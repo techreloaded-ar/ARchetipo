@@ -198,7 +198,7 @@ You don't need workflow-init - you're already using the workflow system.
 
 **To check your progress:**
 
-- Load your current agent (PM, SM, Architect, etc.)
+- Load your current agent (PM, Analyst, Architect, etc.)
 - Run: **/air:aim:workflows:workflow-status**
 
 This will show you what to do next.
@@ -593,7 +593,7 @@ For each phase in path file:
    - Check if workflow should be included based on user choices
    - Add entry: `  {workflow-id}: {default_status}  # agent: {agent}`
    - Default status from path file (required/optional/recommended/conditional)
-   - Agent from path file (pm/architect/ux-designer/sm/strategist/etc.)
+   - Agent from path file (pm/architect/ux-designer/analyst/strategist/etc.)
 4. Add blank line between phases
    </action>
 
@@ -660,8 +660,8 @@ Example: `prd: docs/prd.md  # agent: pm` (NOT "completed - docs/prd.md")
 (Auto-detects epic structure if 2+ stories)
 
 🚀 **Phase 2: Implementation**
-✅ Sprint Planning - Create sprint tracking (sm agent)
-✅ Story Development - Implement story-by-story (sm agent)
+✅ Sprint Planning - Create sprint tracking (analyst agent)
+✅ Story Development - Implement story-by-story (analyst agent)
 {{/if}}
 
 {{#if selected_track in [method, enterprise]}}
@@ -681,8 +681,8 @@ Creates focused solution design from your existing codebase context
 ✅ Solutioning Gate Check - Validate all planning aligns before coding (architect agent)
 
 🚀 **Phase 3: Implementation**
-✅ Sprint Planning - Create sprint tracking (sm agent)
-✅ Story Development - Implement story-by-story with epic-tech-specs (sm agent)
+✅ Sprint Planning - Create sprint tracking (analyst agent)
+✅ Story Development - Implement story-by-story with epic-tech-specs (analyst agent)
 {{/if}}
 
 {{#if selected_track == enterprise}}

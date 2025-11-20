@@ -8,5 +8,5 @@ agents:
   - strategist
   - architect
   - ux-designer
-  - sm
+  - analyst
 party: "./default-party.csv"

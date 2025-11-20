@@ -110,9 +110,9 @@ Automatically adjusts planning depth and documentation based on project needs:
 3. **Phase 3: Solutioning** (Track-dependent) - Architecture, (Coming soon: security, DevOps, test strategy)
 4. **Phase 4: Implementation** (Iterative) - Story-centric development with just-in-time context
 
-**🤖 12 Specialized Agents**
+**🤖 6 Specialized Agents**
 
-PM • Analyst • Architect • Scrum Master • Developer • Test Architect (TEA) • UX Designer • Technical Writer • Game Designer • Game Developer • Game Architect • AIRchetipo Master (Orchestrator)
+PM • Strategist • Analyst • Architect • UX Designer • AIRchetipo Master (Orchestrator)
 
 **📚 Documentation**
 

@@ -173,67 +173,9 @@ Once architecture is complete:
 - **No document sharding needed** - Unlike v4, you don't need to split documents
 - **Web Bundles coming soon** - Will help save LLM tokens for users with limited plans
 
-### Step 3: Start Building (Phase 4 - Implementation)
+### Step 3: Implementation
 
-Once planning and architecture are complete, you'll move to Phase 4. **Important: Each workflow below should be run in a fresh chat to avoid context limitations and hallucinations.**
-
-#### 3.1 Initialize Sprint Planning
-
-1. **Start a new chat** with the **SM (Scrum Master) agent**
-2. Wait for the menu to appear
-3. Tell the agent: "Run sprint-planning"
-4. This creates your `sprint-status.yaml` file that tracks all epics and stories
-
-#### 3.2 Create Epic Context (Optional but Recommended)
-
-1. **Start a new chat** with the **SM agent**
-2. Wait for the menu
-3. Tell the agent: "Run epic-tech-context"
-4. This creates technical context for the current epic before drafting stories
-
-#### 3.3 Draft Your First Story
-
-1. **Start a new chat** with the **SM agent**
-2. Wait for the menu
-3. Tell the agent: "Run create-story"
-4. This drafts the story file from the epic
-
-#### 3.4 Add Story Context (Optional but Recommended)
-
-1. **Start a new chat** with the **SM agent**
-2. Wait for the menu
-3. Tell the agent: "Run story-context"
-4. This creates implementation-specific technical context for the story
-
-#### 3.5 Implement the Story
-
-1. **Start a new chat** with the **DEV agent**
-2. Wait for the menu
-3. Tell the agent: "Run dev-story"
-4. The DEV agent will implement the story and update the sprint status
-
-#### 3.6 Review the Code (Optional but Recommended)
-
-1. **Start a new chat** with the **DEV agent**
-2. Wait for the menu
-3. Tell the agent: "Run code-review"
-4. The DEV agent performs quality validation (this was called QA in v4)
-
-### Step 4: Keep Going
-
-For each subsequent story, repeat the cycle using **fresh chats** for each workflow:
-
-1. **New chat** → SM agent → "Run create-story"
-2. **New chat** → SM agent → "Run story-context"
-3. **New chat** → DEV agent → "Run dev-story"
-4. **New chat** → DEV agent → "Run code-review" (optional but recommended)
-
-After completing all stories in an epic:
-
-1. **Start a new chat** with the **SM agent**
-2. Tell the agent: "Run retrospective"
-
-**Why fresh chats?** Context-intensive workflows can cause hallucinations if you keep issuing commands in the same chat. Starting fresh ensures the agent has maximum context capacity for each workflow.
+Once planning and architecture are complete, you have developer-ready requirements and can proceed with implementation using your preferred development tools and IDE agents.
 
 ---
 
@@ -241,12 +183,11 @@ After completing all stories in an epic:
 
 Each agent is a specialized AI persona:
 
-- **Strategist** - Initializes workflows and tracks progress
-- **PM** - Creates requirements and specifications
-- **UX-Designer** - If your project has a front end - this designer will help produce artifacts, come up with mock updates, and design a great look and feel with you giving it guidance.
+- **Strategist** - Initializes workflows, conducts research, and tracks progress
+- **PM** - Creates requirements documents (PRD, tech-spec)
+- **Analyst** - Breaks down requirements into epics and user stories
+- **UX Designer** - Designs user experience and creates design artifacts
 - **Architect** - Designs system architecture
-- **SM (Scrum Master)** - Manages sprints and creates stories
-- **DEV** - Implements code and reviews work
 
 ## How Workflows Work
 
@@ -267,12 +208,11 @@ AIRchetipo creates two files to track your progress:
 - Created by workflow-init
 - Updated automatically as you progress through phases
 
-**2. sprint-status.yaml** (Phase 4 only)
+**2. Epics and Stories**
 
-- Tracks all your epics and stories during implementation
-- Critical for SM and DEV agents to know what to work on next
-- Created by sprint-planning workflow
-- Updated automatically as stories progress
+- Generated from your requirements by the Analyst agent
+- Provides developer-ready breakdown of work
+- Includes acceptance criteria and technical notes
 
 **You don't need to edit these manually** - agents update them as you work.
 

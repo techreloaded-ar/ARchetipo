@@ -28,32 +28,23 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ### All AIM Agents
 
-**Core Development (8 agents):**
+**Planning & Architecture (5 agents):**
 
 - PM (Product Manager)
 - Strategist (Business Strategist)
+- Analyst (Requirements Analyst)
 - Architect (System Architect)
-- SM (Scrum Master)
-- DEV (Developer)
-- TEA (Test Architect)
 - UX Designer
-- Technical Writer
-
-**Game Development (3 agents):**
-
-- Game Designer
-- Game Developer
-- Game Architect
 
 **Meta (1 core agent):**
 
 - AIRchetipo Master (Orchestrator)
 
-**Total:** 12 agents + cross-module party mode support
+**Total:** 6 AIM agents + AIRchetipo Master + cross-module party mode support
 
 ---
 
-## Core Development Agents
+## Planning & Architecture Agents
 
 ### PM (Product Manager) - Valerio 📋
 
@@ -127,6 +118,49 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ---
 
+### Analyst (Requirements Analyst) - Emanuele 🔍
+
+**Role:** Technical Requirements Analyst + Story Crafting Specialist
+
+**When to Use:**
+
+- Breaking PRD into epics and user stories
+- Translating business requirements into developer-ready stories
+- Creating clear acceptance criteria
+- Refining and decomposing requirements
+- Ensuring stories meet INVEST principles
+- Preparing developer handoffs
+
+**Primary Phase:** Phase 2 (Planning)
+
+**Workflows:**
+
+- `workflow-status` - Check what to do next
+- `create-epics-and-stories` - Break PRD requirements into implementable epics and stories
+- `party-mode` - Consult with other expert agents
+
+**Communication Style:** Precise and technical. Bridges business requirements with implementation reality. Questions ambiguities proactively. Ensures every story is testable, unambiguous, and developer-ready. Focuses on clear handoffs between planning and execution.
+
+**Expertise:**
+
+- Requirements decomposition
+- Epic breakdown into user stories
+- Technical feasibility assessment
+- PRD to backlog translation
+- Story refinement and INVEST principles
+- Developer handoff preparation
+- Acceptance criteria definition
+
+**Key Principles:**
+
+- Perfect alignment between business intent and technical execution
+- User stories are single source of truth for development
+- Every requirement must be actionable, verifiable, and implementable
+- Acceptance criteria eliminate interpretation gaps
+- Enable efficient development handoffs and smooth sprint execution
+
+---
+
 ### Architect - Leonardo 🏗️
 
 **Role:** System Architect + Technical Design Leader
@@ -163,148 +197,6 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ---
 
-### SM (Scrum Master) - Rocco 🏃
-
-**Role:** Technical Scrum Master + Story Preparation Specialist
-
-**When to Use:**
-
-- Sprint planning and tracking initialization
-- Creating user stories
-- Assembling dynamic story context
-- Epic-level technical context (optional)
-- Marking stories ready for development
-- Sprint retrospectives
-
-**Primary Phase:** Phase 4 (Implementation)
-
-**Workflows:**
-
-- `workflow-status` - Check what to do next
-- `sprint-planning` - Initialize `sprint-status.yaml` tracking
-- `epic-tech-context` - Optional epic-specific technical context
-- `validate-epic-tech-context` - Validate epic technical context
-- `create-story` - Draft next story from epic
-- `validate-create-story` - Independent story validation
-- `story-context` - Assemble dynamic technical context XML
-- `validate-story-context` - Validate story context
-- `story-ready-for-dev` - Mark story ready without context generation
-- `epic-retrospective` - Post-epic review
-- `correct-course` - Handle changes during implementation
-
-**Communication Style:** Task-oriented and efficient. Direct and eliminates ambiguity. Focuses on clear handoffs and developer-ready specifications.
-
-**Expertise:**
-
-- Agile ceremonies
-- Story preparation and context injection
-- Development coordination
-- Process integrity
-- Just-in-time design
-
----
-
-### DEV (Developer) - Amelia 💻
-
-**Role:** Senior Implementation Engineer
-
-**When to Use:**
-
-- Implementing stories with tests
-- Performing code reviews on completed stories
-- Marking stories complete after Definition of Done met
-
-**Primary Phase:** Phase 4 (Implementation)
-
-**Workflows:**
-
-- `workflow-status` - Check what to do next
-- `develop-story` - Implement story with:
-  - Task-by-task iteration
-  - Test-driven development
-  - Multi-run capability (initial + fixes)
-  - Strict file boundary enforcement
-- `code-review` - Senior developer-level review with:
-  - Story context awareness
-  - Epic-tech-context alignment
-  - Repository docs reference
-  - MCP server best practices
-  - Web search fallback
-- `story-done` - Mark story complete and advance queue
-
-**Communication Style:** Succinct and checklist-driven. Cites file paths and acceptance criteria IDs. Only asks questions when inputs are missing.
-
-**Critical Principles:**
-
-- Story Context XML is single source of truth
-- Never start until story Status == Approved
-- All acceptance criteria must be satisfied
-- Tests must pass 100% before completion
-- No cheating or lying about test results
-- Multi-run support for fixing issues post-review
-
-**Expertise:**
-
-- Full-stack implementation
-- Test-driven development (TDD)
-- Code quality and design patterns
-- Existing codebase integration
-- Performance optimization
-
----
-
-### TEA (Master Test Architect) - Murat 🧪
-
-**Role:** Master Test Architect with Knowledge Base
-
-**When to Use:**
-
-- Initializing test frameworks for projects
-- ATDD test-first approach (before implementation)
-- Test automation and coverage
-- Designing comprehensive test scenarios
-- Quality gates and traceability
-- CI/CD pipeline setup
-- NFR (Non-Functional Requirements) assessment
-- Test quality reviews
-
-**Primary Phase:** Testing & QA (All phases)
-
-**Workflows:**
-
-- `workflow-status` - Check what to do next
-- `framework` - Initialize production-ready test framework:
-  - Smart framework selection (Playwright vs Cypress)
-  - Fixture architecture
-  - Auto-cleanup patterns
-  - Network-first approaches
-- `atdd` - Generate E2E tests first, before implementation
-- `automate` - Comprehensive test automation
-- `test-design` - Create test scenarios with risk-based approach
-- `trace` - Requirements-to-tests traceability mapping (Phase 1 + Phase 2 quality gate)
-- `nfr-assess` - Validate non-functional requirements
-- `ci` - Scaffold CI/CD quality pipeline
-- `test-review` - Quality review using knowledge base
-
-**Communication Style:** Data-driven advisor. Strong opinions, weakly held. Pragmatic about trade-offs.
-
-**Principles:**
-
-- Risk-based testing (depth scales with impact)
-- Tests mirror actual usage patterns
-- Testing is feature work, not overhead
-- Prioritize unit/integration over E2E
-- Flakiness is critical technical debt
-- ATDD tests first, AI implements, suite validates
-
-**Special Capabilities:**
-
-- **Knowledge Base Access:** Consults comprehensive testing best practices from `testarch/knowledge/` directory
-- **Framework Selection:** Smart framework selection (Playwright vs Cypress) with fixture architecture
-- **Cross-Platform Testing:** Supports testing across web, mobile, and API layers
-
----
-
 ### UX Designer - Livia 🎨
 
 **Role:** User Experience Designer + UI Specialist
@@ -338,171 +230,6 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 - Accessibility (WCAG compliance)
 - Design systems and component libraries
 - Cross-functional collaboration
-
----
-
-### Technical Writer - Paige 📚
-
-**Role:** Technical Documentation Specialist + Knowledge Curator
-
-**When to Use:**
-
-- Documenting brownfield projects (Phase 0)
-- Creating API documentation
-- Generating architecture documentation
-- Writing user guides and tutorials
-- Reviewing documentation quality
-- Creating Mermaid diagrams
-- Improving README files
-- Explaining technical concepts
-
-**Primary Phase:** All phases (documentation support)
-
-**Workflows:**
-
-- `document-project` - Comprehensive project documentation with:
-  - Three scan levels (Quick, Deep, Exhaustive)
-  - Multi-part project detection
-  - Resumability (interrupt and continue)
-  - Write-as-you-go architecture
-  - Deep-dive mode for targeted analysis
-
-**Actions:**
-
-- `generate-diagram` - Create Mermaid diagrams (architecture, sequence, flow, ER, class, state)
-- `validate-doc` - Check documentation against standards
-- `improve-readme` - Review and improve README files
-- `explain-concept` - Create clear technical explanations with examples
-- `standards-guide` - Show AIRchetipo documentation standards reference
-- `create-api-docs` - OpenAPI/Swagger documentation (TODO)
-- `create-architecture-docs` - Architecture docs with diagrams and ADRs (TODO)
-- `create-user-guide` - User-facing guides and tutorials (TODO)
-- `audit-docs` - Documentation quality review (TODO)
-
-**Communication Style:** Patient teacher who makes documentation approachable. Uses examples and analogies. Balances technical precision with accessibility.
-
-**Critical Standards:**
-
-- Zero tolerance for CommonMark violations
-- Valid Mermaid syntax (mentally validates before output)
-- Follows Google Developer Docs Style Guide
-- Microsoft Manual of Style for technical writing
-- Task-oriented writing approach
-
-**See Also:** [Document Project Workflow Reference](./workflow-document-project-reference.md) for detailed brownfield documentation capabilities.
-
----
-
-## Game Development Agents
-
-### Game Designer - Samus Shepard 🎲
-
-**Role:** Lead Game Designer + Creative Vision Architect
-
-**When to Use:**
-
-- Game brainstorming and ideation
-- Creating game briefs for vision and strategy
-- Game Design Documents (GDD) for Level 2-4 game projects
-- Narrative design for story-driven games
-- Game market research
-
-**Primary Phase:** Phase 1-2 (Analysis & Planning - Games)
-
-**Workflows:**
-
-- `workflow-init` - Initialize workflow tracking
-- `workflow-status` - Check what to do next
-- `brainstorm-game` - Game-specific ideation
-- `create-game-brief` - Game vision and strategy
-- `create-gdd` - Complete Game Design Document with:
-  - Game-type-specific injection (24+ game types)
-  - Universal template structure
-  - Platform vs game type separation
-  - Gameplay-first philosophy
-- `narrative` - Narrative design document for story-driven games
-- `research` - Game market research
-
-**Communication Style:** Enthusiastic and player-focused. Frames challenges as design problems to solve. Celebrates creative breakthroughs.
-
-**Principles:**
-
-- Understand what players want to feel, not just do
-- Rapid prototyping and playtesting
-- Every mechanic must serve the core experience
-- Meaningful choices create engagement
-
-**Expertise:**
-
-- Core gameplay loops
-- Progression systems
-- Game economy and balance
-- Player psychology
-- Multi-genre game design
-
----
-
-### Game Developer - Link Freeman 🕹️
-
-**Role:** Senior Game Developer + Technical Implementation Specialist
-
-**When to Use:**
-
-- Implementing game stories
-- Game code reviews
-- Sprint retrospectives for game development
-
-**Primary Phase:** Phase 4 (Implementation - Games)
-
-**Workflows:**
-
-- `workflow-status` - Check what to do next
-- `develop-story` - Execute Dev Story workflow, implementing tasks and tests
-- `story-done` - Mark story done after DoD complete
-- `code-review` - Perform thorough clean context QA code review on a story
-
-**Communication Style:** Direct and energetic. Execution-focused. Breaks down complex game challenges into actionable steps. Celebrates performance wins.
-
-**Expertise:**
-
-- Unity, Unreal, Godot, Phaser, custom engines
-- Gameplay programming
-- Physics and collision systems
-- AI and pathfinding
-- Performance optimization
-- Cross-platform development
-
----
-
-### Game Architect - Cloud Dragonborn 🏛️
-
-**Role:** Principal Game Systems Architect + Technical Director
-
-**When to Use:**
-
-- Game system architecture
-- Technical foundation design for games
-- Solutioning gate checks for game projects
-- Course correction during game development
-
-**Primary Phase:** Phase 3 (Solutioning - Games)
-
-**Workflows:**
-
-- `workflow-status` - Check what to do next
-- `create-architecture` - Game systems architecture
-- `solutioning-gate-check` - Validate Phase 3→4 transition
-- `correct-course` - Handle technical changes
-
-**Communication Style:** Calm and measured. Systematic thinking about complex systems. Uses chess metaphors and military strategy. Emphasizes balance and elegance.
-
-**Expertise:**
-
-- Multiplayer architecture (dedicated servers, P2P, hybrid)
-- Engine architecture and design
-- Asset pipeline optimization
-- Platform-specific optimization (console, PC, mobile)
-- Technical leadership and mentorship
 
 ---
 
@@ -593,26 +320,23 @@ Each agent displays their available workflows when loaded. Look for:
 
 Some workflows are available to multiple agents:
 
-| Workflow           | Agents                            | Purpose                                     |
-| ------------------ | --------------------------------- | ------------------------------------------- |
-| `workflow-status`  | ALL agents                        | Check current state and get recommendations |
-| `workflow-init`    | PM, Strategist, Game Designer     | Initialize workflow tracking                |
-| `correct-course`   | PM, Architect, SM, Game Architect | Change management during implementation     |
-| `document-project` | Strategist, Technical Writer      | Brownfield documentation                    |
+| Workflow           | Agents                         | Purpose                                     |
+| ------------------ | ------------------------------ | ------------------------------------------- |
+| `workflow-status`  | ALL agents                     | Check current state and get recommendations |
+| `workflow-init`    | PM, Strategist, Game Designer  | Initialize workflow tracking                |
+| `correct-course`   | PM, Architect, Game Architect  | Change management during implementation     |
+| `document-project` | Strategist, Technical Writer   | Brownfield documentation                    |
 
 ### Validation Actions
 
 Many workflows have optional validation workflows that perform independent review:
 
-| Validation                   | Agent       | Validates                          |
-| ---------------------------- | ----------- | ---------------------------------- |
-| `validate-prd`               | PM          | PRD + Epics + Stories completeness |
-| `validate-tech-spec`         | PM          | Technical specification quality    |
-| `validate-architecture`      | Architect   | Architecture document              |
-| `validate-design`            | UX Designer | UX specification and artifacts     |
-| `validate-epic-tech-context` | SM          | Epic technical context             |
-| `validate-create-story`      | SM          | Story draft                        |
-| `validate-story-context`     | SM          | Story context XML                  |
+| Validation               | Agent       | Validates                          |
+| ------------------------ | ----------- | ---------------------------------- |
+| `validate-prd`           | PM          | PRD + Epics + Stories completeness |
+| `validate-tech-spec`     | PM          | Technical specification quality    |
+| `validate-architecture`  | Architect   | Architecture document              |
+| `validate-design`        | UX Designer | UX specification and artifacts     |
 
 **When to use validation:**
 
@@ -788,19 +512,15 @@ Load the customized agent and verify the changes are reflected in its behavior a
 
 **2. Match phase to agent**
 
-- **Phase 1 (Analysis):** Strategist, Game Designer
-- **Phase 2 (Planning):** PM, UX Designer, Game Designer
-- **Phase 3 (Solutioning):** Architect, Game Architect
-- **Phase 4 (Implementation):** SM, DEV, Game Developer
-- **Testing:** TEA (all phases)
-- **Documentation:** Technical Writer (all phases)
+- **Phase 1 (Analysis):** Strategist
+- **Phase 2 (Planning):** PM, Analyst, UX Designer
+- **Phase 3 (Solutioning):** Architect
 
 **3. Use specialists**
 
-- **Testing:** TEA for comprehensive quality strategy
-- **Documentation:** Technical Writer for technical writing
-- **Games:** Game Designer/Developer/Architect for game-specific needs
 - **UX:** UX Designer for user-centered design
+- **Requirements:** Analyst for story decomposition
+- **Architecture:** Architect for technical design
 
 **4. Try party mode for:**
 
@@ -844,57 +564,26 @@ Load the customized agent and verify the changes are reflected in its behavior a
 **Starting a New Project (Greenfield):**
 
 ```
-1. PM or Strategist: *workflow-init
+1. Strategist: *workflow-init
 2. Strategist: *brainstorm-project or *product-brief (optional)
-3. PM: *create-prd (Level 2-4) or *tech-spec (Level 0-1)
-4. Architect: *create-architecture (Level 3-4 only)
-5. SM: *sprint-planning
+3. PM: *create-prd or *tech-spec
+4. Architect: *create-architecture (if needed)
+5. Analyst: *create-epics-and-stories
 ```
 
 **Starting with Existing Code (Brownfield):**
 
 ```
-1. Strategist or Technical Writer: *document-project
-2. PM or Strategist: *workflow-init
+1. Strategist: *document-project
+2. Strategist: *workflow-init
 3. PM: *create-prd or *tech-spec
 4. Architect: *create-architecture (if needed)
-5. SM: *sprint-planning
+5. Analyst: *create-epics-and-stories
 ```
 
-**Story Development Cycle:**
+**Implementation:**
 
-```
-1. SM: *epic-tech-context (optional, once per epic)
-2. SM: *create-story
-3. SM: *story-context
-4. DEV: *develop-story
-5. DEV: *code-review
-6. DEV: *story-done
-7. Repeat steps 2-6 for next story
-```
-
-**Testing Strategy:**
-
-```
-1. TEA: *framework (once per project, early)
-2. TEA: *atdd (before implementing features)
-3. DEV: *develop-story (includes tests)
-4. TEA: *automate (comprehensive test suite)
-5. TEA: *trace (quality gate)
-6. TEA: *ci (pipeline setup)
-```
-
-**Game Development:**
-
-```
-1. Game Designer: *brainstorm-game
-2. Game Designer: *create-gdd
-3. Game Architect: *create-architecture
-4. SM: *sprint-planning
-5. Game Developer: *create-story
-6. Game Developer: *dev-story
-7. Game Developer: *code-review
-```
+Work with your preferred development tools and IDE agents for implementation. AIM focuses on planning and requirements preparation.
 
 ### Navigation Tips
 
@@ -918,18 +607,9 @@ Run validation before advancing
 
 ```
 If priorities change mid-project:
-Load PM, Architect, or SM → *correct-course
+Load PM or Architect → *correct-course
 ```
 
-**Testing integration:**
-
-```
-TEA can be invoked at any phase:
-- Phase 1: Test strategy planning
-- Phase 2: Test scenarios in PRD
-- Phase 3: Architecture testability review
-- Phase 4: Test automation and CI
-```
 
 ---
 
@@ -937,51 +617,29 @@ TEA can be invoked at any phase:
 
 Quick reference for agent selection:
 
-| Agent                   | Icon | Primary Phase      | Key Workflows                                 | Best For                              |
-| ----------------------- | ---- | ------------------ | --------------------------------------------- | ------------------------------------- |
-| **Strategist**          | 📊   | 1 (Analysis)       | brainstorm, brief, research, document-project | Discovery, requirements, brownfield   |
-| **PM**                  | 📋   | 2 (Planning)       | prd, tech-spec, epics-stories                 | Planning, requirements docs           |
-| **UX Designer**         | 🎨   | 2 (Planning)       | create-design, validate-design                | UX-heavy projects, design             |
-| **Architect**           | 🏗️   | 3 (Solutioning)    | architecture, gate-check                      | Technical design, architecture        |
-| **SM**                  | 🏃   | 4 (Implementation) | sprint-planning, create-story, story-context  | Story management, sprint coordination |
-| **DEV**                 | 💻   | 4 (Implementation) | develop-story, code-review, story-done        | Implementation, coding                |
-| **TEA**                 | 🧪   | All Phases         | framework, atdd, automate, trace, ci          | Testing, quality assurance            |
-| **Paige (Tech Writer)** | 📚   | All Phases         | document-project, diagrams, validation        | Documentation, diagrams               |
-| **Game Designer**       | 🎲   | 1-2 (Games)        | brainstorm-game, gdd, narrative               | Game design, creative vision          |
-| **Game Developer**      | 🕹️   | 4 (Games)          | develop-story, story-done, code-review        | Game implementation                   |
-| **Game Architect**      | 🏛️   | 3 (Games)          | architecture, gate-check                      | Game systems architecture             |
-| **AIRchetipo Master**   | 🧙   | Meta               | party-mode, list tasks/workflows              | Orchestration, multi-agent            |
+| Agent                 | Icon | Primary Phase   | Key Workflows                                 | Best For                            |
+| --------------------- | ---- | --------------- | --------------------------------------------- | ----------------------------------- |
+| **Strategist**        | 📊   | 1 (Analysis)    | brainstorm, brief, research, document-project | Discovery, requirements, brownfield |
+| **PM**                | 📋   | 2 (Planning)    | prd, tech-spec                                | Planning, requirements docs         |
+| **Analyst**           | 🔍   | 2 (Planning)    | create-epics-and-stories                      | Story crafting, PRD decomposition   |
+| **UX Designer**       | 🎨   | 2 (Planning)    | create-design, validate-design                | UX-heavy projects, design           |
+| **Architect**         | 🏗️   | 3 (Solutioning) | architecture, gate-check                      | Technical design, architecture      |
+| **AIRchetipo Master** | 🧙   | Meta            | party-mode, list tasks/workflows              | Orchestration, multi-agent          |
 
 ### Agent Capabilities Summary
 
-**Planning Agents (3):**
+**Planning & Requirements (3 agents):**
 
-- PM: Requirements and planning docs
+- Strategist: Research, discovery, and workflow initialization
+- PM: Requirements documentation (PRD, tech-spec)
+- Analyst: Story crafting and requirements decomposition
+
+**Design (2 agents):**
+
 - UX Designer: User experience design
-- Game Designer: Game design and narrative
-
-**Architecture Agents (2):**
-
 - Architect: System architecture
-- Game Architect: Game systems architecture
 
-**Implementation Agents (3):**
-
-- SM: Story management and coordination
-- DEV: Software development
-- Game Developer: Game development
-
-**Quality Agents (2):**
-
-- TEA: Testing and quality assurance
-- DEV: Code review
-
-**Support Agents (2):**
-
-- Strategist: Research and discovery
-- Technical Writer: Documentation and diagrams
-
-**Meta Agent (1):**
+**Meta (1 agent):**
 
 - AIRchetipo Master: Orchestration and party mode
 
@@ -1036,19 +694,7 @@ Quick reference for agent selection:
 
 **Implementing Stories:**
 
-- [ ] SM: `*sprint-planning` (once)
-- [ ] SM: `*create-story`
-- [ ] SM: `*story-context`
-- [ ] DEV: `*develop-story`
-- [ ] DEV: `*code-review`
-- [ ] DEV: `*story-done`
-
-**Testing Strategy:**
-
-- [ ] TEA: `*framework` (early in project)
-- [ ] TEA: `*atdd` (before features)
-- [ ] TEA: `*test-design` (comprehensive scenarios)
-- [ ] TEA: `*ci` (pipeline setup)
+- [ ] Use your preferred development tools and IDE agents for implementation
 
 ---
 

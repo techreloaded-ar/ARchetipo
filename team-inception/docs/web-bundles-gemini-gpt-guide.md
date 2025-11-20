@@ -143,7 +143,6 @@ After running `npm run bundle`, you'll have access to:
 - **architect.xml** - System architecture and technical design
 - **dev.xml** - Full-stack development and implementation
 - **pm.xml** - Product management and planning
-- **sm.xml** - Scrum master and agile facilitation
 - **tea.xml** - Test architecture and quality assurance
 - **tech-writer.xml** - Technical documentation
 - **ux-designer.xml** - User experience design

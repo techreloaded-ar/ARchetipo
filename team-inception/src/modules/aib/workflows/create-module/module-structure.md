@@ -53,7 +53,7 @@ Comprehensive solution for a domain.
 
 **Example: Project Management Module**
 
-- PM Agent, Scrum Master Agent, Strategist Agent
+- PM Agent, Strategist Agent, Analyst Agent
 - Workflows: sprint-planning, retrospective, roadmap, user-stories
 - Integrated component ecosystem
 

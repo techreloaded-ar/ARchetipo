@@ -145,33 +145,17 @@ Agent responsible for creating PRDs, tech-specs, and managing product requiremen
 
 Agent that initializes workflows, conducts research, creates product briefs, and tracks progress. Often the entry point for new projects.
 
+### Analyst (Requirements Analyst)
+
+Agent responsible for breaking PRD requirements into epics and user stories. Expert in translating business requirements into developer-ready stories with clear acceptance criteria. Bridges the gap between planning and implementation phases.
+
 ### Architect
 
 Agent that designs system architecture, creates architecture documents, performs technical reviews, and validates designs. Primary agent for Phase 3 solutioning.
 
-### SM (Scrum Master)
-
-Agent that manages sprints, creates stories, generates contexts, and coordinates implementation. Primary orchestrator for Phase 4 implementation.
-
-### DEV (Developer)
-
-Agent that implements stories, writes code, runs tests, and performs code reviews. Primary implementer in Phase 4.
-
-### TEA (Test Architect)
-
-Agent responsible for test strategy, quality gates, NFR assessment, and comprehensive quality assurance. Integrates throughout all phases.
-
-### Technical Writer
-
-Agent specialized in creating and maintaining high-quality technical documentation. Expert in documentation standards, information architecture, and professional technical writing. The agent's internal name is "paige" but is presented as "Technical Writer" to users.
-
 ### UX Designer
 
 Agent that creates UX design documents, interaction patterns, and visual specifications for UI-heavy projects.
-
-### Game Designer
-
-Specialized agent for game development projects. Creates game design documents (GDD) and game-specific workflows.
 
 ### AIRchetipo Master
 

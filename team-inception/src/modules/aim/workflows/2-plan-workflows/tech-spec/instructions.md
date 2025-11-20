@@ -945,7 +945,7 @@ Since the tech-spec is CONTEXT-RICH, you can often skip story-context generation
    - Select story-{epic-slug}-1.md
    - Tech-spec provides all the context needed!
 
-💡 **Optional:** Only run `story-context` (SM agent) if this is unusually complex
+💡 **Optional:** Only run `story-context` (Analyst agent) if this is unusually complex
 {{else}}
 **For Your {{story_count}} Stories - Iterative Approach:**
 
@@ -958,9 +958,9 @@ Since the tech-spec is CONTEXT-RICH, you can often skip story-context generation
    - Repeat for story-{epic-slug}-2.md
    - Continue through story {{story_count}}
 
-💡 **Alternative:** Use `sprint-planning` (SM agent) to organize all stories as a coordinated sprint
+💡 **Alternative:** Use `sprint-planning` (Analyst agent) to organize all stories as a coordinated sprint
 
-💡 **Optional:** Run `story-context` (SM agent) for complex stories needing additional context
+💡 **Optional:** Run `story-context` (Analyst agent) for complex stories needing additional context
 {{/if}}
 
 **Your Tech-Spec:**

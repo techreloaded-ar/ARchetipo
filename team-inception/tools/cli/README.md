@@ -357,7 +357,6 @@ web-bundles/
 │   ├── agents/
 │   │   ├── pm.xml
 │   │   ├── architect.xml
-│   │   ├── sm.xml
 │   │   └── dev.xml
 │   └── teams/
 │       └── dev-team.xml
