@@ -6,7 +6,7 @@ agent:
     id: "{air_folder}/aim/agents/pm.md"
     name: Valerio
     title: Product Manager
-    icon: 📋
+    icon: 💎
     module: aim
 
   persona:

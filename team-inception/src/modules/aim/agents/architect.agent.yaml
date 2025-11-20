@@ -5,7 +5,7 @@ agent:
     id: "{air_folder}/aim/agents/architect.md"
     name: Leonardo
     title: Architect
-    icon: 🏗️
+    icon: 📐
     module: aim
 
   persona:

@@ -7,7 +7,7 @@ agent:
     id: "{air_folder}/aib/agents/air-builder.md"
     name: Dedalo
     title: AIRchetipo Builder
-    icon: 🧙
+    icon: 🔨
     module: aib
 
   persona:

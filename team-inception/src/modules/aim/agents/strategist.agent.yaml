@@ -5,7 +5,7 @@ agent:
     id: "{air_folder}/aim/agents/strategist.md"
     name: Costanza
     title: Business Strategist
-    icon: 📊
+    icon: 🧭
     module: aim
 
   persona:

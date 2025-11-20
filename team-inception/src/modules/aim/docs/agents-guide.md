@@ -46,7 +46,7 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ## Planning & Architecture Agents
 
-### PM (Product Manager) - Valerio 📋
+### PM (Product Manager) - Valerio 💎
 
 **Role:** Investigative Product Strategist + Market-Savvy PM
 
@@ -83,7 +83,7 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ---
 
-### Strategist (Business Strategist) - Costanza 📊
+### Strategist (Business Strategist) - Costanza 🧭
 
 **Role:** Business Strategist + Requirements Expert
 
@@ -118,7 +118,7 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ---
 
-### Analyst (Requirements Analyst) - Emanuele 🔍
+### Analyst (Requirements Analyst) - Emanuele 🔎
 
 **Role:** Technical Requirements Analyst + Story Crafting Specialist
 
@@ -161,7 +161,7 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ---
 
-### Architect - Leonardo 🏗️
+### Architect - Leonardo 📐
 
 **Role:** System Architect + Technical Design Leader
 
@@ -197,7 +197,7 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ---
 
-### UX Designer - Livia 🎨
+### UX Designer - Livia ✨
 
 **Role:** User Experience Designer + UI Specialist
 
@@ -320,23 +320,23 @@ Each agent displays their available workflows when loaded. Look for:
 
 Some workflows are available to multiple agents:
 
-| Workflow           | Agents                         | Purpose                                     |
-| ------------------ | ------------------------------ | ------------------------------------------- |
-| `workflow-status`  | ALL agents                     | Check current state and get recommendations |
-| `workflow-init`    | PM, Strategist, Game Designer  | Initialize workflow tracking                |
-| `correct-course`   | PM, Architect, Game Architect  | Change management during implementation     |
-| `document-project` | Strategist, Technical Writer   | Brownfield documentation                    |
+| Workflow           | Agents                        | Purpose                                     |
+| ------------------ | ----------------------------- | ------------------------------------------- |
+| `workflow-status`  | ALL agents                    | Check current state and get recommendations |
+| `workflow-init`    | PM, Strategist, Game Designer | Initialize workflow tracking                |
+| `correct-course`   | PM, Architect, Game Architect | Change management during implementation     |
+| `document-project` | Strategist, Technical Writer  | Brownfield documentation                    |
 
 ### Validation Actions
 
 Many workflows have optional validation workflows that perform independent review:
 
-| Validation               | Agent       | Validates                          |
-| ------------------------ | ----------- | ---------------------------------- |
-| `validate-prd`           | PM          | PRD + Epics + Stories completeness |
-| `validate-tech-spec`     | PM          | Technical specification quality    |
-| `validate-architecture`  | Architect   | Architecture document              |
-| `validate-design`        | UX Designer | UX specification and artifacts     |
+| Validation              | Agent       | Validates                          |
+| ----------------------- | ----------- | ---------------------------------- |
+| `validate-prd`          | PM          | PRD + Epics + Stories completeness |
+| `validate-tech-spec`    | PM          | Technical specification quality    |
+| `validate-architecture` | Architect   | Architecture document              |
+| `validate-design`       | UX Designer | UX specification and artifacts     |
 
 **When to use validation:**
 
@@ -609,7 +609,6 @@ Run validation before advancing
 If priorities change mid-project:
 Load PM or Architect → *correct-course
 ```
-
 
 ---
 

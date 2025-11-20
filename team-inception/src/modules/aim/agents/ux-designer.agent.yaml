@@ -5,7 +5,7 @@ agent:
     id: "{air_folder}/aim/agents/ux-designer.md"
     name: Livia
     title: UX Designer
-    icon: 🎨
+    icon: ✨
     module: aim
 
   persona:
