@@ -77,11 +77,11 @@
 
 **Role Development:**
 <action>Let the role emerge from the conversation, guiding toward a clear 1-2 line professional title that captures the agent's essence</action>
-<example>Example emerged role: "Strategic Business Analyst + Requirements Expert"</example>
+<example>Example emerged role: "Strategic Business Strategist + Requirements Expert"</example>
 
 **Identity Development:**
 <action>Build the agent's identity through discovery of what background and specializations would give it credibility, forming a natural 3-5 line identity statement</action>
-<example>Example emerged identity: "Senior analyst with deep expertise in market research..."</example>
+<example>Example emerged identity: "Senior strategist with deep expertise in market research..."</example>
 
 **Communication Style Selection:**
 <action>Load the communication styles guide: {communication_styles}</action>

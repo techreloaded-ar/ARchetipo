@@ -4,7 +4,7 @@
 agent:
   metadata:
     id: "{air_folder}/aim/agents/pm.md"
-    name: John
+    name: Valerio
     title: Product Manager
     icon: 📋
     module: aim

@@ -593,7 +593,7 @@ For each phase in path file:
    - Check if workflow should be included based on user choices
    - Add entry: `  {workflow-id}: {default_status}  # agent: {agent}`
    - Default status from path file (required/optional/recommended/conditional)
-   - Agent from path file (pm/architect/ux-designer/sm/analyst/etc.)
+   - Agent from path file (pm/architect/ux-designer/sm/strategist/etc.)
 4. Add blank line between phases
    </action>
 
@@ -637,20 +637,20 @@ Example: `prd: docs/prd.md  # agent: pm` (NOT "completed - docs/prd.md")
 
 {{#if brownfield AND needs_documentation}}
 🔧 **Prerequisites:**
-✅ document-project - Create comprehensive codebase documentation (analyst agent)
+✅ document-project - Create comprehensive codebase documentation (strategist agent)
 (Required before planning workflows)
 {{/if}}
 
 {{#if has_discovery_phase}}
 🧠 **Phase 0: Discovery** (Optional - based on your choices)
 {{#if brainstorm_requested}}
-✅ Brainstorm - Creative exploration session (analyst agent)
+✅ Brainstorm - Creative exploration session (strategist agent)
 {{/if}}
 {{#if research_requested}}
-✅ Research - Domain and technical research (analyst agent)
+✅ Research - Domain and technical research (strategist agent)
 {{/if}}
 {{#if product_brief_requested}}
-✅ Product Brief - Strategic product planning (analyst agent)
+✅ Product Brief - Strategic product planning (strategist agent)
 {{/if}}
 {{/if}}
 
@@ -739,7 +739,7 @@ Your workflow tracking will start from where you left off!
 **Agent:** {{next_agent}}
 **Command:** /air:aim:workflows:{{next_workflow_id}}
 
-{{#if next_agent != 'analyst' AND next_agent != 'pm'}}
+{{#if next_agent != 'strategist' AND next_agent != 'pm'}}
 💡 **Tip:** Start a new chat and load the **{{next_agent}}** agent before running this workflow.
 {{/if}}
 
@@ -757,7 +757,7 @@ Happy building with AIRchetipo! 🚀
 <check if="answer == n">
   <output>No problem! You can run workflow-init again anytime you're ready.
 
-To get started later, just load the Analyst agent and run:
+To get started later, just load the Strategist agent and run:
 **/air:aim:workflows:workflow-init**</output>
 </check>
 

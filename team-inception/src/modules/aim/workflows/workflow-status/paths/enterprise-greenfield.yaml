@@ -14,20 +14,20 @@ phases:
     workflows:
       - id: "brainstorm-project"
         optional: true
-        agent: "analyst"
+        agent: "strategist"
         command: "brainstorm-project"
         included_by: "user_choice"
 
       - id: "research"
         recommended: true
-        agent: "analyst"
+        agent: "strategist"
         command: "research"
         included_by: "user_choice"
         note: "Highly recommended for enterprise - domain and compliance research"
 
       - id: "product-brief"
         recommended: true
-        agent: "analyst"
+        agent: "strategist"
         command: "product-brief"
         included_by: "user_choice"
         note: "Recommended for strategic alignment"

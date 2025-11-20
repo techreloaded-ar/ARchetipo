@@ -25,7 +25,7 @@
 - [ ] TAM calculation verified by at least 2 independent sources
 - [ ] SAM calculation methodology is transparent and sourced
 - [ ] SOM estimates are conservative and based on comparable benchmarks
-- [ ] Market growth rates corroborated by multiple analyst reports
+- [ ] Market growth rates corroborated by multiple strategist reports
 - [ ] Competitive market share data verified across sources
 
 ### Conflicting Data Resolution
@@ -87,7 +87,7 @@
 - [ ] Competitor pricing data has sources (website URLs, pricing pages, reviews)
 - [ ] Funding amounts cite sources (Crunchbase, press releases, SEC filings)
 - [ ] Product features verified through sources (official website, documentation, reviews)
-- [ ] Market positioning claims are backed by sources (analyst reports, company statements)
+- [ ] Market positioning claims are backed by sources (strategist reports, company statements)
 - [ ] Customer count/user numbers cite sources (company announcements, verified reports)
 - [ ] Recent news and developments cite article URLs with dates from {{current_year}}
 
@@ -101,7 +101,7 @@
 
 ### Competitive Claims Verification
 
-- [ ] Market share claims cite analyst reports or verified data
+- [ ] Market share claims cite strategist reports or verified data
 - [ ] "Leading" or "dominant" claims backed by sourced market data
 - [ ] Competitor weaknesses cited from reviews, articles, or public statements (not speculation)
 - [ ] Product comparison claims verified (feature lists from official sources)

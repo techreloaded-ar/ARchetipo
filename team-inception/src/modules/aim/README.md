@@ -24,7 +24,7 @@ This module contains:
 
 ```
 aim/
-├── agents/          # 5 specialized AI agents (PM, Analyst, Architect, SM, UX Designer)
+├── agents/          # 5 specialized AI agents (PM, Strategist, Architect, SM, UX Designer)
 ├── workflows/       # Planning and solutioning workflows across 3 phases
 ├── teams/           # Pre-configured agent groups
 └── docs/            # Complete user documentation
@@ -32,7 +32,7 @@ aim/
 
 ### Agent Roster
 
-**Planning & Solutioning:** PM, Analyst, Architect, SM, UX Designer
+**Planning & Solutioning:** PM, Strategist, Architect, SM, UX Designer
 **Orchestration:** AIRchetipo Master (from Core)
 
 👉 **[Full Agents Guide](./docs/agents-guide.md)** - Roles, workflows, and when to use each agent
@@ -55,7 +55,7 @@ aim/
 # Install AIM
 npx airchetipo@alpha install
 
-# Load Analyst agent in your IDE, then:
+# Load Strategist agent in your IDE, then:
 *workflow-init
 ```
 

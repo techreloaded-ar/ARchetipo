@@ -2,10 +2,10 @@
 bundle:
   name: Team Product Inception
   icon: 🚀
-  description: Expert team for product discovery and strategic planning. Combines product management, business analysis, architecture, and UX design expertise for comprehensive product inception sessions.
+  description: Expert team for product discovery and strategic planning. Combines product management, business strategy, architecture, and UX design expertise for comprehensive product inception sessions.
 agents:
   - pm
-  - analyst
+  - strategist
   - architect
   - ux-designer
   - sm

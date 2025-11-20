@@ -14,7 +14,7 @@ phases:
     workflows:
       - id: "document-project"
         required: true
-        agent: "analyst"
+        agent: "strategist"
         command: "document-project"
         output: "Comprehensive project documentation"
         purpose: "Understand existing codebase - critical for enterprise brownfield"
@@ -26,20 +26,20 @@ phases:
     workflows:
       - id: "brainstorm-project"
         optional: true
-        agent: "analyst"
+        agent: "strategist"
         command: "brainstorm-project"
         included_by: "user_choice"
 
       - id: "research"
         recommended: true
-        agent: "analyst"
+        agent: "strategist"
         command: "research"
         included_by: "user_choice"
         note: "Highly recommended - compliance, integration, risk research"
 
       - id: "product-brief"
         optional: true
-        agent: "analyst"
+        agent: "strategist"
         command: "product-brief"
         included_by: "user_choice"
         note: "Optional for brownfield enterprise"

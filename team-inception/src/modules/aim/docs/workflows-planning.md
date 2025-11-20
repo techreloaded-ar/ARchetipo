@@ -92,7 +92,7 @@ graph TB
 
 | Workflow                     | Agent         | Track      | Purpose                                    | Typical Stories |
 | ---------------------------- | ------------- | ---------- | ------------------------------------------ | --------------- |
-| **workflow-init**            | PM/Analyst    | All        | Entry point: discovery + routing           | N/A             |
+| **workflow-init**            | PM/Strategist | All        | Entry point: discovery + routing           | N/A             |
 | **tech-spec**                | PM            | Quick Flow | Technical document → Story or Epic+Stories | 1-15            |
 | **prd**                      | PM            | AIRchetipo | Strategic PRD                              | 10-50+          |
 | **gdd**                      | Game Designer | AIRchetipo | Game Design Document                       | 10-50+          |
@@ -233,7 +233,7 @@ The system guides but never forces. You can override recommendations.
 
 **Purpose:** Strategic PRD with epic breakdown for software products (AIRchetipo track).
 
-**Agent:** PM (with Architect and Analyst support)
+**Agent:** PM (with Architect and Strategist support)
 
 **When to Use:**
 
@@ -489,7 +489,7 @@ Always run `document-project` before planning brownfield projects. AI agents nee
 ### Brownfield Software (AIRchetipo)
 
 ```
-1. Technical Writer or Analyst: document-project
+1. Technical Writer or Strategist: document-project
 2. workflow-init → routes to prd
 3. PM: prd workflow
 4. PM: create-epics-and-stories

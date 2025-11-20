@@ -534,7 +534,7 @@ Trust your expertise - AIM supports your decisions.
 
 **Example parties:**
 
-- **Product Strategy:** PM + Analyst + AIR Builder
+- **Product Strategy:** PM + Strategist + AIR Builder
 - **Technical Design:** Architect + Game Architect + DEV
 - **User Experience:** UX Designer + PM + Technical Writer
 

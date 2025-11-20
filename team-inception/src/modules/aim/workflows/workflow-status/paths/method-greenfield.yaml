@@ -14,20 +14,20 @@ phases:
     workflows:
       - id: "brainstorm-project"
         optional: true
-        agent: "analyst"
+        agent: "strategist"
         command: "brainstorm-project"
         included_by: "user_choice"
 
       - id: "research"
         optional: true
-        agent: "analyst"
+        agent: "strategist"
         command: "research"
         included_by: "user_choice"
         note: "Can have multiple research workflows"
 
       - id: "product-brief"
         optional: true
-        agent: "analyst"
+        agent: "strategist"
         command: "product-brief"
         included_by: "user_choice"
         note: "Recommended for greenfield Method projects"

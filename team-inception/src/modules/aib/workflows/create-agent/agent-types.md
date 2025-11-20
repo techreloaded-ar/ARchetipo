@@ -34,8 +34,8 @@ Part of a module system under `{air_folder}/{module}/agents/`:
 {air_folder}/aim/agents/
 ├── product-manager.agent.yaml
 ├── product-manager.md           # Built XML
-├── business-analyst.agent.yaml
-└── business-analyst.md          # Built XML
+├── business-strategist.agent.yaml
+└── business-strategist.md          # Built XML
 ```
 
 ## Agent Types
@@ -198,7 +198,7 @@ agent:
 - Product Manager (creates PRDs, manages requirements)
 - Security Engineer (threat models, security reviews)
 - Test Architect (test strategies, automation)
-- Business Analyst (market research, requirements)
+- Business Strategist (market research, requirements)
 
 **YAML Structure (source):**
 

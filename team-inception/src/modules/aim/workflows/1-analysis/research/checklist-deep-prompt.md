@@ -26,7 +26,7 @@
 
 ### Source Quality Guidance
 
-- [ ] Prompt specifies preferred sources (e.g., "Official docs > analyst reports > blog posts")
+- [ ] Prompt specifies preferred sources (e.g., "Official docs > strategist reports > blog posts")
 - [ ] Prompt prioritizes recency: "Prioritize {{current_year}} sources for time-sensitive data"
 - [ ] Prompt requires credibility assessment: "Note source credibility for each citation"
 - [ ] Prompt warns against: "Do not rely on single blog posts for critical claims"

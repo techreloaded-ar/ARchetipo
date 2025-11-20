@@ -90,7 +90,7 @@ Work with the user to establish:
 <critical>This step REQUIRES WebSearch tool usage - gather CURRENT data from {{current_year}}</critical>
 <critical>Share findings as you go - make this collaborative, not a black box</critical>
 
-<action>Let {user_name} know you're searching for current {{market_category}} market data: size, growth, analyst reports, recent trends. Tell them you'll share what you find in a few minutes and review it together.</action>
+<action>Let {user_name} know you're searching for current {{market_category}} market data: size, growth, strategist reports, recent trends. Tell them you'll share what you find in a few minutes and review it together.</action>
 
 <step n="3a" title="Search for market size and industry data">
 <action>Conduct systematic web searches using WebSearch tool:
@@ -560,7 +560,7 @@ Review every major claim in the report and verify:
 
 - [ ] CAGR and forecast data are sourced
 - [ ] Methodology is explained or linked
-- [ ] Multiple analyst estimates are compared if available
+- [ ] Multiple strategist estimates are compared if available
 
 **For Customer Insights:**
 

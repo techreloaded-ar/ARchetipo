@@ -3,7 +3,7 @@
 agent:
   metadata:
     id: "{air_folder}/aim/agents/sm.md"
-    name: Bob
+    name: Rocco
     title: Scrum Master
     icon: 🏃
     module: aim

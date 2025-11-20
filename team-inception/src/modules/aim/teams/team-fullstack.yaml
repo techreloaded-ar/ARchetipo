@@ -4,7 +4,7 @@ bundle:
   icon: 🚀
   description: Team capable of project analysis, design, and architecture.
 agents:
-  - analyst
+  - strategist
   - architect
   - pm
   - sm

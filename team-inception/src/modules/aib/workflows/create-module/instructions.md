@@ -94,7 +94,7 @@
 
 **Example Agent Patterns by Domain:**
 
-- Data/Analytics: Analyst, Designer, Builder roles
+- Data/Analytics: Strategist, Designer, Builder roles
 - Gaming/Creative: Game Master, Generator, Storytelling roles
 - Team/Business: Manager, Facilitator, Documentation roles
 

@@ -165,7 +165,7 @@ If you have documentation but files are huge (>500 lines, 10+ level 2 sections):
 
 **Action: Run document-project workflow**
 
-1. Load Analyst or Technical Writer (Paige) agent
+1. Load Strategist or Technical Writer (Paige) agent
 2. Run `*document-project`
 3. Choose scan level:
    - **Quick** (2-5min): Pattern analysis, no source reading
@@ -472,7 +472,7 @@ Document in tech-spec/architecture:
 **Workflow:**
 
 1. **Document:** Run `document-project` (Deep scan) - Critical for understanding existing UI patterns
-2. **Analyze:** Load Analyst → `research` (if evaluating analytics libraries)
+2. **Analyze:** Load Strategist → `research` (if evaluating analytics libraries)
 3. **Plan:** Load PM → `prd`
 4. **Solution:** Load Architect → `create-architecture` → `solutioning-gate-check`
 5. **Implement:** Sprint-based (10-15 stories)
@@ -494,7 +494,7 @@ Document in tech-spec/architecture:
 **Workflow:**
 
 1. **Document:** Run `document-project` (Exhaustive if not documented) - **Mandatory**
-2. **Analyze:** Load Analyst → `research` (WebSocket vs WebRTC vs CRDT)
+2. **Analyze:** Load Strategist → `research` (WebSocket vs WebRTC vs CRDT)
 3. **Plan:** Load PM → `prd`
 4. **Solution:**
    - Load Architect → `create-architecture` (extend for real-time layer)
@@ -616,12 +616,12 @@ Document in tech-spec/architecture:
 
 ```bash
 # Phase 0: Documentation (If Needed)
-# Analyst agent:
+# Strategist agent:
 document-project        # Create comprehensive docs (10-30min)
 # OR load index-docs task for existing docs (2-5min)
 
 # Phase 1: Analysis (Optional)
-# Analyst agent:
+# Strategist agent:
 brainstorm-project      # Explore solutions
 research                # Gather data
 product-brief           # Strategic planning (AIRchetipo/Enterprise only)

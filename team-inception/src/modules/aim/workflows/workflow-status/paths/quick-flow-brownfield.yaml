@@ -14,7 +14,7 @@ phases:
     workflows:
       - id: "document-project"
         required: true
-        agent: "analyst"
+        agent: "strategist"
         command: "document-project"
         output: "Comprehensive project documentation"
         purpose: "Understand existing codebase before planning"
@@ -26,13 +26,13 @@ phases:
     workflows:
       - id: "brainstorm-project"
         optional: true
-        agent: "analyst"
+        agent: "strategist"
         command: "brainstorm-project"
         included_by: "user_choice"
 
       - id: "research"
         optional: true
-        agent: "analyst"
+        agent: "strategist"
         command: "research"
         included_by: "user_choice"
 

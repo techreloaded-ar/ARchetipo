@@ -3,7 +3,7 @@
 agent:
   metadata:
     id: "{air_folder}/aim/agents/architect.md"
-    name: Winston
+    name: Leonardo
     title: Architect
     icon: 🏗️
     module: aim

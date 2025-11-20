@@ -6,7 +6,7 @@ subagents:
   files:
     - aim-market-researcher.md
     - aim-trend-spotter.md
-    - aim-data-analyst.md
+    - aim-data-strategist.md
     - aim-competitor-analyzer.md
     - aim-user-researcher.md
 
@@ -28,7 +28,7 @@ injections:
 
       - **aim-market-researcher**: Comprehensive market intelligence gathering and analysis
       - **aim-trend-spotter**: Identifies emerging trends and weak signals
-      - **aim-data-analyst**: Quantitative analysis and market sizing calculations
+      - **aim-data-strategist**: Quantitative analysis and market sizing calculations
       - **aim-competitor-analyzer**: Deep competitive intelligence and positioning
       - **aim-user-researcher**: User research, personas, and journey mapping
 
@@ -37,9 +37,9 @@ injections:
       </critical>
 
   - injection_point: "market-tam-calculations"
-    description: "Enhanced TAM calculation with data analyst"
+    description: "Enhanced TAM calculation with data strategist"
     content: |
-      <invoke-subagent name="aim-data-analyst">
+      <invoke-subagent name="aim-data-strategist">
       Calculate TAM using multiple methodologies and provide confidence intervals.
       Use all available market data from previous research steps.
       Show detailed calculations and assumptions.
@@ -90,7 +90,7 @@ configuration:
       max_execution_time: 180
       retry_on_failure: false
 
-    aim-data-analyst:
+    aim-data-strategist:
       priority: high
       max_execution_time: 240
       retry_on_failure: true

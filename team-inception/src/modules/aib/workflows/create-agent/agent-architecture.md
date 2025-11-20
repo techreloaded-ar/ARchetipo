@@ -27,9 +27,9 @@ _LLM-Optimized Technical Documentation for Agent Building_
 
 **Required Attributes:**
 
-- `id` - Unique path identifier (e.g., "{air_folder}/aim/agents/analyst.md")
+- `id` - Unique path identifier (e.g., "{air_folder}/aim/agents/strategist.md")
 - `name` - Agent's name (e.g., "Mary", "John", "Helper")
-- `title` - Professional title (e.g., "Business Analyst", "Security Engineer")
+- `title` - Professional title (e.g., "Business Strategist", "Security Engineer")
 - `icon` - Single emoji representing the agent
 
 ### Core Sections
@@ -285,7 +285,7 @@ Bad:  ../../../relative/paths/
 <!-- Complete persona -->
 <persona>
   <role>Data Analysis Expert</role>
-  <identity>Senior analyst with 10+ years...</identity>
+  <identity>Senior strategist with 10+ years...</identity>
   <communication_style>Analytical and precise...</communication_style>
   <principles>I believe in data-driven...</principles>
 </persona>

@@ -22,13 +22,13 @@ When Claude Code is selected during AIRchetipo installation:
 
 ### Product Management Subagents
 
-| Subagent                 | Purpose                                  | Used By    | Recommended For                               |
-| ------------------------ | ---------------------------------------- | ---------- | --------------------------------------------- |
-| **market-researcher**    | Competitive analysis and market insights | PM Agent   | PRD creation (`*create-prd`), market analysis |
-| **requirements-analyst** | Extract and validate requirements        | PM Agent   | Requirements sections, user story creation    |
-| **technical-evaluator**  | Technology stack evaluation              | PM Agent   | Technical assumptions in PRDs                 |
-| **epic-optimizer**       | Story breakdown and sizing               | PM Agent   | Epic details, story sequencing                |
-| **document-reviewer**    | Quality checks and validation            | PM/Analyst | Final document review before delivery         |
+| Subagent                 | Purpose                                  | Used By       | Recommended For                               |
+| ------------------------ | ---------------------------------------- | ------------- | --------------------------------------------- |
+| **market-researcher**    | Competitive analysis and market insights | PM Agent      | PRD creation (`*create-prd`), market analysis |
+| **requirements-analyst** | Extract and validate requirements        | PM Agent      | Requirements sections, user story creation    |
+| **technical-evaluator**  | Technology stack evaluation              | PM Agent      | Technical assumptions in PRDs                 |
+| **epic-optimizer**       | Story breakdown and sizing               | PM Agent      | Epic details, story sequencing                |
+| **document-reviewer**    | Quality checks and validation            | PM/Strategist | Final document review before delivery         |
 
 ### Architecture and Documentation Subagents
 

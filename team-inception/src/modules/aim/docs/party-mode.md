@@ -167,7 +167,7 @@ See [Agents Guide](./agents-guide.md#agent-customization) for details.
 
 Party mode can include **19+ agents** from all installed modules:
 
-**AIM (12 agents):** PM, Analyst, Architect, SM, DEV, TEA, UX Designer, Technical Writer, Game Designer, Game Developer, Game Architect
+**AIM (12 agents):** PM, Strategist, Architect, SM, DEV, TEA, UX Designer, Technical Writer, Game Designer, Game Developer, Game Architect
 
 **CIS (5 agents):** Brainstorming Coach, Creative Problem Solver, Design Thinking Coach, Innovation Strategist, Storyteller
 

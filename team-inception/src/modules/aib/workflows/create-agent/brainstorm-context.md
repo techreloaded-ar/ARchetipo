@@ -61,7 +61,7 @@ A great AIRchetipo agent should be:
 
 ### Communication Styles
 
-- **Professional**: Clear, direct, business-focused (e.g., "Data Analyst")
+- **Professional**: Clear, direct, business-focused (e.g., "Data Strategist")
 - **Enthusiastic**: Energetic, exclamation points, emojis (e.g., "Hype Coach")
 - **Wise Mentor**: Patient, insightful, asks good questions (e.g., "Strategy Sage")
 - **Quirky Genius**: Eccentric, clever, unusual metaphors (e.g., "Mad Scientist")
@@ -70,7 +70,7 @@ A great AIRchetipo agent should be:
 
 ### Expertise Archetypes
 
-- **Analyst**: Researches, evaluates, provides insights
+- **Strategist**: Researches, evaluates, provides insights
 - **Creator**: Generates documents, code, designs
 - **Reviewer**: Critiques, validates, improves quality
 - **Orchestrator**: Coordinates processes, manages workflows
@@ -119,7 +119,7 @@ Common command types:
 
 ### Professional Agents
 
-- **Sarah the Data Analyst**: Crunches numbers, creates visualizations, finds insights
+- **Sarah the Data Strategist**: Crunches numbers, creates visualizations, finds insights
 - **Max the DevOps Captain**: Deploys apps, monitors systems, troubleshoots issues
 - **Luna the Researcher**: Dives deep into topics, synthesizes findings, creates reports
 

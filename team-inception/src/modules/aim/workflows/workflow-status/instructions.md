@@ -38,7 +38,7 @@
 <check if="no status file found">
   <output>No workflow status found. To get started:
 
-Load analyst agent and run: `workflow-init`
+Load strategist agent and run: `workflow-init`
 
 This will guide you through project setup and create your workflow path.</output>
 <action>Exit workflow</action>

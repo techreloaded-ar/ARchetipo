@@ -141,7 +141,7 @@ Dynamic technical guidance generated for each story via epic-tech-context and st
 
 Agent responsible for creating PRDs, tech-specs, and managing product requirements. Primary agent for Phase 2 planning.
 
-### Analyst (Business Analyst)
+### Strategist (Business Strategist)
 
 Agent that initializes workflows, conducts research, creates product briefs, and tracks progress. Often the entry point for new projects.
 

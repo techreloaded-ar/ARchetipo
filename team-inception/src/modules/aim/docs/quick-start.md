@@ -5,7 +5,7 @@ Get started with AIRchetipo v6 for your new greenfield project. This guide walks
 ## TL;DR - The Quick Path
 
 1. **Install**: `npx airchetipo@alpha install`
-2. **Initialize**: Load Analyst agent → Run "workflow-init"
+2. **Initialize**: Load Strategist agent → Run "workflow-init"
 3. **Plan**: Load PM agent → Run "prd" (or "tech-spec" for small projects)
 4. **Architect**: Load Architect agent → Run "create-architecture" (10+ stories only)
 5. **Build**: Load SM agent → Run workflows for each story → Load DEV agent → Implement
@@ -37,7 +37,7 @@ The interactive installer will guide you through setup and create a `{air_folder
 
 ### Step 1: Initialize Your Workflow
 
-1. **Load the Analyst agent** in your IDE - See your IDE-specific instructions in [docs/ide-info](https://github.com/airchetipo-org/AIRchetipo/tree/main/docs/ide-info) for how to activate agents:
+1. **Load the Strategist agent** in your IDE - See your IDE-specific instructions in [docs/ide-info](https://github.com/airchetipo-org/AIRchetipo/tree/main/docs/ide-info) for how to activate agents:
    - [Claude Code](https://github.com/airchetipo-org/AIRchetipo/blob/main/docs/ide-info/claude-code.md)
    - [VS Code/Cursor/Windsurf](https://github.com/airchetipo-org/AIRchetipo/tree/main/docs/ide-info) - Check your IDE folder
    - Other IDEs also supported
@@ -120,7 +120,7 @@ The agents in V6 are very good with fuzzy menu matching!
 
 For v4 users or those who prefer to skip workflow-status guidance:
 
-- **Analyst** → Brainstorming, Product Brief
+- **Strategist** → Brainstorming, Product Brief
 - **PM** → PRD (AIRchetipo/Enterprise tracks) OR tech-spec (Quick Flow track)
 - **UX-Designer** → UX Design Document (if UI-heavy)
 - **Architect** → Architecture (AIRchetipo/Enterprise tracks)
@@ -241,7 +241,7 @@ After completing all stories in an epic:
 
 Each agent is a specialized AI persona:
 
-- **Analyst** - Initializes workflows and tracks progress
+- **Strategist** - Initializes workflows and tracks progress
 - **PM** - Creates requirements and specifications
 - **UX-Designer** - If your project has a front end - this designer will help produce artifacts, come up with mock updates, and design a great look and feel with you giving it guidance.
 - **Architect** - Designs system architecture
@@ -287,7 +287,7 @@ flowchart LR
         A1[Brainstorm]
         A2[Research]
         A3[Brief]
-        A4[Analyst]
+        A4[Strategist]
         A1 ~~~ A2 ~~~ A3 ~~~ A4
     end
 
@@ -338,7 +338,7 @@ A: Only for AIRchetipo and Enterprise tracks. Quick Flow projects skip straight 
 A: Yes! The SM agent has a "correct-course" workflow for handling scope changes.
 
 **Q: What if I want to brainstorm first?**
-A: Load the Analyst agent and tell it to "Run brainstorm-project" before running workflow-init.
+A: Load the Strategist agent and tell it to "Run brainstorm-project" before running workflow-init.
 
 **Q: Why do I need fresh chats for each workflow?**
 A: Context-intensive workflows can cause hallucinations if run in sequence. Fresh chats ensure maximum context capacity.
@@ -363,4 +363,4 @@ A: Yes, once you learn the flow. Use the Quick Reference in Step 2 to go directl
 ✅ **Tracking is automatic** - The status files update themselves, no manual editing needed
 ✅ **Agents are flexible** - Use menu numbers, shortcuts (\*prd), or natural language
 
-**Ready to start building?** Install AIRchetipo, load the Analyst, run workflow-init, and let the agents guide you!
+**Ready to start building?** Install AIRchetipo, load the Strategist, run workflow-init, and let the agents guide you!

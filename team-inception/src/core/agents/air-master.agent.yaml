@@ -4,7 +4,7 @@
 agent:
   metadata:
     id: "{air_folder}/core/agents/air-master.md"
-    name: "AIRchetipo Master"
+    name: "Virgilio"
     title: "AIRchetipo Master Executor, Knowledge Custodian, and Workflow Orchestrator"
     icon: "🧙"
 

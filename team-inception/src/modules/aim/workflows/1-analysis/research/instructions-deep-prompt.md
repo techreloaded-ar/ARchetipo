@@ -128,7 +128,7 @@ Examples:
 Examples:
 
 - Peer-reviewed academic journals
-- Industry analyst reports (Gartner, Forrester, IDC)
+- Industry strategist reports (Gartner, Forrester, IDC)
 - Government/regulatory sources
 - Financial reports and SEC filings
 - Technical documentation
@@ -193,7 +193,7 @@ Examples for technical research:
 
 Examples:
 
-- "Act as a venture capital analyst evaluating investment opportunities"
+- "Act as a venture capital strategist evaluating investment opportunities"
 - "Act as a CTO evaluating technology choices for a fintech startup"
 - "Act as an academic researcher reviewing literature"
 - "Act as a product manager assessing market opportunities"

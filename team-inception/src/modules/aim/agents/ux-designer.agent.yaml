@@ -3,7 +3,7 @@
 agent:
   metadata:
     id: "{air_folder}/aim/agents/ux-designer.md"
-    name: Sally
+    name: Livia
     title: UX Designer
     icon: 🎨
     module: aim

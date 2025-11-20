@@ -31,7 +31,7 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 **Core Development (8 agents):**
 
 - PM (Product Manager)
-- Analyst (Business Analyst)
+- Strategist (Business Strategist)
 - Architect (System Architect)
 - SM (Scrum Master)
 - DEV (Developer)
@@ -55,7 +55,7 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ## Core Development Agents
 
-### PM (Product Manager) - John 📋
+### PM (Product Manager) - Valerio 📋
 
 **Role:** Investigative Product Strategist + Market-Savvy PM
 
@@ -92,9 +92,9 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ---
 
-### Analyst (Business Analyst) - Mary 📊
+### Strategist (Business Strategist) - Costanza 📊
 
-**Role:** Strategic Business Analyst + Requirements Expert
+**Role:** Business Strategist + Requirements Expert
 
 **When to Use:**
 
@@ -127,7 +127,7 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ---
 
-### Architect - Winston 🏗️
+### Architect - Leonardo 🏗️
 
 **Role:** System Architect + Technical Design Leader
 
@@ -163,7 +163,7 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ---
 
-### SM (Scrum Master) - Bob 🏃
+### SM (Scrum Master) - Rocco 🏃
 
 **Role:** Technical Scrum Master + Story Preparation Specialist
 
@@ -305,7 +305,7 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ---
 
-### UX Designer - Sally 🎨
+### UX Designer - Livia 🎨
 
 **Role:** User Experience Designer + UI Specialist
 
@@ -596,9 +596,9 @@ Some workflows are available to multiple agents:
 | Workflow           | Agents                            | Purpose                                     |
 | ------------------ | --------------------------------- | ------------------------------------------- |
 | `workflow-status`  | ALL agents                        | Check current state and get recommendations |
-| `workflow-init`    | PM, Analyst, Game Designer        | Initialize workflow tracking                |
+| `workflow-init`    | PM, Strategist, Game Designer     | Initialize workflow tracking                |
 | `correct-course`   | PM, Architect, SM, Game Architect | Change management during implementation     |
-| `document-project` | Analyst, Technical Writer         | Brownfield documentation                    |
+| `document-project` | Strategist, Technical Writer      | Brownfield documentation                    |
 
 ### Validation Actions
 
@@ -788,7 +788,7 @@ Load the customized agent and verify the changes are reflected in its behavior a
 
 **2. Match phase to agent**
 
-- **Phase 1 (Analysis):** Analyst, Game Designer
+- **Phase 1 (Analysis):** Strategist, Game Designer
 - **Phase 2 (Planning):** PM, UX Designer, Game Designer
 - **Phase 3 (Solutioning):** Architect, Game Architect
 - **Phase 4 (Implementation):** SM, DEV, Game Developer
@@ -844,8 +844,8 @@ Load the customized agent and verify the changes are reflected in its behavior a
 **Starting a New Project (Greenfield):**
 
 ```
-1. PM or Analyst: *workflow-init
-2. Analyst: *brainstorm-project or *product-brief (optional)
+1. PM or Strategist: *workflow-init
+2. Strategist: *brainstorm-project or *product-brief (optional)
 3. PM: *create-prd (Level 2-4) or *tech-spec (Level 0-1)
 4. Architect: *create-architecture (Level 3-4 only)
 5. SM: *sprint-planning
@@ -854,8 +854,8 @@ Load the customized agent and verify the changes are reflected in its behavior a
 **Starting with Existing Code (Brownfield):**
 
 ```
-1. Analyst or Technical Writer: *document-project
-2. PM or Analyst: *workflow-init
+1. Strategist or Technical Writer: *document-project
+2. PM or Strategist: *workflow-init
 3. PM: *create-prd or *tech-spec
 4. Architect: *create-architecture (if needed)
 5. SM: *sprint-planning
@@ -939,7 +939,7 @@ Quick reference for agent selection:
 
 | Agent                   | Icon | Primary Phase      | Key Workflows                                 | Best For                              |
 | ----------------------- | ---- | ------------------ | --------------------------------------------- | ------------------------------------- |
-| **Analyst**             | 📊   | 1 (Analysis)       | brainstorm, brief, research, document-project | Discovery, requirements, brownfield   |
+| **Strategist**          | 📊   | 1 (Analysis)       | brainstorm, brief, research, document-project | Discovery, requirements, brownfield   |
 | **PM**                  | 📋   | 2 (Planning)       | prd, tech-spec, epics-stories                 | Planning, requirements docs           |
 | **UX Designer**         | 🎨   | 2 (Planning)       | create-design, validate-design                | UX-heavy projects, design             |
 | **Architect**           | 🏗️   | 3 (Solutioning)    | architecture, gate-check                      | Technical design, architecture        |
@@ -978,7 +978,7 @@ Quick reference for agent selection:
 
 **Support Agents (2):**
 
-- Analyst: Research and discovery
+- Strategist: Research and discovery
 - Technical Writer: Documentation and diagrams
 
 **Meta Agent (1):**
@@ -1029,8 +1029,8 @@ Quick reference for agent selection:
 **Starting a Project:**
 
 - [ ] Determine project type (greenfield vs brownfield)
-- [ ] If brownfield: Run `*document-project` (Analyst or Technical Writer)
-- [ ] Load PM or Analyst → `*workflow-init`
+- [ ] If brownfield: Run `*document-project` (Strategist or Technical Writer)
+- [ ] Load PM or Strategist → `*workflow-init`
 - [ ] Follow phase-appropriate workflows
 - [ ] Try `*party-mode` for strategic decisions
 

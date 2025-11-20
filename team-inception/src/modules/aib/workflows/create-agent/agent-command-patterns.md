@@ -631,7 +631,7 @@ The `data` attribute can be added to ANY command type to provide supplementary i
 ### Complete Self-Contained Agent
 
 ```xml
-<agent id="{air_folder}/research/agents/analyst.md" name="Research Analyst" icon="🔬">
+<agent id="{air_folder}/research/agents/strategist.md" name="Research Strategist" icon="🔬">
   <!-- Embedded prompt library -->
   <prompts>
     <prompt id="swot-analysis">
@@ -709,7 +709,7 @@ The `data` attribute can be added to ANY command type to provide supplementary i
 For agents that primarily use embedded logic:
 
 ```xml
-<agent name="Data Analyst">
+<agent name="Data Strategist">
   <menu>
     <item cmd="*help">Show numbered cmd list</item>
 

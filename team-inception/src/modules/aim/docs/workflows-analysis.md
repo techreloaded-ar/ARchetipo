@@ -21,18 +21,18 @@ Phase 1 (Analysis) workflows are **optional** exploration and discovery tools th
 graph TB
     subgraph Discovery["<b>DISCOVERY & IDEATION (Optional)</b>"]
         direction LR
-        BrainstormProject["<b>Analyst: brainstorm-project</b><br/>Multi-track solution exploration"]
-        BrainstormGame["<b>Analyst: brainstorm-game</b><br/>Game concept generation"]
+        BrainstormProject["<b>Strategist: brainstorm-project</b><br/>Multi-track solution exploration"]
+        BrainstormGame["<b>Strategist: brainstorm-game</b><br/>Game concept generation"]
     end
 
     subgraph Research["<b>RESEARCH & VALIDATION (Optional)</b>"]
         direction TB
-        ResearchWF["<b>Analyst: research</b><br/>• market (TAM/SAM/SOM)<br/>• technical (framework evaluation)<br/>• competitive (landscape)<br/>• user (personas, JTBD)<br/>• domain (industry analysis)<br/>• deep_prompt (AI research)"]
+        ResearchWF["<b>Strategist: research</b><br/>• market (TAM/SAM/SOM)<br/>• technical (framework evaluation)<br/>• competitive (landscape)<br/>• user (personas, JTBD)<br/>• domain (industry analysis)<br/>• deep_prompt (AI research)"]
     end
 
     subgraph Strategy["<b>STRATEGIC CAPTURE (Recommended for Greenfield)</b>"]
         direction LR
-        ProductBrief["<b>Analyst: product-brief</b><br/>Product vision + strategy<br/>(Interactive or YOLO mode)"]
+        ProductBrief["<b>Strategist: product-brief</b><br/>Product vision + strategy<br/>(Interactive or YOLO mode)"]
         GameBrief["<b>Game Designer: game-brief</b><br/>Game vision capture<br/>(Interactive or YOLO mode)"]
     end
 
@@ -64,10 +64,10 @@ graph TB
 
 | Workflow               | Agent         | Required    | Purpose                                                        | Output                       |
 | ---------------------- | ------------- | ----------- | -------------------------------------------------------------- | ---------------------------- |
-| **brainstorm-project** | Analyst       | No          | Explore solution approaches and architectures                  | Solution options + rationale |
-| **brainstorm-game**    | Analyst       | No          | Generate game concepts using creative techniques               | Game concepts + evaluation   |
-| **research**           | Analyst       | No          | Multi-type research (market/technical/competitive/user/domain) | Research reports             |
-| **product-brief**      | Analyst       | Recommended | Define product vision and strategy (interactive)               | Product Brief document       |
+| **brainstorm-project** | Strategist    | No          | Explore solution approaches and architectures                  | Solution options + rationale |
+| **brainstorm-game**    | Strategist    | No          | Generate game concepts using creative techniques               | Game concepts + evaluation   |
+| **research**           | Strategist    | No          | Multi-type research (market/technical/competitive/user/domain) | Research reports             |
+| **product-brief**      | Strategist    | Recommended | Define product vision and strategy (interactive)               | Product Brief document       |
 | **game-brief**         | Game Designer | Recommended | Capture game vision before GDD (interactive)                   | Game Brief document          |
 
 ---
@@ -78,7 +78,7 @@ graph TB
 
 **Purpose:** Generate multiple solution approaches through parallel ideation tracks (architecture, UX, integration, value).
 
-**Agent:** Analyst
+**Agent:** Strategist
 
 **When to Use:**
 
@@ -102,7 +102,7 @@ graph TB
 
 **Purpose:** Generate game concepts through systematic creative exploration using five brainstorming techniques.
 
-**Agent:** Analyst
+**Agent:** Strategist
 
 **When to Use:**
 
@@ -133,7 +133,7 @@ graph TB
 
 **Purpose:** Comprehensive multi-type research system consolidating market, technical, competitive, user, and domain analysis.
 
-**Agent:** Analyst
+**Agent:** Strategist
 
 **Research Types:**
 
@@ -161,7 +161,7 @@ graph TB
 
 **Purpose:** Interactive product brief creation that guides strategic product vision definition.
 
-**Agent:** Analyst
+**Agent:** Strategist
 
 **When to Use:**
 

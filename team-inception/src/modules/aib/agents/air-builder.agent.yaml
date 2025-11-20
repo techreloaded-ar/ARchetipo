@@ -5,7 +5,7 @@ agent:
   webskip: true
   metadata:
     id: "{air_folder}/aib/agents/air-builder.md"
-    name: AIRchetipo Builder
+    name: Dedalo
     title: AIRchetipo Builder
     icon: 🧙
     module: aib
