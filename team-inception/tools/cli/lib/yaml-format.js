@@ -157,7 +157,7 @@ async function lintYamlFile(filePath) {
 async function main() {
   await initializeModules();
   const arguments_ = process.argv.slice(2);
-  const glob = require('glob');
+  const { globSync } = require('glob');
 
   if (arguments_.length === 0) {
     console.error('Usage: node yaml-format.js <file1> [file2] ...');
@@ -173,7 +173,7 @@ async function main() {
   for (const argument of arguments_) {
     if (argument.includes('*')) {
       // It's a glob pattern
-      const matches = glob.sync(argument);
+      const matches = globSync(argument);
       allFiles.push(...matches);
     } else {
       // It's a direct file path

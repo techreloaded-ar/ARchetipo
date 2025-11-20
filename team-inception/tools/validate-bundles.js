@@ -2,7 +2,7 @@ const fs = require('fs-extra');
 const path = require('node:path');
 const xml2js = require('xml2js');
 const chalk = require('chalk');
-const glob = require('glob');
+const { globSync } = require('glob');
 
 async function validateXmlFile(filePath) {
   try {
@@ -25,8 +25,9 @@ async function validateAllBundles() {
   const bundlesDir = path.join(__dirname, '..', 'web-bundles');
 
   // Find all XML files in web-bundles
-  const pattern = path.join(bundlesDir, '**/*.xml');
-  const files = glob.sync(pattern);
+  // Note: glob requires forward slashes even on Windows
+  const pattern = path.join(bundlesDir, '**', '*.xml').replaceAll('\\', '/');
+  const files = globSync(pattern);
 
   if (files.length === 0) {
     console.log(chalk.yellow('No XML files found in web-bundles directory'));

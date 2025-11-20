@@ -1,6 +1,6 @@
 const fs = require('fs-extra');
 const path = require('node:path');
-const glob = require('glob');
+const { glob } = require('glob');
 const chalk = require('chalk');
 const yaml = require('js-yaml');
 
@@ -91,7 +91,7 @@ class DependencyResolver {
       // Collect agents
       const agentsDir = path.join(moduleDir, 'agents');
       if (await fs.pathExists(agentsDir)) {
-        const agentFiles = await glob.glob('*.md', { cwd: agentsDir });
+        const agentFiles = await glob('*.md', { cwd: agentsDir });
         for (const file of agentFiles) {
           const agentPath = path.join(agentsDir, file);
 
@@ -114,7 +114,7 @@ class DependencyResolver {
       // Collect tasks
       const tasksDir = path.join(moduleDir, 'tasks');
       if (await fs.pathExists(tasksDir)) {
-        const taskFiles = await glob.glob('*.md', { cwd: tasksDir });
+        const taskFiles = await glob('*.md', { cwd: tasksDir });
         for (const file of taskFiles) {
           files.push({
             path: path.join(tasksDir, file),
@@ -323,7 +323,7 @@ class DependencyResolver {
               }
 
               if (await fs.pathExists(basePath)) {
-                const files = await glob.glob(filePattern, { cwd: basePath });
+                const files = await glob(filePattern, { cwd: basePath });
                 for (const file of files) {
                   paths.push(path.join(basePath, file));
                 }
@@ -357,7 +357,7 @@ class DependencyResolver {
             const pattern = path.basename(depPath);
 
             if (await fs.pathExists(basePath)) {
-              const files = await glob.glob(pattern, { cwd: basePath });
+              const files = await glob(pattern, { cwd: basePath });
               for (const file of files) {
                 paths.push(path.join(basePath, file));
               }
