@@ -40,6 +40,7 @@ web_bundle:
   name: "create-agent"
   description: "Interactive workflow to build AIRchetipo compliant agents (simple, expert, or module types) with optional brainstorming for agent ideas, proper persona development, activation rules, and command structure"
   author: "AIRchetipo"
+  template: false
   web_bundle_files:
     - "{air_folder}/aib/workflows/create-agent/instructions.md"
     - "{air_folder}/aib/workflows/create-agent/checklist.md"

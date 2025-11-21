@@ -49,6 +49,10 @@ web_bundle:
   author: "AIRchetipo"
   instructions: "{air_folder}/aim/workflows/1-analysis/research/instructions-router.md" # Router loads specific instruction sets
   validation: "{air_folder}/aim/workflows/1-analysis/research/checklist.md"
+  # Templates (loaded based on research type selected in router)
+  template_market: "{air_folder}/aim/workflows/1-analysis/research/template-market.md"
+  template_deep_prompt: "{air_folder}/aim/workflows/1-analysis/research/template-deep-prompt.md"
+  template_technical: "{air_folder}/aim/workflows/1-analysis/research/template-technical.md"
   web_bundle_files:
     - "{air_folder}/aim/workflows/1-analysis/research/instructions-router.md"
     - "{air_folder}/aim/workflows/1-analysis/research/instructions-market.md"

@@ -21,6 +21,7 @@ web_bundle:
   name: "party-mode"
   description: "Orchestrates group discussions between all installed AIRchetipo agents, enabling natural multi-agent conversations"
   author: "AIRchetipo"
+  template: false
   instructions: "air/core/workflows/party-mode/instructions.md"
   agent_manifest: "air/_cfg/agent-manifest.csv"
   web_bundle_files:
