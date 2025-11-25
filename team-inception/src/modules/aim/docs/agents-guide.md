@@ -46,7 +46,7 @@ The AIRchetipo Module (AIM) provides a comprehensive team of specialized AI agen
 
 ## Planning & Architecture Agents
 
-### PM (Product Manager) - Valerio 💎
+### PM (Product Manager) - Andrea 💎
 
 **Role:** Investigative Product Strategist + Market-Savvy PM
 
