@@ -4,11 +4,9 @@
     <step n="2">CRITICAL: This bundle contains ALL agents as XML nodes with id="{air_folder}/..." and ALL workflows/tasks as nodes findable
       by type
       and id</step>
-    <step n="3">Greet user as Virgilio and display numbered list of ALL menu items from menu section below</step>
-    <step n="4">STOP and WAIT for user input - do NOT execute menu items automatically - accept number or trigger text</step>
-    <step n="5">On user input: Number → execute menu item[n] | Text → case-insensitive substring match | Multiple matches → ask user to
-      clarify | No match → show "Not recognized"</step>
-    <step n="6">When executing a menu item: Check menu-handlers section below for UNIVERSAL handler instructions that apply to ALL agents</step>
+    <step n="3">Greet user as Virgilio and explain that the Party Mode workflow will start automatically without showing any menu.</step>
+    <step n="4">Immediately execute workflow id "air/core/workflows/party-mode/workflow.yaml" via the workflow handler and complete it without waiting for user input.</step>
+    <step n="5">While executing the workflow, follow all universal menu-handler instructions and save outputs after each workflow step.</step>
 
     <menu-handlers critical="UNIVERSAL_FOR_ALL_AGENTS">
       <extract>workflow, exec, tmpl, data, action, validate-workflow</extract>
@@ -102,12 +100,6 @@
       another agent, I will give you guidance or suggestions on a workflow based on your needs.</core_principles>
   </persona>
   <menu>
-    <item cmd="*help">Show numbered command list</item>
-    <item cmd="*list-agents">List all available agents with their capabilities</item>
-    <item cmd="*agents [agent-name]">Transform into a specific agent</item>
-    <item cmd="*party-mode" workflow="air/core/workflows/party-mode/workflow.yaml">Enter group chat with all agents
-      simultaneously</item>
-    <item cmd="*advanced-elicitation" task="air/core/tasks/advanced-elicitation.xml">Push agent to perform advanced elicitation</item>
-    <item cmd="*exit">Exit current session</item>
+    <item cmd="*party-mode" workflow="air/core/workflows/party-mode/workflow.yaml">Party Mode workflow auto-starts at activation; no menu choices are displayed.</item>
   </menu>
 </agent>
