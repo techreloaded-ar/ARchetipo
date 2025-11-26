@@ -47,8 +47,43 @@ Agents with `bundle="false"` attribute are automatically skipped during bundling
 
 ## Bundle Contents
 
+Bundles are generated in `web-bundles/` directory by default when run from the root of the clones project:
+
+```
+web-bundles/
+├── [module-name]/
+│   └── agents/
+│       └── [agent-name].xml
+```
+
+## Skipping Agents
+
+Agents with `bundle="false"` attribute are automatically skipped during bundling.
+
+## Bundle Contents
+
 Each bundle includes:
 
 - Agent definition with web activation
 - All resolved dependencies
 - Manifests for agent/team discovery
+
+## Limitare i workflow inclusi nei bundle di team
+
+Quando un team web deve supportare solo uno specifico workflow (ad esempio `party-mode`), è possibile alleggerire il pacchetto
+aggiungendo alla configurazione del team la lista `bundle.allowed_workflows`. Solo i workflow elencati vengono vendorizzati e i menu
+che puntano a workflow esclusi vengono rimossi automaticamente dal bundle, riducendo dimensioni e dipendenze.
+
+Esempio:
+
+```yaml
+bundle:
+  name: Team Product Inception
+  icon: "🚀"
+  allowed_workflows:
+    - air/core/workflows/party-mode/workflow.yaml
+```
+
+In questo modo il bundle contiene solo gli asset necessari per eseguire Party Mode mantenendo invariati persona e comportamento degli
+agenti coinvolti.
+

@@ -411,6 +411,10 @@
 
 <step n="5" goal="Present PRD and Exit Party Mode">
   <action>Have 2-3 agents celebrate the completion with characteristic responses</action>
+  <action>Presenta un menù post-PRD con i possibili passi successivi e chiedi all'utente di scegliere prima di concludere</action>
+  <action>Opzione 1: proporre la creazione di un backlog di user stories complete di acceptance criteria tramite `workflow create-epics-and-stories`</action>
+  <action>Opzione 2: proporre la generazione di un documento di architettura tecnica completo tramite `workflow architecture`</action>
+  <action>Descrivi l'output atteso per ogni opzione e attendi esplicitamente che l'utente risponda con la preferenza desiderata</action>
 
   <format>
     ✅ **PRD COMPLETO!** ✅
@@ -440,16 +444,17 @@
     - ✅ Epic Breakdown with User Stories
     - ✅ Roadmap
 
-    **Prossimi passi suggeriti:**
+    **Menù post-PRD (seleziona un'opzione):**
 
-    1. 🎨 **UX Design** (se il prodotto ha UI)
-       Esegui: `workflow ux-design` per design dettagliato delle interazioni
+    1. 📋 **Crea Backlog con User Stories + Acceptance Criteria**
+       - Output: documento dettagliato con epics, user stories e acceptance criteria pronti per la pianificazione
+       - Esegui: `workflow create-epics-and-stories`
 
-    2. 🏗️ **Architettura Dettagliata** (raccomandato)
-       Esegui: `workflow create-architecture` per decisioni tecniche approfondite
+    2. 🏛️ **Crea Documento di Architettura Tecnica Completo**
+       - Output: architettura collaborativa con decisioni tecniche, stack e linee guida di implementazione
+       - Esegui: `workflow architecture`
 
-    3. 📋 **Raffinamento delle Story**
-       Usa gli epic e le story dal PRD per iniziare la pianificazione sprint
+    Rispondi indicandomi 1 o 2 (puoi anche chiedere altro) e ti guiderò immediatamente nel percorso scelto.
 
     ---
 
@@ -459,8 +464,9 @@
 
   </format>
 
-<action>Exit workflow</action>
+  <action>Exit workflow</action>
 </step>
+
 
 </workflow>
 

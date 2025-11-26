@@ -266,7 +266,10 @@ class WebBundler {
       return;
     }
 
+    const workflowWhitelist = this.buildWorkflowWhitelist(teamConfig.bundle.allowed_workflows);
+
     // Start building the team bundle
+
     const dependencies = new Map();
     const processed = new Set();
     const allAgentXmls = [];
@@ -305,9 +308,10 @@ class WebBundler {
       orchestratorXml = this.injectHelpExitMenuItems(orchestratorXml);
 
       // Resolve orchestrator dependencies
-      const { dependencies: orchDeps } = await this.resolveAgentDependencies(orchestratorXml, 'core', warnings);
+      const { dependencies: orchDeps } = await this.resolveAgentDependencies(orchestratorXml, 'core', warnings, workflowWhitelist);
 
       // Merge orchestrator dependencies
+
       for (const [id, content] of orchDeps) {
         if (!dependencies.has(id)) {
           dependencies.set(id, content);
@@ -385,9 +389,15 @@ class WebBundler {
 
       // Resolve agent dependencies
       const agentWarnings = [];
-      const { dependencies: agentDeps, skippedWorkflows } = await this.resolveAgentDependencies(agentXml, moduleName, agentWarnings);
+      const { dependencies: agentDeps, skippedWorkflows } = await this.resolveAgentDependencies(
+        agentXml,
+        moduleName,
+        agentWarnings,
+        workflowWhitelist,
+      );
 
       if (agentWarnings.length > 0) {
+
         warnings.push({ agent: agentName, warnings: agentWarnings });
       }
 
@@ -642,10 +652,11 @@ class WebBundler {
   /**
    * Resolve all dependencies for an agent
    */
-  async resolveAgentDependencies(agentXml, moduleName, warnings = []) {
+  async resolveAgentDependencies(agentXml, moduleName, warnings = [], workflowWhitelist = null) {
     const dependencies = new Map();
     const processed = new Set();
     const skippedWorkflows = [];
+
 
     // Extract file references from agent XML
     const { refs, workflowRefs } = this.extractFileReferences(agentXml);
@@ -657,14 +668,22 @@ class WebBundler {
 
     // Process workflow references with special handling
     for (const workflowRef of workflowRefs) {
-      const result = await this.processWorkflowDependency(workflowRef, dependencies, processed, moduleName, warnings);
+      const result = await this.processWorkflowDependency(
+        workflowRef,
+        dependencies,
+        processed,
+        moduleName,
+        warnings,
+        workflowWhitelist,
+      );
       if (result && result.skipped) {
-        skippedWorkflows.push(workflowRef);
+        skippedWorkflows.push(result.workflowPath || workflowRef);
       }
     }
 
     return { dependencies, skippedWorkflows };
   }
+
 
   /**
    * Extract file references from agent XML
@@ -974,40 +993,57 @@ class WebBundler {
   /**
    * Process a workflow YAML file and its bundle files
    */
-  async processWorkflowDependency(workflowPath, dependencies, processed, moduleName, warnings = []) {
+  async processWorkflowDependency(
+    workflowPath,
+    dependencies,
+    processed,
+    moduleName,
+    warnings = [],
+    workflowWhitelist = null,
+    forceInclude = false,
+  ) {
+    const normalizedWorkflowId = this.normalizeWorkflowId(workflowPath);
+    const workflowId = normalizedWorkflowId || workflowPath;
+
+    if (!forceInclude && workflowWhitelist && workflowId && !workflowWhitelist.has(workflowId)) {
+      return { skipped: true, workflowPath: workflowId };
+    }
+
     // Skip if already processed
-    if (processed.has(workflowPath)) {
+    if (processed.has(workflowId)) {
       return { skipped: false };
     }
-    processed.add(workflowPath);
+    processed.add(workflowId);
 
     // Resolve actual file path
-    const actualPath = this.resolveFilePath(workflowPath, moduleName);
+    const actualPath = this.resolveFilePath(workflowId, moduleName);
 
     if (!actualPath || !(await fs.pathExists(actualPath))) {
-      warnings.push(workflowPath);
-      return { skipped: true };
+      warnings.push(workflowId);
+      return { skipped: true, workflowPath: workflowId };
     }
 
     // Read and parse YAML file
     const yamlContent = await fs.readFile(actualPath, 'utf8');
     let workflowConfig;
 
+
     try {
       workflowConfig = yaml.load(yamlContent);
     } catch (error) {
-      warnings.push(`${workflowPath} (invalid YAML: ${error.message})`);
-      return { skipped: true };
+      warnings.push(`${workflowId} (invalid YAML: ${error.message})`);
+      return { skipped: true, workflowPath: workflowId };
     }
 
     // Check if web_bundle is explicitly set to false
     if (workflowConfig.web_bundle === false) {
       // Mark this workflow as skipped so we can remove the command from agent
-      return { skipped: true, workflowPath };
+      return { skipped: true, workflowPath: workflowId };
     }
 
     // Create YAML content with only web_bundle section (flattened)
     let bundleYamlContent;
+
     if (workflowConfig.web_bundle && typeof workflowConfig.web_bundle === 'object') {
       // Only include the web_bundle content, flattened to root level
       bundleYamlContent = yaml.dump(workflowConfig.web_bundle);
@@ -1020,11 +1056,10 @@ class WebBundler {
     bundleYamlContent = this.processProjectRootReferences(bundleYamlContent);
 
     // Include the YAML file with only web_bundle content, wrapped in XML
-    // Process the workflow path to create a clean ID
-    let yamlId = workflowPath.replace(/^{project-root}\//, '');
-    yamlId = yamlId.replace(/^{air_folder}\//, 'air/');
+    const yamlId = workflowId;
     const wrappedYaml = this.wrapContentInXml(bundleYamlContent, yamlId, 'yaml');
     dependencies.set(yamlId, wrappedYaml);
+
 
     // Always include core workflow task when processing workflows
     await this.includeCoreWorkflowFiles(dependencies, processed, moduleName, warnings);
@@ -1057,8 +1092,17 @@ class WebBundler {
         // Check if this is another workflow.yaml file - if so, recursively process it
         if (bundleFilePath.endsWith('workflow.yaml')) {
           // Recursively process this workflow and its dependencies
-          await this.processWorkflowDependency(bundleFilePath, dependencies, processed, moduleName, warnings);
+          await this.processWorkflowDependency(
+            bundleFilePath,
+            dependencies,
+            processed,
+            moduleName,
+            warnings,
+            workflowWhitelist,
+            true,
+          );
         } else {
+
           // Regular file - process normally
           processed.add(cleanFilePath);
 
@@ -1295,10 +1339,54 @@ class WebBundler {
     return null;
   }
 
+  buildWorkflowWhitelist(values) {
+    if (!Array.isArray(values) || values.length === 0) {
+      return null;
+    }
+
+    const whitelist = new Set();
+
+    for (const value of values) {
+      if (typeof value !== 'string') {
+        continue;
+      }
+      const normalized = this.normalizeWorkflowId(value);
+      if (normalized) {
+        whitelist.add(normalized);
+      }
+    }
+
+    return whitelist.size > 0 ? whitelist : null;
+  }
+
+  normalizeWorkflowId(value) {
+    if (!value || typeof value !== 'string') {
+      return null;
+    }
+
+    let normalized = value.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    normalized = normalized.replace(/\\/g, '/');
+    normalized = normalized.replace(/^{project-root}\//, '');
+    normalized = normalized.replace(/^{air_folder}\//, 'air/');
+    normalized = normalized.replace(/^\.\/+/, '');
+    normalized = normalized.replace(/^\/+/, '');
+
+    if (!normalized.startsWith('air/')) {
+      normalized = `air/${normalized}`;
+    }
+
+    return normalized.replace(/\/+/g, '/');
+  }
+
   /**
    * Process and remove {project-root} references and replace {air_folder} with air
    */
   processProjectRootReferences(content) {
+
     // Remove {project-root}/ prefix (with slash)
     content = content.replaceAll('{project-root}/', '');
     // Also remove {project-root} without slash
