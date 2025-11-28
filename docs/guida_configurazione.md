@@ -22,12 +22,11 @@ comandi/PowerShell su Windows):
 
 ## 2. 📝 Installazione di OpenCode
 
-OpenCode è l'IDE necessario.
 
 ### Installazione
 
 Scarica e installa la versione adatta al tuo sistema operativo (macOS o
-Windows) dal sito ufficiale di OpenCode.
+Windows) dal [sito ufficiale di OpenCode](https://opencode.ai/docs/#install).
 
 ### Avvio
 
@@ -40,23 +39,11 @@ Per avviare l'applicazione da qualsiasi posizione nel terminale:
 L'installazione del plugin avviene tramite la configurazione, e l'IDE lo
 scaricherà e lo installerà automaticamente.
 
-### 3.1. Installazione (Configurazione Minima)
+### 3.1. Installazione
 
 Apri il file di configurazione globale di OpenCode (solitamente
-`~/.config/opencode/opencode.json` o un file di configurazione di
-progetto `.opencode.json`) e aggiungi il plugin nella sezione plugin:
+`~/.config/opencode/opencode.json`  e segui le istruzioni fornite sulla [documentazione ufficiale](https://github.com/numman-ali/opencode-openai-codex-auth?tab=readme-ov-file#installation).
 
-**File di configurazione (es. `~/.config/opencode/opencode.json`):**
-
-``` json
-{
-    "$schema": "https://opencode.ai/config.json",
-    "plugin": [
-        "opencode-openai-codex-auth"
-    ],
-    "model": "openai/gpt-5-codex"
-}
-```
 
 Al primo avvio, OpenCode scaricherà e installerà automaticamente il
 plugin.
@@ -74,13 +61,19 @@ autenticazione OAuth:
 
 Seleziona **OpenAI** quando richiesto.
 
-Scegli l'opzione **"ChatGPT Plus/Pro (Codex Subscription)"**.
-
 Verrà aperto automaticamente il tuo browser predefinito per il flusso di
 autenticazione. Segui le istruzioni per autorizzare l'accesso.
 
 Dopo l'autenticazione, il plugin sarà operativo e connesso al tuo
 account OpenAI.
+
+### 3.3. Selezione del Modello
+
+Esegui `Ctrl + x` per aprire il menù di selezione del modello
+
+Scegli l'opzione **"OpenAI GPT 5.1 Codex Medium (OAuth)"**.
+
+
 
 ## 4. 🗃️ Inizializzazione del Repository Git
 
