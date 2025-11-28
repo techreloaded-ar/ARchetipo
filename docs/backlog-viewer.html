@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backlog Viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 8px 8px 0 0;
+        }
+
+        h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .stats {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-top: 15px;
+        }
+
+        .stat-item {
+            background: rgba(255,255,255,0.2);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+        }
+
+        .controls {
+            padding: 20px 30px;
+            background: #fafafa;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+        }
+
+        .file-input-wrapper input[type=file] {
+            position: absolute;
+            left: -9999px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.3s;
+        }
+
+        .btn:hover {
+            background: #5568d3;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .search-box {
+            flex: 1;
+            min-width: 250px;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 10px 15px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .filters {
+            padding: 20px 30px;
+            background: #f9f9f9;
+            border-bottom: 1px solid #e0e0e0;
+            display: none;
+        }
+
+        .filters.active {
+            display: block;
+        }
+
+        .filter-group {
+            margin-bottom: 15px;
+        }
+
+        .filter-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .filter-group select {
+            width: 100%;
+            max-width: 300px;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .filter-tags {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .filter-tag {
+            padding: 4px 12px;
+            background: #e3e8ff;
+            border-radius: 15px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .filter-tag:hover {
+            background: #d0d7ff;
+        }
+
+        .filter-tag.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+
+        .empty-state h2 {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+
+        .epic {
+            margin-bottom: 30px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            overflow: hidden;
+            background: white;
+        }
+
+        .epic-header {
+            background: #f8f9fa;
+            padding: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            transition: background 0.2s;
+        }
+
+        .epic-header:hover {
+            background: #e9ecef;
+        }
+
+        .epic-toggle {
+            font-size: 20px;
+            width: 24px;
+            text-align: center;
+            transition: transform 0.3s;
+        }
+
+        .epic.collapsed .epic-toggle {
+            transform: rotate(-90deg);
+        }
+
+        .epic-title {
+            flex: 1;
+        }
+
+        .epic-title h2 {
+            font-size: 18px;
+            margin-bottom: 5px;
+            color: #2c3e50;
+        }
+
+        .epic-outcome {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .epic-meta {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-proposed { background: #e3f2fd; color: #1976d2; }
+        .badge-draft { background: #fff3e0; color: #f57c00; }
+        .badge-in_progress { background: #e8f5e9; color: #388e3c; }
+        .badge-done { background: #f3e5f5; color: #7b1fa2; }
+        .badge-high { background: #ffebee; color: #c62828; }
+        .badge-medium { background: #fff9c4; color: #f57f17; }
+        .badge-low { background: #e0f2f1; color: #00695c; }
+
+        .epic-body {
+            padding: 20px;
+            background: #fafafa;
+            display: none;
+        }
+
+        .epic.expanded .epic-body {
+            display: block;
+        }
+
+        .epic-details {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .epic-details h3 {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 8px;
+        }
+
+        .kpi-list {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .kpi-list li {
+            padding: 5px 0;
+            font-size: 14px;
+        }
+
+        .stories-container {
+            display: grid;
+            gap: 15px;
+        }
+
+        .story {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .story-header {
+            padding: 15px;
+            cursor: pointer;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            transition: background 0.2s;
+        }
+
+        .story-header:hover {
+            background: #f8f9fa;
+        }
+
+        .story-toggle {
+            font-size: 16px;
+            width: 20px;
+            text-align: center;
+            transition: transform 0.3s;
+        }
+
+        .story.collapsed .story-toggle {
+            transform: rotate(-90deg);
+        }
+
+        .story-title {
+            flex: 1;
+        }
+
+        .story-title h3 {
+            font-size: 16px;
+            margin-bottom: 8px;
+            color: #2c3e50;
+        }
+
+        .story-description {
+            font-size: 13px;
+            color: #666;
+            line-height: 1.5;
+        }
+
+        .story-meta {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+        }
+
+        .story-body {
+            padding: 15px;
+            border-top: 1px solid #e0e0e0;
+            background: #fafafa;
+            display: none;
+        }
+
+        .story.expanded .story-body {
+            display: block;
+        }
+
+        .acceptance-criteria {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+
+        .acceptance-criteria h4 {
+            font-size: 14px;
+            margin-bottom: 10px;
+            color: #667eea;
+        }
+
+        .scenario {
+            padding: 10px;
+            background: #f8f9fa;
+            border-left: 3px solid #667eea;
+            margin-bottom: 10px;
+            border-radius: 4px;
+        }
+
+        .scenario h5 {
+            font-size: 13px;
+            margin-bottom: 5px;
+            color: #2c3e50;
+        }
+
+        .scenario p {
+            font-size: 12px;
+            color: #666;
+            margin: 3px 0;
+        }
+
+        .architecture {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+
+        .architecture h4 {
+            font-size: 14px;
+            margin-bottom: 10px;
+            color: #764ba2;
+        }
+
+        .architecture pre {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+
+        .tasks-container {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+        }
+
+        .tasks-container h4 {
+            font-size: 14px;
+            margin-bottom: 10px;
+            color: #2c3e50;
+        }
+
+        .task {
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            margin-bottom: 8px;
+        }
+
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .task-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .task-meta {
+            display: flex;
+            gap: 6px;
+        }
+
+        .task-dod {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .task-dod ul {
+            margin-left: 20px;
+            margin-top: 5px;
+        }
+
+        .task-dod li {
+            margin: 3px 0;
+        }
+
+        @media (max-width: 768px) {
+            .controls {
+                flex-direction: column;
+            }
+
+            .epic-meta, .story-meta {
+                flex-direction: column;
+            }
+
+            .stats {
+                flex-direction: column;
+            }
+        }
+
+        .nfr-list {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+
+        .nfr-list li {
+            font-size: 12px;
+            margin: 5px 0;
+        }
+
+        .risk-section {
+            margin-top: 10px;
+        }
+
+        .risk-section h5 {
+            font-size: 13px;
+            margin-bottom: 5px;
+            color: #c62828;
+        }
+
+        .risk-section ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .risk-section li {
+            font-size: 12px;
+            padding: 5px 10px;
+            background: #ffebee;
+            border-left: 3px solid #c62828;
+            margin: 5px 0;
+            border-radius: 3px;
+        }
+
+        .mitigation-section {
+            margin-top: 10px;
+        }
+
+        .mitigation-section h5 {
+            font-size: 13px;
+            margin-bottom: 5px;
+            color: #388e3c;
+        }
+
+        .mitigation-section ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .mitigation-section li {
+            font-size: 12px;
+            padding: 5px 10px;
+            background: #e8f5e9;
+            border-left: 3px solid #388e3c;
+            margin: 5px 0;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📋 Backlog Viewer</h1>
+            <div class="stats" id="stats">
+                <div class="stat-item">Epics: <span id="epic-count">0</span></div>
+                <div class="stat-item">Stories: <span id="story-count">0</span></div>
+                <div class="stat-item">Tasks: <span id="task-count">0</span></div>
+            </div>
+        </header>
+
+        <div class="controls">
+            <div class="file-input-wrapper">
+                <label for="file-input" class="btn">📁 Carica backlog.yaml</label>
+                <input type="file" id="file-input" accept=".yaml,.yml">
+            </div>
+            <button class="btn btn-secondary" id="toggle-filters">🔍 Filtri</button>
+            <button class="btn btn-secondary" id="expand-all">📖 Espandi Tutto</button>
+            <button class="btn btn-secondary" id="collapse-all">📕 Chiudi Tutto</button>
+            <div class="search-box">
+                <input type="text" id="search" placeholder="🔎 Cerca in title, description, epic...">
+            </div>
+        </div>
+
+        <div class="filters" id="filters">
+            <div class="filter-group">
+                <label>Status</label>
+                <div class="filter-tags" id="status-filters"></div>
+            </div>
+            <div class="filter-group">
+                <label>Priority</label>
+                <div class="filter-tags" id="priority-filters"></div>
+            </div>
+            <div class="filter-group">
+                <label>Epic</label>
+                <select id="epic-filter">
+                    <option value="">Tutti gli epics</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="content" id="content">
+            <div class="empty-state">
+                <h2>👋 Benvenuto</h2>
+                <p>Carica il file backlog.yaml per iniziare</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let backlogData = null;
+        let activeFilters = {
+            status: new Set(),
+            priority: new Set(),
+            epic: '',
+            search: ''
+        };
+
+        // File input handler
+        document.getElementById('file-input').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    backlogData = jsyaml.load(event.target.result);
+                    renderBacklog();
+                    updateStats();
+                    initializeFilters();
+                } catch (error) {
+                    alert('Errore nel parsing del file YAML: ' + error.message);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        // Toggle filters
+        document.getElementById('toggle-filters').addEventListener('click', () => {
+            document.getElementById('filters').classList.toggle('active');
+        });
+
+        // Expand/Collapse all
+        document.getElementById('expand-all').addEventListener('click', () => {
+            document.querySelectorAll('.epic, .story').forEach(el => el.classList.add('expanded'));
+        });
+
+        document.getElementById('collapse-all').addEventListener('click', () => {
+            document.querySelectorAll('.epic, .story').forEach(el => el.classList.remove('expanded'));
+        });
+
+        // Search
+        document.getElementById('search').addEventListener('input', (e) => {
+            activeFilters.search = e.target.value.toLowerCase();
+            applyFilters();
+        });
+
+        function updateStats() {
+            if (!backlogData) return;
+            document.getElementById('epic-count').textContent = backlogData.counters.epic;
+            document.getElementById('story-count').textContent = backlogData.counters.story;
+            document.getElementById('task-count').textContent = backlogData.counters.task;
+        }
+
+        function initializeFilters() {
+            if (!backlogData) return;
+
+            // Status filters
+            const statuses = new Set();
+            const priorities = new Set();
+
+            backlogData.stories.forEach(story => {
+                if (story.status) statuses.add(story.status);
+                if (story.priority) priorities.add(story.priority);
+            });
+
+            // Render status filters
+            const statusContainer = document.getElementById('status-filters');
+            statusContainer.innerHTML = '';
+            Array.from(statuses).forEach(status => {
+                const tag = document.createElement('div');
+                tag.className = 'filter-tag';
+                tag.textContent = status;
+                tag.onclick = () => toggleFilter('status', status, tag);
+                statusContainer.appendChild(tag);
+            });
+
+            // Render priority filters
+            const priorityContainer = document.getElementById('priority-filters');
+            priorityContainer.innerHTML = '';
+            Array.from(priorities).forEach(priority => {
+                const tag = document.createElement('div');
+                tag.className = 'filter-tag';
+                tag.textContent = priority;
+                tag.onclick = () => toggleFilter('priority', priority, tag);
+                priorityContainer.appendChild(tag);
+            });
+
+            // Epic filter
+            const epicSelect = document.getElementById('epic-filter');
+            epicSelect.innerHTML = '<option value="">Tutti gli epics</option>';
+            backlogData.epics.forEach(epic => {
+                const option = document.createElement('option');
+                option.value = epic.id;
+                option.textContent = `${epic.id} - ${epic.title}`;
+                epicSelect.appendChild(option);
+            });
+
+            epicSelect.addEventListener('change', (e) => {
+                activeFilters.epic = e.target.value;
+                applyFilters();
+            });
+        }
+
+        function toggleFilter(type, value, element) {
+            if (activeFilters[type].has(value)) {
+                activeFilters[type].delete(value);
+                element.classList.remove('active');
+            } else {
+                activeFilters[type].add(value);
+                element.classList.add('active');
+            }
+            applyFilters();
+        }
+
+        function applyFilters() {
+            if (!backlogData) return;
+
+            document.querySelectorAll('.epic').forEach(epicEl => {
+                const epicId = epicEl.dataset.epicId;
+
+                // Epic filter
+                if (activeFilters.epic && activeFilters.epic !== epicId) {
+                    epicEl.style.display = 'none';
+                    return;
+                }
+
+                // Check stories
+                const stories = epicEl.querySelectorAll('.story');
+                let hasVisibleStory = false;
+
+                stories.forEach(storyEl => {
+                    const storyId = storyEl.dataset.storyId;
+                    const story = backlogData.stories.find(s => s.id === storyId);
+
+                    if (!story) {
+                        storyEl.style.display = 'none';
+                        return;
+                    }
+
+                    let visible = true;
+
+                    // Status filter
+                    if (activeFilters.status.size > 0 && !activeFilters.status.has(story.status)) {
+                        visible = false;
+                    }
+
+                    // Priority filter
+                    if (activeFilters.priority.size > 0 && !activeFilters.priority.has(story.priority)) {
+                        visible = false;
+                    }
+
+                    // Search filter
+                    if (activeFilters.search) {
+                        const searchText = `${story.title} ${story.description} ${story.id} ${epicId}`.toLowerCase();
+                        if (!searchText.includes(activeFilters.search)) {
+                            visible = false;
+                        }
+                    }
+
+                    storyEl.style.display = visible ? 'block' : 'none';
+                    if (visible) hasVisibleStory = true;
+                });
+
+                epicEl.style.display = hasVisibleStory ? 'block' : 'none';
+            });
+        }
+
+        function renderBacklog() {
+            if (!backlogData) return;
+
+            const content = document.getElementById('content');
+            content.innerHTML = '';
+
+            backlogData.epics.forEach(epic => {
+                const epicEl = createEpicElement(epic);
+                content.appendChild(epicEl);
+            });
+        }
+
+        function createEpicElement(epic) {
+            const epicDiv = document.createElement('div');
+            epicDiv.className = 'epic collapsed';
+            epicDiv.dataset.epicId = epic.id;
+
+            const header = document.createElement('div');
+            header.className = 'epic-header';
+            header.onclick = () => epicDiv.classList.toggle('expanded');
+
+            const toggle = document.createElement('div');
+            toggle.className = 'epic-toggle';
+            toggle.textContent = '▼';
+
+            const titleDiv = document.createElement('div');
+            titleDiv.className = 'epic-title';
+
+            const title = document.createElement('h2');
+            title.textContent = `${epic.id}: ${epic.title}`;
+
+            const outcome = document.createElement('div');
+            outcome.className = 'epic-outcome';
+            outcome.textContent = epic.outcome;
+
+            titleDiv.appendChild(title);
+            titleDiv.appendChild(outcome);
+
+            const meta = document.createElement('div');
+            meta.className = 'epic-meta';
+            meta.innerHTML = `
+                <span class="badge badge-${epic.status}">${epic.status}</span>
+                <span class="badge">${epic.owner}</span>
+            `;
+
+            header.appendChild(toggle);
+            header.appendChild(titleDiv);
+            header.appendChild(meta);
+
+            const body = document.createElement('div');
+            body.className = 'epic-body';
+
+            // Epic details
+            const details = document.createElement('div');
+            details.className = 'epic-details';
+
+            let kpiHtml = '';
+            if (epic.kpi && epic.kpi.length > 0) {
+                kpiHtml = `
+                    <h3>KPI</h3>
+                    <ul class="kpi-list">
+                        ${epic.kpi.map(k => `<li><strong>${k.name}:</strong> ${k.target}</li>`).join('')}
+                    </ul>
+                `;
+            }
+
+            details.innerHTML = kpiHtml;
+            body.appendChild(details);
+
+            // Stories
+            const storiesContainer = document.createElement('div');
+            storiesContainer.className = 'stories-container';
+
+            const epicStories = backlogData.stories.filter(s => s.epicId === epic.id);
+            epicStories.forEach(story => {
+                const storyEl = createStoryElement(story);
+                storiesContainer.appendChild(storyEl);
+            });
+
+            body.appendChild(storiesContainer);
+            epicDiv.appendChild(header);
+            epicDiv.appendChild(body);
+
+            return epicDiv;
+        }
+
+        function createStoryElement(story) {
+            const storyDiv = document.createElement('div');
+            storyDiv.className = 'story collapsed';
+            storyDiv.dataset.storyId = story.id;
+
+            const header = document.createElement('div');
+            header.className = 'story-header';
+            header.onclick = () => storyDiv.classList.toggle('expanded');
+
+            const toggle = document.createElement('div');
+            toggle.className = 'story-toggle';
+            toggle.textContent = '▼';
+
+            const titleDiv = document.createElement('div');
+            titleDiv.className = 'story-title';
+
+            const title = document.createElement('h3');
+            title.textContent = `${story.id}: ${story.title}`;
+
+            const description = document.createElement('div');
+            description.className = 'story-description';
+            description.textContent = story.description.substring(0, 150) + '...';
+
+            const meta = document.createElement('div');
+            meta.className = 'story-meta';
+            meta.innerHTML = `
+                <span class="badge badge-${story.status}">${story.status}</span>
+                <span class="badge badge-${story.priority}">${story.priority}</span>
+                <span class="badge">Est: ${story.estimate}</span>
+                <span class="badge">${story.owner}</span>
+            `;
+
+            titleDiv.appendChild(title);
+            titleDiv.appendChild(description);
+            titleDiv.appendChild(meta);
+
+            header.appendChild(toggle);
+            header.appendChild(titleDiv);
+
+            const body = document.createElement('div');
+            body.className = 'story-body';
+
+            // Full description
+            const fullDesc = document.createElement('div');
+            fullDesc.style.background = 'white';
+            fullDesc.style.padding = '15px';
+            fullDesc.style.borderRadius = '6px';
+            fullDesc.style.marginBottom = '15px';
+            fullDesc.style.whiteSpace = 'pre-wrap';
+            fullDesc.textContent = story.description;
+            body.appendChild(fullDesc);
+
+            // Acceptance criteria
+            if (story.acceptance && story.acceptance.scenarios) {
+                const acceptance = document.createElement('div');
+                acceptance.className = 'acceptance-criteria';
+
+                let scenariosHtml = '<h4>📝 Acceptance Criteria</h4>';
+                story.acceptance.scenarios.forEach(scenario => {
+                    scenariosHtml += `
+                        <div class="scenario">
+                            <h5>${scenario.name}</h5>
+                            <p><strong>Given:</strong> ${scenario.given}</p>
+                            <p><strong>When:</strong> ${scenario.when}</p>
+                            <p><strong>Then:</strong> ${scenario.then}</p>
+                        </div>
+                    `;
+                });
+
+                acceptance.innerHTML = scenariosHtml;
+                body.appendChild(acceptance);
+            }
+
+            // NFRs
+            if (story.nfr && story.nfr.length > 0) {
+                const nfrDiv = document.createElement('div');
+                nfrDiv.className = 'acceptance-criteria';
+                nfrDiv.innerHTML = `
+                    <h4>⚡ Non-Functional Requirements</h4>
+                    <ul class="nfr-list">
+                        ${story.nfr.map(n => `<li><strong>${n.key}:</strong> ${n.target}</li>`).join('')}
+                    </ul>
+                `;
+                body.appendChild(nfrDiv);
+            }
+
+            // Architecture
+            if (story.architecture) {
+                const arch = document.createElement('div');
+                arch.className = 'architecture';
+
+                let archHtml = '<h4>🏗️ Architecture</h4>';
+
+                if (story.architecture.notes) {
+                    archHtml += `<pre>${story.architecture.notes}</pre>`;
+                }
+
+                if (story.architecture.risks && story.architecture.risks.length > 0) {
+                    archHtml += `
+                        <div class="risk-section">
+                            <h5>⚠️ Risks</h5>
+                            <ul>
+                                ${story.architecture.risks.map(r => `<li>${r}</li>`).join('')}
+                            </ul>
+                        </div>
+                    `;
+                }
+
+                if (story.architecture.mitigations && story.architecture.mitigations.length > 0) {
+                    archHtml += `
+                        <div class="mitigation-section">
+                            <h5>✅ Mitigations</h5>
+                            <ul>
+                                ${story.architecture.mitigations.map(m => `<li>${m}</li>`).join('')}
+                            </ul>
+                        </div>
+                    `;
+                }
+
+                arch.innerHTML = archHtml;
+                body.appendChild(arch);
+            }
+
+            // Tasks
+            if (story.tasks && story.tasks.length > 0) {
+                const tasksDiv = document.createElement('div');
+                tasksDiv.className = 'tasks-container';
+
+                let tasksHtml = '<h4>✅ Tasks</h4>';
+                story.tasks.forEach(task => {
+                    tasksHtml += `
+                        <div class="task">
+                            <div class="task-header">
+                                <div class="task-title">${task.id}: ${task.title}</div>
+                                <div class="task-meta">
+                                    <span class="badge badge-${task.status}">${task.status}</span>
+                                    <span class="badge">${task.type}</span>
+                                    <span class="badge">Est: ${task.estimate}</span>
+                                </div>
+                            </div>
+                            ${task.definitionOfDone ? `
+                                <div class="task-dod">
+                                    <strong>Definition of Done:</strong>
+                                    <ul>
+                                        ${task.definitionOfDone.map(d => `<li>${d}</li>`).join('')}
+                                    </ul>
+                                </div>
+                            ` : ''}
+                        </div>
+                    `;
+                });
+
+                tasksDiv.innerHTML = tasksHtml;
+                body.appendChild(tasksDiv);
+            }
+
+            storyDiv.appendChild(header);
+            storyDiv.appendChild(body);
+
+            return storyDiv;
+        }
+    </script>
+</body>
+</html>
