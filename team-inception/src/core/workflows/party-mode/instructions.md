@@ -560,6 +560,7 @@
     <action>Remind everyone of the altitude shift: PRD FRs describe strategic outcomes, while stories in this step describe tactical implementation details.</action>
     <action>Each epic MUST be decomposed story-by-story using a 3-agent relay (Product Manager → UX Designer → Strategist/Architect). This sequence is mandatory for EVERY story from Epic 1 Story 1.1 to the final story of the backlog—no skipping, even if information feels repetitive.</action>
     <action>For each epic, break work into small, vertically sliced stories with full UI, validation, performance, accessibility, and error-handling details. Epic 1 (Foundation) MUST start with project setup and environment initialization so that all later stories have a platform to build upon.</action>
+    <action>Story 1.1 is ALWAYS the "Project Foundation" story dedicated to establishing the repository and the minimal scaffolding required for developers to start coding immediately (initialize the repo, define the base directory structure, add README/CONTRIBUTING, example env files, lint/format configs, baseline scripts).</action>
     <action>Each story follows this pattern:
       As a [user type],
       I want [capability],
