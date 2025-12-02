@@ -88,25 +88,6 @@ So that [benefit/value]
 - ✓ [Criterion 2: error handling]
 - ✓ [Criterion 3: edge case]
 
-## Architecture Notes
-
-**Components:**
-- [List of involved components]
-
-**Risks:**
-- [Technical risk 1]
-- [Technical risk 2]
-
-**Mitigations:**
-- [Mitigation for risk 1]
-- [Mitigation for risk 2]
-
-## Tasks
-
-- [ ] TK-XXX: Task description (type, estimate, @owner)
-- [~] TK-YYY: Task description (type, estimate, @owner)
-- [x] TK-ZZZ: Task description (type, estimate, @owner) ✅ YYYY-MM-DD
-
 ## Dev Notes
 
 **YYYY-MM-DD** - Event/Task completed
@@ -134,21 +115,6 @@ So that [benefit/value]
 - Format: bullet list with `✓` prefix
 - Describe expected behavior, not implementation
 
-**Architecture Notes:**
-- Section added by architect-agent after validation
-- Components: list of technologies/modules involved
-- Risks: identification of technical problems
-- Mitigations: proposed solutions for each risk
-
-**Tasks:**
-- ID format: TK-XXX (3-digit zero-padded)
-- Structure: `- [ ] TK-XXX: Description (type, estimate, @owner)`
-- Type: dev | qa | design | docs
-- Estimate: days (0.5, 1, 1.5, 2)
-- Owner: @team or @role
-- State with checkbox: `[ ]` TODO, `[~]` IN PROGRESS, `[x]` DONE
-- Completion date: `✅ YYYY-MM-DD`
-
 **Dev Notes:**
 - Optional section, added during development
 - Entry per date: `**YYYY-MM-DD** - Context`
@@ -166,8 +132,8 @@ So that [benefit/value]
 
 **In backlog.md (checkbox):**
 - `[ ]` **TODO** - Story in backlog, not started
-- `[~]` **IN PROGRESS** - At least one task started
-- `[x]` **DONE** - Story completed, all tasks done, acceptance criteria verified
+- `[~]` **IN PROGRESS** - Story development started
+- `[x]` **DONE** - Story completed, acceptance criteria verified
 - `[!]` **BLOCKED** - Blocked by external dependencies
 
 **In story file (Status field):**
@@ -183,11 +149,6 @@ So that [benefit/value]
 TODO → IN PROGRESS → DONE
   ↓         ↓
 BLOCKED ←────┘
-```
-
-**Task:**
-```
-[ ] TODO → [~] IN PROGRESS → [x] DONE
 ```
 
 ## Complete Examples

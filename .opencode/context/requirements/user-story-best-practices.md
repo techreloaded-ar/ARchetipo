@@ -36,7 +36,6 @@ Every user story MUST satisfy all INVEST criteria:
 - Fits within one sprint (1-8 story points)
 - Typically completable in 1-5 days
 - Break down larger stories into smaller pieces
-- Has 2-5 tasks maximum
 
 ### Testable
 - Clear acceptance criteria exist
@@ -84,38 +83,12 @@ Every user story MUST satisfy all INVEST criteria:
     - key: [metric_name]
       target: "[measurable threshold]"
 
-  architecture:
-    notes: |
-      [Technical approach, patterns, integrations - from architect]
-    risks:
-      - "[Technical risk]"
-    mitigations:
-      - "[Mitigation strategy]"
-
   links: []
   createdAt: YYYY-MM-DD
   updatedAt: YYYY-MM-DD
-
-  history:
-    - at: YYYY-MM-DD
-      what: created
-      by: analyst
-    - at: YYYY-MM-DD
-      what: validated_by_architect
-      by: architect
-
-  tasks:  # Optional: 2-5 implementation tasks
-    - id: TK-XXX
-      storyId: US-XXX
-      title: "[Specific task]"
-      type: [dev|qa|design|docs]
-      estimate: [0.5-2 days]
-      status: [todo|doing|blocked|review|done]
-      owner: [role/team]
-      dependsOn: []
-      definitionOfDone:
-        - "[Completion criterion]"
 ```
+
+**Note**: The actual story files use Markdown format (see `story-template.md` in templates). This YAML structure shows the conceptual model for understanding story components.
 
 ## GHERKIN Acceptance Criteria
 
@@ -254,65 +227,6 @@ Specify measurable NFRs when relevant to the story:
   target: ">= 10000"
 ```
 
-## Task Breakdown
-
-Break stories into 2-5 concrete tasks with clear definition of done:
-
-**Task Types:**
-- **dev** - Development implementation
-- **qa** - Testing and quality assurance
-- **design** - UI/UX design work
-- **docs** - Documentation
-
-**Task Template:**
-```yaml
-- id: TK-XXX
-  title: "[Specific, actionable task]"
-  type: dev
-  estimate: 1  # Days: 0.5-2
-  status: todo
-  owner: [backend|frontend|qa]
-  dependsOn: []  # IDs of tasks that must complete first
-  definitionOfDone:
-    - "[Measurable completion criterion]"
-    - "[Another criterion]"
-```
-
-**Example Tasks:**
-```yaml
-tasks:
-  - id: TK-001
-    title: Implement POST /api/orders endpoint with validation
-    type: dev
-    estimate: 1.5
-    owner: backend
-    dependsOn: []
-    definitionOfDone:
-      - Endpoint accepts valid payloads
-      - Returns 400 for invalid data
-      - Unit test coverage >= 80%
-
-  - id: TK-002
-    title: Build order form UI component
-    type: dev
-    estimate: 1
-    owner: frontend
-    dependsOn: []
-    definitionOfDone:
-      - Form validates input client-side
-      - Integrates with backend API
-      - Matches design system
-
-  - id: TK-003
-    title: Automate acceptance scenarios
-    type: qa
-    estimate: 1
-    owner: qa
-    dependsOn: [TK-001, TK-002]
-    definitionOfDone:
-      - All 3 scenarios automated
-      - Tests run in CI
-```
 
 ## Epic Integration
 
@@ -349,12 +263,6 @@ stories:
 - [ ] Covers success and failure cases
 - [ ] No implementation details
 - [ ] Uses business language
-
-**Architecture & Tasks:**
-- [ ] Architecture validated by architect
-- [ ] Risks identified with mitigations
-- [ ] Tasks have clear definition of done
-- [ ] Dependencies mapped
 
 ## Anti-Patterns to Avoid
 
@@ -408,80 +316,15 @@ stories:
     - key: api_timeout_ms
       target: "3000"
 
-  architecture:
-    notes: |
-      Integration: ShipTrack API via REST. Cache tracking data 30s.
-      Fallback: Last known state if API unavailable.
-      Frontend: React component with 30s polling for updates.
-      Circuit breaker: 5 failures in 1min triggers fallback.
-    risks:
-      - "Dependency on 3rd party API uptime"
-      - "Different carriers have different data formats"
-    mitigations:
-      - "Circuit breaker with cached fallback"
-      - "Adapter pattern for carrier-specific parsing"
-
   links:
     - https://docs.shiptrack.example/api
 
   createdAt: 2025-11-26
   updatedAt: 2025-11-26
-
-  history:
-    - at: 2025-11-26
-      what: created
-      by: analyst
-    - at: 2025-11-26
-      what: validated_by_architect
-      by: architect
-
-  tasks:
-    - id: TK-127
-      storyId: US-042
-      title: Implement ShipTrack API client with circuit breaker
-      type: dev
-      estimate: 1.5
-      status: todo
-      owner: backend
-      dependsOn: []
-      definitionOfDone:
-        - Client handles all carrier formats via adapter pattern
-        - Circuit breaker configured (5 failures/1min)
-        - Unit tests for each carrier adapter
-        - Metrics exposed for API latency
-
-    - id: TK-128
-      storyId: US-042
-      title: Build order tracking UI component
-      type: dev
-      estimate: 1
-      status: todo
-      owner: frontend
-      dependsOn: []
-      definitionOfDone:
-        - Displays map with tracking points
-        - Polls for updates every 30s
-        - Shows fallback UI when unavailable
-        - Responsive for mobile
-
-    - id: TK-129
-      storyId: US-042
-      title: Automate tracking scenarios in E2E tests
-      type: qa
-      estimate: 1
-      status: todo
-      owner: qa
-      dependsOn: [TK-127, TK-128]
-      definitionOfDone:
-        - All 3 GHERKIN scenarios automated
-        - Mock ShipTrack API for deterministic tests
-        - Tests run in CI pipeline
 ```
 
 This example demonstrates:
 - Clear INVEST principles applied
 - 3 diverse GHERKIN scenarios (happy/error/edge)
 - Relevant NFRs for API integration
-- Complete architecture guidance from architect
-- Well-defined tasks with clear DoD
-- Proper linking and history tracking
+- Proper linking and metadata

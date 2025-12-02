@@ -70,9 +70,4 @@ z*/
 web-bundles/
 
 #AIRchetipo Agents File
-docs/prd.md
-docs/requirements.md
-docs/backlog.yaml
-docs/backlog.md
-docs/stories/*
-
+docs/
