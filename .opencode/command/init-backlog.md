@@ -3,7 +3,6 @@ name: init-backlog
 agent: analyst-agent
 ---
 
-@.opencode/context/core/essential-patterns.md
 @.opencode/context/requirements/user-story-best-practices.md
 @.opencode/context/requirements/backlog-format-guide.md
 @docs/requirements.md

@@ -4,7 +4,6 @@ agent: developer-agent
 subtask: true
 ---
 
-@.opencode/context/core/essential-patterns.md
 @.opencode/context/requirements/backlog-format-guide.md
 @.opencode/context/development/coding-standards.md
 
@@ -13,72 +12,47 @@ subtask: true
 
 ## Implementation Workflow
 
-### Phase 1: Initialization
+### Phase 1: Initial Alignment
 
-#### 1. Parse Backlog and Select Story
+#### 1. Confirm the story with the user
 
-**Read backlog structure:**
-- Read `docs/backlog.md` to identify epics and stories
-- Look for TODO stories: `- [ ] [US-XXX](stories/US-XXX-slug.md)`
+- Read `docs/backlog.md` to identify TODO stories (`- [ ] [US-XXX](stories/US-XXX-slug.md)`).
+- If the user already specified the ID, pull the title from the backlog and ask for a quick confirmation.
+- If no story was specified, propose the first TODO story showing title and priority, then ask explicitly: "Should I proceed with US-XXX? (y/n)".
+- If no TODO items exist, respond with "No TODO stories found. All done! 🎉" and exit.
 
-**Story Selection:**
-- **If user provided story ID** (e.g., "US-005"): Use that story
-- **If no story specified**: Auto-select first TODO story in backlog
-- **If no TODO stories**: Report "No TODO stories found. All done! 🎉" and exit
+#### 2. Load and validate the story file
 
-#### 2. Read and Validate Story File
+- Open `docs/stories/US-XXX-slug.md` and gather:
+  - User Story
+  - Acceptance Criteria (GHERKIN)
+  - Architecture Notes
+  - Tasks (`- [ ] TK-XXX: ...`)
+- If the story has no tasks, stop and ask the user how to proceed (do not create tasks automatically).
 
-**Read story file:**
-- Parse `docs/stories/US-XXX-slug.md`
-- Extract sections:
-  - User Story (As a... I want... So that...)
-  - Acceptance Criteria (GHERKIN scenarios)
-  - Architecture Notes (technical guidance)
-  - Tasks list (implementation tasks)
+#### 3. Set the execution mode
 
-**Validate story:**
-- Ensure story has at least one task
-- **If no tasks**: Create task following the backlog-format-guide.md"
-
-#### 3. Ask Execution Mode
-
-Present execution mode choice to user:
+Always ask how to proceed before starting implementation:
 
 ```
-📋 Ready to implement US-XXX: [Story Title]
+📋 US-XXX · [Story Title]
+Total tasks: X
 
-Tasks to implement: X tasks
+1. 🚀 YOLO: execute every task sequentially
+2. 🐢 Step-by-step: stop after every task and wait for you
 
-How do you want to proceed?
-
-1. 🚀 YOLO mode (default): Implement all tasks automatically in sequence
-2. 🐢 Step-by-step mode: Implement one task at a time, wait for confirmation
-
-Your choice (press Enter for YOLO):
+Choice (default 1):
 ```
 
-**Default behavior:**
-- If user presses Enter or doesn't respond: Use YOLO mode
-- YOLO mode: Implement all tasks sequentially without stopping
-- Step-by-step mode: After each task, ask "Continue to next task? (y/n)"
+- If the user does not answer within a reasonable timeout, stay in YOLO mode and post a reminder.
+- In Step-by-step mode, ask "Move to the next task? (y/n)" once a task completes.
 
-#### 4. Create Feature Branch
+#### 4. Manage the branch only on request
 
-**Branch naming:** `feature/US-XXX-slug`
-
-```bash
-git checkout -b feature/US-XXX-slug
-```
-
-**If branch exists:**
-- Ask user: "Branch feature/US-XXX-slug already exists. Use it? (y/n)"
-- If no: Ask for alternative branch name
-
-**Report to user:**
-```
-✅ Created branch: feature/US-XXX-slug
-📍 Ready to implement X tasks
-```
+- Suggest the name `feature/US-XXX-slug`, but ask: "Do you want me to create/switch to this branch? (y/n)".
+- Only run `git checkout -b feature/US-XXX-slug` (or `git checkout feature/US-XXX-slug`) when the user explicitly says yes.
+- If the answer is no, keep the current branch and continue.
+- Never create commits automatically—just report the working tree status.
 
 ---
 
@@ -86,234 +60,158 @@ git checkout -b feature/US-XXX-slug
 
 **For each task in the story file:**
 
-#### Step 1: Update Task Status to IN PROGRESS
+**CRITICAL:** Execute Steps 1-3 continuously without pausing for user input. The only pause points are:
 
-**Read-Modify-Write:**
-1. Read story file content
-2. Find task line: `- [ ] TK-XXX: description (role, duration, @assignee)`
-3. Update to: `- [~] TK-XXX: description (role, duration, @assignee)`
-4. Write story file
+- In Step-by-step mode: after Phase 5 (test outcome), ask before moving to next task
+- When you need clarification or encounter a blocker
+- When explicitly asking for approval (e.g., git operations, out-of-scope changes)
 
-**Report to user:**
-```
-🔨 Starting TK-XXX: [task description]
-```
+#### Step 1: Mark the task as "in progress" and announce it
 
-#### Step 2: Analyze Task Requirements
+- Track the status locally (`taskProgress[TK-XXX] = "in-progress"`) without editing the markdown yet.
+- Tell the user: `🔨 Starting TK-XXX · [short description]`.
+- **IMPORTANT:** In YOLO mode Immediately proceed to Step 2 (Analysis) without waiting for user confirmation. The announcement is informational only.
+- In Step-by-step mode, the pause happens AFTER task completion (Phase 5), not before starting.
 
-**Gather context:**
-- Read task description to understand what needs to be implemented
-- Review Architecture Notes for:
-  - Components to create/modify
-  - APIs and endpoints
-  - Data models and schemas
-  - Technologies and libraries to use
-- Review Acceptance Criteria to understand:
-  - Expected behavior (happy path)
-  - Error handling requirements
-  - Edge cases to cover
-- Check PRD (from context) for:
-  - Tech stack details
-  - Project structure conventions
-  - Framework-specific patterns
+#### Step 2: Analyze the task requirements
 
-**Identify work scope:**
-- List files to create
-- List files to modify
-- List dependencies to add (if any)
+**Minimum context to collect:**
 
-#### Step 3: Implement Code
+- Task description → goal and deliverable.
+- Architecture Notes → components, APIs, data models, required libraries.
+- Acceptance Criteria → scenarios to cover (happy path + failure + edge cases).
+- PRD/guides in the context → structural conventions, coding style, feature flags.
 
-**Align with Architecture Notes:**
-- Use components/services suggested by @architect-agent
-- Use suggested libraries and patterns
+**Expected analysis output:**
 
-**Cover Acceptance Criteria:**
-- Ensure implementation satisfies all GHERKIN scenarios
-- Handle happy path (normal successful flow)
-- Handle validation errors (invalid input, business rules)
-- Handle edge cases (boundary conditions, timeouts, null values)
+- List of files to create/modify.
+- Dependencies or scripts to touch.
+- Questions/blocks to raise with the user (if any).
 
-**Implementation approach:**
-- Work in small increments
-- Implement one feature/component at a time
+#### Step 3: Implement in traceable micro-steps
 
-
-
-
-
-
-
-
-### Phase 3: Git Commit (After Successful Task)
-
-Follow the Conventional Commits format (Conventional Commits) and create a commit for the new implementation
-
-**Report to user:**
-```
-💾 Committed: TK-XXX - [brief description]
-```
+- Follow the architectural guidance and keep each change focused on a single goal.
+- Update a local `localTaskNotes` structure describing what you are doing (later reused in Dev Notes).
+- Keep the diff clean: no unsolicited refactors and no automatic commits.
+- Surface any out-of-scope work and request approval before touching it.
 
 ---
 
+### Phase 3: Git Report (no automatic commits)
 
+- After each finished task run `git status -sb` and show the short list of touched files.
+- When helpful, add `git diff --stat` for context, but avoid dumping full diffs.
+- Store these two outputs (status + stat) in a local object `pendingChangesSummary` so they can be reused later.
+- Suggest a Conventional Commit-style message (e.g., `feat(US-XXX): ...`) and ask for confirmation before doing anything.
+- If the user declines the commit, keep `pendingChangesSummary` intact; if the user approves, clear it once the commit succeeds.
+- Execute Git commands only after the user explicitly tells you to.
 
-
-
-
+---
 
 ### Phase 4: Testing
 
-#### Step 1: Write Tests
+#### Step 1: Decide whether to involve the tester
 
-**1. Report to user:**
-```
-🧪 I'm now calling the @tester-agent to write tests for  $ARGUMENTS
-```
+1. Present a recap: story, completed tasks, touched files, intended test command.
+2. Mention whether a commit was created. If not, append the stored `pendingChangesSummary` (status + diff stat) so the tester sees local changes.
+3. Ask: "Should I call @tester-agent to generate/update the tests? (y/n)".
+4. If yes:
+   - Build a detailed prompt for `/write-tests` that includes story title, relevant acceptance criteria, modified files, any utilities to mock, and—when no commit exists—the `pendingChangesSummary` so the tester knows what is pending.
+   - Run `/write-tests "...context..."` and wait for it to finish.
+5. If no, note that tests will be provided by the user or are already up to date.
 
-**2. Execute the command:**
-Execute the command `/write-tests $ARGUMENTS`
+#### Step 2: Run the test suite
 
-**3. Run tests**
-
-Run the tests, if you don't know what command to launch, ask the @tester-agent.
-
+- Identify the correct command (from package.json or the docs). If unclear, ask the tester.
+- Execute the tests and keep a concise output plus the full log path (if long).
+- When multiple suites exist, start from the one closest to the changes and broaden coverage only if required.
 
 ### Phase 5: Test Outcome Handling
 
 #### Case A: Tests PASS ✅
 
 **Actions:**
-1. **Update task checkbox:**
-   - Read story file
-   - Find task: `- [~] TK-XXX: ...`
-   - Update to: `- [x] TK-XXX: ... ✅ YYYY-MM-DD` (use current date)
-   - Write story file
 
-2. **Append to Dev Notes:**
-   - Find `## Dev Notes` section
-   - If section contains only `_(Sezione da compilare in sviluppo)_`, replace with:
-   ```markdown
-   ## Dev Notes
+1. Set `taskProgress[TK-XXX] = "done"` and prepare every markdown update in memory (checkbox + Dev Notes).
+2. Write the story file once applying:
+   - `- [ ]` → `- [x] TK-XXX: ... ✅ YYYY-MM-DD` (current date).
+   - If `## Dev Notes` only has the placeholder, replace it with a real section; otherwise append:
 
-   ### TK-XXX Implementation (YYYY-MM-DD)
+     ```markdown
+     ### TK-XXX · YYYY-MM-DD
 
-   **What was done:**
-   - Brief description of implementation (1-3 bullet points)
-   ```
-   - If section already has content, append the new entry
+     **Implemented:**
+     - Bullet 1 from `localTaskNotes`
+     - ...
+     ```
 
-3. **Report to user:**
-   ```
-   ✅ TK-XXX completed successfully
-   📁 Files: file1.ts, file2.ts
-   🧪 Tests: All passing
+3. Report to the user:
+
+   ```text
+   ✅ TK-XXX completed
+   📁 Files touched: file1.ts, file2.ts
+   🧪 Tests: command XYZ → PASS
    ```
 
-4. **If step-by-step mode:**
-   - Ask user: "Continue to next task? (y/n)"
-   - Wait for response
-   - If "n": Stop and report "Paused. Run `/implement-story US-XXX` again to continue."
-
-5. **Proceed to next task**
+4. In Step-by-step mode ask if you should continue; otherwise move on automatically.
 
 ---
 
-#### Case B: Tests FAIL ❌ (First Time)
+#### Case B: Tests FAIL ❌ (first attempt)
 
 **Actions:**
-1. **Keep task as IN PROGRESS:**
-   - Task remains: `- [~] TK-XXX: ...`
 
-2. **Append to Dev Notes:**
+1. Keep `taskProgress[TK-XXX] = "in-progress"` (do not update the story file until a decision is made).
+2. Record a Dev Notes block (single write) containing:
+
    ```markdown
-   ### TK-XXX Implementation Attempt (YYYY-MM-DD)
+   ### TK-XXX · YYYY-MM-DD
 
    **Status:** ❌ Tests failing
-
-   **What was implemented:**
-   - Brief description of what was done
-
-   **Files changed:**
+   **Implemented:**
+   - Summary from `localTaskNotes`
+   **Files:**
    - path/to/file1.ext (created/modified)
-
-   **Error output:**
-   ```
-   <paste full test output here>
+   **Test output (excerpt):**
+   [main error details]
    ```
 
-   **Fix attempted:**
-   - Description of what auto-fix tried
+3. Summarize for the user:
 
-   **User guidance needed.**
+   ```text
+   ❌ TK-XXX: tests failing (command XYZ)
+   Error: [short description]
+
+   How should we proceed?
+   1. Try another approach (describe it)
+   2. User will handle it / mark for review
+   3. Mark the task as ⚠️ blocked
    ```
 
-3. **Report to user:**
-   ```
-   ❌ Task TK-XXX: Tests failing after auto-fix attempt
-
-   Error summary: [brief description of error]
-
-   Full test output has been logged in Dev Notes section of the story file.
-
-   How would you like to proceed?
-   1. Let me try a different implementation approach
-   2. You'll fix it manually (I'll move to next task)
-   3. Skip this task for now (mark as blocked)
-
-   Your choice:
-   ```
-
-4. **Wait for user decision:**
-
-   **Choice 1 - Try different approach:**
-   - Ask user: "Please describe the alternative approach you'd like me to try:"
-   - Implement based on user guidance
-   - Re-run tests
-   - Continue based on outcome
-
-   **Choice 2 - Manual fix:**
-   - Report: "Moving to next task. You can fix TK-XXX manually and commit."
-   - Proceed to next task
-
-   **Choice 3 - Skip/Block:**
-   - Update task: `- [!] TK-XXX: ...` (blocked)
-   - Append to Dev Notes: "**Status:** ⚠️ Blocked - awaiting resolution"
-   - Proceed to next task
+4. Apply the chosen path:
+   - **1. New attempt:** collect the additional guidance, implement it, rerun the tests.
+   - **2. Manual fix:** leave the task as in-progress and explain how to resume later.
+   - **3. Blocked:** update the story file with `- [!] TK-XXX: ... ⚠️ Blocked - reason` and log it in Dev Notes.
 
 ---
 
+### Phase 6: Story Completion
 
-### Phase 4: Story Completion
+**Trigger:** All entries in `taskProgress` are `done`.
 
-**Trigger:** All tasks in story have `[x]` checkbox (DONE)
+#### Actions
 
-#### Actions:
+1. Ask the user for final confirmation before touching tracking files.
+2. Update the story front matter (`Status: TODO/IN PROGRESS → DONE`) and the backlog entry (`- [ ]` → `- [x]`) with a single write per file.
+3. Suggest the commit message `chore(US-XXX): mark story as done in backlog`, but keep it as a recommendation only (no `git commit`).
+4. Provide a closing summary:
 
-**1. Update Story File Status:**
-- Read story file
-- Find metadata line: `**Epic:** EP-XXX | **Priority:** HIGH | **Estimate:** 5pt | **Status:** TODO`
-- Update Status: `TODO` → `DONE` (or `IN PROGRESS` → `DONE`)
-- Write story file
-
-**2. Update Backlog Index:**
-- Read `docs/backlog.md`
-- Find story line: `- [ ] [US-XXX](stories/US-XXX-slug.md) - Story title | **HIGH** | 5pt`
-- Update checkbox: `- [ ]` → `- [x]`
-- Write `docs/backlog.md`
-
-**3. Commit Backlog Updates:**
-```
-chore(US-XXX): Mark story as DONE in backlog
-```
-
-**Report to user:**
-```
-✅ Story US-XXX: All tasks completed!
-📊 Summary:
-   - Tasks implemented: X
-   - Commits: X
-```
+   ```text
+   ✅ Story US-XXX completed
+   📊 Tasks: X / X
+   📁 Key files: ...
+   📌 Next steps: (potential follow-ups)
+   ```
 
 ---
 
@@ -369,7 +267,7 @@ Test command:
 
 Please resolve this manually and then:
 - Continue: /implement-story US-XXX (will resume from where it stopped)
-- Or fix git issue and retry
+- Or fix the git issue and retry
 ```
 
 #### 6. Branch Already Exists
@@ -392,5 +290,3 @@ Retrying once...
 <If retry fails>
 ❌ File write failed after retry. Please check file permissions.
 ```
-
-

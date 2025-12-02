@@ -3,7 +3,6 @@ name: write-tests
 agent: tester-agent
 ---
 
-@.opencode/context/core/essential-patterns.md
 @.opencode/context/requirements/backlog-format-guide.md
 @.opencode/context/development/coding-standards.md
 
