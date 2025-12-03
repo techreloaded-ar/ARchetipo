@@ -51,17 +51,30 @@ Test command:
 
 ### Phase 1: Initialization
 
-#### 1. Verify Story Branch Context
-- Determine the expected story branch (for example `feature/<story-id>`) from `docs/backlog.md` or the $ARGUMENTS payload.
-- Run `git rev-parse --abbrev-ref HEAD`; if the current branch does not match the expected one, immediately inform the user that the workflow cannot continue until the correct branch is checked out, then exit.
-- Once the branch matches, fetch remote references so the local copy is ready to integrate the developer-agent commits.
+#### 1. Determine Test Scope
 
-#### 2. Parse Backlog Story
-- Open `docs/backlog.md`, locate the story described in $ARGUMENTS, and copy its acceptance criteria and definition of done into your working notes.
+**If a user story was specified as argument ($ARGUMENTS):**
+- Open `docs/backlog.md` and locate the story described in $ARGUMENTS.
+- Read the story's **Technical Notes** section carefully to understand which files need to be tested.
+- Copy the acceptance criteria and definition of done into your working notes.
 - Highlight any non-functional requirements (performance, accessibility, security) that might require additional tests.
+- The files to test are those mentioned in the Technical Notes or those affected by the story implementation.
 
-#### 3. Decide Whether New Tests Are Needed
-- Compare the acceptance criteria with the current automated test coverage and the developer-agent changes.
+**If no argument was provided:**
+- Run `git rev-parse --abbrev-ref HEAD` to get the current branch name.
+- Determine the expected story branch pattern (for example `feature/<story-id>`) by checking if the current branch matches known patterns from `docs/backlog.md`.
+- **If the current branch matches an expected story branch:**
+  - Run `git diff main...HEAD` to get all changes introduced by this branch compared to main.
+  - The files to test are those modified in this diff.
+  - Try to infer the story context from the branch name and backlog to understand acceptance criteria.
+- **If the current branch does NOT match a story branch:**
+  - Run `git status --short` to identify pending (unstaged or staged) files.
+  - Run `git diff HEAD` to get changes in tracked files.
+  - The files to test are those with pending changes (modified, staged, or untracked).
+  - Tests should cover the changes visible in these pending files.
+
+#### 2. Decide Whether New Tests Are Needed
+- Compare the identified scope (acceptance criteria if available, or code changes) with the current automated test coverage.
 - If every criterion is already validated by existing tests and no regressions are possible, document the rationale, inform stakeholders that no new tests are required, and move directly to Phase 4 (Verification Loop).
 - Otherwise, proceed with the remaining phases to design and implement the necessary tests.
 

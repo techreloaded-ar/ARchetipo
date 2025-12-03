@@ -60,7 +60,13 @@
 - Inizializzazione del repository git
 - Copiare PRD, requirements e mockup nel repo
 - Creare contesto specifico per le scelte tecnologiche
-- Iniettare il contesto agli agenti AI
+- Iniettare il contesto ai comandi custom
+
+> ⚠️ Prompt per generare il contesto:
+
+``` 
+Leggi il PRD e i requirements  dentro /docs, quindi crea un context 'tech-stack' da includere fra quelli disponibili in opencode (.opencode/context/development) che includa le linee guida le migliori linee guida e best practices per lavorare con lo stack tecnologico che si è deciso di usare. Scrivi il file di context in inglese e referenzialo all'interno dei comandi implement-story e write-tests
+ ```
 
 ---
 

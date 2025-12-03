@@ -1,7 +1,6 @@
 ---
 name: implement-story
 agent: developer-agent
-subtask: true
 ---
 
 @.opencode/context/requirements/backlog-format-guide.md
