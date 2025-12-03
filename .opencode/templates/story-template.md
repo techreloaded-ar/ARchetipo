@@ -16,7 +16,7 @@ So that [benefit/value I get]
 
 ## Tasks
 
-_(I task vengono generati da architect-agent tramite /plan. Lo status della storia passerà da TODO a PLANNED dopo l'aggiunta dei task.)_
+_(I task vengono generati da architect-agent tramite /plan-story. Lo status della storia passerà da TODO a PLANNED dopo l'aggiunta dei task.)_
 
 ## Dev Notes
 

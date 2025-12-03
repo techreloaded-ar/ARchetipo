@@ -34,7 +34,7 @@ Convert user stories with acceptance criteria into structured task lists that de
 6. Proceed to task generation
 
 **If no TODO stories found:**
-- Report: "Tutte le storie TODO sono state pianificate. Per rigenerare i task di una storia PLANNED, specificane l'ID: /plan US-XXX"
+- Report: "Tutte le storie TODO sono state pianificate. Per rigenerare i task di una storia PLANNED, specificane l'ID: /plan-story US-XXX"
 - Exit
 
 ### Phase 2: Analyze Story Context

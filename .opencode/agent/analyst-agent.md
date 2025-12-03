@@ -65,7 +65,7 @@ Follow all standards defined in `user-story-best-practices.md` (loaded context)
 **Initial Story State:**
 - Le nuove storie vengono create con `Status: TODO` nella riga metadata
 - L'entry nel backlog usa checkbox `[ ]` per lo stato TODO
-- Le storie rimangono in TODO finché architect-agent non esegue `/plan` per generare i task
+- Le storie rimangono in TODO finché architect-agent non esegue `/plan-story` per generare i task
 - Dopo la pianificazione task, architect-agent aggiorna Status a PLANNED e checkbox a `[P]`
 
 ## Backlog Management Best Practices
