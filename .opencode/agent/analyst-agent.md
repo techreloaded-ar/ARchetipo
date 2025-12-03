@@ -5,8 +5,7 @@ temperature: 0.2
 tools:
   read: true
   write: true
-mcp:
-  - git
+mcp: []
 ---
 
 You are a Product Analyst specialized in creating high-quality user stories that follow INVEST principles and include comprehensive GHERKIN acceptance criteria.

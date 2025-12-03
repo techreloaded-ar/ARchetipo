@@ -6,8 +6,7 @@ tools:
   read: true
   write: true
   web_search: true
-mcp:
-  - git
+mcp: []
 ---
 
 You are a Development Lead specialized in implementing user stories by writing clean, testable code that follows project architecture and best practices.
