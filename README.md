@@ -4,21 +4,30 @@ Questa guida illustra i passaggi necessari per configurare l'ambiente di
 sviluppo, installare le dipendenze essenziali e configurare l'IDE
 OpenCode con il plugin di autenticazione OpenAI.
 
-## 1. 🌳 Installazione di Node.js (LTS)
+## 1. 🌳 Scaffolding
 
-Node.js è essenziale e deve essere installato per eseguire gli script di
-progetto e le dipendenze. Si raccomanda la versione LTS (Long-Term
-Support).
+Apri un terminale e posizionati nella cartella in cui desideri creare il progetto.
 
-### macOS e Windows
+(es. `C:\users\nome_utente\repo`)
 
-Scarica e installa l'ultima versione LTS dal sito ufficiale di Node.js.
+Lancia il comando per creare il progetto:
 
-Verifica l'installazione aprendo il terminale (o Prompt dei
-comandi/PowerShell su Windows):
+Su Windows
 
-    node -v
-    npm -v
+```ps
+
+$Project = "<Nome Progetto>"; curl.exe -sL "https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo_dist/refs/heads/main/install_airchetipo.ps1" -o install.ps1 `
+&& powershell -ExecutionPolicy Bypass -File .\install.ps1 --Project $Project `
+&& Remove-Item install.ps1
+
+```
+
+Su Mac
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo_dist/refs/heads/main/install_airchetipo.sh | bash -s -- <Nome Progetto>
+```
+
 
 ## 2. 📝 Installazione di OpenCode
 
@@ -32,7 +41,9 @@ Windows) dal [sito ufficiale di OpenCode](https://opencode.ai/docs/#install).
 
 Per avviare l'applicazione da qualsiasi posizione nel terminale:
 
-    opencode
+```bash
+opencode
+```
 
 ## 3. 🔑 Configurazione di OpenCode con Plugin OpenAI OAuth
 
@@ -57,7 +68,9 @@ Configuration" nel README ufficiale del plugin.
 Esegui questo comando nel tuo terminale per avviare la procedura di
 autenticazione OAuth:
 
-    opencode auth login
+```bash
+opencode auth login
+```
 
 Seleziona **OpenAI** quando richiesto.
 
@@ -69,7 +82,7 @@ account OpenAI.
 
 ### 3.3. Selezione del Modello
 
-Esegui `Ctrl + x` per aprire il menù di selezione del modello
+Esegui `Ctrl + X, M` per aprire il menù di selezione del modello
 
 Scegli l'opzione **"OpenAI GPT 5.1 Codex Medium (OAuth)"**.
 
@@ -83,28 +96,32 @@ Per iniziare il controllo versione del tuo progetto:
 
 Apri il terminale, crea la cartella di progetto e inizializza Git:
 
+```bash
     # Crea e vai alla cartella di progetto
     mkdir IlMioProgetto
     cd IlMioProgetto
 
     # Inizializza un repository Git locale
     git init
+```
 
-### 4.2. Configurazione del Repository Remoto (Opzionale)
+### 4.2. (Opzionale) - Configurazione del Repository Remoto
 
 Per collegare il progetto a un repository remoto (es. su GitHub):
 
+```bash
     # Collega il repository locale a quello remoto (sostituisci l'URL)
     git remote add origin <URL_DEL_TUO_REPO>
 
     # Rinomina il branch principale
     git branch -M main
+```
 
 ## 5. ▶️ Comandi per Iniziare a Sviluppare
 
-Per aprire il progetto e iniziare a lavorare con OpenCode:
+Per aprire il progetto e iniziare a lavorare con OpenCode
 
-    # Apri la cartella di progetto nell'IDE OpenCode
-    opencode .
-
-Il plugin OpenAI Codex sarà attivo e pronto per l'assistenza al codice.
+```bash
+    # Apri la cartella di progetto in un terminale e lancia
+    opencode 
+```
