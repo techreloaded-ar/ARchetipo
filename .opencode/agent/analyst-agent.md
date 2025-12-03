@@ -1,7 +1,7 @@
 ---
 description: Creates user stories with INVEST principles and GHERKIN acceptance criteria
 mode: primary
-temperature: 0.4
+temperature: 0.2
 tools:
   read: true
   write: true

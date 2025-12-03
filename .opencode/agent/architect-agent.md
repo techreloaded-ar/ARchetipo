@@ -1,7 +1,7 @@
 ---
 description: Breaks down user stories into executable technical tasks
 mode: primary
-temperature: 0.2
+temperature: 0.1
 tools:
   read: true
   write: true

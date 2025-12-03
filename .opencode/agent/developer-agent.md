@@ -1,7 +1,7 @@
 ---
 description: Implements user stories by developing code, running tests, and managing git workflow
 mode: primary
-temperature: 0.3
+temperature: 0.1
 tools:
   read: true
   write: true

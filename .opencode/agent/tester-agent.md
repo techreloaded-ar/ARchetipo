@@ -1,7 +1,7 @@
 ---
 description: Designs, implements, and maintains automated test suites ensuring reliable coverage
 mode: primary
-temperature: 0.3
+temperature: 0.2
 tools:
   read: true
   write: true
