@@ -24,7 +24,7 @@ agent: developer-agent
 **Story Selection:**
 - **If user provided story ID** (e.g., "US-005"): Use that story regardless of status
 - **If no story specified**: Auto-select first PLANNED story (checkbox `[P]`) in backlog
-- **If no PLANNED stories**: Report "Nessuna storia PLANNED trovata. Le storie devono avere task prima dell'implementazione. Usa `/plan` per generare i task." and exit
+- **If no PLANNED stories**: Report "Nessuna storia PLANNED trovata. Le storie devono avere task prima dell'implementazione. Usa `/plan-story` per generare i task." and exit
 
 #### 2. Read and Validate Story File
 
@@ -39,7 +39,7 @@ agent: developer-agent
 **Validate story:**
 - Check Status field in story file metadata
 - **If Status is TODO:**
-  - Report error: "❌ Storia US-XXX ha Status=TODO e non è stata pianificata. Esegui `/plan US-XXX` prima per generare i task e aggiornare lo status a PLANNED."
+  - Report error: "❌ Storia US-XXX ha Status=TODO e non è stata pianificata. Esegui `/plan-story US-XXX` prima per generare i task e aggiornare lo status a PLANNED."
   - Exit
 - **If Status is PLANNED or IN PROGRESS:** Proceed normally
 - **If Status is DONE:**
@@ -117,14 +117,17 @@ Choice (default 1):
 
 ---
 
-### Phase 3: Git Report (no automatic commits)
+### Phase 3: Automatic Commit After Each Task
 
-- After each finished task run `git status -sb` and show the short list of touched files.
-- When helpful, add `git diff --stat` for context, but avoid dumping full diffs.
-- Store these two outputs (status + stat) in a local object `pendingChangesSummary` so they can be reused later.
-- Suggest a Conventional Commit-style message (e.g., `feat(US-XXX): ...`) and ask for confirmation before doing anything.
-- If the user declines the commit, keep `pendingChangesSummary` intact; if the user approves, clear it once the commit succeeds.
-- Execute Git commands only after the user explicitly tells you to.
+// turbo
+- After each finished task run `git add .` to stage all changes.
+- Run `git status -sb` to show the short list of touched files.
+- When helpful, add `git diff --stat --cached` for context, but avoid dumping full diffs.
+- Automatically create a commit with a Conventional Commit-style message:
+  - Format: `feat(US-XXX/TK-YYY): [task description]`
+  - Example: `feat(US-005/TK-003): Add user authentication endpoint`
+- Run `git commit -m "feat(US-XXX/TK-YYY): [task description]"`
+- Report to the user what was committed.
 
 ---
 
@@ -152,7 +155,7 @@ Choice (default 1):
    📁 Files touched: file1.ts, file2.ts
    ```
 
-4. In Step-by-step mode ask if you should continue; otherwise move on automatically.
+4. **Only In Step-by-step mode** ask if you should continue; otherwise **move on automatically**.
 
 ---
 
@@ -162,17 +165,17 @@ Choice (default 1):
 
 #### Actions
 
-1. Ask the user for final confirmation before touching tracking files.
-2. Update the story front matter (`Status: TODO/IN PROGRESS → DONE`) and the backlog entry (`- [ ]` → `- [x]`) with a single write per file.
-3. Suggest the commit message `chore(US-XXX): mark story as done in backlog`, but keep it as a recommendation only (no `git commit`).
-4. Provide a closing summary:
+1. Provide a closing summary:
 
    ```text
-   ✅ Story US-XXX completed
-   📊 Tasks: X / X
-   📁 Key files: ...
-   📌 Next steps: (potential follow-ups)
+   🎉 Story US-XXX completed!
+   📊 Tasks: X / X (all committed)
+   📁 Total commits: X
+   📌 Next steps: Run tests with `/write-tests US-XXX` or write acceptance tests
    ```
+
+2. All changes have been committed incrementally (one commit per task).
+3. The feature branch is ready for review or merging.
 
 ---
 

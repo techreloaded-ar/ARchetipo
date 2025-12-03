@@ -116,29 +116,49 @@ Test command:
 
 ### Phase 5: Finalization
 
-#### 11. Confirm Completion
+#### 11. Read User Story and Identify Test Tasks
+**If a user story was specified as argument ($ARGUMENTS):**
+- Open `docs/backlog.md` and locate the story file path for the story described in $ARGUMENTS.
+- Open the corresponding story file `docs/stories/US-XXX-slug.md`.
+- Read the **Tasks** section and identify all test-related tasks by looking for keywords like:
+  - "test" (unit tests, integration tests, e2e tests)
+  - "Jest", "Supertest", "Playwright"
+  - "Add tests", "Implement tests", "Write tests"
+  - Any task in the "Testing" category (typically TK-XXX tasks that mention testing frameworks or testing activities)
+- Store the list of test-related task IDs (e.g., TK-005, TK-006, TK-007) for later marking.
+
+**If no argument was provided but current branch matches a story branch:**
+- Extract the story ID from the branch name (e.g., `feature/US-005` → `US-005`).
+- Open `docs/backlog.md` and find the corresponding story file path.
+- Follow the same process as above to identify test-related tasks.
+
+**If neither condition is met:**
+- Skip this step as there's no associated user story to update.
+
+#### 12. Confirm Completion
 - When the entire automated suite passes, record the results along with any notes about skipped or unnecessary tests.
 - Explicitly state that acceptance criteria are covered and reference the evidence (test files, command output) so reviewers can verify quickly.
 
-#### 12. Commit and Handover
-- Stage only the test files and supporting fixtures you created or modified, then craft a commit message describing which acceptance criteria are now enforced.
-- Share the commit hash and testing summary with stakeholders, then mark the command as complete.
+#### 13. Mark Test Tasks as Completed
+**If test-related tasks were identified in step 11:**
+- Open the story file `docs/stories/US-XXX-slug.md`.
+- For each test-related task ID identified in step 11:
+  - Locate the task line in the **Tasks** section.
+  - Change the checkbox from `- [ ] TK-XXX:` or `- [~] TK-XXX:` to `- [x] TK-XXX:`.
+  - Add completion timestamp: `✅ YYYY-MM-DD` (use current date).
+  - Example: `- [ ] TK-005: Add Jest unit tests for AuthService methods` → `- [x] TK-005: Add Jest unit tests for AuthService methods ✅ 2025-12-03`
+- Save the story file with all test tasks marked as completed.
+- Inform the user which tasks were marked as completed.
 
-<!-- BOZZA WORKFLOW
-- caricare le modifiche fatte dal developer-agent sul branch corrente
+**If no test-related tasks were found:**
+- Inform the user that no test tasks were identified in the story to mark as completed.
 
-- scrivere i test per coprire i criteri di accettazione della storia, considerango le modifiche fatte dal developer-agent 
+#### 14. Update Backlog Status
+Ask the user to confirm the completion of the story. 
+If the user confirms the completion, mark the story as completed by updating the story front matter (`Status: TODO/IN PROGRESS → DONE`) and the backlog entry (`- [ ]` → `- [x]`) with a single write per file.
 
-- se non ci sono test da scrivere, segnalare che non è necessario scrivere test e procedere alla verifica
-
-- Lanciare i test per vedere se passano
-- Se non passano, verificare il motivo:
-  - Se il problema sono i test scritti male, intervenire automaticamente e correggere
-  - Se il problema è il codice di produzione, chiamare il developer-agent e chiedere di implementare le modifiche necessarie
-  - Tornare a lanciare i test per vedere se passano
-- Se i test passano, segnalare che il task è completo
-- Fare una commit con i test
-- completare il comando
-
--->
+#### 15. Commit and Handover
+- Stage the test files, documentation, supporting fixtures, and the updated story file (if test tasks were marked).
+- Craft a commit message describing which acceptance criteria are now enforced and which test tasks were completed.
+- Share the commit hash and testing summary with the user, then mark the command as complete.
 
