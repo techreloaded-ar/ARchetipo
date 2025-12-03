@@ -13,21 +13,42 @@ agent: developer-agent
 
 ### Phase 1: Initial Alignment
 
-#### 1. Confirm the story with the user
+### Phase 1: Initialization
 
-- Read `docs/backlog.md` to identify TODO stories (`- [ ] [US-XXX](stories/US-XXX-slug.md)`).
-- If the user already specified the ID, pull the title from the backlog and ask for a quick confirmation.
-- If no story was specified, propose the first TODO story showing title and priority, then ask explicitly: "Should I proceed with US-XXX? (y/n)".
-- If no TODO items exist, respond with "No TODO stories found. All done! 🎉" and exit.
+#### 1. Parse Backlog and Select Story
 
-#### 2. Load and validate the story file
+**Read backlog structure:**
+- Read `docs/backlog.md` to identify epics and stories
+- Look for PLANNED stories with checkbox `[P]` - queste hanno task pronti per lo sviluppo
 
-- Open `docs/stories/US-XXX-slug.md` and gather:
-  - User Story
-  - Acceptance Criteria (GHERKIN)
-  - Architecture Notes
-  - Tasks (`- [ ] TK-XXX: ...`)
-- If the story has no tasks, stop and ask the user how to proceed (do not create tasks automatically).
+**Story Selection:**
+- **If user provided story ID** (e.g., "US-005"): Use that story regardless of status
+- **If no story specified**: Auto-select first PLANNED story (checkbox `[P]`) in backlog
+- **If no PLANNED stories**: Report "Nessuna storia PLANNED trovata. Le storie devono avere task prima dell'implementazione. Usa `/plan` per generare i task." and exit
+
+#### 2. Read and Validate Story File
+
+**Read story file:**
+- Parse `docs/stories/US-XXX-slug.md`
+- Extract sections:
+  - User Story (As a... I want... So that...)
+  - Acceptance Criteria (GHERKIN scenarios)
+  - Architecture Notes (technical guidance)
+  - Tasks list (implementation tasks)
+
+**Validate story:**
+- Check Status field in story file metadata
+- **If Status is TODO:**
+  - Report error: "❌ Storia US-XXX ha Status=TODO e non è stata pianificata. Esegui `/plan US-XXX` prima per generare i task e aggiornare lo status a PLANNED."
+  - Exit
+- **If Status is PLANNED or IN PROGRESS:** Proceed normally
+- **If Status is DONE:**
+  - Report error: "❌ Storia US-XXX è già DONE. Niente da implementare."
+  - Exit
+- **If Status is BLOCKED:**
+  - Report warning: "⚠️ Storia US-XXX è BLOCKED. Procedere comunque? (y/n)"
+  - Wait for user confirmation
+- Ensure story has at least one task in Tasks section
 
 #### 3. Set the execution mode
 
