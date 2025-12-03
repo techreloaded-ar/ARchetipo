@@ -40,10 +40,11 @@ Brief description of epic and strategic objective.
 ---
 
 **Legend:**
-- `[ ]` = TODO
-- `[~]` = IN PROGRESS
-- `[x]` = DONE
-- `[!]` = BLOCKED
+- `[ ]` = TODO (storia creata, non ancora pianificata)
+- `[P]` = PLANNED (task definiti, pronta per sviluppo)
+- `[~]` = IN PROGRESS (sviluppo in corso)
+- `[x]` = DONE (completata)
+- `[!]` = BLOCKED (bloccata)
 ```
 
 ### Index Conventions
@@ -108,7 +109,7 @@ So that [benefit/value]
 - **Epic:** Parent epic ID (e.g., EP-001)
 - **Priority:** HIGH | MEDIUM | LOW
 - **Estimate:** Story points (1-8, Fibonacci scale)
-- **Status:** TODO | IN PROGRESS | DONE | BLOCKED
+- **Status:** TODO | PLANNED | IN PROGRESS | DONE | BLOCKED
 
 **User Story:**
 - Structure: As [role] I want [action] So that [value]
@@ -149,27 +150,50 @@ So that [benefit/value]
 ### Story States
 
 **In backlog.md (checkbox):**
-- `[ ]` **TODO** - Story in backlog, not started
-- `[~]` **IN PROGRESS** - Story development started
-- `[x]` **DONE** - Story completed, acceptance criteria verified
-- `[!]` **BLOCKED** - Blocked by external dependencies
+- `[ ]` **TODO** - Storia creata da analyst, task non ancora definiti
+- `[P]` **PLANNED** - Storia ha task, pronta per sviluppo
+- `[~]` **IN PROGRESS** - Sviluppo in corso
+- `[x]` **DONE** - Completata, acceptance criteria verificati
+- `[!]` **BLOCKED** - Bloccata da dipendenze o errori
 
 **In story file (Status field):**
-- **TODO** - Not started
-- **IN PROGRESS** - In development
-- **DONE** - Completed
-- **BLOCKED** - Blocked
+- **TODO** - Storia creata, in attesa di pianificazione task
+- **PLANNED** - Task definiti, pronta per sviluppo
+- **IN PROGRESS** - In sviluppo
+- **DONE** - Completata
+- **BLOCKED** - Bloccata
 
 ### Workflow Transitions
 
-**Story:**
+**Ciclo di vita storia:**
 ```
-TODO → IN PROGRESS → DONE
-  ↓         ↓
-BLOCKED ←────┘
+analyst-agent: Crea storia
+    ↓
+[ ] TODO (senza task)
+    ↓
+architect-agent: Genera task via /plan
+    ↓
+[P] PLANNED (task pronti, implementabile)
+    ↓
+developer-agent: Inizia implementazione via /implement-story
+    ↓
+[~] IN PROGRESS (sviluppa task)
+    ↓
+developer-agent: Completa tutti i task
+    ↓
+[x] DONE (completata, merged)
+
+Qualsiasi stato → [!] BLOCKED (se errori/dipendenze bloccano progresso)
 ```
 
-**Task (within story):**
+**Transizioni di stato:**
+- TODO → PLANNED: architect-agent genera sezione Tasks via `/plan`
+- PLANNED → IN PROGRESS: developer-agent inizia primo task via `/implement-story`
+- IN PROGRESS → DONE: developer-agent completa ultimo task
+- Qualsiasi → BLOCKED: Errori o dipendenze impediscono progresso
+- BLOCKED → stato precedente: Issue risolto, ripresa lavoro
+
+**Stati Task (all'interno della storia):**
 ```
 [ ] TODO → [~] IN PROGRESS → [x] DONE
 ```

@@ -6,22 +6,24 @@ Brief description of this epic's strategic objective and the value it brings to 
 
 **Stories:**
 - [ ] [US-001](stories/US-001-example-story.md) - Brief story title | **HIGH** | 3pt
-- [ ] [US-002](stories/US-002-another-story.md) - Another title | **MEDIUM** | 5pt
+- [P] [US-002](stories/US-002-planned-story.md) - Planned story | **MEDIUM** | 5pt
+- [~] [US-003](stories/US-003-in-progress.md) - In progress | **HIGH** | 5pt
 
 ## 📦 EP-002: Another Epic
 
 Description of second epic.
 
 **Stories:**
-- [ ] [US-003](stories/US-003-third-story.md) - Third story | **LOW** | 2pt
+- [ ] [US-004](stories/US-004-fourth-story.md) - Fourth story | **LOW** | 2pt
 
 ---
 
 **Legend:**
-- `[ ]` = TODO (story not started)
-- `[~]` = IN PROGRESS (story in development)
-- `[x]` = DONE (story completed)
-- `[!]` = BLOCKED (story blocked)
+- `[ ]` = TODO (storia creata, non ancora pianificata)
+- `[P]` = PLANNED (task definiti, pronta per sviluppo)
+- `[~]` = IN PROGRESS (sviluppo in corso)
+- `[x]` = DONE (completata)
+- `[!]` = BLOCKED (bloccata)
 
 **Priority Levels:**
 - **HIGH** - Critical, must-have for MVP

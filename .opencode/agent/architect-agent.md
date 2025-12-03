@@ -27,14 +27,14 @@ Convert user stories with acceptance criteria into structured task lists that de
 
 **If no story ID provided** (auto-selection):
 1. Read `docs/backlog.md`
-2. Find first TODO story without Tasks section: `- [ ] [US-XXX](stories/US-XXX-*.md)`
-3. Parse story ID and filename from link
+2. Find first TODO story (checkbox `[ ]`) - queste storie non hanno ancora task
+3. Parse story ID and filename from link: `- [ ] [US-XXX](stories/US-XXX-*.md)`
 4. Read that story file
-5. Report to user: "Auto-selected US-XXX: [Story Title]"
+5. Report to user: "Auto-selected US-XXX: [Story Title] (Status: TODO, non ancora pianificata)"
 6. Proceed to task generation
 
-**If no TODO stories without tasks found:**
-- Report: "All TODO stories already have tasks. Specify a story ID to regenerate tasks."
+**If no TODO stories found:**
+- Report: "Tutte le storie TODO sono state pianificate. Per rigenerare i task di una storia PLANNED, specificane l'ID: /plan US-XXX"
 - Exit
 
 ### Phase 2: Analyze Story Context
@@ -190,11 +190,34 @@ Check each task:
 
 4. Write updated content back to story file
 
+### Phase 4.5: Update Story State to PLANNED
+
+Dopo aver generato i task con successo, aggiorna lo stato della storia da TODO a PLANNED:
+
+**1. Update Story File Status field:**
+- Read story file content
+- Find metadata line: `**Epic:** EP-XXX | **Priority:** HIGH | **Estimate:** Xpt | **Status:** TODO`
+- Replace Status value: `TODO` → `PLANNED`
+- Write story file back
+
+**2. Update Backlog Index checkbox:**
+- Read `docs/backlog.md`
+- Find story line: `- [ ] [US-XXX](stories/US-XXX-slug.md) - Story title | **PRIORITY** | Xpt`
+- Replace checkbox: `[ ]` → `[P]`
+- Write `docs/backlog.md` back
+
+**3. Report state transition to user:**
+```
+📋 Story status aggiornato: TODO → PLANNED
+```
+
+Questo cambio di stato segnala che la storia è ora pronta per lo sviluppo.
+
 ### Phase 5: Report to User
 
 **Success Report:**
 ```
-✅ Generated tasks for US-XXX: [Story Title]
+✅ Generati task per US-XXX: [Story Title]
 
 📊 Task Breakdown:
    - Data layer: X tasks
@@ -206,11 +229,16 @@ Check each task:
 
    Total: X tasks
 
-💾 Updated file: docs/stories/US-XXX-slug.md
+📋 Story Status: TODO → PLANNED
+💾 File aggiornati:
+   - docs/stories/US-XXX-slug.md (sezione Tasks aggiunta, Status=PLANNED)
+   - docs/backlog.md (checkbox aggiornato a [P])
+
+✅ Storia pronta per lo sviluppo!
 
 Next steps:
-1. Review tasks in story file
-2. Run `/implement-story US-XXX` to start development
+1. Rivedi i task nel file story: docs/stories/US-XXX-slug.md
+2. Esegui `/implement-story US-XXX` per iniziare lo sviluppo
 ```
 
 **If regenerating:**

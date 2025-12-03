@@ -24,12 +24,12 @@ Transform user stories into working software by implementing all tasks, validati
 
 **Read backlog structure:**
 - Read `docs/backlog.md` to identify epics and stories
-- Look for TODO stories: `- [ ] [US-XXX](stories/US-XXX-slug.md)`
+- Look for PLANNED stories with checkbox `[P]` - queste hanno task pronti per lo sviluppo
 
 **Story Selection:**
-- **If user provided story ID** (e.g., "US-005"): Use that story
-- **If no story specified**: Auto-select first TODO story in backlog
-- **If no TODO stories**: Report "No TODO stories found. All done! 🎉" and exit
+- **If user provided story ID** (e.g., "US-005"): Use that story regardless of status
+- **If no story specified**: Auto-select first PLANNED story (checkbox `[P]`) in backlog
+- **If no PLANNED stories**: Report "Nessuna storia PLANNED trovata. Le storie devono avere task prima dell'implementazione. Usa `/plan` per generare i task." and exit
 
 #### 2. Read and Validate Story File
 
@@ -42,8 +42,18 @@ Transform user stories into working software by implementing all tasks, validati
   - Tasks list (implementation tasks)
 
 **Validate story:**
-- Ensure story has at least one task
-- If no tasks: Report error "Story US-XXX has no tasks defined. Please add tasks before implementing."
+- Check Status field in story file metadata
+- **If Status is TODO:**
+  - Report error: "❌ Storia US-XXX ha Status=TODO e non è stata pianificata. Esegui `/plan US-XXX` prima per generare i task e aggiornare lo status a PLANNED."
+  - Exit
+- **If Status is PLANNED or IN PROGRESS:** Proceed normally
+- **If Status is DONE:**
+  - Report error: "❌ Storia US-XXX è già DONE. Niente da implementare."
+  - Exit
+- **If Status is BLOCKED:**
+  - Report warning: "⚠️ Storia US-XXX è BLOCKED. Procedere comunque? (y/n)"
+  - Wait for user confirmation
+- Ensure story has at least one task in Tasks section
 
 #### 3. Ask Execution Mode
 
@@ -94,11 +104,21 @@ git checkout -b feature/US-XXX-slug
 
 #### Step 1: Update Task Status to IN PROGRESS
 
-**Read-Modify-Write:**
+**First, check and update story status if needed:**
 1. Read story file content
-2. Find task line: `- [ ] TK-XXX: description (role, duration, @assignee)`
-3. Update to: `- [~] TK-XXX: description (role, duration, @assignee)`
-4. Write story file
+2. Check Status field:
+   - **If Status is PLANNED**: Questo è il primo task che inizia
+     - Update Status: `PLANNED` → `IN PROGRESS`
+     - Update story file
+     - Update backlog.md: Find story line, change checkbox `[P]` → `[~]`
+     - Report: "📋 Storia US-XXX: PLANNED → IN PROGRESS (inizio sviluppo)"
+   - **If Status is already IN PROGRESS**: Nessun cambio di stato necessario (ripresa lavoro)
+     - Report: "📋 Storia US-XXX: Continuazione implementazione (Status: IN PROGRESS)"
+
+**Then, update task checkbox:**
+1. Find task line: `- [ ] TK-XXX: description`
+2. Update to: `- [~] TK-XXX: description`
+3. Write story file
 
 **Report to user:**
 ```
@@ -401,8 +421,9 @@ EOF
 
 **1. Update Story File Status:**
 - Read story file
-- Find metadata line: `**Epic:** EP-XXX | **Priority:** HIGH | **Estimate:** 5pt | **Status:** TODO`
-- Update Status: `TODO` → `DONE` (or `IN PROGRESS` → `DONE`)
+- Find metadata line: `**Epic:** EP-XXX | **Priority:** HIGH | **Estimate:** 5pt | **Status:** IN PROGRESS`
+- Update Status: `IN PROGRESS` → `DONE`
+  (Nota: Lo Status dovrebbe sempre essere IN PROGRESS a questo punto, dato che è passato da PLANNED all'inizio del primo task)
 - Write story file
 
 **2. Update Backlog Index:**
