@@ -92,3 +92,8 @@ Per aprire il progetto e iniziare a lavorare con OpenCode
     # Apri la cartella di progetto in un terminale e lancia
     opencode 
 ```
+
+
+Link CustomGTP:
+
+> https://chatgpt.com/g/g-692479242b188191a651f1b747d4c71b-airchetipo
