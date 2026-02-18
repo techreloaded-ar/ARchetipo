@@ -439,10 +439,54 @@ class WebBundler {
     const statusIcon = isValid ? chalk.green('✓') : chalk.yellow('⚠');
     console.log(`    ${statusIcon} Bundled team: ${teamName}.xml${isValid ? '' : chalk.yellow(' (invalid XML)')}`);
 
+    // 7. Also generate Claude skill — a SKILL.md file inside a directory named after the skill
+    const skillMarkdown = this.buildSkillMarkdown(teamConfig.bundle, bundle);
+    const skillName = (teamConfig.bundle.name || teamName)
+      .toLowerCase()
+      .replaceAll(/[^a-z0-9]+/g, '-')
+      .replaceAll(/(^-|-$)/g, '')
+      .slice(0, 64);
+    const skillOutputPath = path.join(this.outputDir, moduleName, 'skills', skillName, 'SKILL.md');
+    await fs.ensureDir(path.dirname(skillOutputPath));
+    await fs.writeFile(skillOutputPath, skillMarkdown, 'utf8');
+    console.log(`    ${chalk.green('✓')} Generated skill: ${chalk.cyan(`${moduleName}/skills/${skillName}/SKILL.md`)}`);
+
     // Track warnings
     if (warnings.length > 0) {
       this.stats.warnings.push(...warnings);
     }
+  }
+
+  /**
+   * Build a Claude skill Markdown file from a team bundle.
+   * Follows the Agent Skills specification (https://agentskills.io/specification):
+   *   - YAML frontmatter with 'name' (lowercase, hyphens, max 64 chars) and 'description' (max 200 chars)
+   *   - Markdown body with instructions for Claude
+   */
+  buildSkillMarkdown(teamMetadata, xmlBundle) {
+    const rawName = teamMetadata.name || 'AIRchetipo Team';
+    const teamDescription = teamMetadata.description || '';
+
+    // Derive skill name: lowercase, only letters/numbers/hyphens, max 64 chars
+    const skillName = rawName
+      .toLowerCase()
+      .replaceAll(/[^a-z0-9]+/g, '-')
+      .replaceAll(/(^-|-$)/g, '')
+      .slice(0, 64);
+
+    // Truncate description to 200 chars (Claude.ai limit)
+    const skillDescription = teamDescription.length > 200 ? teamDescription.slice(0, 197) + '...' : teamDescription;
+
+    const lines = [
+      '---',
+      `name: ${skillName}`,
+      `description: ${skillDescription}`,
+      '---',
+      '',
+      xmlBundle,
+    ];
+
+    return lines.join('\n');
   }
 
   /**
