@@ -157,8 +157,8 @@ _If you skip 2-4, I'll default to: Clean & Minimal, platform-standard colors, li
 
 If the user selects **"mvp"**, Livia evaluates screen count before proceeding:
 
-- **6 or fewer screens:** proceed with all of them in the unified MVP prompt.
-- **More than 6 screens:** Livia proposes a curated subset of **4-5 key screens** that form the core user journey, explains the rationale, and asks for confirmation before proceeding.
+- **4 or fewer screens:** proceed with all of them in the unified MVP prompt.
+- **More than 4 screens:** Livia proposes a curated subset of **3-4 key screens** that form the core user journey, explains the rationale, and asks for confirmation before proceeding.
 
 Selection criteria for the curated subset:
 - Screens that form a **connected flow** (each screen transitions naturally to the next)
@@ -168,14 +168,13 @@ Selection criteria for the curated subset:
 Example message when proposing a subset:
 
 ```
-✨ **Livia:** The MVP has [N] screens — that's a lot for a single unified prompt.
-I'd recommend focusing on these [4-5] key screens that form the core user journey:
+✨ **Livia:** The MVP has [N] screens — that's a lot for a single unified prompt (Figma Make has a 5,000 character limit).
+I'd recommend focusing on these [3-4] key screens that form the core user journey:
 
 1. [Screen Name] — [why it's essential]
 2. [Screen Name] — [why it's essential]
 3. [Screen Name] — [why it's essential]
 4. [Screen Name] — [why it's essential]
-5. [Screen Name] — [why it's essential]
 
 These cover [Primary Persona]'s main flow from [start] to [end].
 The remaining screens can be generated individually afterward.
@@ -284,6 +283,8 @@ After generating all prompts, show a closing message:
 
 #### Unified MVP Template
 
+> **Hard limit: the entire generated prompt (everything below the "Copy" line) must be ≤ 5,000 characters.** Livia must count characters before outputting and compress if needed (see Compression Strategy below).
+
 Generate a **single prompt** that covers all selected MVP screens as a connected flow. This prompt is self-contained and copy-pasteable into Figma Make in one go.
 
 **Unified MVP prompt template:**
@@ -295,61 +296,54 @@ Copy everything below this line into Figma Make:
 ---
 
 ## App Overview
-- **App:** [Product Name] — [product category]
-- **Pitch:** [elevator pitch — one sentence]
-- **Primary Persona:** [Name] — [role/description], goals: [key goals]
-- **Secondary Persona:** [Name] — [role/description], goals: [key goals]
-- **Core Problem:** [the main problem the app solves]
+- **App:** [Product Name] — [product category]. [elevator pitch — one sentence describing the core problem it solves]
+- **Persona:** [Name] — [role/description], goals: [key goals]
+- **Navigation:** [Tab bar / Sidebar / Top nav] with [N] items: [Item 1], [Item 2], ...
 
 ## Platform & Style
 - **Platform:** [iOS / Android / Web] — follow [platform design guidelines]
 - **Style:** [chosen style description]
-- **Color Palette:** Primary: [color]. Secondary: [color]. Accent: [color]. Background: [color].
-- **Typography:** [platform-appropriate font family], [weight hierarchy]
-- **Iconography:** [style — e.g., outlined, filled, rounded]
-- **Spacing:** [spacing system — e.g., 8px grid]
+- **Colors:** Primary: [color]. Secondary: [color]. Accent: [color]. Background: [color].
+- **Typography:** [font family], [weight hierarchy]
 - **Mode:** [Light / Dark]
 
 ## User Flow
-[2-3 sentences describing the end-to-end journey across all screens. E.g., "Giulia opens the app, scans a product barcode to add it to her pantry, browses her pantry filtered by expiry date, picks items to generate a recipe, and saves the recipe to her weekly meal plan."]
+[1-2 sentences describing the end-to-end journey. E.g., "Giulia scans a product to add it to her pantry, browses items by expiry, picks ingredients to generate a recipe, and saves it to her meal plan."]
 
 ## Screens
 
 ### Screen 1: [Screen Name]
-- **Purpose:** [1 sentence — what the user accomplishes here]
-- **Layout:** [Navigation bar] → [Header/search area] → [Main content: list/grid/cards/form] → [Primary CTA] → [Bottom nav]
+- **Purpose:** [1 short sentence]
 - **Key Elements:**
-  - [UI Element] — [what it does] — (FR[N])
-  - [UI Element] — [what it does] — (FR[N])
-  ...
-- **Transitions to:** Screen 2 ([Screen Name]) via [action — e.g., "tapping a pantry item"]
+  - [UI Element] — [what it does]
+  - [UI Element] — [what it does]
+  - [UI Element] — [what it does]
+- **Transitions to:** Screen 2 ([Screen Name]) via [action]
 
 ### Screen 2: [Screen Name]
-- **Purpose:** [1 sentence]
-- **Layout:** [abbreviated layout description]
+- **Purpose:** [1 short sentence]
 - **Key Elements:**
-  - [UI Element] — [what it does] — (FR[N])
-  ...
+  - [UI Element] — [what it does]
+  - [UI Element] — [what it does]
+  - [UI Element] — [what it does]
 - **Transitions to:** Screen 3 ([Screen Name]) via [action]
 
-[...repeat for each screen in the MVP selection...]
-
-## Navigation Structure
-- **Global pattern:** [Tab bar / Sidebar / Top nav] with [N] items: [Item 1 icon+label], [Item 2 icon+label], ...
-- **Flow:** Screen 1 → Screen 2 → Screen 3 → ... → [end point or loop back]
+[...repeat for each screen, max 4...]
 
 ## Shared States
-_Defined once for all screens:_
-- **Empty State:** [illustration/message when no data exists — e.g., "Your pantry is empty. Scan your first product to get started!"]
-- **Loading State:** [skeleton screens / shimmer effect / spinner]
-- **Error State:** [error message + retry action — e.g., "Something went wrong. Tap to retry."]
+Empty/loading/error: [brief description, e.g., "Illustrated empty states with CTA, skeleton loading, inline error with retry."]
 
 ## Accessibility
-- Touch targets: minimum [N]×[N] points
-- Screen reader labels for all interactive elements
-- Contrast ratio: minimum [N]:1 for text on backgrounds
-- [Any additional accessibility requirements from NFRs]
+[WCAG level], [min touch target size], [min contrast ratio]. Screen reader labels on all interactive elements.
 ```
+
+#### Compression Strategy
+
+If the generated prompt exceeds 5,000 characters, Livia applies these steps in order:
+1. Shorten Purpose sentences to fragments (e.g., "User checks expiring items" → "Check expiring items")
+2. Reduce Key Elements to top 2-3 per screen
+3. Merge similar screens if possible (e.g., "List" + "Detail" → single screen with inline expansion)
+4. Use abbreviations for common UI patterns (e.g., "nav bar" not "navigation bar with back arrow and title")
 
 After generating the unified MVP prompt, show this closing message:
 
@@ -363,6 +357,7 @@ After generating the unified MVP prompt, show this closing message:
 4. Generate and iterate — Figma Make will produce the full flow
 
 💡 **MVP Tips:**
+- This prompt is optimized to fit within Figma Make's 5,000 character limit
 - This unified prompt gives you a quick overview of the entire flow — great for prototyping
 - You can refine individual screens afterward by asking Figma Make: "Focus on the [Screen Name] and add more detail"
 - For detailed, production-ready prompts per screen, run this skill again and pick individual screens or "all"
@@ -388,8 +383,9 @@ Before outputting prompts, Livia runs this internal checklist:
 - [ ] User Flow describes a coherent end-to-end journey across all screens
 - [ ] Every screen has a "Transitions to" linking to the next screen in the flow
 - [ ] Navigation structure is consistent across all screens
-- [ ] Maximum 6 screens in a single unified prompt
+- [ ] Maximum 4 screens in a single unified prompt
 - [ ] Shared states (empty/loading/error) are defined once, not repeated per screen
+- [ ] Total prompt text (below the "Copy" line) is ≤ 5,000 characters — if over, apply Compression Strategy (shorten purposes, reduce elements per screen, merge similar screens)
 
 ---
 
