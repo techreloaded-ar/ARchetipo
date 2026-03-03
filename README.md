@@ -7,6 +7,7 @@ AIRchetipo è un set di skill per AI coding agent che supportano il processo di 
 - **airchetipo-inception** — Facilitazione interattiva per la definizione del prodotto e generazione del PRD
 - **airchetipo-backlog** — Generazione del backlog a partire dal PRD
 - **airchetipo-vibe-kanban** — Gestione issue su Vibe Kanban a partire dal backlog
+- **airchetipo-figma-make** — Generazione di prompt strutturati per Figma Make a partire dal PRD
 
 ### Tool supportati
 
