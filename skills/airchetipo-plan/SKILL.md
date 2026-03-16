@@ -51,7 +51,7 @@ Il backlog del prodotto è necessario per la pianificazione. Puoi:
    - Among remaining stories, select the one with the highest priority (HIGH > MEDIUM > LOW), and among equal priorities, the lowest story number (first in order)
    - If all stories are already PLANNED/IN PROGRESS/DONE, inform the user and stop
 
-4. Also read `docs/PRD.md` if it exists — it provides useful context for technical decisions.
+4. Also read `docs/PRD.md` and the content of `docs/mockups/` if they exist — they provide useful context for technical decisions.
 
 5. Check if `docs/planning/{US-CODE}.md` already exists. If so, ask the user whether to overwrite or skip.
 
