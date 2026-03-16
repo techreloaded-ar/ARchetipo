@@ -63,8 +63,19 @@ Remember: You are capable of extraordinary creative work. Don't hold back, show 
 
 ## Output: Saving the Mockup
 
-The output of this skill is ALWAYS saved in the `/docs/mockups/` folder:
+**CRITICAL**: Output MUST always go inside `/docs/mockups/` (relative to the project root). Never generate files outside this folder.
 
-- **Folder**: `/docs/mockups/` (relative to the project root)
-- **Tool**: Use the Write tool to save each file under `/docs/mockups/`
-- After saving, list all created files with their paths for the user
+### Format selection
+
+Autonomously choose the **minimum format necessary** to realize the aesthetic vision:
+
+- **Self-contained HTML** — when the design is mostly static or uses CSS/JS animations only. The `index.html` file must contain everything inline (styles + scripts). Openable directly in the browser with a double click or `open index.html`.
+- **Mini web app** — when complexity requires components, state, or composability. Use Vite. Minimum structure: `index.html`, `package.json`, `vite.config.js`, `src/main.jsx`, `src/App.jsx`.
+
+### Mandatory summary
+
+After saving all files with the Write tool, always provide:
+1. List of all created files with their full paths
+2. Command to launch the mockup:
+   - HTML: `open docs/mockups/index.html` (or double click)
+   - React: `cd docs/mockups/ && npm install && npm run dev`
