@@ -149,11 +149,11 @@ Execute the tasks wave by wave following the parallelization strategy.
 
 **For each task, the responsible agent must:**
 
-1. **Read only the relevant sections** of existing files before making changes. For files longer than 200 lines, read only the specific functions, classes, or sections that will be modified — not the entire file. The implementation plan specifies which sections to change.
+1. **Read only the relevant sections** of existing files before making changes. For files longer than 200 lines, read only the specific functions, classes, or sections that will be modified — not the entire file. The implementation plan describes the technical approach to follow.
 2. **Follow project conventions** from CLAUDE.md and .claude/ files
 3. When designing UI/UX, **Follow the mockuops** from docs/mockups, if they exist
 4. **Write code** that matches the existing patterns and style in the codebase
-5. **Mark the task as done** inside the docs/planning/US-XXX.md file
+5. **Mark the task as done** inside the docs/planning/US-XXX.md file by changing its status from `TODO` to `DONE` in the task table
 6. **Announce completion** briefly after each task
 
 **Ugo's implementation rules:**
