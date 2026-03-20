@@ -124,13 +124,30 @@ After code review passes (end of Phase 5):
 
 One final time to confirm everything works.
 
-### 2. Move to {config.workflow.statuses.review} on the project board
+### 2. Close all sub-issues
+
+Close all native sub-issues of the parent story:
+
+```bash
+# List the sub-issues of the parent
+SUB_ISSUES=$(gh api /repos/$OWNER/$REPO/issues/$PARENT_NUMBER/sub_issues \
+  -H "X-GitHub-Api-Version: 2026-03-10" --jq '.[].number')
+
+# Close each sub-issue
+for ISSUE_NUM in $SUB_ISSUES; do
+  gh issue close $ISSUE_NUM
+done
+```
+
+Save the count of closed sub-issues for the output summary.
+
+### 3. Move to {config.workflow.statuses.review} on the project board
 
 ```bash
 gh project item-edit --project-id "<PROJECT_NODE_ID>" --id "<ITEM_ID>" --field-id "<STATUS_FIELD_ID>" --single-select-option-id "<REVIEW_OPTION_ID>"
 ```
 
-### 3. Post a summary comment on the issue
+### 4. Post a summary comment on the issue
 
 ```bash
 gh issue comment <NUMBER> --body "$(cat <<'EOF'
@@ -140,6 +157,7 @@ gh issue comment <NUMBER> --body "$(cat <<'EOF'
 
 **Riepilogo:**
 - Task completati: {N}/{N}
+- Sub-issues chiuse: {N}/{N}
 - Test scritti: {N}
 - Code review: superata ✅
 - Cicli di review: {N}
@@ -154,7 +172,7 @@ EOF
 )"
 ```
 
-### 4. Update labels
+### 5. Update labels
 
 ```bash
 gh label create "in-review" --description "Implementation complete, awaiting human review" --color "D93F0B" --force
@@ -176,6 +194,7 @@ The GitHub-specific completion message replaces the file-based one:
 
 **Riepilogo implementazione:**
 - Task completati: {N}/{N}
+- Sub-issues chiuse: {N} ✅
 - Test scritti: {N}
 - Code review: superata ✅
 - Cicli di review: {N}

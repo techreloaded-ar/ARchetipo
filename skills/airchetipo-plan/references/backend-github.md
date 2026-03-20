@@ -96,20 +96,14 @@ After saving the planning document in `{config.paths.planning}/{US-CODE}.md`:
 
 Read the labels from the parent issue (fetched during story selection). Identify the epic label matching the pattern `EP-XXX`. Save it as `$EPIC_LABEL` — it will be applied to all sub-issues.
 
-### Step 2 — Create `subtask` label
+### Step 2 — Create sub-issues for each TASK
 
-```bash
-gh label create "subtask" --description "Technical subtask of a user story" --color "C2E0C6" --force
-```
-
-### Step 3 — Create sub-issues for each TASK
-
-For each TASK-XX defined in the implementation plan, create a GitHub issue:
+For each TASK-XX defined in the implementation plan, create a GitHub issue and associate it as a native sub-issue of the parent:
 
 ```bash
 gh issue create \
   --title "TASK-XX: {Task Title}" \
-  --label "subtask" --label "$EPIC_LABEL" \
+  --label "$EPIC_LABEL" \
   --body "$(cat <<'TASKEOF'
 **Parent Story:** #{PARENT_ISSUE_NUMBER} — {US-CODE}: {Story Title}
 
@@ -138,18 +132,30 @@ TASKEOF
 )"
 ```
 
-Save the created issue number for each sub-issue. Collect all numbers into a list (e.g., `$SUB_ISSUES="123 124 125 ..."`).
+Save the created issue number for each sub-issue.
+
+After creating each sub-issue, associate it as a native sub-issue of the parent:
+
+```bash
+# Get the database ID of the child issue (required by the REST API, different from the issue number)
+CHILD_ID=$(gh api /repos/$OWNER/$REPO/issues/$CHILD_NUMBER --jq '.id')
+
+# Add as native sub-issue
+gh api -X POST /repos/$OWNER/$REPO/issues/$PARENT_NUMBER/sub_issues \
+  -f "sub_issue_id=$CHILD_ID" \
+  -H "X-GitHub-Api-Version: 2026-03-10"
+```
 
 **Important:** Create sub-issues in TASK order (TASK-01 first, then TASK-02, etc.) to maintain logical ordering.
 
-### Step 4 — Update the parent issue body
+### Step 3 — Update the parent issue body
 
 1. Read the current body:
    ```bash
    gh issue view <NUMBER> --json body --jq '.body'
    ```
 
-2. Build the updated body by appending the plan section and a tasklist block. The tasklist block uses GitHub's special fenced code syntax to create trackable sub-issue checkboxes:
+2. Build the updated body by appending the plan section. Native sub-issues appear automatically in the GitHub UI, so no tasklist block is needed:
 
    ```bash
    UPDATED_BODY=$(cat <<BODYEOF
@@ -165,13 +171,6 @@ Save the created issue number for each sub-issue. Collect all numbers into a lis
    - Task totali: {N} ({N} implementazione + {N} test)
    - Effort stimato: {total}
 
-   \`\`\`[tasklist]
-   ### Technical Tasks
-   - [ ] #{sub_issue_1}
-   - [ ] #{sub_issue_2}
-   - [ ] #{sub_issue_3}
-   \`\`\`
-
    _Generato da AIRchetipo Planning Team_
    BODYEOF
    )
@@ -182,12 +181,7 @@ Save the created issue number for each sub-issue. Collect all numbers into a lis
    gh issue edit <NUMBER> --body "$UPDATED_BODY"
    ```
 
-**Critical notes:**
-- The tasklist fenced block MUST use exactly `` ```[tasklist] `` as the info string for GitHub to render it as trackable tasks
-- Sub-issues must be created BEFORE this step (Step 3) because their issue numbers are needed for the tasklist
-- Use heredoc to handle newlines and backticks properly in shell
-
-### Step 5 — Add `planned` label and move Status to {config.workflow.statuses.planned}
+### Step 4 — Add `planned` label and move Status to {config.workflow.statuses.planned}
 
 ```bash
 gh label create "planned" --description "Story has an implementation plan" --color "0E8A16" --force
@@ -218,7 +212,7 @@ The GitHub-specific completion message:
 - User Story: {US-CODE}: {title}
 - Task totali: {N} ({N} implementazione + {N} test)
 - Label: `planned` ✅
-- Sub-issues: {N} create con label `subtask` + `{EPIC_LABEL}`
+- Sub-issues: {N} associate come sub-issue native
 - Status nel project: {config.workflow.statuses.planned} ✅
 ```
 
