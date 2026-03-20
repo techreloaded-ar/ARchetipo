@@ -1,6 +1,6 @@
 ---
 name: airchetipo-plan
-description: Plans the implementation of a user story from the product backlog. Reads docs/BACKLOG.md, selects the target user story (passed as argument or auto-selected by priority), and orchestrates a virtual team (Architect, Analyst, Developer, Test Architect) to produce a detailed technical implementation plan saved in docs/planning/{US-CODE}.md. Use this skill whenever the user wants to plan a user story, create an implementation plan, do sprint planning, break down a story into technical tasks, or prepare a story for development.
+description: Plans the implementation of a user story from the product backlog. Reads docs/BACKLOG.md, selects the target user story (passed as argument or auto-selected by priority), and orchestrates a virtual team (Architect, Analyst, Developer, Test Architect) to produce a detailed technical implementation plan saved in docs/planning/{US-CODE}.md. If the argument is a free-text description of a new feature (not a US-XXX code), the skill first creates the user story in docs/BACKLOG.md and then plans it. Use this skill whenever the user wants to plan a user story, create an implementation plan, do sprint planning, break down a story into technical tasks, prepare a story for development, or quickly plan a new feature idea.
 ---
 
 # AIRchetipo - User Story Planning Skill
@@ -45,17 +45,32 @@ Il backlog del prodotto è necessario per la pianificazione. Puoi:
    - If not found, inform the user and list available stories
    - If found, select it as the target story
 
-3. **If NO user story code was passed:**
+3. **If a free-text description was passed** (i.e., the argument is not a US-XXX code):
+   - Read the existing backlog to determine: the next available US code (e.g., if the last story is US-011, use US-012), and the list of existing epics
+   - Emanuele creates a new user story following the standard backlog template:
+     - Assign the next available US code
+     - Infer the most relevant existing epic (or create EP-NEW if none fits)
+     - Infer priority (default to MEDIUM unless the description implies urgency or core value)
+     - Estimate story points (default to 3 if not determinable from the description)
+     - Write the story text ("As [persona], I want..., so that...")
+     - Write acceptance criteria
+   - Append the new story to `docs/BACKLOG.md`:
+     - If an existing epic fits: append the story at the end of that epic's section
+     - If no epic fits: append a new `### EP-NEW: [inferred title]` section at the bottom with the story inside
+   - Also update the **Backlog Summary** table at the top of BACKLOG.md: increment the story count and story points for the relevant epic row (or add a new row if a new epic was created)
+   - Select the newly added story as the target story for planning
+
+4. **If NO user story code was passed:**
    - Scan the backlog for all user stories
    - Exclude stories with status PLANNED, IN PROGRESS, or DONE
    - Among remaining stories, select the one with the highest priority (HIGH > MEDIUM > LOW), and among equal priorities, the lowest story number (first in order)
    - If all stories are already PLANNED/IN PROGRESS/DONE, inform the user and stop
 
-4. Also read `docs/PRD.md` and the content of `docs/mockups/` if they exist — they provide useful context for technical decisions.
+5. Also read `docs/PRD.md` and the content of `docs/mockups/` if they exist — they provide useful context for technical decisions.
 
-5. Check if `docs/planning/{US-CODE}.md` already exists. If so, ask the user whether to overwrite or skip.
+6. Check if `docs/planning/{US-CODE}.md` already exists. If so, ask the user whether to overwrite or skip.
 
-6. Announce the session:
+7. Announce the session:
 
 ```
 📋 AIRCHETIPO - USER STORY PLANNING
