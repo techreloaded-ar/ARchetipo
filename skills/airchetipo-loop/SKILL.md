@@ -13,53 +13,53 @@ You are a **loop controller** that executes a prompt iteratively, spawning a fre
 
 The user provides three inputs when invoking the skill:
 
-| Parameter | Formato | Esempio |
+| Parameter | Format | Example |
 |---|---|---|
-| **prompt** | Il prompt da eseguire ad ogni iterazione | `"esegui /airchetipo-implement sulla prossima storia PLANNED"` |
-| **max-loop** | Numero massimo di iterazioni (default: 5) | `--max-loop 10` |
-| **stop-when** | Condizione di uscita in linguaggio naturale | `--stop-when "tutte le storie sono in DONE"` |
+| **prompt** | The prompt to execute at each iteration | `"esegui /airchetipo-implement sulla prossima storia PLANNED"` |
+| **max-loop** | Maximum number of iterations (default: 5) | `--max-loop 10` |
+| **stop-when** | Exit condition in natural language | `--stop-when "tutte le storie sono in DONE"` |
 
-**Parsing degli argomenti:**
-- Il primo argomento (tra virgolette) è il prompt
-- `--max-loop N` imposta il limite massimo (se omesso, usa 5)
-- `--stop-when "condizione"` definisce la condizione di uscita (se omesso, il loop esegue esattamente max-loop iterazioni)
+**Argument parsing:**
+- The first argument (in quotes) is the prompt
+- `--max-loop N` sets the maximum limit (defaults to 5 if omitted)
+- `--stop-when "condition"` defines the exit condition (if omitted, the loop executes exactly max-loop iterations)
 
-**Esempio di invocazione:**
+**Invocation example:**
 ```
 /airchetipo-loop "esegui /airchetipo-implement sulla prossima storia PLANNED" --max-loop 5 --stop-when "tutte le storie del backlog sono in DONE"
 ```
 
 ---
 
-## Architettura
+## Architecture
 
 ```
-Loop Controller (contesto principale, leggero)
+Loop Controller (main context, lightweight)
   │
-  ├─ Iterazione 1 → Subagent (contesto isolato) → risultato
-  ├─ Iterazione 2 → Subagent (contesto isolato) → risultato
-  ├─ Iterazione 3 → Subagent (contesto isolato) → risultato
+  ├─ Iteration 1 → Subagent (isolated context) → result
+  ├─ Iteration 2 → Subagent (isolated context) → result
+  ├─ Iteration 3 → Subagent (isolated context) → result
   └─ ...
 ```
 
-Ogni iterazione viene eseguita in un **subagent con contesto dedicato**, così:
-- Il contesto del controller resta leggero (solo riepiloghi)
-- Ogni iterazione parte "fresca", senza residui delle precedenti
-- Il controller ha sempre una visione chiara dello stato complessivo
+Each iteration runs in a **subagent with a dedicated context**, so that:
+- The controller context stays lightweight (summaries only)
+- Each iteration starts fresh, with no residue from previous ones
+- The controller always has a clear view of overall state
 
 ---
 
-## File di Stato
+## State File
 
-Ogni loop genera un **file di stato univoco** nella cartella `.airchetipo/` del progetto, usando il unix timestamp come identificativo:
+Each loop generates a **unique state file** in the project's `.airchetipo/` folder, using the unix timestamp as identifier:
 
 ```
 .airchetipo/loop-state-{unix_timestamp}.yaml
 ```
 
-Ad esempio: `.airchetipo/loop-state-1711187400.yaml`
+For example: `.airchetipo/loop-state-1711187400.yaml`
 
-Se la cartella `.airchetipo` non esiste, creala prima di scrivere il file di stato. Questo file serve come memoria persistente del loop e viene aggiornato dopo ogni iterazione.
+If the `.airchetipo` folder does not exist, create it before writing the state file. This file serves as persistent memory for the loop and is updated after each iteration.
 
 ```yaml
 loop:
@@ -82,28 +82,28 @@ iterations:
     timestamp: "2026-03-23T10:45:30"
 ```
 
-Il campo `updated_at` viene aggiornato ad ogni iterazione e serve per identificare loop orfani (vedi FASE 0).
+The `updated_at` field is updated at each iteration and is used to identify orphan loops (see PHASE 0).
 
-Il file di stato ha due scopi:
-1. **Resilienza** — se la sessione si interrompe, il loop può essere ripreso
-2. **Contesto per i subagent** — ogni subagent riceve il riepilogo delle iterazioni precedenti, non i dettagli
+The state file has two purposes:
+1. **Resilience** — if the session is interrupted, the loop can be resumed
+2. **Context for subagents** — each subagent receives the summary of previous iterations, not the details
 
 ---
 
 ## Workflow
 
-### FASE 0 — Inizializzazione
+### PHASE 0 — Initialization
 
-1. Parsa gli argomenti dell'utente (prompt, max-loop, stop-when)
+1. Parse user arguments (prompt, max-loop, stop-when)
 
-2. **Cleanup dei file di stato residui:** cerca tutti i file `.airchetipo/loop-state-*.yaml` con status terminale (`completed`, `max_reached`, `stopped`) ed eliminali. Questi file appartengono a loop già conclusi e non servono più.
+2. **Cleanup residual state files:** find all `.airchetipo/loop-state-*.yaml` files with terminal status (`completed`, `max_reached`, `stopped`) and delete them. These files belong to already-finished loops and are no longer needed.
 
-3. **Rilevamento loop attivi:** cerca tutti i file `.airchetipo/loop-state-*.yaml` con `status: running` o `status: error`.
+3. **Active loop detection:** find all `.airchetipo/loop-state-*.yaml` files with `status: running` or `status: error`.
 
-   **Se ne trova 0:** procedi normalmente al punto 4.
+   **If none found:** proceed normally to step 4.
 
-   **Se ne trova 1:**
-   - Controlla il campo `updated_at`: se è più vecchio di **2 ore**, segnalalo come probabile loop orfano:
+   **If one found:**
+   - Check the `updated_at` field: if it is older than **2 hours**, flag it as a probable orphan loop:
      ```
      Trovato un loop in stato "running", ma l'ultima attività risale a {tempo_fa}.
      Probabilmente la sessione si è interrotta.
@@ -112,7 +112,7 @@ Il file di stato ha due scopi:
 
      Vuoi riprenderlo o scartarlo e avviarne uno nuovo?
      ```
-   - Se `updated_at` è recente (meno di 2 ore), il loop è probabilmente ancora attivo su un'altra istanza. Avvisa l'utente:
+   - If `updated_at` is recent (less than 2 hours), the loop is probably still active on another instance. Warn the user:
      ```
      Trovato un loop attivo (ultima attività {tempo_fa}):
      - **Prompt:** "{prompt del loop}"
@@ -120,11 +120,11 @@ Il file di stato ha due scopi:
 
      Potrebbe essere in esecuzione su un'altra sessione. Vuoi comunque riprenderlo, oppure avviare un nuovo loop indipendente?
      ```
-   - Se l'utente vuole **riprendere**: leggi il file di stato, imposta `current_iteration` al valore salvato + 1, e procedi dalla FASE 1. Il subagent riceverà il riepilogo delle iterazioni già completate dal file di stato, garantendo continuità senza bisogno di rieseguire nulla.
-   - Se l'utente vuole **scartarlo**: elimina il file di stato e procedi normalmente.
-   - Se l'utente vuole **avviare un loop indipendente**: procedi normalmente al punto 4 (verrà creato un nuovo file con un timestamp diverso).
+   - If the user wants to **resume**: read the state file, set `current_iteration` to the saved value + 1, and proceed from PHASE 1. The subagent will receive the summary of already-completed iterations from the state file, ensuring continuity without re-executing anything.
+   - If the user wants to **discard**: delete the state file and proceed normally.
+   - If the user wants to **start an independent loop**: proceed normally to step 4 (a new file with a different timestamp will be created).
 
-   **Se ne trova più di 1:** presenta una lista e chiedi all'utente come procedere:
+   **If more than one found:** present a list and ask the user how to proceed:
    ```
    Trovati {N} loop attivi:
 
@@ -136,9 +136,9 @@ Il file di stato ha due scopi:
    Vuoi riprendere uno di questi, scartarli tutti, o avviare un nuovo loop indipendente?
    ```
 
-4. Genera il unix timestamp corrente come ID del loop e crea il file di stato iniziale: `.airchetipo/loop-state-{unix_timestamp}.yaml`
+4. Generate the current unix timestamp as the loop ID and create the initial state file: `.airchetipo/loop-state-{unix_timestamp}.yaml`
 
-5. Comunica all'utente l'avvio del loop:
+5. Communicate the loop start to the user:
 
 ```
 ## Loop avviato
@@ -150,121 +150,121 @@ Il file di stato ha due scopi:
 Avvio iterazione 1/{max-loop}...
 ```
 
-### FASE 1 — Esecuzione iterazione
+### PHASE 1 — Iteration Execution
 
-Spawna un subagent per eseguire l'iterazione corrente. Il prompt del subagent deve essere costruito includendo tutte le informazioni necessarie perché il subagent possa operare autonomamente, senza conoscenza pregressa del progetto:
+Spawn a subagent to execute the current iteration. The subagent prompt must be constructed including all necessary information so the subagent can operate autonomously, without prior knowledge of the project:
 
 ```
-## Contesto operativo
+## Operational Context
 
-- **Working directory:** {percorso assoluto della root del progetto}
-- **Iterazione:** {N} di {max}
+- **Working directory:** {absolute path to project root}
+- **Iteration:** {N} of {max}
 
-### Riepilogo iterazioni precedenti
-{riepilogo dalle iterazioni precedenti nel file di stato, o "Prima iterazione — nessun contesto pregresso." se N=1}
+### Previous Iterations Summary
+{summary from previous iterations in the state file, or "First iteration — no prior context." if N=1}
 
 ## Task
 
-{prompt dell'utente}
+{user's prompt}
 
-## Istruzioni
+## Instructions
 
-1. Prima di operare, leggi i file di configurazione del progetto se presenti (CLAUDE.md, README.md, o equivalenti) per comprendere la struttura e le convenzioni del progetto
-2. Esegui il task descritto sopra
-3. Al termine, restituisci un riepilogo conciso (1-2 frasi) di cosa hai fatto e il risultato ottenuto
+1. Before operating, read the project configuration files if present (CLAUDE.md, README.md, or equivalents) to understand the project structure and conventions
+2. Execute the task described above
+3. When done, return a concise summary (1-2 sentences) of what you did and the result obtained
 ```
 
-Dopo che il subagent restituisce il risultato:
-- Aggiorna il file di stato con il riepilogo, il risultato dell'iterazione, e il campo `updated_at`
-- Comunica brevemente all'utente cosa è successo:
+After the subagent returns its result:
+- Update the state file with the summary, iteration result, and the `updated_at` field
+- Briefly communicate to the user what happened:
 
 ```
 ### Iterazione {N} completata
 {riepilogo dal subagent}
 ```
 
-### FASE 2 — Valutazione condizione di uscita
+### PHASE 2 — Exit Condition Evaluation
 
-Dopo ogni iterazione, valuta se il loop deve fermarsi. Esegui i controlli in questo ordine:
+After each iteration, evaluate whether the loop should stop. Run checks in this order:
 
-**Controllo A — Condizione di uscita raggiunta:**
+**Check A — Exit condition met:**
 
-Se l'utente ha specificato `--stop-when`, verifica la condizione. Questo richiede azioni concrete: leggere file, controllare stati, ispezionare il backlog — qualsiasi cosa serva per determinare se la condizione è soddisfatta.
+If the user specified `--stop-when`, verify the condition. This requires concrete actions: reading files, checking statuses, inspecting the backlog — whatever is needed to determine if the condition is satisfied.
 
-Se la condizione è soddisfatta → termina il loop con `status: completed` e vai alla FASE 3.
+If the condition is met → terminate the loop with `status: completed` and go to PHASE 3.
 
-**Controllo B — Limite massimo raggiunto:**
+**Check B — Maximum limit reached:**
 
-Se `current_iteration >= max_iterations` → termina il loop con `status: max_reached` e vai alla FASE 3.
+If `current_iteration >= max_iterations` → terminate the loop with `status: max_reached` and go to PHASE 3.
 
-**Se nessuna condizione di uscita è soddisfatta** → torna alla FASE 1 con l'iterazione successiva.
+**If no exit condition is satisfied** → return to PHASE 1 with the next iteration.
 
-### FASE 3 — Chiusura
+### PHASE 3 — Closure
 
-Al termine del loop (per qualsiasi motivo):
+When the loop ends (for any reason):
 
-1. Aggiorna il file di stato con lo status finale (`completed`, `max_reached`, `error`, o `stopped`)
-2. Presenta il riepilogo finale all'utente con questa struttura:
+1. Update the state file with the final status (`completed`, `max_reached`, `error`, or `stopped`)
+2. Present the final summary to the user with this structure:
 
 ```
-## Loop {status_finale}
+## Loop {final_status}
 
-{messaggio di chiusura appropriato allo status — vedi sotto}
+{closing message appropriate to the status — see below}
 
 ### Riepilogo iterazioni
 
 | # | Riepilogo | Risultato |
 |---|---|---|
-| 1 | {summary iterazione 1} | {success/error/skipped} |
-| 2 | {summary iterazione 2} | {success/error/skipped} |
+| 1 | {summary iteration 1} | {success/error/skipped} |
+| 2 | {summary iteration 2} | {success/error/skipped} |
 | ... | ... | ... |
 
 **Iterazioni eseguite:** {N}/{max}
 ```
 
-**Messaggi di chiusura per status:**
+**Closing messages by status:**
 
 - `completed`: *"La condizione di uscita è stata raggiunta: \"{stop-when}\""*
-- `max_reached`: includi SEMPRE il suggerimento per proseguire. Calcola quante iterazioni servirebbero in base al lavoro rimanente e suggerisci un valore concreto:
+- `max_reached`: ALWAYS include the suggestion to continue. Calculate how many iterations would be needed based on remaining work and suggest a concrete value:
   ```
   Raggiunte {max-loop} iterazioni senza soddisfare la condizione di uscita: "{stop-when}".
 
   **Per proseguire**, riesegui il loop con un limite più alto:
   /airchetipo-loop "{prompt originale}" --max-loop {valore suggerito} --stop-when "{stop-when originale}"
   ```
-  Il valore suggerito deve essere realistico: se restano 7 task su 10 e ne hai completati 3 in 3 iterazioni, suggerisci `--max-loop 7` (non il doppio arbitrario). Se non puoi stimare, usa `{max * 2}` come fallback.
+  The suggested value must be realistic: if 7 tasks remain out of 10 and you completed 3 in 3 iterations, suggest `--max-loop 7` (not an arbitrary double). If you cannot estimate, use `{max * 2}` as fallback.
 - `error`: *"Il loop è stato interrotto a causa di un errore alla iterazione {N}."*
 - `stopped`: *"Il loop è stato fermato dall'utente alla iterazione {N}."*
 
-3. **Elimina il file di stato** del loop appena concluso. Il riepilogo è già stato comunicato all'utente e non serve mantenere il file.
+3. **Delete the state file** of the just-finished loop. The summary has already been communicated to the user and there is no need to keep the file.
 
 ---
 
-## Gestione Errori
+## Error Handling
 
-Se un subagent fallisce o restituisce un errore:
+If a subagent fails or returns an error:
 
-1. Registra l'errore nel file di stato:
-   - `result: error` per l'iterazione corrente
-   - `error_detail:` con la descrizione dell'errore
-   - `status:` resta `running` (non ancora deciso se fermare)
-   - Aggiorna `updated_at`
+1. Record the error in the state file:
+   - `result: error` for the current iteration
+   - `error_detail:` with the error description
+   - `status:` stays `running` (not yet decided whether to stop)
+   - Update `updated_at`
 
-2. Chiedi all'utente come procedere:
-   - **Riprova** — riesegui la stessa iterazione (non incrementare il contatore)
-   - **Salta** — segna come `skipped`, incrementa il contatore, procedi alla prossima
-   - **Ferma** — imposta `status: stopped` e vai alla FASE 3
+2. Ask the user how to proceed:
+   - **Riprova** — re-execute the same iteration (do not increment the counter)
+   - **Salta** — mark as `skipped`, increment the counter, proceed to next
+   - **Ferma** — set `status: stopped` and go to PHASE 3
 
-3. Registra la scelta dell'utente nel file di stato:
+3. Record the user's choice in the state file:
    - `user_action: retry | skip | stop`
 
-Non proseguire automaticamente dopo un errore — l'utente deve decidere.
+Do not proceed automatically after an error — the user must decide.
 
 ---
 
-## Requisiti
+## Requirements
 
-Questa skill richiede un tool che supporti **subagent con contesto isolato**:
+This skill requires a tool that supports **subagents with isolated context**:
 - **Claude Code** — Tool `Agent`
 - **Gemini CLI** — Tool `create_sub_agent`
 - **Roo Code** — Tool `new_task` / Orchestrator mode
