@@ -51,7 +51,15 @@ Ogni iterazione viene eseguita in un **subagent con contesto dedicato**, così:
 
 ## File di Stato
 
-Il loop mantiene un file `.airchetipo-loop-state.yaml` nella root del progetto. Questo file serve come memoria persistente del loop e viene aggiornato dopo ogni iterazione.
+Ogni loop genera un **file di stato univoco** nella cartella `.airchetipo/` del progetto, usando il unix timestamp come identificativo:
+
+```
+.airchetipo/loop-state-{unix_timestamp}.yaml
+```
+
+Ad esempio: `.airchetipo/loop-state-1711187400.yaml`
+
+Se la cartella `.airchetipo` non esiste, creala prima di scrivere il file di stato. Questo file serve come memoria persistente del loop e viene aggiornato dopo ogni iterazione.
 
 ```yaml
 loop:
@@ -61,6 +69,7 @@ loop:
   current_iteration: 2
   status: running  # running | completed | max_reached | error | stopped
   started_at: "2026-03-23T10:30:00"
+  updated_at: "2026-03-23T10:45:30"
 
 iterations:
   - iteration: 1
@@ -73,6 +82,8 @@ iterations:
     timestamp: "2026-03-23T10:45:30"
 ```
 
+Il campo `updated_at` viene aggiornato ad ogni iterazione e serve per identificare loop orfani (vedi FASE 0).
+
 Il file di stato ha due scopi:
 1. **Resilienza** — se la sessione si interrompe, il loop può essere ripreso
 2. **Contesto per i subagent** — ogni subagent riceve il riepilogo delle iterazioni precedenti, non i dettagli
@@ -84,12 +95,50 @@ Il file di stato ha due scopi:
 ### FASE 0 — Inizializzazione
 
 1. Parsa gli argomenti dell'utente (prompt, max-loop, stop-when)
-2. Verifica se esiste già un file `.airchetipo-loop-state.yaml` con `status: running`
-   - Se esiste, chiedi all'utente: *"Esiste un loop in corso (iterazione {N}/{max}). Vuoi riprenderlo o iniziarne uno nuovo?"*
+
+2. **Cleanup dei file di stato residui:** cerca tutti i file `.airchetipo/loop-state-*.yaml` con status terminale (`completed`, `max_reached`, `stopped`) ed eliminali. Questi file appartengono a loop già conclusi e non servono più.
+
+3. **Rilevamento loop attivi:** cerca tutti i file `.airchetipo/loop-state-*.yaml` con `status: running` o `status: error`.
+
+   **Se ne trova 0:** procedi normalmente al punto 4.
+
+   **Se ne trova 1:**
+   - Controlla il campo `updated_at`: se è più vecchio di **2 ore**, segnalalo come probabile loop orfano:
+     ```
+     Trovato un loop in stato "running", ma l'ultima attività risale a {tempo_fa}.
+     Probabilmente la sessione si è interrotta.
+     - **Prompt:** "{prompt del loop}"
+     - **Progresso:** iterazione {N}/{max}
+
+     Vuoi riprenderlo o scartarlo e avviarne uno nuovo?
+     ```
+   - Se `updated_at` è recente (meno di 2 ore), il loop è probabilmente ancora attivo su un'altra istanza. Avvisa l'utente:
+     ```
+     Trovato un loop attivo (ultima attività {tempo_fa}):
+     - **Prompt:** "{prompt del loop}"
+     - **Progresso:** iterazione {N}/{max}
+
+     Potrebbe essere in esecuzione su un'altra sessione. Vuoi comunque riprenderlo, oppure avviare un nuovo loop indipendente?
+     ```
    - Se l'utente vuole **riprendere**: leggi il file di stato, imposta `current_iteration` al valore salvato + 1, e procedi dalla FASE 1. Il subagent riceverà il riepilogo delle iterazioni già completate dal file di stato, garantendo continuità senza bisogno di rieseguire nulla.
-   - Se l'utente vuole **iniziare da capo**: elimina il file di stato esistente e procedi normalmente.
-3. Crea il file di stato iniziale
-4. Comunica all'utente l'avvio del loop:
+   - Se l'utente vuole **scartarlo**: elimina il file di stato e procedi normalmente.
+   - Se l'utente vuole **avviare un loop indipendente**: procedi normalmente al punto 4 (verrà creato un nuovo file con un timestamp diverso).
+
+   **Se ne trova più di 1:** presenta una lista e chiedi all'utente come procedere:
+   ```
+   Trovati {N} loop attivi:
+
+   | # | Prompt | Progresso | Ultima attività | Stato |
+   |---|---|---|---|---|
+   | 1 | "{prompt}" | {N}/{max} | {updated_at} | {running/error} |
+   | 2 | "{prompt}" | {N}/{max} | {updated_at} | {running/error} |
+
+   Vuoi riprendere uno di questi, scartarli tutti, o avviare un nuovo loop indipendente?
+   ```
+
+4. Genera il unix timestamp corrente come ID del loop e crea il file di stato iniziale: `.airchetipo/loop-state-{unix_timestamp}.yaml`
+
+5. Comunica all'utente l'avvio del loop:
 
 ```
 ## Loop avviato
@@ -126,7 +175,7 @@ Spawna un subagent per eseguire l'iterazione corrente. Il prompt del subagent de
 ```
 
 Dopo che il subagent restituisce il risultato:
-- Aggiorna il file di stato con il riepilogo e il risultato dell'iterazione
+- Aggiorna il file di stato con il riepilogo, il risultato dell'iterazione, e il campo `updated_at`
 - Comunica brevemente all'utente cosa è successo:
 
 ```
@@ -187,6 +236,8 @@ Al termine del loop (per qualsiasi motivo):
 - `error`: *"Il loop è stato interrotto a causa di un errore alla iterazione {N}."*
 - `stopped`: *"Il loop è stato fermato dall'utente alla iterazione {N}."*
 
+3. **Elimina il file di stato** del loop appena concluso. Il riepilogo è già stato comunicato all'utente e non serve mantenere il file.
+
 ---
 
 ## Gestione Errori
@@ -197,6 +248,7 @@ Se un subagent fallisce o restituisce un errore:
    - `result: error` per l'iterazione corrente
    - `error_detail:` con la descrizione dell'errore
    - `status:` resta `running` (non ancora deciso se fermare)
+   - Aggiorna `updated_at`
 
 2. Chiedi all'utente come procedere:
    - **Riprova** — riesegui la stessa iterazione (non incrementare il contatore)
