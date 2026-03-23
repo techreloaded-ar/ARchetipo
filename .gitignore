@@ -1,81 +1,21 @@
-# Dependencies
-node_modules/
-pnpm-workspace.yaml
-
-bun.lock
-
-test-output/*
-coverage/
-
-# Logs
-logs/
-*.log
-npm-debug.log*
-
-# Build output
-build/*.txt
-
-# Environment variables
-.env
-
 # System files
 .DS_Store
 Thumbs.db
 
-# Development tools and configs
-.prettierrc
-
-# IDE and editor configs
-.windsurf/
-.trae/
-.air*/.cursor/
-
-# AI assistant files
-.agents/ 
+# AI assistant local files
+.vscode/
+.agents/
+.claude/
 .github/
 .opencode/
-CLAUDE.md
-.ai/*
-cursor
 .gemini
+.trae
+.ai/*
+CLAUDE.md
+AGENTS.md s
 .mcp.json
-CLAUDE.local.md
-.serena/
-.claude/settings.local.json
+cursor
 
 # Project-specific
-.air-core
-.air-creator-tools
-test-project-install/*
-sample-project/*
-flattened-codebase.xml
-*.stats.md
-.internal-docs/
-#UAT template testing output files
-tools/template-test-generator/test-scenarios/
-
-# Bundler temporary files and generated bundles
-.bundler-temp/
-
-# Generated web bundles (built by CI, not committed)
-src/modules/aim/sub-modules/
-src/modules/aib/sub-modules/
-src/modules/cis/sub-modules/
-src/modules/aigd/sub-modules/
-
-z*/
-
-.air/
-.claude/
-.vscode/
-
-web-bundles/
-
-#AIRchetipo Agents File
-docs/
-
-.omc/
-
-# Skills workspace folders
-skills/*-workspace/
 .airchetipo/*
+docs/
