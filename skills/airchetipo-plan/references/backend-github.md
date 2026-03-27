@@ -66,6 +66,12 @@ If this fails with a scope/permission error, tell the user to run `gh auth refre
    gh issue view <NUMBER> --json body,title,labels,number,url
    ```
 
+4. Parse the `Blocked by` field from the issue body. If it contains issue references (e.g., `#NN (US-XXX)`), fetch those issue bodies in **parallel tool calls** to load blocking story context:
+   ```bash
+   gh issue view <BLOCKER_NUMBER> --json body,title,number,url
+   ```
+   If the `Blocked by` field is absent or `-`, treat the story as having no dependencies.
+
 > **Note:** Free-text story creation is not supported with the GitHub backend. If the argument is not a US-XXX code, inform the user to create the issue on GitHub first.
 
 ## Write Output
@@ -182,31 +188,25 @@ echo "Created issues: ${NUMS[*]}"
 
 **Important:** Create sub-issues in TASK order (TASK-01 first, then TASK-02, etc.) to maintain logical ordering.
 
-### Step 4 — Link sub-issues + cleanup in a single Bash call
+### Step 4 — Link sub-issues to parent in a single Bash call
 
-After creating all sub-issues, link them to the parent AND remove from project board in **one Bash tool call**:
+After creating all sub-issues, link them to the parent as native sub-issues in **one Bash tool call**:
 
 ```bash
 OWNER="..."
 REPO="..."
 PARENT=N
-PROJECT_NUMBER=N
+NUMS=(N N N N)  # actual issue numbers from Step 3
 
 for CHILD_NUMBER in ${NUMS[*]}; do
-  # Link as native sub-issue
   CHILD_ID=$(gh api /repos/$OWNER/$REPO/issues/$CHILD_NUMBER --jq '.id')
   gh api -X POST /repos/$OWNER/$REPO/issues/$PARENT/sub_issues \
     -F "sub_issue_id=$CHILD_ID" \
     -H "X-GitHub-Api-Version: 2026-03-10"
-
-  # Remove from project board if auto-added
-  ITEM_ID=$(gh project item-list $PROJECT_NUMBER --owner "$OWNER" --format json -L 200 \
-    --jq ".items[] | select(.content.number == $CHILD_NUMBER) | .id")
-  if [ -n "$ITEM_ID" ]; then
-    gh project item-delete $PROJECT_NUMBER --owner "$OWNER" --id "$ITEM_ID"
-  fi
 done
 ```
+
+> **Note:** Sub-issues do NOT appear on the project board because `airchetipo-backlog` disables all auto-add workflows during project setup (Step 2b). Only issues explicitly added via `addProjectV2ItemById` appear on the board.
 
 ### Step 5 — Add label + move status in parallel
 

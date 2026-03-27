@@ -199,6 +199,13 @@ These rules exist because mockups represent design decisions already made — th
 - Use the same testing patterns already present in the codebase
 - Each test must be independent and repeatable
 - Test names should describe the behavior being tested, not the implementation
+- **E2E tests with video recording** (when the implementation plan includes an e2e test strategy):
+  - Detect the project's e2e framework from config files, package.json, and CLAUDE.md conventions. Do NOT assume any specific framework
+  - If no e2e framework is installed, install and configure one following the plan's recommendation and project conventions, including video recording support
+  - Configure video recording in the e2e framework config (if not already configured) so every test run produces a video artifact
+  - Write e2e tests that simulate real user behavior: full navigation flows, clicking, form filling, waiting for responses, visual confirmations — not isolated unit-style assertions
+  - Each e2e test scenario must map to a user flow described in the plan's test strategy
+  - Video artifacts MUST be saved in `{config.paths.test_results}/{story-id}/` (e.g., `docs/test-results/US-012/`). Create the subfolder if it doesn't exist
 
 **Progress reporting:** After each wave completes, briefly report:
 

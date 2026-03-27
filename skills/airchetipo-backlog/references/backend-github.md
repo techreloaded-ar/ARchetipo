@@ -67,6 +67,37 @@ gh project field-create $PROJECT_NUMBER --owner "$OWNER" --name "Story Points" -
 
 **Epic** field: created AFTER Phase 2, once epics are known.
 
+### Step 2b — Remove auto-add workflows
+
+After extracting field metadata, delete the "Auto-add sub-issues to project" workflow (and any other enabled auto-add workflows). This prevents GitHub from automatically adding sub-issues created by `airchetipo-plan` to the board — only explicit `addProjectV2ItemById` calls should add items.
+
+The GraphQL API does not support disabling workflows (`updateProjectV2Workflow` does not exist) — use `deleteProjectV2Workflow` instead.
+
+```bash
+# Find and delete all enabled workflows (auto-add sub-issues, etc.)
+WORKFLOWS=$(gh api graphql -f query='query {
+  node(id: "'$PROJECT_NODE_ID'") {
+    ... on ProjectV2 {
+      workflows(first: 20) {
+        nodes { id name enabled }
+      }
+    }
+  }
+}' --jq '.data.node.workflows.nodes[] | select(.enabled == true) | .id')
+
+for WF_ID in $WORKFLOWS; do
+  gh api graphql -f query='mutation {
+    deleteProjectV2Workflow(input: {
+      workflowId: "'$WF_ID'"
+    }) {
+      deletedWorkflowId
+    }
+  }'
+done
+```
+
+> **Note:** This step is idempotent — running it on a project with no enabled workflows is a no-op (the query returns nothing). Built-in disabled workflows (Item closed, Pull request merged, etc.) are left untouched.
+
 ### Step 3 — Status Options Setup
 
 The default Status field only has Todo / In Progress / Done. Add the missing statuses from `{config.workflow.statuses}` via GraphQL. The `updateProjectV2Field` mutation replaces ALL options, so always include existing ones.
@@ -185,6 +216,7 @@ After implementing this story, the user can: [visible increment]
 
 **Epic:** EP-XXX — [Epic Title]
 **Priority:** HIGH | **Story Points:** N
+**Blocked by:** -
 **Scope:** MVP
 
 _Created by AIRchetipo backlog_
@@ -196,6 +228,22 @@ gh issue create --title "US-002: [Story Title]" ...
 gh issue create --title "US-003: [Story Title]" ...
 # ...
 ```
+
+### Step 4b — Backfill Blocked by References
+
+After creating all issues, for stories that have dependencies (`Blocked by` is not `-`), update their issue body to replace `-` with the actual GitHub issue references. Use the issue numbers collected from Step 4 to build `#NN (US-XXX)` references.
+
+Run in a **single Bash call** (only for stories with dependencies):
+
+```bash
+# Only for stories with Blocked by != "-"
+gh issue edit <NUMBER> --repo "$OWNER/$REPO" --body "$(updated body with #NN (US-XXX) references in the Blocked by field)"
+# ... repeat for each story with dependencies
+```
+
+> **Note:** This adds at most N extra API calls, but only for the subset of stories that have dependencies (typically a small subset of the backlog).
+
+### Step 4c — Collect Node IDs
 
 After creating all issues, collect their node IDs in a single query:
 
@@ -287,6 +335,7 @@ The optimized flow uses approximately:
 | Labels | 1 | Single Bash call with all labels |
 | Epic field | 1-2 | Create + optional field-list re-read |
 | Issue creation | N | One `gh issue create` per story (unavoidable via CLI) |
+| Dependency backfill | 0-N | One `gh issue edit` per story with dependencies (typically few) |
 | Fetch node IDs | 1 | Single GraphQL query |
 | Add to project | 1 | Single GraphQL mutation with aliases |
 | Set all fields | 1-2 | Single GraphQL mutation (split if 30+ stories) |

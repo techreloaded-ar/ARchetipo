@@ -130,12 +130,22 @@ For each epic, generate user stories following the template below. Each story mu
 
 **INVEST Validation — for every story, Emanuele verifies internally:**
 
-- **Independent**: the story is not technically coupled with others. If there is a functional dependency (e.g., "create" before "edit"), the dependent story must still be self-sufficient once the precondition is met
+- **Independent**: the story is not technically coupled with others. If there is a functional dependency (e.g., "create" before "edit"), the dependent story must still be self-sufficient once the precondition is met. Intra-epic dependencies are recorded in the `Blocked by` field. **Cross-epic dependencies are forbidden** — if a story in one epic depends on a story in a different epic, it must be restructured (see Cross-Epic Independence Enforcement below)
 - **Negotiable**: describes an outcome, not a technical solution. The "I want" field does not contain technology or component names
 - **Valuable**: produces a visible and verifiable increment, even if small. The value does not necessarily correspond to a FR from the PRD: a setup story that produces an empty but launchable app is already a value increment because it lays the foundation for subsequent stories and is demonstrable. The criterion is: "after this story, something new is visible or usable that wasn't there before"
 - **Estimable**: scope is clear enough to estimate with confidence
 - **Small**: 1-5pt (stories at 8pt must be split)
 - **Testable**: every AC has a binary pass/fail result
+
+**Cross-Epic Independence Enforcement**
+
+During story generation, Emanuele actively checks that no story depends on a story from a different epic. If a cross-epic dependency is detected, Emanuele resolves it using one of these strategies (in order of preference):
+
+1. **Make the story self-sufficient** — reformulate the story so it does not require the other epic's story as a precondition (e.g., include setup steps within the story itself)
+2. **Move the dependency** — if the blocking story logically belongs in the dependent story's epic, move it there
+3. **Extract a shared foundation** — if both stories depend on the same foundational capability, create a new foundational story in the dependent epic that provides what is needed independently
+
+Emanuele must never leave a cross-epic dependency unresolved. The `Blocked by` field must only reference US codes within the same epic.
 
 **Vertical Slicing**
 
@@ -159,6 +169,7 @@ Within each epic, stories must be ordered so that each one adds visible value ov
 ### US-XXX: [Concise action-oriented title]
 
 **Epic:** EP-XXX | **Priority:** HIGH | **Story Points:** N | **Status:** {config.workflow.statuses.todo}
+**Blocked by:** -
 
 **Story**
 As [persona name or role from PRD],
@@ -203,7 +214,7 @@ Assign a priority to every story using these criteria: (Priorities from config: 
 Internally determine the prioritization rationale and write a brief summary (up to 5 bullet points for complex stories) to be included in the backlog under "Prioritization Notes". This section must be written in plain text with no agent names or emoji prefixes — just the bullet points explaining the priority decisions.
 
 Emanuele validates story ordering within each epic with three checks:
-1. **Dependency check**: technical preconditions are respected (e.g., "create entity" must come before "edit entity")
+1. **Dependency check**: technical preconditions are respected (e.g., "create entity" must come before "edit entity"). Verify that every `Blocked by` reference points to a story within the same epic. Verify that the ordering within the epic is consistent with the dependency chain (a story must appear after all stories it is blocked by)
 2. **Increment check**: each story adds demonstrable value on top of the previous one
 3. **Standalone check**: each story works without the subsequent ones (it may be "incomplete" relative to the final vision, but "complete" relative to its own scope)
 
@@ -259,6 +270,7 @@ Generate `{config.paths.backlog}` (default: `docs/BACKLOG.md`) following **exact
 #### US-001: [Story title]
 
 **Epic:** EP-001 | **Priority:** HIGH | **Story Points:** 3 | **Status:** {config.workflow.statuses.todo}
+**Blocked by:** -
 
 **Story**
 As [persona],
@@ -335,6 +347,8 @@ Before writing the output, Emanuele runs an internal checklist:
 - [ ] Within each epic, stories are ordered by incrementality (story N+1 adds visible value on top of story N)
 - [ ] Every AC is verifiable with the sole implementation of its story
 - [ ] No circular dependencies between stories
+- [ ] Every `Blocked by` field references only stories within the same epic (no cross-epic dependencies)
+- [ ] Story ordering within each epic is consistent with the `Blocked by` chain (blocked story appears after its blockers)
 
 ---
 
@@ -369,3 +383,7 @@ Before writing the output, Emanuele runs an internal checklist:
 **Circular dependencies between stories:**
 - Merge the involved stories into a single one
 - Re-apply SPIDR split to obtain independent and vertical stories
+
+**Cross-epic dependency detected during generation:**
+- Apply the Cross-Epic Independence Enforcement strategies (self-sufficient > move > extract shared foundation)
+- Re-validate the affected epic's dependency chain after restructuring

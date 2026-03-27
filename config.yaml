@@ -5,6 +5,7 @@ paths:
   backlog: docs/BACKLOG.md.    #only valid for file backend
   planning: docs/planning/
   mockups: docs/mockups/
+  test_results: docs/test-results/
 
 workflow:
   statuses:
