@@ -9,6 +9,7 @@ AIRchetipo è un set di skill per AI coding agent che supportano il processo di 
 - **airchetipo-design** — Progettazione di interfacce frontend distintive a partire dal PRD
 - **airchetipo-plan** — Pianificazione tecnica delle user story con architettura, task breakdown e test strategy
 - **airchetipo-implement** — Implementazione guidata delle user story a partire dal piano tecnico
+- **airchetipo-autopilot** — Esecuzione autonoma del ciclo plan → implement su tutte le storie del backlog
 
 **Extra Skills**
 - **airchetipo-figma-make** — Generazione di prompt strutturati per Figma Make a partire dal PRD

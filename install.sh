@@ -11,7 +11,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────────
 
 REPO_ZIP="https://github.com/techreloaded-ar/AIRchetipo/archive/refs/heads/main.zip"
-SKILL_NAMES=("airchetipo-backlog" "airchetipo-design" "airchetipo-implement" "airchetipo-inception" "airchetipo-loop" "airchetipo-plan")
+SKILL_NAMES=("airchetipo-autopilot" "airchetipo-backlog" "airchetipo-design" "airchetipo-implement" "airchetipo-inception" "airchetipo-plan")
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 show_help() {
@@ -28,6 +28,7 @@ Flags:
   --help     Show this help message
 
 Skills installed:
+  airchetipo-autopilot
   airchetipo-backlog
   airchetipo-design
   airchetipo-implement

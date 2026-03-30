@@ -1,0 +1,474 @@
+---
+name: airchetipo-autopilot
+description: Runs the full airchetipo pipeline autonomously on backlog stories — for each TODO story (by priority), spawns clean isolated subagents to plan and implement in sequence, verifying status transitions between steps. Use this skill when the user wants to "run everything", "implement all stories", "autopilot the backlog", "plan and implement everything", "batch process the entire backlog", "fai tutto in autonomia", "esegui tutto dal backlog", or any variation of fully autonomous end-to-end execution from backlog to working code. This skill differs from airchetipo-loop because it chains multiple steps (plan → implement) per story as an atomic pipeline unit, rather than running a single command repeatedly.
+---
+
+# AIRchetipo Autopilot — Autonomous Pipeline Execution
+
+You are a **Direttore d'Orchestra** (orchestra conductor): you don't play any instrument, you coordinate the performers. For each story in the backlog, you spawn isolated subagents to execute the pipeline steps (plan → implement), verify status transitions between steps, and move to the next story. Your context stays lightweight — you never read source code, plans, or PRDs.
+
+---
+
+## Input Parameters
+
+| Parameter | Format | Default | Example |
+|---|---|---|---|
+| **--epic** | Filter by epic code | all epics | `--epic EP-002` |
+| **--priority** | Minimum priority level | all priorities | `--priority HIGH` |
+| **--max-stories** | Maximum stories to process | 5 | `--max-stories 10` |
+| **--stop-when** | Exit condition in natural language | all matching stories processed | `--stop-when "EP-001 completato"` |
+| **--steps** | Pipeline steps to execute | `plan,implement` | `--steps plan` |
+| **--on-error** | Error strategy | `ask` | `--on-error skip` |
+
+**Argument parsing:**
+- `--steps` accepts a comma-separated list: `plan`, `implement`, or `plan,implement`
+- `--on-error` accepts: `ask` (default — prompt user), `skip` (log and continue), `stop` (halt immediately)
+- `--priority` filters stories with priority >= the specified level (HIGH > MEDIUM > LOW)
+
+**Invocation examples:**
+```
+/airchetipo-autopilot
+/airchetipo-autopilot --epic EP-002 --max-stories 3
+/airchetipo-autopilot --priority HIGH --on-error skip --max-stories 10
+/airchetipo-autopilot --steps plan --max-stories 20
+/airchetipo-autopilot --stop-when "tutte le storie di EP-001 sono in REVIEW"
+```
+
+---
+
+## Architecture
+
+```
+Autopilot Controller (main context, lightweight — never reads codebase)
+  │
+  ├─ Story US-001
+  │   ├─ Subagent A → /airchetipo-plan US-001   → [context destroyed]
+  │   └─ Subagent B → /airchetipo-implement US-001 → [context destroyed]
+  │
+  ├─ Story US-002
+  │   ├─ Subagent C → /airchetipo-plan US-002   → [context destroyed]
+  │   └─ Subagent D → /airchetipo-implement US-002 → [context destroyed]
+  │
+  └─ ...
+```
+
+**Context isolation is absolute.** Each subagent:
+- Starts with an empty context — no residue from any previous subagent
+- Receives ONLY: the command to execute, the working directory, and a 1-2 sentence summary of previous stories
+- Reads CLAUDE.md, config, backlog, and codebase from scratch — exactly as if the user typed the command in a new terminal session
+- Terminates completely after execution — its context is destroyed
+- Returns only a 1-3 sentence summary to the controller
+
+This means subagent C (plan US-002) knows nothing about what subagent B (implement US-001) did. The controller never accumulates codebase knowledge.
+
+---
+
+## State File
+
+Each autopilot run generates a **unique state file**:
+
+```
+.airchetipo/autopilot-state-{unix_timestamp}.yaml
+```
+
+If the `.airchetipo` folder does not exist, create it before writing the state file.
+
+```yaml
+autopilot:
+  steps: [plan, implement]
+  filters:
+    epic: null
+    priority: null
+  max_stories: 5
+  exit_condition: null
+  on_error: ask
+  current_story_index: 1
+  status: running  # running | completed | max_reached | error | stopped
+  started_at: "2026-03-29T10:30:00"
+  updated_at: "2026-03-29T11:15:30"
+
+queue:
+  - code: US-001
+    title: "Login utente"
+    epic: EP-001
+    priority: HIGH
+    story_points: 3
+    pipeline:
+      plan:
+        status: success  # pending | success | error | skipped
+        summary: "Piano creato con 8 task (5 impl, 2 test, 1 harness)"
+        timestamp: "2026-03-29T10:35:00"
+      implement:
+        status: success
+        summary: "Implementati 8 task, 12 test scritti, code review superata"
+        timestamp: "2026-03-29T11:10:00"
+    result: completed  # completed | partial | error | skipped | pending
+
+  - code: US-002
+    title: "Dashboard principale"
+    epic: EP-001
+    priority: HIGH
+    story_points: 5
+    pipeline:
+      plan:
+        status: pending
+        summary: null
+        timestamp: null
+      implement:
+        status: pending
+        summary: null
+        timestamp: null
+    result: pending
+```
+
+The state file has two purposes:
+1. **Resilience** — if the session is interrupted, the autopilot can resume from the exact step where it stopped
+2. **Summaries for subagents** — each subagent receives only the summary strings from completed stories, never detailed content
+
+---
+
+## Workflow
+
+### PHASE 0 — Initialization
+
+1. Parse user arguments (steps, epic, priority, max-stories, stop-when, on-error)
+
+2. Read `.airchetipo/config.yaml` to determine backend and paths. If missing, use defaults:
+   ```yaml
+   backend: file
+   paths:
+     backlog: docs/BACKLOG.md
+     planning: docs/planning/
+   workflow:
+     statuses:
+       todo: TODO
+       planned: PLANNED
+       in_progress: IN PROGRESS
+       review: REVIEW
+       done: DONE
+   ```
+
+3. **Cleanup residual state files:** find all `.airchetipo/autopilot-state-*.yaml` files with terminal status (`completed`, `max_reached`, `stopped`) and delete them.
+
+4. **Active state detection:** find all `.airchetipo/autopilot-state-*.yaml` files with `status: running` or `status: error`.
+
+   **If none found:** proceed normally to step 5.
+
+   **If one found:**
+   - Check the `updated_at` field: if it is older than **2 hours**, flag it as a probable orphan:
+     ```
+     Trovato un autopilot in stato "running", ma l'ultima attività risale a {tempo_fa}.
+     Probabilmente la sessione si è interrotta.
+     - **Storie processate:** {N}/{total}
+     - **Ultima storia:** {US-CODE}
+     - **Ultimo step:** {plan/implement}
+
+     Vuoi riprenderlo o scartarlo e avviarne uno nuovo?
+     ```
+   - If `updated_at` is recent (less than 2 hours), warn the user it may be active elsewhere.
+   - If the user wants to **resume**: read the state file, find the first story with `result: pending` or `result: error`, determine which pipeline step to resume from, and continue from PHASE 1.
+   - If the user wants to **discard**: delete the state file and proceed normally.
+   - If the user wants to **start an independent run**: proceed normally (new timestamp = new file).
+
+   **If more than one found:** present a list and ask the user how to proceed.
+
+5. **Build the story queue.** Read the backlog once and select stories.
+
+   **How to read the backlog — backend dispatch:**
+
+   Check `backend` in `.airchetipo/config.yaml` (default: `file`).
+
+   **If `backend: file`:**
+   Read `{config.paths.backlog}` (default: `docs/BACKLOG.md`). Parse story blocks by matching `#### US-\d+:` headers and extracting fields:
+   - `**Epic:**` → epic code
+   - `**Priority:**` → HIGH/MEDIUM/LOW
+   - `**Story Points:**` → numeric value
+   - `**Status:**` → current status
+   - `**Blocked by:**` → dependency references
+   - Title from the `#### US-XXX: {Title}` header line
+
+   **If `backend: github`:**
+   1. Detect repository owner:
+      ```bash
+      gh repo view --json owner --jq '.owner.login'
+      ```
+   2. Find the Backlog project (title contains "Backlog"):
+      ```bash
+      gh project list --owner "$OWNER" --format json
+      ```
+   3. Fetch all project items:
+      ```bash
+      gh project item-list $PROJECT_NUMBER --owner "$OWNER" --format json -L 200
+      ```
+   4. Extract from each item: title (contains US code), Status field, Priority field, Story Points field, Epic field.
+
+   **Story selection rules (both backends):**
+   - If `--steps` includes `plan`: select stories with `status: TODO`
+   - If `--steps` is `implement` only: select stories with `status: PLANNED`
+   - Apply `--epic` filter if provided
+   - Apply `--priority` filter if provided (include the specified level and above)
+   - Sort by: priority (HIGH > MEDIUM > LOW), then by story number (US-001 before US-002)
+   - Take at most `--max-stories` stories
+
+   If no stories match the filters, inform the user and stop:
+   ```
+   Nessuna storia trovata con i filtri specificati.
+   - Stato richiesto: {TODO/PLANNED}
+   - Epic: {epic or "tutti"}
+   - Priorità minima: {priority or "tutte"}
+   ```
+
+6. Generate the current unix timestamp as the autopilot ID and create the initial state file.
+
+7. **Announce the queue:**
+
+```
+🎼 **AIRchetipo Autopilot** — Avviato
+
+**Storie in coda:** {N}
+**Pipeline:** {steps}
+**Max storie:** {max-stories}
+**Epic:** {epic or "tutti"}
+**Priorità minima:** {priority or "tutte"}
+**Gestione errori:** {on-error}
+
+| # | Story | Epic | Priorità | SP |
+|---|---|---|---|---|
+| 1 | US-XXX: {title} | EP-XXX | HIGH | 3 |
+| 2 | US-YYY: {title} | EP-YYY | MEDIUM | 5 |
+
+Avvio pipeline sulla prima storia...
+```
+
+---
+
+### PHASE 1 — Story Pipeline Execution
+
+For each story in the queue, execute the pipeline steps **sequentially**. Each step is a separate subagent invocation.
+
+#### Step A — Plan
+
+**Condition:** `plan` is in `--steps` AND the story status is `TODO`.
+
+If the story is already `PLANNED` (e.g., from a previous partial run), skip this step.
+
+Spawn a subagent with this prompt:
+
+```
+## Operational Context
+
+- **Working directory:** {absolute path to project root}
+- **Autopilot Mode:** Story {N} of {total} in an autonomous pipeline run.
+
+### Previous Stories Summary
+{summaries from completed stories in state file, or "First story — no prior context."}
+
+## Task
+
+Execute /airchetipo-plan {US-CODE}
+
+## Instructions
+
+1. Read the project configuration files if present (CLAUDE.md, .airchetipo/config.yaml) to understand the project structure and conventions
+2. Execute the planning skill for story {US-CODE}
+3. When done, return a concise summary (1-2 sentences) of the plan produced and whether it succeeded
+```
+
+**After the subagent returns:**
+
+Trust the subagent's result — do not re-read the backlog. The plan skill already verifies the status transition internally.
+
+1. If the subagent returns successfully (no error):
+   - Record `plan.status: success` and the summary in the state file
+   - Update `updated_at`
+   - Proceed to Step B
+2. If the subagent returns an error or failure:
+   - Record `plan.status: error` with the subagent's return as error detail
+   - Apply error strategy (see Error Handling section)
+
+#### Step B — Implement
+
+**Condition:** `implement` is in `--steps` AND the story status is `PLANNED`.
+
+Spawn a subagent with this prompt:
+
+```
+## Operational Context
+
+- **Working directory:** {absolute path to project root}
+- **Autopilot Mode:** Story {N} of {total} in an autonomous pipeline run.
+
+### Previous Stories Summary
+{summaries from completed stories in state file}
+
+## Task
+
+Execute /airchetipo-implement {US-CODE}
+
+## Instructions
+
+1. Read the project configuration files if present (CLAUDE.md, .airchetipo/config.yaml) to understand the project structure and conventions
+2. Execute the implementation skill for story {US-CODE}
+3. When done, return a concise summary (2-3 sentences) of what was implemented, tests written, and code review result
+```
+
+**After the subagent returns:**
+
+Trust the subagent's result — do not re-read the backlog. The implement skill already verifies status transitions internally.
+
+1. If the subagent returns successfully (no error):
+   - Record `implement.status: success` and the summary in the state file
+   - Mark story `result: completed`
+   - Update `updated_at`
+2. If the subagent returns an error or failure:
+   - Record `implement.status: error`
+   - Mark story `result: partial` (plan succeeded but implement failed)
+   - Apply error strategy
+
+#### Between stories
+
+After completing a story's pipeline, output a brief progress update:
+
+```
+### US-XXX completata ({N}/{total})
+- **Plan:** {plan summary}
+- **Implement:** {implement summary}
+
+Prossima: US-YYY — {title}
+```
+
+Then proceed to PHASE 2 before starting the next story.
+
+---
+
+### PHASE 2 — Exit Condition Evaluation
+
+After each story pipeline completes, run these checks in order:
+
+**Check A — Exit condition met:**
+If `--stop-when` was specified, verify the condition. This requires re-reading the backlog to check current statuses.
+
+Use the same backend dispatch as PHASE 0 step 5:
+- **File backend**: re-read `{config.paths.backlog}` and check story statuses
+- **GitHub backend**: re-run `gh project item-list` to fetch current statuses
+
+Evaluate the `--stop-when` condition against the current state (e.g., "EP-001 completato" → check if all EP-001 stories are in REVIEW or DONE).
+
+If the condition is met → set `status: completed` → go to PHASE 3.
+
+**Check B — Queue exhausted:**
+If all stories in the queue have been processed → set `status: completed` → go to PHASE 3.
+
+**Check C — Max stories reached:**
+If the number of processed stories equals `--max-stories` → set `status: max_reached` → go to PHASE 3.
+
+**If no exit condition is satisfied** → return to PHASE 1 with the next story.
+
+---
+
+### PHASE 3 — Closure
+
+1. Update the state file with the final status.
+
+2. Present the final summary:
+
+```
+## Autopilot {completed/max_reached/error/stopped}
+
+{closing message — see below}
+
+### Riepilogo storie
+
+| # | Story | Plan | Implement | Risultato |
+|---|---|---|---|---|
+| 1 | US-XXX: {title} | ✅ | ✅ | completata |
+| 2 | US-YYY: {title} | ✅ | ❌ | parziale |
+| 3 | US-ZZZ: {title} | ⏭️ | ⏭️ | saltata |
+
+**Storie completate:** {N}/{total}
+**Storie con errori:** {N}
+**Storie saltate:** {N}
+```
+
+**Result icons:**
+- ✅ success
+- ❌ error
+- ⏭️ skipped
+- ⏸️ pending (not reached)
+
+**Closing messages by status:**
+
+- `completed`: *"Tutte le storie in coda sono state processate."* — or if stop-when was used: *"La condizione di uscita è stata raggiunta: \"{stop-when}\""*
+- `max_reached`: Include the suggestion to continue with a realistic estimate:
+  ```
+  Raggiunte {max-stories} storie senza soddisfare la condizione di uscita: "{stop-when}".
+
+  **Per proseguire**, riesegui:
+  /airchetipo-autopilot {original filters} --max-stories {suggested value} --stop-when "{stop-when}"
+  ```
+  The suggested value should be based on remaining work — if 7 stories remain, suggest `--max-stories 7`.
+- `error`: *"L'autopilot è stato interrotto a causa di un errore sulla storia {US-CODE}."*
+- `stopped`: *"L'autopilot è stato fermato dall'utente alla storia {US-CODE}."*
+
+3. **Delete the state file.** The summary has been communicated and there is no need to keep it.
+
+---
+
+## Error Handling
+
+When a pipeline step fails (plan or implement), the behavior depends on `--on-error`:
+
+### `ask` (default)
+
+Prompt the user:
+```
+⚠️ **Errore sulla storia {US-CODE}** — Step: {plan|implement}
+
+{error summary from subagent}
+
+Come vuoi procedere?
+- **Riprova** — riesegui lo step {plan|implement} su {US-CODE}
+- **Salta** — passa alla prossima storia
+- **Ferma** — termina l'autopilot
+```
+
+Record the user's choice in the state file.
+
+### `skip`
+
+Log the error, mark the story's result as `error` (or `partial` if plan succeeded), and proceed to the next story. No user interaction.
+
+### `stop`
+
+Log the error, set `status: error`, and go to PHASE 3 (Closure). No user interaction.
+
+### Partial failure
+
+If plan succeeds but implement fails, the story is marked as `partial`. On resumption, the controller sees the story is already PLANNED and only retries the implement step — it does not re-run plan.
+
+---
+
+## Resumption Logic
+
+When the controller finds an existing `running` or `error` state file and the user chooses to resume:
+
+1. Load the state file (queue, summaries, pipeline statuses)
+2. Find the first story with `result: pending` or `result: error`
+3. Determine which pipeline step to resume from:
+   - `plan.status: pending` → start from plan
+   - `plan.status: error` → retry plan
+   - `plan.status: success` + `implement.status: pending` → start from implement
+   - `plan.status: success` + `implement.status: error` → retry implement
+4. Continue the normal loop from that story onward
+
+Stories with `result: completed` or `result: skipped` are never re-processed.
+
+---
+
+## Requirements
+
+This skill requires a tool that supports **subagents with isolated context**:
+- **Claude Code** — Tool `Agent`
+- **Gemini CLI** — Tool `create_sub_agent`
+- **Roo Code** — Tool `new_task` / Orchestrator mode
+- **Augment Code** — Parallel agents
