@@ -4,8 +4,7 @@ AIRchetipo è un set di skill per AI coding agent che supportano il processo di 
 
 ### Skill incluse
 
-- **airchetipo-inception** — Facilitazione interattiva per la definizione del prodotto e generazione del PRD
-- **airchetipo-backlog** — Generazione del backlog a partire dal PRD
+- **airchetipo-inception** — Facilitazione interattiva per la definizione del prodotto, generazione del PRD e trasformazione del PRD in backlog
 - **airchetipo-design** — Progettazione di interfacce frontend distintive a partire dal PRD
 - **airchetipo-plan** — Pianificazione tecnica delle user story con architettura, task breakdown e test strategy
 - **airchetipo-implement** — Implementazione guidata delle user story a partire dal piano tecnico

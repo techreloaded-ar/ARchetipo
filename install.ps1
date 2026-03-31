@@ -16,7 +16,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RepoZip    = "https://github.com/techreloaded-ar/AIRchetipo/archive/refs/heads/main.zip"
-$SkillNames = @("airchetipo-autopilot", "airchetipo-backlog", "airchetipo-design", "airchetipo-implement", "airchetipo-inception", "airchetipo-plan")
+$SkillNames = @("airchetipo-autopilot", "airchetipo-design", "airchetipo-implement", "airchetipo-inception", "airchetipo-plan")
 
 # ─── Tool definitions ─────────────────────────────────────────────────────────
 $Tools = @(
@@ -333,7 +333,6 @@ Flags:
 
 Skills installed:
   airchetipo-autopilot
-  airchetipo-backlog
   airchetipo-design
   airchetipo-implement
   airchetipo-inception

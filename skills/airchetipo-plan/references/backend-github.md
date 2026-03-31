@@ -206,7 +206,7 @@ for CHILD_NUMBER in ${NUMS[*]}; do
 done
 ```
 
-> **Note:** Sub-issues do NOT appear on the project board because `airchetipo-backlog` disables all auto-add workflows during project setup (Step 2b). Only issues explicitly added via `addProjectV2ItemById` appear on the board.
+> **Note:** Sub-issues do NOT appear on the project board because the backlog generation flow disables all auto-add workflows during project setup. Only issues explicitly added via `addProjectV2ItemById` appear on the board.
 
 ### Step 5 — Add label + move status in parallel
 

@@ -39,7 +39,7 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
 
 #### Step 1 — Story Selection (file backend)
 
-1. Read `{config.paths.backlog}` — if missing, tell the user to run `/airchetipo-backlog` first and stop.
+1. Read `{config.paths.backlog}` — if missing, tell the user to run `airchetipo-inception` and ask it to generate the backlog from the PRD, then stop.
 
 2. **If a user story code was passed as argument** (e.g., "US-005"):
    - Find that story in the backlog

@@ -44,7 +44,7 @@ Poi rilancia la skill.
 ```
 🔧 **Ugo:** Non trovo un GitHub Project con "Backlog" nel titolo.
 
-Esegui prima `/airchetipo-backlog-gh` per creare il project e le issue.
+Esegui prima `airchetipo-inception` chiedendo di generare il backlog dal PRD su GitHub Projects.
 ```
 
 3. Save `$PROJECT_NUMBER` and fetch field metadata:

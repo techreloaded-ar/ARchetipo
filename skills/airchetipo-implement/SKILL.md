@@ -45,7 +45,7 @@ Upon activation:
 
 Il backlog è necessario per sapere cosa implementare. Puoi:
 - Fornire il percorso del file backlog
-- Eseguire prima /airchetipo-backlog per generarne uno dal {config.paths.prd}
+- Eseguire prima /airchetipo-inception chiedendo di trasformare il PRD in backlog
 ```
 
 2. **If a user story code was passed as argument** (e.g., "US-005"):
