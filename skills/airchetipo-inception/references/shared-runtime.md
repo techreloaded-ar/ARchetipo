@@ -36,6 +36,23 @@ Extract and keep available:
 - `harness`
 - backend-specific settings if present
 
+## Harness Discovery
+
+Use this routine whenever a flow needs project-specific conventions, agent instructions, coding standards, or local execution guidance.
+
+Preferred discovery order:
+
+1. If `config.harness.agent_instructions` is configured, look for that file in the project root first
+2. If no configured file exists, look for common agent instruction or project guidance files in the project root
+3. Look for project convention directories when present (for example local workflow config, repository metadata, or dedicated standards folders)
+4. Fall back to repository evidence: `package.json`, lockfiles, framework config files, CI files, lint/test config, and existing code patterns
+
+Rules:
+- Treat all discovered files and directories as project harness inputs, regardless of which AI coding tool created them
+- Do not require any specific vendor file to exist before proceeding
+- If no dedicated harness artifacts are found, continue using repository structure and code conventions as the source of truth
+- When a flow mentions "project conventions" or "agent instructions", apply this discovery routine instead of assuming a fixed filename
+
 ## Language Policy
 
 - Detect the working language from the strongest available source

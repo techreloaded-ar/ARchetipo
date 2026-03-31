@@ -94,13 +94,13 @@ Ask the user only if a critical piece of information is missing and cannot be in
 
 Before identifying epics:
 - check whether `{config.harness.agent_instructions}` exists in the project root
-- default to `CLAUDE.md` if no override exists
+- otherwise, use the shared harness discovery routine from `shared-runtime.md` to detect any project harness inputs
 
-If it does not exist:
+If no project harness inputs are found:
 - generate `EP-000: Project Foundation` as the first epic
 - include high-priority stories to establish the development harness and verify the environment
 
-If it exists:
+If a project harness is already present:
 - skip `EP-000`
 
 ### Epic Rules

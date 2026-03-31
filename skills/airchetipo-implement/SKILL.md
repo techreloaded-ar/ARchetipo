@@ -79,7 +79,7 @@ Questa story non è stata ancora pianificata. Esegui prima:
 ```
 
 5. **Read project context:**
-   - Read project configuration files (e.g., `CLAUDE.md`, project conventions directory) for conventions and architecture
+   - Read the project harness inputs (agent instructions files, conventions directories, and project config such as `.airchetipo/config.yaml`) for conventions and architecture
    - Do NOT read `{config.paths.prd}` — the implementation plan already contains all necessary context. Only read the PRD if the implementation plan explicitly references it or the story touches core architecture decisions.
 
 6. **Load mockup references (if UI tasks are present):**
@@ -168,7 +168,7 @@ Execute the tasks wave by wave following the parallelization strategy.
 **For each task, the responsible agent must:**
 
 1. **Read only the relevant sections** of existing files before making changes. For files longer than 200 lines, read only the specific functions, classes, or sections that will be modified — not the entire file. The implementation plan describes the technical approach to follow.
-2. **Follow project conventions** from CLAUDE.md and .claude/ files
+2. **Follow project conventions** from the detected harness inputs, conventions directories, and existing codebase patterns
 3. When designing UI/UX, **Follow the mockups** from `{config.paths.mockups}`, if they exist
 4. **Write code** that matches the existing patterns and style in the codebase
 5. **Mark the task as done:**
@@ -200,15 +200,15 @@ These rules exist because mockups represent design decisions already made — th
 - Each test must be independent and repeatable
 - Test names should describe the behavior being tested, not the implementation
 - **E2E tests with video recording** (when the implementation plan includes an e2e test strategy):
-  - Detect the project's e2e framework from config files, package.json, and CLAUDE.md conventions. Do NOT assume any specific framework
+  - Detect the project's e2e framework from config files, `package.json`, harness inputs, and existing test conventions. Do NOT assume any specific framework
   - If no e2e framework is installed, install and configure one following the plan's recommendation and project conventions, including video recording support
   - Configure video recording in the e2e framework config (if not already configured) so every test run produces a video artifact
   - Write e2e tests that simulate real user behavior: full navigation flows, clicking, form filling, waiting for responses, visual confirmations — not isolated unit-style assertions
   - Each e2e test scenario must map to a user flow described in the plan's test strategy
   - Video artifacts MUST be saved in `{config.paths.test_results}/{story-id}/` (e.g., `docs/test-results/US-012/`). Create the subfolder if it doesn't exist
   - **E2E test execution** (after e2e tests are written):
-    - Detect the e2e run command from the project config (scripts in `package.json`, `CLAUDE.md` conventions, framework config files like `playwright.config.*`, `cypress.config.*`, `wdio.conf.*`). Do NOT hardcode any specific command
-    - Detect the dev server start command from the project config (e.g., `dev`, `start`, `serve` scripts in `package.json`, or `CLAUDE.md` conventions). E2e tests typically require a running application server
+    - Detect the e2e run command from the project config (scripts in `package.json`, harness inputs, framework config files like `playwright.config.*`, `cypress.config.*`, `wdio.conf.*`). Do NOT hardcode any specific command
+    - Detect the dev server start command from the project config (e.g., `dev`, `start`, `serve` scripts in `package.json`, harness inputs, or repository conventions). E2e tests typically require a running application server
     - Start the dev server in the background before running e2e tests. Wait for the server to be ready (check the port or use the framework's built-in `webServer` configuration if available — many e2e frameworks handle this automatically)
     - Run the e2e tests using the detected command
     - After execution, verify that video artifacts were produced in `{config.paths.test_results}/{story-id}/`. If no video files exist, investigate: check framework config for video output path, check for recording errors in test output, and fix the configuration
@@ -231,7 +231,7 @@ These rules exist because mockups represent design decisions already made — th
 
 **After all implementation waves are done**, run the test suites before proceeding to code review:
 
-1. **Unit & integration tests:** Detect and run the project's standard test command (from `package.json` scripts, `CLAUDE.md`, or project config). All tests must pass.
+1. **Unit & integration tests:** Detect and run the project's standard test command (from `package.json` scripts, harness inputs, or project config). All tests must pass.
 2. **E2E tests** (if e2e tests were written in this story): Mina runs the e2e tests following the "E2E test execution" instructions in her test rules above. This is a separate step because e2e tests require a running dev server and browser infrastructure. All e2e tests must pass and video artifacts must be present in `{config.paths.test_results}/{story-id}/` before proceeding.
 
 If any tests fail, Mina investigates and Ugo fixes the implementation before proceeding to code review.
@@ -259,7 +259,7 @@ After all tasks are implemented and tests pass, **delegate the code review to a 
    - No dead code or commented-out code
    - Proper error handling where appropriate
 3. **Aderenza all'architettura:**
-   - Follows the project's architectural patterns (from CLAUDE.md and .claude/ files)
+   - Follows the project's architectural patterns (from harness inputs, conventions directories, and the existing codebase)
    - Correct layer separation (no business logic in controllers, no DB access in use cases, etc.)
    - DTOs, mappers, and interfaces used correctly
 4. **Sicurezza:**
