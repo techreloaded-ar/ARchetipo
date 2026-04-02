@@ -7,15 +7,15 @@
 
 ## Setup
 
-### Step 1 — Auth & Project Discovery (single pass)
+### Step 1 — Auth & Current Repository Discovery (single pass)
 
-Detect owner and discover the project in one flow:
+Detect owner and the current repository in one flow:
 
 ```bash
-gh repo view --json owner,name --jq '{owner: .owner.login, name: .name}'
+gh repo view --json owner,name,nameWithOwner --jq '{owner: .owner.login, name: .name, repo: .nameWithOwner}'
 ```
 
-Save `$OWNER` and `$REPO_NAME`. Then list projects (this also verifies auth):
+Save `$OWNER`, `$REPO_NAME`, and `$REPO_SLUG`. Then list projects (this also verifies auth):
 
 ```bash
 gh project list --owner "$OWNER" --format json
@@ -34,8 +34,11 @@ gh auth refresh -s read:project -s project
 Poi rilancia `/airchetipo-backlog`.
 ```
 
-From the project list, look for a project whose title contains "Backlog".
-- **If found:** Ask the user for confirmation: "Ho trovato il project '[title]' (#N). Vuoi usare questo?"
+From the project list, first infer which project is linked to the current git repository.
+- A project is linked only if its items contain issues whose `content.repository.nameWithOwner` matches `$REPO_SLUG`.
+- If multiple linked projects exist, prefer exact title `$REPO_NAME Backlog`, then titles containing `Backlog`, then the lowest project number.
+- If no linked project is found, only then look for an exact title match `$REPO_NAME Backlog`.
+- **If found:** Ask the user for confirmation: "Ho trovato il project '[title]' (#N) collegato a `$REPO_SLUG`. Vuoi usare questo?"
 - **If not found:** Create a new project:
   ```bash
   gh project create --owner "$OWNER" --title "$REPO_NAME Backlog"

@@ -7,7 +7,7 @@
 
 ## Setup
 
-### Step 1 — Auth check & owner detection
+### Step 1 — Auth check & current repository detection
 
 1. Detect repository owner:
    ```bash
@@ -15,7 +15,13 @@
    ```
    Save as `$OWNER`.
 
-2. Test GitHub Projects auth:
+2. Detect the current repository name and slug:
+   ```bash
+   gh repo view --json name,nameWithOwner --jq '{name: .name, repo: .nameWithOwner}'
+   ```
+   Save as `$REPO` and `$REPO_SLUG`.
+
+3. Test GitHub Projects auth:
    ```bash
    gh project list --owner "$OWNER" --limit 1 --format json
    ```
@@ -34,15 +40,20 @@ Poi rilancia la skill.
 
 ### Step 2 — Project discovery
 
-1. Find the Backlog project:
+1. Find the project linked to the **current git repository**:
    ```bash
    gh project list --owner "$OWNER" --format json
    ```
-   Look for a project whose title contains "Backlog".
+   Treat a project as linked only if its items contain issues whose `content.repository.nameWithOwner` matches `$REPO_SLUG`.
+   If multiple projects are linked to `$REPO_SLUG`, prefer:
+   - exact title `$REPO Backlog`
+   - otherwise a title containing `Backlog`
+   - otherwise the linked project with the lowest project number
+   If no linked project is found, only then fall back to an exact title match `$REPO Backlog`.
 
 2. If not found, show message and **stop**:
 ```
-🔧 **Ugo:** Non trovo un GitHub Project con "Backlog" nel titolo.
+🔧 **Ugo:** Non trovo un GitHub Project collegato al repository corrente.
 
 Esegui prima `airchetipo-inception` chiedendo di generare il backlog dal PRD su GitHub Projects.
 ```

@@ -7,7 +7,7 @@
 
 ## Setup
 
-### Step 1 — Auth check & owner detection
+### Step 1 — Auth check & current repository detection
 
 Run these two commands in **parallel tool calls**:
 
@@ -21,6 +21,12 @@ gh repo view --json name --jq '.name'
 
 Save as `$OWNER` and `$REPO`.
 
+Also save the current repository slug as `$REPO_SLUG`:
+
+```bash
+gh repo view --json nameWithOwner --jq '.nameWithOwner'
+```
+
 Then test GitHub Projects auth:
 ```bash
 gh project list --owner "$OWNER" --limit 1 --format json
@@ -29,11 +35,18 @@ If this fails with a scope/permission error, tell the user to run `gh auth refre
 
 ### Step 2 — Project discovery & data fetch
 
-1. Find the Backlog project:
+1. Find the project linked to the **current git repository**:
    ```bash
    gh project list --owner "$OWNER" --format json
    ```
-   Look for a project whose title contains "Backlog". If not found, stop.
+   Treat a project as linked to the current repository only if its items contain GitHub Issues whose `content.repository.nameWithOwner` matches `$REPO_SLUG`.
+   To infer this, inspect each candidate project's items and compare the repository attached to the issue content.
+   If multiple projects are linked to `$REPO_SLUG`, prefer:
+   - exact title `$REPO Backlog`
+   - otherwise a title containing `Backlog`
+   - otherwise the linked project with the lowest project number
+   If no linked project is found, only then fall back to an exact title match `$REPO Backlog`.
+   If still not found, stop.
 
 2. Save `$PROJECT_NUMBER` and fetch field metadata + items in **parallel tool calls**:
 

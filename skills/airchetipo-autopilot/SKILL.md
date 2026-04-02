@@ -192,15 +192,22 @@ The state file has two purposes:
       ```bash
       gh repo view --json owner --jq '.owner.login'
       ```
-   2. Find the Backlog project (title contains "Backlog"):
+   2. Detect the current repository name and slug:
+      ```bash
+      gh repo view --json name,nameWithOwner --jq '{name: .name, repo: .nameWithOwner}'
+      ```
+   3. Find the GitHub Project linked to the current repository:
       ```bash
       gh project list --owner "$OWNER" --format json
       ```
-   3. Fetch all project items:
+      Consider a project linked only if its items contain issues whose `content.repository.nameWithOwner` matches `$REPO_SLUG`.
+      If multiple linked projects exist, prefer exact title `$REPO Backlog`, then titles containing `Backlog`, then the lowest project number.
+      If no linked project is found, only then fall back to an exact title match `$REPO Backlog`.
+   4. Fetch all project items:
       ```bash
       gh project item-list $PROJECT_NUMBER --owner "$OWNER" --format json -L 200
       ```
-   4. Extract from each item: title (contains US code), Status field, Priority field, Story Points field, Epic field.
+   5. Extract from each item: title (contains US code), Status field, Priority field, Story Points field, Epic field.
 
    **Story selection rules (both backends):**
    - If `--steps` includes `plan`: select stories with `status: TODO`

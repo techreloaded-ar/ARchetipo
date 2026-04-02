@@ -57,15 +57,18 @@ Poi rilancia `/airchetipo-plan-gh`.
 
 #### Step 2 — Project discovery
 
-1. Find the Backlog project:
+1. Find the project linked to the current git repository:
    ```bash
    gh project list --owner "$OWNER" --format json
    ```
-   Look for a project whose title contains "Backlog".
+   Detect the current repository slug with `gh repo view --json name,nameWithOwner --jq '{name: .name, repo: .nameWithOwner}'` and save `$REPO` and `$REPO_SLUG`.
+   Treat a project as linked only if its items contain issues whose `content.repository.nameWithOwner` matches `$REPO_SLUG`.
+   If multiple linked projects exist, prefer exact title `$REPO Backlog`, then titles containing `Backlog`, then the lowest project number.
+   If no linked project is found, only then fall back to an exact title match `$REPO Backlog`.
 
 2. If not found, show message and **stop**:
 ```
-🔎 **Emanuele:** Non trovo un GitHub Project con "Backlog" nel titolo.
+🔎 **Emanuele:** Non trovo un GitHub Project collegato al repository corrente.
 
 Esegui prima `/airchetipo-backlog-gh` per creare il project e le issue.
 ```

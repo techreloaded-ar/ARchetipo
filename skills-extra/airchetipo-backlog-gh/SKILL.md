@@ -78,11 +78,14 @@ Could you tell me where the PRD is located? You can:
    ```bash
    gh project list --owner "$OWNER" --format json
    ```
-   Look for a project whose title contains "Backlog".
-   - **If found:** Ask the user for confirmation: "Ho trovato il project '[title]' (#N). Vuoi usare questo?"
+   First infer which project is linked to the current git repository.
+   - Detect the current repository slug with `gh repo view --json name,nameWithOwner --jq '{name: .name, repo: .nameWithOwner}'` and save `$REPO_NAME` and `$REPO_SLUG`.
+   - Treat a project as linked only if its items contain issues whose `content.repository.nameWithOwner` matches `$REPO_SLUG`.
+   - If multiple linked projects exist, prefer exact title `$REPO_NAME Backlog`, then titles containing `Backlog`, then the lowest project number.
+   - If no linked project is found, only then look for an exact title match `$REPO_NAME Backlog`.
+   - **If found:** Ask the user for confirmation: "Ho trovato il project '[title]' (#N) collegato a `$REPO_SLUG`. Vuoi usare questo?"
    - **If not found:** Get the repo name and create a new project:
      ```bash
-     REPO_NAME=$(gh repo view --json name --jq '.name')
      gh project create --owner "$OWNER" --title "$REPO_NAME Backlog"
      ```
 
