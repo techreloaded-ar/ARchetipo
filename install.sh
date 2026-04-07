@@ -11,7 +11,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────────
 
 REPO_ZIP="https://github.com/techreloaded-ar/AIRchetipo/archive/refs/heads/main.zip"
-SKILL_NAMES=("airchetipo-autopilot" "airchetipo-design" "airchetipo-implement" "airchetipo-inception" "airchetipo-plan")
+SKILL_NAMES=("airchetipo-autopilot" "airchetipo-design" "airchetipo-implement" "airchetipo-inception" "airchetipo-plan" "airchetipo-spec")
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 show_help() {
@@ -33,6 +33,7 @@ Skills installed:
   airchetipo-implement
   airchetipo-inception
   airchetipo-plan
+  airchetipo-spec
 
 Configuration:
   .airchetipo/config.yaml is created with the selected backend (file or github).
