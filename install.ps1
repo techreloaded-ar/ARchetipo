@@ -312,6 +312,28 @@ function Install-Config {
   Write-Host "  $([char]0x2713) " -ForegroundColor Green -NoNewline
   Write-Host ".airchetipo\config.yaml" -ForegroundColor White -NoNewline
   Write-Host " (backend: $Backend)" -ForegroundColor DarkGray
+
+  # Install backend contracts and implementations
+  $sourceRoot = Split-Path $SourceDir -Parent
+  $contractsSource = Join-Path $sourceRoot "contracts.md"
+  if (Test-Path $contractsSource) {
+    Copy-Item -Path $contractsSource -Destination (Join-Path $configDir "contracts.md") -Force
+    Write-Host "  $([char]0x2713) " -ForegroundColor Green -NoNewline
+    Write-Host ".airchetipo\contracts.md" -ForegroundColor White
+  }
+
+  $backendsSource = Join-Path $sourceRoot "backends"
+  if (Test-Path $backendsSource) {
+    $backendsDir = Join-Path $configDir "backends"
+    if (-not (Test-Path $backendsDir)) {
+      New-Item -ItemType Directory -Path $backendsDir -Force | Out-Null
+    }
+    Copy-Item -Path (Join-Path $backendsSource "*.md") -Destination $backendsDir -Force
+    $backendCount = (Get-ChildItem -Path $backendsDir -Filter "*.md" | Measure-Object).Count
+    Write-Host "  $([char]0x2713) " -ForegroundColor Green -NoNewline
+    Write-Host ".airchetipo\backends\" -ForegroundColor White -NoNewline
+    Write-Host " ($backendCount backend files)" -ForegroundColor DarkGray
+  }
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────

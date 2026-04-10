@@ -133,20 +133,7 @@ The state file has two purposes:
 
 1. Parse user arguments (steps, epic, priority, max-stories, stop-when, on-error)
 
-2. Read `.airchetipo/config.yaml` to determine backend and paths. If missing, use defaults:
-   ```yaml
-   backend: file
-   paths:
-     backlog: docs/BACKLOG.md
-     planning: docs/planning/
-   workflow:
-     statuses:
-       todo: TODO
-       planned: PLANNED
-       in_progress: IN PROGRESS
-       review: REVIEW
-       done: DONE
-   ```
+2. Read `.airchetipo/contracts.md` from the `.airchetipo/` directory. This loads the backend contracts and instructs you to read the active backend implementation file based on `config.yaml`. Execute `SETUP: initialize_backend` from the loaded backend file.
 
 3. **Cleanup residual state files:** find all `.airchetipo/autopilot-state-*.yaml` files with terminal status (`completed`, `max_reached`, `stopped`) and delete them.
 
@@ -174,42 +161,9 @@ The state file has two purposes:
 
 5. **Build the story queue.** Read the backlog once and select stories.
 
-   **How to read the backlog — backend dispatch:**
+   Execute `READ: fetch_backlog_items` from the backend (no status filter — fetch all items to evaluate against the pipeline steps).
 
-   Check `backend` in `.airchetipo/config.yaml` (default: `file`).
-
-   **If `backend: file`:**
-   Read `{config.paths.backlog}` (default: `docs/BACKLOG.md`). Parse story blocks by matching `#### US-\d+:` headers and extracting fields:
-   - `**Epic:**` → epic code
-   - `**Priority:**` → HIGH/MEDIUM/LOW
-   - `**Story Points:**` → numeric value
-   - `**Status:**` → current status
-   - `**Blocked by:**` → dependency references
-   - Title from the `#### US-XXX: {Title}` header line
-
-   **If `backend: github`:**
-   1. Detect repository owner:
-      ```bash
-      gh repo view --json owner --jq '.owner.login'
-      ```
-   2. Detect the current repository name and slug:
-      ```bash
-      gh repo view --json name,nameWithOwner --jq '{name: .name, repo: .nameWithOwner}'
-      ```
-   3. Find the GitHub Project linked to the current repository:
-      ```bash
-      gh project list --owner "$OWNER" --format json
-      ```
-      Consider a project linked only if its items contain issues whose `content.repository.nameWithOwner` matches `$REPO_SLUG`.
-      If multiple linked projects exist, prefer exact title `$REPO Backlog`, then titles containing `Backlog`, then the lowest project number.
-      If no linked project is found, only then fall back to an exact title match `$REPO Backlog`.
-   4. Fetch all project items:
-      ```bash
-      gh project item-list $PROJECT_NUMBER --owner "$OWNER" --format json -L 200
-      ```
-   5. Extract from each item: title (contains US code), Status field, Priority field, Story Points field, Epic field.
-
-   **Story selection rules (both backends):**
+   **Story selection rules:**
    - If `--steps` includes `plan`: select stories with `status: TODO`
    - If `--steps` is `implement` only: select stories with `status: PLANNED`
    - Apply `--epic` filter if provided
@@ -367,9 +321,7 @@ After each story pipeline completes, run these checks in order:
 **Check A — Exit condition met:**
 If `--stop-when` was specified, verify the condition. This requires re-reading the backlog to check current statuses.
 
-Use the same backend dispatch as PHASE 0 step 5:
-- **File backend**: re-read `{config.paths.backlog}` and check story statuses
-- **GitHub backend**: re-run `gh project item-list` to fetch current statuses
+Re-execute `READ: fetch_backlog_items` from the backend to get current statuses.
 
 Evaluate the `--stop-when` condition against the current state (e.g., "EP-001 completato" → check if all EP-001 stories are in REVIEW or DONE).
 

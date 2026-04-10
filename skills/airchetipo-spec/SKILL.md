@@ -16,7 +16,7 @@ Treat routing as an internal implementation detail.
 Keep the working context lean:
 - Load this file first
 - Load exactly one main flow reference at activation time
-- Load connector references only when the configured backend requires them
+- The backend is loaded once via contracts — no need for connector references
 
 ## Supported Modes
 
@@ -30,8 +30,7 @@ Use this mode when:
 In this mode:
 1. Read this file
 2. Read `references/backlog-bootstrap-flow.md`
-3. If `backend: github`, also read `references/connectors/github-projects.md`
-4. Use the PRD as the primary source and create the initial backlog
+3. Use the PRD as the primary source and create the initial backlog
 
 ### `mode: extend-backlog`
 
@@ -43,33 +42,14 @@ Use this mode when:
 In this mode:
 1. Read this file
 2. Read `references/story-extension-flow.md`
-3. If `backend: github`, also read `references/connectors/github-projects.md`
-4. Use the existing backlog as the primary source and PRD/codebase as supporting context
-5. Append or create only the requested items
+3. Use the existing backlog as the primary source and PRD/codebase as supporting context
+4. Append or create only the requested items
 
-## Config Loading
+## Config Loading & Backend Dispatch
 
-Always begin by reading `.airchetipo/config.yaml`.
-
-If the file does not exist, assume these defaults:
-
-```yaml
-backend: file
-paths:
-  prd: docs/PRD.md
-  backlog: docs/BACKLOG.md
-  planning: docs/planning/
-  mockups: docs/mockups/
-harness:
-  agent_instructions: AGENTS.md
-workflow:
-  statuses:
-    todo: TODO
-    planned: PLANNED
-    in_progress: IN_PROGRESS
-    review: REVIEW
-    done: DONE
-```
+1. Read `.airchetipo/contracts.md` from the `.airchetipo/` directory. This loads the backend contracts and instructs you to read the active backend implementation file based on `config.yaml`.
+2. Execute `SETUP: initialize_backend` from the loaded backend file.
+3. If the calling flow creates or extends a backlog, also execute `SETUP: ensure_project_infrastructure` (the backend handles this as a no-op if not applicable).
 
 Extract and keep available:
 - `backend`
@@ -79,28 +59,21 @@ Extract and keep available:
 - `paths.mockups`
 - `workflow.statuses`
 - `harness`
-- backend-specific settings if present
 
 ## Backlog Discovery
 
 Use this routine whenever the skill must decide whether it is extending an existing backlog or creating the first one.
 
-### `backend: file`
+Execute `READ: read_existing_backlog` from the backend. This operation:
+- For `backend: file`: reads `{config.paths.backlog}` and searches for backlog files if not found at the configured path
+- For other backends: queries the backend service for existing backlog items
 
-1. Try to read `{config.paths.backlog}`
-2. Only if that fails with file not found:
-   - search markdown files in `docs/`
-   - prefer files whose name or content indicates they are a backlog
-3. Only if still not found:
-   - search for `BACKLOG*` files anywhere in the project
+If existing stories are found, use them as the source of truth for backlog extension.
+If none are found, treat the project as backlog-less and route to initial backlog creation.
 
-If a backlog file is found, use it as the source of truth for backlog extension.
-If none is found, treat the project as backlog-less and route to initial backlog creation.
-
-### `backend: github`
-
-Do not infer backlog existence from local files.
-Let `references/connectors/github-projects.md` determine whether an existing backlog project and backlog issues already exist.
+**File backend fallback search** (only when `{config.paths.backlog}` is not found):
+1. Search markdown files in `docs/` — prefer files whose name or content indicates they are a backlog
+2. If still not found, search for `BACKLOG*` files anywhere in the project
 
 ## PRD Discovery
 
@@ -199,15 +172,15 @@ For non-critical gaps:
 
 - Load this file first
 - Load only one main flow reference at activation time
-- Load connector references only when backend-specific behavior is needed
+- The backend is loaded once via contracts at activation time — no additional connector references needed
 - Do not load both main flow references in the same activation unless you are explicitly switching because backlog discovery proved the active assumption wrong
 
 ## Output Boundaries
 
 - Initial backlog creation belongs to this skill, not to `airchetipo-inception`
-- On `backend: file`, create the initial backlog through the template embedded in `references/backlog-bootstrap-flow.md`
-- On `backend: file`, backlog extension must preserve the existing document and append only the new content
-- On `backend: github`, the domain logic stays in the active flow and `references/connectors/github-projects.md` overrides setup and write-output behavior
+- For initial backlog creation, use `WRITE: save_initial_backlog` from the backend
+- For backlog extension, use `WRITE: append_stories` from the backend
+- Domain logic (PRD analysis, epic identification, story generation, prioritization) stays in the flow references and is backend-independent
 
 ## Compatibility Note
 

@@ -1,15 +1,13 @@
 ---
 name: airchetipo-implement
-description: Implements a planned user story by executing its technical implementation plan. Supports both file-based (docs/BACKLOG.md + docs/planning/US-XXX.md) and GitHub Projects v2 backends via .airchetipo/config.yaml. Selects a PLANNED story (passed as argument or auto-selected by priority), loads its implementation plan, and orchestrates Ugo, Mina, and Cesare to write code, tests, validation, and code review. Use this skill whenever the user wants to implement a story that is already planned and ready for development, start coding a planned backlog item, or execute a sprint task from backlog. Do not use it for discovery, backlog creation, or planning work when the story or implementation plan does not yet exist.
+description: Implements a planned user story by executing its technical implementation plan. Selects a PLANNED story (passed as argument or auto-selected by priority), loads its implementation plan, and orchestrates Ugo, Mina, and Cesare to write code, tests, validation, and code review. The backend (configured in .airchetipo/config.yaml) determines where stories and plans are read from and where status updates are written. Use this skill whenever the user wants to implement a story that is already planned and ready for development, start coding a planned backlog item, or execute a sprint task from backlog. Do not use it for discovery, backlog creation, or planning work when the story or implementation plan does not yet exist.
 ---
 
 # AIRchetipo - User Story Implementation Skill
 
 You facilitate a **user story implementation** session with a virtual delivery team. Your goal is to implement the planned story, add the necessary tests, pass code review, and move the story to review while following the existing implementation plan.
 
-The implementation plan comes from:
-- `{config.paths.planning}/US-XXX.md` for `backend: file`
-- the GitHub parent issue body + sub-issues for `backend: github`
+The implementation plan is loaded via the configured backend using `READ: read_story_detail` and `READ: read_story_tasks`.
 
 ## The Team
 
@@ -30,7 +28,7 @@ This section has priority over every other section in the skill.
 3. **Concurrency is conditional.** Run multiple workers concurrently only when tasks in the same wave are truly independent.
 4. **In-context fallback is non-blocking.** If workers are unavailable, unreliable, or not worth the overhead, execute the same pipeline in the current context. Lack of worker support is not an error and not a reason to stop.
 5. **Stop only for explicit blockers.** Do not invent new reasons to ask the user.
-6. **Backend-specific variants are conditional.** Read `references/backend-github.md` only when `backend: github`. That reference overrides backend I/O phases only; domain workflow, review policy, and completion criteria remain the same.
+6. **Backend operations are loaded via contracts.** Read `.airchetipo/contracts.md` to load the active backend. Backend operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
 
 ## Autonomy Policy
 
@@ -87,31 +85,22 @@ Do not avoid worker-backed execution only because a wave must be scheduled seque
 
 ## Workflow
 
-> **Language rule:** Detect the language used in the backlog (`{config.paths.backlog}` or GitHub issue body) and use that same language consistently throughout all user-facing communication. The templates below are examples only.
+> **Language rule:** Detect the language used in the backlog and use that same language consistently throughout all user-facing communication. The templates below are examples only.
 
 ### PHASE 0 - Setup, Story Selection, and Plan Loading
 
-1. Read `.airchetipo/config.yaml`. If it does not exist, assume:
-   - `backend: file`
-   - `backlog: docs/BACKLOG.md`
-   - `planning: docs/planning/`
-   - `prd: docs/PRD.md`
-   - `mockups: docs/mockups/`
-2. Extract backend, paths, workflow statuses, and backend-specific settings.
-3. If `backend: github`, read `references/backend-github.md` and use it for backend setup, story source, status transitions, and completion writing.
-4. Locate the target story in `{config.paths.backlog}` when using `backend: file`.
-5. If the backlog file does not exist, stop and show:
+1. Read `.airchetipo/contracts.md` from the `.airchetipo/` directory. This loads the backend contracts and instructs you to read the active backend implementation file based on `config.yaml`.
+2. Execute `SETUP: initialize_backend` from the loaded backend file.
+3. Execute `READ: fetch_backlog_items` with `status_filter` = `{config.workflow.statuses.planned}`. If no backlog exists, stop and show:
 
 ```text
-🔧 **Ugo:** Non riesco a trovare il file {config.paths.backlog}.
+🔧 **Ugo:** Non riesco a trovare il backlog.
 
 Il backlog è necessario per sapere cosa implementare. Puoi:
-- Fornire il percorso del file backlog
 - Eseguire /airchetipo-spec per creare il backlog e poi /airchetipo-plan per pianificare la prima storia
 ```
 
-6. If a story code was passed as argument, select that story. Otherwise, choose the highest-priority, lowest-numbered story in status `{config.workflow.statuses.planned}`.
-7. If no eligible story exists, stop and show:
+4. Execute `READ: select_story` with the user's argument and eligible statuses = `[{config.workflow.statuses.planned}]`. If no eligible story exists, stop and show:
 
 ```text
 🔧 **Ugo:** Non ci sono user story in stato {config.workflow.statuses.planned} nel backlog.
@@ -121,24 +110,20 @@ Puoi:
 - Specificare una story diversa come argomento
 ```
 
-8. Load the implementation plan:
-   - `backend: github` -> use `references/backend-github.md`
-   - `backend: file` -> read `{config.paths.planning}/US-XXX.md`
-9. If the file-based implementation plan does not exist, stop and show:
+5. Execute `READ: read_story_detail` to load the full story content.
+6. Execute `READ: read_story_tasks` to load the implementation plan (task list). If no plan exists, stop and show:
 
 ```text
-🔧 **Ugo:** Non trovo il piano di implementazione {config.paths.planning}/US-XXX.md.
+🔧 **Ugo:** Non trovo il piano di implementazione per questa story.
 
 Questa story non è stata ancora pianificata. Esegui prima:
 /airchetipo-plan {US-CODE}
 ```
 
-10. Load the relevant project context: harness inputs, conventions, project config, and existing patterns in the touched area.
-11. If the plan contains UI work, scan it for mockups or design references and search `{config.paths.mockups}` for matching files. Treat explicitly referenced mockups as the source of truth.
-12. Move the story to `{config.workflow.statuses.in_progress}`:
-   - `backend: file` -> update `{config.paths.backlog}`
-   - `backend: github` -> use the GitHub reference
-13. Announce the session briefly:
+7. Load the relevant project context: harness inputs, conventions, project config, and existing patterns in the touched area.
+8. If the plan contains UI work, scan it for mockups or design references and search `{config.paths.mockups}` for matching files. Treat explicitly referenced mockups as the source of truth.
+9. Execute `WRITE: transition_status` to move the story to `{config.workflow.statuses.in_progress}`.
+10. Announce the session briefly:
 
 ```text
 ⚡ AIRCHETIPO - USER STORY IMPLEMENTATION
@@ -152,11 +137,20 @@ Il team di sviluppo è pronto.
 
 **User Story:** US-XXX: [titolo]
 **Epic:** EP-XXX | **Priorita:** HIGH | **Story Points:** N
-**Piano di implementazione:** {config.paths.planning}/US-XXX.md (file) | Issue #{NN} (github)
 **Task da completare:** N
 
 Avvio l'implementazione...
 ```
+
+### Validation policy for task parsing
+
+When loading tasks via `READ: read_story_tasks`, apply these validation rules:
+
+- If `Tipo` is missing but the body clearly describes an implementation or test task, infer it and log a warning
+- If `Tipo` is missing and the task cannot be classified confidently, treat that task as sequential-only
+- If dependencies are missing or malformed, do **not** assume independent scheduling; treat as sequential
+- If task identity is partially usable but not clean enough for graph scheduling, use sequential scheduling
+- If multiple malformed tasks prevent a trustworthy execution order, stop and tell the user that the planning artifacts need repair
 
 ### PHASE 1 - Task Analysis & Execution Strategy
 
@@ -200,9 +194,7 @@ For each task:
 1. Read only the relevant sections of the touched files.
 2. Follow the implementation plan unless doing so would hit an explicit blocker.
 3. Follow mockups when UI work is involved.
-4. Mark the task as done:
-   - `backend: file` -> change task status from `TODO` to `DONE` in `{config.paths.planning}/US-XXX.md`
-   - `backend: github` -> follow the GitHub task-completion flow
+4. Mark the task as done: execute `WRITE: complete_task` from the backend.
 5. Announce completion briefly.
 
 #### Ugo's rules
@@ -346,10 +338,9 @@ Do not end with the story still in `{config.workflow.statuses.in_progress}`, and
 ### PHASE 5 - Completion & Backlog Update
 
 1. Run the full required test suite one final time. If it fails, return to the fix loop and do not update the story status.
-2. Update the story status in the same session:
-   - `backend: file` -> set `{config.workflow.statuses.review}` in `{config.paths.backlog}`
-   - `backend: github` -> use the completion flow from `references/backend-github.md`
-3. Confirm completion with a concise summary. If non-blocking `🟡 MIGLIORAMENTO` items remain open, include them in the final report under an explicit optional improvements section:
+2. Execute `WRITE: transition_status` to move the story to `{config.workflow.statuses.review}`.
+3. Execute `WRITE: post_comment` with a completion summary (the backend handles this as a no-op if comments are not supported).
+4. Confirm completion with a concise summary. If non-blocking `🟡 MIGLIORAMENTO` items remain open, include them in the final report under an explicit optional improvements section:
 
 ```text
 ✅ Implementazione completata!

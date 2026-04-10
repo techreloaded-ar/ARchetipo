@@ -1,11 +1,11 @@
 ---
 name: airchetipo-plan
-description: Plans the implementation of a user story from the product backlog. Supports both file-based (docs/BACKLOG.md) and GitHub Projects v2 backends via .airchetipo/config.yaml. Selects the target user story (passed as argument or auto-selected by priority), and orchestrates a virtual team (Architect, Analyst, Developer, Test Architect) to produce a detailed technical implementation plan. With file backend, the plan is saved in docs/planning/{US-CODE}.md. With GitHub backend, the plan is written directly into the parent issue body (strategy) and sub-issues (executable tasks) — no local file is created. If the argument is a free-text description of a new feature (not a US-XXX code), the skill first creates the user story in the backlog and then plans it. Use this skill whenever the user wants to plan a user story, create an implementation plan, do sprint planning, break down a story into technical tasks, prepare a story for development, or quickly plan a new feature idea.
+description: Plans the implementation of a user story from the product backlog. Selects the target user story (passed as argument or auto-selected by priority), and orchestrates a virtual team (Architect, Analyst, Developer, Test Architect) to produce a detailed technical implementation plan. The backend (configured in .airchetipo/config.yaml) determines where stories are read from and where plans are saved. If the argument is a free-text description of a new feature (not a US-XXX code), the skill first creates the user story in the backlog and then plans it. Use this skill whenever the user wants to plan a user story, create an implementation plan, do sprint planning, break down a story into technical tasks, prepare a story for development, or quickly plan a new feature idea.
 ---
 
 # AIRchetipo - User Story Planning Skill
 
-You facilitate a **user story planning** session assisted by a team of specialized virtual agents. Your goal is to produce a **detailed implementation plan** for a user story and save it in `{config.paths.planning}/{US-CODE}.md`.
+You facilitate a **user story planning** session assisted by a team of specialized virtual agents. Your goal is to produce a **detailed implementation plan** for a user story and save it via the configured backend.
 
 > **PERFORMANCE RULE:** This skill must execute fast. Never generate content as dialogue first and then rewrite it as a document. Perform all analysis internally, show only a brief Team Brief to the user, then write the document directly. Maximize parallel tool calls — read multiple files in a single turn, never one by one.
 
@@ -32,34 +32,19 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
 
 #### Step 0 — Config Loading & Backend Dispatch
 
-1. Read `.airchetipo/config.yaml` — if it does not exist, assume defaults: `backend: file`, `backlog: docs/BACKLOG.md`, `prd: docs/PRD.md`, `planning: docs/planning/`
-2. Extract configuration values: `backend`, paths, workflow statuses, and backend-specific settings
-3. **If `backend: github`**: Read `references/backend-github.md` from this skill's directory. The reference file overrides the I/O phases (Setup, Read Backlog, Write Output) while the domain logic remains identical. Apply the GitHub setup instead of reading {config.paths.backlog}.
-4. **If `backend: file`** (default): Proceed with the standard file-based workflow below.
+1. Read `.airchetipo/contracts.md` from the `.airchetipo/` directory. This loads the backend contracts and instructs you to read the active backend implementation file based on `config.yaml`.
+2. Execute `SETUP: initialize_backend` from the loaded backend file.
 
-#### Step 1 — Story Selection (file backend)
+#### Step 1 — Story Selection
 
-1. Read `{config.paths.backlog}` — if missing, tell the user to run `airchetipo-inception` and ask it to generate the backlog from the PRD, then stop.
+1. Execute `READ: fetch_backlog_items` with `status_filter` = `{config.workflow.statuses.todo}`. If no backlog exists, tell the user to run `airchetipo-spec` first and stop.
 
-2. **If a user story code was passed as argument** (e.g., "US-005"):
-   - Find that story in the backlog
-   - If not found, inform the user and list available stories
+2. Execute `READ: select_story` with the user's argument and eligible statuses = `[{config.workflow.statuses.todo}]`:
+   - If a user story code was passed as argument (e.g., "US-005"), select that story
+   - If a free-text description was passed (not a US-XXX code), the backend handles creating a new story in the backlog and selecting it
+   - If no argument was passed, auto-select the highest-priority eligible story
 
-3. **If a free-text description was passed** (not a US-XXX code):
-   - Read the existing backlog to determine the next available US code and existing epics
-   - Create a new user story following the standard backlog template:
-     - Assign the next available US code
-     - Infer the most relevant existing epic (or create EP-NEW if none fits)
-     - Infer priority (default MEDIUM) and story points (default 3)
-     - Write story text ("As [persona], I want..., so that...") and acceptance criteria
-   - Append the new story to `{config.paths.backlog}` in the appropriate epic section
-   - Update the **Backlog Summary** table at the top
-   - Select the newly added story as the target
-
-4. **If NO argument was passed:**
-   - Exclude stories with status planned/in_progress/review/done
-   - Select highest priority (HIGH > MEDIUM > LOW), lowest story number among ties
-   - If all stories are already planned or beyond, inform the user and stop
+3. If no eligible stories exist, inform the user and stop.
 
 #### Step 2 — Context Loading (parallel)
 
@@ -150,9 +135,14 @@ In a **single turn**, produce both:
 
 **2. Write the planning document:**
 
-> **Backend dispatch:** If `backend: github`, do NOT write a local file. Instead, the plan is written directly into the GitHub issue body and sub-issues as described in `references/backend-github.md`. Skip the file template below and proceed to STAGE 2. The template below applies only to `backend: file`.
+Execute `WRITE: save_plan` from the backend, providing:
+- The story reference
+- The strategic plan content (technical solution + test strategy)
+- The task list
 
-Write to `{config.paths.planning}/{US-CODE}.md` using exactly this template:
+The backend determines where and how the plan is persisted. For `backend: file`, the plan follows the template below. For other backends, the backend file defines the persistence format.
+
+**File backend plan template** (used when `backend: file` — write to `{config.paths.planning}/{US-CODE}.md`):
 
 ```markdown
 # {US-CODE}: {Story Title} — Piano di Implementazione
@@ -241,25 +231,20 @@ _Piano generato via AIRchetipo Planning — {DATE}_
 
 After saving the planning document:
 
-1. **Update backlog status:**
-   - **File backend:** Find the story in `{config.paths.backlog}` and add/update status to `{config.workflow.statuses.planned}`
-   - **GitHub backend:** Follow the Write Output procedure from `references/backend-github.md` to write the full plan into the parent issue body, create sub-issues with executable task details, add "planned" label, and move Status to {config.workflow.statuses.planned}. No local file is written.
+1. **Update backlog status:** Execute `WRITE: transition_status` to move the story to `{config.workflow.statuses.planned}`.
 
-2. **Confirm completion:**
+2. **Add label (if supported):** Execute `WRITE: add_label` with label `planned`. The backend handles this as a no-op if labels are not supported.
 
-For **file backend:**
+3. **Confirm completion:**
+
 ```
 ✅ Pianificazione completata!
-
-📁 {config.paths.planning}/{US-CODE}.md
 
 📊 Riepilogo:
 - User Story: {US-CODE}: {title}
 - Task totali: {N} ({N} implementazione + {N} test)
 - Stato nel backlog: {config.workflow.statuses.planned} ✅
 ```
-
-For **github backend**, use the completion message format from `references/backend-github.md`.
 
 If mockup generation was spawned, add: `🎨 Mockup in generazione in background — disponibili in {config.paths.mockups}/{US-CODE}/ a breve.`
 

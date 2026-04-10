@@ -1,6 +1,6 @@
 ---
 name: airchetipo-backlog
-description: Reads a PRD and generates a prioritized product backlog with epics and user stories. Supports both file-based output (docs/BACKLOG.md) and GitHub Projects v2 backend via .airchetipo/config.yaml. Asks the user for clarification only when critical information is missing from the PRD.
+description: Reads a PRD and generates a prioritized product backlog with epics and user stories. The backend (configured in .airchetipo/config.yaml) determines where the backlog is saved. Asks the user for clarification only when critical information is missing from the PRD.
 ---
 
 # AIRchetipo - Backlog Generation Skill
@@ -30,10 +30,10 @@ Upon activation:
 
 #### Step 0 — Config Loading & Backend Dispatch
 
-1. Read `.airchetipo/config.yaml` — if it does not exist, assume defaults: `backend: file`, `backlog: docs/BACKLOG.md`, `prd: docs/PRD.md`
-2. Extract configuration values: `backend`, paths (`prd`, `backlog`, `planning`, `mockups`), `workflow.statuses` (a dictionary with keys: `todo`, `planned`, `in_progress`, `review`, `done`), and backend-specific settings
-3. **If `backend: github`**: Read `references/backend-github.md` from this skill's directory. The reference file overrides the I/O phases (Setup, Write Output) while the domain logic (PRD Analysis, Epic Identification, Story Generation, Prioritization) remains identical. Apply the GitHub setup (auth, project, fields) before proceeding to PRD Discovery.
-4. **If `backend: file`** (default): Proceed with the standard file-based workflow below, using paths from config.
+1. Read `.airchetipo/contracts.md` from the `.airchetipo/` directory. This loads the backend contracts and instructs you to read the active backend implementation file based on `config.yaml`.
+2. Execute `SETUP: initialize_backend` from the loaded backend file.
+3. Execute `SETUP: ensure_project_infrastructure` (the backend handles this as a no-op if not applicable).
+4. Extract configuration values: paths (`prd`, `backlog`, `planning`, `mockups`), `workflow.statuses`.
 
 #### Step 1 — PRD Discovery
 
@@ -330,7 +330,7 @@ After saving the file, output this summary:
 
 ```
 
-> **If `backend: github`:** Skip the file output above. Instead, follow the Write Output procedure from `references/backend-github.md` to create GitHub Issues and populate the project board.
+After generating the backlog content, execute `WRITE: save_initial_backlog` from the backend, providing the complete list of stories. Then execute `WRITE: create_labels` and `WRITE: backfill_dependencies` if applicable (the backend handles these as no-ops when not needed).
 
 ---
 

@@ -18,10 +18,9 @@ Rotation rule:
 
 ## Backend Dispatch
 
-After loading `SKILL.md`:
-1. If `backend: github`, read `references/connectors/github-projects.md`
-2. Let the connector override setup and write-output phases
-3. Keep all domain logic in this file identical regardless of backend
+The backend is already loaded via `.airchetipo/contracts.md` during `SKILL.md` config loading.
+All I/O operations in this flow use backend contract operations.
+Domain logic in this file is backend-independent.
 
 ## Phase 0 - Setup and PRD Discovery
 
@@ -187,8 +186,9 @@ Emanuele validates:
 
 ## Phase 5 - Output Generation
 
-If `backend: file`:
-1. Write the markdown backlog to `{config.paths.backlog}` using exactly this structure:
+Execute `WRITE: save_initial_backlog` from the backend, providing the complete list of stories with all their metadata.
+
+For `backend: file`, the backlog content follows this markdown structure (write to `{config.paths.backlog}`):
 
 ```markdown
 # [Product Name] - Product Backlog
@@ -266,12 +266,12 @@ _Backlog generated via AIRchetipo - [DATE]_
 _[Total N stories across N epics - N story points total]_
 ```
 
-2. Output this closing confirmation:
+After writing, execute `WRITE: create_labels` and `WRITE: backfill_dependencies` if applicable (the backend handles these as no-ops when not needed).
+
+Output this closing confirmation:
 
 ```text
 Backlog generated successfully.
-
-Path: {config.paths.backlog}
 
 Summary:
 - Epics: N
@@ -281,10 +281,6 @@ Summary:
 - MEDIUM priority: N stories
 - LOW priority: N stories
 ```
-
-If `backend: github`:
-- keep using this domain logic
-- let `references/connectors/github-projects.md` handle setup and write-output
 
 ## Quality Rules
 

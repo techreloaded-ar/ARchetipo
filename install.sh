@@ -347,6 +347,19 @@ install_config() {
   fi
 
   printf "\n  ${GREEN}✓${RESET} ${BOLD}.airchetipo/config.yaml${RESET} ${DIM}(backend: %s)${RESET}\n" "$backend"
+
+  # Install backend contracts and implementations
+  local source_root="$source_dir/.."
+  if [[ -f "$source_root/contracts.md" ]]; then
+    cp -f "$source_root/contracts.md" "$config_dir/contracts.md"
+    printf "  ${GREEN}✓${RESET} ${BOLD}.airchetipo/contracts.md${RESET}\n"
+  fi
+
+  if [[ -d "$source_root/backends" ]]; then
+    mkdir -p "$config_dir/backends"
+    cp -f "$source_root/backends/"*.md "$config_dir/backends/" 2>/dev/null
+    printf "  ${GREEN}✓${RESET} ${BOLD}.airchetipo/backends/${RESET} ${DIM}($(ls "$config_dir/backends/" 2>/dev/null | wc -l | tr -d ' ') backend files)${RESET}\n"
+  fi
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────

@@ -15,10 +15,9 @@ Gli agenti si alternano. Andrea guida la fase di discovery, Emanuele guida la ge
 
 ## Backend Dispatch
 
-After loading `SKILL.md`:
-1. If `backend: github`, read `references/connectors/github-projects.md`
-2. Let the connector override setup and write-output phases
-3. Keep all domain logic in this file identical regardless of backend
+The backend is already loaded via `.airchetipo/contracts.md` during `SKILL.md` config loading.
+All I/O operations in this flow use backend contract operations.
+Domain logic in this file is backend-independent.
 
 ## Fase 0 - Setup e lettura del contesto
 
@@ -49,18 +48,15 @@ Con te oggi ci sono:
 
 ### Step 2 - Lettura backlog e PRD
 
-**Backend file:**
-- Read `{config.paths.backlog}` and extract:
-  - existing epics (`EP-XXX` + titles)
-  - the last `US-XXX` code used
-  - ticket statuses already in use
-  - the backlog language
-- Read `{config.paths.prd}` if available and extract vision, personas, MVP scope
+Execute `READ: read_existing_backlog` from the backend and extract:
+- existing epics (`EP-XXX` + titles)
+- the last `US-XXX` code used
+- ticket statuses already in use
+- the backlog language
 
-**Backend github:**
-- Let the connector discover owner, repository, backlog project, existing backlog issues, epics, and next available story code
-- If the connector detects that the project has no backlog yet, switch to initial backlog creation instead of failing
-- Read `{config.paths.prd}` if available as supporting context
+If the backend detects that no backlog exists yet, switch to initial backlog creation instead of failing.
+
+Read `{config.paths.prd}` if available and extract vision, personas, MVP scope as supporting context.
 
 ### Step 3 - Scansione del codebase
 
@@ -170,34 +166,16 @@ Procedo con l'aggiunta? Oppure dimmi cosa modificare.
 
 ## Fase 3 - Output
 
-### Backend file
+Execute `WRITE: append_stories` from the backend, providing the confirmed new stories with all metadata. The backend handles the persistence details (file append, issue creation, project field updates, etc.).
 
-1. Re-read `{config.paths.backlog}` only if needed
-2. For each story:
-   - find the correct `### EP-XXX: [titolo epica]` section
-   - append the story at the end of that epic section, before the next epic or end of file
-   - if the epic is new, add the epic section with title and short description, then append the stories
-3. Update the `Backlog Summary` table:
-   - increment story count and story points for touched epics
-   - if the epic is new, add a new row
-4. Preserve everything else unchanged
+If a new epic is introduced, the backend also handles creating the necessary labels/fields.
 
-### Backend github
-
-- Let `references/connectors/github-projects.md` handle GitHub auth, project lookup, issue creation, and project field updates
-- Create only the new stories confirmed by the user
-- If a new epic is introduced, ensure the connector also updates the `Epic` field options
+After writing, execute `WRITE: create_labels` and `WRITE: backfill_dependencies` if applicable (the backend handles these as no-ops when not needed).
 
 ### Messaggio di chiusura
 
 ```text
 Storia/e aggiunte al backlog.
-
-[backend: file]
-Path: {config.paths.backlog}
-
-[backend: github]
-Progetto: [URL progetto]
 
 Aggiunto:
 - US-XXX: [titolo] (EP-XXX | PRIORITY | Npt)
