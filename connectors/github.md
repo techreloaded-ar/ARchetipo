@@ -221,7 +221,7 @@ gh issue view <NUMBER> --json body,title,labels,number,url
 Read the task list for a story from its sub-issues.
 
 ```bash
-gh api /repos/$OWNER/$REPO_NAME/issues/<PARENT_NUMBER>/sub_issues \
+gh api repos/$OWNER/$REPO_NAME/issues/<PARENT_NUMBER>/sub_issues \
   -H "X-GitHub-Api-Version: 2026-03-10"
 ```
 
@@ -462,8 +462,8 @@ OWNER="..." REPO="..." PARENT=N
 NUMS=(N N N N)  # actual issue numbers from Step 3
 
 for CHILD_NUMBER in ${NUMS[*]}; do
-  CHILD_ID=$(gh api /repos/$OWNER/$REPO/issues/$CHILD_NUMBER --jq '.id')
-  gh api -X POST /repos/$OWNER/$REPO/issues/$PARENT/sub_issues \
+  CHILD_ID=$(gh api repos/$OWNER/$REPO/issues/$CHILD_NUMBER --jq '.id')
+  gh api -X POST repos/$OWNER/$REPO/issues/$PARENT/sub_issues \
     -F "sub_issue_id=$CHILD_ID" \
     -H "X-GitHub-Api-Version: 2026-03-10"
 done
