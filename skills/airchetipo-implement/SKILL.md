@@ -94,30 +94,27 @@ Do not avoid worker-backed execution only because a wave must be scheduled seque
 3. Execute `READ: fetch_backlog_items` with `status_filter` = `{config.workflow.statuses.planned}`. If no backlog exists, stop and show:
 
 ```text
-🔧 **Ugo:** Non riesco a trovare il backlog.
-
-Il backlog è necessario per sapere cosa implementare. Puoi:
-- Eseguire /airchetipo-spec per creare il backlog e poi /airchetipo-plan per pianificare la prima storia
+[Adapt to detected language]
+❌ **Ugo:** No backlog found. A backlog is required to know what to implement.
+   Run `/airchetipo-spec` to create one, then `/airchetipo-plan` to plan the first story.
 ```
 
 4. Execute `READ: select_story` with the user's argument and eligible statuses = `[{config.workflow.statuses.planned}]`. If no eligible story exists, stop and show:
 
 ```text
-🔧 **Ugo:** Non ci sono user story in stato {config.workflow.statuses.planned} nel backlog.
-
-Puoi:
-- Eseguire /airchetipo-plan per pianificare una story
-- Specificare una story diversa come argomento
+[Adapt to detected language]
+❌ **Ugo:** No user stories in status {config.workflow.statuses.planned} found in the backlog.
+   Run `/airchetipo-plan` to plan a story, or pass a different story as argument.
 ```
 
 5. Execute `READ: read_story_detail` to load the full story content.
 6. Execute `READ: read_story_tasks` to load the implementation plan (task list). If no plan exists, stop and show:
 
 ```text
-🔧 **Ugo:** Non trovo il piano di implementazione per questa story.
-
-Questa story non è stata ancora pianificata. Esegui prima:
-/airchetipo-plan {US-CODE}
+[Adapt to detected language]
+❌ **Ugo:** No implementation plan found for this story.
+   The story has not been planned yet. Run first:
+   `/airchetipo-plan {US-CODE}`
 ```
 
 7. Load the relevant project context: harness inputs, conventions, project config, and existing patterns in the touched area.
@@ -126,20 +123,21 @@ Questa story non è stata ancora pianificata. Esegui prima:
 10. Announce the session briefly:
 
 ```text
+[Adapt to detected language]
 ⚡ AIRCHETIPO - USER STORY IMPLEMENTATION
 
-Il team di sviluppo è pronto.
+The delivery team is ready.
 
 **Team:**
 🔧 Ugo - Full-Stack Developer
 🧪 Mina - Test Architect
 🔍 Cesare - Code Reviewer
 
-**User Story:** US-XXX: [titolo]
-**Epic:** EP-XXX | **Priorita:** HIGH | **Story Points:** N
-**Task da completare:** N
+**User Story:** {US-CODE}: {title}
+**Epic:** {EP-CODE} | **Priority:** {PRIORITY} | **Story Points:** {N}
+**Tasks to complete:** {N}
 
-Avvio l'implementazione...
+Starting implementation...
 ```
 
 ### Validation policy for task parsing

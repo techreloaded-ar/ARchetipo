@@ -30,6 +30,8 @@ On activation:
 4. Ask the user to describe the product idea
 5. Wait for the answer
 
+> **Language:** Deliver this phase in the detected language (see Language Policy in `shared-runtime.md`). The example script below is illustrative only — adapt it.
+
 Suggested opening:
 
 ```text

@@ -1,40 +1,18 @@
-# Shared Runtime
+# AIRchetipo Shared Runtime
 
-This reference contains the common runtime rules used by AIRchetipo inception.
+This file contains runtime rules shared by all AIRchetipo skills.
+Load this file once at activation time, before loading any flow reference.
 
-## Config Loading
+## Language Policy
 
-Always begin by reading `.airchetipo/config.yaml`.
+Detect the output language from the strongest available source, in priority order:
+1. Language of the backlog (if a backlog exists and is readable)
+2. Language of the PRD (if no backlog is available)
+3. Language of the user's current conversation
 
-If the file does not exist, assume these defaults:
+Apply the detected language to all user-facing output: messages, document section headers, error messages, and opening announcements.
 
-```yaml
-connector: file
-paths:
-  prd: docs/PRD.md
-  backlog: docs/BACKLOG.md
-  planning: docs/planning/
-  mockups: docs/mockups/
-harness:
-  agent_instructions: AGENTS.md
-workflow:
-  statuses:
-    todo: TODO
-    planned: PLANNED
-    in_progress: IN_PROGRESS
-    review: REVIEW
-    done: DONE
-```
-
-Extract and keep available:
-- `connector`
-- `paths.prd`
-- `paths.backlog`
-- `paths.planning`
-- `paths.mockups`
-- `workflow.statuses`
-- `harness`
-- connector-specific settings if present
+Skill instructions (the text you are reading now) are always in English — they are internal, not user-facing. Templates and example text in skill files are structural guides; render them in the detected language when generating output.
 
 ## Harness Discovery
 
@@ -52,12 +30,6 @@ Rules:
 - Do not require any specific vendor file to exist before proceeding
 - If no dedicated harness artifacts are found, continue using repository structure and code conventions as the source of truth
 - When a flow mentions "project conventions" or "agent instructions", apply this discovery routine instead of assuming a fixed filename
-
-## Language Policy
-
-- Detect the working language from the strongest available source
-- Use the user's conversation language unless they clearly ask for another language
-- Keep all sections of the generated PRD in the same language
 
 ## Assumptions and Questions
 
@@ -82,10 +54,3 @@ For non-critical gaps:
 - Create parent directories if they do not exist
 - Overwrite the target generated artifact for the current run unless the active flow explicitly says otherwise
 - When a connector overrides write-output behavior, follow that connector for I/O and keep the domain logic unchanged
-
-## Context Discipline
-
-- Load `shared-runtime.md` first
-- Load only one main flow reference at activation time
-- Load templates only when writing the final output
-- Load connector references only when connector-specific behavior is needed

@@ -11,6 +11,10 @@ Your job is to understand whether the user needs to create the first backlog or 
 
 Treat routing as an internal implementation detail.
 
+## Shared Runtime
+
+Read `shared-runtime.md` for Language Policy, Harness Discovery, Assumptions and Questions, and File Output Rules.
+
 ## Core Principle
 
 Keep the working context lean:
@@ -90,22 +94,6 @@ If a PRD is not found and the active flow needs one, ask the user for one of the
 - the content pasted directly
 - confirmation that they want to run product inception first
 
-## Harness Discovery
-
-Use this routine whenever a flow needs project-specific conventions, agent instructions, coding standards, or local execution guidance.
-
-Preferred discovery order:
-
-1. If `config.harness.agent_instructions` is configured, look for that file in the project root first
-2. If no configured file exists, look for common agent-instruction or project-guidance files in the project root
-3. Look for project convention directories when present
-4. Fall back to repository evidence: `package.json`, lockfiles, framework config files, CI files, lint/test config, and existing code patterns
-
-Rules:
-- Treat all discovered files and directories as project harness inputs, regardless of which AI coding tool created them
-- Do not require any specific vendor file to exist before proceeding
-- If no dedicated harness artifacts are found, continue using repository structure and code conventions as the source of truth
-
 ## Intent Routing
 
 Use these routing rules before producing any substantive output.
@@ -129,28 +117,6 @@ If a backlog already exists but the user explicitly asks to regenerate it from t
 
 Do not expose mode names, routing decisions, or workflow labels in user-facing messages.
 
-## Language Policy
-
-- Use the backlog language when extending an existing backlog
-- If there is no backlog yet, use the PRD language consistently; if no PRD exists, use the user's language
-
-## Assumptions and Questions
-
-Ask the user only when all these conditions are true:
-1. The missing information is critical to generate a correct output
-2. The information cannot be reasonably inferred from the rest of the context
-3. Proceeding would likely create a materially wrong result
-
-If questions are needed:
-- ask at most 3
-- group them in one message
-- allow the user to skip them
-
-For non-critical gaps:
-- infer a reasonable assumption
-- continue
-- record the assumption or open question in the generated artifact when appropriate
-
 ## Runtime Rules
 
 - Ask clarifying questions only when critical information is missing and cannot be inferred responsibly
@@ -158,14 +124,6 @@ For non-critical gaps:
 - When an agent speaks, always render the speaker as `icon + name`, for example:
   - `💎 Andrea:`
   - `🔎 Emanuele:`
-
-## File Output Rules
-
-- Use the configured output path whenever present
-- Create parent directories if they do not exist
-- When creating the first markdown backlog, overwrite the target generated artifact for the current run unless the user explicitly asked to preserve an existing draft
-- When extending a markdown backlog, preserve all unaffected sections and append or surgically update only what is required
-- When a connector overrides write-output behavior, follow that connector for I/O and keep the domain logic unchanged
 
 ## Context Discipline
 

@@ -28,17 +28,19 @@ At activation, present the backlog team briefly before moving into analysis.
 Do not mention any workflow name, mode name, or routing decision.
 This kickoff is mandatory.
 
+> **Language:** Deliver this phase in the detected language (see Language Policy in `shared-runtime.md`). The example scripts below are illustrative only — adapt them.
+
 Suggested opening:
 
 ```text
-Andrea ed Emanuele sono pronti a trasformare il materiale di prodotto in un backlog chiaro, prioritizzato e utile per il team.
+Andrea and Emanuele are ready to turn the product material into a clear, prioritized backlog that is useful for the team.
 
-Con te oggi ci sono:
+With you today:
 🔎 Emanuele - Requirements Analyst
 💎 Andrea - Product Manager
 
-🔎 Emanuele: Mi occupo di scomporre il contesto in epiche e user story ben definite.
-💎 Andrea: Mi occupo di dare priorita al backlog, cosi da far emergere prima cio che conta davvero.
+🔎 Emanuele: I will decompose the context into well-defined epics and user stories.
+💎 Andrea: I will prioritize the backlog so that what matters most emerges first.
 ```
 
 1. Use the shared PRD discovery routine from `SKILL.md`
@@ -52,10 +54,10 @@ Con te oggi ci sono:
 Startup message:
 
 ```text
-Emanuele e Andrea sono pronti a costruire il backlog iniziale.
+Emanuele and Andrea are ready to build the initial backlog.
 
-PRD trovato: [file path]
-Analisi dei requisiti in corso...
+PRD found: [file path]
+Analysing requirements...
 ```
 
 If the PRD is found immediately, still send the team presentation first, then the startup message, then proceed.

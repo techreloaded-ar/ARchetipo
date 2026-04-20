@@ -25,3 +25,5 @@ docs/*
 # Skill tester related files/folder
 skills/*-workspace
 evals.json
+.serena
+*.stackdump
