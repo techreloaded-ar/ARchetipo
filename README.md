@@ -11,10 +11,6 @@ AIRchetipo è un set di skill per AI coding agent che supportano il processo di 
 - **airchetipo-implement** — Implementazione guidata delle user story a partire dal piano tecnico
 - **airchetipo-autopilot** — Esecuzione autonoma del ciclo plan → implement su tutte le storie del backlog
 
-**Extra Skills**
-- **airchetipo-figma-make** — Generazione di prompt strutturati per Figma Make a partire dal PRD
-- **airchetipo-vibe-kanban** — Gestione issue su Vibe Kanban a partire dal backlog
-
 
 ### Tool supportati
 
@@ -50,4 +46,3 @@ Apri PowerShell, posizionati nella directory del tuo progetto e lancia:
 ```powershell
 irm https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo/main/install.ps1 | iex
 ```
-
