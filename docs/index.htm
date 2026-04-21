@@ -1,0 +1,1282 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIRchetipo</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+    :root {
+      --bg-base:     #0d0f14;
+      --bg-surface:  #131620;
+      --bg-elevated: #1a1e2e;
+      --bg-subtle:   #0a0c11;
+      --text-primary:   #e8eaf0;
+      --text-secondary: #8b92a8;
+      --text-code:      #a8d4b0;
+      --text-dim:       #525870;
+      --accent:        #4fc3f7;
+      --accent-green:  #69db7c;
+      --accent-amber:  #ffd43b;
+      --accent-purple: #c084fc;
+      --accent-dim:    rgba(79,195,247,0.10);
+      --accent-glow:   rgba(79,195,247,0.18);
+      --border:        rgba(255,255,255,0.07);
+      --border-accent: rgba(79,195,247,0.28);
+      --mono: "JetBrains Mono","Fira Code","SF Mono",Consolas,monospace;
+      --sans: "Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg-base);
+      color: var(--text-primary);
+      font-family: var(--sans);
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); text-underline-offset: .15em; }
+
+    code {
+      font-family: var(--mono);
+      font-size: .875em;
+      background: var(--bg-elevated);
+      color: var(--text-code);
+      padding: .1em .35em;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+
+    pre {
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      overflow-x: auto;
+      position: relative;
+    }
+    pre code {
+      background: transparent; border: 0; padding: 0;
+      font-size: .82rem; line-height: 1.75; color: var(--text-code);
+    }
+
+    h2 { font-weight: 800; font-size: 1.65rem; line-height: 1.2; }
+    h3 { font-weight: 700; font-size: 1.05rem; line-height: 1.3; }
+    ul { padding-left: 1.1rem; }
+    li + li { margin-top: .3rem; }
+
+    /* ── PAGE LAYOUT ── */
+    .page {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      min-height: 100vh;
+    }
+
+    /* ── SIDEBAR ── */
+    .sidebar {
+      background: var(--bg-subtle);
+      border-right: 1px solid var(--border);
+      padding: 2rem 1rem 2rem 1.5rem;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 2rem;
+    }
+
+    .sidebar-logo {
+      font-family: var(--mono);
+      font-size: .9rem;
+      font-weight: 500;
+      color: var(--accent);
+    }
+    .sidebar-logo span { color: var(--text-dim); font-weight: 400; }
+
+    .toc-label {
+      font-size: .68rem;
+      font-weight: 600;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: .5rem;
+    }
+
+    .toc { list-style: none; padding: 0; display: flex; flex-direction: column; gap: .05rem; }
+    .toc a {
+      display: block;
+      padding: .32rem .5rem;
+      border-radius: 4px;
+      font-size: .83rem;
+      color: var(--text-secondary);
+      text-decoration: none;
+      transition: background 120ms, color 120ms;
+    }
+    .toc a:hover, .toc a.is-active {
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+
+    .lang-switch {
+      display: inline-flex;
+      gap: .2rem;
+      padding: .2rem;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      margin-top: auto;
+      align-self: flex-start;
+    }
+    .lang-switch button {
+      border: 0;
+      background: transparent;
+      color: var(--text-secondary);
+      padding: .3rem .65rem;
+      border-radius: 999px;
+      font-family: var(--mono);
+      font-size: .78rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 120ms, color 120ms;
+    }
+    .lang-switch button.is-active { background: var(--accent); color: var(--bg-base); }
+    .lang-switch button:hover:not(.is-active) { background: var(--bg-elevated); color: var(--text-primary); }
+
+    /* ── MAIN ── */
+    .main {
+      padding: 0 2.5rem 5rem;
+      max-width: 840px;
+    }
+
+    .section-kicker {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: .7rem;
+      font-weight: 500;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: .6rem;
+    }
+
+    section { padding-top: 3.5rem; }
+    section > h2 { margin-bottom: 1.5rem; }
+
+    /* ── HERO ── */
+    #hero {
+      padding-top: 4.5rem;
+      padding-bottom: 3rem;
+      border-bottom: 1px solid var(--border);
+      position: relative;
+    }
+    #hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: radial-gradient(ellipse 90% 100% at 0% 0%, black 20%, transparent 100%);
+      pointer-events: none;
+    }
+
+    .hero-eyebrow {
+      font-family: var(--mono);
+      font-size: .72rem;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 1rem;
+      position: relative;
+    }
+    .hero-title {
+      font-size: clamp(2.8rem, 5.5vw, 4.5rem);
+      font-weight: 800;
+      letter-spacing: -.035em;
+      color: var(--text-primary);
+      line-height: 1.05;
+      position: relative;
+    }
+    .hero-rule {
+      width: 3.5rem;
+      height: 2px;
+      background: var(--accent);
+      margin: 1.5rem 0;
+      position: relative;
+    }
+    .hero-lede {
+      font-size: 1.05rem;
+      color: var(--text-secondary);
+      max-width: 520px;
+      line-height: 1.75;
+      position: relative;
+    }
+    .hero-ctas {
+      display: flex;
+      gap: .75rem;
+      margin-top: 2rem;
+      flex-wrap: wrap;
+      position: relative;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      padding: .6rem 1.2rem;
+      background: var(--accent);
+      color: var(--bg-base);
+      font-family: var(--mono);
+      font-size: .85rem;
+      font-weight: 500;
+      border: 0;
+      border-radius: 6px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: opacity 150ms, transform 150ms;
+    }
+    .btn-primary:hover { opacity: .85; transform: translateY(-1px); color: var(--bg-base); }
+
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      padding: .6rem 1.2rem;
+      background: transparent;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: .85rem;
+      font-weight: 500;
+      border: 1px solid var(--border-accent);
+      border-radius: 6px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 150ms, transform 150ms;
+    }
+    .btn-secondary:hover { background: var(--accent-dim); transform: translateY(-1px); }
+
+    /* ── GLOSSARY ── */
+    .glossary-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: .75rem;
+    }
+    .glossary-item {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      transition: border-color 150ms;
+    }
+    .glossary-item:hover { border-color: var(--border-accent); }
+    .glossary-term {
+      font-family: var(--mono);
+      font-size: .82rem;
+      font-weight: 500;
+      color: var(--accent);
+      margin-bottom: .4rem;
+    }
+    .glossary-def {
+      font-size: .85rem;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    /* ── PIPELINE ── */
+    .pipeline-list {
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    .pipeline-list::before {
+      content: "";
+      position: absolute;
+      left: 27px;
+      top: 28px;
+      width: 1px;
+      bottom: 90px;
+      background: linear-gradient(180deg, var(--border-accent) 0%, var(--border) 85%, transparent 100%);
+    }
+
+    .pipeline-step {
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      gap: 1rem;
+      padding: .5rem 0;
+      position: relative;
+    }
+
+    .step-num {
+      width: 56px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-accent);
+      border-radius: 8px;
+      font-family: var(--mono);
+      font-size: .78rem;
+      font-weight: 500;
+      color: var(--accent);
+      flex-shrink: 0;
+      position: relative;
+      z-index: 1;
+    }
+    .step-num.auto {
+      border-style: dashed;
+      border-color: rgba(105,219,124,.4);
+      color: var(--accent-green);
+    }
+
+    .step-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-bottom: .75rem;
+      transition: border-color 180ms, box-shadow 180ms, transform 180ms;
+    }
+    .step-card:hover {
+      border-color: var(--border-accent);
+      box-shadow: 0 0 22px var(--accent-glow);
+      transform: translateX(3px);
+    }
+    .step-card.auto {
+      border-style: dashed;
+      border-color: rgba(105,219,124,.28);
+    }
+    .step-card.auto:hover {
+      border-color: rgba(105,219,124,.6);
+      box-shadow: 0 0 22px rgba(105,219,124,.12);
+    }
+
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      flex-wrap: wrap;
+      margin-bottom: .5rem;
+    }
+    .step-skill-name {
+      font-family: var(--mono);
+      font-size: .9rem;
+      font-weight: 500;
+      color: var(--accent);
+    }
+    .step-skill-name.auto { color: var(--accent-green); }
+
+    .badge {
+      font-family: var(--mono);
+      font-size: .62rem;
+      font-weight: 500;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      padding: .13em .45em;
+      border-radius: 3px;
+    }
+    .badge-optional { background: rgba(255,212,59,.1); color: var(--accent-amber); border: 1px solid rgba(255,212,59,.22); }
+    .badge-auto     { background: rgba(105,219,124,.1); color: var(--accent-green); border: 1px solid rgba(105,219,124,.22); }
+
+    .step-role { font-size: .88rem; color: var(--text-secondary); margin-bottom: .55rem; }
+
+    .step-desc {
+      font-size: .855rem;
+      color: var(--text-secondary);
+      line-height: 1.65;
+      margin-bottom: .7rem;
+    }
+
+    .step-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      font-size: .78rem;
+      font-family: var(--mono);
+    }
+    .step-output { color: var(--accent-green); }
+    .step-output::before { content: "→ "; color: var(--text-dim); }
+    .step-prereq { color: var(--text-dim); }
+    .step-prereq::before { content: "↳ "; }
+
+    .step-team {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .3rem;
+      margin-top: .65rem;
+    }
+    .team-pill {
+      font-size: .7rem;
+      font-family: var(--mono);
+      padding: .12em .45em;
+      border-radius: 3px;
+      background: rgba(192,132,252,.09);
+      color: var(--accent-purple);
+      border: 1px solid rgba(192,132,252,.18);
+    }
+
+    /* ── DECISION HELPER ── */
+    .decision-box {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-accent);
+      border-radius: 10px;
+      padding: 1.5rem;
+    }
+
+    .decision-trail {
+      font-family: var(--mono);
+      font-size: .72rem;
+      color: var(--text-dim);
+      margin-bottom: 1rem;
+      min-height: 1rem;
+    }
+
+    .decision-question {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 1rem;
+    }
+
+    .decision-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .6rem;
+    }
+
+    .decision-opt {
+      padding: .55rem 1rem;
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: var(--mono);
+      font-size: .82rem;
+      cursor: pointer;
+      transition: background 120ms, border-color 120ms, transform 120ms;
+      text-align: left;
+    }
+    .decision-opt:hover {
+      background: var(--accent-dim);
+      border-color: var(--border-accent);
+      transform: translateY(-1px);
+    }
+
+    .decision-result { display: flex; flex-direction: column; gap: 1rem; }
+
+    .result-row {
+      display: flex;
+      align-items: baseline;
+      gap: .75rem;
+    }
+    .result-label {
+      font-family: var(--mono);
+      font-size: .68rem;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: var(--text-dim);
+    }
+    .result-skill {
+      font-family: var(--mono);
+      font-size: 1rem;
+      font-weight: 500;
+      color: var(--accent);
+    }
+
+    .result-why {
+      font-size: .88rem;
+      color: var(--text-secondary);
+      line-height: 1.65;
+    }
+
+    .decision-reset {
+      align-self: flex-start;
+      font-family: var(--mono);
+      font-size: .78rem;
+      color: var(--text-dim);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: .28rem .65rem;
+      cursor: pointer;
+      transition: border-color 120ms, color 120ms;
+    }
+    .decision-reset:hover { border-color: var(--border-accent); color: var(--accent); }
+
+    /* ── BACKEND ── */
+    .backend-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1rem;
+    }
+    .backend-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+    }
+    .backend-title {
+      font-family: var(--mono);
+      font-size: .85rem;
+      font-weight: 500;
+      color: var(--text-primary);
+      padding-bottom: .75rem;
+      margin-bottom: .75rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .backend-list {
+      list-style: none;
+      padding: 0;
+      font-size: .855rem;
+      color: var(--text-secondary);
+    }
+    .backend-list li { padding: .2rem 0; }
+    .backend-list li::before { content: "· "; color: var(--text-dim); }
+
+    /* ── INSTALL ── */
+    .install-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; }
+    .install-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+    .install-os {
+      font-family: var(--mono);
+      font-size: .72rem;
+      font-weight: 500;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      margin-bottom: .65rem;
+    }
+    .copy-wrap { position: relative; }
+    .copy-btn {
+      position: absolute;
+      top: .5rem;
+      right: .5rem;
+      font-family: var(--mono);
+      font-size: .68rem;
+      padding: .22rem .5rem;
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      cursor: pointer;
+      transition: color 120ms, border-color 120ms;
+    }
+    .copy-btn:hover { color: var(--accent); border-color: var(--border-accent); }
+    .copy-btn.ok { color: var(--accent-green); border-color: rgba(105,219,124,.3); }
+
+    /* ── FAQ ── */
+    .faq-list { display: flex; flex-direction: column; gap: .75rem; }
+    .faq-item {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+    }
+    .faq-q { font-size: .92rem; font-weight: 600; margin-bottom: .5rem; }
+    .faq-a { font-size: .875rem; color: var(--text-secondary); line-height: 1.65; }
+
+    /* ── FOOTER ── */
+    footer {
+      padding: 2rem 0 3rem;
+      margin-top: 3rem;
+      border-top: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: .78rem;
+      color: var(--text-dim);
+    }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 920px) {
+      .page { grid-template-columns: 1fr; }
+      .sidebar {
+        position: static;
+        height: auto;
+        flex-direction: row;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 1rem 1.25rem;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+        gap: 1rem;
+      }
+      .toc-nav { display: none; }
+      .lang-switch { margin-top: 0; }
+      .main { padding: 0 1.25rem 3rem; }
+      .glossary-grid, .backend-grid, .install-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 580px) {
+      .pipeline-list::before { display: none; }
+      .pipeline-step { grid-template-columns: 1fr; }
+      .step-num { display: none; }
+      .hero-title { font-size: 2.4rem; }
+      .decision-options { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">airchetipo<span>/</span></div>
+    <div class="toc-nav">
+      <p class="toc-label" data-i18n="nav.label"></p>
+      <ul class="toc" role="navigation" aria-label="Indice della pagina">
+        <li><a href="#glossario" data-i18n="nav.glossary"></a></li>
+        <li><a href="#pipeline" data-i18n="nav.pipeline"></a></li>
+        <li><a href="#decision" data-i18n="nav.decision"></a></li>
+        <li><a href="#backend" data-i18n="nav.backend"></a></li>
+        <li><a href="#install" data-i18n="nav.install"></a></li>
+        <li><a href="#faq" data-i18n="nav.faq"></a></li>
+      </ul>
+    </div>
+    <div class="lang-switch" role="group" aria-label="Lingua">
+      <button type="button" class="is-active" data-lang="it" aria-pressed="true">IT</button>
+      <button type="button" data-lang="en" aria-pressed="false">EN</button>
+    </div>
+  </nav>
+
+  <!-- MAIN -->
+  <div class="main">
+
+    <!-- HERO -->
+    <header id="hero">
+      <p class="hero-eyebrow" data-i18n="hero.eyebrow"></p>
+      <h1 class="hero-title">AIRchetipo</h1>
+      <div class="hero-rule"></div>
+      <p class="hero-lede" data-i18n="hero.lede"></p>
+      <div class="hero-ctas">
+        <a href="#install" class="btn-primary" data-i18n="hero.cta_install"></a>
+        <a href="#pipeline" class="btn-secondary" data-i18n="hero.cta_pipeline"></a>
+      </div>
+    </header>
+
+    <!-- GLOSSARY -->
+    <section id="glossario">
+      <p class="section-kicker" data-i18n="glossary.kicker"></p>
+      <h2 data-i18n="glossary.heading"></h2>
+      <div class="glossary-grid" id="glossary-grid"></div>
+    </section>
+
+    <!-- PIPELINE -->
+    <section id="pipeline">
+      <p class="section-kicker" data-i18n="pipeline.kicker"></p>
+      <h2 data-i18n="pipeline.heading"></h2>
+      <p style="font-size:.88rem;color:var(--text-secondary);margin-bottom:1.5rem;line-height:1.7" data-i18n="pipeline.intro"></p>
+      <div class="pipeline-list" id="pipeline-list"></div>
+    </section>
+
+    <!-- DECISION -->
+    <section id="decision">
+      <p class="section-kicker" data-i18n="decision.kicker"></p>
+      <h2 data-i18n="decision.heading"></h2>
+      <p style="font-size:.88rem;color:var(--text-secondary);margin-bottom:1.25rem;line-height:1.7" data-i18n="decision.intro"></p>
+      <div class="decision-box">
+        <div class="decision-trail" id="decision-trail"></div>
+        <div id="decision-body"></div>
+      </div>
+    </section>
+
+    <!-- BACKEND -->
+    <section id="backend">
+      <p class="section-kicker" data-i18n="backend.kicker"></p>
+      <h2 data-i18n="backend.heading"></h2>
+      <p style="font-size:.88rem;color:var(--text-secondary);margin-bottom:1.25rem;line-height:1.7" data-i18n="backend.intro"></p>
+      <div class="backend-grid">
+        <div class="backend-card">
+          <p class="backend-title" data-i18n="backend.file.title"></p>
+          <ul class="backend-list" id="backend-file"></ul>
+        </div>
+        <div class="backend-card">
+          <p class="backend-title" data-i18n="backend.gh.title"></p>
+          <ul class="backend-list" id="backend-gh"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- INSTALL -->
+    <section id="install">
+      <p class="section-kicker" data-i18n="install.kicker"></p>
+      <h2 data-i18n="install.heading"></h2>
+      <p style="font-size:.88rem;color:var(--text-secondary);margin-bottom:1.25rem;line-height:1.7" data-i18n="install.intro"></p>
+      <div class="install-grid">
+        <div class="install-card">
+          <p class="install-os">macOS / Linux</p>
+          <div class="copy-wrap">
+            <pre><code id="cmd-mac">curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo/main/install.sh | bash</code></pre>
+            <button class="copy-btn" data-target="cmd-mac"></button>
+          </div>
+        </div>
+        <div class="install-card">
+          <p class="install-os">Windows (PowerShell)</p>
+          <div class="copy-wrap">
+            <pre><code id="cmd-win">irm https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo/main/install.ps1 | iex</code></pre>
+            <button class="copy-btn" data-target="cmd-win"></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section id="faq">
+      <p class="section-kicker" data-i18n="faq.kicker"></p>
+      <h2 data-i18n="faq.heading"></h2>
+      <div class="faq-list" id="faq-list"></div>
+    </section>
+
+    <footer>
+      <span data-i18n="footer.text"></span>
+    </footer>
+
+  </div><!-- .main -->
+</div><!-- .page -->
+
+<script>
+(function () {
+
+/* ═══════════════════════════════════════════
+   TRANSLATIONS
+═══════════════════════════════════════════ */
+var T = {
+  it: {
+    nav: {
+      label: "In questa pagina",
+      glossary: "Concetti chiave",
+      pipeline: "Pipeline",
+      decision: "Da dove parto?",
+      backend: "Backend",
+      install: "Installazione",
+      faq: "Note operative"
+    },
+    hero: {
+      eyebrow: "Skill per AI coding agent",
+      lede: "AIRchetipo è un sistema di 6 skill che governa il ciclo di vita iniziale di un progetto software: dalla scoperta del prodotto fino all'implementazione, con agenti virtuali specializzati a ogni fase.",
+      cta_install: "→ Installa ora",
+      cta_pipeline: "↓ Scopri la pipeline"
+    },
+    glossary: {
+      kicker: "Concetti di base",
+      heading: "Termini chiave",
+      items: [
+        { term: "PRD", def: "Product Requirements Document — definisce cosa costruire, per chi e perché. È il punto di partenza della pipeline." },
+        { term: "Backlog", def: "Lista ordinata di user story da implementare, ciascuna con priorità, stima e stato (TODO → PLANNED → IN PROGRESS → REVIEW → DONE)." },
+        { term: "User story", def: "Unità atomica di requisito dal punto di vista dell'utente: \"Come <persona> voglio <azione> così che <beneficio>\"." },
+        { term: "Epic", def: "Raggruppamento di user story correlate con un obiettivo condiviso. Ogni story appartiene a un epic." },
+        { term: "Planning file", def: "Documento tecnico per una singola story con soluzione, task ordinati, dipendenze e strategia di test. Salvato in docs/planning/US-XXX.md." },
+        { term: "INVEST", def: "Criteri di qualità per le user story: Indipendente, Negoziabile, Valorosa, Estimabile, Small, Testabile." },
+        { term: "Acceptance criteria", def: "Condizioni verificabili che definiscono quando una story può considerarsi completata." },
+        { term: "Backend", def: "Modalità di storage degli artefatti del progetto: file system locale (Markdown) oppure GitHub Projects v2 + Issues." }
+      ]
+    },
+    pipeline: {
+      kicker: "Come funziona",
+      heading: "La pipeline",
+      intro: "Le 6 skill si concatenano in sequenza orientata alla delivery. Ogni skill produce artefatti consumati dalla successiva.",
+      prereq: "Prerequisito:",
+      output_prefix: "Output:",
+      optional_badge: "OPZIONALE",
+      auto_badge: "MODALITÀ AUTOMATICA",
+      steps: [
+        {
+          id: "inception", num: "01",
+          name: "airchetipo-inception",
+          role: "Discovery e definizione del prodotto",
+          desc: "Guida la fase di discovery con un team virtuale. Raccoglie obiettivi, scope e ipotesi di business, produce il PRD.",
+          output: "docs/PRD.md",
+          requires: null, optional: false, auto: false,
+          team: ["Andrea PM", "Costanza Strategist", "Leonardo Arch", "Livia UX", "Emanuele Req"]
+        },
+        {
+          id: "spec", num: "02",
+          name: "airchetipo-spec",
+          role: "Creazione e estensione del backlog",
+          desc: "Converte il PRD in backlog oppure aggiunge nuove story INVEST-compliant a uno esistente, con domande sfidanti di qualità.",
+          output: "docs/BACKLOG.md",
+          requires: "PRD esistente", optional: false, auto: false,
+          team: ["Andrea PM", "Emanuele Req"]
+        },
+        {
+          id: "design", num: "03",
+          name: "airchetipo-design",
+          role: "Mockup e prototipi UI",
+          desc: "Produce mockup HTML/CSS isolati in docs/mockups/ senza toccare il codice applicativo. Usati come riferimento visivo da airchetipo-implement.",
+          output: "docs/mockups/",
+          requires: null, optional: true, auto: false,
+          team: ["Livia UX"]
+        },
+        {
+          id: "plan", num: "04",
+          name: "airchetipo-plan",
+          role: "Piano tecnico di implementazione",
+          desc: "Trasforma una story TODO in piano tecnico con soluzione, task ordinati, dipendenze e strategia di test (inclusi test e2e con video recording).",
+          output: "docs/planning/US-XXX.md",
+          requires: "story in BACKLOG.md", optional: false, auto: false,
+          team: ["Emanuele Req", "Leonardo Arch", "Ugo Dev", "Mina Test"]
+        },
+        {
+          id: "implement", num: "05",
+          name: "airchetipo-implement",
+          role: "Scrittura di codice e test",
+          desc: "Esegue il piano tecnico: scrive codice, test unit/integration/e2e, effettua code review automatica e porta la story verso REVIEW.",
+          output: "codice + test + backlog aggiornato",
+          requires: "planning file (story PLANNED)", optional: false, auto: false,
+          team: ["Ugo Dev", "Mina Test", "Cesare Reviewer"]
+        },
+        {
+          id: "autopilot", num: "⚡",
+          name: "airchetipo-autopilot",
+          role: "Esecuzione autonoma del ciclo plan → implement",
+          desc: "Coordina automaticamente plan e implement su più story in sequenza usando subagent isolati. Configurabile per epic, priorità, numero massimo di story e strategia sugli errori. Alternativa al ciclo manuale plan + implement.",
+          output: "avanzamento coordinato del backlog",
+          requires: "story TODO/PLANNED nel backlog", optional: false, auto: true,
+          team: []
+        }
+      ]
+    },
+    decision: {
+      kicker: "Guida rapida",
+      heading: "Da dove parto?",
+      intro: "Rispondi alle domande per trovare la skill giusta in base alla fase del tuo progetto.",
+      result_label: "Skill consigliata",
+      reset: "↺ Ricomincia",
+      nodes: {
+        root:    { q: "Hai già un PRD del progetto?", opts: [{ label: "Sì, ho un PRD", next: "has_prd" }, { label: "No, parto da un'idea", next: "r_inception" }] },
+        has_prd: { q: "Hai già un backlog con user story?", opts: [{ label: "Sì, ho story nel backlog", next: "has_backlog" }, { label: "No, solo il PRD", next: "r_spec" }] },
+        has_backlog: { q: "Le story sono già pianificate (hanno un piano tecnico)?", opts: [{ label: "Sì, sono in stato PLANNED", next: "story_planned" }, { label: "No, sono in stato TODO", next: "story_todo" }] },
+        story_todo:   { q: "La story riguarda UI e non hai ancora mockup?", opts: [{ label: "Sì, serve UI senza mockup", next: "r_design" }, { label: "No, o ho già mockup", next: "r_plan" }] },
+        story_planned: { q: "Hai più story pronte e vuoi processarle in autonomia?", opts: [{ label: "Sì, voglio automatizzare", next: "r_autopilot" }, { label: "No, procedo una alla volta", next: "r_implement" }] },
+        r_inception: { result: "inception",  why: "Il PRD è il punto di partenza. airchetipo-inception conduce la discovery con un team virtuale e produce il documento." },
+        r_spec:      { result: "spec",        why: "airchetipo-spec converte il PRD in backlog strutturato con epic e user story INVEST-compliant." },
+        r_design:    { result: "design",      why: "Prima crea i mockup con airchetipo-design, poi usa airchetipo-plan: il planning file li referencerà per l'implementazione." },
+        r_plan:      { result: "plan",         why: "airchetipo-plan produce il piano tecnico con task, dipendenze e strategia di test. Poi potrai usare airchetipo-implement." },
+        r_implement: { result: "implement",   why: "airchetipo-implement esegue il piano tecnico: scrive codice, test e porta la story verso REVIEW." },
+        r_autopilot: { result: "autopilot",   why: "airchetipo-autopilot esegue il ciclo plan→implement su più story in sequenza con subagent isolati e state file per riprendere se interrotto." }
+      }
+    },
+    backend: {
+      kicker: "Storage",
+      heading: "Backend supportati",
+      intro: "AIRchetipo supporta due modalità di storage, configurabili in .airchetipo/config.yaml tramite il campo backend: file | github.",
+      file: {
+        title: "File system (default)",
+        items: ["Artefatti in Markdown locale", "Backlog in docs/BACKLOG.md", "Piani in docs/planning/US-XXX.md", "Nessuna autenticazione", "Funziona offline"]
+      },
+      gh: {
+        title: "GitHub Projects v2",
+        items: ["Story come GitHub Issues con labels", "Piano nel corpo dell'issue", "Sub-issues per ogni task eseguibile", "Transizioni via gh CLI", "Richiede: gh auth refresh -s project"]
+      }
+    },
+    install: {
+      kicker: "Avvio rapido",
+      heading: "Installazione",
+      intro: "Esegui nella root del tuo progetto. L'installer scarica le skill e mostra un menu interattivo per scegliere su quali tool installarle.",
+      copy: "Copia",
+      copied: "Copiato ✓"
+    },
+    faq: {
+      kicker: "Note pratiche",
+      heading: "Note operative",
+      items: [
+        { q: "Serve sempre il PRD per iniziare?", a: "Per costruire un backlog solido sì: il PRD è il punto di partenza ideale. Se non esiste ancora, usa airchetipo-inception per crearlo prima di passare a airchetipo-spec." },
+        { q: "Posso aggiungere story senza rifare tutto il backlog?", a: "Sì. airchetipo-spec distingue tra generazione iniziale ed estensione: se il backlog esiste, aggiunge o raffina story senza ripartire da zero." },
+        { q: "Quando ha senso usare autopilot invece del ciclo manuale?", a: "Quando hai più story già ordinate nel backlog e vuoi delegare il ciclo operativo agli agenti. Il percorso manuale è migliore quando vuoi revisionare ogni piano prima dell'implementazione." },
+        { q: "I mockup prodotti da design finiscono nel codice applicativo?", a: "No. airchetipo-design produce file isolati in docs/mockups/ usati solo come riferimento visivo da airchetipo-implement, che li legge prima di scrivere l'interfaccia reale." }
+      ]
+    },
+    footer: { text: "AIRchetipo · skill per AI coding agent · github.com/techreloaded-ar/AIRchetipo" }
+  },
+
+  en: {
+    nav: {
+      label: "On this page",
+      glossary: "Key concepts",
+      pipeline: "Pipeline",
+      decision: "Where do I start?",
+      backend: "Backend",
+      install: "Installation",
+      faq: "Operating notes"
+    },
+    hero: {
+      eyebrow: "Skills for AI coding agents",
+      lede: "AIRchetipo is a system of 6 skills that governs the early lifecycle of a software project: from product discovery through implementation, with specialized virtual agents at every phase.",
+      cta_install: "→ Install now",
+      cta_pipeline: "↓ Explore the pipeline"
+    },
+    glossary: {
+      kicker: "Core concepts",
+      heading: "Key terms",
+      items: [
+        { term: "PRD", def: "Product Requirements Document — defines what to build, for whom, and why. It is the starting point of the pipeline." },
+        { term: "Backlog", def: "Ordered list of user stories to implement, each with priority, estimate, and status (TODO → PLANNED → IN PROGRESS → REVIEW → DONE)." },
+        { term: "User story", def: "Atomic requirement unit from the user's perspective: \"As <persona> I want <action> so that <benefit>\"." },
+        { term: "Epic", def: "A grouping of related user stories sharing a common goal. Every story belongs to an epic." },
+        { term: "Planning file", def: "Technical document for a single story with solution, ordered tasks, dependencies, and test strategy. Saved in docs/planning/US-XXX.md." },
+        { term: "INVEST", def: "Quality criteria for user stories: Independent, Negotiable, Valuable, Estimable, Small, Testable." },
+        { term: "Acceptance criteria", def: "Verifiable conditions that define when a story can be considered complete." },
+        { term: "Backend", def: "How project artifacts are stored: local file system (Markdown) or GitHub Projects v2 + Issues." }
+      ]
+    },
+    pipeline: {
+      kicker: "How it works",
+      heading: "The pipeline",
+      intro: "The 6 skills chain into a delivery-oriented sequence. Each skill produces artifacts consumed by the next.",
+      prereq: "Requires:",
+      output_prefix: "Output:",
+      optional_badge: "OPTIONAL",
+      auto_badge: "AUTOMATIC MODE",
+      steps: [
+        {
+          id: "inception", num: "01",
+          name: "airchetipo-inception",
+          role: "Product discovery and definition",
+          desc: "Leads the discovery phase with a virtual team. Collects goals, scope, and business assumptions, produces the PRD.",
+          output: "docs/PRD.md",
+          requires: null, optional: false, auto: false,
+          team: ["Andrea PM", "Costanza Strategist", "Leonardo Arch", "Livia UX", "Emanuele Req"]
+        },
+        {
+          id: "spec", num: "02",
+          name: "airchetipo-spec",
+          role: "Backlog creation and extension",
+          desc: "Converts the PRD into a backlog or adds new INVEST-compliant stories to an existing one, using challenging quality questions.",
+          output: "docs/BACKLOG.md",
+          requires: "existing PRD", optional: false, auto: false,
+          team: ["Andrea PM", "Emanuele Req"]
+        },
+        {
+          id: "design", num: "03",
+          name: "airchetipo-design",
+          role: "UI mockups and prototypes",
+          desc: "Produces isolated HTML/CSS mockups in docs/mockups/ without touching application code. Used as visual reference by airchetipo-implement.",
+          output: "docs/mockups/",
+          requires: null, optional: true, auto: false,
+          team: ["Livia UX"]
+        },
+        {
+          id: "plan", num: "04",
+          name: "airchetipo-plan",
+          role: "Technical implementation plan",
+          desc: "Turns a TODO story into a technical plan with solution, ordered tasks, dependencies, and test strategy (including e2e tests with video recording).",
+          output: "docs/planning/US-XXX.md",
+          requires: "story in BACKLOG.md", optional: false, auto: false,
+          team: ["Emanuele Req", "Leonardo Arch", "Ugo Dev", "Mina Test"]
+        },
+        {
+          id: "implement", num: "05",
+          name: "airchetipo-implement",
+          role: "Code and test writing",
+          desc: "Executes the technical plan: writes code, unit/integration/e2e tests, performs automated code review, and moves the story toward REVIEW.",
+          output: "code + tests + updated backlog",
+          requires: "planning file (story PLANNED)", optional: false, auto: false,
+          team: ["Ugo Dev", "Mina Test", "Cesare Reviewer"]
+        },
+        {
+          id: "autopilot", num: "⚡",
+          name: "airchetipo-autopilot",
+          role: "Autonomous execution of plan → implement",
+          desc: "Automatically orchestrates plan and implement across multiple stories in sequence using isolated subagents. Configurable for epic, priority, max stories, and error strategy. Alternative to the manual plan + implement cycle.",
+          output: "coordinated backlog progression",
+          requires: "TODO/PLANNED stories in backlog", optional: false, auto: true,
+          team: []
+        }
+      ]
+    },
+    decision: {
+      kicker: "Quick guide",
+      heading: "Where do I start?",
+      intro: "Answer the questions to find the right skill based on where you are in your project.",
+      result_label: "Recommended skill",
+      reset: "↺ Start over",
+      nodes: {
+        root:    { q: "Do you already have a project PRD?", opts: [{ label: "Yes, I have a PRD", next: "has_prd" }, { label: "No, starting from an idea", next: "r_inception" }] },
+        has_prd: { q: "Do you already have a backlog with user stories?", opts: [{ label: "Yes, I have stories", next: "has_backlog" }, { label: "No, only the PRD", next: "r_spec" }] },
+        has_backlog: { q: "Are the stories already planned (do they have a technical plan)?", opts: [{ label: "Yes, they are PLANNED", next: "story_planned" }, { label: "No, they are TODO", next: "story_todo" }] },
+        story_todo:   { q: "Does the story involve UI and you don't have mockups yet?", opts: [{ label: "Yes, UI needed without mockups", next: "r_design" }, { label: "No, or I have mockups", next: "r_plan" }] },
+        story_planned: { q: "Multiple stories ready — want to process them autonomously?", opts: [{ label: "Yes, automate everything", next: "r_autopilot" }, { label: "No, one at a time", next: "r_implement" }] },
+        r_inception: { result: "inception",  why: "The PRD is the starting point. airchetipo-inception runs discovery with a virtual team and produces the document." },
+        r_spec:      { result: "spec",        why: "airchetipo-spec converts the PRD into a structured backlog with epics and INVEST-compliant user stories." },
+        r_design:    { result: "design",      why: "First create mockups with airchetipo-design, then use airchetipo-plan: the planning file will reference them for implementation." },
+        r_plan:      { result: "plan",         why: "airchetipo-plan produces the technical plan with tasks, dependencies, and test strategy. Then you can use airchetipo-implement." },
+        r_implement: { result: "implement",   why: "airchetipo-implement executes the technical plan: writes code, tests, and moves the story toward REVIEW." },
+        r_autopilot: { result: "autopilot",   why: "airchetipo-autopilot runs the plan→implement cycle across multiple stories in sequence with isolated subagents and a state file for resumption." }
+      }
+    },
+    backend: {
+      kicker: "Storage",
+      heading: "Supported backends",
+      intro: "AIRchetipo supports two storage modes, configurable in .airchetipo/config.yaml via the field backend: file | github.",
+      file: {
+        title: "File system (default)",
+        items: ["Artifacts as local Markdown files", "Backlog in docs/BACKLOG.md", "Plans in docs/planning/US-XXX.md", "No authentication", "Works offline"]
+      },
+      gh: {
+        title: "GitHub Projects v2",
+        items: ["Stories as GitHub Issues with labels", "Plan written into the issue body", "Sub-issues for each executable task", "Status transitions via gh CLI", "Requires: gh auth refresh -s project"]
+      }
+    },
+    install: {
+      kicker: "Quick start",
+      heading: "Installation",
+      intro: "Run from your project root. The installer downloads the skills and shows an interactive menu to choose which tools to install them on.",
+      copy: "Copy",
+      copied: "Copied ✓"
+    },
+    faq: {
+      kicker: "Practical notes",
+      heading: "Operating notes",
+      items: [
+        { q: "Do I always need a PRD to get started?", a: "For a solid backlog, yes: the PRD is the ideal starting point. If one doesn't exist yet, use airchetipo-inception to create it before moving to airchetipo-spec." },
+        { q: "Can I add stories without regenerating the entire backlog?", a: "Yes. airchetipo-spec distinguishes between initial generation and extension: if a backlog exists, it adds or refines stories without starting from scratch." },
+        { q: "When does autopilot make sense over the manual cycle?", a: "When you have multiple ordered stories in the backlog and want to delegate the operational cycle to agents. The manual path is better when you want to review each plan before implementation." },
+        { q: "Do mockups from design end up in the application code?", a: "No. airchetipo-design produces isolated files in docs/mockups/ used only as visual references by airchetipo-implement, which reads them before writing the real interface." }
+      ]
+    },
+    footer: { text: "AIRchetipo · skills for AI coding agents · github.com/techreloaded-ar/AIRchetipo" }
+  }
+};
+
+/* ═══════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════ */
+var lang = 'it';
+var decisionPath = [];
+var decisionNode = 'root';
+
+/* ═══════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════ */
+function get(keyPath) {
+  return keyPath.split('.').reduce(function(o, k) { return o && o[k]; }, T[lang]) || '';
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ═══════════════════════════════════════════
+   RENDER: static data-i18n nodes
+═══════════════════════════════════════════ */
+function applyStaticTranslations() {
+  document.querySelectorAll('[data-i18n]').forEach(function(el) {
+    el.textContent = get(el.dataset.i18n);
+  });
+}
+
+/* ═══════════════════════════════════════════
+   RENDER: glossary
+═══════════════════════════════════════════ */
+function renderGlossary() {
+  var items = T[lang].glossary.items;
+  document.getElementById('glossary-grid').innerHTML = items.map(function(item) {
+    return '<div class="glossary-item">' +
+      '<p class="glossary-term">' + esc(item.term) + '</p>' +
+      '<p class="glossary-def">' + esc(item.def) + '</p>' +
+      '</div>';
+  }).join('');
+}
+
+/* ═══════════════════════════════════════════
+   RENDER: pipeline
+═══════════════════════════════════════════ */
+function renderPipeline() {
+  var data = T[lang].pipeline;
+  var steps = data.steps;
+  document.getElementById('pipeline-list').innerHTML = steps.map(function(s) {
+    var badges = '';
+    if (s.optional) badges += '<span class="badge badge-optional">' + esc(data.optional_badge) + '</span>';
+    if (s.auto)     badges += '<span class="badge badge-auto">' + esc(data.auto_badge) + '</span>';
+
+    var prereq = s.requires
+      ? '<span class="step-prereq">' + esc(data.prereq) + ' ' + esc(s.requires) + '</span>'
+      : '';
+
+    var team = s.team.length
+      ? '<div class="step-team">' + s.team.map(function(m) {
+          return '<span class="team-pill">' + esc(m) + '</span>';
+        }).join('') + '</div>'
+      : '';
+
+    return '<div class="pipeline-step">' +
+      '<div class="step-num' + (s.auto ? ' auto' : '') + '">' + esc(s.num) + '</div>' +
+      '<div class="step-card' + (s.auto ? ' auto' : '') + '">' +
+        '<div class="step-header">' +
+          '<span class="step-skill-name' + (s.auto ? ' auto' : '') + '">' + esc(s.name) + '</span>' +
+          badges +
+        '</div>' +
+        '<p class="step-role">' + esc(s.role) + '</p>' +
+        '<p class="step-desc">' + esc(s.desc) + '</p>' +
+        '<div class="step-meta">' +
+          '<span class="step-output">' + esc(s.output) + '</span>' +
+          prereq +
+        '</div>' +
+        team +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+/* ═══════════════════════════════════════════
+   RENDER: decision helper
+═══════════════════════════════════════════ */
+function renderDecision() {
+  var nodes = T[lang].decision.nodes;
+  var node  = nodes[decisionNode];
+  var trail = document.getElementById('decision-trail');
+  var body  = document.getElementById('decision-body');
+
+  trail.textContent = decisionPath.length ? decisionPath.join(' › ') : '';
+
+  if (node.result) {
+    var skillName = 'airchetipo-' + node.result;
+    body.innerHTML =
+      '<div class="decision-result">' +
+        '<div class="result-row">' +
+          '<span class="result-label">' + esc(get('decision.result_label')) + '</span>' +
+          '<span class="result-skill">' + esc(skillName) + '</span>' +
+        '</div>' +
+        '<p class="result-why">' + esc(node.why) + '</p>' +
+        '<button class="decision-reset" id="btn-reset">' + esc(get('decision.reset')) + '</button>' +
+      '</div>';
+    document.getElementById('btn-reset').addEventListener('click', function() {
+      decisionPath = [];
+      decisionNode = 'root';
+      renderDecision();
+    });
+  } else {
+    var optsHtml = node.opts.map(function(opt, i) {
+      return '<button class="decision-opt" data-next="' + esc(opt.next) + '" data-label="' + esc(opt.label) + '">' + esc(opt.label) + '</button>';
+    }).join('');
+    body.innerHTML =
+      '<p class="decision-question">' + esc(node.q) + '</p>' +
+      '<div class="decision-options">' + optsHtml + '</div>';
+    body.querySelectorAll('.decision-opt').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        decisionPath.push(this.dataset.label);
+        decisionNode = this.dataset.next;
+        renderDecision();
+      });
+    });
+  }
+}
+
+/* ═══════════════════════════════════════════
+   RENDER: backend
+═══════════════════════════════════════════ */
+function renderBackend() {
+  var b = T[lang].backend;
+  document.getElementById('backend-file').innerHTML =
+    b.file.items.map(function(i) { return '<li>' + esc(i) + '</li>'; }).join('');
+  document.getElementById('backend-gh').innerHTML =
+    b.gh.items.map(function(i) { return '<li>' + esc(i) + '</li>'; }).join('');
+}
+
+/* ═══════════════════════════════════════════
+   RENDER: faq
+═══════════════════════════════════════════ */
+function renderFaq() {
+  document.getElementById('faq-list').innerHTML =
+    T[lang].faq.items.map(function(item) {
+      return '<div class="faq-item">' +
+        '<p class="faq-q">' + esc(item.q) + '</p>' +
+        '<p class="faq-a">' + esc(item.a) + '</p>' +
+        '</div>';
+    }).join('');
+}
+
+/* ═══════════════════════════════════════════
+   FULL RENDER
+═══════════════════════════════════════════ */
+function render() {
+  document.documentElement.lang = lang;
+  applyStaticTranslations();
+  renderGlossary();
+  renderPipeline();
+  renderDecision();
+  renderBackend();
+  renderFaq();
+  updateCopyButtonLabels();
+}
+
+/* ═══════════════════════════════════════════
+   COPY BUTTONS
+═══════════════════════════════════════════ */
+function updateCopyButtonLabels() {
+  document.querySelectorAll('.copy-btn:not(.ok)').forEach(function(btn) {
+    btn.textContent = get('install.copy');
+  });
+}
+
+function initCopyButtons() {
+  document.querySelectorAll('.copy-btn[data-target]').forEach(function(btn) {
+    btn.textContent = get('install.copy');
+    btn.addEventListener('click', function() {
+      var code = document.getElementById(this.dataset.target).textContent;
+      var self = this;
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(code).then(function() {
+          self.textContent = get('install.copied');
+          self.classList.add('ok');
+          setTimeout(function() {
+            self.textContent = get('install.copy');
+            self.classList.remove('ok');
+          }, 2200);
+        });
+      }
+    });
+  });
+}
+
+/* ═══════════════════════════════════════════
+   LANG SWITCH
+═══════════════════════════════════════════ */
+document.querySelectorAll('[data-lang]').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    lang = this.dataset.lang;
+    document.querySelectorAll('[data-lang]').forEach(function(b) {
+      var active = b.dataset.lang === lang;
+      b.classList.toggle('is-active', active);
+      b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    render();
+  });
+});
+
+/* ═══════════════════════════════════════════
+   TOC HIGHLIGHT (IntersectionObserver)
+═══════════════════════════════════════════ */
+function initToc() {
+  var links = document.querySelectorAll('.toc a');
+  var sections = document.querySelectorAll('section[id], header[id]');
+  if (!('IntersectionObserver' in window)) return;
+  var observer = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting) {
+        links.forEach(function(a) {
+          a.classList.toggle('is-active', a.getAttribute('href') === '#' + entry.target.id);
+        });
+      }
+    });
+  }, { rootMargin: '-15% 0px -70% 0px' });
+  sections.forEach(function(s) { observer.observe(s); });
+}
+
+/* ═══════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════ */
+render();
+initCopyButtons();
+initToc();
+
+}());
+</script>
+</body>
+</html>

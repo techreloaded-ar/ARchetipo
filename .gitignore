@@ -18,7 +18,9 @@ cursor
 
 # Project-specific
 .airchetipo/*
-docs/
+docs/*
+!docs/index.htm
+
 
 # Skill tester related files/folder
 skills/*-workspace
