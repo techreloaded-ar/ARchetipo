@@ -19,7 +19,7 @@ cursor
 # Project-specific
 .airchetipo/*
 docs/*
-!docs/index.htm
+!docs/index.html
 
 
 # Skill tester related files/folder
