@@ -12,7 +12,25 @@ Detect the output language from the strongest available source, in priority orde
 
 Apply the detected language to all user-facing output: messages, document section headers, error messages, and opening announcements.
 
-Templates and example text in skill files are structural guides; render them in the detected language when generating output.
+### Template Rendering Rule
+
+Templates and example text in skill files are **structural guides written in English**. When generating the final artifact, render every static element in the detected language. This includes:
+
+- Document titles and section headings (e.g. "Elevator Pitch", "Vision", "User Personas")
+- Table headers (e.g. "Phase | Action | Thought | Emotion | Opportunity")
+- Bold inline labels (e.g. "**Author:**", "**Role:**", "**Goals:**", "**Pain Points:**")
+- Connective phrases and sentence scaffolding (e.g. "For **X**, who has the problem of **Y**, **Z** is a **C** that..." → translate the connectives "For", "who has the problem of", "is a", "that", "Unlike", "our product")
+- Enumerations, captions, footers, and any hard-coded prose around placeholders
+- Agent role captions (e.g. "Proposed by:")
+
+Rules:
+1. Keep every `{{PLACEHOLDER}}` token **unchanged** — do not translate placeholder names.
+2. Keep code blocks, file paths, CLI commands, and identifiers unchanged.
+3. Keep technical terms that have no natural translation (e.g. "MVP", "ADR", "CI/CD", "ORM") unchanged unless the target language has a standard equivalent already used in the existing artifact.
+4. Keep consistency with any existing artifact language (PRD → backlog → stories must all use the same language).
+5. If the detected language is English, render the template as-is.
+
+The final output must read as a single coherent document in the detected language — never a mix of English scaffolding and localized content.
 
 
 ## Assumptions and Questions

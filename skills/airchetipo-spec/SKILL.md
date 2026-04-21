@@ -61,7 +61,6 @@ Extract and keep available:
 - `paths.planning`
 - `paths.mockups`
 - `workflow.statuses`
-- `harness`
 
 ## Backlog Discovery
 

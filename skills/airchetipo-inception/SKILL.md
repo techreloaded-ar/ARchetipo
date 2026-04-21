@@ -27,7 +27,6 @@ From the effective configuration, extract and keep available:
 - `paths.planning`
 - `paths.mockups`
 - `workflow.statuses`
-- `harness`
 - connector-specific settings if present
 
 ## Context Discipline
