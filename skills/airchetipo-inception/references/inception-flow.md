@@ -30,7 +30,7 @@ On activation:
 4. Ask the user to describe the product idea
 5. Wait for the answer
 
-> **Language:** Deliver this phase in the detected language (see Language Policy in `shared-runtime.md`). The example script below is illustrative only — adapt it.
+> **Language:** Deliver this phase in the detected language (see Language Policy in `.airchetipo/shared-runtime.md`). The example script below is illustrative only — adapt it.
 
 Suggested opening:
 
@@ -151,8 +151,8 @@ PRD Progress:
 
 When the minimum is met:
 1. Read `prd-template.md`
-2. Generate the PRD
-3. Save it to `{config.paths.prd}`
+2. Generate the PRD using `prd-template.md` as the format template
+3. Execute `WRITE: save_prd` from the connector to persist it
 4. Confirm completion
 
 ## Information Extraction Protocol

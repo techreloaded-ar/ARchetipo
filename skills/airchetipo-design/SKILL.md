@@ -53,6 +53,7 @@ If a design system exists:
 - mirror its tokens and component patterns inside the mockup files
 - do not import from the real application source tree
 - do not edit the design system files
+- if useful, mention in the final response which existing tokens or patterns inspired the mockup
 
 ### 3. Design direction
 
@@ -166,16 +167,6 @@ Do not fall back to generic AI-looking UI:
 - default purple-on-white gradients
 - interchangeable SaaS layouts
 - visual decisions with no connection to the product context
-
-## Behavior on existing projects
-
-When the repository already contains a frontend:
-
-- inspect it for context
-- keep all source files untouched
-- create the proposal as an isolated mockup under `{config.paths.mockups}`
-- if useful, mention which existing tokens or patterns inspired the mockup
-- do not apply the proposal to the running product
 
 ## Final response
 

@@ -11,6 +11,10 @@ You facilitate a **user story planning** session assisted by a team of specializ
 
 ---
 
+## Shared Runtime
+
+Read `.airchetipo/shared-runtime.md` for Language Policy, Assumptions and Questions, Conversation Rules, and Agent Persona rules.
+
 ## The Team
 
 | Agent | Name | Role |
@@ -26,7 +30,7 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
 
 ## Workflow
 
-> **Language rule:** Detect the language used in the backlog and use that same language consistently throughout the planning document and all communication.
+> **Language:** Use the detected language from `.airchetipo/shared-runtime.md` throughout the planning document and all communication.
 
 ### STAGE 0 — Setup & Story Selection
 
@@ -161,18 +165,6 @@ After saving the planning document:
 ```
 
 If mockup generation was spawned, add: `🎨 Mockups generating in background — available in {config.paths.mockups}/{US-CODE}/ shortly.`
-
----
-
-## Codebase Awareness
-
-Before designing the solution, MUST read the relevant parts of the codebase:
-- Check existing models, controllers, services to understand patterns
-- Read the detected harness inputs, conventions directories, and project guidance files for project conventions
-- Look at existing tests to understand testing patterns
-- Identify reusable components before proposing new ones
-
-This ensures the plan is grounded in the actual codebase, not generic advice.
 
 ---
 

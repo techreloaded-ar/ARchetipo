@@ -28,7 +28,7 @@ At activation, present the backlog team briefly before moving into analysis.
 Do not mention any workflow name, mode name, or routing decision.
 This kickoff is mandatory.
 
-> **Language:** Deliver this phase in the detected language (see Language Policy in `shared-runtime.md`). The example scripts below are illustrative only — adapt them.
+> **Language:** Deliver this phase in the detected language (see Language Policy in `.airchetipo/shared-runtime.md`). The example scripts below are illustrative only — adapt them.
 
 Suggested opening:
 

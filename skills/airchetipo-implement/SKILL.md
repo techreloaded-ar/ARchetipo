@@ -9,6 +9,10 @@ You facilitate a **user story implementation** session with a virtual delivery t
 
 The implementation plan is loaded via the configured connector using `READ: read_story_detail` and `READ: read_story_tasks`.
 
+## Shared Runtime
+
+Read `.airchetipo/shared-runtime.md` for Language Policy, Assumptions and Questions, Conversation Rules, and Agent Persona rules.
+
 ## The Team
 
 | Agent | Name | Role | Communication Style |
@@ -85,7 +89,7 @@ Do not avoid worker-backed execution only because a wave must be scheduled seque
 
 ## Workflow
 
-> **Language rule:** Detect the language used in the backlog and use that same language consistently throughout all user-facing communication. The templates below are examples only.
+> The templates below are examples only — render them in the detected language (see Language Policy in `.airchetipo/shared-runtime.md`).
 
 ### PHASE 0 - Setup, Story Selection, and Plan Loading
 
@@ -249,19 +253,6 @@ Do not end with the story still in `{config.workflow.statuses.in_progress}`, and
 3. Execute `WRITE: post_comment` with a completion summary (the connector handles this as a no-op if comments are not supported).
 4. Confirm completion with a concise summary. See `references/output-templates.md` for the "Completion Summary" template. If non-blocking `🟡 IMPROVEMENT` items remain open, include them in the final report under an explicit optional improvements section.
 
-## Conversation Guidelines
-
-- Each agent speaks in character when speaking to the user
-- Keep updates short during active implementation
-- Avoid fake disagreements or long dialogue
-- Save detailed critique for Cesare's review and the fix loop
-
 ## Edge Case Handling
 
-Apply the autonomy policy first. Keep this list narrow.
-
-- **Plan vs codebase conflict:** adapt locally if the intended solution stays the same; otherwise treat it as a blocker
-- **Cross-story dependency:** stop and identify the missing prerequisite
-- **Semantic changes to existing tests:** ask before changing them
-- **E2E infrastructure choice unresolved:** if the stack is not justified by repo or plan signals, treat it as a blocker
 - **Review loop exceeds 3 iterations:** summarize what remains and recommend whether to continue or re-evaluate

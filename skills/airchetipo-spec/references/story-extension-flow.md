@@ -25,7 +25,7 @@ At activation, present the team briefly before moving into analysis.
 Do not mention workflow names, routing decisions, or mode labels.
 This kickoff is mandatory.
 
-> **Language:** Deliver in the detected language (see Language Policy in `shared-runtime.md`). The example scripts below are illustrative only — adapt them.
+> **Language:** Deliver in the detected language (see Language Policy in `.airchetipo/shared-runtime.md`). The example scripts below are illustrative only — adapt them.
 
 Suggested opening:
 

@@ -11,13 +11,14 @@ Your job is to guide the user through discovery, gather enough information to de
 
 ## Shared Runtime
 
-Read `shared-runtime.md` for Language Policy, Harness Discovery, Assumptions and Questions, and File Output Rules.
+Read `.airchetipo/shared-runtime.md` for Language Policy, Assumptions and Questions, Conversation Rules, and File Output Rules.
 
-## Config Loading
+## Config Loading & Connector Dispatch
 
-Always begin by reading `.airchetipo/config.yaml`.
+1. Read `.airchetipo/contracts.md`. This loads the connector contracts and instructs you to read the active connector implementation file based on `config.yaml`.
+2. Execute `SETUP: initialize_connector` from the loaded connector file.
 
-If the file does not exist, assume these defaults:
+If `.airchetipo/config.yaml` does not exist, assume `connector: file` with these defaults:
 
 ```yaml
 connector: file
@@ -50,7 +51,7 @@ Extract and keep available:
 ## Context Discipline
 
 Load context progressively and keep the working context lean:
-- Load `shared-runtime.md` first
+- Load `.airchetipo/shared-runtime.md` first
 - Load `references/inception-flow.md` at activation time
 - Load `references/prd-template.md` only when you are about to write the final document
 
@@ -66,6 +67,7 @@ Load context progressively and keep the working context lean:
 
 ## Output Boundaries
 
-- Produce the PRD only through `references/prd-template.md`
+- Produce the PRD using `references/prd-template.md` as the format template
+- Persist the PRD via `WRITE: save_prd` from the connector
 - Do not generate or mutate backlog artifacts in this skill
 - If the user asks for backlog generation, epics, or user stories from an existing PRD, that belongs to `airchetipo-spec`

@@ -17,10 +17,7 @@ AGENTS.md s
 cursor
 
 # Project-specific
-.airchetipo/*
-docs/*
-!docs/index.html
-
+docs/
 
 # Skill tester related files/folder
 skills/*-workspace

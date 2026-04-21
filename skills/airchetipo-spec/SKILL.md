@@ -13,7 +13,7 @@ Treat routing as an internal implementation detail.
 
 ## Shared Runtime
 
-Read `shared-runtime.md` for Language Policy, Harness Discovery, Assumptions and Questions, and File Output Rules.
+Read `.airchetipo/shared-runtime.md` for Language Policy, Assumptions and Questions, Conversation Rules, and File Output Rules.
 
 ## Core Principle
 
@@ -121,16 +121,7 @@ Do not expose mode names, routing decisions, or workflow labels in user-facing m
 
 - Ask clarifying questions only when critical information is missing and cannot be inferred responsibly
 - Group clarifying questions in a single message when possible
-## Context Discipline
-
-- Load this file first
-- Load only one main flow reference at activation time
-- The connector is loaded once via contracts at activation time — no additional connector references needed
-- Do not load both main flow references in the same activation unless you are explicitly switching because backlog discovery proved the active assumption wrong
 
 ## Output Boundaries
 
 - Initial backlog creation belongs to this skill, not to `airchetipo-inception`
-- For initial backlog creation, use `WRITE: save_initial_backlog` from the connector
-- For backlog extension, use `WRITE: append_stories` from the connector
-- Domain logic (PRD analysis, epic identification, story generation, prioritization) stays in the flow references and is connector-independent
