@@ -124,3 +124,27 @@ Do not expose mode names, routing decisions, or workflow labels in user-facing m
 ## Output Boundaries
 
 - Initial backlog creation belongs to this skill, not to `airchetipo-inception`
+
+## Story Template
+
+Use this shape for every story, in both initial backlog generation and story extension:
+
+```markdown
+#### US-XXX: [Concise action-oriented title]
+
+**Epic:** EP-XXX | **Priority:** HIGH | **Story Points:** N | **Status:** {config.workflow.statuses.todo}
+**Blocked by:** -
+
+**Story**
+As [persona name or role],
+I want [specific action or capability],
+so that [concrete benefit tied to a PRD goal].
+
+**Demonstrates**
+After implementing this story, [describe what can be concretely observed or verified — e.g. for a feature: "the user can open the reports page, click Export, and download a CSV"; for a foundational story: "a developer can run the test suite and see all checks pass"]
+
+**Acceptance Criteria**
+- [ ] [Primary happy path]
+- [ ] [Validation or error case]
+- [ ] [Relevant edge case]
+```

@@ -129,27 +129,7 @@ Emanuele determines how many stories to generate:
 
 ### Step 3 - Writing Stories
 
-For each story, use exactly this format:
-
-```markdown
-#### US-XXX: [Concise action-oriented title]
-
-**Epic:** EP-XXX | **Priority:** HIGH | **Story Points:** N | **Status:** {config.workflow.statuses.todo}
-**Blocked by:** -
-
-**Story**
-As [persona],
-I want [specific action],
-so that [concrete benefit].
-
-**Demonstrates**
-After implementing this story, the user can: [visible increment]
-
-**Acceptance Criteria**
-- [ ] [Primary happy path]
-- [ ] [Validation or error case]
-- [ ] [Relevant edge case]
-```
+For each story, use the Story Template defined in `SKILL.md`.
 
 Rules:
 - acceptance criteria must be satisfiable by this story alone

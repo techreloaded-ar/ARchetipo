@@ -163,27 +163,7 @@ Use SPIDR-style splitting when needed:
 
 ## Story Template
 
-Use this shape for every story before rendering it through the final markdown backlog or through the GitHub connector:
-
-```markdown
-#### US-XXX: [Concise action-oriented title]
-
-**Epic:** EP-XXX | **Priority:** HIGH | **Story Points:** N | **Status:** {config.workflow.statuses.todo}
-**Blocked by:** -
-
-**Story**
-As [persona name or role],
-I want [specific action or capability],
-so that [concrete benefit tied to a PRD goal].
-
-**Demonstrates**
-After implementing this story, the user can: [visible increment]
-
-**Acceptance Criteria**
-- [ ] [Primary happy path]
-- [ ] [Validation or error case]
-- [ ] [Relevant edge case]
-```
+Use the Story Template defined in `SKILL.md` for every story before rendering it through the final markdown backlog or through the GitHub connector.
 
 ## Phase 4 - Prioritization
 
