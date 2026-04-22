@@ -2,9 +2,9 @@
 
 # ARchetipo
 
-**Un team AI al tuo fianco, dall'idea al codice.**
+**Un team AI al tuo fianco, dall'idea al prodotto finito.**
 
-Skill portabili per AI coding agent che trasformano il tuo assistente in una squadra di prodotto: analista, architetto, sviluppatore, tester, reviewer, designer, ognuno con il proprio ruolo e voce.
+Un workflow spec driven che trasforma il tuo assistente AI in una squadra di sviluppo prodotto: analista, architetto, sviluppatore, tester, reviewer, designer, ognuno con il proprio ruolo e voce.
 
 [![Status](https://img.shields.io/badge/status-beta-orange.svg)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#licenza)
