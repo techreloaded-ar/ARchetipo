@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AIRchetipo</title>
+  <title>ARchetipo</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -686,7 +686,7 @@
 
   <!-- SIDEBAR -->
   <nav class="sidebar">
-    <div class="sidebar-logo">airchetipo<span>/</span></div>
+    <div class="sidebar-logo">archetipo<span>/</span></div>
     <div class="toc-nav">
       <p class="toc-label" data-i18n="nav.label"></p>
       <ul class="toc" role="navigation" aria-label="Indice della pagina">
@@ -711,7 +711,7 @@
     <!-- HERO -->
     <header id="hero">
       <p class="hero-eyebrow" data-i18n="hero.eyebrow"></p>
-      <h1 class="hero-title">AIRchetipo</h1>
+      <h1 class="hero-title">ARchetipo</h1>
       <div class="hero-rule"></div>
       <p class="hero-lede" data-i18n="hero.lede"></p>
       <div class="hero-ctas">
@@ -773,14 +773,14 @@
         <div class="install-card">
           <p class="install-os">macOS / Linux</p>
           <div class="copy-wrap">
-            <pre><code id="cmd-mac">curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo/main/install.sh | bash</code></pre>
+            <pre><code id="cmd-mac">curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.sh | bash</code></pre>
             <button class="copy-btn" data-target="cmd-mac"></button>
           </div>
         </div>
         <div class="install-card">
           <p class="install-os">Windows (PowerShell)</p>
           <div class="copy-wrap">
-            <pre><code id="cmd-win">irm https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo/main/install.ps1 | iex</code></pre>
+            <pre><code id="cmd-win">irm https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.ps1 | iex</code></pre>
             <button class="copy-btn" data-target="cmd-win"></button>
           </div>
         </div>
@@ -828,14 +828,14 @@ var T = {
     },
     hero: {
       eyebrow: "Skill per AI coding agent",
-      lede: "AIRchetipo è un sistema di 6 skill che governa il ciclo di vita iniziale di un progetto software: dalla scoperta del prodotto fino all'implementazione, con agenti virtuali specializzati a ogni fase.",
+      lede: "ARchetipo è un sistema di 6 skill che governa il ciclo di vita iniziale di un progetto software: dalla scoperta del prodotto fino all'implementazione, con agenti virtuali specializzati a ogni fase.",
       cta_install: "→ Installa ora",
       cta_pipeline: "↓ Scopri la pipeline"
     },
     intro: {
       kicker: "Cos'è",
       heading: "Il progetto",
-      body: "AIRchetipo è un framework di skill per AI coding agent che governa il ciclo di vita iniziale di un progetto software. Sei skill concatenate in pipeline coprono l'intero percorso: dalla discovery del prodotto e la definizione del PRD, fino alla creazione del backlog, alla pianificazione tecnica e all'implementazione del codice. Ogni skill coinvolge un team virtuale di specialisti che collaborano sotto la direzione dell'agente. Gli artefatti prodotti vengono salvati su file system locale in Markdown o su GitHub Projects v2.",
+      body: "ARchetipo è un framework di skill per AI coding agent che governa il ciclo di vita iniziale di un progetto software. Sei skill concatenate in pipeline coprono l'intero percorso: dalla discovery del prodotto e la definizione del PRD, fino alla creazione del backlog, alla pianificazione tecnica e all'implementazione del codice. Ogni skill coinvolge un team virtuale di specialisti che collaborano sotto la direzione dell'agente. Gli artefatti prodotti vengono salvati su file system locale in Markdown o su GitHub Projects v2.",
       team_label: "Il team virtuale",
       team: [
         { name: "Andrea",   icon: "andrea",   role: "Product Manager — scope, priorità e valore di business" },
@@ -873,7 +873,7 @@ var T = {
       steps: [
         {
           id: "inception", num: "01",
-          name: "airchetipo-inception",
+          name: "archetipo-inception",
           role: "Discovery e definizione del prodotto",
           desc: "Guida la fase di discovery con un team virtuale. Raccoglie obiettivi, scope e ipotesi di business, produce il PRD.",
           output: "docs/PRD.md",
@@ -882,16 +882,16 @@ var T = {
         },
         {
           id: "design", num: "02",
-          name: "airchetipo-design",
+          name: "archetipo-design",
           role: "Mockup e prototipi UI",
-          desc: "Produce mockup HTML/CSS isolati in docs/mockups/ senza toccare il codice applicativo. Usati come riferimento visivo da airchetipo-implement.",
+          desc: "Produce mockup HTML/CSS isolati in docs/mockups/ senza toccare il codice applicativo. Usati come riferimento visivo da archetipo-implement.",
           output: "docs/mockups/",
           requires: null, optional: true, auto: false,
           team: ["Livia"]
         },
         {
           id: "spec", num: "03",
-          name: "airchetipo-spec",
+          name: "archetipo-spec",
           role: "Creazione e estensione del backlog",
           desc: "Converte il PRD in backlog oppure aggiunge nuove story INVEST-compliant a uno esistente, con domande sfidanti di qualità.",
           output: "docs/BACKLOG.md",
@@ -901,7 +901,7 @@ var T = {
       
         {
           id: "plan", num: "04",
-          name: "airchetipo-plan",
+          name: "archetipo-plan",
           role: "Piano tecnico di implementazione",
           desc: "Trasforma una story TODO in piano tecnico con soluzione, task ordinati, dipendenze e strategia di test (inclusi test e2e con video recording).",
           output: "docs/planning/US-XXX.md",
@@ -910,7 +910,7 @@ var T = {
         },
         {
           id: "implement", num: "05",
-          name: "airchetipo-implement",
+          name: "archetipo-implement",
           role: "Scrittura di codice e test",
           desc: "Esegue il piano tecnico: scrive codice, test unit/integration/e2e, effettua code review automatica e porta la story verso REVIEW.",
           output: "codice + test + backlog aggiornato",
@@ -919,7 +919,7 @@ var T = {
         },
         {
           id: "autopilot", num: "⚡",
-          name: "airchetipo-autopilot",
+          name: "archetipo-autopilot",
           role: "Esecuzione autonoma del ciclo plan → implement",
           desc: "Coordina automaticamente plan e implement su più story in sequenza usando subagent isolati. Configurabile per epic, priorità, numero massimo di story e strategia sugli errori. Alternativa al ciclo manuale plan + implement.",
           output: "avanzamento coordinato del backlog",
@@ -940,18 +940,18 @@ var T = {
         has_backlog: { q: "Hai già un backlog con user story?", opts: [{ label: "Sì, ho story nel backlog", next: "has_planned" }, { label: "No, solo il PRD", next: "r_spec" }] },
         has_planned: { q: "Le story sono già pianificate (hanno un piano tecnico)?", opts: [{ label: "Sì, sono in stato PLANNED", next: "story_planned" }, { label: "No, sono in stato TODO", next: "r_plan" }] },
         story_planned: { q: "Hai più story pronte e vuoi processarle in autonomia?", opts: [{ label: "Sì, voglio automatizzare", next: "r_autopilot" }, { label: "No, procedo una alla volta", next: "r_implement" }] },
-        r_inception: { result: "inception",  why: "Il PRD è il punto di partenza. airchetipo-inception conduce la discovery con un team virtuale e produce il documento." },
-        r_spec:      { result: "spec",        why: "airchetipo-spec converte il PRD in backlog strutturato con epic e user story INVEST-compliant." },
-        r_design:    { result: "design",      why: "Dopo il PRD, airchetipo-design crea concept visivi e mockup HTML/CSS in docs/mockups/ come riferimento visivo prima di iniziare lo sviluppo." },
-        r_plan:      { result: "plan",         why: "airchetipo-plan produce il piano tecnico con task, dipendenze e strategia di test. Poi potrai usare airchetipo-implement." },
-        r_implement: { result: "implement",   why: "airchetipo-implement esegue il piano tecnico: scrive codice, test e porta la story verso REVIEW." },
-        r_autopilot: { result: "autopilot",   why: "airchetipo-autopilot esegue il ciclo plan→implement su più story in sequenza con subagent isolati e state file per riprendere se interrotto." }
+        r_inception: { result: "inception",  why: "Il PRD è il punto di partenza. archetipo-inception conduce la discovery con un team virtuale e produce il documento." },
+        r_spec:      { result: "spec",        why: "archetipo-spec converte il PRD in backlog strutturato con epic e user story INVEST-compliant." },
+        r_design:    { result: "design",      why: "Dopo il PRD, archetipo-design crea concept visivi e mockup HTML/CSS in docs/mockups/ come riferimento visivo prima di iniziare lo sviluppo." },
+        r_plan:      { result: "plan",         why: "archetipo-plan produce il piano tecnico con task, dipendenze e strategia di test. Poi potrai usare archetipo-implement." },
+        r_implement: { result: "implement",   why: "archetipo-implement esegue il piano tecnico: scrive codice, test e porta la story verso REVIEW." },
+        r_autopilot: { result: "autopilot",   why: "archetipo-autopilot esegue il ciclo plan→implement su più story in sequenza con subagent isolati e state file per riprendere se interrotto." }
       }
     },
     backend: {
       kicker: "Storage",
       heading: "Backend supportati",
-      intro: "AIRchetipo supporta due modalità di storage, configurabili in .airchetipo/config.yaml tramite il campo backend: file | github.",
+      intro: "ARchetipo supporta due modalità di storage, configurabili in .archetipo/config.yaml tramite il campo backend: file | github.",
       file: {
         title: "File system (default)",
         items: ["Artefatti in Markdown locale", "Backlog in docs/BACKLOG.md", "Piani in docs/planning/US-XXX.md", "Nessuna autenticazione", "Funziona offline"]
@@ -972,13 +972,13 @@ var T = {
       kicker: "FAQ",
       heading: "FAQ",
       items: [
-        { q: "Serve sempre il PRD per iniziare?", a: "Per costruire un backlog solido sì: il PRD è il punto di partenza ideale. Se non esiste ancora, usa airchetipo-inception per crearlo prima di passare a airchetipo-spec." },
-        { q: "Posso aggiungere story senza rifare tutto il backlog?", a: "Sì. airchetipo-spec distingue tra generazione iniziale ed estensione: se il backlog esiste, aggiunge o raffina story senza ripartire da zero." },
+        { q: "Serve sempre il PRD per iniziare?", a: "Per costruire un backlog solido sì: il PRD è il punto di partenza ideale. Se non esiste ancora, usa archetipo-inception per crearlo prima di passare a archetipo-spec." },
+        { q: "Posso aggiungere story senza rifare tutto il backlog?", a: "Sì. archetipo-spec distingue tra generazione iniziale ed estensione: se il backlog esiste, aggiunge o raffina story senza ripartire da zero." },
         { q: "Quando ha senso usare autopilot invece del ciclo manuale?", a: "Quando hai più story già ordinate nel backlog e vuoi delegare il ciclo operativo agli agenti. Il percorso manuale è migliore quando vuoi revisionare ogni piano prima dell'implementazione." },
-        { q: "I mockup prodotti da design finiscono nel codice applicativo?", a: "No. airchetipo-design produce file isolati in docs/mockups/ usati solo come riferimento visivo da airchetipo-implement, che li legge prima di scrivere l'interfaccia reale." }
+        { q: "I mockup prodotti da design finiscono nel codice applicativo?", a: "No. archetipo-design produce file isolati in docs/mockups/ usati solo come riferimento visivo da archetipo-implement, che li legge prima di scrivere l'interfaccia reale." }
       ]
     },
-    footer: { text: "AIRchetipo · skill per AI coding agent · github.com/techreloaded-ar/AIRchetipo" }
+    footer: { text: "ARchetipo · skill per AI coding agent · github.com/techreloaded-ar/ARchetipo" }
   },
 
   en: {
@@ -994,14 +994,14 @@ var T = {
     },
     hero: {
       eyebrow: "Skills for AI coding agents",
-      lede: "AIRchetipo is a system of 6 skills that governs the early lifecycle of a software project: from product discovery through implementation, with specialized virtual agents at every phase.",
+      lede: "ARchetipo is a system of 6 skills that governs the early lifecycle of a software project: from product discovery through implementation, with specialized virtual agents at every phase.",
       cta_install: "→ Install now",
       cta_pipeline: "↓ Explore the pipeline"
     },
     intro: {
       kicker: "What it is",
       heading: "The project",
-      body: "AIRchetipo is a skill framework for AI coding agents that governs the early lifecycle of a software project. Six skills chained into a pipeline cover the entire journey: from product discovery and PRD definition through backlog creation, technical planning, and code implementation. Each skill engages a virtual team of specialists collaborating under the agent's direction. Produced artifacts are saved to a local Markdown file system or GitHub Projects v2 depending on configuration.",
+      body: "ARchetipo is a skill framework for AI coding agents that governs the early lifecycle of a software project. Six skills chained into a pipeline cover the entire journey: from product discovery and PRD definition through backlog creation, technical planning, and code implementation. Each skill engages a virtual team of specialists collaborating under the agent's direction. Produced artifacts are saved to a local Markdown file system or GitHub Projects v2 depending on configuration.",
       team_label: "The virtual team",
       team: [
         { name: "Andrea",   icon: "andrea",   role: "Product Manager — scope, priorities and business value" },
@@ -1039,7 +1039,7 @@ var T = {
       steps: [
         {
           id: "inception", num: "01",
-          name: "airchetipo-inception",
+          name: "archetipo-inception",
           role: "Product discovery and definition",
           desc: "Leads the discovery phase with a virtual team. Collects goals, scope, and business assumptions, produces the PRD.",
           output: "docs/PRD.md",
@@ -1048,16 +1048,16 @@ var T = {
         },
         {
           id: "design", num: "02",
-          name: "airchetipo-design",
+          name: "archetipo-design",
           role: "UI mockups and prototypes",
-          desc: "Produces isolated HTML/CSS mockups in docs/mockups/ without touching application code. Used as visual reference by airchetipo-implement.",
+          desc: "Produces isolated HTML/CSS mockups in docs/mockups/ without touching application code. Used as visual reference by archetipo-implement.",
           output: "docs/mockups/",
           requires: null, optional: true, auto: false,
           team: ["Livia"]
         },
         {
           id: "spec", num: "03",
-          name: "airchetipo-spec",
+          name: "archetipo-spec",
           role: "Backlog creation and extension",
           desc: "Converts the PRD into a backlog or adds new INVEST-compliant stories to an existing one, using challenging quality questions.",
           output: "docs/BACKLOG.md",
@@ -1066,7 +1066,7 @@ var T = {
         },
         {
           id: "plan", num: "04",
-          name: "airchetipo-plan",
+          name: "archetipo-plan",
           role: "Technical implementation plan",
           desc: "Turns a TODO story into a technical plan with solution, ordered tasks, dependencies, and test strategy (including e2e tests with video recording).",
           output: "docs/planning/US-XXX.md",
@@ -1075,7 +1075,7 @@ var T = {
         },
         {
           id: "implement", num: "05",
-          name: "airchetipo-implement",
+          name: "archetipo-implement",
           role: "Code and test writing",
           desc: "Executes the technical plan: writes code, unit/integration/e2e tests, performs automated code review, and moves the story toward REVIEW.",
           output: "code + tests + updated backlog",
@@ -1084,7 +1084,7 @@ var T = {
         },
         {
           id: "autopilot", num: "⚡",
-          name: "airchetipo-autopilot",
+          name: "archetipo-autopilot",
           role: "Autonomous execution of plan → implement",
           desc: "Automatically orchestrates plan and implement across multiple stories in sequence using isolated subagents. Configurable for epic, priority, max stories, and error strategy. Alternative to the manual plan + implement cycle.",
           output: "coordinated backlog progression",
@@ -1105,18 +1105,18 @@ var T = {
         has_backlog: { q: "Do you already have a backlog with user stories?", opts: [{ label: "Yes, I have stories", next: "has_planned" }, { label: "No, only the PRD", next: "r_spec" }] },
         has_planned: { q: "Are the stories already planned (do they have a technical plan)?", opts: [{ label: "Yes, they are PLANNED", next: "story_planned" }, { label: "No, they are TODO", next: "r_plan" }] },
         story_planned: { q: "Multiple stories ready — want to process them autonomously?", opts: [{ label: "Yes, automate everything", next: "r_autopilot" }, { label: "No, one at a time", next: "r_implement" }] },
-        r_inception: { result: "inception",  why: "The PRD is the starting point. airchetipo-inception runs discovery with a virtual team and produces the document." },
-        r_spec:      { result: "spec",        why: "airchetipo-spec converts the PRD into a structured backlog with epics and INVEST-compliant user stories." },
-        r_design:    { result: "design",      why: "After the PRD, airchetipo-design creates visual concepts and HTML/CSS mockups in docs/mockups/ as visual reference before development begins." },
-        r_plan:      { result: "plan",         why: "airchetipo-plan produces the technical plan with tasks, dependencies, and test strategy. Then you can use airchetipo-implement." },
-        r_implement: { result: "implement",   why: "airchetipo-implement executes the technical plan: writes code, tests, and moves the story toward REVIEW." },
-        r_autopilot: { result: "autopilot",   why: "airchetipo-autopilot runs the plan→implement cycle across multiple stories in sequence with isolated subagents and a state file for resumption." }
+        r_inception: { result: "inception",  why: "The PRD is the starting point. archetipo-inception runs discovery with a virtual team and produces the document." },
+        r_spec:      { result: "spec",        why: "archetipo-spec converts the PRD into a structured backlog with epics and INVEST-compliant user stories." },
+        r_design:    { result: "design",      why: "After the PRD, archetipo-design creates visual concepts and HTML/CSS mockups in docs/mockups/ as visual reference before development begins." },
+        r_plan:      { result: "plan",         why: "archetipo-plan produces the technical plan with tasks, dependencies, and test strategy. Then you can use archetipo-implement." },
+        r_implement: { result: "implement",   why: "archetipo-implement executes the technical plan: writes code, tests, and moves the story toward REVIEW." },
+        r_autopilot: { result: "autopilot",   why: "archetipo-autopilot runs the plan→implement cycle across multiple stories in sequence with isolated subagents and a state file for resumption." }
       }
     },
     backend: {
       kicker: "Storage",
       heading: "Supported backends",
-      intro: "AIRchetipo supports two storage modes, configurable in .airchetipo/config.yaml via the field backend: file | github.",
+      intro: "ARchetipo supports two storage modes, configurable in .archetipo/config.yaml via the field backend: file | github.",
       file: {
         title: "File system (default)",
         items: ["Artifacts as local Markdown files", "Backlog in docs/BACKLOG.md", "Plans in docs/planning/US-XXX.md", "No authentication", "Works offline"]
@@ -1137,13 +1137,13 @@ var T = {
       kicker: "FAQ",
       heading: "FAQ",
       items: [
-        { q: "Do I always need a PRD to get started?", a: "For a solid backlog, yes: the PRD is the ideal starting point. If one doesn't exist yet, use airchetipo-inception to create it before moving to airchetipo-spec." },
-        { q: "Can I add stories without regenerating the entire backlog?", a: "Yes. airchetipo-spec distinguishes between initial generation and extension: if a backlog exists, it adds or refines stories without starting from scratch." },
+        { q: "Do I always need a PRD to get started?", a: "For a solid backlog, yes: the PRD is the ideal starting point. If one doesn't exist yet, use archetipo-inception to create it before moving to archetipo-spec." },
+        { q: "Can I add stories without regenerating the entire backlog?", a: "Yes. archetipo-spec distinguishes between initial generation and extension: if a backlog exists, it adds or refines stories without starting from scratch." },
         { q: "When does autopilot make sense over the manual cycle?", a: "When you have multiple ordered stories in the backlog and want to delegate the operational cycle to agents. The manual path is better when you want to review each plan before implementation." },
-        { q: "Do mockups from design end up in the application code?", a: "No. airchetipo-design produces isolated files in docs/mockups/ used only as visual references by airchetipo-implement, which reads them before writing the real interface." }
+        { q: "Do mockups from design end up in the application code?", a: "No. archetipo-design produces isolated files in docs/mockups/ used only as visual references by archetipo-implement, which reads them before writing the real interface." }
       ]
     },
-    footer: { text: "AIRchetipo · skills for AI coding agents · github.com/techreloaded-ar/AIRchetipo" }
+    footer: { text: "ARchetipo · skills for AI coding agents · github.com/techreloaded-ar/ARchetipo" }
   }
 };
 
@@ -1273,7 +1273,7 @@ function renderDecision() {
   trail.textContent = decisionPath.length ? decisionPath.join(' › ') : '';
 
   if (node.result) {
-    var skillName = 'airchetipo-' + node.result;
+    var skillName = 'archetipo-' + node.result;
     body.innerHTML =
       '<div class="decision-result">' +
         '<div class="result-row">' +

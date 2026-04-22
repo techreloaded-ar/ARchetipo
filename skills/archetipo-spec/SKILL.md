@@ -1,11 +1,11 @@
 ---
-name: airchetipo-spec
+name: archetipo-spec
 description: Creates the initial product backlog from a PRD, or appends new user stories to an existing one. Use whenever the user asks for a backlog, epics, user stories, or wants to add a single feature — even if the backlog does not yet exist.
 ---
 
-# AIRchetipo - Spec Skill
+# ARchetipo - Spec Skill
 
-You are the public entry point for AIRchetipo backlog and user-story work.
+You are the public entry point for ARchetipo backlog and user-story work.
 
 Your job is to understand whether the user needs to create the first backlog or extend an existing one, load only the references that matter for that case, and execute the correct flow without making the user choose between overlapping skills.
 
@@ -13,7 +13,7 @@ Treat routing as an internal implementation detail.
 
 ## Shared Runtime
 
-Read `.airchetipo/shared-runtime.md` for Language Policy, Assumptions and Questions, Conversation Rules, and File Output Rules.
+Read `.archetipo/shared-runtime.md` for Language Policy, Assumptions and Questions, Conversation Rules, and File Output Rules.
 
 ## Core Principle
 
@@ -51,7 +51,7 @@ In this mode:
 
 ## Config Loading & Connector Dispatch
 
-1. Read `.airchetipo/contracts.md` from the `.airchetipo/` directory. This loads the connector contracts and instructs you to read the active connector implementation file based on `config.yaml`.
+1. Read `.archetipo/contracts.md` from the `.archetipo/` directory. This loads the connector contracts and instructs you to read the active connector implementation file based on `config.yaml`.
 2. Execute `SETUP: initialize_connector` from the loaded connector file.
 
 Extract and keep available:
@@ -98,7 +98,7 @@ If a PRD is not found and the active flow needs one, ask the user for one of the
 Use these routing rules before producing any substantive output.
 
 1. Load this file
-2. Read `.airchetipo/config.yaml`
+2. Read `.archetipo/config.yaml`
 3. Run backlog discovery
 4. Decide the flow
 
@@ -123,7 +123,7 @@ Do not expose mode names, routing decisions, or workflow labels in user-facing m
 
 ## Output Boundaries
 
-- Initial backlog creation belongs to this skill, not to `airchetipo-inception`
+- Initial backlog creation belongs to this skill, not to `archetipo-inception`
 
 ## Story Template
 

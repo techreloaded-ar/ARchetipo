@@ -1,6 +1,6 @@
 ---
-name: airchetipo-autopilot
-description: Runs the full airchetipo pipeline autonomously on backlog stories — for each TODO story (by priority), spawns clean isolated subagents to plan and implement in sequence, verifying status transitions between steps. Use this skill when the user wants to "run everything", "implement all stories", "autopilot the backlog", "plan and implement everything", "batch process the entire backlog", "fai tutto in autonomia", "esegui tutto dal backlog", or any variation of fully autonomous end-to-end execution from backlog to working code. This skill differs from airchetipo-loop because it chains multiple steps (plan → implement) per story as an atomic pipeline unit, rather than running a single command repeatedly.
+name: archetipo-autopilot
+description: Runs the full archetipo pipeline autonomously on backlog stories — for each TODO story (by priority), spawns clean isolated subagents to plan and implement in sequence, verifying status transitions between steps. Use this skill when the user wants to "run everything", "implement all stories", "autopilot the backlog", "plan and implement everything", "batch process the entire backlog", "fai tutto in autonomia", "esegui tutto dal backlog", or any variation of fully autonomous end-to-end execution from backlog to working code. This skill differs from archetipo-loop because it chains multiple steps (plan → implement) per story as an atomic pipeline unit, rather than running a single command repeatedly.
 ---
 
 ## Compatibility
@@ -18,10 +18,10 @@ This skill requires **isolated subagent/worker support** from your AI coding too
 | OpenCode | **Not supported** — lacks subagents |
 
 **If your tool is not supported**, run the pipeline manually:
-1. `/airchetipo-plan US-XXX` for each story
-2. `/airchetipo-implement US-XXX` for each story
+1. `/archetipo-plan US-XXX` for each story
+2. `/archetipo-implement US-XXX` for each story
 
-# AIRchetipo Autopilot — Autonomous Pipeline Execution
+# ARchetipo Autopilot — Autonomous Pipeline Execution
 
 You are a **Direttore d'Orchestra** (orchestra conductor): you don't play any instrument, you coordinate the performers. For each story in the backlog, you spawn isolated subagents to execute the pipeline steps (plan → implement), verify status transitions between steps, and move to the next story. Your context stays lightweight — you never read source code, plans, or PRDs.
 
@@ -45,11 +45,11 @@ You are a **Direttore d'Orchestra** (orchestra conductor): you don't play any in
 
 **Invocation examples:**
 ```
-/airchetipo-autopilot
-/airchetipo-autopilot --epic EP-002 --max-stories 3
-/airchetipo-autopilot --priority HIGH --on-error skip --max-stories 10
-/airchetipo-autopilot --steps plan --max-stories 20
-/airchetipo-autopilot --stop-when "tutte le storie di EP-001 sono in REVIEW"
+/archetipo-autopilot
+/archetipo-autopilot --epic EP-002 --max-stories 3
+/archetipo-autopilot --priority HIGH --on-error skip --max-stories 10
+/archetipo-autopilot --steps plan --max-stories 20
+/archetipo-autopilot --stop-when "tutte le storie di EP-001 sono in REVIEW"
 ```
 
 ---
@@ -60,12 +60,12 @@ You are a **Direttore d'Orchestra** (orchestra conductor): you don't play any in
 Autopilot Controller (main context, lightweight — never reads codebase)
   │
   ├─ Story US-001
-  │   ├─ Subagent A → /airchetipo-plan US-001   → [context destroyed]
-  │   └─ Subagent B → /airchetipo-implement US-001 → [context destroyed]
+  │   ├─ Subagent A → /archetipo-plan US-001   → [context destroyed]
+  │   └─ Subagent B → /archetipo-implement US-001 → [context destroyed]
   │
   ├─ Story US-002
-  │   ├─ Subagent C → /airchetipo-plan US-002   → [context destroyed]
-  │   └─ Subagent D → /airchetipo-implement US-002 → [context destroyed]
+  │   ├─ Subagent C → /archetipo-plan US-002   → [context destroyed]
+  │   └─ Subagent D → /archetipo-implement US-002 → [context destroyed]
   │
   └─ ...
 ```
@@ -86,10 +86,10 @@ This means subagent C (plan US-002) knows nothing about what subagent B (impleme
 Each autopilot run generates a **unique state file**:
 
 ```
-.airchetipo/autopilot-state-{unix_timestamp}.yaml
+.archetipo/autopilot-state-{unix_timestamp}.yaml
 ```
 
-If the `.airchetipo` folder does not exist, create it before writing the state file.
+If the `.archetipo` folder does not exist, create it before writing the state file.
 
 ```yaml
 autopilot:
@@ -151,11 +151,11 @@ The state file has two purposes:
 
 1. Parse user arguments (steps, epic, priority, max-stories, stop-when, on-error)
 
-2. Read `.airchetipo/contracts.md` from the `.airchetipo/` directory. This loads the connector contracts and instructs you to read the active connector implementation file based on `config.yaml`. Execute `SETUP: initialize_connector` from the loaded connector file.
+2. Read `.archetipo/contracts.md` from the `.archetipo/` directory. This loads the connector contracts and instructs you to read the active connector implementation file based on `config.yaml`. Execute `SETUP: initialize_connector` from the loaded connector file.
 
-3. **Cleanup residual state files:** find all `.airchetipo/autopilot-state-*.yaml` files with terminal status (`completed`, `max_reached`, `stopped`) and delete them.
+3. **Cleanup residual state files:** find all `.archetipo/autopilot-state-*.yaml` files with terminal status (`completed`, `max_reached`, `stopped`) and delete them.
 
-4. **Active state detection:** find all `.airchetipo/autopilot-state-*.yaml` files with `status: running` or `status: error`.
+4. **Active state detection:** find all `.archetipo/autopilot-state-*.yaml` files with `status: running` or `status: error`.
 
    **If none found:** proceed normally to step 5.
 
@@ -202,7 +202,7 @@ The state file has two purposes:
 7. **Announce the queue:**
 
 ```
-🎼 **AIRchetipo Autopilot** — Avviato
+🎼 **ARchetipo Autopilot** — Avviato
 
 **Storie in coda:** {N}
 **Pipeline:** {steps}
@@ -244,11 +244,11 @@ Spawn a subagent with this prompt:
 
 ## Task
 
-Execute /airchetipo-plan {US-CODE}
+Execute /archetipo-plan {US-CODE}
 
 ## Instructions
 
-1. Read the project context and configuration files if present (for example `.airchetipo/config.yaml`, `CLAUDE.md`, `AGENTS.md`, or other agent-instructions files) to understand the project structure and conventions
+1. Read the project context and configuration files if present (for example `.archetipo/config.yaml`, `CLAUDE.md`, `AGENTS.md`, or other agent-instructions files) to understand the project structure and conventions
 2. Execute the planning skill for story {US-CODE}
 3. When done, return a concise summary (1-2 sentences) of the plan produced and whether it succeeded
 ```
@@ -264,7 +264,7 @@ Trust the subagent's result — do not re-read the backlog. The plan skill alrea
      1. Check if `{config.paths.mockups}/{US-CODE}/` contains at least one file (use `ls` or glob)
      2. If mockup files are found: record `mockup_verified: true` in the state file and proceed
      3. If NO mockup files are found:
-        - Spawn a dedicated mockup subagent: execute `/airchetipo-design {US-CODE}` with the story title and plan summary as context
+        - Spawn a dedicated mockup subagent: execute `/archetipo-design {US-CODE}` with the story title and plan summary as context
         - Wait for completion (do NOT run in background)
         - Verify files exist after completion
         - If still no files: log `mockup_missing: true` in the state file and proceed anyway (do not block the pipeline)
@@ -290,11 +290,11 @@ Spawn a subagent with this prompt:
 
 ## Task
 
-Execute /airchetipo-implement {US-CODE}
+Execute /archetipo-implement {US-CODE}
 
 ## Instructions
 
-1. Read the project context and configuration files if present (for example `.airchetipo/config.yaml`, `CLAUDE.md`, `AGENTS.md`, or other agent-instructions files) to understand the project structure and conventions
+1. Read the project context and configuration files if present (for example `.archetipo/config.yaml`, `CLAUDE.md`, `AGENTS.md`, or other agent-instructions files) to understand the project structure and conventions
 2. Execute the implementation skill for story {US-CODE}
 3. When done, return a concise summary (2-3 sentences) of what was implemented, tests written, and code review result
 ```
@@ -393,7 +393,7 @@ If the number of processed stories equals `--max-stories` → set `status: max_r
   Raggiunte {max-stories} storie senza soddisfare la condizione di uscita: "{stop-when}".
 
   **Per proseguire**, riesegui:
-  /airchetipo-autopilot {original filters} --max-stories {suggested value} --stop-when "{stop-when}"
+  /archetipo-autopilot {original filters} --max-stories {suggested value} --stop-when "{stop-when}"
   ```
   The suggested value should be based on remaining work — if 7 stories remain, suggest `--max-stories 7`.
 - `error`: *"L'autopilot è stato interrotto a causa di un errore sulla storia {US-CODE}."*

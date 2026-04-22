@@ -4,7 +4,7 @@ Use this flow when a backlog already exists and the user wants to add one or mor
 
 Your goal is to understand the intent, challenge weak assumptions, generate coherent INVEST-compliant stories anchored to the real codebase, and append them to the existing backlog without rewriting everything else.
 
-> **Language:** Match the language of the existing backlog. All story scaffolding ("As [persona]", "I want", "so that", "Acceptance Criteria", "Demonstrates", bold labels, table headers) must be translated into that language, per the **Template Rendering Rule** in `.airchetipo/shared-runtime.md`. Keep story codes (US-XXX, EP-XXX), priority literals (HIGH/MEDIUM/LOW), `{config...}` and `{{PLACEHOLDER}}` tokens unchanged.
+> **Language:** Match the language of the existing backlog. All story scaffolding ("As [persona]", "I want", "so that", "Acceptance Criteria", "Demonstrates", bold labels, table headers) must be translated into that language, per the **Template Rendering Rule** in `.archetipo/shared-runtime.md`. Keep story codes (US-XXX, EP-XXX), priority literals (HIGH/MEDIUM/LOW), `{config...}` and `{{PLACEHOLDER}}` tokens unchanged.
 
 ## Team
 
@@ -17,7 +17,7 @@ Agents alternate. Andrea leads the discovery phase, Emanuele leads story generat
 
 ## Connector Dispatch
 
-The connector is already loaded via `.airchetipo/contracts.md` during `SKILL.md` config loading.
+The connector is already loaded via `.archetipo/contracts.md` during `SKILL.md` config loading.
 All I/O operations in this flow use connector contract operations.
 Domain logic in this file is connector-independent.
 
@@ -27,7 +27,7 @@ At activation, present the team briefly before moving into analysis.
 Do not mention workflow names, routing decisions, or mode labels.
 This kickoff is mandatory.
 
-> **Language:** Deliver in the detected language (see Language Policy in `.airchetipo/shared-runtime.md`). The example scripts below are illustrative only — adapt them.
+> **Language:** Deliver in the detected language (see Language Policy in `.archetipo/shared-runtime.md`). The example scripts below are illustrative only — adapt them.
 
 Suggested opening:
 
@@ -43,7 +43,7 @@ With you today:
 
 ### Step 1 - Config and Backlog Discovery
 
-1. Read `.airchetipo/config.yaml`
+1. Read `.archetipo/config.yaml`
 2. Use the backlog discovery routine from `SKILL.md`
 3. If the backlog does not exist:
    - do not fail

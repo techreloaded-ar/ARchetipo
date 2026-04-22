@@ -1,5 +1,5 @@
 ---
-name: airchetipo-plan
+name: archetipo-plan
 description: Creates a detailed technical implementation plan for a user story. Use this skill whenever the user wants to plan a user story, break down a feature into technical tasks, create an implementation plan, do sprint planning, prepare a story for development or estimate a feature. Also triggers on requests like "plan this", "break this down", "what are the tasks for this story", or "how would we build this". The story can be passed by code (e.g., US-005) or as a free-text description — the skill handles both automatically.
 ---
 
@@ -8,7 +8,7 @@ description: Creates a detailed technical implementation plan for a user story. 
 This skill uses isolated subagents for optimal context management.
 If your AI coding tool does not support isolated subagents, the skill will generate mockups inline instead of spawning a dedicated agent. Planning output quality is unchanged.
 
-# AIRchetipo - User Story Planning Skill
+# ARchetipo - User Story Planning Skill
 
 You facilitate a **user story planning** session assisted by a team of specialized virtual agents. Your goal is to produce a **detailed implementation plan** for a user story and save it via the configured connector.
 
@@ -18,7 +18,7 @@ You facilitate a **user story planning** session assisted by a team of specializ
 
 ## Shared Runtime
 
-Read `.airchetipo/shared-runtime.md` for Language Policy, Assumptions and Questions, Conversation Rules, and Agent Persona rules.
+Read `.archetipo/shared-runtime.md` for Language Policy, Assumptions and Questions, Conversation Rules, and Agent Persona rules.
 
 ## The Team
 
@@ -35,18 +35,18 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
 
 ## Workflow
 
-> **Language:** Use the detected language from `.airchetipo/shared-runtime.md` throughout the planning document and all communication.
+> **Language:** Use the detected language from `.archetipo/shared-runtime.md` throughout the planning document and all communication.
 
 ### STAGE 0 — Setup & Story Selection
 
 #### Step 0 — Config Loading & Connector Dispatch
 
-1. Read `.airchetipo/contracts.md` from the `.airchetipo/` directory. This loads the connector contracts and instructs you to read the active connector implementation file based on `config.yaml`.
+1. Read `.archetipo/contracts.md` from the `.archetipo/` directory. This loads the connector contracts and instructs you to read the active connector implementation file based on `config.yaml`.
 2. Execute `SETUP: initialize_connector` from the loaded connector file.
 
 #### Step 1 — Story Selection
 
-1. Execute `READ: fetch_backlog_items` with `status_filter` = `{config.workflow.statuses.todo}`. If no backlog exists, tell the user to run `airchetipo-spec` first and stop.
+1. Execute `READ: fetch_backlog_items` with `status_filter` = `{config.workflow.statuses.todo}`. If no backlog exists, tell the user to run `archetipo-spec` first and stop.
 
 2. Execute `READ: select_story` with the user's argument and eligible statuses = `[{config.workflow.statuses.todo}]`:
    - If a user story code was passed as argument (e.g., "US-005"), select that story
@@ -69,7 +69,7 @@ After selecting the story, read ALL context in a **single turn with parallel too
 Output a compact announcement:
 
 ```
-📋 **AIRchetipo Planning** — {US-CODE}: {Story Title}
+📋 **ARchetipo Planning** — {US-CODE}: {Story Title}
 {EP-CODE} | {PRIORITY} | {N} SP
 
 [Detected language: brief status message that analysis is starting with the team]
@@ -116,7 +116,7 @@ Silently perform all of the following — this is your chain of thought, not vis
 If the story requires **new user interface** (new pages, significant UI components, or substantial layout changes):
 
 **If subagent/worker support is available:**
-1. Spawn an agent that invokes `/airchetipo-design` with:
+1. Spawn an agent that invokes `/archetipo-design` with:
    - The full user story (code, title, text, acceptance criteria)
    - A summary of the technical solution (UI-relevant aspects)
    - Frontend framework/design system info
@@ -126,7 +126,7 @@ If the story requires **new user interface** (new pages, significant UI componen
 3. After the mockup agent completes, verify that at least one file exists in `{config.paths.mockups}/{US-CODE}/` before setting `mockup_generated = true`. If no files exist, log a warning and set `mockup_generated = false`.
 
 **If subagent/worker support is NOT available:**
-1. Load `skills/airchetipo-design/SKILL.md` and apply its workflow inline — design rules, aesthetic guidelines, and output constraints live there and must not be duplicated here.
+1. Load `skills/archetipo-design/SKILL.md` and apply its workflow inline — design rules, aesthetic guidelines, and output constraints live there and must not be duplicated here.
 2. Save mockup files to `{config.paths.mockups}/{US-CODE}/` as instructed by the design skill.
 3. After generation, verify at least one file exists: set `mockup_generated = true` on success, or `mockup_generated = false` with a warning if the directory is empty.
 

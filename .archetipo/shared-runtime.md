@@ -1,6 +1,6 @@
-# AIRchetipo Shared Runtime
+# ARchetipo Shared Runtime
 
-This file contains runtime rules shared by all AIRchetipo skills.
+This file contains runtime rules shared by all ARchetipo skills.
 Load this file once at activation time, before loading any flow reference.
 
 ## Language Policy

@@ -1,6 +1,6 @@
-# ─── AIRchetipo Installer ─────────────────────────────────────────────────────
-# Installs AIRchetipo skills + config for Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot
-# Usage: irm https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo/main/install.ps1 | iex
+# ─── ARchetipo Installer ─────────────────────────────────────────────────────
+# Installs ARchetipo skills + config for Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot
+# Usage: irm https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.ps1 | iex
 #        .\install.ps1 [-Local] [-Cleanup] [-Help]
 #   -Local    Installs from local .\skills\ folder instead of GitHub
 #   -Cleanup  Removes installed skills from selected tools
@@ -15,8 +15,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$RepoZip    = "https://github.com/techreloaded-ar/AIRchetipo/archive/refs/heads/main.zip"
-$SkillNames = @("airchetipo-autopilot", "airchetipo-design", "airchetipo-implement", "airchetipo-inception", "airchetipo-plan", "airchetipo-spec")
+$RepoZip    = "https://github.com/techreloaded-ar/ARchetipo/archive/refs/heads/main.zip"
+$SkillNames = @("archetipo-autopilot", "archetipo-design", "archetipo-implement", "archetipo-inception", "archetipo-plan", "archetipo-spec")
 
 # ─── Tool definitions ─────────────────────────────────────────────────────────
 $Tools = @(
@@ -274,11 +274,11 @@ function Show-FallbackConnector {
 function Install-Config {
   param([string]$SourceDir, [string]$Connector)
 
-  $configDir  = ".airchetipo"
+  $configDir  = ".archetipo"
   $configFile = Join-Path $configDir "config.yaml"
 
   # Determine source config path
-  $sourceConfig = Join-Path (Split-Path $SourceDir -Parent) ".airchetipo\config.yaml"
+  $sourceConfig = Join-Path (Split-Path $SourceDir -Parent) ".archetipo\config.yaml"
   if (-not (Test-Path $sourceConfig)) {
     Write-Host ""
     Write-Host "  - " -ForegroundColor Yellow -NoNewline
@@ -290,7 +290,7 @@ function Install-Config {
   if (Test-Path $configFile) {
     Write-Host ""
     Write-Host "  ! " -ForegroundColor Yellow -NoNewline
-    Write-Host ".airchetipo\config.yaml esiste gia. Sovrascrivere? [s/N] " -NoNewline
+    Write-Host ".archetipo\config.yaml esiste gia. Sovrascrivere? [s/N] " -NoNewline
     $answer = Read-Host
     if ($answer -ne "s" -and $answer -ne "S" -and $answer -ne "y" -and $answer -ne "Y") {
       Write-Host "  Config non modificato" -ForegroundColor DarkGray
@@ -310,19 +310,19 @@ function Install-Config {
 
   Write-Host ""
   Write-Host "  $([char]0x2713) " -ForegroundColor Green -NoNewline
-  Write-Host ".airchetipo\config.yaml" -ForegroundColor White -NoNewline
+  Write-Host ".archetipo\config.yaml" -ForegroundColor White -NoNewline
   Write-Host " (connector: $Connector)" -ForegroundColor DarkGray
 
   # Install connector contracts and implementations
   $sourceRoot = Split-Path $SourceDir -Parent
-  $contractsSource = Join-Path $sourceRoot ".airchetipo\contracts.md"
+  $contractsSource = Join-Path $sourceRoot ".archetipo\contracts.md"
   if (Test-Path $contractsSource) {
     Copy-Item -Path $contractsSource -Destination (Join-Path $configDir "contracts.md") -Force
     Write-Host "  $([char]0x2713) " -ForegroundColor Green -NoNewline
-    Write-Host ".airchetipo\contracts.md" -ForegroundColor White
+    Write-Host ".archetipo\contracts.md" -ForegroundColor White
   }
 
-  $connectorsSource = Join-Path $sourceRoot ".airchetipo\connectors"
+  $connectorsSource = Join-Path $sourceRoot ".archetipo\connectors"
   if (Test-Path $connectorsSource) {
     $connectorsDir = Join-Path $configDir "connectors"
     if (-not (Test-Path $connectorsDir)) {
@@ -331,7 +331,7 @@ function Install-Config {
     Copy-Item -Path (Join-Path $connectorsSource "*.md") -Destination $connectorsDir -Force
     $connectorCount = (Get-ChildItem -Path $connectorsDir -Filter "*.md" | Measure-Object).Count
     Write-Host "  $([char]0x2713) " -ForegroundColor Green -NoNewline
-    Write-Host ".airchetipo\connectors\" -ForegroundColor White -NoNewline
+    Write-Host ".archetipo\connectors\" -ForegroundColor White -NoNewline
     Write-Host " ($connectorCount connector files)" -ForegroundColor DarkGray
   }
 }
@@ -342,10 +342,10 @@ function Main {
   if ($Help) {
     Write-Host @"
 
-AIRchetipo Installer
+ARchetipo Installer
 
 Usage:
-  irm https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo/main/install.ps1 | iex
+  irm https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.ps1 | iex
   .\install.ps1 [-Local] [-Cleanup] [-Help]
 
 Flags:
@@ -354,15 +354,15 @@ Flags:
   -Help     Show this help message
 
 Skills installed:
-  airchetipo-autopilot
-  airchetipo-design
-  airchetipo-implement
-  airchetipo-inception
-  airchetipo-plan
-  airchetipo-spec
+  archetipo-autopilot
+  archetipo-design
+  archetipo-implement
+  archetipo-inception
+  archetipo-plan
+  archetipo-spec
 
 Configuration:
-  .airchetipo\config.yaml is created with the selected connector (file or github).
+  .archetipo\config.yaml is created with the selected connector (file or github).
 
 Supported tools:
   Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot
@@ -370,10 +370,10 @@ Supported tools:
     return
   }
 
-  Write-Host "  AIRchetipo Installer" -ForegroundColor Cyan
+  Write-Host "  ARchetipo Installer" -ForegroundColor Cyan
 
   if ($Cleanup) {
-    Write-Host "  Remove AIRchetipo skills from your tools" -ForegroundColor DarkGray
+    Write-Host "  Remove ARchetipo skills from your tools" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host ""
 
@@ -402,7 +402,7 @@ Supported tools:
     return
   }
 
-  Write-Host "  Install AIRchetipo skills for your tools" -ForegroundColor DarkGray
+  Write-Host "  Install ARchetipo skills for your tools" -ForegroundColor DarkGray
   Write-Host ""
 
   $sourceDir = ""
@@ -418,11 +418,11 @@ Supported tools:
     Write-Host "  Using local skills folder..." -ForegroundColor DarkGray
   } else {
     # Create temp directory
-    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "airchetipo-$(Get-Random)"
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "archetipo-$(Get-Random)"
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
     Write-Host "  Downloading skills..." -ForegroundColor DarkGray
-    $zipFile = Join-Path $tempDir "airchetipo.zip"
+    $zipFile = Join-Path $tempDir "archetipo.zip"
 
     try {
       Invoke-WebRequest -Uri $RepoZip -OutFile $zipFile -UseBasicParsing -ErrorAction Stop
@@ -435,7 +435,7 @@ Supported tools:
     }
 
     Expand-Archive -Path $zipFile -DestinationPath $tempDir -Force
-    $sourceDir = Join-Path $tempDir "AIRchetipo-main\skills"
+    $sourceDir = Join-Path $tempDir "ARchetipo-main\skills"
 
     Write-Host "  $([char]0x2713) Downloaded skills" -ForegroundColor Green
   }

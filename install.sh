@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ─── AIRchetipo Installer ─────────────────────────────────────────────────────
-# Installs AIRchetipo skills + config for Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot
-# Usage: curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo/main/install.sh | bash
+# ─── ARchetipo Installer ─────────────────────────────────────────────────────
+# Installs ARchetipo skills + config for Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot
+# Usage: curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.sh | bash
 #        ./install.sh [--local] [--cleanup] [--help]
 #   --local    Installs from local ./skills/ folder instead of GitHub
 #   --cleanup  Removes installed skills from selected tools
 #   --help     Shows this help message
 # ──────────────────────────────────────────────────────────────────────────────
 
-REPO_ZIP="https://github.com/techreloaded-ar/AIRchetipo/archive/refs/heads/main.zip"
-SKILL_NAMES=("airchetipo-autopilot" "airchetipo-design" "airchetipo-implement" "airchetipo-inception" "airchetipo-plan" "airchetipo-spec")
+REPO_ZIP="https://github.com/techreloaded-ar/ARchetipo/archive/refs/heads/main.zip"
+SKILL_NAMES=("archetipo-autopilot" "archetipo-design" "archetipo-implement" "archetipo-inception" "archetipo-plan" "archetipo-spec")
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 show_help() {
   cat <<'HELP'
-AIRchetipo Installer
+ARchetipo Installer
 
 Usage:
-  curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.sh | bash
   ./install.sh [--local] [--cleanup] [--help]
 
 Flags:
@@ -28,15 +28,15 @@ Flags:
   --help     Show this help message
 
 Skills installed:
-  airchetipo-autopilot
-  airchetipo-design
-  airchetipo-implement
-  airchetipo-inception
-  airchetipo-plan
-  airchetipo-spec
+  archetipo-autopilot
+  archetipo-design
+  archetipo-implement
+  archetipo-inception
+  archetipo-plan
+  archetipo-spec
 
 Configuration:
-  .airchetipo/config.yaml is created with the selected connector (file or github).
+  .archetipo/config.yaml is created with the selected connector (file or github).
 
 Supported tools:
   Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot
@@ -315,13 +315,13 @@ fallback_connector() {
 install_config() {
   local source_dir="$1"
   local connector="$2"
-  local config_dir=".airchetipo"
+  local config_dir=".archetipo"
   local config_file="$config_dir/config.yaml"
 
   # Determine source config path
   local source_config=""
-  if [[ -f "$source_dir/../.airchetipo/config.yaml" ]]; then
-    source_config="$source_dir/../.airchetipo/config.yaml"
+  if [[ -f "$source_dir/../.archetipo/config.yaml" ]]; then
+    source_config="$source_dir/../.archetipo/config.yaml"
   else
     echo ""
     printf "  ${YELLOW}–${RESET} ${DIM}config.yaml non trovato nella source, skip${RESET}\n"
@@ -330,7 +330,7 @@ install_config() {
 
   # Check if config already exists
   if [[ -f "$config_file" ]]; then
-    printf "\n  ${YELLOW}!${RESET} ${BOLD}.airchetipo/config.yaml${RESET} esiste già. Sovrascrivere? [s/N] "
+    printf "\n  ${YELLOW}!${RESET} ${BOLD}.archetipo/config.yaml${RESET} esiste già. Sovrascrivere? [s/N] "
     read -r answer < /dev/tty
     if [[ "$answer" != "s" && "$answer" != "S" && "$answer" != "y" && "$answer" != "Y" ]]; then
       printf "  ${DIM}Config non modificato${RESET}\n"
@@ -346,19 +346,19 @@ install_config() {
     sed -i.bak "s/^connector:.*/connector: $connector/" "$config_file" && rm -f "$config_file.bak"
   fi
 
-  printf "\n  ${GREEN}✓${RESET} ${BOLD}.airchetipo/config.yaml${RESET} ${DIM}(connector: %s)${RESET}\n" "$connector"
+  printf "\n  ${GREEN}✓${RESET} ${BOLD}.archetipo/config.yaml${RESET} ${DIM}(connector: %s)${RESET}\n" "$connector"
 
   # Install connector contracts and implementations
   local source_root="$source_dir/.."
-  if [[ -f "$source_root/.airchetipo/contracts.md" ]]; then
-    cp -f "$source_root/.airchetipo/contracts.md" "$config_dir/contracts.md"
-    printf "  ${GREEN}✓${RESET} ${BOLD}.airchetipo/contracts.md${RESET}\n"
+  if [[ -f "$source_root/.archetipo/contracts.md" ]]; then
+    cp -f "$source_root/.archetipo/contracts.md" "$config_dir/contracts.md"
+    printf "  ${GREEN}✓${RESET} ${BOLD}.archetipo/contracts.md${RESET}\n"
   fi
 
-  if [[ -d "$source_root/.airchetipo/connectors" ]]; then
+  if [[ -d "$source_root/.archetipo/connectors" ]]; then
     mkdir -p "$config_dir/connectors"
-    cp -f "$source_root/.airchetipo/connectors/"*.md "$config_dir/connectors/" 2>/dev/null
-    printf "  ${GREEN}✓${RESET} ${BOLD}.airchetipo/connectors/${RESET} ${DIM}($(ls "$config_dir/connectors/" 2>/dev/null | wc -l | tr -d ' ') connector files)${RESET}\n"
+    cp -f "$source_root/.archetipo/connectors/"*.md "$config_dir/connectors/" 2>/dev/null
+    printf "  ${GREEN}✓${RESET} ${BOLD}.archetipo/connectors/${RESET} ${DIM}($(ls "$config_dir/connectors/" 2>/dev/null | wc -l | tr -d ' ') connector files)${RESET}\n"
   fi
 }
 
@@ -376,10 +376,10 @@ main() {
   done
 
   echo ""
-  printf "${BOLD}${CYAN}  AIRchetipo Installer${RESET}\n"
+  printf "${BOLD}${CYAN}  ARchetipo Installer${RESET}\n"
 
   if [[ $do_cleanup -eq 1 ]]; then
-    printf "${DIM}  Remove AIRchetipo skills from your tools${RESET}\n"
+    printf "${DIM}  Remove ARchetipo skills from your tools${RESET}\n"
     echo ""
     echo ""
 
@@ -407,7 +407,7 @@ main() {
     return
   fi
 
-  printf "${DIM}  Install AIRchetipo skills for your tools${RESET}\n"
+  printf "${DIM}  Install ARchetipo skills for your tools${RESET}\n"
   echo ""
 
   local source_dir=""
@@ -437,7 +437,7 @@ main() {
 
     # Download zip archive
     printf "${DIM}  Downloading skills...${RESET}\n"
-    local zip_file="$TMPDIR_INSTALL/airchetipo.zip"
+    local zip_file="$TMPDIR_INSTALL/archetipo.zip"
 
     if [[ "$downloader" == "curl" ]]; then
       if ! curl -fsSL "$REPO_ZIP" -o "$zip_file" 2>/dev/null; then
@@ -457,7 +457,7 @@ main() {
       exit 1
     fi
 
-    source_dir="$TMPDIR_INSTALL/AIRchetipo-main/skills"
+    source_dir="$TMPDIR_INSTALL/ARchetipo-main/skills"
     printf "  ${GREEN}✓${RESET} Downloaded skills\n"
   fi
 

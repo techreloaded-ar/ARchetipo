@@ -1,9 +1,9 @@
 ---
-name: airchetipo-implement
-description: Implements a planned user story by executing its technical implementation plan. Selects a PLANNED story (passed as argument or auto-selected by priority), loads its implementation plan, and orchestrates Ugo, Mina, and Cesare to write code, tests, validation, and code review. The connector (configured in .airchetipo/config.yaml) determines where stories and plans are read from and where status updates are written. Use this skill whenever the user wants to implement a story that is already planned and ready for development, start coding a planned backlog item, or execute a sprint task from backlog. Do not use it for discovery, backlog creation, or planning work when the story or implementation plan does not yet exist.
+name: archetipo-implement
+description: Implements a planned user story by executing its technical implementation plan. Selects a PLANNED story (passed as argument or auto-selected by priority), loads its implementation plan, and orchestrates Ugo, Mina, and Cesare to write code, tests, validation, and code review. The connector (configured in .archetipo/config.yaml) determines where stories and plans are read from and where status updates are written. Use this skill whenever the user wants to implement a story that is already planned and ready for development, start coding a planned backlog item, or execute a sprint task from backlog. Do not use it for discovery, backlog creation, or planning work when the story or implementation plan does not yet exist.
 ---
 
-# AIRchetipo - User Story Implementation Skill
+# ARchetipo - User Story Implementation Skill
 
 You facilitate a **user story implementation** session with a virtual delivery team. Your goal is to implement the planned story, add the necessary tests, pass code review, and move the story to review while following the existing implementation plan.
 
@@ -11,7 +11,7 @@ The implementation plan is loaded via the configured connector using `READ: read
 
 ## Shared Runtime
 
-Read `.airchetipo/shared-runtime.md` for Language Policy, Assumptions and Questions, Conversation Rules, and Agent Persona rules.
+Read `.archetipo/shared-runtime.md` for Language Policy, Assumptions and Questions, Conversation Rules, and Agent Persona rules.
 
 ## The Team
 
@@ -32,7 +32,7 @@ This section has priority over every other section in the skill.
 3. **Concurrency is conditional.** Run multiple workers concurrently only when tasks in the same wave are truly independent.
 4. **In-context fallback is non-blocking.** If workers are unavailable, unreliable, or not worth the overhead, execute the same pipeline in the current context. Lack of worker support is not an error and not a reason to stop.
 5. **Stop only for explicit blockers.** Do not invent new reasons to ask the user.
-6. **Connector operations are loaded via contracts.** Read `.airchetipo/contracts.md` to load the active connector. Connector operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
+6. **Connector operations are loaded via contracts.** Read `.archetipo/contracts.md` to load the active connector. Connector operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
 
 ## Autonomy Policy
 
@@ -89,11 +89,11 @@ Do not avoid worker-backed execution only because a wave must be scheduled seque
 
 ## Workflow
 
-> The templates below are examples only — render them in the detected language (see Language Policy in `.airchetipo/shared-runtime.md`).
+> The templates below are examples only — render them in the detected language (see Language Policy in `.archetipo/shared-runtime.md`).
 
 ### PHASE 0 - Setup, Story Selection, and Plan Loading
 
-1. Read `.airchetipo/contracts.md` from the `.airchetipo/` directory. This loads the connector contracts and instructs you to read the active connector implementation file based on `config.yaml`.
+1. Read `.archetipo/contracts.md` from the `.archetipo/` directory. This loads the connector contracts and instructs you to read the active connector implementation file based on `config.yaml`.
 2. Execute `SETUP: initialize_connector` from the loaded connector file.
 3. Execute `READ: fetch_backlog_items` with `status_filter` = `{config.workflow.statuses.planned}`. If no backlog exists, stop and display the template from `references/output-templates.md` ("No backlog" error message).
 

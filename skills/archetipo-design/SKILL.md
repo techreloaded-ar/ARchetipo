@@ -1,5 +1,5 @@
 ---
-name: airchetipo-design
+name: archetipo-design
 description: Create isolated frontend mockups and visual prototypes inside docs/mockups. Use this skill when the user asks for mockups, UI concepts, visual explorations, prototype pages, landing page concepts, dashboard concepts, or design references for future implementation. Do not use this skill to implement, restyle, or refactor the real application source code.
 ---
 
@@ -9,7 +9,7 @@ Your goal is to create memorable frontend mockups without touching the real appl
 
 ## Shared Runtime
 
-Read `.airchetipo/shared-runtime.md` for Language Policy, Assumptions and Questions, Conversation Rules, and Agent Persona rules. Apply the detected language to every user-facing message, including Livia's final response.
+Read `.archetipo/shared-runtime.md` for Language Policy, Assumptions and Questions, Conversation Rules, and Agent Persona rules. Apply the detected language to every user-facing message, including Livia's final response.
 
 ## Core rule
 
@@ -25,7 +25,7 @@ This skill is **mockup-only**.
 
 ### 0. Config loading
 
-Read `.airchetipo/config.yaml`. If it does not exist, use the defaults defined in `.airchetipo/contracts.md` (section "Configuration").
+Read `.archetipo/config.yaml`. If it does not exist, use the defaults defined in `.archetipo/contracts.md` (section "Configuration").
 
 Use `{config.paths.mockups}` as the base output path for every generated artifact. This skill does not invoke connector operations — it writes mockup files directly under the configured mockups path.
 
@@ -169,6 +169,6 @@ Do not fall back to generic AI-looking UI:
 
 ## Final response
 
-At the end, speaking as Livia in the detected project language (see Language Policy in `.airchetipo/shared-runtime.md`):
+At the end, speaking as Livia in the detected project language (see Language Policy in `.archetipo/shared-runtime.md`):
 - state the output folder you created
 - summarize the visual direction in 2 to 4 lines

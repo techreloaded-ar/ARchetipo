@@ -1,6 +1,6 @@
 <div align="center">
 
-# AIRchetipo
+# ARchetipo
 
 **Un team AI al tuo fianco, dall'idea al codice.**
 
@@ -17,9 +17,9 @@ Skill portabili per AI coding agent che trasformano il tuo assistente in una squ
 
 ---
 
-## Perché AIRchetipo
+## Perché ARchetipo
 
-Gli AI coding agent sono potenti, ma tendono a rispondere a prompt isolati senza un processo. **AIRchetipo introduce un flusso di lavoro ispirato ai team di prodotto reali**, con ruoli specializzati e artefatti persistenti (PRD, backlog, piani tecnici, mockup) che si passano da una fase all'altra.
+Gli AI coding agent sono potenti, ma tendono a rispondere a prompt isolati senza un processo. **ARchetipo introduce un flusso di lavoro ispirato ai team di prodotto reali**, con ruoli specializzati e artefatti persistenti (PRD, backlog, piani tecnici, mockup) che si passano da una fase all'altra.
 
 - **Un processo, non un prompt.** Dalla discovery al code review, ogni fase ha la propria skill, i propri ruoli e i propri output.
 - **Agnostico rispetto al tool.** Le stesse skill funzionano su Claude Code, Codex, Gemini CLI, OpenCode e GitHub Copilot.
@@ -29,25 +29,25 @@ Gli AI coding agent sono potenti, ma tendono a rispondere a prompt isolati senza
 
 ## Quickstart
 
-### 1. Installa AIRchetipo nel tuo progetto
+### 1. Installa ARchetipo nel tuo progetto
 
 **macOS / Linux**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.sh | bash
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-irm https://raw.githubusercontent.com/techreloaded-ar/AIRchetipo/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.ps1 | iex
 ```
 
 L'installer:
 1. Scarica le skill da GitHub.
 2. Mostra un menu interattivo per scegliere su quali AI tool installarle.
 3. Copia ogni skill nella directory corretta del tool.
-4. Crea la cartella `.airchetipo` con le configurazioni di default.
+4. Crea la cartella `.archetipo` con le configurazioni di default.
 
 **Prerequisiti:**
 - `curl` + `unzip` su macOS/Linux (inclusi di default)
@@ -58,7 +58,7 @@ L'installer:
 
 ## Il workflow
 
-AIRchetipo è un set di **skill** che compongono un **worflow**. Ogni skill incarna una fase del processo, ispirata alla metodologia **Spec-Driven Development**: il ciclo `spec → plan → implement` si ripete per ogni incremento di prodotto in maniera continuativa.
+ARchetipo è un set di **skill** che compongono un **worflow**. Ogni skill incarna una fase del processo, ispirata alla metodologia **Spec-Driven Development**: il ciclo `spec → plan → implement` si ripete per ogni incremento di prodotto in maniera continuativa.
 
 
 ```mermaid
@@ -83,18 +83,18 @@ flowchart LR
     class D aside;
 ```
 
-- **Inception** (`/airchetipo-inception`) è one-shot: Lancia  la product discovery e produce un documenti di requisiti `PRD` (visione, personas, MVP, architettura, requisiti funzionali).
-- **Spec** (`/airchetipo-spec`) apre il ciclo iterativo. Genera il `Backlog` iniziale partendo dal `PRD`, oppure lo estende con nuove user story.
-- **Plan** (`/airchetipo-plan`) pianifica la singola storia. Si occupa di analisi tecnca, task breakdown e strategia di test. Se la storia richiede UI nuova, invoca automaticamente Design.
-- **Implement** (`/airchetipo-implement`) esegue il piano. Genera codice e test, conduce una code review rigorosa e prepara la storia per essere revisionata dall'utente.
+- **Inception** (`/archetipo-inception`) è one-shot: Lancia  la product discovery e produce un documenti di requisiti `PRD` (visione, personas, MVP, architettura, requisiti funzionali).
+- **Spec** (`/archetipo-spec`) apre il ciclo iterativo. Genera il `Backlog` iniziale partendo dal `PRD`, oppure lo estende con nuove user story.
+- **Plan** (`/archetipo-plan`) pianifica la singola storia. Si occupa di analisi tecnca, task breakdown e strategia di test. Se la storia richiede UI nuova, invoca automaticamente Design.
+- **Implement** (`/archetipo-implement`) esegue il piano. Genera codice e test, conduce una code review rigorosa e prepara la storia per essere revisionata dall'utente.
   
-- **Design** produce mockup frontend distintivi. Viene invocato da `/airchetipo-plan` quando serve UI per una nuova funzionalità, o direttamente con `/airchetipo-design` per esplorare concept visivi senza toccare il codice applicativo.
+- **Design** produce mockup frontend distintivi. Viene invocato da `/archetipo-plan` quando serve UI per una nuova funzionalità, o direttamente con `/archetipo-design` per esplorare concept visivi senza toccare il codice applicativo.
 
 Il ciclo `Spec → Plan → Implement` si ripete per ogni funzionalità.
 
 ### Il team
 
-In ogni fase di AIRchetipo, avrai a che fare con personas AI diverse, ognuna con ruolo e competenze ben definite.
+In ogni fase di ARchetipo, avrai a che fare con personas AI diverse, ognuna con ruolo e competenze ben definite.
 
 | Persona | Ruolo | Competenza principale |
 |---|---|---|
@@ -111,8 +111,8 @@ In ogni fase di AIRchetipo, avrai a che fare con personas AI diverse, ognuna con
 
 Le skill non sanno **dove** vivono gli artefatti: delegano la persistenza a un **connector** configurabile.
 
-- **Interfaccia** → `.airchetipo/contracts.md` (catalogo delle operazioni)
-- **Implementazione** → `.airchetipo/connectors/<nome>.md` (come eseguirle)
+- **Interfaccia** → `.archetipo/contracts.md` (catalogo delle operazioni)
+- **Implementazione** → `.archetipo/connectors/<nome>.md` (come eseguirle)
 
 Cambiare connector = cambiare file, senza toccare le skill.
 
@@ -128,17 +128,17 @@ Cambiare connector = cambiare file, senza toccare le skill.
 
 | Skill | Scopo | Trigger tipici |
 |---|---|---|
-| **`airchetipo-inception`** | Facilitazione interattiva della product discovery e generazione del PRD (visione, personas, MVP, architettura, requisiti funzionali). | "definisci il prodotto", "idea di prodotto", "scrivi un PRD" |
-| **`airchetipo-spec`** | Creazione del backlog iniziale dal PRD **oppure** aggiunta di nuove user story a un backlog esistente. Auto-rilevamento della modalità. | "crea il backlog", "aggiungi una storia", "serve una feature per…" |
-| **`airchetipo-design`** | Generazione di mockup frontend distintivi, isolati in `docs/mockups/`. Non tocca mai il codice applicativo. | "fammi un mockup", "concept della dashboard", "landing page" |
-| **`airchetipo-plan`** | Pianificazione tecnica di una user story: analisi, soluzione architetturale, task breakdown, strategia di test (con e2e quando serve). | "pianifica US-005", "come lo costruiamo?", "rompi la storia in task" |
-| **`airchetipo-implement`** | Implementazione guidata della storia pianificata: codice, test, esecuzione della suite, code review rigorosa, fix loop, transizione a `REVIEW`. | "implementa US-005", "esegui la prossima storia pronta" |
+| **`archetipo-inception`** | Facilitazione interattiva della product discovery e generazione del PRD (visione, personas, MVP, architettura, requisiti funzionali). | "definisci il prodotto", "idea di prodotto", "scrivi un PRD" |
+| **`archetipo-spec`** | Creazione del backlog iniziale dal PRD **oppure** aggiunta di nuove user story a un backlog esistente. Auto-rilevamento della modalità. | "crea il backlog", "aggiungi una storia", "serve una feature per…" |
+| **`archetipo-design`** | Generazione di mockup frontend distintivi, isolati in `docs/mockups/`. Non tocca mai il codice applicativo. | "fammi un mockup", "concept della dashboard", "landing page" |
+| **`archetipo-plan`** | Pianificazione tecnica di una user story: analisi, soluzione architetturale, task breakdown, strategia di test (con e2e quando serve). | "pianifica US-005", "come lo costruiamo?", "rompi la storia in task" |
+| **`archetipo-implement`** | Implementazione guidata della storia pianificata: codice, test, esecuzione della suite, code review rigorosa, fix loop, transizione a `REVIEW`. | "implementa US-005", "esegui la prossima storia pronta" |
 
 ---
 
 ## Configurazione
 
-Dopo l'installazione, `.airchetipo/config.yaml` contiene i parametri del progetto:
+Dopo l'installazione, `.archetipo/config.yaml` contiene i parametri del progetto:
 
 ```yaml
 connector: file              # file | github
@@ -178,7 +178,7 @@ github:                      # solo per connector github
 - Transizioni di stato come campi custom del Project.
 - Richiede `gh` CLI autenticato con permessi `repo` + `project`.
 
-Il catalogo completo delle operazioni supportate da ogni connector è in [`.airchetipo/contracts.md`](.airchetipo/contracts.md).
+Il catalogo completo delle operazioni supportate da ogni connector è in [`.archetipo/contracts.md`](.archetipo/contracts.md).
 
 ---
 
@@ -195,31 +195,31 @@ Il catalogo completo delle operazioni supportate da ogni connector è in [`.airc
 <details>
 <summary><b>Devo usare tutte le skill?</b></summary>
 
-No. Ogni skill è utilizzabile in isolamento. Puoi partire direttamente da `airchetipo-plan` se hai già un backlog scritto a mano, o usare solo `airchetipo-design` per esplorare concept visivi.
+No. Ogni skill è utilizzabile in isolamento. Puoi partire direttamente da `archetipo-plan` se hai già un backlog scritto a mano, o usare solo `archetipo-design` per esplorare concept visivi.
 </details>
 
 <details>
-<summary><b>Posso usare AIRchetipo su un progetto già esistente?</b></summary>
+<summary><b>Posso usare ARchetipo su un progetto già esistente?</b></summary>
 
-Sì. `airchetipo-spec` aggiunge storie a un backlog esistente. `airchetipo-plan` e `airchetipo-implement` lavorano su qualsiasi storia presente, indipendentemente da come è stata creata.
+Sì. `archetipo-spec` aggiunge storie a un backlog esistente. `archetipo-plan` e `archetipo-implement` lavorano su qualsiasi storia presente, indipendentemente da come è stata creata.
 </details>
 
 <details>
 <summary><b>Gli artefatti sono vincolati a un formato?</b></summary>
 
-I template in `references/` sono modificabili. Se usi il connector `github`, le issue seguono un layout preciso, vedi `.airchetipo/connectors/github.md`.
+I template in `references/` sono modificabili. Se usi il connector `github`, le issue seguono un layout preciso, vedi `.archetipo/connectors/github.md`.
 </details>
 
 <details>
 <summary><b>Perché i nomi italiani (Emanuele, Leonardo, Ugo, Mina, Cesare, Livia)?</b></summary>
 
-AIRchetipo nasce in Italia e mantiene una voce riconoscibile: un team con nomi propri funziona meglio di "the analyst agent" / "the architect agent". Le skill parlano comunque nella lingua della conversazione (auto-detected).
+ARchetipo nasce in Italia e mantiene una voce riconoscibile: un team con nomi propri funziona meglio di "the analyst agent" / "the architect agent". Le skill parlano comunque nella lingua della conversazione (auto-detected).
 </details>
 
 <details>
 <summary><b>Come si fa il debug di una skill?</b></summary>
 
-Ogni skill dichiara quali reference carica. Attiva la modalità verbose del tuo AI tool e controlla che le operazioni connector (`READ:`, `WRITE:`) siano eseguite nell'ordine atteso. `.airchetipo/contracts.md` è la fonte di verità.
+Ogni skill dichiara quali reference carica. Attiva la modalità verbose del tuo AI tool e controlla che le operazioni connector (`READ:`, `WRITE:`) siano eseguite nell'ordine atteso. `.archetipo/contracts.md` è la fonte di verità.
 </details>
 
 ---
@@ -232,8 +232,8 @@ MIT © [techreloaded](https://github.com/techreloaded-ar)
 
 <div align="center">
 
-**Se AIRchetipo ti è utile, lascia una ⭐ al repo e condividilo con il tuo team.**
+**Se ARchetipo ti è utile, lascia una ⭐ al repo e condividilo con il tuo team.**
 
-[Report bug](https://github.com/techreloaded-ar/AIRchetipo/issues) · [Richiedi feature](https://github.com/techreloaded-ar/AIRchetipo/issues) · [Discussions](https://github.com/techreloaded-ar/AIRchetipo/discussions)
+[Report bug](https://github.com/techreloaded-ar/ARchetipo/issues) · [Richiedi feature](https://github.com/techreloaded-ar/ARchetipo/issues) · [Discussions](https://github.com/techreloaded-ar/ARchetipo/discussions)
 
 </div>

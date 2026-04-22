@@ -4,7 +4,7 @@ Use this flow only for `mode: inception`.
 
 Your goal is to guide the user through a structured product inception conversation and gather enough information to produce a complete PRD.
 
-> **Language:** Conduct the conversation and render every artifact (PRD, prompts, questions, section titles, table headers, bold labels, connective phrases) in the detected language. Follow the **Template Rendering Rule** in `.airchetipo/shared-runtime.md`. Keep `{{PLACEHOLDER}}` tokens unchanged.
+> **Language:** Conduct the conversation and render every artifact (PRD, prompts, questions, section titles, table headers, bold labels, connective phrases) in the detected language. Follow the **Template Rendering Rule** in `.archetipo/shared-runtime.md`. Keep `{{PLACEHOLDER}}` tokens unchanged.
 
 ## Team
 
@@ -32,12 +32,12 @@ On activation:
 4. Ask the user to describe the product idea
 5. Wait for the answer
 
-> **Language:** Deliver this phase in the detected language (see Language Policy in `.airchetipo/shared-runtime.md`). The example script below is illustrative only — adapt it.
+> **Language:** Deliver this phase in the detected language (see Language Policy in `.archetipo/shared-runtime.md`). The example script below is illustrative only — adapt it.
 
 Suggested opening:
 
 ```text
-Il team AIRchetipo è qui per aiutarti a trasformare un'idea in una direzione di prodotto chiara, concreta e realizzabile.
+Il team ARchetipo è qui per aiutarti a trasformare un'idea in una direzione di prodotto chiara, concreta e realizzabile.
 
 Con te oggi ci sono:
 💎 Andrea - Product Manager

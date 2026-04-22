@@ -1,18 +1,18 @@
-# AIRchetipo Connector Contracts
+# ARchetipo Connector Contracts
 
 This file is the single entry point for all connector operations. Skills read this file instead of managing connector-specific logic themselves.
 
 ## How It Works
 
-1. Read `.airchetipo/config.yaml` to determine the `connector` value (default: `file`)
-2. Read `.airchetipo/connectors/{connector}.md` — that file contains the implementation of every operation listed below
+1. Read `.archetipo/config.yaml` to determine the `connector` value (default: `file`)
+2. Read `.archetipo/connectors/{connector}.md` — that file contains the implementation of every operation listed below
 3. When a skill references an operation (e.g., `SETUP: initialize_connector`), find the matching section header in the loaded connector file and follow its instructions
 
 > **Context discipline:** Load this file and the connector file once at the start of the skill. Do not re-read them unless the skill explicitly requires a refresh.
 
 ## Configuration
 
-The connector file receives these values from `.airchetipo/config.yaml`:
+The connector file receives these values from `.archetipo/config.yaml`:
 
 ```yaml
 connector: file | github          # which connector implementation to load
@@ -31,7 +31,7 @@ workflow:
     done: DONE
 ```
 
-If `.airchetipo/config.yaml` does not exist, assume `connector: file` with the default paths above.
+If `.archetipo/config.yaml` does not exist, assume `connector: file` with the default paths above.
 
 ---
 

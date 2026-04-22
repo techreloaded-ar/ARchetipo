@@ -1,8 +1,8 @@
 # Connector: File System
 
-This file implements the AIRchetipo connector contracts for the local file system. This is the default connector when `.airchetipo/config.yaml` has `connector: file` or when config.yaml does not exist.
+This file implements the ARchetipo connector contracts for the local file system. This is the default connector when `.archetipo/config.yaml` has `connector: file` or when config.yaml does not exist.
 
-All data is stored as markdown files in the project directory. Paths come from `.airchetipo/config.yaml` with these defaults:
+All data is stored as markdown files in the project directory. Paths come from `.archetipo/config.yaml` with these defaults:
 
 ```yaml
 paths:
@@ -26,7 +26,7 @@ No authentication or external service setup is needed. The file connector uses l
 - `config.paths.mockups` — path to the mockups directory (default: `docs/mockups/`)
 - `config.paths.test_results` — path to the test results directory (default: `docs/test-results/`)
 
-Verify that `{config.paths.backlog}` exists. If it does not exist and the calling skill requires a backlog, stop and tell the user to run `airchetipo-spec` first.
+Verify that `{config.paths.backlog}` exists. If it does not exist and the calling skill requires a backlog, stop and tell the user to run `archetipo-spec` first.
 
 ---
 
@@ -109,7 +109,7 @@ For each row, extract:
 - Type (Impl / Test)
 - Dependencies (other TASK-XX codes or `-`)
 
-If the planning file does not exist, stop and tell the user to run `airchetipo-plan` first.
+If the planning file does not exist, stop and tell the user to run `archetipo-plan` first.
 
 ---
 

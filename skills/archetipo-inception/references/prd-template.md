@@ -2,12 +2,12 @@
 
 When the inception flow has gathered the minimum required information, generate the PRD using exactly this structure and save it to `{config.paths.prd}`.
 
-> **Language:** The template below is an English scaffold. Before writing the file, translate every static element (headings, table headers, bold labels, connective phrases like "For **X**, who has the problem of **Y**...") into the detected language, per the **Template Rendering Rule** in `.airchetipo/shared-runtime.md`. Keep `{{PLACEHOLDER}}` tokens unchanged.
+> **Language:** The template below is an English scaffold. Before writing the file, translate every static element (headings, table headers, bold labels, connective phrases like "For **X**, who has the problem of **Y**...") into the detected language, per the **Template Rendering Rule** in `.archetipo/shared-runtime.md`. Keep `{{PLACEHOLDER}}` tokens unchanged.
 
 ```markdown
 # {{PROJECT_NAME}} - Product Requirements Document
 
-**Author:** AIRchetipo
+**Author:** ARchetipo
 **Date:** {{DATE}}
 **Version:** 1.0
 
@@ -196,12 +196,12 @@ When the inception flow has gathered the minimum required information, generate 
 
 ## Next Steps
 
-1. **Backlog** - Run `/airchetipo-spec` to transform this PRD into a backlog
-2. **Design** - Run `/airchetipo-design` for UI mockups (when applicable)
+1. **Backlog** - Run `/archetipo-spec` to transform this PRD into a backlog
+2. **Design** - Run `/archetipo-design` for UI mockups (when applicable)
 3. **Validation** - Review with stakeholders and test the riskiest assumptions
 
 ---
 
-_PRD generated via AIRchetipo Product Inception - {{DATE}}_
-_Session conducted by: {{USER_NAME}} with the AIRchetipo team_
+_PRD generated via ARchetipo Product Inception - {{DATE}}_
+_Session conducted by: {{USER_NAME}} with the ARchetipo team_
 ```

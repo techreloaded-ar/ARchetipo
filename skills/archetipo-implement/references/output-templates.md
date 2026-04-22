@@ -1,7 +1,7 @@
-# AIRchetipo Implement — Output Templates
+# ARchetipo Implement — Output Templates
 
-> **Language rule:** All structural labels, headers, and user-facing messages in these templates must be rendered in the detected project language (see Language Policy in `.airchetipo/shared-runtime.md`).  
-> Exception: agent names and role identifiers (Ugo, Mina, Cesare) are part of the AIRchetipo brand voice and remain unchanged across languages.
+> **Language rule:** All structural labels, headers, and user-facing messages in these templates must be rendered in the detected project language (see Language Policy in `.archetipo/shared-runtime.md`).  
+> Exception: agent names and role identifiers (Ugo, Mina, Cesare) are part of the ARchetipo brand voice and remain unchanged across languages.
 
 ---
 
@@ -11,14 +11,14 @@
 
 ```text
 ❌ **Ugo:** No backlog found. A backlog is required to know what to implement.
-   Run `/airchetipo-spec` to create one, then `/airchetipo-plan` to plan the first story.
+   Run `/archetipo-spec` to create one, then `/archetipo-plan` to plan the first story.
 ```
 
 ### No planned stories
 
 ```text
 ❌ **Ugo:** No user stories in status {config.workflow.statuses.planned} found in the backlog.
-   Run `/airchetipo-plan` to plan a story, or pass a different story as argument.
+   Run `/archetipo-plan` to plan a story, or pass a different story as argument.
 ```
 
 ### No implementation plan
@@ -26,7 +26,7 @@
 ```text
 ❌ **Ugo:** No implementation plan found for this story.
    The story has not been planned yet. Run first:
-   `/airchetipo-plan {US-CODE}`
+   `/archetipo-plan {US-CODE}`
 ```
 
 ---
@@ -34,7 +34,7 @@
 ## Session Announcement (Phase 0, Step 10)
 
 ```text
-⚡ AIRCHETIPO — USER STORY IMPLEMENTATION
+⚡ ARCHETIPO — USER STORY IMPLEMENTATION
 
 The delivery team is ready.
 
