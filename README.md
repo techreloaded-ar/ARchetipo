@@ -4,7 +4,7 @@
 
 **Un team AI al tuo fianco, dall'idea al codice.**
 
-Skill portabili per AI coding agent che trasformano il tuo assistente in una squadra di prodotto: analista, architetto, sviluppatore, tester, reviewer, designer — ognuno con il proprio ruolo e voce.
+Skill portabili per AI coding agent che trasformano il tuo assistente in una squadra di prodotto: analista, architetto, sviluppatore, tester, reviewer, designer, ognuno con il proprio ruolo e voce.
 
 [![Status](https://img.shields.io/badge/status-beta-orange.svg)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#licenza)
@@ -23,7 +23,6 @@ Gli AI coding agent sono potenti, ma tendono a rispondere a prompt isolati senza
 
 - **Un processo, non un prompt.** Dalla discovery al code review, ogni fase ha la propria skill, i propri ruoli e i propri output.
 - **Agnostico rispetto al tool.** Le stesse skill funzionano su Claude Code, Codex, Gemini CLI, OpenCode e GitHub Copilot.
-- **Agnostico rispetto alla persistenza.** Gli artefatti vivono come file markdown nel repo oppure come issue su GitHub Projects, senza cambiare il modo in cui parli alle skill.
 - **Autonomo quando serve.** Il flusso può essere guidato passo-passo oppure lanciato in autopilot sull'intero backlog.
 
 ---
@@ -48,54 +47,29 @@ L'installer:
 1. Scarica le skill da GitHub.
 2. Mostra un menu interattivo per scegliere su quali AI tool installarle.
 3. Copia ogni skill nella directory corretta del tool.
-4. Crea `.airchetipo/config.yaml` con il connector scelto (`file` di default).
+4. Crea la cartella `.airchetipo` con le configurazioni di default.
 
-**Prerequisiti:**\
-· `curl` + `unzip` su macOS/Linux (inclusi di default) \
-· PowerShell 5.1+ su Windows \
-· opzionale [`gh` CLI](https://cli.github.com/) autenticato se usi il connector GitHub.
-
-
-### 2. Segui il flusso end-to-end
-
-```
-# Definisci il prodotto
-> /airchetipo-inception
-  → docs/PRD.md
-
-# Genera il backlog iniziale
-> /airchetipo-spec
-  → docs/BACKLOG.md
-
-# Pianifica una storia
-> /airchetipo-plan US-001
-  → docs/planning/US-001.md
-  → docs/mockups/US-001/ (se UI)
-
-# Implementa
-> /airchetipo-implement US-001
-  → codice + test + code review
-  → storia in REVIEW nel backlog
-
-```
-
-Ad ogni passo la skill adotta la lingua della conversazione (rileva automaticamente italiano o inglese) e produce artefatti persistenti che alimentano la fase successiva.
+**Prerequisiti:**
+- `curl` + `unzip` su macOS/Linux (inclusi di default)
+- PowerShell 5.1+ su Windows
+- opzionale [`gh` CLI](https://cli.github.com/) autenticato se usi il connector GitHub.
 
 ---
 
-## Come funziona
+## Il workflow
 
-AIRchetipo è un set di **skill** (file markdown con istruzioni + reference) caricate dall'AI coding agent. Ogni skill incarna una fase del processo, ispirata alla metodologia **Spec-Driven Development**: la specifica è il contratto, e il ciclo `spec → plan → implement` si ripete per ogni slice di valore fino a completare il prodotto.
+AIRchetipo è un set di **skill** che compongono un **worflow**. Ogni skill incarna una fase del processo, ispirata alla metodologia **Spec-Driven Development**: il ciclo `spec → plan → implement` si ripete per ogni incremento di prodotto in maniera continuativa.
+
 
 ```mermaid
 flowchart LR
-    I["🧭 Inception<br/><i>PRD</i>"] --> S
-    I -. initial mockup .-> D["🎨 Design<br/><i>mockup</i>"]
+    I["<b>Inception</b><br/><i>→ PRD</i>"] --> S
+    I -. initial mockup .-> D["<b>Design</b><br/><i>→ mockup</i>"]
 
     subgraph Loop["Spec-Driven Loop"]
         direction TB
-        S["📋 Spec<br/><i>backlog</i>"] --> P["📐 Plan<br/><i>tasks</i>"]
-        P --> IM["🔧 Implement<br/><i>code + tests</i>"]
+        S["<b>Spec</b><br/><i>→ backlog</i>"] --> P["<b>Plan</b><br/><i>→ piano tecnico</i>"]
+        P --> IM["<b>Implement</b><br/><i>→ codice + test</i>"]
         IM -. next story .-> S
     end
 
@@ -109,11 +83,18 @@ flowchart LR
     class D aside;
 ```
 
-- **Inception** è one-shot: definisce il perimetro di prodotto.
-- **Spec → Plan → Implement** è il ciclo iterativo: ogni giro arricchisce il backlog, pianifica la prossima storia e la implementa, fino al rilascio.
-- **Design** viene invocato da `plan` quando una storia richiede UI nuova, o direttamente quando vuoi esplorare concept visivi.
+- **Inception** (`/airchetipo-inception`) è one-shot: Lancia  la product discovery e produce un documenti di requisiti `PRD` (visione, personas, MVP, architettura, requisiti funzionali).
+- **Spec** (`/airchetipo-spec`) apre il ciclo iterativo. Genera il `Backlog` iniziale partendo dal `PRD`, oppure lo estende con nuove user story.
+- **Plan** (`/airchetipo-plan`) pianifica la singola storia. Si occupa di analisi tecnca, task breakdown e strategia di test. Se la storia richiede UI nuova, invoca automaticamente Design.
+- **Implement** (`/airchetipo-implement`) esegue il piano. Genera codice e test, conduce una code review rigorosa e prepara la storia per essere revisionata dall'utente.
+  
+- **Design** produce mockup frontend distintivi. Viene invocato da `/airchetipo-plan` quando serve UI per una nuova funzionalità, o direttamente con `/airchetipo-design` per esplorare concept visivi senza toccare il codice applicativo.
+
+Il ciclo `Spec → Plan → Implement` si ripete per ogni funzionalità.
 
 ### Il team
+
+In ogni fase di AIRchetipo, avrai a che fare con personas AI diverse, ognuna con ruolo e competenze ben definite.
 
 | Persona | Ruolo | Competenza principale |
 |---|---|---|
@@ -128,28 +109,30 @@ flowchart LR
 
 ### Architettura connector
 
-Le skill non gestiscono mai direttamente la persistenza. Il flusso è sempre:
+Le skill non sanno **dove** vivono gli artefatti: delegano la persistenza a un **connector** configurabile.
 
-1. La skill legge `.airchetipo/config.yaml` per sapere quale connector è attivo.
-2. La skill carica `.airchetipo/contracts.md` (catalogo delle operazioni).
-3. La skill carica `.airchetipo/connectors/{file|github}.md` (implementazione).
-4. La skill chiama operazioni astratte (`READ: fetch_backlog_items`, `WRITE: save_plan`, `WRITE: transition_status`, …).
+- **Interfaccia** → `.airchetipo/contracts.md` (catalogo delle operazioni)
+- **Implementazione** → `.airchetipo/connectors/<nome>.md` (come eseguirle)
 
-Questo significa che **puoi cambiare dove vivono i tuoi artefatti senza cambiare una riga nelle skill**. Oggi `file` e `github`, domani Linear, Jira o il tuo connector custom.
+Cambiare connector = cambiare file, senza toccare le skill.
+
+| Connector | Dove finiscono gli artefatti |
+|---|---|
+| `file` *(default)* | File markdown locali nel repo |
+| `github` | Issues + GitHub Projects v2 |
+| *custom* | Linear, Jira, Notion, … (estendibile) |
 
 ---
 
-## Skill
+## Dettagli delle Skill
 
-| Skill | Scopo | Team | Trigger tipici |
-|---|---|---|---|
-| **`airchetipo-inception`** | Facilitazione interattiva della product discovery e generazione del PRD (visione, personas, MVP, architettura, requisiti funzionali). | 🧭 Andrea · 💼 Costanza · 🎨 Livia · 📐 Leonardo · 🔎 Emanuele | "definisci il prodotto", "idea di prodotto", "scrivi un PRD" |
-| **`airchetipo-spec`** | Creazione del backlog iniziale dal PRD **oppure** aggiunta di nuove user story a un backlog esistente. Auto-rilevamento della modalità. | 🧭 Andrea · 🔎 Emanuele | "crea il backlog", "aggiungi una storia", "serve una feature per…" |
-| **`airchetipo-design`** | Generazione di mockup frontend distintivi, isolati in `docs/mockups/`. Non tocca mai il codice applicativo. | 🎨 Livia | "fammi un mockup", "concept della dashboard", "landing page" |
-| **`airchetipo-plan`** | Pianificazione tecnica di una user story: analisi, soluzione architetturale, task breakdown, strategia di test (con e2e quando serve). | 🔎 Emanuele · 📐 Leonardo · 🔧 Ugo · 🧪 Mina | "pianifica US-005", "come lo costruiamo?", "rompi la storia in task" |
-| **`airchetipo-implement`** | Implementazione guidata della storia pianificata: codice, test, esecuzione della suite, code review rigorosa, fix loop, transizione a `REVIEW`. | 🔧 Ugo · 🧪 Mina · 🔍 Cesare | "implementa US-005", "esegui la prossima storia pronta" |
-
-> La cartella `skills-extra/` contiene skill sperimentali riservate a **versioni future** (integrazioni con Figma Make, Vibe Kanban, e altre in lavorazione). Non sono ancora parte del flusso ufficiale.
+| Skill | Scopo | Trigger tipici |
+|---|---|---|
+| **`airchetipo-inception`** | Facilitazione interattiva della product discovery e generazione del PRD (visione, personas, MVP, architettura, requisiti funzionali). | "definisci il prodotto", "idea di prodotto", "scrivi un PRD" |
+| **`airchetipo-spec`** | Creazione del backlog iniziale dal PRD **oppure** aggiunta di nuove user story a un backlog esistente. Auto-rilevamento della modalità. | "crea il backlog", "aggiungi una storia", "serve una feature per…" |
+| **`airchetipo-design`** | Generazione di mockup frontend distintivi, isolati in `docs/mockups/`. Non tocca mai il codice applicativo. | "fammi un mockup", "concept della dashboard", "landing page" |
+| **`airchetipo-plan`** | Pianificazione tecnica di una user story: analisi, soluzione architetturale, task breakdown, strategia di test (con e2e quando serve). | "pianifica US-005", "come lo costruiamo?", "rompi la storia in task" |
+| **`airchetipo-implement`** | Implementazione guidata della storia pianificata: codice, test, esecuzione della suite, code review rigorosa, fix loop, transizione a `REVIEW`. | "implementa US-005", "esegui la prossima storia pronta" |
 
 ---
 
@@ -201,9 +184,7 @@ Il catalogo completo delle operazioni supportate da ogni connector è in [`.airc
 
 ## Filosofia
 
-- **Il team è una lente, non un costume.** Ogni persona virtuale applica un angolo di analisi specifico; il loro "brief" è conciso e serve a rendere visibile il processo, non a generare verbosità.
-- **Contesto lean.** Le skill leggono solo ciò che serve e in ordine: shared-runtime → contracts → connector → template. I file grandi si leggono chirurgicamente.
-- **Output persistenti.** Ogni fase produce artefatti che vivono nel repo (o nel sistema connector). Il prossimo comando — o il prossimo giorno di lavoro — parte da lì.
+- **Output persistenti.** Ogni fase produce artefatti che vivono nel repo (o nel sistema connector). Il prossimo comando, o il prossimo giorno di lavoro,  parte da lì.
 - **Autonomia responsabile.** Le skill si fermano solo davanti a blocker reali (dipendenze esterne, ambiguità sul contratto). Adattamenti locali, fix meccanici e aggiornamenti di test non richiedono conferma.
 - **Tool-agnostico e connector-agnostico.** Cambiare AI agent o sistema di tracking non deve riscrivere il processo.
 
@@ -220,19 +201,13 @@ No. Ogni skill è utilizzabile in isolamento. Puoi partire direttamente da `airc
 <details>
 <summary><b>Posso usare AIRchetipo su un progetto già esistente?</b></summary>
 
-Sì. `airchetipo-spec` in modalità `extend-backlog` aggiunge storie a un backlog esistente. `airchetipo-plan` e `airchetipo-implement` lavorano su qualsiasi storia presente, indipendentemente da come è stata creata.
-</details>
-
-<details>
-<summary><b>Cosa succede se il mio AI tool non supporta i subagent?</b></summary>
-
-Le skill principali funzionano lo stesso, in modalità in-context. Solo `airchetipo-autopilot` richiede subagent isolati, perché orchestra più passi per storia.
+Sì. `airchetipo-spec` aggiunge storie a un backlog esistente. `airchetipo-plan` e `airchetipo-implement` lavorano su qualsiasi storia presente, indipendentemente da come è stata creata.
 </details>
 
 <details>
 <summary><b>Gli artefatti sono vincolati a un formato?</b></summary>
 
-I template in `references/` sono opinati ma modificabili. Se usi il connector `github`, le issue seguono un layout preciso — vedi `.airchetipo/connectors/github.md`.
+I template in `references/` sono modificabili. Se usi il connector `github`, le issue seguono un layout preciso, vedi `.airchetipo/connectors/github.md`.
 </details>
 
 <details>
