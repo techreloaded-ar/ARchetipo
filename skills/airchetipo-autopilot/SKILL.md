@@ -73,7 +73,7 @@ Autopilot Controller (main context, lightweight — never reads codebase)
 **Context isolation is absolute.** Each subagent:
 - Starts with an empty context — no residue from any previous subagent
 - Receives ONLY: the command to execute, the working directory, and a 1-2 sentence summary of previous stories
-- Reads the project harness inputs, config, backlog, and codebase from scratch — exactly as if the user typed the command in a new terminal session
+- Reads the project context, config, backlog, and codebase from scratch — exactly as if the user typed the command in a new terminal session
 - Terminates completely after execution — its context is destroyed
 - Returns only a 1-3 sentence summary to the controller
 
@@ -248,7 +248,7 @@ Execute /airchetipo-plan {US-CODE}
 
 ## Instructions
 
-1. Read the project harness inputs and configuration files if present (for example `.airchetipo/config.yaml` and any detected agent-instructions or conventions files) to understand the project structure and conventions
+1. Read the project context and configuration files if present (for example `.airchetipo/config.yaml`, `CLAUDE.md`, `AGENTS.md`, or other agent-instructions files) to understand the project structure and conventions
 2. Execute the planning skill for story {US-CODE}
 3. When done, return a concise summary (1-2 sentences) of the plan produced and whether it succeeded
 ```
@@ -294,7 +294,7 @@ Execute /airchetipo-implement {US-CODE}
 
 ## Instructions
 
-1. Read the project harness inputs and configuration files if present (for example `.airchetipo/config.yaml` and any detected agent-instructions or conventions files) to understand the project structure and conventions
+1. Read the project context and configuration files if present (for example `.airchetipo/config.yaml`, `CLAUDE.md`, `AGENTS.md`, or other agent-instructions files) to understand the project structure and conventions
 2. Execute the implementation skill for story {US-CODE}
 3. When done, return a concise summary (2-3 sentences) of what was implemented, tests written, and code review result
 ```
@@ -460,6 +460,6 @@ This skill requires an AI coding tool that supports these capabilities:
 - Isolated subagents or worker contexts
 - Passing a working directory and a short task prompt to each subagent
 - Independent execution of sequential pipeline steps without shared residual context
-- Reading project harness inputs, config, backlog, and repository files from the subagent context itself
+- Reading project context, config, backlog, and repository files from the subagent context itself
 
 Any agentic IDE or CLI that provides these capabilities is compatible; the skill logic must remain capability-based rather than vendor-specific.

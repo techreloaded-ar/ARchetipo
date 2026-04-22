@@ -102,7 +102,7 @@ Do not avoid worker-backed execution only because a wave must be scheduled seque
 5. Execute `READ: read_story_detail` to load the full story content.
 6. Execute `READ: read_story_tasks` to load the implementation plan (task list). If no plan exists, stop and display the template from `references/output-templates.md` ("No implementation plan" error message).
 
-7. Load the relevant project context: harness inputs, conventions, project config, and existing patterns in the touched area.
+7. Load the relevant project context: agent instructions (CLAUDE.md, AGENTS.md), project config, conventions, and existing patterns in the touched area.
 8. If the plan contains UI work, scan it for mockups or design references and search `{config.paths.mockups}` for matching files. Treat explicitly referenced mockups as the source of truth.
 9. Execute `WRITE: transition_status` to move the story to `{config.workflow.statuses.in_progress}`.
 10. Announce the session briefly using the template from `references/output-templates.md` ("Session Announcement").
@@ -174,7 +174,7 @@ Apply this section when the plan requires e2e coverage, or when Mina determines 
 - Do not skip e2e coverage only because it is harder than unit or integration testing
 
 **Authoring**
-- Detect the existing e2e framework from project config, `package.json`, harness inputs, and existing tests
+- Detect the existing e2e framework from project config, `package.json`, agent instructions files, and existing tests
 - Reuse the existing stack when present
 - Map each e2e scenario to a user flow described in the plan
 - Write real end-to-end flows: navigation, interaction, waiting, and outcome assertions
@@ -192,7 +192,7 @@ Decision rule — record a demo video for this story when **all** of the followi
 - The increment is observable through the UI or a user-facing artifact (a downloaded file, a received email preview, a visible state change). A pure API change, schema migration, refactor, infra wiring, or config tweak does not qualify.
 - A non-technical reviewer (PM, stakeholder, new teammate) would plausibly gain understanding from watching it.
 
-Skip the demo video when the story is purely technical (refactor, dependency upgrade, internal service extraction, test harness work, build tooling), when there is no user-visible surface, or when `Demonstrates` is missing or unfilmable. Skipping is a normal outcome, not a failure — note it briefly in the completion summary ("No demo video: technical story, no user-visible surface").
+Skip the demo video when the story is purely technical (refactor, dependency upgrade, internal service extraction, build tooling), when there is no user-visible surface, or when `Demonstrates` is missing or unfilmable. Skipping is a normal outcome, not a failure — note it briefly in the completion summary ("No demo video: technical story, no user-visible surface").
 
 Skipping the demo video does not remove the obligation to write e2e tests when the plan requires them. E2E coverage and video recording are independent decisions: e2e tests can run without producing videos.
 

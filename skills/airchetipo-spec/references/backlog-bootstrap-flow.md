@@ -96,17 +96,15 @@ Ask the user only if a critical piece of information is missing and cannot be in
 
 ## Phase 2 - Epic Identification
 
-### Harness Detection
+### Foundation Check
 
-Before identifying epics:
-- check whether `{config.harness.agent_instructions}` exists in the project root
-- otherwise, use the shared harness discovery routine from `SKILL.md`
+Before identifying epics, check whether the project already has development foundation artifacts: `CLAUDE.md`, `AGENTS.md`, existing test configuration, or CI/CD setup.
 
-If no project harness inputs are found:
+If no foundation artifacts are found:
 - generate `EP-000: Project Foundation` as the first epic
-- include high-priority stories to establish the development harness and verify the environment
+- include high-priority stories to establish the development environment and verify it works end-to-end
 
-If a project harness is already present:
+If foundation artifacts are already present:
 - skip `EP-000`
 
 ### Epic Rules

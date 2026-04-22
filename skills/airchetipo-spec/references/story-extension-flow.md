@@ -65,7 +65,7 @@ Read `{config.paths.prd}` if available and extract vision, personas, MVP scope a
 ### Step 3 - Codebase Scan
 
 In parallel with Step 2, read the technical context:
-- harness inputs discovered through `SKILL.md`
+- agent instructions files if present: `CLAUDE.md`, `AGENTS.md`, or similar
 - repository root directories
 - schema or model files such as `schema.prisma`, `models/`, `types/`, `src/types/`
 - entry points and route folders such as `app/`, `src/app/`, `routes/`, `pages/`, `src/routes/`

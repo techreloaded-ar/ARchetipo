@@ -103,10 +103,6 @@ Collect internally:
 - local development environment
 - CI/CD strategy
 - target infrastructure
-- harness blueprint:
-  - context map
-  - quality gates
-  - bootstrap requirements
 
 Leonardo proposes a concrete architecture.
 
@@ -114,8 +110,6 @@ Then Costanza challenges the buildability from the perspective of an AI coding a
 - what is still implicit
 - what conventions need to be documented
 - where an implementation agent might get stuck
-
-Then Leonardo proposes the harness blueprint.
 
 ## Phase 3 - Requirements
 
@@ -140,7 +134,6 @@ Minimum required to generate the PRD:
 - at least 1 complete persona
 - MVP scope
 - technical architecture
-- harness blueprint
 - at least 10 functional requirements
 
 Every 3-4 rounds, show a short progress block:

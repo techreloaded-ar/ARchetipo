@@ -176,26 +176,6 @@ When the inception flow has gathered the minimum required information, generate 
 
 ---
 
-## Harness Blueprint
-
-> **Proposed by:** Leonardo (Architect)
->
-> This section defines the development harness that enables AI agents to produce reliable code.
-
-### Context Map
-
-{{CONTEXT_MAP_RECOMMENDATIONS}}
-
-### Quality Gates
-
-{{QUALITY_GATES_RECOMMENDATIONS}}
-
-### Bootstrap Requirements
-
-{{BOOTSTRAP_REQUIREMENTS}}
-
----
-
 ## Functional Requirements
 
 {{FUNCTIONAL_REQUIREMENTS}}

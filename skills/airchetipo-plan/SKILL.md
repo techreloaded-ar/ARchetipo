@@ -107,7 +107,7 @@ Silently perform all of the following — this is your chain of thought, not vis
 - **If the story involves UI or user interaction**, Mina MUST define an e2e testing strategy that includes:
   - User scenarios to simulate (complete user flows, not isolated clicks — e.g., "user registers, logs in, creates first project")
   - Video recording enabled for every e2e scenario (to produce visual artifacts of test runs), with videos saved in `{config.paths.test_results}/{story-id}/`
-  - The e2e framework to use, detected from the project (existing config files, `package.json`, harness inputs, and current repository conventions). Do NOT hardcode any specific framework — adapt to whatever the project uses
+  - The e2e framework to use, detected from the project (existing config files, `package.json`, agent instructions files, and current repository conventions). Do NOT hardcode any specific framework — adapt to whatever the project uses
   - If no e2e infrastructure exists in the project, include a setup task (TASK) in the task list for installing and configuring the framework, including video recording support
   - **This e2e strategy MUST be included in the planning document — it is not optional.** The implement skill will only write e2e tests if this strategy is present in the plan. Omitting the e2e strategy for a UI story is a planning error.
 
