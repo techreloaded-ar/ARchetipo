@@ -2,34 +2,36 @@
 
 # ARchetipo
 
-**Un team AI al tuo fianco, dall'idea al prodotto finito.**
+**English** · [Italiano](README.it.md)
 
-Un workflow spec driven che trasforma il tuo assistente AI in una squadra di sviluppo prodotto: analista, architetto, sviluppatore, tester, reviewer, designer, ognuno con il proprio ruolo e voce.
+**An AI team at your side, from idea to finished product.**
+
+A spec-driven workflow that turns your AI assistant into a product development squad: analyst, architect, developer, tester, reviewer, designer — each with their own role and voice.
 
 [![Status](https://img.shields.io/badge/status-beta-orange.svg)](#)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](#licenza)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 [![Made for](https://img.shields.io/badge/made%20for-Claude%20Code%20%7C%20Codex%20%7C%20Gemini%20%7C%20OpenCode%20%7C%20Copilot-black.svg)](#)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#)
 
-[Quickstart](#quickstart) · [Skill](#skill) · [Come funziona](#come-funziona) · [Configurazione](#configurazione) · [FAQ](#faq)
+[Quickstart](#quickstart) · [Skills](#skill-details) · [How it works](#the-workflow) · [Configuration](#configuration) · [FAQ](#faq)
 
 </div>
 
 ---
 
-## Perché ARchetipo
+## Why ARchetipo
 
-Gli AI coding agent sono potenti, ma tendono a rispondere a prompt isolati senza un processo. **ARchetipo introduce un flusso di lavoro ispirato ai team di prodotto reali**, con ruoli specializzati e artefatti persistenti (PRD, backlog, piani tecnici, mockup) che si passano da una fase all'altra.
+AI coding agents are powerful, but they tend to answer isolated prompts without a process. **ARchetipo introduces a workflow inspired by real product teams**, with specialized roles and persistent artifacts (PRD, backlog, technical plans, mockups) that flow from one phase to the next.
 
-- **Un processo, non un prompt.** Dalla discovery al code review, ogni fase ha la propria skill, i propri ruoli e i propri output.
-- **Agnostico rispetto al tool.** Le stesse skill funzionano su Claude Code, Codex, Gemini CLI, OpenCode e GitHub Copilot.
-- **Autonomo quando serve.** Il flusso può essere guidato passo-passo oppure lanciato in autopilot sull'intero backlog.
+- **A process, not a prompt.** From discovery to code review, every phase has its own skill, its own roles, and its own outputs.
+- **Tool-agnostic.** The same skills work on Claude Code, Codex, Gemini CLI, OpenCode, and GitHub Copilot.
+- **Autonomous when needed.** The flow can be guided step-by-step or launched on autopilot across the whole backlog.
 
 ---
 
 ## Quickstart
 
-### 1. Installa ARchetipo nel tuo progetto
+### 1. Install ARchetipo in your project
 
 **macOS / Linux**
 
@@ -43,22 +45,22 @@ curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/inst
 irm https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.ps1 | iex
 ```
 
-L'installer:
-1. Scarica le skill da GitHub.
-2. Mostra un menu interattivo per scegliere su quali AI tool installarle.
-3. Copia ogni skill nella directory corretta del tool.
-4. Crea la cartella `.archetipo` con le configurazioni di default.
+The installer:
+1. Downloads the skills from GitHub.
+2. Shows an interactive menu to pick which AI tools to install them on.
+3. Copies every skill into the correct directory for each tool.
+4. Creates the `.archetipo` folder with default configuration.
 
-**Prerequisiti:**
-- `curl` + `unzip` su macOS/Linux (inclusi di default)
-- PowerShell 5.1+ su Windows
-- opzionale [`gh` CLI](https://cli.github.com/) autenticato se usi il connector GitHub.
+**Prerequisites:**
+- `curl` + `unzip` on macOS/Linux (included by default)
+- PowerShell 5.1+ on Windows
+- optional [`gh` CLI](https://cli.github.com/) authenticated if you use the GitHub connector.
 
 ---
 
-## Il workflow
+## The workflow
 
-ARchetipo è un set di **skill** che compongono un **worflow**. Ogni skill incarna una fase del processo, ispirata alla metodologia **Spec-Driven Development**: il ciclo `spec → plan → implement` si ripete per ogni incremento di prodotto in maniera continuativa.
+ARchetipo is a set of **skills** that compose a **workflow**. Each skill embodies one phase of the process, inspired by the **Spec-Driven Development** methodology: the `spec → plan → implement` cycle repeats continuously for each product increment.
 
 
 ```mermaid
@@ -68,8 +70,8 @@ flowchart LR
 
     subgraph Loop["Spec-Driven Loop"]
         direction TB
-        S["<b>Spec</b><br/><i>→ backlog</i>"] --> P["<b>Plan</b><br/><i>→ piano tecnico</i>"]
-        P --> IM["<b>Implement</b><br/><i>→ codice + test</i>"]
+        S["<b>Spec</b><br/><i>→ backlog</i>"] --> P["<b>Plan</b><br/><i>→ technical plan</i>"]
+        P --> IM["<b>Implement</b><br/><i>→ code + tests</i>"]
         IM -. next story .-> S
     end
 
@@ -83,69 +85,69 @@ flowchart LR
     class D aside;
 ```
 
-- **Inception** (`/archetipo-inception`) è one-shot: Lancia  la product discovery e produce un documenti di requisiti `PRD` (visione, personas, MVP, architettura, requisiti funzionali).
-- **Spec** (`/archetipo-spec`) apre il ciclo iterativo. Genera il `Backlog` iniziale partendo dal `PRD`, oppure lo estende con nuove user story.
-- **Plan** (`/archetipo-plan`) pianifica la singola storia. Si occupa di analisi tecnca, task breakdown e strategia di test. Se la storia richiede UI nuova, invoca automaticamente Design.
-- **Implement** (`/archetipo-implement`) esegue il piano. Genera codice e test, conduce una code review rigorosa e prepara la storia per essere revisionata dall'utente.
-  
-- **Design** produce mockup frontend distintivi. Viene invocato da `/archetipo-plan` quando serve UI per una nuova funzionalità, o direttamente con `/archetipo-design` per esplorare concept visivi senza toccare il codice applicativo.
+- **Inception** (`/archetipo-inception`) is one-shot: it runs product discovery and produces a `PRD` (Product Requirements Document) covering vision, personas, MVP, architecture, and functional requirements.
+- **Spec** (`/archetipo-spec`) opens the iterative loop. It generates the initial `Backlog` from the `PRD`, or extends it with new user stories.
+- **Plan** (`/archetipo-plan`) plans a single story. It handles technical analysis, task breakdown, and test strategy. If the story requires new UI, it automatically invokes Design.
+- **Implement** (`/archetipo-implement`) executes the plan. It produces code and tests, runs a rigorous code review, and hands the story off for user review.
 
-Il ciclo `Spec → Plan → Implement` si ripete per ogni funzionalità.
+- **Design** produces distinctive frontend mockups. It is invoked by `/archetipo-plan` when new UI is needed for a feature, or directly via `/archetipo-design` to explore visual concepts without touching the application code.
 
-### Il team
+The `Spec → Plan → Implement` cycle repeats for every feature.
 
-In ogni fase di ARchetipo, avrai a che fare con personas AI diverse, ognuna con ruolo e competenze ben definite.
+### The team
 
-| Persona | Ruolo | Competenza principale |
+In every phase of ARchetipo, you will work with different AI personas, each with a clear role and set of skills.
+
+| Persona | Role | Main expertise |
 |---|---|---|
-| 🧭 **Andrea** | Product Manager | Vision, personas, scope dell'MVP |
-| 💼 **Costanza** | Business Analyst | Requisiti funzionali e regole di dominio |
-| 🔎 **Emanuele** | Requirements Analyst | Chiarisce acceptance criteria ed edge case |
-| 📐 **Leonardo** | Architect | Soluzione tecnica e decisioni architetturali |
-| 🔧 **Ugo** | Full-Stack Developer | Implementazione e task breakdown |
-| 🧪 **Mina** | Test Architect | Strategia di test e coverage |
-| 🔍 **Cesare** | Code Reviewer | Qualità, sicurezza, aderenza al piano |
-| 🎨 **Livia** | UX Designer | Mockup e linguaggio visivo |
+| 💎 **Andrea** | Product Manager | Vision, personas, MVP scope |
+| 🧭 **Costanza** | Business Strategist | Brainstorming and discovery |
+| 🔎 **Emanuele** | Requirements Analyst | Clarifies acceptance criteria and edge cases |
+| 📐 **Leonardo** | Architect | Technical solution and architectural decisions |
+| 🔧 **Ugo** | Full-Stack Developer | Implementation and task breakdown |
+| 🧪 **Mina** | Test Architect | Test strategy and coverage |
+| 🔍 **Cesare** | Code Reviewer | Quality, security, adherence to the plan |
+| ✨ **Livia** | UX Designer | Mockups and visual language |
 
-### Architettura connector
+### Connector architecture
 
-Le skill non sanno **dove** vivono gli artefatti: delegano la persistenza a un **connector** configurabile.
+Skills don't know **where** artifacts live: they delegate persistence to a configurable **connector**.
 
-- **Interfaccia** → `.archetipo/contracts.md` (catalogo delle operazioni)
-- **Implementazione** → `.archetipo/connectors/<nome>.md` (come eseguirle)
+- **Interface** → `.archetipo/contracts.md` (operations catalog)
+- **Implementation** → `.archetipo/connectors/<name>.md` (how to run them)
 
-Cambiare connector = cambiare file, senza toccare le skill.
+Switching connectors = switching files, without touching the skills.
 
-| Connector | Dove finiscono gli artefatti |
+| Connector | Where artifacts land |
 |---|---|
-| `file` *(default)* | File markdown locali nel repo |
+| `file` *(default)* | Local markdown files in the repo |
 | `github` | Issues + GitHub Projects v2 |
-| *custom* | Linear, Jira, Notion, … (estendibile) |
+| *custom* | Linear, Jira, Notion, … (extensible) |
 
 ---
 
-## Dettagli delle Skill
+## Skill details
 
-| Skill | Scopo | Trigger tipici |
+| Skill | Purpose | Typical triggers |
 |---|---|---|
-| **`archetipo-inception`** | Facilitazione interattiva della product discovery e generazione del PRD (visione, personas, MVP, architettura, requisiti funzionali). | "definisci il prodotto", "idea di prodotto", "scrivi un PRD" |
-| **`archetipo-spec`** | Creazione del backlog iniziale dal PRD **oppure** aggiunta di nuove user story a un backlog esistente. Auto-rilevamento della modalità. | "crea il backlog", "aggiungi una storia", "serve una feature per…" |
-| **`archetipo-design`** | Generazione di mockup frontend distintivi, isolati in `docs/mockups/`. Non tocca mai il codice applicativo. | "fammi un mockup", "concept della dashboard", "landing page" |
-| **`archetipo-plan`** | Pianificazione tecnica di una user story: analisi, soluzione architetturale, task breakdown, strategia di test (con e2e quando serve). | "pianifica US-005", "come lo costruiamo?", "rompi la storia in task" |
-| **`archetipo-implement`** | Implementazione guidata della storia pianificata: codice, test, esecuzione della suite, code review rigorosa, fix loop, transizione a `REVIEW`. | "implementa US-005", "esegui la prossima storia pronta" |
+| **`archetipo-inception`** | Interactive facilitation of product discovery and PRD generation (vision, personas, MVP, architecture, functional requirements). | "define the product", "product idea", "write a PRD" |
+| **`archetipo-spec`** | Create the initial backlog from the PRD **or** add new user stories to an existing backlog. Mode is auto-detected. | "create the backlog", "add a story", "we need a feature for…" |
+| **`archetipo-design`** | Generate distinctive frontend mockups, isolated in `docs/mockups/`. Never touches application code. | "make me a mockup", "dashboard concept", "landing page" |
+| **`archetipo-plan`** | Technical planning of a user story: analysis, architectural solution, task breakdown, test strategy (including e2e when needed). | "plan US-005", "how do we build this?", "break the story into tasks" |
+| **`archetipo-implement`** | Guided implementation of the planned story: code, tests, suite execution, rigorous code review, fix loop, transition to `REVIEW`. | "implement US-005", "run the next ready story" |
 
 ---
 
-## Configurazione
+## Configuration
 
-Dopo l'installazione, `.archetipo/config.yaml` contiene i parametri del progetto:
+After installation, `.archetipo/config.yaml` holds the project parameters:
 
 ```yaml
 connector: file              # file | github
 
 paths:
   prd: docs/PRD.md
-  backlog: docs/BACKLOG.md   # solo per connector file
+  backlog: docs/BACKLOG.md   # file connector only
   planning: docs/planning/
   mockups: docs/mockups/
   test_results: docs/test-results/
@@ -156,75 +158,75 @@ workflow:
     planned: PLANNED
     in_progress: IN PROGRESS
     review: REVIEW
-    done: DONE               # transizione manuale
+    done: DONE               # manual transition
 
-github:                      # solo per connector github
+github:                      # github connector only
   # owner: auto-detected
   # project_number: auto-detected
 ```
 
-### Connector disponibili
+### Available connectors
 
 #### `file` *(default)*
 
-- Backlog in un singolo file markdown (`docs/BACKLOG.md`).
-- Piani tecnici in `docs/planning/US-XXX.md`.
-- Zero dipendenze esterne, tutto versionato con il tuo repo.
+- Backlog in a single markdown file (`docs/BACKLOG.md`).
+- Technical plans in `docs/planning/US-XXX.md`.
+- Zero external dependencies, everything versioned with your repo.
 
 #### `github`
 
-- Backlog come issue su un GitHub Project v2.
-- Storie e task collegati tramite sub-issue.
-- Transizioni di stato come campi custom del Project.
-- Richiede `gh` CLI autenticato con permessi `repo` + `project`.
+- Backlog as issues on a GitHub Project v2.
+- Stories and tasks linked via sub-issues.
+- State transitions as Project custom fields.
+- Requires `gh` CLI authenticated with `repo` + `project` scopes.
 
-Il catalogo completo delle operazioni supportate da ogni connector è in [`.archetipo/contracts.md`](.archetipo/contracts.md).
+The full catalog of operations supported by each connector lives in [`.archetipo/contracts.md`](.archetipo/contracts.md).
 
 ---
 
-## Filosofia
+## Philosophy
 
-- **Output persistenti.** Ogni fase produce artefatti che vivono nel repo (o nel sistema connector). Il prossimo comando, o il prossimo giorno di lavoro,  parte da lì.
-- **Autonomia responsabile.** Le skill si fermano solo davanti a blocker reali (dipendenze esterne, ambiguità sul contratto). Adattamenti locali, fix meccanici e aggiornamenti di test non richiedono conferma.
-- **Tool-agnostico e connector-agnostico.** Cambiare AI agent o sistema di tracking non deve riscrivere il processo.
+- **Persistent output.** Every phase produces artifacts that live in the repo (or in the connector system). The next command, or the next working day, starts from there.
+- **Responsible autonomy.** Skills only stop at real blockers (external dependencies, contract ambiguity). Local adjustments, mechanical fixes, and test updates don't require confirmation.
+- **Tool-agnostic and connector-agnostic.** Switching the AI agent or tracking system shouldn't rewrite the process.
 
 ---
 
 ## FAQ
 
 <details>
-<summary><b>Devo usare tutte le skill?</b></summary>
+<summary><b>Do I have to use all the skills?</b></summary>
 
-No. Ogni skill è utilizzabile in isolamento. Puoi partire direttamente da `archetipo-plan` se hai già un backlog scritto a mano, o usare solo `archetipo-design` per esplorare concept visivi.
+No. Every skill can be used in isolation. You can start directly from `archetipo-plan` if you already have a hand-written backlog, or use only `archetipo-design` to explore visual concepts.
 </details>
 
 <details>
-<summary><b>Posso usare ARchetipo su un progetto già esistente?</b></summary>
+<summary><b>Can I use ARchetipo on an existing project?</b></summary>
 
-Sì. `archetipo-spec` aggiunge storie a un backlog esistente. `archetipo-plan` e `archetipo-implement` lavorano su qualsiasi storia presente, indipendentemente da come è stata creata.
+Yes. `archetipo-spec` adds stories to an existing backlog. `archetipo-plan` and `archetipo-implement` work on any existing story, regardless of how it was created.
 </details>
 
 <details>
-<summary><b>Gli artefatti sono vincolati a un formato?</b></summary>
+<summary><b>Are artifacts bound to a specific format?</b></summary>
 
-I template in `references/` sono modificabili. Se usi il connector `github`, le issue seguono un layout preciso, vedi `.archetipo/connectors/github.md`.
+The templates in `references/` are editable. If you use the `github` connector, issues follow a precise layout — see `.archetipo/connectors/github.md`.
 </details>
 
 <details>
-<summary><b>Perché i nomi italiani (Emanuele, Leonardo, Ugo, Mina, Cesare, Livia)?</b></summary>
+<summary><b>Why the Italian names (Emanuele, Leonardo, Ugo, Mina, Cesare, Livia)?</b></summary>
 
-ARchetipo nasce in Italia e mantiene una voce riconoscibile: un team con nomi propri funziona meglio di "the analyst agent" / "the architect agent". Le skill parlano comunque nella lingua della conversazione (auto-detected).
+ARchetipo was born in Italy and keeps a recognizable voice: a team with proper names works better than "the analyst agent" / "the architect agent". Skills still speak the language of the conversation (auto-detected).
 </details>
 
 <details>
-<summary><b>Come si fa il debug di una skill?</b></summary>
+<summary><b>How do I debug a skill?</b></summary>
 
-Ogni skill dichiara quali reference carica. Attiva la modalità verbose del tuo AI tool e controlla che le operazioni connector (`READ:`, `WRITE:`) siano eseguite nell'ordine atteso. `.archetipo/contracts.md` è la fonte di verità.
+Every skill declares which references it loads. Turn on your AI tool's verbose mode and verify that connector operations (`READ:`, `WRITE:`) are executed in the expected order. `.archetipo/contracts.md` is the source of truth.
 </details>
 
 ---
 
-## Licenza
+## License
 
 MIT © [techreloaded](https://github.com/techreloaded-ar)
 
@@ -232,8 +234,8 @@ MIT © [techreloaded](https://github.com/techreloaded-ar)
 
 <div align="center">
 
-**Se ARchetipo ti è utile, lascia una ⭐ al repo e condividilo con il tuo team.**
+**If ARchetipo is useful to you, leave a ⭐ on the repo and share it with your team.**
 
-[Report bug](https://github.com/techreloaded-ar/ARchetipo/issues) · [Richiedi feature](https://github.com/techreloaded-ar/ARchetipo/issues) · [Discussions](https://github.com/techreloaded-ar/ARchetipo/discussions)
+[Report bug](https://github.com/techreloaded-ar/ARchetipo/issues) · [Request feature](https://github.com/techreloaded-ar/ARchetipo/issues) · [Discussions](https://github.com/techreloaded-ar/ARchetipo/discussions)
 
 </div>
