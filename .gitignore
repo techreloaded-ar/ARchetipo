@@ -16,9 +16,6 @@ AGENTS.md s
 .mcp.json
 cursor
 
-# Project-specific
-docs/
-
 # Skill tester related files/folder
 skills/*-workspace
 evals.json

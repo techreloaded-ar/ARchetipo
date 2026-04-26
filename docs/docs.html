@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documentazione · ARchetipo</title>
+<meta name="description" content="Guida tecnica ad ARchetipo: installazione, glossario, pipeline delle skill, backend, configurazione e troubleshooting.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="container nav-inner">
+    <a class="brand" href="./index.html">
+      <span class="brand-mark">A</span>
+      <span>ARchetipo</span>
+    </a>
+    <nav class="nav-links">
+      <a href="index.html#come-funziona">Come funziona</a>
+      <a href="index.html#team">Team</a>
+      <a href="index.html#skills">Skill</a>
+      <a href="docs.html" style="color:var(--text);background:rgba(255,255,255,0.04);">Docs</a>
+    </nav>
+    <a class="nav-cta" href="https://github.com/techreloaded-ar/ARchetipo">
+      GitHub
+      <span class="arrow">→</span>
+    </a>
+  </div>
+</header>
+
+<div class="docs-shell">
+  <aside class="docs-toc" aria-label="Indice">
+    <div class="toc-title">In questa pagina</div>
+    <a href="#intro">Introduzione</a>
+    <a href="#install">Installazione</a>
+    <a href="#prerequisiti">Prerequisiti</a>
+    <a href="#quickstart">Quickstart end-to-end</a>
+    <a href="#glossario">Glossario</a>
+    <a href="#pipeline">La pipeline</a>
+    <a href="#decision">Da dove parto?</a>
+    <a href="#backend">Backend</a>
+    <a href="#config">Configurazione</a>
+    <a href="#lingua">Lingua e conversazione</a>
+    <a href="#filosofia">Filosofia</a>
+    <a href="#faq">FAQ</a>
+    <a href="#troubleshooting">Troubleshooting</a>
+    <a href="#licenza">Licenza</a>
+  </aside>
+
+  <main class="docs-main">
+    <div class="kicker">Documentazione tecnica</div>
+    <h1 class="lead-h1">Guida completa ad ARchetipo.</h1>
+    <p>ARchetipo è un sistema di sei skill che governa il ciclo di vita iniziale di un progetto software: dalla discovery del prodotto fino all'implementazione, con agenti virtuali specializzati a ogni fase. Pensato per sviluppatori che vogliono trasformare un AI coding agent in un team di prodotto reale — concreto, senza fronzoli.</p>
+
+    <div class="callout">
+      <strong>In breve.</strong> ARchetipo è un set di skill markdown che trasforma un AI coding agent (Claude Code, Codex, Gemini CLI, OpenCode, Copilot) in un team di prodotto. Le skill leggono <code>.archetipo/config.yaml</code> per sapere dove salvare gli artefatti, poi operano astrattamente sui connector.
+    </div>
+
+    <h2 id="intro">1 · Il progetto</h2>
+    <p>ARchetipo è un framework di skill per AI coding agent che governa il ciclo di vita iniziale di un progetto software. Sei skill concatenate in pipeline coprono l'intero percorso: dalla discovery del prodotto e la definizione del PRD, fino alla creazione del backlog, alla pianificazione tecnica e all'implementazione del codice. Ogni skill coinvolge un team virtuale di specialisti che collaborano sotto la direzione dell'agente. Gli artefatti prodotti vengono salvati su file system locale in Markdown o su GitHub Projects v2.</p>
+
+    <h3>Il team virtuale</h3>
+    <p>Otto persone virtuali, ognuna con un angolo di analisi specifico. I nomi restano invariati in qualsiasi lingua — sono identità, non traduzioni.</p>
+    <table>
+      <thead>
+        <tr><th>Nome</th><th>Ruolo</th><th>Focus</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Andrea</strong></td><td>Product Manager</td><td>Scope, priorità e valore di business</td></tr>
+        <tr><td><strong>Costanza</strong></td><td>Business Strategist</td><td>Analisi di mercato e posizionamento</td></tr>
+        <tr><td><strong>Leonardo</strong></td><td>Software Architect</td><td>Decisioni architetturali e tech stack</td></tr>
+        <tr><td><strong>Livia</strong></td><td>UX Designer</td><td>Esperienza utente, mockup, design system</td></tr>
+        <tr><td><strong>Emanuele</strong></td><td>Business Analyst</td><td>Requisiti funzionali e acceptance criteria</td></tr>
+        <tr><td><strong>Ugo</strong></td><td>Senior Developer</td><td>Implementazione e code quality</td></tr>
+        <tr><td><strong>Mina</strong></td><td>QA Engineer</td><td>Strategia di test, e2e e copertura</td></tr>
+        <tr><td><strong>Cesare</strong></td><td>Code Reviewer</td><td>Revisione, standard e best practice</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="install">2 · Installazione</h2>
+    <p>Un unico script installa tutto: scarica le skill, mostra un menu interattivo per selezionare gli AI tool di destinazione, copia ogni skill nella directory corretta e crea <code>.archetipo/config.yaml</code>.</p>
+
+    <div class="tabs radio-tabs">
+      <input type="radio" name="os" id="tab-mac" checked>
+      <label class="tab-label" for="tab-mac">macOS / Linux</label>
+      <input type="radio" name="os" id="tab-win">
+      <label class="tab-label" for="tab-win">Windows (PowerShell)</label>
+      <div class="tab-content" style="grid-column:1/-1;margin-top:18px;">
+        <div class="tab-panel" id="panel-mac">
+          <div class="code-block">
+            <div class="code-head"><span>terminal</span><span>bash</span></div>
+<pre><span class="cmt"># macOS / Linux</span>
+<span class="p">curl</span> -fsSL https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.sh | <span class="p">bash</span>
+</pre>
+          </div>
+        </div>
+        <div class="tab-panel" id="panel-win">
+          <div class="code-block">
+            <div class="code-head"><span>PowerShell</span><span>ps1</span></div>
+<pre><span class="cmt"># Windows</span>
+<span class="p">irm</span> https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.ps1 | <span class="p">iex</span>
+</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h3>Cosa fa l'installer</h3>
+    <ul>
+      <li>Scarica le skill ufficiali dal repository GitHub.</li>
+      <li>Mostra un menu interattivo per scegliere su quali AI tool installarle.</li>
+      <li>Copia ciascuna skill nella directory corretta del tool selezionato.</li>
+      <li>Crea <code>.archetipo/config.yaml</code> con il connector scelto (<code>file</code> di default).</li>
+    </ul>
+
+    <h2 id="prerequisiti">3 · Prerequisiti</h2>
+    <ul>
+      <li><strong>macOS / Linux:</strong> <code>curl</code> e <code>unzip</code> (inclusi di default nella maggior parte delle distribuzioni).</li>
+      <li><strong>Windows:</strong> PowerShell 5.1 o superiore.</li>
+      <li><strong>Opzionale:</strong> <a href="https://cli.github.com/">gh CLI</a> autenticato con permessi <code>repo</code> + <code>project</code>, solo se pianifichi di usare il connector GitHub.</li>
+    </ul>
+
+    <h2 id="quickstart">4 · Quickstart end-to-end</h2>
+    <p>Dopo l'installazione, segui questo flusso nel tuo AI coding agent. Ogni slash-command invoca una skill che produce artefatti persistenti e alimenta la fase successiva.</p>
+
+    <div class="code-block">
+      <div class="code-head"><span>AI agent</span><span>commands</span></div>
+<pre><span class="cmt"># 1 · Definisci il prodotto</span>
+<span class="p">&gt;</span> /archetipo-inception
+  <span class="v">→ docs/PRD.md</span>
+
+<span class="cmt"># 2 · (opzionale) Concept visivi</span>
+<span class="p">&gt;</span> /archetipo-design
+  <span class="v">→ docs/mockups/</span>
+
+<span class="cmt"># 3 · Genera il backlog iniziale</span>
+<span class="p">&gt;</span> /archetipo-spec
+  <span class="v">→ docs/BACKLOG.md</span>
+
+<span class="cmt"># 4 · Pianifica una storia</span>
+<span class="p">&gt;</span> /archetipo-plan US-001
+  <span class="v">→ docs/planning/US-001.md</span>
+
+<span class="cmt"># 5 · Implementa</span>
+<span class="p">&gt;</span> /archetipo-implement US-001
+  <span class="v">→ codice + test + code review</span>
+  <span class="v">→ storia transita in REVIEW</span>
+
+<span class="cmt"># Alternativa · esecuzione autonoma di più storie</span>
+<span class="p">&gt;</span> /archetipo-autopilot
+  <span class="v">→ avanzamento coordinato del backlog</span>
+</pre>
+    </div>
+
+    <div class="callout">
+      <strong>Auto-detect della lingua.</strong> Ogni skill adotta automaticamente la lingua della conversazione. Scrivi in italiano, ricevi artefatti in italiano. Scrivi in inglese, ricevi artefatti in inglese.
+    </div>
+
+    <h2 id="glossario">5 · Glossario</h2>
+    <p>Concetti di base che ricorrono in tutta la documentazione e nelle skill.</p>
+    <table>
+      <thead>
+        <tr><th>Termine</th><th>Significato</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>PRD</strong></td><td>Product Requirements Document — definisce cosa costruire, per chi e perché. È il punto di partenza della pipeline.</td></tr>
+        <tr><td><strong>Backlog</strong></td><td>Lista ordinata di user story da implementare, ciascuna con priorità, stima e stato (TODO → PLANNED → IN PROGRESS → REVIEW → DONE).</td></tr>
+        <tr><td><strong>User story</strong></td><td>Unità atomica di requisito dal punto di vista dell'utente: "Come &lt;persona&gt; voglio &lt;azione&gt; così che &lt;beneficio&gt;".</td></tr>
+        <tr><td><strong>Epic</strong></td><td>Raggruppamento di user story correlate con un obiettivo condiviso. Ogni story appartiene a un epic.</td></tr>
+        <tr><td><strong>Planning file</strong></td><td>Documento tecnico per una singola story con soluzione, task ordinati, dipendenze e strategia di test. Salvato in <code>docs/planning/US-XXX.md</code>.</td></tr>
+        <tr><td><strong>INVEST</strong></td><td>Criteri di qualità per le user story: Indipendente, Negoziabile, Valorosa, Estimabile, Small, Testabile.</td></tr>
+        <tr><td><strong>Acceptance criteria</strong></td><td>Condizioni verificabili che definiscono quando una story può considerarsi completata.</td></tr>
+        <tr><td><strong>Backend</strong></td><td>Modalità di storage degli artefatti del progetto: file system locale (Markdown) oppure GitHub Projects v2 + Issues.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="pipeline">6 · La pipeline</h2>
+    <p>Le sei skill si concatenano in una sequenza orientata alla delivery. Ogni skill produce artefatti consumati dalla successiva. ARchetipo implementa la metodologia <strong>Spec-Driven Development</strong>: la specifica è il contratto, e il ciclo <code>spec → plan → implement</code> si ripete per ogni slice di valore fino a completare il prodotto.</p>
+
+    <h3>Stati workflow</h3>
+    <p>Le storie transitano tra stati standardizzati. Le transizioni automatiche avvengono durante il loop; il passaggio finale a <code>DONE</code> è sempre manuale.</p>
+    <table>
+      <thead>
+        <tr><th>Stato</th><th>Significato</th><th>Transizione</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>TODO</code></td><td>Storia nel backlog, non ancora lavorata</td><td>auto (da spec)</td></tr>
+        <tr><td><code>PLANNED</code></td><td>Pianificazione tecnica completata</td><td>auto (da plan)</td></tr>
+        <tr><td><code>IN PROGRESS</code></td><td>Implementazione in corso</td><td>auto (da implement)</td></tr>
+        <tr><td><code>REVIEW</code></td><td>Code review + test passati, pronta per approvazione umana</td><td>auto (fine implement)</td></tr>
+        <tr><td><code>DONE</code></td><td>Storia accettata e rilasciata</td><td>manuale</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Le sei skill</h3>
+
+    <h4 style="margin-top:32px;font-family:var(--mono);font-size:15px;color:var(--accent-2);">01 · <code>archetipo-inception</code></h4>
+    <p><strong>Discovery e definizione del prodotto.</strong> Guida la fase di discovery con un team virtuale. Raccoglie obiettivi, scope e ipotesi di business, produce il PRD.</p>
+    <ul>
+      <li><strong>Output:</strong> <code>docs/PRD.md</code></li>
+      <li><strong>Prerequisito:</strong> nessuno</li>
+      <li><strong>Team:</strong> Andrea, Costanza, Leonardo, Livia, Emanuele</li>
+    </ul>
+
+    <h4 style="margin-top:32px;font-family:var(--mono);font-size:15px;color:var(--accent-2);">02 · <code>archetipo-design</code> <span style="font-family:var(--mono);font-size:11px;color:var(--warn);margin-left:6px;">OPZIONALE</span></h4>
+    <p><strong>Mockup e prototipi UI.</strong> Produce mockup HTML/CSS isolati in <code>docs/mockups/</code> senza toccare il codice applicativo. Usati come riferimento visivo da <code>archetipo-implement</code>.</p>
+    <ul>
+      <li><strong>Output:</strong> <code>docs/mockups/</code></li>
+      <li><strong>Prerequisito:</strong> nessuno</li>
+      <li><strong>Team:</strong> Livia</li>
+    </ul>
+
+    <h4 style="margin-top:32px;font-family:var(--mono);font-size:15px;color:var(--accent-2);">03 · <code>archetipo-spec</code></h4>
+    <p><strong>Creazione ed estensione del backlog.</strong> Converte il PRD in backlog oppure aggiunge nuove story INVEST-compliant a uno esistente, con domande sfidanti di qualità. Auto-rileva la modalità.</p>
+    <ul>
+      <li><strong>Output:</strong> <code>docs/BACKLOG.md</code></li>
+      <li><strong>Prerequisito:</strong> PRD esistente</li>
+      <li><strong>Team:</strong> Andrea, Emanuele</li>
+    </ul>
+
+    <h4 style="margin-top:32px;font-family:var(--mono);font-size:15px;color:var(--accent-2);">04 · <code>archetipo-plan</code></h4>
+    <p><strong>Piano tecnico di implementazione.</strong> Trasforma una story TODO in piano tecnico con soluzione, task ordinati, dipendenze e strategia di test (inclusi e2e con video recording).</p>
+    <ul>
+      <li><strong>Output:</strong> <code>docs/planning/US-XXX.md</code></li>
+      <li><strong>Prerequisito:</strong> story in <code>BACKLOG.md</code></li>
+      <li><strong>Team:</strong> Emanuele, Leonardo, Ugo, Mina</li>
+    </ul>
+
+    <h4 style="margin-top:32px;font-family:var(--mono);font-size:15px;color:var(--accent-2);">05 · <code>archetipo-implement</code></h4>
+    <p><strong>Scrittura di codice e test.</strong> Esegue il piano tecnico: scrive codice, test unit/integration/e2e, effettua code review automatica e porta la story verso <code>REVIEW</code>.</p>
+    <ul>
+      <li><strong>Output:</strong> codice + test + backlog aggiornato</li>
+      <li><strong>Prerequisito:</strong> planning file (story <code>PLANNED</code>)</li>
+      <li><strong>Team:</strong> Ugo, Mina, Cesare</li>
+    </ul>
+
+    <h4 style="margin-top:32px;font-family:var(--mono);font-size:15px;color:var(--accent-2);">⚡ <code>archetipo-autopilot</code> <span style="font-family:var(--mono);font-size:11px;color:var(--accent-2);margin-left:6px;">MODALITÀ AUTOMATICA</span></h4>
+    <p><strong>Esecuzione autonoma del ciclo plan → implement.</strong> Coordina automaticamente <code>plan</code> e <code>implement</code> su più story in sequenza usando subagent isolati. Configurabile per epic, priorità, numero massimo di story e strategia sugli errori. Alternativa al ciclo manuale.</p>
+    <ul>
+      <li><strong>Output:</strong> avanzamento coordinato del backlog</li>
+      <li><strong>Prerequisito:</strong> story TODO/PLANNED nel backlog</li>
+      <li><strong>Team:</strong> orchestratore (nessun ruolo dedicato)</li>
+    </ul>
+
+    <div class="callout warn">
+      <strong>Skill sperimentali.</strong> La cartella <code>skills-extra/</code> contiene skill riservate a versioni future (integrazioni con Figma Make, Vibe Kanban, e altre in lavorazione). Non fanno parte del flusso ufficiale.
+    </div>
+
+    <h2 id="decision">7 · Da dove parto?</h2>
+    <p>Guida rapida per scegliere la skill giusta in base alla fase del tuo progetto. Segui le domande in ordine.</p>
+
+    <ul>
+      <li><strong>Hai già un PRD?</strong> Se <em>no</em> → parti da <code>archetipo-inception</code> per condurre la discovery e produrre il documento.</li>
+      <li><strong>Vuoi concept visivi prima dello sviluppo?</strong> Se <em>sì</em> → usa <code>archetipo-design</code> per mockup HTML/CSS isolati in <code>docs/mockups/</code>.</li>
+      <li><strong>Hai un backlog con user story?</strong> Se <em>no</em>, hai solo il PRD → usa <code>archetipo-spec</code> per generare backlog strutturato con epic e story INVEST-compliant.</li>
+      <li><strong>Le story sono già pianificate (PLANNED)?</strong> Se <em>no</em>, sono in TODO → usa <code>archetipo-plan</code> per produrre il piano tecnico con task, dipendenze e strategia di test.</li>
+      <li><strong>Hai più story pronte da processare in autonomia?</strong> Se <em>sì</em> → <code>archetipo-autopilot</code> esegue il ciclo plan→implement su più story con subagent isolati e state file per riprendere se interrotto. Se <em>no</em>, una alla volta → <code>archetipo-implement</code>.</li>
+    </ul>
+
+    <h2 id="backend">8 · Backend supportati</h2>
+    <p>ARchetipo supporta due modalità di storage, configurabili in <code>.archetipo/config.yaml</code> tramite il campo <code>backend: file | github</code>. Le skill non gestiscono mai direttamente la persistenza: il flusso è sempre lo stesso.</p>
+
+    <ul>
+      <li>La skill legge <code>.archetipo/config.yaml</code> per sapere quale connector è attivo.</li>
+      <li>La skill carica <code>.archetipo/contracts.md</code> (catalogo delle operazioni).</li>
+      <li>La skill carica <code>.archetipo/connectors/{file|github}.md</code> (implementazione).</li>
+      <li>La skill chiama operazioni astratte come <code>READ: fetch_backlog_items</code>, <code>WRITE: save_plan</code>, <code>WRITE: transition_status</code>.</li>
+    </ul>
+    <p>Risultato: puoi cambiare <strong>dove</strong> vivono i tuoi artefatti senza cambiare una riga nelle skill.</p>
+
+    <div class="connector-cards" style="margin-top:24px;">
+      <div class="connector-card">
+        <div class="kind">Default · file</div>
+        <h4>File system locale</h4>
+        <ul>
+          <li>Artefatti in Markdown locale</li>
+          <li>Backlog in <code>docs/BACKLOG.md</code></li>
+          <li>Piani in <code>docs/planning/US-XXX.md</code></li>
+          <li>Mockup in <code>docs/mockups/US-XXX/</code></li>
+          <li>Nessuna autenticazione, funziona offline</li>
+          <li>Ideale per progetti solo o early-stage</li>
+        </ul>
+      </div>
+      <div class="connector-card">
+        <div class="kind">Cloud · github</div>
+        <h4>GitHub Projects v2</h4>
+        <ul>
+          <li>Story come GitHub Issues con labels</li>
+          <li>Piano nel corpo dell'issue</li>
+          <li>Sub-issues per ogni task eseguibile</li>
+          <li>Transizioni di stato come campi custom del Project</li>
+          <li>Richiede <code>gh auth refresh -s project</code></li>
+          <li>Ideale per team distribuiti con stakeholder visibili sul tracking</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout" style="margin-top:24px;">
+      <strong>Contratto completo.</strong> Il catalogo delle operazioni supportate da ogni connector è in <code>.archetipo/contracts.md</code>. Se vuoi scrivere un connector custom (Linear, Jira, Trello) parti da lì.
+    </div>
+
+    <h2 id="config">9 · Configurazione</h2>
+    <p>Dopo l'installazione, <code>.archetipo/config.yaml</code> contiene tutti i parametri del progetto. È versionato nel repo e può essere modificato a mano.</p>
+
+    <div class="code-block">
+      <div class="code-head"><span>.archetipo/config.yaml</span><span>yaml</span></div>
+<pre><span class="k">connector</span>: <span class="v">file</span>              <span class="cmt"># file | github</span>
+
+<span class="k">paths</span>:
+  <span class="k">prd</span>:          <span class="s">docs/PRD.md</span>
+  <span class="k">backlog</span>:      <span class="s">docs/BACKLOG.md</span>   <span class="cmt"># solo per connector file</span>
+  <span class="k">planning</span>:     <span class="s">docs/planning/</span>
+  <span class="k">mockups</span>:      <span class="s">docs/mockups/</span>
+  <span class="k">test_results</span>: <span class="s">docs/test-results/</span>
+
+<span class="k">workflow</span>:
+  <span class="k">statuses</span>:
+    <span class="k">todo</span>:        <span class="s">TODO</span>
+    <span class="k">planned</span>:     <span class="s">PLANNED</span>
+    <span class="k">in_progress</span>: <span class="s">IN PROGRESS</span>
+    <span class="k">review</span>:      <span class="s">REVIEW</span>
+    <span class="k">done</span>:        <span class="s">DONE</span>               <span class="cmt"># transizione manuale</span>
+
+<span class="k">github</span>:                      <span class="cmt"># solo per connector github</span>
+  <span class="cmt"># owner:          auto-detected</span>
+  <span class="cmt"># project_number: auto-detected</span>
+</pre>
+    </div>
+
+    <h2 id="lingua">10 · Lingua e conversazione</h2>
+    <p>Le skill rilevano automaticamente la lingua del messaggio utente e adattano tutti gli artefatti di conseguenza. Questo include:</p>
+    <ul>
+      <li>Testo del PRD, delle user story e dei piani tecnici.</li>
+      <li>Commit message e descrizioni di PR.</li>
+      <li>Copy dei mockup generati da <code>archetipo-design</code>.</li>
+    </ul>
+    <p>I nomi delle persone virtuali (Andrea, Costanza, Emanuele, Leonardo, Ugo, Mina, Cesare, Livia) restano invariati — sono identità, non traduzioni.</p>
+
+    <h2 id="filosofia">11 · Filosofia</h2>
+    <ul>
+      <li><strong>Il team è una lente, non un costume.</strong> Ogni persona applica un angolo di analisi. Il brief è conciso e serve a rendere visibile il processo.</li>
+      <li><strong>Contesto lean.</strong> Le skill leggono solo ciò che serve, nell'ordine: <code>shared-runtime → contracts → connector → template</code>. I file grandi si leggono chirurgicamente.</li>
+      <li><strong>Output persistenti.</strong> Ogni fase produce artefatti che vivono nel repo o nel sistema connector. Il prossimo comando parte da lì.</li>
+      <li><strong>Autonomia responsabile.</strong> Le skill si fermano solo davanti a blocker reali (dipendenze esterne, ambiguità sul contratto). Adattamenti locali e fix meccanici non richiedono conferma.</li>
+      <li><strong>Tool e connector agnostici.</strong> Cambiare AI agent o sistema di tracking non deve riscrivere il processo.</li>
+    </ul>
+
+    <h2 id="faq">12 · FAQ</h2>
+
+    <h3>Serve sempre il PRD per iniziare?</h3>
+    <p>Per costruire un backlog solido sì: il PRD è il punto di partenza ideale. Se non esiste ancora, usa <code>archetipo-inception</code> per crearlo prima di passare a <code>archetipo-spec</code>.</p>
+
+    <h3>Posso aggiungere story senza rifare tutto il backlog?</h3>
+    <p>Sì. <code>archetipo-spec</code> distingue tra generazione iniziale ed estensione: se il backlog esiste, aggiunge o raffina story senza ripartire da zero.</p>
+
+    <h3>Quando ha senso usare autopilot invece del ciclo manuale?</h3>
+    <p>Quando hai più story già ordinate nel backlog e vuoi delegare il ciclo operativo agli agenti. Il percorso manuale è migliore quando vuoi revisionare ogni piano prima dell'implementazione.</p>
+
+    <h3>I mockup prodotti da design finiscono nel codice applicativo?</h3>
+    <p>No. <code>archetipo-design</code> produce file isolati in <code>docs/mockups/</code> usati solo come riferimento visivo da <code>archetipo-implement</code>, che li legge prima di scrivere l'interfaccia reale.</p>
+
+    <h3>Posso usare ARchetipo su un progetto già esistente?</h3>
+    <p>Sì. <code>archetipo-spec</code> in modalità extend-backlog aggiunge storie a un backlog esistente. <code>archetipo-plan</code> e <code>archetipo-implement</code> lavorano su qualsiasi storia presente, indipendentemente da come è stata creata.</p>
+
+    <h3>Cosa succede se il mio AI tool non supporta i subagent?</h3>
+    <p>Le skill principali funzionano lo stesso, in modalità in-context. Solo <code>archetipo-autopilot</code> richiede subagent isolati, perché orchestra più passi per storia.</p>
+
+    <h2 id="troubleshooting">13 · Troubleshooting</h2>
+
+    <h3>La skill non trova il PRD</h3>
+    <p>Verifica che <code>paths.prd</code> in <code>.archetipo/config.yaml</code> punti al file corretto. Il valore di default è <code>docs/PRD.md</code>.</p>
+
+    <h3>Il connector GitHub non transiziona le issue</h3>
+    <p>Controlla che <code>gh</code> sia autenticato (<code>gh auth status</code>) e che il token abbia gli scope <code>repo</code> e <code>project</code>. Le transizioni di stato avvengono tramite GraphQL sui campi custom del Project.</p>
+
+    <h3>Gli artefatti sono nella lingua sbagliata</h3>
+    <p>Le skill rilevano la lingua dall'ultimo messaggio utente. Se il contesto è misto, invia un messaggio esplicito nella lingua desiderata prima di invocare la skill.</p>
+
+    <h3>Debug di una skill</h3>
+    <p>Ogni skill dichiara quali reference carica. Attiva la modalità verbose del tuo AI tool e controlla che le operazioni connector (<code>READ:</code>, <code>WRITE:</code>) siano eseguite nell'ordine atteso. <code>.archetipo/contracts.md</code> è la fonte di verità.</p>
+
+    <h2 id="licenza">14 · Licenza</h2>
+    <p>MIT © <a href="https://github.com/techreloaded-ar">techreloaded</a>. Fork, modifiche e contributi benvenuti — apri una PR o una discussion sul repository.</p>
+
+    <div class="callout" style="margin-top:40px;">
+      <strong>Serve altro?</strong> Per segnalare bug, proporre feature o chiedere supporto, apri una issue sul <a href="https://github.com/techreloaded-ar/ARchetipo/issues">repository GitHub</a> o entra nelle <a href="https://github.com/techreloaded-ar/ARchetipo/discussions">Discussions</a>.
+    </div>
+  </main>
+</div>
+
+<footer>
+  <div class="inner">
+    <div>ARchetipo · MIT © <a href="https://github.com/techreloaded-ar" style="color:var(--text-2);">techreloaded</a></div>
+    <div class="f-links">
+      <a href="index.html">Home</a>
+      <a href="https://github.com/techreloaded-ar/ARchetipo">GitHub</a>
+      <a href="https://github.com/techreloaded-ar/ARchetipo/issues">Issues</a>
+      <a href="https://github.com/techreloaded-ar/ARchetipo/discussions">Discussions</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
