@@ -55,18 +55,7 @@ Pick a story from the backlog by code or auto-select by priority.
    - Find that story in the backlog
    - If not found, list available stories and stop
 
-2. **If a free-text description was passed** (not a US-XXX code):
-   - Read the existing backlog to determine the next available US code and existing epics
-   - Create a new user story following the standard backlog template:
-     - Assign the next available US code
-     - Infer the most relevant existing epic (or create EP-NEW if none fits)
-     - Infer priority (default MEDIUM) and story points (default 3)
-     - Write story text ("As [persona], I want..., so that...") and acceptance criteria
-   - Append the new story to `{config.paths.backlog}` in the appropriate epic section
-   - Update the **Backlog Summary** table at the top
-   - Select the newly added story as the target
-
-3. **If no argument was passed (auto-select):**
+2. **If no argument was passed (auto-select):**
    - Among eligible stories (filtered by status criteria from the caller), select highest priority (HIGH > MEDIUM > LOW)
    - Break ties with the lowest story number (US-001 before US-002)
    - If no eligible stories exist, inform the user and stop
