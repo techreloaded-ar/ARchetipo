@@ -59,19 +59,9 @@ func Register() {
 // SETUP
 
 func (c *Connector) InitializeConnector(ctx context.Context) (domain.SetupInfo, error) {
-	repo, err := c.detectRepo(ctx)
+	repo, project, err := c.resolveBoard(ctx)
 	if err != nil {
 		return domain.SetupInfo{}, err
-	}
-	project, err := c.findProject(ctx, repo)
-	if err != nil {
-		return domain.SetupInfo{}, err
-	}
-	if project == nil {
-		return domain.SetupInfo{}, iox.NewPrecondition(
-			"no GitHub Projects v2 backlog linked to this repository",
-			"run `archetipo-spec` to create one, or create a project titled \""+repo.Name+" Backlog\" and link it",
-			nil)
 	}
 	c.state.repo = repo
 	c.state.project = project
@@ -412,62 +402,6 @@ func (c *Connector) detectRepo(ctx context.Context) (*domain.RepoInfo, error) {
 		Slug:   raw.NameWithOwner,
 		NodeID: raw.ID,
 	}, nil
-}
-
-// findProject lists projects owned by repo.Owner and applies the preference
-// pipeline documented in the original github.md (exact title, then "Backlog",
-// then lowest number).
-func (c *Connector) findProject(ctx context.Context, repo *domain.RepoInfo) (*domain.ProjectInfo, error) {
-	var raw struct {
-		Projects []struct {
-			Number int    `json:"number"`
-			ID     string `json:"id"`
-			Title  string `json:"title"`
-			URL    string `json:"url"`
-		} `json:"projects"`
-	}
-	if err := runJSON(ctx, c.runner, &raw,
-		"project", "list", "--owner", repo.Owner, "--format", "json",
-	); err != nil {
-		return nil, err
-	}
-	if c.cfg.GitHub.ProjectNumber > 0 {
-		for _, p := range raw.Projects {
-			if p.Number == c.cfg.GitHub.ProjectNumber {
-				return c.loadProjectFields(ctx, repo, p.Number, p.ID, p.URL)
-			}
-		}
-	}
-	exactTitle := repo.Name + " Backlog"
-	type cand struct {
-		num   int
-		id    string
-		title string
-		url   string
-	}
-	candidates := make([]cand, 0, len(raw.Projects))
-	for _, p := range raw.Projects {
-		candidates = append(candidates, cand{p.Number, p.ID, p.Title, p.URL})
-	}
-	// Preference 1: exact title.
-	for _, p := range candidates {
-		if p.title == exactTitle {
-			return c.loadProjectFields(ctx, repo, p.num, p.id, p.url)
-		}
-	}
-	// Preference 2: title containing "Backlog".
-	for _, p := range candidates {
-		if strings.Contains(p.title, "Backlog") {
-			return c.loadProjectFields(ctx, repo, p.num, p.id, p.url)
-		}
-	}
-	// Preference 3: lowest number.
-	if len(candidates) > 0 {
-		sort.Slice(candidates, func(i, j int) bool { return candidates[i].num < candidates[j].num })
-		p := candidates[0]
-		return c.loadProjectFields(ctx, repo, p.num, p.id, p.url)
-	}
-	return nil, nil
 }
 
 // loadProjectFields fetches the field metadata of a project and the items so

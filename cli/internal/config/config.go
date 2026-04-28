@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 
@@ -156,6 +157,101 @@ func (c Config) AbsPath(p string) string {
 		return p
 	}
 	return filepath.Join(c.ProjectRoot, p)
+}
+
+// Save patches the `github.owner` and `github.project_number` keys in the
+// existing config file, preserving comments and the order of unrelated keys
+// via yaml.Node. If the file does not yet exist a fresh one is written from
+// the in-memory Config. When ProjectRoot is empty (e.g. tests using
+// Default()) Save is a no-op.
+func (c Config) Save() error {
+	if c.ProjectRoot == "" {
+		return nil
+	}
+	path := filepath.Join(c.ProjectRoot, RelativePath)
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("creating .archetipo dir: %w", err)
+		}
+		// Bootstrap: emit only the keys that matter for the github connector.
+		// applyDefaults() will fill the rest at next Load. Avoids marshalling
+		// the whole Config, whose nested types (domain.ConfigPaths /
+		// domain.StatusLabels) lack yaml tags and would emit broken keys.
+		out := fmt.Sprintf("connector: %s\ngithub:\n  owner: %s\n  project_number: %d\n",
+			c.Connector, c.GitHub.Owner, c.GitHub.ProjectNumber)
+		return os.WriteFile(path, []byte(out), 0o644)
+	}
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if err := upsertGitHubSection(&doc, c.GitHub); err != nil {
+		return err
+	}
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return fmt.Errorf("encoding config: %w", err)
+	}
+	return os.WriteFile(path, out, 0o644)
+}
+
+// upsertGitHubSection finds (or creates) a top-level `github:` mapping inside
+// the YAML document and ensures `owner` and `project_number` keys reflect g.
+// Other keys under `github:` and elsewhere in the document are left untouched.
+func upsertGitHubSection(doc *yaml.Node, g GitHubConfig) error {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		// Empty or malformed document: rebuild a minimal mapping.
+		doc.Kind = yaml.DocumentNode
+		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return fmt.Errorf("config root is not a mapping")
+	}
+	gh := findChildMapping(root, "github")
+	if gh == nil {
+		key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "github"}
+		gh = &yaml.Node{Kind: yaml.MappingNode}
+		root.Content = append(root.Content, key, gh)
+	}
+	setScalarChild(gh, "owner", g.Owner, "!!str")
+	setScalarChild(gh, "project_number", strconv.Itoa(g.ProjectNumber), "!!int")
+	return nil
+}
+
+// findChildMapping returns the value node for a given mapping key, or nil
+// when the key is absent or its value is not a mapping.
+func findChildMapping(m *yaml.Node, key string) *yaml.Node {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key && m.Content[i+1].Kind == yaml.MappingNode {
+			return m.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// setScalarChild sets a scalar key on a mapping, preserving any leading
+// comment already attached to the existing key. Adds the key when missing.
+// Resets Style so the new value is emitted plain regardless of how the
+// previous value was quoted.
+func setScalarChild(m *yaml.Node, key, value, tag string) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content[i+1].Kind = yaml.ScalarNode
+			m.Content[i+1].Tag = tag
+			m.Content[i+1].Value = value
+			m.Content[i+1].Style = 0
+			return
+		}
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: value},
+	)
 }
 
 // find walks up from start looking for .archetipo/config.yaml. Returns the

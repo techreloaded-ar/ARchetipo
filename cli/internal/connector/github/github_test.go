@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
@@ -73,5 +74,99 @@ func TestProjectPreference_TitleContainsBacklog(t *testing.T) {
 	}
 	if info.Project.Number != 3 {
 		t.Errorf("expected project 3 (contains Backlog), got %d", info.Project.Number)
+	}
+}
+
+// TestResolveBoard_ConfigPinsProjectNumber verifies that when the config
+// already carries owner + project_number the resolver picks that exact
+// project, regardless of title-based preferences.
+func TestResolveBoard_ConfigPinsProjectNumber(t *testing.T) {
+	m := newMock(t).
+		on("repo view --json", `{"id":"R","owner":{"login":"acme"},"name":"web","nameWithOwner":"acme/web"}`).
+		on("project list --owner acme", `{"projects":[
+			{"number":4,"id":"PVT4","title":"web Backlog","url":""},
+			{"number":9,"id":"PVT9","title":"Other","url":""}
+		]}`).
+		on("project field-list 9", `{"fields":[]}`)
+
+	cfg := config.Default()
+	cfg.Connector = config.ConnectorGitHub
+	cfg.GitHub.Owner = "acme"
+	cfg.GitHub.ProjectNumber = 9
+	c := NewWithRunner(cfg, m)
+
+	info, err := c.InitializeConnector(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Project.Number != 9 {
+		t.Errorf("expected pinned project 9, got %d", info.Project.Number)
+	}
+}
+
+// TestResolveBoard_StaleConfigNumberFails verifies that an outdated
+// project_number in the config produces an explicit precondition error and
+// does NOT silently fall back to title-based discovery.
+func TestResolveBoard_StaleConfigNumberFails(t *testing.T) {
+	m := newMock(t).
+		on("repo view --json", `{"id":"R","owner":{"login":"acme"},"name":"web","nameWithOwner":"acme/web"}`).
+		on("project list --owner acme", `{"projects":[
+			{"number":4,"id":"PVT4","title":"web Backlog","url":""}
+		]}`)
+
+	cfg := config.Default()
+	cfg.Connector = config.ConnectorGitHub
+	cfg.GitHub.Owner = "acme"
+	cfg.GitHub.ProjectNumber = 99 // not present
+	c := NewWithRunner(cfg, m)
+
+	_, err := c.InitializeConnector(context.Background())
+	if err == nil {
+		t.Fatal("expected precondition error for stale project_number")
+	}
+	if !strings.Contains(err.Error(), "project_number 99") {
+		t.Errorf("error message should mention stale number, got: %v", err)
+	}
+	if m.calledWithPrefix("project field-list 4") {
+		t.Errorf("must NOT fall back to title pipeline when config is stale")
+	}
+}
+
+// TestResolveBoard_NoProjectTriggersCreate verifies that when the user has
+// no project at all the resolver creates one, configures the canonical
+// custom fields, and aligns the Status options to workflow.statuses.
+func TestResolveBoard_NoProjectTriggersCreate(t *testing.T) {
+	m := newMock(t).
+		on("repo view --json", `{"id":"R","owner":{"login":"acme"},"name":"web","nameWithOwner":"acme/web"}`).
+		on("project list --owner acme", `{"projects":[]}`).
+		on("project create --owner acme --title web Backlog --format json",
+			`{"number":11,"id":"PVT11","url":"https://gh/p/11"}`).
+		on("project field-create 11 --owner acme --name Priority", "ok").
+		on("project field-create 11 --owner acme --name Story Points", "ok").
+		on("project field-list 11", `{"fields":[
+			{"id":"FID_status","name":"Status","type":"SINGLE_SELECT","options":[]}
+		]}`).
+		on("api graphql", `{"data":{"updateProjectV2Field":{"projectV2Field":{"id":"FID_status"}}}}`)
+
+	cfg := config.Default()
+	cfg.Connector = config.ConnectorGitHub
+	c := NewWithRunner(cfg, m)
+
+	info, err := c.InitializeConnector(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Project.Number != 11 {
+		t.Errorf("expected created project 11, got %d", info.Project.Number)
+	}
+	for _, want := range []string{
+		"project create --owner acme",
+		"project field-create 11 --owner acme --name Priority",
+		"project field-create 11 --owner acme --name Story Points",
+		"api graphql",
+	} {
+		if !m.calledWithPrefix(want) {
+			t.Errorf("expected gh call with prefix %q", want)
+		}
 	}
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -89,5 +90,91 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSave_PatchesGitHubKeysPreservingComments(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	initial := `connector: github
+# only valid for file connector
+paths:
+  prd: docs/PRD.md
+
+github:
+  # auto-detected on first run
+  owner: ""
+`
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(initial), 0o644))
+
+	c, err := Load(root)
+	must(t, err)
+	c.GitHub.Owner = "acme"
+	c.GitHub.ProjectNumber = 42
+	must(t, c.Save())
+
+	out, err := os.ReadFile(filepath.Join(root, RelativePath))
+	must(t, err)
+	s := string(out)
+	for _, want := range []string{
+		"# only valid for file connector",
+		"# auto-detected on first run",
+		"owner: acme",
+		"project_number: 42",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in saved file:\n%s", want, s)
+		}
+	}
+}
+
+func TestSave_AddsGitHubSectionWhenMissing(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	initial := `connector: github
+paths:
+  prd: docs/PRD.md
+`
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(initial), 0o644))
+
+	c, err := Load(root)
+	must(t, err)
+	c.GitHub.Owner = "x"
+	c.GitHub.ProjectNumber = 7
+	must(t, c.Save())
+
+	raw, err := os.ReadFile(filepath.Join(root, RelativePath))
+	must(t, err)
+	s := string(raw)
+	for _, want := range []string{"github:", "owner: x", "project_number: 7"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in saved file:\n%s", want, s)
+		}
+	}
+}
+
+func TestSave_NoOpWhenProjectRootEmpty(t *testing.T) {
+	c := Default()
+	c.GitHub.Owner = "x"
+	c.GitHub.ProjectNumber = 1
+	if err := c.Save(); err != nil {
+		t.Fatalf("Save with empty ProjectRoot should be a no-op, got %v", err)
+	}
+}
+
+func TestSave_CreatesFileWhenMissing(t *testing.T) {
+	root := t.TempDir()
+	c := Default()
+	c.ProjectRoot = root
+	c.Connector = ConnectorGitHub
+	c.GitHub.Owner = "y"
+	c.GitHub.ProjectNumber = 1
+	must(t, c.Save())
+
+	raw, err := os.ReadFile(filepath.Join(root, RelativePath))
+	must(t, err)
+	s := string(raw)
+	if !strings.Contains(s, "owner: y") || !strings.Contains(s, "project_number: 1") {
+		t.Errorf("fresh config missing github keys:\n%s", s)
 	}
 }
