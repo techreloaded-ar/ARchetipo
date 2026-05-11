@@ -152,7 +152,11 @@ Proceed with adding them? Or tell me what to change.
 
 ## Phase 3 - Output
 
-Write the payload to a YAML or JSON file, then call `.archetipo/bin/archetipo story add --file <path>`:
+Construct the full JSON payload string in your own context (not via shell heredoc or inline script). Choose a unique temp filename using the new story codes (e.g. `tmp-payload-US-016-US-018.json`). Write the file to `.archetipo/` using your file-writing tool. Then invoke `.archetipo/bin/archetipo story add --file <path>`. After the CLI exits, delete the temp file.
+
+> **⚠️ Cross-platform warning:** Do NOT generate the JSON via shell scripting (PowerShell heredoc, bash `cat <<EOF`, or pipe-to-stdin). Shell heredocs break when markdown bodies contain `$`, `{`, or `` ` `` characters. Shell variable interpolation converts objects to `[object Object]`. Use your file-writing tool to write the JSON file directly — this works correctly on every OS.
+>
+> **Temp file:** Use `.archetipo/tmp-payload-{first-new-code}-{last-new-code}.json`. The codes are known to you already. After the CLI command exits, delete it with `rm .archetipo/tmp-payload-{first-new-code}-{last-new-code}.json` (works in both bash and PowerShell). Always clean up, regardless of CLI success or failure.
 
 ```json
 {"stories":[{"code":"US-NNN","title":"...", ...}]}

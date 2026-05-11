@@ -47,7 +47,7 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
    - `.archetipo/bin/archetipo init`
    - `.archetipo/bin/archetipo story show {US-CODE}`
    - `.archetipo/bin/archetipo story show --status {config.workflow.statuses.todo}`
-   - `.archetipo/bin/archetipo story plan {US-CODE} --file -`
+   - `.archetipo/bin/archetipo story plan {US-CODE} --file <path>`
 
 #### Step 1 — Story Selection
 
@@ -157,7 +157,11 @@ In a **single turn**, produce both:
 
 **2. Save the plan and transition the story:**
 
-Serialize a YAML or JSON payload and pipe it to `.archetipo/bin/archetipo story plan {US-CODE} --file -` via stdin:
+Construct the full JSON payload string in your own context (not via shell heredoc or inline script). Choose a unique temp filename using the story code (e.g. `tmp-payload-US-005-plan.json`). Write the file to `.archetipo/` using your file-writing tool. Then invoke `.archetipo/bin/archetipo story plan {US-CODE} --file <path>`. After the CLI exits, delete the temp file.
+
+> **⚠️ Cross-platform warning:** Do NOT pipe the JSON through stdin via shell (`--file -` with shell pipe). Shell pipes are OS-dependent and can corrupt JSON that contains markdown with special characters (`` ` ``, `$`, `{`, line breaks, Unicode). Use your file-writing tool to write the JSON file first, then pass its path to `--file`.
+>
+> **Temp file:** Use `.archetipo/tmp-payload-{US-CODE}-plan.json`. The code is known to you already. After the CLI command exits, delete it with `rm .archetipo/tmp-payload-{US-CODE}-plan.json` (works in both bash and PowerShell). Always clean up, regardless of CLI success or failure.
 
 ```json
 {"plan_body":"<technical solution + test strategy as markdown>","tasks":[{"id":"TASK-01","title":"...","description":"...","type":"Impl|Test","status":"TODO","dependencies":[]}]}
