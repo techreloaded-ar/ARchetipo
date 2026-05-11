@@ -15,7 +15,7 @@ const (
 
 // Status is the workflow status of a story or task. Strings come from the
 // `workflow.statuses` map in .archetipo/config.yaml; the canonical set is the
-// one documented in contracts.md.
+// one built into the CLI defaults.
 type Status string
 
 const (

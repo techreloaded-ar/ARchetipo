@@ -41,8 +41,13 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
 
 #### Step 0 — Config Loading & Connector Dispatch
 
-1. Read `.archetipo/contracts.md` once for the CLI protocol reference.
-2. Run `.archetipo/bin/archetipo init` and parse the stdout JSON envelope; keep the `data` (SetupInfo) available.
+1. Run `.archetipo/bin/archetipo init` and parse the stdout JSON envelope; keep the `data` (SetupInfo) available.
+2. On failure, parse stderr as the JSON error envelope and branch on `error.code`.
+3. This skill uses only these CLI operations:
+   - `.archetipo/bin/archetipo init`
+   - `.archetipo/bin/archetipo story show {US-CODE}`
+   - `.archetipo/bin/archetipo story show --status {config.workflow.statuses.todo}`
+   - `.archetipo/bin/archetipo story plan {US-CODE} --file -`
 
 #### Step 1 — Story Selection
 

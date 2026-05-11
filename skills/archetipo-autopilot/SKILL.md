@@ -151,7 +151,11 @@ The state file has two purposes:
 
 1. Parse user arguments (steps, epic, priority, max-stories, stop-when, on-error)
 
-2. Read `.archetipo/contracts.md` once for the CLI protocol reference. Run `.archetipo/bin/archetipo init` and parse the stdout JSON envelope; keep `data` (SetupInfo) available.
+2. Run `.archetipo/bin/archetipo init` and parse the stdout JSON envelope; keep `data` (SetupInfo) available.
+   Parse stderr as the JSON error envelope and branch on `error.code`.
+   This skill uses only these CLI operations directly:
+   - `.archetipo/bin/archetipo init`
+   - `.archetipo/bin/archetipo backlog show [--status STATUS]`
 
 3. **Cleanup residual state files:** find all `.archetipo/autopilot-state-*.yaml` files with terminal status (`completed`, `max_reached`, `stopped`) and delete them.
 

@@ -348,13 +348,8 @@ install_config() {
 
   printf "\n  ${GREEN}✓${RESET} ${BOLD}.archetipo/config.yaml${RESET} ${DIM}(connector: %s)${RESET}\n" "$connector"
 
-  # Install connector contracts and implementations
+  # Install shared runtime metadata
   local source_root="$source_dir/.."
-  if [[ -f "$source_root/.archetipo/contracts.md" ]]; then
-    cp -f "$source_root/.archetipo/contracts.md" "$config_dir/contracts.md"
-    printf "  ${GREEN}✓${RESET} ${BOLD}.archetipo/contracts.md${RESET}\n"
-  fi
-
   if [[ -f "$source_root/.archetipo/shared-runtime.md" ]]; then
     cp -f "$source_root/.archetipo/shared-runtime.md" "$config_dir/shared-runtime.md"
     printf "  ${GREEN}✓${RESET} ${BOLD}.archetipo/shared-runtime.md${RESET}\n"

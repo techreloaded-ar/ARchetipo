@@ -17,7 +17,7 @@ import (
 // exit code. Stdin/stdout/stderr are taken as parameters so tests can drive the
 // CLI without touching the real OS streams.
 //
-// Exit codes follow contracts.md:
+// Exit codes follow the public CLI runtime contract:
 //
 //	0  ok
 //	1  generic error
@@ -44,7 +44,7 @@ func newRootCmd(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "archetipo",
 		Short:         "ARchetipo connector CLI",
-		Long:          "Deterministic CLI implementing the ARchetipo connector contracts (file and github).",
+		Long:          "Deterministic CLI implementing the ARchetipo workflow operations (file and github).",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       version.Version,

@@ -32,7 +32,7 @@ This section has priority over every other section in the skill.
 3. **Concurrency is conditional.** Run multiple workers concurrently only when tasks in the same wave are truly independent.
 4. **In-context fallback is non-blocking.** If workers are unavailable, unreliable, or not worth the overhead, execute the same pipeline in the current context. Lack of worker support is not an error and not a reason to stop.
 5. **Stop only for explicit blockers.** Do not invent new reasons to ask the user.
-6. **Connector operations are exposed by the CLI.** Read `.archetipo/contracts.md` once for the protocol reference. Every operation is a sub-command of `.archetipo/bin/archetipo`. Connector operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
+6. **Connector operations are exposed by the CLI.** Every operation is a sub-command of `.archetipo/bin/archetipo`. This skill uses `init`, `story show`, `story start`, `task done`, and `story review`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`. Connector operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
 
 ## Autonomy Policy
 
@@ -93,8 +93,8 @@ Do not avoid worker-backed execution only because a wave must be scheduled seque
 
 ### PHASE 0 - Setup, Story Selection, and Plan Loading
 
-1. Read `.archetipo/contracts.md` once for the CLI protocol reference.
-2. Run `.archetipo/bin/archetipo init` and parse the stdout JSON envelope; keep `data` (SetupInfo) available.
+1. Run `.archetipo/bin/archetipo init` and parse the stdout JSON envelope; keep `data` (SetupInfo) available.
+2. On failure, parse stderr as the JSON error envelope and branch on `error.code`.
 3. Load the story and its plan with a single CLI call:
    - If a code was passed: `.archetipo/bin/archetipo story show {US-CODE}`
    - Otherwise: `.archetipo/bin/archetipo story show --status {config.workflow.statuses.planned}` (auto-pick first eligible by priority + code)

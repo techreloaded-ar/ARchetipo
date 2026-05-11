@@ -51,8 +51,12 @@ In this mode:
 
 ## Config Loading & Connector Dispatch
 
-1. Read `.archetipo/contracts.md` once for the CLI protocol reference (envelope shape, sub-commands, error codes).
-2. Run `.archetipo/bin/archetipo init` and parse the stdout JSON envelope. The `data` field is a `SetupInfo` object.
+1. Run `.archetipo/bin/archetipo init` and parse the stdout JSON envelope. The `data` field is a `SetupInfo` object.
+2. On failure, parse stderr as the JSON error envelope and branch on `error.code`.
+3. This skill uses only these CLI operations:
+   - `.archetipo/bin/archetipo init`
+   - `.archetipo/bin/archetipo backlog show`
+   - `.archetipo/bin/archetipo story add --file <path|->`
 
 Extract and keep available from `data`:
 - `connector`
@@ -92,7 +96,7 @@ If a PRD is not found and the active flow needs one, ask the user for one of the
 Use these routing rules before producing any substantive output.
 
 1. Load this file
-2. Read `.archetipo/config.yaml`
+2. Run `.archetipo/bin/archetipo init` and use `data.paths` / `data.workflow.statuses` as the project metadata source
 3. Run backlog discovery
 4. Decide the flow
 

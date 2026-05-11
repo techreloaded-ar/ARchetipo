@@ -3,6 +3,35 @@
 This file contains runtime rules shared by all ARchetipo skills.
 Load this file once at activation time, before loading any flow reference.
 
+## CLI Runtime Contract
+
+ARchetipo skills use `.archetipo/bin/archetipo` as the only backend for PRD, backlog, plan, task, and workflow-status operations.
+
+Common rules:
+
+- Run `.archetipo/bin/archetipo init` at the start of every skill that needs project metadata or configured paths.
+- Parse stdout as a JSON success envelope:
+
+```json
+{"schema":"archetipo/v1","kind":"<kind>","data":{...}}
+```
+
+- Parse stderr as a JSON error envelope:
+
+```json
+{"schema":"archetipo/v1","kind":"error","error":{"code":"E_*","message":"...","hint":"..."}}
+```
+
+- Branch on `error.code`, never on `error.message`.
+- Treat exit codes as stable:
+  - `0`: success
+  - `1`: generic error
+  - `2`: invalid input
+  - `3`: connector/backend failure
+  - `4`: missing precondition
+- When `.archetipo/config.yaml` is absent, the CLI applies its built-in defaults for connector, paths, and workflow statuses.
+- Command-specific invocation forms, payloads, and semantics belong in each skill that uses them. Do not infer CLI operations from documentation files.
+
 ## Language Policy
 
 Detect the output language from the strongest available source, in priority order:

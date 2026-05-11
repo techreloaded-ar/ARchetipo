@@ -5,7 +5,7 @@
 // the contract, where artifacts live, and how workflow statuses are labelled.
 //
 // Defaults: when config.yaml does not exist, the file connector is selected
-// with the canonical paths and statuses documented in contracts.md.
+// with the canonical paths and statuses built into the CLI.
 package config
 
 import (

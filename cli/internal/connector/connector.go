@@ -1,6 +1,6 @@
 // Package connector defines the abstract interface implemented by every
-// ARchetipo connector. The 13 methods mirror 1:1 the operations documented in
-// .archetipo/contracts.md.
+// ARchetipo connector. The 13 methods mirror the public workflow operations
+// exposed by the CLI.
 package connector
 
 import (
@@ -14,7 +14,7 @@ import (
 //   - filefs.Connector: stores PRD, backlog and plans as YAML files.
 //   - github.Connector: stores backlog and plans as GitHub issues + Projects v2.
 //
-// Operations match the contract catalog. Methods take a context.Context so
+// Operations match the CLI surface. Methods take a context.Context so
 // long-running github calls can be cancelled and tested with timeouts.
 type Connector interface {
 	// SETUP

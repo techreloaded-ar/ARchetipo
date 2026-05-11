@@ -99,12 +99,12 @@ In ogni fase di ARchetipo, avrai a che fare con personas AI diverse, ognuna con 
 
 ### Architettura connector
 
-Le skill non sanno **dove** vivono gli artefatti: delegano la persistenza a un **connector** configurabile.
+Le skill non sanno **dove** vivono gli artefatti: delegano la persistenza a un **connector** configurabile tramite la CLI `archetipo`.
 
-- **Interfaccia** → `.archetipo/contracts.md` (catalogo delle operazioni)
-- **Implementazione** → `.archetipo/connectors/<nome>.md` (come eseguirle)
+- **Regole runtime** → `.archetipo/shared-runtime.md` (envelope JSON, gestione errori, disciplina CLI)
+- **Operazioni** → comandi `.archetipo/bin/archetipo ...` dichiarati esplicitamente dentro ogni skill
 
-Cambiare connector = cambiare file, senza toccare le skill.
+Cambiare connector avviene tramite `.archetipo/config.yaml`, senza toccare la logica di workflow delle skill.
 
 | Connector | Dove finiscono gli artefatti |
 |---|---|
@@ -168,14 +168,14 @@ github:                      # solo per connector github
 - Transizioni di stato come campi custom del Project.
 - Richiede `gh` CLI autenticato con permessi `repo` + `project`.
 
-Il catalogo completo delle operazioni supportate da ogni connector è in [`.archetipo/contracts.md`](.archetipo/contracts.md).
+La CLI è l'unica superficie backend. Ogni skill documenta i sub-comandi `archetipo` che usa davvero.
 
 ---
 
 ## Filosofia
 
 - **Output persistenti.** Ogni fase produce artefatti che vivono nel repo (o nel sistema connector). Il prossimo comando, o il prossimo giorno di lavoro,  parte da lì.
-- **Autonomia responsabile.** Le skill si fermano solo davanti a blocker reali (dipendenze esterne, ambiguità sul contratto). Adattamenti locali, fix meccanici e aggiornamenti di test non richiedono conferma.
+- **Autonomia responsabile.** Le skill si fermano solo davanti a blocker reali (dipendenze esterne, precondizioni CLI, ambiguità reali). Adattamenti locali, fix meccanici e aggiornamenti di test non richiedono conferma.
 - **Tool-agnostico e connector-agnostico.** Cambiare AI agent o sistema di tracking non deve riscrivere il processo.
 
 ---
@@ -209,7 +209,7 @@ ARchetipo nasce in Italia e mantiene una voce riconoscibile: un team con nomi pr
 <details>
 <summary><b>Come si fa il debug di una skill?</b></summary>
 
-Ogni skill dichiara quali reference carica. Attiva la modalità verbose del tuo AI tool e controlla che le operazioni connector (`READ:`, `WRITE:`) siano eseguite nell'ordine atteso. `.archetipo/contracts.md` è la fonte di verità.
+Ogni skill dichiara quali reference carica. Attiva la modalità verbose del tuo AI tool e controlla che i comandi `.archetipo/bin/archetipo ...` attesi siano eseguiti nell'ordine corretto.
 </details>
 
 ---

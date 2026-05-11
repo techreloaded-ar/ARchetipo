@@ -22,7 +22,7 @@ import (
 // Schema is the JSON envelope schema version emitted by every command.
 const Schema = "archetipo/v1"
 
-// Exit codes documented in contracts.md / plan.
+// Stable exit codes for the CLI runtime contract.
 const (
 	ExitOK              = 0
 	ExitGeneric         = 1

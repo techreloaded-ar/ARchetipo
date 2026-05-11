@@ -313,15 +313,8 @@ function Install-Config {
   Write-Host ".archetipo\config.yaml" -ForegroundColor White -NoNewline
   Write-Host " (connector: $Connector)" -ForegroundColor DarkGray
 
-  # Install connector contracts and implementations
+  # Install shared runtime metadata
   $sourceRoot = Split-Path $SourceDir -Parent
-  $contractsSource = Join-Path $sourceRoot ".archetipo\contracts.md"
-  if (Test-Path $contractsSource) {
-    Copy-Item -Path $contractsSource -Destination (Join-Path $configDir "contracts.md") -Force
-    Write-Host "  $([char]0x2713) " -ForegroundColor Green -NoNewline
-    Write-Host ".archetipo\contracts.md" -ForegroundColor White
-  }
-
   $sharedRuntimeSource = Join-Path $sourceRoot ".archetipo\shared-runtime.md"
   if (Test-Path $sharedRuntimeSource) {
     Copy-Item -Path $sharedRuntimeSource -Destination (Join-Path $configDir "shared-runtime.md") -Force

@@ -1,6 +1,6 @@
 # archetipo CLI
 
-Deterministic Go implementation of the ARchetipo connector contracts. Replaces the markdown connector files (`file.md`, `github.md`) with one binary that performs every operation defined in `.archetipo/contracts.md`.
+Deterministic Go implementation of the ARchetipo workflow operations. Replaces markdown-described connector behavior with one binary that performs the public backlog, story, task, PRD, and board operations directly.
 
 ## Build
 

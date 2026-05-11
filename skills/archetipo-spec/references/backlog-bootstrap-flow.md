@@ -34,8 +34,8 @@ Rotation rule:
 
 ## Connector Dispatch
 
-The connector is already loaded via `.archetipo/contracts.md` during `SKILL.md` config loading.
-All I/O operations in this flow use connector contract operations.
+The CLI runtime is already initialized during `SKILL.md` setup.
+All I/O operations in this flow use explicit `.archetipo/bin/archetipo ...` commands defined by the skill.
 Domain logic in this file is connector-independent.
 
 ## Phase 0 - Setup and PRD Discovery

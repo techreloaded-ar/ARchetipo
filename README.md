@@ -99,12 +99,12 @@ In every phase of ARchetipo, you will work with different AI personas, each with
 
 ### Connector architecture
 
-Skills don't know **where** artifacts live: they delegate persistence to a configurable **connector**.
+Skills don't know **where** artifacts live: they delegate persistence to a configurable **connector** through the `archetipo` CLI.
 
-- **Interface** → `.archetipo/contracts.md` (operations catalog)
-- **Implementation** → `.archetipo/connectors/<name>.md` (how to run them)
+- **Runtime rules** → `.archetipo/shared-runtime.md` (JSON envelopes, error handling, CLI discipline)
+- **Operations** → explicit `.archetipo/bin/archetipo ...` commands embedded in each skill
 
-Switching connectors = switching files, without touching the skills.
+Switching connectors happens through `.archetipo/config.yaml`, without touching the skills' workflow logic.
 
 | Connector | Where artifacts land |
 |---|---|
@@ -168,14 +168,14 @@ github:                      # github connector only
 - State transitions as Project custom fields.
 - Requires `gh` CLI authenticated with `repo` + `project` scopes.
 
-The full catalog of operations supported by each connector lives in [`.archetipo/contracts.md`](.archetipo/contracts.md).
+The CLI is the only backend surface. Each skill documents the exact `archetipo` sub-commands it uses.
 
 ---
 
 ## Philosophy
 
 - **Persistent output.** Every phase produces artifacts that live in the repo (or in the connector system). The next command, or the next working day, starts from there.
-- **Responsible autonomy.** Skills only stop at real blockers (external dependencies, contract ambiguity). Local adjustments, mechanical fixes, and test updates don't require confirmation.
+- **Responsible autonomy.** Skills only stop at real blockers (external dependencies, CLI preconditions, real ambiguity). Local adjustments, mechanical fixes, and test updates don't require confirmation.
 - **Tool-agnostic and connector-agnostic.** Switching the AI agent or tracking system shouldn't rewrite the process.
 
 ---
@@ -209,7 +209,7 @@ ARchetipo was born in Italy and keeps a recognizable voice: a team with proper n
 <details>
 <summary><b>How do I debug a skill?</b></summary>
 
-Every skill declares which references it loads. Turn on your AI tool's verbose mode and verify that connector operations (`READ:`, `WRITE:`) are executed in the expected order. `.archetipo/contracts.md` is the source of truth.
+Every skill declares which references it loads. Turn on your AI tool's verbose mode and verify that the expected `.archetipo/bin/archetipo ...` commands are executed in the expected order.
 </details>
 
 ---

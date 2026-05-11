@@ -15,10 +15,13 @@ Read `.archetipo/shared-runtime.md` for Language Policy, Assumptions and Questio
 
 ## Config Loading & Connector Dispatch
 
-1. Read `.archetipo/contracts.md` once for the CLI protocol reference.
-2. Run `.archetipo/bin/archetipo init` and parse the stdout JSON envelope.
+1. Run `.archetipo/bin/archetipo init` and parse the stdout JSON envelope (`{"schema":"archetipo/v1","kind":"setup","data":{...}}`).
+2. On failure, parse stderr as `{"schema":"archetipo/v1","kind":"error","error":{"code":"E_*","message":"...","hint":"..."}}` and branch on `error.code`.
+3. This skill uses only these CLI operations:
+   - `.archetipo/bin/archetipo init`
+   - `.archetipo/bin/archetipo prd write`
 
-If the CLI cannot find `.archetipo/config.yaml`, it falls back to the defaults documented in `.archetipo/contracts.md` (section "Configuration").
+If the CLI cannot find `.archetipo/config.yaml`, it falls back to its built-in defaults for connector, paths, and workflow statuses.
 
 From the parsed `data` (SetupInfo), extract and keep available:
 - `connector`
