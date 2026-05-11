@@ -155,7 +155,7 @@ Save the implementation plan and transition the story to `PLANNED`. Atomic from 
 - **Args:** `--file <path|->` required. `-` means stdin.
 - **Input file:** YAML or JSON payload `{"plan_body":"<markdown>","tasks":[Task, ...]}`.
 - **Stdout kind:** `write_result`.
-- **Effect (file):** writes `{paths.planning}/{US-XXX}.yaml` with schema `archetipo/plan/v2`, updates `.archetipo/stories/{US-XXX}.yaml`, and synchronizes `.archetipo/backlog.yaml` board order to `PLANNED`.
+- **Effect (file):** writes `{paths.planning}/{US-XXX}-plan.yaml` with schema `archetipo/plan/v2`, updates `.archetipo/stories/{US-XXX}.yaml`, and synchronizes `.archetipo/backlog.yaml` board order to `PLANNED`.
 - **Effect (github):** appends the plan body to the parent issue, creates one sub-issue per task, then moves the project card to `PLANNED`.
 - **Idempotent:** re-running on a `PLANNED` story upserts the plan body without erroring.
 - **Errors:** `E_CONFLICT` when the story is past `PLANNED` (e.g. `IN PROGRESS`, `REVIEW`, `DONE`); `E_PRECONDITION` (story not found).

@@ -72,7 +72,7 @@ func (c *Connector) storiesDir() string {
 }
 
 func (c *Connector) planPath(storyRef string) string {
-	return filepath.Join(c.cfg.AbsPath(c.cfg.Paths.Planning), storyRef+".yaml")
+	return filepath.Join(c.cfg.AbsPath(c.cfg.Paths.Planning), storyRef+"-plan.yaml")
 }
 
 func (c *Connector) storyPath(storyCode string) string {

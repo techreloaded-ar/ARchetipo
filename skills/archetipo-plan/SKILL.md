@@ -152,13 +152,13 @@ In a **single turn**, produce both:
 
 **2. Save the plan and transition the story:**
 
-Write a YAML or JSON payload file, then call `.archetipo/bin/archetipo story plan {US-CODE} --file <path>` with:
+Serialize a YAML or JSON payload and pipe it to `.archetipo/bin/archetipo story plan {US-CODE} --file -` via stdin:
 
 ```json
 {"plan_body":"<technical solution + test strategy as markdown>","tasks":[{"id":"TASK-01","title":"...","description":"...","type":"Impl|Test","status":"TODO","dependencies":[]}]}
 ```
 
-This single command saves the plan AND transitions the story to `{config.workflow.statuses.planned}` atomically — no separate `status set` step is needed. The CLI persists according to the active connector (file: writes `{paths.planning}/{US-CODE}.yaml`; github: appends to the parent issue body and creates one sub-issue per task). For the file connector, follow the template in `references/plan-template.md` to compose `plan_body`. Re-running the command on a story already in `PLANNED` upserts the plan body without erroring.
+This single command saves the plan AND transitions the story to `{config.workflow.statuses.planned}` atomically — no separate `status set` step is needed. The CLI persists according to the active connector (file: writes `{paths.planning}/{US-CODE}-plan.yaml`; github: appends to the parent issue body and creates one sub-issue per task). For the file connector, follow the template in `references/plan-template.md` to compose `plan_body`. Re-running the command on a story already in `PLANNED` upserts the plan body without erroring.
 
 ### STAGE 2 — Close
 

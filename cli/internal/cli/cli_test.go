@@ -45,6 +45,10 @@ func writeInputFile(t *testing.T, name, content string) string {
 	return path
 }
 
+func expectedPlanPath(code string) string {
+	return filepath.Join(".", ".archetipo", "plans", code+"-plan.yaml")
+}
+
 func decodeOK(t *testing.T, res result) (string, map[string]any) {
 	t.Helper()
 	if res.exit != 0 {
@@ -255,6 +259,9 @@ func TestStoryPlan_TODOToPlanned(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("expected 2 tasks after plan, got %d", len(tasks))
 	}
+	if _, err := os.Stat(expectedPlanPath("US-001")); err != nil {
+		t.Fatalf("expected plan file at %s: %v", expectedPlanPath("US-001"), err)
+	}
 }
 
 func TestStoryPlan_IdempotentOnPlanned(t *testing.T) {
@@ -270,6 +277,29 @@ func TestStoryPlan_IdempotentOnPlanned(t *testing.T) {
 	res := runCLI(t, "", "story", "plan", "US-001", "--file", planFile)
 	if res.exit != 0 {
 		t.Fatalf("re-plan should be idempotent, got exit %d, stderr=%s", res.exit, res.stderr.String())
+	}
+}
+
+func TestStoryPlan_FromStdin(t *testing.T) {
+	newProject(t)
+	storiesFile := writeInputFile(t, "stories.json", storyJSON)
+	if res := runCLI(t, "", "story", "add", "--file", storiesFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	res := runCLI(t, planJSON, "story", "plan", "US-001", "--file", "-")
+	_, data := decodeOK(t, res)
+	refs, _ := data["refs"].([]any)
+	if len(refs) == 0 {
+		t.Fatalf("expected refs after stdin plan save")
+	}
+	firstRef, _ := refs[0].(map[string]any)
+	gotPath, _ := firstRef["path"].(string)
+	wantPath, err := filepath.Abs(expectedPlanPath("US-001"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != wantPath {
+		t.Fatalf("expected first ref path %s, got %s", wantPath, gotPath)
 	}
 }
 
