@@ -33,7 +33,7 @@ Use this mode when:
 
 In this mode:
 1. Read this file
-2. Read `references/backlog-bootstrap-flow.md`
+2. Read `./references/backlog-bootstrap-flow.md`
 3. Use the PRD as the primary source and create the initial backlog
 
 ### `mode: extend-backlog`
@@ -45,7 +45,7 @@ Use this mode when:
 
 In this mode:
 1. Read this file
-2. Read `references/story-extension-flow.md`
+2. Read `./references/story-extension-flow.md`
 3. Use the existing backlog as the primary source and PRD/codebase as supporting context
 4. Append or create only the requested items
 

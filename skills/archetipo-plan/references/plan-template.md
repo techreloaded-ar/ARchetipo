@@ -60,16 +60,6 @@
 
 ---
 
-## Implementation Tasks
-
-| {STATUS_HEADER} | # | {TASK_HEADER} | {DESCRIPTION_HEADER} | {TYPE_HEADER} | {DEPENDENCIES_HEADER} |
-|---|---|---|---|---|---|
-| TODO | TASK-01 | {TITLE} | {BRIEF_DESCRIPTION} | Impl | - |
-| TODO | TASK-02 | {TITLE} | {BRIEF_DESCRIPTION} | Test | TASK-01 |
-| TODO | TASK-03 | {TITLE} | {BRIEF_DESCRIPTION} | Impl | TASK-01 |
-
----
-
 {IF_MOCKUP_GENERATED}
 > 🎨 Mockups for this story are available in `{config.paths.mockups}/{US-CODE}/`
 {/IF_MOCKUP_GENERATED}
@@ -77,7 +67,6 @@
 _Plan generated via ARchetipo Planning — {DATE}_
 ```
 
-> **Table parsing note:** The task table is parsed by the connector using column position (index). You must translate the column headers into the detected project language. Example translations: Status→Stato, Task→Titolo, Description→Descrizione, Type→Tipo, Dependencies→Dipendenze. The data rows (TODO/DONE, Impl/Test, TASK-XX) remain in English as they are machine-readable tokens.
 
 > Include the mockup reference line only if `mockup_generated = true`. Omit entirely otherwise.
 >
@@ -86,6 +75,6 @@ _Plan generated via ARchetipo Planning — {DATE}_
 > - Task format: sequential ID (TASK-01, TASK-02...), action-oriented title, brief description (1-2 sentences), type (Impl/Test), dependencies
 > - Implementation order: follow the project's natural dependency chain — lower layers first, tests interleaved (not all at end)
 > - Frontend tasks when mockups exist: If `mockup_generated = true`, include at least one frontend implementation task (type: Impl) that explicitly references the mockups directory `{config.paths.mockups}/{US-CODE}/`. Omitting frontend tasks when `mockup_generated = true` is a plan error — do not proceed without them.
-> - Task dependencies (`Dependencies` column) must only reference tasks within the same story plan. Cross-story task dependencies are not supported — use story-level `Blocked by` for cross-story sequencing
+> - Task dependencies must only reference tasks within the same story plan. Cross-story task dependencies are not supported — use story-level `Blocked by` for cross-story sequencing
 > - If the `Blocked by` field is absent from the story (older backlogs), treat it as `-` (no dependencies)
 > - If total tasks exceed 15, suggest splitting into sub-stories

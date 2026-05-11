@@ -167,7 +167,9 @@ Construct the full JSON payload string in your own context (not via shell heredo
 {"plan_body":"<technical solution + test strategy as markdown>","tasks":[{"id":"TASK-01","title":"...","description":"...","type":"Impl|Test","status":"TODO","dependencies":[]}]}
 ```
 
-This single command saves the plan AND transitions the story to `{config.workflow.statuses.planned}` atomically — no separate `status set` step is needed. The CLI persists according to the active connector (file: writes `{paths.planning}/{US-CODE}-plan.yaml`; github: appends to the parent issue body and creates one sub-issue per task). For the file connector, follow the template in `references/plan-template.md` to compose `plan_body`. Re-running the command on a story already in `PLANNED` upserts the plan body without erroring.
+This single command saves the plan AND transitions the story to `{config.workflow.statuses.planned}` atomically — no separate `status set` step is needed. The CLI persists according to the active connector (file: writes `{paths.planning}/{US-CODE}-plan.yaml`; github: appends to the parent issue body and creates one sub-issue per task). For the file connector, follow the template in `./references/plan-template.md` to compose `plan_body`.
+
+Re-running the command on a story already in `PLANNED` upserts the plan body without erroring.
 
 ### STAGE 2 — Close
 

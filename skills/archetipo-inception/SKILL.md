@@ -36,8 +36,8 @@ From the parsed `data` (SetupInfo), extract and keep available:
 
 Load context progressively and keep the working context lean:
 - Load `.archetipo/shared-runtime.md` first
-- Load `references/inception-flow.md` at activation time
-- Load `references/prd-template.md` only when you are about to write the final document
+- Load `./references/inception-flow.md` at activation time
+- Load `./references/prd-template.md` only when you are about to write the final document
 
 ## Runtime Rules
 
@@ -51,7 +51,7 @@ Load context progressively and keep the working context lean:
 
 ## Output Boundaries
 
-- Produce the PRD using `references/prd-template.md` as the format template
+- Produce the PRD using `./references/prd-template.md` as the format template
 - Persist the PRD by piping the markdown into `.archetipo/bin/archetipo prd write` and verifying the resulting `write_result` envelope
 - Do not generate or mutate backlog artifacts in this skill
 - If the user asks for backlog generation, epics, or user stories from an existing PRD, that belongs to `archetipo-spec`

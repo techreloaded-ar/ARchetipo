@@ -101,13 +101,13 @@ Do not avoid worker-backed execution only because a wave must be scheduled seque
 
    The envelope returns `data.story` (the full Story including `body`) and `data.tasks` (the implementation task list).
 
-   - If `error.code = E_PRECONDITION` (no eligible story or auto-pick on empty queue), stop and display the template from `references/output-templates.md` ("No planned stories" / "No backlog" as appropriate).
-   - If `data.tasks` is empty, the story has no plan yet — stop and display the template from `references/output-templates.md` ("No implementation plan" error message).
+   - If `error.code = E_PRECONDITION` (no eligible story or auto-pick on empty queue), stop and display the template from `./references/output-templates.md` ("No planned stories" / "No backlog" as appropriate).
+   - If `data.tasks` is empty, the story has no plan yet — stop and display the template from `./references/output-templates.md` ("No implementation plan" error message).
 
 4. Load the relevant project context: agent instructions (CLAUDE.md, AGENTS.md), project config, conventions, and existing patterns in the touched area.
 5. If the plan contains UI work, scan it for mockups or design references and search `{config.paths.mockups}` for matching files. Treat explicitly referenced mockups as the source of truth.
 6. Run `.archetipo/bin/archetipo story start {US-CODE}` to transition the story to `{config.workflow.statuses.in_progress}`. The verb is idempotent — re-running on a story already `IN PROGRESS` is a safe no-op.
-7. Announce the session briefly using the template from `references/output-templates.md` ("Session Announcement").
+7. Announce the session briefly using the template from `./references/output-templates.md` ("Session Announcement").
 
 ### Validation policy for task parsing
 
@@ -233,7 +233,7 @@ Apply these rules **only to the demo scenario**; other e2e tests stay fast and u
 
 #### Progress reporting
 
-After each wave, report briefly. See `references/output-templates.md` for the "Wave Completion Report" template.
+After each wave, report briefly. See `./references/output-templates.md` for the "Wave Completion Report" template.
 
 #### Before code review
 
@@ -259,7 +259,7 @@ After all implementation waves:
 6. mockup adherence when UI work exists
 7. completeness vs. tasks and acceptance criteria
 
-**Output format:** See `references/output-templates.md` for the "Code Review Output" template.
+**Output format:** See `./eferences/output-templates.md` for the "Code Review Output" template.
 
 ### PHASE 4 - Fix & Re-Review Loop
 
