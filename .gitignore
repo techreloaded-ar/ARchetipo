@@ -21,3 +21,5 @@ skills/*-workspace
 evals.json
 .serena
 *.stackdump
+test/workspaces/*
+!test/workspaces/.gitkeep

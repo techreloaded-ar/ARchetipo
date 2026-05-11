@@ -2,16 +2,20 @@
 set -euo pipefail
 
 # ─── ARchetipo Installer ─────────────────────────────────────────────────────
-# Installs ARchetipo skills + config for Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot
+# Installs ARchetipo skills + config for Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot, Pi
 # Usage: curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.sh | bash
-#        ./install.sh [--local] [--cleanup] [--help]
+#        ./install.sh [--local] [--cleanup] [--tool codex] [--connector file] [--yes] [--help]
 #   --local    Installs from local ./skills/ folder instead of GitHub
 #   --cleanup  Removes installed skills from selected tools
+#   --tool     Installs for a single tool without prompts
+#   --connector Selects connector without prompts
+#   --yes      Accepts overwrite prompts automatically
 #   --help     Shows this help message
 # ──────────────────────────────────────────────────────────────────────────────
 
 REPO_ZIP="https://github.com/techreloaded-ar/ARchetipo/archive/refs/heads/main.zip"
 SKILL_NAMES=("archetipo-autopilot" "archetipo-design" "archetipo-implement" "archetipo-inception" "archetipo-plan" "archetipo-spec")
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 show_help() {
@@ -20,11 +24,14 @@ ARchetipo Installer
 
 Usage:
   curl -fsSL https://raw.githubusercontent.com/techreloaded-ar/ARchetipo/main/install.sh | bash
-  ./install.sh [--local] [--cleanup] [--help]
+  ./install.sh [--local] [--cleanup] [--tool codex] [--connector file] [--yes] [--help]
 
 Flags:
   --local    Install from local ./skills/ folder instead of downloading from GitHub
   --cleanup  Remove installed skills from selected tools
+  --tool     Install or cleanup a single tool non-interactively (claude, codex, gemini, opencode, copilot, pi)
+  --connector Select connector non-interactively (file or github)
+  --yes      Overwrite config.yaml without prompting
   --help     Show this help message
 
 Skills installed:
@@ -39,7 +46,7 @@ Configuration:
   .archetipo/config.yaml is created with the selected connector (file or github).
 
 Supported tools:
-  Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot
+  Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot, Pi
 HELP
 }
 
@@ -53,8 +60,9 @@ DIM='\033[2m'
 RESET='\033[0m'
 
 # ─── Tool definitions ─────────────────────────────────────────────────────────
-TOOL_NAMES=("Claude Code" "Codex" "Gemini CLI" "OpenCode" "GitHub Copilot")
-TOOL_PATHS=(".claude/skills" ".agents/skills" ".gemini/skills" ".opencode/skills" ".github/skills")
+TOOL_NAMES=("Claude Code" "Codex" "Gemini CLI" "OpenCode" "GitHub Copilot" "Pi")
+TOOL_KEYS=("claude" "codex" "gemini" "opencode" "copilot" "pi")
+TOOL_PATHS=(".claude/skills" ".agents/skills" ".gemini/skills" ".opencode/skills" ".github/skills" ".pi/skills")
 TOOL_COUNT=${#TOOL_NAMES[@]}
 
 # ─── Cleanup ──────────────────────────────────────────────────────────────────
@@ -225,6 +233,41 @@ fallback_menu() {
   fi
 }
 
+resolve_tool_index() {
+  local raw="${1:-}"
+  local normalized
+  normalized="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  normalized="${normalized// /-}"
+  case "$normalized" in
+    claude|claude-code)
+      printf "0"
+      return 0
+      ;;
+    codex)
+      printf "1"
+      return 0
+      ;;
+    gemini|gemini-cli)
+      printf "2"
+      return 0
+      ;;
+    opencode|open-code)
+      printf "3"
+      return 0
+      ;;
+    copilot|github-copilot|github)
+      printf "4"
+      return 0
+      ;;
+    pi)
+      printf "5"
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 # ─── Connector selection (radio-button, single choice) ───────────────────────
 CONNECTOR_OPTIONS=("file" "github")
 CONNECTOR_DESCRIPTIONS=("backlog e planning come file Markdown locali" "backlog e planning su GitHub Projects v2 — richiede GitHub CLI")
@@ -315,6 +358,7 @@ fallback_connector() {
 install_config() {
   local source_dir="$1"
   local connector="$2"
+  local assume_yes="${3:-0}"
   local config_dir=".archetipo"
   local config_file="$config_dir/config.yaml"
 
@@ -330,11 +374,13 @@ install_config() {
 
   # Check if config already exists
   if [[ -f "$config_file" ]]; then
-    printf "\n  ${YELLOW}!${RESET} ${BOLD}.archetipo/config.yaml${RESET} esiste già. Sovrascrivere? [s/N] "
-    read -r answer < /dev/tty
-    if [[ "$answer" != "s" && "$answer" != "S" && "$answer" != "y" && "$answer" != "Y" ]]; then
-      printf "  ${DIM}Config non modificato${RESET}\n"
-      return
+    if [[ "$assume_yes" != "1" ]]; then
+      printf "\n  ${YELLOW}!${RESET} ${BOLD}.archetipo/config.yaml${RESET} esiste già. Sovrascrivere? [s/N] "
+      read -r answer < /dev/tty
+      if [[ "$answer" != "s" && "$answer" != "S" && "$answer" != "y" && "$answer" != "Y" ]]; then
+        printf "  ${DIM}Config non modificato${RESET}\n"
+        return
+      fi
     fi
   fi
 
@@ -416,13 +462,55 @@ main() {
   # Parse arguments
   local use_local=0
   local do_cleanup=0
-  for arg in "$@"; do
-    case "$arg" in
-      --help|-h) show_help; exit 0 ;;
-      --local) use_local=1 ;;
-      --cleanup) do_cleanup=1 ;;
+  local assume_yes=0
+  local requested_tool=""
+  local requested_connector=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --help|-h)
+        show_help
+        exit 0
+        ;;
+      --local)
+        use_local=1
+        shift
+        ;;
+      --cleanup)
+        do_cleanup=1
+        shift
+        ;;
+      --tool)
+        if [[ $# -lt 2 ]]; then
+          printf "${RED}Error: --tool requires a value.${RESET}\n"
+          exit 1
+        fi
+        requested_tool="$2"
+        shift 2
+        ;;
+      --connector)
+        if [[ $# -lt 2 ]]; then
+          printf "${RED}Error: --connector requires a value.${RESET}\n"
+          exit 1
+        fi
+        requested_connector="$2"
+        shift 2
+        ;;
+      --yes)
+        assume_yes=1
+        shift
+        ;;
+      *)
+        printf "${RED}Error: unknown argument %s${RESET}\n" "$1"
+        exit 1
+        ;;
     esac
   done
+
+  if [[ -n "$requested_connector" && "$requested_connector" != "file" && "$requested_connector" != "github" ]]; then
+    printf "${RED}Error: --connector must be 'file' or 'github'.${RESET}\n"
+    exit 1
+  fi
 
   echo ""
   printf "${BOLD}${CYAN}  ARchetipo Installer${RESET}\n"
@@ -433,8 +521,17 @@ main() {
     echo ""
 
     # Tool selection
-    printf "${BOLD}  Select tools to clean up:${RESET}\n\n"
-    interactive_menu
+    if [[ -n "$requested_tool" ]]; then
+      local cleanup_index
+      if ! cleanup_index="$(resolve_tool_index "$requested_tool")"; then
+        printf "${RED}Error: unsupported tool '%s'.${RESET}\n" "$requested_tool"
+        exit 1
+      fi
+      SELECTED_TOOLS=("$cleanup_index")
+    else
+      printf "${BOLD}  Select tools to clean up:${RESET}\n\n"
+      interactive_menu
+    fi
 
     if [[ ${#SELECTED_TOOLS[@]} -eq 0 ]]; then
       printf "${YELLOW}  No tools selected. Exiting.${RESET}\n"
@@ -450,9 +547,11 @@ main() {
     # Summary
     echo ""
     printf "${GREEN}${BOLD}  Done!${RESET} Cleaned up %d tool(s).\n" "${#SELECTED_TOOLS[@]}"
-    echo ""
-    printf "${DIM}  Press Enter to exit...${RESET}"
-    read -r < /dev/tty
+    if [[ "$assume_yes" != "1" ]]; then
+      echo ""
+      printf "${DIM}  Press Enter to exit...${RESET}"
+      read -r < /dev/tty
+    fi
     return
   fi
 
@@ -462,12 +561,12 @@ main() {
   local source_dir=""
 
   if [[ $use_local -eq 1 ]]; then
-    # Use local ./skills/ folder
-    if [[ ! -d "./skills" ]]; then
-      printf "${RED}Error: ./skills/ folder not found. Run from the repository root.${RESET}\n"
+    # Use local repository folder relative to this installer.
+    if [[ ! -d "$SCRIPT_DIR/skills" ]]; then
+      printf "${RED}Error: %s/skills folder not found.${RESET}\n" "$SCRIPT_DIR"
       exit 1
     fi
-    source_dir="./skills"
+    source_dir="$SCRIPT_DIR/skills"
     printf "${DIM}  Using local skills folder...${RESET}\n"
   else
     # Check for curl or wget
@@ -513,8 +612,17 @@ main() {
   echo ""
 
   # Tool selection
-  printf "${BOLD}  Select tools to install for:${RESET}\n\n"
-  interactive_menu
+  if [[ -n "$requested_tool" ]]; then
+    local install_index
+    if ! install_index="$(resolve_tool_index "$requested_tool")"; then
+      printf "${RED}Error: unsupported tool '%s'.${RESET}\n" "$requested_tool"
+      exit 1
+    fi
+    SELECTED_TOOLS=("$install_index")
+  else
+    printf "${BOLD}  Select tools to install for:${RESET}\n\n"
+    interactive_menu
+  fi
 
   if [[ ${#SELECTED_TOOLS[@]} -eq 0 ]]; then
     printf "${YELLOW}  No tools selected. Exiting.${RESET}\n"
@@ -522,8 +630,12 @@ main() {
   fi
 
   # Connector selection
-  printf "${BOLD}  Select connector:${RESET}\n\n"
-  select_connector
+  if [[ -n "$requested_connector" ]]; then
+    SELECTED_CONNECTOR="$requested_connector"
+  else
+    printf "${BOLD}  Select connector:${RESET}\n\n"
+    select_connector
+  fi
 
   # Install
   printf "${BOLD}  Installing...${RESET}\n"
@@ -532,7 +644,7 @@ main() {
   done
 
   # Install config
-  install_config "$source_dir" "$SELECTED_CONNECTOR"
+  install_config "$source_dir" "$SELECTED_CONNECTOR" "$assume_yes"
 
   # Install CLI binary (.archetipo/bin/archetipo)
   install_cli "$source_dir/.." "$use_local"
@@ -540,9 +652,11 @@ main() {
   # Summary
   echo ""
   printf "${GREEN}${BOLD}  Done!${RESET} Installed %d skill(s) for %d tool(s).\n" "${#SKILL_NAMES[@]}" "${#SELECTED_TOOLS[@]}"
-  echo ""
-  printf "${DIM}  Press Enter to exit...${RESET}"
-  read -r < /dev/tty
+  if [[ "$assume_yes" != "1" ]]; then
+    echo ""
+    printf "${DIM}  Press Enter to exit...${RESET}"
+    read -r < /dev/tty
+  fi
 }
 
 main "$@"
