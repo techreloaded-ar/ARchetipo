@@ -32,6 +32,9 @@ type state struct {
 	project *domain.ProjectInfo
 	// items maps issue number to project item id (needed by transition_status).
 	items map[int]string
+	// stories caches project board rows for the lifetime of one CLI process.
+	stories     []domain.Story
+	itemsLoaded bool
 	// labels caches known label names so create_labels can avoid duplicate
 	// gh label create calls.
 	labels map[string]struct{}
@@ -179,6 +182,9 @@ func (c *Connector) ReadExistingBacklog(ctx context.Context) (domain.BacklogSumm
 	if err := c.ensureSetup(ctx); err != nil {
 		return domain.BacklogSummary{}, err
 	}
+	if c.state.itemsLoaded {
+		return summarizeStories(c.state.stories), nil
+	}
 	var raw []struct {
 		Number int    `json:"number"`
 		Title  string `json:"title"`
@@ -187,9 +193,7 @@ func (c *Connector) ReadExistingBacklog(ctx context.Context) (domain.BacklogSumm
 		} `json:"labels"`
 	}
 	if err := runJSON(ctx, c.runner, &raw,
-		"issue", "list", "--repo", c.state.repo.Slug,
-		"--label", "archetipo-backlog", "--state", "all",
-		"--json", "number,title,labels", "--limit", "200",
+		"api", fmt.Sprintf("repos/%s/issues?state=all&labels=archetipo-backlog&per_page=100", c.state.repo.Slug),
 	); err != nil {
 		return domain.BacklogSummary{}, err
 	}
@@ -217,6 +221,27 @@ func (c *Connector) ReadExistingBacklog(ctx context.Context) (domain.BacklogSumm
 	}
 	sort.Slice(out.Epics, func(i, j int) bool { return out.Epics[i].Code < out.Epics[j].Code })
 	return out, nil
+}
+
+func summarizeStories(stories []domain.Story) domain.BacklogSummary {
+	out := domain.BacklogSummary{}
+	seen := map[string]domain.Epic{}
+	for _, s := range stories {
+		out.Codes = append(out.Codes, s.Code)
+		out.Titles = append(out.Titles, s.Title)
+		if s.Epic.Code != "" {
+			seen[s.Epic.Code] = s.Epic
+		}
+	}
+	sort.Strings(out.Codes)
+	if len(out.Codes) > 0 {
+		out.LastCode = out.Codes[len(out.Codes)-1]
+	}
+	for _, e := range seen {
+		out.Epics = append(out.Epics, e)
+	}
+	sort.Slice(out.Epics, func(i, j int) bool { return out.Epics[i].Code < out.Epics[j].Code })
+	return out
 }
 
 // WRITE
@@ -262,12 +287,8 @@ func (c *Connector) SavePlan(ctx context.Context, storyRef string, plan domain.P
 	}
 	// Append the strategic plan body to the parent issue.
 	updatedBody := parent.Body + "\n\n---\n\n" + strings.TrimSpace(plan.PlanBody)
-	if _, _, err := c.runner.Run(ctx, nil,
-		"issue", "edit", strconv.Itoa(parentNum),
-		"--repo", c.state.repo.Slug,
-		"--body", updatedBody,
-	); err != nil {
-		return domain.WriteResult{}, classify(err, nil)
+	if _, err := c.editIssueBody(ctx, parentNum, updatedBody); err != nil {
+		return domain.WriteResult{}, err
 	}
 	// Find the EP- label on the parent so sub-issues inherit it.
 	epicLabel := ""
@@ -279,41 +300,31 @@ func (c *Connector) SavePlan(ctx context.Context, storyRef string, plan domain.P
 	}
 	refs := []domain.Ref{{Code: storyRef, Number: parentNum, URL: parent.URL}}
 	subNumbers := make([]int, 0, len(plan.Tasks))
+	subIDs := make([]int64, 0, len(plan.Tasks))
 	for _, t := range plan.Tasks {
-		args := []string{"issue", "create", "--repo", c.state.repo.Slug,
-			"--title", fmt.Sprintf("%s: %s", t.ID, t.Title),
-			"--body", t.Body}
+		labels := []string{}
 		if epicLabel != "" {
-			args = append(args, "--label", epicLabel)
+			labels = append(labels, epicLabel)
 		}
-		stdout, stderr, err := c.runner.Run(ctx, nil, args...)
+		created, err := c.createIssue(ctx, fmt.Sprintf("%s: %s", t.ID, t.Title), t.Body, labels)
 		if err != nil {
-			return domain.WriteResult{}, classify(err, stderr)
-		}
-		num := lastNumberOnLine(stdout)
-		if num == 0 {
-			return domain.WriteResult{}, iox.NewConnector(iox.CodeConnectorBackend,
-				"could not parse issue number from gh issue create output",
-				"check gh CLI version", nil)
-		}
-		subNumbers = append(subNumbers, num)
-		refs = append(refs, domain.Ref{Code: t.ID, Number: num})
-	}
-	// Link sub-issues to parent via REST API.
-	for _, num := range subNumbers {
-		// Resolve sub-issue node id then call sub_issues endpoint.
-		var idResp struct {
-			ID int64 `json:"id"`
-		}
-		if err := runJSON(ctx, c.runner, &idResp,
-			"api", fmt.Sprintf("repos/%s/issues/%d", c.state.repo.Slug, num),
-		); err != nil {
 			return domain.WriteResult{}, err
 		}
+		if created.ID == 0 {
+			return domain.WriteResult{}, iox.NewConnector(iox.CodeConnectorBackend,
+				"GitHub issue create response missing REST id",
+				"check gh CLI and GitHub REST API compatibility", nil)
+		}
+		subNumbers = append(subNumbers, created.Number)
+		subIDs = append(subIDs, created.ID)
+		refs = append(refs, domain.Ref{Code: t.ID, Number: created.Number, URL: created.URL})
+	}
+	// Link sub-issues to parent via REST API.
+	for i := range subNumbers {
 		if _, stderr, err := c.runner.Run(ctx, nil,
 			"api", "-X", "POST",
 			fmt.Sprintf("repos/%s/issues/%d/sub_issues", c.state.repo.Slug, parentNum),
-			"-F", fmt.Sprintf("sub_issue_id=%d", idResp.ID),
+			"-F", fmt.Sprintf("sub_issue_id=%d", subIDs[i]),
 			"-H", "X-GitHub-Api-Version: 2026-03-10",
 		); err != nil {
 			return domain.WriteResult{}, classify(err, stderr)
@@ -356,6 +367,7 @@ func (c *Connector) TransitionStatus(ctx context.Context, storyRef string, newSt
 	}, nil); err != nil {
 		return domain.WriteResult{}, err
 	}
+	c.updateCachedStoryStatus(num, newStatus)
 	return domain.WriteResult{OK: true, Refs: []domain.Ref{{Code: storyRef, Number: num}}}, nil
 }
 
@@ -367,10 +379,8 @@ func (c *Connector) CompleteTask(ctx context.Context, parentRef, taskRef string)
 	if err != nil {
 		return domain.WriteResult{}, err
 	}
-	if _, stderr, err := c.runner.Run(ctx, nil,
-		"issue", "close", strconv.Itoa(num), "--repo", c.state.repo.Slug,
-	); err != nil {
-		return domain.WriteResult{}, classify(err, stderr)
+	if _, err := c.closeIssue(ctx, num); err != nil {
+		return domain.WriteResult{}, err
 	}
 	return domain.WriteResult{OK: true, Refs: []domain.Ref{{Code: taskRef, Number: num}}}, nil
 }
@@ -383,10 +393,8 @@ func (c *Connector) PostComment(ctx context.Context, storyRef, body string) (dom
 	if err != nil {
 		return domain.WriteResult{}, err
 	}
-	if _, stderr, err := c.runner.Run(ctx, []byte(body),
-		"issue", "comment", strconv.Itoa(num), "--repo", c.state.repo.Slug, "--body-file", "-",
-	); err != nil {
-		return domain.WriteResult{}, classify(err, stderr)
+	if _, err := c.postIssueComment(ctx, num, body); err != nil {
+		return domain.WriteResult{}, err
 	}
 	return domain.WriteResult{OK: true, Refs: []domain.Ref{{Code: storyRef, Number: num}}}, nil
 }
@@ -452,23 +460,29 @@ func (c *Connector) detectRepo(ctx context.Context) (*domain.RepoInfo, error) {
 	}, nil
 }
 
-// loadProjectFields fetches the field metadata of a project and the items so
-// transition_status / fetch_backlog_items can resolve names to ids.
-func (c *Connector) loadProjectFields(ctx context.Context, repo *domain.RepoInfo, number int, id, url string) (*domain.ProjectInfo, error) {
+// loadProjectFields fetches only the field metadata needed to resolve names
+// to ids. It intentionally avoids `gh project field-list`, which also pulls
+// project items and is very expensive in GraphQL credits.
+func (c *Connector) loadProjectFields(ctx context.Context, _ *domain.RepoInfo, number int, id, url string) (*domain.ProjectInfo, error) {
 	var fl struct {
-		Fields []struct {
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			Type    string `json:"type"`
-			Options []struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			} `json:"options,omitempty"`
-		} `json:"fields"`
+		Node struct {
+			Fields struct {
+				Nodes []struct {
+					TypeName string `json:"__typename"`
+					ID       string `json:"id"`
+					Name     string `json:"name"`
+					DataType string `json:"dataType"`
+					Options  []struct {
+						ID   string `json:"id"`
+						Name string `json:"name"`
+					} `json:"options,omitempty"`
+				} `json:"nodes"`
+			} `json:"fields"`
+		} `json:"node"`
 	}
-	if err := runJSON(ctx, c.runner, &fl,
-		"project", "field-list", strconv.Itoa(number), "--owner", repo.Owner, "--format", "json",
-	); err != nil {
+	if err := runGraphQL(ctx, c.runner, projectFieldsQuery, map[string]string{
+		"projectId": id,
+	}, &fl); err != nil {
 		return nil, err
 	}
 	pi := &domain.ProjectInfo{
@@ -481,7 +495,7 @@ func (c *Connector) loadProjectFields(ctx context.Context, repo *domain.RepoInfo
 			EpicOptions:     map[string]string{},
 		},
 	}
-	for _, f := range fl.Fields {
+	for _, f := range fl.Node.Fields.Nodes {
 		switch f.Name {
 		case "Status":
 			pi.Fields.StatusFieldID = f.ID
@@ -508,42 +522,134 @@ func (c *Connector) loadProjectFields(ctx context.Context, repo *domain.RepoInfo
 // listProjectItems pulls all items on the board (capped at 200) and converts
 // them to []domain.Story. Caches issue->itemID mapping in c.state.items.
 func (c *Connector) listProjectItems(ctx context.Context) ([]domain.Story, error) {
-	var raw struct {
-		Items []struct {
-			ID      string `json:"id"`
-			Status  string `json:"status"`
-			Title   string `json:"title"`
-			Content struct {
-				Number int    `json:"number"`
-				URL    string `json:"url"`
-			} `json:"content"`
-			Priority    string  `json:"priority"`
-			StoryPoints float64 `json:"storyPoints"`
-			Epic        string  `json:"epic"`
-		} `json:"items"`
+	if c.state.itemsLoaded {
+		return append([]domain.Story(nil), c.state.stories...), nil
 	}
-	if err := runJSON(ctx, c.runner, &raw,
-		"project", "item-list", strconv.Itoa(c.state.project.Number),
-		"--owner", c.state.repo.Owner, "--format", "json", "-L", "200",
-	); err != nil {
-		return nil, err
-	}
-	out := make([]domain.Story, 0, len(raw.Items))
-	for _, it := range raw.Items {
-		s := domain.Story{
-			Code:        codeFromTitle(it.Title),
-			Title:       titleAfterCode(it.Title),
-			Status:      domain.Status(it.Status),
-			Priority:    domain.Priority(it.Priority),
-			StoryPoints: int(it.StoryPoints),
-			Epic:        domain.Epic{Code: epicCodeFromLabel(it.Epic), Title: epicTitleFromLabel(it.Epic)},
-			Ref:         strconv.Itoa(it.Content.Number),
-			URL:         it.Content.URL,
+	out := []domain.Story{}
+	after := ""
+	for {
+		var raw struct {
+			Node struct {
+				Items struct {
+					PageInfo struct {
+						EndCursor   string `json:"endCursor"`
+						HasNextPage bool   `json:"hasNextPage"`
+					} `json:"pageInfo"`
+					Nodes []projectItemNode `json:"nodes"`
+				} `json:"items"`
+			} `json:"node"`
 		}
-		c.state.items[it.Content.Number] = it.ID
-		out = append(out, s)
+		vars := map[string]string{"projectId": c.state.project.NodeID}
+		if after != "" {
+			vars["after"] = after
+		}
+		if err := runGraphQL(ctx, c.runner, projectItemsQuery, vars, &raw); err != nil {
+			return nil, err
+		}
+		for _, it := range raw.Node.Items.Nodes {
+			story, ok := it.story()
+			if !ok {
+				continue
+			}
+			c.state.items[it.Content.Number] = it.ID
+			out = append(out, story)
+		}
+		if !raw.Node.Items.PageInfo.HasNextPage {
+			break
+		}
+		after = raw.Node.Items.PageInfo.EndCursor
+		if after == "" {
+			break
+		}
 	}
+	c.state.stories = append([]domain.Story(nil), out...)
+	c.state.itemsLoaded = true
 	return out, nil
+}
+
+type projectItemNode struct {
+	ID      string `json:"id"`
+	Content struct {
+		TypeName string `json:"__typename"`
+		Number   int    `json:"number"`
+		Title    string `json:"title"`
+		URL      string `json:"url"`
+		Labels   struct {
+			Nodes []struct {
+				Name string `json:"name"`
+			} `json:"nodes"`
+		} `json:"labels"`
+	} `json:"content"`
+	Status      *projectFieldValue `json:"status"`
+	Priority    *projectFieldValue `json:"priority"`
+	StoryPoints *projectFieldValue `json:"storyPoints"`
+	Epic        *projectFieldValue `json:"epic"`
+}
+
+type projectFieldValue struct {
+	TypeName string  `json:"__typename"`
+	Name     string  `json:"name"`
+	Text     string  `json:"text"`
+	Number   float64 `json:"number"`
+}
+
+func (it projectItemNode) story() (domain.Story, bool) {
+	if it.Content.TypeName != "Issue" || it.Content.Number == 0 {
+		return domain.Story{}, false
+	}
+	code := codeFromTitle(it.Content.Title)
+	if code == "" || !it.hasLabel("archetipo-backlog") {
+		return domain.Story{}, false
+	}
+	status := domain.StatusTodo
+	if it.Status != nil && it.Status.Name != "" {
+		status = domain.Status(it.Status.Name)
+	}
+	epicLabel := it.firstLabelWithPrefix("EP-")
+	if it.Epic != nil {
+		switch {
+		case it.Epic.Name != "":
+			epicLabel = it.Epic.Name
+		case it.Epic.Text != "":
+			epicLabel = it.Epic.Text
+		}
+	}
+	points := 0
+	if it.StoryPoints != nil {
+		points = int(it.StoryPoints.Number)
+	}
+	priority := domain.Priority("")
+	if it.Priority != nil {
+		priority = domain.Priority(it.Priority.Name)
+	}
+	return domain.Story{
+		Code:        code,
+		Title:       titleAfterCode(it.Content.Title),
+		Status:      status,
+		Priority:    priority,
+		StoryPoints: points,
+		Epic:        domain.Epic{Code: epicCodeFromLabel(epicLabel), Title: epicTitleFromLabel(epicLabel)},
+		Ref:         strconv.Itoa(it.Content.Number),
+		URL:         it.Content.URL,
+	}, true
+}
+
+func (it projectItemNode) hasLabel(name string) bool {
+	for _, l := range it.Content.Labels.Nodes {
+		if l.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (it projectItemNode) firstLabelWithPrefix(prefix string) string {
+	for _, l := range it.Content.Labels.Nodes {
+		if strings.HasPrefix(l.Name, prefix) {
+			return l.Name
+		}
+	}
+	return ""
 }
 
 // fillStoryDetail enriches a story with its issue body.
@@ -583,11 +689,14 @@ func (c *Connector) viewIssueAsStory(ctx context.Context, num int) (domain.Story
 }
 
 type rawIssue struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
-	URL    string `json:"url"`
-	Labels []struct {
+	Number  int    `json:"number"`
+	ID      int64  `json:"id"`
+	NodeID  string `json:"node_id"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	URL     string `json:"url"`
+	HTMLURL string `json:"html_url"`
+	Labels  []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 }
@@ -595,11 +704,78 @@ type rawIssue struct {
 func (c *Connector) viewIssueRaw(ctx context.Context, num int) (rawIssue, error) {
 	var raw rawIssue
 	if err := runJSON(ctx, c.runner, &raw,
-		"issue", "view", strconv.Itoa(num),
-		"--repo", c.state.repo.Slug,
-		"--json", "number,title,body,url,labels",
+		"api", fmt.Sprintf("repos/%s/issues/%d", c.state.repo.Slug, num),
 	); err != nil {
 		return rawIssue{}, err
+	}
+	if raw.URL == "" {
+		raw.URL = raw.HTMLURL
+	}
+	return raw, nil
+}
+
+func (c *Connector) createIssue(ctx context.Context, title, body string, labels []string) (rawIssue, error) {
+	args := []string{
+		"api", "-X", "POST", fmt.Sprintf("repos/%s/issues", c.state.repo.Slug),
+		"-f", "title=" + title,
+		"-f", "body=" + body,
+	}
+	for _, label := range labels {
+		args = append(args, "-f", "labels[]="+label)
+	}
+	var raw rawIssue
+	if err := runJSON(ctx, c.runner, &raw, args...); err != nil {
+		return rawIssue{}, err
+	}
+	if raw.URL == "" {
+		raw.URL = raw.HTMLURL
+	}
+	if raw.Number == 0 || raw.NodeID == "" {
+		return rawIssue{}, iox.NewConnector(iox.CodeConnectorBackend,
+			"GitHub issue create response missing number or node_id",
+			"check gh CLI and GitHub REST API compatibility", nil)
+	}
+	return raw, nil
+}
+
+func (c *Connector) editIssueBody(ctx context.Context, num int, body string) (rawIssue, error) {
+	var raw rawIssue
+	if err := runJSON(ctx, c.runner, &raw,
+		"api", "-X", "PATCH", fmt.Sprintf("repos/%s/issues/%d", c.state.repo.Slug, num),
+		"-f", "body="+body,
+	); err != nil {
+		return rawIssue{}, err
+	}
+	if raw.URL == "" {
+		raw.URL = raw.HTMLURL
+	}
+	return raw, nil
+}
+
+func (c *Connector) closeIssue(ctx context.Context, num int) (rawIssue, error) {
+	var raw rawIssue
+	if err := runJSON(ctx, c.runner, &raw,
+		"api", "-X", "PATCH", fmt.Sprintf("repos/%s/issues/%d", c.state.repo.Slug, num),
+		"-f", "state=closed",
+	); err != nil {
+		return rawIssue{}, err
+	}
+	if raw.URL == "" {
+		raw.URL = raw.HTMLURL
+	}
+	return raw, nil
+}
+
+func (c *Connector) postIssueComment(ctx context.Context, num int, body string) (rawIssue, error) {
+	var raw rawIssue
+	if err := runJSON(ctx, c.runner, &raw,
+		"api", "-X", "POST", fmt.Sprintf("repos/%s/issues/%d/comments", c.state.repo.Slug, num),
+		"-f", "body="+body,
+	); err != nil {
+		return rawIssue{}, err
+	}
+	if raw.URL == "" {
+		raw.URL = raw.HTMLURL
 	}
 	return raw, nil
 }
@@ -684,9 +860,7 @@ func (c *Connector) idempotencyCheck(ctx context.Context) error {
 		Title  string `json:"title"`
 	}
 	if err := runJSON(ctx, c.runner, &raw,
-		"issue", "list", "--repo", c.state.repo.Slug,
-		"--label", "archetipo-backlog", "--state", "all",
-		"--json", "number,title", "--limit", "200",
+		"api", fmt.Sprintf("repos/%s/issues?state=all&labels=archetipo-backlog&per_page=100", c.state.repo.Slug),
 	); err != nil {
 		return err
 	}
@@ -719,20 +893,16 @@ func (c *Connector) createStoriesAndAttach(ctx context.Context, stories []domain
 	refs := make([]domain.Ref, 0, len(stories))
 	for _, s := range stories {
 		title := s.Code + ": " + s.Title
-		args := []string{"issue", "create", "--repo", c.state.repo.Slug,
-			"--title", title,
-			"--label", "archetipo-backlog",
-			"--body", s.Body,
-		}
+		labels := []string{"archetipo-backlog"}
 		if s.Epic.Code != "" {
-			args = append(args, "--label", s.Epic.Code+": ["+s.Epic.Title+"]")
+			labels = append(labels, s.Epic.Code+": ["+s.Epic.Title+"]")
 		}
-		stdout, stderr, err := c.runner.Run(ctx, nil, args...)
+		created, err := c.createIssue(ctx, title, s.Body, labels)
 		if err != nil {
-			return domain.WriteResult{}, classify(err, stderr)
+			return domain.WriteResult{}, err
 		}
-		num := lastNumberOnLine(stdout)
-		refs = append(refs, domain.Ref{Code: s.Code, Number: num, URL: strings.TrimSpace(string(stdout))})
+		num := created.Number
+		refs = append(refs, domain.Ref{Code: s.Code, Number: num, URL: created.URL})
 		// Add to project + set fields. Status field is the only one always
 		// present; priority/points/epic depend on whether the project
 		// declares those fields (loadProjectFields populated them or not).
@@ -746,18 +916,9 @@ func (c *Connector) createStoriesAndAttach(ctx context.Context, stories []domain
 				} `json:"item"`
 			} `json:"addProjectV2ItemById"`
 		}
-		// Get issue node id first.
-		var idResp struct {
-			NodeID string `json:"node_id"`
-		}
-		if err := runJSON(ctx, c.runner, &idResp,
-			"api", fmt.Sprintf("repos/%s/issues/%d", c.state.repo.Slug, num),
-		); err != nil {
-			return domain.WriteResult{}, err
-		}
 		if err := runGraphQL(ctx, c.runner, addProjectItemMutation, map[string]string{
 			"projectId": c.state.project.NodeID,
-			"contentId": idResp.NodeID,
+			"contentId": created.NodeID,
 		}, &addResp); err != nil {
 			return domain.WriteResult{}, err
 		}
@@ -790,6 +951,7 @@ func (c *Connector) createStoriesAndAttach(ctx context.Context, stories []domain
 			}, nil)
 		}
 	}
+	c.invalidateItemsCache()
 	return domain.WriteResult{OK: true, Refs: refs}, nil
 }
 
@@ -811,4 +973,21 @@ func (c *Connector) ensureLabel(ctx context.Context, name, description, color st
 	}
 	c.state.labels[name] = struct{}{}
 	return nil
+}
+
+func (c *Connector) invalidateItemsCache() {
+	c.state.stories = nil
+	c.state.itemsLoaded = false
+}
+
+func (c *Connector) updateCachedStoryStatus(num int, status domain.Status) {
+	if !c.state.itemsLoaded {
+		return
+	}
+	for i := range c.state.stories {
+		if c.state.stories[i].Ref == strconv.Itoa(num) {
+			c.state.stories[i].Status = status
+			return
+		}
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 
 	"gopkg.in/yaml.v3"
@@ -44,8 +45,11 @@ type Config struct {
 // GitHubConfig holds connector-specific overrides. Owner and project number
 // are auto-detected from `gh` when empty.
 type GitHubConfig struct {
-	Owner         string `yaml:"owner,omitempty" json:"owner,omitempty"`
-	ProjectNumber int    `yaml:"project_number,omitempty" json:"project_number,omitempty"`
+	Owner         string               `yaml:"owner,omitempty" json:"owner,omitempty"`
+	ProjectNumber int                  `yaml:"project_number,omitempty" json:"project_number,omitempty"`
+	ProjectNodeID string               `yaml:"project_node_id,omitempty" json:"project_node_id,omitempty"`
+	ProjectURL    string               `yaml:"project_url,omitempty" json:"project_url,omitempty"`
+	Fields        domain.ProjectFields `yaml:"fields,omitempty" json:"fields,omitempty"`
 }
 
 // Default returns the canonical default config (file connector, English status
@@ -178,8 +182,20 @@ func (c Config) Save() error {
 		// applyDefaults() will fill the rest at next Load. Avoids marshalling
 		// the whole Config, whose nested types (domain.ConfigPaths /
 		// domain.StatusLabels) lack yaml tags and would emit broken keys.
-		out := fmt.Sprintf("connector: %s\ngithub:\n  owner: %s\n  project_number: %d\n",
-			c.Connector, c.GitHub.Owner, c.GitHub.ProjectNumber)
+		gh := &yaml.Node{Kind: yaml.MappingNode}
+		upsertGitHubMapping(gh, c.GitHub)
+		doc := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode}}}
+		root := doc.Content[0]
+		root.Content = append(root.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "connector"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: c.Connector},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "github"},
+			gh,
+		)
+		out, err := yaml.Marshal(doc)
+		if err != nil {
+			return fmt.Errorf("encoding config: %w", err)
+		}
 		return os.WriteFile(path, []byte(out), 0o644)
 	}
 	if err != nil {
@@ -218,9 +234,18 @@ func upsertGitHubSection(doc *yaml.Node, g GitHubConfig) error {
 		gh = &yaml.Node{Kind: yaml.MappingNode}
 		root.Content = append(root.Content, key, gh)
 	}
+	upsertGitHubMapping(gh, g)
+	return nil
+}
+
+func upsertGitHubMapping(gh *yaml.Node, g GitHubConfig) {
 	setScalarChild(gh, "owner", g.Owner, "!!str")
 	setScalarChild(gh, "project_number", strconv.Itoa(g.ProjectNumber), "!!int")
-	return nil
+	setOptionalScalarChild(gh, "project_node_id", g.ProjectNodeID)
+	setOptionalScalarChild(gh, "project_url", g.ProjectURL)
+	if !projectFieldsEmpty(g.Fields) {
+		setMappingChild(gh, "fields", projectFieldsNode(g.Fields))
+	}
 }
 
 // findOrCreateChildMapping returns the value node for a given mapping key.
@@ -262,6 +287,68 @@ func setScalarChild(m *yaml.Node, key, value, tag string) {
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: value},
 	)
+}
+
+func setOptionalScalarChild(m *yaml.Node, key, value string) {
+	if value == "" {
+		return
+	}
+	setScalarChild(m, key, value, "!!str")
+}
+
+func setMappingChild(m *yaml.Node, key string, value *yaml.Node) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content[i+1] = value
+			return
+		}
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		value,
+	)
+}
+
+func projectFieldsEmpty(f domain.ProjectFields) bool {
+	return f.StatusFieldID == "" &&
+		f.PriorityFieldID == "" &&
+		f.StoryPointsFieldID == "" &&
+		f.EpicFieldID == "" &&
+		len(f.StatusOptions) == 0 &&
+		len(f.PriorityOptions) == 0 &&
+		len(f.EpicOptions) == 0
+}
+
+func projectFieldsNode(f domain.ProjectFields) *yaml.Node {
+	n := &yaml.Node{Kind: yaml.MappingNode}
+	setOptionalScalarChild(n, "status_field_id", f.StatusFieldID)
+	setStringMapChild(n, "status_options", f.StatusOptions)
+	setOptionalScalarChild(n, "priority_field_id", f.PriorityFieldID)
+	setStringMapChild(n, "priority_options", f.PriorityOptions)
+	setOptionalScalarChild(n, "story_points_field_id", f.StoryPointsFieldID)
+	setOptionalScalarChild(n, "epic_field_id", f.EpicFieldID)
+	setStringMapChild(n, "epic_options", f.EpicOptions)
+	return n
+}
+
+func setStringMapChild(m *yaml.Node, key string, values map[string]string) {
+	if len(values) == 0 {
+		return
+	}
+	child := &yaml.Node{Kind: yaml.MappingNode}
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		v := values[k]
+		child.Content = append(child.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v},
+		)
+	}
+	setMappingChild(m, key, child)
 }
 
 // find walks up from start looking for .archetipo/config.yaml. Returns the

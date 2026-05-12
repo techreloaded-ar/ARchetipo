@@ -72,23 +72,6 @@ func epicTitleFromLabel(label string) string {
 	return label[open+1 : close]
 }
 
-// lastNumberOnLine pulls the last numeric segment from output like
-// "https://github.com/owner/repo/issues/42" produced by `gh issue create`.
-func lastNumberOnLine(out []byte) int {
-	s := strings.TrimSpace(string(out))
-	if s == "" {
-		return 0
-	}
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] < '0' || s[i] > '9' {
-			n, _ := strconv.Atoi(s[i+1:])
-			return n
-		}
-	}
-	n, _ := strconv.Atoi(s)
-	return n
-}
-
 // writeFile is a duplicate of filefs.writeFile to avoid an import cycle when
 // the github connector also needs to persist a local file (PRD).
 func writeFile(path string, content []byte) error {

@@ -42,3 +42,70 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Float!) {
     value: { number: $value }
   }) { projectV2Item { id } }
 }`
+
+// projectFieldsQuery is the lean replacement for `gh project field-list`.
+// The gh command fetches every item and every field value too, which costs
+// ~100 GraphQL credits on even small boards. This asks only for field metadata.
+const projectFieldsQuery = `
+query($projectId: ID!) {
+  node(id: $projectId) {
+    ... on ProjectV2 {
+      fields(first: 50) {
+        nodes {
+          __typename
+          ... on ProjectV2Field { id name dataType }
+          ... on ProjectV2IterationField { id name dataType }
+          ... on ProjectV2SingleSelectField {
+            id
+            name
+            dataType
+            options { id name }
+          }
+        }
+      }
+    }
+  }
+}`
+
+// projectItemsQuery is the lean replacement for `gh project item-list`.
+// It fetches only issue content and the named ARchetipo fields rather than
+// every ProjectV2 field value type.
+const projectItemsQuery = `
+query($projectId: ID!, $after: String) {
+  node(id: $projectId) {
+    ... on ProjectV2 {
+      items(first: 100, after: $after) {
+        pageInfo { endCursor hasNextPage }
+        nodes {
+          id
+          content {
+            __typename
+            ... on Issue {
+              number
+              title
+              url
+              labels(first: 20) { nodes { name } }
+            }
+          }
+          status: fieldValueByName(name: "Status") {
+            __typename
+            ... on ProjectV2ItemFieldSingleSelectValue { name optionId }
+          }
+          priority: fieldValueByName(name: "Priority") {
+            __typename
+            ... on ProjectV2ItemFieldSingleSelectValue { name optionId }
+          }
+          storyPoints: fieldValueByName(name: "Story Points") {
+            __typename
+            ... on ProjectV2ItemFieldNumberValue { number }
+          }
+          epic: fieldValueByName(name: "Epic") {
+            __typename
+            ... on ProjectV2ItemFieldSingleSelectValue { name optionId }
+            ... on ProjectV2ItemFieldTextValue { text }
+          }
+        }
+      }
+    }
+  }
+}`

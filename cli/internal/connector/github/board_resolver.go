@@ -51,10 +51,13 @@ func (c *Connector) resolveBoard(ctx context.Context) (*domain.RepoInfo, *domain
 	if !cameFromConfig {
 		c.cfg.GitHub.Owner = repo.Owner
 		c.cfg.GitHub.ProjectNumber = project.Number
-		// Saving config is best-effort: a filesystem permission error must
-		// not block read/write operations against the (already resolved) board.
-		_ = c.cfg.Save()
 	}
+	c.cfg.GitHub.ProjectNodeID = project.NodeID
+	c.cfg.GitHub.ProjectURL = project.URL
+	c.cfg.GitHub.Fields = project.Fields
+	// Saving config is best-effort: a filesystem permission error must
+	// not block read/write operations against the (already resolved) board.
+	_ = c.cfg.Save()
 
 	return repo, project, nil
 }
@@ -79,6 +82,9 @@ func (c *Connector) lookupProjectByNumber(ctx context.Context, owner string, num
 	}
 	for _, p := range raw.Projects {
 		if p.Number == number {
+			if cached := c.projectFromConfigCache(p.Number, p.ID, p.URL); cached != nil {
+				return cached, nil
+			}
 			return c.loadProjectFields(ctx, repo, p.Number, p.ID, p.URL)
 		}
 	}
@@ -111,6 +117,9 @@ func (c *Connector) findProjectByTitlePipeline(ctx context.Context, repo *domain
 	exactTitle := repo.Name + " Backlog"
 	for _, p := range raw.Projects {
 		if p.Title == exactTitle {
+			if cached := c.projectFromConfigCache(p.Number, p.ID, p.URL); cached != nil {
+				return cached, nil
+			}
 			return c.loadProjectFields(ctx, repo, p.Number, p.ID, p.URL)
 		}
 	}
@@ -161,6 +170,22 @@ func (c *Connector) createProject(ctx context.Context, repo *domain.RepoInfo) (*
 	}
 	// Reload to capture the new Status options.
 	return c.loadProjectFields(ctx, repo, created.Number, created.ID, created.URL)
+}
+
+func (c *Connector) projectFromConfigCache(number int, id, url string) *domain.ProjectInfo {
+	if c.cfg.GitHub.ProjectNumber != number || c.cfg.GitHub.ProjectNodeID == "" || c.cfg.GitHub.ProjectNodeID != id {
+		return nil
+	}
+	fields := c.cfg.GitHub.Fields
+	if fields.StatusFieldID == "" || len(fields.StatusOptions) == 0 {
+		return nil
+	}
+	return &domain.ProjectInfo{
+		Number: number,
+		NodeID: id,
+		URL:    url,
+		Fields: fields,
+	}
 }
 
 // alignStatusOptions overwrites the options of the project's Status

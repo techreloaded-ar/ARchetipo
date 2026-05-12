@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 )
 
 // TestInitializeConnector_HappyPath verifies the gh call sequence used by
@@ -18,16 +19,16 @@ func TestInitializeConnector_HappyPath(t *testing.T) {
 		on("project list --owner acme", `{
 			"projects":[{"number":4,"id":"PVT_kw","title":"web Backlog","url":"https://gh/p/4"}]
 		}`).
-		on("project field-list 4", `{
-			"fields":[
-				{"id":"FID_status","name":"Status","type":"SINGLE_SELECT","options":[
+		on("api graphql", `{
+			"data":{"node":{"fields":{"nodes":[
+				{"id":"FID_status","name":"Status","dataType":"SINGLE_SELECT","options":[
 					{"id":"OPT_todo","name":"TODO"},{"id":"OPT_planned","name":"PLANNED"}
 				]},
-				{"id":"FID_pri","name":"Priority","type":"SINGLE_SELECT","options":[
+				{"id":"FID_pri","name":"Priority","dataType":"SINGLE_SELECT","options":[
 					{"id":"OPT_high","name":"HIGH"}
 				]},
-				{"id":"FID_sp","name":"Story Points","type":"NUMBER"}
-			]
+				{"id":"FID_sp","name":"Story Points","dataType":"NUMBER"}
+			]}}}
 		}`)
 
 	cfg := config.Default()
@@ -68,10 +69,9 @@ func TestProjectPreference_NoExactMatchCreatesNew(t *testing.T) {
 			`{"number":12,"id":"PVT12","url":"https://gh/p/12"}`).
 		on("project field-create 12 --owner sleli --name Priority", "ok").
 		on("project field-create 12 --owner sleli --name Story Points", "ok").
-		on("project field-list 12", `{"fields":[
-			{"id":"FID_status","name":"Status","type":"SINGLE_SELECT","options":[]}
-		]}`).
-		on("api graphql", `{"data":{"updateProjectV2Field":{"projectV2Field":{"id":"FID_status"}}}}`)
+		on("api graphql", `{"data":{"node":{"fields":{"nodes":[
+			{"id":"FID_status","name":"Status","dataType":"SINGLE_SELECT","options":[]}
+		]}}}}`)
 
 	cfg := config.Default()
 	cfg.Connector = config.ConnectorGitHub
@@ -99,7 +99,7 @@ func TestResolveBoard_ConfigPinsProjectNumber(t *testing.T) {
 			{"number":4,"id":"PVT4","title":"web Backlog","url":""},
 			{"number":9,"id":"PVT9","title":"Other","url":""}
 		]}`).
-		on("project field-list 9", `{"fields":[]}`)
+		on("api graphql", `{"data":{"node":{"fields":{"nodes":[]}}}}`)
 
 	cfg := config.Default()
 	cfg.Connector = config.ConnectorGitHub
@@ -155,10 +155,9 @@ func TestResolveBoard_NoProjectTriggersCreate(t *testing.T) {
 			`{"number":11,"id":"PVT11","url":"https://gh/p/11"}`).
 		on("project field-create 11 --owner acme --name Priority", "ok").
 		on("project field-create 11 --owner acme --name Story Points", "ok").
-		on("project field-list 11", `{"fields":[
-			{"id":"FID_status","name":"Status","type":"SINGLE_SELECT","options":[]}
-		]}`).
-		on("api graphql", `{"data":{"updateProjectV2Field":{"projectV2Field":{"id":"FID_status"}}}}`)
+		on("api graphql", `{"data":{"node":{"fields":{"nodes":[
+			{"id":"FID_status","name":"Status","dataType":"SINGLE_SELECT","options":[]}
+		]}}}}`)
 
 	cfg := config.Default()
 	cfg.Connector = config.ConnectorGitHub
@@ -180,5 +179,53 @@ func TestResolveBoard_NoProjectTriggersCreate(t *testing.T) {
 		if !m.calledWithPrefix(want) {
 			t.Errorf("expected gh call with prefix %q", want)
 		}
+	}
+}
+
+func TestFetchBacklogItems_UsesLeanGraphQLAndFiltersTasks(t *testing.T) {
+	m := newMock(t).
+		on("repo view --json", `{"id":"R","owner":{"login":"acme"},"name":"web","nameWithOwner":"acme/web"}`).
+		on("project list --owner acme", `{"projects":[
+			{"number":4,"id":"PVT4","title":"web Backlog","url":"https://gh/p/4"}
+		]}`).
+		on("api graphql -f query=\nquery($projectId: ID!)", `{"data":{"node":{"fields":{"nodes":[
+			{"id":"FID_status","name":"Status","dataType":"SINGLE_SELECT","options":[{"id":"OPT_todo","name":"TODO"}]},
+			{"id":"FID_pri","name":"Priority","dataType":"SINGLE_SELECT","options":[{"id":"OPT_high","name":"HIGH"}]},
+			{"id":"FID_sp","name":"Story Points","dataType":"NUMBER"}
+		]}}}}`).
+		on("api graphql -f query=\nquery($projectId: ID!, $after: String)", `{"data":{"node":{"items":{
+			"pageInfo":{"endCursor":"","hasNextPage":false},
+			"nodes":[
+				{
+					"id":"PVTI_story",
+					"content":{"__typename":"Issue","number":10,"title":"US-001: Setup","url":"https://gh/i/10","labels":{"nodes":[{"name":"archetipo-backlog"},{"name":"EP-001: [Foundations]"}]}},
+					"status":{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"TODO"},
+					"priority":{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"HIGH"},
+					"storyPoints":{"__typename":"ProjectV2ItemFieldNumberValue","number":3}
+				},
+				{
+					"id":"PVTI_task",
+					"content":{"__typename":"Issue","number":11,"title":"TASK-01: Do work","url":"https://gh/i/11","labels":{"nodes":[{"name":"EP-001: [Foundations]"}]}},
+					"status":{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"TODO"}
+				}
+			]
+		}}}}`)
+
+	cfg := config.Default()
+	cfg.Connector = config.ConnectorGitHub
+	c := NewWithRunner(cfg, m)
+
+	stories, err := c.FetchBacklogItems(context.Background(), domain.StatusTodo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stories) != 1 || stories[0].Code != "US-001" {
+		t.Fatalf("expected only backlog story US-001, got %+v", stories)
+	}
+	if m.calledWithPrefix("project item-list") {
+		t.Fatal("must not call high-cost gh project item-list")
+	}
+	if m.calledWithPrefix("project field-list") {
+		t.Fatal("must not call high-cost gh project field-list")
 	}
 }
