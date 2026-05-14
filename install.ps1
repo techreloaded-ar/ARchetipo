@@ -25,9 +25,22 @@ if (-not [string]::IsNullOrWhiteSpace($Connector) -and $Connector -notin @("file
   throw "Unsupported connector '$Connector'. Use 'file' or 'github'."
 }
 
+function Resolve-InstallerScriptDir {
+  if ($script:ARchetipoInstallerScriptPath) {
+    return Split-Path -Parent $script:ARchetipoInstallerScriptPath
+  }
+  if ($PSScriptRoot) {
+    return $PSScriptRoot
+  }
+  if ($MyInvocation.MyCommand.Path) {
+    return Split-Path -Parent $MyInvocation.MyCommand.Path
+  }
+  return $null
+}
+
 $RepoZip    = "https://github.com/techreloaded-ar/ARchetipo/archive/refs/heads/main.zip"
 $SkillNames = @("archetipo-autopilot", "archetipo-design", "archetipo-implement", "archetipo-inception", "archetipo-plan", "archetipo-spec")
-$ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptDir  = Resolve-InstallerScriptDir
 
 # ─── Tool definitions ─────────────────────────────────────────────────────────
 $Tools = @(
@@ -530,6 +543,9 @@ Supported tools:
   $tempDir   = $null
 
   if ($Local) {
+    if (-not $ScriptDir) {
+      throw "Local install requires a script path. Re-run the local installer from a file, or omit -Local for the remote bootstrap path."
+    }
     # Use the local repository folder relative to this installer.
     $localSkillsDir = Join-Path $ScriptDir "skills"
     if (-not (Test-Path $localSkillsDir)) {

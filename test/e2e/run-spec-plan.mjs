@@ -727,6 +727,7 @@ function buildInstallerEncodedCommand({ installScript, tool, connector }) {
   const psScript = [
     `$scriptPath = ${toPowerShellSingleQuotedString(installScript)}`,
     `$scriptContent = Get-Content -Raw -LiteralPath $scriptPath`,
+    `$script:ARchetipoInstallerScriptPath = $scriptPath`,
     `$Local = $true`,
     `$Tool = ${toPowerShellSingleQuotedString(tool)}`,
     `$Connector = ${toPowerShellSingleQuotedString(connector)}`,
