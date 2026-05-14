@@ -14,13 +14,16 @@ param(
   [switch]$Local,
   [switch]$Cleanup,
   [string]$Tool,
-  [ValidateSet("file", "github")]
   [string]$Connector,
   [switch]$Yes,
   [switch]$Help
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not [string]::IsNullOrWhiteSpace($Connector) -and $Connector -notin @("file", "github")) {
+  throw "Unsupported connector '$Connector'. Use 'file' or 'github'."
+}
 
 $RepoZip    = "https://github.com/techreloaded-ar/ARchetipo/archive/refs/heads/main.zip"
 $SkillNames = @("archetipo-autopilot", "archetipo-design", "archetipo-implement", "archetipo-inception", "archetipo-plan", "archetipo-spec")

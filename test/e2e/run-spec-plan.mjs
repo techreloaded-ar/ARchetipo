@@ -727,9 +727,11 @@ function buildInstallerEncodedCommand({ installScript, tool, connector }) {
   const psScript = [
     `$scriptPath = ${toPowerShellSingleQuotedString(installScript)}`,
     `$scriptContent = Get-Content -Raw -LiteralPath $scriptPath`,
-    `Invoke-Expression "& ([scriptblock]::Create($scriptContent)) -Local -Tool ${toPowerShellSingleQuotedString(
-      tool,
-    )} -Connector ${toPowerShellSingleQuotedString(connector)} -Yes"`,
+    `$Local = $true`,
+    `$Tool = ${toPowerShellSingleQuotedString(tool)}`,
+    `$Connector = ${toPowerShellSingleQuotedString(connector)}`,
+    `$Yes = $true`,
+    `Invoke-Expression $scriptContent`,
   ].join("\n");
   return Buffer.from(psScript, "utf16le").toString("base64");
 }
