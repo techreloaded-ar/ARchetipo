@@ -17,6 +17,8 @@ const DEFAULT_CONNECTOR = "file";
 const DEFAULT_GITHUB_REPO_PREFIX = "archetipo-e2e";
 const LONG_RUNNING_STEP_HEARTBEAT_MS = 30 * 1000;
 const PROCESS_TERMINATION_GRACE_MS = 5 * 1000;
+const DEFAULT_AGENT_ID = "default-agent";
+const DEFAULT_SCENARIO_ID = "default";
 
 const TOOL_SKILL_ROOT = {
   claude: ".claude/skills",
@@ -31,18 +33,37 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const configPath = path.resolve(repoRoot, options.config);
   const manifest = YAML.parse(await fs.readFile(configPath, "utf8"));
-  const run = normalizeRun(manifest?.run, configPath);
+  const scenarios = normalizeConfig(manifest, configPath, options.scenario);
 
-  console.log(`\n==> Running ${run.id} (${run.model ?? "no model"}) [connector=${options.connector}]`);
-  const result = await runConfiguredScenario({
-    run,
-    connector: options.connector,
-    configPath,
-    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
+  const results = [];
+  for (const scenario of scenarios) {
+    const agentLabel = `${scenario.agent.id}`;
+    console.log(`\n==> Running scenario "${scenario.id}" (agent: ${agentLabel}, model: ${scenario.agent.model ?? "no model"}) [connector=${options.connector}]`);
+    const result = await runConfiguredScenario({
+      scenario,
+      connector: options.connector,
+      configPath,
+      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    });
+    results.push(result);
+    console.log(formatResultLine(result));
+  }
 
-  console.log(`\nSummary:\n- ${formatResultLine(result)}`);
-  process.exit(result.status === "pass" || result.status === "skip" ? 0 : 1);
+  const hasFailure = results.some((r) => r.status === "fail");
+  const hasSkip = results.some((r) => r.status === "skip");
+  const hasPass = results.some((r) => r.status === "pass");
+
+  console.log(`\n${results.length > 1 ? "====== E2E Summary ======" : "Summary:"}`);
+  for (const result of results) {
+    console.log(`- ${formatResultLine(result)}`);
+  }
+
+  if (results.length === 0) {
+    console.error("No scenarios matched.");
+    process.exit(1);
+  }
+
+  process.exit(hasFailure || (!hasPass && !hasSkip) ? 1 : 0);
 }
 
 function parseArgs(argv) {
@@ -59,6 +80,10 @@ function parseArgs(argv) {
         break;
       case "--connector":
         options.connector = argv[++index];
+        break;
+      case "--scenario":
+      case "--scenarios":
+        options.scenario = argv[++index];
         break;
       case "--timeout-ms":
         options.timeoutMs = Number(argv[++index]);
@@ -85,16 +110,102 @@ function printHelp() {
 
 Usage:
   node ./test/e2e/run.mjs --config test/e2e/run.yaml --connector file
-  npm run test:e2e:file -- [--config test/e2e/run.yaml]
-  npm run test:e2e:github -- [--config test/e2e/run.yaml]
+  node ./test/e2e/run.mjs --config test/e2e/run.yaml --connector github --scenario spec-plan
+  npm run test:e2e:file -- [--config test/e2e/run.yaml] [--scenario scenario-name]
+  npm run test:e2e:github -- [--config test/e2e/run.yaml] [--scenario scenario-name]
 `);
 }
 
-function normalizeRun(run, configPath) {
-  if (!run || typeof run !== "object") {
-    throw new Error(`Missing top-level 'run' object in ${configPath}`);
+function normalizeConfig(manifest, configPath, filterScenarios) {
+  // Support both old format (top-level 'run') and new format ('agents' + 'scenarios')
+  if (manifest?.run) {
+    // Old format: auto-convert to agents + scenarios
+    const run = manifest.run;
+    validateRunBlock(run, configPath);
+    const agentId = run.id || DEFAULT_AGENT_ID;
+    const agents = {
+      [agentId]: {
+        tool: run.tool,
+        command: run.command,
+        model: run.model,
+        args: run.args,
+        env_required: run.env_required,
+      },
+    };
+    const scenarios = [
+      {
+        id: DEFAULT_SCENARIO_ID,
+        agentId,
+        agent: { id: agentId, ...agents[agentId] },
+        prd: run.prd,
+        prompts: run.prompts,
+        env_required: run.env_required,
+      },
+    ];
+    return filterScenarioList(scenarios, filterScenarios, configPath);
   }
-  for (const key of ["id", "tool", "command"]) {
+
+  // New format
+  const agents = manifest?.agents;
+  const rawScenarios = manifest?.scenarios;
+
+  if (!agents || typeof agents !== "object" || Object.keys(agents).length === 0) {
+    throw new Error(`Missing or empty 'agents' object in ${configPath}`);
+  }
+  if (!rawScenarios || typeof rawScenarios !== "object" || Object.keys(rawScenarios).length === 0) {
+    throw new Error(`Missing or empty 'scenarios' object in ${configPath}`);
+  }
+
+  // Validate agents
+  for (const [agentId, agent] of Object.entries(agents)) {
+    if (!agent || typeof agent !== "object") {
+      throw new Error(`agents.${agentId} must be an object in ${configPath}`);
+    }
+    for (const key of ["tool", "command"]) {
+      if (!agent[key] || typeof agent[key] !== "string") {
+        throw new Error(`agents.${agentId}.${key} must be a non-empty string in ${configPath}`);
+      }
+    }
+    if (!Array.isArray(agent.args) || agent.args.length === 0 || !agent.args.every((arg) => typeof arg === "string")) {
+      throw new Error(`agents.${agentId}.args must be a non-empty list of strings in ${configPath}`);
+    }
+  }
+
+  // Build resolved scenarios
+  const scenarios = [];
+  for (const [scenarioId, rawScenario] of Object.entries(rawScenarios)) {
+    if (!rawScenario || typeof rawScenario !== "object") {
+      throw new Error(`scenarios.${scenarioId} must be an object in ${configPath}`);
+    }
+    const agentId = rawScenario.agent;
+    if (!agentId || typeof agentId !== "string") {
+      throw new Error(`scenarios.${scenarioId}.agent must be a non-empty string referencing an agent in ${configPath}`);
+    }
+    const agent = agents[agentId];
+    if (!agent) {
+      throw new Error(`scenarios.${scenarioId} references unknown agent '${agentId}' in ${configPath}`);
+    }
+    if (!Array.isArray(rawScenario.prompts) || rawScenario.prompts.length === 0 || !rawScenario.prompts.every((prompt) => typeof prompt === "string")) {
+      throw new Error(`scenarios.${scenarioId}.prompts must be a non-empty list of strings in ${configPath}`);
+    }
+    if (rawScenario.prd !== undefined && (typeof rawScenario.prd !== "string" || rawScenario.prd.trim() === "")) {
+      throw new Error(`scenarios.${scenarioId}.prd must be a non-empty string when specified in ${configPath}`);
+    }
+    scenarios.push({
+      id: scenarioId,
+      agentId,
+      agent: { id: agentId, ...agent },
+      prd: rawScenario.prd,
+      prompts: rawScenario.prompts,
+      env_required: rawScenario.env_required ?? agent.env_required,
+    });
+  }
+
+  return filterScenarioList(scenarios, filterScenarios, configPath);
+}
+
+function validateRunBlock(run, configPath) {
+  for (const key of ["tool", "command"]) {
     if (!run[key] || typeof run[key] !== "string") {
       throw new Error(`run.${key} must be a non-empty string in ${configPath}`);
     }
@@ -108,34 +219,50 @@ function normalizeRun(run, configPath) {
   if (run.prd !== undefined && (typeof run.prd !== "string" || run.prd.trim() === "")) {
     throw new Error(`run.prd must be a non-empty string when specified in ${configPath}`);
   }
-  return run;
 }
 
-async function runConfiguredScenario({ run, connector, configPath, timeoutMs }) {
-  const toolSkillRoot = TOOL_SKILL_ROOT[run.tool];
+function filterScenarioList(scenarios, filter, configPath) {
+  if (!filter) {
+    return scenarios;
+  }
+  const requested = filter.split(",").map((s) => s.trim()).filter(Boolean);
+  const filtered = scenarios.filter((s) => requested.includes(s.id));
+  const found = new Set(filtered.map((s) => s.id));
+  const missing = requested.filter((id) => !found.has(id));
+  if (missing.length > 0) {
+    const available = scenarios.map((s) => s.id).join(", ");
+    throw new Error(`Scenario(s) not found: ${missing.join(", ")}. Available scenarios: ${available}`);
+  }
+  return filtered;
+}
+
+async function runConfiguredScenario({ scenario, connector, configPath, timeoutMs }) {
+  const agent = scenario.agent;
+  const toolSkillRoot = TOOL_SKILL_ROOT[agent.tool];
   if (!toolSkillRoot) {
     return {
-      run: run.id,
+      scenario: scenario.id,
+      agent: agent.id,
       connector,
-      model: run.model,
+      model: agent.model,
       status: "skip",
-      reason: `Unsupported installer tool '${run.tool}'`,
+      reason: `Unsupported installer tool '${agent.tool}'`,
     };
   }
 
-  const workspaceRoot = path.join(repoRoot, "test", "workspaces", run.id);
+  const workspaceRoot = path.join(repoRoot, "test", "workspaces", scenario.id);
   const runRoot = await createRunRoot(workspaceRoot);
   const sandboxDir = path.join(runRoot, "sandbox");
   const reportPath = path.join(runRoot, "report.html");
   const summaryPath = path.join(runRoot, "summary.json");
 
-  logRunStepStart(run.id, "workspace", `Creating sandbox at ${sandboxDir}`);
+  logRunStepStart(scenario.id, "workspace", `Creating sandbox at ${sandboxDir}`);
   await fs.mkdir(path.join(sandboxDir, "docs"), { recursive: true });
-  const prdSourcePath = await copyConfiguredPrd({ run, configPath, sandboxDir });
-  logRunStepDone(run.id, "workspace", `Sandbox ready in ${sandboxDir}`);
+  const prdSourcePath = await copyConfiguredPrd({ scenario, configPath, sandboxDir });
+  logRunStepDone(scenario.id, "workspace", `Sandbox ready in ${sandboxDir}`);
 
   const report = createRunReport({
-    run,
+    scenario,
     connector,
     configPath,
     runRoot,
@@ -144,7 +271,8 @@ async function runConfiguredScenario({ run, connector, configPath, timeoutMs }) 
     reportPath,
   });
   const context = {
-    run,
+    scenario,
+    agent,
     connector,
     configPath,
     runRoot,
@@ -168,38 +296,38 @@ async function runConfiguredScenario({ run, connector, configPath, timeoutMs }) 
   }
 
   try {
-    logRunStepStart(run.id, "prepare", `Checking local command '${run.command}'`);
-    const prep = await ensureCommand(run.command);
+    logRunStepStart(scenario.id, "prepare", `Checking local command '${agent.command}'`);
+    const prep = await ensureCommand(agent.command);
     if (prep.skip) {
       return finish({ status: "skip", reason: prep.reason });
     }
-    logRunStepDone(run.id, "prepare", `Command '${run.command}' is available`);
+    logRunStepDone(scenario.id, "prepare", `Command '${agent.command}' is available`);
 
-    logRunStepStart(run.id, "env", "Validating required environment");
-    await verifyRequiredEnv(run);
-    logRunStepDone(run.id, "env", "Environment looks good");
+    logRunStepStart(scenario.id, "env", "Validating required environment");
+    await verifyRequiredEnv(agent);
+    logRunStepDone(scenario.id, "env", "Environment looks good");
 
-    logRunStepStart(run.id, "bootstrap", `Preparing ${connector} workspace`);
+    logRunStepStart(scenario.id, "bootstrap", `Preparing ${connector} workspace`);
     await prepareWorkspace(context);
-    logRunStepDone(run.id, "bootstrap", `${connector} workspace ready`);
+    logRunStepDone(scenario.id, "bootstrap", `${connector} workspace ready`);
 
-    logRunStepStart(run.id, "install", `Installing ARchetipo assets for tool '${run.tool}'`);
+    logRunStepStart(scenario.id, "install", `Installing ARchetipo assets for tool '${agent.tool}'`);
     await installWorkspace(context);
-    logRunStepDone(run.id, "install", "Installation completed");
+    logRunStepDone(scenario.id, "install", "Installation completed");
 
-    logRunStepStart(run.id, "verify-install", "Checking installed files and connector config");
+    logRunStepStart(scenario.id, "verify-install", "Checking installed files and connector config");
     await verifyInstallation(context);
-    logRunStepDone(run.id, "verify-install", "Installed files verified");
+    logRunStepDone(scenario.id, "verify-install", "Installed files verified");
 
-    logRunStepStart(run.id, "init", "Reading project metadata from local CLI");
+    logRunStepStart(scenario.id, "init", "Reading project metadata from local CLI");
     await readCliEnvelope(context, "init", ["init"]);
-    logRunStepDone(run.id, "init", "CLI init completed");
+    logRunStepDone(scenario.id, "init", "CLI init completed");
 
-    for (let index = 0; index < run.prompts.length; index += 1) {
-      const prompt = run.prompts[index];
+    for (let index = 0; index < scenario.prompts.length; index += 1) {
+      const prompt = scenario.prompts[index];
       const step = `prompt-${index + 1}`;
       const invocation = buildPromptInvocation(context, prompt);
-      logRunStepStart(run.id, step, `Running ${invocation.skill}`);
+      logRunStepStart(scenario.id, step, `Running ${invocation.skill}`);
       const promptRun = await runReportedCommand({
         ...context,
         step,
@@ -208,7 +336,7 @@ async function runConfiguredScenario({ run, connector, configPath, timeoutMs }) 
       if (!promptRun.ok) {
         return finish(classifyRunFailure(context, step, promptRun));
       }
-      logRunStepDone(run.id, step, "Prompt completed");
+      logRunStepDone(scenario.id, step, "Prompt completed");
     }
 
     return finish({
@@ -228,12 +356,12 @@ async function runConfiguredScenario({ run, connector, configPath, timeoutMs }) 
   }
 }
 
-async function copyConfiguredPrd({ run, configPath, sandboxDir }) {
-  if (!run.prd) {
+async function copyConfiguredPrd({ scenario, configPath, sandboxDir }) {
+  if (!scenario.prd) {
     return null;
   }
 
-  const sourcePath = path.resolve(path.dirname(configPath), run.prd.trim());
+  const sourcePath = path.resolve(path.dirname(configPath), scenario.prd.trim());
   const targetDir = path.join(sandboxDir, "docs");
   const targetPath = path.join(targetDir, "PRD.md");
 
@@ -247,7 +375,7 @@ async function copyConfiguredPrd({ run, configPath, sandboxDir }) {
     throw error;
   }
 
-  logRunStepDetail(run.id, "workspace", `Copied PRD ${sourcePath} -> ${targetPath}`);
+  logRunStepDetail(scenario.id, "workspace", `Copied PRD ${sourcePath} -> ${targetPath}`);
   return sourcePath;
 }
 
@@ -285,8 +413,8 @@ function formatRunTimestamp(date) {
   ].join("");
 }
 
-async function verifyRequiredEnv(run) {
-  const required = run.env_required ?? [];
+async function verifyRequiredEnv(agent) {
+  const required = agent.env_required ?? [];
   const missing = required.filter((name) => !process.env[name]);
   if (missing.length > 0) {
     throw new SkipError(`Missing required environment variables: ${missing.join(", ")}`);
@@ -298,11 +426,11 @@ async function prepareWorkspace(context) {
     return;
   }
 
-  logRunStepDetail(context.run.id, "bootstrap", "Checking GitHub prerequisites");
+  logRunStepDetail(context.scenario.id, "bootstrap", "Checking GitHub prerequisites");
   await verifyGitHubPrerequisites(context);
-  logRunStepDetail(context.run.id, "bootstrap", "Provisioning temporary GitHub repository");
+  logRunStepDetail(context.scenario.id, "bootstrap", "Provisioning temporary GitHub repository");
   await provisionGitHubRepository(context);
-  logRunStepDetail(context.run.id, "bootstrap", "Initializing git sandbox");
+  logRunStepDetail(context.scenario.id, "bootstrap", "Initializing git sandbox");
   await bootstrapSandboxGit(context);
 }
 
@@ -319,12 +447,48 @@ async function installWorkspace(context) {
   }
 }
 
+function getInstallerInvocation(context) {
+  if (process.platform === "win32") {
+    const installScript = path.join(repoRoot, "install.ps1");
+    return {
+      command: "powershell",
+      args: [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        installScript,
+        "-Local",
+        "-Tool",
+        context.agent.tool,
+        "-Connector",
+        context.connector,
+        "-Yes",
+      ],
+    };
+  }
+
+  const installScript = path.join(repoRoot, "install.sh");
+  return {
+    command: "bash",
+    args: [
+      installScript,
+      "--local",
+      "--tool",
+      context.agent.tool,
+      "--connector",
+      context.connector,
+      "--yes",
+    ],
+  };
+}
+
 async function verifyInstallation(context) {
   const requiredPaths = [
     getCliBinaryPath(context.sandboxDir),
     path.join(context.sandboxDir, ".archetipo", "config.yaml"),
     path.join(context.sandboxDir, ".archetipo", "shared-runtime.md"),
-    ...deriveSkillNames(context.run.prompts).map((skillName) => context.skillRoot(skillName)),
+    ...deriveSkillNames(context.scenario.prompts).map((skillName) => context.skillRoot(skillName)),
   ];
   for (const requiredPath of requiredPaths) {
     try {
@@ -339,6 +503,11 @@ async function verifyInstallation(context) {
   if (!connectorPattern.test(configText)) {
     throw new Error(`Installed config.yaml does not use connector: ${context.connector}.`);
   }
+}
+
+function getCliBinaryPath(sandboxDir) {
+  const executable = process.platform === "win32" ? "archetipo.exe" : "archetipo";
+  return path.join(sandboxDir, ".archetipo", "bin", executable);
 }
 
 function deriveSkillNames(prompts) {
@@ -368,60 +537,19 @@ async function readCliEnvelope(context, step, cliArgs) {
   }
 }
 
-function getInstallerInvocation(context) {
-  if (process.platform === "win32") {
-    const installScript = path.join(repoRoot, "install.ps1");
-    return {
-      command: "powershell",
-      args: [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        installScript,
-        "-Local",
-        "-Tool",
-        context.run.tool,
-        "-Connector",
-        context.connector,
-        "-Yes",
-      ],
-    };
-  }
-
-  const installScript = path.join(repoRoot, "install.sh");
-  return {
-    command: "bash",
-    args: [
-      installScript,
-      "--local",
-      "--tool",
-      context.run.tool,
-      "--connector",
-      context.connector,
-      "--yes",
-    ],
-  };
-}
-
-function getCliBinaryPath(sandboxDir) {
-  const executable = process.platform === "win32" ? "archetipo.exe" : "archetipo";
-  return path.join(sandboxDir, ".archetipo", "bin", executable);
-}
-
 function buildPromptInvocation(context, prompt) {
   return {
     kind: "prompt",
     skill: deriveSkillName(prompt),
     prompt,
-    command: context.run.command,
-    args: context.run.args.map((arg) => interpolateArg(arg, context, prompt)),
+    command: context.agent.command,
+    args: context.agent.args.map((arg) => interpolateArg(arg, context, prompt)),
   };
 }
 
 function interpolateArg(arg, context, prompt) {
   return arg
-    .replaceAll("{model}", context.run.model ?? "")
+    .replaceAll("{model}", context.agent.model ?? "")
     .replaceAll("{prompt}", prompt)
     .replaceAll("{sandboxDir}", context.sandboxDir);
 }
@@ -516,13 +644,14 @@ async function runReportedCommand({
   };
 }
 
-function createRunReport({ run, connector, configPath, runRoot, sandboxDir, prdSourcePath, reportPath }) {
+function createRunReport({ scenario, connector, configPath, runRoot, sandboxDir, prdSourcePath, reportPath }) {
   return {
     startedAt: Date.now(),
-    run: run.id,
+    scenario: scenario.id,
+    agent: scenario.agent.id,
     connector,
     githubRepo: null,
-    model: run.model,
+    model: scenario.agent.model,
     configPath,
     prdSourcePath,
     runRoot,
@@ -563,7 +692,7 @@ function renderHtmlReport(report) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ARchetipo E2E Report - ${escapeHtml(report.run)}</title>
+  <title>ARchetipo E2E Report - ${escapeHtml(report.scenario)}</title>
   <style>
     :root { color-scheme: light; --bg: #f6f7f9; --panel: #ffffff; --ink: #172026; --muted: #61707d; --line: #d8dee6; --ok: #18794e; --fail: #c93a2f; --skip: #8a5a00; --prompt: #2457a7; --cli: #386a20; }
     * { box-sizing: border-box; }
@@ -612,7 +741,8 @@ function renderHtmlReport(report) {
     <header>
       <h1>ARchetipo E2E Report</h1>
       <div class="meta">
-        ${renderMeta("Run", report.run)}
+        ${renderMeta("Scenario", report.scenario)}
+        ${renderMeta("Agent", report.agent)}
         ${renderMeta("Connector", report.connector)}
         ${renderMeta("Model", report.model)}
         ${renderMeta("Status", result.status ?? "unknown")}
@@ -746,7 +876,7 @@ async function ensureCommand(command) {
   return { skip: false };
 }
 
-async function verifyGitHubPrerequisites() {
+async function verifyGitHubPrerequisites(context) {
   const ghCommand = await ensureCommand("gh");
   if (ghCommand.skip) {
     throw new SkipError("GitHub connector requires the 'gh' CLI to be installed.");
@@ -791,7 +921,7 @@ async function provisionGitHubRepository(context) {
     "--private",
     "--disable-wiki",
     "--description",
-    `ARchetipo E2E sandbox for ${context.run.id}`,
+    `ARchetipo E2E sandbox for ${context.scenario.id}`,
   ]);
   if (!createRepo.ok) {
     throw new Error(`Failed to create GitHub repo ${repoSlug}: ${createRepo.stderr || createRepo.stdout || `exit ${createRepo.code}`}`);
@@ -882,7 +1012,7 @@ async function deleteProjectByTitle(owner, projectTitle) {
 function buildDefaultGitHubRepoName(context) {
   return sanitizeGitHubName([
     DEFAULT_GITHUB_REPO_PREFIX,
-    context.run.id,
+    context.scenario.id,
   ].join("-"));
 }
 
@@ -928,7 +1058,7 @@ function classifyRunFailure(context, step, commandResult) {
   if (authPattern.test(combined)) {
     return {
       status: "skip",
-      reason: `${step} skipped because ${context.run.id} is not authenticated or lacks credentials.`,
+      reason: `${step} skipped because ${context.scenario.id} is not authenticated or lacks credentials.`,
       sandboxDir: context.sandboxDir,
     };
   }
@@ -952,10 +1082,11 @@ function classifyRunFailure(context, step, commandResult) {
 function finalizeResult(context, result) {
   if (result instanceof SkipError) {
     return {
-      run: context.run.id,
+      scenario: context.scenario.id,
+      agent: context.agent.id,
       connector: context.connector,
       githubRepo: context.githubRepo,
-      model: context.run.model,
+      model: context.agent.model,
       status: "skip",
       reason: result.message,
       runRoot: context.runRoot,
@@ -966,10 +1097,11 @@ function finalizeResult(context, result) {
   }
 
   return {
-    run: context.run.id,
+    scenario: context.scenario.id,
+    agent: context.agent.id,
     connector: context.connector,
     githubRepo: context.githubRepo,
-    model: context.run.model,
+    model: context.agent.model,
     status: result.status,
     reason: result.reason,
     runRoot: context.runRoot,
@@ -980,23 +1112,25 @@ function finalizeResult(context, result) {
 }
 
 function formatResultLine(result) {
-  const base = `${result.run} [${result.model ?? "no model"}] [connector=${result.connector ?? DEFAULT_CONNECTOR}] -> ${result.status.toUpperCase()}`;
+  const scenarioLabel = result.scenario ?? "?";
+  const agentLabel = result.agent ?? "?";
+  const base = `${scenarioLabel} (agent: ${agentLabel}, model: ${result.model ?? "no model"}) [connector=${result.connector ?? DEFAULT_CONNECTOR}] -> ${result.status.toUpperCase()}`;
   if (result.reason) {
     return `${base} - ${result.reason}`;
   }
   return base;
 }
 
-function logRunStepStart(runId, step, message) {
-  console.log(` -> [${runId}] ${step}: ${message}`);
+function logRunStepStart(runIdOrScenario, step, message) {
+  console.log(` -> [${runIdOrScenario}] ${step}: ${message}`);
 }
 
-function logRunStepDone(runId, step, message) {
-  console.log(` <- [${runId}] ${step}: ${message}`);
+function logRunStepDone(runIdOrScenario, step, message) {
+  console.log(` <- [${runIdOrScenario}] ${step}: ${message}`);
 }
 
-function logRunStepDetail(runId, step, message) {
-  console.log(`    [${runId}] ${step}: ${message}`);
+function logRunStepDetail(runIdOrScenario, step, message) {
+  console.log(`    [${runIdOrScenario}] ${step}: ${message}`);
 }
 
 function formatDurationMs(durationMs) {

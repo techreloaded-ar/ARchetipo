@@ -1,15 +1,19 @@
-run:
-  id: pi-cli-olmx
-  tool: pi
-  command: pi
-  model: olmx/Qwen3.6-35B-A3B-4bit
-  prd: ../PRD.md
-  args:
-    - --print
-    - --no-session
-    - --model
-    - "{model}"
-    - "{prompt}"
-  prompts:
-    - /archetipo-spec
-    - /archetipo-plan US-001
+agents:
+  pi-cli-olmx:
+    tool: pi
+    command: pi
+    model: olmx/Qwen3.6-35B-A3B-4bit
+    args:
+      - --print
+      - --no-session
+      - --model
+      - "{model}"
+      - "{prompt}"
+
+scenarios:
+  spec-plan:
+    agent: pi-cli-olmx
+    prd: ../PRD.md
+    prompts:
+      - /archetipo-spec
+      - /archetipo-plan US-001
