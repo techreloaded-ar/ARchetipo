@@ -26,3 +26,4 @@ node_modules/
 .pi-lens
 .pi
 cli/archetipo
+.archetipo/bin/*

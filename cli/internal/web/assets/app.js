@@ -223,14 +223,12 @@
         el.className = 'card';
         if (story.priority) el.classList.add('prio-' + story.priority);
         el.dataset.code = story.code;
-        const excerpt = bodyExcerpt(story.body);
         el.innerHTML = `
             <div class="card-top">
                 <span class="card-code">${escapeHtml(story.code)}</span>
                 ${story.priority ? `<span class="priority-badge priority-${escapeHtml(story.priority)}">${escapeHtml(story.priority)}</span>` : ''}
             </div>
             <div class="card-title">${escapeHtml(story.title || '(untitled)')}</div>
-            ${excerpt ? `<p class="card-excerpt">${escapeHtml(excerpt)}</p>` : '<p class="card-excerpt card-excerpt--empty">(no description)</p>'}
             <div class="card-meta">
                 <span class="card-epic">${story.epic && story.epic.code ? escapeHtml(story.epic.code) : ''}</span>
                 <span class="card-points">${Number.isFinite(story.story_points) ? story.story_points + ' pt' : ''}</span>
@@ -238,33 +236,6 @@
         `;
         el.addEventListener('click', () => openEditor(story.code));
         return el;
-    }
-
-    // bodyExcerpt strips markdown markup and returns a short plain-text preview
-    // suitable for inline display on a card.
-    function bodyExcerpt(body) {
-        if (!body) return '';
-        const text = String(body)
-            .replace(/```[\s\S]*?```/g, ' ')          // fenced code blocks
-            .replace(/`[^`]*`/g, ' ')                  // inline code
-            .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')     // images
-            .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')   // links → label
-            .replace(/^\s{0,3}#{1,6}\s+/gm, '')        // headings
-            .replace(/^\s{0,3}>\s?/gm, '')             // blockquotes
-            .replace(/^\s*[-*+]\s+/gm, '')             // bullet markers
-            .replace(/^\s*\d+\.\s+/gm, '')             // numbered list markers
-            .replace(/\*\*([^*]+)\*\*/g, '$1')         // bold
-            .replace(/\*([^*]+)\*/g, '$1')             // italic
-            .replace(/__([^_]+)__/g, '$1')             // bold (underscore)
-            .replace(/_([^_]+)_/g, '$1')               // italic (underscore)
-            .replace(/~~([^~]+)~~/g, '$1')             // strikethrough
-            .replace(/\s+/g, ' ')
-            .trim();
-        const max = 160;
-        if (text.length <= max) return text;
-        const cut = text.slice(0, max);
-        const lastSpace = cut.lastIndexOf(' ');
-        return (lastSpace > 80 ? cut.slice(0, lastSpace) : cut) + '…';
     }
 
     function emptyHint() {

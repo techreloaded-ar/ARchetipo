@@ -501,6 +501,7 @@ html[data-theme="light"] .theme-ico-moon {
     transition: border-color var(--transition), background var(--transition),
         transform 0.1s var(--ease), box-shadow var(--transition);
     overflow: hidden;
+    flex: 0 0 auto;
 }
 
 .card::before {
@@ -573,25 +574,6 @@ html[data-theme="light"] .theme-ico-moon {
     line-height: 1.4;
     color: var(--text);
     margin-bottom: 6px;
-}
-
-.card-excerpt {
-    margin: 0 0 10px;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--text-muted);
-    /* Clamp to 3 lines so cards stay roughly the same height. */
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.card-excerpt--empty {
-    font-family: var(--font-display);
-    font-style: italic;
-    color: var(--text-dim);
 }
 
 .card-meta {
