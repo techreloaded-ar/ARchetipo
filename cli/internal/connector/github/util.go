@@ -5,11 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
-	"strconv"
 	"strings"
-
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 )
 
 // codeFromTitle returns the US-NNN code from an issue title like
@@ -84,30 +80,3 @@ func writeFile(path string, content []byte) error {
 	return nil
 }
 
-// sortByPriorityThenCode mirrors filefs ordering so `select_story --auto`
-// returns the same answer for both connectors given the same inputs.
-func sortByPriorityThenCode(s []domain.Story) {
-	rank := map[domain.Priority]int{
-		domain.PriorityHigh:   0,
-		domain.PriorityMedium: 1,
-		domain.PriorityLow:    2,
-	}
-	sort.SliceStable(s, func(i, j int) bool {
-		ri, rj := rank[s[i].Priority], rank[s[j].Priority]
-		if ri != rj {
-			return ri < rj
-		}
-		ti := numericTail(s[i].Code)
-		tj := numericTail(s[j].Code)
-		return ti < tj
-	})
-}
-
-func numericTail(code string) int {
-	idx := strings.LastIndex(code, "-")
-	if idx == -1 || idx == len(code)-1 {
-		return 0
-	}
-	n, _ := strconv.Atoi(code[idx+1:])
-	return n
-}

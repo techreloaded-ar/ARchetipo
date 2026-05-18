@@ -12,8 +12,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
@@ -86,7 +84,7 @@ func (c *Connector) SelectStory(ctx context.Context, q domain.SelectQuery) (doma
 		return domain.Story{}, iox.NewPrecondition("no eligible stories",
 			"adjust --eligible or run `archetipo backlog list`", nil)
 	}
-	sortByPriorityThenCode(candidates)
+	domain.SortByPriorityThenCode(candidates)
 	return candidates[0], nil
 }
 
@@ -377,34 +375,6 @@ func (c *Connector) codeFor(ref string) string {
 		}
 	}
 	return ""
-}
-
-func sortByPriorityThenCode(s []domain.Story) {
-	rank := map[domain.Priority]int{
-		domain.PriorityHigh:   0,
-		domain.PriorityMedium: 1,
-		domain.PriorityLow:    2,
-	}
-	sort.SliceStable(s, func(i, j int) bool {
-		ri, rj := rank[s[i].Priority], rank[s[j].Priority]
-		if ri != rj {
-			return ri < rj
-		}
-		// tie-break: lowest US number
-		return numericTail(s[i].Code) < numericTail(s[j].Code)
-	})
-}
-
-func numericTail(code string) int {
-	idx := strings.LastIndex(code, "-")
-	if idx == -1 || idx == len(code)-1 {
-		return 0
-	}
-	n, err := strconv.Atoi(code[idx+1:])
-	if err != nil {
-		return 0
-	}
-	return n
 }
 
 // Register integrates the inmemory connector with the registry under the name

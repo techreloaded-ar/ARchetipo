@@ -69,11 +69,31 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 		}
 		return id
 	}
+	var boardOrder map[string][]string
+	if r, ok := s.conn.(boardOrderReader); ok {
+		if order, oerr := r.ReadBoardOrder(ctx); oerr == nil {
+			boardOrder = order
+		}
+	}
+	storyByCode := make(map[string]domain.Story, len(stories))
+	for _, st := range stories {
+		storyByCode[st.Code] = st
+	}
 	for _, col := range boardLayout {
 		c := boardColumnView{ID: col.ID, Title: titleFor(col.ID), Status: col.Status}
+		seen := map[string]bool{}
+		for _, code := range boardOrder[col.ID] {
+			st, ok := storyByCode[code]
+			if !ok || st.Status != col.Status {
+				continue
+			}
+			c.Stories = append(c.Stories, st)
+			seen[code] = true
+		}
 		for _, st := range stories {
-			if st.Status == col.Status {
+			if st.Status == col.Status && !seen[st.Code] {
 				c.Stories = append(c.Stories, st)
+				seen[st.Code] = true
 			}
 		}
 		view.Columns = append(view.Columns, c)
@@ -151,6 +171,14 @@ type prdReader interface {
 // design mockups produced by archetipo-design (HTML folders under paths.mockups).
 type mockupLister interface {
 	ListMockups(ctx context.Context) ([]domain.MockupEntry, error)
+}
+
+// boardOrderReader is an optional capability connectors can implement to expose
+// the per-column ordering produced by drag-and-drop. Without it, the viewer
+// renders stories in whatever order FetchBacklogItems returns, ignoring the
+// position the user assigned by moving cards.
+type boardOrderReader interface {
+	ReadBoardOrder(ctx context.Context) (map[string][]string, error)
 }
 
 type prdView struct {

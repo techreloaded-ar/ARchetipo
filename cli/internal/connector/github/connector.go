@@ -128,7 +128,7 @@ func (c *Connector) SelectStory(ctx context.Context, q domain.SelectQuery) (doma
 		return domain.Story{}, iox.NewPrecondition(
 			"no eligible stories in project board", "", nil)
 	}
-	sortByPriorityThenCode(candidates)
+	domain.SortByPriorityThenCode(candidates)
 	return c.fillStoryDetail(ctx, candidates[0])
 }
 

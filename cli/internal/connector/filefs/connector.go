@@ -97,7 +97,7 @@ func (c *Connector) SelectStory(ctx context.Context, q domain.SelectQuery) (doma
 			"check the backlog status distribution", nil,
 		)
 	}
-	sortByPriorityThenCode(candidates)
+	domain.SortByPriorityThenCode(candidates)
 	return candidates[0], nil
 }
 
@@ -158,6 +158,23 @@ func (c *Connector) SavePRD(ctx context.Context, content string) (domain.WriteRe
 		return domain.WriteResult{}, err
 	}
 	return domain.WriteResult{OK: true, Refs: []domain.Ref{{Path: path}}}, nil
+}
+
+// ReadBoardOrder returns the per-column ordering of story codes as persisted
+// by MoveBoardCard. The web viewer uses it to render the Kanban in the order
+// the user assigned via drag-and-drop.
+func (c *Connector) ReadBoardOrder(ctx context.Context) (map[string][]string, error) {
+	store, err := c.loadStore()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]string, len(store.Backlog.Orders.Board))
+	for id, codes := range store.Backlog.Orders.Board {
+		cp := make([]string, len(codes))
+		copy(cp, codes)
+		out[id] = cp
+	}
+	return out, nil
 }
 
 // ReadPRD returns the contents of the configured PRD file. A missing file is
@@ -476,21 +493,6 @@ func refsFromStories(stories []domain.Story, path string) []domain.Ref {
 		out = append(out, domain.Ref{Code: story.Code, Path: path})
 	}
 	return out
-}
-
-func sortByPriorityThenCode(stories []domain.Story) {
-	rank := map[domain.Priority]int{
-		domain.PriorityHigh:   0,
-		domain.PriorityMedium: 1,
-		domain.PriorityLow:    2,
-	}
-	sort.SliceStable(stories, func(i, j int) bool {
-		ri, rj := rank[stories[i].Priority], rank[stories[j].Priority]
-		if ri != rj {
-			return ri < rj
-		}
-		return numericTail(stories[i].Code) < numericTail(stories[j].Code)
-	})
 }
 
 func highestCode(codes []string) string {
