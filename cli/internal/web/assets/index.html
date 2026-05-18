@@ -77,7 +77,28 @@
                 </form>
             </section>
             <section class="tab-panel" data-panel="plan">
-                <form id="plan-form" class="form-grid">
+                <div id="plan-view" class="story-view">
+                    <div class="markdown-rendered" id="plan-body-view"></div>
+                    <div class="tasks-header">
+                        <span>Tasks</span>
+                    </div>
+                    <table class="tasks-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Title</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Deps</th>
+                            </tr>
+                        </thead>
+                        <tbody id="plan-tasks-view"></tbody>
+                    </table>
+                    <div class="form-actions">
+                        <button type="button" id="plan-edit-btn" class="primary-btn">Edit</button>
+                    </div>
+                </div>
+                <form id="plan-form" class="form-grid hidden">
                     <label class="field full">
                         <span>Plan body (markdown)</span>
                         <textarea name="plan_body" rows="10" spellcheck="false"></textarea>
@@ -103,6 +124,7 @@
                     </div>
                     <div class="form-actions full">
                         <button type="submit" class="primary-btn">Save plan</button>
+                        <button type="button" id="plan-cancel-btn" class="ghost-btn">Cancel</button>
                         <span class="status-msg" id="plan-status"></span>
                     </div>
                 </form>

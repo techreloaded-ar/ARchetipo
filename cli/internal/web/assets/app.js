@@ -18,6 +18,11 @@
     const storyBodyView = document.getElementById('story-body-view');
     const storyEditBtn = document.getElementById('story-edit-btn');
     const storyCancelBtn = document.getElementById('story-cancel-btn');
+    const planView = document.getElementById('plan-view');
+    const planBodyView = document.getElementById('plan-body-view');
+    const planTasksView = document.getElementById('plan-tasks-view');
+    const planEditBtn = document.getElementById('plan-edit-btn');
+    const planCancelBtn = document.getElementById('plan-cancel-btn');
     const tasksTbody = document.getElementById('tasks-tbody');
     const addTaskBtn = document.getElementById('add-task-btn');
     const toast = document.getElementById('toast');
@@ -50,6 +55,7 @@
 
     let currentStoryCode = null;
     let currentStorySnapshot = null; // last loaded story (for cancel + re-render after save)
+    let currentPlanSnapshot = null; // last loaded plan (for cancel + re-render after save)
     let boardSnapshot = null; // last loaded board (for undo on failed drag)
 
     refreshBtn.addEventListener('click', loadBoard);
@@ -65,6 +71,8 @@
     planForm.addEventListener('submit', onSavePlan);
     storyEditBtn.addEventListener('click', () => enterStoryEditMode());
     storyCancelBtn.addEventListener('click', () => exitStoryEditMode());
+    planEditBtn.addEventListener('click', () => enterPlanEditMode());
+    planCancelBtn.addEventListener('click', () => exitPlanEditMode());
     addTaskBtn.addEventListener('click', () => addTaskRow());
 
     loadBoard();
@@ -180,12 +188,15 @@
         storyStatus.textContent = 'Loading...';
         planStatus.textContent = '';
         showStoryView();
+        showPlanView();
         try {
             const detail = await apiGet(`/api/story/${encodeURIComponent(code)}`);
             currentStorySnapshot = detail.story || {};
+            currentPlanSnapshot = { plan_body: detail.plan_body || '', tasks: detail.tasks || [] };
             fillStoryView(currentStorySnapshot);
             fillStoryForm(currentStorySnapshot);
-            fillPlanForm(detail.plan_body || '', detail.tasks || []);
+            fillPlanView(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
+            fillPlanForm(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
             storyStatus.textContent = '';
         } catch (err) {
             storyStatus.textContent = `Load failed: ${err.message || err}`;
@@ -236,6 +247,45 @@
     function exitStoryEditMode() {
         if (currentStorySnapshot) fillStoryForm(currentStorySnapshot);
         showStoryView();
+    }
+
+    function fillPlanView(body, tasks) {
+        planBodyView.innerHTML = marked.parse(body || '*(no plan)*');
+        planTasksView.innerHTML = '';
+        (tasks || []).forEach((t) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${escapeHtml(t.id || '')}</td>
+                <td>${escapeHtml(t.title || '')}</td>
+                <td>${escapeHtml(t.type || '')}</td>
+                <td>${escapeHtml(t.status || '')}</td>
+                <td>${escapeHtml((t.dependencies || []).join(', '))}</td>
+            `;
+            planTasksView.appendChild(tr);
+        });
+        if (!tasks || tasks.length === 0) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = '<td colspan="5" class="empty-cell">No tasks</td>';
+            planTasksView.appendChild(tr);
+        }
+    }
+
+    function showPlanView() {
+        planView.classList.remove('hidden');
+        planForm.classList.add('hidden');
+    }
+
+    function enterPlanEditMode() {
+        planView.classList.add('hidden');
+        planForm.classList.remove('hidden');
+        planStatus.textContent = '';
+        planStatus.className = 'status-msg';
+        setTimeout(() => planEditor.codemirror.refresh(), 0);
+    }
+
+    function exitPlanEditMode() {
+        if (currentPlanSnapshot) fillPlanForm(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
+        showPlanView();
     }
 
     function addTaskRow(task) {
@@ -336,6 +386,9 @@
             planStatus.textContent = 'Saved';
             planStatus.className = 'status-msg ok';
             showToast(`${currentStoryCode} plan updated`, 'ok');
+            currentPlanSnapshot = { plan_body: payload.plan_body, tasks: payload.tasks };
+            fillPlanView(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
+            showPlanView();
         } catch (err) {
             planStatus.textContent = `Save failed: ${err.message || err}`;
             planStatus.className = 'status-msg err';
@@ -352,7 +405,9 @@
             p.classList.toggle('active', p.dataset.panel === name);
         });
         // CodeMirror instances mounted inside hidden panels need a refresh once visible.
-        if (name === 'plan') setTimeout(() => planEditor.codemirror.refresh(), 0);
+        if (name === 'plan' && !planForm.classList.contains('hidden')) {
+            setTimeout(() => planEditor.codemirror.refresh(), 0);
+        }
         if (name === 'story' && !storyForm.classList.contains('hidden')) {
             setTimeout(() => storyEditor.codemirror.refresh(), 0);
         }
@@ -362,6 +417,7 @@
         modal.classList.add('hidden');
         currentStoryCode = null;
         currentStorySnapshot = null;
+        currentPlanSnapshot = null;
     }
 
     function showToast(msg, kind) {
