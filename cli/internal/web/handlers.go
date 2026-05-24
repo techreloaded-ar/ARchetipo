@@ -71,7 +71,7 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 		}
 		return id
 	}
-	var boardOrder map[string][]string
+	var boardOrder []string
 	if r, ok := s.conn.(boardOrderReader); ok {
 		if order, oerr := r.ReadBoardOrder(ctx); oerr == nil {
 			boardOrder = order
@@ -81,23 +81,39 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 	for _, sp := range specs {
 		specByCode[sp.Code] = sp
 	}
+	columnSpecs := make(map[string][]domain.Spec, len(boardLayout))
+	seen := map[string]bool{}
+	for _, code := range boardOrder {
+		sp, ok := specByCode[code]
+		if !ok {
+			continue
+		}
+		colID := ""
+		for _, col := range boardLayout {
+			if col.Status == sp.Status {
+				colID = col.ID
+				break
+			}
+		}
+		if colID == "" {
+			continue
+		}
+		columnSpecs[colID] = append(columnSpecs[colID], sp)
+		seen[sp.Code] = true
+	}
+	for _, sp := range specs {
+		if seen[sp.Code] {
+			continue
+		}
+		for _, col := range boardLayout {
+			if col.Status == sp.Status {
+				columnSpecs[col.ID] = append(columnSpecs[col.ID], sp)
+				break
+			}
+		}
+	}
 	for _, col := range boardLayout {
-		c := boardColumnView{ID: col.ID, Title: titleFor(col.ID), Status: col.Status}
-		seen := map[string]bool{}
-		for _, code := range boardOrder[col.ID] {
-			sp, ok := specByCode[code]
-			if !ok || sp.Status != col.Status {
-				continue
-			}
-			c.Specs = append(c.Specs, sp)
-			seen[code] = true
-		}
-		for _, sp := range specs {
-			if sp.Status == col.Status && !seen[sp.Code] {
-				c.Specs = append(c.Specs, sp)
-				seen[sp.Code] = true
-			}
-		}
+		c := boardColumnView{ID: col.ID, Title: titleFor(col.ID), Status: col.Status, Specs: columnSpecs[col.ID]}
 		view.Columns = append(view.Columns, c)
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -218,11 +234,11 @@ type mockupLister interface {
 }
 
 // boardOrderReader is an optional capability connectors can implement to expose
-// the per-column ordering produced by drag-and-drop. Without it, the viewer
+// the global ordering produced by drag-and-drop. Without it, the viewer
 // renders specs in whatever order FetchBacklogItems returns, ignoring the
 // position the user assigned by moving cards.
 type boardOrderReader interface {
-	ReadBoardOrder(ctx context.Context) (map[string][]string, error)
+	ReadBoardOrder(ctx context.Context) ([]string, error)
 }
 
 type prdView struct {

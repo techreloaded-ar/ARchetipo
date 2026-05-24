@@ -52,17 +52,15 @@ func (c *Connector) FetchBacklogItems(ctx context.Context, statusFilter domain.S
 		return nil, err
 	}
 	out := make([]domain.Spec, 0, len(store.Specs))
-	for _, col := range c.boardColumns() {
-		for _, code := range store.Backlog.Orders.Board[col.ID] {
-			spec, ok := store.Specs[code]
-			if !ok {
-				continue
-			}
-			if statusFilter != "" && spec.Status != statusFilter {
-				continue
-			}
-			out = append(out, spec)
+	for _, code := range store.Backlog.Order {
+		spec, ok := store.Specs[code]
+		if !ok {
+			continue
 		}
+		if statusFilter != "" && spec.Status != statusFilter {
+			continue
+		}
+		out = append(out, spec)
 	}
 	return out, nil
 }
@@ -130,17 +128,15 @@ func (c *Connector) ReadExistingBacklog(ctx context.Context) (domain.BacklogSumm
 	}
 	out := domain.BacklogSummary{}
 	seenEpics := map[string]domain.Epic{}
-	for _, col := range c.boardColumns() {
-		for _, code := range store.Backlog.Orders.Board[col.ID] {
-			spec, ok := store.Specs[code]
-			if !ok {
-				continue
-			}
-			out.Codes = append(out.Codes, spec.Code)
-			out.Titles = append(out.Titles, spec.Title)
-			if spec.Epic.Code != "" {
-				seenEpics[spec.Epic.Code] = spec.Epic
-			}
+	for _, code := range store.Backlog.Order {
+		spec, ok := store.Specs[code]
+		if !ok {
+			continue
+		}
+		out.Codes = append(out.Codes, spec.Code)
+		out.Titles = append(out.Titles, spec.Title)
+		if spec.Epic.Code != "" {
+			seenEpics[spec.Epic.Code] = spec.Epic
 		}
 	}
 	sortedCodes := append([]string(nil), out.Codes...)
@@ -164,20 +160,16 @@ func (c *Connector) SavePRD(ctx context.Context, content string) (domain.WriteRe
 	return domain.WriteResult{OK: true, Refs: []domain.Ref{{Path: path}}}, nil
 }
 
-// ReadBoardOrder returns the per-column ordering of spec codes as persisted
-// by MoveBoardCard. The web viewer uses it to render the Kanban in the order
-// the user assigned via drag-and-drop.
-func (c *Connector) ReadBoardOrder(ctx context.Context) (map[string][]string, error) {
+// ReadBoardOrder returns the global ordering of spec codes as persisted by
+// MoveBoardCard. The web viewer projects this list onto Kanban columns by
+// filtering on each spec's Status, so a single ordering is enough.
+func (c *Connector) ReadBoardOrder(ctx context.Context) ([]string, error) {
 	store, err := c.loadStore()
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string][]string, len(store.Backlog.Orders.Board))
-	for id, codes := range store.Backlog.Orders.Board {
-		cp := make([]string, len(codes))
-		copy(cp, codes)
-		out[id] = cp
-	}
+	out := make([]string, len(store.Backlog.Order))
+	copy(out, store.Backlog.Order)
 	return out, nil
 }
 
@@ -256,7 +248,7 @@ func (c *Connector) SaveInitialBacklog(ctx context.Context, specs []domain.Spec)
 		Backlog: c.normalizeBacklog(backlogDoc{
 			Schema:  backlogSchema,
 			Version: 2,
-			Orders:  ordersDoc{Board: map[string][]string{}},
+			Order:   []string{},
 		}, map[string]domain.Spec{}),
 		Specs: map[string]domain.Spec{},
 	}
@@ -323,16 +315,11 @@ func (c *Connector) TransitionStatus(ctx context.Context, specRef string, newSta
 	if !ok {
 		return domain.WriteResult{}, iox.NewPrecondition(fmt.Sprintf("spec %s not found", specRef), "", nil)
 	}
-	colID, ok := columnIDForStatus(c.boardColumns(), newStatus)
-	if !ok {
+	if _, ok := columnIDForStatus(c.boardColumns(), newStatus); !ok {
 		return domain.WriteResult{}, iox.NewConflict(fmt.Sprintf("status %s is not mapped to a board column", newStatus), "", nil)
 	}
 	spec.Status = newStatus
 	store.Specs[specRef] = spec
-	for id, order := range store.Backlog.Orders.Board {
-		store.Backlog.Orders.Board[id] = removeCode(order, specRef)
-	}
-	store.Backlog.Orders.Board[colID] = append(store.Backlog.Orders.Board[colID], specRef)
 	if err := c.writeStore(store); err != nil {
 		return domain.WriteResult{}, err
 	}
@@ -390,14 +377,11 @@ func (c *Connector) MoveBoardCard(ctx context.Context, specRef, targetColumn str
 			nil,
 		)
 	}
-	for id, order := range store.Backlog.Orders.Board {
-		store.Backlog.Orders.Board[id] = removeCode(order, specRef)
-	}
-	newOrder, err := insertRelative(store.Backlog.Orders.Board[targetColumn], specRef, anchor)
+	newOrder, err := insertRelative(store.Backlog.Order, specRef, anchor)
 	if err != nil {
 		return domain.WriteResult{}, err
 	}
-	store.Backlog.Orders.Board[targetColumn] = newOrder
+	store.Backlog.Order = newOrder
 	refs := []domain.Ref{{Code: specRef, Path: c.backlogPath()}}
 	if spec.Status != targetStatus {
 		spec.Status = targetStatus

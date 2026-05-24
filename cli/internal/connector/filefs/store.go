@@ -26,17 +26,13 @@ type backlogDoc struct {
 	Schema  string        `yaml:"schema"`
 	Version int           `yaml:"version"`
 	Epics   []domain.Epic `yaml:"epics,omitempty"`
-	Orders  ordersDoc     `yaml:"orders"`
+	Order   []string      `yaml:"order"`
 }
 
 type boardColumnDoc struct {
 	ID     string
 	Title  string
 	Status domain.Status
-}
-
-type ordersDoc struct {
-	Board map[string][]string `yaml:"board"`
 }
 
 type specDoc struct {
@@ -250,9 +246,7 @@ func (c *Connector) loadLegacyStore() (yamlStore, error) {
 	backlog := c.normalizeBacklog(backlogDoc{
 		Schema:  backlogSchema,
 		Version: 2,
-		Orders: ordersDoc{
-			Board: map[string][]string{},
-		},
+		Order:   []string{},
 	}, out)
 	return yamlStore{Backlog: backlog, Specs: out}, nil
 }
@@ -362,10 +356,6 @@ func writeYAML(path string, v any) error {
 func (c *Connector) normalizeBacklog(doc backlogDoc, specs map[string]domain.Spec) backlogDoc {
 	doc.Schema = backlogSchema
 	doc.Version = 2
-	columns := c.boardColumns()
-	if doc.Orders.Board == nil {
-		doc.Orders.Board = map[string][]string{}
-	}
 	epics := map[string]domain.Epic{}
 	for _, spec := range specs {
 		if spec.Ref == "" {
@@ -381,44 +371,28 @@ func (c *Connector) normalizeBacklog(doc backlogDoc, specs map[string]domain.Spe
 	}
 	sort.Slice(doc.Epics, func(i, j int) bool { return doc.Epics[i].Code < doc.Epics[j].Code })
 
-	boardSeen := map[string]struct{}{}
-	normalizedBoard := make(map[string][]string, len(columns))
-	for _, col := range columns {
-		normalizedBoard[col.ID] = []string{}
-	}
-	for _, col := range columns {
-		for _, code := range doc.Orders.Board[col.ID] {
-			spec, ok := specs[code]
-			if !ok {
-				continue
-			}
-			if expected, ok := columnIDForStatus(columns, spec.Status); !ok || expected != col.ID {
-				continue
-			}
-			if _, dup := boardSeen[code]; dup {
-				continue
-			}
-			normalizedBoard[col.ID] = append(normalizedBoard[col.ID], code)
-			boardSeen[code] = struct{}{}
+	seen := map[string]struct{}{}
+	normalized := make([]string, 0, len(specs))
+	for _, code := range doc.Order {
+		if _, ok := specs[code]; !ok {
+			continue
 		}
+		if _, dup := seen[code]; dup {
+			continue
+		}
+		normalized = append(normalized, code)
+		seen[code] = struct{}{}
 	}
 	remaining := make([]string, 0, len(specs))
 	for code := range specs {
-		if _, ok := boardSeen[code]; ok {
+		if _, ok := seen[code]; ok {
 			continue
 		}
 		remaining = append(remaining, code)
 	}
 	sort.Strings(remaining)
-	for _, code := range remaining {
-		spec := specs[code]
-		colID, ok := columnIDForStatus(columns, spec.Status)
-		if !ok {
-			colID = columns[0].ID
-		}
-		normalizedBoard[colID] = append(normalizedBoard[colID], code)
-	}
-	doc.Orders.Board = normalizedBoard
+	normalized = append(normalized, remaining...)
+	doc.Order = normalized
 	return doc
 }
 
