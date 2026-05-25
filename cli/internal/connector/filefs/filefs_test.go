@@ -16,8 +16,8 @@ func newTestConnector(t *testing.T) *Connector {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.ProjectRoot = dir
-	cfg.Paths.Backlog = filepath.Join(dir, ".archetipo", "backlog.yaml")
-	cfg.Paths.Planning = filepath.Join(dir, ".archetipo", "plans")
+	cfg.File.Backlog = filepath.Join(dir, ".archetipo", "backlog.yaml")
+	cfg.File.Planning = filepath.Join(dir, ".archetipo", "plans")
 	cfg.Paths.PRD = filepath.Join(dir, "PRD.md")
 	return New(cfg)
 }

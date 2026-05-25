@@ -215,10 +215,9 @@ The CLI architecture is extensible, but the built-in connectors today are `file`
 ```yaml
 connector: file   # file | github
 
+# Shared — used by every connector
 paths:
   prd: docs/PRD.md
-  backlog: .archetipo/backlog.yaml   # file connector only
-  planning: .archetipo/plans/
   mockups: docs/mockups/
   test_results: docs/test-results/
 
@@ -230,10 +229,18 @@ workflow:
     review: REVIEW
     done: DONE   # no skill moves a spec to DONE automatically
 
+# Used only when connector == file
+file:
+  backlog: .archetipo/backlog.yaml
+  planning: .archetipo/plans/
+
+# Used only when connector == github
 github:
   # owner: auto-detected from repo
   # project_number: auto-detected from repo
 ```
+
+Each connector reads only its dedicated section: configuring `file:` while the active connector is `github` (or vice versa) has no effect. Legacy configs with `paths.backlog` / `paths.planning` are refused at load time with a migration hint — there is no auto-migration.
 
 ---
 

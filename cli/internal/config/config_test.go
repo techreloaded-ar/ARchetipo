@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -16,17 +17,23 @@ func TestDefaultWhenConfigMissing(t *testing.T) {
 	if c.Connector != ConnectorFile {
 		t.Errorf("expected default connector %q, got %q", ConnectorFile, c.Connector)
 	}
-	if c.Paths.Backlog != ".archetipo/backlog.yaml" {
-		t.Errorf("default backlog path: %q", c.Paths.Backlog)
+	if c.File.Backlog != ".archetipo/backlog.yaml" {
+		t.Errorf("default backlog path: %q", c.File.Backlog)
+	}
+	if c.File.Planning != ".archetipo/plans/" {
+		t.Errorf("default planning path: %q", c.File.Planning)
+	}
+	if c.Paths.PRD != "docs/PRD.md" {
+		t.Errorf("default PRD path: %q", c.Paths.PRD)
 	}
 }
 
 func TestLoadFromConfigFile(t *testing.T) {
 	root := t.TempDir()
 	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
-	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(`connector: github
-paths:
-  backlog: my/BL.md
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(`connector: file
+file:
+  backlog: my/BL.yaml
 workflow:
   statuses:
     todo: A_FARE
@@ -40,18 +47,18 @@ workflow:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Connector != ConnectorGitHub {
+	if c.Connector != ConnectorFile {
 		t.Errorf("connector: %q", c.Connector)
 	}
-	if c.Paths.Backlog != "my/BL.md" {
-		t.Errorf("backlog: %q", c.Paths.Backlog)
+	if c.File.Backlog != "my/BL.yaml" {
+		t.Errorf("backlog: %q", c.File.Backlog)
 	}
-	// Defaults preserved for unspecified path keys.
+	// Defaults preserved for unspecified keys.
 	if c.Paths.PRD != "docs/PRD.md" {
 		t.Errorf("PRD default lost: %q", c.Paths.PRD)
 	}
-	if c.Paths.Planning != ".archetipo/plans/" {
-		t.Errorf("planning default lost: %q", c.Paths.Planning)
+	if c.File.Planning != ".archetipo/plans/" {
+		t.Errorf("planning default lost: %q", c.File.Planning)
 	}
 	if c.Workflow.Statuses.Todo != "A_FARE" {
 		t.Errorf("status override lost: %q", c.Workflow.Statuses.Todo)
@@ -96,6 +103,84 @@ func TestUnknownConnectorPassesThroughConfig(t *testing.T) {
 	}
 }
 
+func TestLegacyPathsBacklogIsRejected(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(`connector: file
+paths:
+  backlog: .archetipo/backlog.yaml
+`), 0o644))
+
+	_, err := Load(root)
+	if err == nil {
+		t.Fatal("expected error for legacy paths.backlog key")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "paths.backlog -> file.backlog") {
+		t.Errorf("error should mention migration path; got: %v", err)
+	}
+}
+
+func TestLegacyPathsPlanningIsRejected(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(`connector: file
+paths:
+  planning: .archetipo/plans/
+`), 0o644))
+
+	_, err := Load(root)
+	if err == nil {
+		t.Fatal("expected error for legacy paths.planning key")
+	}
+	if !strings.Contains(err.Error(), "paths.planning -> file.planning") {
+		t.Errorf("error should mention migration path; got: %v", err)
+	}
+}
+
+func TestPathValidationRejectsUnwritableSharedPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod-based unwritable check not portable on Windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("running as root bypasses directory permission checks")
+	}
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	readonly := filepath.Join(root, "readonly")
+	must(t, os.MkdirAll(readonly, 0o755))
+	must(t, os.Chmod(readonly, 0o555))
+	defer os.Chmod(readonly, 0o755)
+
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(`connector: github
+paths:
+  mockups: readonly/inside/
+`), 0o644))
+
+	_, err := Load(root)
+	if err == nil {
+		t.Fatal("expected error for unwritable paths.mockups")
+	}
+	if !strings.Contains(err.Error(), "paths.mockups") {
+		t.Errorf("error should mention paths.mockups; got: %v", err)
+	}
+}
+
+func TestPathValidationSkipsFilePathsForGitHubConnector(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	// file.planning points to a non-existent unrelated absolute path. The
+	// github connector should not validate file.* paths.
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(`connector: github
+file:
+  planning: /nonexistent/never/touched/by/github/
+`), 0o644))
+
+	if _, err := Load(root); err != nil {
+		t.Fatalf("github connector should not validate file.* paths: %v", err)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
@@ -107,7 +192,6 @@ func TestSave_PatchesGitHubKeysPreservingComments(t *testing.T) {
 	root := t.TempDir()
 	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
 	initial := `connector: github
-# only valid for file connector
 paths:
   prd: docs/PRD.md
 
@@ -127,7 +211,6 @@ github:
 	must(t, err)
 	s := string(out)
 	for _, want := range []string{
-		"# only valid for file connector",
 		"# auto-detected on first run",
 		"owner: acme",
 		"project_number: 42",

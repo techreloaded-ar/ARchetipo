@@ -59,10 +59,10 @@ func NewServer(conn connector.Connector, cfg config.Config, addr string) (*Serve
 // the parent of the backlog file (typically .archetipo/), which also contains
 // stories/ and plans/.
 func resolveWatchRoot(cfg config.Config) string {
-	if cfg.Paths.Backlog == "" {
+	if cfg.File.Backlog == "" {
 		return ""
 	}
-	return cfg.AbsPath(filepath.Dir(cfg.Paths.Backlog))
+	return cfg.AbsPath(filepath.Dir(cfg.File.Backlog))
 }
 
 // Addr returns the address the server listens on.

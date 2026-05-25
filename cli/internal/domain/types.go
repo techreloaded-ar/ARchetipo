@@ -86,22 +86,30 @@ type Task struct {
 }
 
 // SetupInfo is the output of initialize_connector. Fields populated depend on
-// the connector: filefs only fills Paths; github fills Repo + Project.
+// the connector: filefs fills Paths + File; github fills Paths + Repo + Project.
 type SetupInfo struct {
 	Connector string         `json:"connector" yaml:"connector"`
 	Paths     ConfigPaths    `json:"paths" yaml:"paths"`
 	Workflow  WorkflowConfig `json:"workflow" yaml:"workflow"`
+	File      *FileConfig    `json:"file,omitempty" yaml:"file,omitempty"`
 	Repo      *RepoInfo      `json:"repo,omitempty" yaml:"repo,omitempty"`
 	Project   *ProjectInfo   `json:"project,omitempty" yaml:"project,omitempty"`
 }
 
-// ConfigPaths mirrors the paths section of .archetipo/config.yaml.
+// ConfigPaths mirrors the shared paths section of .archetipo/config.yaml.
+// These paths are used by every connector. Connector-specific paths live in
+// their own section (FileConfig for the file connector).
 type ConfigPaths struct {
 	PRD         string `json:"prd" yaml:"prd"`
-	Backlog     string `json:"backlog" yaml:"backlog"`
-	Planning    string `json:"planning" yaml:"planning"`
 	Mockups     string `json:"mockups" yaml:"mockups"`
 	TestResults string `json:"test_results" yaml:"test_results"`
+}
+
+// FileConfig mirrors the `file:` section of .archetipo/config.yaml. Holds the
+// paths used exclusively by the file connector.
+type FileConfig struct {
+	Backlog  string `json:"backlog" yaml:"backlog"`
+	Planning string `json:"planning" yaml:"planning"`
 }
 
 // WorkflowConfig mirrors workflow.statuses from .archetipo/config.yaml.

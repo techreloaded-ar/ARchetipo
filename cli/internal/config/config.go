@@ -36,6 +36,7 @@ type Config struct {
 	Connector string                `yaml:"connector" json:"connector"`
 	Paths     domain.ConfigPaths    `yaml:"paths" json:"paths"`
 	Workflow  domain.WorkflowConfig `yaml:"workflow" json:"workflow"`
+	File      domain.FileConfig     `yaml:"file" json:"file,omitempty"`
 	GitHub    GitHubConfig          `yaml:"github" json:"github,omitempty"`
 	// ProjectRoot is the absolute path of the directory that contains
 	// .archetipo/. Set by Load; not present in the YAML file.
@@ -59,10 +60,12 @@ func Default() Config {
 		Connector: ConnectorFile,
 		Paths: domain.ConfigPaths{
 			PRD:         "docs/PRD.md",
-			Backlog:     ".archetipo/backlog.yaml",
-			Planning:    ".archetipo/plans/",
 			Mockups:     "docs/mockups/",
 			TestResults: "docs/test-results/",
+		},
+		File: domain.FileConfig{
+			Backlog:  ".archetipo/backlog.yaml",
+			Planning: ".archetipo/plans/",
 		},
 		Workflow: domain.WorkflowConfig{
 			Statuses: domain.StatusLabels{
@@ -95,16 +98,85 @@ func Load(startDir string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("reading %s: %w", cfgPath, err)
 	}
+	if err := rejectLegacyKeys(raw, cfgPath); err != nil {
+		return Config{}, err
+	}
 	c := Default()
 	if err := yaml.Unmarshal(raw, &c); err != nil {
 		return Config{}, fmt.Errorf("parsing %s: %w", cfgPath, err)
 	}
 	c.applyDefaults()
+	c.ProjectRoot = root
 	if err := c.validate(); err != nil {
 		return Config{}, err
 	}
-	c.ProjectRoot = root
 	return c, nil
+}
+
+// rejectLegacyKeys scans the raw YAML for top-level `paths.backlog` /
+// `paths.planning` and refuses the config with an explicit migration error.
+// Those keys moved to a dedicated `file:` section; no automatic migration is
+// performed.
+func rejectLegacyKeys(raw []byte, cfgPath string) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		// Defer the real parse error to the main Unmarshal below.
+		return nil
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	paths := childMapping(root, "paths")
+	if paths == nil {
+		return nil
+	}
+	legacy := []string{}
+	if childMapping(paths, "backlog") != nil || childScalar(paths, "backlog") != nil {
+		legacy = append(legacy, "paths.backlog -> file.backlog")
+	}
+	if childMapping(paths, "planning") != nil || childScalar(paths, "planning") != nil {
+		legacy = append(legacy, "paths.planning -> file.planning")
+	}
+	if len(legacy) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s: legacy key(s) %v belong to the file connector and must move to a top-level `file:` section. "+
+			"No automatic migration is performed — update your config manually",
+		cfgPath, legacy,
+	)
+}
+
+func childMapping(m *yaml.Node, key string) *yaml.Node {
+	n := childNode(m, key)
+	if n == nil || n.Kind != yaml.MappingNode {
+		return nil
+	}
+	return n
+}
+
+func childScalar(m *yaml.Node, key string) *yaml.Node {
+	n := childNode(m, key)
+	if n == nil || n.Kind != yaml.ScalarNode || n.Value == "" {
+		return nil
+	}
+	return n
+}
+
+func childNode(m *yaml.Node, key string) *yaml.Node {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i+1]
+		}
+	}
+	return nil
 }
 
 // applyDefaults fills empty fields with canonical defaults. Lets the user
@@ -117,17 +189,17 @@ func (c *Config) applyDefaults() {
 	if c.Paths.PRD == "" {
 		c.Paths.PRD = d.Paths.PRD
 	}
-	if c.Paths.Backlog == "" {
-		c.Paths.Backlog = d.Paths.Backlog
-	}
-	if c.Paths.Planning == "" {
-		c.Paths.Planning = d.Paths.Planning
-	}
 	if c.Paths.Mockups == "" {
 		c.Paths.Mockups = d.Paths.Mockups
 	}
 	if c.Paths.TestResults == "" {
 		c.Paths.TestResults = d.Paths.TestResults
+	}
+	if c.File.Backlog == "" {
+		c.File.Backlog = d.File.Backlog
+	}
+	if c.File.Planning == "" {
+		c.File.Planning = d.File.Planning
 	}
 	if c.Workflow.Statuses.Todo == "" {
 		c.Workflow.Statuses.Todo = d.Workflow.Statuses.Todo
@@ -149,8 +221,77 @@ func (c *Config) applyDefaults() {
 // validate performs config-level checks. Connector name validation is
 // intentionally deferred to connector.New, which already rejects unknown
 // names and can list the registered set dynamically.
+//
+// Path validation verifies that the parent directory of each configured path
+// exists (or is creatable) and that the location is writable. A missing leaf
+// file (e.g. paths.prd before the first write) is acceptable. Paths used only
+// by the active connector are checked; paths from other connectors are not.
 func (c *Config) validate() error {
+	checks := []struct {
+		key  string
+		path string
+	}{
+		{"paths.prd", c.Paths.PRD},
+		{"paths.mockups", c.Paths.Mockups},
+		{"paths.test_results", c.Paths.TestResults},
+	}
+	if c.Connector == ConnectorFile {
+		checks = append(checks,
+			struct{ key, path string }{"file.backlog", c.File.Backlog},
+			struct{ key, path string }{"file.planning", c.File.Planning},
+		)
+	}
+	for _, ck := range checks {
+		if ck.path == "" {
+			continue
+		}
+		if err := checkPathWritable(c.AbsPath(ck.path)); err != nil {
+			return fmt.Errorf("config %s (%s): %w", ck.key, ck.path, err)
+		}
+	}
 	return nil
+}
+
+// checkPathWritable ensures that the directory containing target exists (or
+// can be created) and is writable. Used by validate() to surface bad config
+// at Load time rather than at first write.
+func checkPathWritable(target string) error {
+	dir := target
+	if filepath.Ext(target) != "" || !endsWithSep(target) {
+		dir = filepath.Dir(target)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+				return fmt.Errorf("parent directory %s is not creatable: %w", dir, mkErr)
+			}
+			info, err = os.Stat(dir)
+			if err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("parent %s is not a directory", dir)
+	}
+	probe, err := os.CreateTemp(dir, ".archetipo-write-probe-*")
+	if err != nil {
+		return fmt.Errorf("directory %s is not writable: %w", dir, err)
+	}
+	probeName := probe.Name()
+	_ = probe.Close()
+	_ = os.Remove(probeName)
+	return nil
+}
+
+func endsWithSep(s string) bool {
+	if s == "" {
+		return false
+	}
+	return s[len(s)-1] == filepath.Separator || s[len(s)-1] == '/'
 }
 
 // AbsPath joins p against the project root if p is relative.

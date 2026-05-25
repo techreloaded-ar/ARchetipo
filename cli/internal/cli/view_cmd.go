@@ -39,7 +39,7 @@ loopback interface only; no authentication is performed.`,
 			}
 			cfg, err := config.Load(cwd)
 			if err != nil {
-				return iox.NewInvalidInput("invalid .archetipo/config.yaml", "fix the file or remove it to fall back to defaults", err)
+				return iox.NewInvalidInput(err.Error(), "fix the file or remove it to fall back to defaults", err)
 			}
 			conn, err := connector.New(cfg)
 			if err != nil {

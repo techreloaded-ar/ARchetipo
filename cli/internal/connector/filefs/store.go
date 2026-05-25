@@ -90,7 +90,7 @@ type yamlStore struct {
 }
 
 func (c *Connector) backlogPath() string {
-	return c.cfg.AbsPath(c.cfg.Paths.Backlog)
+	return c.cfg.AbsPath(c.cfg.File.Backlog)
 }
 
 func (c *Connector) specsDir() string {
@@ -98,7 +98,7 @@ func (c *Connector) specsDir() string {
 }
 
 func (c *Connector) planPath(specRef string) string {
-	return filepath.Join(c.cfg.AbsPath(c.cfg.Paths.Planning), specRef+"-plan.yaml")
+	return filepath.Join(c.cfg.AbsPath(c.cfg.File.Planning), specRef+"-plan.yaml")
 }
 
 func (c *Connector) specPath(specCode string) string {
@@ -252,18 +252,18 @@ func (c *Connector) loadLegacyStore() (yamlStore, error) {
 }
 
 func (c *Connector) legacyBacklogPath() string {
-	if strings.HasSuffix(strings.ToLower(c.cfg.Paths.Backlog), ".md") {
-		return c.cfg.AbsPath(c.cfg.Paths.Backlog)
+	if strings.HasSuffix(strings.ToLower(c.cfg.File.Backlog), ".md") {
+		return c.cfg.AbsPath(c.cfg.File.Backlog)
 	}
 	return filepath.Join(c.cfg.ProjectRoot, "docs", "BACKLOG.md")
 }
 
 func (c *Connector) legacyPlanningDir() string {
-	if strings.HasSuffix(strings.ToLower(c.cfg.Paths.Planning), ".md") {
-		return filepath.Dir(c.cfg.AbsPath(c.cfg.Paths.Planning))
+	if strings.HasSuffix(strings.ToLower(c.cfg.File.Planning), ".md") {
+		return filepath.Dir(c.cfg.AbsPath(c.cfg.File.Planning))
 	}
-	if strings.HasSuffix(strings.ToLower(c.cfg.Paths.Planning), "/") || strings.Contains(filepath.Base(c.cfg.Paths.Planning), ".") == false {
-		path := c.cfg.AbsPath(c.cfg.Paths.Planning)
+	if strings.HasSuffix(strings.ToLower(c.cfg.File.Planning), "/") || strings.Contains(filepath.Base(c.cfg.File.Planning), ".") == false {
+		path := c.cfg.AbsPath(c.cfg.File.Planning)
 		if strings.HasSuffix(strings.ToLower(path), ".yaml") {
 			return filepath.Join(c.cfg.ProjectRoot, "docs", "planning")
 		}

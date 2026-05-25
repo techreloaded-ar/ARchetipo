@@ -39,10 +39,12 @@ var errBacklogMissing = errors.New("backlog missing")
 var mockupSpecCodeRE = regexp.MustCompile(`^(US|EP)-\d+$`)
 
 func (c *Connector) InitializeConnector(ctx context.Context) (domain.SetupInfo, error) {
+	file := c.cfg.File
 	return domain.SetupInfo{
 		Connector: config.ConnectorFile,
 		Paths:     c.cfg.Paths,
 		Workflow:  c.cfg.Workflow,
+		File:      &file,
 	}, nil
 }
 
