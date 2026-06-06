@@ -442,6 +442,15 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 	if patch.Epic != nil {
 		spec.Epic = *patch.Epic
 	}
+	if patch.Branch != nil {
+		spec.Branch = *patch.Branch
+	}
+	if patch.Worktree != nil {
+		spec.Worktree = *patch.Worktree
+	}
+	if patch.ForkBase != nil {
+		spec.ForkBase = *patch.ForkBase
+	}
 	store.Specs[specRef] = spec
 	if err := c.writeStore(store); err != nil {
 		return domain.WriteResult{}, err

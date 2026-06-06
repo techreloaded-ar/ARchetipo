@@ -48,6 +48,9 @@ type specDoc struct {
 	Body      string          `yaml:"body,omitempty"`
 	Ref       string          `yaml:"ref,omitempty"`
 	URL       string          `yaml:"url,omitempty"`
+	Branch    string          `yaml:"branch,omitempty"`
+	Worktree  string          `yaml:"worktree,omitempty"`
+	ForkBase  string          `yaml:"fork_base,omitempty"`
 }
 
 // specEpicDoc is the on-disk representation of a spec's epic. It accepts
@@ -302,6 +305,9 @@ func specDocFromSpec(spec domain.Spec) specDoc {
 		Body:      spec.Body,
 		Ref:       spec.Ref,
 		URL:       spec.URL,
+		Branch:    spec.Branch,
+		Worktree:  spec.Worktree,
+		ForkBase:  spec.ForkBase,
 	}
 }
 
@@ -318,6 +324,9 @@ func (d specDoc) toSpec() domain.Spec {
 		Body:      d.Body,
 		Ref:       d.Ref,
 		URL:       d.URL,
+		Branch:    d.Branch,
+		Worktree:  d.Worktree,
+		ForkBase:  d.ForkBase,
 	}
 }
 

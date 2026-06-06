@@ -10,8 +10,10 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
@@ -35,6 +37,7 @@ func newSpecCmd(s streams) *cobra.Command {
 		newSpecPlanCmd(s),
 		newSpecStartCmd(s),
 		newSpecReviewCmd(s),
+		newSpecIntegrateCmd(s),
 		newSpecMoveCmd(s),
 	)
 	return root
@@ -282,14 +285,114 @@ func newSpecStartCmd(s streams) *cobra.Command {
 	return &cobra.Command{
 		Use:   "start US-XXX",
 		Short: "Transition a planned spec to IN PROGRESS (idempotent)",
-		Args:  cobra.ExactArgs(1),
+		Long: "Transitions the spec from PLANNED to IN PROGRESS. When the worktree " +
+			"workflow is enabled (worktree.enabled in config.yaml), it also creates a " +
+			"dedicated git branch + worktree forked from the right base (dependency-aware) " +
+			"and records branch/worktree/fork_base on the spec. Worktree setup is " +
+			"non-fatal: outside a git repository it is skipped with a warning.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := strings.TrimSpace(args[0])
 			if ref == "" {
 				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
 			}
-			return withConnector(cmd, s, "write_result", func(ctx context.Context, c connector.Connector) (any, error) {
-				return transitionWithValidation(ctx, c, ref, "start", domain.StatusPlanned, domain.StatusInProgress)
+			return withConnectorCfg(cmd, s, "write_result", func(ctx context.Context, cfg config.Config, c connector.Connector) (any, error) {
+				res, err := transitionWithValidation(ctx, c, ref, "start", domain.StatusPlanned, domain.StatusInProgress)
+				if err != nil {
+					return nil, err
+				}
+				if cfg.Worktree.Enabled {
+					if wt, werr := setupWorktree(ctx, cfg, c, ref); werr != nil {
+						fmt.Fprintf(s.err, "warning: worktree setup skipped: %v\n", werr)
+					} else {
+						res.Refs = append(res.Refs, domain.Ref{Code: ref, Path: wt})
+					}
+				}
+				return res, nil
+			})
+		},
+	}
+}
+
+// setupWorktree creates (idempotently) the branch + worktree for a spec and
+// persists branch/worktree/fork_base on it. Returns the worktree path. Any git
+// failure is returned to the caller, which treats worktree setup as non-fatal.
+func setupWorktree(ctx context.Context, cfg config.Config, c connector.Connector, ref string) (string, error) {
+	if err := gitwt.EnsureRepo(ctx, cfg.ProjectRoot, cfg.Worktree.Base); err != nil {
+		return "", err
+	}
+	spec, err := c.ReadSpecDetail(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	if spec.Branch != "" {
+		// Already set up on a previous start.
+		return spec.Worktree, nil
+	}
+	allSpecs, err := c.FetchBacklogItems(ctx, "")
+	if err != nil {
+		return "", err
+	}
+	forkRef, err := gitwt.ForkRef(ctx, cfg.ProjectRoot, cfg.Worktree, spec, allSpecs)
+	if err != nil {
+		return "", err
+	}
+	branch, worktree, forkBase, err := gitwt.Ensure(ctx, cfg.ProjectRoot, cfg.Worktree, ref, forkRef)
+	if err != nil {
+		return "", err
+	}
+	if _, err := c.UpdateSpec(ctx, ref, domain.SpecUpdate{
+		Branch:   &branch,
+		Worktree: &worktree,
+		ForkBase: &forkBase,
+	}); err != nil {
+		return "", err
+	}
+	return worktree, nil
+}
+
+func newSpecIntegrateCmd(s streams) *cobra.Command {
+	return &cobra.Command{
+		Use:   "integrate US-XXX",
+		Short: "Merge a spec's worktree branch into base, clean up, and mark it DONE",
+		Long: "Integrates a reviewed spec: merges its branch into the base branch " +
+			"(--no-ff), removes the worktree, deletes the branch and transitions the " +
+			"spec to DONE. Requires the worktree workflow and that all blockers are " +
+			"already integrated. On merge conflict the merge is aborted and the " +
+			"conflicting files are reported (E_CONFLICT); resolve manually and retry.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ref := strings.TrimSpace(args[0])
+			if ref == "" {
+				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
+			}
+			return withConnectorCfg(cmd, s, "write_result", func(ctx context.Context, cfg config.Config, c connector.Connector) (any, error) {
+				if !cfg.Worktree.Enabled {
+					return nil, iox.NewConflict("worktree workflow is disabled", "enable worktree.enabled in config.yaml to use integrate", nil)
+				}
+				if err := gitwt.EnsureRepo(ctx, cfg.ProjectRoot, cfg.Worktree.Base); err != nil {
+					return nil, err
+				}
+				spec, err := c.ReadSpecDetail(ctx, ref)
+				if err != nil {
+					return nil, err
+				}
+				if spec.Branch == "" {
+					return nil, iox.NewPrecondition(fmt.Sprintf("spec %s has no worktree branch", ref), "run `archetipo spec start` with worktree enabled first", nil)
+				}
+				allSpecs, err := c.FetchBacklogItems(ctx, "")
+				if err != nil {
+					return nil, err
+				}
+				if blockers := gitwt.UnintegratedBlockers(ctx, cfg.ProjectRoot, cfg.Worktree, spec, allSpecs); len(blockers) > 0 {
+					return nil, iox.NewConflict(
+						fmt.Sprintf("unintegrated blockers: %s", strings.Join(blockers, ", ")),
+						"integrate the blockers before this spec", nil)
+				}
+				if err := gitwt.Integrate(ctx, cfg.ProjectRoot, cfg.Worktree, spec.Branch, spec.Worktree); err != nil {
+					return nil, err
+				}
+				return c.TransitionStatus(ctx, ref, domain.StatusDone)
 			})
 		},
 	}
