@@ -449,7 +449,16 @@ func newSpecReviewCmd(s streams) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return withConnector(cmd, s, "write_result", func(ctx context.Context, c connector.Connector) (any, error) {
+			return withConnectorCfg(cmd, s, "write_result", func(ctx context.Context, cfg config.Config, c connector.Connector) (any, error) {
+				spec, err := c.ReadSpecDetail(ctx, ref)
+				if err != nil {
+					return nil, err
+				}
+				if spec.Status != domain.StatusReview && cfg.Worktree.Enabled && spec.Branch != "" && spec.Worktree != "" {
+					if err := gitwt.CommitWorktreeChanges(ctx, cfg.ProjectRoot, spec.Worktree, spec.Code); err != nil {
+						return nil, err
+					}
+				}
 				res, err := transitionWithValidation(ctx, c, ref, "review", domain.StatusInProgress, domain.StatusReview)
 				if err != nil {
 					return nil, err

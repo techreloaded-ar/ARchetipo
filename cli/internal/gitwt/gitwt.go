@@ -39,6 +39,22 @@ func runGit(ctx context.Context, repoRoot string, args ...string) (string, error
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+func runGitInDir(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
 // gitOK runs git and reports whether it exited zero, discarding output. Used
 // for boolean probes (ref existence, ancestry) where a non-zero exit is a
 // normal "false" answer rather than an error.
@@ -154,7 +170,10 @@ func Resolve(repoRoot string, cfg domain.WorktreeConfig, code string) (rel strin
 func Ensure(ctx context.Context, repoRoot string, cfg domain.WorktreeConfig, code, forkRef string) (branch, worktreeRel, forkBaseSHA string, err error) {
 	branch = BranchName(cfg, code)
 	worktreeRel = WorktreeRel(cfg, code)
-	worktreeAbs := filepath.Join(repoRoot, worktreeRel)
+	worktreeAbs := worktreeRel
+	if !filepath.IsAbs(worktreeAbs) {
+		worktreeAbs = filepath.Join(repoRoot, worktreeRel)
+	}
 
 	forkBaseSHA, err = runGit(ctx, repoRoot, "rev-parse", forkRef)
 	if err != nil {
@@ -176,6 +195,45 @@ func Ensure(ctx context.Context, repoRoot string, cfg domain.WorktreeConfig, cod
 		}
 	}
 	return branch, worktreeRel, forkBaseSHA, nil
+}
+
+// CommitWorktreeChanges stages and commits any dirty or untracked changes in a
+// spec worktree so the review diff, which is branch-based, includes all files.
+func CommitWorktreeChanges(ctx context.Context, repoRoot, worktreeRel, code string) error {
+	if strings.TrimSpace(worktreeRel) == "" {
+		return iox.NewPrecondition(
+			fmt.Sprintf("spec %s has no worktree path", code),
+			"run `archetipo spec start` with worktree enabled first", nil)
+	}
+	worktreeAbs := worktreeRel
+	if !filepath.IsAbs(worktreeAbs) {
+		worktreeAbs = filepath.Join(repoRoot, worktreeRel)
+	}
+	if fi, err := os.Stat(worktreeAbs); err != nil || !fi.IsDir() {
+		return iox.NewPrecondition(
+			fmt.Sprintf("worktree for spec %s not found at %s", code, worktreeAbs),
+			"run `archetipo spec start` with worktree enabled first", err)
+	}
+	status, err := runGitInDir(ctx, worktreeAbs, "status", "--porcelain")
+	if err != nil {
+		return iox.NewConflict(
+			fmt.Sprintf("could not inspect worktree changes for %s", code),
+			"ensure the spec worktree is a valid git checkout", err)
+	}
+	if strings.TrimSpace(status) == "" {
+		return nil
+	}
+	if _, err := runGitInDir(ctx, worktreeAbs, "add", "-A"); err != nil {
+		return iox.NewConflict(
+			fmt.Sprintf("could not stage worktree changes for %s", code),
+			"inspect the worktree and retry `archetipo spec review`", err)
+	}
+	if _, err := runGitInDir(ctx, worktreeAbs, "commit", "-m", fmt.Sprintf("chore(%s): prepare review", code)); err != nil {
+		return iox.NewConflict(
+			fmt.Sprintf("could not commit worktree changes for %s", code),
+			"inspect the worktree and retry `archetipo spec review`", err)
+	}
+	return nil
 }
 
 // AheadBehind reports how many commits branch is ahead of and behind base.
