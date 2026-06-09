@@ -709,11 +709,16 @@ async function runReportedCommand({
   if (binDir) {
     env.PATH = `${binDir}${path.delimiter}${env.PATH || process.env.PATH}`;
   }
-  const child = spawn(command, args, {
+  const { command: spawnCommand, args: spawnArgs, shell } = resolveReportedSpawn({
+    command,
+    args,
+    kind: event.kind,
+  });
+  const child = spawn(spawnCommand, spawnArgs, {
     cwd: sandboxDir,
     env,
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
+    shell,
   });
 
   child.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
@@ -963,6 +968,24 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function resolveReportedSpawn({ command, args, kind }) {
+  if (process.platform !== "win32") {
+    return { command, args, shell: false };
+  }
+
+  const commandExtension = path.extname(command).toLowerCase();
+  const shouldRunThroughCmd = kind === "prompt" || commandExtension === ".cmd" || commandExtension === ".bat";
+  if (!shouldRunThroughCmd) {
+    return { command, args, shell: false };
+  }
+
+  return {
+    command: process.env.ComSpec || "cmd.exe",
+    args: ["/d", "/s", "/c", command, ...args],
+    shell: false,
+  };
 }
 
 async function terminateChildProcess(child) {
