@@ -2,15 +2,46 @@ package gitwt
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
 // initRepo creates a real git repository with one commit on `main` and returns
 // its path. It skips the test when git is unavailable.
 func initRepo(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "archetipo-test@example.com")
+	run("config", "user.name", "ARchetipo Test")
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", ".")
+	run("commit", "-q", "-m", "init")
+	return root
+}
+
+func initRepoWithoutLocalIdentity(t *testing.T) string {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -106,5 +137,38 @@ func TestEnsureDiffIntegrate_RealGit(t *testing.T) {
 	}
 	if refExists(ctx, root, branch) {
 		t.Fatalf("branch not deleted after integrate")
+	}
+}
+
+func TestIntegrate_RealGit_MissingCommitterIdentityIsNotReportedAsConflict(t *testing.T) {
+	root := initRepoWithoutLocalIdentity(t)
+	isolatedHomeDir := t.TempDir()
+	t.Setenv("HOME", isolatedHomeDir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(isolatedHomeDir, "xdg"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	ctx := context.Background()
+	c := cfg()
+	branch, worktreeRel, _, err := Ensure(ctx, root, c, "US-001", c.Base)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	worktreeAbs := filepath.Join(root, worktreeRel)
+	commitInWorktree(t, worktreeAbs, "b.txt", "hello\n", "add b")
+
+	err = Integrate(ctx, root, c, branch, worktreeRel)
+	if err == nil {
+		t.Fatal("expected integrate to fail without a configured git identity")
+	}
+
+	var codedErr *iox.CodedError
+	if !errors.As(err, &codedErr) {
+		t.Fatalf("expected coded error, got %T: %v", err, err)
+	}
+	if codedErr.Code != iox.CodePreconditionMissing {
+		t.Fatalf("expected %s, got %s (%v)", iox.CodePreconditionMissing, codedErr.Code, err)
+	}
+	if codedErr.Message != "git committer identity is not configured" {
+		t.Fatalf("unexpected message %q", codedErr.Message)
 	}
 }

@@ -90,6 +90,21 @@ func isAncestor(ctx context.Context, repoRoot, ref, descendant string) bool {
 	return gitOK(ctx, repoRoot, "merge-base", "--is-ancestor", ref, descendant)
 }
 
+func abortMergeIfInProgress(ctx context.Context, repoRoot string) {
+	if gitOK(ctx, repoRoot, "rev-parse", "--verify", "--quiet", "MERGE_HEAD") {
+		_, _ = runGit(ctx, repoRoot, "merge", "--abort")
+	}
+}
+
+func mergeOutputIndicatesMissingCommitterIdentity(mergeErr error) bool {
+	if mergeErr == nil {
+		return false
+	}
+	mergeOutput := mergeErr.Error()
+	return strings.Contains(mergeOutput, "Committer identity unknown") ||
+		strings.Contains(mergeOutput, "unable to auto-detect email address")
+}
+
 // BranchName returns the git branch name for a spec code under the configured
 // prefix (e.g. "archetipo/US-002").
 func BranchName(cfg domain.WorktreeConfig, code string) string {
@@ -256,20 +271,31 @@ func AheadBehind(ctx context.Context, repoRoot, base, branch string) (ahead, beh
 // Integrate merges branch into base with --no-ff, then removes the worktree and
 // deletes the branch. On merge conflict it aborts the merge and returns an
 // E_CONFLICT error listing the conflicting files; the working tree is left
-// clean so the caller can resolve manually and retry.
+// clean so the caller can resolve manually and retry. Other merge failures are
+// surfaced without misclassifying them as conflicts.
 func Integrate(ctx context.Context, repoRoot string, cfg domain.WorktreeConfig, branch, worktreeRel string) error {
 	if _, err := runGit(ctx, repoRoot, "checkout", cfg.Base); err != nil {
 		return err
 	}
 	if _, err := runGit(ctx, repoRoot, "merge", "--no-ff", branch); err != nil {
-		conflicts, _ := runGit(ctx, repoRoot, "diff", "--name-only", "--diff-filter=U")
-		_, _ = runGit(ctx, repoRoot, "merge", "--abort")
-		hint := "resolve the conflicts manually, then retry"
-		msg := fmt.Sprintf("merge of %s into %s has conflicts", branch, cfg.Base)
-		if files := strings.TrimSpace(conflicts); files != "" {
+		conflictingPaths, _ := runGit(ctx, repoRoot, "diff", "--name-only", "--diff-filter=U")
+		if files := strings.TrimSpace(conflictingPaths); files != "" {
+			abortMergeIfInProgress(ctx, repoRoot)
+			hint := "resolve the conflicts manually, then retry"
+			msg := fmt.Sprintf("merge of %s into %s has conflicts", branch, cfg.Base)
 			msg = fmt.Sprintf("%s: %s", msg, strings.Join(strings.Fields(files), ", "))
+			return iox.NewConflict(msg, hint, nil)
 		}
-		return iox.NewConflict(msg, hint, nil)
+
+		abortMergeIfInProgress(ctx, repoRoot)
+		if mergeOutputIndicatesMissingCommitterIdentity(err) {
+			return iox.NewPrecondition(
+				"git committer identity is not configured",
+				"set git user.name and user.email in this repository, then retry",
+				err,
+			)
+		}
+		return iox.NewInternal(fmt.Sprintf("could not merge %s into %s", branch, cfg.Base), err)
 	}
 	if worktreeRel != "" {
 		worktreeAbs := filepath.Join(repoRoot, worktreeRel)
