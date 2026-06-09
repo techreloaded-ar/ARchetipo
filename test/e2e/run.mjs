@@ -164,11 +164,6 @@ function normalizeConfig(manifest, configPath, filterScenarios) {
     if (rawScenario.verify_integrate !== undefined && (!Array.isArray(rawScenario.verify_integrate) || !rawScenario.verify_integrate.every((code) => typeof code === "string" && code.trim() !== ""))) {
       throw new Error(`scenarios.${scenarioId}.verify_integrate must be a list of non-empty strings when specified in ${configPath}`);
     }
-    for (const key of ["verify_worktree_files", "verify_integrated_files"]) {
-      if (rawScenario[key] !== undefined && (!Array.isArray(rawScenario[key]) || !rawScenario[key].every(isExpectedFile))) {
-        throw new Error(`scenarios.${scenarioId}.${key} must be a list of {path, content} objects when specified in ${configPath}`);
-      }
-    }
     scenarios.push({
       id: scenarioId,
       agentId,
@@ -179,20 +174,10 @@ function normalizeConfig(manifest, configPath, filterScenarios) {
       archetipo_pre_commands: rawScenario.archetipo_pre_commands ?? [],
       archetipo_post_commands: rawScenario.archetipo_post_commands ?? [],
       verify_integrate: rawScenario.verify_integrate ?? [],
-      verify_worktree_files: rawScenario.verify_worktree_files ?? [],
-      verify_integrated_files: rawScenario.verify_integrated_files ?? [],
     });
   }
 
   return filterScenarioList(scenarios, filterScenarios, configPath);
-}
-
-function isExpectedFile(value) {
-  return value
-    && typeof value === "object"
-    && typeof value.path === "string"
-    && value.path.trim() !== ""
-    && typeof value.content === "string";
 }
 
 function filterScenarioList(scenarios, filter, configPath) {
@@ -355,12 +340,12 @@ async function runConfiguredScenario({ scenario, configPath, timeoutMs, cliSourc
       logRunStepDone(scenario.id, step, "Prompt completed");
     }
 
-    if (scenario.verify_worktree_files.length > 0) {
-      const code = deriveFirstSpecCode(scenario.prompts);
-      const step = `verify-worktree-files-${code}`;
-      logRunStepStart(scenario.id, step, `Verifying files were written in ${code}'s worktree`);
-      await verifyWorktreeFiles(context, code, scenario.verify_worktree_files);
-      logRunStepDone(scenario.id, step, "Worktree files verified");
+    const integrationStates = new Map();
+    for (const code of scenario.verify_integrate) {
+      const step = `capture-integrate-state-${code}`;
+      logRunStepStart(scenario.id, step, `Capturing ${code}'s branch tip before integration`);
+      integrationStates.set(code, await captureIntegrationState(context, code, step));
+      logRunStepDone(scenario.id, step, "Integration state captured");
     }
 
     for (let index = 0; index < scenario.archetipo_post_commands.length; index += 1) {
@@ -381,16 +366,9 @@ async function runConfiguredScenario({ scenario, configPath, timeoutMs, cliSourc
 
     for (const code of scenario.verify_integrate) {
       const step = `verify-integrate-${code}`;
-      logRunStepStart(scenario.id, step, `Verifying ${code} reached DONE and its branch was removed`);
-      await verifyIntegration(context, code);
+      logRunStepStart(scenario.id, step, `Verifying ${code} reached DONE and its worktree was cleaned up`);
+      await verifyIntegration(context, code, integrationStates.get(code), step);
       logRunStepDone(scenario.id, step, "Integration verified");
-    }
-
-    if (scenario.verify_integrated_files.length > 0) {
-      const step = "verify-integrated-files";
-      logRunStepStart(scenario.id, step, "Verifying integrated files in the base checkout");
-      await verifyExpectedFiles(context.sandboxDir, scenario.verify_integrated_files, "base checkout");
-      logRunStepDone(scenario.id, step, "Integrated files verified");
     }
 
     return finish({
@@ -408,14 +386,6 @@ async function runConfiguredScenario({ scenario, configPath, timeoutMs, cliSourc
       sandboxDir,
     });
   }
-}
-
-function deriveFirstSpecCode(prompts) {
-  for (const prompt of prompts) {
-    const match = String(prompt).match(/\bUS-\d+\b/);
-    if (match) return match[0];
-  }
-  throw new Error("verify_worktree_files requires a US-XXX code in the scenario prompts");
 }
 
 // copyFixture overlays a fixture directory onto the sandbox root. The fixture
@@ -473,86 +443,112 @@ async function initSandboxGitRepo(context) {
   }
 }
 
-// verifyIntegration confirms the round-trip closed: the spec reached DONE and
-// its per-spec branch was deleted by `spec integrate`.
-async function verifyIntegration(context, code) {
+async function captureIntegrationState(context, code, step) {
   const show = await runReportedCommand({
     ...context,
-    step: "verify-integrate",
+    step,
     command: context.cliBinaryPath,
     args: ["spec", "show", code],
   });
   if (!show.ok) {
     throw new Error(`spec show ${code} failed: ${show.stderr || show.stdout || `exit ${show.code}`}`);
   }
-  let status = "";
+  let spec;
   try {
-    status = JSON.parse(show.stdout)?.data?.spec?.status ?? "";
+    spec = JSON.parse(show.stdout)?.data?.spec;
   } catch (err) {
     throw new Error(`could not parse spec show ${code} output: ${err.message}`);
   }
+  const branch = spec?.branch || `archetipo/${code}`;
+  const worktree = spec?.worktree || "";
+  if (!worktree) {
+    throw new Error(`spec show ${code} did not return data.spec.worktree before integrate`);
+  }
+
+  const tipProbe = await runProbe("git", ["rev-parse", "--verify", "--quiet", `${branch}^{commit}`], {
+    cwd: context.sandboxDir,
+  });
+  if (!tipProbe.ok) {
+    throw new Error(`expected branch ${branch} to exist before integrate, but could not resolve its tip`);
+  }
+
+  return {
+    branch,
+    branchTip: tipProbe.stdout.trim(),
+    worktree,
+    worktreeAbs: resolveSandboxPath(context.sandboxDir, worktree),
+  };
+}
+
+// verifyIntegration confirms the round-trip closed: the spec reached DONE, the
+// branch tip is reachable from main, and the per-spec branch/worktree are gone.
+async function verifyIntegration(context, code, beforeIntegrate, step) {
+  if (!beforeIntegrate?.branchTip) {
+    throw new Error(`missing pre-integrate branch tip for ${code}`);
+  }
+
+  const show = await runReportedCommand({
+    ...context,
+    step,
+    command: context.cliBinaryPath,
+    args: ["spec", "show", code],
+  });
+  if (!show.ok) {
+    throw new Error(`spec show ${code} failed: ${show.stderr || show.stdout || `exit ${show.code}`}`);
+  }
+  let spec;
+  try {
+    spec = JSON.parse(show.stdout)?.data?.spec;
+  } catch (err) {
+    throw new Error(`could not parse spec show ${code} output: ${err.message}`);
+  }
+  const status = spec?.status ?? "";
   if (status !== "DONE") {
     throw new Error(`expected ${code} to be DONE after integrate, got ${status || "(empty)"}`);
   }
 
-  const branch = `archetipo/${code}`;
+  const ancestorProbe = await runProbe("git", ["merge-base", "--is-ancestor", beforeIntegrate.branchTip, "main"], {
+    cwd: context.sandboxDir,
+  });
+  if (!ancestorProbe.ok) {
+    throw new Error(`expected pre-integrate tip ${beforeIntegrate.branchTip} for ${code} to be reachable from main`);
+  }
+
+  const branch = spec?.branch || beforeIntegrate.branch || `archetipo/${code}`;
   const branchProbe = await runProbe("git", ["rev-parse", "--verify", "--quiet", `${branch}^{commit}`], {
     cwd: context.sandboxDir,
   });
   if (branchProbe.ok) {
     throw new Error(`expected branch ${branch} to be deleted after integrate, but it still exists`);
   }
-}
 
-async function verifyWorktreeFiles(context, code, expectedFiles) {
-  const show = await runReportedCommand({
-    ...context,
-    step: "verify-worktree-show",
-    command: context.cliBinaryPath,
-    args: ["spec", "show", code],
-  });
-  if (!show.ok) {
-    throw new Error(`spec show ${code} failed: ${show.stderr || show.stdout || `exit ${show.code}`}`);
-  }
-
-  let workdir = "";
+  const worktreeAbs = resolveSandboxPath(context.sandboxDir, spec?.worktree || beforeIntegrate.worktree);
   try {
-    workdir = JSON.parse(show.stdout)?.data?.workdir ?? "";
+    await fs.access(worktreeAbs);
+    throw new Error(`expected worktree directory ${worktreeAbs} to be removed after integrate`);
   } catch (err) {
-    throw new Error(`could not parse spec show ${code} output: ${err.message}`);
-  }
-  if (!workdir) {
-    throw new Error(`spec show ${code} did not return data.workdir`);
-  }
-  if (path.resolve(workdir) === path.resolve(context.sandboxDir)) {
-    throw new Error(`expected ${code} to resolve to a dedicated worktree, got project root ${workdir}`);
+    if (err?.code !== "ENOENT") {
+      throw err;
+    }
   }
 
-  await verifyExpectedFiles(workdir, expectedFiles, `${code} worktree`);
-  for (const expected of expectedFiles) {
-    const rootPath = path.join(context.sandboxDir, expected.path);
-    try {
-      await fs.access(rootPath);
-    } catch {
-      continue;
-    }
-    throw new Error(`expected ${expected.path} to be absent from the base checkout before integration`);
+  const worktreeList = await runProbe("git", ["worktree", "list", "--porcelain"], {
+    cwd: context.sandboxDir,
+  });
+  if (!worktreeList.ok) {
+    throw new Error(`git worktree list --porcelain failed: ${worktreeList.stderr || worktreeList.stdout || `exit ${worktreeList.code}`}`);
+  }
+  const listedWorktrees = worktreeList.stdout
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => path.resolve(line.slice("worktree ".length)));
+  if (listedWorktrees.includes(path.resolve(worktreeAbs))) {
+    throw new Error(`expected git worktree list --porcelain to omit ${worktreeAbs}`);
   }
 }
 
-async function verifyExpectedFiles(rootDir, expectedFiles, label) {
-  for (const expected of expectedFiles) {
-    const filePath = path.join(rootDir, expected.path);
-    let actual;
-    try {
-      actual = await fs.readFile(filePath, "utf8");
-    } catch (err) {
-      throw new Error(`expected ${expected.path} in ${label}, but could not read ${filePath}: ${err.message}`);
-    }
-    if (actual.trimEnd() !== expected.content.trimEnd()) {
-      throw new Error(`unexpected content for ${expected.path} in ${label}: ${JSON.stringify(actual)}`);
-    }
-  }
+function resolveSandboxPath(sandboxDir, value) {
+  return path.resolve(path.isAbsolute(value) ? value : path.join(sandboxDir, value));
 }
 
 async function copyCliBinaryToSandbox({ scenario, cliSourceBinaryPath, sandboxDir }) {

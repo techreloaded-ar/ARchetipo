@@ -24,39 +24,38 @@ agents:
 scenarios:
 
   # Spec + plam  US-001.
-  spec-plan:
+  from-prd-to-plan:
     agent: pi-go-ds4-flash
-    fixture: fixtures/spec
+    fixture: fixtures/prd
     prompts:
       - /archetipo-spec
       - /archetipo-plan US-001
 
-  # Implement worktree with integration
-  worktree-implement-integrate:
+  # Implement worktree without integration
+  from-plan-to-implement:
     agent: pi-go-ds4-flash
-    fixture: fixtures/worktree
-    prompts:
-      - /archetipo-implement US-001
-    verify_worktree_files:
-      - path: hello.txt
-        content: "Hello from ARchetipo"
-    archetipo_post_commands:
-      - spec integrate US-001
-    verify_integrate:
-      - US-001
-    verify_integrated_files:
-      - path: hello.txt
-        content: "Hello from ARchetipo"
-
-
-    # Implement worktree with integration
-  worktree-implement-no-integrate:
-    agent: pi-go-ds4-flash
-    fixture: fixtures/worktree
+    fixture: fixtures/plan
     archetipo_pre_commands:
       - spec start US-001
     prompts:
       - /archetipo-implement US-001
-    verify_worktree_files:
-      - path: hello.txt
-        content: "Hello from ARchetipo"
+
+  # Implement worktree with integration
+  worktree-from-plan-to-implement-integrate:
+    agent: pi-go-ds4-flash
+    fixture: fixtures/worktree-plan
+    prompts:
+      - /archetipo-implement US-001
+    archetipo_post_commands:
+      - spec integrate US-001
+    verify_integrate:
+      - US-001
+
+  # Implement worktree without integration
+  worktree-implement-no-integrate:
+    agent: pi-go-ds4-flash
+    fixture: fixtures/worktree-plan
+    archetipo_pre_commands:
+      - spec start US-001
+    prompts:
+      - /archetipo-implement US-001
