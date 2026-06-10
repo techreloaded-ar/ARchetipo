@@ -54,6 +54,28 @@ func TestSpecMarkerRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSpecFromMarkerRejectsMalformedCodes(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+	}{
+		{"garbage spec code", `<!-- archetipo:spec code=garbage epic=EP-001 priority=HIGH points=3 status=TODO -->`},
+		{"missing spec code", `<!-- archetipo:spec epic=EP-001 priority=HIGH points=3 status=TODO -->`},
+		{"garbage epic code", `<!-- archetipo:spec code=US-001 epic=nope priority=HIGH points=3 status=TODO -->`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mk, ok := parseMarker(tc.line)
+			if !ok {
+				t.Fatalf("failed to parse marker: %s", tc.line)
+			}
+			if _, err := specFromMarker(mk); err == nil {
+				t.Fatalf("expected error for %s", tc.line)
+			}
+		})
+	}
+}
+
 func TestRenderBacklogIsDeterministic(t *testing.T) {
 	specs := []domain.Spec{
 		{

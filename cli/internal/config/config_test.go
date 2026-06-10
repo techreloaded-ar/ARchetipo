@@ -150,7 +150,7 @@ func TestPathValidationRejectsUnwritableSharedPath(t *testing.T) {
 	readonly := filepath.Join(root, "readonly")
 	must(t, os.MkdirAll(readonly, 0o755))
 	must(t, os.Chmod(readonly, 0o555))
-	defer os.Chmod(readonly, 0o755)
+	defer func() { _ = os.Chmod(readonly, 0o755) }()
 
 	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(`connector: github
 paths:

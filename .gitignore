@@ -6,7 +6,9 @@ Thumbs.db
 .vscode/
 .agents/
 .claude/
-.github/
+# Only the Copilot skills installed by `archetipo init` — never the whole
+# .github/, or CI workflows silently stop being tracked.
+.github/skills/
 .opencode/
 .gemini
 .trae

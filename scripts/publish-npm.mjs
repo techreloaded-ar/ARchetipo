@@ -32,16 +32,32 @@ function distTagFromVersion(v) {
   return pre ? pre.split(".")[0] : "latest";
 }
 
+const mainPkg = JSON.parse(
+  await fs.readFile(path.join(npmDir, "archetipo", "package.json"), "utf8"),
+);
+
 let distTag;
 const tagIdx = process.argv.indexOf("--tag");
 if (tagIdx !== -1 && process.argv[tagIdx + 1]) {
   distTag = process.argv[tagIdx + 1]; // explicit override
 } else {
-  const mainPkg = JSON.parse(
-    await fs.readFile(path.join(npmDir, "archetipo", "package.json"), "utf8"),
-  );
   distTag = distTagFromVersion(mainPkg.version);
 }
+
+// Guard rails: never let a prerelease land on the default install channel, and
+// reject tags npm itself would refuse (a tag must not look like a version).
+const isPrerelease = String(mainPkg.version).includes("-");
+if (isPrerelease && distTag === "latest") {
+  console.error(
+    `✗ refusing to publish prerelease ${mainPkg.version} with dist-tag 'latest'`,
+  );
+  process.exit(2);
+}
+if (!/^[a-z][a-z0-9._-]*$/i.test(distTag) || /^\d/.test(distTag)) {
+  console.error(`✗ invalid npm dist-tag '${distTag}'`);
+  process.exit(2);
+}
+console.log(`Publishing version ${mainPkg.version} with dist-tag '${distTag}'.`);
 
 async function pkgDirs() {
   const entries = await fs.readdir(npmDir, { withFileTypes: true });
