@@ -107,7 +107,7 @@ func classify(err error, stderr []byte) error {
 		return iox.NewConnector(iox.CodeConnectorAuth,
 			"gh authentication or scope is missing",
 			"run `gh auth refresh -s read:project -s project`", err)
-	case bytes.Contains(stderr, []byte("could not resolve to a") ) ||
+	case bytes.Contains(stderr, []byte("could not resolve to a")) ||
 		bytes.Contains(stderr, []byte("Not Found")):
 		return iox.NewConnector(iox.CodeNotFound, msg, "", err)
 	default:

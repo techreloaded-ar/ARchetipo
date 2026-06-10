@@ -200,10 +200,13 @@ type Ref struct {
 // Skipped lists the codes that the CLI intentionally did not write because
 // they would conflict with existing artifacts (e.g. `archetipo spec add`
 // idempotently skips specs whose code is already present in the backlog).
+// Warnings lists non-fatal failures: the artifacts were written, but a
+// best-effort side operation (e.g. setting a project board field) failed.
 type WriteResult struct {
-	OK      bool     `json:"ok" yaml:"ok"`
-	Refs    []Ref    `json:"refs,omitempty" yaml:"refs,omitempty"`
-	Skipped []string `json:"skipped,omitempty" yaml:"skipped,omitempty"`
+	OK       bool     `json:"ok" yaml:"ok"`
+	Refs     []Ref    `json:"refs,omitempty" yaml:"refs,omitempty"`
+	Skipped  []string `json:"skipped,omitempty" yaml:"skipped,omitempty"`
+	Warnings []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 }
 
 // PlanInput is the stdin payload of `archetipo spec plan`.

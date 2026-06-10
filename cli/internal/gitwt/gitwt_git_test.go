@@ -59,6 +59,9 @@ func initRepoWithoutLocalIdentity(t *testing.T) string {
 		}
 	}
 	run("init", "-q", "-b", "main")
+	// Without this, git silently falls back to username@hostname on machines
+	// with a fully qualified hostname and the commit succeeds anyway.
+	run("config", "user.useConfigOnly", "true")
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("one\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

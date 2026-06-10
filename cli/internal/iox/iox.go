@@ -24,10 +24,10 @@ const Schema = "archetipo/v1"
 
 // Stable exit codes for the CLI runtime contract.
 const (
-	ExitOK              = 0
-	ExitGeneric         = 1
-	ExitInvalidInput    = 2
-	ExitConnector       = 3
+	ExitOK                  = 0
+	ExitGeneric             = 1
+	ExitInvalidInput        = 2
+	ExitConnector           = 3
 	ExitPreconditionMissing = 4
 )
 
@@ -40,8 +40,8 @@ type Envelope struct {
 
 // ErrorEnvelope is the shape written to stderr on failure.
 type ErrorEnvelope struct {
-	Schema string `json:"schema"`
-	Kind   string `json:"kind"`
+	Schema string       `json:"schema"`
+	Kind   string       `json:"kind"`
 	Error  ErrorPayload `json:"error"`
 }
 

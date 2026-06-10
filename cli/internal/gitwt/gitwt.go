@@ -101,8 +101,9 @@ func mergeOutputIndicatesMissingCommitterIdentity(mergeErr error) bool {
 		return false
 	}
 	mergeOutput := mergeErr.Error()
-	return strings.Contains(mergeOutput, "Committer identity unknown") ||
-		strings.Contains(mergeOutput, "unable to auto-detect email address")
+	return strings.Contains(mergeOutput, "identity unknown") ||
+		strings.Contains(mergeOutput, "unable to auto-detect email address") ||
+		strings.Contains(mergeOutput, "auto-detection is disabled")
 }
 
 // BranchName returns the git branch name for a spec code under the configured
@@ -263,8 +264,14 @@ func AheadBehind(ctx context.Context, repoRoot, base, branch string) (ahead, beh
 	}
 	// left = commits in base not in branch (behind); right = commits in branch
 	// not in base (ahead).
-	behind, _ = strconv.Atoi(fields[0])
-	ahead, _ = strconv.Atoi(fields[1])
+	behind, err = strconv.Atoi(fields[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("unexpected rev-list output: %q", out)
+	}
+	ahead, err = strconv.Atoi(fields[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("unexpected rev-list output: %q", out)
+	}
 	return ahead, behind, nil
 }
 

@@ -36,6 +36,7 @@ var allSkills = []string{
 	"archetipo-implement",
 	"archetipo-inception",
 	"archetipo-plan",
+	"archetipo-review",
 	"archetipo-spec",
 }
 
@@ -172,22 +173,10 @@ func discoverDataDir() (string, error) {
 // repoFallbackDataDir maps the repo layout (skills/ + .archetipo/) onto the
 // expected runtime layout by treating .archetipo/ as runtime/.
 func repoFallbackDataDir(repoRoot string) string {
-	// In-place: the init code uses dataDir/skills and dataDir/runtime.
-	// The repo has skills/ and .archetipo/. We materialize a virtual mapping
-	// by symlinking is overkill — instead the caller reads runtime via
-	// runtimeRootFor(dataDir) which checks both layouts. We return the repo
-	// root and let installRuntimeAssets look in either runtime/ or .archetipo/.
+	// The init code uses dataDir/skills and dataDir/runtime, while the repo
+	// has skills/ and .archetipo/. We return the repo root and let
+	// installRuntimeAssets look in either runtime/ or .archetipo/.
 	return repoRoot
-}
-
-// runtimeRootFor returns the directory holding config.yaml + shared-runtime.md,
-// preferring runtime/ (npm layout) and falling back to .archetipo/ (repo layout).
-func runtimeRootFor(dataDir string) string {
-	candidate := filepath.Join(dataDir, "runtime")
-	if _, err := os.Stat(filepath.Join(candidate, "config.yaml")); err == nil {
-		return candidate
-	}
-	return filepath.Join(dataDir, ".archetipo")
 }
 
 func resolveToolFlags(flags []string) ([]toolDef, error) {
@@ -403,12 +392,25 @@ func copyFile(src, dst string) error {
 
 func readLine(r io.Reader) (string, error) {
 	if r == nil {
-		return "", errors.New("no input stream")
+		return "", errNonInteractiveInput(errors.New("no input stream"))
 	}
 	br := bufio.NewReader(r)
 	line, err := br.ReadString('\n')
 	if err != nil && line == "" {
+		if errors.Is(err, io.EOF) {
+			return "", errNonInteractiveInput(err)
+		}
 		return "", err
 	}
 	return line, nil
+}
+
+// errNonInteractiveInput explains how to run init without a terminal (CI,
+// piped stdin) instead of surfacing a bare EOF.
+func errNonInteractiveInput(cause error) error {
+	return iox.NewPrecondition(
+		"interactive input is not available",
+		"run non-interactively: archetipo init --tool <claude|codex|gemini|opencode|copilot|pi> --connector <file|github> [--yes]",
+		cause,
+	)
 }

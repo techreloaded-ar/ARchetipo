@@ -896,6 +896,7 @@ func (c *Connector) createSpecsAndAttach(ctx context.Context, specs []domain.Spe
 		}
 	}
 	refs := make([]domain.Ref, 0, len(specs))
+	var warnings []string
 	for _, s := range specs {
 		title := s.Code + ": " + s.Title
 		labels := []string{"archetipo-backlog"}
@@ -929,35 +930,44 @@ func (c *Connector) createSpecsAndAttach(ctx context.Context, specs []domain.Spe
 		}
 		itemID := addResp.AddProjectV2ItemById.Item.ID
 		c.state.items[num] = itemID
+		// Field updates are best-effort: the issue exists on the board even
+		// if a field mutation fails, so report failures as warnings instead
+		// of aborting the whole batch.
 		if optID := c.state.project.Fields.StatusOptions[string(s.Status)]; optID != "" {
-			_ = runGraphQL(ctx, c.runner, updateSingleSelectFieldMutation, map[string]string{
+			if err := runGraphQL(ctx, c.runner, updateSingleSelectFieldMutation, map[string]string{
 				"projectId": c.state.project.NodeID,
 				"itemId":    itemID,
 				"fieldId":   c.state.project.Fields.StatusFieldID,
 				"optionId":  optID,
-			}, nil)
+			}, nil); err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s: could not set Status field: %v", s.Code, err))
+			}
 		}
 		if c.state.project.Fields.PriorityFieldID != "" {
 			if optID := c.state.project.Fields.PriorityOptions[string(s.Priority)]; optID != "" {
-				_ = runGraphQL(ctx, c.runner, updateSingleSelectFieldMutation, map[string]string{
+				if err := runGraphQL(ctx, c.runner, updateSingleSelectFieldMutation, map[string]string{
 					"projectId": c.state.project.NodeID,
 					"itemId":    itemID,
 					"fieldId":   c.state.project.Fields.PriorityFieldID,
 					"optionId":  optID,
-				}, nil)
+				}, nil); err != nil {
+					warnings = append(warnings, fmt.Sprintf("%s: could not set Priority field: %v", s.Code, err))
+				}
 			}
 		}
 		if c.state.project.Fields.PointsFieldID != "" && s.Points > 0 {
-			_ = runGraphQL(ctx, c.runner, updateNumberFieldMutation, map[string]string{
+			if err := runGraphQL(ctx, c.runner, updateNumberFieldMutation, map[string]string{
 				"projectId": c.state.project.NodeID,
 				"itemId":    itemID,
 				"fieldId":   c.state.project.Fields.PointsFieldID,
 				"value":     strconv.Itoa(s.Points),
-			}, nil)
+			}, nil); err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s: could not set Points field: %v", s.Code, err))
+			}
 		}
 	}
 	c.invalidateItemsCache()
-	return domain.WriteResult{OK: true, Refs: refs}, nil
+	return domain.WriteResult{OK: true, Refs: refs, Warnings: warnings}, nil
 }
 
 // ensureLabel creates a label on the repo if not already known. `gh label

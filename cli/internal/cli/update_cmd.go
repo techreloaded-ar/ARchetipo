@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -71,7 +72,9 @@ func runUpdate(s streams, check, dryRun bool) error {
 	c.Env = os.Environ()
 	if err := c.Run(); err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
-			os.Exit(ee.ExitCode())
+			ce := iox.NewInternal(fmt.Sprintf("npm exited with status %d", ee.ExitCode()), err)
+			ce.Exit = ee.ExitCode()
+			return ce
 		}
 		return iox.NewInternal("npm invocation failed", err)
 	}
@@ -93,8 +96,10 @@ func joinArgs(parts []string) string {
 // archetipo package and returns the resolved version string.
 func fetchLatestVersion(timeout time.Duration) (string, error) {
 	client := &http.Client{Timeout: timeout}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	url := "https://registry.npmjs.org/" + npmPackageName + "/latest"
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
