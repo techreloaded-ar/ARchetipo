@@ -29,6 +29,7 @@ const RelativePath = ".archetipo/config.yaml"
 const (
 	ConnectorFile   = "file"
 	ConnectorGitHub = "github"
+	ConnectorJira   = "jira"
 )
 
 // Config is the parsed shape of .archetipo/config.yaml.
@@ -38,6 +39,7 @@ type Config struct {
 	Workflow  domain.WorkflowConfig `yaml:"workflow" json:"workflow"`
 	File      domain.FileConfig     `yaml:"file" json:"file,omitempty"`
 	GitHub    GitHubConfig          `yaml:"github" json:"github,omitempty"`
+	Jira      JiraConfig            `yaml:"jira" json:"jira,omitempty"`
 	// Worktree is the optional per-spec git worktree workflow. Disabled by
 	// default; when enabled, `archetipo spec start` creates a branch + worktree
 	// per spec so the review diff can be isolated and integrated with one merge.
@@ -55,6 +57,28 @@ type GitHubConfig struct {
 	ProjectNodeID string               `yaml:"project_node_id,omitempty" json:"project_node_id,omitempty"`
 	ProjectURL    string               `yaml:"project_url,omitempty" json:"project_url,omitempty"`
 	Fields        domain.ProjectFields `yaml:"fields,omitempty" json:"fields,omitempty"`
+}
+
+// JiraConfig holds connector-specific settings for the Jira Cloud connector.
+//
+// The API token is never read from this file: it always comes from the
+// JIRA_API_TOKEN environment variable so the secret stays out of version
+// control. Email may be set here or, preferably, via JIRA_EMAIL.
+//
+// StatusMap maps the canonical workflow statuses (TODO, PLANNED, IN PROGRESS,
+// REVIEW, DONE) to the names of the statuses configured in the Jira project's
+// workflow. PriorityMap maps the canonical priorities (HIGH, MEDIUM, LOW) to
+// the Jira priority names. Both default to a sensible identity/title-case
+// mapping when omitted (see the jira connector).
+type JiraConfig struct {
+	BaseURL     string            `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+	ProjectKey  string            `yaml:"project_key,omitempty" json:"project_key,omitempty"`
+	Email       string            `yaml:"email,omitempty" json:"email,omitempty"`
+	StoryType   string            `yaml:"story_type,omitempty" json:"story_type,omitempty"`
+	SubtaskType string            `yaml:"subtask_type,omitempty" json:"subtask_type,omitempty"`
+	PointsField string            `yaml:"points_field,omitempty" json:"points_field,omitempty"`
+	StatusMap   map[string]string `yaml:"status_map,omitempty" json:"status_map,omitempty"`
+	PriorityMap map[string]string `yaml:"priority_map,omitempty" json:"priority_map,omitempty"`
 }
 
 // Default returns the canonical default config (file connector, English status
@@ -266,6 +290,14 @@ func (c *Config) validate() error {
 		}
 		if err := checkPathWritable(c.AbsPath(ck.path)); err != nil {
 			return fmt.Errorf("config %s (%s): %w", ck.key, ck.path, err)
+		}
+	}
+	if c.Connector == ConnectorJira {
+		if c.Jira.BaseURL == "" {
+			return fmt.Errorf("config jira.base_url is required for the jira connector (e.g. https://acme.atlassian.net)")
+		}
+		if c.Jira.ProjectKey == "" {
+			return fmt.Errorf("config jira.project_key is required for the jira connector (e.g. ARCH)")
 		}
 	}
 	return nil

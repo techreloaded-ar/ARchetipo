@@ -1,25 +1,16 @@
 package web
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
-
-// reviewStore is an optional capability connectors can implement to persist the
-// inline review comments left on a spec's diff. The filefs connector stores
-// them under .archetipo/reviews/{code}.yaml; connectors without it simply
-// expose no saved comments.
-type reviewStore interface {
-	ReadReview(ctx context.Context, code string) (domain.Review, error)
-	SaveReview(ctx context.Context, code string, r domain.Review) error
-}
 
 type diffView struct {
 	Base   string           `json:"base"`
@@ -79,7 +70,7 @@ func (s *Server) handleGetReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, iox.NewInvalidInput("missing spec code", "", nil))
 		return
 	}
-	rs, ok := s.conn.(reviewStore)
+	rs, ok := s.conn.(connector.ReviewStore)
 	if !ok {
 		writeJSON(w, http.StatusOK, domain.Review{Comments: []domain.ReviewComment{}})
 		return
@@ -101,7 +92,7 @@ func (s *Server) handleSaveReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, iox.NewInvalidInput("missing spec code", "", nil))
 		return
 	}
-	rs, ok := s.conn.(reviewStore)
+	rs, ok := s.conn.(connector.ReviewStore)
 	if !ok {
 		writeError(w, iox.NewConnector(iox.CodePreconditionMissing, "this connector does not persist review comments", "use the file connector", nil))
 		return
@@ -130,7 +121,7 @@ func (s *Server) handleRequestChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	rs, ok := s.conn.(reviewStore)
+	rs, ok := s.conn.(connector.ReviewStore)
 	if !ok {
 		writeError(w, iox.NewConnector(iox.CodePreconditionMissing, "this connector does not persist review comments", "use the file connector", nil))
 		return

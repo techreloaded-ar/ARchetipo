@@ -34,6 +34,17 @@ func Register() {
 	})
 }
 
+// Optional capabilities exposed to the web viewer (see connector.capabilities).
+// The compile-time assertions make the contract explicit: dropping one of these
+// methods becomes a build error rather than a silent runtime gap.
+var (
+	_ connector.PRDReader        = (*Connector)(nil)
+	_ connector.PlanBodyReader   = (*Connector)(nil)
+	_ connector.MockupLister     = (*Connector)(nil)
+	_ connector.BoardOrderReader = (*Connector)(nil)
+	_ connector.ReviewStore      = (*Connector)(nil)
+)
+
 var errBacklogMissing = errors.New("backlog missing")
 
 // mockupSpecCodeRE matches mockup folder names that map 1:1 to a spec or

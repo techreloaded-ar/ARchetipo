@@ -1,4 +1,4 @@
-connector: file   # file | github
+connector: file   # file | github | jira
 
 # Shared paths — used by every connector.
 paths:
@@ -44,3 +44,24 @@ github:
   #   points_field_id: <auto>
   #   epic_field_id: <auto>
   #   epic_options: { ... }
+
+# Used only when connector == jira. The API token is read from the
+# JIRA_API_TOKEN env var (never stored here); the email from JIRA_EMAIL or the
+# jira.email key below.
+jira:
+  # base_url: https://acme.atlassian.net
+  # project_key: ARCH
+  # email: you@acme.com            # optional; falls back to $JIRA_EMAIL
+  # story_type: Story              # issue type for specs (default: Story)
+  # subtask_type: Sub-task         # issue type for plan tasks (default: Sub-task)
+  # points_field: customfield_10016  # story points custom field id (optional)
+  # status_map:                    # canonical workflow status -> Jira status name
+  #   TODO: To Do
+  #   PLANNED: Selected for Development
+  #   IN PROGRESS: In Progress
+  #   REVIEW: In Review
+  #   DONE: Done
+  # priority_map:                  # canonical priority -> Jira priority name
+  #   HIGH: High
+  #   MEDIUM: Medium
+  #   LOW: Low

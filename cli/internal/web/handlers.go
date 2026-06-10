@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/metrics"
@@ -83,7 +84,7 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 		return id
 	}
 	var boardOrder []string
-	if r, ok := s.conn.(boardOrderReader); ok {
+	if r, ok := s.conn.(connector.BoardOrderReader); ok {
 		if order, oerr := r.ReadBoardOrder(ctx); oerr == nil {
 			boardOrder = order
 		}
@@ -216,7 +217,7 @@ func (s *Server) readPlanForSpec(ctx context.Context, code string) ([]domain.Tas
 		return nil, "", err
 	}
 	body := ""
-	if pr, ok := s.conn.(planBodyReader); ok {
+	if pr, ok := s.conn.(connector.PlanBodyReader); ok {
 		if b, err := pr.ReadPlanBody(ctx, code); err == nil {
 			body = b
 		}
@@ -224,40 +225,12 @@ func (s *Server) readPlanForSpec(ctx context.Context, code string) ([]domain.Tas
 	return tasks, body, nil
 }
 
-// planBodyReader is an optional capability connectors can implement to expose
-// the plan body text alongside the tasks. The viewer probes for it at runtime
-// via a type assertion, so connectors that do not implement it (e.g. github)
-// simply return tasks with an empty body.
-type planBodyReader interface {
-	ReadPlanBody(ctx context.Context, code string) (string, error)
-}
-
-// prdReader is an optional capability connectors can implement to expose the
-// raw PRD markdown so the viewer can render it next to specs and plans.
-type prdReader interface {
-	ReadPRD(ctx context.Context) (string, error)
-}
-
-// mockupLister is an optional capability connectors can implement to list the
-// design mockups produced by archetipo-design (HTML folders under paths.mockups).
-type mockupLister interface {
-	ListMockups(ctx context.Context) ([]domain.MockupEntry, error)
-}
-
-// boardOrderReader is an optional capability connectors can implement to expose
-// the global ordering produced by drag-and-drop. Without it, the viewer
-// renders specs in whatever order FetchBacklogItems returns, ignoring the
-// position the user assigned by moving cards.
-type boardOrderReader interface {
-	ReadBoardOrder(ctx context.Context) ([]string, error)
-}
-
 type prdView struct {
 	Body string `json:"body"`
 }
 
 func (s *Server) handleGetPRD(w http.ResponseWriter, r *http.Request) {
-	pr, ok := s.conn.(prdReader)
+	pr, ok := s.conn.(connector.PRDReader)
 	if !ok {
 		writeError(w, iox.NewConnector(iox.CodePreconditionMissing, "this connector does not expose a PRD", "use the file connector to read the PRD", nil))
 		return
@@ -288,7 +261,7 @@ type mockupsView struct {
 }
 
 func (s *Server) handleListMockups(w http.ResponseWriter, r *http.Request) {
-	ml, ok := s.conn.(mockupLister)
+	ml, ok := s.conn.(connector.MockupLister)
 	if !ok {
 		writeJSON(w, http.StatusOK, mockupsView{Mockups: []domain.MockupEntry{}})
 		return

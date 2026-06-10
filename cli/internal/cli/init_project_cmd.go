@@ -56,7 +56,7 @@ func newInitProjectCmd(s streams) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringSliceVar(&toolFlags, "tool", nil, "Tool key(s) to install for: claude, codex, gemini, opencode, copilot, pi. Repeat or comma-separate.")
-	cmd.Flags().StringVar(&connectorFlag, "connector", "", "Connector for .archetipo/config.yaml: file|github")
+	cmd.Flags().StringVar(&connectorFlag, "connector", "", "Connector for .archetipo/config.yaml: file|github|jira")
 	cmd.Flags().BoolVar(&assumeYes, "yes", false, "Assume 'yes' to overwrite prompts (non-interactive).")
 	return cmd
 }
@@ -94,8 +94,8 @@ func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeY
 
 	var conn string
 	if connectorFlag != "" {
-		if connectorFlag != "file" && connectorFlag != "github" {
-			return iox.NewInvalidInput("--connector must be 'file' or 'github'", "", nil)
+		if connectorFlag != "file" && connectorFlag != "github" && connectorFlag != "jira" {
+			return iox.NewInvalidInput("--connector must be 'file', 'github' or 'jira'", "", nil)
 		}
 		conn = connectorFlag
 	} else {
@@ -248,6 +248,7 @@ func pickConnectorInteractive(s streams) (string, error) {
 	fmt.Fprintln(s.out, "Select connector:")
 	fmt.Fprintln(s.out, "  1) file    — backlog and planning as local Markdown files")
 	fmt.Fprintln(s.out, "  2) github  — GitHub Projects v2 (requires gh CLI)")
+	fmt.Fprintln(s.out, "  3) jira    — Jira Cloud (requires JIRA_EMAIL/JIRA_API_TOKEN)")
 	fmt.Fprintln(s.out)
 	fmt.Fprint(s.out, "Choice [1]: ")
 	line, err := readLine(s.in)
@@ -260,8 +261,10 @@ func pickConnectorInteractive(s streams) (string, error) {
 		return "file", nil
 	case "2", "github":
 		return "github", nil
+	case "3", "jira":
+		return "jira", nil
 	}
-	return "", iox.NewInvalidInput("invalid connector choice: "+line, "enter 1 or 2", nil)
+	return "", iox.NewInvalidInput("invalid connector choice: "+line, "enter 1, 2 or 3", nil)
 }
 
 func installRuntimeAssets(s streams, runtimeDir, connector string, assumeYes bool) error {
@@ -410,7 +413,7 @@ func readLine(r io.Reader) (string, error) {
 func errNonInteractiveInput(cause error) error {
 	return iox.NewPrecondition(
 		"interactive input is not available",
-		"run non-interactively: archetipo init --tool <claude|codex|gemini|opencode|copilot|pi> --connector <file|github> [--yes]",
+		"run non-interactively: archetipo init --tool <claude|codex|gemini|opencode|copilot|pi> --connector <file|github|jira> [--yes]",
 		cause,
 	)
 }

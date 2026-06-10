@@ -186,6 +186,7 @@ Skills never decide where artifacts live. They apply the shared runtime rules, c
 |---|---|---|
 | `file` | Local project files under `.archetipo/` plus `docs/PRD.md` and `docs/mockups/` | Solo work, early product phases, offline workflows |
 | `github` | GitHub Issues plus GitHub Projects v2 | Team tracking, cloud collaboration, project board workflows |
+| `jira` | Jira Cloud issues (Story) plus Sub-tasks | Teams already standardized on Jira |
 
 ### `file` connector
 
@@ -206,7 +207,15 @@ No authentication is required. Everything is local and versionable.
 - Status transitions are managed through Project custom fields.
 - Requires the `gh` CLI authenticated with `repo` and `project` scopes.
 
-The CLI architecture is extensible, but the built-in connectors today are `file` and `github`.
+### `jira` connector
+
+- Backlog items become Jira issues of type `Story`, tagged with the `archetipo-backlog` label.
+- Spec tasks are created as Jira `Sub-task` issues under the parent story.
+- Plans are appended to the parent story description.
+- Status changes go through the Jira workflow transitions; map the canonical statuses to your project's status names via `jira.status_map`.
+- Connects to the Jira Cloud REST API (v2). Set `jira.base_url` and `jira.project_key` in `config.yaml`, and export `JIRA_EMAIL` and `JIRA_API_TOKEN` (create a token at id.atlassian.com). The token is never stored in the config file.
+
+The CLI architecture is extensible, but the built-in connectors today are `file`, `github` and `jira`.
 
 ---
 
@@ -229,7 +238,7 @@ The CLI architecture is extensible, but the built-in connectors today are `file`
 `.archetipo/config.yaml` defines connector, paths, and workflow states. Missing keys are filled with official defaults.
 
 ```yaml
-connector: file   # file | github
+connector: file   # file | github | jira
 
 # Shared — used by every connector
 paths:
@@ -254,6 +263,14 @@ file:
 github:
   # owner: auto-detected from repo
   # project_number: auto-detected from repo
+
+# Used only when connector == jira (token comes from $JIRA_API_TOKEN)
+jira:
+  # base_url: https://acme.atlassian.net
+  # project_key: ARCH
+  # email: you@acme.com           # optional; falls back to $JIRA_EMAIL
+  # points_field: customfield_10016
+  # status_map: { TODO: To Do, PLANNED: Selected for Development, IN PROGRESS: In Progress, REVIEW: In Review, DONE: Done }
 ```
 
 Each connector reads only its dedicated section: configuring `file:` while the active connector is `github` (or vice versa) has no effect. Legacy configs with `paths.backlog` / `paths.planning` are refused at load time with a migration hint — there is no auto-migration.

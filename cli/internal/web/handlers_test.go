@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/inmemory"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
@@ -392,7 +393,7 @@ func TestRequestChangesMovesCommentsIntoSpec(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	rs := srv.conn.(reviewStore)
+	rs := srv.conn.(connector.ReviewStore)
 	if err := rs.SaveReview(ctx, "US-001", domain.Review{Comments: []domain.ReviewComment{
 		{File: "hello.txt", Line: 3, Side: "new", Body: "localize this greeting"},
 	}}); err != nil {

@@ -119,7 +119,45 @@ func runDoctorChecks(ctx context.Context) []doctorCheck {
 		checks = append(checks, doctorCheck{name: "gh", skipped: true, detail: "skipped (connector is not github)"})
 	}
 
+	// 6. Jira credentials, only relevant for the jira connector.
+	if cfgErr == nil && cfg.Connector == config.ConnectorJira {
+		checks = append(checks, checkJira(cfg))
+	} else {
+		checks = append(checks, doctorCheck{name: "jira", skipped: true, detail: "skipped (connector is not jira)"})
+	}
+
 	return checks
+}
+
+// checkJira verifies the jira connector has the base URL, project key and the
+// credentials it needs. It does not hit the network (a failing token would be
+// surfaced at the first real operation).
+func checkJira(cfg config.Config) doctorCheck {
+	var missing []string
+	if cfg.Jira.BaseURL == "" {
+		missing = append(missing, "jira.base_url")
+	}
+	if cfg.Jira.ProjectKey == "" {
+		missing = append(missing, "jira.project_key")
+	}
+	email := cfg.Jira.Email
+	if email == "" {
+		email = os.Getenv("JIRA_EMAIL")
+	}
+	if email == "" {
+		missing = append(missing, "JIRA_EMAIL (or jira.email)")
+	}
+	if os.Getenv("JIRA_API_TOKEN") == "" {
+		missing = append(missing, "JIRA_API_TOKEN")
+	}
+	if len(missing) > 0 {
+		return doctorCheck{
+			name:   "jira",
+			detail: "missing: " + strings.Join(missing, ", "),
+			hint:   "set base_url/project_key in .archetipo/config.yaml and export JIRA_EMAIL + JIRA_API_TOKEN",
+		}
+	}
+	return doctorCheck{name: "jira", ok: true, detail: fmt.Sprintf("%s project %s (%s)", cfg.Jira.BaseURL, cfg.Jira.ProjectKey, email)}
 }
 
 func checkPackagedSkills(dataDir string) doctorCheck {
