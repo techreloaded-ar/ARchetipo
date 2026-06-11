@@ -74,6 +74,7 @@ query($projectId: ID!, $after: String) {
             ... on Issue {
               number
               title
+              body
               url
               labels(first: 20) { nodes { name } }
             }

@@ -856,6 +856,92 @@ func repoDataDir(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "..", ".."))
 }
 
+func TestSpecUpdate_TitleChange(t *testing.T) {
+	newProject(t)
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	patchFile := writeInputFile(t, "patch.yaml", "title: Updated First")
+	res := runCLI(t, "", "spec", "update", "US-001", "--file", patchFile)
+	kind, data := decodeOK(t, res)
+	if kind != "write_result" {
+		t.Fatalf("expected kind=write_result, got %s", kind)
+	}
+	if ok, _ := data["ok"].(bool); !ok {
+		t.Fatal("expected ok=true")
+	}
+	// Verify via spec show.
+	show := runCLI(t, "", "spec", "show", "US-001")
+	_, showData := decodeOK(t, show)
+	spec, _ := showData["spec"].(map[string]any)
+	if spec["title"] != "Updated First" {
+		t.Fatalf("expected title 'Updated First', got %v", spec["title"])
+	}
+}
+
+func TestSpecUpdate_MultipleFields(t *testing.T) {
+	newProject(t)
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	patchYAML := `title: Multi-update
+priority: LOW
+scope: MVP
+blocked_by:
+  - US-003
+rework: true`
+	patchFile := writeInputFile(t, "patch.yaml", patchYAML)
+	res := runCLI(t, "", "spec", "update", "US-001", "--file", patchFile)
+	if res.exit != 0 {
+		t.Fatalf("update failed: %s", res.stderr.String())
+	}
+	show := runCLI(t, "", "spec", "show", "US-001")
+	_, showData := decodeOK(t, show)
+	spec, _ := showData["spec"].(map[string]any)
+	if spec["title"] != "Multi-update" {
+		t.Errorf("title: %v", spec["title"])
+	}
+	if spec["priority"] != "LOW" {
+		t.Errorf("priority: %v", spec["priority"])
+	}
+	if spec["scope"] != "MVP" {
+		t.Errorf("scope: %v", spec["scope"])
+	}
+	blocked, _ := spec["blocked_by"].([]any)
+	if len(blocked) != 1 || blocked[0] != "US-003" {
+		t.Errorf("blocked_by: %v", blocked)
+	}
+	if rework, _ := spec["rework"].(bool); !rework {
+		t.Error("expected rework=true")
+	}
+}
+
+func TestSpecUpdate_EmptyPatchRejected(t *testing.T) {
+	newProject(t)
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	// YAML with no fields (empty document).
+	patchFile := writeInputFile(t, "empty.yaml", "")
+	res := runCLI(t, "", "spec", "update", "US-001", "--file", patchFile)
+	_, code := decodeError(t, res)
+	if code != iox.CodeInvalidInput {
+		t.Fatalf("expected E_INVALID_INPUT for empty patch, got %s", code)
+	}
+}
+
+func TestSpecUpdate_MissingFileRejected(t *testing.T) {
+	newProject(t)
+	res := runCLI(t, "", "spec", "update", "US-001")
+	_, code := decodeError(t, res)
+	if code != iox.CodeInvalidInput {
+		t.Fatalf("expected E_INVALID_INPUT for missing --file, got %s", code)
+	}
+}
+
 func TestVersionCommand(t *testing.T) {
 	res := runCLI(t, "", "version")
 	if res.exit != 0 {

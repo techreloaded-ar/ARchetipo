@@ -169,6 +169,7 @@ ARchetipo usa una CLI deterministica scritta in Go, `archetipo`, per persistenza
 | `archetipo spec start US-001` | Porta una spec pianificata in `IN PROGRESS`. |
 | `archetipo spec review US-001 [--file note.md]` | Porta una spec in `REVIEW` e può allegare un commento finale. |
 | `archetipo spec request-changes US-001 --file feedback.json` | Rimanda una spec in `REVIEW` a `TODO` con feedback di rework strutturato aggiunto al corpo. |
+| `archetipo spec update US-001 --file patch.yaml` | Applica una patch parziale (title, priority, points, scope, blocked_by, body, epic, rework) a una spec esistente. Supportato su tutti i connector. |
 | `archetipo spec integrate US-001` | Fonde il branch worktree di una spec approvata nel base, pulisce e la marca `DONE` (workflow worktree). |
 | `archetipo task done US-001 TASK-01` | Marca un task come completato. |
 | `archetipo metrics` | Riporta l'avanzamento del backlog: totali, completamento, dettaglio per epic, WIP, rework, spec bloccate e cycle/lead time medi dalla history degli stati. |

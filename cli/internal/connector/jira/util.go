@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/specmeta"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 )
 
@@ -62,8 +63,9 @@ var (
 	taskMarkerRegexp = regexp.MustCompile(`(?m)^<!-- archetipo:task (.*?) -->\s*$`)
 )
 
-// renderDescription appends the epic marker to the spec body when an epic is set.
-func renderDescription(body string, epic domain.Epic) string {
+// renderDescription appends the epic marker and the spec-meta marker
+// to the spec body when either carries data.
+func renderDescription(body string, epic domain.Epic, meta specmeta.Meta) string {
 	out := strings.TrimRight(body, "\n")
 	if epic.Code != "" {
 		marker := fmt.Sprintf("<!-- archetipo:epic %s|%s -->", epic.Code, epic.Title)
@@ -72,12 +74,13 @@ func renderDescription(body string, epic domain.Epic) string {
 		}
 		out += marker
 	}
-	return out
+	// Let specmeta.Render handle the spec-meta marker (idempotent replace).
+	return specmeta.Render(out, meta)
 }
 
-// parseDescription splits a stored description into the clean body and the epic
-// it carries (empty when absent).
-func parseDescription(raw string) (body string, epic domain.Epic) {
+// parseDescription splits a stored description into the clean body, its epic
+// and its spec-meta fields. Both markers are stripped from body.
+func parseDescription(raw string) (body string, epic domain.Epic, meta specmeta.Meta) {
 	m := epicMarkerRegexp.FindStringSubmatch(raw)
 	if m != nil {
 		parts := strings.SplitN(m[1], "|", 2)
@@ -86,8 +89,10 @@ func parseDescription(raw string) (body string, epic domain.Epic) {
 			epic.Title = strings.TrimSpace(parts[1])
 		}
 	}
-	body = strings.TrimSpace(epicMarkerRegexp.ReplaceAllString(raw, ""))
-	return body, epic
+	// Strip the epic marker first, then let specmeta do its own stripping.
+	stripped := strings.TrimSpace(epicMarkerRegexp.ReplaceAllString(raw, ""))
+	body, meta = specmeta.Parse(stripped)
+	return body, epic, meta
 }
 
 // renderTaskDescription appends the task marker (type + dependencies) to a

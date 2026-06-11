@@ -312,6 +312,18 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 			if patch.Epic != nil {
 				c.specs[i].Epic = *patch.Epic
 			}
+			if patch.Branch != nil {
+				c.specs[i].Branch = *patch.Branch
+			}
+			if patch.Worktree != nil {
+				c.specs[i].Worktree = *patch.Worktree
+			}
+			if patch.ForkBase != nil {
+				c.specs[i].ForkBase = *patch.ForkBase
+			}
+			if patch.Rework != nil {
+				c.specs[i].Rework = *patch.Rework
+			}
 			return domain.WriteResult{OK: true, Refs: []domain.Ref{{Code: c.specs[i].Code}}}, nil
 		}
 	}
