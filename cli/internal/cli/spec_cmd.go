@@ -42,6 +42,7 @@ func newSpecCmd(s streams) *cobra.Command {
 		newSpecRequestChangesCmd(s),
 		newSpecIntegrateCmd(s),
 		newSpecMoveCmd(s),
+		newSpecUpdateCmd(s),
 	)
 	return root
 }
@@ -612,6 +613,61 @@ func isValidMoveTarget(t string) bool {
 		}
 	}
 	return false
+}
+
+func newSpecUpdateCmd(s streams) *cobra.Command {
+	var filePath string
+	cmd := &cobra.Command{
+		Use:   "update US-XXX",
+		Short: "Apply a partial patch to an existing spec",
+		Long: "Reads a YAML or JSON payload from --file (a domain.SpecUpdate partial patch) " +
+			"and applies only the fields present in the payload. Fields absent in the " +
+			"payload are left untouched. Use --file - to read from stdin. " +
+			"Example payload:\n" +
+			"  title: Nuovo titolo\n" +
+			"  priority: HIGH\n" +
+			"  scope: MVP\n" +
+			"  points: 5\n" +
+			"  body: |\n" +
+			"    ## Spec\n    Updated body.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ref := strings.TrimSpace(args[0])
+			if ref == "" {
+				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
+			}
+			if filePath == "" {
+				return errInvalidUsage("missing input file", "pass --file path/to/patch.yaml or --file -")
+			}
+			var patch domain.SpecUpdate
+			if err := readStructuredInput(s.in, filePath, &patch); err != nil {
+				return err
+			}
+			if isEmptyPatch(patch) {
+				return errInvalidUsage("empty patch payload", "provide at least one field to update (e.g. title, priority, points, scope, body)")
+			}
+			return withConnector(cmd, s, "write_result", func(ctx context.Context, c connector.Connector) (any, error) {
+				return c.UpdateSpec(ctx, ref, patch)
+			})
+		},
+	}
+	cmd.Flags().StringVar(&filePath, "file", "", "path to a YAML or JSON payload file, or - for stdin")
+	return cmd
+}
+
+// isEmptyPatch returns true when every pointer field in the patch is nil.
+func isEmptyPatch(p domain.SpecUpdate) bool {
+	return p.Title == nil &&
+		p.Priority == nil &&
+		p.Points == nil &&
+		p.Scope == nil &&
+		p.BlockedBy == nil &&
+		p.Body == nil &&
+		p.Epic == nil &&
+		p.Branch == nil &&
+		p.Worktree == nil &&
+		p.ForkBase == nil &&
+		p.Rework == nil
 }
 
 // transitionWithValidation enforces the idempotent + validated transition rules

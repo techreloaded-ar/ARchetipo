@@ -259,21 +259,21 @@ type MockupEntry struct {
 // at the zero value). Connectors must only touch fields whose pointer is
 // non-nil and leave the rest untouched.
 type SpecUpdate struct {
-	Title     *string   `json:"title,omitempty"`
-	Priority  *Priority `json:"priority,omitempty"`
-	Points    *int      `json:"points,omitempty"`
-	Scope     *Scope    `json:"scope,omitempty"`
-	BlockedBy *[]string `json:"blocked_by,omitempty"`
-	Body      *string   `json:"body,omitempty"`
-	Epic      *Epic     `json:"epic,omitempty"`
+	Title     *string   `json:"title,omitempty" yaml:"title,omitempty"`
+	Priority  *Priority `json:"priority,omitempty" yaml:"priority,omitempty"`
+	Points    *int      `json:"points,omitempty" yaml:"points,omitempty"`
+	Scope     *Scope    `json:"scope,omitempty" yaml:"scope,omitempty"`
+	BlockedBy *[]string `json:"blocked_by,omitempty" yaml:"blocked_by,omitempty"`
+	Body      *string   `json:"body,omitempty" yaml:"body,omitempty"`
+	Epic      *Epic     `json:"epic,omitempty" yaml:"epic,omitempty"`
 	// Branch, Worktree and ForkBase track the git worktree the spec is
 	// implemented on. Set by `archetipo spec start` (worktree workflow). The
 	// github connector ignores them.
-	Branch   *string `json:"branch,omitempty"`
-	Worktree *string `json:"worktree,omitempty"`
-	ForkBase *string `json:"fork_base,omitempty"`
+	Branch   *string `json:"branch,omitempty" yaml:"branch,omitempty"`
+	Worktree *string `json:"worktree,omitempty" yaml:"worktree,omitempty"`
+	ForkBase *string `json:"fork_base,omitempty" yaml:"fork_base,omitempty"`
 	// Rework toggles the rework marker (see Spec.Rework).
-	Rework *bool `json:"rework,omitempty"`
+	Rework *bool `json:"rework,omitempty" yaml:"rework,omitempty"`
 }
 
 // WorktreeConfig mirrors the optional `worktree:` section of

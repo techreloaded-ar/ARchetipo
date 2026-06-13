@@ -10,6 +10,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/specmeta"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
@@ -98,7 +99,7 @@ func (c *Connector) ReadPlanBody(ctx context.Context, specCode string) (string, 
 	if err := c.do(ctx, "GET", "/rest/api/3/issue/"+key+"?fields=description", nil, &issue); err != nil {
 		return "", err
 	}
-	desc, _ := parseDescription(c.decodeFields(issue).Description)
+	desc, _, _ := parseDescription(c.decodeFields(issue).Description)
 	idx := strings.Index(desc, "\n---\n")
 	if idx == -1 {
 		return "", nil
@@ -425,7 +426,15 @@ func (c *Connector) createSpecs(ctx context.Context, specs []domain.Spec) (domai
 			"issuetype": map[string]string{"name": c.storyType()},
 			"labels":    c.specLabels(s),
 		}
-		if desc := renderDescription(s.Body, s.Epic); desc != "" {
+		meta := specmeta.Meta{
+			Scope:     string(s.Scope),
+			BlockedBy: append([]string(nil), s.BlockedBy...),
+			Branch:    s.Branch,
+			Worktree:  s.Worktree,
+			ForkBase:  s.ForkBase,
+			Rework:    s.Rework,
+		}
+		if desc := renderDescription(s.Body, s.Epic, meta); desc != "" {
 			fields["description"] = adfFromText(desc)
 		}
 		if pr := c.priorityName(s.Priority); pr != "" {
@@ -572,13 +581,27 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 	if err != nil {
 		return domain.WriteResult{}, err
 	}
-	// Read the current issue so partial body/epic edits can be merged into the
-	// stored description (which carries the epic marker).
+	// Read the current issue so partial body/epic/metadata edits can be merged
+	// into the stored description (which carries both markers).
 	var issue jiraIssue
 	if err := c.do(ctx, "GET", "/rest/api/3/issue/"+key+"?fields="+c.specFields(), nil, &issue); err != nil {
 		return domain.WriteResult{}, err
 	}
 	cur := c.specFromIssue(issue)
+
+	// Build the current meta from the spec (mirrors specFromIssue round-trip).
+	meta := specmeta.Meta{
+		Scope:     string(cur.Scope),
+		BlockedBy: append([]string(nil), cur.BlockedBy...),
+		Branch:    cur.Branch,
+		Worktree:  cur.Worktree,
+		ForkBase:  cur.ForkBase,
+		Rework:    cur.Rework,
+	}
+	body := cur.Body
+	epic := cur.Epic
+	descChanged := false
+
 	fields := map[string]any{}
 	if patch.Title != nil {
 		fields["summary"] = cur.Code + ": " + *patch.Title
@@ -591,17 +614,41 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 	if patch.Points != nil && c.jira.PointsField != "" {
 		fields[c.jira.PointsField] = *patch.Points
 	}
-	body := cur.Body
-	epic := cur.Epic
 	if patch.Body != nil {
 		body = *patch.Body
+		descChanged = true
 	}
 	if patch.Epic != nil {
 		epic = *patch.Epic
 		fields["labels"] = c.specLabels(domain.Spec{Epic: epic})
+		descChanged = true
 	}
-	if patch.Body != nil || patch.Epic != nil {
-		fields["description"] = adfFromText(renderDescription(body, epic))
+	if patch.Scope != nil {
+		meta.Scope = string(*patch.Scope)
+		descChanged = true
+	}
+	if patch.BlockedBy != nil {
+		meta.BlockedBy = append([]string(nil), (*patch.BlockedBy)...)
+		descChanged = true
+	}
+	if patch.Branch != nil {
+		meta.Branch = *patch.Branch
+		descChanged = true
+	}
+	if patch.Worktree != nil {
+		meta.Worktree = *patch.Worktree
+		descChanged = true
+	}
+	if patch.ForkBase != nil {
+		meta.ForkBase = *patch.ForkBase
+		descChanged = true
+	}
+	if patch.Rework != nil {
+		meta.Rework = *patch.Rework
+		descChanged = true
+	}
+	if descChanged {
+		fields["description"] = adfFromText(renderDescription(body, epic, meta))
 	}
 	if len(fields) == 0 {
 		return domain.WriteResult{OK: true, Refs: []domain.Ref{{Code: cur.Code, URL: c.browseURL(key)}}}, nil
@@ -719,7 +766,7 @@ func (c *Connector) decodeFields(it jiraIssue) knownFields {
 
 func (c *Connector) specFromIssue(it jiraIssue) domain.Spec {
 	f := c.decodeFields(it)
-	body, epic := parseDescription(f.Description)
+	body, epic, meta := parseDescription(f.Description)
 	status := domain.StatusTodo
 	if f.Status != nil {
 		status = c.statusFromJira(f.Status.Name)
@@ -737,15 +784,21 @@ func (c *Connector) specFromIssue(it jiraIssue) domain.Spec {
 		}
 	}
 	return domain.Spec{
-		Code:     codeFromSummary(f.Summary),
-		Title:    titleAfterCode(f.Summary),
-		Epic:     epic,
-		Priority: priority,
-		Points:   c.pointsFromFields(it.Fields),
-		Status:   status,
-		Body:     body,
-		Ref:      it.Key,
-		URL:      c.browseURL(it.Key),
+		Code:      codeFromSummary(f.Summary),
+		Title:     titleAfterCode(f.Summary),
+		Epic:      epic,
+		Priority:  priority,
+		Points:    c.pointsFromFields(it.Fields),
+		Status:    status,
+		Scope:     domain.Scope(meta.Scope),
+		BlockedBy: append([]string(nil), meta.BlockedBy...),
+		Body:      body,
+		Ref:       it.Key,
+		URL:       c.browseURL(it.Key),
+		Branch:    meta.Branch,
+		Worktree:  meta.Worktree,
+		ForkBase:  meta.ForkBase,
+		Rework:    meta.Rework,
 	}
 }
 

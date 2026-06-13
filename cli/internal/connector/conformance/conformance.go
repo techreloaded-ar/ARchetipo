@@ -33,6 +33,7 @@ func Run(t *testing.T, newConn Factory) {
 	t.Run("PlanLifecycle", func(t *testing.T) { testPlanLifecycle(t, newConn(t)) })
 	t.Run("AppendSpecs", func(t *testing.T) { testAppendSpecs(t, newConn(t)) })
 	t.Run("PostCommentNoOpAllowed", func(t *testing.T) { testPostComment(t, newConn(t)) })
+	t.Run("UpdateSpec", func(t *testing.T) { testUpdateSpec(t, newConn(t)) })
 }
 
 func testInitialize(t *testing.T, c connector.Connector) {
@@ -184,6 +185,130 @@ func testPostComment(t *testing.T, c connector.Connector) {
 	}
 	if !res.OK {
 		t.Errorf("post_comment must return ok=true even when the connector is no-op")
+	}
+}
+
+func testUpdateSpec(t *testing.T, c connector.Connector) {
+	ctx := context.Background()
+	if _, err := c.SaveInitialBacklog(ctx, sampleSpecs()); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Update title and priority.
+	newTitle := "Updated Setup"
+	newPriority := domain.PriorityLow
+	res, err := c.UpdateSpec(ctx, "US-001", domain.SpecUpdate{
+		Title:    &newTitle,
+		Priority: &newPriority,
+	})
+	if err != nil {
+		t.Fatalf("update title/priority: %v", err)
+	}
+	if !res.OK {
+		t.Error("expected ok=true")
+	}
+
+	det, err := c.ReadSpecDetail(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if det.Title != newTitle {
+		t.Errorf("expected title %q, got %q", newTitle, det.Title)
+	}
+	if det.Priority != newPriority {
+		t.Errorf("expected priority %q, got %q", newPriority, det.Priority)
+	}
+	// Body and scope should be untouched.
+	if det.Body == "" {
+		t.Error("body should not be empty after partial update")
+	}
+	if det.Scope != "MVP" {
+		t.Errorf("scope should be MVP untouched, got %q", det.Scope)
+	}
+
+	// 2. Update scope, blocked_by, and rework.
+	newScope := domain.Scope("MVP")
+	newBlockedBy := []string{"US-003"}
+	newRework := true
+	res, err = c.UpdateSpec(ctx, "US-001", domain.SpecUpdate{
+		Scope:     &newScope,
+		BlockedBy: &newBlockedBy,
+		Rework:    &newRework,
+	})
+	if err != nil {
+		t.Fatalf("update scope/blocked_by/rework: %v", err)
+	}
+
+	det, err = c.ReadSpecDetail(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if det.Scope != newScope {
+		t.Errorf("expected scope %q, got %q", newScope, det.Scope)
+	}
+	if len(det.BlockedBy) != 1 || det.BlockedBy[0] != "US-003" {
+		t.Errorf("expected blocked_by [US-003], got %v", det.BlockedBy)
+	}
+	if !det.Rework {
+		t.Error("expected rework=true")
+	}
+
+	// 3. Clear blocked_by and rework (zero-value semantics).
+	emptyBlocked := []string{}
+	falseRework := false
+	res, err = c.UpdateSpec(ctx, "US-001", domain.SpecUpdate{
+		BlockedBy: &emptyBlocked,
+		Rework:    &falseRework,
+	})
+	if err != nil {
+		t.Fatalf("update clear blocked_by/rework: %v", err)
+	}
+
+	det, err = c.ReadSpecDetail(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(det.BlockedBy) != 0 {
+		t.Errorf("expected empty blocked_by, got %v", det.BlockedBy)
+	}
+	if det.Rework {
+		t.Error("expected rework=false")
+	}
+
+	// 4. Update body.
+	newBody := "## Spec\n\nUpdated body content."
+	res, err = c.UpdateSpec(ctx, "US-001", domain.SpecUpdate{Body: &newBody})
+	if err != nil {
+		t.Fatalf("update body: %v", err)
+	}
+
+	det, err = c.ReadSpecDetail(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if det.Body != newBody {
+		t.Errorf("expected body %q, got %q", newBody, det.Body)
+	}
+
+	// 5. Update epic.
+	newEpic := domain.Epic{Code: "EP-002", Title: "Security"}
+	res, err = c.UpdateSpec(ctx, "US-001", domain.SpecUpdate{Epic: &newEpic})
+	if err != nil {
+		t.Fatalf("update epic: %v", err)
+	}
+
+	det, err = c.ReadSpecDetail(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if det.Epic.Code != "EP-002" || det.Epic.Title != "Security" {
+		t.Errorf("expected epic EP-002/Security, got %s/%s", det.Epic.Code, det.Epic.Title)
+	}
+
+	// 6. Unknown spec returns precondition error.
+	_, err = c.UpdateSpec(ctx, "US-999", domain.SpecUpdate{Title: &newTitle})
+	if err == nil {
+		t.Error("expected error for unknown spec")
 	}
 }
 

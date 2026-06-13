@@ -169,6 +169,7 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 | `archetipo spec start US-001` | Moves a planned spec to `IN PROGRESS`. |
 | `archetipo spec review US-001 [--file note.md]` | Moves a spec to `REVIEW` and can attach a final comment. |
 | `archetipo spec request-changes US-001 --file feedback.json` | Sends a spec in `REVIEW` back to `TODO` with structured rework feedback appended to its body. |
+| `archetipo spec update US-001 --file patch.yaml` | Applies a partial patch (title, priority, points, scope, blocked_by, body, epic, rework) to an existing spec. All connectors supported. |
 | `archetipo spec integrate US-001` | Merges a reviewed spec's worktree branch into base, cleans up, and marks it `DONE` (worktree workflow). |
 | `archetipo task done US-001 TASK-01` | Marks one task as completed. |
 | `archetipo metrics` | Reports backlog progress: totals, completion, per-epic breakdown, WIP, rework, blocked specs, and average cycle/lead time from the recorded status history. |
