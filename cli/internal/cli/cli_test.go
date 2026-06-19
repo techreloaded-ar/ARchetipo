@@ -6,12 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/analytics"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/cli"
@@ -1706,5 +1710,584 @@ func TestDoctor_AnalyticsWithoutConfig(t *testing.T) {
 	}
 	if !strings.Contains(out, "disabled (default)") {
 		t.Fatalf("expected 'disabled (default)' in doctor output, got:\n%s", out)
+	}
+}
+
+// --- TASK-03: HTTP integration tests with httptest ---
+
+func TestAnalyticsHTTPIntegration_EndToEnd(t *testing.T) {
+	newProject(t)
+
+	var mu sync.Mutex
+	var payloads []map[string]any
+	var requestCount int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		requestCount++
+
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		ct := r.Header.Get("Content-Type")
+		if ct != "application/json" {
+			t.Errorf("expected Content-Type application/json, got %q", ct)
+		}
+
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decoding body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		payloads = append(payloads, body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	writeAnalyticsConfig(t, true, srv.URL)
+
+	// Run several CLI commands. spec list may fail without a backlog;
+	// analytics fires regardless of success/failure.
+	runCLI(t, "", "version")
+	runCLI(t, "", "config", "show")
+	runCLI(t, "", "spec", "list")
+
+	mu.Lock()
+	count := requestCount
+	mu.Unlock()
+	if count != 3 {
+		t.Fatalf("expected 3 requests, got %d", count)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	wantedCmds := map[string]bool{"version": false, "config.show": false, "spec.list": false}
+	for i, p := range payloads {
+		if p["schema"] != "archetipo.analytics/v1" {
+			t.Errorf("payload %d: expected schema='archetipo.analytics/v1', got %v", i, p["schema"])
+		}
+		if p["event"] != "command_completed" {
+			t.Errorf("payload %d: expected event='command_completed', got %v", i, p["event"])
+		}
+		cmd, _ := p["command"].(string)
+		if cmd == "" {
+			t.Errorf("payload %d: expected non-empty command", i)
+		}
+		if _, ok := wantedCmds[cmd]; ok {
+			wantedCmds[cmd] = true
+		}
+		// success must be present.
+		if _, ok := p["success"]; !ok {
+			t.Errorf("payload %d: expected success field", i)
+		}
+		// exit_code: may be omitted when 0 (omitempty), so check only when present.
+		if ec, ok := p["exit_code"].(float64); ok && ec < 0 {
+			t.Errorf("payload %d: expected exit_code >= 0, got %v", i, ec)
+		}
+		dur, _ := p["duration_ms"].(float64)
+		if dur < 0 {
+			t.Errorf("payload %d: expected duration_ms >= 0, got %v", i, dur)
+		}
+		conn, _ := p["connector"].(string)
+		if conn == "" {
+			t.Errorf("payload %d: expected non-empty connector", i)
+		}
+	}
+	for cmd, found := range wantedCmds {
+		if !found {
+			t.Errorf("expected command %q but was not received", cmd)
+		}
+	}
+}
+
+func TestAnalyticsHTTPIntegration_CommandNormalized(t *testing.T) {
+	newProject(t)
+
+	var mu sync.Mutex
+	var commands []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		cmd, _ := body["command"].(string)
+		commands = append(commands, cmd)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	writeAnalyticsConfig(t, true, srv.URL)
+
+	// config show → command should be "config.show"
+	runCLI(t, "", "config", "show")
+	// spec show with a code (will fail, analytics still fires)
+	// command should be "spec.show", NOT "spec.show.US-001"
+	runCLI(t, "", "spec", "show", "US-001")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(commands) != 2 {
+		t.Fatalf("expected 2 commands, got %d: %v", len(commands), commands)
+	}
+	if commands[0] != "config.show" {
+		t.Errorf("expected first command='config.show', got %q", commands[0])
+	}
+	if commands[1] != "spec.show" {
+		t.Errorf("expected second command='spec.show' (normalized, not 'spec.show.US-001'), got %q", commands[1])
+	}
+}
+
+// --- TASK-04: Privacy regression — forbidden fields in payload ---
+
+// analyticsDenylist is the set of fields that must NEVER appear in an
+// analytics event payload. Keep in sync with docs/analytics.md §6.
+var analyticsDenylist = map[string]string{
+	"path":              "filesystem path",
+	"cwd":               "current working directory",
+	"project_root":      "absolute project root path",
+	"repo_name":         "repository name",
+	"git_remote":        "git remote URL",
+	"hostname":          "machine hostname",
+	"username":          "user name (PII)",
+	"email":             "email address (PII)",
+	"token":             "authentication token",
+	"issue_url":         "full issue/repo URL",
+	"prd_content":       "PRD body content",
+	"spec_content":      "spec body content",
+	"plan_content":      "implementation plan body",
+	"stdin_payload":     "stdin input payload",
+	"stdout_payload":    "stdout output payload",
+	"stderr_payload":    "stderr output payload",
+	"error_message_raw": "raw error message (may contain paths)",
+}
+
+func TestAnalyticsPrivacy_NoForbiddenFields(t *testing.T) {
+	newProject(t)
+
+	var mu sync.Mutex
+	var violations []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		for key := range body {
+			if reason, forbidden := analyticsDenylist[key]; forbidden {
+				violations = append(violations, fmt.Sprintf("%s (%s)", key, reason))
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	writeAnalyticsConfig(t, true, srv.URL)
+
+	// Run a variety of commands that exercise different code paths.
+	// Some will fail (no backlog/PRD), but analytics fires regardless.
+	commands := [][]string{
+		{"version"},
+		{"config", "show"},
+		{"spec", "list"},
+		{"spec", "show", "US-001"},
+		{"metrics"},
+	}
+	for _, args := range commands {
+		runCLI(t, "", args...)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(violations) > 0 {
+		t.Errorf("forbidden fields found in analytics payload:\n%s",
+			strings.Join(violations, "\n"))
+	}
+}
+
+// TestAnalyticsPrivacy_ForbiddenFieldsAcrossAllCommands runs every known
+// CLI subcommand and checks that none of them leak forbidden fields.
+func TestAnalyticsPrivacy_ForbiddenFieldsAcrossAllCommands(t *testing.T) {
+	newProject(t)
+
+	var mu sync.Mutex
+	var violations []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		for key := range body {
+			if reason, forbidden := analyticsDenylist[key]; forbidden {
+				violations = append(violations, fmt.Sprintf("%s (%s)", key, reason))
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	// Seed a minimal project so commands that need state work.
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	planFile := writeInputFile(t, "plan.json", planJSON)
+	runCLI(t, "", "spec", "add", "--file", specsFile)
+	runCLI(t, "", "spec", "plan", "US-001", "--file", planFile)
+
+	writeAnalyticsConfig(t, true, srv.URL)
+
+	allCommands := [][]string{
+		{"version"},
+		{"config", "show"},
+		{"spec", "list"},
+		{"spec", "show", "US-001"},
+		{"spec", "next", "--status", "TODO"},
+		{"metrics"},
+		{"analytics", "status"},
+		{"analytics", "enable"},
+		{"analytics", "disable"},
+		{"task", "done", "US-001", "TASK-01"},
+	}
+	for _, args := range allCommands {
+		runCLI(t, "", args...)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(violations) > 0 {
+		t.Errorf("forbidden fields found in analytics payload:\n%s",
+			strings.Join(violations, "\n"))
+	}
+}
+
+// --- TASK-05: Resilience — unreachable / timeout endpoint ---
+
+func TestAnalyticsResilience_EndpointUnreachable(t *testing.T) {
+	// Record baseline: version output WITHOUT analytics.
+	newProject(t)
+	baseline := runCLI(t, "", "version")
+
+	// Now with analytics pointing to a closed server.
+	newProject(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	closedURL := srv.URL
+	srv.Close() // immediately close → connection refused
+
+	writeAnalyticsConfig(t, true, closedURL)
+	res := runCLI(t, "", "version")
+
+	// (a) exit code must match.
+	if res.exit != baseline.exit {
+		t.Errorf("exit code changed: baseline=%d, with-unreachable=%d", baseline.exit, res.exit)
+	}
+	// (b) stdout must match.
+	if res.stdout.String() != baseline.stdout.String() {
+		t.Errorf("stdout differs with unreachable endpoint.\nbaseline: %s\ngot:      %s",
+			baseline.stdout.String(), res.stdout.String())
+	}
+	// (c) stderr must NOT contain analytics error messages.
+	stderrStr := res.stderr.String()
+	for _, forbidden := range []string{"analytics", "telemetria", "connection refused", "timeout"} {
+		if strings.Contains(strings.ToLower(stderrStr), forbidden) {
+			t.Errorf("stderr contains analytics-related text: %q", stderrStr)
+		}
+	}
+}
+
+func TestAnalyticsResilience_MultipleCommandsWithUnreachableEndpoint(t *testing.T) {
+	// Test that CLI commands work correctly with unreachable analytics endpoint.
+	// We verify exit codes are correct and JSON envelopes are valid,
+	// regardless of analytics endpoint status.
+
+	newProject(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	closedURL := srv.URL
+	srv.Close()
+
+	writeAnalyticsConfig(t, true, closedURL)
+
+	// Commands that should succeed with exit 0.
+	// version outputs plain text (not JSON envelope).
+	res := runCLI(t, "", "version")
+	if res.exit != 0 {
+		t.Errorf("version: expected exit 0, got %d (stderr=%s)",
+			res.exit, res.stderr.String())
+	}
+	// config show should succeed.
+	res = runCLI(t, "", "config", "show")
+	if res.exit != 0 {
+		t.Errorf("config show: expected exit 0, got %d (stderr=%s)",
+			res.exit, res.stderr.String())
+	}
+	kind, _ := decodeOK(t, res)
+	if kind == "" {
+		t.Error("config show: no kind in JSON envelope")
+	}
+
+	// Commands that may fail — verify error is the expected type, not analytics.
+	res = runCLI(t, "", "spec", "show", "US-001")
+	exit, code := decodeError(t, res)
+	if exit != 4 {
+		t.Errorf("spec show US-001: expected exit=4 (E_PRECONDITION), got %d", exit)
+	}
+	if code != iox.CodePreconditionMissing {
+		t.Errorf("spec show US-001: expected code=%s, got %s", iox.CodePreconditionMissing, code)
+	}
+}
+
+// TestAnalyticsResilience_TimeoutDoesNotAlterOutput verifies that a slow
+// server (response after >2s client timeout) does not cause panics or output
+// changes. Since the analytics client has a 2s timeout, we configure the
+// server to sleep longer and verify the CLI still works correctly.
+func TestAnalyticsResilience_TimeoutDoesNotAlterOutput(t *testing.T) {
+	// Baseline: version output WITHOUT analytics.
+	newProject(t)
+	baseline := runCLI(t, "", "version")
+
+	// Analytics with a server that responds after a long delay.
+	newProject(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Sleep longer than the 2s client timeout.
+		time.Sleep(3 * time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	writeAnalyticsConfig(t, true, srv.URL)
+	res := runCLI(t, "", "version")
+
+	if res.exit != baseline.exit {
+		t.Errorf("exit code changed: baseline=%d, with-timeout=%d", baseline.exit, res.exit)
+	}
+	if res.stdout.String() != baseline.stdout.String() {
+		t.Errorf("stdout differs with timeout.\nbaseline: %s\ngot:      %s",
+			baseline.stdout.String(), res.stdout.String())
+	}
+	// No panic, no crash. Got here.
+}
+
+// --- TASK-06: Consent — disabled, init non-interactive, analytics disable ---
+
+func TestAnalyticsConsent_DisabledSendsNoEvents(t *testing.T) {
+	newProject(t)
+
+	var mu sync.Mutex
+	requestCount := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requestCount++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	// consent: false + endpoint set to server URL.
+	writeAnalyticsConfig(t, false, srv.URL)
+
+	// Run several commands.
+	commands := [][]string{
+		{"version"},
+		{"config", "show"},
+		{"spec", "list"},
+		{"analytics", "status"},
+	}
+	for _, args := range commands {
+		runCLI(t, "", args...)
+	}
+
+	mu.Lock()
+	count := requestCount
+	mu.Unlock()
+	if count != 0 {
+		t.Errorf("expected 0 analytics requests when consent=false, got %d", count)
+	}
+}
+
+func TestAnalyticsConsent_InitNonInteractiveDoesNotEnableConsent(t *testing.T) {
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+
+	// --yes skips the analytics prompt; consent must NOT be written.
+	res := runCLI(t, "", "init", "--tool", "claude", "--connector", "file", "--yes")
+	if res.exit != 0 {
+		t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+
+	raw, err := os.ReadFile(filepath.Join(".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	// The template may include a commented-out consent; the key must not
+	// appear uncommented.
+	if strings.Contains(s, "\n  consent:") {
+		t.Fatalf("expected NO uncommented consent key with --yes, got:\n%s", s)
+	}
+
+	// Verify that after init without consent, no analytics events are sent.
+	var mu sync.Mutex
+	requestCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requestCount++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	// Patch config to add endpoint but keep consent unset.
+	// Since consent key is absent, analytics is disabled by default.
+	patchConfig := `connector: file
+paths:
+  prd: docs/PRD.md
+analytics:
+  endpoint: ` + srv.URL + "\n"
+	writeConfig(t, patchConfig)
+
+	runCLI(t, "", "version")
+	runCLI(t, "", "config", "show")
+
+	mu.Lock()
+	count := requestCount
+	mu.Unlock()
+	if count != 0 {
+		t.Errorf("expected 0 analytics requests after non-interactive init, got %d", count)
+	}
+}
+
+func TestAnalyticsConsent_DisableCommandStopsEvents(t *testing.T) {
+	newProject(t)
+
+	var mu sync.Mutex
+	requestCount := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requestCount++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	// First enable analytics and verify events are sent.
+	writeAnalyticsConfig(t, true, srv.URL)
+	runCLI(t, "", "version")
+
+	mu.Lock()
+	beforeDisable := requestCount
+	mu.Unlock()
+	if beforeDisable < 1 {
+		t.Fatal("expected at least 1 analytics request before disable")
+	}
+
+	// Run analytics disable.
+	res := runCLI(t, "", "analytics", "disable")
+	if res.exit != 0 {
+		t.Fatalf("analytics disable failed: %s", res.stderr.String())
+	}
+
+	// Reset counter and run commands after disable.
+	mu.Lock()
+	requestCount = 0
+	mu.Unlock()
+
+	runCLI(t, "", "version")
+	runCLI(t, "", "config", "show")
+	runCLI(t, "", "spec", "list")
+
+	mu.Lock()
+	afterDisable := requestCount
+	mu.Unlock()
+	if afterDisable != 0 {
+		t.Errorf("expected 0 analytics requests after disable, got %d", afterDisable)
+	}
+
+	// Verify config file has consent: false.
+	raw, err := os.ReadFile(filepath.Join(".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "consent: false") {
+		t.Errorf("expected consent: false in config after disable, got:\n%s", string(raw))
+	}
+}
+
+// --- TASK-07: Documentation validation ---
+
+func TestAnalyticsDocumentation_ExistsAndComplete(t *testing.T) {
+	// Read docs/analytics.md from the project root.
+	// The test runs in a temp dir; we need to read the actual file.
+	// Use the repo root resolved from the caller path.
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Skip("cannot resolve caller path")
+	}
+	// cli/internal/cli/cli_test.go → repo root is three levels up.
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "..", ".."))
+	analyticsDoc := filepath.Join(repoRoot, "docs", "analytics.md")
+
+	content, err := os.ReadFile(analyticsDoc)
+	if err != nil {
+		t.Fatalf("docs/analytics.md not found at %s: %v", analyticsDoc, err)
+	}
+	s := string(content)
+
+	// Must mention the event type.
+	if !strings.Contains(s, "command_completed") {
+		t.Error("docs/analytics.md does not mention 'command_completed'")
+	}
+
+	// Allowed fields table must contain key fields.
+	allowedFields := []string{
+		"`schema`", "`event`", "`command`", "`version`",
+		"`os`", "`arch`", "`connector`",
+	}
+	for _, f := range allowedFields {
+		if !strings.Contains(s, f) {
+			t.Errorf("docs/analytics.md missing allowed field %s", f)
+		}
+	}
+
+	// Forbidden fields table must contain key fields.
+	forbiddenFields := []string{
+		"`path`", "`hostname`", "`username`", "`token`",
+	}
+	for _, f := range forbiddenFields {
+		if !strings.Contains(s, f) {
+			t.Errorf("docs/analytics.md missing forbidden field %s", f)
+		}
+	}
+
+	// Must contain enable/disable instructions.
+	if !strings.Contains(s, "analytics enable") {
+		t.Error("docs/analytics.md missing 'analytics enable' instruction")
+	}
+	if !strings.Contains(s, "analytics disable") {
+		t.Error("docs/analytics.md missing 'analytics disable' instruction")
+	}
+
+	// Must contain consent mechanism explanation.
+	if !strings.Contains(s, "archetipo init") {
+		t.Error("docs/analytics.md missing reference to 'archetipo init'")
+	}
+
+	// Must mention anonymous_installation_id as UUID random.
+	if !strings.Contains(s, "anonymous_installation_id") {
+		t.Error("docs/analytics.md missing 'anonymous_installation_id'")
 	}
 }
