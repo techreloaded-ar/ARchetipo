@@ -189,7 +189,12 @@ func (s *Server) handleIntegrate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if blockers := gitwt.UnintegratedBlockers(ctx, s.cfg.ProjectRoot, s.cfg.Worktree, spec, allSpecs); len(blockers) > 0 {
+	blockers, err := gitwt.UnintegratedBlockers(ctx, s.cfg.ProjectRoot, s.cfg.Worktree, spec, allSpecs)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if len(blockers) > 0 {
 		writeError(w, iox.NewConflict(fmt.Sprintf("unintegrated blockers: %s", strings.Join(blockers, ", ")), "integrate the blockers first", nil))
 		return
 	}
@@ -197,6 +202,13 @@ func (s *Server) handleIntegrate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// Clear persisted worktree metadata after a successful integrate.
+	emptyStr := ""
+	s.conn.UpdateSpec(ctx, code, domain.SpecUpdate{
+		Branch:   &emptyStr,
+		Worktree: &emptyStr,
+		ForkBase: &emptyStr,
+	}) // best-effort: ignore error, merge succeeded.
 	if _, err := s.conn.TransitionStatus(ctx, code, domain.StatusDone); err != nil {
 		writeError(w, err)
 		return

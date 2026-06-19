@@ -942,6 +942,85 @@ func TestSpecUpdate_MissingFileRejected(t *testing.T) {
 	}
 }
 
+// TestSpecStart_AfterIntegrateDependency_CreatesWorktree reproduces the bug
+// where US-002 (blocked by US-001) gets no worktree after US-001 is integrated
+// because stale branch metadata on the DONE blocker points to a deleted branch.
+func TestSpecStart_AfterIntegrateDependency_CreatesWorktree(t *testing.T) {
+	newProject(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeWorktreeConfig(t)
+	initGitMain(t)
+
+	// Two specs: US-001 (no blocker) and US-002 (blocked by US-001).
+	specs := `{"specs":[
+		{"code":"US-001","title":"First","priority":"HIGH","points":3,"status":"TODO","epic":{"code":"EP-001","title":"Epic"}},
+		{"code":"US-002","title":"Second","priority":"MEDIUM","points":2,"status":"TODO","epic":{"code":"EP-001","title":"Epic"},"blocked_by":["US-001"]}
+	]}`
+	specsFile := writeInputFile(t, "specs.json", specs)
+	planFile := writeInputFile(t, "plan.json", planJSON)
+
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "plan", "US-001", "--file", planFile); res.exit != 0 {
+		t.Fatalf("plan US-001 failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "plan", "US-002", "--file", planFile); res.exit != 0 {
+		t.Fatalf("plan US-002 failed: %s", res.stderr.String())
+	}
+
+	// Start US-001 and commit a change in its worktree.
+	if res := runCLI(t, "", "spec", "start", "US-001"); res.exit != 0 {
+		t.Fatalf("start US-001 failed: %s", res.stderr.String())
+	}
+	wt001 := filepath.Join(".archetipo", "worktrees", "US-001")
+	if err := os.WriteFile(filepath.Join(wt001, "feature.txt"), []byte("done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, "git", "-C", wt001, "add", "feature.txt")
+	mustRun(t, "git", "-C", wt001, "commit", "-m", "implement US-001")
+
+	// Review and integrate US-001 (deletes branch and worktree).
+	if res := runCLI(t, "", "spec", "review", "US-001"); res.exit != 0 {
+		t.Fatalf("review US-001 failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "integrate", "US-001"); res.exit != 0 {
+		t.Fatalf("integrate US-001 failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+
+	// Now start US-002. It must get its own worktree, not the project root.
+	startRes := runCLI(t, "", "spec", "start", "US-002")
+	if startRes.exit != 0 {
+		t.Fatalf("start US-002 failed: stdout=%s stderr=%s", startRes.stdout.String(), startRes.stderr.String())
+	}
+	stderr := startRes.stderr.String()
+	if strings.Contains(stderr, "worktree setup skipped") {
+		t.Fatalf("unexpected worktree setup skipped warning: %s", stderr)
+	}
+
+	// Verify US-002 has its own worktree.
+	show := runCLI(t, "", "spec", "show", "US-002")
+	_, showData := decodeOK(t, show)
+	wantWorkdir := filepath.Join(root, ".archetipo", "worktrees", "US-002")
+	if showData["workdir"] != wantWorkdir {
+		t.Fatalf("expected workdir=%s, got %v", wantWorkdir, showData["workdir"])
+	}
+
+	// Also verify US-001 metadata is clean after integrate.
+	show001 := runCLI(t, "", "spec", "show", "US-001")
+	_, showData001 := decodeOK(t, show001)
+	spec001, _ := showData001["spec"].(map[string]any)
+	if spec001["branch"] != nil && spec001["branch"] != "" {
+		t.Fatalf("expected empty branch after integrate, got %v", spec001["branch"])
+	}
+	if spec001["worktree"] != nil && spec001["worktree"] != "" {
+		t.Fatalf("expected empty worktree after integrate, got %v", spec001["worktree"])
+	}
+}
+
 func TestVersionCommand(t *testing.T) {
 	res := runCLI(t, "", "version")
 	if res.exit != 0 {

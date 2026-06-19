@@ -454,13 +454,28 @@ func newSpecIntegrateCmd(s streams) *cobra.Command {
 				if err != nil {
 					return nil, err
 				}
-				if blockers := gitwt.UnintegratedBlockers(ctx, cfg.ProjectRoot, cfg.Worktree, spec, allSpecs); len(blockers) > 0 {
+				blockers, err := gitwt.UnintegratedBlockers(ctx, cfg.ProjectRoot, cfg.Worktree, spec, allSpecs)
+				if err != nil {
+					return nil, err
+				}
+				if len(blockers) > 0 {
 					return nil, iox.NewConflict(
 						fmt.Sprintf("unintegrated blockers: %s", strings.Join(blockers, ", ")),
 						"integrate the blockers before this spec", nil)
 				}
 				if err := gitwt.Integrate(ctx, cfg.ProjectRoot, cfg.Worktree, spec.Branch, spec.Worktree); err != nil {
 					return nil, err
+				}
+				// Clear persisted worktree metadata after a successful integrate
+				// so future blocker resolution does not see stale branch refs.
+				emptyStr := ""
+				if _, err := c.UpdateSpec(ctx, ref, domain.SpecUpdate{
+					Branch:   &emptyStr,
+					Worktree: &emptyStr,
+					ForkBase: &emptyStr,
+				}); err != nil {
+					// Non-fatal: the merge already succeeded.
+					fmt.Fprintf(s.err, "warning: could not clear worktree metadata: %v\n", err)
 				}
 				return c.TransitionStatus(ctx, ref, domain.StatusDone)
 			})

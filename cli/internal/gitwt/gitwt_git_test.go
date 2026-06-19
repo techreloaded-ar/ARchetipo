@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
@@ -140,6 +141,84 @@ func TestEnsureDiffIntegrate_RealGit(t *testing.T) {
 	}
 	if refExists(ctx, root, branch) {
 		t.Fatalf("branch not deleted after integrate")
+	}
+}
+
+// TestForkRef_StaleDoneBlockerBranch_RealGit reproduces the bug where a DONE
+// blocker still carries stale branch metadata after its branch was deleted by
+// integrate. ForkRef must ignore the stale branch and fork from base instead.
+func TestForkRef_StaleDoneBlockerBranch_RealGit(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	c := cfg()
+
+	if err := EnsureRepo(ctx, root, c.Base); err != nil {
+		t.Fatalf("EnsureRepo: %v", err)
+	}
+
+	// Create and integrate US-001, which deletes archetipo/US-001.
+	branch, worktreeRel, _, err := Ensure(ctx, root, c, "US-001", c.Base)
+	if err != nil {
+		t.Fatalf("Ensure US-001: %v", err)
+	}
+	worktreeAbs := filepath.Join(root, worktreeRel)
+	commitInWorktree(t, worktreeAbs, "b.txt", "hello\n", "add b")
+	if err := Integrate(ctx, root, c, branch, worktreeRel); err != nil {
+		t.Fatalf("Integrate US-001: %v", err)
+	}
+	if refExists(ctx, root, branch) {
+		t.Fatal("expected branch archetipo/US-001 to be deleted after integrate")
+	}
+
+	// Simulate stale metadata: US-001 is DONE but still records the old branch.
+	// This is what happens before the fix when Integrate doesn't clear metadata.
+	staleDone := domain.Spec{
+		Code:   "US-001",
+		Status: domain.StatusDone,
+		Branch: branch,
+	}
+	dependent := domain.Spec{
+		Code:      "US-002",
+		BlockedBy: []string{"US-001"},
+	}
+	allSpecs := []domain.Spec{staleDone, dependent}
+
+	ref, err := ForkRef(ctx, root, c, dependent, allSpecs)
+	if err != nil {
+		t.Fatalf("ForkRef with stale DONE blocker should not error, got: %v", err)
+	}
+	if ref != c.Base {
+		t.Fatalf("expected fork from base %q with stale DONE blocker, got %q", c.Base, ref)
+	}
+}
+
+// TestForkRef_DeletedBranchOnNonDoneBlocker_RealGit tests that a non-DONE blocker
+// whose branch was deleted is detected as a broken state and returns an error.
+func TestForkRef_DeletedBranchOnNonDoneBlocker_RealGit(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	c := cfg()
+
+	if err := EnsureRepo(ctx, root, c.Base); err != nil {
+		t.Fatalf("EnsureRepo: %v", err)
+	}
+
+	// US-001 has a recorded branch that doesn't actually exist in git,
+	// and US-001 is NOT DONE. This is a corrupted state.
+	brokenBlocker := domain.Spec{
+		Code:   "US-001",
+		Status: domain.StatusInProgress,
+		Branch: BranchName(c, "US-001"), // never created
+	}
+	dependent := domain.Spec{
+		Code:      "US-002",
+		BlockedBy: []string{"US-001"},
+	}
+	allSpecs := []domain.Spec{brokenBlocker, dependent}
+
+	_, err := ForkRef(ctx, root, c, dependent, allSpecs)
+	if err == nil {
+		t.Fatal("expected error for non-DONE blocker with missing branch")
 	}
 }
 

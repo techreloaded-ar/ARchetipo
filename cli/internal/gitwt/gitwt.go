@@ -116,11 +116,16 @@ func BranchName(cfg domain.WorktreeConfig, code string) string {
 // dependencies (BlockedBy):
 //   - blockers that have no branch, or whose branch is already merged into base,
 //     are considered integrated and ignored;
+//   - blockers whose recorded branch no longer exists: if DONE, treated as
+//     integrated (stale metadata after integrate); otherwise returns an error;
 //   - 0 unmerged blockers  -> fork from base;
 //   - 1 unmerged blocker   -> fork from that blocker's branch (stacking);
 //   - >=2 unmerged blockers -> E_CONFLICT (the caller must integrate/resolve first).
 func ForkRef(ctx context.Context, repoRoot string, cfg domain.WorktreeConfig, spec domain.Spec, allSpecs []domain.Spec) (string, error) {
-	unmerged := UnintegratedBlockers(ctx, repoRoot, cfg, spec, allSpecs)
+	unmerged, err := UnintegratedBlockers(ctx, repoRoot, cfg, spec, allSpecs)
+	if err != nil {
+		return "", err
+	}
 	switch len(unmerged) {
 	case 0:
 		return cfg.Base, nil
@@ -135,8 +140,10 @@ func ForkRef(ctx context.Context, repoRoot string, cfg domain.WorktreeConfig, sp
 
 // UnintegratedBlockers returns the codes of the spec's blockers whose branch
 // exists and is not yet merged into the base branch. A blocker with no recorded
-// branch is treated as already integrated.
-func UnintegratedBlockers(ctx context.Context, repoRoot string, cfg domain.WorktreeConfig, spec domain.Spec, allSpecs []domain.Spec) []string {
+// branch is treated as already integrated. A blocker whose recorded branch
+// no longer exists is treated as integrated when the blocker is DONE (stale
+// metadata after integrate); otherwise an error is returned (broken state).
+func UnintegratedBlockers(ctx context.Context, repoRoot string, cfg domain.WorktreeConfig, spec domain.Spec, allSpecs []domain.Spec) ([]string, error) {
 	byCode := make(map[string]domain.Spec, len(allSpecs))
 	for _, s := range allSpecs {
 		byCode[s.Code] = s
@@ -151,12 +158,23 @@ func UnintegratedBlockers(ctx context.Context, repoRoot string, cfg domain.Workt
 		if branch == "" {
 			continue
 		}
+		if !refExists(ctx, repoRoot, branch) {
+			// Branch was recorded but the git ref no longer exists.
+			if ok && b.Status == domain.StatusDone {
+				// DONE + missing branch → stale metadata after integrate, safe to ignore.
+				continue
+			}
+			// Non-DONE blocker with a missing branch is a broken state.
+			return nil, iox.NewConflict(
+				fmt.Sprintf("blocker %s is not DONE but its branch %q does not exist", code, branch),
+				"this may indicate stale metadata from an incomplete integrate", nil)
+		}
 		if isAncestor(ctx, repoRoot, branch, cfg.Base) {
 			continue
 		}
 		unmerged = append(unmerged, code)
 	}
-	return unmerged
+	return unmerged, nil
 }
 
 // WorktreeRel returns the conventional worktree path (relative to repoRoot) for
