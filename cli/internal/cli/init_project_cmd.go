@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
@@ -105,6 +106,35 @@ func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeY
 		}
 	}
 
+	// Prompts analytics consent BEFORE installing skills, per privacy-by-design:
+	// the user decides on telemetry before any files are written. The consent
+	// is saved after installRuntimeAssets writes the config file.
+	// --yes (non-interactive) skips the prompt entirely — consent stays nil.
+	var analyticsConsent *bool
+	if !assumeYes {
+		if cfg, cfgErr := config.Load("."); cfgErr == nil {
+			hasConsent, _ := cfg.HasAnalyticsConsent()
+			if !hasConsent {
+				fmt.Fprintln(s.out)
+				fmt.Fprintln(s.out, analyticsConsentPrompt())
+				fmt.Fprint(s.out, "\nConsenso telemetria [s/N]: ")
+				line, lErr := readLine(s.in)
+				if lErr != nil {
+					return lErr
+				}
+				ans := strings.ToLower(strings.TrimSpace(line))
+				if ans == "s" || ans == "si" || ans == "y" {
+					t := true
+					analyticsConsent = &t
+				} else {
+					// "n", Enter (default), or anything else: disable.
+					f := false
+					analyticsConsent = &f
+				}
+			}
+		}
+	}
+
 	fmt.Fprintln(s.out, "Installing...")
 	for _, t := range tools {
 		target := t.ProjectPath
@@ -129,6 +159,16 @@ func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeY
 
 	if err := installRuntimeAssets(s, runtimeDir, conn, assumeYes); err != nil {
 		return err
+	}
+
+	// Persist analytics consent after the config file is in place.
+	if analyticsConsent != nil {
+		if cfg, cfgErr := config.Load("."); cfgErr == nil {
+			cfg.Analytics.Consent = analyticsConsent
+			if saveErr := cfg.Save(); saveErr != nil {
+				_, _ = fmt.Fprintf(s.out, "  ⚠ Non è stato possibile salvare il consenso telemetria: %v\n", saveErr)
+			}
+		}
 	}
 
 	fmt.Fprintln(s.out, "Done.")
@@ -416,4 +456,13 @@ func errNonInteractiveInput(cause error) error {
 		"run non-interactively: archetipo init --tool <claude|codex|gemini|opencode|copilot|pi> --connector <file|github|jira> [--yes]",
 		cause,
 	)
+}
+
+// analyticsConsentPrompt returns the in-app consent text shown during
+// archetipo init. Mirrors the prompt defined in docs/analytics.md (US-001).
+func analyticsConsentPrompt() string {
+	return "Aiutaci a migliorare ARchetipo inviando telemetria anonima?\n" +
+		"- Nessun dato personale o di progetto viene raccolto\n" +
+		"- Puoi disabilitarla in qualsiasi momento con 'archetipo analytics disable'\n" +
+		"- Leggi docs/analytics.md per l'elenco completo dei dati inviati"
 }

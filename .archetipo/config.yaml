@@ -28,6 +28,18 @@ worktree:
   dir: .archetipo/worktrees
   branch_prefix: archetipo/
 
+# Telemetria anonima — finalità: migliorare il prodotto misurando l'uso dei
+# comandi, l'affidabilità e i tassi di errore, in forma aggregata e anonima.
+# Nessun dato personale, nessun percorso filesystem, nessun contenuto viene
+# mai raccolto. L'elenco completo dei dati inviati e delle garanzie privacy è
+# in docs/analytics.md.
+#
+# Il consenso è opt-in: nessun evento viene inviato senza il tuo esplicito
+# "sì" durante archetipo init (o con archetipo analytics enable in seguito).
+# Disattiva in qualsiasi momento con archetipo analytics disable.
+analytics:
+  # consent: false
+
 # Used only when connector == github. owner/project_number are auto-detected
 # from `gh`; the remaining keys are populated automatically by the CLI during
 # initialize_connector — leave them commented unless you need to override.

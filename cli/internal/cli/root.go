@@ -59,7 +59,7 @@ func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	cwd, cwdErr := os.Getwd()
 	if cwdErr == nil {
 		cfg, cfgErr := config.Load(cwd)
-		if cfgErr == nil && cfg.Analytics.Consent {
+		if cfgErr == nil && cfg.Analytics.Consent != nil && *cfg.Analytics.Consent {
 			if AnalyticsClientFactory != nil {
 				sender = AnalyticsClientFactory(cfg)
 			} else {
@@ -147,7 +147,7 @@ func resolveConnector() string {
 // initAnalyticsSenderCfg builds the analytics sender from the project config.
 // Returns nil when analytics is disabled.
 func initAnalyticsSenderCfg(cfg config.Config) AnalyticsSender {
-	if !cfg.Analytics.Consent {
+	if cfg.Analytics.Consent == nil || !*cfg.Analytics.Consent {
 		return nil
 	}
 	s := analytics.Settings{
