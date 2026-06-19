@@ -485,17 +485,29 @@ func newSpecIntegrateCmd(s streams) *cobra.Command {
 
 func newSpecReviewCmd(s streams) *cobra.Command {
 	var filePath string
+	var commitType string
+	var commitSummary string
 	cmd := &cobra.Command{
 		Use:   "review US-XXX",
 		Short: "Transition a spec to REVIEW; --file (or stdin) is posted as a closing comment",
 		Long: "Transitions the spec from IN PROGRESS to REVIEW and, when a non-empty body is provided " +
 			"via --file or stdin, posts it as a closing comment on the parent issue. Connectors " +
-			"without comment support silently ignore the body.",
+			"without comment support silently ignore the body.\n\n" +
+			"When the worktree workflow is active and the spec has a dirty worktree, changes are " +
+			"auto-committed before the transition. --commit-type and --commit-summary control the " +
+			"Conventional Commit subject of that auto-commit (default: chore({code}): {title}).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := strings.TrimSpace(args[0])
 			if ref == "" {
 				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
+			}
+			// Validate --commit-type early so invalid values surface before any I/O.
+			if _, err := gitwt.NormalizeCommitType(commitType); err != nil {
+				return errInvalidUsage(
+					fmt.Sprintf("invalid --commit-type %q", commitType),
+					"must be one of feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert",
+				)
 			}
 			comment, err := readRawInput(s.in, filePath)
 			if err != nil {
@@ -507,7 +519,8 @@ func newSpecReviewCmd(s streams) *cobra.Command {
 					return nil, err
 				}
 				if spec.Status != domain.StatusReview && cfg.Worktree.Enabled && spec.Branch != "" && spec.Worktree != "" {
-					if err := gitwt.CommitWorktreeChanges(ctx, cfg.ProjectRoot, spec.Worktree, spec.Code); err != nil {
+					opts := gitwt.CommitMessageOptions{Type: commitType, Summary: commitSummary}
+					if err := gitwt.CommitWorktreeChanges(ctx, cfg.ProjectRoot, spec.Worktree, spec.Code, spec.Title, opts); err != nil {
 						return nil, err
 					}
 				}
@@ -525,6 +538,8 @@ func newSpecReviewCmd(s streams) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&filePath, "file", "", "path to the closing comment, or - for stdin (default: stdin)")
+	cmd.Flags().StringVar(&commitType, "commit-type", "", "Conventional Commit type for the auto-commit (default: chore)")
+	cmd.Flags().StringVar(&commitSummary, "commit-summary", "", "summary for the auto-commit subject (default: spec title)")
 	return cmd
 }
 

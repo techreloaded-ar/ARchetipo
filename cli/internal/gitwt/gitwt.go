@@ -231,9 +231,73 @@ func Ensure(ctx context.Context, repoRoot string, cfg domain.WorktreeConfig, cod
 	return branch, worktreeRel, forkBaseSHA, nil
 }
 
+// ValidCommitTypes is the allowlist of Conventional Commit types accepted by
+// the review command's --commit-type flag.
+var ValidCommitTypes = map[string]struct{}{
+	"feat":     {},
+	"fix":      {},
+	"docs":     {},
+	"style":    {},
+	"refactor": {},
+	"perf":     {},
+	"test":     {},
+	"build":    {},
+	"ci":       {},
+	"chore":    {},
+	"revert":   {},
+}
+
+// CommitMessageOptions carries the caller's intent for the auto-commit subject
+// used by CommitWorktreeChanges.
+type CommitMessageOptions struct {
+	Type    string
+	Summary string
+}
+
+// NormalizeCommitType validates and normalizes the --commit-type value.
+//   - blank → "chore" (backward-compatible default)
+//   - valid non-blank → lowercased, trimmed value
+//   - invalid → error
+func NormalizeCommitType(raw string) (string, error) {
+	t := strings.ToLower(strings.TrimSpace(raw))
+	if t == "" {
+		return "chore", nil
+	}
+	if _, ok := ValidCommitTypes[t]; !ok {
+		return "", fmt.Errorf("invalid commit type %q: must be one of feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert", raw)
+	}
+	return t, nil
+}
+
+// sanitizeSummary collapses whitespace so the commit subject stays single-line.
+func sanitizeSummary(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// ReviewCommitMessage returns a Conventional Commit subject for the auto-commit
+// created by `archetipo spec review` when the spec has a dirty worktree.
+func ReviewCommitMessage(code string, opts CommitMessageOptions, fallbackTitle string) string {
+	typ, err := NormalizeCommitType(opts.Type)
+	if err != nil {
+		typ = "chore"
+	}
+	summary := sanitizeSummary(opts.Summary)
+	if summary == "" {
+		summary = sanitizeSummary(fallbackTitle)
+	}
+	if summary == "" {
+		summary = "prepare review"
+	}
+	return fmt.Sprintf("%s(%s): %s", typ, code, summary)
+}
+
 // CommitWorktreeChanges stages and commits any dirty or untracked changes in a
 // spec worktree so the review diff, which is branch-based, includes all files.
-func CommitWorktreeChanges(ctx context.Context, repoRoot, worktreeRel, code string) error {
+func CommitWorktreeChanges(ctx context.Context, repoRoot, worktreeRel, code, title string, opts CommitMessageOptions) error {
 	if strings.TrimSpace(worktreeRel) == "" {
 		return iox.NewPrecondition(
 			fmt.Sprintf("spec %s has no worktree path", code),
@@ -262,7 +326,8 @@ func CommitWorktreeChanges(ctx context.Context, repoRoot, worktreeRel, code stri
 			fmt.Sprintf("could not stage worktree changes for %s", code),
 			"inspect the worktree and retry `archetipo spec review`", err)
 	}
-	if _, err := runGitInDir(ctx, worktreeAbs, "commit", "-m", fmt.Sprintf("chore(%s): prepare review", code)); err != nil {
+		msg := ReviewCommitMessage(code, opts, title)
+		if _, err := runGitInDir(ctx, worktreeAbs, "commit", "-m", msg); err != nil {
 		return iox.NewConflict(
 			fmt.Sprintf("could not commit worktree changes for %s", code),
 			"inspect the worktree and retry `archetipo spec review`", err)

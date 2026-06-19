@@ -294,8 +294,19 @@ Do not end with the spec still in `{config.workflow.statuses.in_progress}`, and 
 ### PHASE 5 - Completion & Backlog Update
 
 1. Run the full required test suite one final time. If it fails, return to the fix loop and do not transition the spec.
-2. Optionally run `git status --short` under `data.workdir` for visibility, then pipe the completion summary markdown into `archetipo spec review {US-CODE}` from `data.project_root`. This single command commits any dirty/untracked worktree changes for worktree-backed specs, transitions the spec to `{config.workflow.statuses.review}`, and posts the comment on the parent issue (or silently ignores it for connectors without comment support — never branch on connector type).
-3. Confirm completion with a concise summary. See `references/output-templates.md` for the "Completion Summary" template. If non-blocking `🟡 IMPROVEMENT` items remain open, include them in the final report under an explicit optional improvements section.
+2. Choose a Conventional Commit type that describes the completed work:
+   - `feat`: new user-facing capability or behavior
+   - `fix`: bug fix
+   - `ci`: CI/CD, workflow, release automation
+   - `build`: build system, dependencies, package infrastructure
+   - `test`: tests-only changes
+   - `docs`: documentation-only changes
+   - `refactor`: code restructuring without behavior change
+   - `perf`: performance improvement
+   - `chore`: maintenance or tooling that does not fit the above
+3. Optionally run `git status --short` under `data.workdir` for visibility, then invoke `archetipo spec review {US-CODE}` from `data.project_root` with `--commit-type <type>` and, when the spec title is not specific enough, `--commit-summary "<concise summary>"`. Pipe the completion summary markdown via stdin as the closing comment. This single command commits any dirty/untracked worktree changes with a Conventional Commit subject (`<type>({US-CODE}): <summary>`), transitions the spec to `{config.workflow.statuses.review}`, and posts the comment on the parent issue (or silently ignores it for connectors without comment support — never branch on connector type).
+   - Example: `archetipo spec review US-125 --commit-type ci --commit-summary "add release workflow"`
+4. Confirm completion with a concise summary. See `references/output-templates.md` for the "Completion Summary" template. If non-blocking `🟡 IMPROVEMENT` items remain open, include them in the final report under an explicit optional improvements section.
 
 ## Edge Case Handling
 

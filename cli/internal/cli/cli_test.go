@@ -556,8 +556,131 @@ func TestSpecReview_CommitsDirtyWorktreeBeforeReview(t *testing.T) {
 	if !strings.Contains(diff, "M\thello.txt") {
 		t.Fatalf("expected review diff to include modified hello.txt, got:\n%s", diff)
 	}
-	if !strings.Contains(diff, "A\tarchetipo.txt") {
-		t.Fatalf("expected review diff to include new archetipo.txt, got:\n%s", diff)
+		if !strings.Contains(diff, "A\tarchetipo.txt") {
+			t.Fatalf("expected review diff to include new archetipo.txt, got:\n%s", diff)
+		}
+
+		// Verify default commit subject (no --commit-type / --commit-summary flags).
+		subject := mustOutput(t, "git", "-C", worktree, "log", "-1", "--pretty=%s")
+		want := "chore(US-001): First"
+		if subject != want {
+			t.Fatalf("expected commit subject %q, got %q", want, subject)
+		}
+}
+
+func TestSpecReview_CommitSubjectFeat(t *testing.T) {
+	newProject(t)
+	writeWorktreeConfig(t)
+	initGitMain(t)
+
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	planFile := writeInputFile(t, "plan.json", planJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "plan", "US-001", "--file", planFile); res.exit != 0 {
+		t.Fatalf("plan failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "start", "US-001"); res.exit != 0 {
+		t.Fatalf("start failed: %s", res.stderr.String())
+	}
+
+	worktree := filepath.Join(".archetipo", "worktrees", "US-001")
+	if err := os.WriteFile(filepath.Join(worktree, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runCLI(t, "", "spec", "review", "US-001", "--commit-type", "feat", "--commit-summary", "add invite flow")
+	if res.exit != 0 {
+		t.Fatalf("review failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	subject := mustOutput(t, "git", "-C", worktree, "log", "-1", "--pretty=%s")
+	want := "feat(US-001): add invite flow"
+	if subject != want {
+		t.Fatalf("expected commit subject %q, got %q", want, subject)
+	}
+}
+
+func TestSpecReview_CommitSubjectFixWithDifferentCode(t *testing.T) {
+	newProject(t)
+	writeWorktreeConfig(t)
+	initGitMain(t)
+
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	planFile := writeInputFile(t, "plan.json", planJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "plan", "US-002", "--file", planFile); res.exit != 0 {
+		t.Fatalf("plan failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "start", "US-002"); res.exit != 0 {
+		t.Fatalf("start failed: %s", res.stderr.String())
+	}
+
+	worktree := filepath.Join(".archetipo", "worktrees", "US-002")
+	if err := os.WriteFile(filepath.Join(worktree, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runCLI(t, "", "spec", "review", "US-002", "--commit-type", "fix", "--commit-summary", "handle expired token")
+	if res.exit != 0 {
+		t.Fatalf("review failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	subject := mustOutput(t, "git", "-C", worktree, "log", "-1", "--pretty=%s")
+	want := "fix(US-002): handle expired token"
+	if subject != want {
+		t.Fatalf("expected commit subject %q, got %q", want, subject)
+	}
+}
+
+func TestSpecReview_CommitSubjectCiWithDifferentCode(t *testing.T) {
+	newProject(t)
+	writeWorktreeConfig(t)
+	initGitMain(t)
+
+	ciJSON := `{"specs":[
+		{"code":"US-125","title":"CI Setup","priority":"MEDIUM","points":2,"status":"TODO"}
+	]}`
+	specsFile := writeInputFile(t, "specs.json", ciJSON)
+	planFile := writeInputFile(t, "plan.json", planJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "plan", "US-125", "--file", planFile); res.exit != 0 {
+		t.Fatalf("plan failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "start", "US-125"); res.exit != 0 {
+		t.Fatalf("start failed: %s", res.stderr.String())
+	}
+
+	worktree := filepath.Join(".archetipo", "worktrees", "US-125")
+	if err := os.WriteFile(filepath.Join(worktree, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runCLI(t, "", "spec", "review", "US-125", "--commit-type", "ci", "--commit-summary", "add release workflow")
+	if res.exit != 0 {
+		t.Fatalf("review failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	subject := mustOutput(t, "git", "-C", worktree, "log", "-1", "--pretty=%s")
+	want := "ci(US-125): add release workflow"
+	if subject != want {
+		t.Fatalf("expected commit subject %q, got %q", want, subject)
+	}
+}
+
+func TestSpecReview_InvalidCommitType(t *testing.T) {
+	newProject(t)
+	seedStartedWorktreeSpec(t)
+
+	res := runCLI(t, "", "spec", "review", "US-001", "--commit-type", "bogus")
+	if res.exit == 0 {
+		t.Fatal("expected non-zero exit for invalid --commit-type")
+	}
+	stderr := res.stderr.String()
+	if !strings.Contains(stderr, "E_INVALID_INPUT") {
+		t.Fatalf("expected E_INVALID_INPUT error, got: %s", stderr)
 	}
 }
 
