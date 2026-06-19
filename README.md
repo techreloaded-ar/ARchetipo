@@ -328,6 +328,36 @@ Each skill declares the references it loads and the CLI commands it uses. Turn o
 
 ---
 
+## Telemetry
+
+ARchetipo collects **anonymous, opt-in telemetry** to help improve the product. No personal data, filesystem paths, repository names, or content is ever sent.
+
+**What is collected:**
+- Command name (e.g. `spec.plan`, `init`)
+- CLI version, OS, and CPU architecture
+- Active connector (`file`, `github`)
+- Success/failure, stable error code, exit code, and duration (ms)
+- Whether the command ran in CI
+- Anonymous installation ID (random UUID v4, per-project)
+
+**What is NEVER collected:**
+- Filesystem paths, working directory, project root
+- Repository name, Git remote URL, hostname
+- Username, email, authentication tokens
+- Issue URLs, PRD/spec/plan content, stdin/stdout/stderr payloads
+
+You are asked for consent during `archetipo init`. You can disable telemetry at any time:
+
+```bash
+archetipo analytics disable
+```
+
+Or by editing `.archetipo/config.yaml` and setting `analytics.consent: false`.
+
+Full privacy details in [docs/analytics.md](docs/analytics.md).
+
+---
+
 ## License
 
 MIT © [techreloaded](https://github.com/techreloaded-ar)

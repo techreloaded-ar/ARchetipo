@@ -64,8 +64,12 @@ func newAnalyticsStatusCmd(s streams) *cobra.Command {
 				source = "project_config"
 			}
 			idPresent := cfg.Analytics.AnonymousInstallationID != ""
+			consent := false
+			if cfg.Analytics.Consent != nil {
+				consent = *cfg.Analytics.Consent
+			}
 			st := analyticsStatus{
-				Enabled:                        cfg.Analytics.Consent,
+				Enabled:                        consent,
 				Source:                         source,
 				Endpoint:                       config.AnalyticsEndpoint,
 				AnonymousInstallationIDPresent: idPresent,
@@ -116,7 +120,7 @@ func setConsent(s streams, consent bool) error {
 		return iox.NewInternal("checking analytics consent", err)
 	}
 	// Idempotent no-op: the key already exists with the desired value.
-	if hasConsent && cfg.Analytics.Consent == consent {
+	if hasConsent && cfg.Analytics.Consent != nil && *cfg.Analytics.Consent == consent {
 		msg := "analytics already enabled"
 		if !consent {
 			msg = "analytics already disabled"

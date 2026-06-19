@@ -432,7 +432,7 @@ analytics:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.Analytics.Consent {
+	if c.Analytics.Consent == nil || !*c.Analytics.Consent {
 		t.Error("expected analytics.consent=true")
 	}
 	if c.Analytics.Endpoint != "https://analytics.example.com/events" {
@@ -452,7 +452,7 @@ analytics:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Analytics.Consent {
+	if c.Analytics.Consent == nil || *c.Analytics.Consent {
 		t.Error("expected analytics.consent=false")
 	}
 }
@@ -467,14 +467,115 @@ func TestAnalyticsConfigAbsentDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Analytics.Consent {
-		t.Error("expected analytics.consent default=false when section absent")
+	if c.Analytics.Consent != nil {
+		t.Error("expected analytics.consent=nil when section absent")
 	}
 	if c.Analytics.Endpoint != "" {
 		t.Errorf("expected empty endpoint default, got %q", c.Analytics.Endpoint)
 	}
 	if c.Analytics.AnonymousInstallationID != "" {
 		t.Errorf("expected empty anonymous_installation_id default, got %q", c.Analytics.AnonymousInstallationID)
+	}
+}
+
+func TestAnalyticsSaveRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	initial := `connector: file
+`
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(initial), 0o644))
+
+	// Load -> write consent -> save -> load -> verify.
+	c, err := Load(root)
+	must(t, err)
+	trueVal := true
+	c.Analytics.Consent = &trueVal
+	c.Analytics.AnonymousInstallationID = "test-uuid"
+	must(t, c.Save())
+
+	c2, err := Load(root)
+	must(t, err)
+	if c2.Analytics.Consent == nil || !*c2.Analytics.Consent {
+		t.Error("round-trip: expected consent=true")
+	}
+	if c2.Analytics.AnonymousInstallationID != "test-uuid" {
+		t.Errorf("round-trip: expected uuid, got %q", c2.Analytics.AnonymousInstallationID)
+	}
+}
+
+func TestAnalyticsSaveUpdatesExistingSection(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	initial := `connector: file
+analytics:
+  # consent explicitness
+  consent: false
+`
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(initial), 0o644))
+
+	c, err := Load(root)
+	must(t, err)
+	trueVal := true
+	c.Analytics.Consent = &trueVal
+	must(t, c.Save())
+
+	raw, err := os.ReadFile(filepath.Join(root, RelativePath))
+	must(t, err)
+	s := string(raw)
+	if !strings.Contains(s, "# consent explicitness") {
+		t.Errorf("comment lost in Save; got:\n%s", s)
+	}
+	if !strings.Contains(s, "consent: true") {
+		t.Errorf("consent not updated to true; got:\n%s", s)
+	}
+}
+
+func TestAnalyticsSaveAbsentWhenConsentNil(t *testing.T) {
+	// When Analytics.Consent is nil, Save must not inject an analytics section.
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	initial := `connector: file
+file:
+  backlog: custom.yaml
+`
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(initial), 0o644))
+
+	c, err := Load(root)
+	must(t, err)
+	c.GitHub.Owner = "acme"
+	c.GitHub.ProjectNumber = 1
+	must(t, c.Save())
+
+	raw, err := os.ReadFile(filepath.Join(root, RelativePath))
+	must(t, err)
+	s := string(raw)
+	if strings.Contains(s, "analytics:") {
+		t.Errorf("analytics section should not appear when Consent is nil; got:\n%s", s)
+	}
+	if !strings.Contains(s, "backlog: custom.yaml") {
+		t.Errorf("unrelated keys lost; got:\n%s", s)
+	}
+}
+
+func TestAnalyticsSaveBootstrapWithConsent(t *testing.T) {
+	// When the config file is missing, Save creates one. If Analytics.Consent
+	// is set, the analytics section must be included in the bootstrapped file.
+	root := t.TempDir()
+	c := Default()
+	c.ProjectRoot = root
+	c.Connector = ConnectorFile
+	falseVal := false
+	c.Analytics.Consent = &falseVal
+	must(t, c.Save())
+
+	raw, err := os.ReadFile(filepath.Join(root, RelativePath))
+	must(t, err)
+	s := string(raw)
+	if !strings.Contains(s, "analytics:") {
+		t.Errorf("bootstrap missing analytics section:\n%s", s)
+	}
+	if !strings.Contains(s, "consent: false") {
+		t.Errorf("bootstrap missing consent: false:\n%s", s)
 	}
 }
 

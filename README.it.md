@@ -304,6 +304,36 @@ Ogni skill dichiara le reference che carica e i comandi CLI che usa. Attiva la m
 
 ---
 
+## Telemetria
+
+ARchetipo raccoglie **telemetria anonima e solo con consenso esplicito** per migliorare il prodotto. Nessun dato personale, percorso filesystem, nome repository o contenuto viene mai inviato.
+
+**Cosa viene raccolto:**
+- Nome del comando (es. `spec.plan`, `init`)
+- Versione CLI, sistema operativo e architettura CPU
+- Connector attivo (`file`, `github`)
+- Successo/fallimento, codice errore stabile, exit code e durata (ms)
+- Se il comando è stato eseguito in CI
+- ID anonimo di installazione (UUID v4 casuale, per-progetto)
+
+**Cosa NON viene mai raccolto:**
+- Percorsi filesystem, directory di lavoro, root di progetto
+- Nome del repository, URL del remote Git, hostname
+- Nome utente, email, token di autenticazione
+- URL di issue, contenuti di PRD/spec/piano, payload di stdin/stdout/stderr
+
+Il consenso viene richiesto durante `archetipo init`. Puoi disabilitare la telemetria in qualsiasi momento:
+
+```bash
+archetipo analytics disable
+```
+
+Oppure modificando `.archetipo/config.yaml` e impostando `analytics.consent: false`.
+
+Dettagli completi sulla privacy in [docs/analytics.md](docs/analytics.md).
+
+---
+
 ## Licenza
 
 MIT © [techreloaded](https://github.com/techreloaded-ar)

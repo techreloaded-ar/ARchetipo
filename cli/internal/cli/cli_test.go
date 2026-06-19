@@ -1517,3 +1517,194 @@ func TestAnalyticsEventHasNoRawArgs(t *testing.T) {
 		t.Errorf("expected command=spec.show, got %q", mock.event.Command)
 	}
 }
+
+// --- TASK-05: analytics consent prompt during init ---
+
+func TestInit_AnalyticsConsentYes(t *testing.T) {
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+
+	// Simulate answering "s" to the analytics consent prompt.
+	res := runCLI(t, "s\n", "init", "--tool", "claude", "--connector", "file")
+	if res.exit != 0 {
+		t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+
+	// Verify .archetipo/config.yaml contains consent: true.
+	raw, err := os.ReadFile(filepath.Join(".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "consent: true") {
+		t.Fatalf("expected consent: true, got:\n%s", s)
+	}
+}
+
+func TestInit_AnalyticsConsentNo(t *testing.T) {
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+
+	// Simulate answering "n" to the analytics consent prompt.
+	res := runCLI(t, "n\n", "init", "--tool", "claude", "--connector", "file")
+	if res.exit != 0 {
+		t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+
+	raw, err := os.ReadFile(filepath.Join(".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "consent: false") {
+		t.Fatalf("expected consent: false, got:\n%s", s)
+	}
+}
+
+func TestInit_AnalyticsConsentDefaultEnter(t *testing.T) {
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+
+	// Default (Enter) = no consent → consent: false.
+	res := runCLI(t, "\n", "init", "--tool", "claude", "--connector", "file")
+	if res.exit != 0 {
+		t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+
+	raw, err := os.ReadFile(filepath.Join(".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "consent: false") {
+		t.Fatalf("expected consent: false (default), got:\n%s", s)
+	}
+}
+
+func TestInit_AnalyticsConsentYesFlagSkipsPrompt(t *testing.T) {
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+
+	// --yes skips the analytics prompt entirely; consent is NOT written.
+	// The config template may include a commented consent line — that's fine.
+	res := runCLI(t, "", "init", "--tool", "claude", "--connector", "file", "--yes")
+	if res.exit != 0 {
+		t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+
+	raw, err := os.ReadFile(filepath.Join(".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	// The template includes a commented-out consent; the key must not
+	// appear uncommented.
+	if strings.Contains(s, "\n  consent:") {
+		t.Fatalf("expected NO uncommented consent key with --yes, got:\n%s", s)
+	}
+}
+
+func TestInit_AnalyticsConsentAlreadySetDoesNotReprompt(t *testing.T) {
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+
+	// First init: set consent to true via stdin "s".
+	res := runCLI(t, "s\n", "init", "--tool", "claude", "--connector", "file")
+	if res.exit != 0 {
+		t.Fatalf("first init failed: stderr=%s", res.stderr.String())
+	}
+
+	// Second init WITHOUT --yes: analytics prompt is skipped because consent
+	// already set; answer "n" to the config-overwrite prompt.
+	res2 := runCLI(t, "n\n", "init", "--tool", "claude", "--connector", "file")
+	if res2.exit != 0 {
+		t.Fatalf("second init failed: stderr=%s", res2.stderr.String())
+	}
+
+	raw, err := os.ReadFile(filepath.Join(".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "consent: true") {
+		t.Fatalf("expected consent: true preserved, got:\n%s", s)
+	}
+}
+
+// --- TASK-07: analytics in doctor ---
+
+func TestDoctor_AnalyticsDefault(t *testing.T) {
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+
+	// Init without analytics consent (--yes skips prompt).
+	res := runCLI(t, "", "init", "--tool", "claude", "--connector", "file", "--yes")
+	if res.exit != 0 {
+		t.Fatalf("init failed: stderr=%s", res.stderr.String())
+	}
+
+	doctorRes := runCLI(t, "", "doctor")
+	out := doctorRes.stdout.String()
+	if !strings.Contains(out, "analytics") {
+		t.Fatalf("expected analytics line in doctor output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "disabled (default)") {
+		t.Fatalf("expected 'disabled (default)' in doctor output, got:\n%s", out)
+	}
+}
+
+func TestDoctor_AnalyticsEnabled(t *testing.T) {
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+
+	// Init with analytics consent=true.
+	res := runCLI(t, "s\n", "init", "--tool", "claude", "--connector", "file")
+	if res.exit != 0 {
+		t.Fatalf("init failed: stderr=%s", res.stderr.String())
+	}
+
+	doctorRes := runCLI(t, "", "doctor")
+	out := doctorRes.stdout.String()
+	if !strings.Contains(out, "analytics") {
+		t.Fatalf("expected analytics line in doctor output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "enabled (project_config)") {
+		t.Fatalf("expected 'enabled (project_config)' in doctor output, got:\n%s", out)
+	}
+}
+
+func TestDoctor_AnalyticsDisabled(t *testing.T) {
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+
+	// Init with analytics consent=false.
+	res := runCLI(t, "n\n", "init", "--tool", "claude", "--connector", "file")
+	if res.exit != 0 {
+		t.Fatalf("init failed: stderr=%s", res.stderr.String())
+	}
+
+	doctorRes := runCLI(t, "", "doctor")
+	out := doctorRes.stdout.String()
+	if !strings.Contains(out, "analytics") {
+		t.Fatalf("expected analytics line in doctor output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "disabled (project_config)") {
+		t.Fatalf("expected 'disabled (project_config)' in doctor output, got:\n%s", out)
+	}
+}
+
+func TestDoctor_AnalyticsWithoutConfig(t *testing.T) {
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+
+	// No config at all — doctor uses defaults, shows disabled.
+	doctorRes := runCLI(t, "", "doctor")
+	// May fail because of missing installed skills; that's fine.
+	out := doctorRes.stdout.String()
+	if !strings.Contains(out, "analytics") {
+		t.Fatalf("expected analytics line in doctor output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "disabled (default)") {
+		t.Fatalf("expected 'disabled (default)' in doctor output, got:\n%s", out)
+	}
+}

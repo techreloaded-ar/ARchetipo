@@ -96,6 +96,9 @@ func runDoctorChecks(ctx context.Context) []doctorCheck {
 	} else {
 		detail := fmt.Sprintf("connector %q, project root %s", cfg.Connector, cfg.ProjectRoot)
 		checks = append(checks, doctorCheck{name: "project config", ok: true, detail: detail})
+
+		// 2b. Analytics consent.
+		checks = append(checks, analyticsDoctorCheck(cfg))
 	}
 
 	// 3. Skills installed in the project's tool directories.
@@ -269,4 +272,26 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// analyticsDoctorCheck reports the analytics consent status: enabled/disabled
+// and whether the consent comes from the project config or the built-in
+// default (nil -> disabled, default).
+func analyticsDoctorCheck(cfg config.Config) doctorCheck {
+	if cfg.Analytics.Consent == nil {
+		return doctorCheck{
+			name:   "analytics",
+			ok:     true,
+			detail: "disabled (default) — la telemetria non è attiva. Per attivarla: archetipo analytics enable",
+		}
+	}
+	state := "disabled"
+	if *cfg.Analytics.Consent {
+		state = "enabled"
+	}
+	return doctorCheck{
+		name:   "analytics",
+		ok:     true,
+		detail: fmt.Sprintf("%s (project_config)", state),
+	}
 }

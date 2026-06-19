@@ -41,7 +41,7 @@ const AnalyticsEndpoint = "segment"
 // opt-in gate; the anonymous ID is auto-generated on first consent and
 // never leaves the project. Endpoint is the HTTP URL where events are POSTed.
 type AnalyticsConfig struct {
-	Consent                 bool   `yaml:"consent" json:"consent"`
+	Consent                 *bool  `yaml:"consent,omitempty" json:"consent,omitempty"`
 	Endpoint                string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
 	AnonymousInstallationID string `yaml:"anonymous_installation_id,omitempty" json:"anonymous_installation_id,omitempty"`
 }
@@ -403,6 +403,14 @@ func (c Config) Save() error {
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: sectionKey},
 			section,
 		)
+		if c.Analytics.Consent != nil {
+			an := &yaml.Node{Kind: yaml.MappingNode}
+			upsertAnalyticsMapping(an, c.Analytics)
+			root.Content = append(root.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "analytics"},
+				an,
+			)
+		}
 		out, err := yaml.Marshal(doc)
 		if err != nil {
 			return fmt.Errorf("encoding config: %w", err)
@@ -424,6 +432,11 @@ func (c Config) Save() error {
 	}
 	if err != nil {
 		return err
+	}
+	if c.Analytics.Consent != nil {
+		if err := upsertAnalyticsSection(&doc, c.Analytics); err != nil {
+			return err
+		}
 	}
 	out, err := yaml.Marshal(&doc)
 	if err != nil {
@@ -638,6 +651,39 @@ func (c Config) HasAnalyticsConsent() (bool, error) {
 		return false, nil
 	}
 	return childNode(analytics, "consent") != nil, nil
+}
+
+// upsertAnalyticsSection finds (or creates) a top-level `analytics:` mapping
+// inside the YAML document and ensures the consent, endpoint, and
+// anonymous_installation_id keys reflect a. Other keys under `analytics:` and
+// elsewhere in the document are left untouched.
+func upsertAnalyticsSection(doc *yaml.Node, a AnalyticsConfig) error {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		doc.Kind = yaml.DocumentNode
+		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return fmt.Errorf("config root is not a mapping")
+	}
+	an := findOrCreateChildMapping(root, "analytics")
+	if an == nil {
+		key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "analytics"}
+		an = &yaml.Node{Kind: yaml.MappingNode}
+		root.Content = append(root.Content, key, an)
+	}
+	upsertAnalyticsMapping(an, a)
+	return nil
+}
+
+// upsertAnalyticsMapping writes the analytics keys that hold a value into the
+// given mapping node.
+func upsertAnalyticsMapping(an *yaml.Node, a AnalyticsConfig) {
+	if a.Consent != nil {
+		setScalarChild(an, "consent", strconv.FormatBool(*a.Consent), "!!bool")
+	}
+	setOptionalScalarChild(an, "endpoint", a.Endpoint)
+	setOptionalScalarChild(an, "anonymous_installation_id", a.AnonymousInstallationID)
 }
 
 // SetAnalyticsConsent writes analytics.consent to the project config file,
