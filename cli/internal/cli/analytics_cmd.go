@@ -1,10 +1,16 @@
 package cli
 
 import (
+	"context"
+	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/analytics/ingest"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
@@ -20,22 +26,25 @@ type analyticsStatus struct {
 func newAnalyticsCmd(s streams) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "analytics",
-		Short: "Manage telemetry consent",
-		Long:  "Enable, disable, or check telemetry consent. All changes are scoped to the current project's .archetipo/config.yaml.",
+		Short: "Gestisci telemetria: consenso e server di ingest",
+		Long:  "Sottocomandi per gestire il consenso telemetria (status, enable, disable) e avviare il server di ingest per eventi archetipo.analytics/v1 (serve).",
 	}
 	root.AddCommand(
 		newAnalyticsStatusCmd(s),
 		newAnalyticsEnableCmd(s),
 		newAnalyticsDisableCmd(s),
+		newAnalyticsServeCmd(s),
 	)
 	return root
 }
 
+// ---- Consent management (US-003, US-005) ----
+
 func newAnalyticsStatusCmd(s streams) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show telemetry consent status",
-		Long:  "Reads the project config and returns whether telemetry is enabled, where the consent was set (project_config or default), the telemetry endpoint channel name, and whether an anonymous installation ID exists.",
+		Short: "Mostra lo stato del consenso telemetria",
+		Long:  "Legge la configurazione di progetto e indica se la telemetria è abilitata, da dove proviene il consenso (project_config o default), l'endpoint di telemetria e se esiste un ID di installazione anonimo.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			cwd, err := os.Getwd()
@@ -69,8 +78,8 @@ func newAnalyticsStatusCmd(s streams) *cobra.Command {
 func newAnalyticsEnableCmd(s streams) *cobra.Command {
 	return &cobra.Command{
 		Use:   "enable",
-		Short: "Enable telemetry consent for this project",
-		Long:  "Sets analytics.consent: true in the project's .archetipo/config.yaml. Idempotent: running it again when already enabled is a no-op.",
+		Short: "Abilita il consenso telemetria per questo progetto",
+		Long:  "Imposta analytics.consent: true nel file .archetipo/config.yaml del progetto. Idempotente: eseguirlo di nuovo quando già abilitato non ha effetto.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return setConsent(s, true)
@@ -81,8 +90,8 @@ func newAnalyticsEnableCmd(s streams) *cobra.Command {
 func newAnalyticsDisableCmd(s streams) *cobra.Command {
 	return &cobra.Command{
 		Use:   "disable",
-		Short: "Disable telemetry consent for this project",
-		Long:  "Sets analytics.consent: false in the project's .archetipo/config.yaml. Idempotent: running it again when already disabled is a no-op.",
+		Short: "Disabilita il consenso telemetria per questo progetto",
+		Long:  "Imposta analytics.consent: false nel file .archetipo/config.yaml del progetto. Idempotente: eseguirlo di nuovo quando già disabilitato non ha effetto.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return setConsent(s, false)
@@ -122,4 +131,63 @@ func setConsent(s streams, consent bool) error {
 		msg = "analytics disabled"
 	}
 	return iox.WriteOK(s.out, "write_result", map[string]any{"ok": true, "message": msg})
+}
+
+// ---- Server ingest (US-006) ----
+
+func newAnalyticsServeCmd(s streams) *cobra.Command {
+	var (
+		addr       string
+		rateLimit  int
+		rateWindow time.Duration
+		storageTTL time.Duration
+	)
+
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Avvia il server di ingest analytics (POST /v1/events)",
+		Long: "Avvia un server HTTP che espone l'endpoint POST /v1/events per la raccolta " +
+			"di eventi telemetrici nel formato archetipo.analytics/v1. Il server implementa " +
+			"rate limiting, validazione strict dello schema e storage in-memory anonimizzato.\n\n" +
+			"Il server non richiede autenticazione. La protezione anti-abuso si basa su rate " +
+			"limiting e validazione schema. Gli IP dei client non sono mai persistiti.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg := ingest.ServerConfig{
+				Addr: addr,
+				RateLimit: ingest.RateLimitConfig{
+					Rate:   rateLimit,
+					Window: rateWindow,
+					Burst:  10,
+				},
+				StorageTTL: storageTTL,
+			}
+
+			srv := ingest.NewServer(cfg)
+
+			ctx, cancel := signal.NotifyContext(context.Background(),
+				os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+
+			fmt.Fprintf(s.out, "Avvio server analytics su %s\n", cfg.Addr)
+			fmt.Fprintf(s.out, "Endpoint: POST /v1/events\n")
+			fmt.Fprintf(s.out, "Rate limit: %d richieste/%s, burst 10\n", cfg.RateLimit.Rate, cfg.RateLimit.Window)
+			fmt.Fprintf(s.out, "Storage TTL: %s\n", cfg.StorageTTL)
+
+			return srv.Run(ctx, func(url string) {
+				fmt.Fprintf(s.out, "In ascolto su %s\n", url)
+			})
+		},
+	}
+
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080",
+		"Indirizzo di ascolto (es. 127.0.0.1:8080)")
+	cmd.Flags().IntVar(&rateLimit, "rate-limit", 60,
+		"Numero massimo di richieste per finestra temporale")
+	cmd.Flags().DurationVar(&rateWindow, "rate-window", 1*time.Minute,
+		"Finestra temporale per il rate limiting (es. 1m, 30s)")
+	cmd.Flags().DurationVar(&storageTTL, "storage-ttl", 168*time.Hour,
+		"TTL degli eventi in storage (es. 168h = 7 giorni)")
+
+	return cmd
 }
