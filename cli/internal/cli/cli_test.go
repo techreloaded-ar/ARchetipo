@@ -2,7 +2,9 @@ package cli_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -11,7 +13,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/analytics"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/cli"
+	cconfig "github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
@@ -1241,5 +1245,275 @@ func TestVersionFlagMatchesCommand(t *testing.T) {
 	flag := runCLI(t, "", "--version")
 	if cmd.stdout.String() != flag.stdout.String() {
 		t.Fatalf("mismatch: cmd=%q flag=%q", cmd.stdout.String(), flag.stdout.String())
+	}
+}
+
+// ---------------- Analytics instrumentation tests (US-004) ----------------
+
+// mockAnalyticsSender captures the last Event sent.
+type mockAnalyticsSender struct {
+	event    *analytics.Event
+	sendErr  error
+	called   bool
+	captured []analytics.Event
+}
+
+func (m *mockAnalyticsSender) Send(_ context.Context, e analytics.Event) error {
+	m.called = true
+	m.event = &e
+	m.captured = append(m.captured, e)
+	return m.sendErr
+}
+
+func writeAnalyticsConfig(t *testing.T, consent bool, endpoint string) {
+	t.Helper()
+	if err := os.MkdirAll(".archetipo", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yaml := fmt.Sprintf("connector: file\nanalytics:\n  consent: %v\n  endpoint: %s\n", consent, endpoint)
+	if err := os.WriteFile(filepath.Join(".archetipo", "config.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnalyticsCommandCompleted_NormalisedAndCorrect(t *testing.T) {
+	newProject(t)
+	mock := &mockAnalyticsSender{}
+	orig := cli.AnalyticsClientFactory
+	cli.AnalyticsClientFactory = func(_ cconfig.Config) cli.AnalyticsSender { return mock }
+	t.Cleanup(func() { cli.AnalyticsClientFactory = orig })
+
+	writeAnalyticsConfig(t, true, "https://example.com/events")
+
+	// version always succeeds without backlog.
+	res := runCLI(t, "", "version")
+	if res.exit != 0 {
+		t.Fatalf("version failed: stderr=%s", res.stderr.String())
+	}
+	if !mock.called {
+		t.Fatal("expected analytics sender to be called")
+	}
+	if mock.event == nil {
+		t.Fatal("expected event to be captured")
+	}
+	e := mock.event
+	if e.Command != "version" {
+		t.Errorf("expected command=version, got %q", e.Command)
+	}
+	if e.Schema != analytics.DefaultSchema {
+		t.Errorf("expected schema=%s, got %q", analytics.DefaultSchema, e.Schema)
+	}
+	if e.Event != analytics.EventCommandCompleted {
+		t.Errorf("expected event=%s, got %q", analytics.EventCommandCompleted, e.Event)
+	}
+	if e.Success == nil || !*e.Success {
+		t.Error("expected success=true")
+	}
+	if e.ExitCode != 0 {
+		t.Errorf("expected exit_code=0, got %d", e.ExitCode)
+	}
+	if e.ErrorCode != "" {
+		t.Errorf("expected empty error_code, got %q", e.ErrorCode)
+	}
+	if e.DurationMs < 0 {
+		t.Errorf("expected duration_ms >= 0, got %d", e.DurationMs)
+	}
+	if e.Connector != "file" {
+		t.Errorf("expected connector=file, got %q", e.Connector)
+	}
+}
+
+func TestAnalyticsMultipleCommandsNormalised(t *testing.T) {
+	tests := []struct {
+		args    []string
+		wantCmd string
+	}{
+		{[]string{"version"}, "version"},
+		{[]string{"config", "show"}, "config.show"},
+	}
+
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			newProject(t)
+			mock := &mockAnalyticsSender{}
+			orig := cli.AnalyticsClientFactory
+			cli.AnalyticsClientFactory = func(_ cconfig.Config) cli.AnalyticsSender { return mock }
+			t.Cleanup(func() { cli.AnalyticsClientFactory = orig })
+
+			writeAnalyticsConfig(t, true, "https://example.com/events")
+
+			res := runCLI(t, "", tt.args...)
+			if res.exit != 0 {
+				t.Fatalf("command %v failed: stderr=%s", tt.args, res.stderr.String())
+			}
+			if !mock.called {
+				t.Fatal("expected analytics sender to be called")
+			}
+			if mock.event.Command != tt.wantCmd {
+				t.Errorf("expected command=%q, got %q", tt.wantCmd, mock.event.Command)
+			}
+		})
+	}
+}
+
+func TestAnalyticsErrorCodeForTypedErrors(t *testing.T) {
+	newProject(t)
+	mock := &mockAnalyticsSender{}
+	orig := cli.AnalyticsClientFactory
+	cli.AnalyticsClientFactory = func(_ cconfig.Config) cli.AnalyticsSender { return mock }
+	t.Cleanup(func() { cli.AnalyticsClientFactory = orig })
+
+	writeAnalyticsConfig(t, true, "https://example.com/events")
+
+	// spec show without a code returns E_INVALID_INPUT.
+	res := runCLI(t, "", "spec", "show")
+	if res.exit != iox.ExitInvalidInput {
+		t.Fatalf("expected exit %d, got %d", iox.ExitInvalidInput, res.exit)
+	}
+	if !mock.called {
+		t.Fatal("expected analytics sender to be called")
+	}
+	e := mock.event
+	if e.Command != "spec.show" {
+		t.Errorf("expected command=spec.show, got %q", e.Command)
+	}
+	if e.Success == nil || *e.Success {
+		t.Error("expected success=false")
+	}
+	if e.ExitCode != iox.ExitInvalidInput {
+		t.Errorf("expected exit_code=%d, got %d", iox.ExitInvalidInput, e.ExitCode)
+	}
+	if e.ErrorCode != iox.CodeInvalidInput {
+		t.Errorf("expected error_code=%s, got %q", iox.CodeInvalidInput, e.ErrorCode)
+	}
+}
+
+func TestAnalyticsConsentDisabledNoCall(t *testing.T) {
+	newProject(t)
+	mock := &mockAnalyticsSender{}
+	orig := cli.AnalyticsClientFactory
+	cli.AnalyticsClientFactory = func(_ cconfig.Config) cli.AnalyticsSender { return mock }
+	t.Cleanup(func() { cli.AnalyticsClientFactory = orig })
+
+	writeAnalyticsConfig(t, false, "https://example.com/events")
+
+	// version command always works.
+	res := runCLI(t, "", "version")
+	if res.exit != 0 {
+		t.Fatalf("version failed: stderr=%s", res.stderr.String())
+	}
+	if mock.called {
+		t.Error("expected analytics sender NOT to be called when consent=false")
+	}
+}
+
+func TestAnalyticsConfigAbsentNoCall(t *testing.T) {
+	newProject(t)
+	mock := &mockAnalyticsSender{}
+	orig := cli.AnalyticsClientFactory
+	cli.AnalyticsClientFactory = func(_ cconfig.Config) cli.AnalyticsSender { return mock }
+	t.Cleanup(func() { cli.AnalyticsClientFactory = orig })
+
+	// No config file at all.
+	res := runCLI(t, "", "version")
+	if res.exit != 0 {
+		t.Fatalf("version failed: stderr=%s", res.stderr.String())
+	}
+	if mock.called {
+		t.Error("expected analytics sender NOT to be called when config absent")
+	}
+}
+
+func TestAnalyticsExitCodeUnchangedWithMockFailure(t *testing.T) {
+	newProject(t)
+	mock := &mockAnalyticsSender{sendErr: io.ErrUnexpectedEOF}
+	orig := cli.AnalyticsClientFactory
+	cli.AnalyticsClientFactory = func(_ cconfig.Config) cli.AnalyticsSender { return mock }
+	t.Cleanup(func() { cli.AnalyticsClientFactory = orig })
+
+	writeAnalyticsConfig(t, true, "https://example.com/events")
+
+	// version always succeeds.
+	res := runCLI(t, "", "version")
+	if res.exit != 0 {
+		t.Fatalf("expected exit 0 despite analytics failure, got %d. stderr=%s", res.exit, res.stderr.String())
+	}
+	// Must still have been called.
+	if !mock.called {
+		t.Error("analytics sender should have been called")
+	}
+}
+
+func TestAnalyticsOutputUnchangedWithMockFailure(t *testing.T) {
+	newProject(t)
+	// Record output without analytics.
+	resNoAnalytics := runCLI(t, "", "version")
+
+	// Now with analytics mock that fails.
+	mock := &mockAnalyticsSender{sendErr: io.ErrUnexpectedEOF}
+	orig := cli.AnalyticsClientFactory
+	cli.AnalyticsClientFactory = func(_ cconfig.Config) cli.AnalyticsSender { return mock }
+	t.Cleanup(func() { cli.AnalyticsClientFactory = orig })
+
+	writeAnalyticsConfig(t, true, "https://example.com/events")
+	resWithAnalytics := runCLI(t, "", "version")
+
+	// Exit codes must match.
+	if resNoAnalytics.exit != resWithAnalytics.exit {
+		t.Errorf("exit code changed: %d vs %d", resNoAnalytics.exit, resWithAnalytics.exit)
+	}
+	// Stdout must be identical.
+	if resNoAnalytics.stdout.String() != resWithAnalytics.stdout.String() {
+		t.Errorf("stdout differs with analytics failure:\nno-analytics: %s\nwith-analytics: %s",
+			resNoAnalytics.stdout.String(), resWithAnalytics.stdout.String())
+	}
+}
+
+func TestAnalyticsNotifierIndependence(t *testing.T) {
+	newProject(t)
+	mock := &mockAnalyticsSender{}
+	orig := cli.AnalyticsClientFactory
+	cli.AnalyticsClientFactory = func(_ cconfig.Config) cli.AnalyticsSender { return mock }
+	t.Cleanup(func() { cli.AnalyticsClientFactory = orig })
+
+	writeAnalyticsConfig(t, true, "https://example.com/events")
+
+	// Run version command — notifier runs but analytics should also fire.
+	res := runCLI(t, "", "version")
+	if res.exit != 0 {
+		t.Fatalf("version failed: stderr=%s", res.stderr.String())
+	}
+	// Analytics should have been called — notifier doesn't block it.
+	if !mock.called {
+		t.Error("analytics sender should be called independently of notifier")
+	}
+	// Verify the event is correct.
+	if mock.event == nil {
+		t.Fatal("expected captured event")
+	}
+	if mock.event.Command != "version" {
+		t.Errorf("expected command=version, got %q", mock.event.Command)
+	}
+}
+
+func TestAnalyticsEventHasNoRawArgs(t *testing.T) {
+	newProject(t)
+	mock := &mockAnalyticsSender{}
+	orig := cli.AnalyticsClientFactory
+	cli.AnalyticsClientFactory = func(_ cconfig.Config) cli.AnalyticsSender { return mock }
+	t.Cleanup(func() { cli.AnalyticsClientFactory = orig })
+
+	writeAnalyticsConfig(t, true, "https://example.com/events")
+
+	// Run with arguments — the event command should be normalised, not raw args.
+	res := runCLI(t, "", "spec", "show", "US-001")
+	_ = res // may fail (no backlog) but analytics still fires
+
+	if !mock.called {
+		t.Fatal("expected analytics sender to be called")
+	}
+	// Command should be the normalised dotted form, not include the code arg.
+	if mock.event.Command != "spec.show" {
+		t.Errorf("expected command=spec.show, got %q", mock.event.Command)
 	}
 }

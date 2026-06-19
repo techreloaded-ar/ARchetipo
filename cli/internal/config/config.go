@@ -36,11 +36,13 @@ const (
 // The actual endpoint URL is never exposed to the user.
 const AnalyticsEndpoint = "segment"
 
-// AnalyticsConfig holds telemetry consent and an anonymous installation
-// identifier. Consent is the user-facing opt-in gate; the anonymous ID is
-// auto-generated on first consent and never leaves the project.
+// AnalyticsConfig holds telemetry consent, an anonymous installation
+// identifier, and the analytics endpoint URL. Consent is the user-facing
+// opt-in gate; the anonymous ID is auto-generated on first consent and
+// never leaves the project. Endpoint is the HTTP URL where events are POSTed.
 type AnalyticsConfig struct {
 	Consent                 bool   `yaml:"consent" json:"consent"`
+	Endpoint                string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
 	AnonymousInstallationID string `yaml:"anonymous_installation_id,omitempty" json:"anonymous_installation_id,omitempty"`
 }
 
