@@ -1,4 +1,4 @@
-connector: file   # file | github | jira
+connector: file
 
 # Shared paths — used by every connector.
 paths:
@@ -23,7 +23,7 @@ file:
 # creates a branch + worktree per spec so the review diff is isolated to a
 # single spec and integrated back with one merge. Disabled by default.
 worktree:
-  enabled: false
+  enabled: true
   base: main
   dir: .archetipo/worktrees
   branch_prefix: archetipo/
