@@ -63,6 +63,7 @@ func newRootCmd(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 
 	s := streams{in: stdin, out: stdout, err: stderr}
 	cmd.AddCommand(
+		newAnalyticsCmd(s),
 		newConfigCmd(s),
 		newDoctorCmd(s),
 		newInitProjectCmd(s),

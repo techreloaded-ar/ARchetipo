@@ -32,6 +32,18 @@ const (
 	ConnectorJira   = "jira"
 )
 
+// AnalyticsEndpoint is the redacted channel name shown by analytics status.
+// The actual endpoint URL is never exposed to the user.
+const AnalyticsEndpoint = "segment"
+
+// AnalyticsConfig holds telemetry consent and an anonymous installation
+// identifier. Consent is the user-facing opt-in gate; the anonymous ID is
+// auto-generated on first consent and never leaves the project.
+type AnalyticsConfig struct {
+	Consent                 bool   `yaml:"consent" json:"consent"`
+	AnonymousInstallationID string `yaml:"anonymous_installation_id,omitempty" json:"anonymous_installation_id,omitempty"`
+}
+
 // Config is the parsed shape of .archetipo/config.yaml.
 type Config struct {
 	Connector string                `yaml:"connector" json:"connector"`
@@ -40,6 +52,7 @@ type Config struct {
 	File      domain.FileConfig     `yaml:"file" json:"file,omitempty"`
 	GitHub    GitHubConfig          `yaml:"github" json:"github,omitempty"`
 	Jira      JiraConfig            `yaml:"jira" json:"jira,omitempty"`
+	Analytics AnalyticsConfig       `yaml:"analytics" json:"analytics,omitempty"`
 	// Worktree is the optional per-spec git worktree workflow. Disabled by
 	// default; when enabled, `archetipo spec start` creates a branch + worktree
 	// per spec so the review diff can be isolated and integrated with one merge.
@@ -588,6 +601,99 @@ func setStringMapChild(m *yaml.Node, key string, values map[string]string) {
 		)
 	}
 	setMappingChild(m, key, child)
+}
+
+// HasAnalyticsConsent reports whether the analytics.consent key is explicitly
+// present in the config YAML, regardless of its value. Returns false when the
+// config file is missing or the key is absent.
+func (c Config) HasAnalyticsConsent() (bool, error) {
+	if c.ProjectRoot == "" {
+		return false, nil
+	}
+	path := filepath.Join(c.ProjectRoot, RelativePath)
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		// Treat parse errors as "key not present" — the caller will
+		// already have received a Load error if the config is malformed.
+		return false, nil
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return false, nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return false, nil
+	}
+	analytics := childMapping(root, "analytics")
+	if analytics == nil {
+		return false, nil
+	}
+	return childNode(analytics, "consent") != nil, nil
+}
+
+// SetAnalyticsConsent writes analytics.consent to the project config file,
+// preserving comments and all unrelated sections via yaml.Node. When the
+// config file is missing a minimal one is created.
+func (c Config) SetAnalyticsConsent(consent bool) error {
+	if c.ProjectRoot == "" {
+		return nil
+	}
+	path := filepath.Join(c.ProjectRoot, RelativePath)
+	v := strconv.FormatBool(consent)
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		// Create a minimal config file with only the analytics section.
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("creating .archetipo dir: %w", err)
+		}
+		doc := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode}}}
+		root := doc.Content[0]
+		an := &yaml.Node{Kind: yaml.MappingNode}
+		setScalarChild(an, "consent", v, "!!bool")
+		root.Content = append(root.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "analytics"},
+			an,
+		)
+		out, err := yaml.Marshal(doc)
+		if err != nil {
+			return fmt.Errorf("encoding analytics config: %w", err)
+		}
+		return os.WriteFile(path, out, 0o644)
+	}
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		doc.Kind = yaml.DocumentNode
+		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return fmt.Errorf("config root is not a mapping")
+	}
+	an := findOrCreateChildMapping(root, "analytics")
+	if an == nil {
+		key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "analytics"}
+		an = &yaml.Node{Kind: yaml.MappingNode}
+		root.Content = append(root.Content, key, an)
+	}
+	setScalarChild(an, "consent", v, "!!bool")
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return fmt.Errorf("encoding analytics config: %w", err)
+	}
+	return os.WriteFile(path, out, 0o644)
 }
 
 // find walks up from start looking for .archetipo/config.yaml. Returns the
