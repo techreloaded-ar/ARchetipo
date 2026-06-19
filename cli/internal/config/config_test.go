@@ -419,6 +419,65 @@ jira:
 	}
 }
 
+func TestAnalyticsConfigParsedFromYAML(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(`connector: file
+analytics:
+  consent: true
+  endpoint: https://analytics.example.com/events
+`), 0o644))
+
+	c, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Analytics.Consent {
+		t.Error("expected analytics.consent=true")
+	}
+	if c.Analytics.Endpoint != "https://analytics.example.com/events" {
+		t.Errorf("expected endpoint, got %q", c.Analytics.Endpoint)
+	}
+}
+
+func TestAnalyticsConfigConsentFalse(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(`connector: file
+analytics:
+  consent: false
+`), 0o644))
+
+	c, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Analytics.Consent {
+		t.Error("expected analytics.consent=false")
+	}
+}
+
+func TestAnalyticsConfigAbsentDefaults(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(`connector: file
+`), 0o644))
+
+	c, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Analytics.Consent {
+		t.Error("expected analytics.consent default=false when section absent")
+	}
+	if c.Analytics.Endpoint != "" {
+		t.Errorf("expected empty endpoint default, got %q", c.Analytics.Endpoint)
+	}
+	if c.Analytics.AnonymousInstallationID != "" {
+		t.Errorf("expected empty anonymous_installation_id default, got %q", c.Analytics.AnonymousInstallationID)
+	}
+}
+
 func TestSave_CreatesFileWithJiraSection(t *testing.T) {
 	root := t.TempDir()
 	c := Default()

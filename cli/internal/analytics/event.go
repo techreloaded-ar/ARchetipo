@@ -4,6 +4,13 @@
 // with opt-out, timeout, and network resilience built in.
 package analytics
 
+const (
+	// DefaultSchema is the analytics event schema version.
+	DefaultSchema = "archetipo.analytics/v1"
+	// EventCommandCompleted is emitted after every CLI command execution.
+	EventCommandCompleted = "command_completed"
+)
+
 // Event is a client-side analytics event whose shape is restricted
 // to the US-001 allowlist. No generic or untyped fields are permitted
 // so that the caller cannot accidentally leak arbitrary runtime data.
