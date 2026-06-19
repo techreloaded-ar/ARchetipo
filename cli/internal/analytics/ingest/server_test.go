@@ -3,7 +3,6 @@ package ingest
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -226,7 +225,7 @@ func TestServerE2E_BatchHandling(t *testing.T) {
 	}
 
 	// Invalid batch (fail-atomic).
-	badBatch := fmt.Sprintf(`[{"schema":"archetipo.analytics/v1","event":"ok"},{"schema":"archetipo.analytics/v1","event":"bad","hostname":"leak"}]`)
+	badBatch := `[{"schema":"archetipo.analytics/v1","event":"ok"},{"schema":"archetipo.analytics/v1","event":"bad","hostname":"leak"}]`
 	resp, err = client.Post(baseURL+"/v1/events", "application/json",
 		strings.NewReader(badBatch))
 	if err != nil {

@@ -10,7 +10,7 @@ type testClock struct {
 	t time.Time
 }
 
-func (c *testClock) Now() time.Time { return c.t }
+func (c *testClock) Now() time.Time          { return c.t }
 func (c *testClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 func newTestTokenBucket(cfg RateLimitConfig, start time.Time) (*TokenBucket, *testClock) {

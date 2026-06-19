@@ -11,10 +11,10 @@ import (
 
 // Server wraps an HTTP server that exposes the analytics ingest endpoint.
 type Server struct {
-	httpSrv  *http.Server
-	store    *MemoryStore
-	limiter  *TokenBucket
-	handler  *IngestHandler
+	httpSrv *http.Server
+	store   *MemoryStore
+	limiter *TokenBucket
+	handler *IngestHandler
 }
 
 // ServerConfig holds all parameters needed to start the analytics server.
