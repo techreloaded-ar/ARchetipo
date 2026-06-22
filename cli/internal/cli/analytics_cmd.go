@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,7 +21,8 @@ import (
 type analyticsStatus struct {
 	Enabled                        bool   `json:"enabled"`
 	Source                         string `json:"source"`
-	Endpoint                       string `json:"endpoint"`
+	EndpointConfigured             bool   `json:"endpoint_configured"`
+	EndpointHost                   string `json:"endpoint_host"`
 	AnonymousInstallationIDPresent bool   `json:"anonymous_installation_id_present"`
 }
 
@@ -68,10 +71,23 @@ func newAnalyticsStatusCmd(s streams) *cobra.Command {
 			if cfg.Analytics.Consent != nil {
 				consent = *cfg.Analytics.Consent
 			}
+			endpointConfigured := false
+			endpointHost := "none (local noop)"
+			if cfg.Analytics.Endpoint != "" {
+				if u, parseErr := url.Parse(cfg.Analytics.Endpoint); parseErr == nil && u.Host != "" {
+					endpointConfigured = true
+					endpointHost = u.Host
+				} else if !strings.HasPrefix(cfg.Analytics.Endpoint, "http") {
+					// Non-URL endpoint (e.g. host:port), show redacted.
+					endpointConfigured = true
+					endpointHost = redactEndpoint(cfg.Analytics.Endpoint)
+				}
+			}
 			st := analyticsStatus{
 				Enabled:                        consent,
 				Source:                         source,
-				Endpoint:                       config.AnalyticsEndpoint,
+				EndpointConfigured:             endpointConfigured,
+				EndpointHost:                   endpointHost,
 				AnonymousInstallationIDPresent: idPresent,
 			}
 			return iox.WriteOK(s.out, "analytics_status", st)
@@ -105,7 +121,8 @@ func newAnalyticsDisableCmd(s streams) *cobra.Command {
 
 // setConsent loads the project config, checks whether the desired consent
 // value is already explicitly set (idempotent no-op), and otherwise writes
-// the consent key to .archetipo/config.yaml.
+// the consent key to .archetipo/config.yaml. When enabling, it also generates
+// an anonymous installation ID if one does not already exist.
 func setConsent(s streams, consent bool) error {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -130,11 +147,38 @@ func setConsent(s streams, consent bool) error {
 	if err := cfg.SetAnalyticsConsent(consent); err != nil {
 		return iox.NewInternal("writing analytics consent", err)
 	}
+	// Generate anonymous installation ID on first enable.
+	if consent && cfg.Analytics.AnonymousInstallationID == "" {
+		cfg.Analytics.Consent = &consent // SetAnalyticsConsent already wrote consent, but cfg is stale
+		if _, idErr := cfg.EnsureAnonymousInstallationID(); idErr != nil {
+			return iox.NewInternal("generating anonymous installation id", idErr)
+		}
+	}
 	msg := "analytics enabled"
 	if !consent {
 		msg = "analytics disabled"
 	}
 	return iox.WriteOK(s.out, "write_result", map[string]any{"ok": true, "message": msg})
+}
+
+// redactEndpoint returns a privacy-safe version of the endpoint string:
+// only the host is shown (no scheme, path, or query).
+func redactEndpoint(raw string) string {
+	// Try parsing as URL first.
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return u.Host
+	}
+	// Fallback: strip scheme prefix if present.
+	s := raw
+	s = strings.TrimPrefix(s, "https://")
+	s = strings.TrimPrefix(s, "http://")
+	if idx := strings.Index(s, "/"); idx >= 0 {
+		s = s[:idx]
+	}
+	if s == "" {
+		return "unknown"
+	}
+	return s
 }
 
 // ---- Server ingest (US-006) ----

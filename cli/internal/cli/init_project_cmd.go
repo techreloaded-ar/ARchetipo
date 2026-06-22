@@ -45,6 +45,7 @@ func newInitProjectCmd(s streams) *cobra.Command {
 	var toolFlags []string
 	var connectorFlag string
 	var assumeYes bool
+	var analyticsFlag string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -53,16 +54,17 @@ func newInitProjectCmd(s streams) *cobra.Command {
 			"Also creates .archetipo/config.yaml and .archetipo/shared-runtime.md in the current directory.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runInitProject(s, toolFlags, connectorFlag, assumeYes)
+			return runInitProject(s, toolFlags, connectorFlag, assumeYes, analyticsFlag)
 		},
 	}
 	cmd.Flags().StringSliceVar(&toolFlags, "tool", nil, "Tool key(s) to install for: claude, codex, gemini, opencode, copilot, pi. Repeat or comma-separate.")
 	cmd.Flags().StringVar(&connectorFlag, "connector", "", "Connector for .archetipo/config.yaml: file|github|jira")
-	cmd.Flags().BoolVar(&assumeYes, "yes", false, "Assume 'yes' to overwrite prompts (non-interactive).")
+	cmd.Flags().BoolVar(&assumeYes, "yes", false, "Assume 'yes' to skip config-file overwrite prompt (non-interactive).")
+	cmd.Flags().StringVar(&analyticsFlag, "analytics", "", "Set analytics consent non-interactively: 'on' (enable) or 'off' (disable).")
 	return cmd
 }
 
-func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeYes bool) error {
+func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeYes bool, analyticsFlag string) error {
 	dataDir, err := discoverDataDir()
 	if err != nil {
 		return err
@@ -109,30 +111,46 @@ func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeY
 	// Prompts analytics consent BEFORE installing skills, per privacy-by-design:
 	// the user decides on telemetry before any files are written. The consent
 	// is saved after installRuntimeAssets writes the config file.
-	// --yes (non-interactive) skips the prompt entirely — consent stays nil.
+	//
+	// --analytics=on|off takes precedence and skips the prompt entirely.
+	// When --analytics is unset:
+	//   - interactive (no --yes, stdin available) → shows the prompt
+	//   - non-interactive (--yes or EOF stdin) → consent stays nil=off, no error
 	var analyticsConsent *bool
-	if !assumeYes {
-		if cfg, cfgErr := config.Load("."); cfgErr == nil {
-			hasConsent, _ := cfg.HasAnalyticsConsent()
-			if !hasConsent {
-				fmt.Fprintln(s.out)
-				fmt.Fprintln(s.out, analyticsConsentPrompt())
-				fmt.Fprint(s.out, "\nConsenso telemetria [s/N]: ")
-				line, lErr := readLine(s.in)
-				if lErr != nil {
-					return lErr
-				}
-				ans := strings.ToLower(strings.TrimSpace(line))
-				if ans == "s" || ans == "si" || ans == "y" {
-					t := true
-					analyticsConsent = &t
-				} else {
-					// "n", Enter (default), or anything else: disable.
-					f := false
-					analyticsConsent = &f
+	switch strings.ToLower(analyticsFlag) {
+	case "on":
+		t := true
+		analyticsConsent = &t
+	case "off":
+		f := false
+		analyticsConsent = &f
+	case "":
+		if !assumeYes {
+			if cfg, cfgErr := config.Load("."); cfgErr == nil {
+				hasConsent, _ := cfg.HasAnalyticsConsent()
+				if !hasConsent {
+					fmt.Fprintln(s.out)
+					fmt.Fprintln(s.out, analyticsConsentPrompt())
+					fmt.Fprint(s.out, "\nConsenso telemetria [s/N]: ")
+					line, lErr := readLine(s.in)
+					if lErr != nil {
+						return lErr
+					}
+					ans := strings.ToLower(strings.TrimSpace(line))
+					if ans == "s" || ans == "si" || ans == "y" {
+						t := true
+						analyticsConsent = &t
+					} else {
+						// "n", Enter (default), or anything else: disable.
+						f := false
+						analyticsConsent = &f
+					}
 				}
 			}
 		}
+		// else: non-interactive without --analytics → consent stays nil=off
+	default:
+		return iox.NewInvalidInput("--analytics must be 'on' or 'off'", "", nil)
 	}
 
 	fmt.Fprintln(s.out, "Installing...")
@@ -167,6 +185,11 @@ func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeY
 			cfg.Analytics.Consent = analyticsConsent
 			if saveErr := cfg.Save(); saveErr != nil {
 				_, _ = fmt.Fprintf(s.out, "  ⚠ Non è stato possibile salvare il consenso telemetria: %v\n", saveErr)
+			} else if cfg.Analytics.AnonymousInstallationID == "" && analyticsConsent != nil && *analyticsConsent {
+				// Generate anonymous installation ID on first consent.
+				if _, idErr := cfg.EnsureAnonymousInstallationID(); idErr != nil {
+					_, _ = fmt.Fprintf(s.out, "  ⚠ Non è stato possibile generare l'ID di installazione anonimo: %v\n", idErr)
+				}
 			}
 		}
 	}
@@ -453,7 +476,7 @@ func readLine(r io.Reader) (string, error) {
 func errNonInteractiveInput(cause error) error {
 	return iox.NewPrecondition(
 		"interactive input is not available",
-		"run non-interactively: archetipo init --tool <claude|codex|gemini|opencode|copilot|pi> --connector <file|github|jira> [--yes]",
+		"run non-interactively: archetipo init --tool <claude|codex|gemini|opencode|copilot|pi> --connector <file|github|jira> [--yes] [--analytics=on|off]",
 		cause,
 	)
 }

@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/uuid"
 )
 
 // Path of the config file relative to the project root.
@@ -31,10 +32,6 @@ const (
 	ConnectorGitHub = "github"
 	ConnectorJira   = "jira"
 )
-
-// AnalyticsEndpoint is the redacted channel name shown by analytics status.
-// The actual endpoint URL is never exposed to the user.
-const AnalyticsEndpoint = "segment"
 
 // AnalyticsConfig holds telemetry consent, an anonymous installation
 // identifier, and the analytics endpoint URL. Consent is the user-facing
@@ -742,6 +739,24 @@ func (c Config) SetAnalyticsConsent(consent bool) error {
 		return fmt.Errorf("encoding analytics config: %w", err)
 	}
 	return os.WriteFile(path, out, 0o644)
+}
+
+// EnsureAnonymousInstallationID returns the persisted anonymous installation
+// ID. If it is empty, a UUID v4 is generated via crypto/rand, persisted to
+// the config file via Save(), and returned.
+func (c Config) EnsureAnonymousInstallationID() (string, error) {
+	if c.Analytics.AnonymousInstallationID != "" {
+		return c.Analytics.AnonymousInstallationID, nil
+	}
+	id, err := uuid.NewV4()
+	if err != nil {
+		return "", fmt.Errorf("generating anonymous installation id: %w", err)
+	}
+	c.Analytics.AnonymousInstallationID = id
+	if err := c.Save(); err != nil {
+		return "", fmt.Errorf("persisting anonymous installation id: %w", err)
+	}
+	return id, nil
 }
 
 // find walks up from start looking for .archetipo/config.yaml. Returns the

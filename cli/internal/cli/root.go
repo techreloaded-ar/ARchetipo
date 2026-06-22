@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	// Concrete connectors register themselves via init().
 	_ "github.com/techreloaded-ar/ARchetipo/cli/internal/connector/builtin"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/uuid"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/version"
 )
 
@@ -54,19 +56,9 @@ func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	notifier.Start()
 	defer notifier.Print(stderr)
 
-	// Initialise analytics sender (best-effort, after notifier).
-	var sender AnalyticsSender
-	cwd, cwdErr := os.Getwd()
-	if cwdErr == nil {
-		cfg, cfgErr := config.Load(cwd)
-		if cfgErr == nil && cfg.Analytics.Consent != nil && *cfg.Analytics.Consent {
-			if AnalyticsClientFactory != nil {
-				sender = AnalyticsClientFactory(cfg)
-			} else {
-				sender = initAnalyticsSenderCfg(cfg)
-			}
-		}
-	}
+	// Session ID is generated once per invocation for event correlation.
+	sessionID, _ := uuid.NewV4()
+	timestamp := time.Now().UTC().Format(time.RFC3339)
 
 	// Track the leaf command executed for analytics normalization.
 	var leafCmd *cobra.Command
@@ -84,18 +76,40 @@ func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	exitCode := exitCodeFor(err)
 
+	// Build analytics sender AFTER command execution, so consent changes
+	// (e.g. analytics enable/disable) are reflected in the send decision.
+	var sender AnalyticsSender
+	cwd, cwdErr := os.Getwd()
+	if cwdErr == nil {
+		cfg, cfgErr := config.Load(cwd)
+		if cfgErr == nil && cfg.Analytics.Consent != nil && *cfg.Analytics.Consent {
+			if AnalyticsClientFactory != nil {
+				sender = AnalyticsClientFactory(cfg)
+			} else {
+				sender = initAnalyticsSenderFromConfig(cfg)
+			}
+		}
+	}
+
 	if sender != nil {
 		success := err == nil
 		event := analytics.Event{
-			Schema:     analytics.DefaultSchema,
-			Event:      analytics.EventCommandCompleted,
-			Command:    normalizeCommand(leafCmd),
-			Version:    version.Version,
-			Success:    &success,
-			ExitCode:   exitCode,
-			DurationMs: durationMs,
-			ErrorCode:  extractErrorCode(err),
-			Connector:  resolveConnector(),
+			Schema:                  analytics.DefaultSchema,
+			Event:                   analytics.EventCommandCompleted,
+			Timestamp:               timestamp,
+			Command:                 normalizeCommand(leafCmd),
+			ArchetipoVersion:        version.Version,
+			SessionID:               sessionID,
+			OS:                      runtime.GOOS,
+			Arch:                    runtime.GOARCH,
+			Success:                 &success,
+			ExitCode:                exitCode,
+			DurationMs:              durationMs,
+			ErrorCode:               extractErrorCode(err),
+			Connector:               resolveConnector(),
+			CI:                      isCI(),
+			AnonymousInstallationID: resolveAnonymousInstallationID(),
+			Args:                    extractArgs(leafCmd),
 		}
 		// Fail-silent: never alter exit code or output.
 		_ = sender.Send(context.Background(), event)
@@ -144,9 +158,9 @@ func resolveConnector() string {
 	return cfg.Connector
 }
 
-// initAnalyticsSenderCfg builds the analytics sender from the project config.
-// Returns nil when analytics is disabled.
-func initAnalyticsSenderCfg(cfg config.Config) AnalyticsSender {
+// initAnalyticsSenderFromConfig builds the analytics sender from the project
+// config. Returns nil when analytics is disabled.
+func initAnalyticsSenderFromConfig(cfg config.Config) AnalyticsSender {
 	if cfg.Analytics.Consent == nil || !*cfg.Analytics.Consent {
 		return nil
 	}
@@ -155,6 +169,30 @@ func initAnalyticsSenderCfg(cfg config.Config) AnalyticsSender {
 		Endpoint: cfg.Analytics.Endpoint,
 	}
 	return analytics.NewClient(s, nil)
+}
+
+// isCI reports whether the current environment is a CI system.
+func isCI() bool {
+	for _, v := range []string{"CI", "GITHUB_ACTIONS", "GITLAB_CI", "CIRCLECI", "JENKINS_HOME", "TRAVIS"} {
+		if os.Getenv(v) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveAnonymousInstallationID returns the anonymous installation ID from
+// the project config, or empty string when unavailable.
+func resolveAnonymousInstallationID() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	cfg, err := config.Load(cwd)
+	if err != nil {
+		return ""
+	}
+	return cfg.Analytics.AnonymousInstallationID
 }
 
 func newRootCmd(stdin io.Reader, stdout, stderr io.Writer, leafCmd **cobra.Command) *cobra.Command {

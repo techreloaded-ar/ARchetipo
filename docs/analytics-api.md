@@ -41,6 +41,7 @@ Il body può essere un **oggetto JSON singolo** oppure un **array JSON di oggett
 | `error_code` | string | | Codice errore in caso di fallimento |
 | `connector` | string | | Connector utilizzato (`file`, `github`, `jira`) |
 | `spec_code` | string | | Codice spec coinvolta (es. `"US-001"`) |
+| `args` | object | | Argomenti del comando: flag impostati e posizionali |
 | `properties` | object | | Mappa libera di proprietà aggiuntive |
 
 ### Campi vietati
@@ -163,6 +164,32 @@ curl -X POST http://localhost:8080/v1/events \
     {"schema":"archetipo.analytics/v1","event":"cli.invocation","tool":"test"},
     {"schema":"archetipo.analytics/v1","event":"spec.created","tool":"test"}
   ]'
+```
+
+**Risposta:** `202 Accepted`
+```json
+{"status":"accepted"}
+```
+
+### Evento valido con `args`
+
+```bash
+curl -X POST http://localhost:8080/v1/events \
+  -H "Content-Type: application/json" \
+  -d '{
+    "schema": "archetipo.analytics/v1",
+    "event": "command_completed",
+    "command": "spec.list",
+    "os": "darwin",
+    "arch": "arm64",
+    "archetipo_version": "1.0.0",
+    "success": true,
+    "duration_ms": 234,
+    "connector": "file",
+    "args": {
+      "status": "TODO"
+    }
+  }'
 ```
 
 **Risposta:** `202 Accepted`

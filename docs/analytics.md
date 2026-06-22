@@ -1,8 +1,8 @@
 # ARchetipo — Contratto Analytics
 
-**Versione:** 1.0
+**Versione:** 1.1
 **Schema evento:** `archetipo.analytics/v1`
-**Ultima modifica:** 2026-06-19
+**Ultima modifica:** 2026-06-22
 
 ---
 
@@ -30,20 +30,21 @@ ARchetipo raccoglie telemetria anonima con i seguenti obiettivi:
 
 La telemetria ARchetipo richiede consenso esplicito dell'utente:
 
-1. Durante `archetipo init`, l'utente vede una richiesta chiara:
+1. Durante `archetipo init` interattivo, l'utente vede una richiesta chiara:
 
    ```
    Aiutaci a migliorare ARchetipo inviando telemetria anonima?
    - Nessun dato personale o di progetto viene raccolto
    - Puoi disabilitarla in qualsiasi momento con 'archetipo analytics disable'
    - Leggi docs/analytics.md per l'elenco completo dei dati inviati
-   [Sì / No]
+   [s/N]
    ```
 
-2. Se l'utente accetta, il flag `analytics.consent` viene salvato come `true` nel `.archetipo/config.yaml` del progetto.
+2. Se l'utente accetta, il flag `analytics.consent` viene salvato come `true` nel `.archetipo/config.yaml` del progetto e viene generato un UUID v4 anonimo (`anonymous_installation_id`).
 3. Se l'utente rifiuta (o salta `init`), il flag rimane `false` (default) e **nessun evento viene inviato**.
-4. Il consenso è **per-progetto**: ogni progetto ha il proprio flag indipendente.
-5. Il consenso può essere modificato in qualsiasi momento con `archetipo analytics enable|disable` (US-002).
+4. In ambienti non interattivi (CI, pipe), si può usare il flag `--analytics=on|off` per impostare il consenso senza prompt. Il flag `--yes` riguarda solo il prompt di sovrascrittura `config.yaml`, non il consenso telemetria.
+5. Il consenso è **per-progetto**: ogni progetto ha il proprio flag indipendente.
+6. Il consenso può essere modificato in qualsiasi momento con `archetipo analytics enable|disable`.
 
 ### Esempio: sezione analytics nel `.archetipo/config.yaml`
 
@@ -69,16 +70,25 @@ Ogni evento di telemetria è un oggetto JSON con schema `archetipo.analytics/v1`
   "event": "<tipo_evento>",
   "timestamp": "<ISO 8601>",
   "command": "<sottocomando>",
-  "version": "<versione binario>",
+  "tool": "<tool_invocante>",
+  "tool_version": "<versione_tool>",
+  "archetipo_version": "<versione_binario>",
   "os": "<sistema_operativo>",
   "arch": "<architettura_cpu>",
   "connector": "<connector_in_uso>",
+  "session_id": "<UUID v4>",
   "success": true,
   "error_code": "<E_CODE>",
   "exit_code": 0,
   "duration_ms": 1234,
   "ci": false,
-  "anonymous_installation_id": "<UUID v4>"
+  "anonymous_installation_id": "<UUID v4>",
+  "spec_code": "<codice_spec>",
+  "args": {
+    "<nome_flag>": "<valore_flag>",
+    "_0": "<arg_posizionale>"
+  },
+  "properties": {}
 }
 ```
 
@@ -86,20 +96,75 @@ Ogni evento di telemetria è un oggetto JSON con schema `archetipo.analytics/v1`
 
 | Campo | Significato |
 |---|---|
-| `schema` | Versione dello schema evento. Valore fisso: `"archetipo.analytics/v1"`. Permette al backend di validare e versionare la deserializzazione. |
-| `event` | Tipo di evento. Attualmente l'unico evento è `command_completed`. Eventi futuri (es. `cli_started`) saranno aggiunti qui. |
-| `timestamp` | Data/ora dell'evento in formato ISO 8601 UTC (es. `"2026-06-19T13:00:00Z"`). Non contiene timezone locale. |
-| `command` | Sottocomando eseguito (es. `spec.plan`, `spec.show`, `config.show`). Identificatore stabile, non il comando raw. |
-| `version` | Versione del binario ARchetipo (es. `"1.2.3"`). |
-| `os` | Sistema operativo rilevato da Go (`runtime.GOOS`: `darwin`, `linux`, `windows`). |
-| `arch` | Architettura CPU rilevata da Go (`runtime.GOARCH`: `amd64`, `arm64`). |
-| `connector` | Connector in uso per questa esecuzione (`file`, `github`). |
+| `schema` | Versione dello schema evento. Valore fisso: `"archetipo.analytics/v1"`. |
+| `event` | Tipo di evento. Attualmente: `command_completed`. Eventi futuri (es. `cli_started`) saranno aggiunti qui. |
+| `timestamp` | Data/ora dell'evento in formato ISO 8601 UTC (es. `"2026-06-22T12:00:00Z"`). |
+| `command` | Sottocomando eseguito (es. `spec.plan`, `spec.show`). Identificatore stabile, non il comando raw. |
+| `tool` | Tool AI invocante (es. `claude`, `pi`). **Opzionale**: la CLI non sa quale tool l'ha invocata; riservato per uso futuro. |
+| `tool_version` | Versione del tool AI invocante. **Opzionale**, come `tool`. |
+| `archetipo_version` | Versione del binario ARchetipo (es. `"1.2.3"`). |
+| `os` | Sistema operativo (`runtime.GOOS`: `darwin`, `linux`, `windows`). |
+| `arch` | Architettura CPU (`runtime.GOARCH`: `amd64`, `arm64`). |
+| `connector` | Connector in uso (`file`, `github`, `jira`). |
+| `session_id` | UUID v4 generato per-invocazione per correlare eventi di una stessa run. |
 | `success` | `true` se il comando è terminato con exit code 0, `false` altrimenti. |
-| `error_code` | Codice errore stabile (es. `E_INVALID_INPUT`, `E_CONNECTOR`). Vuoto (`""`) se `success` è `true`. Non contiene il messaggio di errore raw. |
+| `error_code` | Codice errore stabile (es. `E_INVALID_INPUT`). Vuoto se `success` è `true`. |
 | `exit_code` | Exit code numerico del processo (0, 1, 2, 3, 4). |
 | `duration_ms` | Durata dell'esecuzione in millisecondi (intero). |
-| `ci` | `true` se l'ambiente di esecuzione è rilevato come CI (es. `CI=true`, `GITHUB_ACTIONS=true`). `false` altrimenti. |
-| `anonymous_installation_id` | UUID v4 generato localmente dopo consenso. **Opzionale**: assente (`null` o campo omesso) se il consenso non è stato dato. |
+| `ci` | `true` se rilevato ambiente CI (es. `CI=true`, `GITHUB_ACTIONS=true`). |
+| `anonymous_installation_id` | UUID v4 generato al primo consenso. Presente solo se `analytics.consent` è `true`. |
+| `spec_code` | Codice spec (es. `US-001`). **Riservato**: non popolato da `command_completed`; per eventi futuri di spec-lifecycle. |
+| `args` | Argomenti del comando: flag impostati dall'utente e argomenti posizionali. **Vedi sezione dedicata sotto.** |
+| `properties` | Mappa opzionale per dati estensibili (es. `{"plan_size": 5}`). Soggetta a revisione privacy. |
+
+### Campo `args`
+
+Il campo `args` è una mappa opzionale che cattura gli argomenti con cui il comando è stato invocato. Il campo è omesso quando il comando non ha ricevuto argomenti.
+
+**Formato:** ogni chiave è il nome di un flag o la posizione di un argomento posizionale.
+
+| Tipo chiave | Formato | Esempio |
+|---|---|---|
+| Flag safe (valore reale) | `"<nome_flag>": <valore>` | `"status": "TODO"` |
+| Flag content-sensitive (solo presenza) | `"<nome_flag>": true` | `"file": true` |
+| StringSlice | `"<nome_flag>": ["a", "b"]` | `"tool": ["claude", "pi"]` |
+| Argomento posizionale | `"_<indice>": "<valore>"` | `"_0": "US-005"` |
+
+**Flag content-sensitive:** i flag `--file` e `--commit-summary` i cui valori conterrebbero path filesystem o testo libero dell'utente registrano solo la presenza (`true`), mai il valore effettivo.
+
+**Flag safe:** tutti gli altri flag registrano il loro valore reale. Esempi: `--status`, `--to`, `--tool`, `--connector`, `--check`, `--yes`, `--port`, `--commit-type`, ecc.
+
+**Argomenti posizionali:** registrati con chiavi `_0`, `_1`, `_2`... (es. `spec plan US-005` produce `"_0": "US-005"`).
+
+**Esempio:** `archetipo spec list --status TODO` produce:
+```json
+{
+  "args": {
+    "status": "TODO"
+  }
+}
+```
+
+**Esempio con flag content-sensitive:** `archetipo spec plan US-005 --file plan.yaml` produce:
+```json
+{
+  "args": {
+    "file": true,
+    "_0": "US-005"
+  }
+}
+```
+
+**Esempio con più argomenti:** `archetipo init --tool claude,pi --connector github --analytics on` produce:
+```json
+{
+  "args": {
+    "tool": ["claude", "pi"],
+    "connector": "github",
+    "analytics": "on"
+  }
+}
+```
 
 ---
 
@@ -119,17 +184,24 @@ I seguenti campi sono gli unici ammessi nel payload di un evento `archetipo.anal
 |---|---|---|
 | `schema` | `string` | Versione dello schema evento. Valore fisso: `"archetipo.analytics/v1"`. |
 | `event` | `string` | Tipo di evento. Es. `"command_completed"`. |
-| `command` | `string` | Sottocomando eseguito. Identificatore stabile (es. `"spec.plan"`, `"spec.show"`). |
-| `version` | `string` | Versione del binario ARchetipo (es. `"1.2.3"`). |
+| `timestamp` | `string` | Timestamp ISO 8601 UTC. |
+| `command` | `string` | Sottocomando eseguito (es. `"spec.plan"`, `"spec.show"`). |
+| `tool` | `string` (opzionale) | Tool AI invocante. Riservato, non popolato dalla CLI. |
+| `tool_version` | `string` (opzionale) | Versione del tool AI. Riservato, non popolato dalla CLI. |
+| `archetipo_version` | `string` | Versione del binario ARchetipo (es. `"1.2.3"`). |
 | `os` | `string` | Sistema operativo: `"darwin"`, `"linux"`, `"windows"`. |
 | `arch` | `string` | Architettura CPU: `"amd64"`, `"arm64"`. |
-| `connector` | `string` | Connector in uso: `"file"`, `"github"`. |
+| `connector` | `string` | Connector in uso: `"file"`, `"github"`, `"jira"`. |
+| `session_id` | `string` | UUID v4 per-invocazione per correlare eventi di una stessa run. |
 | `success` | `boolean` | `true` se il comando è terminato con successo (exit code 0). |
-| `error_code` | `string` | Codice errore stabile (es. `"E_INVALID_INPUT"`). Stringa vuota `""` se `success` è `true`. |
+| `error_code` | `string` | Codice errore stabile (es. `"E_INVALID_INPUT"`). Vuoto se `success` è `true`. |
 | `exit_code` | `number` | Exit code numerico del processo (0, 1, 2, 3, 4). |
 | `duration_ms` | `number` | Durata dell'esecuzione in millisecondi (intero). |
 | `ci` | `boolean` | `true` se eseguito in ambiente CI, `false` altrimenti. |
-| `anonymous_installation_id` | `string` (opzionale) | UUID v4 generato localmente dopo consenso. **Opzionale:** presente solo se `analytics.consent` è `true`. |
+| `anonymous_installation_id` | `string` (opzionale) | UUID v4 generato al primo consenso. Presente solo se `analytics.consent` è `true`. |
+| `spec_code` | `string` (opzionale) | Codice spec. **Riservato**: non popolato da `command_completed`; per eventi futuri di spec-lifecycle. |
+| `args` | `object` (opzionale) | Argomenti del comando: flag impostati e argomenti posizionali. Vedi sezione 3 per i dettagli. |
+| `properties` | `object` (opzionale) | Mappa opzionale per dati estensibili. |
 
 ---
 
@@ -212,12 +284,14 @@ analytics:
 
 ### Modifica
 
-Il flag può essere modificato in qualsiasi momento tramite i comandi (da implementare in US-002):
+Il flag può essere modificato in qualsiasi momento tramite i comandi:
 
 ```bash
 archetipo analytics enable   # imposta consent: true, genera UUID se assente
 archetipo analytics disable  # imposta consent: false, non cancella l'UUID
 ```
+
+**Nota:** `analytics enable` invia l'evento di enable al server (il consenso diventa true prima dell'invio). `analytics disable` **non** invia l'evento di disable (il consenso diventa false prima dell'invio, rispettando il nuovo stato di opt-out).
 
 ### Esempio completo della sezione analytics
 
@@ -235,15 +309,16 @@ analytics:
 
 ### Evento valido — `command_completed`
 
-Questo JSON rappresenta un evento `command_completed` valido dopo che l'utente ha eseguito `archetipo spec plan US-005` e il comando è fallito con un errore di input. Tutti i valori sono fittizi e non contengono dati reali del workspace di sviluppo.
+Questo JSON rappresenta un evento `command_completed` valido dopo che l'utente ha eseguito `archetipo spec plan US-005` e il comando è fallito con un errore di input.
 
 ```json
 {
   "schema": "archetipo.analytics/v1",
   "event": "command_completed",
-  "timestamp": "2026-06-19T13:00:00Z",
+  "timestamp": "2026-06-22T12:00:00Z",
   "command": "spec.plan",
-  "version": "1.2.3",
+  "archetipo_version": "1.2.3",
+  "session_id": "e4f5a6b7-c8d9-4e0f-8a1b-2c3d4e5f6a7b",
   "os": "darwin",
   "arch": "arm64",
   "connector": "file",
@@ -264,17 +339,70 @@ Quando `analytics.consent` è `false`, il campo `anonymous_installation_id` è o
 {
   "schema": "archetipo.analytics/v1",
   "event": "command_completed",
-  "timestamp": "2026-06-19T13:05:00Z",
+  "timestamp": "2026-06-22T12:05:00Z",
   "command": "spec.show",
-  "version": "1.2.3",
+  "archetipo_version": "1.2.3",
+  "session_id": "f1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c",
   "os": "linux",
   "arch": "amd64",
   "connector": "github",
   "success": true,
-  "error_code": "",
   "exit_code": 0,
   "duration_ms": 856,
   "ci": true
+}
+```
+
+### Evento valido con `args` — `command_completed`
+
+Questo JSON rappresenta un evento dopo `archetipo spec list --status TODO`:
+
+```json
+{
+  "schema": "archetipo.analytics/v1",
+  "event": "command_completed",
+  "timestamp": "2026-06-22T12:15:00Z",
+  "command": "spec.list",
+  "archetipo_version": "1.2.3",
+  "session_id": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+  "os": "darwin",
+  "arch": "arm64",
+  "connector": "file",
+  "success": true,
+  "exit_code": 0,
+  "duration_ms": 234,
+  "ci": false,
+  "anonymous_installation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "args": {
+    "status": "TODO"
+  }
+}
+```
+
+### Evento valido con flag content-sensitive — `command_completed`
+
+Questo JSON rappresenta un evento dopo `archetipo spec plan US-005 --file /path/to/plan.yaml`. Notare che `file` registra solo presenza (`true`), non il percorso.
+
+```json
+{
+  "schema": "archetipo.analytics/v1",
+  "event": "command_completed",
+  "timestamp": "2026-06-22T12:20:00Z",
+  "command": "spec.plan",
+  "archetipo_version": "1.2.3",
+  "session_id": "c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f",
+  "os": "darwin",
+  "arch": "arm64",
+  "connector": "file",
+  "success": true,
+  "exit_code": 0,
+  "duration_ms": 567,
+  "ci": false,
+  "anonymous_installation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "args": {
+    "file": true,
+    "_0": "US-005"
+  }
 }
 ```
 
@@ -286,9 +414,10 @@ Il JSON seguente contiene campi esplicitamente vietati. **Non deve mai essere in
 {
   "schema": "archetipo.analytics/v1",
   "event": "command_completed",
-  "timestamp": "2026-06-19T13:10:00Z",
+  "timestamp": "2026-06-22T12:10:00Z",
   "command": "spec.plan",
-  "version": "1.2.3",
+  "archetipo_version": "1.2.3",
+  "session_id": "abcd-efgh",
   "os": "darwin",
   "arch": "arm64",
   "connector": "file",

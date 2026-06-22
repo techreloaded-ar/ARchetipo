@@ -11,8 +11,10 @@ func TestEventMarshalsOnlyAllowlistFields(t *testing.T) {
 	e := Event{
 		Schema:                  "archetipo.analytics/v1",
 		Event:                   "command_completed",
+		Timestamp:               "2026-06-22T12:00:00Z",
 		Command:                 "spec show",
-		Version:                 "1.0.0",
+		ArchetipoVersion:        "1.0.0",
+		SessionID:               "sess-abc",
 		OS:                      "darwin",
 		Arch:                    "arm64",
 		Connector:               "file",
@@ -34,12 +36,16 @@ func TestEventMarshalsOnlyAllowlistFields(t *testing.T) {
 		t.Fatalf("json.Unmarshal failed: %v", err)
 	}
 
-	// Allowed fields from US-001 allowlist.
+	// Allowed fields from unified archetipo.analytics/v1 allowlist.
 	allowed := map[string]bool{
 		"schema":                    true,
 		"event":                     true,
+		"timestamp":                 true,
 		"command":                   true,
-		"version":                   true,
+		"tool":                      true,
+		"tool_version":              true,
+		"archetipo_version":         true,
+		"session_id":                true,
 		"os":                        true,
 		"arch":                      true,
 		"connector":                 true,
@@ -74,7 +80,7 @@ func TestEventEmptyFieldsOmitted(t *testing.T) {
 
 	// These empty/zero fields must NOT appear in the output.
 	forbidden := []string{
-		`"version"`,
+		`"archetipo_version"`,
 		`"os"`,
 		`"arch"`,
 		`"connector"`,
@@ -84,6 +90,8 @@ func TestEventEmptyFieldsOmitted(t *testing.T) {
 		`"ci"`,
 		`"duration_ms"`,
 		`"anonymous_installation_id"`,
+		`"session_id"`,
+		`"timestamp"`,
 	}
 
 	for _, f := range forbidden {
@@ -98,11 +106,13 @@ func TestEventCommandCompletedFixture(t *testing.T) {
 	e := Event{
 		Schema:                  "archetipo.analytics/v1",
 		Event:                   "command_completed",
+		Timestamp:               "2026-06-22T12:00:00Z",
 		Command:                 "spec start",
-		Version:                 "2.3.1",
+		ArchetipoVersion:        "2.3.1",
 		OS:                      "linux",
 		Arch:                    "amd64",
 		Connector:               "github",
+		SessionID:               "sess-xyz",
 		Success:                 &success,
 		ErrorCode:               "",
 		ExitCode:                0,

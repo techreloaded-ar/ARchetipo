@@ -12,42 +12,52 @@ import (
 // Only fields listed here are accepted; all others are rejected either by
 // JSON DisallowUnknownFields or by the denylist check in ValidateEvent.
 type AnalyticsEvent struct {
-	Schema           string         `json:"schema"`
-	Event            string         `json:"event"`
-	Tool             string         `json:"tool,omitempty"`
-	ToolVersion      string         `json:"tool_version,omitempty"`
-	OS               string         `json:"os,omitempty"`
-	Arch             string         `json:"arch,omitempty"`
-	ArchetipoVersion string         `json:"archetipo_version,omitempty"`
-	SessionID        string         `json:"session_id,omitempty"`
-	Timestamp        string         `json:"timestamp,omitempty"`
-	DurationMs       int64          `json:"duration_ms,omitempty"`
-	Success          *bool          `json:"success,omitempty"`
-	ErrorCode        string         `json:"error_code,omitempty"`
-	Connector        string         `json:"connector,omitempty"`
-	SpecCode         string         `json:"spec_code,omitempty"`
-	Properties       map[string]any `json:"properties,omitempty"`
+	Schema                  string         `json:"schema"`
+	Event                   string         `json:"event"`
+	Timestamp               string         `json:"timestamp,omitempty"`
+	Command                 string         `json:"command,omitempty"`
+	Tool                    string         `json:"tool,omitempty"`
+	ToolVersion             string         `json:"tool_version,omitempty"`
+	OS                      string         `json:"os,omitempty"`
+	Arch                    string         `json:"arch,omitempty"`
+	ArchetipoVersion        string         `json:"archetipo_version,omitempty"`
+	SessionID               string         `json:"session_id,omitempty"`
+	DurationMs              int64          `json:"duration_ms,omitempty"`
+	Success                 *bool          `json:"success,omitempty"`
+	ErrorCode               string         `json:"error_code,omitempty"`
+	ExitCode                int            `json:"exit_code,omitempty"`
+	CI                      bool           `json:"ci,omitempty"`
+	Connector               string         `json:"connector,omitempty"`
+	AnonymousInstallationID string         `json:"anonymous_installation_id,omitempty"`
+	SpecCode                string         `json:"spec_code,omitempty"`
+	Args                    map[string]any `json:"args,omitempty"`
+	Properties              map[string]any `json:"properties,omitempty"`
 }
 
 // StoredEvent is AnalyticsEvent without any origin-identifying fields.
 // IP addresses are never persisted here; the rate limiter uses a hashed
 // origin key internally and the storage layer never receives the raw IP.
 type StoredEvent struct {
-	Schema           string         `json:"schema"`
-	Event            string         `json:"event"`
-	Tool             string         `json:"tool,omitempty"`
-	ToolVersion      string         `json:"tool_version,omitempty"`
-	OS               string         `json:"os,omitempty"`
-	Arch             string         `json:"arch,omitempty"`
-	ArchetipoVersion string         `json:"archetipo_version,omitempty"`
-	SessionID        string         `json:"session_id,omitempty"`
-	Timestamp        string         `json:"timestamp,omitempty"`
-	DurationMs       int64          `json:"duration_ms,omitempty"`
-	Success          *bool          `json:"success,omitempty"`
-	ErrorCode        string         `json:"error_code,omitempty"`
-	Connector        string         `json:"connector,omitempty"`
-	SpecCode         string         `json:"spec_code,omitempty"`
-	Properties       map[string]any `json:"properties,omitempty"`
+	Schema                  string         `json:"schema"`
+	Event                   string         `json:"event"`
+	Timestamp               string         `json:"timestamp,omitempty"`
+	Command                 string         `json:"command,omitempty"`
+	Tool                    string         `json:"tool,omitempty"`
+	ToolVersion             string         `json:"tool_version,omitempty"`
+	OS                      string         `json:"os,omitempty"`
+	Arch                    string         `json:"arch,omitempty"`
+	ArchetipoVersion        string         `json:"archetipo_version,omitempty"`
+	SessionID               string         `json:"session_id,omitempty"`
+	DurationMs              int64          `json:"duration_ms,omitempty"`
+	Success                 *bool          `json:"success,omitempty"`
+	ErrorCode               string         `json:"error_code,omitempty"`
+	ExitCode                int            `json:"exit_code,omitempty"`
+	CI                      bool           `json:"ci,omitempty"`
+	Connector               string         `json:"connector,omitempty"`
+	AnonymousInstallationID string         `json:"anonymous_installation_id,omitempty"`
+	SpecCode                string         `json:"spec_code,omitempty"`
+	Args                    map[string]any `json:"args,omitempty"`
+	Properties              map[string]any `json:"properties,omitempty"`
 	// ReceivedAt is set by the storage layer when the event is persisted.
 	ReceivedAt time.Time `json:"received_at"`
 }
@@ -55,22 +65,27 @@ type StoredEvent struct {
 // StoredEventFromAnalytics converts an AnalyticsEvent to a StoredEvent.
 func StoredEventFromAnalytics(e AnalyticsEvent) StoredEvent {
 	return StoredEvent{
-		Schema:           e.Schema,
-		Event:            e.Event,
-		Tool:             e.Tool,
-		ToolVersion:      e.ToolVersion,
-		OS:               e.OS,
-		Arch:             e.Arch,
-		ArchetipoVersion: e.ArchetipoVersion,
-		SessionID:        e.SessionID,
-		Timestamp:        e.Timestamp,
-		DurationMs:       e.DurationMs,
-		Success:          e.Success,
-		ErrorCode:        e.ErrorCode,
-		Connector:        e.Connector,
-		SpecCode:         e.SpecCode,
-		Properties:       e.Properties,
-		ReceivedAt:       time.Now(),
+		Schema:                  e.Schema,
+		Event:                   e.Event,
+		Timestamp:               e.Timestamp,
+		Command:                 e.Command,
+		Tool:                    e.Tool,
+		ToolVersion:             e.ToolVersion,
+		OS:                      e.OS,
+		Arch:                    e.Arch,
+		ArchetipoVersion:        e.ArchetipoVersion,
+		SessionID:               e.SessionID,
+		DurationMs:              e.DurationMs,
+		Success:                 e.Success,
+		ErrorCode:               e.ErrorCode,
+		ExitCode:                e.ExitCode,
+		CI:                      e.CI,
+		Connector:               e.Connector,
+		AnonymousInstallationID: e.AnonymousInstallationID,
+		SpecCode:                e.SpecCode,
+		Args:                    e.Args,
+		Properties:              e.Properties,
+		ReceivedAt:              time.Now(),
 	}
 }
 

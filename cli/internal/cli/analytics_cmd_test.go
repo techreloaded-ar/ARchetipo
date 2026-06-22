@@ -13,7 +13,8 @@ import (
 type analyticsStatusData struct {
 	Enabled                        bool   `json:"enabled"`
 	Source                         string `json:"source"`
-	Endpoint                       string `json:"endpoint"`
+	EndpointConfigured             bool   `json:"endpoint_configured"`
+	EndpointHost                   string `json:"endpoint_host"`
 	AnonymousInstallationIDPresent bool   `json:"anonymous_installation_id_present"`
 }
 
@@ -71,8 +72,11 @@ func TestAnalyticsStatus_DefaultNoConfig(t *testing.T) {
 	if st.Source != "default" {
 		t.Errorf("expected source=default without config, got %q", st.Source)
 	}
-	if st.Endpoint != "segment" {
-		t.Errorf("expected endpoint=segment, got %q", st.Endpoint)
+	if st.EndpointConfigured {
+		t.Errorf("expected endpoint_configured=false without config, got true")
+	}
+	if st.EndpointHost != "none (local noop)" {
+		t.Errorf("expected endpoint_host='none (local noop)', got %q", st.EndpointHost)
 	}
 	if st.AnonymousInstallationIDPresent {
 		t.Errorf("expected anonymous_installation_id_present=false without config, got true")
@@ -94,8 +98,8 @@ paths:
 	if st.Source != "default" {
 		t.Errorf("expected source=default without analytics key, got %q", st.Source)
 	}
-	if st.Endpoint != "segment" {
-		t.Errorf("expected endpoint=segment, got %q", st.Endpoint)
+	if st.EndpointConfigured {
+		t.Errorf("expected endpoint_configured=false without analytics key, got true")
 	}
 	if st.AnonymousInstallationIDPresent {
 		t.Errorf("expected anonymous_installation_id_present=false, got true")

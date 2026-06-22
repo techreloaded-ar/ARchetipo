@@ -2254,8 +2254,8 @@ func TestAnalyticsDocumentation_ExistsAndComplete(t *testing.T) {
 
 	// Allowed fields table must contain key fields.
 	allowedFields := []string{
-		"`schema`", "`event`", "`command`", "`version`",
-		"`os`", "`arch`", "`connector`",
+		"`schema`", "`event`", "`command`", "`archetipo_version`",
+		"`os`", "`arch`", "`connector`", "`session_id`", "`timestamp`",
 	}
 	for _, f := range allowedFields {
 		if !strings.Contains(s, f) {

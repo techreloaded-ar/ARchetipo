@@ -5,19 +5,22 @@ import (
 )
 
 func TestValidateEvent_Valid(t *testing.T) {
-	raw := []byte(`{"schema":"archetipo.analytics/v1","event":"cli.invocation","tool":"test-tool","tool_version":"1.0.0","os":"darwin","arch":"arm64","archetipo_version":"1.2.0","session_id":"sess-123","timestamp":"2026-06-19T12:00:00Z","duration_ms":150,"success":true}`)
+	raw := []byte(`{"schema":"archetipo.analytics/v1","event":"command_completed","timestamp":"2026-06-19T12:00:00Z","command":"spec.show","tool":"test-tool","tool_version":"1.0.0","os":"darwin","arch":"arm64","archetipo_version":"1.2.0","session_id":"sess-123","duration_ms":150,"success":true,"exit_code":0,"ci":false}`)
 	evt := AnalyticsEvent{
 		Schema:           "archetipo.analytics/v1",
-		Event:            "cli.invocation",
+		Event:            "command_completed",
+		Timestamp:        "2026-06-19T12:00:00Z",
+		Command:          "spec.show",
 		Tool:             "test-tool",
 		ToolVersion:      "1.0.0",
 		OS:               "darwin",
 		Arch:             "arm64",
 		ArchetipoVersion: "1.2.0",
 		SessionID:        "sess-123",
-		Timestamp:        "2026-06-19T12:00:00Z",
 		DurationMs:       150,
 		Success:          boolPtr(true),
+		ExitCode:         0,
+		CI:               false,
 	}
 	if err := ValidateEvent(raw, evt); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -185,11 +188,99 @@ func TestValidateEvent_WithProperties(t *testing.T) {
 	}
 }
 
+func TestValidateEvent_CommandCompletedRoundTrip(t *testing.T) {
+	// A command_completed event from the client must be accepted by the server.
+	raw := []byte(`{"schema":"archetipo.analytics/v1","event":"command_completed","timestamp":"2026-06-22T12:00:00Z","command":"spec.plan","archetipo_version":"1.0.0","session_id":"abc-def","os":"linux","arch":"amd64","connector":"file","success":false,"error_code":"E_INVALID_INPUT","exit_code":2,"duration_ms":1234,"ci":true,"anonymous_installation_id":"uuid-1234"}`)
+	evt := AnalyticsEvent{
+		Schema:                  "archetipo.analytics/v1",
+		Event:                   "command_completed",
+		Timestamp:               "2026-06-22T12:00:00Z",
+		Command:                 "spec.plan",
+		ArchetipoVersion:        "1.0.0",
+		SessionID:               "abc-def",
+		OS:                      "linux",
+		Arch:                    "amd64",
+		Connector:               "file",
+		Success:                 boolPtr(false),
+		ErrorCode:               "E_INVALID_INPUT",
+		ExitCode:                2,
+		DurationMs:              1234,
+		CI:                      true,
+		AnonymousInstallationID: "uuid-1234",
+	}
+	if err := ValidateEvent(raw, evt); err != nil {
+		t.Fatalf("expected command_completed to be accepted, got: %v", err)
+	}
+}
+
+func TestValidateEvent_VersionFieldRejected(t *testing.T) {
+	// The old "version" field must be rejected as unknown.
+	raw := []byte(`{"schema":"archetipo.analytics/v1","event":"command_completed","version":"1.0.0"}`)
+	evt := AnalyticsEvent{Schema: "archetipo.analytics/v1", Event: "command_completed"}
+	err := ValidateEvent(raw, evt)
+	if err == nil {
+		t.Fatal("expected ValidationError for 'version' field (now unknown)")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok {
+		t.Fatalf("expected *ValidationError, got %T: %v", err, err)
+	}
+	if ve.Violation != ViolationUnknownField {
+		t.Fatalf("expected violation %q, got %q", ViolationUnknownField, ve.Violation)
+	}
+	if ve.Field != "version" {
+		t.Fatalf("expected field=version, got %q", ve.Field)
+	}
+}
+
 func TestValidationError_Error(t *testing.T) {
 	ve := &ValidationError{Field: "test_field", Violation: ViolationForbiddenField, Detail: "bad"}
 	msg := ve.Error()
 	if msg == "" {
 		t.Fatal("expected non-empty error message")
+	}
+}
+
+func TestValidateEvent_WithArgs(t *testing.T) {
+	// Events with a valid "args" field should pass validation.
+	raw := []byte(`{"schema":"archetipo.analytics/v1","event":"command_completed","args":{"status":"TODO"}}`)
+	evt := AnalyticsEvent{
+		Schema: "archetipo.analytics/v1",
+		Event:  "command_completed",
+		Args:   map[string]any{"status": "TODO"},
+	}
+	if err := ValidateEvent(raw, evt); err != nil {
+		t.Fatalf("expected no error for event with args, got: %v", err)
+	}
+}
+
+func TestValidateEvent_ArgsWithMultipleKeys(t *testing.T) {
+	// An args map with multiple keys (flag names, positional) should validate.
+	raw := []byte(`{"schema":"archetipo.analytics/v1","event":"command_completed","args":{"file":true,"status":"TODO","_0":"US-001"}}`)
+	evt := AnalyticsEvent{
+		Schema: "archetipo.analytics/v1",
+		Event:  "command_completed",
+		Args: map[string]any{
+			"file":   true,
+			"status": "TODO",
+			"_0":     "US-001",
+		},
+	}
+	if err := ValidateEvent(raw, evt); err != nil {
+		t.Fatalf("expected no error for event with multiple args, got: %v", err)
+	}
+}
+
+func TestValidateEvent_ArgsWithToolSlice(t *testing.T) {
+	// Args containing a []string (from StringSlice flags) should validate.
+	raw := []byte(`{"schema":"archetipo.analytics/v1","event":"command_completed","args":{"tool":["claude","pi"]}}`)
+	evt := AnalyticsEvent{
+		Schema: "archetipo.analytics/v1",
+		Event:  "command_completed",
+		Args:   map[string]any{"tool": []any{"claude", "pi"}},
+	}
+	if err := ValidateEvent(raw, evt); err != nil {
+		t.Fatalf("expected no error for args with slice value, got: %v", err)
 	}
 }
 

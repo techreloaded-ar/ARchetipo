@@ -2,7 +2,6 @@ package jira
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/uuid"
 )
 
 // This file closes the gap left by Jira's standard project templates: they
@@ -261,11 +261,9 @@ func (c *Connector) addStatusesToWorkflow(ctx context.Context, workflowName stri
 // newStatusReference returns a fresh UUIDv4 to key a status within a workflow
 // create/update payload.
 func newStatusReference() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	ref, err := uuid.NewV4()
+	if err != nil {
 		return "", iox.NewInternal("generating workflow status reference", err)
 	}
-	b[6] = b[6]&0x0f | 0x40
-	b[8] = b[8]&0x3f | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+	return ref, nil
 }
