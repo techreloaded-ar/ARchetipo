@@ -1,0 +1,46 @@
+schema: archetipo/spec/v2
+code: US-005
+title: Rendere la telemetria comprensibile e controllabile dall'utente
+epic:
+  code: EP-000
+  title: Foundation
+priority: HIGH
+points: 3
+status: DONE
+body: |-
+  #### US-005: Rendere la telemetria comprensibile e controllabile dall'utente
+
+  **Epic:** EP-000 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
+  **Blocked by:** US-001, US-002, US-003
+
+  **User Story**
+  Come sviluppatore che installa ARchetipo,
+  voglio che il consenso analytics sia esplicito in `archetipo init`, verificabile in `archetipo doctor` e documentato in modo trasparente,
+  così da poter decidere in modo informato se condividere dati di utilizzo anonimi e sapere sempre se la telemetria è attiva.
+
+  **Dimostra**
+  Dopo aver implementato questa spec:
+  - un utente che lancia `archetipo init` interattivo vede, dopo la selezione tool e connector, una richiesta di consenso analytics con il testo definito in US-001; rispondendo "no" (default) il flag `analytics.consent` viene impostato a `false` nel `.archetipo/config.yaml` del progetto
+  - un utente che lancia `archetipo init --yes` NON abilita gli analytics implicitamente — il flag `--yes` risponde solo ai prompt di overwrite, non al consenso telemetria; `analytics.consent` non viene scritto o resta `false`
+  - un utente che lancia `archetipo doctor` vede una riga `analytics` con stato abilitato/disabilitato e provenienza (`project_config` o `default`)
+  - un utente che apre il README o la documentazione sa esattamente cosa viene raccolto, cosa non viene raccolto e come disabilitare la telemetria via `archetipo analytics disable` o modificando il `.archetipo/config.yaml`
+
+  **Criteri di accettazione**
+  - [ ] `archetipo init` interattivo, dopo la selezione tool/connector e prima di installare le skill, mostra il prompt di consenso analytics con il testo definito in `docs/analytics.md` (US-001) e accetta `s`/`n`; default equivale a `n` (analytics disabilitati)
+  - [ ] La risposta al prompt di consenso viene salvata nel `.archetipo/config.yaml` del progetto come `analytics.consent: true` o `analytics.consent: false`
+  - [ ] `archetipo init --yes` (modalità non interattiva) NON scrive `analytics.consent: true`; se il flag non è già presente, gli analytics restano disabilitati
+  - [ ] `archetipo doctor` include una riga `analytics` che riporta: stato (`enabled`/`disabled`) e provenienza del consenso (`project_config` o `default`)
+  - [ ] Il README del progetto ARchetipo spiega in linguaggio utente: finalità della telemetria, elenco dei dati raccolti (comandi, versione, OS/arch, connector, durata, codici errore), elenco esplicito di ciò che NON viene mai raccolto (path, repo, token, contenuti), e istruzioni per disabilitare (`archetipo analytics disable`)
+  - [ ] Il template `.archetipo/config.yaml` include una sezione `analytics.consent` (default `false`) commentata, con spiegazione del funzionamento
+  - [ ] La suite di test CLI esistente (`go test ./...`) passa invariata dopo le modifiche a `init` e `doctor`
+history:
+  - status: TODO
+    at: "2026-06-19T12:39:40Z"
+  - status: PLANNED
+    at: "2026-06-19T13:08:32Z"
+  - status: IN PROGRESS
+    at: "2026-06-19T14:33:22Z"
+  - status: REVIEW
+    at: "2026-06-19T14:45:25Z"
+  - status: DONE
+    at: "2026-06-19T19:26:21Z"

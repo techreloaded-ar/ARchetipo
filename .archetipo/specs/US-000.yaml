@@ -1,0 +1,27 @@
+schema: archetipo/spec/v2
+code: US-000
+title: Existing Product Foundation
+epic:
+  code: EP-000
+  title: Foundation
+priority: HIGH
+points: 1
+status: DONE
+body: |
+  #### US-000: Existing Product Foundation
+
+  **Epic:** EP-000 | **Priority:** HIGH | **Points:** 1 | **Status:** DONE
+  **Blocked by:** -
+
+  **User Story**
+  As a developer, I want the existing product to be recognized in the backlog, so that new specs can be added incrementally without regenerating the full backlog.
+
+  **Demonstrates**
+  After this spec, the backlog is populated and new specs can be added via extend mode.
+
+  **Acceptance Criteria**
+  - [ ] Backlog file exists
+  - [ ] Backlog contains at least one spec
+history:
+  - status: DONE
+    at: "2026-06-19T12:26:11Z"

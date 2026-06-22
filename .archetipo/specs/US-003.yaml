@@ -1,0 +1,55 @@
+schema: archetipo/spec/v2
+code: US-003
+title: Implementare client analytics Go con invio HTTP e privacy by design
+epic:
+  code: EP-000
+  title: Foundation
+priority: HIGH
+points: 5
+status: DONE
+body: |-
+  #### US-003: Implementare client analytics Go con invio HTTP e privacy by design
+
+  **Epic:** EP-000 | **Priority:** HIGH | **Points:** 5 | **Status:** TODO
+  **Blocked by:** US-001, US-002
+
+  **User Story**
+  Come sviluppatore del team ARchetipo,
+  voglio un package Go `cli/internal/analytics` che costruisca e invii eventi `command_completed` via HTTP rispettando i vincoli di privacy e consenso definiti in US-001,
+  così da poter strumentare i comandi CLI in spec successive senza dover re-implementare ogni volta la logica di opt-out, allowlist, timeout e resilienza di rete.
+
+  **Dimostra**
+  Dopo aver implementato questa spec, un developer esegue `go test ./cli/internal/analytics/...` e vede passare almeno tre gruppi di test:
+  - test su `settings_test.go` che verificano i default del tipo `Settings` e la costruzione del client con timeout configurabile;
+  - test su `client_test.go` che avviano un `httptest.Server` locale, inviano un evento valido e verificano che il server riceva il JSON corretto con User-Agent `archetipo-analytics/<version>`, nessun campo fuori allowlist, e Content-Type `application/json`; gli stessi test verificano che con `Enabled=false` non venga effettuata alcuna chiamata HTTP e che errori del server (4xx, 5xx, connessione rifiutata, timeout) non causino panic né propaghino errore al chiamante;
+  - test su `event_test.go` che verificano che la serializzazione JSON dell'evento includa solo i campi dell'allowlist documentata in US-001.
+  `golangci-lint run ./cli/internal/analytics/...` non riporta issue. Nessuna risorsa esterna (rete, file system) è richiesta dai test.
+
+  **Criteri di accettazione**
+  - [ ] Il package `cli/internal/analytics` esiste con file `settings.go`, `client.go`, `event.go`
+  - [ ] `settings.go` espone un tipo `Settings` con campi `Enabled bool`, `Endpoint string`, `Timeout time.Duration`, `UserAgent string`
+  - [ ] `Settings` ha valori di default documentati: `Enabled=false`, `Timeout=2s`, `Endpoint=localhost` (per test), `UserAgent="archetipo-analytics/<version>"` usando `cli/internal/version.Version`
+  - [ ] Il package `cli/internal/analytics` NON legge variabili d'ambiente né file di configurazione — `Enabled` è impostato dal chiamante (es. in base al flag `analytics.consent` nel `.archetipo/config.yaml`)
+  - [ ] `event.go` definisce la struct `Event` con esattamente i campi dell'allowlist di US-001; nessun campo `map[string]any`, `interface{}`, o struttura generica per dati runtime non filtrati
+  - [ ] `client.go` espone `func NewClient(s Settings) *Client` e `func (c *Client) Send(ctx context.Context, e Event) error`
+  - [ ] `Send()` ritorna immediatamente `nil` se `Settings.Enabled == false`, senza alcuna chiamata HTTP
+  - [ ] `Send()` esegue una POST HTTP con body JSON, Content-Type `application/json`, User-Agent configurato, timeout derivato da `Settings.Timeout` e rispettando la cancellazione del `context.Context`
+  - [ ] Errori di rete, risposte HTTP non-2xx, e timeout vengono loggati internamente ma **non** propagati come errore al chiamante (`Send()` ritorna sempre `nil`); non alterano `os.Exit`, stdout, o stderr
+  - [ ] L'endpoint HTTP non è mai hardcodato nel client ma deriva esclusivamente da `Settings.Endpoint`; nessun segreto, token, chiave API o credenziale è presente nel codice sorgente
+  - [ ] Il file `settings_test.go` verifica i default del tipo `Settings`
+  - [ ] Il file `event_test.go` verifica che `json.Marshal` di un `Event` popolato produca solo campi allowlist e che campi vuoti siano omessi (`omitempty`)
+  - [ ] Il file `client_test.go` usa `httptest.NewServer` e verifica: (a) invio con successo e corpo/header/User-Agent ricevuti; (b) `Enabled=false` → zero chiamate HTTP; (c) server non raggiungibile → `Send()` non restituisce errore; (d) timeout inferiore alla latenza del server → `Send()` non restituisce errore
+  - [ ] `go test ./cli/internal/analytics/...` passa al 100% senza risorse esterne
+  - [ ] `golangci-lint run ./cli/internal/analytics/...` non riporta issue
+  - [ ] Nessuna modifica ad altri package esistenti al di fuori di `cli/internal/analytics/`
+history:
+  - status: TODO
+    at: "2026-06-19T12:39:40Z"
+  - status: PLANNED
+    at: "2026-06-19T13:07:27Z"
+  - status: IN PROGRESS
+    at: "2026-06-19T14:02:57Z"
+  - status: REVIEW
+    at: "2026-06-19T14:09:27Z"
+  - status: DONE
+    at: "2026-06-19T14:13:10Z"

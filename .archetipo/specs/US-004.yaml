@@ -1,0 +1,51 @@
+schema: archetipo/spec/v2
+code: US-004
+title: Instrumentazione comandi CLI con client analytics
+epic:
+  code: EP-000
+  title: Foundation
+priority: HIGH
+points: 3
+status: DONE
+body: |-
+  #### US-004: Instrumentazione comandi CLI con client analytics
+
+  **Epic:** EP-000 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
+  **Blocked by:** US-001, US-003
+
+  **User Story**
+  Come sviluppatore del team ARchetipo,
+  voglio che ogni comando CLI invii automaticamente un evento `command_completed` al termine dell'esecuzione,
+  così da raccogliere metriche d'uso reali — comandi più usati, tasso di errore, connector utilizzati — senza dover instrumentare ogni comando a mano.
+
+  **Dimostra**
+  Dopo aver implementato questa spec, un developer può:
+  - eseguire qualsiasi comando `archetipo` (es. `archetipo spec list`, `archetipo config show`) e osservare nel log di rete una chiamata HTTP all'endpoint analytics con il payload `command_completed` contenente `command: "spec.list"`, i campi `success`, `exit_code`, `duration_ms`, `error_code` e `connector` corretti;
+  - lanciare `go test ./...` in `cli/` e vedere test che verificano: (a) payload generato correttamente per più comandi, (b) nessun evento inviato con `analytics.consent: false` nel config, (c) fallimento silenzioso dell'endpoint senza alterare exit code o output CLI;
+  - verificare con un grep che nessun sottocomando (`spec_cmd.go`, `task_cmd.go`, …) è stato modificato individualmente — la strumentazione è centralizzata in `Execute`.
+
+  **Criteri di accettazione**
+  - [ ] La funzione `Execute` in `cli/internal/cli/root.go` cattura `time.Now()` prima del comando, calcola `duration_ms` al termine, e dopo `root.Execute()` chiama il client analytics (se abilitato) con l'evento `command_completed`
+  - [ ] Il client analytics viene inizializzato con `Enabled` derivato dal flag `analytics.consent` nel `.archetipo/config.yaml` del progetto; se il flag non è presente o è `false`, `Enabled=false`
+  - [ ] Il command path Cobra è normalizzato nel formato `spec.list`, `config.show` (punti al posto degli spazi)
+  - [ ] Il campo `success` è `true` se `err == nil`, `false` altrimenti
+  - [ ] Il campo `exit_code` riflette il valore di `exitCodeFor(err)`: 0 se ok, 1–4 se errore
+  - [ ] Il campo `error_code` è popolato solo da `*iox.CodedError` estraendo `ce.Code` (es. `E_INVALID_INPUT`, `E_CONNECTOR`, `E_INTERNAL`); per errori non tipizzati resta vuoto
+  - [ ] Il campo `connector` è risolto da `config.Load` best-effort dopo il comando: se riesce usa `cfg.Connector`, altrimenti `"unknown"` senza causare errore CLI
+  - [ ] Gli argomenti raw (`os.Args`, `cmd.Args`) non compaiono mai nell'evento — solo il command name normalizzato
+  - [ ] Il client analytics è chiamato solo se `Settings.Enabled == true` (consenso esplicito); se `false`, nessuna chiamata di rete
+  - [ ] Qualsiasi errore del client analytics è fail-silent: non altera l'exit code, non scrive su stdout/stderr, non causa panic
+  - [ ] Il notifier di update e il client analytics restano indipendenti: env, cache e impostazioni separate
+  - [ ] La test suite in `cli/` include: test tabellari su più comandi (`spec list`, `config show`, `task done`), test con consenso disabilitato (`analytics.consent: false`), test con endpoint mock down
+  - [ ] `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...` passano senza errori da `cli/`
+history:
+  - status: TODO
+    at: "2026-06-19T12:39:40Z"
+  - status: PLANNED
+    at: "2026-06-19T13:08:25Z"
+  - status: IN PROGRESS
+    at: "2026-06-19T14:13:58Z"
+  - status: REVIEW
+    at: "2026-06-19T14:25:11Z"
+  - status: DONE
+    at: "2026-06-19T14:29:02Z"

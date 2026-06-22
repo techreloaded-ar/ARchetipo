@@ -1,0 +1,44 @@
+schema: archetipo/spec/v2
+code: US-002
+title: Aggiungere comando `archetipo analytics` per gestire consenso telemetria
+epic:
+  code: EP-000
+  title: Foundation
+priority: HIGH
+points: 3
+status: DONE
+body: |-
+  #### US-002: Aggiungere comando `archetipo analytics` per gestire consenso telemetria
+
+  **Epic:** EP-000 | **Priority:** MEDIUM | **Points:** 3 | **Status:** TODO
+  **Blocked by:** US-001
+
+  **User Story**
+  Come sviluppatore del team ARchetipo,
+  voglio un comando CLI esplicito (`archetipo analytics`) per abilitare, disabilitare e verificare lo stato del consenso telemetria,
+  così da controllare la telemetria modificando il `.archetipo/config.yaml` del progetto senza doverlo editare a mano.
+
+  **Dimostra**
+  Dopo aver implementato questa spec, un developer può eseguire `archetipo analytics status` e vedere un JSON envelope con `enabled`, `source`, `endpoint` e `anonymous_installation_id_present`. Eseguendo `archetipo analytics enable` il flag `analytics.consent` viene impostato a `true` nel `.archetipo/config.yaml` del progetto e `status` conferma `enabled: true, source: project_config`. Il consenso è salvato nel `.archetipo/config.yaml` di progetto, non in una directory utente globale.
+
+  **Criteri di accettazione**
+  - [ ] `archetipo analytics` è un gruppo Cobra registrato in `root.go` con sottocomandi `status`, `enable`, `disable`
+  - [ ] `archetipo analytics status` restituisce un JSON envelope (`iox.WriteOK`) con i campi: `enabled` (bool), `source` (stringa: `project_config|default`), `endpoint` (stringa, redatto o nome canale, mai URL con token), `anonymous_installation_id_present` (bool)
+  - [ ] `archetipo analytics enable` imposta `analytics.consent: true` nel `.archetipo/config.yaml` del progetto e restituisce envelope di conferma; esecuzioni successive di `status` mostrano `enabled: true, source: project_config`
+  - [ ] `archetipo analytics disable` imposta `analytics.consent: false` nel `.archetipo/config.yaml` e `status` mostra `enabled: false, source: project_config`
+  - [ ] Stato di default (progetto senza `analytics.consent` nel config.yaml): `status` restituisce `enabled: false, source: default`
+  - [ ] I comandi `enable`/`disable` modificano esclusivamente il `.archetipo/config.yaml` del progetto corrente; non esiste configurazione globale per utente
+  - [ ] Test automatici coprono: default (progetto senza config), enable, disable, idempotenza enable/disable, progetto con `.archetipo/config.yaml` già esistente
+  - [ ] Nessun codice di invio eventi di rete è presente in questa spec — solo superficie CLI di consenso e configurazione
+  - [ ] `endpoint` è un valore redatto o il nome del canale (es. `"segment"`), mai un URL con token o segreti
+history:
+  - status: TODO
+    at: "2026-06-19T12:39:40Z"
+  - status: PLANNED
+    at: "2026-06-19T13:07:59Z"
+  - status: IN PROGRESS
+    at: "2026-06-19T13:21:33Z"
+  - status: REVIEW
+    at: "2026-06-19T13:25:52Z"
+  - status: DONE
+    at: "2026-06-19T13:43:53Z"

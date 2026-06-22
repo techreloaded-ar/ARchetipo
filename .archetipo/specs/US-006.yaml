@@ -1,0 +1,42 @@
+schema: archetipo/spec/v2
+code: US-006
+title: Implementare endpoint HTTPS ingest analytics con validazione e rate limiting
+epic:
+  code: EP-000
+  title: Foundation
+priority: HIGH
+points: 5
+status: DONE
+body: |-
+  #### US-006: Implementare endpoint HTTPS ingest analytics con validazione e rate limiting
+
+  **Epic:** EP-000 | **Priority:** HIGH | **Points:** 5 | **Status:** TODO
+  **Blocked by:** US-001
+
+  **User Story**
+  Come sviluppatore dell'infrastruttura analytics ARchetipo,
+  voglio un endpoint HTTPS che accetti eventi telemetrici con validazione schema strict e rate limiting,
+  per consentire alla CLI open source di inviare eventi senza incorporare segreti e garantire che i dati ricevuti siano puliti e protetti da abusi.
+
+  **Dimostra**
+  Dopo aver implementato questa spec, un developer può inviare via POST a `/v1/events` un evento JSON conforme allo schema `archetipo.analytics/v1` e ricevere `202 Accepted`. Un evento con campi vietati o sconosciuti restituisce `400 Bad Request`. Richieste eccessive dalla stessa origine restituiscono `429 Too Many Requests`. Gli IP raw non compaiono nello storage persistente oltre i log tecnici minimi. Nessuna credenziale è richiesta per inviare eventi. La CLI open source interagisce con l'endpoint solo tramite il contratto HTTP documentato, senza dipendere dalla logica interna del backend.
+
+  **Criteri di accettazione**
+  - [ ] L'endpoint `POST /v1/events` accetta payload JSON conformi allo schema `archetipo.analytics/v1` (definito in US-001) e risponde `202 Accepted` con body JSON minimale (`{"status":"accepted"}`)
+  - [ ] Eventi con campi vietati (path, cwd, hostname, username, ecc.) o campi sconosciuti rispetto allo schema ricevono `400 Bad Request` con descrizione dell'errore di validazione
+  - [ ] Il rate limiting è attivo: richieste oltre la soglia configurata da una singola origine ricevono `429 Too Many Requests`
+  - [ ] Gli IP raw dei client non sono persistiti oltre i log tecnici minimi necessari al funzionamento del rate limiting (TTL massimo 7 giorni per i log raw)
+  - [ ] L'endpoint non richiede autenticazione (nessun token, API key o segreto embedded); la protezione anti-abuso si basa esclusivamente su rate limiting, validazione schema e anomaly detection
+  - [ ] La suite di test dell'endpoint copre: evento valido → 202, evento invalido (campi vietati) → 400, evento invalido (campi sconosciuti) → 400, superamento soglia rate limit → 429, batch piccolo di eventi validi → 202 per ciascuno, batch con un evento invalido → 400 per l'intero batch
+  - [ ] Il contratto HTTP (`POST /v1/events`, formato richiesta/risposta, codici di stato) è documentato in modo che la CLI open source possa implementare il client senza accedere al codice interno del backend
+history:
+  - status: TODO
+    at: "2026-06-19T12:39:40Z"
+  - status: PLANNED
+    at: "2026-06-19T13:08:31Z"
+  - status: IN PROGRESS
+    at: "2026-06-19T13:26:16Z"
+  - status: REVIEW
+    at: "2026-06-19T13:37:55Z"
+  - status: DONE
+    at: "2026-06-19T14:01:59Z"

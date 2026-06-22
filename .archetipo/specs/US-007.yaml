@@ -1,0 +1,45 @@
+schema: archetipo/spec/v2
+code: US-007
+title: Validazione end-to-end analytics per release
+epic:
+  code: EP-000
+  title: Foundation
+priority: HIGH
+points: 5
+status: DONE
+body: |-
+  #### US-007: Validazione end-to-end analytics per release
+
+  **Epic:** EP-000 | **Priority:** HIGH | **Points:** 5 | **Status:** TODO
+  **Blocked by:** US-004, US-005, US-006
+
+  **User Story**
+  Come sviluppatore del team ARchetipo,
+  voglio validare che l'intero sistema analytics funzioni correttamente end-to-end, inclusi test CLI, regression privacy, comportamento offline/failure e completezza documentale,
+  per poter rilasciare la feature analytics con la certezza che tutti i requisiti di qualità e privacy siano rispettati.
+
+  **Dimostra**
+  Dopo aver implementato questa spec, eseguendo la suite CI completa da `cli/` si ottengono zero errori per gofmt, go vet, go build, go test e golangci-lint; `archetipo init` in modalità non interattiva non registra il consenso analytics; con `analytics.consent: false` nel config.yaml nessun evento viene inviato; con l'endpoint analytics irraggiungibile la CLI restituisce lo stesso output ed exit code del caso raggiungibile; un controllo automatico conferma che il payload POST non contiene mai campi vietati; `docs/analytics.md` è completo e trasparente per l'utente finale.
+
+  **Criteri di accettazione**
+  - [ ] `gofmt -l .` eseguito in `cli/` restituisce output vuoto
+  - [ ] `go vet ./...` eseguito in `cli/` non produce errori
+  - [ ] `go build ./...` eseguito in `cli/` completa con successo
+  - [ ] `go test ./...` eseguito in `cli/` passa tutti i test
+  - [ ] `golangci-lint run --timeout 5m ./...` eseguito in `cli/` restituisce 0 issues
+  - [ ] `archetipo init --non-interactive` (o il test unitario corrispondente) non attiva il meccanismo di consenso analytics
+  - [ ] Un test dimostra che con `analytics.consent: false` nel `.archetipo/config.yaml` nessun evento viene inviato
+  - [ ] Un test dimostra che con endpoint analytics irraggiungibile la CLI mantiene output ed exit code invariati, senza crash né messaggi di errore esposti
+  - [ ] Un test automatico verifica che il payload POST non contenga campi vietati — tutti quelli elencati nella tabella di `docs/analytics.md` (path, cwd, project root, hostname, username, email, token, error message raw, contenuti spec/plan)
+  - [ ] `docs/analytics.md` spiega in modo trasparente e accessibile: cosa viene inviato, come attivare il consenso via `archetipo init` o `archetipo analytics enable`, come disattivarlo con `archetipo analytics disable`, quali dati non vengono mai raccolti
+history:
+  - status: TODO
+    at: "2026-06-19T12:39:40Z"
+  - status: PLANNED
+    at: "2026-06-19T13:07:58Z"
+  - status: IN PROGRESS
+    at: "2026-06-19T19:27:10Z"
+  - status: REVIEW
+    at: "2026-06-19T20:14:03Z"
+  - status: DONE
+    at: "2026-06-19T20:40:14Z"

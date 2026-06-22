@@ -1,0 +1,43 @@
+schema: archetipo/spec/v2
+code: US-001
+title: Definire contratto analytics, policy privacy e consenso
+epic:
+  code: EP-000
+  title: Foundation
+priority: HIGH
+points: 3
+status: DONE
+body: |-
+  #### US-001: Definire contratto analytics, policy privacy e consenso
+
+  **Epic:** EP-000 | **Priority:** HIGH | **Points:** 3 | **Status:** TODO
+  **Blocked by:** -
+
+  **User Story**
+  Come sviluppatore del team ARchetipo,
+  voglio un contratto analytics documentato con schema eventi, policy privacy e meccanismo di consenso,
+  per poter implementare le spec analytics successive rispettando vincoli precisi e offrire trasparenza agli utenti finali.
+
+  **Dimostra**
+  Dopo aver implementato questa spec, un developer può aprire `docs/analytics.md` e trovare: lo schema completo dell'evento `command_completed` con tutti i campi ammessi, la tabella esplicita dei campi vietati con motivazione privacy, la descrizione del meccanismo di consenso opt-in (richiesto durante `archetipo init`, salvato nel `.archetipo/config.yaml` del progetto), e fixture JSON di esempio (evento valido e non valido). Un grep per `command_completed` e `anonymous_installation_id` trova i riferimenti nel documento.
+
+  **Criteri di accettazione**
+  - [ ] `docs/analytics.md` esiste e descrive: finalità della telemetria, modalità consenso opt-in esplicito via `archetipo init` con salvataggio nel `.archetipo/config.yaml` del progetto, schema evento `archetipo.analytics/v1`, retention consigliata
+  - [ ] Il documento elenca in tabella i campi ammessi (`schema`, `event`, `command`, `version`, `os`, `arch`, `connector`, `success`, `error_code`, `exit_code`, `duration_ms`, `ci`, `anonymous_installation_id`) con descrizione e tipo
+  - [ ] Il documento elenca in tabella i campi vietati (path, cwd, project root, repo name, git remote, hostname, username, email, token, issue URL, contenuti PRD/spec/plan, payload stdin/stdout/stderr, error message raw) con motivazione privacy per ciascuno
+  - [ ] Il documento specifica che `anonymous_installation_id` è UUID random generato localmente dopo consenso, mai derivato da fingerprint della macchina o del repo
+  - [ ] Il documento descrive il flag `analytics.consent` nel `.archetipo/config.yaml` di progetto come meccanismo di consenso per-progetto (default: `false`)
+  - [ ] Le fixture JSON includono almeno un evento `command_completed` valido (con `duration_ms`, `error_code` stabile, `anonymous_installation_id` opzionale, senza path) e un esempio non valido commentato che spiega perché path o messaggi raw non vanno inviati
+  - [ ] Le fixture non contengono dati reali del workspace di sviluppo (nessun path assoluto, nome repo, hostname reale)
+  - [ ] Nessun codice di invio rete è presente in questa spec — solo contratto documentale e fixture
+history:
+  - status: TODO
+    at: "2026-06-19T12:30:35Z"
+  - status: PLANNED
+    at: "2026-06-19T13:07:08Z"
+  - status: IN PROGRESS
+    at: "2026-06-19T13:10:47Z"
+  - status: REVIEW
+    at: "2026-06-19T13:13:37Z"
+  - status: DONE
+    at: "2026-06-19T13:19:17Z"
