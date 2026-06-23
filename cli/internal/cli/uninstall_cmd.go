@@ -22,7 +22,7 @@ func newUninstallCmd(s streams) *cobra.Command {
 			return runUninstall(s, toolFlags)
 		},
 	}
-	cmd.Flags().StringSliceVar(&toolFlags, "tool", nil, "Tool key(s) to clean up: claude, codex, gemini, opencode, copilot, pi. Repeat or comma-separate.")
+	cmd.Flags().StringSliceVar(&toolFlags, "tool", nil, "Tool key(s) to clean up: "+validToolKeysHint()+". Repeat or comma-separate.")
 	return cmd
 }
 

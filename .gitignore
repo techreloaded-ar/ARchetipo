@@ -9,6 +9,8 @@ Thumbs.db
 # Only the Copilot skills installed by `archetipo init` — never the whole
 # .github/, or CI workflows silently stop being tracked.
 .github/skills/
+# Cursor skills installed by `archetipo init` — not the whole .cursor/ tree.
+.cursor/skills/
 .opencode/
 .gemini
 .trae

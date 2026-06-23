@@ -10,7 +10,7 @@ ARchetipo is a spec-driven workflow for AI coding agents. It gives your assistan
 
 [![Status](https://img.shields.io/badge/status-beta-orange.svg)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
-[![Made for](https://img.shields.io/badge/made%20for-Claude%20Code%20%7C%20Codex%20%7C%20Gemini%20%7C%20OpenCode%20%7C%20Copilot-black.svg)](#)
+[![Made for](https://img.shields.io/badge/made%20for-Claude%20Code%20%7C%20Codex%20%7C%20Cursor%20%7C%20Gemini%20%7C%20OpenCode%20%7C%20Copilot-black.svg)](#)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#)
 
 [Quickstart](#quickstart) · [Workflow](#workflow) · [Where to start](#where-to-start) · [CLI](#cli-and-commands) · [Configuration](#configuration) · [FAQ](#faq)
@@ -26,7 +26,7 @@ AI coding agents are fast, but a fast answer to an isolated prompt is not the sa
 - **A workflow, not prompt lore.** Every phase has a skill, a role, a contract, and an output that feeds the next step.
 - **Spec-driven by default.** The `spec -> plan -> implement` loop repeats for each valuable slice until the product is done.
 - **Persistent project memory.** PRD, backlog, spec files, plans, mockups, and test results live in your repo or in the configured connector.
-- **Tool-agnostic.** The same product method works with Claude Code, Codex, Gemini CLI, OpenCode, and GitHub Copilot.
+- **Tool-agnostic.** The same product method works with Claude Code, Codex, Cursor, Gemini CLI, OpenCode, and GitHub Copilot.
 - **Language-aware.** Skills automatically follow the language of the conversation: write in English, get English artifacts; write in Italian, get Italian artifacts.
 
 ---
@@ -67,7 +67,7 @@ archetipo init
 archetipo init --tool claude --connector file
 ```
 
-`archetipo init` copies the ARchetipo skills into the selected AI tool directory, for example `.claude/skills/` or `.gemini/skills/`, and creates:
+`archetipo init` copies the ARchetipo skills into the selected AI tool directory, for example `.claude/skills/`, `.cursor/skills/`, or `.gemini/skills/`, and creates:
 
 - `.archetipo/config.yaml`
 - `.archetipo/shared-runtime.md`

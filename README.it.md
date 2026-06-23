@@ -10,7 +10,7 @@ ARchetipo è un workflow spec-driven per AI coding agent. Dà al tuo assistente 
 
 [![Status](https://img.shields.io/badge/status-beta-orange.svg)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#licenza)
-[![Made for](https://img.shields.io/badge/made%20for-Claude%20Code%20%7C%20Codex%20%7C%20Gemini%20%7C%20OpenCode%20%7C%20Copilot-black.svg)](#)
+[![Made for](https://img.shields.io/badge/made%20for-Claude%20Code%20%7C%20Codex%20%7C%20Cursor%20%7C%20Gemini%20%7C%20OpenCode%20%7C%20Copilot-black.svg)](#)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#)
 
 [Quickstart](#quickstart) · [Workflow](#workflow) · [Da dove parto](#da-dove-parto) · [CLI](#cli-e-comandi) · [Configurazione](#configurazione) · [FAQ](#faq)
@@ -26,7 +26,7 @@ Gli AI coding agent sono veloci, ma una risposta veloce a un prompt isolato non 
 - **Un workflow, non prompt sparsi.** Ogni fase ha una skill, un ruolo, un contratto e un output che alimenta il passo successivo.
 - **Spec-driven di default.** Il ciclo `spec -> plan -> implement` si ripete per ogni slice di valore fino al completamento del prodotto.
 - **Memoria persistente del progetto.** PRD, backlog, spec, piani, mockup e risultati dei test vivono nel repo o nel connector configurato.
-- **Agnostico rispetto al tool.** Lo stesso metodo funziona con Claude Code, Codex, Gemini CLI, OpenCode e GitHub Copilot.
+- **Agnostico rispetto al tool.** Lo stesso metodo funziona con Claude Code, Codex, Cursor, Gemini CLI, OpenCode e GitHub Copilot.
 - **Auto-detect della lingua.** Le skill adottano la lingua della conversazione: scrivi in italiano, ricevi artefatti in italiano; scrivi in inglese, ricevi artefatti in inglese.
 
 ---
@@ -67,7 +67,7 @@ archetipo init
 archetipo init --tool claude --connector file
 ```
 
-`archetipo init` copia le skill ARchetipo nella directory del tool AI selezionato, per esempio `.claude/skills/` o `.gemini/skills/`, e crea:
+`archetipo init` copia le skill ARchetipo nella directory del tool AI selezionato, per esempio `.claude/skills/`, `.cursor/skills/` o `.gemini/skills/`, e crea:
 
 - `.archetipo/config.yaml`
 - `.archetipo/shared-runtime.md`

@@ -24,10 +24,19 @@ type toolDef struct {
 var allTools = []toolDef{
 	{Key: "claude", Name: "Claude Code", ProjectPath: ".claude/skills"},
 	{Key: "codex", Name: "Codex", ProjectPath: ".agents/skills"},
+	{Key: "cursor", Name: "Cursor", ProjectPath: ".cursor/skills"},
 	{Key: "gemini", Name: "Gemini CLI", ProjectPath: ".gemini/skills"},
 	{Key: "opencode", Name: "OpenCode", ProjectPath: ".opencode/skills"},
 	{Key: "copilot", Name: "GitHub Copilot", ProjectPath: ".github/skills"},
 	{Key: "pi", Name: "Pi", ProjectPath: ".pi/skills"},
+}
+
+func validToolKeysHint() string {
+	keys := make([]string, len(allTools))
+	for i, t := range allTools {
+		keys[i] = t.Key
+	}
+	return strings.Join(keys, ", ")
 }
 
 var allSkills = []string{
@@ -55,7 +64,7 @@ func newInitProjectCmd(s streams) *cobra.Command {
 			return runInitProject(s, toolFlags, connectorFlag, assumeYes)
 		},
 	}
-	cmd.Flags().StringSliceVar(&toolFlags, "tool", nil, "Tool key(s) to install for: claude, codex, gemini, opencode, copilot, pi. Repeat or comma-separate.")
+	cmd.Flags().StringSliceVar(&toolFlags, "tool", nil, "Tool key(s) to install for: "+validToolKeysHint()+". Repeat or comma-separate.")
 	cmd.Flags().StringVar(&connectorFlag, "connector", "", "Connector for .archetipo/config.yaml: file|github|jira")
 	cmd.Flags().BoolVar(&assumeYes, "yes", false, "Assume 'yes' to overwrite prompts (non-interactive).")
 	return cmd
@@ -193,7 +202,7 @@ func resolveToolFlags(flags []string) ([]toolDef, error) {
 		key := strings.ToLower(strings.TrimSpace(raw))
 		t, ok := keysByKey[key]
 		if !ok {
-			return nil, iox.NewInvalidInput("unknown tool: "+raw, "valid: claude, codex, gemini, opencode, copilot, pi", nil)
+			return nil, iox.NewInvalidInput("unknown tool: "+raw, "valid: "+validToolKeysHint(), nil)
 		}
 		if _, dup := seen[t.Key]; dup {
 			continue
@@ -413,7 +422,7 @@ func readLine(r io.Reader) (string, error) {
 func errNonInteractiveInput(cause error) error {
 	return iox.NewPrecondition(
 		"interactive input is not available",
-		"run non-interactively: archetipo init --tool <claude|codex|gemini|opencode|copilot|pi> --connector <file|github|jira> [--yes]",
+		"run non-interactively: archetipo init --tool <"+strings.ReplaceAll(validToolKeysHint(), ", ", "|")+"> --connector <file|github|jira> [--yes]",
 		cause,
 	)
 }

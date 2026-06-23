@@ -10,11 +10,11 @@ This skill requires **isolated subagent/worker support** from your AI coding too
 | Tool | Status |
 |---|---|
 | Claude Code (Agent tool) | Supported |
+| Cursor (Task tool) | Supported |
 | Gemini CLI (`create_sub_agent`) | Supported |
 | Roo Code (`new_task` / Orchestrator) | Supported |
 | Codex.ai | **Not supported** — lacks subagents |
 | GitHub Copilot | **Not supported** — lacks subagents |
-| Cursor | **Not supported** — lacks subagents |
 | OpenCode | **Not supported** — lacks subagents |
 
 **If your tool is not supported**, run the pipeline manually:
