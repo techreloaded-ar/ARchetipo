@@ -91,8 +91,9 @@ func (ms *MemoryStore) cleanup() {
 }
 
 // Close stops the background cleanup goroutine. Safe to call multiple times.
-func (ms *MemoryStore) Close() {
+func (ms *MemoryStore) Close() error {
 	ms.stopOnce.Do(func() {
 		close(ms.stopCh)
 	})
+	return nil
 }

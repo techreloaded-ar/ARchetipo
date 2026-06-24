@@ -24,7 +24,7 @@ func TestServerE2E_RealFlow(t *testing.T) {
 		StorageTTL: time.Hour,
 	}
 
-	srv := NewServer(cfg)
+	srv := NewServer(cfg, NewMemoryStore(cfg.StorageTTL))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -182,7 +182,7 @@ func TestServerE2E_BatchHandling(t *testing.T) {
 		StorageTTL: time.Hour,
 	}
 
-	srv := NewServer(cfg)
+	srv := NewServer(cfg, NewMemoryStore(cfg.StorageTTL))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -260,7 +260,7 @@ func TestServerE2E_RateLimitingWithDirectHandler(t *testing.T) {
 		StorageTTL: time.Hour,
 	}
 
-	srv := NewServer(cfg)
+	srv := NewServer(cfg, NewMemoryStore(cfg.StorageTTL))
 
 	// Start the server so the handler is wired, then test the handler
 	// directly with a fixed origin for deterministic rate limiting.
@@ -300,6 +300,49 @@ func TestServerE2E_RateLimitingWithDirectHandler(t *testing.T) {
 	}
 	if w.Header().Get("Retry-After") == "" {
 		t.Fatal("expected Retry-After header on 429")
+	}
+
+	cancel()
+	<-errCh
+}
+
+// TestServerE2E_Healthz verifies the /healthz endpoint returns 200 for
+// liveness/readiness probes (used by Fly.io healthchecks).
+func TestServerE2E_Healthz(t *testing.T) {
+	cfg := ServerConfig{
+		Addr:       "127.0.0.1:0",
+		RateLimit:  DefaultRateLimitConfig(),
+		StorageTTL: time.Hour,
+	}
+
+	srv := NewServer(cfg, NewMemoryStore(cfg.StorageTTL))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ready := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Run(ctx, func(url string) { ready <- url })
+	}()
+
+	var baseURL string
+	select {
+	case url := <-ready:
+		baseURL = url
+	case err := <-errCh:
+		t.Fatalf("server failed: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout")
+	}
+
+	resp, err := http.Get(baseURL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
 	cancel()

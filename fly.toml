@@ -1,0 +1,47 @@
+# Fly.io configuration for archetipo-analytics.
+#
+# Deploy:  fly deploy --remote-only
+#
+# Prerequisiti manuali (una tantum):
+#   fly launch            # crea l'app e sceglie la region (sovrascrive poi con questo file)
+#   fly volumes create archetipo_data --size 1 -a archetipo-analytics
+#   fly tokens create deploy -a archetipo-analytics   # -> GitHub secret FLY_API_TOKEN
+
+app = "archetipo-analytics"
+primary_region = "fra" # Frankfurt; cambiare con `fly regions` se preferito
+
+[build]
+  # Builda l'immagine sui builder remoti Fly a partire dal Dockerfile repo root.
+  # Niente docker daemon locale richiesto.
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false  # always-on: nessun cold-start, nessun evento perso
+  min_machines_running = 1    # 1 VM sempre attiva (rientra nel free tier)
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 100
+    soft_limit = 60
+
+# Healthcheck basato su GET /healthz (endpoint aggiunto al server ingest).
+[[http_service.checks]]
+  interval = "15s"
+  timeout = "3s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/healthz"
+
+# Volume persistente per il database SQLite: sopravvive a restart e deploy.
+# Il mount point /data corrisponde a --db-path /data/analytics.db nel CMD.
+[[mounts]]
+  source = "archetipo_data"
+  destination = "/data"
+
+# Dimensione VM: shared-cpu-1x con 256MB rientra nel free tier ed è
+# sufficiente per un ingest HTTP in-memory rate-limited + SQLite WAL.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = 256

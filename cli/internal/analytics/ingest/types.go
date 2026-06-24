@@ -157,4 +157,7 @@ type EventStore interface {
 	Events() []StoredEvent
 	// Len returns the number of stored events.
 	Len() int
+	// Close releases any resources held by the store (e.g. background
+	// cleanup goroutines, database connections). Safe to call multiple times.
+	Close() error
 }

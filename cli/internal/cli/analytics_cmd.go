@@ -201,6 +201,7 @@ func newAnalyticsServeCmd(s streams) *cobra.Command {
 			"limiting e validazione schema. Gli IP dei client non sono mai persistiti.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			store := ingest.NewMemoryStore(storageTTL)
 			cfg := ingest.ServerConfig{
 				Addr: addr,
 				RateLimit: ingest.RateLimitConfig{
@@ -211,7 +212,7 @@ func newAnalyticsServeCmd(s streams) *cobra.Command {
 				StorageTTL: storageTTL,
 			}
 
-			srv := ingest.NewServer(cfg)
+			srv := ingest.NewServer(cfg, store)
 
 			ctx, cancel := signal.NotifyContext(context.Background(),
 				os.Interrupt, syscall.SIGTERM)

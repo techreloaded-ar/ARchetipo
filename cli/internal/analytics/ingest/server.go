@@ -12,7 +12,7 @@ import (
 // Server wraps an HTTP server that exposes the analytics ingest endpoint.
 type Server struct {
 	httpSrv *http.Server
-	store   *MemoryStore
+	store   EventStore
 	limiter *TokenBucket
 	handler *IngestHandler
 }
@@ -33,15 +33,17 @@ func DefaultServerConfig() ServerConfig {
 	}
 }
 
-// NewServer constructs a Server with the given config. The server is not
-// started yet — call Run to begin listening.
-func NewServer(cfg ServerConfig) *Server {
-	store := NewMemoryStore(cfg.StorageTTL)
+// NewServer constructs a Server with the given config and event store
+// (dependency injection). The caller chooses the store implementation
+// (MemoryStore for the CLI, SQLiteStore for the analytics-server binary).
+// The server is not started yet — call Run to begin listening.
+func NewServer(cfg ServerConfig, store EventStore) *Server {
 	limiter := NewTokenBucket(cfg.RateLimit)
 	handler := NewIngestHandler(limiter, store)
 
 	mux := http.NewServeMux()
 	mux.Handle("/v1/events", handler)
+	mux.HandleFunc("/healthz", healthzHandler)
 
 	return &Server{
 		httpSrv: &http.Server{
@@ -55,11 +57,18 @@ func NewServer(cfg ServerConfig) *Server {
 	}
 }
 
+// healthzHandler responds 200 OK to liveness/readiness probes (e.g. Fly).
+func healthzHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
 // Addr returns the address the server is listening on.
 func (s *Server) Addr() string { return s.httpSrv.Addr }
 
 // Store returns the underlying event store (for inspection in tests).
-func (s *Server) Store() *MemoryStore { return s.store }
+func (s *Server) Store() EventStore { return s.store }
 
 // Handler returns the underlying ingest handler (for testing with fixed origins).
 func (s *Server) Handler() *IngestHandler { return s.handler }
