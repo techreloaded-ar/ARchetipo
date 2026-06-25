@@ -300,6 +300,30 @@ func (s *Server) handleUpdateSpec(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"spec": spec})
 }
 
+func (s *Server) handleDeleteSpec(w http.ResponseWriter, r *http.Request) {
+	code := r.PathValue("code")
+	if code == "" {
+		writeError(w, iox.NewInvalidInput("missing spec code", "", nil))
+		return
+	}
+	deleter, ok := s.conn.(connector.SpecDeleter)
+	if !ok {
+		writeError(w, iox.NewConnector(
+			iox.CodePreconditionMissing,
+			"this connector does not support deleting specs from the viewer",
+			"use the local file connector",
+			nil,
+		))
+		return
+	}
+	res, err := deleter.DeleteSpec(r.Context(), code)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 type savePlanReq struct {
 	PlanBody string        `json:"plan_body"`
 	Tasks    []domain.Task `json:"tasks"`

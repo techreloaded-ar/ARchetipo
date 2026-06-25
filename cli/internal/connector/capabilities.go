@@ -58,6 +58,13 @@ type BoardOrderReader interface {
 	ReadBoardOrder(ctx context.Context) ([]string, error)
 }
 
+// SpecDeleter removes a spec and its local viewer artifacts. It is modelled as
+// an optional capability because not every connector can safely support
+// destructive deletion from the web viewer.
+type SpecDeleter interface {
+	DeleteSpec(ctx context.Context, code string) (domain.WriteResult, error)
+}
+
 // ReviewStore persists the inline review comments left on a spec's diff during
 // the human acceptance gate. Connectors that cannot store them leave the
 // capability unimplemented and the viewer's review panel is unavailable.

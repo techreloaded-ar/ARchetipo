@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,6 +43,7 @@ var (
 	_ connector.PlanBodyReader   = (*Connector)(nil)
 	_ connector.MockupLister     = (*Connector)(nil)
 	_ connector.BoardOrderReader = (*Connector)(nil)
+	_ connector.SpecDeleter      = (*Connector)(nil)
 	_ connector.ReviewStore      = (*Connector)(nil)
 )
 
@@ -418,6 +420,37 @@ func (c *Connector) MoveBoardCard(ctx context.Context, specRef, targetColumn str
 
 func (c *Connector) PostComment(ctx context.Context, specRef, body string) (domain.WriteResult, error) {
 	return domain.WriteResult{OK: true}, nil
+}
+
+// DeleteSpec removes a spec from the local backlog and deletes its local spec,
+// plan, and review artifacts. The store rewrite must happen before removing the
+// spec YAML file, otherwise the next loadStore would re-hydrate the deleted spec
+// from disk.
+func (c *Connector) DeleteSpec(ctx context.Context, code string) (domain.WriteResult, error) {
+	if code == "" {
+		return domain.WriteResult{}, iox.NewInvalidInput("missing spec code", "pass US-XXX as positional argument", nil)
+	}
+	store, err := c.loadStore()
+	if err != nil {
+		return domain.WriteResult{}, err
+	}
+	if _, ok := store.Specs[code]; !ok {
+		return domain.WriteResult{}, iox.NewPrecondition(fmt.Sprintf("spec %s not found", code), "", nil)
+	}
+	delete(store.Specs, code)
+	store.Backlog.Order = removeCode(store.Backlog.Order, code)
+	if err := c.writeStore(store); err != nil {
+		return domain.WriteResult{}, err
+	}
+
+	refs := []domain.Ref{{Code: code, Path: c.backlogPath()}}
+	for _, path := range []string{c.specPath(code), c.planPath(code), c.reviewPath(code)} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return domain.WriteResult{}, iox.NewInternal(fmt.Sprintf("deleting %s", path), err)
+		}
+		refs = append(refs, domain.Ref{Code: code, Path: path})
+	}
+	return domain.WriteResult{OK: true, Refs: refs}, nil
 }
 
 // ReadPlanBody returns the prose body of a spec's plan, if any. It is not on

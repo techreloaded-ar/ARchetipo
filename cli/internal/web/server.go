@@ -116,6 +116,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/metrics", s.handleGetMetrics)
 	s.mux.HandleFunc("GET /api/spec/{code}", s.handleGetSpec)
 	s.mux.HandleFunc("PUT /api/spec/{code}", s.handleUpdateSpec)
+	s.mux.HandleFunc("DELETE /api/spec/{code}", s.handleDeleteSpec)
 	s.mux.HandleFunc("PUT /api/spec/{code}/plan", s.handleSavePlan)
 	s.mux.HandleFunc("POST /api/board/move", s.handleMoveCard)
 	s.mux.HandleFunc("GET /api/spec/{code}/diff", s.handleGetDiff)

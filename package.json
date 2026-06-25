@@ -6,7 +6,8 @@
     "build:npm": "node ./scripts/build-npm.mjs",
     "publish:npm": "node ./scripts/publish-npm.mjs",
     "test:cli": "cd cli && go test ./...",
-    "test:e2e": "node ./test/e2e/run.mjs"
+    "test:e2e": "node ./test/e2e/run.mjs",
+    "test:view-delete-smoke": "node ./test/e2e/delete-story-view-smoke.mjs"
   },
   "dependencies": {
     "yaml": "^2.9.0"

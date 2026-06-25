@@ -325,3 +325,72 @@ func TestSpecFilesReadLegacyScalarEpic(t *testing.T) {
 		t.Errorf("epic title fallback failed; got %q want %q", st.Epic.Title, "Foundations")
 	}
 }
+
+func TestDeleteSpecRemovesStoreAndArtifacts(t *testing.T) {
+	c := newTestConnector(t)
+	ctx := context.Background()
+	_, err := c.SaveInitialBacklog(ctx, []domain.Spec{
+		{Code: "US-001", Title: "Setup", Epic: domain.Epic{Code: "EP-001", Title: "Foundations"}, Priority: domain.PriorityHigh, Points: 3, Status: domain.StatusTodo},
+		{Code: "US-002", Title: "Auth", Epic: domain.Epic{Code: "EP-001", Title: "Foundations"}, Priority: domain.PriorityMedium, Points: 5, Status: domain.StatusPlanned},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SavePlan(ctx, "US-001", domain.PlanInput{PlanBody: "## Plan", Tasks: []domain.Task{{ID: "TASK-01", Title: "Ship", Type: domain.TaskImpl, Status: domain.StatusTodo}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SaveReview(ctx, "US-001", domain.Review{Comments: []domain.ReviewComment{{File: "x.go", Line: 7, Side: "new", Body: "check this"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := c.DeleteSpec(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.OK {
+		t.Fatal("expected ok write result")
+	}
+	for _, path := range []string{c.specPath("US-001"), c.planPath("US-001"), c.reviewPath("US-001")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be removed, stat err=%v", path, err)
+		}
+	}
+	if _, err := c.ReadSpecDetail(ctx, "US-001"); err == nil {
+		t.Fatal("expected deleted spec to be unreadable")
+	}
+	store, err := c.loadStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Backlog.Order) != 1 || store.Backlog.Order[0] != "US-002" {
+		t.Fatalf("unexpected backlog order after delete: %+v", store.Backlog.Order)
+	}
+	if _, ok := store.Specs["US-001"]; ok {
+		t.Fatal("deleted spec still present in store")
+	}
+	if _, ok := store.Specs["US-002"]; !ok {
+		t.Fatal("remaining spec missing from store")
+	}
+}
+
+func TestDeleteSpecIgnoresMissingOptionalArtifacts(t *testing.T) {
+	c := newTestConnector(t)
+	ctx := context.Background()
+	_, err := c.SaveInitialBacklog(ctx, []domain.Spec{{
+		Code:     "US-001",
+		Title:    "Setup",
+		Epic:     domain.Epic{Code: "EP-001", Title: "Foundations"},
+		Priority: domain.PriorityHigh,
+		Points:   3,
+		Status:   domain.StatusTodo,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DeleteSpec(ctx, "US-001"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(c.specPath("US-001")); !os.IsNotExist(err) {
+		t.Fatalf("expected spec file removed, stat err=%v", err)
+	}
+}

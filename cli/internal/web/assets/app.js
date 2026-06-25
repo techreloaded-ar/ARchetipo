@@ -19,6 +19,7 @@
     const specViewMeta = document.getElementById('story-view-meta');
     const specViewTitle = document.getElementById('story-view-title');
     const specBodyView = document.getElementById('story-body-view');
+    const specDeleteBtn = document.getElementById('story-delete-btn');
     const specEditBtn = document.getElementById('story-edit-btn');
     const specCancelBtn = document.getElementById('story-cancel-btn');
     const planView = document.getElementById('plan-view');
@@ -132,6 +133,9 @@
     specForm.addEventListener('submit', onSaveSpec);
     planForm.addEventListener('submit', onSavePlan);
     specEditBtn.addEventListener('click', () => enterSpecEditMode());
+    specDeleteBtn.addEventListener('click', () => {
+        if (currentSpecCode) confirmAndDeleteSpec(currentSpecCode, currentSpecSnapshot && currentSpecSnapshot.title);
+    });
     specCancelBtn.addEventListener('click', () => exitSpecEditMode());
     planEditBtn.addEventListener('click', () => enterPlanEditMode());
     planCancelBtn.addEventListener('click', () => exitPlanEditMode());
@@ -272,6 +276,9 @@
         const epicCode = spec.epic && spec.epic.code ? spec.epic.code : '';
         const epicTooltip = spec.epic && spec.epic.title ? `${epicCode} — ${spec.epic.title}` : epicCode;
         el.innerHTML = `
+            <button type="button" class="card-delete-btn" title="Delete ${escapeHtml(spec.code)}" aria-label="Delete ${escapeHtml(spec.code)}">
+                <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 4.5h9" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M6 2.5h4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M5 4.5v8h6v-8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6.75 6.5v4.25M9.25 6.5v4.25" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            </button>
             <div class="card-top">
                 <span class="card-code">${escapeHtml(spec.code)}</span>
                 ${spec.rework ? `<span class="rework-badge" title="In rework: review feedback waiting to be re-planned">⟲ rework</span>` : ''}
@@ -284,6 +291,13 @@
             </div>
             ${spec.branch ? `<div class="card-branch" title="git branch">⎇ ${escapeHtml(spec.branch)}</div>` : ''}
         `;
+        const deleteBtn = el.querySelector('.card-delete-btn');
+        const stopDeleteEvent = (event) => event.stopPropagation();
+        ['pointerdown', 'mousedown', 'touchstart'].forEach((type) => deleteBtn.addEventListener(type, stopDeleteEvent));
+        deleteBtn.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            await confirmAndDeleteSpec(spec.code, spec.title);
+        });
         el.addEventListener('click', () => openEditor(spec.code));
         return el;
     }
@@ -361,6 +375,8 @@
         const mockup = findMockupForSpec(s.code);
         if (mockup) metaParts.push(`<a class="meta-chip mockup-link" href="${escapeHtml(mockup.url)}" target="_blank" rel="noopener">↗ mockup</a>`);
         specViewMeta.innerHTML = metaParts.join('');
+        specDeleteBtn.title = s.code ? `Delete ${s.code}` : 'Delete story';
+        specDeleteBtn.setAttribute('aria-label', s.code ? `Delete ${s.code}` : 'Delete story');
         specBodyView.innerHTML = marked.parse(s.body || '*(no description)*');
     }
 
@@ -769,6 +785,27 @@
         }
     }
 
+    async function confirmAndDeleteSpec(code, title) {
+        if (!code) return false;
+        const label = title ? `${code} — ${title}` : code;
+        const confirmed = window.confirm(
+            `Delete ${label}? This removes the story from the local backlog and deletes its local plan/review artifacts if present. This cannot be undone from the viewer.`
+        );
+        if (!confirmed) return false;
+        try {
+            await apiDelete(`/api/spec/${encodeURIComponent(code)}`);
+            showToast(`${code} deleted`, 'ok');
+            if (currentSpecCode === code) {
+                closeModal();
+            }
+            await loadBoard();
+            return true;
+        } catch (err) {
+            showToast(`Delete failed: ${err.message || err}`, 'err');
+            return false;
+        }
+    }
+
     async function onRequestChanges() {
         if (!currentSpecCode) return;
         if (reviewComments.length === 0) {
@@ -832,6 +869,10 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
         });
+        return parseResponse(r);
+    }
+    async function apiDelete(url) {
+        const r = await fetch(url, { method: 'DELETE' });
         return parseResponse(r);
     }
     async function parseResponse(r) {

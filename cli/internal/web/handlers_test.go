@@ -132,6 +132,72 @@ func TestUpdateSpecNotFound(t *testing.T) {
 	}
 }
 
+func TestDeleteSpecEndpointFileConnector(t *testing.T) {
+	srv, _ := newFileServer(t)
+	ctx := context.Background()
+	if _, err := srv.conn.SaveInitialBacklog(ctx, []domain.Spec{
+		{Code: "US-001", Title: "Setup", Epic: domain.Epic{Code: "EP-001", Title: "F"}, Priority: domain.PriorityHigh, Points: 3, Status: domain.StatusTodo},
+		{Code: "US-002", Title: "Auth", Epic: domain.Epic{Code: "EP-001", Title: "F"}, Priority: domain.PriorityMedium, Points: 5, Status: domain.StatusPlanned},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.conn.SavePlan(ctx, "US-001", domain.PlanInput{PlanBody: "## Plan", Tasks: []domain.Task{{ID: "TASK-01", Title: "Ship", Type: domain.TaskImpl, Status: domain.StatusTodo}}}); err != nil {
+		t.Fatal(err)
+	}
+	rs := srv.conn.(connector.ReviewStore)
+	if err := rs.SaveReview(ctx, "US-001", domain.Review{Comments: []domain.ReviewComment{{File: "x.go", Line: 4, Side: "new", Body: "remove"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/spec/US-001", nil)
+	srv.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/api/board", nil)
+	srv.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("board status: got %d, body=%s", w.Code, w.Body.String())
+	}
+	var view boardView
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	codes := map[string]bool{}
+	for _, col := range view.Columns {
+		for _, spec := range col.Specs {
+			codes[spec.Code] = true
+		}
+	}
+	if codes["US-001"] {
+		t.Fatal("deleted spec still present in board view")
+	}
+	if !codes["US-002"] {
+		t.Fatal("remaining spec missing from board view")
+	}
+	if _, err := srv.conn.ReadSpecDetail(ctx, "US-001"); err == nil {
+		t.Fatal("expected deleted spec to be unreadable")
+	}
+}
+
+func TestDeleteSpecEndpointUnsupportedConnector(t *testing.T) {
+	srv, conn := newTestServer(t)
+	seedSpecs(t, conn)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/spec/US-001", nil)
+	srv.mux.ServeHTTP(w, r)
+	if w.Code == http.StatusOK {
+		t.Fatalf("expected non-2xx status, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "does not support deleting specs") {
+		t.Fatalf("expected clear unsupported-connector error, got %s", w.Body.String())
+	}
+}
+
 func TestMoveCard(t *testing.T) {
 	srv, conn := newTestServer(t)
 	seedSpecs(t, conn)

@@ -93,7 +93,12 @@
             </nav>
             <section class="tab-panel active" data-panel="story">
                 <div id="story-view" class="story-view">
-                    <div class="story-view-meta" id="story-view-meta"></div>
+                    <div class="story-view-topbar">
+                        <div class="story-view-meta" id="story-view-meta"></div>
+                        <div class="story-view-actions">
+                            <button type="button" id="story-delete-btn" class="ghost-btn danger-ghost-btn">Delete story</button>
+                        </div>
+                    </div>
                     <h3 class="story-view-title" id="story-view-title"></h3>
                     <div class="markdown-rendered" id="story-body-view"></div>
                     <div class="form-actions">
