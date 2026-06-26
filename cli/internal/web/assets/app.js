@@ -252,20 +252,37 @@
             body.dataset.columnId = col.id;
             (col.specs || []).forEach((s) => body.appendChild(renderCard(s)));
             if (!col.specs || col.specs.length === 0) {
-                body.appendChild(emptyHint());
+                body.appendChild(emptyHint(col.id));
             }
             columnEl.appendChild(body);
             boardEl.appendChild(columnEl);
 
+            createBoardSortable(body, col.id);
+        });
+    }
+
+    function createBoardSortable(body, columnId) {
+        if (columnId === 'review') {
             Sortable.create(body, {
-                group: 'kanban',
+                group: { name: 'review-approval', pull: true, put: false },
+                sort: false,
+                animation: 140,
+                ghostClass: 'sortable-ghost',
+                dragClass: 'sortable-drag',
+            });
+            return;
+        }
+        if (columnId === 'done') {
+            Sortable.create(body, {
+                group: { name: 'review-approval', pull: false, put: ['review-approval'] },
+                draggable: '.done-drop-target-disabled',
+                sort: false,
                 animation: 140,
                 ghostClass: 'sortable-ghost',
                 dragClass: 'sortable-drag',
                 onAdd: onDragMove,
-                onUpdate: onDragMove,
             });
-        });
+        }
     }
 
     function renderCard(spec) {
@@ -302,16 +319,31 @@
         return el;
     }
 
-    function emptyHint() {
+    function emptyHint(columnId) {
         const e = document.createElement('div');
         e.className = 'empty-column';
-        e.textContent = 'drop a card here';
+        e.textContent = columnId === 'done'
+            ? 'drop a Review card here to approve'
+            : 'no specs';
         return e;
     }
 
     async function onDragMove(evt) {
+        const sourceColumn = evt.from && evt.from.dataset ? evt.from.dataset.columnId : '';
+        const targetColumn = evt.to && evt.to.dataset ? evt.to.dataset.columnId : '';
+        if (sourceColumn !== 'review' || targetColumn !== 'done') {
+            showToast('Only Review → Done drag-and-drop is allowed', 'err');
+            // revert any accidental DOM change by restoring the last known good board.
+            if (boardSnapshot) {
+                renderBoard(boardSnapshot);
+                updateStats(boardSnapshot);
+            } else {
+                await loadBoard();
+            }
+            return;
+        }
+
         const code = evt.item.dataset.code;
-        const targetColumn = evt.to.dataset.columnId;
         // Determine anchor based on the card now next to the dragged item.
         let anchor = {};
         const cards = Array.from(evt.to.querySelectorAll('.card'));
@@ -325,12 +357,17 @@
         }
         try {
             await apiPost('/api/board/move', { code, to: targetColumn, ...anchor });
-            showToast(`${code} moved to ${targetColumn}`, 'ok');
+            showToast(`${code} approved and moved to ${targetColumn}`, 'ok');
             await loadBoard();
         } catch (err) {
             showToast(`Move failed: ${err.message || err}`, 'err');
             // revert the optimistic DOM change by reloading the last known good board.
-            if (boardSnapshot) renderBoard(boardSnapshot);
+            if (boardSnapshot) {
+                renderBoard(boardSnapshot);
+                updateStats(boardSnapshot);
+            } else {
+                await loadBoard();
+            }
         }
     }
 
