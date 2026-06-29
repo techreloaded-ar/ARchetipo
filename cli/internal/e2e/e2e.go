@@ -182,12 +182,67 @@ func Ensure(ctx context.Context, opts EnsureOptions) (EnsureResult, error) {
 	return res, nil
 }
 
+// RunOptions configures RunFunctional.
+type RunOptions struct {
+	ProjectRoot string
+	Grep        string
+	Runner      Runner
+}
+
+// RunResult is the JSON payload returned by `archetipo e2e run`. A failing test
+// suite is a result (Passed=false), not a command error: the command still
+// exits 0 so the caller branches on data.passed.
+type RunResult struct {
+	Framework string `json:"framework"`
+	Passed    bool   `json:"passed"`
+	Output    string `json:"output,omitempty"`
+}
+
+// RunFunctional runs the Playwright suite headless (no video, no slowMo —
+// recording belongs to `e2e demo`). Requires Ensure to have been run.
+func RunFunctional(ctx context.Context, opts RunOptions) (RunResult, error) {
+	root := opts.ProjectRoot
+	if root == "" {
+		return RunResult{}, iox.NewInvalidInput("project root is empty", "run inside a project directory", nil)
+	}
+	run := opts.Runner
+	if run == nil {
+		run = osRunner{}
+	}
+	det, err := Detect(root)
+	if err != nil {
+		return RunResult{}, iox.NewInternal("detecting e2e framework", err)
+	}
+	if !det.Installed {
+		return RunResult{}, iox.NewPrecondition(
+			"Playwright is not installed in this project",
+			"run `archetipo e2e ensure` first", nil)
+	}
+	args := []string{"playwright", "test", "--reporter=list"}
+	if opts.Grep != "" {
+		args = append(args, "--grep", opts.Grep)
+	}
+	out, runErr := run.Run(ctx, root, "npx", args...)
+	return RunResult{Framework: FrameworkPlaywright, Passed: runErr == nil, Output: tail(out)}, nil
+}
+
 func firstLine(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]
 	}
 	return s
+}
+
+// tail caps command output so the JSON envelope stays small; the most relevant
+// information (failures, summary) is at the end of a Playwright run.
+func tail(s string) string {
+	const max = 4000
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return "...\n" + s[len(s)-max:]
 }
 
 const minimalPlaywrightConfig = `import { defineConfig, devices } from '@playwright/test';

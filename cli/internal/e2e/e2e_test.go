@@ -117,6 +117,40 @@ func TestEnsure_WithDeps_PassesFlag(t *testing.T) {
 	}
 }
 
+func TestRunFunctional_NotInstalled_Precondition(t *testing.T) {
+	dir := t.TempDir()
+	writePackageJSON(t, dir, `{"name":"x"}`)
+	_, err := RunFunctional(context.Background(), RunOptions{ProjectRoot: dir, Runner: &fakeRunner{}})
+	if err == nil || !strings.Contains(err.Error(), "E_PRECONDITION") {
+		t.Fatalf("expected precondition, got %v", err)
+	}
+}
+
+func TestRunFunctional_PassAndFail(t *testing.T) {
+	dir := t.TempDir()
+	writePackageJSON(t, dir, `{"devDependencies":{"@playwright/test":"1.0.0"}}`)
+
+	res, err := RunFunctional(context.Background(), RunOptions{ProjectRoot: dir, Grep: "demo", Runner: &fakeRunner{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Passed {
+		t.Fatalf("expected passed, got %+v", res)
+	}
+
+	failing := &fakeRunner{err: context.DeadlineExceeded}
+	res, err = RunFunctional(context.Background(), RunOptions{ProjectRoot: dir, Runner: failing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Passed {
+		t.Fatalf("expected failed result, got %+v", res)
+	}
+	if !failing.called("npx playwright test --reporter=list") {
+		t.Fatalf("unexpected invocation: %v", failing.calls)
+	}
+}
+
 func TestDetect(t *testing.T) {
 	dir := t.TempDir()
 	if det, err := Detect(dir); err != nil || det.Framework != "" {

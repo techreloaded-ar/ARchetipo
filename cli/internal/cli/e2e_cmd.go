@@ -14,7 +14,7 @@ import (
 // test setup. Today only Playwright is supported.
 func newE2ECmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "e2e", Short: "End-to-end testing helpers"}
-	root.AddCommand(newE2EDetectCmd(s), newE2EEnsureCmd(s))
+	root.AddCommand(newE2EDetectCmd(s), newE2EEnsureCmd(s), newE2ERunCmd(s))
 	return root
 }
 
@@ -80,5 +80,27 @@ func newE2EEnsureCmd(s streams) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&browser, "browser", e2e.DefaultBrowser, "browser to install")
 	cmd.Flags().BoolVar(&withDeps, "with-deps", false, "also install OS-level browser dependencies (may require sudo)")
+	return cmd
+}
+
+func newE2ERunCmd(s streams) *cobra.Command {
+	var grep string
+	cmd := &cobra.Command{
+		Use:   "run",
+		Short: "Run the Playwright functional suite headless (no video)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			root, err := projectRoot()
+			if err != nil {
+				return err
+			}
+			res, err := e2e.RunFunctional(cmd.Context(), e2e.RunOptions{ProjectRoot: root, Grep: grep})
+			if err != nil {
+				return err
+			}
+			return iox.WriteOK(s.out, "e2e_run", res)
+		},
+	}
+	cmd.Flags().StringVar(&grep, "grep", "", "only run tests matching this pattern")
 	return cmd
 }
