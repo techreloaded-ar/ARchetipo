@@ -1452,42 +1452,57 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 }
 
 .task-desc-details {
-	margin-top: 4px;
-	font-size: 12px;
+	margin-top: 2px;
 }
 
 .task-desc-details summary {
-	color: var(--accent);
+	display: inline-flex;
+	align-items: baseline;
+	gap: 6px;
+	color: var(--text-strong);
 	cursor: pointer;
-	font-family: var(--font-mono);
-	font-size: 10.5px;
-	text-transform: uppercase;
-	letter-spacing: 0.1em;
+	list-style: revert;
 	user-select: none;
 }
 
-.task-desc-body {
-	margin-top: 6px;
-	padding: 8px 10px;
-	background: var(--surface);
-	border: 1px solid var(--rule);
-	border-radius: var(--radius-sm);
-	color: var(--text-muted);
-	line-height: 1.5;
+.task-desc-details summary::marker {
+	color: var(--accent);
 }
 
-.task-desc-body p {
-	margin: 0;
+.task-desc-details summary:hover .task-title-text,
+.task-desc-details summary:focus-visible .task-title-text {
+	color: var(--accent);
 }
-.task-desc-body p + p {
-	margin-top: 4px;
+
+.task-title-text {
+	font-weight: 600;
+	color: var(--text-strong);
+	transition: color var(--transition);
 }
-.task-desc-body code {
-	font-family: var(--font-mono);
-	font-size: 11px;
-	background: var(--surface-2);
-	padding: 1px 4px;
-	border-radius: 2px;
+
+.task-desc-markdown {
+	margin-top: 8px;
+	padding: 12px 14px;
+	font-size: 12.5px;
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+
+.task-desc-markdown p:first-child,
+.task-desc-markdown ul:first-child,
+.task-desc-markdown ol:first-child,
+.task-desc-markdown pre:first-child,
+.task-desc-markdown blockquote:first-child {
+	margin-top: 0;
+}
+
+.task-desc-markdown p:last-child,
+.task-desc-markdown ul:last-child,
+.task-desc-markdown ol:last-child,
+.task-desc-markdown pre:last-child,
+.task-desc-markdown blockquote:last-child {
+	margin-bottom: 0;
 }
 
 .empty-cell {

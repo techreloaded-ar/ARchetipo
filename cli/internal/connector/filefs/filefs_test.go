@@ -189,6 +189,47 @@ func TestPlanRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSavePlanRoundTripKeepsTaskMarkdownInDescriptionFallback(t *testing.T) {
+	c := newTestConnector(t)
+	ctx := context.Background()
+	if _, err := c.SaveInitialBacklog(ctx, []domain.Spec{{
+		Code:     "US-001",
+		Title:    "Setup",
+		Epic:     domain.Epic{Code: "EP-001", Title: "Foundations"},
+		Priority: domain.PriorityHigh,
+		Points:   3,
+		Status:   domain.StatusPlanned,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	const taskMarkdownBody = "Paragraph\n\n- item\n\n`code`"
+	if _, err := c.SavePlan(ctx, "US-001", domain.PlanInput{
+		PlanBody: "## Plan",
+		Tasks: []domain.Task{{
+			ID:          "TASK-01",
+			Title:       "Schema DB",
+			Body:        taskMarkdownBody,
+			Description: taskMarkdownBody,
+			Type:        domain.TaskImpl,
+			Status:      domain.StatusTodo,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := c.ReadSpecTasks(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].Description != taskMarkdownBody {
+		t.Fatalf("task markdown did not survive in description fallback: got %q want %q", tasks[0].Description, taskMarkdownBody)
+	}
+}
+
 func TestUpdateSpec(t *testing.T) {
 	c := newTestConnector(t)
 	ctx := context.Background()

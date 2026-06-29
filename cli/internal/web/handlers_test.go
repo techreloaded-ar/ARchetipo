@@ -223,10 +223,18 @@ func TestSavePlanEndpoint(t *testing.T) {
 	srv, conn := newTestServer(t)
 	seedSpecs(t, conn)
 
+	const taskMarkdownBody = "Paragraph\n\n- item\n\n`code`"
 	plan := map[string]any{
 		"plan_body": "## Plan\n\nbody",
 		"tasks": []map[string]any{
-			{"id": "TASK-01", "title": "do x", "type": "Impl", "status": "TODO"},
+			{
+				"id":          "TASK-01",
+				"title":       "do x",
+				"body":        taskMarkdownBody,
+				"description": taskMarkdownBody,
+				"type":        "Impl",
+				"status":      "TODO",
+			},
 		},
 	}
 	body, _ := json.Marshal(plan)
@@ -242,7 +250,33 @@ func TestSavePlanEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(tasks) != 1 || tasks[0].ID != "TASK-01" {
-		t.Errorf("plan not saved: %+v", tasks)
+		t.Fatalf("plan not saved: %+v", tasks)
+	}
+	if tasks[0].Body != taskMarkdownBody {
+		t.Fatalf("task body lost on save: got %q want %q", tasks[0].Body, taskMarkdownBody)
+	}
+	if tasks[0].Description != taskMarkdownBody {
+		t.Fatalf("task description lost on save: got %q want %q", tasks[0].Description, taskMarkdownBody)
+	}
+
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/api/spec/US-001", nil)
+	srv.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get spec status: got %d, body=%s", w.Code, w.Body.String())
+	}
+	var out specDetailView
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Tasks) != 1 {
+		t.Fatalf("expected 1 task in GET response, got %d", len(out.Tasks))
+	}
+	if out.Tasks[0].Body != taskMarkdownBody {
+		t.Fatalf("task body not returned by GET: got %q want %q", out.Tasks[0].Body, taskMarkdownBody)
+	}
+	if out.Tasks[0].Description != taskMarkdownBody {
+		t.Fatalf("task description not returned by GET: got %q want %q", out.Tasks[0].Description, taskMarkdownBody)
 	}
 }
 

@@ -525,18 +525,34 @@
 		showSpecView();
 	}
 
+	function getTaskMarkdown(task) {
+		const body = typeof task?.body === "string" ? task.body.trim() : "";
+		if (body) return body;
+		return typeof task?.description === "string" ? task.description.trim() : "";
+	}
+
+	function renderTaskTitleCell(task) {
+		const title = escapeHtml(task.title || "");
+		const taskMarkdown = getTaskMarkdown(task);
+		if (!taskMarkdown) {
+			return `<div class="task-title-text">${title}</div>`;
+		}
+		return `
+                <details class="task-desc-details">
+                    <summary><span class="task-title-text">${title}</span></summary>
+                    <div class="markdown-rendered task-desc-markdown">${marked.parse(taskMarkdown)}</div>
+                </details>
+            `;
+	}
+
 	function fillPlanView(body, tasks) {
 		planBodyView.innerHTML = marked.parse(body || "*(no plan)*");
 		planTasksView.innerHTML = "";
 		(tasks || []).forEach((t) => {
-			const desc = t.description || t.body || "";
 			const tr = document.createElement("tr");
 			tr.innerHTML = `
                 <td>${escapeHtml(t.id || "")}</td>
-                <td>
-                    <div>${escapeHtml(t.title || "")}</div>
-                    ${desc ? `<details class="task-desc-details"><summary>description</summary><div class="task-desc-body">${marked.parse(desc)}</div></details>` : ""}
-                </td>
+                <td>${renderTaskTitleCell(t)}</td>
                 <td>${escapeHtml(t.type || "")}</td>
                 <td>${escapeHtml(t.status || "")}</td>
                 <td>${escapeHtml((t.dependencies || []).join(", "))}</td>
@@ -574,6 +590,7 @@
 			id: nextTaskID(),
 			title: "",
 			description: "",
+			body: "",
 			type: "Impl",
 			status: "TODO",
 			dependencies: [],
@@ -583,7 +600,7 @@
             <td><input type="text" class="task-id" value="${escapeHtml(t.id || "")}" /></td>
             <td>
                 <input type="text" class="task-title" value="${escapeHtml(t.title || "")}" />
-                <textarea class="task-desc" rows="2" placeholder="Technical description…">${escapeHtml(t.description || "")}</textarea>
+                <textarea class="task-desc" rows="2" placeholder="Task markdown body…">${escapeHtml(getTaskMarkdown(t))}</textarea>
             </td>
             <td>
                 <select class="task-type">
@@ -663,10 +680,12 @@
 					.map((s) => s.trim())
 					.filter(Boolean);
 				const descEl = tr.querySelector(".task-desc");
+				const taskMarkdownBody = descEl ? descEl.value.trim() : "";
 				return {
 					id: tr.querySelector(".task-id").value.trim(),
 					title: tr.querySelector(".task-title").value.trim(),
-					description: descEl ? descEl.value.trim() : "",
+					body: taskMarkdownBody,
+					description: taskMarkdownBody,
 					type: tr.querySelector(".task-type").value,
 					status: tr.querySelector(".task-status").value,
 					dependencies: deps,
