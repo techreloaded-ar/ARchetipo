@@ -70,6 +70,7 @@ func newRootCmd(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 		newUpdateCmd(s),
 		newPRDCmd(s),
 		newSpecCmd(s),
+		newE2ECmd(s),
 		newMetricsCmd(s),
 		newTaskCmd(s),
 		newViewCmd(s),
