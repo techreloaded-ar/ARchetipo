@@ -1,6 +1,6 @@
 ---
 name: archetipo-review
-description: Facilitates the human acceptance gate for a spec in REVIEW status. Presents the delivered increment (acceptance criteria, diff, test results, demo video), collects the human verdict, and either approves the spec (transition to DONE, with worktree integration when enabled) or sends it back with structured rework feedback. The connector (configured in .archetipo/config.yaml) determines where specs are read from and where status updates are written. Use this skill whenever the user wants to review, accept, approve, or reject a delivered spec, or to decide what happens to work that is waiting in the REVIEW column. Do not use it for code-level review during implementation (that is Cesare's job inside archetipo-implement) or for planning work.
+description: Facilitates the human acceptance gate for a spec in REVIEW status. Presents the delivered increment (acceptance criteria, diff, test results), records and presents a demo video for filmable specs, collects the human verdict, and either approves the spec (transition to DONE, with worktree integration when enabled) or sends it back with structured rework feedback. The connector (configured in .archetipo/config.yaml) determines where specs are read from and where status updates are written. Use this skill whenever the user wants to review, accept, approve, or reject a delivered spec, or to decide what happens to work that is waiting in the REVIEW column. Do not use it for code-level review during implementation (that is Cesare's job inside archetipo-implement) or for planning work.
 ---
 
 # ARchetipo - Spec Acceptance Review Skill
@@ -17,7 +17,7 @@ Read `.archetipo/shared-runtime.md` for the CLI Runtime Contract, Language Polic
 
 1. **The verdict is the user's.** This skill is the one place in the workflow where stopping to ask is the point, not a failure. Never approve, reject, or postpone a spec on your own initiative.
 2. **Everything else is autonomous.** Gathering evidence, presenting the increment, and executing the chosen verdict need no confirmation beyond the verdict itself.
-3. **Connector operations are exposed by the CLI.** This skill uses `config show`, `spec show`, `spec next`, `spec integrate`, `spec move`, and `spec request-changes`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`, never on connector type.
+3. **Connector operations are exposed by the CLI.** This skill uses `config show`, `spec show`, `spec next`, `spec integrate`, `spec move`, and `spec request-changes`. It also uses `e2e demo` to record the demo video. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`, never on connector type.
 
 ## Workflow
 
@@ -42,6 +42,12 @@ Build a compact review dossier from these sources. Read surgically — this phas
 2. **The work.** From `data.tasks`: completed vs total tasks. Flag any task not marked done.
 3. **The diff.** When `data.spec.branch` is set (worktree workflow): run `git diff {data.spec.fork_base}...{data.spec.branch} --stat` from `data.project_root` and report files touched and overall size. Otherwise mention that the changes live on the main working tree and that `archetipo view` offers a browsable diff against the configured base.
 4. **The evidence.** Look in `{config.paths.test_results}/{US-CODE}/` for test output and a demo video; point the user at the video file when it exists. If the spec promised e2e coverage and the folder is empty, say so explicitly — absence of evidence is a finding, not a detail to skip.
+
+**Demo video (recorded here, on demand).** Recording the demo is a review responsibility, not an implementation one. Decide whether to record before building the dossier:
+
+- Record when **all** hold: the spec's `Demonstrates` field describes a concrete, user-visible action; the increment is observable through the UI or a user-facing artifact; a non-technical reviewer would gain understanding from watching it. Skip for purely technical specs (refactor, infra, config) or when `Demonstrates` is missing/unfilmable, and note the skip briefly ("No demo video: technical spec, no user-visible surface").
+- When recording: author **one** demo test that reproduces the `Demonstrates` flow end to end — from a clean starting state to the visible increment — using one logical action per step and explicit assertion-based waits (`expect(locator).toBeVisible()`) so each beat is visible; end with a final visibility assertion. Name it after the outcome (e.g. `demo__user-exports-monthly-report.spec.ts`). Keep edge cases and error paths in separate, unrecorded tests.
+- Run `archetipo e2e demo --spec {US-CODE} --grep <demo>` from `data.workdir`. The CLI injects the recording settings (video on, slow motion, fixed viewport) via an ephemeral config, so the test file stays a plain scenario, and stores the video under `{config.paths.test_results}/{US-CODE}/`. Parse the JSON envelope for `data.video_path` and `data.passed`; if no video was produced or the run failed, report it as a finding. The recorded video is what step 4 then presents.
 
 Present the dossier as Andrea: short, structured around the acceptance criteria (one line per criterion: met / unclear / not verifiable from the artifacts), with the open questions surfaced. Do not paste raw diffs or full file contents — summarize and reference.
 
