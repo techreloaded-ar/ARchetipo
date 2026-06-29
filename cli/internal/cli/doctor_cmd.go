@@ -164,11 +164,20 @@ func checkE2E(cfg config.Config) doctorCheck {
 		return doctorCheck{
 			name:   "e2e",
 			ok:     true,
-			detail: fmt.Sprintf("%s configured; package not installed yet", det.Framework),
+			detail: fmt.Sprintf("%s configured; package not installed yet (%s)", det.Framework, demoRecordingState(cfg)),
 			hint:   "run `archetipo e2e ensure` to install it",
 		}
 	}
-	return doctorCheck{name: "e2e", ok: true, detail: fmt.Sprintf("%s installed", det.Framework)}
+	return doctorCheck{name: "e2e", ok: true, detail: fmt.Sprintf("%s installed (%s)", det.Framework, demoRecordingState(cfg))}
+}
+
+// demoRecordingState renders the e2e.record_demo_video gate for the doctor
+// report so it is visible whether `archetipo e2e demo` will record or skip.
+func demoRecordingState(cfg config.Config) string {
+	if cfg.E2E.RecordDemoVideo {
+		return "demo recording enabled"
+	}
+	return "demo recording disabled (e2e.record_demo_video)"
 }
 
 // checkJira verifies the jira connector has the base URL and the credentials

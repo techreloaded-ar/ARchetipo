@@ -28,6 +28,12 @@ worktree:
   dir: .archetipo/worktrees
   branch_prefix: archetipo/
 
+# Optional end-to-end demo recording. `archetipo e2e demo` produces a video
+# ONLY when record_demo_video is true; otherwise it records nothing and reports
+# the skip. Off by default, so demo videos are opt-in.
+e2e:
+  record_demo_video: false
+
 # Used only when connector == github. owner/project_number are auto-detected
 # from `gh`; the remaining keys are populated automatically by the CLI during
 # initialize_connector — leave them commented unless you need to override.

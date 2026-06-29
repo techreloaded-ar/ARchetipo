@@ -44,6 +44,9 @@ type Config struct {
 	// default; when enabled, `archetipo spec start` creates a branch + worktree
 	// per spec so the review diff can be isolated and integrated with one merge.
 	Worktree domain.WorktreeConfig `yaml:"worktree" json:"worktree,omitempty"`
+	// E2E is the optional `e2e:` section. RecordDemoVideo gates demo recording
+	// (`archetipo e2e demo`); off by default, so videos are opt-in.
+	E2E domain.E2EConfig `yaml:"e2e" json:"e2e,omitempty"`
 	// ProjectRoot is the absolute path of the directory that contains
 	// .archetipo/. Set by Load; not present in the YAML file.
 	ProjectRoot string `yaml:"-" json:"project_root"`

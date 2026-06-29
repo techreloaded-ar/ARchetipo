@@ -123,6 +123,14 @@ func newE2EDemoCmd(s streams) *cobra.Command {
 			if err != nil {
 				return iox.NewInvalidInput(err.Error(), "fix .archetipo/config.yaml or remove it to fall back to defaults", err)
 			}
+			if !cfg.E2E.RecordDemoVideo {
+				return iox.WriteOK(s.out, "e2e_demo", e2e.DemoResult{
+					Framework: e2e.FrameworkPlaywright,
+					Spec:      spec,
+					Skipped:   true,
+					Reason:    "demo video recording disabled (set e2e.record_demo_video: true to enable)",
+				})
+			}
 			res, err := e2e.RecordDemo(cmd.Context(), e2e.DemoOptions{
 				ProjectRoot:    cfg.ProjectRoot,
 				Spec:           spec,

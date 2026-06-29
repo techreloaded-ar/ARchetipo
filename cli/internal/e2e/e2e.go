@@ -253,8 +253,13 @@ type DemoResult struct {
 	Spec      string `json:"spec"`
 	Passed    bool   `json:"passed"`
 	VideoPath string `json:"video_path,omitempty"` // relative to ProjectRoot; empty when none produced
-	OutputDir string `json:"output_dir"`           // relative to ProjectRoot
+	OutputDir string `json:"output_dir,omitempty"` // relative to ProjectRoot
 	Output    string `json:"output,omitempty"`
+	// Skipped reports that recording was deliberately not attempted (e.g. demo
+	// recording disabled in config). Distinct from a recording that ran but
+	// produced no video. Reason carries the human-readable explanation.
+	Skipped bool   `json:"skipped"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // RecordDemo runs a single demo test with deterministic recording (video on,

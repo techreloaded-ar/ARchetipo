@@ -1273,3 +1273,25 @@ func TestVersionFlagMatchesCommand(t *testing.T) {
 		t.Fatalf("mismatch: cmd=%q flag=%q", cmd.stdout.String(), flag.stdout.String())
 	}
 }
+
+// With e2e.record_demo_video off (the default), `e2e demo` must report an
+// intentional skip without recording: no playwright is invoked and no artifact
+// folder is created. The gate is checked before RecordDemo, so this holds even
+// in a project with no package.json.
+func TestE2EDemoSkippedWhenDisabled(t *testing.T) {
+	newProject(t)
+	res := runCLI(t, "", "e2e", "demo", "--spec", "US-001", "--grep", "demo")
+	kind, data := decodeOK(t, res)
+	if kind != "e2e_demo" {
+		t.Fatalf("kind: %q", kind)
+	}
+	if data["skipped"] != true {
+		t.Fatalf("skipped: got %v, want true", data["skipped"])
+	}
+	if v, ok := data["video_path"]; ok && v != "" {
+		t.Fatalf("video_path should be empty, got %v", v)
+	}
+	if _, err := os.Stat(filepath.Join("docs", "test-results", "US-001")); !os.IsNotExist(err) {
+		t.Fatalf("artifact folder should not exist when recording is disabled (err=%v)", err)
+	}
+}

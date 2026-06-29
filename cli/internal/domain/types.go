@@ -316,6 +316,13 @@ type WorktreeConfig struct {
 	BranchPrefix string `json:"branch_prefix" yaml:"branch_prefix"`
 }
 
+// E2EConfig mirrors the optional `e2e:` section of .archetipo/config.yaml.
+// RecordDemoVideo gates `archetipo e2e demo`: the demo video is recorded only
+// when it is true. Off by default, so videos are opt-in.
+type E2EConfig struct {
+	RecordDemoVideo bool `json:"record_demo_video" yaml:"record_demo_video"`
+}
+
 // ReviewComment is a single inline comment left on the review diff, anchored to
 // a file and a line. Side is "new" for a line in the post-image (added/context
 // on the new side) or "old" for a line on the pre-image (removed side).

@@ -68,6 +68,36 @@ workflow:
 	}
 }
 
+func TestLoad_E2ERecordDemoVideo(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(`connector: file
+e2e:
+  record_demo_video: true
+`), 0o644))
+	c, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.E2E.RecordDemoVideo {
+		t.Errorf("record_demo_video: got false, want true")
+	}
+}
+
+func TestLoad_E2ERecordDemoVideoDefaultsFalse(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(`connector: file
+`), 0o644))
+	c, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.E2E.RecordDemoVideo {
+		t.Errorf("record_demo_video: got true, want false default when section absent")
+	}
+}
+
 func TestLoadFromSubdirectoryWalksUp(t *testing.T) {
 	root := t.TempDir()
 	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
