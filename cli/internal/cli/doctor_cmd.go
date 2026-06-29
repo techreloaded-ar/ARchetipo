@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/e2e"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/version"
 )
@@ -126,7 +127,48 @@ func runDoctorChecks(ctx context.Context) []doctorCheck {
 		checks = append(checks, doctorCheck{name: "jira", skipped: true, detail: "skipped (connector is not jira)"})
 	}
 
+	// 7. e2e toolchain, only relevant for Node projects that use it.
+	if cfgErr == nil {
+		checks = append(checks, checkE2E(cfg))
+	} else {
+		checks = append(checks, doctorCheck{name: "e2e", skipped: true, detail: "skipped (project config unavailable)"})
+	}
+
 	return checks
+}
+
+// checkE2E reports the e2e toolchain state. It is informational for projects
+// that are not (yet) using e2e: it only fails when a Node project has e2e but
+// node/npm are missing from PATH.
+func checkE2E(cfg config.Config) doctorCheck {
+	if _, err := os.Stat(filepath.Join(cfg.ProjectRoot, "package.json")); err != nil {
+		return doctorCheck{name: "e2e", skipped: true, detail: "skipped (no package.json)"}
+	}
+	det, err := e2e.Detect(cfg.ProjectRoot)
+	if err != nil {
+		return doctorCheck{name: "e2e", detail: "detection failed: " + err.Error()}
+	}
+	if det.Framework == "" {
+		return doctorCheck{name: "e2e", skipped: true, detail: "skipped (no e2e framework configured)"}
+	}
+	_, nodeErr := exec.LookPath("node")
+	_, npmErr := exec.LookPath("npm")
+	if nodeErr != nil || npmErr != nil {
+		return doctorCheck{
+			name:   "e2e",
+			detail: fmt.Sprintf("%s detected but node/npm missing in PATH", det.Framework),
+			hint:   "install Node.js (provides node + npm) to run `archetipo e2e ensure`",
+		}
+	}
+	if !det.Installed {
+		return doctorCheck{
+			name:   "e2e",
+			ok:     true,
+			detail: fmt.Sprintf("%s configured; package not installed yet", det.Framework),
+			hint:   "run `archetipo e2e ensure` to install it",
+		}
+	}
+	return doctorCheck{name: "e2e", ok: true, detail: fmt.Sprintf("%s installed", det.Framework)}
 }
 
 // checkJira verifies the jira connector has the base URL and the credentials
