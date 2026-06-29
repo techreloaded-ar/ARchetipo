@@ -12,10 +12,14 @@ import (
 type fakeRunner struct {
 	calls [][]string
 	err   error
+	onRun func() // optional side effect, e.g. simulate artifact creation
 }
 
 func (f *fakeRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
 	f.calls = append(f.calls, append([]string{name}, args...))
+	if f.onRun != nil {
+		f.onRun()
+	}
 	return "", f.err
 }
 
@@ -148,6 +152,80 @@ func TestRunFunctional_PassAndFail(t *testing.T) {
 	}
 	if !failing.called("npx playwright test --reporter=list") {
 		t.Fatalf("unexpected invocation: %v", failing.calls)
+	}
+}
+
+func TestRecordDemo_NotInstalled_Precondition(t *testing.T) {
+	dir := t.TempDir()
+	writePackageJSON(t, dir, `{"name":"x"}`)
+	_, err := RecordDemo(context.Background(), DemoOptions{ProjectRoot: dir, Spec: "US-1", Runner: &fakeRunner{}})
+	if err == nil || !strings.Contains(err.Error(), "E_PRECONDITION") {
+		t.Fatalf("expected precondition, got %v", err)
+	}
+}
+
+func TestRecordDemo_MissingSpec_Invalid(t *testing.T) {
+	dir := t.TempDir()
+	writePackageJSON(t, dir, `{"devDependencies":{"@playwright/test":"1.0.0"}}`)
+	_, err := RecordDemo(context.Background(), DemoOptions{ProjectRoot: dir, Runner: &fakeRunner{}})
+	if err == nil || !strings.Contains(err.Error(), "E_INVALID_INPUT") {
+		t.Fatalf("expected invalid input, got %v", err)
+	}
+}
+
+func TestRecordDemo_RunsRecordsAndCleansUp(t *testing.T) {
+	dir := t.TempDir()
+	writePackageJSON(t, dir, `{"devDependencies":{"@playwright/test":"1.0.0"}}`)
+	// Existing project config => the ephemeral config must import it.
+	if err := os.WriteFile(filepath.Join(dir, "playwright.config.ts"), []byte("// base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRunner{}
+
+	res, err := RecordDemo(context.Background(), DemoOptions{
+		ProjectRoot:    dir,
+		Spec:           "US-001",
+		Grep:           "demo",
+		TestResultsDir: "out",
+		Runner:         fr,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Passed || res.OutputDir != filepath.Join("out", "US-001") {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if !fr.called("npx playwright test --config "+demoConfigName) || !fr.called("--grep demo") {
+		t.Fatalf("unexpected invocation: %v", fr.calls)
+	}
+	// Output dir created, ephemeral config removed after the run.
+	if _, err := os.Stat(filepath.Join(dir, "out", "US-001")); err != nil {
+		t.Fatalf("output dir not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, demoConfigName)); !os.IsNotExist(err) {
+		t.Fatalf("ephemeral config should be removed, err=%v", err)
+	}
+}
+
+func TestRecordDemo_FindsVideo(t *testing.T) {
+	dir := t.TempDir()
+	writePackageJSON(t, dir, `{"devDependencies":{"@playwright/test":"1.0.0"}}`)
+	// Simulate Playwright writing a video into the output dir during the run.
+	producer := &fakeRunner{}
+	produce := func() {
+		vidDir := filepath.Join(dir, "docs/test-results", "US-009", "trace")
+		_ = os.MkdirAll(vidDir, 0o755)
+		_ = os.WriteFile(filepath.Join(vidDir, "video.webm"), []byte("x"), 0o644)
+	}
+	producer.onRun = produce
+
+	res, err := RecordDemo(context.Background(), DemoOptions{ProjectRoot: dir, Spec: "US-009", Runner: producer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join("docs/test-results", "US-009", "trace", "video.webm")
+	if res.VideoPath != want {
+		t.Fatalf("video path = %q, want %q", res.VideoPath, want)
 	}
 }
 

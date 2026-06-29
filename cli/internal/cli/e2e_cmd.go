@@ -14,7 +14,7 @@ import (
 // test setup. Today only Playwright is supported.
 func newE2ECmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "e2e", Short: "End-to-end testing helpers"}
-	root.AddCommand(newE2EDetectCmd(s), newE2EEnsureCmd(s), newE2ERunCmd(s))
+	root.AddCommand(newE2EDetectCmd(s), newE2EEnsureCmd(s), newE2ERunCmd(s), newE2EDemoCmd(s))
 	return root
 }
 
@@ -102,5 +102,40 @@ func newE2ERunCmd(s streams) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&grep, "grep", "", "only run tests matching this pattern")
+	return cmd
+}
+
+func newE2EDemoCmd(s streams) *cobra.Command {
+	var spec, grep string
+	cmd := &cobra.Command{
+		Use:   "demo --spec US-XXX --grep <demo>",
+		Short: "Record a watchable demo video for one scenario",
+		Long: "Runs a single demo test with deterministic recording (video on, slow motion, " +
+			"fixed viewport) and collects the video under <test_results>/<spec>/. The recording " +
+			"settings are injected via an ephemeral config, so the demo test file stays a plain scenario.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return iox.NewInternal("cwd unavailable", err)
+			}
+			cfg, err := config.Load(cwd)
+			if err != nil {
+				return iox.NewInvalidInput(err.Error(), "fix .archetipo/config.yaml or remove it to fall back to defaults", err)
+			}
+			res, err := e2e.RecordDemo(cmd.Context(), e2e.DemoOptions{
+				ProjectRoot:    cfg.ProjectRoot,
+				Spec:           spec,
+				Grep:           grep,
+				TestResultsDir: cfg.Paths.TestResults,
+			})
+			if err != nil {
+				return err
+			}
+			return iox.WriteOK(s.out, "e2e_demo", res)
+		},
+	}
+	cmd.Flags().StringVar(&spec, "spec", "", "spec code (US-XXX); used as the artifact subfolder")
+	cmd.Flags().StringVar(&grep, "grep", "", "pattern selecting the single demo test to record")
 	return cmd
 }
