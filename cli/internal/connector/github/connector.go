@@ -276,6 +276,7 @@ func (c *Connector) AppendSpecs(ctx context.Context, specs []domain.Spec) (domai
 }
 
 func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.PlanInput) (domain.WriteResult, error) {
+	domain.NormalizePlanInput(&plan)
 	if err := c.ensureSetup(ctx); err != nil {
 		return domain.WriteResult{}, err
 	}
@@ -308,7 +309,7 @@ func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.Pl
 		if epicLabel != "" {
 			labels = append(labels, epicLabel)
 		}
-		created, err := c.createIssue(ctx, fmt.Sprintf("%s: %s", t.ID, t.Title), t.Body, labels)
+		created, err := c.createIssue(ctx, fmt.Sprintf("%s: %s", t.ID, t.Title), firstNonEmpty(t.Body, t.Description), labels)
 		if err != nil {
 			return domain.WriteResult{}, err
 		}

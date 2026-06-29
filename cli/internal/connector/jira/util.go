@@ -99,7 +99,7 @@ func parseDescription(raw string) (body string, epic domain.Epic, meta specmeta.
 // renderTaskDescription appends the task marker (type + dependencies) to a
 // sub-task body.
 func renderTaskDescription(t domain.Task) string {
-	out := strings.TrimRight(firstNonEmpty(t.Description, t.Body), "\n")
+	out := strings.TrimRight(firstNonEmpty(t.Body, t.Description), "\n")
 	marker := "type=" + string(t.Type)
 	if len(t.Dependencies) > 0 {
 		marker += " deps=" + strings.Join(t.Dependencies, ",")

@@ -177,6 +177,8 @@ ARchetipo usa una CLI deterministica scritta in Go, `archetipo`, per persistenza
 
 La CLI legge `.archetipo/config.yaml` dal progetto per scegliere connector attivo e percorsi degli artefatti.
 
+Per sviluppo locale della CLI senza pubblicare pacchetti npm, vedi [`docs/dev-local-cli.md`](docs/dev-local-cli.md).
+
 ---
 
 ## Connector

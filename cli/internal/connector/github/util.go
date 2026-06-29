@@ -68,6 +68,15 @@ func epicTitleFromLabel(label string) string {
 	return label[open+1 : close]
 }
 
+// firstNonEmpty returns the first non-blank string. When both are populated,
+// body takes precedence over description.
+func firstNonEmpty(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
+}
+
 // writeFile is a duplicate of filefs.writeFile to avoid an import cycle when
 // the github connector also needs to persist a local file (PRD).
 func writeFile(path string, content []byte) error {

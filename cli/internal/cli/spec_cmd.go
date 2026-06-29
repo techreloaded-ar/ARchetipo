@@ -205,6 +205,7 @@ func loadSpecWithTasks(ctx context.Context, cfg config.Config, c connector.Conne
 			return nil, err
 		}
 	}
+	domain.NormalizeTaskBodies(tasks)
 	return map[string]any{"spec": st, "tasks": tasks, "workdir": resolveWorkdir(cfg, st)}, nil
 }
 
@@ -282,6 +283,7 @@ func newSpecPlanCmd(s streams) *cobra.Command {
 			if err := readStructuredInput(s.in, filePath, &input); err != nil {
 				return err
 			}
+			domain.NormalizePlanInput(&input)
 			if err := validatePlanInput(input); err != nil {
 				return err
 			}

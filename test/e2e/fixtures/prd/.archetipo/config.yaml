@@ -1,0 +1,23 @@
+connector: file
+
+paths:
+  prd: docs/PRD.md
+  mockups: docs/mockups/
+  test_results: docs/test-results/
+
+workflow:
+  statuses:
+    todo: TODO
+    planned: PLANNED
+    in_progress: IN PROGRESS
+    review: REVIEW
+    done: DONE
+
+file:
+  backlog: .archetipo/backlog.yaml
+  planning: .archetipo/plans/
+
+# Worktree disabled — this scenario only goes from PRD → spec → plan,
+# it does not implement, so no worktree needed.
+worktree:
+  enabled: false

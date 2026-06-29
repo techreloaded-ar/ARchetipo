@@ -216,6 +216,7 @@ func (s *Server) readPlanForSpec(ctx context.Context, code string) ([]domain.Tas
 		}
 		return nil, "", err
 	}
+	domain.NormalizeTaskBodies(tasks)
 	body := ""
 	if pr, ok := s.conn.(connector.PlanBodyReader); ok {
 		if b, err := pr.ReadPlanBody(ctx, code); err == nil {
@@ -340,7 +341,9 @@ func (s *Server) handleSavePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	res, err := s.conn.SavePlan(r.Context(), code, domain.PlanInput{PlanBody: req.PlanBody, Tasks: req.Tasks})
+	input := domain.PlanInput{PlanBody: req.PlanBody, Tasks: req.Tasks}
+	domain.NormalizePlanInput(&input)
+	res, err := s.conn.SavePlan(r.Context(), code, input)
 	if err != nil {
 		writeError(w, err)
 		return
