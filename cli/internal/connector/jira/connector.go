@@ -346,6 +346,7 @@ func (c *Connector) ReadSpecTasks(ctx context.Context, parentRef string) ([]doma
 		out = append(out, domain.Task{
 			ID:           id,
 			Title:        titleAfterCode(f.Summary),
+			Description:  body,
 			Type:         typ,
 			Status:       status,
 			Dependencies: deps,
