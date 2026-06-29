@@ -154,8 +154,12 @@ const specJSON = `{"specs":[
 ]}`
 
 const planJSON = `{"plan_body":"## Plan\nDo the work","tasks":[
-	{"id":"TASK-01","title":"Implement","type":"Impl","status":"TODO"},
-	{"id":"TASK-02","title":"Test","type":"Test","status":"TODO"}
+	{"id":"TASK-01","title":"Implement","body":"## Descrizione\n\nImplementare il flusso.\n\n## File Coinvolti\n- internal/service.go — aggiungere la logica\n\n## Criteri di Completamento\n- [ ] comportamento implementato","type":"Impl","status":"TODO"},
+	{"id":"TASK-02","title":"Test","body":"## Descrizione\n\nVerificare il comportamento.\n\n## File Coinvolti\n- internal/service_test.go — aggiungere i casi\n\n## Criteri di Completamento\n- [ ] test verdi","type":"Test","status":"TODO"}
+]}`
+
+const legacyPlanJSON = `{"plan_body":"## Plan\nDo the work","tasks":[
+	{"id":"TASK-01","title":"Implement","description":"Legacy description only","type":"Impl","status":"TODO"}
 ]}`
 
 func TestConfigShow(t *testing.T) {
@@ -386,8 +390,34 @@ func TestSpecPlan_TODOToPlanned(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("expected 2 tasks after plan, got %d", len(tasks))
 	}
+	firstTask, _ := tasks[0].(map[string]any)
+	if firstTask["body"] == nil || firstTask["body"] == "" {
+		t.Fatalf("expected canonical task body in spec show payload, got %+v", firstTask)
+	}
 	if _, err := os.Stat(expectedPlanPath("US-001")); err != nil {
 		t.Fatalf("expected plan file at %s: %v", expectedPlanPath("US-001"), err)
+	}
+}
+
+func TestSpecPlan_LegacyDescriptionNormalizesTaskBody(t *testing.T) {
+	newProject(t)
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	planFile := writeInputFile(t, "plan-legacy.json", legacyPlanJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "plan", "US-001", "--file", planFile); res.exit != 0 {
+		t.Fatalf("legacy plan failed: %s", res.stderr.String())
+	}
+	show := runCLI(t, "", "spec", "show", "US-001")
+	_, data := decodeOK(t, show)
+	tasks, _ := data["tasks"].([]any)
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task after legacy plan, got %d", len(tasks))
+	}
+	first, _ := tasks[0].(map[string]any)
+	if first["body"] != "Legacy description only" {
+		t.Fatalf("expected normalized task body, got %v", first["body"])
 	}
 }
 

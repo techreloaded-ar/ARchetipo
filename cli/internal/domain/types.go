@@ -112,12 +112,31 @@ type Task struct {
 	Type         TaskType `json:"type" yaml:"type"`
 	Status       Status   `json:"status" yaml:"status"`
 	Dependencies []string `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
-	// Body is the full markdown body of the task (filled by read_spec_tasks
-	// when the connector exposes one). May be empty for the file connector.
+	// Body is the canonical markdown body of the task. Description is kept only
+	// as a legacy/deprecated compatibility field.
 	Body string `json:"body,omitempty" yaml:"body,omitempty"`
 	// Ref is a connector-local identifier (sub-issue number for github,
 	// task ID for filefs). Always set together with ID.
 	Ref string `json:"ref,omitempty" yaml:"ref,omitempty"`
+}
+
+// NormalizeTaskBody applies the legacy compatibility rule for task content:
+// when body is blank and description is populated, copy description into body.
+// Description is intentionally left untouched for backward compatibility.
+func NormalizeTaskBody(task *Task) {
+	if task == nil {
+		return
+	}
+	if strings.TrimSpace(task.Body) == "" && strings.TrimSpace(task.Description) != "" {
+		task.Body = task.Description
+	}
+}
+
+// NormalizeTaskBodies applies NormalizeTaskBody to every task in place.
+func NormalizeTaskBodies(tasks []Task) {
+	for i := range tasks {
+		NormalizeTaskBody(&tasks[i])
+	}
 }
 
 // SetupInfo is the output of initialize_connector. Fields populated depend on
@@ -229,6 +248,15 @@ type WriteResult struct {
 type PlanInput struct {
 	PlanBody string `json:"plan_body" yaml:"plan_body"`
 	Tasks    []Task `json:"tasks" yaml:"tasks"`
+}
+
+// NormalizePlanInput applies the task body compatibility rule to every task in
+// the plan so legacy payloads that still send only description remain usable.
+func NormalizePlanInput(input *PlanInput) {
+	if input == nil {
+		return
+	}
+	NormalizeTaskBodies(input.Tasks)
 }
 
 // SelectQuery captures the inputs of select_spec.

@@ -354,6 +354,7 @@ func (c *Connector) ReadSpecTasks(ctx context.Context, parentRef string) ([]doma
 			Ref:          it.Key,
 		})
 	}
+	domain.NormalizeTaskBodies(out)
 	return out, nil
 }
 
@@ -465,6 +466,7 @@ func (c *Connector) specLabels(s domain.Spec) []string {
 }
 
 func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.PlanInput) (domain.WriteResult, error) {
+	domain.NormalizePlanInput(&plan)
 	if err := c.ensureSetup(ctx); err != nil {
 		return domain.WriteResult{}, err
 	}

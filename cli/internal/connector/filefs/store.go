@@ -197,6 +197,7 @@ func (c *Connector) readPlan(specCode string) (planDoc, error) {
 			doc.Tasks[i].Ref = doc.Tasks[i].ID
 		}
 	}
+	domain.NormalizeTaskBodies(doc.Tasks)
 	return doc, nil
 }
 
@@ -337,6 +338,7 @@ func (d specDoc) toSpec() domain.Spec {
 }
 
 func (c *Connector) writePlan(specCode string, plan domain.PlanInput) error {
+	domain.NormalizePlanInput(&plan)
 	doc := planDoc{
 		Schema:   planSchema,
 		SpecCode: specCode,

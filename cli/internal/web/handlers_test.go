@@ -228,12 +228,11 @@ func TestSavePlanEndpoint(t *testing.T) {
 		"plan_body": "## Plan\n\nbody",
 		"tasks": []map[string]any{
 			{
-				"id":          "TASK-01",
-				"title":       "do x",
-				"body":        taskMarkdownBody,
-				"description": taskMarkdownBody,
-				"type":        "Impl",
-				"status":      "TODO",
+				"id":     "TASK-01",
+				"title":  "do x",
+				"body":   taskMarkdownBody,
+				"type":   "Impl",
+				"status": "TODO",
 			},
 		},
 	}
@@ -255,8 +254,8 @@ func TestSavePlanEndpoint(t *testing.T) {
 	if tasks[0].Body != taskMarkdownBody {
 		t.Fatalf("task body lost on save: got %q want %q", tasks[0].Body, taskMarkdownBody)
 	}
-	if tasks[0].Description != taskMarkdownBody {
-		t.Fatalf("task description lost on save: got %q want %q", tasks[0].Description, taskMarkdownBody)
+	if tasks[0].Description != "" {
+		t.Fatalf("did not expect canonical save to repopulate description, got %q", tasks[0].Description)
 	}
 
 	w = httptest.NewRecorder()
@@ -275,8 +274,8 @@ func TestSavePlanEndpoint(t *testing.T) {
 	if out.Tasks[0].Body != taskMarkdownBody {
 		t.Fatalf("task body not returned by GET: got %q want %q", out.Tasks[0].Body, taskMarkdownBody)
 	}
-	if out.Tasks[0].Description != taskMarkdownBody {
-		t.Fatalf("task description not returned by GET: got %q want %q", out.Tasks[0].Description, taskMarkdownBody)
+	if out.Tasks[0].Description != "" {
+		t.Fatalf("did not expect description in GET response for canonical task, got %q", out.Tasks[0].Description)
 	}
 }
 

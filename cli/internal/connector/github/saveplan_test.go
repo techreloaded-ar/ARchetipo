@@ -70,6 +70,8 @@ func TestSavePlan_TaskDescriptionFallback(t *testing.T) {
 // Body and Description are populated, Body wins.
 func TestSavePlan_BodyTakesPrecedenceOverDescription(t *testing.T) {
 	issueBody := "## Spec\\n\\nAs a user, I want X."
+	richTaskBody := "## Descrizione\n\nBody wins\n\n## File Coinvolti\n- internal/schema.sql — creare lo schema\n\n## Criteri di Completamento\n- [ ] checklist"
+	escapedRichTaskBody := strings.ReplaceAll(richTaskBody, "\n", "\\n")
 	m := newMock(t).
 		on("repo view --json", `{"id":"R","owner":{"login":"acme"},"name":"web","nameWithOwner":"acme/web"}`).
 		on("project list --owner acme", `{"projects":[{"number":4,"id":"PVT4","title":"web Backlog","url":"https://gh/p/4"}]}`).
@@ -85,7 +87,7 @@ func TestSavePlan_BodyTakesPrecedenceOverDescription(t *testing.T) {
 		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":"`+issueBody+`","url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`).
 		on("api -X PATCH repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","url":"https://gh/i/10"}`).
 		// Sub-issue create: Body takes precedence.
-		on("api -X POST repos/acme/web/issues -f title=TASK-01: Schema DB", `{"number":20,"id":20,"node_id":"I_20","title":"TASK-01: Schema DB","body":"Body wins","url":"https://gh/i/20"}`).
+		on("api -X POST repos/acme/web/issues -f title=TASK-01: Schema DB", `{"number":20,"id":20,"node_id":"I_20","title":"TASK-01: Schema DB","body":"`+escapedRichTaskBody+`","url":"https://gh/i/20"}`).
 		on("api -X POST repos/acme/web/issues/10/sub_issues", "ok")
 
 	cfg := config.Default()
@@ -95,7 +97,7 @@ func TestSavePlan_BodyTakesPrecedenceOverDescription(t *testing.T) {
 	plan := domain.PlanInput{
 		PlanBody: "## Soluzione\\n\\nDetail.",
 		Tasks: []domain.Task{
-			{ID: "TASK-01", Title: "Schema DB", Description: "Description text", Body: "Body wins", Type: domain.TaskImpl, Status: domain.StatusTodo},
+			{ID: "TASK-01", Title: "Schema DB", Description: "Description text", Body: richTaskBody, Type: domain.TaskImpl, Status: domain.StatusTodo},
 		},
 	}
 	res, err := c.SavePlan(context.Background(), "US-001", plan)
@@ -114,12 +116,44 @@ func TestSavePlan_BodyTakesPrecedenceOverDescription(t *testing.T) {
 			if strings.Contains(args, "body=Description text") {
 				t.Errorf("Body should take precedence over Description, but Description text found: %s", args)
 			}
-			if !strings.Contains(args, "body=Body wins") {
-				t.Errorf("expected Body text in sub-issue, got: %s", args)
+			if !strings.Contains(args, "body=## Descrizione") || !strings.Contains(args, "Criteri di Completamento") {
+				t.Errorf("expected rich task body in sub-issue, got: %s", args)
 			}
 		}
 	}
 	if !foundCreate {
 		t.Error("expected sub-issue create POST call")
+	}
+}
+
+func TestReadSpecTasksReturnsCleanRichBody(t *testing.T) {
+	richTaskBody := "## Descrizione\n\nBody wins\n\n## File Coinvolti\n- internal/schema.sql — creare lo schema\n\n## Criteri di Completamento\n- [ ] checklist"
+	escapedRichTaskBody := strings.ReplaceAll(richTaskBody, "\n", "\\n")
+	m := newMock(t).
+		on("repo view --json", `{"id":"R","owner":{"login":"acme"},"name":"web","nameWithOwner":"acme/web"}`).
+		on("project list --owner acme", `{"projects":[{"number":4,"id":"PVT4","title":"web Backlog","url":"https://gh/p/4"}]}`).
+		on("api repos/acme/web/issues/10/sub_issues", `[{"number":20,"title":"TASK-01: Schema DB","body":"`+escapedRichTaskBody+`","state":"open"}]`)
+
+	cfg := config.Default()
+	cfg.Connector = config.ConnectorGitHub
+	c := NewWithRunner(cfg, m)
+	c.state.repo = &domain.RepoInfo{Slug: "acme/web"}
+	c.state.project = &domain.ProjectInfo{}
+
+	tasks, err := c.ReadSpecTasks(context.Background(), "10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].Body != richTaskBody {
+		t.Fatalf("expected rich task body, got %q", tasks[0].Body)
+	}
+	if tasks[0].Description != "" {
+		t.Fatalf("expected description to stay empty on canonical GitHub read, got %q", tasks[0].Description)
+	}
+	if tasks[0].Status != domain.StatusTodo {
+		t.Fatalf("expected open sub-issue to map to TODO, got %s", tasks[0].Status)
 	}
 }

@@ -189,7 +189,59 @@ func TestPlanRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSavePlanRoundTripKeepsTaskMarkdownInDescriptionFallback(t *testing.T) {
+func TestSavePlanRoundTripKeepsRichTaskBody(t *testing.T) {
+	c := newTestConnector(t)
+	ctx := context.Background()
+	if _, err := c.SaveInitialBacklog(ctx, []domain.Spec{{
+		Code:     "US-001",
+		Title:    "Setup",
+		Epic:     domain.Epic{Code: "EP-001", Title: "Foundations"},
+		Priority: domain.PriorityHigh,
+		Points:   3,
+		Status:   domain.StatusPlanned,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	const taskMarkdownBody = "## Descrizione\n\nParagraph\n\n## File Coinvolti\n- internal/schema.sql — creare lo schema\n\n## Criteri di Completamento\n- [ ] checklist"
+	if _, err := c.SavePlan(ctx, "US-001", domain.PlanInput{
+		PlanBody: "## Plan",
+		Tasks: []domain.Task{{
+			ID:     "TASK-01",
+			Title:  "Schema DB",
+			Body:   taskMarkdownBody,
+			Type:   domain.TaskImpl,
+			Status: domain.StatusTodo,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := c.ReadSpecTasks(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].Body != taskMarkdownBody {
+		t.Fatalf("task markdown did not survive in body: got %q want %q", tasks[0].Body, taskMarkdownBody)
+	}
+
+	raw, err := os.ReadFile(c.planPath("US-001"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, "body: |") {
+		t.Fatalf("expected YAML task body block, got:\n%s", text)
+	}
+	if strings.Contains(text, "description:") {
+		t.Fatalf("did not expect canonical YAML plan to persist description, got:\n%s", text)
+	}
+}
+
+func TestSavePlanLegacyDescriptionFallbackNormalizesBody(t *testing.T) {
 	c := newTestConnector(t)
 	ctx := context.Background()
 	if _, err := c.SaveInitialBacklog(ctx, []domain.Spec{{
@@ -209,7 +261,6 @@ func TestSavePlanRoundTripKeepsTaskMarkdownInDescriptionFallback(t *testing.T) {
 		Tasks: []domain.Task{{
 			ID:          "TASK-01",
 			Title:       "Schema DB",
-			Body:        taskMarkdownBody,
 			Description: taskMarkdownBody,
 			Type:        domain.TaskImpl,
 			Status:      domain.StatusTodo,
@@ -225,8 +276,11 @@ func TestSavePlanRoundTripKeepsTaskMarkdownInDescriptionFallback(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(tasks))
 	}
+	if tasks[0].Body != taskMarkdownBody {
+		t.Fatalf("task markdown did not normalize into body: got %q want %q", tasks[0].Body, taskMarkdownBody)
+	}
 	if tasks[0].Description != taskMarkdownBody {
-		t.Fatalf("task markdown did not survive in description fallback: got %q want %q", tasks[0].Description, taskMarkdownBody)
+		t.Fatalf("legacy task description should still round-trip: got %q want %q", tasks[0].Description, taskMarkdownBody)
 	}
 }
 

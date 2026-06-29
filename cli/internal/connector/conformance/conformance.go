@@ -117,8 +117,8 @@ func testPlanLifecycle(t *testing.T, c connector.Connector) {
 	plan := domain.PlanInput{
 		PlanBody: "## Soluzione Tecnica\n\nSpiegazione.",
 		Tasks: []domain.Task{
-			{ID: "TASK-01", Title: "Schema", Description: "Create schema", Type: domain.TaskImpl, Status: domain.StatusTodo},
-			{ID: "TASK-02", Title: "Test schema", Description: "Verify", Type: domain.TaskTest, Status: domain.StatusTodo, Dependencies: []string{"TASK-01"}},
+			{ID: "TASK-01", Title: "Schema", Body: "## Descrizione\n\nCreate schema\n\n## File Coinvolti\n- schema.sql — creare lo schema\n\n## Criteri di Completamento\n- [ ] schema creato", Type: domain.TaskImpl, Status: domain.StatusTodo},
+			{ID: "TASK-02", Title: "Test schema", Body: "## Descrizione\n\nVerify\n\n## File Coinvolti\n- schema_test.go — coprire il flusso\n\n## Criteri di Completamento\n- [ ] test verdi", Type: domain.TaskTest, Status: domain.StatusTodo, Dependencies: []string{"TASK-01"}},
 		},
 	}
 	if _, err := c.SavePlan(ctx, "US-001", plan); err != nil {
@@ -130,6 +130,9 @@ func testPlanLifecycle(t *testing.T, c connector.Connector) {
 	}
 	if len(tasks) != 2 {
 		t.Fatalf("expected 2 tasks, got %d", len(tasks))
+	}
+	if tasks[0].Body == "" {
+		t.Fatalf("expected canonical task body, got %+v", tasks[0])
 	}
 	if tasks[1].ID != "TASK-02" || len(tasks[1].Dependencies) != 1 {
 		t.Errorf("dependency lost: %+v", tasks[1])

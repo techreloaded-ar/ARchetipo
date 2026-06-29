@@ -276,6 +276,7 @@ func (c *Connector) AppendSpecs(ctx context.Context, specs []domain.Spec) (domai
 }
 
 func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.PlanInput) (domain.WriteResult, error) {
+	domain.NormalizePlanInput(&plan)
 	if err := c.ensureSetup(ctx); err != nil {
 		return domain.WriteResult{}, err
 	}
@@ -961,13 +962,11 @@ func (c *Connector) listSubIssues(ctx context.Context, parentNum int) ([]domain.
 	}
 	out := make([]domain.Task, 0, len(raw))
 	for _, s := range raw {
-		body := s.Body
 		t := domain.Task{
-			ID:          taskIDFromTitle(s.Title),
-			Title:       titleAfterTaskID(s.Title),
-			Description: body,
-			Body:        body,
-			Ref:         strconv.Itoa(s.Number),
+			ID:    taskIDFromTitle(s.Title),
+			Title: titleAfterTaskID(s.Title),
+			Body:  s.Body,
+			Ref:   strconv.Itoa(s.Number),
 		}
 		if strings.EqualFold(s.State, "closed") {
 			t.Status = domain.StatusDone

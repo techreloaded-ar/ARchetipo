@@ -617,6 +617,7 @@ func TestReadSpecTasksRoundTrip(t *testing.T) {
 	if _, err := c.SaveInitialBacklog(ctx, sampleSpecs()); err != nil {
 		t.Fatal(err)
 	}
+	const richTaskBody = "## Descrizione\n\nImplementare il primo pezzo.\n\n## File Coinvolti\n- internal/schema.sql — creare lo schema\n\n## Criteri di Completamento\n- [ ] checklist"
 	plan := domain.PlanInput{
 		PlanBody: "## Piano",
 		Tasks: []domain.Task{{
@@ -624,7 +625,7 @@ func TestReadSpecTasksRoundTrip(t *testing.T) {
 			Title:        "Preparare schema",
 			Type:         domain.TaskImpl,
 			Dependencies: []string{"TASK-000"},
-			Body:         "Implementare il primo pezzo.",
+			Body:         richTaskBody,
 		}},
 	}
 	if _, err := c.SavePlan(ctx, "US-001", plan); err != nil {
@@ -642,6 +643,9 @@ func TestReadSpecTasksRoundTrip(t *testing.T) {
 	}
 	if len(tasks[0].Dependencies) != 1 || tasks[0].Dependencies[0] != "TASK-000" {
 		t.Fatalf("task dependencies lost: %+v", tasks[0].Dependencies)
+	}
+	if tasks[0].Body != richTaskBody {
+		t.Fatalf("task body lost: got %q want %q", tasks[0].Body, richTaskBody)
 	}
 	if strings.Contains(tasks[0].Body, "archetipo:task") {
 		t.Fatalf("task marker leaked into body: %q", tasks[0].Body)

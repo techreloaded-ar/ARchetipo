@@ -9,6 +9,14 @@ tasks:
     title: Create hello.txt at the repository root
     type: Impl
     status: TODO
-    description: |
+    body: |
+      ## Descrizione
+
       Create a file named `hello.txt` at the root of the checkout containing
       the single line `Hello from ARchetipo`.
+
+      ## File Coinvolti
+      - `hello.txt` — creare il file nella root del repository
+
+      ## Criteri di Completamento
+      - [ ] il file contiene esattamente `Hello from ARchetipo`

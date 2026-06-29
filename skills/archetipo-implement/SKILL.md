@@ -37,6 +37,7 @@ This section has priority over every other section in the skill.
 ## Autonomy Policy
 
 Stop and ask the user only when one of these is true:
+
 - The implementation plan conflicts with the current codebase in a way that cannot be adapted locally without changing the intended solution
 - The spec depends on another unimplemented spec or prerequisite outside the current spec scope
 - Existing tests must be changed **semantically** because the intended behavior or contract changes
@@ -44,6 +45,7 @@ Stop and ask the user only when one of these is true:
 - Completing the task would change scope, acceptance criteria, or the user-facing contract of the spec
 
 Do **not** stop for these:
+
 - Local implementation adaptations that preserve the planned solution
 - Minor technical fixes, dependency wiring, or configuration cleanup inside the current spec scope
 - Surgical re-reads during debugging, review, or the fix loop
@@ -57,12 +59,14 @@ If a situation is ambiguous, prefer continuing when the adaptation is local and 
 ### Worker-backed preferred
 
 Use workers/subagents when:
+
 - the runtime supports parallel work reliably
 - clean execution context per wave or task is valuable
 - Mina can work from stable interfaces or contracts
 - Cesare can review diffs in a separate context
 
 In worker-backed mode:
+
 - every wave is executed through one or more workers, even if the wave is sequential
 - sequential waves may still use one worker per task or one worker per wave, as long as the execution context stays isolated from the main orchestrator
 - concurrent fan-out is used only for truly independent tasks
@@ -70,6 +74,7 @@ In worker-backed mode:
 ### In-context fallback
 
 Use a single orchestrator when:
+
 - worker/subagent support is missing or unreliable
 - the repo or runtime makes coordination costlier than execution
 
@@ -99,7 +104,7 @@ Do not avoid worker-backed execution only because a wave must be scheduled seque
    - If a code was passed: `archetipo spec show {US-CODE}`
    - Otherwise: `archetipo spec next --status {config.workflow.statuses.planned}` (auto-pick first eligible by priority + code)
 
-   The envelope returns `data.spec` (the full Spec including `body`) and `data.tasks` (the implementation task list).
+   The envelope returns `data.spec` (the full Spec including `body`) and `data.tasks` (the implementation task list). `data.tasks[].body` is the canonical operational content of each task.
 
    - If `error.code = E_PRECONDITION` (no eligible spec or auto-pick on empty queue), stop and display the template from `./references/output-templates.md` ("No planned specs" / "No backlog" as appropriate).
    - If `data.tasks` is empty, the spec has no plan yet — stop and display the template from `./references/output-templates.md` ("No implementation plan" error message).
@@ -117,6 +122,8 @@ Do not avoid worker-backed execution only because a wave must be scheduled seque
 
 When loading tasks via `archetipo spec show`, apply these validation rules to the JSON envelope's `data.tasks`:
 
+- Treat `task.body` as the canonical source of task instructions. Read it before planning execution, especially the `File Coinvolti` and `Criteri di Completamento` sections.
+- If a task arrives without `body`, treat it as legacy or malformed. The CLI should already have normalised old `description`-only plans, but if a task still lacks a usable body, handle it with extra caution.
 - If `type` is missing but the body clearly describes an implementation or test task, infer it and log a warning
 - If `type` is missing and the task cannot be classified confidently, treat that task as sequential-only
 - If `dependencies` are missing or malformed, do **not** assume independent scheduling; treat as sequential
@@ -142,11 +149,13 @@ When loading tasks via `archetipo spec show`, apply these validation rules to th
 Execute the work wave by wave using the selected execution context and scheduling strategy.
 
 For each task:
-1. Read only the relevant sections of the touched files.
-2. Follow the implementation plan unless doing so would hit an explicit blocker.
-3. Follow mockups when UI work is involved.
-4. Mark the task as done: run `archetipo task done {US-CODE} {TASK-ID}` from `data.project_root`.
-5. Announce completion briefly.
+
+1. Read `task.body` first and use it as the operational checklist for the work.
+2. Read only the relevant sections of the touched files.
+3. Follow the implementation plan unless doing so would hit an explicit blocker.
+4. Follow mockups when UI work is involved.
+5. Mark the task as done: run `archetipo task done {US-CODE} {TASK-ID}` from `data.project_root`.
+6. Announce completion briefly.
 
 #### Ugo's rules
 
@@ -176,16 +185,19 @@ For each task:
 Apply this section when the plan requires e2e coverage, or when Mina determines e2e is necessary for the implemented user flow.
 
 **When required**
+
 - If the plan includes an e2e strategy, Mina must define and author those tests
 - Do not skip e2e coverage only because it is harder than unit or integration testing
 
 **Authoring**
+
 - Detect the existing e2e framework from project config, `package.json`, agent instructions files, and existing tests
 - Reuse the existing stack when present
 - Map each e2e scenario to a user flow described in the plan
 - Write real end-to-end flows: navigation, interaction, waiting, and outcome assertions
 
 **Bootstrap authorization**
+
 - If the repo lacks e2e infrastructure but the repo or plan provides clear signals about the intended stack, Mina may install and configure the missing framework, runtime dependencies, and artifact settings
 - If those signals are insufficient, treat the stack choice as an explicit blocker rather than choosing a framework arbitrarily
 
@@ -194,6 +206,7 @@ Apply this section when the plan requires e2e coverage, or when Mina determines 
 Demo videos are selective, not blanket. Recording every e2e test produces noise no one watches and drowns the real demo in artifacts. Record video only for the single demo scenario of specs where a video genuinely helps a human reviewer understand the delivered increment.
 
 Decision rule — record a demo video for this spec when **all** of the following hold:
+
 - The spec has a `Demonstrates` field that describes a concrete, user-visible action (see the next subsection).
 - The increment is observable through the UI or a user-facing artifact (a downloaded file, a received email preview, a visible state change). A pure API change, schema migration, refactor, infra wiring, or config tweak does not qualify.
 - A non-technical reviewer (PM, stakeholder, new teammate) would plausibly gain understanding from watching it.
@@ -228,6 +241,7 @@ Apply these rules **only to the demo scenario**; other e2e tests stay fast and u
 - One logical user action per step. Avoid chaining fills, clicks, and navigations into one line — each discrete action should be its own call so it appears as its own beat in the video.
 
 **Run and artifacts**
+
 - Detect the e2e run command and any required dev-server command from project conventions
 - Start background services only when needed and wait for readiness
 - Run the suite and verify that the expected artifacts are actually produced
@@ -242,6 +256,7 @@ After each wave, report briefly. See `./references/output-templates.md` for the 
 #### Before code review
 
 After all implementation waves:
+
 1. Run the project's unit and integration tests
 2. Run e2e tests if this spec required or introduced them
 3. If tests fail, determine whether the failure is new or pre-existing, fix local issues autonomously, and escalate only if an explicit blocker appears
@@ -255,6 +270,7 @@ After all implementation waves:
 - Review only diffs or changed areas, using project conventions and the implementation plan as reference
 
 **Review criteria:**
+
 1. plan adherence
 2. code quality
 3. architecture adherence
@@ -268,12 +284,14 @@ After all implementation waves:
 ### PHASE 4 - Fix & Re-Review Loop
 
 If Cesare found critical issues:
+
 1. Ugo and Mina fix them
 2. Re-run the relevant tests
 3. Re-review only the fix diffs
 4. Repeat until no critical issues remain
 
 If Cesare found only improvements:
+
 1. Summarize them briefly.
 2. Treat them as non-blocking by default.
 3. Fix them only if the user explicitly asks for extra polishing, or if re-checking shows that one of them is actually critical.
@@ -283,6 +301,7 @@ If Cesare found no issues, or all critical issues are fixed, proceed to completi
 ### Completion Gate
 
 Proceed to Phase 5 only when all of the following are true:
+
 - no `🔴 CRITICAL` findings remain open
 - the full required final test suite passes
 - the spec can be moved to `{config.workflow.statuses.review}` via `archetipo spec review`
