@@ -537,10 +537,11 @@
 		if (!taskMarkdown) {
 			return `<div class="task-title-text">${title}</div>`;
 		}
+		const rendered = TaskMarkdown.renderTaskMarkdown(taskMarkdown);
 		return `
                 <details class="task-desc-details">
                     <summary><span class="task-title-text">${title}</span></summary>
-                    <div class="markdown-rendered task-desc-markdown">${marked.parse(taskMarkdown)}</div>
+                    <div class="markdown-rendered task-desc-markdown">${rendered}</div>
                 </details>
             `;
 	}

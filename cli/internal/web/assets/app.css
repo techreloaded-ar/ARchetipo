@@ -1389,8 +1389,8 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	letter-spacing: 0.14em;
 }
 
-.tasks-table input,
-.tasks-table select {
+#plan-form .tasks-table input,
+#plan-form .tasks-table select {
 	background: transparent;
 	border: 1px solid transparent;
 	color: var(--text);
@@ -1404,8 +1404,8 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 		border-color var(--transition);
 }
 
-.tasks-table input:focus,
-.tasks-table select:focus {
+#plan-form .tasks-table input:focus,
+#plan-form .tasks-table select:focus {
 	background: var(--surface);
 	border-color: var(--accent);
 	outline: none;

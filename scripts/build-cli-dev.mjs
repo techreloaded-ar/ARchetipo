@@ -9,8 +9,10 @@
 //   .dev/native/archetipo[.exe]   → Go binary with dev-local version
 //   .dev/bin/archetipo.cmd        → Windows wrapper (sets ARCHETIPO_DATA_DIR)
 //   .dev/bin/archetipo-dev.cmd    → alias to archetipo.cmd
-//   .dev/bin/archetipo.sh         → Unix wrapper
-//   .dev/bin/archetipo-dev.sh     → alias to archetipo.sh
+//   .dev/bin/archetipo            → Unix wrapper (PATH-resolved command)
+//   .dev/bin/archetipo-dev        → Unix alias
+//   .dev/bin/archetipo.sh         → Unix compatibility alias
+//   .dev/bin/archetipo-dev.sh     → Unix compatibility alias
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -102,16 +104,20 @@ async function writeUnixWrappers() {
 		"",
 	].join("\n");
 
-	const shPath = path.join(binDir, "archetipo.sh");
-	await fs.writeFile(shPath, sh);
-	await fs.chmod(shPath, 0o755);
+	const wrapperNames = ["archetipo", "archetipo-dev", "archetipo.sh", "archetipo-dev.sh"];
+	for (const name of wrapperNames) {
+		const wrapperPath = path.join(binDir, name);
+		await writeExecutable(wrapperPath, sh);
+		console.log(`  ✓ .dev/bin/${name}`);
+	}
+}
 
-	const devShPath = path.join(binDir, "archetipo-dev.sh");
-	await fs.writeFile(devShPath, sh);
-	await fs.chmod(devShPath, 0o755);
-
-	console.log(`  ✓ .dev/bin/archetipo.sh`);
-	console.log(`  ✓ .dev/bin/archetipo-dev.sh`);
+async function writeExecutable(filePath, contents) {
+	// If a previous dev build left a symlink here, replace the symlink itself
+	// instead of following it and accidentally rewriting its target.
+	await fs.rm(filePath, { force: true });
+	await fs.writeFile(filePath, contents);
+	await fs.chmod(filePath, 0o755);
 }
 
 // ---------------------------------------------------------------------------

@@ -183,10 +183,10 @@ Construct the full JSON payload string in your own context (not via shell heredo
 > **Temp file:** Use `.archetipo/tmp-payload-{US-CODE}-plan.json`. The code is known to you already. After the CLI command exits, delete it with `rm .archetipo/tmp-payload-{US-CODE}-plan.json` (works in both bash and PowerShell). Always clean up, regardless of CLI success or failure.
 
 ```json
-{"plan_body":"<technical solution + test strategy as markdown>","tasks":[{"id":"TASK-01","title":"...","body":"## Descrizione\n...\n\n## File Coinvolti\n- path/to/file — cosa fare\n\n## Criteri di Completamento\n- [ ] criterio verificabile","type":"Impl|Test","status":"TODO","dependencies":[]}]}
+{"plan_body":"<technical solution + test strategy as markdown — do NOT include a task summary>","tasks":[{"id":"TASK-01","title":"...","body":"## Descrizione\n...\n\n## File Coinvolti\n- path/to/file — cosa fare\n\n## Criteri di Completamento\n- [ ] criterio verificabile","type":"Impl|Test","status":"TODO","dependencies":[]}]}
 ```
 
-> **Payload field contracts:** `status` uses the CLI's canonical values (`TODO`, `DONE`) — these are part of the envelope contract and are **not** the display labels from `config.workflow.statuses`. `type` is one of `Impl`, `Test`, or `Fix` (Fix only in rework mode). `dependencies` lists ids of tasks defined in the same payload; the CLI rejects references to unknown task ids. Each task must use `body` as the only produced content field. The task body must be markdown and include at least `## Descrizione`, `## File Coinvolti`, and `## Criteri di Completamento`. Use concrete file paths when they are known; when they are not, stay conservative and do not invent files.
+> **Payload field contracts:** `plan_body` contains ONLY the technical solution, test strategy, and context notes as markdown. The task list lives exclusively in the `tasks` array — do NOT duplicate it inside `plan_body` (no task summary table or bullet list). `status` uses the CLI's canonical values (`TODO`, `DONE`) — these are part of the envelope contract and are **not** the display labels from `config.workflow.statuses`. `type` is one of `Impl`, `Test`, or `Fix` (Fix only in rework mode). `dependencies` lists ids of tasks defined in the same payload; the CLI rejects references to unknown task ids. Each task must use `body` as the only produced content field. The task body must be markdown and include at least `## Descrizione`, `## File Coinvolti`, and `## Criteri di Completamento`. Use concrete file paths when they are known; when they are not, stay conservative and do not invent files.
 
 **Rework mode task construction.** When the spec is in rework (see Step 2), build the `tasks` array like this instead of planning from scratch:
 
@@ -195,7 +195,7 @@ Construct the full JSON payload string in your own context (not via shell heredo
 - Add interleaved `Test` tasks for the fixes when the change warrants verification.
 - Set `plan_body` to the existing plan body augmented with a short "Rework" note summarising the feedback being addressed; do not discard the original technical solution.
 
-This single command saves the plan AND transitions the spec to `{config.workflow.statuses.planned}` atomically (and clears the rework marker) — no separate `status set` step is needed. The CLI persists according to the active connector (file: writes `{paths.planning}/{US-CODE}-plan.yaml`; github: appends to the parent issue body and creates one sub-issue per task). For the file connector, follow the template in `./references/plan-template.md` to compose `plan_body`.
+This single command saves the plan AND transitions the spec to `{config.workflow.statuses.planned}` atomically (and clears the rework marker) — no separate `status set` step is needed. The CLI persists according to the active connector (file: writes `{paths.planning}/{US-CODE}-plan.yaml`; github: appends to the parent issue body and creates one sub-issue per task). For the file connector, follow the template in `./references/plan-template.md` to compose `plan_body` (technical solution + test strategy only — no task summary table).
 
 Re-running the command on a spec already in `PLANNED` upserts the plan body without erroring.
 

@@ -1,7 +1,9 @@
 # ARchetipo Plan — Document Template
 
 > Document template for the plan produced by the skill. Persistence is the CLI's responsibility after `archetipo spec plan {US-CODE} --file -`.
-> **Language rule:** All section headers and table column headers in this template must be rendered in the detected language of the project (see Language Policy in `.archetipo/shared-runtime.md`). The connector parses the task table by column index, not by header text — headers may be translated freely.
+> **Language rule:** All section headers in this template must be rendered in the detected language of the project (see Language Policy in `.archetipo/shared-runtime.md`).
+>
+> **`plan_body` vs tasks:** `plan_body` contains the **technical solution and test strategy** as markdown. The **task list** lives exclusively in the structured `tasks` array of the JSON payload — it is NOT part of `plan_body`. Do NOT include a task summary table or bullet list inside `plan_body`. The web viewer already renders the `tasks` array as an expandable table below the plan body; a duplicate inside `plan_body` would appear twice and create confusion.
 
 ---
 
@@ -81,3 +83,4 @@ _Plan generated via ARchetipo Planning — {DATE}_
 > - Task dependencies must only reference tasks within the same spec plan. Cross-spec task dependencies are not supported — use spec-level `Blocked by` for cross-spec sequencing
 > - If the `Blocked by` field is absent from the spec (older backlogs), treat it as `-` (no dependencies)
 > - If total tasks exceed 15, suggest splitting into sub-specs
+> - **Do NOT include a task summary table or bullet list in `plan_body`.** Tasks live exclusively in the structured `tasks` array of the JSON payload. The web viewer renders `tasks` as an expandable table below `plan_body`; duplicating them inside `plan_body` creates visual redundancy.
