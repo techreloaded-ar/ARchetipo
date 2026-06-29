@@ -124,7 +124,7 @@ Silently perform all of the following — this is your chain of thought, not vis
   - User scenarios to simulate (complete user flows, not isolated clicks — e.g., "user registers, logs in, creates first project")
   - Video recording for the **single demo scenario only**, when the spec's `Demonstrates` field describes a filmable user-visible increment, with the video saved in `{config.paths.test_results}/{spec-id}/`. All e2e scenarios run, but only the demo scenario records video — the implement skill's "Mina's E2E policy" owns the final record/skip decision
   - The e2e framework to use, detected from the project (existing config files, `package.json`, agent instructions files, and current repository conventions). Do NOT hardcode any specific framework — adapt to whatever the project uses
-  - If no e2e infrastructure exists in the project, include a setup task (TASK) in the task list for installing and configuring the framework, including video recording support scoped to the demo scenario
+  - If no e2e infrastructure exists in the project, include a setup task (TASK) for installing and configuring the framework — for Playwright, `archetipo e2e ensure` does this idempotently and non-interactively — including video recording support scoped to the demo scenario
   - **This e2e strategy MUST be included in the planning document — it is not optional.** The implement skill will only write e2e tests if this strategy is present in the plan. Omitting the e2e strategy for a UI spec is a planning error.
 
 #### UI/UX Assessment & Mockup Spawn

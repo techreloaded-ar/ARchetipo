@@ -198,8 +198,9 @@ Apply this section when the plan requires e2e coverage, or when Mina determines 
 
 **Bootstrap authorization**
 
-- If the repo lacks e2e infrastructure but the repo or plan provides clear signals about the intended stack, Mina may install and configure the missing framework, runtime dependencies, and artifact settings
-- If those signals are insufficient, treat the stack choice as an explicit blocker rather than choosing a framework arbitrarily
+- When the intended stack is Playwright (detected, or signalled by the repo/plan), bootstrap it deterministically by running `archetipo e2e ensure` from `data.workdir`. The command is idempotent and non-interactive: it installs `@playwright/test` only when missing, writes a minimal config without overwriting an existing one, and installs a single browser. Parse the JSON envelope and branch on `error.code` — e.g. `E_PRECONDITION` when there is no `package.json` yet, which means the Node project must be initialized first. Do **not** run ad-hoc interactive installers (`npm init playwright@latest`) or download every browser.
+- For a non-Playwright stack signalled clearly by the repo/plan, Mina may install and configure it following the same idempotent, non-interactive discipline.
+- If the intended stack cannot be determined, treat the stack choice as an explicit blocker rather than choosing a framework arbitrarily.
 
 **When to record a demo video**
 
