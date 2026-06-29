@@ -202,53 +202,15 @@ Apply this section when the plan requires e2e coverage, or when Mina determines 
 - For a non-Playwright stack signalled clearly by the repo/plan, Mina may install and configure it following the same idempotent, non-interactive discipline.
 - If the intended stack cannot be determined, treat the stack choice as an explicit blocker rather than choosing a framework arbitrarily.
 
-**When to record a demo video**
-
-Demo videos are selective, not blanket. Recording every e2e test produces noise no one watches and drowns the real demo in artifacts. Record video only for the single demo scenario of specs where a video genuinely helps a human reviewer understand the delivered increment.
-
-Decision rule — record a demo video for this spec when **all** of the following hold:
-
-- The spec has a `Demonstrates` field that describes a concrete, user-visible action (see the next subsection).
-- The increment is observable through the UI or a user-facing artifact (a downloaded file, a received email preview, a visible state change). A pure API change, schema migration, refactor, infra wiring, or config tweak does not qualify.
-- A non-technical reviewer (PM, stakeholder, new teammate) would plausibly gain understanding from watching it.
-
-Skip the demo video when the spec is purely technical (refactor, dependency upgrade, internal service extraction, build tooling), when there is no user-visible surface, or when `Demonstrates` is missing or unfilmable. Skipping is a normal outcome, not a failure — note it briefly in the completion summary ("No demo video: technical spec, no user-visible surface").
-
-Skipping the demo video does not remove the obligation to write e2e tests when the plan requires them. E2E coverage and video recording are independent decisions: e2e tests can run without producing videos.
-
-**Demo scenario from Demonstrates**
-
-When the decision rule above says a video is warranted, the spec's `Demonstrates` line is the contract for what that video must show. Treat it as the script, not as decoration.
-
-- Read the `Demonstrates` field from `data.spec.body` returned by `archetipo spec show {US-CODE}`.
-- Produce exactly one **demo** e2e scenario that reproduces the Demonstrates flow end to end, from a clean starting state to the visible increment the spec promises. Name the test file or the test case after the Demonstrates outcome so it is obvious when the artifact is browsed later (e.g. `demo__user-exports-monthly-report.spec.ts`).
-- The demo scenario must include: an initial state that makes the change observable (empty list, logged-out shell, etc.), the user actions described in `Demonstrates`, and a final assertion on the user-visible increment (the new row, the redirected page, the downloaded file, the updated badge).
-- Edge cases, error paths, and validation stay in separate e2e files and are **not** recorded. Do not bloat the demo test with them; they pollute the video and obscure the spec outcome.
-- If `Demonstrates` is vague or not filmable (e.g. "user can manage data effectively"), do not invent a flow. Surface it as a planning gap: either ask the user to refine the spec, or record no demo video and explain why in the completion summary.
-
-**Video pacing and readability**
-
-When a demo video is recorded, it must be watchable by a non-technical reviewer. A correct test that produces an unreadable video fails this policy.
-
-The goal: a human viewer should be able to follow each step and see the final result without pausing or rewinding. Tests that race through the UI in two seconds do not prove the spec to the stakeholder, even when they pass.
-
-Apply these rules **only to the demo scenario**; other e2e tests stay fast and unrecorded:
-
-- Scope recording to the demo test only. Prefer per-test configuration (Playwright `test.use({ video: 'on' })` inside the demo file while the global config stays `video: 'off'`, Cypress project split or `cy.task` gating, project-level `*.demo.spec.ts` matchers). Do not flip on global video recording.
-- Use the framework's slow-mode knob so actions are visible: Playwright `use: { launchOptions: { slowMo: 300 } }` or per-test, Cypress via `cy.wait` discipline between actions, WebdriverIO `wdio.conf` `execArgv`, etc. Detect the framework first and apply its idiomatic mechanism. 250–500 ms per action is the target range.
-- Prefer explicit assertion-based waits (`expect(locator).toBeVisible()`, `cy.contains(...).should('be.visible')`) over blind `sleep`/`wait(ms)`. Assertions double as pacing and as correctness checks, and they give the video a visible "something just happened" beat.
-- After the final action, hold the end state visible for at least 1.5 seconds before the test ends, so the recorded frame captures the outcome rather than a teardown flash. A final visibility assertion followed by a short explicit wait is acceptable here — this is one of the few places where a fixed wait is justified.
-- Record at a viewport large enough to show the relevant UI without cropping. Default to 1280×720 unless the project already standardises a larger size.
-- One logical user action per step. Avoid chaining fills, clicks, and navigations into one line — each discrete action should be its own call so it appears as its own beat in the video.
+**Demo video — not recorded here**
+- Do not record demo videos during implementation. The demo scenario and its video are produced at the acceptance gate by `archetipo-review`, which owns the record/skip decision and runs `archetipo e2e demo`.
+- E2E coverage and demo video are independent decisions: author the e2e tests the plan requires; keep them fast and unrecorded. Recording happens later, in review.
 
 **Run and artifacts**
-
-- Detect the e2e run command and any required dev-server command from project conventions
-- Start background services only when needed and wait for readiness
-- Run the suite and verify that the expected artifacts are actually produced
-- When a demo video is recorded, store it under `{config.paths.test_results}/{spec-id}/` (or document the framework-native artifact path in the final summary) and confirm it is present and playable before completing the spec
-- Do not generate videos for non-demo e2e tests; if the framework default is `video: 'on'`, scope it down so only the demo scenario records
-- Retry flaky or timeout-based failures once; if they fail again, report them clearly as non-transient
+- Run the functional e2e suite with `archetipo e2e run` (Playwright) or the project's e2e command. It runs headless with **no video** — recording is a review concern.
+- Start background services only when needed and wait for readiness.
+- Verify the expected (non-video) artifacts, such as test reports, are produced.
+- Retry flaky or timeout-based failures once; if they fail again, report them clearly as non-transient.
 
 #### Progress reporting
 

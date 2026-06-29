@@ -52,7 +52,7 @@
 ### E2E Tests — User Simulation
 
 **Framework:** {DETECTED_E2E_FRAMEWORK}
-**Video recording:** Demo scenario only (per the spec's `Demonstrates` field); other scenarios run unrecorded
+**Demo video:** {DEMO_EXPECTED} (recorded later by `archetipo-review`, not during implementation)
 
 | Scenario | User flow description |
 |---|---|
