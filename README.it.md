@@ -161,6 +161,7 @@ ARchetipo usa una CLI deterministica scritta in Go, `archetipo`, per persistenza
 | `archetipo view` | Avvia una board Kanban locale per `.archetipo/backlog.yaml`, `.archetipo/specs/` e `.archetipo/plans/`. |
 | `archetipo config show` | Inizializza il connector e stampa i metadati. |
 | `archetipo prd write [--file PRD.md]` | Salva il markdown del PRD da `--file` o stdin. |
+| `archetipo validate inception [--file PRD.md]` | Valida il PRD contro le regole strutturali di inception. |
 | `archetipo spec list [--status STATUS]` | Legge backlog e metadati riassuntivi, opzionalmente filtrato per stato. |
 | `archetipo spec add --file specs.yaml` | Crea o estende il backlog con spec (corpo user-story). |
 | `archetipo spec show US-001` | Legge una spec e i suoi task per codice. |

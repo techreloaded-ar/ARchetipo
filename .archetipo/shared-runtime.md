@@ -22,7 +22,10 @@ Common rules:
 {"schema":"archetipo/v1","kind":"error","error":{"code":"E_*","message":"...","hint":"..."}}
 ```
 
-- Branch on `error.code`, never on `error.message`.
+- Error envelopes MAY include an optional `error.details` field with machine-readable corrective data (e.g. validation findings). Skills must tolerate its absence and must never branch on its shape alone — always branch on `error.code` first, then use `details` only as corrective instructions.
+
+- Branch on `error.code`, never on `error.message`. Important error codes:
+  - `E_VALIDATION`: artifact validation failed; `error.details` carries structured findings to guide correction.
 - Treat exit codes as stable:
   - `0`: success
   - `1`: generic error

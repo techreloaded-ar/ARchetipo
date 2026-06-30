@@ -50,6 +50,7 @@ type ErrorPayload struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Hint    string `json:"hint,omitempty"`
+	Details any    `json:"details,omitempty"`
 }
 
 // Error codes. Skills branch on Code, not on Message.
@@ -62,6 +63,7 @@ const (
 	CodeNotFound            = "E_NOT_FOUND"
 	CodeConflict            = "E_CONFLICT"
 	CodeInternal            = "E_INTERNAL"
+	CodeValidation          = "E_VALIDATION"
 )
 
 // CodedError is an error that carries both a stable code (for the JSON
@@ -70,6 +72,7 @@ type CodedError struct {
 	Code    string
 	Message string
 	Hint    string
+	Details any
 	Exit    int
 	Cause   error
 }
@@ -123,6 +126,12 @@ func NewConflict(message, hint string, cause error) *CodedError {
 	return &CodedError{Code: CodeConflict, Message: message, Hint: hint, Exit: ExitGeneric, Cause: cause}
 }
 
+// NewValidation builds an error for a validation failure that carries
+// machine-readable findings in details (e.g. PRD validation findings).
+func NewValidation(message, hint string, details any) *CodedError {
+	return &CodedError{Code: CodeValidation, Message: message, Hint: hint, Details: details, Exit: ExitInvalidInput}
+}
+
 // WriteOK marshals data as a success envelope on the given writer.
 func WriteOK(w io.Writer, kind string, data any) error {
 	enc := json.NewEncoder(w)
@@ -142,7 +151,7 @@ func WriteError(w io.Writer, err error) {
 	env := ErrorEnvelope{
 		Schema: Schema,
 		Kind:   "error",
-		Error:  ErrorPayload{Code: ce.Code, Message: ce.Message, Hint: ce.Hint},
+		Error:  ErrorPayload{Code: ce.Code, Message: ce.Message, Hint: ce.Hint, Details: ce.Details},
 	}
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)

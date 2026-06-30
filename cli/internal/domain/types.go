@@ -272,6 +272,40 @@ type ReorderAnchor struct {
 	After  string
 }
 
+// ValidationResult is the canonical success envelope for `archetipo validate`.
+type ValidationResult struct {
+	OK       bool                `json:"ok"`
+	Phase    string              `json:"phase"`
+	Target   string              `json:"target"`
+	Checks   []ValidationCheck   `json:"checks"`
+	Findings []ValidationFinding `json:"findings,omitempty"`
+}
+
+// ValidationCheck reports the outcome of a single rule.
+type ValidationCheck struct {
+	Code    string `json:"code"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+}
+
+// ValidationFinding describes one specific problem discovered during validation.
+type ValidationFinding struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+	Path     string `json:"path"`
+	Message  string `json:"message"`
+	Hint     string `json:"hint"`
+}
+
+// ValidationErrorDetails is the payload placed inside error.details when a
+// validation fails. It includes the phase, target artifact, and a list of
+// findings so the calling skill can correct the artifact and retry.
+type ValidationErrorDetails struct {
+	Phase    string              `json:"phase"`
+	Target   string              `json:"target"`
+	Findings []ValidationFinding `json:"findings"`
+}
+
 // MockupEntry describes a single mockup folder (one per design artifact)
 // served by the viewer. Name is the folder name under paths.mockups; URL is
 // the path the SPA can link to (served by the viewer's static handler).

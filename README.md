@@ -161,6 +161,7 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 | `archetipo view` | Starts a local Kanban view for `.archetipo/backlog.yaml`, `.archetipo/specs/`, and `.archetipo/plans/`. |
 | `archetipo config show` | Initializes the connector and prints metadata. |
 | `archetipo prd write [--file PRD.md]` | Saves PRD markdown from `--file` or stdin. |
+| `archetipo validate inception [--file PRD.md]` | Validates the PRD against inception structural rules. |
 | `archetipo spec list [--status STATUS]` | Reads backlog items and summary metadata, optionally filtered by status. |
 | `archetipo spec add --file specs.yaml` | Creates or extends the backlog with specs (user-story body). |
 | `archetipo spec show US-001` | Reads one spec and its tasks by code. |

@@ -1295,3 +1295,273 @@ func TestE2EDemoSkippedWhenDisabled(t *testing.T) {
 		t.Fatalf("artifact folder should not exist when recording is disabled (err=%v)", err)
 	}
 }
+
+func decodeErrorWithDetails(t *testing.T, res result) (int, string, any) {
+	t.Helper()
+	if res.exit == 0 {
+		t.Fatalf("expected non-zero exit, got 0. stdout=%s", res.stdout.String())
+	}
+	var env struct {
+		Schema string `json:"schema"`
+		Kind   string `json:"kind"`
+		Error  struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Hint    string `json:"hint"`
+			Details any    `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(res.stderr.Bytes(), &env); err != nil {
+		t.Fatalf("decoding stderr: %v\nraw=%s", err, res.stderr.String())
+	}
+	return res.exit, env.Error.Code, env.Error.Details
+}
+
+func validPRDContent() string {
+	return `<!-- archetipo:prd section=elevator_pitch required=true -->
+A concise elevator pitch summarizing the product.
+
+<!-- archetipo:prd section=vision required=true -->
+The long-term vision for the product.
+
+<!-- archetipo:prd section=user_personas required=true -->
+Detailed personas describing target users.
+
+<!-- archetipo:prd section=brainstorming_insights required=true -->
+Insights gathered during brainstorming sessions.
+
+<!-- archetipo:prd section=product_scope required=true -->
+MVP scope and out-of-scope items.
+
+<!-- archetipo:prd section=technical_architecture required=true -->
+The chosen tech stack and architecture decisions.
+
+<!-- archetipo:prd section=functional_requirements required=true -->
+List of functional requirements with IDs.
+
+<!-- archetipo:prd section=non_functional_requirements required=true -->
+Performance, security, and reliability requirements.
+
+<!-- archetipo:prd section=next_steps required=true -->
+Concrete next steps and owners.
+`
+}
+
+func TestValidateInception_Success(t *testing.T) {
+	newProject(t)
+	prdFile := writeInputFile(t, "test-prd.md", validPRDContent())
+	res := runCLI(t, "", "validate", "inception", "--file", prdFile)
+	kind, data := decodeOK(t, res)
+	if kind != "validation_result" {
+		t.Fatalf("expected kind=validation_result, got %s", kind)
+	}
+	ok, _ := data["ok"].(bool)
+	if !ok {
+		t.Fatalf("expected ok=true, got data=%v", data)
+	}
+	phase, _ := data["phase"].(string)
+	if phase != "inception" {
+		t.Fatalf("expected phase=inception, got %s", phase)
+	}
+	checks, _ := data["checks"].([]any)
+	if len(checks) == 0 {
+		t.Fatal("expected at least one check in result")
+	}
+}
+
+func TestValidateInception_PlaceholderFailure(t *testing.T) {
+	newProject(t)
+	prdWithPlaceholder := `<!-- archetipo:prd section=elevator_pitch required=true -->
+Pitch.
+
+<!-- archetipo:prd section=vision required=true -->
+Vision with {{UNRESOLVED}} placeholder.
+
+<!-- archetipo:prd section=user_personas required=true -->
+Users.
+
+<!-- archetipo:prd section=brainstorming_insights required=true -->
+Insights.
+
+<!-- archetipo:prd section=product_scope required=true -->
+Scope.
+
+<!-- archetipo:prd section=technical_architecture required=true -->
+Stack: {{TECH_STACK}}.
+
+<!-- archetipo:prd section=functional_requirements required=true -->
+FR.
+
+<!-- archetipo:prd section=non_functional_requirements required=true -->
+NFR.
+
+<!-- archetipo:prd section=next_steps required=true -->
+Next.
+`
+	prdFile := writeInputFile(t, "bad-prd.md", prdWithPlaceholder)
+	res := runCLI(t, "", "validate", "inception", "--file", prdFile)
+	exit, code, details := decodeErrorWithDetails(t, res)
+	if exit != iox.ExitInvalidInput {
+		t.Fatalf("expected exit %d, got %d", iox.ExitInvalidInput, exit)
+	}
+	if code != iox.CodeValidation {
+		t.Fatalf("expected code %s, got %s", iox.CodeValidation, code)
+	}
+	if details == nil {
+		t.Fatal("expected error.details to be populated")
+	}
+	detailsMap, ok := details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected details to be a map, got %T", details)
+	}
+	findings, _ := detailsMap["findings"].([]any)
+	if len(findings) == 0 {
+		t.Fatal("expected at least one finding in error.details.findings")
+	}
+}
+
+func TestValidateInception_DefaultTargetMissing(t *testing.T) {
+	newProject(t)
+	// No PRD file at the default path => E_PRECONDITION.
+	res := runCLI(t, "", "validate", "inception")
+	exit, code, _ := decodeErrorWithDetails(t, res)
+	if exit != iox.ExitPreconditionMissing {
+		t.Fatalf("expected exit %d, got %d", iox.ExitPreconditionMissing, exit)
+	}
+	if code != iox.CodePreconditionMissing {
+		t.Fatalf("expected code %s, got %s", iox.CodePreconditionMissing, code)
+	}
+}
+
+func TestValidateInception_FileMissingReturnsPrecondition(t *testing.T) {
+	newProject(t)
+	res := runCLI(t, "", "validate", "inception", "--file", "/nonexistent/file.md")
+	exit, code, _ := decodeErrorWithDetails(t, res)
+	if exit != iox.ExitPreconditionMissing {
+		t.Fatalf("expected exit %d, got %d", iox.ExitPreconditionMissing, exit)
+	}
+	if code != iox.CodePreconditionMissing {
+		t.Fatalf("expected code %s, got %s", iox.CodePreconditionMissing, code)
+	}
+}
+
+func TestValidateInception_E2E_CorrectionLoop(t *testing.T) {
+	newProject(t)
+
+	// 1. Create and persist an invalid PRD (placeholder + missing marker).
+	invalidPath := writeInputFile(t, "invalid-prd.md", invalidPRDContent())
+
+	writeRes := runCLI(t, "", "prd", "write", "--file", invalidPath)
+	writeKind, writeData := decodeOK(t, writeRes)
+	if writeKind != "write_result" {
+		t.Fatalf("expected kind=write_result, got %s", writeKind)
+	}
+	if ok, _ := writeData["ok"].(bool); !ok {
+		t.Fatalf("expected ok=true, got %v", writeData["ok"])
+	}
+
+	// 2. Validate the default PRD — must fail with E_VALIDATION.
+	valRes := runCLI(t, "", "validate", "inception")
+	exit, code, details := decodeErrorWithDetails(t, valRes)
+	if exit != iox.ExitInvalidInput {
+		t.Fatalf("expected exit %d, got %d. stderr=%s", iox.ExitInvalidInput, exit, valRes.stderr.String())
+	}
+	if code != iox.CodeValidation {
+		t.Fatalf("expected code %s, got %s. stderr=%s", iox.CodeValidation, code, valRes.stderr.String())
+	}
+	codes := collectFindingCodes(t, details)
+	hasPlaceholder := false
+	hasMissing := false
+	for _, c := range codes {
+		if c == "PRD_PLACEHOLDER_LEFT" {
+			hasPlaceholder = true
+		}
+		if c == "PRD_MISSING_SECTION" {
+			hasMissing = true
+		}
+	}
+	if !hasPlaceholder {
+		t.Fatalf("expected PRD_PLACEHOLDER_LEFT finding, got codes=%v", codes)
+	}
+	if !hasMissing {
+		t.Fatalf("expected PRD_MISSING_SECTION finding, got codes=%v", codes)
+	}
+
+	// 3. Overwrite with a valid PRD and persist.
+	validPath := writeInputFile(t, "valid-prd.md", validPRDContent())
+
+	writeRes2 := runCLI(t, "", "prd", "write", "--file", validPath)
+	writeKind2, writeData2 := decodeOK(t, writeRes2)
+	if writeKind2 != "write_result" {
+		t.Fatalf("expected kind=write_result, got %s", writeKind2)
+	}
+	if ok, _ := writeData2["ok"].(bool); !ok {
+		t.Fatalf("expected ok=true, got %v", writeData2["ok"])
+	}
+
+	// 4. Re-validate — must pass.
+	valRes2 := runCLI(t, "", "validate", "inception")
+	kind, data := decodeOK(t, valRes2)
+	if kind != "validation_result" {
+		t.Fatalf("expected kind=validation_result, got %s", kind)
+	}
+	if ok, _ := data["ok"].(bool); !ok {
+		t.Fatalf("expected ok=true, got data=%v", data)
+	}
+}
+
+// collectFindingCodes extracts the code field from each finding in an error
+// details payload. The caller must still assert that details is non-nil.
+func collectFindingCodes(t *testing.T, details any) []string {
+	t.Helper()
+	detailsMap, ok := details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected details to be a map, got %T", details)
+	}
+	findingsRaw, ok := detailsMap["findings"]
+	if !ok || findingsRaw == nil {
+		return nil
+	}
+	findings, ok := findingsRaw.([]any)
+	if !ok {
+		t.Fatalf("expected findings to be an array, got %T", findingsRaw)
+	}
+	var codes []string
+	for _, f := range findings {
+		fm, ok := f.(map[string]any)
+		if !ok {
+			continue
+		}
+		if code, ok := fm["code"].(string); ok {
+			codes = append(codes, code)
+		}
+	}
+	return codes
+}
+
+func invalidPRDContent() string {
+	return `<!-- archetipo:prd section=elevator_pitch required=true -->
+A concise elevator pitch with {{UNRESOLVED}} still here.
+
+<!-- archetipo:prd section=user_personas required=true -->
+Detailed personas describing target users.
+
+<!-- archetipo:prd section=brainstorming_insights required=true -->
+Insights gathered during brainstorming sessions.
+
+<!-- archetipo:prd section=product_scope required=true -->
+MVP scope and out-of-scope items.
+
+<!-- archetipo:prd section=technical_architecture required=true -->
+Stack: {{TECH_STACK}}.
+
+<!-- archetipo:prd section=functional_requirements required=true -->
+List of functional requirements with IDs.
+
+<!-- archetipo:prd section=non_functional_requirements required=true -->
+Performance and reliability requirements.
+
+<!-- archetipo:prd section=next_steps required=true -->
+Concrete next steps.
+`
+}
