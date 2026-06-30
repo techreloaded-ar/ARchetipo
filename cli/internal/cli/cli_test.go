@@ -1165,6 +1165,25 @@ func TestDoctor_PassesAfterInit(t *testing.T) {
 	}
 }
 
+func TestInit_Cursor(t *testing.T) {
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+	res := runCLI(t, "", "init", "--tool", "cursor", "--connector", "file", "--yes")
+	if res.exit != 0 {
+		t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	out := res.stdout.String()
+	if !strings.Contains(out, "Cursor") || !strings.Contains(out, ".cursor/skills") {
+		t.Fatalf("expected Cursor install path in output, got:\n%s", out)
+	}
+	for _, sk := range []string{"archetipo-spec", "archetipo-plan", "archetipo-implement"} {
+		path := filepath.Join(".cursor", "skills", sk, "SKILL.md")
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected skill at %s: %v", path, err)
+		}
+	}
+}
+
 // repoDataDir resolves the repository root (which holds skills/ + .archetipo/)
 // so init/doctor tests can run against the real packaged assets.
 func repoDataDir(t *testing.T) string {

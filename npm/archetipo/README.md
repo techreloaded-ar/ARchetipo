@@ -42,7 +42,7 @@ archetipo init --tool claude --connector file
 `init` copies the ARchetipo skills (`archetipo-autopilot`, `archetipo-design`,
 `archetipo-implement`, `archetipo-inception`, `archetipo-plan`,
 `archetipo-spec`) under the tool-specific directory of the current project
-(e.g. `.claude/skills/`) and creates `.archetipo/config.yaml` and
+(e.g. `.claude/skills/`, `.cursor/skills/`) and creates `.archetipo/config.yaml` and
 `.archetipo/shared-runtime.md`.
 
 ## Other commands

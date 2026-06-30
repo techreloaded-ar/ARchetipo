@@ -4,7 +4,7 @@ This file provides guidance to AI agents when working with code in this reposito
 
 ## Progetto
 
-ARchetipo è un set di skill per AI coding agent (Claude Code, Codex, Gemini CLI, OpenCode, GitHub Copilot) che supportano il processo di ideazione, analisi e pianificazione di un progetto software.
+ARchetipo è un set di skill per AI coding agent (Claude Code, Codex, Cursor, Gemini CLI, OpenCode, GitHub Copilot) che supportano il processo di ideazione, analisi e pianificazione di un progetto software.
 
 ## Struttura del repository
 

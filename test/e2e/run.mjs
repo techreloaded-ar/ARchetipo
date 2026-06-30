@@ -20,6 +20,7 @@ const DEFAULT_SCENARIO_ID = "default";
 const TOOL_SKILL_ROOT = {
   claude: ".claude/skills",
   codex: ".agents/skills",
+  cursor: ".cursor/skills",
   gemini: ".gemini/skills",
   opencode: ".opencode/skills",
   copilot: ".github/skills",
