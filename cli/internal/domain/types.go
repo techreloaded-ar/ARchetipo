@@ -275,7 +275,7 @@ type ReorderAnchor struct {
 // ValidationResult is the canonical success envelope for `archetipo validate`.
 type ValidationResult struct {
 	OK       bool                `json:"ok"`
-	Phase    string              `json:"phase"`
+	Artifact string              `json:"artifact"`
 	Target   string              `json:"target"`
 	Checks   []ValidationCheck   `json:"checks"`
 	Findings []ValidationFinding `json:"findings,omitempty"`
@@ -298,10 +298,10 @@ type ValidationFinding struct {
 }
 
 // ValidationErrorDetails is the payload placed inside error.details when a
-// validation fails. It includes the phase, target artifact, and a list of
+// validation fails. It includes the artifact, target artifact, and a list of
 // findings so the calling skill can correct the artifact and retry.
 type ValidationErrorDetails struct {
-	Phase    string              `json:"phase"`
+	Artifact string              `json:"artifact"`
 	Target   string              `json:"target"`
 	Findings []ValidationFinding `json:"findings"`
 }

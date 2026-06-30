@@ -18,17 +18,17 @@ func newValidateCmd(s streams) *cobra.Command {
 		Short: "Validate an artifact (PRD, backlog, etc.)",
 		Long:  "Run deterministic, marker-based validation on an artifact phase and return structured findings.",
 	}
-	root.AddCommand(newValidateInceptionCmd(s))
+	root.AddCommand(newValidatePRDCmd(s))
 	return root
 }
 
-// newValidateInceptionCmd builds `archetipo validate inception`.
-func newValidateInceptionCmd(s streams) *cobra.Command {
+// newValidatePRDCmd builds `archetipo validate prd`.
+func newValidatePRDCmd(s streams) *cobra.Command {
 	var filePath string
 	cmd := &cobra.Command{
-		Use:   "inception",
-		Short: "Validate the PRD against inception structural rules",
-		Long: `Run structural validation on the PRD artifact produced by the inception phase.
+		Use:   "prd",
+		Short: "Validate the PRD against PRD structural rules",
+		Long: `Run structural validation on the PRD artifact.
 
 The validator checks:
   - PRD is not empty
@@ -39,13 +39,13 @@ On success, a validation_result envelope is written to stdout.
 On failure, an E_VALIDATION error envelope with structured findings is
 written to stderr. Use error.details.findings to correct the PRD and retry.`,
 		Args: cobra.NoArgs,
-		RunE: runValidateInception(s, &filePath),
+		RunE: runValidatePRD(s, &filePath),
 	}
 	cmd.Flags().StringVar(&filePath, "file", "", "path to the PRD markdown, or - for stdin (default: docs/PRD.md)")
 	return cmd
 }
 
-func runValidateInception(s streams, filePath *string) func(cmd *cobra.Command, _ []string) error {
+func runValidatePRD(s streams, filePath *string) func(cmd *cobra.Command, _ []string) error {
 	return func(cmd *cobra.Command, _ []string) error {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -91,14 +91,14 @@ func runValidateInception(s streams, filePath *string) func(cmd *cobra.Command, 
 			markdown = string(data)
 		}
 
-		result := validation.ValidateInceptionPRD(target, markdown)
+		result := validation.ValidatePRD(target, markdown)
 
 		if !result.OK {
 			return iox.NewValidation(
-				"inception validation failed",
+				"prd validation failed",
 				"fix the listed PRD findings and rerun validation",
 				domain.ValidationErrorDetails{
-					Phase:    result.Phase,
+					Artifact: result.Artifact,
 					Target:   result.Target,
 					Findings: result.Findings,
 				},

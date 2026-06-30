@@ -33,10 +33,10 @@ var markerRe = regexp.MustCompile(`<!--\s*archetipo:prd\s+section=(\S+)\s+requir
 // placeholderRe matches unresolved {{PLACEHOLDER}} tokens.
 var placeholderRe = regexp.MustCompile(`\{\{[^}]+\}\}`)
 
-// ValidateInceptionPRD runs every PRD structural rule against the given
+// ValidatePRD runs every PRD structural rule against the given
 // markdown content and returns a ValidationResult. target is the file path
 // used for the result envelope and finding paths.
-func ValidateInceptionPRD(target string, markdown string) domain.ValidationResult {
+func ValidatePRD(target string, markdown string) domain.ValidationResult {
 	var checks []domain.ValidationCheck
 	var findings []domain.ValidationFinding
 
@@ -55,7 +55,7 @@ func ValidateInceptionPRD(target string, markdown string) domain.ValidationResul
 		})
 		return domain.ValidationResult{
 			OK:       false,
-			Phase:    "inception",
+			Artifact: "prd",
 			Target:   target,
 			Checks:   checks,
 			Findings: findings,
@@ -174,7 +174,7 @@ func ValidateInceptionPRD(target string, markdown string) domain.ValidationResul
 	ok := len(findings) == 0
 	return domain.ValidationResult{
 		OK:       ok,
-		Phase:    "inception",
+		Artifact: "prd",
 		Target:   target,
 		Checks:   checks,
 		Findings: findings,

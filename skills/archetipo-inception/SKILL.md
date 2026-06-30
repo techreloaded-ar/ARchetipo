@@ -20,7 +20,7 @@ Read `.archetipo/shared-runtime.md` for Language Policy, Assumptions and Questio
 3. This skill uses only these CLI operations:
    - `archetipo config show`
    - `archetipo prd write`
-   - `archetipo validate inception`
+   - `archetipo validate prd`
 
 If the CLI cannot find `.archetipo/config.yaml`, it falls back to its built-in defaults for connector, paths, and workflow statuses.
 
@@ -67,7 +67,7 @@ After persisting the PRD with `archetipo prd write`, you MUST run the determinis
 From the project root, run:
 
 ```bash
-archetipo validate inception
+archetipo validate prd
 ```
 
 This command reads the PRD from the configured path (`paths.prd`) and checks structural completeness. It does not need a connector.
@@ -84,7 +84,7 @@ If validation fails with `E_VALIDATION`:
 
 1. Read `error.details.findings` and correct the PRD markdown based on the findings: use `message` to understand the problem, `path` to locate the affected section, and `hint` for suggested remediation.
 2. Re-persist the corrected PRD with `archetipo prd write`.
-3. Re-run `archetipo validate inception`.
+3. Re-run `archetipo validate prd`.
 4. **Maximum 3 correction attempts.** If validation still fails after 3 attempts:
    - Stop the loop.
    - Show the user the remaining findings with their code, message, and hint.

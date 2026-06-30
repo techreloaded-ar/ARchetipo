@@ -1347,10 +1347,10 @@ Concrete next steps and owners.
 `
 }
 
-func TestValidateInception_Success(t *testing.T) {
+func TestValidatePRD_Success(t *testing.T) {
 	newProject(t)
 	prdFile := writeInputFile(t, "test-prd.md", validPRDContent())
-	res := runCLI(t, "", "validate", "inception", "--file", prdFile)
+	res := runCLI(t, "", "validate", "prd", "--file", prdFile)
 	kind, data := decodeOK(t, res)
 	if kind != "validation_result" {
 		t.Fatalf("expected kind=validation_result, got %s", kind)
@@ -1359,9 +1359,9 @@ func TestValidateInception_Success(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ok=true, got data=%v", data)
 	}
-	phase, _ := data["phase"].(string)
-	if phase != "inception" {
-		t.Fatalf("expected phase=inception, got %s", phase)
+	artifact, _ := data["artifact"].(string)
+	if artifact != "prd" {
+		t.Fatalf("expected artifact=prd, got %s", artifact)
 	}
 	checks, _ := data["checks"].([]any)
 	if len(checks) == 0 {
@@ -1369,7 +1369,7 @@ func TestValidateInception_Success(t *testing.T) {
 	}
 }
 
-func TestValidateInception_PlaceholderFailure(t *testing.T) {
+func TestValidatePRD_PlaceholderFailure(t *testing.T) {
 	newProject(t)
 	prdWithPlaceholder := `<!-- archetipo:prd section=elevator_pitch required=true -->
 Pitch.
@@ -1399,7 +1399,7 @@ NFR.
 Next.
 `
 	prdFile := writeInputFile(t, "bad-prd.md", prdWithPlaceholder)
-	res := runCLI(t, "", "validate", "inception", "--file", prdFile)
+	res := runCLI(t, "", "validate", "prd", "--file", prdFile)
 	exit, code, details := decodeErrorWithDetails(t, res)
 	if exit != iox.ExitInvalidInput {
 		t.Fatalf("expected exit %d, got %d", iox.ExitInvalidInput, exit)
@@ -1420,10 +1420,10 @@ Next.
 	}
 }
 
-func TestValidateInception_DefaultTargetMissing(t *testing.T) {
+func TestValidatePRD_DefaultTargetMissing(t *testing.T) {
 	newProject(t)
 	// No PRD file at the default path => E_PRECONDITION.
-	res := runCLI(t, "", "validate", "inception")
+	res := runCLI(t, "", "validate", "prd")
 	exit, code, _ := decodeErrorWithDetails(t, res)
 	if exit != iox.ExitPreconditionMissing {
 		t.Fatalf("expected exit %d, got %d", iox.ExitPreconditionMissing, exit)
@@ -1433,9 +1433,9 @@ func TestValidateInception_DefaultTargetMissing(t *testing.T) {
 	}
 }
 
-func TestValidateInception_FileMissingReturnsPrecondition(t *testing.T) {
+func TestValidatePRD_FileMissingReturnsPrecondition(t *testing.T) {
 	newProject(t)
-	res := runCLI(t, "", "validate", "inception", "--file", "/nonexistent/file.md")
+	res := runCLI(t, "", "validate", "prd", "--file", "/nonexistent/file.md")
 	exit, code, _ := decodeErrorWithDetails(t, res)
 	if exit != iox.ExitPreconditionMissing {
 		t.Fatalf("expected exit %d, got %d", iox.ExitPreconditionMissing, exit)
@@ -1445,7 +1445,7 @@ func TestValidateInception_FileMissingReturnsPrecondition(t *testing.T) {
 	}
 }
 
-func TestValidateInception_E2E_CorrectionLoop(t *testing.T) {
+func TestValidatePRD_E2E_CorrectionLoop(t *testing.T) {
 	newProject(t)
 
 	// 1. Create and persist an invalid PRD (placeholder + missing marker).
@@ -1461,7 +1461,7 @@ func TestValidateInception_E2E_CorrectionLoop(t *testing.T) {
 	}
 
 	// 2. Validate the default PRD — must fail with E_VALIDATION.
-	valRes := runCLI(t, "", "validate", "inception")
+	valRes := runCLI(t, "", "validate", "prd")
 	exit, code, details := decodeErrorWithDetails(t, valRes)
 	if exit != iox.ExitInvalidInput {
 		t.Fatalf("expected exit %d, got %d. stderr=%s", iox.ExitInvalidInput, exit, valRes.stderr.String())
@@ -1500,7 +1500,7 @@ func TestValidateInception_E2E_CorrectionLoop(t *testing.T) {
 	}
 
 	// 4. Re-validate — must pass.
-	valRes2 := runCLI(t, "", "validate", "inception")
+	valRes2 := runCLI(t, "", "validate", "prd")
 	kind, data := decodeOK(t, valRes2)
 	if kind != "validation_result" {
 		t.Fatalf("expected kind=validation_result, got %s", kind)

@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestValidateInceptionPRD_Valid(t *testing.T) {
+func TestValidatePRD_Valid(t *testing.T) {
 	prd := `<!-- archetipo:prd section=elevator_pitch required=true -->
 The Elevator Pitch is a concise statement.
 
@@ -32,7 +32,7 @@ NFR-01: 99.9% uptime.
 <!-- archetipo:prd section=next_steps required=true -->
 Finalize the backlog.`
 
-	result := ValidateInceptionPRD("docs/PRD.md", prd)
+	result := ValidatePRD("docs/PRD.md", prd)
 	if !result.OK {
 		t.Fatalf("expected OK=true, got false. findings=%v", result.Findings)
 	}
@@ -41,8 +41,8 @@ Finalize the backlog.`
 	}
 }
 
-func TestValidateInceptionPRD_Empty(t *testing.T) {
-	result := ValidateInceptionPRD("docs/PRD.md", "")
+func TestValidatePRD_Empty(t *testing.T) {
+	result := ValidatePRD("docs/PRD.md", "")
 	if result.OK {
 		t.Fatal("expected OK=false for empty PRD")
 	}
@@ -55,14 +55,14 @@ func TestValidateInceptionPRD_Empty(t *testing.T) {
 	}
 }
 
-func TestValidateInceptionPRD_WhitespaceOnly(t *testing.T) {
-	result := ValidateInceptionPRD("docs/PRD.md", "   \n  \n  ")
+func TestValidatePRD_WhitespaceOnly(t *testing.T) {
+	result := ValidatePRD("docs/PRD.md", "   \n  \n  ")
 	if result.OK {
 		t.Fatal("expected OK=false for whitespace-only PRD")
 	}
 }
 
-func TestValidateInceptionPRD_UnresolvedPlaceholder(t *testing.T) {
+func TestValidatePRD_UnresolvedPlaceholder(t *testing.T) {
 	prd := `<!-- archetipo:prd section=elevator_pitch required=true -->
 A pitch.
 
@@ -90,7 +90,7 @@ NFR-01.
 <!-- archetipo:prd section=next_steps required=true -->
 Next.`
 
-	result := ValidateInceptionPRD("docs/PRD.md", prd)
+	result := ValidatePRD("docs/PRD.md", prd)
 	if result.OK {
 		t.Fatal("expected OK=false with placeholder left")
 	}
@@ -106,7 +106,7 @@ Next.`
 	}
 }
 
-func TestValidateInceptionPRD_MissingSection(t *testing.T) {
+func TestValidatePRD_MissingSection(t *testing.T) {
 	// vision marker is missing
 	prd := `<!-- archetipo:prd section=elevator_pitch required=true -->
 Pitch.
@@ -132,7 +132,7 @@ NFR.
 <!-- archetipo:prd section=next_steps required=true -->
 Next.`
 
-	result := ValidateInceptionPRD("docs/PRD.md", prd)
+	result := ValidatePRD("docs/PRD.md", prd)
 	if result.OK {
 		t.Fatal("expected OK=false with missing section")
 	}
@@ -148,7 +148,7 @@ Next.`
 	}
 }
 
-func TestValidateInceptionPRD_EmptySection(t *testing.T) {
+func TestValidatePRD_EmptySection(t *testing.T) {
 	prd := `<!-- archetipo:prd section=elevator_pitch required=true -->
 Some pitch.
 
@@ -174,7 +174,7 @@ NFR.
 <!-- archetipo:prd section=next_steps required=true -->
 Next.`
 
-	result := ValidateInceptionPRD("docs/PRD.md", prd)
+	result := ValidatePRD("docs/PRD.md", prd)
 	if result.OK {
 		t.Fatal("expected OK=false with empty section")
 	}
@@ -190,7 +190,7 @@ Next.`
 	}
 }
 
-func TestValidateInceptionPRD_NoPlaceholder_ButFoundWordWithBraces(t *testing.T) {
+func TestValidatePRD_NoPlaceholder_ButFoundWordWithBraces(t *testing.T) {
 	// Single braces with non-placeholder content should not trigger placeholder detection.
 	prd := `<!-- archetipo:prd section=elevator_pitch required=true -->
 Pitch.
@@ -219,15 +219,15 @@ NFR.
 <!-- archetipo:prd section=next_steps required=true -->
 Next.`
 
-	result := ValidateInceptionPRD("docs/PRD.md", prd)
+	result := ValidatePRD("docs/PRD.md", prd)
 	if !result.OK {
 		t.Fatalf("expected OK=true for PRD without double braces, got findings=%v", result.Findings)
 	}
 }
 
-func TestValidateInceptionPRD_AllChecksPassed(t *testing.T) {
+func TestValidatePRD_AllChecksPassed(t *testing.T) {
 	prd := validPRD()
-	result := ValidateInceptionPRD("docs/PRD.md", prd)
+	result := ValidatePRD("docs/PRD.md", prd)
 	if !result.OK {
 		t.Fatalf("expected OK=true, got false")
 	}

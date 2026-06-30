@@ -4,7 +4,7 @@ When the inception flow has gathered the minimum required information, generate 
 
 > **Language:** The template below is an English scaffold. Before writing the file, translate every static element (headings, table headers, bold labels, connective phrases like "For **X**, who has the problem of **Y**...") into the detected language, per the **Template Rendering Rule** in `.archetipo/shared-runtime.md`. Keep `{{PLACEHOLDER}}` tokens unchanged.
 
-> **📌 Marker contract:** The HTML comments `<!-- archetipo:prd section=<id> required=true -->` below are stable, machine-readable markers used by `archetipo validate inception`. **Do not translate, modify, or remove them.** They are part of the validation contract and must appear verbatim in every generated PRD.
+> **📌 Marker contract:** The HTML comments `<!-- archetipo:prd section=<id> required=true -->` below are stable, machine-readable markers used by `archetipo validate prd`. **Do not translate, modify, or remove them.** They are part of the validation contract and must appear verbatim in every generated PRD.
 
 ```markdown
 # {{PROJECT_NAME}} - Product Requirements Document

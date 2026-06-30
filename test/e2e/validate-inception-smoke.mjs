@@ -92,6 +92,10 @@ async function main() {
   const startedAt = Date.now();
   const events = [];
 
+  let passed = false;
+  let errorMessage = "";
+  let findings = [];
+
   try {
     // 1. Build the CLI binary.
     await buildCLI();
@@ -113,11 +117,11 @@ async function main() {
     assertDataOk(write1);
 
     // STEP 2 — validate → E_VALIDATION.
-    console.log("═══ STEP 2/4: validate inception (expects E_VALIDATION) ═══");
-    const val1 = await runAndRecord("validate-invalid", cliPath, ["validate", "inception"], { cwd: sandboxDir }, events);
+    console.log("═══ STEP 2/4: validate prd (expects E_VALIDATION) ═══");
+    const val1 = await runAndRecord("validate-invalid", cliPath, ["validate", "prd"], { cwd: sandboxDir }, events);
     assertExit(val1, 2, "ExitInvalidInput");
     assertErrorCode(val1, "E_VALIDATION");
-    const findings = assertErrorDetails(val1);
+    findings = assertErrorDetails(val1);
 
     console.log(`\n   Validation findings (${findings.length}):`);
     for (const f of findings) {
@@ -134,8 +138,8 @@ async function main() {
     assertDataOk(write2);
 
     // STEP 4 — validate → OK.
-    console.log("═══ STEP 4/4: validate inception (expects success) ═══");
-    const val2 = await runAndRecord("validate-valid", cliPath, ["validate", "inception"], { cwd: sandboxDir }, events);
+    console.log("═══ STEP 4/4: validate prd (expects success) ═══");
+    const val2 = await runAndRecord("validate-valid", cliPath, ["validate", "prd"], { cwd: sandboxDir }, events);
     assertExit(val2, 0, "ExitOK");
     const envOk = JSON.parse(val2.stdout);
     if (envOk.kind !== "validation_result") {
@@ -145,22 +149,35 @@ async function main() {
       throw new Error(`Expected data.ok=true, got ${JSON.stringify(envOk.data)}`);
     }
 
-    // Write HTML report.
+    passed = true;
+  } catch (error) {
+    errorMessage = error.message;
+  } finally {
+    // Always write the HTML report.
     const endedAt = Date.now();
     const durationMs = endedAt - startedAt;
-    const html = renderReport({ sandboxDir, events, startedAt, endedAt, durationMs, findings });
+    const html = renderReport({ sandboxDir, events, startedAt, endedAt, durationMs, findings, passed, errorMessage });
     await fs.writeFile(reportPath, html);
 
-    console.log(`\n╔══════════════════════════════════════════╗`);
-    console.log(`║  PASS: validate-inception smoke test     ║`);
-    console.log(`╠══════════════════════════════════════════╣`);
-    console.log(`║  Report:  ${reportPath}`);
-    console.log(`╚══════════════════════════════════════════╝`);
-  } finally {
+    if (passed) {
+      console.log(`\n╔══════════════════════════════════════════╗`);
+      console.log(`║  PASS: validate-inception smoke test     ║`);
+      console.log(`╠══════════════════════════════════════════╣`);
+      console.log(`║  Report:  ${reportPath}`);
+      console.log(`╚══════════════════════════════════════════╝`);
+    } else {
+      console.error(`\nFAIL: ${errorMessage}`);
+      console.error(`Report written anyway: ${reportPath}`);
+    }
+
     if (options.cleanup) {
       await fs.rm(runDir, { recursive: true, force: true });
       console.log(`-> cleaned workspace: ${runDir}`);
     }
+  }
+
+  if (!passed) {
+    throw new Error(errorMessage);
   }
 }
 
@@ -296,14 +313,14 @@ function assertErrorDetails(result) {
 // HTML report (matches run.mjs style)
 // ---------------------------------------------------------------------------
 
-function renderReport({ sandboxDir, events, startedAt, endedAt, durationMs, findings }) {
+function renderReport({ sandboxDir, events, startedAt, endedAt, durationMs, findings, passed, errorMessage }) {
   const startedISO = new Date(startedAt).toISOString();
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ARchetipo Smoke — Validate Inception Correction Loop</title>
+  <title>ARchetipo Smoke — Validate PRD Correction Loop</title>
   <style>
     :root { color-scheme: light; --bg: #f6f7f9; --panel: #ffffff; --ink: #172026; --muted: #61707d; --line: #d8dee6; --ok: #18794e; --fail: #c93a2f; --warn: #8a5a00; }
     * { box-sizing: border-box; }
@@ -357,9 +374,9 @@ function renderReport({ sandboxDir, events, startedAt, endedAt, durationMs, find
 <body>
   <main>
     <header>
-      <h1>ARchetipo Smoke — Validate Inception Correction Loop</h1>
+      <h1>ARchetipo Smoke — Validate PRD Correction Loop</h1>
       <div class="meta">
-        ${metaItem("Status", "PASS")}
+        ${metaItem("Status", passed ? "PASS" : "FAIL")}
         ${metaItem("Started", startedISO)}
         ${metaItem("Duration", formatDuration(durationMs))}
         ${metaItem("Sandbox", sandboxDir)}
@@ -368,12 +385,15 @@ function renderReport({ sandboxDir, events, startedAt, endedAt, durationMs, find
 
     <h2>Scenario</h2>
     <p class="section-desc">
-      This smoke test exercises the <code>archetipo validate inception</code> correction loop
+      This smoke test exercises the <code>archetipo validate prd</code> correction loop
       without an AI agent. It writes a deliberately broken PRD (missing <code>vision</code> marker,
       <code>{{UNRESOLVED}}</code> + <code>{{TECH_STACK}}</code> placeholders), validates,
       inspects the <code>E_VALIDATION</code> findings, corrects the PRD, and re-validates to
       confirm the loop closes.
     </p>
+
+    ${!passed ? `<h2>Error</h2>
+    <p class="section-desc" style="color:var(--fail);font-weight:650;">${esc(errorMessage)}</p>` : ""}
 
     <h2>Timeline</h2>
     <section class="timeline">
