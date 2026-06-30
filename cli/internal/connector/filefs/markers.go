@@ -36,6 +36,13 @@ var markerLine = regexp.MustCompile(`^\s*<!--\s*archetipo:(\w+)\s*(.*?)\s*-->\s*
 // percent-encoded for whitespace and special characters.
 var attribute = regexp.MustCompile(`(\w+)=(\S*)`)
 
+// Spec and epic codes follow the fixed US-/EP- numbering scheme; anything else
+// in a marker is a hand-editing mistake we want to surface early.
+var (
+	specCodePattern = regexp.MustCompile(`^US-\d+$`)
+	epicCodePattern = regexp.MustCompile(`^EP-\d+$`)
+)
+
 // marker is the parsed in-memory representation of a marker line.
 type marker struct {
 	Kind  string
@@ -119,6 +126,12 @@ func specMarker(s domain.Spec) string {
 func specFromMarker(m marker) (domain.Spec, error) {
 	if m.Kind != "spec" {
 		return domain.Spec{}, fmt.Errorf("expected kind=spec, got %q", m.Kind)
+	}
+	if code := m.Attrs["code"]; !specCodePattern.MatchString(code) {
+		return domain.Spec{}, fmt.Errorf("invalid spec code %q: expected US-<number>", code)
+	}
+	if epic := m.Attrs["epic"]; epic != "" && !epicCodePattern.MatchString(epic) {
+		return domain.Spec{}, fmt.Errorf("invalid epic code %q: expected EP-<number>", epic)
 	}
 	s := domain.Spec{
 		Code: m.Attrs["code"],

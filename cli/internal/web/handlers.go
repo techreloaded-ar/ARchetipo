@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/metrics"
 )
 
 // boardColumnView is the JSON shape of one Kanban column in GET /api/board.
@@ -35,6 +37,16 @@ var boardLayout = []struct {
 	{"in_progress", domain.StatusInProgress},
 	{"review", domain.StatusReview},
 	{"done", domain.StatusDone},
+}
+
+// handleGetMetrics returns the same aggregation as `archetipo metrics`.
+func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
+	specs, err := s.conn.FetchBacklogItems(r.Context(), "")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, metrics.Compute(specs))
 }
 
 func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +84,7 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 		return id
 	}
 	var boardOrder []string
-	if r, ok := s.conn.(boardOrderReader); ok {
+	if r, ok := s.conn.(connector.BoardOrderReader); ok {
 		if order, oerr := r.ReadBoardOrder(ctx); oerr == nil {
 			boardOrder = order
 		}
@@ -204,8 +216,9 @@ func (s *Server) readPlanForSpec(ctx context.Context, code string) ([]domain.Tas
 		}
 		return nil, "", err
 	}
+	domain.NormalizeTaskBodies(tasks)
 	body := ""
-	if pr, ok := s.conn.(planBodyReader); ok {
+	if pr, ok := s.conn.(connector.PlanBodyReader); ok {
 		if b, err := pr.ReadPlanBody(ctx, code); err == nil {
 			body = b
 		}
@@ -213,40 +226,12 @@ func (s *Server) readPlanForSpec(ctx context.Context, code string) ([]domain.Tas
 	return tasks, body, nil
 }
 
-// planBodyReader is an optional capability connectors can implement to expose
-// the plan body text alongside the tasks. The viewer probes for it at runtime
-// via a type assertion, so connectors that do not implement it (e.g. github)
-// simply return tasks with an empty body.
-type planBodyReader interface {
-	ReadPlanBody(ctx context.Context, code string) (string, error)
-}
-
-// prdReader is an optional capability connectors can implement to expose the
-// raw PRD markdown so the viewer can render it next to specs and plans.
-type prdReader interface {
-	ReadPRD(ctx context.Context) (string, error)
-}
-
-// mockupLister is an optional capability connectors can implement to list the
-// design mockups produced by archetipo-design (HTML folders under paths.mockups).
-type mockupLister interface {
-	ListMockups(ctx context.Context) ([]domain.MockupEntry, error)
-}
-
-// boardOrderReader is an optional capability connectors can implement to expose
-// the global ordering produced by drag-and-drop. Without it, the viewer
-// renders specs in whatever order FetchBacklogItems returns, ignoring the
-// position the user assigned by moving cards.
-type boardOrderReader interface {
-	ReadBoardOrder(ctx context.Context) ([]string, error)
-}
-
 type prdView struct {
 	Body string `json:"body"`
 }
 
 func (s *Server) handleGetPRD(w http.ResponseWriter, r *http.Request) {
-	pr, ok := s.conn.(prdReader)
+	pr, ok := s.conn.(connector.PRDReader)
 	if !ok {
 		writeError(w, iox.NewConnector(iox.CodePreconditionMissing, "this connector does not expose a PRD", "use the file connector to read the PRD", nil))
 		return
@@ -277,7 +262,7 @@ type mockupsView struct {
 }
 
 func (s *Server) handleListMockups(w http.ResponseWriter, r *http.Request) {
-	ml, ok := s.conn.(mockupLister)
+	ml, ok := s.conn.(connector.MockupLister)
 	if !ok {
 		writeJSON(w, http.StatusOK, mockupsView{Mockups: []domain.MockupEntry{}})
 		return
@@ -316,6 +301,30 @@ func (s *Server) handleUpdateSpec(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"spec": spec})
 }
 
+func (s *Server) handleDeleteSpec(w http.ResponseWriter, r *http.Request) {
+	code := r.PathValue("code")
+	if code == "" {
+		writeError(w, iox.NewInvalidInput("missing spec code", "", nil))
+		return
+	}
+	deleter, ok := s.conn.(connector.SpecDeleter)
+	if !ok {
+		writeError(w, iox.NewConnector(
+			iox.CodePreconditionMissing,
+			"this connector does not support deleting specs from the viewer",
+			"use the local file connector",
+			nil,
+		))
+		return
+	}
+	res, err := deleter.DeleteSpec(r.Context(), code)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 type savePlanReq struct {
 	PlanBody string        `json:"plan_body"`
 	Tasks    []domain.Task `json:"tasks"`
@@ -332,7 +341,9 @@ func (s *Server) handleSavePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	res, err := s.conn.SavePlan(r.Context(), code, domain.PlanInput{PlanBody: req.PlanBody, Tasks: req.Tasks})
+	input := domain.PlanInput{PlanBody: req.PlanBody, Tasks: req.Tasks}
+	domain.NormalizePlanInput(&input)
+	res, err := s.conn.SavePlan(r.Context(), code, input)
 	if err != nil {
 		writeError(w, err)
 		return

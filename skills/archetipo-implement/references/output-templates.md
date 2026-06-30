@@ -60,14 +60,14 @@ Starting implementation...
 **Execution context:** Worker-backed preferred | In-context fallback
 
 **Wave 1 — Sequential workers**
-- 🔧 Ugo: TASK-01 [description]
-- 🧪 Mina: TASK-02 [description]
+- 🔧 Ugo: TASK-01 [title or body excerpt]
+- 🧪 Mina: TASK-02 [title or body excerpt]
 
 **Reason for sequential scheduling:** [dependencies | shared files | unstable interfaces]
 
 **Wave 2 — Concurrent workers**
-- 🔧 Ugo: TASK-03 [description]
-- 🧪 Mina: TASK-04 [description]
+- 🔧 Ugo: TASK-03 [title or body excerpt]
+- 🧪 Mina: TASK-04 [title or body excerpt]
 
 **Fallback to current context:** [only if workers are unavailable or unreliable]
 
@@ -93,6 +93,7 @@ Proceeding.
 ## Code Review Output (Phase 3)
 
 **Review criteria (English labels):**
+
 1. plan adherence
 2. code quality
 3. architecture adherence
@@ -124,6 +125,7 @@ Proceeding.
 ```
 
 **Severity labels:**
+
 - `🔴 CRITICAL` — must fix before completion
 - `🟡 IMPROVEMENT` — should fix, but may be skipped with user approval
 
@@ -151,5 +153,5 @@ Proceeding.
 **Optional improvements left open:**
 - [Improvement title] — `path/to/file.ts:NN` — [brief suggestion]
 
-⚠️ The spec is in Review. Moving to {config.workflow.statuses.done} is manual.
+⚠️ The spec is in Review. Run `/archetipo-review {US-CODE}` to accept it or send it back with feedback.
 ```

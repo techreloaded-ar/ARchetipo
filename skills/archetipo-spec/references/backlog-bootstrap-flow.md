@@ -182,9 +182,9 @@ Emanuele validates:
 
 ## Phase 5 - Output Generation
 
-Construct the full JSON payload string in your own context (not via shell heredoc or inline script). Choose a unique temp filename using the spec code range (e.g. `tmp-payload-US-001-US-015.json`). Write the file to `.archetipo/` using your file-writing tool. Then invoke `archetipo validate specs --file <path>` before writing the backlog.
+Construct the full JSON payload string in your own context (not via shell heredoc or inline script). Choose a unique temp filename using the spec code range (e.g. `tmp-payload-US-001-US-015.json`). Write the file to `.archetipo/` using your file-writing tool. Then invoke `archetipo validate spec --file <path>` before writing the backlog.
 
-If validation returns `kind: "validation_result"` with `data.ok: false`, do not call `archetipo spec add`. Read `data.issues`, repair every `severity: "error"` in the payload, and rerun validation. Treat warnings as quality feedback; fix them when straightforward, but they do not block persistence.
+If validation returns `kind: "validation_result"` with `data.ok: false`, do not call `archetipo spec add`. Read `data.findings`, repair every `severity: "error"` in the payload, and rerun validation. Treat warnings as quality feedback; fix them when straightforward, but they do not block persistence.
 
 Only after validation passes, invoke `archetipo spec add --file <path>`. After the CLI exits, delete the temp file.
 

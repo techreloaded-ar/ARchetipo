@@ -36,18 +36,23 @@ type boardColumnDoc struct {
 }
 
 type specDoc struct {
-	Schema    string          `yaml:"schema"`
-	Code      string          `yaml:"code"`
-	Title     string          `yaml:"title"`
-	Epic      specEpicDoc     `yaml:"epic,omitempty"`
-	Priority  domain.Priority `yaml:"priority"`
-	Points    int             `yaml:"points"`
-	Status    domain.Status   `yaml:"status"`
-	BlockedBy []string        `yaml:"blocked_by,omitempty"`
-	Scope     domain.Scope    `yaml:"scope,omitempty"`
-	Body      string          `yaml:"body,omitempty"`
-	Ref       string          `yaml:"ref,omitempty"`
-	URL       string          `yaml:"url,omitempty"`
+	Schema    string                `yaml:"schema"`
+	Code      string                `yaml:"code"`
+	Title     string                `yaml:"title"`
+	Epic      specEpicDoc           `yaml:"epic,omitempty"`
+	Priority  domain.Priority       `yaml:"priority"`
+	Points    int                   `yaml:"points"`
+	Status    domain.Status         `yaml:"status"`
+	BlockedBy []string              `yaml:"blocked_by,omitempty"`
+	Scope     domain.Scope          `yaml:"scope,omitempty"`
+	Body      string                `yaml:"body,omitempty"`
+	Ref       string                `yaml:"ref,omitempty"`
+	URL       string                `yaml:"url,omitempty"`
+	Branch    string                `yaml:"branch,omitempty"`
+	Worktree  string                `yaml:"worktree,omitempty"`
+	ForkBase  string                `yaml:"fork_base,omitempty"`
+	Rework    bool                  `yaml:"rework,omitempty"`
+	History   []domain.StatusChange `yaml:"history,omitempty"`
 }
 
 // specEpicDoc is the on-disk representation of a spec's epic. It accepts
@@ -192,6 +197,7 @@ func (c *Connector) readPlan(specCode string) (planDoc, error) {
 			doc.Tasks[i].Ref = doc.Tasks[i].ID
 		}
 	}
+	domain.NormalizeTaskBodies(doc.Tasks)
 	return doc, nil
 }
 
@@ -262,7 +268,7 @@ func (c *Connector) legacyPlanningDir() string {
 	if strings.HasSuffix(strings.ToLower(c.cfg.File.Planning), ".md") {
 		return filepath.Dir(c.cfg.AbsPath(c.cfg.File.Planning))
 	}
-	if strings.HasSuffix(strings.ToLower(c.cfg.File.Planning), "/") || strings.Contains(filepath.Base(c.cfg.File.Planning), ".") == false {
+	if strings.HasSuffix(strings.ToLower(c.cfg.File.Planning), "/") || !strings.Contains(filepath.Base(c.cfg.File.Planning), ".") {
 		path := c.cfg.AbsPath(c.cfg.File.Planning)
 		if strings.HasSuffix(strings.ToLower(path), ".yaml") {
 			return filepath.Join(c.cfg.ProjectRoot, "docs", "planning")
@@ -302,6 +308,11 @@ func specDocFromSpec(spec domain.Spec) specDoc {
 		Body:      spec.Body,
 		Ref:       spec.Ref,
 		URL:       spec.URL,
+		Branch:    spec.Branch,
+		Worktree:  spec.Worktree,
+		ForkBase:  spec.ForkBase,
+		Rework:    spec.Rework,
+		History:   spec.History,
 	}
 }
 
@@ -318,10 +329,16 @@ func (d specDoc) toSpec() domain.Spec {
 		Body:      d.Body,
 		Ref:       d.Ref,
 		URL:       d.URL,
+		Branch:    d.Branch,
+		Worktree:  d.Worktree,
+		ForkBase:  d.ForkBase,
+		Rework:    d.Rework,
+		History:   d.History,
 	}
 }
 
 func (c *Connector) writePlan(specCode string, plan domain.PlanInput) error {
+	domain.NormalizePlanInput(&plan)
 	doc := planDoc{
 		Schema:   planSchema,
 		SpecCode: specCode,

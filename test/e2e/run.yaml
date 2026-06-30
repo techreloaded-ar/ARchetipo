@@ -22,15 +22,79 @@ agents:
       - "{prompt}"
 
 scenarios:
-  spec-plan:
+
+  # Inception creates and persists a structurally valid PRD.
+  inception-creates-valid-prd:
     agent: pi-go-ds4-flash
-    prd: ../PRD.md
+    fixture: fixtures/inception
+    prompts:
+      - >-
+        /archetipo-inception Crea un PRD completo e salvalo subito usando queste
+        informazioni, senza fare domande di follow-up: prodotto Match5, una web
+        app per organizzare partite amatoriali di calcetto tra amici e piccoli
+        gruppi locali. Target primario: organizzatori di partite ricorrenti che
+        oggi usano chat WhatsApp caotiche; target secondario: giocatori
+        occasionali che cercano una partita libera vicino a casa. Problema:
+        conferme, sostituzioni, quote campo e comunicazioni sono disperse.
+        Valore: creare eventi partita, invitare giocatori, gestire
+        disponibilità, lista d'attesa, pagamenti quota, notifiche e storico
+        presenze in un unico posto. Differenziatore: flusso ultra-rapido per
+        confermare o trovare sostituti, pensato per gruppi informali non per
+        società sportive. MVP: autenticazione email, profilo giocatore,
+        creazione partita, inviti via link, conferma presenza, lista riserve,
+        notifiche email, riepilogo quote, dashboard organizzatore e vista mobile
+        responsive. Post-MVP: ranking fair play, integrazione calendario,
+        pagamenti reali, suggerimenti campi, chat leggera. Architettura
+        preferita: applicazione web responsive con backend API, PostgreSQL,
+        autenticazione semplice, test automatici e deploy cloud. Requisiti:
+        produci almeno 10 requisiti funzionali numerati, requisiti non
+        funzionali su sicurezza/accessibilità/performance, due personas
+        complete, brainstorming con assunzioni/rischi, scope MVP/growth/future e
+        prossimi passi. Se mancano dettagli, usa assunzioni esplicite invece di
+        fermarti. Dopo aver scritto il PRD, esegui anche la validazione prevista
+        dalla skill.
+    archetipo_post_commands:
+      - validate prd
+
+  # Spec + plam  US-001.
+  from-prd-to-plan:
+    agent: pi-go-ds4-flash
+    fixture: fixtures/prd
     prompts:
       - /archetipo-spec
       - /archetipo-plan US-001
 
-  spec:
+
+  # Spec + plam  US-001.
+  jira-init:
     agent: pi-go-ds4-flash
-    prd: ../PRD.md
+    fixture: fixtures/jira-prd
     prompts:
-      - /archetipo-spec
+      
+
+  # Implement worktree without integration
+  from-plan-to-implement:
+    agent: pi-go-ds4-flash
+    fixture: fixtures/plan
+    prompts:
+      - /archetipo-implement US-001
+
+  # Implement worktree with integration
+  worktree-from-plan-to-implement-integrate:
+    agent: pi-go-ds4-flash
+    fixture: fixtures/worktree-plan
+    prompts:
+      - /archetipo-implement US-001
+    archetipo_post_commands:
+      - spec integrate US-001
+    verify_integrate:
+      - US-001
+
+  # Implement worktree without integration
+  worktree-implement-no-integrate:
+    agent: pi-go-ds4-flash
+    fixture: fixtures/worktree-plan
+    archetipo_pre_commands:
+      - spec start US-001
+    prompts:
+      - /archetipo-implement US-001

@@ -37,6 +37,7 @@ This section has priority over every other section in the skill.
 ## Autonomy Policy
 
 Stop and ask the user only when one of these is true:
+
 - The implementation plan conflicts with the current codebase in a way that cannot be adapted locally without changing the intended solution
 - The spec depends on another unimplemented spec or prerequisite outside the current spec scope
 - Existing tests must be changed **semantically** because the intended behavior or contract changes
@@ -44,6 +45,7 @@ Stop and ask the user only when one of these is true:
 - Completing the task would change scope, acceptance criteria, or the user-facing contract of the spec
 
 Do **not** stop for these:
+
 - Local implementation adaptations that preserve the planned solution
 - Minor technical fixes, dependency wiring, or configuration cleanup inside the current spec scope
 - Surgical re-reads during debugging, review, or the fix loop
@@ -57,12 +59,14 @@ If a situation is ambiguous, prefer continuing when the adaptation is local and 
 ### Worker-backed preferred
 
 Use workers/subagents when:
+
 - the runtime supports parallel work reliably
 - clean execution context per wave or task is valuable
 - Mina can work from stable interfaces or contracts
 - Cesare can review diffs in a separate context
 
 In worker-backed mode:
+
 - every wave is executed through one or more workers, even if the wave is sequential
 - sequential waves may still use one worker per task or one worker per wave, as long as the execution context stays isolated from the main orchestrator
 - concurrent fan-out is used only for truly independent tasks
@@ -70,6 +74,7 @@ In worker-backed mode:
 ### In-context fallback
 
 Use a single orchestrator when:
+
 - worker/subagent support is missing or unreliable
 - the repo or runtime makes coordination costlier than execution
 
@@ -93,26 +98,32 @@ Do not avoid worker-backed execution only because a wave must be scheduled seque
 
 ### PHASE 0 - Setup, Spec Selection, and Plan Loading
 
-1. Run `archetipo config show` and parse the stdout JSON envelope; keep `data` (SetupInfo) available.
+1. Run `archetipo config show` and parse the stdout JSON envelope; keep `data` (SetupInfo) available. Treat `data.project_root` as the cwd for all ARchetipo connector/backlog commands in this skill.
 2. On failure, parse stderr as the JSON error envelope and branch on `error.code`.
 3. Load the spec and its plan with a single CLI call:
    - If a code was passed: `archetipo spec show {US-CODE}`
    - Otherwise: `archetipo spec next --status {config.workflow.statuses.planned}` (auto-pick first eligible by priority + code)
 
-   The envelope returns `data.spec` (the full Spec including `body`) and `data.tasks` (the implementation task list).
+   The envelope returns `data.spec` (the full Spec including `body`) and `data.tasks` (the implementation task list). `data.tasks[].body` is the canonical operational content of each task.
 
    - If `error.code = E_PRECONDITION` (no eligible spec or auto-pick on empty queue), stop and display the template from `./references/output-templates.md` ("No planned specs" / "No backlog" as appropriate).
    - If `data.tasks` is empty, the spec has no plan yet — stop and display the template from `./references/output-templates.md` ("No implementation plan" error message).
 
-4. Load the relevant project context: agent instructions (CLAUDE.md, AGENTS.md), project config, conventions, and existing patterns in the touched area.
-5. If the plan contains UI work, scan it for mockups or design references and search `{config.paths.mockups}` for matching files. Treat explicitly referenced mockups as the source of truth.
-6. Run `archetipo spec start {US-CODE}` to transition the spec to `{config.workflow.statuses.in_progress}`. The verb is idempotent — re-running on a spec already `IN PROGRESS` is a safe no-op.
+4. Run `archetipo spec start {US-CODE}` from `data.project_root` to transition the spec to `{config.workflow.statuses.in_progress}`. The verb is idempotent — re-running on a spec already `IN PROGRESS` is a safe no-op.
+   - Immediately after `spec start`, run `archetipo spec show {US-CODE}` again from `data.project_root`. Replace the in-memory `spec`, `tasks`, and `workdir` with this post-start envelope before reading or editing any code. This second read is mandatory because `spec start` may have just created the worktree, so the pre-start `data.workdir` can still be the project root.
+   - **Worktree workflow (optional):** when `worktree.enabled` is set in `.archetipo/config.yaml`, `spec start` also creates a dedicated git branch + worktree for the spec (forked dependency-aware from the base or a blocker branch). Apply the **Worktree Working Directory** rule from `.archetipo/shared-runtime.md`: do all implementation work — every file edit, test run, and optional local commit — under the post-start `data.workdir`, so the review diff (`git diff <fork_base>...<branch>`) stays isolated to this spec. When the spec has no worktree, `data.workdir` is the project root and nothing changes. Never branch on connector type; branch only on `data.workdir`. The final `archetipo spec review` command is the authoritative review gate: for worktree-backed specs it stages and commits any dirty or untracked worktree changes before moving the spec to review, so the branch diff is complete even if the agent did not commit manually.
+
+   - **Rework cycle:** when a spec returns from review via *request changes* it goes back to TODO with the feedback recorded in its body; after archetipo-plan re-plans it, its branch and worktree already exist. `spec start` is idempotent and reuses the existing worktree — it does not recreate anything. Resume implementation under the post-start `data.workdir` so the new Fix tasks build on the changes already committed there.
+5. Load the relevant project context under the post-start `data.workdir`: agent instructions (CLAUDE.md, AGENTS.md), project config, conventions, and existing patterns in the touched area.
+6. If the plan contains UI work, scan it for mockups or design references and search `{config.paths.mockups}` from `data.project_root` for matching files. Treat explicitly referenced mockups as the source of truth, then apply them while implementing under `data.workdir`.
 7. Announce the session briefly using the template from `./references/output-templates.md` ("Session Announcement").
 
 ### Validation policy for task parsing
 
 When loading tasks via `archetipo spec show`, apply these validation rules to the JSON envelope's `data.tasks`:
 
+- Treat `task.body` as the canonical source of task instructions. Read it before planning execution, especially the `File Coinvolti` and `Criteri di Completamento` sections.
+- If a task arrives without `body`, treat it as legacy or malformed. The CLI should already have normalised old `description`-only plans, but if a task still lacks a usable body, handle it with extra caution.
 - If `type` is missing but the body clearly describes an implementation or test task, infer it and log a warning
 - If `type` is missing and the task cannot be classified confidently, treat that task as sequential-only
 - If `dependencies` are missing or malformed, do **not** assume independent scheduling; treat as sequential
@@ -143,7 +154,7 @@ For each task:
 3. Do not make new architectural decisions during implementation. If the task contract is missing a decision that changes the user-facing contract, data model, security model, or integration boundary, stop and report the blocker.
 4. Follow mockups when UI work is involved.
 5. Run the task-specific verification from the task contract when present. If the contract has no verification command, run the smallest relevant project check that proves the task.
-6. Mark the task as done only after verification passes: run `archetipo task done {US-CODE} {TASK-ID}`.
+6. Mark the task as done only after verification passes: run `archetipo task done {US-CODE} {TASK-ID}` from `data.project_root`.
 7. Announce completion briefly.
 
 #### Ugo's rules
@@ -174,64 +185,32 @@ For each task:
 Apply this section when the plan requires e2e coverage, or when Mina determines e2e is necessary for the implemented user flow.
 
 **When required**
+
 - If the plan includes an e2e strategy, Mina must define and author those tests
 - Do not skip e2e coverage only because it is harder than unit or integration testing
 
 **Authoring**
+
 - Detect the existing e2e framework from project config, `package.json`, agent instructions files, and existing tests
 - Reuse the existing stack when present
 - Map each e2e scenario to a user flow described in the plan
 - Write real end-to-end flows: navigation, interaction, waiting, and outcome assertions
 
 **Bootstrap authorization**
-- If the repo lacks e2e infrastructure but the repo or plan provides clear signals about the intended stack, Mina may install and configure the missing framework, runtime dependencies, and artifact settings
-- If those signals are insufficient, treat the stack choice as an explicit blocker rather than choosing a framework arbitrarily
 
-**When to record a demo video**
+- When the intended stack is Playwright (detected, or signalled by the repo/plan), bootstrap it deterministically by running `archetipo e2e ensure` from `data.workdir`. The command is idempotent and non-interactive: it installs `@playwright/test` only when missing, writes a minimal config without overwriting an existing one, and installs a single browser. Parse the JSON envelope and branch on `error.code` — e.g. `E_PRECONDITION` when there is no `package.json` yet, which means the Node project must be initialized first. Do **not** run ad-hoc interactive installers (`npm init playwright@latest`) or download every browser.
+- For a non-Playwright stack signalled clearly by the repo/plan, Mina may install and configure it following the same idempotent, non-interactive discipline.
+- If the intended stack cannot be determined, treat the stack choice as an explicit blocker rather than choosing a framework arbitrarily.
 
-Demo videos are selective, not blanket. Recording every e2e test produces noise no one watches and drowns the real demo in artifacts. Record video only for the single demo scenario of specs where a video genuinely helps a human reviewer understand the delivered increment.
-
-Decision rule — record a demo video for this spec when **all** of the following hold:
-- The spec has a `Demonstrates` field that describes a concrete, user-visible action (see the next subsection).
-- The increment is observable through the UI or a user-facing artifact (a downloaded file, a received email preview, a visible state change). A pure API change, schema migration, refactor, infra wiring, or config tweak does not qualify.
-- A non-technical reviewer (PM, stakeholder, new teammate) would plausibly gain understanding from watching it.
-
-Skip the demo video when the spec is purely technical (refactor, dependency upgrade, internal service extraction, build tooling), when there is no user-visible surface, or when `Demonstrates` is missing or unfilmable. Skipping is a normal outcome, not a failure — note it briefly in the completion summary ("No demo video: technical spec, no user-visible surface").
-
-Skipping the demo video does not remove the obligation to write e2e tests when the plan requires them. E2E coverage and video recording are independent decisions: e2e tests can run without producing videos.
-
-**Demo scenario from Demonstrates**
-
-When the decision rule above says a video is warranted, the spec's `Demonstrates` line is the contract for what that video must show. Treat it as the script, not as decoration.
-
-- Read the `Demonstrates` field from `data.spec.body` returned by `archetipo spec show {US-CODE}`.
-- Produce exactly one **demo** e2e scenario that reproduces the Demonstrates flow end to end, from a clean starting state to the visible increment the spec promises. Name the test file or the test case after the Demonstrates outcome so it is obvious when the artifact is browsed later (e.g. `demo__user-exports-monthly-report.spec.ts`).
-- The demo scenario must include: an initial state that makes the change observable (empty list, logged-out shell, etc.), the user actions described in `Demonstrates`, and a final assertion on the user-visible increment (the new row, the redirected page, the downloaded file, the updated badge).
-- Edge cases, error paths, and validation stay in separate e2e files and are **not** recorded. Do not bloat the demo test with them; they pollute the video and obscure the spec outcome.
-- If `Demonstrates` is vague or not filmable (e.g. "user can manage data effectively"), do not invent a flow. Surface it as a planning gap: either ask the user to refine the spec, or record no demo video and explain why in the completion summary.
-
-**Video pacing and readability**
-
-When a demo video is recorded, it must be watchable by a non-technical reviewer. A correct test that produces an unreadable video fails this policy.
-
-The goal: a human viewer should be able to follow each step and see the final result without pausing or rewinding. Tests that race through the UI in two seconds do not prove the spec to the stakeholder, even when they pass.
-
-Apply these rules **only to the demo scenario**; other e2e tests stay fast and unrecorded:
-
-- Scope recording to the demo test only. Prefer per-test configuration (Playwright `test.use({ video: 'on' })` inside the demo file while the global config stays `video: 'off'`, Cypress project split or `cy.task` gating, project-level `*.demo.spec.ts` matchers). Do not flip on global video recording.
-- Use the framework's slow-mode knob so actions are visible: Playwright `use: { launchOptions: { slowMo: 300 } }` or per-test, Cypress via `cy.wait` discipline between actions, WebdriverIO `wdio.conf` `execArgv`, etc. Detect the framework first and apply its idiomatic mechanism. 250–500 ms per action is the target range.
-- Prefer explicit assertion-based waits (`expect(locator).toBeVisible()`, `cy.contains(...).should('be.visible')`) over blind `sleep`/`wait(ms)`. Assertions double as pacing and as correctness checks, and they give the video a visible "something just happened" beat.
-- After the final action, hold the end state visible for at least 1.5 seconds before the test ends, so the recorded frame captures the outcome rather than a teardown flash. A final visibility assertion followed by a short explicit wait is acceptable here — this is one of the few places where a fixed wait is justified.
-- Record at a viewport large enough to show the relevant UI without cropping. Default to 1280×720 unless the project already standardises a larger size.
-- One logical user action per step. Avoid chaining fills, clicks, and navigations into one line — each discrete action should be its own call so it appears as its own beat in the video.
+**Demo video — not recorded here**
+- Do not record demo videos during implementation. The demo scenario and its video are produced at the acceptance gate by `archetipo-review`, which owns the record/skip decision and runs `archetipo e2e demo`.
+- E2E coverage and demo video are independent decisions: author the e2e tests the plan requires; keep them fast and unrecorded. Recording happens later, in review.
 
 **Run and artifacts**
-- Detect the e2e run command and any required dev-server command from project conventions
-- Start background services only when needed and wait for readiness
-- Run the suite and verify that the expected artifacts are actually produced
-- When a demo video is recorded, store it under `{config.paths.test_results}/{spec-id}/` (or document the framework-native artifact path in the final summary) and confirm it is present and playable before completing the spec
-- Do not generate videos for non-demo e2e tests; if the framework default is `video: 'on'`, scope it down so only the demo scenario records
-- Retry flaky or timeout-based failures once; if they fail again, report them clearly as non-transient
+- Run the functional e2e suite with `archetipo e2e run` (Playwright) or the project's e2e command. It runs headless with **no video** — recording is a review concern.
+- Start background services only when needed and wait for readiness.
+- Verify the expected (non-video) artifacts, such as test reports, are produced.
+- Retry flaky or timeout-based failures once; if they fail again, report them clearly as non-transient.
 
 #### Progress reporting
 
@@ -240,6 +219,7 @@ After each wave, report briefly. See `./references/output-templates.md` for the 
 #### Before code review
 
 After all implementation waves:
+
 1. Run the project's unit and integration tests
 2. Run e2e tests if this spec required or introduced them
 3. If tests fail, determine whether the failure is new or pre-existing, fix local issues autonomously, and escalate only if an explicit blocker appears
@@ -254,6 +234,7 @@ After all implementation waves:
 - Review only diffs or changed areas, using project conventions and the implementation plan as reference
 
 **Review criteria:**
+
 1. plan adherence
 2. code quality
 3. architecture adherence
@@ -267,12 +248,14 @@ After all implementation waves:
 ### PHASE 4 - Fix & Re-Review Loop
 
 If Cesare found critical issues:
+
 1. Ugo and Mina fix them
 2. Re-run the relevant tests
 3. Re-review only the fix diffs
 4. Repeat until no critical issues remain
 
 If Cesare found only improvements:
+
 1. Summarize them briefly.
 2. Treat them as non-blocking by default.
 3. Fix them only if the user explicitly asks for extra polishing, or if re-checking shows that one of them is actually critical.
@@ -282,6 +265,7 @@ If Cesare found no issues, or all critical issues are fixed, proceed to completi
 ### Completion Gate
 
 Proceed to Phase 5 only when all of the following are true:
+
 - no `🔴 CRITICAL` findings remain open
 - the full required final test suite passes
 - the spec can be moved to `{config.workflow.statuses.review}` via `archetipo spec review`
@@ -293,8 +277,19 @@ Do not end with the spec still in `{config.workflow.statuses.in_progress}`, and 
 ### PHASE 5 - Completion & Backlog Update
 
 1. Run the full required test suite one final time. If it fails, return to the fix loop and do not transition the spec.
-2. Pipe the completion summary markdown into `archetipo spec review {US-CODE}`. This single command transitions the spec to `{config.workflow.statuses.review}` AND posts the comment on the parent issue (or silently ignores it for connectors without comment support — never branch on connector type).
-3. Confirm completion with a concise summary. See `references/output-templates.md` for the "Completion Summary" template. If non-blocking `🟡 IMPROVEMENT` items remain open, include them in the final report under an explicit optional improvements section.
+2. Choose a Conventional Commit type that describes the completed work:
+   - `feat`: new user-facing capability or behavior
+   - `fix`: bug fix
+   - `ci`: CI/CD, workflow, release automation
+   - `build`: build system, dependencies, package infrastructure
+   - `test`: tests-only changes
+   - `docs`: documentation-only changes
+   - `refactor`: code restructuring without behavior change
+   - `perf`: performance improvement
+   - `chore`: maintenance or tooling that does not fit the above
+3. Optionally run `git status --short` under `data.workdir` for visibility, then invoke `archetipo spec review {US-CODE}` from `data.project_root` with `--commit-type <type>` and, when the spec title is not specific enough, `--commit-summary "<concise summary>"`. Pipe the completion summary markdown via stdin as the closing comment. This single command commits any dirty/untracked worktree changes with a Conventional Commit subject (`<type>({US-CODE}): <summary>`), transitions the spec to `{config.workflow.statuses.review}`, and posts the comment on the parent issue (or silently ignores it for connectors without comment support — never branch on connector type).
+   - Example: `archetipo spec review US-125 --commit-type ci --commit-summary "add release workflow"`
+4. Confirm completion with a concise summary. See `references/output-templates.md` for the "Completion Summary" template. If non-blocking `🟡 IMPROVEMENT` items remain open, include them in the final report under an explicit optional improvements section.
 
 ## Edge Case Handling
 

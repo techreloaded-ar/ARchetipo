@@ -4,6 +4,8 @@ When the inception flow has gathered the minimum required information, generate 
 
 > **Language:** The template below is an English scaffold. Before writing the file, translate every static element (headings, table headers, bold labels, connective phrases like "For **X**, who has the problem of **Y**...") into the detected language, per the **Template Rendering Rule** in `.archetipo/shared-runtime.md`. Keep `{{PLACEHOLDER}}` tokens unchanged.
 
+> **📌 Marker contract:** The HTML comments `<!-- archetipo:prd section=<id> required=true -->` below are stable, machine-readable markers used by `archetipo validate prd`. **Do not translate, modify, or remove them.** They are part of the validation contract and must appear verbatim in every generated PRD.
+
 ```markdown
 # {{PROJECT_NAME}} - Product Requirements Document
 
@@ -15,6 +17,8 @@ When the inception flow has gathered the minimum required information, generate 
 
 ## Elevator Pitch
 
+<!-- archetipo:prd section=elevator_pitch required=true -->
+
 > {{ELEVATOR_PITCH}}
 >
 > For **{{TARGET_SEGMENT}}**, who has the problem of **{{PROBLEM}}**, **{{PRODUCT_NAME}}** is a **{{CATEGORY}}** that **{{KEY_BENEFIT}}**. Unlike **{{MAIN_ALTERNATIVE}}**, our product **{{DIFFERENTIATOR}}**.
@@ -22,6 +26,8 @@ When the inception flow has gathered the minimum required information, generate 
 ---
 
 ## Vision
+
+<!-- archetipo:prd section=vision required=true -->
 
 {{VISION_STATEMENT}}
 
@@ -32,6 +38,8 @@ When the inception flow has gathered the minimum required information, generate 
 ---
 
 ## User Personas
+
+<!-- archetipo:prd section=user_personas required=true -->
 
 ### Persona 1: {{PERSONA_1_NAME}}
 
@@ -93,6 +101,8 @@ When the inception flow has gathered the minimum required information, generate 
 
 ## Brainstorming Insights
 
+<!-- archetipo:prd section=brainstorming_insights required=true -->
+
 > Key discoveries and alternative directions explored during the inception session.
 
 ### Assumptions Challenged
@@ -103,9 +113,19 @@ When the inception flow has gathered the minimum required information, generate 
 
 {{NEW_DIRECTIONS_DISCOVERED}}
 
+### Assumptions to Validate
+
+{{ASSUMPTIONS_TO_VALIDATE}}
+
+### Key Risks
+
+{{KEY_RISKS}}
+
 ---
 
 ## Product Scope
+
+<!-- archetipo:prd section=product_scope required=true -->
 
 ### MVP - Minimum Viable Product
 
@@ -122,6 +142,8 @@ When the inception flow has gathered the minimum required information, generate 
 ---
 
 ## Technical Architecture
+
+<!-- archetipo:prd section=technical_architecture required=true -->
 
 > **Proposed by:** Leonardo (Architect)
 
@@ -178,11 +200,15 @@ When the inception flow has gathered the minimum required information, generate 
 
 ## Functional Requirements
 
+<!-- archetipo:prd section=functional_requirements required=true -->
+
 {{FUNCTIONAL_REQUIREMENTS}}
 
 ---
 
 ## Non-Functional Requirements
+
+<!-- archetipo:prd section=non_functional_requirements required=true -->
 
 ### Security
 
@@ -195,6 +221,8 @@ When the inception flow has gathered the minimum required information, generate 
 ---
 
 ## Next Steps
+
+<!-- archetipo:prd section=next_steps required=true -->
 
 1. **Backlog** - Run `/archetipo-spec` to transform this PRD into a backlog
 2. **Design** - Run `/archetipo-design` for UI mockups (when applicable)

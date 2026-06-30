@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/inmemory"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/metrics"
 )
 
 func newTestServer(t *testing.T) (*Server, *inmemory.Connector) {
@@ -38,6 +40,28 @@ func seedSpecs(t *testing.T, c *inmemory.Connector) {
 	}
 	if _, err := c.SaveInitialBacklog(context.Background(), specs); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGetMetrics(t *testing.T) {
+	srv, conn := newTestServer(t)
+	seedSpecs(t, conn)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/metrics", nil)
+	srv.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+	var data metrics.Data
+	if err := json.Unmarshal(w.Body.Bytes(), &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.Totals.Specs != 2 || data.Totals.Points != 8 {
+		t.Fatalf("unexpected totals: %+v", data.Totals)
+	}
+	if len(data.ByEpic) != 1 || data.ByEpic[0].Code != "EP-001" {
+		t.Fatalf("unexpected epic buckets: %+v", data.ByEpic)
 	}
 }
 
@@ -108,6 +132,72 @@ func TestUpdateSpecNotFound(t *testing.T) {
 	}
 }
 
+func TestDeleteSpecEndpointFileConnector(t *testing.T) {
+	srv, _ := newFileServer(t)
+	ctx := context.Background()
+	if _, err := srv.conn.SaveInitialBacklog(ctx, []domain.Spec{
+		{Code: "US-001", Title: "Setup", Epic: domain.Epic{Code: "EP-001", Title: "F"}, Priority: domain.PriorityHigh, Points: 3, Status: domain.StatusTodo},
+		{Code: "US-002", Title: "Auth", Epic: domain.Epic{Code: "EP-001", Title: "F"}, Priority: domain.PriorityMedium, Points: 5, Status: domain.StatusPlanned},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.conn.SavePlan(ctx, "US-001", domain.PlanInput{PlanBody: "## Plan", Tasks: []domain.Task{{ID: "TASK-01", Title: "Ship", Type: domain.TaskImpl, Status: domain.StatusTodo}}}); err != nil {
+		t.Fatal(err)
+	}
+	rs := srv.conn.(connector.ReviewStore)
+	if err := rs.SaveReview(ctx, "US-001", domain.Review{Comments: []domain.ReviewComment{{File: "x.go", Line: 4, Side: "new", Body: "remove"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/spec/US-001", nil)
+	srv.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/api/board", nil)
+	srv.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("board status: got %d, body=%s", w.Code, w.Body.String())
+	}
+	var view boardView
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	codes := map[string]bool{}
+	for _, col := range view.Columns {
+		for _, spec := range col.Specs {
+			codes[spec.Code] = true
+		}
+	}
+	if codes["US-001"] {
+		t.Fatal("deleted spec still present in board view")
+	}
+	if !codes["US-002"] {
+		t.Fatal("remaining spec missing from board view")
+	}
+	if _, err := srv.conn.ReadSpecDetail(ctx, "US-001"); err == nil {
+		t.Fatal("expected deleted spec to be unreadable")
+	}
+}
+
+func TestDeleteSpecEndpointUnsupportedConnector(t *testing.T) {
+	srv, conn := newTestServer(t)
+	seedSpecs(t, conn)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/spec/US-001", nil)
+	srv.mux.ServeHTTP(w, r)
+	if w.Code == http.StatusOK {
+		t.Fatalf("expected non-2xx status, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "does not support deleting specs") {
+		t.Fatalf("expected clear unsupported-connector error, got %s", w.Body.String())
+	}
+}
+
 func TestMoveCard(t *testing.T) {
 	srv, conn := newTestServer(t)
 	seedSpecs(t, conn)
@@ -133,10 +223,17 @@ func TestSavePlanEndpoint(t *testing.T) {
 	srv, conn := newTestServer(t)
 	seedSpecs(t, conn)
 
+	const taskMarkdownBody = "Paragraph\n\n- item\n\n`code`"
 	plan := map[string]any{
 		"plan_body": "## Plan\n\nbody",
 		"tasks": []map[string]any{
-			{"id": "TASK-01", "title": "do x", "type": "Impl", "status": "TODO"},
+			{
+				"id":     "TASK-01",
+				"title":  "do x",
+				"body":   taskMarkdownBody,
+				"type":   "Impl",
+				"status": "TODO",
+			},
 		},
 	}
 	body, _ := json.Marshal(plan)
@@ -152,7 +249,33 @@ func TestSavePlanEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(tasks) != 1 || tasks[0].ID != "TASK-01" {
-		t.Errorf("plan not saved: %+v", tasks)
+		t.Fatalf("plan not saved: %+v", tasks)
+	}
+	if tasks[0].Body != taskMarkdownBody {
+		t.Fatalf("task body lost on save: got %q want %q", tasks[0].Body, taskMarkdownBody)
+	}
+	if tasks[0].Description != "" {
+		t.Fatalf("did not expect canonical save to repopulate description, got %q", tasks[0].Description)
+	}
+
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/api/spec/US-001", nil)
+	srv.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get spec status: got %d, body=%s", w.Code, w.Body.String())
+	}
+	var out specDetailView
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Tasks) != 1 {
+		t.Fatalf("expected 1 task in GET response, got %d", len(out.Tasks))
+	}
+	if out.Tasks[0].Body != taskMarkdownBody {
+		t.Fatalf("task body not returned by GET: got %q want %q", out.Tasks[0].Body, taskMarkdownBody)
+	}
+	if out.Tasks[0].Description != "" {
+		t.Fatalf("did not expect description in GET response for canonical task, got %q", out.Tasks[0].Description)
 	}
 }
 
@@ -358,5 +481,72 @@ func TestGetSpec(t *testing.T) {
 	}
 	if out.Spec.Code != "US-001" {
 		t.Errorf("expected US-001, got %+v", out.Spec)
+	}
+}
+
+func TestRequestChangesMovesCommentsIntoSpec(t *testing.T) {
+	srv, _ := newFileServer(t)
+	ctx := context.Background()
+	if _, err := srv.conn.SaveInitialBacklog(ctx, []domain.Spec{
+		{Code: "US-001", Title: "Greeting", Epic: domain.Epic{Code: "EP-001", Title: "F"}, Status: domain.StatusReview, Body: "## User Story\nas a user"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rs := srv.conn.(connector.ReviewStore)
+	if err := rs.SaveReview(ctx, "US-001", domain.Review{Comments: []domain.ReviewComment{
+		{File: "hello.txt", Line: 3, Side: "new", Body: "localize this greeting"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/spec/US-001/request-changes", nil)
+	srv.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	spec, err := srv.conn.ReadSpecDetail(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Status != domain.StatusTodo {
+		t.Errorf("expected status TODO, got %s", spec.Status)
+	}
+	if !spec.Rework {
+		t.Error("expected rework flag to be set")
+	}
+	for _, want := range []string{"## Rework Feedback", "hello.txt:3", "localize this greeting"} {
+		if !strings.Contains(spec.Body, want) {
+			t.Errorf("spec body missing %q; body=%q", want, spec.Body)
+		}
+	}
+	// Original body is preserved.
+	if !strings.Contains(spec.Body, "## User Story") {
+		t.Error("original body was discarded")
+	}
+	// Review is cleared after the comments move into the spec.
+	rev, err := rs.ReadReview(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rev.Comments) != 0 {
+		t.Errorf("expected review cleared, got %d comments", len(rev.Comments))
+	}
+}
+
+func TestRequestChangesNoCommentsErrors(t *testing.T) {
+	srv, _ := newFileServer(t)
+	ctx := context.Background()
+	if _, err := srv.conn.SaveInitialBacklog(ctx, []domain.Spec{
+		{Code: "US-001", Title: "Greeting", Status: domain.StatusReview},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/spec/US-001/request-changes", nil)
+	srv.mux.ServeHTTP(w, r)
+	if w.Code == http.StatusOK {
+		t.Fatalf("expected error without comments, got 200: %s", w.Body.String())
 	}
 }

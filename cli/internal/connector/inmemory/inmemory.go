@@ -38,9 +38,10 @@ func New(cfg config.Config) *Connector {
 
 func (c *Connector) InitializeConnector(ctx context.Context) (domain.SetupInfo, error) {
 	return domain.SetupInfo{
-		Connector: "inmemory",
-		Paths:     c.cfg.Paths,
-		Workflow:  c.cfg.Workflow,
+		Connector:   "inmemory",
+		ProjectRoot: c.cfg.ProjectRoot,
+		Paths:       c.cfg.Paths,
+		Workflow:    c.cfg.Workflow,
 	}, nil
 }
 
@@ -108,14 +109,18 @@ func (c *Connector) ReadSpecTasks(ctx context.Context, parentRef string) ([]doma
 		// fall back: maybe parentRef is a code, look it up
 		for _, s := range c.specs {
 			if s.Code == parentRef || s.Ref == parentRef {
-				return append([]domain.Task(nil), c.tasks[s.Code]...), nil
+				copied := append([]domain.Task(nil), c.tasks[s.Code]...)
+				domain.NormalizeTaskBodies(copied)
+				return copied, nil
 			}
 		}
 		return nil, iox.NewPrecondition(
 			fmt.Sprintf("no plan for spec %s", parentRef),
 			"run `archetipo plan save` first", nil)
 	}
-	return append([]domain.Task(nil), tasks...), nil
+	copied := append([]domain.Task(nil), tasks...)
+	domain.NormalizeTaskBodies(copied)
+	return copied, nil
 }
 
 func (c *Connector) ReadExistingBacklog(ctx context.Context) (domain.BacklogSummary, error) {
@@ -177,6 +182,7 @@ func (c *Connector) AppendSpecs(ctx context.Context, specs []domain.Spec) (domai
 func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.PlanInput) (domain.WriteResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	domain.NormalizePlanInput(&plan)
 	code := c.codeFor(specRef)
 	if code == "" {
 		return domain.WriteResult{}, iox.NewPrecondition(
@@ -310,6 +316,18 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 			}
 			if patch.Epic != nil {
 				c.specs[i].Epic = *patch.Epic
+			}
+			if patch.Branch != nil {
+				c.specs[i].Branch = *patch.Branch
+			}
+			if patch.Worktree != nil {
+				c.specs[i].Worktree = *patch.Worktree
+			}
+			if patch.ForkBase != nil {
+				c.specs[i].ForkBase = *patch.ForkBase
+			}
+			if patch.Rework != nil {
+				c.specs[i].Rework = *patch.Rework
 			}
 			return domain.WriteResult{OK: true, Refs: []domain.Ref{{Code: c.specs[i].Code}}}, nil
 		}

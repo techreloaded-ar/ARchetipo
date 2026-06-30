@@ -5,6 +5,12 @@
 // sub-packages are published first (so the main package can resolve them as
 // optionalDependencies), then @techreloaded/archetipo.
 //
+// The npm dist-tag is derived from the main package version: a prerelease such
+// as 2.3.2-beta.1 publishes under the prerelease identifier ("beta"), while a
+// plain 2.3.2 publishes under "latest". This keeps prereleases off the default
+// `npm install -g @techreloaded/archetipo` channel (use @beta to opt in). Pass
+// --tag <dist-tag> to override the derived value.
+//
 // Requires NPM_TOKEN to be set (or `npm login` to have been run interactively).
 
 import { spawnSync } from "node:child_process";
@@ -18,9 +24,40 @@ const npmDir = path.join(repoRoot, "npm");
 
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has("--dry-run");
-let distTag = "latest";
+
+// Map a semver version to an npm dist-tag: prerelease identifier or "latest".
+//   2.3.2-beta.1 -> "beta"   2.3.2-rc.2 -> "rc"   2.3.2 -> "latest"
+function distTagFromVersion(v) {
+  const pre = String(v).replace(/^v/, "").split("-")[1]; // "beta.1" | undefined
+  return pre ? pre.split(".")[0] : "latest";
+}
+
+const mainPkg = JSON.parse(
+  await fs.readFile(path.join(npmDir, "archetipo", "package.json"), "utf8"),
+);
+
+let distTag;
 const tagIdx = process.argv.indexOf("--tag");
-if (tagIdx !== -1 && process.argv[tagIdx + 1]) distTag = process.argv[tagIdx + 1];
+if (tagIdx !== -1 && process.argv[tagIdx + 1]) {
+  distTag = process.argv[tagIdx + 1]; // explicit override
+} else {
+  distTag = distTagFromVersion(mainPkg.version);
+}
+
+// Guard rails: never let a prerelease land on the default install channel, and
+// reject tags npm itself would refuse (a tag must not look like a version).
+const isPrerelease = String(mainPkg.version).includes("-");
+if (isPrerelease && distTag === "latest") {
+  console.error(
+    `✗ refusing to publish prerelease ${mainPkg.version} with dist-tag 'latest'`,
+  );
+  process.exit(2);
+}
+if (!/^[a-z][a-z0-9._-]*$/i.test(distTag) || /^\d/.test(distTag)) {
+  console.error(`✗ invalid npm dist-tag '${distTag}'`);
+  process.exit(2);
+}
+console.log(`Publishing version ${mainPkg.version} with dist-tag '${distTag}'.`);
 
 async function pkgDirs() {
   const entries = await fs.readdir(npmDir, { withFileTypes: true });

@@ -4,6 +4,11 @@
 // it lives in BACKLOG.md or as a GitHub issue.
 package domain
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Priority of a spec. Stable string set so the JSON output is deterministic.
 type Priority string
 
@@ -35,6 +40,9 @@ type TaskType string
 const (
 	TaskImpl TaskType = "Impl"
 	TaskTest TaskType = "Test"
+	// TaskFix marks a task generated from review feedback ("request changes"):
+	// the comments left on the diff become Fix tasks appended to the spec plan.
+	TaskFix TaskType = "Fix"
 )
 
 // Epic identifies a group of specs. Code looks like "EP-001"; Title is
@@ -67,6 +75,33 @@ type Spec struct {
 	Ref string `json:"ref,omitempty" yaml:"ref,omitempty"`
 	// URL is set by connectors that have a web location (github).
 	URL string `json:"url,omitempty" yaml:"url,omitempty"`
+	// Branch, Worktree and ForkBase are populated by `archetipo spec start`
+	// when the worktree workflow is enabled (see WorktreeConfig). Branch is the
+	// git branch the spec is implemented on; Worktree is the path (relative to
+	// the project root) of the git worktree checked out on that branch; ForkBase
+	// is the resolved SHA the branch forked from (base branch tip or a blocker
+	// branch tip for stacked specs). The review diff is `git diff
+	// <ForkBase>...<Branch>`. All empty when the worktree workflow is disabled.
+	Branch   string `json:"branch,omitempty" yaml:"branch,omitempty"`
+	Worktree string `json:"worktree,omitempty" yaml:"worktree,omitempty"`
+	ForkBase string `json:"fork_base,omitempty" yaml:"fork_base,omitempty"`
+	// Rework is set when the spec is sent back from review via "request changes":
+	// the inline review comments are appended to Body as a "## Rework Feedback"
+	// section and the spec returns to TODO. It is a visual marker (rendered as a
+	// badge in the board) signalling that archetipo-plan must turn that feedback
+	// into Fix tasks. Cleared automatically when the spec is re-planned.
+	Rework bool `json:"rework,omitempty" yaml:"rework,omitempty"`
+	// History records the spec's workflow transitions in chronological order,
+	// starting with the status it was created with. Connectors that cannot
+	// persist it leave it empty; `archetipo metrics` derives cycle and lead
+	// time only from specs that carry it.
+	History []StatusChange `json:"history,omitempty" yaml:"history,omitempty"`
+}
+
+// StatusChange is one entry of a spec's status history. At is RFC3339 UTC.
+type StatusChange struct {
+	Status Status `json:"status" yaml:"status"`
+	At     string `json:"at" yaml:"at"`
 }
 
 // Task is a unit of work inside a Spec's implementation plan.
@@ -77,23 +112,43 @@ type Task struct {
 	Type         TaskType `json:"type" yaml:"type"`
 	Status       Status   `json:"status" yaml:"status"`
 	Dependencies []string `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
-	// Body is the full markdown body of the task (filled by read_spec_tasks
-	// when the connector exposes one). May be empty for the file connector.
+	// Body is the canonical markdown body of the task. Description is kept only
+	// as a legacy/deprecated compatibility field.
 	Body string `json:"body,omitempty" yaml:"body,omitempty"`
 	// Ref is a connector-local identifier (sub-issue number for github,
 	// task ID for filefs). Always set together with ID.
 	Ref string `json:"ref,omitempty" yaml:"ref,omitempty"`
 }
 
+// NormalizeTaskBody applies the legacy compatibility rule for task content:
+// when body is blank and description is populated, copy description into body.
+// Description is intentionally left untouched for backward compatibility.
+func NormalizeTaskBody(task *Task) {
+	if task == nil {
+		return
+	}
+	if strings.TrimSpace(task.Body) == "" && strings.TrimSpace(task.Description) != "" {
+		task.Body = task.Description
+	}
+}
+
+// NormalizeTaskBodies applies NormalizeTaskBody to every task in place.
+func NormalizeTaskBodies(tasks []Task) {
+	for i := range tasks {
+		NormalizeTaskBody(&tasks[i])
+	}
+}
+
 // SetupInfo is the output of initialize_connector. Fields populated depend on
 // the connector: filefs fills Paths + File; github fills Paths + Repo + Project.
 type SetupInfo struct {
-	Connector string         `json:"connector" yaml:"connector"`
-	Paths     ConfigPaths    `json:"paths" yaml:"paths"`
-	Workflow  WorkflowConfig `json:"workflow" yaml:"workflow"`
-	File      *FileConfig    `json:"file,omitempty" yaml:"file,omitempty"`
-	Repo      *RepoInfo      `json:"repo,omitempty" yaml:"repo,omitempty"`
-	Project   *ProjectInfo   `json:"project,omitempty" yaml:"project,omitempty"`
+	Connector   string         `json:"connector" yaml:"connector"`
+	ProjectRoot string         `json:"project_root" yaml:"project_root"`
+	Paths       ConfigPaths    `json:"paths" yaml:"paths"`
+	Workflow    WorkflowConfig `json:"workflow" yaml:"workflow"`
+	File        *FileConfig    `json:"file,omitempty" yaml:"file,omitempty"`
+	Repo        *RepoInfo      `json:"repo,omitempty" yaml:"repo,omitempty"`
+	Project     *ProjectInfo   `json:"project,omitempty" yaml:"project,omitempty"`
 }
 
 // ConfigPaths mirrors the shared paths section of .archetipo/config.yaml.
@@ -180,10 +235,13 @@ type Ref struct {
 // Skipped lists the codes that the CLI intentionally did not write because
 // they would conflict with existing artifacts (e.g. `archetipo spec add`
 // idempotently skips specs whose code is already present in the backlog).
+// Warnings lists non-fatal failures: the artifacts were written, but a
+// best-effort side operation (e.g. setting a project board field) failed.
 type WriteResult struct {
-	OK      bool     `json:"ok" yaml:"ok"`
-	Refs    []Ref    `json:"refs,omitempty" yaml:"refs,omitempty"`
-	Skipped []string `json:"skipped,omitempty" yaml:"skipped,omitempty"`
+	OK       bool     `json:"ok" yaml:"ok"`
+	Refs     []Ref    `json:"refs,omitempty" yaml:"refs,omitempty"`
+	Skipped  []string `json:"skipped,omitempty" yaml:"skipped,omitempty"`
+	Warnings []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 }
 
 // PlanInput is the stdin payload of `archetipo spec plan`.
@@ -192,22 +250,13 @@ type PlanInput struct {
 	Tasks    []Task `json:"tasks" yaml:"tasks"`
 }
 
-// ValidationIssue describes a deterministic artifact-quality problem found
-// before a skill persists generated specs or plans.
-type ValidationIssue struct {
-	Severity string `json:"severity" yaml:"severity"`
-	Code     string `json:"code" yaml:"code"`
-	Path     string `json:"path,omitempty" yaml:"path,omitempty"`
-	Message  string `json:"message" yaml:"message"`
-	Hint     string `json:"hint,omitempty" yaml:"hint,omitempty"`
-}
-
-// ValidationResult is emitted by `archetipo validate ...` commands. Validation
-// failures are normal command output, not process errors, so skills can parse
-// issues and repair their payloads without mutating project state.
-type ValidationResult struct {
-	OK     bool              `json:"ok" yaml:"ok"`
-	Issues []ValidationIssue `json:"issues" yaml:"issues"`
+// NormalizePlanInput applies the task body compatibility rule to every task in
+// the plan so legacy payloads that still send only description remain usable.
+func NormalizePlanInput(input *PlanInput) {
+	if input == nil {
+		return
+	}
+	NormalizeTaskBodies(input.Tasks)
 }
 
 // SelectQuery captures the inputs of select_spec.
@@ -221,6 +270,40 @@ type SelectQuery struct {
 type ReorderAnchor struct {
 	Before string
 	After  string
+}
+
+// ValidationResult is the canonical success envelope for `archetipo validate`.
+type ValidationResult struct {
+	OK       bool                `json:"ok"`
+	Artifact string              `json:"artifact"`
+	Target   string              `json:"target"`
+	Checks   []ValidationCheck   `json:"checks"`
+	Findings []ValidationFinding `json:"findings,omitempty"`
+}
+
+// ValidationCheck reports the outcome of a single rule.
+type ValidationCheck struct {
+	Code    string `json:"code"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+}
+
+// ValidationFinding describes one specific problem discovered during validation.
+type ValidationFinding struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+	Path     string `json:"path"`
+	Message  string `json:"message"`
+	Hint     string `json:"hint"`
+}
+
+// ValidationErrorDetails is the payload placed inside error.details when a
+// validation fails. It includes the artifact, target artifact, and a list of
+// findings so the calling skill can correct the artifact and retry.
+type ValidationErrorDetails struct {
+	Artifact string              `json:"artifact"`
+	Target   string              `json:"target"`
+	Findings []ValidationFinding `json:"findings"`
 }
 
 // MockupEntry describes a single mockup folder (one per design artifact)
@@ -238,11 +321,88 @@ type MockupEntry struct {
 // at the zero value). Connectors must only touch fields whose pointer is
 // non-nil and leave the rest untouched.
 type SpecUpdate struct {
-	Title     *string   `json:"title,omitempty"`
-	Priority  *Priority `json:"priority,omitempty"`
-	Points    *int      `json:"points,omitempty"`
-	Scope     *Scope    `json:"scope,omitempty"`
-	BlockedBy *[]string `json:"blocked_by,omitempty"`
-	Body      *string   `json:"body,omitempty"`
-	Epic      *Epic     `json:"epic,omitempty"`
+	Title     *string   `json:"title,omitempty" yaml:"title,omitempty"`
+	Priority  *Priority `json:"priority,omitempty" yaml:"priority,omitempty"`
+	Points    *int      `json:"points,omitempty" yaml:"points,omitempty"`
+	Scope     *Scope    `json:"scope,omitempty" yaml:"scope,omitempty"`
+	BlockedBy *[]string `json:"blocked_by,omitempty" yaml:"blocked_by,omitempty"`
+	Body      *string   `json:"body,omitempty" yaml:"body,omitempty"`
+	Epic      *Epic     `json:"epic,omitempty" yaml:"epic,omitempty"`
+	// Branch, Worktree and ForkBase track the git worktree the spec is
+	// implemented on. Set by `archetipo spec start` (worktree workflow). The
+	// github connector ignores them.
+	Branch   *string `json:"branch,omitempty" yaml:"branch,omitempty"`
+	Worktree *string `json:"worktree,omitempty" yaml:"worktree,omitempty"`
+	ForkBase *string `json:"fork_base,omitempty" yaml:"fork_base,omitempty"`
+	// Rework toggles the rework marker (see Spec.Rework).
+	Rework *bool `json:"rework,omitempty" yaml:"rework,omitempty"`
+}
+
+// WorktreeConfig mirrors the optional `worktree:` section of
+// .archetipo/config.yaml. When Enabled, `archetipo spec start` creates a
+// dedicated git branch + worktree per spec so the review diff can be isolated
+// to a single spec (`git diff <fork_base>...<branch>`) and integrated back with
+// a single merge. When disabled, the implementation flow is unchanged.
+type WorktreeConfig struct {
+	Enabled      bool   `json:"enabled" yaml:"enabled"`
+	Base         string `json:"base" yaml:"base"`
+	Dir          string `json:"dir" yaml:"dir"`
+	BranchPrefix string `json:"branch_prefix" yaml:"branch_prefix"`
+}
+
+// E2EConfig mirrors the optional `e2e:` section of .archetipo/config.yaml.
+// RecordDemoVideo gates `archetipo e2e demo`: the demo video is recorded only
+// when it is true. Off by default, so videos are opt-in.
+type E2EConfig struct {
+	RecordDemoVideo bool `json:"record_demo_video" yaml:"record_demo_video"`
+}
+
+// ReviewComment is a single inline comment left on the review diff, anchored to
+// a file and a line. Side is "new" for a line in the post-image (added/context
+// on the new side) or "old" for a line on the pre-image (removed side).
+type ReviewComment struct {
+	File      string `json:"file" yaml:"file"`
+	Side      string `json:"side" yaml:"side"`
+	Line      int    `json:"line" yaml:"line"`
+	Body      string `json:"body" yaml:"body"`
+	CreatedAt string `json:"created_at,omitempty" yaml:"created_at,omitempty"`
+}
+
+// Review is the set of inline comments saved for a spec under review. It is
+// persisted by the file connector at .archetipo/reviews/{code}.yaml and is
+// ephemeral: once the comments are converted into Fix tasks ("request changes")
+// the review is cleared.
+type Review struct {
+	Comments []ReviewComment `json:"comments" yaml:"comments"`
+}
+
+// ReworkFeedbackHeading is the markdown heading under which request-changes
+// records the review comments. archetipo-plan keys off this heading to detect a
+// rework cycle.
+const ReworkFeedbackHeading = "## Rework Feedback"
+
+// AppendReworkFeedback appends a Rework Feedback section to the spec body, one
+// bullet per review comment anchored to its file:line when present.
+// archetipo-plan turns each bullet into a Fix task.
+func AppendReworkFeedback(body string, comments []ReviewComment) string {
+	var b strings.Builder
+	if trimmed := strings.TrimRight(body, "\n"); trimmed != "" {
+		b.WriteString(trimmed)
+		b.WriteString("\n\n")
+	}
+	b.WriteString(ReworkFeedbackHeading)
+	b.WriteString("\n\n<!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->\n\n")
+	for _, c := range comments {
+		text := strings.ReplaceAll(strings.TrimSpace(c.Body), "\n", " ")
+		anchor := c.File
+		if anchor != "" && c.Line > 0 {
+			anchor = fmt.Sprintf("%s:%d", c.File, c.Line)
+		}
+		if anchor == "" {
+			fmt.Fprintf(&b, "- %s\n", text)
+			continue
+		}
+		fmt.Fprintf(&b, "- **%s** — %s\n", anchor, text)
+	}
+	return b.String()
 }

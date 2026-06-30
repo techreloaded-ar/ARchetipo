@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
@@ -24,6 +27,7 @@ import (
 //	spec plan   -> save plan + transition TODO → PLANNED (stdin: {"plan_body","tasks"})
 //	spec start  -> transition PLANNED → IN PROGRESS (idempotent)
 //	spec review -> transition IN PROGRESS → REVIEW; --file (optional) is a closing comment
+//	spec request-changes -> REVIEW → TODO with rework feedback appended to the body (stdin: {"comments":[...]})
 //	spec move   -> reposition a spec within the board or across workflow columns
 func newSpecCmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "spec", Short: "Spec operations (user story is the spec body)"}
@@ -35,7 +39,10 @@ func newSpecCmd(s streams) *cobra.Command {
 		newSpecPlanCmd(s),
 		newSpecStartCmd(s),
 		newSpecReviewCmd(s),
+		newSpecRequestChangesCmd(s),
+		newSpecIntegrateCmd(s),
 		newSpecMoveCmd(s),
+		newSpecUpdateCmd(s),
 	)
 	return root
 }
@@ -144,12 +151,12 @@ func newSpecShowCmd(s streams) *cobra.Command {
 			if ref == "" {
 				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
 			}
-			return withConnector(cmd, s, "spec", func(ctx context.Context, c connector.Connector) (any, error) {
+			return withConnectorCfg(cmd, s, "spec", func(ctx context.Context, cfg config.Config, c connector.Connector) (any, error) {
 				st, err := c.ReadSpecDetail(ctx, ref)
 				if err != nil {
 					return nil, err
 				}
-				return loadSpecWithTasks(ctx, c, st)
+				return loadSpecWithTasks(ctx, cfg, c, st)
 			})
 		},
 	}
@@ -167,12 +174,12 @@ func newSpecNextCmd(s streams) *cobra.Command {
 			if strings.TrimSpace(status) == "" {
 				return errInvalidUsage("missing --status", "pass --status TODO|PLANNED|IN PROGRESS|REVIEW|DONE")
 			}
-			return withConnector(cmd, s, "spec", func(ctx context.Context, c connector.Connector) (any, error) {
+			return withConnectorCfg(cmd, s, "spec", func(ctx context.Context, cfg config.Config, c connector.Connector) (any, error) {
 				st, err := c.SelectSpec(ctx, domain.SelectQuery{EligibleStatuses: []domain.Status{domain.Status(status)}})
 				if err != nil {
 					return nil, err
 				}
-				return loadSpecWithTasks(ctx, c, st)
+				return loadSpecWithTasks(ctx, cfg, c, st)
 			})
 		},
 	}
@@ -183,7 +190,13 @@ func newSpecNextCmd(s streams) *cobra.Command {
 // loadSpecWithTasks builds the `spec` envelope payload shared by spec show
 // and spec next. A spec without a plan reports an empty task list rather than
 // an error.
-func loadSpecWithTasks(ctx context.Context, c connector.Connector, st domain.Spec) (map[string]any, error) {
+//
+// The payload also carries `workdir`: the ABSOLUTE directory a skill must use
+// as the single root for all of the spec's file and git work — the spec's git
+// worktree when one exists, the project root otherwise. It is always populated
+// so skills never branch on worktree presence. See resolveWorkdir for how it is
+// derived (filesystem state first, persisted field only as a fallback).
+func loadSpecWithTasks(ctx context.Context, cfg config.Config, c connector.Connector, st domain.Spec) (map[string]any, error) {
 	tasks, err := c.ReadSpecTasks(ctx, st.Code)
 	if err != nil {
 		if ce, ok := err.(*iox.CodedError); ok && ce.Code == iox.CodePreconditionMissing {
@@ -192,7 +205,28 @@ func loadSpecWithTasks(ctx context.Context, c connector.Connector, st domain.Spe
 			return nil, err
 		}
 	}
-	return map[string]any{"spec": st, "tasks": tasks}, nil
+	domain.NormalizeTaskBodies(tasks)
+	return map[string]any{"spec": st, "tasks": tasks, "workdir": resolveWorkdir(cfg, st)}, nil
+}
+
+// resolveWorkdir returns the absolute working directory for a spec. The worktree
+// workflow can leave the persisted spec.Worktree field out of sync with the real
+// git worktree (e.g. the link is dropped while the worktree still exists on
+// disk), so the actual filesystem state is the authoritative source: when the
+// worktree workflow is enabled and the conventional worktree directory exists,
+// that directory wins. Only when it is absent do we honor a recorded
+// spec.Worktree (e.g. a connector that tracks it out of band), falling back to
+// the project root. The result is always absolute and never empty.
+func resolveWorkdir(cfg config.Config, st domain.Spec) string {
+	if cfg.Worktree.Enabled {
+		if rel, exists := gitwt.Resolve(cfg.ProjectRoot, cfg.Worktree, st.Code); exists {
+			return filepath.Join(cfg.ProjectRoot, rel)
+		}
+	}
+	if st.Worktree != "" {
+		return filepath.Join(cfg.ProjectRoot, st.Worktree)
+	}
+	return cfg.ProjectRoot
 }
 
 func newSpecListCmd(s streams) *cobra.Command {
@@ -249,6 +283,10 @@ func newSpecPlanCmd(s streams) *cobra.Command {
 			if err := readStructuredInput(s.in, filePath, &input); err != nil {
 				return err
 			}
+			domain.NormalizePlanInput(&input)
+			if err := validatePlanInput(input); err != nil {
+				return err
+			}
 			return withConnector(cmd, s, "write_result", func(ctx context.Context, c connector.Connector) (any, error) {
 				spec, err := c.ReadSpecDetail(ctx, ref)
 				if err != nil {
@@ -261,6 +299,12 @@ func newSpecPlanCmd(s streams) *cobra.Command {
 						return nil, err
 					}
 					if _, err := c.TransitionStatus(ctx, ref, domain.StatusPlanned); err != nil {
+						return nil, err
+					}
+					// Re-planning clears the rework marker: the review feedback has
+					// now been turned into tasks. No-op when the spec was not in rework.
+					rework := false
+					if _, err := c.UpdateSpec(ctx, ref, domain.SpecUpdate{Rework: &rework}); err != nil {
 						return nil, err
 					}
 					return res, nil
@@ -278,18 +322,164 @@ func newSpecPlanCmd(s streams) *cobra.Command {
 	return cmd
 }
 
+// validatePlanInput rejects plans with duplicate task ids or dependencies that
+// do not reference a task in the same plan, so broken task graphs surface at
+// save time instead of during implementation.
+func validatePlanInput(input domain.PlanInput) error {
+	ids := make(map[string]struct{}, len(input.Tasks))
+	for _, t := range input.Tasks {
+		id := strings.TrimSpace(t.ID)
+		if id == "" {
+			return iox.NewInvalidInput("plan task with empty id", "give every task a unique id (e.g. TASK-01)", nil)
+		}
+		if _, dup := ids[id]; dup {
+			return iox.NewInvalidInput("duplicate plan task id: "+id, "task ids must be unique within the plan", nil)
+		}
+		ids[id] = struct{}{}
+	}
+	for _, t := range input.Tasks {
+		for _, dep := range t.Dependencies {
+			dep = strings.TrimSpace(dep)
+			if dep == "" {
+				continue
+			}
+			if _, ok := ids[dep]; !ok {
+				return iox.NewInvalidInput(
+					fmt.Sprintf("task %s depends on unknown task %s", t.ID, dep),
+					"dependencies must reference task ids defined in the same plan", nil)
+			}
+		}
+	}
+	return nil
+}
+
 func newSpecStartCmd(s streams) *cobra.Command {
 	return &cobra.Command{
 		Use:   "start US-XXX",
 		Short: "Transition a planned spec to IN PROGRESS (idempotent)",
-		Args:  cobra.ExactArgs(1),
+		Long: "Transitions the spec from PLANNED to IN PROGRESS. When the worktree " +
+			"workflow is enabled (worktree.enabled in config.yaml), it also creates a " +
+			"dedicated git branch + worktree forked from the right base (dependency-aware) " +
+			"and records branch/worktree/fork_base on the spec. Worktree setup is " +
+			"non-fatal: outside a git repository it is skipped with a warning.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := strings.TrimSpace(args[0])
 			if ref == "" {
 				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
 			}
-			return withConnector(cmd, s, "write_result", func(ctx context.Context, c connector.Connector) (any, error) {
-				return transitionWithValidation(ctx, c, ref, "start", domain.StatusPlanned, domain.StatusInProgress)
+			return withConnectorCfg(cmd, s, "write_result", func(ctx context.Context, cfg config.Config, c connector.Connector) (any, error) {
+				res, err := transitionWithValidation(ctx, c, ref, "start", domain.StatusPlanned, domain.StatusInProgress)
+				if err != nil {
+					return nil, err
+				}
+				if cfg.Worktree.Enabled {
+					if wt, werr := setupWorktree(ctx, cfg, c, ref); werr != nil {
+						fmt.Fprintf(s.err, "warning: worktree setup skipped: %v\n", werr)
+					} else {
+						res.Refs = append(res.Refs, domain.Ref{Code: ref, Path: wt})
+					}
+				}
+				return res, nil
+			})
+		},
+	}
+}
+
+// setupWorktree creates (idempotently) the branch + worktree for a spec and
+// persists branch/worktree/fork_base on it. Returns the worktree path. Any git
+// failure is returned to the caller, which treats worktree setup as non-fatal.
+func setupWorktree(ctx context.Context, cfg config.Config, c connector.Connector, ref string) (string, error) {
+	if err := gitwt.EnsureRepo(ctx, cfg.ProjectRoot, cfg.Worktree.Base); err != nil {
+		return "", err
+	}
+	spec, err := c.ReadSpecDetail(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	if spec.Branch != "" {
+		// Already set up on a previous start.
+		return spec.Worktree, nil
+	}
+	allSpecs, err := c.FetchBacklogItems(ctx, "")
+	if err != nil {
+		return "", err
+	}
+	forkRef, err := gitwt.ForkRef(ctx, cfg.ProjectRoot, cfg.Worktree, spec, allSpecs)
+	if err != nil {
+		return "", err
+	}
+	branch, worktree, forkBase, err := gitwt.Ensure(ctx, cfg.ProjectRoot, cfg.Worktree, ref, forkRef)
+	if err != nil {
+		return "", err
+	}
+	if _, err := c.UpdateSpec(ctx, ref, domain.SpecUpdate{
+		Branch:   &branch,
+		Worktree: &worktree,
+		ForkBase: &forkBase,
+	}); err != nil {
+		return "", err
+	}
+	return worktree, nil
+}
+
+func newSpecIntegrateCmd(s streams) *cobra.Command {
+	return &cobra.Command{
+		Use:   "integrate US-XXX",
+		Short: "Merge a spec's worktree branch into base, clean up, and mark it DONE",
+		Long: "Integrates a reviewed spec: merges its branch into the base branch " +
+			"(--no-ff), removes the worktree, deletes the branch and transitions the " +
+			"spec to DONE. Requires the worktree workflow and that all blockers are " +
+			"already integrated. On merge conflict the merge is aborted and the " +
+			"conflicting files are reported (E_CONFLICT); resolve manually and retry.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ref := strings.TrimSpace(args[0])
+			if ref == "" {
+				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
+			}
+			return withConnectorCfg(cmd, s, "write_result", func(ctx context.Context, cfg config.Config, c connector.Connector) (any, error) {
+				if !cfg.Worktree.Enabled {
+					return nil, iox.NewConflict("worktree workflow is disabled", "enable worktree.enabled in config.yaml to use integrate", nil)
+				}
+				if err := gitwt.EnsureRepo(ctx, cfg.ProjectRoot, cfg.Worktree.Base); err != nil {
+					return nil, err
+				}
+				spec, err := c.ReadSpecDetail(ctx, ref)
+				if err != nil {
+					return nil, err
+				}
+				if spec.Branch == "" {
+					return nil, iox.NewPrecondition(fmt.Sprintf("spec %s has no worktree branch", ref), "run `archetipo spec start` with worktree enabled first", nil)
+				}
+				allSpecs, err := c.FetchBacklogItems(ctx, "")
+				if err != nil {
+					return nil, err
+				}
+				blockers, err := gitwt.UnintegratedBlockers(ctx, cfg.ProjectRoot, cfg.Worktree, spec, allSpecs)
+				if err != nil {
+					return nil, err
+				}
+				if len(blockers) > 0 {
+					return nil, iox.NewConflict(
+						fmt.Sprintf("unintegrated blockers: %s", strings.Join(blockers, ", ")),
+						"integrate the blockers before this spec", nil)
+				}
+				if err := gitwt.Integrate(ctx, cfg.ProjectRoot, cfg.Worktree, spec.Branch, spec.Worktree); err != nil {
+					return nil, err
+				}
+				// Clear persisted worktree metadata after a successful integrate
+				// so future blocker resolution does not see stale branch refs.
+				emptyStr := ""
+				if _, err := c.UpdateSpec(ctx, ref, domain.SpecUpdate{
+					Branch:   &emptyStr,
+					Worktree: &emptyStr,
+					ForkBase: &emptyStr,
+				}); err != nil {
+					// Non-fatal: the merge already succeeded.
+					fmt.Fprintf(s.err, "warning: could not clear worktree metadata: %v\n", err)
+				}
+				return c.TransitionStatus(ctx, ref, domain.StatusDone)
 			})
 		},
 	}
@@ -297,23 +487,45 @@ func newSpecStartCmd(s streams) *cobra.Command {
 
 func newSpecReviewCmd(s streams) *cobra.Command {
 	var filePath string
+	var commitType string
+	var commitSummary string
 	cmd := &cobra.Command{
 		Use:   "review US-XXX",
 		Short: "Transition a spec to REVIEW; --file (or stdin) is posted as a closing comment",
 		Long: "Transitions the spec from IN PROGRESS to REVIEW and, when a non-empty body is provided " +
 			"via --file or stdin, posts it as a closing comment on the parent issue. Connectors " +
-			"without comment support silently ignore the body.",
+			"without comment support silently ignore the body.\n\n" +
+			"When the worktree workflow is active and the spec has a dirty worktree, changes are " +
+			"auto-committed before the transition. --commit-type and --commit-summary control the " +
+			"Conventional Commit subject of that auto-commit (default: chore({code}): {title}).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := strings.TrimSpace(args[0])
 			if ref == "" {
 				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
 			}
+			// Validate --commit-type early so invalid values surface before any I/O.
+			if _, err := gitwt.NormalizeCommitType(commitType); err != nil {
+				return errInvalidUsage(
+					fmt.Sprintf("invalid --commit-type %q", commitType),
+					"must be one of feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert",
+				)
+			}
 			comment, err := readRawInput(s.in, filePath)
 			if err != nil {
 				return err
 			}
-			return withConnector(cmd, s, "write_result", func(ctx context.Context, c connector.Connector) (any, error) {
+			return withConnectorCfg(cmd, s, "write_result", func(ctx context.Context, cfg config.Config, c connector.Connector) (any, error) {
+				spec, err := c.ReadSpecDetail(ctx, ref)
+				if err != nil {
+					return nil, err
+				}
+				if spec.Status != domain.StatusReview && cfg.Worktree.Enabled && spec.Branch != "" && spec.Worktree != "" {
+					opts := gitwt.CommitMessageOptions{Type: commitType, Summary: commitSummary}
+					if err := gitwt.CommitWorktreeChanges(ctx, cfg.ProjectRoot, spec.Worktree, spec.Code, spec.Title, opts); err != nil {
+						return nil, err
+					}
+				}
 				res, err := transitionWithValidation(ctx, c, ref, "review", domain.StatusInProgress, domain.StatusReview)
 				if err != nil {
 					return nil, err
@@ -328,6 +540,64 @@ func newSpecReviewCmd(s streams) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&filePath, "file", "", "path to the closing comment, or - for stdin (default: stdin)")
+	cmd.Flags().StringVar(&commitType, "commit-type", "", "Conventional Commit type for the auto-commit (default: chore)")
+	cmd.Flags().StringVar(&commitSummary, "commit-summary", "", "summary for the auto-commit subject (default: spec title)")
+	return cmd
+}
+
+func newSpecRequestChangesCmd(s streams) *cobra.Command {
+	var filePath string
+	cmd := &cobra.Command{
+		Use:   "request-changes US-XXX",
+		Short: "Send a spec under REVIEW back to TODO with structured rework feedback",
+		Long: "Reads a YAML or JSON payload from --file ({\"comments\":[{\"file\",\"line\",\"body\"}]}), " +
+			"appends the comments to the spec body as a \"" + domain.ReworkFeedbackHeading + "\" section, " +
+			"flags the spec as in rework and transitions it back to TODO. The next `archetipo spec plan` " +
+			"run turns each feedback item into a Fix task. `file` and `line` are optional anchors. " +
+			"Errors with E_CONFLICT when the spec is not in REVIEW.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ref := strings.TrimSpace(args[0])
+			if ref == "" {
+				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
+			}
+			if filePath == "" {
+				return errInvalidUsage("missing input file", "pass --file path/to/feedback.yaml or --file -")
+			}
+			var input domain.Review
+			if err := readStructuredInput(s.in, filePath, &input); err != nil {
+				return err
+			}
+			comments := make([]domain.ReviewComment, 0, len(input.Comments))
+			for _, c := range input.Comments {
+				if strings.TrimSpace(c.Body) == "" {
+					continue
+				}
+				comments = append(comments, c)
+			}
+			if len(comments) == 0 {
+				return errInvalidUsage("no feedback comments in payload", "pass at least one comment with a non-empty body")
+			}
+			return withConnector(cmd, s, "write_result", func(ctx context.Context, c connector.Connector) (any, error) {
+				spec, err := c.ReadSpecDetail(ctx, ref)
+				if err != nil {
+					return nil, err
+				}
+				if spec.Status != domain.StatusReview {
+					return nil, iox.NewConflict(
+						fmt.Sprintf("cannot request changes on spec %s: status is %s, expected %s", ref, spec.Status, domain.StatusReview),
+						"only specs under review can be sent back with feedback", nil)
+				}
+				body := domain.AppendReworkFeedback(spec.Body, comments)
+				rework := true
+				if _, err := c.UpdateSpec(ctx, ref, domain.SpecUpdate{Body: &body, Rework: &rework}); err != nil {
+					return nil, err
+				}
+				return c.TransitionStatus(ctx, ref, domain.StatusTodo)
+			})
+		},
+	}
+	cmd.Flags().StringVar(&filePath, "file", "", "path to a YAML or JSON payload file, or - for stdin")
 	return cmd
 }
 
@@ -375,6 +645,61 @@ func isValidMoveTarget(t string) bool {
 		}
 	}
 	return false
+}
+
+func newSpecUpdateCmd(s streams) *cobra.Command {
+	var filePath string
+	cmd := &cobra.Command{
+		Use:   "update US-XXX",
+		Short: "Apply a partial patch to an existing spec",
+		Long: "Reads a YAML or JSON payload from --file (a domain.SpecUpdate partial patch) " +
+			"and applies only the fields present in the payload. Fields absent in the " +
+			"payload are left untouched. Use --file - to read from stdin. " +
+			"Example payload:\n" +
+			"  title: Nuovo titolo\n" +
+			"  priority: HIGH\n" +
+			"  scope: MVP\n" +
+			"  points: 5\n" +
+			"  body: |\n" +
+			"    ## Spec\n    Updated body.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ref := strings.TrimSpace(args[0])
+			if ref == "" {
+				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
+			}
+			if filePath == "" {
+				return errInvalidUsage("missing input file", "pass --file path/to/patch.yaml or --file -")
+			}
+			var patch domain.SpecUpdate
+			if err := readStructuredInput(s.in, filePath, &patch); err != nil {
+				return err
+			}
+			if isEmptyPatch(patch) {
+				return errInvalidUsage("empty patch payload", "provide at least one field to update (e.g. title, priority, points, scope, body)")
+			}
+			return withConnector(cmd, s, "write_result", func(ctx context.Context, c connector.Connector) (any, error) {
+				return c.UpdateSpec(ctx, ref, patch)
+			})
+		},
+	}
+	cmd.Flags().StringVar(&filePath, "file", "", "path to a YAML or JSON payload file, or - for stdin")
+	return cmd
+}
+
+// isEmptyPatch returns true when every pointer field in the patch is nil.
+func isEmptyPatch(p domain.SpecUpdate) bool {
+	return p.Title == nil &&
+		p.Priority == nil &&
+		p.Points == nil &&
+		p.Scope == nil &&
+		p.BlockedBy == nil &&
+		p.Body == nil &&
+		p.Epic == nil &&
+		p.Branch == nil &&
+		p.Worktree == nil &&
+		p.ForkBase == nil &&
+		p.Rework == nil
 }
 
 // transitionWithValidation enforces the idempotent + validated transition rules

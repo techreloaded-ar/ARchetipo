@@ -39,14 +39,23 @@ AI coding agents are fast, but a fast answer to an isolated prompt is not the sa
 npm install -g @techreloaded/archetipo
 ```
 
-One global install works on macOS, Linux, and Windows. Update it later with:
+**Alternatively:** if you cannot install npm packages globally, install ARchetipo as a local project dependency.
 
 ```bash
-archetipo update
+npm install @techreloaded/archetipo
 ```
 
-> On Linux, if `npm install -g` reports permission problems, set a user-owned prefix once:
-> `npm config set prefix ~/.npm-global`, then add `~/.npm-global/bin` to your `PATH`.
+Then add the local CLI to your session `PATH`:
+
+```bash
+# Windows PowerShell
+$env:PATH = "$(Get-Location)\node_modules\.bin;$env:PATH"
+
+# macOS / Linux
+export PATH="$PWD/node_modules/.bin/:$PATH"
+```
+
+After that, `archetipo init` works as usual.
 
 ### 2. Initialize a project
 
@@ -93,6 +102,7 @@ flowchart LR
 | 3. Backlog | `/archetipo-spec` | `.archetipo/backlog.yaml`, `.archetipo/specs/` | Converts the PRD into INVEST-compliant user stories or extends an existing backlog. |
 | 4. Planning | `/archetipo-plan US-001` | `.archetipo/plans/US-001-plan.yaml` | Produces the technical solution, ordered tasks, dependencies, and test strategy. |
 | 5. Code | `/archetipo-implement US-001` | Code, tests, review notes | Executes the plan, runs tests, performs review, and moves the spec toward human approval. |
+| 6. Acceptance | `/archetipo-review US-001` | Verdict: `DONE` or rework feedback | Presents the delivered increment (criteria, diff, test evidence) and executes the human verdict: approve or send back with feedback. |
 
 ### Workflow states
 
@@ -104,7 +114,7 @@ Specs move through standardized states. ARchetipo automates the loop, while fina
 | `PLANNED` | Technical planning is complete. | Set by plan |
 | `IN PROGRESS` | Implementation has started. | Set by implement |
 | `REVIEW` | Code review and tests are complete; ready for human review. | Set by implement |
-| `DONE` | Spec accepted and released. | Manual only |
+| `DONE` | Spec accepted and released. | Human approval via `/archetipo-review` |
 
 ### The AI team
 
@@ -134,6 +144,7 @@ Use this decision guide inside your AI coding agent:
 | Do you already have a backlog of specs? | Run `/archetipo-spec`. | Continue. |
 | Are the specs already `PLANNED`? | Run `/archetipo-plan US-001` on a `TODO` spec. | Continue. |
 | Is a spec ready for implementation? | Plan it first. | Run `/archetipo-implement US-001`. |
+| Is a spec waiting in `REVIEW`? | Implement it first. | Run `/archetipo-review US-001` to accept it or send it back. |
 
 For batch work, `/archetipo-autopilot` can run the plan and implement pipeline across eligible backlog specs with filters such as epic, priority, maximum spec count, or stop conditions.
 
@@ -146,19 +157,25 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 | Command | Purpose |
 |---|---|
 | `archetipo init` | Installs ARchetipo into the current project and creates `.archetipo/config.yaml` plus `.archetipo/shared-runtime.md`. |
+| `archetipo doctor` | Diagnoses the installation: data directory, packaged and installed skills, project config, git, and gh auth (github connector). |
 | `archetipo view` | Starts a local Kanban view for `.archetipo/backlog.yaml`, `.archetipo/specs/`, and `.archetipo/plans/`. |
 | `archetipo config show` | Initializes the connector and prints metadata. |
 | `archetipo prd write [--file PRD.md]` | Saves PRD markdown from `--file` or stdin. |
+| `archetipo validate inception [--file PRD.md]` | Validates the PRD against inception structural rules. |
 | `archetipo spec list [--status STATUS]` | Reads backlog items and summary metadata, optionally filtered by status. |
 | `archetipo spec add --file specs.yaml` | Creates or extends the backlog with specs (user-story body). |
 | `archetipo spec show US-001` | Reads one spec and its tasks by code. |
 | `archetipo spec next --status TODO` | Auto-selects the first eligible spec by status. |
 | `archetipo spec plan US-001 --file plan.yaml` | Saves the implementation plan and moves the spec to `PLANNED`. |
 | `archetipo spec start US-001` | Moves a planned spec to `IN PROGRESS`. |
-| `archetipo spec review US-001 [--file note.md]` | Moves a spec to `REVIEW` and can attach a final comment. |
+| `archetipo spec review US-001 [--file note.md] [--commit-type feat] [--commit-summary "summary"]` | Moves a spec to `REVIEW`, posts a closing comment, and auto-commits dirty worktree changes with a Conventional Commit subject (default: `chore(US-001): {title}`). |
+| `archetipo spec request-changes US-001 --file feedback.json` | Sends a spec in `REVIEW` back to `TODO` with structured rework feedback appended to its body. |
+| `archetipo spec update US-001 --file patch.yaml` | Applies a partial patch (title, priority, points, scope, blocked_by, body, epic, rework) to an existing spec. All connectors supported. |
+| `archetipo spec integrate US-001` | Merges a reviewed spec's worktree branch into base, cleans up, and marks it `DONE` (worktree workflow). |
 | `archetipo task done US-001 TASK-01` | Marks one task as completed. |
+| `archetipo metrics` | Reports backlog progress: totals, completion, per-epic breakdown, WIP, rework, blocked specs, and average cycle/lead time from the recorded status history. |
 | `archetipo spec move US-001 --to review` | Reorders or moves a spec across workflow columns. |
-| `archetipo validate specs --file specs.yaml` | Validates a generated spec payload without persisting it. |
+| `archetipo validate spec --file specs.yaml` | Validates a generated spec payload without persisting it. |
 | `archetipo validate plan US-001 --file plan.yaml` | Validates a generated plan payload without changing the spec status. |
 
 The CLI reads `.archetipo/config.yaml` from the project to choose the active connector and artifact paths.
@@ -177,6 +194,7 @@ Skills never decide where artifacts live. They apply the shared runtime rules, c
 |---|---|---|
 | `file` | Local project files under `.archetipo/` plus `docs/PRD.md` and `docs/mockups/` | Solo work, early product phases, offline workflows |
 | `github` | GitHub Issues plus GitHub Projects v2 | Team tracking, cloud collaboration, project board workflows |
+| `jira` | Jira Cloud issues (Story) plus Sub-tasks | Teams already standardized on Jira |
 
 ### `file` connector
 
@@ -197,7 +215,15 @@ No authentication is required. Everything is local and versionable.
 - Status transitions are managed through Project custom fields.
 - Requires the `gh` CLI authenticated with `repo` and `project` scopes.
 
-The CLI architecture is extensible, but the built-in connectors today are `file` and `github`.
+### `jira` connector
+
+- Backlog items become Jira issues of type `Story`, tagged with the `archetipo-backlog` label.
+- Spec tasks are created as Jira `Sub-task` issues under the parent story.
+- Plans are appended to the parent story description.
+- Status changes go through the Jira workflow transitions; map the canonical statuses to your project's status names via `jira.status_map`.
+- Connects to the Jira Cloud REST API (v2). Set `jira.base_url` and `jira.project_key` in `config.yaml`, and export `JIRA_EMAIL` and `JIRA_API_TOKEN` (create a token at id.atlassian.com). The token is never stored in the config file.
+
+The CLI architecture is extensible, but the built-in connectors today are `file`, `github` and `jira`.
 
 ---
 
@@ -210,6 +236,7 @@ The CLI architecture is extensible, but the built-in connectors today are `file`
 | `archetipo-spec` | Creates or extends the backlog from product intent. | "create the backlog", "add a spec", "we need a feature for..." |
 | `archetipo-plan` | Plans one spec with architecture, tasks, dependencies, and tests. | "plan US-005", "how do we build this?", "break this into tasks" |
 | `archetipo-implement` | Executes a planned spec through code, tests, review, and handoff. | "implement US-005", "run the next ready spec" |
+| `archetipo-review` | Facilitates the human acceptance gate: approve to `DONE` or send back with rework feedback. | "review US-005", "accept the spec", "what's waiting for review?" |
 | `archetipo-autopilot` | Runs planning and implementation across multiple eligible specs. | "run everything", "autopilot the backlog", "implement all specs" |
 
 ---
@@ -219,7 +246,7 @@ The CLI architecture is extensible, but the built-in connectors today are `file`
 `.archetipo/config.yaml` defines connector, paths, and workflow states. Missing keys are filled with official defaults.
 
 ```yaml
-connector: file   # file | github
+connector: file   # file | github | jira
 
 # Shared — used by every connector
 paths:
@@ -233,7 +260,7 @@ workflow:
     planned: PLANNED
     in_progress: IN PROGRESS
     review: REVIEW
-    done: DONE   # no skill moves a spec to DONE automatically
+    done: DONE   # human-gated: only /archetipo-review moves a spec here, after explicit approval
 
 # Used only when connector == file
 file:
@@ -244,6 +271,14 @@ file:
 github:
   # owner: auto-detected from repo
   # project_number: auto-detected from repo
+
+# Used only when connector == jira (token comes from $JIRA_API_TOKEN)
+jira:
+  # base_url: https://acme.atlassian.net
+  # project_key: ARCH
+  # email: you@acme.com           # optional; falls back to $JIRA_EMAIL
+  # points_field: customfield_10016
+  # status_map: { TODO: To Do, PLANNED: Selected for Development, IN PROGRESS: In Progress, REVIEW: In Review, DONE: Done }
 ```
 
 Each connector reads only its dedicated section: configuring `file:` while the active connector is `github` (or vice versa) has no effect. Legacy configs with `paths.backlog` / `paths.planning` are refused at load time with a migration hint — there is no auto-migration.

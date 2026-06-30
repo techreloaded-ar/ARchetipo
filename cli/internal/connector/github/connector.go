@@ -9,6 +9,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/specmeta"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
@@ -69,11 +70,12 @@ func (c *Connector) InitializeConnector(ctx context.Context) (domain.SetupInfo, 
 	c.state.repo = repo
 	c.state.project = project
 	return domain.SetupInfo{
-		Connector: config.ConnectorGitHub,
-		Paths:     c.cfg.Paths,
-		Workflow:  c.cfg.Workflow,
-		Repo:      repo,
-		Project:   project,
+		Connector:   config.ConnectorGitHub,
+		ProjectRoot: c.cfg.ProjectRoot,
+		Paths:       c.cfg.Paths,
+		Workflow:    c.cfg.Workflow,
+		Repo:        repo,
+		Project:     project,
 	}, nil
 }
 
@@ -274,6 +276,7 @@ func (c *Connector) AppendSpecs(ctx context.Context, specs []domain.Spec) (domai
 }
 
 func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.PlanInput) (domain.WriteResult, error) {
+	domain.NormalizePlanInput(&plan)
 	if err := c.ensureSetup(ctx); err != nil {
 		return domain.WriteResult{}, err
 	}
@@ -306,7 +309,7 @@ func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.Pl
 		if epicLabel != "" {
 			labels = append(labels, epicLabel)
 		}
-		created, err := c.createIssue(ctx, fmt.Sprintf("%s: %s", t.ID, t.Title), t.Body, labels)
+		created, err := c.createIssue(ctx, fmt.Sprintf("%s: %s", t.ID, t.Title), firstNonEmpty(t.Body, t.Description), labels)
 		if err != nil {
 			return domain.WriteResult{}, err
 		}
@@ -400,12 +403,146 @@ func (c *Connector) PostComment(ctx context.Context, specRef, body string) (doma
 }
 
 func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain.SpecUpdate) (domain.WriteResult, error) {
-	return domain.WriteResult{}, iox.NewConnector(
-		iox.CodeConnectorBackend,
-		"spec metadata update is not supported by the github connector yet",
-		"edit the issue directly on GitHub for now",
-		nil,
-	)
+	if err := c.ensureSetup(ctx); err != nil {
+		return domain.WriteResult{}, err
+	}
+	num, err := c.resolveIssueNumber(ctx, specRef)
+	if err != nil {
+		return domain.WriteResult{}, err
+	}
+	// Read the current issue so we can merge partial edits.
+	raw, err := c.viewIssueRaw(ctx, num)
+	if err != nil {
+		return domain.WriteResult{}, err
+	}
+	code := codeFromTitle(raw.Title)
+	if code == "" {
+		return domain.WriteResult{}, iox.NewPrecondition(
+			fmt.Sprintf("issue #%d does not look like an ARchetipo spec", num), "", nil)
+	}
+	// Parse current body to separate user content from embedded metadata.
+	cleanBody, meta := specmeta.Parse(raw.Body)
+
+	// Track what changed for the REST PATCH.
+	patchFields := map[string]any{}
+	if patch.Title != nil {
+		patchFields["title"] = code + ": " + *patch.Title
+	}
+
+	if patch.Body != nil {
+		cleanBody = *patch.Body
+	}
+	if patch.Scope != nil {
+		meta.Scope = string(*patch.Scope)
+	}
+	if patch.BlockedBy != nil {
+		meta.BlockedBy = append([]string(nil), (*patch.BlockedBy)...)
+	}
+	if patch.Branch != nil {
+		meta.Branch = *patch.Branch
+	}
+	if patch.Worktree != nil {
+		meta.Worktree = *patch.Worktree
+	}
+	if patch.ForkBase != nil {
+		meta.ForkBase = *patch.ForkBase
+	}
+	if patch.Rework != nil {
+		meta.Rework = *patch.Rework
+	}
+
+	// Rebuild the issue body with the spec-meta marker.
+	if patch.Body != nil || patch.Scope != nil || patch.BlockedBy != nil ||
+		patch.Branch != nil || patch.Worktree != nil || patch.ForkBase != nil ||
+		patch.Rework != nil {
+		patchFields["body"] = specmeta.Render(cleanBody, meta)
+	}
+
+	// Handle epic (label) changes.
+	if patch.Epic != nil {
+		currentLabels := make([]string, 0, len(raw.Labels))
+		for _, l := range raw.Labels {
+			currentLabels = append(currentLabels, l.Name)
+		}
+		newLabels := c.buildLabelsAfterEpicChange(currentLabels, *patch.Epic)
+		patchFields["labels"] = newLabels
+	}
+
+	// Apply REST PATCH for title, body, labels.
+	if len(patchFields) > 0 {
+		args := []string{
+			"api", "-X", "PATCH",
+			fmt.Sprintf("repos/%s/issues/%d", c.state.repo.Slug, num),
+		}
+		for k, v := range patchFields {
+			switch val := v.(type) {
+			case string:
+				args = append(args, "-f", k+"="+val)
+			case []string:
+				for _, item := range val {
+					args = append(args, "-f", k+"[]="+item)
+				}
+			}
+		}
+		if _, stderr, err := c.runner.Run(ctx, nil, args...); err != nil {
+			return domain.WriteResult{}, classify(err, stderr)
+		}
+	}
+
+	// Update project fields (priority, points) via GraphQL.
+	itemID := c.state.items[num]
+	if itemID != "" && c.state.project != nil {
+		if patch.Priority != nil {
+			optID := c.state.project.Fields.PriorityOptions[string(*patch.Priority)]
+			if optID != "" {
+				_ = runGraphQL(ctx, c.runner, updateSingleSelectFieldMutation, map[string]string{
+					"projectId": c.state.project.NodeID,
+					"itemId":    itemID,
+					"fieldId":   c.state.project.Fields.PriorityFieldID,
+					"optionId":  optID,
+				}, nil)
+			}
+		}
+		if patch.Points != nil && c.state.project.Fields.PointsFieldID != "" {
+			_ = runGraphQL(ctx, c.runner, updateNumberFieldMutation, map[string]string{
+				"projectId": c.state.project.NodeID,
+				"itemId":    itemID,
+				"fieldId":   c.state.project.Fields.PointsFieldID,
+				"value":     strconv.Itoa(*patch.Points),
+			}, nil)
+		}
+	}
+
+	// Invalidate the cached spec list so the next read picks up changes.
+	c.state.itemsLoaded = false
+	c.state.specs = nil
+
+	return domain.WriteResult{OK: true, Refs: []domain.Ref{{Code: code, Number: num}}}, nil
+}
+
+// buildLabelsAfterEpicChange replaces old EP-* labels with the new epic label
+// while preserving non-epic labels (including archetipo-backlog).
+func (c *Connector) buildLabelsAfterEpicChange(current []string, newEpic domain.Epic) []string {
+	out := make([]string, 0, len(current)+1)
+	hasBacklog := false
+	for _, l := range current {
+		if l == "archetipo-backlog" {
+			hasBacklog = true
+			out = append(out, l)
+			continue
+		}
+		if strings.HasPrefix(l, "EP-") {
+			continue // Drop old epic labels.
+		}
+		out = append(out, l)
+	}
+	if !hasBacklog {
+		out = append(out, "archetipo-backlog")
+	}
+	if newEpic.Code != "" {
+		out = append(out, newEpic.Code+": ["+newEpic.Title+"]")
+	}
+	return out
 }
 
 func (c *Connector) MoveBoardCard(ctx context.Context, specRef, targetColumn string, anchor domain.ReorderAnchor) (domain.WriteResult, error) {
@@ -577,6 +714,7 @@ type projectItemNode struct {
 		TypeName string `json:"__typename"`
 		Number   int    `json:"number"`
 		Title    string `json:"title"`
+		Body     string `json:"body"`
 		URL      string `json:"url"`
 		Labels   struct {
 			Nodes []struct {
@@ -626,15 +764,23 @@ func (it projectItemNode) spec() (domain.Spec, bool) {
 	if it.Priority != nil {
 		priority = domain.Priority(it.Priority.Name)
 	}
+	// Parse spec-meta from body (extracted by the GraphQL query).
+	_, meta := specmeta.Parse(it.Content.Body)
 	return domain.Spec{
-		Code:     code,
-		Title:    titleAfterCode(it.Content.Title),
-		Status:   status,
-		Priority: priority,
-		Points:   points,
-		Epic:     domain.Epic{Code: epicCodeFromLabel(epicLabel), Title: epicTitleFromLabel(epicLabel)},
-		Ref:      strconv.Itoa(it.Content.Number),
-		URL:      it.Content.URL,
+		Code:      code,
+		Title:     titleAfterCode(it.Content.Title),
+		Status:    status,
+		Priority:  priority,
+		Points:    points,
+		Scope:     domain.Scope(meta.Scope),
+		BlockedBy: append([]string(nil), meta.BlockedBy...),
+		Epic:      domain.Epic{Code: epicCodeFromLabel(epicLabel), Title: epicTitleFromLabel(epicLabel)},
+		Ref:       strconv.Itoa(it.Content.Number),
+		URL:       it.Content.URL,
+		Branch:    meta.Branch,
+		Worktree:  meta.Worktree,
+		ForkBase:  meta.ForkBase,
+		Rework:    meta.Rework,
 	}, true
 }
 
@@ -683,12 +829,28 @@ func (c *Connector) viewIssueAsSpec(ctx context.Context, num int) (domain.Spec, 
 	if err != nil {
 		return domain.Spec{}, err
 	}
+	cleanBody, meta := specmeta.Parse(raw.Body)
+	epic := domain.Epic{}
+	for _, l := range raw.Labels {
+		if strings.HasPrefix(l.Name, "EP-") {
+			epic.Code = epicCodeFromLabel(l.Name)
+			epic.Title = epicTitleFromLabel(l.Name)
+			break
+		}
+	}
 	return domain.Spec{
-		Code:  codeFromTitle(raw.Title),
-		Title: titleAfterCode(raw.Title),
-		Body:  raw.Body,
-		Ref:   strconv.Itoa(num),
-		URL:   raw.URL,
+		Code:      codeFromTitle(raw.Title),
+		Title:     titleAfterCode(raw.Title),
+		Body:      cleanBody,
+		Scope:     domain.Scope(meta.Scope),
+		BlockedBy: append([]string(nil), meta.BlockedBy...),
+		Epic:      epic,
+		Ref:       strconv.Itoa(num),
+		URL:       raw.URL,
+		Branch:    meta.Branch,
+		Worktree:  meta.Worktree,
+		ForkBase:  meta.ForkBase,
+		Rework:    meta.Rework,
 	}, nil
 }
 
@@ -895,13 +1057,22 @@ func (c *Connector) createSpecsAndAttach(ctx context.Context, specs []domain.Spe
 		}
 	}
 	refs := make([]domain.Ref, 0, len(specs))
+	var warnings []string
 	for _, s := range specs {
 		title := s.Code + ": " + s.Title
 		labels := []string{"archetipo-backlog"}
 		if s.Epic.Code != "" {
 			labels = append(labels, s.Epic.Code+": ["+s.Epic.Title+"]")
 		}
-		created, err := c.createIssue(ctx, title, s.Body, labels)
+		bodyWithMeta := specmeta.Render(s.Body, specmeta.Meta{
+			Scope:     string(s.Scope),
+			BlockedBy: append([]string(nil), s.BlockedBy...),
+			Branch:    s.Branch,
+			Worktree:  s.Worktree,
+			ForkBase:  s.ForkBase,
+			Rework:    s.Rework,
+		})
+		created, err := c.createIssue(ctx, title, bodyWithMeta, labels)
 		if err != nil {
 			return domain.WriteResult{}, err
 		}
@@ -928,35 +1099,44 @@ func (c *Connector) createSpecsAndAttach(ctx context.Context, specs []domain.Spe
 		}
 		itemID := addResp.AddProjectV2ItemById.Item.ID
 		c.state.items[num] = itemID
+		// Field updates are best-effort: the issue exists on the board even
+		// if a field mutation fails, so report failures as warnings instead
+		// of aborting the whole batch.
 		if optID := c.state.project.Fields.StatusOptions[string(s.Status)]; optID != "" {
-			_ = runGraphQL(ctx, c.runner, updateSingleSelectFieldMutation, map[string]string{
+			if err := runGraphQL(ctx, c.runner, updateSingleSelectFieldMutation, map[string]string{
 				"projectId": c.state.project.NodeID,
 				"itemId":    itemID,
 				"fieldId":   c.state.project.Fields.StatusFieldID,
 				"optionId":  optID,
-			}, nil)
+			}, nil); err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s: could not set Status field: %v", s.Code, err))
+			}
 		}
 		if c.state.project.Fields.PriorityFieldID != "" {
 			if optID := c.state.project.Fields.PriorityOptions[string(s.Priority)]; optID != "" {
-				_ = runGraphQL(ctx, c.runner, updateSingleSelectFieldMutation, map[string]string{
+				if err := runGraphQL(ctx, c.runner, updateSingleSelectFieldMutation, map[string]string{
 					"projectId": c.state.project.NodeID,
 					"itemId":    itemID,
 					"fieldId":   c.state.project.Fields.PriorityFieldID,
 					"optionId":  optID,
-				}, nil)
+				}, nil); err != nil {
+					warnings = append(warnings, fmt.Sprintf("%s: could not set Priority field: %v", s.Code, err))
+				}
 			}
 		}
 		if c.state.project.Fields.PointsFieldID != "" && s.Points > 0 {
-			_ = runGraphQL(ctx, c.runner, updateNumberFieldMutation, map[string]string{
+			if err := runGraphQL(ctx, c.runner, updateNumberFieldMutation, map[string]string{
 				"projectId": c.state.project.NodeID,
 				"itemId":    itemID,
 				"fieldId":   c.state.project.Fields.PointsFieldID,
 				"value":     strconv.Itoa(s.Points),
-			}, nil)
+			}, nil); err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s: could not set Points field: %v", s.Code, err))
+			}
 		}
 	}
 	c.invalidateItemsCache()
-	return domain.WriteResult{OK: true, Refs: refs}, nil
+	return domain.WriteResult{OK: true, Refs: refs, Warnings: warnings}, nil
 }
 
 // ensureLabel creates a label on the repo if not already known. `gh label

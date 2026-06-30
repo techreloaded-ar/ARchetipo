@@ -29,6 +29,7 @@ const RelativePath = ".archetipo/config.yaml"
 const (
 	ConnectorFile   = "file"
 	ConnectorGitHub = "github"
+	ConnectorJira   = "jira"
 )
 
 // Config is the parsed shape of .archetipo/config.yaml.
@@ -38,6 +39,14 @@ type Config struct {
 	Workflow  domain.WorkflowConfig `yaml:"workflow" json:"workflow"`
 	File      domain.FileConfig     `yaml:"file" json:"file,omitempty"`
 	GitHub    GitHubConfig          `yaml:"github" json:"github,omitempty"`
+	Jira      JiraConfig            `yaml:"jira" json:"jira,omitempty"`
+	// Worktree is the optional per-spec git worktree workflow. Disabled by
+	// default; when enabled, `archetipo spec start` creates a branch + worktree
+	// per spec so the review diff can be isolated and integrated with one merge.
+	Worktree domain.WorktreeConfig `yaml:"worktree" json:"worktree,omitempty"`
+	// E2E is the optional `e2e:` section. RecordDemoVideo gates demo recording
+	// (`archetipo e2e demo`); off by default, so videos are opt-in.
+	E2E domain.E2EConfig `yaml:"e2e" json:"e2e,omitempty"`
 	// ProjectRoot is the absolute path of the directory that contains
 	// .archetipo/. Set by Load; not present in the YAML file.
 	ProjectRoot string `yaml:"-" json:"project_root"`
@@ -51,6 +60,28 @@ type GitHubConfig struct {
 	ProjectNodeID string               `yaml:"project_node_id,omitempty" json:"project_node_id,omitempty"`
 	ProjectURL    string               `yaml:"project_url,omitempty" json:"project_url,omitempty"`
 	Fields        domain.ProjectFields `yaml:"fields,omitempty" json:"fields,omitempty"`
+}
+
+// JiraConfig holds connector-specific settings for the Jira Cloud connector.
+//
+// The API token is never read from this file: it always comes from the
+// JIRA_API_TOKEN environment variable so the secret stays out of version
+// control. Email may be set here or, preferably, via JIRA_EMAIL.
+//
+// StatusMap maps the canonical workflow statuses (TODO, PLANNED, IN PROGRESS,
+// REVIEW, DONE) to the names of the statuses configured in the Jira project's
+// workflow. PriorityMap maps the canonical priorities (HIGH, MEDIUM, LOW) to
+// the Jira priority names. Both default to a sensible identity/title-case
+// mapping when omitted (see the jira connector).
+type JiraConfig struct {
+	BaseURL     string            `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+	ProjectKey  string            `yaml:"project_key,omitempty" json:"project_key,omitempty"`
+	Email       string            `yaml:"email,omitempty" json:"email,omitempty"`
+	StoryType   string            `yaml:"story_type,omitempty" json:"story_type,omitempty"`
+	SubtaskType string            `yaml:"subtask_type,omitempty" json:"subtask_type,omitempty"`
+	PointsField string            `yaml:"points_field,omitempty" json:"points_field,omitempty"`
+	StatusMap   map[string]string `yaml:"status_map,omitempty" json:"status_map,omitempty"`
+	PriorityMap map[string]string `yaml:"priority_map,omitempty" json:"priority_map,omitempty"`
 }
 
 // Default returns the canonical default config (file connector, English status
@@ -75,6 +106,12 @@ func Default() Config {
 				Review:     string(domain.StatusReview),
 				Done:       string(domain.StatusDone),
 			},
+		},
+		Worktree: domain.WorktreeConfig{
+			Enabled:      false,
+			Base:         "main",
+			Dir:          ".archetipo/worktrees",
+			BranchPrefix: "archetipo/",
 		},
 	}
 }
@@ -216,6 +253,15 @@ func (c *Config) applyDefaults() {
 	if c.Workflow.Statuses.Done == "" {
 		c.Workflow.Statuses.Done = d.Workflow.Statuses.Done
 	}
+	if c.Worktree.Base == "" {
+		c.Worktree.Base = d.Worktree.Base
+	}
+	if c.Worktree.Dir == "" {
+		c.Worktree.Dir = d.Worktree.Dir
+	}
+	if c.Worktree.BranchPrefix == "" {
+		c.Worktree.BranchPrefix = d.Worktree.BranchPrefix
+	}
 }
 
 // validate performs config-level checks. Connector name validation is
@@ -247,6 +293,13 @@ func (c *Config) validate() error {
 		}
 		if err := checkPathWritable(c.AbsPath(ck.path)); err != nil {
 			return fmt.Errorf("config %s (%s): %w", ck.key, ck.path, err)
+		}
+	}
+	if c.Connector == ConnectorJira {
+		// project_key is optional: the connector auto-detects (or creates) the
+		// Jira project on first run and writes the key back via Save().
+		if c.Jira.BaseURL == "" && os.Getenv("JIRA_BASE_URL") == "" {
+			return fmt.Errorf("config jira.base_url is required for the jira connector (e.g. https://acme.atlassian.net), or export JIRA_BASE_URL")
 		}
 	}
 	return nil
@@ -302,7 +355,7 @@ func (c Config) AbsPath(p string) string {
 	return filepath.Join(c.ProjectRoot, p)
 }
 
-// Save patches the `github.owner` and `github.project_number` keys in the
+// Save patches the active connector's section (`github:` or `jira:`) in the
 // existing config file, preserving comments and the order of unrelated keys
 // via yaml.Node. If the file does not yet exist a fresh one is written from
 // the in-memory Config. When ProjectRoot is empty (e.g. tests using
@@ -317,19 +370,26 @@ func (c Config) Save() error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return fmt.Errorf("creating .archetipo dir: %w", err)
 		}
-		// Bootstrap: emit only the keys that matter for the github connector.
+		// Bootstrap: emit only the keys that matter for the active connector.
 		// applyDefaults() will fill the rest at next Load. Avoids marshalling
 		// the whole Config, whose nested types (domain.ConfigPaths /
 		// domain.StatusLabels) lack yaml tags and would emit broken keys.
-		gh := &yaml.Node{Kind: yaml.MappingNode}
-		upsertGitHubMapping(gh, c.GitHub)
+		section := &yaml.Node{Kind: yaml.MappingNode}
+		sectionKey := ConnectorGitHub
+		switch c.Connector {
+		case ConnectorJira:
+			sectionKey = ConnectorJira
+			upsertJiraMapping(section, c.Jira)
+		default:
+			upsertGitHubMapping(section, c.GitHub)
+		}
 		doc := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode}}}
 		root := doc.Content[0]
 		root.Content = append(root.Content,
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "connector"},
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: c.Connector},
-			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "github"},
-			gh,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: sectionKey},
+			section,
 		)
 		out, err := yaml.Marshal(doc)
 		if err != nil {
@@ -344,7 +404,13 @@ func (c Config) Save() error {
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		return fmt.Errorf("parsing %s: %w", path, err)
 	}
-	if err := upsertGitHubSection(&doc, c.GitHub); err != nil {
+	switch c.Connector {
+	case ConnectorJira:
+		err = upsertJiraSection(&doc, c.Jira)
+	default:
+		err = upsertGitHubSection(&doc, c.GitHub)
+	}
+	if err != nil {
 		return err
 	}
 	out, err := yaml.Marshal(&doc)
@@ -385,6 +451,43 @@ func upsertGitHubMapping(gh *yaml.Node, g GitHubConfig) {
 	if !projectFieldsEmpty(g.Fields) {
 		setMappingChild(gh, "fields", projectFieldsNode(g.Fields))
 	}
+}
+
+// upsertJiraSection finds (or creates) a top-level `jira:` mapping inside the
+// YAML document and ensures the resolved keys reflect j. Other keys under
+// `jira:` and elsewhere in the document are left untouched.
+func upsertJiraSection(doc *yaml.Node, j JiraConfig) error {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		// Empty or malformed document: rebuild a minimal mapping.
+		doc.Kind = yaml.DocumentNode
+		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return fmt.Errorf("config root is not a mapping")
+	}
+	jr := findOrCreateChildMapping(root, "jira")
+	if jr == nil {
+		key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "jira"}
+		jr = &yaml.Node{Kind: yaml.MappingNode}
+		root.Content = append(root.Content, key, jr)
+	}
+	upsertJiraMapping(jr, j)
+	return nil
+}
+
+// upsertJiraMapping writes only the keys that hold a value: base_url stays out
+// of the file when it came from $JIRA_BASE_URL, and the secret-bearing keys
+// (token) are never part of JiraConfig in the first place.
+func upsertJiraMapping(jr *yaml.Node, j JiraConfig) {
+	setOptionalScalarChild(jr, "base_url", j.BaseURL)
+	setOptionalScalarChild(jr, "project_key", j.ProjectKey)
+	setOptionalScalarChild(jr, "email", j.Email)
+	setOptionalScalarChild(jr, "story_type", j.StoryType)
+	setOptionalScalarChild(jr, "subtask_type", j.SubtaskType)
+	setOptionalScalarChild(jr, "points_field", j.PointsField)
+	setStringMapChild(jr, "status_map", j.StatusMap)
+	setStringMapChild(jr, "priority_map", j.PriorityMap)
 }
 
 // findOrCreateChildMapping returns the value node for a given mapping key.

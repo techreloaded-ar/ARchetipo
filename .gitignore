@@ -6,7 +6,9 @@ Thumbs.db
 .vscode/
 .agents/
 .claude/
-.github/
+# Only the Copilot skills installed by `archetipo init` — never the whole
+# .github/, or CI workflows silently stop being tracked.
+.github/skills/
 .opencode/
 .gemini
 .trae
@@ -28,6 +30,7 @@ node_modules/
 .pi
 cli/archetipo
 .archetipo/bin/*
+.dev/
 
 .archetipo/stories/*
 .archetipo/plans/*
@@ -41,3 +44,7 @@ npm/archetipo-*/bin/archetipo.exe
 npm/*/*.tgz
 cli/dist/
 cli/archetipo-bin
+
+*env*
+.plans
+graphify-out

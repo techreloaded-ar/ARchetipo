@@ -152,9 +152,9 @@ Proceed with adding them? Or tell me what to change.
 
 ## Phase 3 - Output
 
-Construct the full JSON payload string in your own context (not via shell heredoc or inline script). Choose a unique temp filename using the new spec codes (e.g. `tmp-payload-US-016-US-018.json`). Write the file to `.archetipo/` using your file-writing tool. Then invoke `archetipo validate specs --file <path>` before appending anything.
+Construct the full JSON payload string in your own context (not via shell heredoc or inline script). Choose a unique temp filename using the new spec codes (e.g. `tmp-payload-US-016-US-018.json`). Write the file to `.archetipo/` using your file-writing tool. Then invoke `archetipo validate spec --file <path>` before appending anything.
 
-If validation returns `kind: "validation_result"` with `data.ok: false`, do not call `archetipo spec add`. Read `data.issues`, repair every `severity: "error"` in the payload, and rerun validation. Treat warnings as quality feedback; fix them when straightforward, but they do not block persistence.
+If validation returns `kind: "validation_result"` with `data.ok: false`, do not call `archetipo spec add`. Read `data.findings`, repair every `severity: "error"` in the payload, and rerun validation. Treat warnings as quality feedback; fix them when straightforward, but they do not block persistence.
 
 Only after validation passes, invoke `archetipo spec add --file <path>`. After the CLI exits, delete the temp file.
 

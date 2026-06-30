@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
+	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
@@ -32,6 +35,18 @@ func Register() {
 	})
 }
 
+// Optional capabilities exposed to the web viewer (see connector.capabilities).
+// The compile-time assertions make the contract explicit: dropping one of these
+// methods becomes a build error rather than a silent runtime gap.
+var (
+	_ connector.PRDReader        = (*Connector)(nil)
+	_ connector.PlanBodyReader   = (*Connector)(nil)
+	_ connector.MockupLister     = (*Connector)(nil)
+	_ connector.BoardOrderReader = (*Connector)(nil)
+	_ connector.SpecDeleter      = (*Connector)(nil)
+	_ connector.ReviewStore      = (*Connector)(nil)
+)
+
 var errBacklogMissing = errors.New("backlog missing")
 
 // mockupSpecCodeRE matches mockup folder names that map 1:1 to a spec or
@@ -41,10 +56,11 @@ var mockupSpecCodeRE = regexp.MustCompile(`^(US|EP)-\d+$`)
 func (c *Connector) InitializeConnector(ctx context.Context) (domain.SetupInfo, error) {
 	file := c.cfg.File
 	return domain.SetupInfo{
-		Connector: config.ConnectorFile,
-		Paths:     c.cfg.Paths,
-		Workflow:  c.cfg.Workflow,
-		File:      &file,
+		Connector:   config.ConnectorFile,
+		ProjectRoot: c.cfg.ProjectRoot,
+		Paths:       c.cfg.Paths,
+		Workflow:    c.cfg.Workflow,
+		File:        &file,
 	}, nil
 }
 
@@ -256,6 +272,7 @@ func (c *Connector) SaveInitialBacklog(ctx context.Context, specs []domain.Spec)
 	}
 	for _, spec := range specs {
 		spec.Ref = spec.Code
+		recordCreation(&spec)
 		store.Specs[spec.Code] = spec
 	}
 	if err := c.writeStore(store); err != nil {
@@ -282,6 +299,7 @@ func (c *Connector) AppendSpecs(ctx context.Context, specs []domain.Spec) (domai
 			continue
 		}
 		spec.Ref = spec.Code
+		recordCreation(&spec)
 		store.Specs[spec.Code] = spec
 		added = append(added, spec)
 	}
@@ -320,7 +338,10 @@ func (c *Connector) TransitionStatus(ctx context.Context, specRef string, newSta
 	if _, ok := columnIDForStatus(c.boardColumns(), newStatus); !ok {
 		return domain.WriteResult{}, iox.NewConflict(fmt.Sprintf("status %s is not mapped to a board column", newStatus), "", nil)
 	}
-	spec.Status = newStatus
+	if spec.Status != newStatus {
+		spec.Status = newStatus
+		recordTransition(&spec, newStatus)
+	}
 	store.Specs[specRef] = spec
 	if err := c.writeStore(store); err != nil {
 		return domain.WriteResult{}, err
@@ -387,6 +408,7 @@ func (c *Connector) MoveBoardCard(ctx context.Context, specRef, targetColumn str
 	refs := []domain.Ref{{Code: specRef, Path: c.backlogPath()}}
 	if spec.Status != targetStatus {
 		spec.Status = targetStatus
+		recordTransition(&spec, targetStatus)
 		store.Specs[specRef] = spec
 		refs = append(refs, domain.Ref{Code: specRef, Path: c.specPath(specRef)})
 	}
@@ -398,6 +420,37 @@ func (c *Connector) MoveBoardCard(ctx context.Context, specRef, targetColumn str
 
 func (c *Connector) PostComment(ctx context.Context, specRef, body string) (domain.WriteResult, error) {
 	return domain.WriteResult{OK: true}, nil
+}
+
+// DeleteSpec removes a spec from the local backlog and deletes its local spec,
+// plan, and review artifacts. The store rewrite must happen before removing the
+// spec YAML file, otherwise the next loadStore would re-hydrate the deleted spec
+// from disk.
+func (c *Connector) DeleteSpec(ctx context.Context, code string) (domain.WriteResult, error) {
+	if code == "" {
+		return domain.WriteResult{}, iox.NewInvalidInput("missing spec code", "pass US-XXX as positional argument", nil)
+	}
+	store, err := c.loadStore()
+	if err != nil {
+		return domain.WriteResult{}, err
+	}
+	if _, ok := store.Specs[code]; !ok {
+		return domain.WriteResult{}, iox.NewPrecondition(fmt.Sprintf("spec %s not found", code), "", nil)
+	}
+	delete(store.Specs, code)
+	store.Backlog.Order = removeCode(store.Backlog.Order, code)
+	if err := c.writeStore(store); err != nil {
+		return domain.WriteResult{}, err
+	}
+
+	refs := []domain.Ref{{Code: code, Path: c.backlogPath()}}
+	for _, path := range []string{c.specPath(code), c.planPath(code), c.reviewPath(code)} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return domain.WriteResult{}, iox.NewInternal(fmt.Sprintf("deleting %s", path), err)
+		}
+		refs = append(refs, domain.Ref{Code: code, Path: path})
+	}
+	return domain.WriteResult{OK: true, Refs: refs}, nil
 }
 
 // ReadPlanBody returns the prose body of a spec's plan, if any. It is not on
@@ -442,6 +495,18 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 	if patch.Epic != nil {
 		spec.Epic = *patch.Epic
 	}
+	if patch.Branch != nil {
+		spec.Branch = *patch.Branch
+	}
+	if patch.Worktree != nil {
+		spec.Worktree = *patch.Worktree
+	}
+	if patch.ForkBase != nil {
+		spec.ForkBase = *patch.ForkBase
+	}
+	if patch.Rework != nil {
+		spec.Rework = *patch.Rework
+	}
 	store.Specs[specRef] = spec
 	if err := c.writeStore(store); err != nil {
 		return domain.WriteResult{}, err
@@ -453,6 +518,23 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 			{Code: specRef, Path: c.backlogPath()},
 		},
 	}, nil
+}
+
+// recordCreation seeds the status history with the status the spec is created
+// with, so lead time can be measured from day one. No-op when the payload
+// already carries a history (e.g. an import).
+func recordCreation(spec *domain.Spec) {
+	if len(spec.History) > 0 {
+		return
+	}
+	recordTransition(spec, spec.Status)
+}
+
+func recordTransition(spec *domain.Spec, status domain.Status) {
+	spec.History = append(spec.History, domain.StatusChange{
+		Status: status,
+		At:     time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 func refsFromSpecs(specs []domain.Spec, path string) []domain.Ref {
@@ -475,14 +557,17 @@ func highestCode(codes []string) string {
 }
 
 func numericTail(code string) int {
-	value := 0
-	multiplier := 1
-	for i := len(code) - 1; i >= 0; i-- {
-		if code[i] < '0' || code[i] > '9' {
-			break
-		}
-		value += int(code[i]-'0') * multiplier
-		multiplier *= 10
+	start := len(code)
+	for start > 0 && code[start-1] >= '0' && code[start-1] <= '9' {
+		start--
+	}
+	if start == len(code) {
+		return 0
+	}
+	value, err := strconv.Atoi(code[start:])
+	if err != nil {
+		// Out of int range: treat as no numeric tail rather than a garbage value.
+		return 0
 	}
 	return value
 }

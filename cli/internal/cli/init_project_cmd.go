@@ -36,6 +36,7 @@ var allSkills = []string{
 	"archetipo-implement",
 	"archetipo-inception",
 	"archetipo-plan",
+	"archetipo-review",
 	"archetipo-spec",
 }
 
@@ -55,7 +56,7 @@ func newInitProjectCmd(s streams) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringSliceVar(&toolFlags, "tool", nil, "Tool key(s) to install for: claude, codex, gemini, opencode, copilot, pi. Repeat or comma-separate.")
-	cmd.Flags().StringVar(&connectorFlag, "connector", "", "Connector for .archetipo/config.yaml: file|github")
+	cmd.Flags().StringVar(&connectorFlag, "connector", "", "Connector for .archetipo/config.yaml: file|github|jira")
 	cmd.Flags().BoolVar(&assumeYes, "yes", false, "Assume 'yes' to overwrite prompts (non-interactive).")
 	return cmd
 }
@@ -93,8 +94,8 @@ func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeY
 
 	var conn string
 	if connectorFlag != "" {
-		if connectorFlag != "file" && connectorFlag != "github" {
-			return iox.NewInvalidInput("--connector must be 'file' or 'github'", "", nil)
+		if connectorFlag != "file" && connectorFlag != "github" && connectorFlag != "jira" {
+			return iox.NewInvalidInput("--connector must be 'file', 'github' or 'jira'", "", nil)
 		}
 		conn = connectorFlag
 	} else {
@@ -172,22 +173,10 @@ func discoverDataDir() (string, error) {
 // repoFallbackDataDir maps the repo layout (skills/ + .archetipo/) onto the
 // expected runtime layout by treating .archetipo/ as runtime/.
 func repoFallbackDataDir(repoRoot string) string {
-	// In-place: the init code uses dataDir/skills and dataDir/runtime.
-	// The repo has skills/ and .archetipo/. We materialize a virtual mapping
-	// by symlinking is overkill — instead the caller reads runtime via
-	// runtimeRootFor(dataDir) which checks both layouts. We return the repo
-	// root and let installRuntimeAssets look in either runtime/ or .archetipo/.
+	// The init code uses dataDir/skills and dataDir/runtime, while the repo
+	// has skills/ and .archetipo/. We return the repo root and let
+	// installRuntimeAssets look in either runtime/ or .archetipo/.
 	return repoRoot
-}
-
-// runtimeRootFor returns the directory holding config.yaml + shared-runtime.md,
-// preferring runtime/ (npm layout) and falling back to .archetipo/ (repo layout).
-func runtimeRootFor(dataDir string) string {
-	candidate := filepath.Join(dataDir, "runtime")
-	if _, err := os.Stat(filepath.Join(candidate, "config.yaml")); err == nil {
-		return candidate
-	}
-	return filepath.Join(dataDir, ".archetipo")
 }
 
 func resolveToolFlags(flags []string) ([]toolDef, error) {
@@ -259,6 +248,7 @@ func pickConnectorInteractive(s streams) (string, error) {
 	fmt.Fprintln(s.out, "Select connector:")
 	fmt.Fprintln(s.out, "  1) file    — backlog and planning as local Markdown files")
 	fmt.Fprintln(s.out, "  2) github  — GitHub Projects v2 (requires gh CLI)")
+	fmt.Fprintln(s.out, "  3) jira    — Jira Cloud (requires JIRA_EMAIL/JIRA_API_TOKEN)")
 	fmt.Fprintln(s.out)
 	fmt.Fprint(s.out, "Choice [1]: ")
 	line, err := readLine(s.in)
@@ -271,8 +261,10 @@ func pickConnectorInteractive(s streams) (string, error) {
 		return "file", nil
 	case "2", "github":
 		return "github", nil
+	case "3", "jira":
+		return "jira", nil
 	}
-	return "", iox.NewInvalidInput("invalid connector choice: "+line, "enter 1 or 2", nil)
+	return "", iox.NewInvalidInput("invalid connector choice: "+line, "enter 1, 2 or 3", nil)
 }
 
 func installRuntimeAssets(s streams, runtimeDir, connector string, assumeYes bool) error {
@@ -403,12 +395,25 @@ func copyFile(src, dst string) error {
 
 func readLine(r io.Reader) (string, error) {
 	if r == nil {
-		return "", errors.New("no input stream")
+		return "", errNonInteractiveInput(errors.New("no input stream"))
 	}
 	br := bufio.NewReader(r)
 	line, err := br.ReadString('\n')
 	if err != nil && line == "" {
+		if errors.Is(err, io.EOF) {
+			return "", errNonInteractiveInput(err)
+		}
 		return "", err
 	}
 	return line, nil
+}
+
+// errNonInteractiveInput explains how to run init without a terminal (CI,
+// piped stdin) instead of surfacing a bare EOF.
+func errNonInteractiveInput(cause error) error {
+	return iox.NewPrecondition(
+		"interactive input is not available",
+		"run non-interactively: archetipo init --tool <claude|codex|gemini|opencode|copilot|pi> --connector <file|github|jira> [--yes]",
+		cause,
+	)
 }

@@ -41,6 +41,10 @@
         </div>
 
         <div class="topbar-actions">
+            <button id="metrics-btn" type="button" class="ghost-btn">
+                <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 13.5h12" stroke="currentColor" stroke-width="1.2"/><path d="M3.5 13.5V9M7 13.5V5.5M10.5 13.5V7.5M14 13.5V3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                <span>Metrics</span>
+            </button>
             <button id="prd-btn" type="button" class="ghost-btn">
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.5h7.5L13 4v10.5H3z" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M10.5 1.5V4H13" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 7h5M5.5 9.5h5M5.5 12h3" stroke="currentColor" stroke-width="1.2"/></svg>
                 <span>PRD</span>
@@ -85,10 +89,16 @@
             <nav class="modal-tabs" role="tablist">
                 <button type="button" class="tab active" data-tab="story" role="tab" aria-selected="true">Story</button>
                 <button type="button" class="tab" data-tab="plan" role="tab" aria-selected="false">Plan</button>
+                <button type="button" class="tab hidden" data-tab="review" id="review-tab" role="tab" aria-selected="false">Review</button>
             </nav>
             <section class="tab-panel active" data-panel="story">
                 <div id="story-view" class="story-view">
-                    <div class="story-view-meta" id="story-view-meta"></div>
+                    <div class="story-view-topbar">
+                        <div class="story-view-meta" id="story-view-meta"></div>
+                        <div class="story-view-actions">
+                            <button type="button" id="story-delete-btn" class="ghost-btn danger-ghost-btn">Delete story</button>
+                        </div>
+                    </div>
                     <h3 class="story-view-title" id="story-view-title"></h3>
                     <div class="markdown-rendered" id="story-body-view"></div>
                     <div class="form-actions">
@@ -184,6 +194,17 @@
                     </div>
                 </form>
             </section>
+            <section class="tab-panel" data-panel="review">
+                <div class="review-toolbar">
+                    <div class="review-branch" id="review-branch"></div>
+                    <div class="review-actions">
+                        <button type="button" id="review-request-btn" class="ghost-btn" title="Convert comments into Fix tasks and send the spec back to IN PROGRESS">Request changes</button>
+                        <button type="button" id="review-integrate-btn" class="primary-btn" title="Merge the branch into base and close the spec">Integrate &amp; close</button>
+                    </div>
+                </div>
+                <div class="review-diff" id="review-diff"></div>
+                <span class="status-msg" id="review-status"></span>
+            </section>
         </div>
     </div>
 
@@ -217,11 +238,27 @@
         </div>
     </div>
 
+    <div id="metrics-modal" class="modal-root hidden" role="dialog" aria-modal="true" aria-labelledby="metrics-title">
+        <div class="modal">
+            <header class="modal-header">
+                <h2 id="metrics-title" class="modal-title">Metrics</h2>
+                <button id="metrics-modal-close" type="button" class="icon-btn" aria-label="Close">
+                    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                </button>
+            </header>
+            <section class="tab-panel active">
+                <div id="metrics-body" class="metrics-body"></div>
+                <span class="status-msg" id="metrics-status"></span>
+            </section>
+        </div>
+    </div>
+
     <div id="toast" class="toast hidden"></div>
 
     <script src="/vendor/sortable.min.js"></script>
     <script src="/vendor/marked.min.js"></script>
     <script src="/vendor/easymde.min.js"></script>
+    <script src="/task-markdown.js"></script>
     <script src="/app.js"></script>
 </body>
 </html>

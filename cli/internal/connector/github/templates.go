@@ -4,15 +4,6 @@ package github
 // original `.archetipo/connectors/github.md` to preserve behaviour and tested
 // against `gh api graphql` semantics.
 
-// linkProjectMutation links a Projects v2 project to a repository so the
-// project shows up in repo-context tools.
-const linkProjectMutation = `
-mutation($projectId: ID!, $repoId: ID!) {
-  linkProjectV2ToRepository(input: {projectId: $projectId, repositoryId: $repoId}) {
-    repository { id nameWithOwner }
-  }
-}`
-
 // addProjectItemMutation adds an issue to a project board and returns the new item id.
 const addProjectItemMutation = `
 mutation($projectId: ID!, $contentId: ID!) {
@@ -83,6 +74,7 @@ query($projectId: ID!, $after: String) {
             ... on Issue {
               number
               title
+              body
               url
               labels(first: 20) { nodes { name } }
             }

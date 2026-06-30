@@ -9,12 +9,16 @@ cd cli
 go build ./cmd/archetipo
 ```
 
-The output binary `archetipo` reads `.archetipo/config.yaml` from the project root (or any ancestor) to choose the connector (`file` or `github`) and execute the requested sub-command.
+The output binary `archetipo` reads `.archetipo/config.yaml` from the project root (or any ancestor) to choose the connector (`file`, `github` or `jira`) and execute the requested sub-command.
+
+For a copy/paste local development workflow that builds the CLI and tests it without publishing npm packages, see [`../docs/dev-local-cli.md`](../docs/dev-local-cli.md).
+
+With the `jira` connector only `jira.base_url` (or `JIRA_BASE_URL`) plus the `JIRA_EMAIL`/`JIRA_API_TOKEN` env vars are required up front: on first run the CLI looks for a Jira project named after the project directory, creates it when missing (project creation needs the *Administer Jira* permission — without it the CLI reports the error and you can set `jira.project_key` manually instead), discovers how the canonical workflow statuses map onto the project's Jira statuses, and writes `project_key` and `status_map` back into `config.yaml` where they can be corrected by hand. Canonical statuses the Jira workflow lacks (the standard templates ship without a REVIEW-like status) are provisioned automatically: the CLI creates the status and adds it to the project's workflow, falling back to a manual-fix hint when the token lacks the required permission.
 
 Generated artifacts can be checked without side effects before persistence:
 
 ```bash
-archetipo validate specs --file specs.yaml
+archetipo validate spec --file specs.yaml
 archetipo validate plan US-001 --file plan.yaml
 ```
 
@@ -32,9 +36,10 @@ npm run build:cli
 cmd/archetipo/        # entry point
 internal/
   cli/                # cobra sub-commands (one file per operation)
-  connector/          # interface, registry, two implementations + inmemory ref
+  connector/          # interface, registry, three implementations + inmemory ref
     filefs/           # markdown + HTML-comment markers
     github/           # gh CLI shell-out + GraphQL aliased mutations
+    jira/             # Jira Cloud REST API v3 over an injectable HTTP Doer
     inmemory/         # reference impl used by the conformance suite
     conformance/      # behavioural test suite shared by every implementation
   config/             # .archetipo/config.yaml loader
@@ -49,7 +54,7 @@ internal/
 go test ./...
 ```
 
-The conformance suite runs against `filefs` and `inmemory`. The `github` connector is exercised with a mock `gh` runner; live smoke tests are gated behind `ARCHETIPO_E2E_GH=1` and need a sandbox repo with `gh` authenticated.
+The conformance suite runs against `filefs` and `inmemory`. The `github` connector is exercised with a mock `gh` runner; live smoke tests are gated behind `ARCHETIPO_E2E_GH=1` and need a sandbox repo with `gh` authenticated. The `jira` connector is exercised against an in-memory fake Jira backend that implements the REST endpoints it calls (see `internal/connector/jira/jira_test.go`).
 
 ## Distribution
 
