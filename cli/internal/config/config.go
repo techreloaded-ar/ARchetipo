@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -131,10 +132,93 @@ func Load(startDir string) (Config, error) {
 		c.ProjectRoot = abs
 		return c, nil
 	}
-	raw, err := os.ReadFile(cfgPath)
+	raw, _, _, err := ReadRaw(root)
 	if err != nil {
-		return Config{}, fmt.Errorf("reading %s: %w", cfgPath, err)
+		return Config{}, err
 	}
+	return parseRaw(root, cfgPath, []byte(raw))
+}
+
+// ReadRaw returns the raw config.yaml contents for a known project root. When
+// the file is missing, exists is false and path still points at the canonical
+// target location under .archetipo/.
+func ReadRaw(root string) (raw string, exists bool, path string, err error) {
+	_, path, err = absoluteConfigPath(root)
+	if err != nil {
+		return "", false, "", err
+	}
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, path, nil
+	}
+	if err != nil {
+		return "", false, path, fmt.Errorf("reading %s: %w", path, err)
+	}
+	return string(b), true, path, nil
+}
+
+// RenderFull serializes a config into canonical YAML, applying defaults and
+// omitting runtime-only fields such as ProjectRoot.
+func RenderFull(c Config) ([]byte, error) {
+	c.applyDefaults()
+	c.ProjectRoot = ""
+	return yaml.Marshal(&c)
+}
+
+// ValidateRaw parses raw config YAML against the same legacy-key and defaulting
+// rules used by Load, rooting relative paths under root.
+func ValidateRaw(root string, raw []byte) (Config, error) {
+	absRoot, path, err := absoluteConfigPath(root)
+	if err != nil {
+		return Config{}, err
+	}
+	return parseRaw(absRoot, path, raw)
+}
+
+// SaveRaw validates and writes raw config YAML atomically. When overwriting an
+// existing file, a backup copy is written first.
+func SaveRaw(root string, raw []byte) (backupPath string, err error) {
+	absRoot, path, err := absoluteConfigPath(root)
+	if err != nil {
+		return "", err
+	}
+	if _, err := ValidateRaw(absRoot, raw); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
+	}
+	if existing, readErr := os.ReadFile(path); readErr == nil {
+		backupPath = path + ".bak"
+		if _, statErr := os.Stat(backupPath); statErr == nil {
+			backupPath = fmt.Sprintf("%s.%s.bak", path, time.Now().UTC().Format("20060102-150405"))
+		}
+		if err := os.WriteFile(backupPath, existing, 0o644); err != nil {
+			return "", fmt.Errorf("writing backup %s: %w", backupPath, err)
+		}
+	} else if !errors.Is(readErr, fs.ErrNotExist) {
+		return "", fmt.Errorf("reading %s: %w", path, readErr)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "config-*.yaml")
+	if err != nil {
+		return backupPath, fmt.Errorf("creating temp config file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return backupPath, fmt.Errorf("writing temp config file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return backupPath, fmt.Errorf("closing temp config file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return backupPath, fmt.Errorf("replacing %s: %w", path, err)
+	}
+	return backupPath, nil
+}
+
+func parseRaw(root, cfgPath string, raw []byte) (Config, error) {
 	if err := rejectLegacyKeys(raw, cfgPath); err != nil {
 		return Config{}, err
 	}
@@ -148,6 +232,17 @@ func Load(startDir string) (Config, error) {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+func absoluteConfigPath(root string) (absRoot, cfgPath string, err error) {
+	if root == "" {
+		root = "."
+	}
+	absRoot, err = filepath.Abs(root)
+	if err != nil {
+		return "", "", err
+	}
+	return absRoot, filepath.Join(absRoot, RelativePath), nil
 }
 
 // rejectLegacyKeys scans the raw YAML for top-level `paths.backlog` /

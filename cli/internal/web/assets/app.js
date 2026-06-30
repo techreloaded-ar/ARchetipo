@@ -43,6 +43,23 @@
 	const metricsModalClose = document.getElementById("metrics-modal-close");
 	const metricsBody = document.getElementById("metrics-body");
 	const metricsStatus = document.getElementById("metrics-status");
+	const configBtn = document.getElementById("config-btn");
+	const configModal = document.getElementById("config-modal");
+	const configModalClose = document.getElementById("config-modal-close");
+	const configTabs = configModal.querySelectorAll("[data-config-tab]");
+	const configPanels = configModal.querySelectorAll("[data-config-panel]");
+	const configPath = document.getElementById("config-path");
+	const configRestartNotice = document.getElementById("config-restart-notice");
+	const configGuidedForm = document.getElementById("config-guided-form");
+	const configRaw = document.getElementById("config-raw");
+	const configStatus = document.getElementById("config-status");
+	const configValidateBtn = document.getElementById("config-validate-btn");
+	const configSaveBtn = document.getElementById("config-save-btn");
+	const configCancelBtn = document.getElementById("config-cancel-btn");
+	const configSummaryConnector = document.getElementById("config-summary-connector");
+	const configSummaryExists = document.getElementById("config-summary-exists");
+	const configValidation = document.getElementById("config-validation");
+	const configConnectorGrid = document.getElementById("config-connector-grid");
 	const mockupsBtn = document.getElementById("mockups-btn");
 	const mockupsMenu = document.getElementById("mockups-menu");
 	const mockupsDropdown = document.getElementById("mockups-dropdown");
@@ -138,6 +155,10 @@
 	let currentPlanSnapshot = null; // last loaded plan (for cancel + re-render after save)
 	let boardSnapshot = null; // last loaded board (for undo on failed drag)
 	let currentPrdSnapshot = ""; // last loaded PRD body
+	let currentConfigSnapshot = null; // last loaded effective config
+	let currentConfigRaw = ""; // last loaded/saved config YAML
+	let currentConfigExists = false; // whether config.yaml existed on open
+	let activeConfigTab = "guided";
 	let mockupsCache = []; // cached list of mockups (refreshed lazily)
 
 	refreshBtn.addEventListener("click", loadBoard);
@@ -191,6 +212,23 @@
 			closeMetrics();
 	});
 
+	configBtn.addEventListener("click", openConfig);
+	configModalClose.addEventListener("click", closeConfig);
+	configCancelBtn.addEventListener("click", closeConfig);
+	configValidateBtn.addEventListener("click", validateConfig);
+	configSaveBtn.addEventListener("click", saveConfig);
+	configModal.addEventListener("click", (e) => {
+		if (e.target === configModal) closeConfig();
+	});
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && !configModal.classList.contains("hidden"))
+			closeConfig();
+	});
+	configTabs.forEach((tab) =>
+		tab.addEventListener("click", () => activateConfigTab(tab.dataset.configTab)),
+	);
+	configConnectorGrid.addEventListener("change", updateConnectorSections);
+
 	mockupsBtn.addEventListener("click", toggleMockupsMenu);
 	document.addEventListener("click", (e) => {
 		if (!mockupsDropdown.contains(e.target))
@@ -226,6 +264,7 @@
 			// bring the board back in sync.
 			if (!modal.classList.contains("hidden")) return;
 			if (!prdModal.classList.contains("hidden")) return;
+			if (!configModal.classList.contains("hidden")) return;
 			loadBoard();
 		}, 150);
 	}
@@ -1056,6 +1095,318 @@
 	function cssEscape(s) {
 		if (window.CSS && CSS.escape) return CSS.escape(s);
 		return String(s).replace(/["\\]/g, "\\$&");
+	}
+
+	// ---- Config ------------------------------------------------------------
+
+	function configField(name) {
+		return configModal.querySelector(`[name="${name}"]`);
+	}
+
+	function selectedConnector() {
+		const checked = configModal.querySelector('input[name="connector"]:checked');
+		return (checked && checked.value) || "file";
+	}
+
+	function setConnectorSelection(value) {
+		configModal.querySelectorAll('input[name="connector"]').forEach((input) => {
+			input.checked = input.value === value;
+		});
+		updateConnectorSections();
+	}
+
+	function updateConnectorSections() {
+		const connector = selectedConnector();
+		configModal
+			.querySelectorAll(".config-connector-section")
+			.forEach((section) => {
+				section.classList.toggle(
+					"hidden",
+					section.dataset.connectorSection !== connector,
+				);
+			});
+		configConnectorGrid.querySelectorAll(".config-connector-card").forEach((card) => {
+			const input = card.querySelector('input[name="connector"]');
+			card.classList.toggle("active", !!input && input.checked);
+		});
+	}
+
+	function setConfigStatus(message, kind) {
+		configStatus.textContent = message || "";
+		configStatus.className = "status-msg";
+		if (kind) configStatus.classList.add(kind);
+	}
+
+	function setConfigValidation(message, kind) {
+		configValidation.textContent = message || "Not tested in this session.";
+		configValidation.className = "config-validation";
+		if (kind) configValidation.classList.add(kind);
+	}
+
+	function formatKVMap(obj) {
+		if (!obj) return "";
+		return Object.entries(obj)
+			.map(([k, v]) => `${k}: ${v}`)
+			.join("\n");
+	}
+
+	function parseKVMap(text) {
+		const out = {};
+		String(text || "")
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter(Boolean)
+			.forEach((line) => {
+				const idx = line.indexOf(":");
+				if (idx === -1) {
+					out[line] = "";
+					return;
+				}
+				const key = line.slice(0, idx).trim();
+				if (!key) return;
+				out[key] = line.slice(idx + 1).trim();
+			});
+		return out;
+	}
+
+	function fillConfigForm(cfg) {
+		const githubFields = (cfg.github && cfg.github.fields) || {};
+		configField("paths_prd").value = (cfg.paths && cfg.paths.prd) || "";
+		configField("paths_mockups").value = (cfg.paths && cfg.paths.mockups) || "";
+		configField("paths_test_results").value =
+			(cfg.paths && cfg.paths.test_results) || "";
+		configField("file_backlog").value = (cfg.file && cfg.file.backlog) || "";
+		configField("file_planning").value = (cfg.file && cfg.file.planning) || "";
+		configField("status_todo").value =
+			(cfg.workflow && cfg.workflow.statuses && cfg.workflow.statuses.todo) || "";
+		configField("status_planned").value =
+			(cfg.workflow && cfg.workflow.statuses && cfg.workflow.statuses.planned) || "";
+		configField("status_in_progress").value =
+			(cfg.workflow && cfg.workflow.statuses && cfg.workflow.statuses.in_progress) ||
+			"";
+		configField("status_review").value =
+			(cfg.workflow && cfg.workflow.statuses && cfg.workflow.statuses.review) ||
+			"";
+		configField("status_done").value =
+			(cfg.workflow && cfg.workflow.statuses && cfg.workflow.statuses.done) || "";
+		configField("worktree_enabled").checked = !!(
+			cfg.worktree && cfg.worktree.enabled
+		);
+		configField("worktree_base").value =
+			(cfg.worktree && cfg.worktree.base) || "";
+		configField("worktree_dir").value = (cfg.worktree && cfg.worktree.dir) || "";
+		configField("worktree_branch_prefix").value =
+			(cfg.worktree && cfg.worktree.branch_prefix) || "";
+		configField("e2e_record_demo_video").checked = !!(
+			cfg.e2e && cfg.e2e.record_demo_video
+		);
+		setConnectorSelection(cfg.connector || "file");
+		configField("github_owner").value = (cfg.github && cfg.github.owner) || "";
+		configField("github_project_number").value =
+			(cfg.github && cfg.github.project_number) || "";
+		configField("github_project_node_id").value =
+			(cfg.github && cfg.github.project_node_id) || "";
+		configField("github_project_url").value =
+			(cfg.github && cfg.github.project_url) || "";
+		configField("github_status_field_id").value =
+			githubFields.status_field_id || "";
+		configField("github_priority_field_id").value =
+			githubFields.priority_field_id || "";
+		configField("github_points_field_id").value =
+			githubFields.points_field_id || "";
+		configField("github_epic_field_id").value =
+			githubFields.epic_field_id || "";
+		configField("github_status_options").value = formatKVMap(
+			githubFields.status_options,
+		);
+		configField("github_priority_options").value = formatKVMap(
+			githubFields.priority_options,
+		);
+		configField("github_epic_options").value = formatKVMap(
+			githubFields.epic_options,
+		);
+		configField("jira_base_url").value = (cfg.jira && cfg.jira.base_url) || "";
+		configField("jira_project_key").value =
+			(cfg.jira && cfg.jira.project_key) || "";
+		configField("jira_email").value = (cfg.jira && cfg.jira.email) || "";
+		configField("jira_story_type").value =
+			(cfg.jira && cfg.jira.story_type) || "";
+		configField("jira_subtask_type").value =
+			(cfg.jira && cfg.jira.subtask_type) || "";
+		configField("jira_points_field").value =
+			(cfg.jira && cfg.jira.points_field) || "";
+		configField("jira_status_map").value = formatKVMap(
+			cfg.jira && cfg.jira.status_map,
+		);
+		configField("jira_priority_map").value = formatKVMap(
+			cfg.jira && cfg.jira.priority_map,
+		);
+	}
+
+	function buildGuidedConfig() {
+		const projectNumber = parseInt(configField("github_project_number").value, 10);
+		return {
+			connector: selectedConnector(),
+			paths: {
+				prd: configField("paths_prd").value.trim(),
+				mockups: configField("paths_mockups").value.trim(),
+				test_results: configField("paths_test_results").value.trim(),
+			},
+			workflow: {
+				statuses: {
+					todo: configField("status_todo").value.trim(),
+					planned: configField("status_planned").value.trim(),
+					in_progress: configField("status_in_progress").value.trim(),
+					review: configField("status_review").value.trim(),
+					done: configField("status_done").value.trim(),
+				},
+			},
+			file: {
+				backlog: configField("file_backlog").value.trim(),
+				planning: configField("file_planning").value.trim(),
+			},
+			github: {
+				owner: configField("github_owner").value.trim(),
+				project_number: Number.isFinite(projectNumber) ? projectNumber : 0,
+				project_node_id: configField("github_project_node_id").value.trim(),
+				project_url: configField("github_project_url").value.trim(),
+				fields: {
+					status_field_id: configField("github_status_field_id").value.trim(),
+					status_options: parseKVMap(
+						configField("github_status_options").value,
+					),
+					priority_field_id: configField("github_priority_field_id").value.trim(),
+					priority_options: parseKVMap(
+						configField("github_priority_options").value,
+					),
+					points_field_id: configField("github_points_field_id").value.trim(),
+					epic_field_id: configField("github_epic_field_id").value.trim(),
+					epic_options: parseKVMap(configField("github_epic_options").value),
+				},
+			},
+			jira: {
+				base_url: configField("jira_base_url").value.trim(),
+				project_key: configField("jira_project_key").value.trim(),
+				email: configField("jira_email").value.trim(),
+				story_type: configField("jira_story_type").value.trim(),
+				subtask_type: configField("jira_subtask_type").value.trim(),
+				points_field: configField("jira_points_field").value.trim(),
+				status_map: parseKVMap(configField("jira_status_map").value),
+				priority_map: parseKVMap(configField("jira_priority_map").value),
+			},
+			worktree: {
+				enabled: !!configField("worktree_enabled").checked,
+				base: configField("worktree_base").value.trim(),
+				dir: configField("worktree_dir").value.trim(),
+				branch_prefix: configField("worktree_branch_prefix").value.trim(),
+			},
+			e2e: {
+				record_demo_video: !!configField("e2e_record_demo_video").checked,
+			},
+		};
+	}
+
+	function activateConfigTab(name) {
+		activeConfigTab = name || "guided";
+		configTabs.forEach((tab) => {
+			const active = tab.dataset.configTab === activeConfigTab;
+			tab.classList.toggle("active", active);
+			tab.setAttribute("aria-selected", active ? "true" : "false");
+		});
+		configPanels.forEach((panel) => {
+			panel.classList.toggle(
+				"active",
+				panel.dataset.configPanel === activeConfigTab,
+			);
+		});
+	}
+
+	async function openConfig() {
+		configModal.classList.remove("hidden");
+		activateConfigTab(activeConfigTab);
+		setConfigStatus("Loading...", null);
+		setConfigValidation("Not tested in this session.", null);
+		configRestartNotice.classList.add("hidden");
+		await loadConfig();
+	}
+
+	async function loadConfig() {
+		try {
+			const data = await apiGet("/api/config");
+			currentConfigSnapshot = (data && data.config) || {};
+			currentConfigRaw = (data && data.raw) || "";
+			currentConfigExists = !!(data && data.exists);
+			fillConfigForm(currentConfigSnapshot);
+			configRaw.value = currentConfigRaw;
+			configPath.textContent = `${data.path || ".archetipo/config.yaml"} · ${currentConfigExists ? "present" : "will be created on save"}`;
+			configSummaryConnector.textContent =
+				(currentConfigSnapshot && currentConfigSnapshot.connector) || "file";
+			configSummaryExists.textContent = currentConfigExists ? "present" : "missing";
+			setConfigStatus("", null);
+		} catch (err) {
+			setConfigStatus(`Load failed: ${err.message || err}`, "err");
+		}
+	}
+
+	function closeConfig() {
+		configModal.classList.add("hidden");
+		setConfigStatus("", null);
+		setConfigValidation("Not tested in this session.", null);
+	}
+
+	function configPayload() {
+		if (activeConfigTab === "advanced") {
+			return { raw: configRaw.value };
+		}
+		return { config: buildGuidedConfig() };
+	}
+
+	async function validateConfig() {
+		setConfigStatus("Validating...", null);
+		try {
+			const result = await apiPost("/api/config/test", configPayload());
+			const warnings = (result && result.warnings) || [];
+			if (warnings.length > 0) {
+				setConfigValidation(warnings.join(" "), "warn");
+			} else if (result && result.info && result.info.connector) {
+				setConfigValidation(
+					`Validation ok · ${result.info.connector} connector is ready.`,
+					"ok",
+				);
+			} else {
+				setConfigValidation("Validation ok.", "ok");
+			}
+			setConfigStatus("Validation complete", "ok");
+		} catch (err) {
+			setConfigValidation(err.message || String(err), "err");
+			setConfigStatus(`Validation failed: ${err.message || err}`, "err");
+		}
+	}
+
+	async function saveConfig() {
+		setConfigStatus("Saving...", null);
+		try {
+			const data = await apiPut("/api/config", configPayload());
+			currentConfigSnapshot = (data && data.config) || currentConfigSnapshot;
+			currentConfigRaw = (data && data.raw) || currentConfigRaw;
+			currentConfigExists = true;
+			fillConfigForm(currentConfigSnapshot);
+			configRaw.value = currentConfigRaw;
+			configSummaryConnector.textContent =
+				(currentConfigSnapshot && currentConfigSnapshot.connector) || "file";
+			configSummaryExists.textContent = "present";
+			configRestartNotice.classList.toggle(
+				"hidden",
+				!(data && data.restart_required),
+			);
+			const bits = ["Config saved"];
+			if (data && data.backup_path) bits.push(`backup: ${data.backup_path}`);
+			if (data && data.restart_required) bits.push("restart required");
+			setConfigStatus(bits.join(" · "), "ok");
+			showToast("Config saved", "ok");
+		} catch (err) {
+			setConfigStatus(`Save failed: ${err.message || err}`, "err");
+		}
 	}
 
 	// ---- API helpers --------------------------------------------------------

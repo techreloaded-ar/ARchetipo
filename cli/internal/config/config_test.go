@@ -470,3 +470,106 @@ func TestSave_CreatesFileWithJiraSection(t *testing.T) {
 		t.Errorf("jira bootstrap must not emit a github section:\n%s", s)
 	}
 }
+
+func TestReadRawMissingReturnsPath(t *testing.T) {
+	root := t.TempDir()
+	raw, exists, path, err := ReadRaw(root)
+	must(t, err)
+	if exists {
+		t.Fatal("expected missing config")
+	}
+	if raw != "" {
+		t.Fatalf("expected empty raw config, got %q", raw)
+	}
+	if path != filepath.Join(root, RelativePath) {
+		t.Fatalf("path = %q, want %q", path, filepath.Join(root, RelativePath))
+	}
+}
+
+func TestRenderFullRendersCanonicalConfig(t *testing.T) {
+	c := Default()
+	c.Connector = ConnectorJira
+	c.Jira.BaseURL = "https://acme.atlassian.net"
+	out, err := RenderFull(c)
+	must(t, err)
+	s := string(out)
+	for _, want := range []string{
+		"connector: jira",
+		"paths:",
+		"workflow:",
+		"worktree:",
+		"e2e:",
+		"jira:",
+		"base_url: https://acme.atlassian.net",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("rendered config missing %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "project_root") {
+		t.Fatalf("rendered config leaked runtime field:\n%s", s)
+	}
+}
+
+func TestValidateRawRejectsLegacyKeys(t *testing.T) {
+	root := t.TempDir()
+	_, err := ValidateRaw(root, []byte(`connector: file
+paths:
+  backlog: .archetipo/backlog.yaml
+`))
+	if err == nil || !strings.Contains(err.Error(), "paths.backlog -> file.backlog") {
+		t.Fatalf("expected legacy-key rejection, got %v", err)
+	}
+}
+
+func TestSaveRawCreatesFileWhenMissing(t *testing.T) {
+	root := t.TempDir()
+	raw := []byte("connector: file\n")
+	backup, err := SaveRaw(root, raw)
+	must(t, err)
+	if backup != "" {
+		t.Fatalf("did not expect backup on first save, got %q", backup)
+	}
+	got, err := os.ReadFile(filepath.Join(root, RelativePath))
+	must(t, err)
+	if string(got) != string(raw) {
+		t.Fatalf("saved config mismatch: got %q want %q", string(got), string(raw))
+	}
+}
+
+func TestSaveRawRejectsInvalidAndPreservesExistingFile(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	path := filepath.Join(root, RelativePath)
+	must(t, os.WriteFile(path, []byte("connector: file\n"), 0o644))
+	if _, err := SaveRaw(root, []byte("connector: [\n")); err == nil {
+		t.Fatal("expected invalid YAML to be rejected")
+	}
+	got, err := os.ReadFile(path)
+	must(t, err)
+	if string(got) != "connector: file\n" {
+		t.Fatalf("existing config changed after failed save: %q", string(got))
+	}
+}
+
+func TestSaveRawCreatesBackupOnOverwrite(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	path := filepath.Join(root, RelativePath)
+	must(t, os.WriteFile(path, []byte("connector: file\n"), 0o644))
+	backup, err := SaveRaw(root, []byte("connector: github\n"))
+	must(t, err)
+	if backup == "" {
+		t.Fatal("expected backup path on overwrite")
+	}
+	backupRaw, err := os.ReadFile(backup)
+	must(t, err)
+	if string(backupRaw) != "connector: file\n" {
+		t.Fatalf("backup mismatch: %q", string(backupRaw))
+	}
+	got, err := os.ReadFile(path)
+	must(t, err)
+	if string(got) != "connector: github\n" {
+		t.Fatalf("saved config mismatch: %q", string(got))
+	}
+}

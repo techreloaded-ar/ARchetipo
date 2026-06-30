@@ -57,6 +57,10 @@
                 </button>
                 <div class="dropdown-menu hidden" id="mockups-menu" role="menu"></div>
             </div>
+            <button id="config-btn" type="button" class="ghost-btn">
+                <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l1 .35.5 1.24 1.3.36 1.04-.72.88.88-.72 1.04.36 1.3 1.24.5.35 1-.35 1-1.24.5-.36 1.3.72 1.04-.88.88-1.04-.72-1.3.36-.5 1.24-1 .35-1-.35-.5-1.24-1.3-.36-1.04.72-.88-.88.72-1.04-.36-1.3-1.24-.5-.35-1 .35-1 1.24-.5.36-1.3-.72-1.04.88-.88 1.04.72 1.3-.36.5-1.24z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>
+                <span>Config</span>
+            </button>
             <button id="refresh-btn" type="button" class="ghost-btn" aria-label="Refresh board" title="Refresh (R)">
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.88" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
             </button>
@@ -250,6 +254,158 @@
                 <div id="metrics-body" class="metrics-body"></div>
                 <span class="status-msg" id="metrics-status"></span>
             </section>
+        </div>
+    </div>
+
+    <div id="config-modal" class="modal-root hidden" role="dialog" aria-modal="true" aria-labelledby="config-title">
+        <div class="modal config-modal-shell">
+            <header class="modal-header config-modal-header">
+                <div>
+                    <div class="config-eyebrow">Project configuration</div>
+                    <h2 id="config-title" class="modal-title">Configure ARchetipo</h2>
+                    <div class="config-path" id="config-path"></div>
+                    <div class="config-notice hidden" id="config-restart-notice">Some changes affect the running viewer. Save is allowed, then restart <code>archetipo view</code> to use the new connector and paths.</div>
+                </div>
+                <button id="config-modal-close" type="button" class="icon-btn" aria-label="Close">
+                    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                </button>
+            </header>
+            <nav class="modal-tabs config-modal-tabs" role="tablist">
+                <button type="button" class="tab active" data-config-tab="guided" role="tab" aria-selected="true">Guided</button>
+                <button type="button" class="tab" data-config-tab="connector" role="tab" aria-selected="false">Connector</button>
+                <button type="button" class="tab" data-config-tab="advanced" role="tab" aria-selected="false">Advanced YAML</button>
+            </nav>
+            <div class="config-layout">
+                <aside class="config-sidebar">
+                    <div class="config-sidebar-section">
+                        <h3>Current state</h3>
+                        <div class="config-kv"><span>Connector</span><span id="config-summary-connector">—</span></div>
+                        <div class="config-kv"><span>Config file</span><span id="config-summary-exists">—</span></div>
+                        <div class="config-kv"><span>Secrets</span><span>env only</span></div>
+                    </div>
+                    <div class="config-sidebar-section">
+                        <h3>Validation</h3>
+                        <div class="config-validation" id="config-validation">Not tested in this session.</div>
+                    </div>
+                    <div class="config-sidebar-section">
+                        <h3>Notes</h3>
+                        <p class="config-copy">Guided save writes canonical YAML for the supported fields. Use the Advanced YAML tab when you need to preserve comments or unsupported keys exactly.</p>
+                    </div>
+                </aside>
+                <div class="config-main">
+                    <section class="tab-panel active config-panel" data-config-panel="guided">
+                        <div class="config-section-head">
+                            <div>
+                                <h3 class="config-section-title">Common settings</h3>
+                                <p class="config-copy">Fields most users change without editing raw YAML.</p>
+                            </div>
+                        </div>
+                        <form id="config-guided-form" class="config-form-stack">
+                            <section class="config-group">
+                                <h4>Worktree workflow</h4>
+                                <div class="form-grid config-form-grid">
+                                    <div class="field full config-toggle-field">
+                                        <span>Enable isolated worktrees</span>
+                                        <label class="config-toggle-row"><input type="checkbox" name="worktree_enabled" /><span>One branch + worktree per spec for review and integration.</span></label>
+                                    </div>
+                                    <label class="field"><span>Base branch</span><input type="text" name="worktree_base" /></label>
+                                    <label class="field"><span>Worktree directory</span><input type="text" name="worktree_dir" /></label>
+                                    <label class="field"><span>Branch prefix</span><input type="text" name="worktree_branch_prefix" /></label>
+                                    <div class="field full config-toggle-field">
+                                        <span>Record E2E demo video</span>
+                                        <label class="config-toggle-row"><input type="checkbox" name="e2e_record_demo_video" /><span>Allows <code>archetipo e2e demo</code> to record a video.</span></label>
+                                    </div>
+                                </div>
+                            </section>
+                            <section class="config-group">
+                                <h4>Workflow labels</h4>
+                                <div class="form-grid config-form-grid">
+                                    <label class="field"><span>Todo</span><input type="text" name="status_todo" /></label>
+                                    <label class="field"><span>Planned</span><input type="text" name="status_planned" /></label>
+                                    <label class="field"><span>In progress</span><input type="text" name="status_in_progress" /></label>
+                                    <label class="field"><span>Review</span><input type="text" name="status_review" /></label>
+                                    <label class="field"><span>Done</span><input type="text" name="status_done" /></label>
+                                </div>
+                            </section>
+                            <section class="config-group">
+                                <h4>Paths</h4>
+                                <div class="form-grid config-form-grid">
+                                    <label class="field"><span>PRD path</span><input type="text" name="paths_prd" /></label>
+                                    <label class="field"><span>Mockups directory</span><input type="text" name="paths_mockups" /></label>
+                                    <label class="field"><span>Test results directory</span><input type="text" name="paths_test_results" /></label>
+                                    <label class="field"><span>Backlog file</span><input type="text" name="file_backlog" /></label>
+                                    <label class="field"><span>Planning directory</span><input type="text" name="file_planning" /></label>
+                                </div>
+                            </section>
+                        </form>
+                    </section>
+                    <section class="tab-panel config-panel" data-config-panel="connector">
+                        <div class="config-section-head">
+                            <div>
+                                <h3 class="config-section-title">Connector settings</h3>
+                                <p class="config-copy">Non-secret connector settings only. Tokens remain environment-only.</p>
+                            </div>
+                        </div>
+                        <div class="config-group">
+                            <h4>Connector</h4>
+                            <div class="config-connector-grid" id="config-connector-grid">
+                                <label class="config-connector-card"><input type="radio" name="connector" value="file" /><strong>File</strong><small>Local markdown and YAML artifacts</small></label>
+                                <label class="config-connector-card"><input type="radio" name="connector" value="github" /><strong>GitHub</strong><small>Projects v2 via <code>gh</code> auth</small></label>
+                                <label class="config-connector-card"><input type="radio" name="connector" value="jira" /><strong>Jira</strong><small>Cloud API via environment credentials</small></label>
+                            </div>
+                        </div>
+                        <div class="config-group config-connector-section" data-connector-section="github">
+                            <h4>GitHub</h4>
+                            <div class="form-grid config-form-grid">
+                                <label class="field"><span>Owner</span><input type="text" name="github_owner" /></label>
+                                <label class="field"><span>Project number</span><input type="number" name="github_project_number" min="0" /></label>
+                                <label class="field"><span>Project node id</span><input type="text" name="github_project_node_id" /></label>
+                                <label class="field"><span>Project URL</span><input type="text" name="github_project_url" /></label>
+                                <label class="field"><span>Status field id</span><input type="text" name="github_status_field_id" /></label>
+                                <label class="field"><span>Priority field id</span><input type="text" name="github_priority_field_id" /></label>
+                                <label class="field"><span>Points field id</span><input type="text" name="github_points_field_id" /></label>
+                                <label class="field"><span>Epic field id</span><input type="text" name="github_epic_field_id" /></label>
+                                <label class="field full"><span>Status options (KEY: value)</span><textarea name="github_status_options" rows="4" spellcheck="false"></textarea></label>
+                                <label class="field full"><span>Priority options (KEY: value)</span><textarea name="github_priority_options" rows="4" spellcheck="false"></textarea></label>
+                                <label class="field full"><span>Epic options (KEY: value)</span><textarea name="github_epic_options" rows="4" spellcheck="false"></textarea></label>
+                            </div>
+                        </div>
+                        <div class="config-group config-connector-section" data-connector-section="jira">
+                            <h4>Jira</h4>
+                            <div class="form-grid config-form-grid">
+                                <label class="field"><span>Base URL</span><input type="text" name="jira_base_url" placeholder="https://acme.atlassian.net" /></label>
+                                <label class="field"><span>Project key</span><input type="text" name="jira_project_key" /></label>
+                                <label class="field"><span>Email</span><input type="text" name="jira_email" /></label>
+                                <label class="field"><span>Story type</span><input type="text" name="jira_story_type" /></label>
+                                <label class="field"><span>Subtask type</span><input type="text" name="jira_subtask_type" /></label>
+                                <label class="field"><span>Points field</span><input type="text" name="jira_points_field" /></label>
+                                <label class="field full"><span>Status map (KEY: value)</span><textarea name="jira_status_map" rows="5" spellcheck="false"></textarea></label>
+                                <label class="field full"><span>Priority map (KEY: value)</span><textarea name="jira_priority_map" rows="4" spellcheck="false"></textarea></label>
+                            </div>
+                        </div>
+                    </section>
+                    <section class="tab-panel config-panel" data-config-panel="advanced">
+                        <div class="config-section-head">
+                            <div>
+                                <h3 class="config-section-title">Advanced YAML</h3>
+                                <p class="config-copy">Full-fidelity editing for comments, unsupported keys and connector-specific details.</p>
+                            </div>
+                        </div>
+                        <label class="field full">
+                            <span>config.yaml</span>
+                            <textarea id="config-raw" class="config-raw-editor" rows="24" spellcheck="false"></textarea>
+                        </label>
+                    </section>
+                </div>
+            </div>
+            <footer class="config-footer">
+                <span class="status-msg" id="config-status"></span>
+                <div class="config-footer-actions">
+                    <button type="button" id="config-cancel-btn" class="ghost-btn">Cancel</button>
+                    <button type="button" id="config-validate-btn" class="ghost-btn">Validate / Test</button>
+                    <button type="button" id="config-save-btn" class="primary-btn">Save config</button>
+                </div>
+            </footer>
         </div>
     </div>
 

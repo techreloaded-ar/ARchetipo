@@ -27,10 +27,12 @@ func newViewCmd(s streams) *cobra.Command {
 		Long: `Start a local HTTP server that serves a Kanban board for the project
 backlog and, by default, opens it in the system browser.
 
-The view reads and writes the same files used by the file connector
-(.archetipo/backlog.yaml, .archetipo/specs/, .archetipo/plans/), so any
-edits made in the browser persist immediately. The server binds to the
-loopback interface only; no authentication is performed.`,
+The view reads and writes the same local artifacts used by ARchetipo
+(backlog, plans, PRD, mockups and .archetipo/config.yaml), so edits made in
+the browser persist immediately. Config changes are saved locally but do not
+hot-reload the running viewer: restart "archetipo view" to apply connector or
+path changes. The server binds to the loopback interface only; no
+authentication is performed.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cwd, err := os.Getwd()
