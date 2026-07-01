@@ -25,6 +25,7 @@ Read `.archetipo/shared-runtime.md` for Language Policy, Assumptions and Questio
 If the CLI cannot find `.archetipo/config.yaml`, it falls back to its built-in defaults for connector, paths, and workflow statuses.
 
 From the parsed `data` (SetupInfo), extract and keep available:
+
 - `connector`
 - `paths.prd`
 - `paths.backlog`
@@ -36,6 +37,7 @@ From the parsed `data` (SetupInfo), extract and keep available:
 ## Context Discipline
 
 Load context progressively and keep the working context lean:
+
 - Load `.archetipo/shared-runtime.md` first
 - Load `./references/inception-flow.md` at activation time
 - Load `./references/prd-template.md` only when you are about to write the final document
@@ -76,13 +78,13 @@ This command reads the PRD from the configured path (`paths.prd`) and checks str
 
 - **Success** (`kind: "validation_result"`, `data.ok: true`): the PRD is structurally valid. Confirm to the user and continue.
 
-- **Validation failure** (`error.code == "E_VALIDATION"`): the PRD has structural problems. Parse `error.details.findings[]` — each finding has a `code`, `severity`, `path`, `message`, and `hint`.
+- **Validation failure** (`kind: "validation_result"`, `data.ok: false`): the PRD has structural problems. Parse `data.findings[]` — each finding has a `code`, `severity`, `path`, `message`, and `hint`.
 
 ### 3. Correction loop (max 3 attempts)
 
-If validation fails with `E_VALIDATION`:
+If validation returns `kind: "validation_result"` with `data.ok: false`:
 
-1. Read `error.details.findings` and correct the PRD markdown based on the findings: use `message` to understand the problem, `path` to locate the affected section, and `hint` for suggested remediation.
+1. Read `data.findings` and correct the PRD markdown based on the findings: use `message` to understand the problem, `path` to locate the affected section, and `hint` for suggested remediation.
 2. Re-persist the corrected PRD with `archetipo prd write`.
 3. Re-run `archetipo validate prd`.
 4. **Maximum 3 correction attempts.** If validation still fails after 3 attempts:
@@ -92,7 +94,7 @@ If validation fails with `E_VALIDATION`:
 
 ### 4. Other error codes
 
-For any error code other than `E_VALIDATION` (e.g. `E_PRECONDITION` when the PRD file is missing, `E_INTERNAL`), follow the standard runtime contract: branch on `error.code`, not on `error.message`, and act accordingly.
+If `archetipo validate prd` returns an error envelope instead of `validation_result`, treat it as a process failure (e.g. `E_PRECONDITION` when the PRD file is missing, `E_INTERNAL`). Follow the standard runtime contract: branch on `error.code`, not on `error.message`, and act accordingly.
 
 ### 5. What NOT to do
 

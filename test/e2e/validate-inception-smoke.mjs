@@ -12,7 +12,12 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const binDir = path.join(repoRoot, "test", "e2e", ".bin");
 const binName = process.platform === "win32" ? "archetipo.exe" : "archetipo";
 const cliPath = path.join(binDir, binName);
-const defaultWorkspaceRoot = path.join(repoRoot, "test", "workspaces", "validate-inception-smoke");
+const defaultWorkspaceRoot = path.join(
+	repoRoot,
+	"test",
+	"workspaces",
+	"validate-inception-smoke",
+);
 const cliEnv = { ...process.env, ARCHETIPO_DATA_DIR: repoRoot };
 
 // ---------------------------------------------------------------------------
@@ -80,105 +85,147 @@ Concrete next steps and owners.
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const options = parseArgs(process.argv.slice(2));
-  const runDir = await createRunDir(options.workspaceRoot);
-  const sandboxDir = path.join(runDir, "sandbox");
-  const reportPath = path.join(runDir, "report.html");
+	const options = parseArgs(process.argv.slice(2));
+	const runDir = await createRunDir(options.workspaceRoot);
+	const sandboxDir = path.join(runDir, "sandbox");
+	const reportPath = path.join(runDir, "report.html");
 
-  console.log(`-> workspace: ${runDir}`);
-  await fs.mkdir(sandboxDir, { recursive: true });
-  await fs.mkdir(binDir, { recursive: true });
+	console.log(`-> workspace: ${runDir}`);
+	await fs.mkdir(sandboxDir, { recursive: true });
+	await fs.mkdir(binDir, { recursive: true });
 
-  const startedAt = Date.now();
-  const events = [];
+	const startedAt = Date.now();
+	const events = [];
 
-  let passed = false;
-  let errorMessage = "";
-  let findings = [];
+	let passed = false;
+	let errorMessage = "";
+	let findings = [];
 
-  try {
-    // 1. Build the CLI binary.
-    await buildCLI();
+	try {
+		// 1. Build the CLI binary.
+		await buildCLI();
 
-    // 2. Initialize the sandbox project.
-    await runAndRecord("init", cliPath, ["init", "--tool", "pi", "--connector", "file", "--yes"], { cwd: sandboxDir }, events);
+		// 2. Initialize the sandbox project.
+		await runAndRecord(
+			"init",
+			cliPath,
+			["init", "--tool", "pi", "--connector", "file", "--yes"],
+			{ cwd: sandboxDir },
+			events,
+		);
 
-    // 3. Write invalid PRD input files.
-    const invalidPath = path.join(runDir, "invalid-prd.md");
-    const validPath = path.join(runDir, "valid-prd.md");
-    await fs.writeFile(invalidPath, invalidPRD);
-    await fs.writeFile(validPath, validPRD);
+		// 3. Write invalid PRD input files.
+		const invalidPath = path.join(runDir, "invalid-prd.md");
+		const validPath = path.join(runDir, "valid-prd.md");
+		await fs.writeFile(invalidPath, invalidPRD);
+		await fs.writeFile(validPath, validPRD);
 
-    // STEP 1 — persist invalid PRD.
-    console.log("\n═══ STEP 1/4: persist invalid PRD ═══");
-    const write1 = await runAndRecord("prd-write-invalid", cliPath, ["prd", "write", "--file", invalidPath], { cwd: sandboxDir }, events);
-    assertExit(write1, 0, "ExitOK");
-    assertKind(write1, "write_result");
-    assertDataOk(write1);
+		// STEP 1 — persist invalid PRD.
+		console.log("\n═══ STEP 1/4: persist invalid PRD ═══");
+		const write1 = await runAndRecord(
+			"prd-write-invalid",
+			cliPath,
+			["prd", "write", "--file", invalidPath],
+			{ cwd: sandboxDir },
+			events,
+		);
+		assertExit(write1, 0, "ExitOK");
+		assertKind(write1, "write_result");
+		assertDataOk(write1);
 
-    // STEP 2 — validate → E_VALIDATION.
-    console.log("═══ STEP 2/4: validate prd (expects E_VALIDATION) ═══");
-    const val1 = await runAndRecord("validate-invalid", cliPath, ["validate", "prd"], { cwd: sandboxDir }, events);
-    assertExit(val1, 2, "ExitInvalidInput");
-    assertErrorCode(val1, "E_VALIDATION");
-    findings = assertErrorDetails(val1);
+		// STEP 2 — validate → validation_result with ok:false.
+		console.log(
+			"═══ STEP 2/4: validate prd (expects validation_result ok:false) ═══",
+		);
+		const val1 = await runAndRecord(
+			"validate-invalid",
+			cliPath,
+			["validate", "prd"],
+			{ cwd: sandboxDir },
+			events,
+		);
+		assertExit(val1, 0, "ExitOK");
+		findings = assertValidationFindings(val1);
 
-    console.log(`\n   Validation findings (${findings.length}):`);
-    for (const f of findings) {
-      console.log(`   ❌ [${f.code}] ${f.message}`);
-      console.log(`      path: ${f.path}`);
-      console.log(`      hint: ${f.hint}`);
-    }
+		console.log(`\n   Validation findings (${findings.length}):`);
+		for (const f of findings) {
+			console.log(`   ❌ [${f.code}] ${f.message}`);
+			console.log(`      path: ${f.path}`);
+			console.log(`      hint: ${f.hint}`);
+		}
 
-    // STEP 3 — persist valid PRD.
-    console.log("\n═══ STEP 3/4: persist valid PRD ═══");
-    const write2 = await runAndRecord("prd-write-valid", cliPath, ["prd", "write", "--file", validPath], { cwd: sandboxDir }, events);
-    assertExit(write2, 0, "ExitOK");
-    assertKind(write2, "write_result");
-    assertDataOk(write2);
+		// STEP 3 — persist valid PRD.
+		console.log("\n═══ STEP 3/4: persist valid PRD ═══");
+		const write2 = await runAndRecord(
+			"prd-write-valid",
+			cliPath,
+			["prd", "write", "--file", validPath],
+			{ cwd: sandboxDir },
+			events,
+		);
+		assertExit(write2, 0, "ExitOK");
+		assertKind(write2, "write_result");
+		assertDataOk(write2);
 
-    // STEP 4 — validate → OK.
-    console.log("═══ STEP 4/4: validate prd (expects success) ═══");
-    const val2 = await runAndRecord("validate-valid", cliPath, ["validate", "prd"], { cwd: sandboxDir }, events);
-    assertExit(val2, 0, "ExitOK");
-    const envOk = JSON.parse(val2.stdout);
-    if (envOk.kind !== "validation_result") {
-      throw new Error(`Expected kind=validation_result, got ${envOk.kind}`);
-    }
-    if (envOk.data?.ok !== true) {
-      throw new Error(`Expected data.ok=true, got ${JSON.stringify(envOk.data)}`);
-    }
+		// STEP 4 — validate → OK.
+		console.log("═══ STEP 4/4: validate prd (expects success) ═══");
+		const val2 = await runAndRecord(
+			"validate-valid",
+			cliPath,
+			["validate", "prd"],
+			{ cwd: sandboxDir },
+			events,
+		);
+		assertExit(val2, 0, "ExitOK");
+		const envOk = parseStdoutEnv(val2);
+		if (envOk.kind !== "validation_result") {
+			throw new Error(`Expected kind=validation_result, got ${envOk.kind}`);
+		}
+		if (envOk.data?.ok !== true) {
+			throw new Error(
+				`Expected data.ok=true, got ${JSON.stringify(envOk.data)}`,
+			);
+		}
 
-    passed = true;
-  } catch (error) {
-    errorMessage = error.message;
-  } finally {
-    // Always write the HTML report.
-    const endedAt = Date.now();
-    const durationMs = endedAt - startedAt;
-    const html = renderReport({ sandboxDir, events, startedAt, endedAt, durationMs, findings, passed, errorMessage });
-    await fs.writeFile(reportPath, html);
+		passed = true;
+	} catch (error) {
+		errorMessage = error.message;
+	} finally {
+		// Always write the HTML report.
+		const endedAt = Date.now();
+		const durationMs = endedAt - startedAt;
+		const html = renderReport({
+			sandboxDir,
+			events,
+			startedAt,
+			endedAt,
+			durationMs,
+			findings,
+			passed,
+			errorMessage,
+		});
+		await fs.writeFile(reportPath, html);
 
-    if (passed) {
-      console.log(`\n╔══════════════════════════════════════════╗`);
-      console.log(`║  PASS: validate-inception smoke test     ║`);
-      console.log(`╠══════════════════════════════════════════╣`);
-      console.log(`║  Report:  ${reportPath}`);
-      console.log(`╚══════════════════════════════════════════╝`);
-    } else {
-      console.error(`\nFAIL: ${errorMessage}`);
-      console.error(`Report written anyway: ${reportPath}`);
-    }
+		if (passed) {
+			console.log(`\n╔══════════════════════════════════════════╗`);
+			console.log(`║  PASS: validate-inception smoke test     ║`);
+			console.log(`╠══════════════════════════════════════════╣`);
+			console.log(`║  Report:  ${reportPath}`);
+			console.log(`╚══════════════════════════════════════════╝`);
+		} else {
+			console.error(`\nFAIL: ${errorMessage}`);
+			console.error(`Report written anyway: ${reportPath}`);
+		}
 
-    if (options.cleanup) {
-      await fs.rm(runDir, { recursive: true, force: true });
-      console.log(`-> cleaned workspace: ${runDir}`);
-    }
-  }
+		if (options.cleanup) {
+			await fs.rm(runDir, { recursive: true, force: true });
+			console.log(`-> cleaned workspace: ${runDir}`);
+		}
+	}
 
-  if (!passed) {
-    throw new Error(errorMessage);
-  }
+	if (!passed) {
+		throw new Error(errorMessage);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -186,70 +233,86 @@ async function main() {
 // ---------------------------------------------------------------------------
 
 async function runAndRecord(step, command, args, options, events) {
-  console.log(`   $ ${command} ${args.join(" ")}`);
-  const startedAt = Date.now();
-  const result = await new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env || cliEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout = [];
-    const stderr = [];
-    child.stdout.on("data", (chunk) => stdout.push(chunk));
-    child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.on("close", (code) => resolve({
-      code,
-      stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8"),
-    }));
-    child.on("error", (error) => resolve({ code: 1, stdout: "", stderr: error.message }));
-  });
-  const endedAt = Date.now();
+	console.log(`   $ ${command} ${args.join(" ")}`);
+	const startedAt = Date.now();
+	const result = await new Promise((resolve) => {
+		const child = spawn(command, args, {
+			cwd: options.cwd,
+			env: options.env || cliEnv,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const stdout = [];
+		const stderr = [];
+		child.stdout.on("data", (chunk) => stdout.push(chunk));
+		child.stderr.on("data", (chunk) => stderr.push(chunk));
+		child.on("close", (code) =>
+			resolve({
+				code,
+				stdout: Buffer.concat(stdout).toString("utf8"),
+				stderr: Buffer.concat(stderr).toString("utf8"),
+			}),
+		);
+		child.on("error", (error) =>
+			resolve({ code: 1, stdout: "", stderr: error.message }),
+		);
+	});
+	const endedAt = Date.now();
 
-  let stdoutEnv = null;
-  let stderrEnv = null;
-  try { stdoutEnv = JSON.parse(result.stdout); } catch { /* raw text */ }
-  try { stderrEnv = JSON.parse(result.stderr); } catch { /* raw text */ }
+	let stdoutEnv = null;
+	let stderrEnv = null;
+	try {
+		stdoutEnv = JSON.parse(result.stdout);
+	} catch {
+		/* raw text */
+	}
+	try {
+		stderrEnv = JSON.parse(result.stderr);
+	} catch {
+		/* raw text */
+	}
 
-  events.push({
-    step,
-    command,
-    args,
-    startedAt,
-    endedAt,
-    durationMs: endedAt - startedAt,
-    exit: result.code,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    stdoutEnv,
-    stderrEnv,
-  });
-  return result;
+	events.push({
+		step,
+		command,
+		args,
+		startedAt,
+		endedAt,
+		durationMs: endedAt - startedAt,
+		exit: result.code,
+		stdout: result.stdout,
+		stderr: result.stderr,
+		stdoutEnv,
+		stderrEnv,
+	});
+	return result;
 }
 
 async function buildCLI() {
-  console.log(`-> building CLI: ${cliPath}`);
-  const result = await new Promise((resolve) => {
-    const child = spawn("go", ["build", "-o", cliPath, "./cmd/archetipo"], {
-      cwd: path.join(repoRoot, "cli"),
-      env: cliEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout = [];
-    const stderr = [];
-    child.stdout.on("data", (chunk) => stdout.push(chunk));
-    child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.on("close", (code) => resolve({
-      code,
-      stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8"),
-    }));
-    child.on("error", (error) => resolve({ code: 1, stdout: "", stderr: error.message }));
-  });
-  if (result.code !== 0) {
-    throw new Error(`go build failed: ${result.stderr || result.stdout}`);
-  }
+	console.log(`-> building CLI: ${cliPath}`);
+	const result = await new Promise((resolve) => {
+		const child = spawn("go", ["build", "-o", cliPath, "./cmd/archetipo"], {
+			cwd: path.join(repoRoot, "cli"),
+			env: cliEnv,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const stdout = [];
+		const stderr = [];
+		child.stdout.on("data", (chunk) => stdout.push(chunk));
+		child.stderr.on("data", (chunk) => stderr.push(chunk));
+		child.on("close", (code) =>
+			resolve({
+				code,
+				stdout: Buffer.concat(stdout).toString("utf8"),
+				stderr: Buffer.concat(stderr).toString("utf8"),
+			}),
+		);
+		child.on("error", (error) =>
+			resolve({ code: 1, stdout: "", stderr: error.message }),
+		);
+	});
+	if (result.code !== 0) {
+		throw new Error(`go build failed: ${result.stderr || result.stdout}`);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -257,65 +320,77 @@ async function buildCLI() {
 // ---------------------------------------------------------------------------
 
 function assertExit(result, expected, label) {
-  if (result.code !== expected) {
-    throw new Error(
-      `Expected exit ${expected} (${label}), got ${result.code}\n` +
-      `STDOUT: ${result.stdout}\nSTDERR: ${result.stderr}`,
-    );
-  }
+	if (result.code !== expected) {
+		throw new Error(
+			`Expected exit ${expected} (${label}), got ${result.code}\n` +
+				`STDOUT: ${result.stdout}\nSTDERR: ${result.stderr}`,
+		);
+	}
 }
 
 function assertKind(result, expected) {
-  const env = JSON.parse(result.stdout);
-  if (env.kind !== expected) {
-    throw new Error(`Expected kind=${expected}, got ${env.kind}\n${result.stdout}`);
-  }
+	const env = parseStdoutEnv(result);
+	if (env.kind !== expected) {
+		throw new Error(
+			`Expected kind=${expected}, got ${env.kind}\n${result.stdout}`,
+		);
+	}
 }
 
 function assertDataOk(result) {
-  const env = JSON.parse(result.stdout);
-  if (env.data?.ok !== true) {
-    throw new Error(`Expected data.ok=true, got ${JSON.stringify(env.data)}`);
-  }
+	const env = parseStdoutEnv(result);
+	if (env.data?.ok !== true) {
+		throw new Error(`Expected data.ok=true, got ${JSON.stringify(env.data)}`);
+	}
 }
 
-function assertErrorCode(result, expected) {
-  let env;
-  try { env = JSON.parse(result.stderr); } catch {
-    throw new Error(`Failed to parse stderr as JSON\nSTDERR: ${result.stderr}`);
-  }
-  if (env.error?.code !== expected) {
-    throw new Error(`Expected error.code=${expected}, got ${env.error?.code}\nSTDERR: ${result.stderr}`);
-  }
-}
-
-function assertErrorDetails(result) {
-  const env = JSON.parse(result.stderr);
-  const details = env.error?.details;
-  if (!details || typeof details !== "object") {
-    throw new Error(`Expected error.details to be populated\nSTDERR: ${result.stderr}`);
-  }
-  const findings = details.findings;
-  if (!Array.isArray(findings) || findings.length === 0) {
-    throw new Error(`Expected error.details.findings to be a non-empty array\nSTDERR: ${result.stderr}`);
-  }
-  const codes = findings.map((f) => f.code).filter(Boolean);
-  if (!codes.includes("PRD_PLACEHOLDER_LEFT")) {
-    throw new Error(`Expected PRD_PLACEHOLDER_LEFT, got [${codes.join(", ")}]\nSTDERR: ${result.stderr}`);
-  }
-  if (!codes.includes("PRD_MISSING_SECTION")) {
-    throw new Error(`Expected PRD_MISSING_SECTION, got [${codes.join(", ")}]\nSTDERR: ${result.stderr}`);
-  }
-  return findings;
+function assertValidationFindings(result) {
+	const env = parseStdoutEnv(result);
+	if (env.kind !== "validation_result") {
+		throw new Error(
+			`Expected kind=validation_result, got ${env.kind}\nSTDOUT: ${result.stdout}`,
+		);
+	}
+	if (env.data?.ok !== false) {
+		throw new Error(
+			`Expected data.ok=false, got ${JSON.stringify(env.data)}\nSTDOUT: ${result.stdout}`,
+		);
+	}
+	const findings = env.data?.findings;
+	if (!Array.isArray(findings) || findings.length === 0) {
+		throw new Error(
+			`Expected data.findings to be a non-empty array\nSTDOUT: ${result.stdout}`,
+		);
+	}
+	const codes = findings.map((f) => f.code).filter(Boolean);
+	if (!codes.includes("PRD_PLACEHOLDER_LEFT")) {
+		throw new Error(
+			`Expected PRD_PLACEHOLDER_LEFT, got [${codes.join(", ")}]\nSTDOUT: ${result.stdout}`,
+		);
+	}
+	if (!codes.includes("PRD_MISSING_SECTION")) {
+		throw new Error(
+			`Expected PRD_MISSING_SECTION, got [${codes.join(", ")}]\nSTDOUT: ${result.stdout}`,
+		);
+	}
+	return findings;
 }
 
 // ---------------------------------------------------------------------------
 // HTML report (matches run.mjs style)
 // ---------------------------------------------------------------------------
 
-function renderReport({ sandboxDir, events, startedAt, endedAt, durationMs, findings, passed, errorMessage }) {
-  const startedISO = new Date(startedAt).toISOString();
-  return `<!doctype html>
+function renderReport({
+	sandboxDir,
+	events,
+	startedAt,
+	durationMs,
+	findings,
+	passed,
+	errorMessage,
+}) {
+	const startedISO = new Date(startedAt).toISOString();
+	return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -388,12 +463,16 @@ function renderReport({ sandboxDir, events, startedAt, endedAt, durationMs, find
       This smoke test exercises the <code>archetipo validate prd</code> correction loop
       without an AI agent. It writes a deliberately broken PRD (missing <code>vision</code> marker,
       <code>{{UNRESOLVED}}</code> + <code>{{TECH_STACK}}</code> placeholders), validates,
-      inspects the <code>E_VALIDATION</code> findings, corrects the PRD, and re-validates to
+      inspects the <code>validation_result</code> findings with <code>data.ok=false</code>, corrects the PRD, and re-validates to
       confirm the loop closes.
     </p>
 
-    ${!passed ? `<h2>Error</h2>
-    <p class="section-desc" style="color:var(--fail);font-weight:650;">${esc(errorMessage)}</p>` : ""}
+    ${
+			!passed
+				? `<h2>Error</h2>
+    <p class="section-desc" style="color:var(--fail);font-weight:650;">${esc(errorMessage)}</p>`
+				: ""
+		}
 
     <h2>Timeline</h2>
     <section class="timeline">
@@ -404,33 +483,44 @@ function renderReport({ sandboxDir, events, startedAt, endedAt, durationMs, find
     ${findings ? renderFindingsTable(findings) : `<p class="section-desc">No findings — test did not reach the validation step.</p>`}
 
     <h2>Raw Envelopes</h2>
-    ${events.filter(e => e.stdoutEnv || e.stderrEnv).map((e) => renderEnvelopeDetails(e)).join("")}
+    ${events
+			.filter((e) => e.stdoutEnv || e.stderrEnv)
+			.map((e) => renderEnvelopeDetails(e))
+			.join("")}
   </main>
 </body>
 </html>`;
 }
 
+function parseStdoutEnv(result) {
+	try {
+		return JSON.parse(result.stdout);
+	} catch {
+		throw new Error(`Failed to parse stdout as JSON\nSTDOUT: ${result.stdout}`);
+	}
+}
+
 function metaItem(label, value) {
-  return `<div><span class="label">${esc(label)}</span><span class="value">${esc(String(value ?? ""))}</span></div>`;
+	return `<div><span class="label">${esc(label)}</span><span class="value">${esc(String(value ?? ""))}</span></div>`;
 }
 
 function renderEvent(event, index, runStartedAt) {
-  const offset = formatDuration(event.startedAt - runStartedAt);
-  const dur = formatDuration(event.durationMs);
-  const status = event.exit === 0 ? "pass" : "fail";
-  const stepLabel = event.step.replace(/-/g, " ");
+	const offset = formatDuration(event.startedAt - runStartedAt);
+	const dur = formatDuration(event.durationMs);
+	const status = event.exit === 0 ? "pass" : "fail";
+	const stepLabel = event.step.replace(/-/g, " ");
 
-  let details = "";
-  if (event.step === "validate-invalid" && event.stderrEnv) {
-    const f = event.stderrEnv?.error?.details?.findings ?? [];
-    details = f.length > 0 ? renderFindingsTable(f) : "";
-  }
-  if (event.step === "validate-valid" && event.stdoutEnv) {
-    const checks = event.stdoutEnv?.data?.checks ?? [];
-    details = checks.length > 0 ? renderChecksTable(checks) : "";
-  }
+	let details = "";
+	if (event.step === "validate-invalid" && event.stdoutEnv) {
+		const f = event.stdoutEnv?.data?.findings ?? [];
+		details = f.length > 0 ? renderFindingsTable(f) : "";
+	}
+	if (event.step === "validate-valid" && event.stdoutEnv) {
+		const checks = event.stdoutEnv?.data?.checks ?? [];
+		details = checks.length > 0 ? renderChecksTable(checks) : "";
+	}
 
-  return `<article class="event cli" id="event-${index + 1}">
+	return `<article class="event cli" id="event-${index + 1}">
     <div class="event-head">
       <div class="event-title">
         <span class="step">${esc(stepLabel)}</span>
@@ -445,42 +535,54 @@ function renderEvent(event, index, runStartedAt) {
 }
 
 function renderFindingsTable(findings) {
-  return `<table class="findings-table">
+	return `<table class="findings-table">
     <thead><tr><th>Code</th><th>Severity</th><th>Message</th><th>Path</th><th>Hint</th></tr></thead>
-    <tbody>${findings.map((f) => `
+    <tbody>${findings
+			.map(
+				(f) => `
       <tr>
         <td class="code">${esc(f.code)}</td>
         <td>${esc(f.severity)}</td>
         <td>${esc(f.message)}</td>
         <td><code>${esc(f.path)}</code></td>
         <td class="hint">${esc(f.hint)}</td>
-      </tr>`).join("")}
+      </tr>`,
+			)
+			.join("")}
     </tbody>
   </table>`;
 }
 
 function renderChecksTable(checks) {
-  return `<table class="checks-table">
+	return `<table class="checks-table">
     <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
-    <tbody>${checks.map((c) => `
+    <tbody>${checks
+			.map(
+				(c) => `
       <tr>
         <td class="check-code">${esc(c.code)}</td>
         <td class="status-${c.status === "passed" ? "pass" : "fail"}">${esc(c.status)}</td>
         <td>${esc(c.message ?? "-")}</td>
-      </tr>`).join("")}
+      </tr>`,
+			)
+			.join("")}
     </tbody>
   </table>`;
 }
 
 function renderEnvelopeDetails(event) {
-  const sections = [];
-  if (event.stdoutEnv) {
-    sections.push(`<details><summary>📤 STDOUT — ${esc(event.step)}</summary><pre>${esc(JSON.stringify(event.stdoutEnv, null, 2))}</pre></details>`);
-  }
-  if (event.stderrEnv) {
-    sections.push(`<details><summary>📥 STDERR — ${esc(event.step)}</summary><pre>${esc(JSON.stringify(event.stderrEnv, null, 2))}</pre></details>`);
-  }
-  return sections.join("\n");
+	const sections = [];
+	if (event.stdoutEnv) {
+		sections.push(
+			`<details><summary>📤 STDOUT — ${esc(event.step)}</summary><pre>${esc(JSON.stringify(event.stdoutEnv, null, 2))}</pre></details>`,
+		);
+	}
+	if (event.stderrEnv) {
+		sections.push(
+			`<details><summary>📥 STDERR — ${esc(event.step)}</summary><pre>${esc(JSON.stringify(event.stderrEnv, null, 2))}</pre></details>`,
+		);
+	}
+	return sections.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -488,20 +590,28 @@ function renderEnvelopeDetails(event) {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const options = { workspaceRoot: defaultWorkspaceRoot, cleanup: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    switch (argv[i]) {
-      case "--workspace-root": options.workspaceRoot = path.resolve(argv[++i]); break;
-      case "--cleanup": options.cleanup = true; break;
-      case "--help": case "-h": printHelp(); process.exit(0);
-      default: throw new Error(`Unknown argument: ${argv[i]}`);
-    }
-  }
-  return options;
+	const options = { workspaceRoot: defaultWorkspaceRoot, cleanup: false };
+	for (let i = 0; i < argv.length; i += 1) {
+		switch (argv[i]) {
+			case "--workspace-root":
+				options.workspaceRoot = path.resolve(argv[++i]);
+				break;
+			case "--cleanup":
+				options.cleanup = true;
+				break;
+			case "--help":
+			case "-h":
+				printHelp();
+				process.exit(0);
+			default:
+				throw new Error(`Unknown argument: ${argv[i]}`);
+		}
+	}
+	return options;
 }
 
 function printHelp() {
-  console.log(`Smoke test for inception PRD validation correction loop
+	console.log(`Smoke test for inception PRD validation correction loop
 
 Usage:
   node ./test/e2e/validate-inception-smoke.mjs
@@ -514,27 +624,27 @@ Options:
 }
 
 async function createRunDir(root) {
-  await fs.mkdir(root, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const runDir = path.join(root, stamp);
-  await fs.mkdir(runDir, { recursive: true });
-  return runDir;
+	await fs.mkdir(root, { recursive: true });
+	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+	const runDir = path.join(root, stamp);
+	await fs.mkdir(runDir, { recursive: true });
+	return runDir;
 }
 
 function formatDuration(ms) {
-  const totalSeconds = Math.max(1, Math.round(ms / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return minutes === 0 ? `${seconds}s` : `${minutes}m ${seconds}s`;
+	const totalSeconds = Math.max(1, Math.round(ms / 1000));
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds % 60;
+	return minutes === 0 ? `${seconds}s` : `${minutes}m ${seconds}s`;
 }
 
 function esc(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+	return String(value)
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
 }
 
 // ---------------------------------------------------------------------------
@@ -542,6 +652,6 @@ function esc(value) {
 // ---------------------------------------------------------------------------
 
 main().catch((error) => {
-  console.error(`\nFAIL: ${error.message}`);
-  process.exit(1);
+	console.error(`\nFAIL: ${error.message}`);
+	process.exit(1);
 });

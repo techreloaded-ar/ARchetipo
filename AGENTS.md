@@ -55,6 +55,7 @@ Le skill devono incorporare esplicitamente i sub-comandi CLI che usano davvero, 
 - Tutte le query GraphQL del connector github vivono in `cli/internal/connector/github/templates.go`. Aggiungere snapshot test prima di modificarle.
 - Distribuzione: il binario è versionato insieme alle skill (un solo tag per repo). Su tag `v*` il workflow `release.yml` esegue GoReleaser per produrre le binary in `cli/dist/`, poi `scripts/build-npm.mjs` sincronizza le binary nei 6 sotto-pacchetti `@techreloaded/archetipo-{os}-{arch}` e le skill nel pacchetto principale `@techreloaded/archetipo`, infine `scripts/publish-npm.mjs` pubblica tutti i 7 pacchetti su npm.
 - **Prima di consegnare modifiche**, esegui gli stessi controlli della CI in locale per evitare build rossi:
+
   ```bash
   cd cli
   gofmt -l .          # deve essere vuoto
@@ -63,6 +64,7 @@ Le skill devono incorporare esplicitamente i sub-comandi CLI che usano davvero, 
   go test ./...       # tutti i test passano
   golangci-lint run --timeout 5m ./...   # 0 issues
   ```
+
   Se `golangci-lint` non è installato: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`
 
 ## Test E2E (`test/e2e/`)
@@ -128,7 +130,7 @@ Questa repo ha una harness E2E locale in Node.js che esercita la CLI compilata d
 
 ### Smoke test standalone
 
-- `node ./test/e2e/validate-inception-smoke.mjs`: compila CLI, inizializza sandbox file/pi, scrive un PRD invalido, verifica `archetipo validate prd` con exit `2` e `error.code=E_VALIDATION` includendo `PRD_PLACEHOLDER_LEFT` e `PRD_MISSING_SECTION`, poi scrive un PRD valido e verifica `kind=validation_result` con `data.ok=true`. Produce report HTML. Opzioni: `--workspace-root`, `--cleanup`. Nota: l'help cita `npm run test:validate-inception`, ma al momento non c'è uno script package corrispondente.
+- `node ./test/e2e/validate-inception-smoke.mjs`: compila CLI, inizializza sandbox file/pi, scrive un PRD invalido, verifica `archetipo validate prd` con exit `0`, `kind=validation_result` e `data.ok=false` includendo `PRD_PLACEHOLDER_LEFT` e `PRD_MISSING_SECTION`, poi scrive un PRD valido e verifica `kind=validation_result` con `data.ok=true`. Produce report HTML. Opzioni: `--workspace-root`, `--cleanup`. Nota: l'help cita `npm run test:validate-inception`, ma al momento non c'è uno script package corrispondente.
 - `npm run test:view-delete-smoke`: compila CLI, inizializza sandbox, aggiunge due spec, semina plan/review per `US-901`, avvia `archetipo view` su porta random e verifica via HTTP API che `DELETE /api/spec/US-901` rimuova la card, lasci `US-902`, restituisca poi 404 su `US-901` e cancelli spec/plan/review artifact.
 
 Quando aggiungi o modifichi E2E, preferisci fixture esplicite con `.archetipo/config.yaml` completa, usa `env_required` per credenziali esterne, mantieni i report generati fuori dal commit e aggiorna questa sezione se cambia la semantica del runner.

@@ -18,11 +18,12 @@ With the `jira` connector only `jira.base_url` (or `JIRA_BASE_URL`) plus the `JI
 Generated artifacts can be checked without side effects before persistence:
 
 ```bash
+archetipo validate prd [--file PRD.md]
 archetipo validate spec --file specs.yaml
 archetipo validate plan US-001 --file plan.yaml
 ```
 
-Validation returns a normal JSON success envelope with `kind: "validation_result"` and `data.ok` set to `false` when structural issues are found, so skills can repair payloads before calling `spec add` or `spec plan`.
+Validation returns a normal JSON success envelope with `kind: "validation_result"` and `data.ok` set to `true` or `false` when validation runs successfully. Structural issues are reported in `data.findings`; error envelopes are reserved for process failures, so skills can repair artifacts before calling `prd write`, `spec add`, or `spec plan`.
 
 To build all release binaries locally from the repository root:
 

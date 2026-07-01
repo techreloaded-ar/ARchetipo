@@ -253,9 +253,9 @@ func TestValidatePlan_CatchesDependencyAndMissingTestTask(t *testing.T) {
 	for _, raw := range findings {
 		finding, _ := raw.(map[string]any)
 		switch finding["code"] {
-		case "E_PLAN_TASK_DEP_UNKNOWN":
+		case "PLAN_TASK_DEP_UNKNOWN":
 			foundDep = true
-		case "E_PLAN_TEST_TASK_MISSING":
+		case "PLAN_TEST_TASK_MISSING":
 			foundTest = true
 		}
 	}
@@ -1505,23 +1505,26 @@ Next.
 `
 	prdFile := writeInputFile(t, "bad-prd.md", prdWithPlaceholder)
 	res := runCLI(t, "", "validate", "prd", "--file", prdFile)
-	exit, code, details := decodeErrorWithDetails(t, res)
-	if exit != iox.ExitInvalidInput {
-		t.Fatalf("expected exit %d, got %d", iox.ExitInvalidInput, exit)
+	kind, data := decodeOK(t, res)
+	if kind != "validation_result" {
+		t.Fatalf("expected validation_result, got %s", kind)
 	}
-	if code != iox.CodeValidation {
-		t.Fatalf("expected code %s, got %s", iox.CodeValidation, code)
+	if ok, _ := data["ok"].(bool); ok {
+		t.Fatalf("expected ok=false, got %v", data)
 	}
-	if details == nil {
-		t.Fatal("expected error.details to be populated")
-	}
-	detailsMap, ok := details.(map[string]any)
-	if !ok {
-		t.Fatalf("expected details to be a map, got %T", details)
-	}
-	findings, _ := detailsMap["findings"].([]any)
+	findings, _ := data["findings"].([]any)
 	if len(findings) == 0 {
-		t.Fatal("expected at least one finding in error.details.findings")
+		t.Fatal("expected at least one finding in data.findings")
+	}
+	codes := collectFindingCodes(t, findings)
+	hasPlaceholder := false
+	for _, code := range codes {
+		if code == "PRD_PLACEHOLDER_LEFT" {
+			hasPlaceholder = true
+		}
+	}
+	if !hasPlaceholder {
+		t.Fatalf("expected PRD_PLACEHOLDER_LEFT finding, got codes=%v", codes)
 	}
 }
 
@@ -1565,16 +1568,20 @@ func TestValidatePRD_E2E_CorrectionLoop(t *testing.T) {
 		t.Fatalf("expected ok=true, got %v", writeData["ok"])
 	}
 
-	// 2. Validate the default PRD — must fail with E_VALIDATION.
+	// 2. Validate the default PRD — must return validation_result with ok:false.
 	valRes := runCLI(t, "", "validate", "prd")
-	exit, code, details := decodeErrorWithDetails(t, valRes)
-	if exit != iox.ExitInvalidInput {
-		t.Fatalf("expected exit %d, got %d. stderr=%s", iox.ExitInvalidInput, exit, valRes.stderr.String())
+	kind, data := decodeOK(t, valRes)
+	if kind != "validation_result" {
+		t.Fatalf("expected kind=validation_result, got %s", kind)
 	}
-	if code != iox.CodeValidation {
-		t.Fatalf("expected code %s, got %s. stderr=%s", iox.CodeValidation, code, valRes.stderr.String())
+	if ok, _ := data["ok"].(bool); ok {
+		t.Fatalf("expected ok=false, got data=%v", data)
 	}
-	codes := collectFindingCodes(t, details)
+	findings, _ := data["findings"].([]any)
+	if len(findings) == 0 {
+		t.Fatalf("expected findings, got data=%v", data)
+	}
+	codes := collectFindingCodes(t, findings)
 	hasPlaceholder := false
 	hasMissing := false
 	for _, c := range codes {
@@ -1606,7 +1613,7 @@ func TestValidatePRD_E2E_CorrectionLoop(t *testing.T) {
 
 	// 4. Re-validate — must pass.
 	valRes2 := runCLI(t, "", "validate", "prd")
-	kind, data := decodeOK(t, valRes2)
+	kind, data = decodeOK(t, valRes2)
 	if kind != "validation_result" {
 		t.Fatalf("expected kind=validation_result, got %s", kind)
 	}
@@ -1615,24 +1622,16 @@ func TestValidatePRD_E2E_CorrectionLoop(t *testing.T) {
 	}
 }
 
-// collectFindingCodes extracts the code field from each finding in an error
-// details payload. The caller must still assert that details is non-nil.
-func collectFindingCodes(t *testing.T, details any) []string {
+// collectFindingCodes extracts the code field from each finding in a
+// validation_result data.findings payload.
+func collectFindingCodes(t *testing.T, findings any) []string {
 	t.Helper()
-	detailsMap, ok := details.(map[string]any)
+	findingsList, ok := findings.([]any)
 	if !ok {
-		t.Fatalf("expected details to be a map, got %T", details)
-	}
-	findingsRaw, ok := detailsMap["findings"]
-	if !ok || findingsRaw == nil {
-		return nil
-	}
-	findings, ok := findingsRaw.([]any)
-	if !ok {
-		t.Fatalf("expected findings to be an array, got %T", findingsRaw)
+		t.Fatalf("expected findings to be an array, got %T", findings)
 	}
 	var codes []string
-	for _, f := range findings {
+	for _, f := range findingsList {
 		fm, ok := f.(map[string]any)
 		if !ok {
 			continue

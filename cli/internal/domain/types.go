@@ -282,6 +282,8 @@ type ValidationResult struct {
 }
 
 // ValidationCheck reports the outcome of a single rule.
+// Status is "passed" when the rule has no findings, "failed" when it has at
+// least one error-severity finding, and "warning" when it has only warnings.
 type ValidationCheck struct {
 	Code    string `json:"code"`
 	Status  string `json:"status"`

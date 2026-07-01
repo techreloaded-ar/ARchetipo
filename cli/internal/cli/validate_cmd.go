@@ -14,10 +14,11 @@ import (
 
 // newValidateCmd builds `archetipo validate <artifact>`.
 //
-// `prd` validates the persisted PRD on disk and reports failures as an
-// E_VALIDATION error envelope. `spec` and `plan` validate a structured payload
-// before persistence and report failures as a normal validation_result with
-// ok:false (exit 0) so skills can repair the payload without mutating state.
+// Every validate subcommand returns a validation_result envelope on stdout when
+// validation runs successfully. Structurally invalid artifacts are reported as
+// ok:false (exit 0) so skills can repair them without branching on stderr.
+// Error envelopes remain reserved for process failures such as unreadable
+// input, missing files, or config/runtime errors.
 func newValidateCmd(s streams) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "validate",
@@ -41,9 +42,9 @@ The validator checks:
   - No unresolved {{PLACEHOLDER}} tokens
   - All required section markers are present and have meaningful content
 
-On success, a validation_result envelope is written to stdout.
-On failure, an E_VALIDATION error envelope with structured findings is
-written to stderr. Use error.details.findings to correct the PRD and retry.`,
+Validation is a normal result, not a process error: a validation_result
+envelope is written to stdout with data.ok:true or data.ok:false and
+structured data.findings. Use those findings to correct the PRD and retry.`,
 		Args: cobra.NoArgs,
 		RunE: runValidatePRD(s, &filePath),
 	}
@@ -98,19 +99,6 @@ func runValidatePRD(s streams, filePath *string) func(cmd *cobra.Command, _ []st
 		}
 
 		result := validation.ValidatePRD(target, markdown)
-
-		if !result.OK {
-			return iox.NewValidation(
-				"prd validation failed",
-				"fix the listed PRD findings and rerun validation",
-				domain.ValidationErrorDetails{
-					Artifact: result.Artifact,
-					Target:   result.Target,
-					Findings: result.Findings,
-				},
-			)
-		}
-
 		return iox.WriteOK(s.out, "validation_result", result)
 	}
 }

@@ -46,7 +46,7 @@ npm install -g @techreloaded/archetipo
 ```
 
  Poi aggiungi la CLI locale al `PATH` della sessione corrente:
- 
+
 ```bash
  # Windows PowerShell
  $env:PATH = "$(Get-Location)\node_modules\.bin;$env:PATH"
@@ -178,7 +178,7 @@ ARchetipo usa una CLI deterministica scritta in Go, `archetipo`, per persistenza
 | `archetipo validate spec --file specs.yaml` | Valida un payload di spec generato senza salvarlo. |
 | `archetipo validate plan US-001 --file plan.yaml` | Valida un payload di piano senza cambiare lo stato della spec. |
 
-La CLI legge `.archetipo/config.yaml` dal progetto per scegliere connector attivo e percorsi degli artefatti.
+La CLI legge `.archetipo/config.yaml` dal progetto per scegliere connector attivo e percorsi degli artefatti. Tutti i comandi `archetipo validate ...` restituiscono `kind: "validation_result"` su stdout con `data.ok` a `true` o `false`; gli error envelope restano riservati agli errori di processo.
 
 Per sviluppo locale della CLI senza pubblicare pacchetti npm, vedi [`guides/dev-local-cli.md`](guides/dev-local-cli.md).
 

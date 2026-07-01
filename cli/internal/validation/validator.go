@@ -33,6 +33,13 @@ var markerRe = regexp.MustCompile(`<!--\s*archetipo:prd\s+section=(\S+)\s+requir
 // placeholderRe matches unresolved {{PLACEHOLDER}} tokens.
 var placeholderRe = regexp.MustCompile(`\{\{[^}]+\}\}`)
 
+// commentLineRe matches HTML comment-only lines within a section body.
+var commentLineRe = regexp.MustCompile(`^\s*<!--`)
+
+// mdStripRe removes common markdown syntax before testing if a line has
+// meaningful prose content.
+var mdStripRe = regexp.MustCompile(`[#*_~>` + "`" + `]`)
+
 // ValidatePRD runs every PRD structural rule against the given
 // markdown content and returns a ValidationResult. target is the file path
 // used for the result envelope and finding paths.
@@ -46,13 +53,7 @@ func ValidatePRD(target string, markdown string) domain.ValidationResult {
 			Code:   "PRD_NOT_EMPTY",
 			Status: "failed",
 		})
-		findings = append(findings, domain.ValidationFinding{
-			Code:     "PRD_EMPTY",
-			Severity: "error",
-			Path:     target,
-			Message:  "PRD is empty",
-			Hint:     "Run archetipo-inception to generate a PRD.",
-		})
+		findings = addFinding(findings, "error", "PRD_EMPTY", target, "PRD is empty", "Run archetipo-inception to generate a PRD.")
 		return domain.ValidationResult{
 			OK:       false,
 			Artifact: "prd",
@@ -74,13 +75,7 @@ func ValidatePRD(target string, markdown string) domain.ValidationResult {
 			Status: "failed",
 		})
 		for _, ph := range unresolved {
-			findings = append(findings, domain.ValidationFinding{
-				Code:     "PRD_PLACEHOLDER_LEFT",
-				Severity: "error",
-				Path:     target,
-				Message:  "Unresolved placeholder " + ph,
-				Hint:     "Replace the placeholder with concrete content or an explicit TBD note.",
-			})
+			findings = addFinding(findings, "error", "PRD_PLACEHOLDER_LEFT", target, "Unresolved placeholder "+ph, "Replace the placeholder with concrete content or an explicit TBD note.")
 		}
 	} else {
 		checks = append(checks, domain.ValidationCheck{
@@ -120,13 +115,7 @@ func ValidatePRD(target string, markdown string) domain.ValidationResult {
 				Code:   "PRD_REQUIRED_SECTIONS",
 				Status: "failed",
 			})
-			findings = append(findings, domain.ValidationFinding{
-				Code:     "PRD_MISSING_SECTION",
-				Severity: "error",
-				Path:     "markers." + secID,
-				Message:  "Missing required marker for section " + secID,
-				Hint:     "Add <!-- archetipo:prd section=" + secID + " required=true --> before the section content.",
-			})
+			findings = addFinding(findings, "error", "PRD_MISSING_SECTION", "markers."+secID, "Missing required marker for section "+secID, "Add <!-- archetipo:prd section="+secID+" required=true --> before the section content.")
 		}
 	}
 
@@ -145,13 +134,7 @@ func ValidatePRD(target string, markdown string) domain.ValidationResult {
 				Code:   "PRD_REQUIRED_SECTIONS",
 				Status: "failed",
 			})
-			findings = append(findings, domain.ValidationFinding{
-				Code:     "PRD_SECTION_EMPTY",
-				Severity: "error",
-				Path:     "markers." + m.id,
-				Message:  "Section " + m.id + " has no meaningful content",
-				Hint:     "Fill in the " + m.id + " section with concrete information.",
-			})
+			findings = addFinding(findings, "error", "PRD_SECTION_EMPTY", "markers."+m.id, "Section "+m.id+" has no meaningful content", "Fill in the "+m.id+" section with concrete information.")
 		}
 	}
 
@@ -171,7 +154,7 @@ func ValidatePRD(target string, markdown string) domain.ValidationResult {
 		})
 	}
 
-	ok := len(findings) == 0
+	ok := !hasErrorFinding(findings)
 	return domain.ValidationResult{
 		OK:       ok,
 		Artifact: "prd",
@@ -185,8 +168,6 @@ func ValidatePRD(target string, markdown string) domain.ValidationResult {
 // like prose (not just whitespace, not a pure HTML comment, and not too short
 // after stripping markdown syntax).
 func hasMeaningfulContent(body string) bool {
-	commentLineRe := regexp.MustCompile(`^\s*<!--`)
-	mdStripRe := regexp.MustCompile(`[#*_~>` + "`" + `]`)
 	for _, raw := range strings.Split(body, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" {

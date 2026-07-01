@@ -161,7 +161,7 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 | `archetipo view` | Starts a local Kanban view for `.archetipo/backlog.yaml`, `.archetipo/specs/`, and `.archetipo/plans/`. |
 | `archetipo config show` | Initializes the connector and prints metadata. |
 | `archetipo prd write [--file PRD.md]` | Saves PRD markdown from `--file` or stdin. |
-| `archetipo validate inception [--file PRD.md]` | Validates the PRD against inception structural rules. |
+| `archetipo validate prd [--file PRD.md]` | Validates the PRD against structural PRD rules. |
 | `archetipo spec list [--status STATUS]` | Reads backlog items and summary metadata, optionally filtered by status. |
 | `archetipo spec add --file specs.yaml` | Creates or extends the backlog with specs (user-story body). |
 | `archetipo spec show US-001` | Reads one spec and its tasks by code. |
@@ -178,7 +178,7 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 | `archetipo validate spec --file specs.yaml` | Validates a generated spec payload without persisting it. |
 | `archetipo validate plan US-001 --file plan.yaml` | Validates a generated plan payload without changing the spec status. |
 
-The CLI reads `.archetipo/config.yaml` from the project to choose the active connector and artifact paths.
+The CLI reads `.archetipo/config.yaml` from the project to choose the active connector and artifact paths. All `archetipo validate ...` commands return `kind: "validation_result"` on stdout with `data.ok` set to `true` or `false`; error envelopes are reserved for process failures.
 
 ### Hybrid model workflow
 

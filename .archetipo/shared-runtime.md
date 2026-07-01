@@ -22,10 +22,11 @@ Common rules:
 {"schema":"archetipo/v1","kind":"error","error":{"code":"E_*","message":"...","hint":"..."}}
 ```
 
-- Error envelopes MAY include an optional `error.details` field with machine-readable corrective data (e.g. validation findings). Skills must tolerate its absence and must never branch on its shape alone — always branch on `error.code` first, then use `details` only as corrective instructions.
+- Error envelopes MAY include an optional `error.details` field with machine-readable corrective data. Skills must tolerate its absence and must never branch on its shape alone — always branch on `error.code` first, then use `details` only as corrective instructions.
 
-- Branch on `error.code`, never on `error.message`. Important error codes:
-  - `E_VALIDATION`: artifact validation failed; `error.details` carries structured findings to guide correction.
+- `archetipo validate ...` commands return a normal stdout envelope with `kind:"validation_result"`. Structural validation outcomes are reported in `data.ok` and `data.findings`; error envelopes are reserved for process failures such as unreadable input, missing files, config errors, or internal failures.
+
+- Branch on `error.code`, never on `error.message`.
 - Treat exit codes as stable:
   - `0`: success
   - `1`: generic error
@@ -52,6 +53,7 @@ When the spec has no worktree, `data.workdir` is just the project root and nothi
 ## Language Policy
 
 Detect the output language from the strongest available source, in priority order:
+
 1. Language of the backlog (if a backlog exists and is readable)
 2. Language of the PRD (if no backlog is available)
 3. Language of the user's current conversation
@@ -70,6 +72,7 @@ Templates and example text in skill files are **structural guides written in Eng
 - Agent role captions (e.g. "Proposed by:")
 
 Rules:
+
 1. Keep every `{{PLACEHOLDER}}` token **unchanged** — do not translate placeholder names.
 2. Keep code blocks, file paths, CLI commands, and identifiers unchanged.
 3. Keep technical terms that have no natural translation (e.g. "MVP", "ADR", "CI/CD", "ORM") unchanged unless the target language has a standard equivalent already used in the existing artifact.
@@ -78,20 +81,22 @@ Rules:
 
 The final output must read as a single coherent document in the detected language — never a mix of English scaffolding and localized content.
 
-
 ## Assumptions and Questions
 
 Ask the user only when all these conditions are true:
+
 1. The missing information is critical to generate a correct output
 2. The information cannot be reasonably inferred from the rest of the context
 3. Proceeding would likely create a materially wrong result
 
 If questions are needed:
+
 - ask at most 3
 - group them in one message
 - allow the user to skip them
 
 For non-critical gaps:
+
 - infer a reasonable assumption
 - continue
 - record the assumption or open question in the final artifact
