@@ -63,7 +63,6 @@ const (
 	CodeNotFound            = "E_NOT_FOUND"
 	CodeConflict            = "E_CONFLICT"
 	CodeInternal            = "E_INTERNAL"
-	CodeValidation          = "E_VALIDATION"
 )
 
 // CodedError is an error that carries both a stable code (for the JSON
@@ -124,12 +123,6 @@ func NewNotFound(message, hint string, cause error) *CodedError {
 // state of the artifact (e.g. `story start` on a TODO story).
 func NewConflict(message, hint string, cause error) *CodedError {
 	return &CodedError{Code: CodeConflict, Message: message, Hint: hint, Exit: ExitGeneric, Cause: cause}
-}
-
-// NewValidation builds an error for a validation failure that carries
-// machine-readable findings in details (e.g. PRD validation findings).
-func NewValidation(message, hint string, details any) *CodedError {
-	return &CodedError{Code: CodeValidation, Message: message, Hint: hint, Details: details, Exit: ExitInvalidInput}
 }
 
 // WriteOK marshals data as a success envelope on the given writer.

@@ -44,44 +44,24 @@ var mdStripRe = regexp.MustCompile(`[#*_~>` + "`" + `]`)
 // markdown content and returns a ValidationResult. target is the file path
 // used for the result envelope and finding paths.
 func ValidatePRD(target string, markdown string) domain.ValidationResult {
-	var checks []domain.ValidationCheck
 	var findings []domain.ValidationFinding
 
 	// --- PRD_NOT_EMPTY ---
 	if strings.TrimSpace(markdown) == "" {
-		checks = append(checks, domain.ValidationCheck{
-			Code:   "PRD_NOT_EMPTY",
-			Status: "failed",
-		})
-		findings = addFinding(findings, "error", "PRD_EMPTY", target, "PRD is empty", "Run archetipo-inception to generate a PRD.")
+		findings = addFinding(findings, SeverityError, "PRD_EMPTY", target, "PRD is empty", "Run archetipo-inception to generate a PRD.")
 		return domain.ValidationResult{
 			OK:       false,
 			Artifact: "prd",
 			Target:   target,
-			Checks:   checks,
+			Checks:   buildChecks(prdCheckRules, findings),
 			Findings: findings,
 		}
 	}
-	checks = append(checks, domain.ValidationCheck{
-		Code:   "PRD_NOT_EMPTY",
-		Status: "passed",
-	})
 
 	// --- PRD_NO_UNRESOLVED_PLACEHOLDERS ---
 	unresolved := placeholderRe.FindAllString(markdown, -1)
-	if len(unresolved) > 0 {
-		checks = append(checks, domain.ValidationCheck{
-			Code:   "PRD_NO_UNRESOLVED_PLACEHOLDERS",
-			Status: "failed",
-		})
-		for _, ph := range unresolved {
-			findings = addFinding(findings, "error", "PRD_PLACEHOLDER_LEFT", target, "Unresolved placeholder "+ph, "Replace the placeholder with concrete content or an explicit TBD note.")
-		}
-	} else {
-		checks = append(checks, domain.ValidationCheck{
-			Code:   "PRD_NO_UNRESOLVED_PLACEHOLDERS",
-			Status: "passed",
-		})
+	for _, ph := range unresolved {
+		findings = addFinding(findings, SeverityError, "PRD_PLACEHOLDER_LEFT", target, "Unresolved placeholder "+ph, "Replace the placeholder with concrete content or an explicit TBD note.")
 	}
 
 	// --- PRD_REQUIRED_SECTIONS (marker-based) ---
@@ -111,11 +91,7 @@ func ValidatePRD(target string, markdown string) domain.ValidationResult {
 	}
 	for _, secID := range requiredPRDSections {
 		if !present[secID] {
-			checks = append(checks, domain.ValidationCheck{
-				Code:   "PRD_REQUIRED_SECTIONS",
-				Status: "failed",
-			})
-			findings = addFinding(findings, "error", "PRD_MISSING_SECTION", "markers."+secID, "Missing required marker for section "+secID, "Add <!-- archetipo:prd section="+secID+" required=true --> before the section content.")
+			findings = addFinding(findings, SeverityError, "PRD_MISSING_SECTION", "markers."+secID, "Missing required marker for section "+secID, "Add <!-- archetipo:prd section="+secID+" required=true --> before the section content.")
 		}
 	}
 
@@ -130,33 +106,13 @@ func ValidatePRD(target string, markdown string) domain.ValidationResult {
 		// The section body must contain at least one non-whitespace, non-comment line
 		// that has some substance (>= 3 chars after stripping markdown syntax).
 		if !hasMeaningfulContent(body) {
-			checks = append(checks, domain.ValidationCheck{
-				Code:   "PRD_REQUIRED_SECTIONS",
-				Status: "failed",
-			})
-			findings = addFinding(findings, "error", "PRD_SECTION_EMPTY", "markers."+m.id, "Section "+m.id+" has no meaningful content", "Fill in the "+m.id+" section with concrete information.")
+			findings = addFinding(findings, SeverityError, "PRD_SECTION_EMPTY", "markers."+m.id, "Section "+m.id+" has no meaningful content", "Fill in the "+m.id+" section with concrete information.")
 		}
 	}
 
-	// Emit a single passed check for REQUIRED_SECTIONS if no finding was
-	// attached to it.
-	hadSectionFailure := false
-	for _, c := range checks {
-		if c.Code == "PRD_REQUIRED_SECTIONS" && c.Status == "failed" {
-			hadSectionFailure = true
-			break
-		}
-	}
-	if !hadSectionFailure {
-		checks = append(checks, domain.ValidationCheck{
-			Code:   "PRD_REQUIRED_SECTIONS",
-			Status: "passed",
-		})
-	}
-
-	ok := !hasErrorFinding(findings)
+	checks := buildChecks(prdCheckRules, findings)
 	return domain.ValidationResult{
-		OK:       ok,
+		OK:       !hasErrorFinding(findings),
 		Artifact: "prd",
 		Target:   target,
 		Checks:   checks,

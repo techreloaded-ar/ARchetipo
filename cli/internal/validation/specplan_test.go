@@ -47,7 +47,7 @@ func TestValidateSpecs_Valid(t *testing.T) {
 	}
 	statuses := checkStatuses(r)
 	for _, code := range []string{"SPECS_NOT_EMPTY", "SPEC_CODES_VALID", "SPEC_BODIES_COMPLETE", "SPEC_BLOCKERS_CHECKED"} {
-		if statuses[code] != "passed" {
+		if statuses[code] != CheckPassed {
 			t.Fatalf("expected %s=passed, got %q", code, statuses[code])
 		}
 	}
@@ -61,7 +61,7 @@ func TestValidateSpecs_Empty(t *testing.T) {
 	if findingCodes(r)["SPECS_EMPTY"] != 1 {
 		t.Fatalf("expected SPECS_EMPTY, got %+v", r.Findings)
 	}
-	if checkStatuses(r)["SPECS_NOT_EMPTY"] != "failed" {
+	if checkStatuses(r)["SPECS_NOT_EMPTY"] != CheckFailed {
 		t.Fatalf("expected SPECS_NOT_EMPTY=failed, got %+v", r.Checks)
 	}
 }
@@ -84,7 +84,7 @@ func TestValidateSpecs_StructuralErrors(t *testing.T) {
 	}
 	statuses := checkStatuses(r)
 	for _, code := range []string{"SPEC_CODES_VALID", "SPEC_TITLES_PRESENT", "SPEC_EPICS_VALID", "SPEC_PRIORITIES_VALID", "SPEC_POINTS_VALID", "SPEC_STATUSES_PRESENT", "SPEC_BODIES_COMPLETE"} {
-		if statuses[code] != "failed" {
+		if statuses[code] != CheckFailed {
 			t.Errorf("expected %s=failed, got %q", code, statuses[code])
 		}
 	}
@@ -100,7 +100,7 @@ func TestValidateSpecs_UnknownBlockerIsWarning(t *testing.T) {
 	if findingCodes(r)["SPEC_BLOCKER_UNKNOWN"] != 1 {
 		t.Fatalf("expected SPEC_BLOCKER_UNKNOWN warning, got %+v", r.Findings)
 	}
-	if checkStatuses(r)["SPEC_BLOCKERS_CHECKED"] != "warning" {
+	if checkStatuses(r)["SPEC_BLOCKERS_CHECKED"] != CheckWarning {
 		t.Fatalf("expected SPEC_BLOCKERS_CHECKED=warning, got %+v", r.Checks)
 	}
 }
@@ -136,7 +136,7 @@ func TestValidatePlan_Valid(t *testing.T) {
 	}
 	statuses := checkStatuses(r)
 	for _, code := range []string{"PLAN_SPEC_CODE_VALID", "PLAN_BODY_PRESENT", "PLAN_TASKS_PRESENT", "PLAN_TASK_IDS_VALID", "PLAN_TASK_BODIES_COMPLETE", "PLAN_TEST_TASK_PRESENT", "PLAN_TASK_DEPENDENCIES_VALID"} {
-		if statuses[code] != "passed" {
+		if statuses[code] != CheckPassed {
 			t.Fatalf("expected %s=passed, got %q", code, statuses[code])
 		}
 	}
@@ -158,10 +158,10 @@ func TestValidatePlan_DependencyAndMissingTest(t *testing.T) {
 		t.Fatalf("expected dependency and missing-test findings, got %+v", r.Findings)
 	}
 	statuses := checkStatuses(r)
-	if statuses["PLAN_TEST_TASK_PRESENT"] != "failed" {
+	if statuses["PLAN_TEST_TASK_PRESENT"] != CheckFailed {
 		t.Fatalf("expected PLAN_TEST_TASK_PRESENT=failed, got %q", statuses["PLAN_TEST_TASK_PRESENT"])
 	}
-	if statuses["PLAN_TASK_DEPENDENCIES_VALID"] != "failed" {
+	if statuses["PLAN_TASK_DEPENDENCIES_VALID"] != CheckFailed {
 		t.Fatalf("expected PLAN_TASK_DEPENDENCIES_VALID=failed, got %q", statuses["PLAN_TASK_DEPENDENCIES_VALID"])
 	}
 }
@@ -183,7 +183,7 @@ func TestValidatePlan_WeakContractIsWarning(t *testing.T) {
 	if findingCodes(r)["PLAN_TASK_CONTRACT_WEAK"] == 0 {
 		t.Fatalf("expected PLAN_TASK_CONTRACT_WEAK warning, got %+v", r.Findings)
 	}
-	if checkStatuses(r)["PLAN_TASK_BODIES_COMPLETE"] != "warning" {
+	if checkStatuses(r)["PLAN_TASK_BODIES_COMPLETE"] != CheckWarning {
 		t.Fatalf("expected PLAN_TASK_BODIES_COMPLETE=warning, got %+v", r.Checks)
 	}
 }
@@ -200,7 +200,7 @@ func TestValidatePlan_Cycle(t *testing.T) {
 	if findingCodes(r)["PLAN_TASK_DEP_CYCLE"] == 0 {
 		t.Fatalf("expected cycle finding, got %+v", r.Findings)
 	}
-	if checkStatuses(r)["PLAN_TASK_DEPENDENCIES_VALID"] != "failed" {
+	if checkStatuses(r)["PLAN_TASK_DEPENDENCIES_VALID"] != CheckFailed {
 		t.Fatalf("expected PLAN_TASK_DEPENDENCIES_VALID=failed, got %+v", r.Checks)
 	}
 }

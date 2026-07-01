@@ -282,8 +282,11 @@ type ValidationResult struct {
 }
 
 // ValidationCheck reports the outcome of a single rule.
-// Status is "passed" when the rule has no findings, "failed" when it has at
-// least one error-severity finding, and "warning" when it has only warnings.
+//
+// Status must be one of the canonical constants defined in the validation
+// package: CheckPassed ("passed") — no matching findings; CheckFailed
+// ("failed") — at least one error-severity finding; CheckWarning ("warning")
+// — only warning-severity findings, no errors.
 type ValidationCheck struct {
 	Code    string `json:"code"`
 	Status  string `json:"status"`
@@ -292,20 +295,14 @@ type ValidationCheck struct {
 
 // ValidationFinding describes one specific problem discovered during validation.
 type ValidationFinding struct {
-	Code     string `json:"code"`
+	Code string `json:"code"`
+	// Severity must be one of the canonical constants defined in the validation
+	// package: SeverityError ("error") blocks persistence; SeverityWarning
+	// ("warning") is quality feedback and does not block.
 	Severity string `json:"severity"`
 	Path     string `json:"path"`
 	Message  string `json:"message"`
 	Hint     string `json:"hint"`
-}
-
-// ValidationErrorDetails is the payload placed inside error.details when a
-// validation fails. It includes the artifact, target artifact, and a list of
-// findings so the calling skill can correct the artifact and retry.
-type ValidationErrorDetails struct {
-	Artifact string              `json:"artifact"`
-	Target   string              `json:"target"`
-	Findings []ValidationFinding `json:"findings"`
 }
 
 // MockupEntry describes a single mockup folder (one per design artifact)

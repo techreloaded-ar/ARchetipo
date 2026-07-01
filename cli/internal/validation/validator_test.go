@@ -237,7 +237,7 @@ func TestValidatePRD_AllChecksPassed(t *testing.T) {
 		checks[c.Code] = c.Status
 	}
 	for _, code := range []string{"PRD_NOT_EMPTY", "PRD_NO_UNRESOLVED_PLACEHOLDERS", "PRD_REQUIRED_SECTIONS"} {
-		if checks[code] != "passed" {
+		if checks[code] != CheckPassed {
 			t.Errorf("expected %s to be passed, got %s", code, checks[code])
 		}
 	}
