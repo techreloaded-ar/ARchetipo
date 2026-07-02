@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
@@ -138,6 +139,76 @@ func TestEnsureDiffIntegrate_RealGit(t *testing.T) {
 	}
 	if _, err := os.Stat(worktreeAbs); !os.IsNotExist(err) {
 		t.Fatalf("worktree not removed after integrate")
+	}
+	if refExists(ctx, root, branch) {
+		t.Fatalf("branch not deleted after integrate")
+	}
+	if mergeCount(t, root) != 0 {
+		t.Fatalf("expected a fast-forward (no merge commit) when base had not moved")
+	}
+}
+
+// mergeCount returns the number of merge commits reachable from the current
+// HEAD, used to distinguish a fast-forward (0) from a real merge commit (>0).
+func mergeCount(t *testing.T, root string) int {
+	t.Helper()
+	cmd := exec.Command("git", "log", "--merges", "--oneline")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log --merges: %v\n%s", err, out)
+	}
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" {
+		return 0
+	}
+	return len(strings.Split(trimmed, "\n"))
+}
+
+// TestIntegrate_RealGit_MergeCommitWhenBaseDiverged verifies that when base has
+// moved on since the branch forked (fast-forward not possible), Integrate
+// falls back to an explicit merge commit so both sides' changes and an
+// audit-trail commit are preserved.
+func TestIntegrate_RealGit_MergeCommitWhenBaseDiverged(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	c := cfg()
+
+	branch, worktreeRel, _, err := Ensure(ctx, root, c, "US-001", c.Base)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	worktreeAbs := filepath.Join(root, worktreeRel)
+	commitInWorktree(t, worktreeAbs, "b.txt", "hello\n", "add b")
+
+	// Advance base independently (non-conflicting file) so fast-forward is
+	// not possible.
+	baseFile := filepath.Join(root, "base-only.txt")
+	if err := os.WriteFile(baseFile, []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-q", "-m", "advance base"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	if err := Integrate(ctx, root, c, branch, worktreeRel); err != nil {
+		t.Fatalf("Integrate: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "b.txt")); err != nil {
+		t.Fatalf("branch file missing on base after merge: %v", err)
+	}
+	if _, err := os.Stat(baseFile); err != nil {
+		t.Fatalf("base file missing after merge: %v", err)
+	}
+	if mergeCount(t, root) == 0 {
+		t.Fatalf("expected an explicit merge commit when base had diverged")
 	}
 	if refExists(ctx, root, branch) {
 		t.Fatalf("branch not deleted after integrate")
@@ -310,6 +381,24 @@ func TestIntegrate_RealGit_MissingCommitterIdentityIsNotReportedAsConflict(t *te
 	}
 	worktreeAbs := filepath.Join(root, worktreeRel)
 	commitInWorktree(t, worktreeAbs, "b.txt", "hello\n", "add b")
+	// Advance base independently so the merge cannot fast-forward and a real
+	// merge commit (requiring committer identity) is actually attempted.
+	if err := os.WriteFile(filepath.Join(root, "base-only.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commitOnBase := exec.Command("git", "add", ".")
+	commitOnBase.Dir = root
+	if out, err := commitOnBase.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	commitOnBaseCommit := exec.Command("git", "commit", "-q", "-m", "advance base")
+	commitOnBaseCommit.Dir = root
+	commitOnBaseCommit.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e")
+	if out, err := commitOnBaseCommit.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
 
 	err = Integrate(ctx, root, c, branch, worktreeRel)
 	if err == nil {

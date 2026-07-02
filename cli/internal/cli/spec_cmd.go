@@ -428,10 +428,11 @@ func newSpecIntegrateCmd(s streams) *cobra.Command {
 		Use:   "integrate US-XXX",
 		Short: "Merge a spec's worktree branch into base, clean up, and mark it DONE",
 		Long: "Integrates a reviewed spec: merges its branch into the base branch " +
-			"(--no-ff), removes the worktree, deletes the branch and transitions the " +
-			"spec to DONE. Requires the worktree workflow and that all blockers are " +
-			"already integrated. On merge conflict the merge is aborted and the " +
-			"conflicting files are reported (E_CONFLICT); resolve manually and retry.",
+			"(fast-forward when possible, otherwise an explicit --no-ff merge commit), " +
+			"removes the worktree, deletes the branch and transitions the spec to DONE. " +
+			"Requires the worktree workflow and that all blockers are already " +
+			"integrated. On merge conflict the merge is aborted and the conflicting " +
+			"files are reported (E_CONFLICT); resolve manually and retry.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := strings.TrimSpace(args[0])
