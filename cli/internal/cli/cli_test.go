@@ -428,6 +428,9 @@ func TestSpecShow_WorkdirBeforeAndAfterWorktreeStart(t *testing.T) {
 	if beforeData["workdir"] != root {
 		t.Fatalf("expected workdir before start=%s, got %v", root, beforeData["workdir"])
 	}
+	if err := os.WriteFile(".env.local", []byte("TOKEN=local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if res := runCLI(t, "", "spec", "start", "US-001"); res.exit != 0 {
 		t.Fatalf("start failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
@@ -442,6 +445,13 @@ func TestSpecShow_WorkdirBeforeAndAfterWorktreeStart(t *testing.T) {
 	spec, _ := afterData["spec"].(map[string]any)
 	if spec["worktree"] != filepath.Join(".archetipo", "worktrees", "US-001") {
 		t.Fatalf("expected persisted spec.worktree, got %v", spec["worktree"])
+	}
+	gotEnv, err := os.ReadFile(filepath.Join(wantWorkdir, ".env.local"))
+	if err != nil {
+		t.Fatalf("expected .env.local copied into worktree: %v", err)
+	}
+	if string(gotEnv) != "TOKEN=local\n" {
+		t.Fatalf("unexpected copied .env.local content: %q", gotEnv)
 	}
 }
 

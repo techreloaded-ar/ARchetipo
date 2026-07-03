@@ -198,6 +198,31 @@ func Resolve(repoRoot string, cfg domain.WorktreeConfig, code string) (rel strin
 	return rel, false
 }
 
+func copyRootEnvFiles(repoRoot, worktreeAbs string) error {
+	matches, err := filepath.Glob(filepath.Join(repoRoot, ".env*"))
+	if err != nil {
+		return fmt.Errorf("copying env files into worktree: %w", err)
+	}
+	for _, src := range matches {
+		info, err := os.Lstat(src)
+		if err != nil {
+			return fmt.Errorf("copying env files into worktree: inspecting %s: %w", filepath.Base(src), err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		body, err := os.ReadFile(src)
+		if err != nil {
+			return fmt.Errorf("copying env files into worktree: reading %s: %w", filepath.Base(src), err)
+		}
+		dst := filepath.Join(worktreeAbs, filepath.Base(src))
+		if err := os.WriteFile(dst, body, info.Mode().Perm()); err != nil {
+			return fmt.Errorf("copying env files into worktree: writing %s: %w", filepath.Base(dst), err)
+		}
+	}
+	return nil
+}
+
 // Ensure creates (idempotently) the branch and worktree for a spec forked from
 // forkRef. It returns the branch name, the worktree path (relative to
 // repoRoot), and the resolved fork-base SHA used as the diff parent.
@@ -225,6 +250,9 @@ func Ensure(ctx context.Context, repoRoot string, cfg domain.WorktreeConfig, cod
 			return "", "", "", fmt.Errorf("creating worktree dir: %w", err)
 		}
 		if _, err := runGit(ctx, repoRoot, "worktree", "add", worktreeAbs, branch); err != nil {
+			return "", "", "", err
+		}
+		if err := copyRootEnvFiles(repoRoot, worktreeAbs); err != nil {
 			return "", "", "", err
 		}
 	}

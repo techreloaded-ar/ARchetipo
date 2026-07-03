@@ -144,6 +144,79 @@ func TestEnsureDiffIntegrate_RealGit(t *testing.T) {
 	}
 }
 
+func TestEnsure_CopiesRootEnvFilesIntoNewWorktree(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	c := cfg()
+
+	envFiles := map[string]string{
+		".env":             "BASE_URL=http://localhost:3000\n",
+		".env.local":       "TOKEN=local\n",
+		".env.development": "MODE=development\n",
+	}
+	for name, body := range envFiles {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, ".env.d"), 0o755); err != nil {
+		t.Fatalf("mkdir .env.d: %v", err)
+	}
+
+	_, worktreeRel, _, err := Ensure(ctx, root, c, "US-001", c.Base)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	worktreeAbs := filepath.Join(root, worktreeRel)
+
+	for name, want := range envFiles {
+		got, err := os.ReadFile(filepath.Join(worktreeAbs, name))
+		if err != nil {
+			t.Fatalf("read copied %s: %v", name, err)
+		}
+		if string(got) != want {
+			t.Fatalf("copied %s = %q, want %q", name, got, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(worktreeAbs, ".env.d")); !os.IsNotExist(err) {
+		t.Fatalf("expected .env.d directory to be ignored, got err=%v", err)
+	}
+}
+
+func TestEnsure_DoesNotOverwriteEnvFilesInExistingWorktree(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	c := cfg()
+
+	if err := os.WriteFile(filepath.Join(root, ".env.local"), []byte("TOKEN=root\n"), 0o600); err != nil {
+		t.Fatalf("write root env: %v", err)
+	}
+	_, worktreeRel, _, err := Ensure(ctx, root, c, "US-001", c.Base)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	worktreeAbs := filepath.Join(root, worktreeRel)
+	worktreeEnv := filepath.Join(worktreeAbs, ".env.local")
+	if err := os.WriteFile(worktreeEnv, []byte("TOKEN=worktree\n"), 0o600); err != nil {
+		t.Fatalf("write worktree env: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".env.local"), []byte("TOKEN=changed-root\n"), 0o600); err != nil {
+		t.Fatalf("update root env: %v", err)
+	}
+
+	if _, _, _, err := Ensure(ctx, root, c, "US-001", c.Base); err != nil {
+		t.Fatalf("Ensure existing worktree: %v", err)
+	}
+
+	got, err := os.ReadFile(worktreeEnv)
+	if err != nil {
+		t.Fatalf("read worktree env: %v", err)
+	}
+	if string(got) != "TOKEN=worktree\n" {
+		t.Fatalf("existing worktree env was overwritten: %q", got)
+	}
+}
+
 // TestForkRef_StaleDoneBlockerBranch_RealGit reproduces the bug where a DONE
 // blocker still carries stale branch metadata after its branch was deleted by
 // integrate. ForkRef must ignore the stale branch and fork from base instead.
