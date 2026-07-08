@@ -165,40 +165,33 @@ golangci-lint run --timeout 5m ./...
 
 ## Testare anche lo shim npm, senza pubblicare
 
-Usa questa se devi verificare il comportamento del pacchetto `@techreloaded/archetipo` e del sub-package nativo della piattaforma corrente.
+Usa questa se devi verificare il comportamento del pacchetto `@techreloaded/archetipo` e del sub-package nativo della piattaforma corrente, cioè simulare quello che ottiene un utente con `npm install -g @techreloaded/archetipo` ma con il codice del repo.
 
 ```bash
 cd /path/to/ARchetipo
-export ARCHETIPO_REPO="$PWD"
+npm run install:dev
 
-PLATFORM="$(node -p "process.platform + '-' + process.arch")"
-BIN_NAME="$(node -p "process.platform === 'win32' ? 'archetipo.exe' : 'archetipo'")"
-SUBPKG="npm/archetipo-$PLATFORM"
-
-mkdir -p "$SUBPKG/bin"
-(
-  cd cli
-  go build \
-    -ldflags "-X github.com/techreloaded-ar/ARchetipo/cli/internal/version.Version=dev-local-npm" \
-    -o "$ARCHETIPO_REPO/$SUBPKG/bin/$BIN_NAME" \
-    ./cmd/archetipo
-)
-
-rm -rf npm/archetipo/skills npm/archetipo/runtime
-cp -R skills npm/archetipo/skills
-mkdir -p npm/archetipo/runtime
-cp .archetipo/config.yaml .archetipo/shared-runtime.md npm/archetipo/runtime/
-
-npm install -g "./$SUBPKG" "./npm/archetipo"
-archetipo version
+archetipo version   # es. 0.0.0-dev.g38acca5
 ```
+
+Lo script:
+
+- calcola la versione `0.0.0-dev.g<short-sha>` dal commit corrente (con suffisso `.dirty` se ci sono modifiche tracciate non committate), così `archetipo version` dice esattamente da quale build arriva l'installazione globale;
+- compila il binario Go della sola piattaforma corrente e prepara i pacchetti npm (shim + skill + runtime risincronizzati dalle sorgenti) in `.dev/npm-staging/`, senza toccare i file tracciati sotto `npm/` — il working tree resta pulito;
+- genera i `.tgz` con `npm pack` e li installa con `npm install -g`, verificando alla fine che il binario globale riporti la versione attesa.
 
 Per rimuovere il test globale:
 
 ```bash
-PLATFORM="$(node -p "process.platform + '-' + process.arch")"
-npm uninstall -g @techreloaded/archetipo "@techreloaded/archetipo-$PLATFORM"
+npm run uninstall:dev
 ```
+
+Note:
+
+- L'install dev sovrascrive un'eventuale installazione globale stabile di `@techreloaded/archetipo`; per ripristinarla: `npm install -g @techreloaded/archetipo`.
+- Se il prefix npm globale è di sistema, `npm install -g` può fallire per permessi: preferisci un prefix utente (nvm/volta) invece di sudo.
+- Il notifier di update può segnalare che sul registry esiste una versione "più recente" di `0.0.0-dev.*`: è atteso e innocuo.
+- Se hai `.dev/bin` o `.local/bin` nel `PATH` (flusso PATH-based qui sopra), quelli vincono sull'install globale: controlla con `which -a archetipo`.
 
 ### Variante release-style con GoReleaser
 
@@ -218,6 +211,6 @@ Nota: `npm run build:npm -- 0.0.0-local` sincronizza asset e versioni dentro `np
 |---|---|---|
 | `could not locate ARchetipo data directory` | Il binario locale non sa dove trovare `skills/` e runtime. | `export ARCHETIPO_DATA_DIR=/path/to/ARchetipo` |
 | `archetipo version` mostra una versione pubblicata | Nel `PATH` vince l'installazione npm globale. | `export PATH=/path/to/ARchetipo/.local/bin:$PATH` e poi `which -a archetipo` |
-| Lo shim npm dice che manca il native binary | Hai installato solo `npm/archetipo`, non il sub-package piattaforma. | Installa insieme `./npm/archetipo-$PLATFORM` e `./npm/archetipo` |
+| Lo shim npm dice che manca il native binary | È stato installato solo il pacchetto principale, non il sub-package piattaforma. | `npm run install:dev` (installa entrambi insieme) |
 | `archetipo init` copia skill vecchie | Stai usando asset npm non risincronizzati o `ARCHETIPO_DATA_DIR` punta altrove. | Punta `ARCHETIPO_DATA_DIR` alla root del repo o risincronizza `npm/archetipo/skills` |
 | Comandi `github` o `jira` falliscono in sandbox | Mancano credenziali o configurazione esterna. | Per smoke test locali usa `--connector file` |

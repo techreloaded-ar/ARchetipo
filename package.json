@@ -3,6 +3,8 @@
     "test": "npm run test:cli",
     "build:cli": "cd cli && go run github.com/goreleaser/goreleaser/v2@v2.15.4 release --snapshot --clean",
     "build:cli:dev": "node ./scripts/build-cli-dev.mjs",
+    "install:dev": "node ./scripts/install-dev.mjs",
+    "uninstall:dev": "node ./scripts/uninstall-dev.mjs",
     "release:cli": "cd cli && go run github.com/goreleaser/goreleaser/v2@v2.15.4 release --clean",
     "build:npm": "node ./scripts/build-npm.mjs",
     "publish:npm": "node ./scripts/publish-npm.mjs",
