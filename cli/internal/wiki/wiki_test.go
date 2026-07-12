@@ -56,6 +56,45 @@ sources:
 	}
 }
 
+func TestInitCreatesComponentSection(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(root, "components")); err != nil || !info.IsDir() {
+		t.Fatalf("components section missing or not a directory: info=%v err=%v", info, err)
+	}
+}
+
+func TestValidateRejectsNoncanonicalPagePath(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	page := `---
+id: architecture.auth
+type: architecture
+summary: Authentication boundaries
+status: draft
+---
+# Authentication
+`
+	if err := os.WriteFile(filepath.Join(root, "architecture-auth.md"), []byte(page), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := Validate(project, root)
+	if report.OK {
+		t.Fatal("expected noncanonical path to fail validation")
+	}
+	if len(report.Findings) != 1 || report.Findings[0].Code != "WIKI_NONCANONICAL_PATH" {
+		t.Fatalf("findings: %+v", report.Findings)
+	}
+	if report.Findings[0].Message != "page id architecture.auth must live at architecture/auth.md" {
+		t.Fatalf("message: %s", report.Findings[0].Message)
+	}
+}
+
 func TestValidateBrokenLinksAndStaleSources(t *testing.T) {
 	project := t.TempDir()
 	root := filepath.Join(project, "docs", "wiki")

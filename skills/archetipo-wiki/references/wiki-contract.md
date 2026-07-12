@@ -2,7 +2,7 @@
 
 ## Page format
 
-Ordinary pages live below `paths.wiki`, excluding `index.md`, `log.md`, and archived files below `sources/`.
+Ordinary pages live below `paths.wiki`, excluding `index.md`, `log.md`, and archived files below `sources/`. Their repository-relative path is derived from the stable page ID: replace every `.` with `/` and append `.md`. For example, `architecture.authentication` must live at `architecture/authentication.md`; an ID without dots such as `overview` lives at `overview.md`. Do not flatten a dotted ID into a hyphenated root filename.
 
 ```markdown
 ---
@@ -22,7 +22,9 @@ last_verified_at: optional-RFC3339
 # Authentication
 ```
 
-Allowed statuses are `draft`, `verified`, `needs-review`, and `superseded`. IDs remain stable across file moves. Summaries are compact routing descriptions. Use repository-relative paths for local evidence.
+Allowed statuses are `draft`, `verified`, `needs-review`, and `superseded`. IDs remain stable across content changes. Summaries are compact routing descriptions. Use repository-relative paths for local evidence. When the body needs a Wiki-style reference, target the stable page ID (for example, `[[domains.identity]]`) rather than its filesystem path.
+
+`archetipo wiki validate` reports `WIKI_NONCANONICAL_PATH` as an error when a page path does not match its ID-derived path. Move the page to the reported canonical path before publishing.
 
 ## CLI operations
 

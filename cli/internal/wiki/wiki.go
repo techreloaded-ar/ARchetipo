@@ -18,7 +18,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 )
 
-var sections = []string{"vision", "product", "architecture", "domains", "decisions", "engineering", "operations", "history", "sources"}
+var sections = []string{"vision", "product", "architecture", "domains", "components", "decisions", "engineering", "operations", "history", "sources"}
 
 type Page struct {
 	Meta domain.WikiPageMeta `json:"meta"`
@@ -127,6 +127,12 @@ func Validate(projectRoot, root string) Report {
 		} else {
 			ids[p.Meta.ID] = p
 		}
+		if p.Meta.ID != "" {
+			expected := canonicalPagePath(p.Meta.ID)
+			if p.Path != expected {
+				add("WIKI_NONCANONICAL_PATH", "page id "+p.Meta.ID+" must live at "+expected)
+			}
+		}
 		if p.Meta.Type == "" {
 			add("WIKI_MISSING_TYPE", "page type is required")
 		}
@@ -183,6 +189,10 @@ func Validate(projectRoot, root string) Report {
 		}
 	}
 	return Report{OK: ok, Pages: len(pages), Findings: findings}
+}
+
+func canonicalPagePath(id string) string {
+	return strings.ReplaceAll(id, ".", "/") + ".md"
 }
 
 func Search(root, query, pageType, status string, includeSources bool) ([]Page, error) {

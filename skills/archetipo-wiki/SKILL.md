@@ -19,7 +19,7 @@ Maintain `paths.wiki` as the canonical, progressively loaded project knowledge b
 1. Run `archetipo wiki init`.
 2. Run `archetipo wiki migrate` to archive an existing configured PRD and `docs/CODEMAP.md`; never treat migration as semantic ingestion.
 3. Inventory repository boundaries using manifests, top-level directories, entry points, public contracts, configuration, and tests. For a large repository, sample representative files per component and explicitly record uninspected areas.
-4. Create focused draft pages. Use one page per domain, component, decision, or operational concern; do not create a monolithic Codemap.
+4. Create focused draft pages. Use one page per domain, component, decision, or operational concern; do not create a monolithic Codemap. Derive every page path from its stable ID using the canonical mapping in the Wiki contract.
 5. Cite repository-relative source paths in frontmatter.
 6. Run `archetipo wiki validate`. Repair every error finding; review warnings and record genuine coverage gaps as `needs-review` pages.
 7. Run `archetipo wiki publish` only after the generated content is internally consistent.
