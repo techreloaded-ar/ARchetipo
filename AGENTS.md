@@ -132,6 +132,7 @@ Questa repo ha una harness E2E locale in Node.js che esercita la CLI compilata d
 
 - `node ./test/e2e/validate-inception-smoke.mjs`: compila CLI, inizializza sandbox file/pi, scrive un PRD invalido, verifica `archetipo validate prd` con exit `0`, `kind=validation_result` e `data.ok=false` includendo `PRD_PLACEHOLDER_LEFT` e `PRD_MISSING_SECTION`, poi scrive un PRD valido e verifica `kind=validation_result` con `data.ok=true`. Produce report HTML. Opzioni: `--workspace-root`, `--cleanup`. Nota: l'help cita `npm run test:validate-inception`, ma al momento non c'è uno script package corrispondente.
 - `npm run test:view-delete-smoke`: compila CLI, inizializza sandbox, aggiunge due spec, semina plan/review per `US-901`, avvia `archetipo view` su porta random e verifica via HTTP API che `DELETE /api/spec/US-901` rimuova la card, lasci `US-902`, restituisca poi 404 su `US-901` e cancelli spec/plan/review artifact.
+- `npm run test:wiki-smoke`: compila la CLI, inizializza una Wiki in un sandbox Git, crea una pagina draft e verifica validate, search, publish, promozione a `verified` e rigenerazione di `index.md`.
 
 Quando aggiungi o modifichi E2E, preferisci fixture esplicite con `.archetipo/config.yaml` completa, usa `env_required` per credenziali esterne, mantieni i report generati fuori dal commit e aggiorna questa sezione se cambia la semantica del runner.
 

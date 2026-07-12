@@ -78,18 +78,20 @@ Dopo l'inizializzazione, usa le skill `/archetipo-*` dentro il tuo AI coding age
 
 ## Workflow
 
-ARchetipo implementa lo Spec-Driven Development: la specifica è il contratto, e ogni incremento di prodotto attraversa `spec -> plan -> implement`.
+ARchetipo implementa uno Spec-Driven Development supportato dalla Wiki: la conoscenza viva guida ogni incremento e viene aggiornata attraverso `spec -> plan -> implement -> review`.
 
 ```mermaid
 flowchart LR
-    I["<b>Inception</b><br/><i>docs/PRD.md</i>"] --> S
+    I["<b>Inception</b><br/><i>PRD temporaneo</i>"] --> W["<b>Wiki viva</b><br/><i>docs/wiki/</i>"]
+    W --> S
     I -. concept opzionale .-> D["<b>Design</b><br/><i>docs/mockups/</i>"]
 
     subgraph Loop["Spec-Driven Loop"]
         direction TB
         S["<b>Spec</b><br/><i>.archetipo/backlog.yaml<br/>.archetipo/specs/</i>"] --> P["<b>Plan</b><br/><i>.archetipo/plans/</i>"]
-        P --> IM["<b>Implement</b><br/><i>codice + test + review</i>"]
-        IM -. spec successiva .-> S
+        P --> IM["<b>Implement</b><br/><i>codice + test + draft Wiki</i>"]
+        IM --> R["<b>Review</b><br/><i>accetta + pubblica</i>"]
+        R -. spec successiva .-> S
     end
 
     P -. serve UI .-> D
@@ -97,9 +99,9 @@ flowchart LR
 
 | Step | Skill | Output | Cosa succede |
 |---|---|---|---|
-| 1. Discovery | `/archetipo-inception` | `docs/PRD.md` | Definisce visione di prodotto, scope, personas, requisiti funzionali e architettura di base. |
+| 1. Discovery | `/archetipo-inception` | `docs/wiki/` | Produce un PRD temporaneo, lo compila in conoscenza viva e lo archivia come fonte. |
 | 2. Concept visivo, opzionale | `/archetipo-design` | `docs/mockups/` | Crea mockup HTML/CSS isolati senza toccare il codice applicativo. |
-| 3. Backlog | `/archetipo-spec` | `.archetipo/backlog.yaml`, `.archetipo/specs/` | Converte il PRD in spec con corpo user-story INVEST-compliant, oppure estende un backlog esistente. |
+| 3. Backlog | `/archetipo-spec` | `.archetipo/backlog.yaml`, `.archetipo/specs/` | Carica le pagine Wiki pertinenti e crea o estende user story INVEST-compliant. |
 | 4. Planning | `/archetipo-plan US-001` | `.archetipo/plans/US-001-plan.yaml` | Produce soluzione tecnica, task ordinati, dipendenze e strategia di test. |
 | 5. Code | `/archetipo-implement US-001` | Codice, test, note di review | Esegue il piano, lancia i test, conduce la review e porta la spec verso l'approvazione umana. |
 | 6. Accettazione | `/archetipo-review US-001` | Verdetto: `DONE` o feedback di rework | Presenta l'incremento consegnato (criteri, diff, evidenze di test) ed esegue il verdetto umano: approva o rimanda indietro con feedback. |
@@ -231,6 +233,7 @@ L'architettura della CLI è estendibile, ma i connector integrati oggi sono `fil
 | `archetipo-implement` | Esegue una spec pianificata attraverso codice, test, review e handoff. | "implementa US-005", "esegui la prossima spec pronta" |
 | `archetipo-review` | Facilita il gate di accettazione umano: approva verso `DONE` o rimanda indietro con feedback di rework. | "review US-005", "accetta la spec", "cosa c'è in attesa di review?" |
 | `archetipo-autopilot` | Esegue planning e implementazione su più spec eleggibili. | "fai tutto", "autopilot del backlog", "implementa tutte le spec" |
+| `archetipo-wiki` | Inizializza, consulta, importa, aggiorna e controlla la conoscenza viva. | "inizializza la Wiki", "documenta questa codebase", "aggiorna la conoscenza" |
 
 ---
 

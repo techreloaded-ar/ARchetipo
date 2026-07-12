@@ -1162,6 +1162,9 @@ func TestDoctor_PassesAfterInit(t *testing.T) {
 	if res := runCLI(t, "", "init", "--tool", "claude", "--connector", "file", "--yes"); res.exit != 0 {
 		t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
 	}
+	if res := runCLI(t, "", "wiki", "init"); res.exit != 0 {
+		t.Fatalf("wiki init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
 	res := runCLI(t, "", "doctor")
 	if res.exit != 0 {
 		t.Fatalf("doctor failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())

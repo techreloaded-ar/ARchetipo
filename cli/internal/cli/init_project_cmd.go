@@ -142,6 +142,7 @@ func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeY
 	}
 
 	fmt.Fprintln(s.out, "Done.")
+	fmt.Fprintln(s.out, "Next: run /archetipo-wiki bootstrap")
 	return nil
 }
 

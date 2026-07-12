@@ -25,6 +25,20 @@ archetipo validate plan US-001 --file plan.yaml
 
 Validation returns a normal JSON success envelope with `kind: "validation_result"` and `data.ok` set to `true` or `false` when validation runs successfully. Structural issues are reported in `data.findings`; error envelopes are reserved for process failures, so skills can repair artifacts before calling `prd write`, `spec add`, or `spec plan`.
 
+Living project knowledge is managed locally and independently of the configured connector:
+
+```bash
+archetipo wiki init
+archetipo wiki status
+archetipo wiki validate
+archetipo wiki search "authentication" --type architecture
+archetipo wiki affected --base main --head HEAD
+archetipo wiki publish
+archetipo wiki migrate
+```
+
+The CLI performs deterministic storage, indexing, evidence matching, and validation. The `archetipo-wiki` skill performs semantic bootstrap, ingest, refresh, query, and lint workflows.
+
 To build all release binaries locally from the repository root:
 
 ```bash
