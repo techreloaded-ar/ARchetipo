@@ -75,6 +75,7 @@ func newRootCmd(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 		newTaskCmd(s),
 		newValidateCmd(s),
 		newViewCmd(s),
+		newWikiCmd(s),
 		newVersionCmd(s),
 	)
 	return cmd
