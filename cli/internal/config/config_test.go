@@ -26,6 +26,9 @@ func TestDefaultWhenConfigMissing(t *testing.T) {
 	if c.Paths.PRD != "docs/PRD.md" {
 		t.Errorf("default PRD path: %q", c.Paths.PRD)
 	}
+	if c.Paths.Wiki != "docs/wiki/" {
+		t.Errorf("default Wiki path: %q", c.Paths.Wiki)
+	}
 }
 
 func TestLoadFromConfigFile(t *testing.T) {

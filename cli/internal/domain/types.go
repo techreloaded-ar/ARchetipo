@@ -156,8 +156,60 @@ type SetupInfo struct {
 // their own section (FileConfig for the file connector).
 type ConfigPaths struct {
 	PRD         string `json:"prd" yaml:"prd"`
+	Wiki        string `json:"wiki" yaml:"wiki"`
 	Mockups     string `json:"mockups" yaml:"mockups"`
 	TestResults string `json:"test_results" yaml:"test_results"`
+}
+
+// WikiStatus is the lifecycle state of a living-knowledge page.
+type WikiStatus string
+
+const (
+	WikiStatusDraft       WikiStatus = "draft"
+	WikiStatusVerified    WikiStatus = "verified"
+	WikiStatusNeedsReview WikiStatus = "needs-review"
+	WikiStatusSuperseded  WikiStatus = "superseded"
+)
+
+// WikiLink is an explicit relationship to another stable page ID.
+type WikiLink struct {
+	ID       string `json:"id" yaml:"id"`
+	Relation string `json:"relation,omitempty" yaml:"relation,omitempty"`
+}
+
+// WikiSource records provenance without copying source content into a page.
+type WikiSource struct {
+	Path     string `json:"path" yaml:"path"`
+	Revision string `json:"revision,omitempty" yaml:"revision,omitempty"`
+	Note     string `json:"note,omitempty" yaml:"note,omitempty"`
+}
+
+// WikiPageMeta is the required frontmatter contract for Wiki pages.
+type WikiPageMeta struct {
+	ID             string       `json:"id" yaml:"id"`
+	Type           string       `json:"type" yaml:"type"`
+	Summary        string       `json:"summary" yaml:"summary"`
+	Status         WikiStatus   `json:"status" yaml:"status"`
+	Links          []WikiLink   `json:"links,omitempty" yaml:"links,omitempty"`
+	Sources        []WikiSource `json:"sources,omitempty" yaml:"sources,omitempty"`
+	GitRevision    string       `json:"git_revision,omitempty" yaml:"git_revision,omitempty"`
+	LastVerifiedAt string       `json:"last_verified_at,omitempty" yaml:"last_verified_at,omitempty"`
+}
+
+// WikiFinding is one deterministic structural or evidence validation result.
+type WikiFinding struct {
+	Code     string `json:"code" yaml:"code"`
+	Severity string `json:"severity" yaml:"severity"`
+	PageID   string `json:"page_id,omitempty" yaml:"page_id,omitempty"`
+	Path     string `json:"path,omitempty" yaml:"path,omitempty"`
+	Message  string `json:"message" yaml:"message"`
+}
+
+// WikiImpact is persisted by plans to make documentation work reviewable.
+type WikiImpact struct {
+	Read                  []string `json:"read,omitempty" yaml:"read,omitempty"`
+	UpdateAfterAcceptance []string `json:"update_after_acceptance,omitempty" yaml:"update_after_acceptance,omitempty"`
+	Create                []string `json:"create,omitempty" yaml:"create,omitempty"`
 }
 
 // FileConfig mirrors the `file:` section of .archetipo/config.yaml. Holds the
