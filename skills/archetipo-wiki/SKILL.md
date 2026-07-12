@@ -1,6 +1,6 @@
 ---
 name: archetipo-wiki
-description: Bootstrap, query, ingest, refresh, migrate, and lint ARchetipo's Markdown project Wiki. Use for an existing codebase without living documentation, importing project documents, answering project questions from canonical knowledge, repairing Wiki drift, or maintaining knowledge outside a single spec workflow.
+description: Bootstrap, query, ingest, refresh, and lint ARchetipo's Markdown project Wiki. Use for an existing codebase without living documentation, importing project documents, answering project questions from canonical knowledge, repairing Wiki drift, or maintaining knowledge outside a single spec workflow.
 ---
 
 # ARchetipo Wiki
@@ -17,9 +17,9 @@ Maintain `paths.wiki` as the canonical, progressively loaded project knowledge b
 ## Bootstrap
 
 1. Run `archetipo wiki init`.
-2. Run `archetipo wiki migrate` to archive an existing configured PRD and `docs/CODEMAP.md`; never treat migration as semantic ingestion.
-3. Inventory repository boundaries using manifests, top-level directories, entry points, public contracts, configuration, and tests. For a large repository, sample representative files per component and explicitly record uninspected areas.
-4. Create focused draft pages. Use one page per domain, component, decision, or operational concern; do not create a monolithic Codemap. Derive every page path from its stable ID using the canonical mapping in the Wiki contract.
+2. Resolve the configured `data.paths.prd` from `data.project_root`. If a non-empty PRD exists, read it as product context and preserve it verbatim at `<paths.wiki>/sources/prd.md`. Treat the archived copy as provenance and cite it from derived pages where relevant. If the PRD is absent, continue from repository evidence without creating a placeholder source.
+3. Inventory repository boundaries using manifests, top-level directories, entry points, public contracts, configuration, and tests. Reconcile implementation evidence with the PRD instead of assuming either is current; represent material conflicts as `needs-review`. For a large repository, sample representative files per component and explicitly record uninspected areas.
+4. Create focused draft pages from the available PRD and repository evidence. Use one page per domain, component, decision, or operational concern. Derive every page path from its stable ID using the canonical mapping in the Wiki contract.
 5. Cite repository-relative source paths in frontmatter.
 6. Run `archetipo wiki validate`. Repair every error finding; review warnings and record genuine coverage gaps as `needs-review` pages.
 7. Run `archetipo wiki publish` only after the generated content is internally consistent.
@@ -59,5 +59,5 @@ Maintain `paths.wiki` as the canonical, progressively loaded project knowledge b
 - Never branch on connector type; Wiki storage is local for every connector.
 - Branch on `error.code`, never `error.message`.
 - Do not publish invalid drafts or convert uncertain claims to `verified`.
-- Do not delete legacy source documents during migration.
+- Do not delete or modify source documents while archiving or ingesting them.
 - Do not load all source files or all Wiki pages when index and search can bound the context.

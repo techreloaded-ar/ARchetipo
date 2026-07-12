@@ -16,7 +16,7 @@ import (
 
 func newWikiCmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "wiki", Short: "Living project Wiki operations"}
-	root.AddCommand(newWikiInitCmd(s), newWikiStatusCmd(s), newWikiValidateCmd(s), newWikiSearchCmd(s), newWikiAffectedCmd(s), newWikiPublishCmd(s), newWikiMigrateCmd(s))
+	root.AddCommand(newWikiInitCmd(s), newWikiStatusCmd(s), newWikiValidateCmd(s), newWikiSearchCmd(s), newWikiAffectedCmd(s), newWikiPublishCmd(s))
 	return root
 }
 
@@ -146,26 +146,4 @@ func newWikiPublishCmd(s streams) *cobra.Command {
 			return map[string]any{"published": count, "root": root}, nil
 		})
 	}}
-}
-
-func newWikiMigrateCmd(s streams) *cobra.Command {
-	var prd, codemap string
-	cmd := &cobra.Command{Use: "migrate", Short: "Archive legacy PRD and Codemap sources", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
-		return withWiki(cmd, s, "wiki_migration_result", false, func(cfg config.Config, root string) (any, error) {
-			if prd == "" {
-				prd = cfg.Paths.PRD
-			}
-			if codemap == "" {
-				codemap = "docs/CODEMAP.md"
-			}
-			items, err := wiki.Migrate(cfg.ProjectRoot, root, prd, codemap)
-			if err != nil {
-				return nil, iox.NewInternal("migrating Wiki sources", err)
-			}
-			return map[string]any{"imported": items, "count": len(items), "requires_semantic_ingest": len(items) > 0}, nil
-		})
-	}}
-	cmd.Flags().StringVar(&prd, "prd", "", "legacy PRD path")
-	cmd.Flags().StringVar(&codemap, "codemap", "", "legacy Codemap path")
-	return cmd
 }

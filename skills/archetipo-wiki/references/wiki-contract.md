@@ -36,8 +36,6 @@ All commands receive no stdin payload and emit the standard `archetipo/v1` envel
 - `archetipo wiki search [query] [--type TYPE] [--status STATUS] [--include-sources]` → `kind: wiki_search_result`, compact `data.items` without page bodies.
 - `archetipo wiki affected [--base REV --head REV | --file PATH...]` → `kind: wiki_affected_result`, changed files and matching evidence-backed pages.
 - `archetipo wiki publish` → `kind: wiki_publish_result`, `data.published`. It promotes valid drafts, rebuilds the index, records Git revision and verification time, and appends the log.
-- `archetipo wiki migrate [--prd PATH] [--codemap PATH]` → `kind: wiki_migration_result`, archived paths and `requires_semantic_ingest`. It preserves sources but does not interpret them.
-
 Relevant error codes:
 
 - `E_PRECONDITION`: Wiki missing; initialize it where appropriate.

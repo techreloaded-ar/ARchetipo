@@ -311,37 +311,6 @@ func Publish(projectRoot, root string) (int, error) {
 	return published, nil
 }
 
-func Migrate(projectRoot, root, prdPath, codemapPath string) ([]string, error) {
-	if _, err := Init(root); err != nil {
-		return nil, err
-	}
-	imported := []string{}
-	for _, source := range []struct{ name, path string }{{"prd.md", prdPath}, {"codemap.md", codemapPath}} {
-		if source.path == "" {
-			continue
-		}
-		path := source.path
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(projectRoot, path)
-		}
-		raw, err := os.ReadFile(path)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		target := filepath.Join(root, "sources", source.name)
-		if err := atomicWrite(target, raw); err != nil {
-			return nil, err
-		}
-		rel, _ := filepath.Rel(projectRoot, target)
-		imported = append(imported, filepath.ToSlash(rel))
-	}
-	sort.Strings(imported)
-	return imported, nil
-}
-
 func renderPage(p Page) ([]byte, error) {
 	meta, err := yaml.Marshal(p.Meta)
 	if err != nil {

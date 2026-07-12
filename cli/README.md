@@ -34,7 +34,6 @@ archetipo wiki validate
 archetipo wiki search "authentication" --type architecture
 archetipo wiki affected --base main --head HEAD
 archetipo wiki publish
-archetipo wiki migrate
 ```
 
 The CLI performs deterministic storage, indexing, evidence matching, and validation. The `archetipo-wiki` skill performs semantic bootstrap, ingest, refresh, query, and lint workflows.

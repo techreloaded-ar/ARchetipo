@@ -128,21 +128,3 @@ sources:
 		t.Fatalf("findings: %+v", report.Findings)
 	}
 }
-
-func TestMigrateArchivesLegacyArtifacts(t *testing.T) {
-	project := t.TempDir()
-	root := filepath.Join(project, "docs", "wiki")
-	if err := os.MkdirAll(filepath.Join(project, "docs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(project, "docs", "PRD.md"), []byte("# PRD\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	items, err := Migrate(project, root, "docs/PRD.md", "docs/CODEMAP.md")
-	if err != nil || len(items) != 1 {
-		t.Fatalf("items=%v err=%v", items, err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "sources", "prd.md")); err != nil {
-		t.Fatal(err)
-	}
-}

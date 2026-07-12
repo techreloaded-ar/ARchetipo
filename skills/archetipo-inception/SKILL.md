@@ -22,7 +22,6 @@ Read `.archetipo/shared-runtime.md` for Language Policy, Assumptions and Questio
    - `archetipo prd write`
    - `archetipo validate prd`
    - `archetipo wiki init`
-   - `archetipo wiki migrate`
    - `archetipo wiki validate`
    - `archetipo wiki publish`
 
@@ -67,7 +66,7 @@ Load context progressively and keep the working context lean:
 
 ## Compile Discovery Into the Wiki
 
-After the PRD validation gate passes, initialize the Wiki and convert the accepted discovery into focused draft pages for vision, users, outcomes, product principles, capabilities, requirements, constraints, and initial architecture. Preserve the PRD through `archetipo wiki migrate`; it is provenance under `sources/`, not an operational dependency for later skills. Follow the page contract in the installed `archetipo-wiki` skill, run `archetipo wiki validate`, repair error findings, then run `archetipo wiki publish`. Do not create a Codemap.
+After the PRD validation gate passes, initialize the Wiki and preserve the configured PRD verbatim at `<paths.wiki>/sources/prd.md`. Convert the accepted discovery into focused draft pages for vision, users, outcomes, product principles, capabilities, requirements, constraints, and initial architecture, citing the archived PRD where relevant. The archived PRD is provenance, not an operational dependency for later skills. Follow the page contract in the installed `archetipo-wiki` skill, run `archetipo wiki validate`, repair error findings, then run `archetipo wiki publish`.
 
 ## PRD Validation Gate
 

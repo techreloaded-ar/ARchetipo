@@ -13,16 +13,16 @@ ARchetipo uses a local, Markdown, Git-versioned Wiki as the canonical project kn
 
 Every ordinary page has YAML frontmatter with a stable `id`, `type`, routing `summary`, lifecycle `status`, explicit `links`, provenance `sources`, `git_revision`, and `last_verified_at`. Allowed states are `draft`, `verified`, `needs-review`, and `superseded`.
 
-The CLI owns deterministic filesystem operations: scaffolding, parsing, indexing, search, graph validation, evidence checks, affected-page discovery, atomic publication, and legacy migration. Skills own semantic interpretation and content generation. Connectors continue to own backlog and workflow only; Wiki commands never branch on connector type.
+The CLI owns deterministic filesystem operations: scaffolding, parsing, indexing, search, graph validation, evidence checks, affected-page discovery, and atomic publication. Skills own semantic interpretation, source archiving, and content generation. Connectors continue to own backlog and workflow only; Wiki commands never branch on connector type.
 
-`index.md` is a routing catalog rather than a cumulative project document. Source code is cited rather than copied. Imported PRDs and Codemaps are retained below `sources/` but excluded from ordinary context search unless explicitly requested.
+`index.md` is a routing catalog rather than a cumulative project document. Source code is cited rather than copied. An existing configured PRD is used as product context during bootstrap and retained below `sources/` as provenance.
 
 Development skills load the index first and only then select relevant pages. Plans declare `wiki_impact`. Implementation may prepare draft pages, while review validates and publishes them after acceptance.
 
 ## Consequences
 
 - New projects compile discovery into the Wiki and archive the PRD as provenance.
-- Existing projects bootstrap from repository boundaries and may migrate legacy PRD or Codemap artifacts.
-- Agents can progressively load project knowledge without embeddings or a monolithic Codemap.
+- Existing projects bootstrap from repository boundaries and incorporate an existing configured PRD when present.
+- Agents can progressively load project knowledge without embeddings or a monolithic project document.
 - Wiki changes become part of the same reviewable Git history as code changes.
 - Structural correctness is machine validated; semantic quality remains the responsibility of skills and reviewers.
