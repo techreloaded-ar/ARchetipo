@@ -91,6 +91,19 @@ This is an acceptance map, not a task summary. Every criterion must have evidenc
 
 ---
 
+## Wiki Impact
+
+```yaml
+wiki_impact:
+  read: [{WIKI_PAGE_IDS_USED_FOR_PLANNING}]
+  update_after_acceptance: [{EXISTING_PAGE_IDS_EXPECTED_TO_CHANGE}]
+  create: [{NEW_PAGE_IDS_OR_DECISION_IDS_EXPECTED}]
+```
+
+Use empty arrays when no impact is expected. This block is the reviewable documentation contract consumed by implementation and acceptance review.
+
+---
+
 {IF_MOCKUP_GENERATED}
 > 🎨 Mockups for this spec are available in `{config.paths.mockups}/{US-CODE}/`
 {/IF_MOCKUP_GENERATED}

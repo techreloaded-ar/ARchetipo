@@ -110,6 +110,10 @@ ARchetipo artifacts must be usable by smaller or lower-cost models during later 
 - In implementation plans, split work into small tasks with local context, clear allowed changes, verification commands, done criteria, and blockers.
 - Do not leave architectural choices implicit for implementation. If a decision matters, put it in the plan.
 - Before persisting generated specs or plans, run the relevant `archetipo validate ...` command and repair blocking issues instead of saving malformed artifacts.
+
+## Living Wiki
+
+`paths.wiki` is connector-independent local project knowledge. Read `docs/wiki/index.md` before selecting pages and use `archetipo wiki search` to keep context bounded. Skills that change code use `archetipo wiki affected` to identify documentation candidates; implementation prepares draft changes and review publishes them only after acceptance. `archetipo wiki validate` reports structural findings through `kind:"validation_result"` and `data.ok`, not through an error envelope. Never branch Wiki behavior on connector type.
 - Treat warnings as quality feedback. They do not block persistence, but fix them when the repair is straightforward.
 
 ## Conversation Rules

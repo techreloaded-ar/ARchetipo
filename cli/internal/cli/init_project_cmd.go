@@ -47,6 +47,7 @@ var allSkills = []string{
 	"archetipo-plan",
 	"archetipo-review",
 	"archetipo-spec",
+	"archetipo-wiki",
 }
 
 func newInitProjectCmd(s streams) *cobra.Command {

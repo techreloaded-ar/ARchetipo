@@ -49,6 +49,7 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
    - `archetipo spec next --status {config.workflow.statuses.todo}`
    - `archetipo validate plan {US-CODE} --file <path>`
    - `archetipo spec plan {US-CODE} --file <path>`
+   - `archetipo wiki search [query]`
 
 #### Step 1 — Spec Selection
 
@@ -70,6 +71,7 @@ After selecting the spec, read ALL context in a **single turn with parallel tool
 - `{config.paths.prd}` (if exists)
 - `{config.paths.mockups}/` contents (if exists)
 - Relevant codebase files: schema/model definition files, existing related source files, existing tests
+- `{config.paths.wiki}/index.md` and only the pages selected from the spec's `Wiki context` IDs or `archetipo wiki search`
 - If the target spec has a `Blocked by` field with values other than `-`, read those blocking specs from the backlog to understand preconditions and shared context
 - If `data.tasks` from Step 1 was non-empty, a plan already exists. In **Rework mode** (see below) do NOT ask — preserve the existing tasks and append. Otherwise ask the user: overwrite, create a new revision, or skip. Never silently overwrite.
 

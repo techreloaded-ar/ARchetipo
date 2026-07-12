@@ -1,0 +1,4 @@
+interface:
+  display_name: "ARchetipo Wiki"
+  short_description: "Maintain living project knowledge"
+  default_prompt: "Use $archetipo-wiki to bootstrap or maintain the project Wiki."
