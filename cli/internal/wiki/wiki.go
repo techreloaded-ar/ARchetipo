@@ -256,7 +256,7 @@ func GitChangedFiles(projectRoot, base, head string) ([]string, error) {
 func Publish(projectRoot, root string) (int, error) {
 	report := Validate(projectRoot, root)
 	if !report.OK {
-		return 0, fmt.Errorf("Wiki validation failed")
+		return 0, fmt.Errorf("wiki validation failed")
 	}
 	pages, err := Load(root, false)
 	if err != nil {
