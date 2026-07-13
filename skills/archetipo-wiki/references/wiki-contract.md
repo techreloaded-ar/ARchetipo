@@ -1,56 +1,140 @@
-# Wiki contract and CLI protocol
+# DDD Wiki contract and CLI protocol
 
 ## Page format
 
-Ordinary pages live below `paths.wiki`, excluding `index.md`, `log.md`, and archived files below `sources/`. Their repository-relative path is derived from the stable page ID: replace every `.` with `/` and append `.md`. For example, `architecture.authentication` must live at `architecture/authentication.md`; an ID without dots such as `overview` lives at `overview.md`. Do not flatten a dotted ID into a hyphenated root filename.
+Ordinary pages live below `paths.wiki`, excluding `index.md`, `log.md`, and `sources/`. A stable ID maps to a path by replacing `.` with `/` and appending `.md`.
 
 ```markdown
 ---
-id: architecture.authentication
-type: architecture
-summary: Authentication boundaries, token lifecycle, and trust relationships
-status: draft
+id: domains.trips
+type: domain
+classification: candidate
+summary: Trip lifecycle, stages, publication, and owned trip data
+status: generated
 links:
-  - id: domains.identity
-    relation: implements
+  - id: architecture.context-map
+    relation: participates-in
 sources:
-  - path: cli/internal/auth/service.go
-    revision: optional-git-sha
-coverage:
-  - path: cli
-    status: documented
-    pages: [architecture, engineering.code-map]
-git_revision: optional-git-sha
-last_verified_at: optional-RFC3339
+  - path: src/app/api/trips/[id]/publish/route.ts
+    role: inbound-api
+    symbol: PATCH
+  - path: src/lib/trips/tripValidationService.ts
+    role: application-domain
+    symbol: TripValidationService.validateForPublication
+issues:
+  - code: UNREACHABLE_REVIEW_STATE
+    summary: The schema declares a review state but no inspected write path reaches it
 ---
-# Authentication
+# Trips
+
+<!-- archetipo:wiki section=purpose -->
+...
 ```
 
-Allowed statuses are `draft`, `verified`, `needs-review`, and `superseded`. IDs remain stable across content changes. Summaries are compact routing descriptions. Use repository-relative paths for local evidence. When the body needs a Wiki-style reference, target the stable page ID (for example, `[[domains.identity]]`) rather than its filesystem path.
+Allowed persisted statuses are only:
 
-`archetipo wiki validate` reports `WIKI_NONCANONICAL_PATH` as an error when a page path does not match its ID-derived path. Move the page to the reported canonical path before publishing.
+- `generated`: created or materially changed, useful for routing but not explicitly reviewed;
+- `reviewed`: explicitly approved against recorded content and evidence.
 
-`engineering.code-map` additionally carries one `coverage` entry for every boundary returned by `wiki inspect`. Allowed coverage statuses are `documented`, `mapped-only`, `needs-review`, and `excluded`. `documented` requires at least one valid page ID. The other statuses require a concise `note`; use them to make sampling, uncertainty, and intentional exclusions visible.
+`stale` and `attention` are derived display states. `stale` means reviewed content or cited evidence changed. `attention` means the page contains unresolved `issues`. Generated pages must not carry `review`; reviewed pages require CLI-produced `review.content_hash`, `review.evidence_revision`, and `review.reviewed_at`.
 
-Body references in `[[...]]` must target an ordinary stable page ID. Archived files below `sources/` are provenance rather than Wiki pages and use standard Markdown links.
+An issue is an approval blocker, so reserve it for a concrete contradiction, unreachable modeled behavior, or evidence gap that makes the page unsafe to trust. Candidate classification, shared-runtime coupling, tradeoffs, and descriptive uncertainties are not issues by themselves; record them in the relevant body section.
+
+Delete replaced pages after updating links; Git is the history.
+
+## Domain and bounded-context model
+
+Domains and contexts share one page type: `type: domain`. `classification` is required:
+
+- `candidate`: a capability cluster supported by evidence but not yet proven to be an autonomous bounded context;
+- `bounded-context`: vocabulary, ownership, contracts, runtime behavior, and boundary are sufficiently evidenced.
+
+Every domain page contains these language-neutral markers with meaningful content:
+
+```markdown
+<!-- archetipo:wiki section=purpose -->
+<!-- archetipo:wiki section=language -->
+<!-- archetipo:wiki section=ownership -->
+<!-- archetipo:wiki section=contracts -->
+<!-- archetipo:wiki section=flows -->
+<!-- archetipo:wiki section=code -->
+<!-- archetipo:wiki section=invariants -->
+<!-- archetipo:wiki section=verification -->
+```
+
+The code section maps UI, inbound APIs, application/domain logic, owned data, integrations, configuration, and tests. Ownership means the data and business decisions controlled by the domain, not the people maintaining it. The flows section separates observed runtime transitions from declared-but-unobserved states. For state machines, an observed transition requires an exact write assignment, its source-state guard when present, and the cited source path. Derive `A -> B` from the code that assigns `B`, never from an enum member, endpoint name, comment, UI label, or expected workflow. If code guarded on `A` writes `C` while `B` exists only in the model, document `A -> C` and flag `B` as unreachable. The invariants section separates constraints enforced by executable code/schema/tests from assumptions or declared intent; a TypeScript type alone is not runtime enforcement. `bounded-context` is never inferred from directory layout alone.
+
+## Context map and code map
+
+`architecture.context-map` is the logical DDD view. It contains:
+
+Its page type is `context-map`; `engineering.code-map` uses `code-map`, `overview` uses `overview`, and `operations.development` uses `operations`.
+
+```markdown
+<!-- archetipo:wiki section=contexts -->
+<!-- archetipo:wiki section=relationships -->
+<!-- archetipo:wiki section=shared -->
+<!-- archetipo:wiki section=uncertainties -->
+```
+
+It describes domain responsibilities and relationships. Use specialized DDD relationship names only when evidence supports them.
+
+`engineering.code-map` is the physical crosswalk from domains to code. It contains:
+
+```markdown
+<!-- archetipo:wiki section=domain-code -->
+<!-- archetipo:wiki section=shared -->
+<!-- archetipo:wiki section=unmapped -->
+<!-- archetipo:wiki section=coverage -->
+```
+
+Its main table maps each domain to UI, entry points, application/domain code, owned data, integrations, tests, and its Wiki page. It does not repeat architecture prose.
+
+## Deterministic coverage
+
+`engineering.code-map` frontmatter represents every item returned by `wiki inspect`:
+
+```yaml
+coverage:
+  - kind: boundary
+    path: src
+    status: mapped
+    pages: [engineering.code-map]
+  - kind: capability
+    path: trip
+    status: mapped
+    pages: [domains.trips]
+  - kind: capability
+    path: ui
+    status: partial
+    note: Shared UI primitives are mapped physically but are not a business domain
+```
+
+Allowed kinds are `boundary` and `capability`. Allowed statuses are:
+
+- `mapped`: requires one or more valid page IDs;
+- `partial`: requires a reason;
+- `excluded`: requires a reason.
 
 ## CLI operations
 
 All commands receive no stdin payload and emit the standard `archetipo/v1` envelope.
 
-- `archetipo wiki init` → `kind: wiki_init_result`, `data.root`, `data.created`. Idempotently creates the scaffold.
-- `archetipo wiki inspect` → `kind: wiki_inspection_result`; compact codebase inventory with `data.boundaries`, evidence categories, optional `data.prd`, exclusions, and uninspected areas. It returns no source contents.
-- `archetipo wiki status` → `kind: wiki_status`, page/status counts and validation findings.
-- `archetipo wiki validate [--profile bootstrap]` → `kind: validation_result`, `data.ok`, `data.pages`, `data.findings`. The bootstrap profile also checks core pages and inspection coverage. An invalid Wiki is a successful command with `data.ok: false`.
-- `archetipo wiki search [query] [--type TYPE] [--status STATUS] [--include-sources]` → `kind: wiki_search_result`, compact `data.items` without page bodies.
-- `archetipo wiki affected [--base REV --head REV | --file PATH...]` → `kind: wiki_affected_result`, changed files and matching evidence-backed pages.
-- `archetipo wiki catalog` → `kind: wiki_catalog_result`, `data.cataloged`. Rebuilds index and log without changing page status.
-- `archetipo wiki publish` → `kind: wiki_publish_result`, `data.published`. It promotes valid drafts, rebuilds the index, records Git revision and verification time, and appends the log.
+- `archetipo wiki init` → `kind: wiki_init_result`, `data.root`, `data.created`.
+- `archetipo wiki inspect` → `kind: wiki_inspection_result`; content-free deterministic inventory including `data.boundaries`, `data.capability_candidates`, evidence categories, exclusions, uninspected areas, and optional `data.project_sources`.
+- `archetipo wiki status` → `kind: wiki_status`; derived state counts and page items plus findings.
+- `archetipo wiki validate [--profile bootstrap]` → `kind: validation_result`, `data.ok`, `data.pages`, `data.findings`. Bootstrap validation also requires core DDD pages and full boundary/capability coverage.
+- `archetipo wiki search [query] [--type TYPE] [--status STATE] [--include-sources]` → `kind: wiki_search_result` without page bodies.
+- `archetipo wiki affected [--base REV --head REV | --file PATH...]` → `kind: wiki_affected_result`.
+- `archetipo wiki catalog` → `kind: wiki_catalog_result`, `data.cataloged`; rebuilds navigation without changing review state.
+- `archetipo wiki reset <page-id...>` → `kind: wiki_reset_result`, `data.reset`; returns selected reviewed pages to generated and removes review metadata before semantic edits.
+- `archetipo wiki approve [page-id...]` → `kind: wiki_approve_result`, `data.approved`; marks issue-free generated pages reviewed and records review metadata.
 
-Use `catalog` after generated or refreshed content. Use `publish` only after explicit human approval; structural validation alone never authorizes promotion to `verified`.
+`wiki publish` is a deprecated compatibility alias for approving all generated pages. Skills use `approve` only.
+
 Relevant error codes:
 
-- `E_PRECONDITION`: Wiki missing or repository evidence absent; initialize where appropriate, but never fabricate bootstrap content.
-- `E_INVALID_INPUT`: malformed config, arguments, or Git revisions; repair the input.
-- `E_CONFLICT`: publication blocked by validation; inspect `wiki validate` findings.
-- `E_INTERNAL`: filesystem or encoding failure; stop without inventing success.
+- `E_PRECONDITION`: Wiki missing or repository evidence absent;
+- `E_INVALID_INPUT`: malformed config, arguments, page IDs, or Git revisions;
+- `E_CONFLICT`: approval blocked by validation errors or unresolved issues;
+- `E_INTERNAL`: filesystem, Git, or encoding failure.

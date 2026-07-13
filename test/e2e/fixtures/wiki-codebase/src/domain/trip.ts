@@ -3,3 +3,5 @@ export interface Trip {
   title: string;
   distanceKm: number;
 }
+
+export type TripStatus = "Draft" | "ReadyForReview" | "Published";

@@ -89,7 +89,7 @@ flowchart LR
     subgraph Loop["Spec-Driven Loop"]
         direction TB
         S["<b>Spec</b><br/><i>.archetipo/backlog.yaml<br/>.archetipo/specs/</i>"] --> P["<b>Plan</b><br/><i>.archetipo/plans/</i>"]
-        P --> IM["<b>Implement</b><br/><i>codice + test + draft Wiki</i>"]
+        P --> IM["<b>Implement</b><br/><i>codice + test + aggiornamenti Wiki generated</i>"]
         IM --> R["<b>Review</b><br/><i>accetta + pubblica</i>"]
         R -. spec successiva .-> S
     end
@@ -233,7 +233,7 @@ L'architettura della CLI è estendibile, ma i connector integrati oggi sono `fil
 | `archetipo-implement` | Esegue una spec pianificata attraverso codice, test, review e handoff. | "implementa US-005", "esegui la prossima spec pronta" |
 | `archetipo-review` | Facilita il gate di accettazione umano: approva verso `DONE` o rimanda indietro con feedback di rework. | "review US-005", "accetta la spec", "cosa c'è in attesa di review?" |
 | `archetipo-autopilot` | Esegue planning e implementazione su più spec eleggibili. | "fai tutto", "autopilot del backlog", "implementa tutte le spec" |
-| `archetipo-wiki` | Inizializza, consulta, importa, aggiorna e controlla la conoscenza viva. | "inizializza la Wiki", "documenta questa codebase", "aggiorna la conoscenza" |
+| `archetipo-wiki` | Costruisce una mappa DDD codebase-first di domini, bounded context candidati, relazioni logiche e ownership fisica di codice e test. | "inizializza la Wiki", "mappa i domini", "aggiorna la conoscenza" |
 
 ---
 

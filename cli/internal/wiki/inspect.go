@@ -15,26 +15,27 @@ const representativeLimit = 8
 
 // Inspection is a compact, content-free inventory used to ground semantic Wiki bootstrap.
 type Inspection struct {
-	ProjectRoot     string               `json:"project_root"`
-	Revision        string               `json:"revision,omitempty"`
-	Files           int                  `json:"files"`
-	Languages       []InspectionCount    `json:"languages"`
-	Manifests       []string             `json:"manifests"`
-	Workspaces      []string             `json:"workspaces"`
-	SourceRoots     []string             `json:"source_roots"`
-	Boundaries      []InspectionBoundary `json:"boundaries"`
-	EntryPoints     []string             `json:"entry_points"`
-	PublicContracts []string             `json:"public_contracts"`
-	Routes          []string             `json:"routes"`
-	Schemas         []string             `json:"schemas"`
-	Tests           []string             `json:"tests"`
-	Automation      []string             `json:"automation"`
-	Infrastructure  []string             `json:"infrastructure"`
-	Configuration   []string             `json:"configuration"`
-	Documentation   []string             `json:"documentation"`
-	PRD             InspectionSource     `json:"prd"`
-	Excluded        []string             `json:"excluded"`
-	Uninspected     []string             `json:"uninspected"`
+	ProjectRoot     string                 `json:"project_root"`
+	Revision        string                 `json:"revision,omitempty"`
+	Files           int                    `json:"files"`
+	Languages       []InspectionCount      `json:"languages"`
+	Manifests       []string               `json:"manifests"`
+	Workspaces      []string               `json:"workspaces"`
+	SourceRoots     []string               `json:"source_roots"`
+	Boundaries      []InspectionBoundary   `json:"boundaries"`
+	Capabilities    []InspectionCapability `json:"capability_candidates"`
+	EntryPoints     []string               `json:"entry_points"`
+	PublicContracts []string               `json:"public_contracts"`
+	Routes          []string               `json:"routes"`
+	Schemas         []string               `json:"schemas"`
+	Tests           []string               `json:"tests"`
+	Automation      []string               `json:"automation"`
+	Infrastructure  []string               `json:"infrastructure"`
+	Configuration   []string               `json:"configuration"`
+	Documentation   []string               `json:"documentation"`
+	ProjectSources  []InspectionSource     `json:"project_sources"`
+	Excluded        []string               `json:"excluded"`
+	Uninspected     []string               `json:"uninspected"`
 }
 
 type InspectionCount struct {
@@ -49,9 +50,23 @@ type InspectionBoundary struct {
 	Representatives []string `json:"representatives"`
 }
 
+// InspectionCapability is a deterministic cluster of code signals. It is an
+// input to DDD interpretation, not a claim that the cluster is a bounded context.
+type InspectionCapability struct {
+	ID            string   `json:"id"`
+	EntryPoints   []string `json:"entry_points"`
+	UI            []string `json:"ui"`
+	Application   []string `json:"application"`
+	Domain        []string `json:"domain"`
+	Data          []string `json:"data"`
+	Contracts     []string `json:"contracts"`
+	Tests         []string `json:"tests"`
+	Configuration []string `json:"configuration"`
+}
+
 type InspectionSource struct {
-	Present bool   `json:"present"`
-	Path    string `json:"path,omitempty"`
+	Path string `json:"path"`
+	Kind string `json:"kind"`
 }
 
 // Inspect inventories repository paths without returning source or secret contents.
@@ -66,6 +81,7 @@ func Inspect(projectRoot, wikiRoot, prdPath string) (Inspection, error) {
 	result := Inspection{ProjectRoot: projectRoot, Revision: gitRevision(projectRoot)}
 	languages := map[string]int{}
 	boundaryFiles := map[string][]string{}
+	safePaths := []string{}
 	excludedSensitive := 0
 	for _, rel := range paths {
 		rel = filepath.ToSlash(filepath.Clean(rel))
@@ -79,9 +95,12 @@ func Inspect(projectRoot, wikiRoot, prdPath string) (Inspection, error) {
 			excludedSensitive++
 			continue
 		}
+		safePaths = append(safePaths, rel)
 		result.Files++
 		base := filepath.Base(rel)
 		ext := strings.ToLower(filepath.Ext(base))
+		lower := strings.ToLower(rel)
+		testFile := isTest(lower, base)
 		if language := languageForExtension(ext); language != "" {
 			languages[language]++
 		}
@@ -94,20 +113,19 @@ func Inspect(projectRoot, wikiRoot, prdPath string) (Inspection, error) {
 		if root := sourceRoot(rel); root != "" {
 			result.SourceRoots = append(result.SourceRoots, root)
 		}
-		if isEntryPoint(rel, base) {
+		if !testFile && isEntryPoint(rel, base) {
 			result.EntryPoints = append(result.EntryPoints, rel)
 		}
-		if isPublicContract(rel, base, ext) {
+		if !testFile && isPublicContract(rel, base, ext) {
 			result.PublicContracts = append(result.PublicContracts, rel)
 		}
-		lower := strings.ToLower(rel)
-		if isRoute(lower) {
+		if !testFile && isRoute(lower) {
 			result.Routes = append(result.Routes, rel)
 		}
-		if isSchema(lower, ext) {
+		if !testFile && isSchema(lower, ext) {
 			result.Schemas = append(result.Schemas, rel)
 		}
-		if isTest(lower, base) {
+		if testFile {
 			result.Tests = append(result.Tests, rel)
 		}
 		if isAutomation(lower, base) {
@@ -146,6 +164,7 @@ func Inspect(projectRoot, wikiRoot, prdPath string) (Inspection, error) {
 		}
 		result.Boundaries = append(result.Boundaries, InspectionBoundary{Path: path, Kind: boundaryKind(path), Files: len(files), Representatives: representatives})
 	}
+	result.Capabilities = buildCapabilityCandidates(safePaths)
 	sort.Slice(result.Boundaries, func(i, j int) bool { return result.Boundaries[i].Path < result.Boundaries[j].Path })
 	for _, list := range []*[]string{&result.Manifests, &result.Workspaces, &result.SourceRoots, &result.EntryPoints, &result.PublicContracts, &result.Routes, &result.Schemas, &result.Tests, &result.Automation, &result.Infrastructure, &result.Configuration, &result.Documentation, &result.Uninspected} {
 		*list = uniqueSorted(*list)
@@ -156,7 +175,7 @@ func Inspect(projectRoot, wikiRoot, prdPath string) (Inspection, error) {
 			abs = filepath.Join(projectRoot, filepath.FromSlash(prdPath))
 		}
 		if info, statErr := os.Stat(abs); statErr == nil && !info.IsDir() && info.Size() > 0 {
-			result.PRD = InspectionSource{Present: true, Path: filepath.ToSlash(prdPath)}
+			result.ProjectSources = append(result.ProjectSources, InspectionSource{Path: filepath.ToSlash(prdPath), Kind: "configured-product-document"})
 		}
 	}
 	result.Excluded = []string{"repository metadata", "dependency and build directories", "configured Wiki root"}
@@ -349,6 +368,213 @@ func representativeScore(path string) int {
 		score += 3
 	}
 	return score
+}
+
+type capabilityAccumulator struct {
+	entryPoints   []string
+	ui            []string
+	application   []string
+	domain        []string
+	data          []string
+	contracts     []string
+	tests         []string
+	configuration []string
+}
+
+func buildCapabilityCandidates(paths []string) []InspectionCapability {
+	clusters := map[string]*capabilityAccumulator{}
+	for _, path := range paths {
+		if isTest(strings.ToLower(path), filepath.Base(path)) {
+			continue
+		}
+		id := capabilityID(path)
+		if id == "" {
+			continue
+		}
+		cluster := clusters[id]
+		if cluster == nil {
+			cluster = &capabilityAccumulator{}
+			clusters[id] = cluster
+		}
+		cluster.add(capabilityRole(path), path)
+	}
+	aliases := map[string][]string{}
+	for id := range clusters {
+		compact := compactCapability(id)
+		aliases[compact] = append(aliases[compact], id)
+	}
+	for _, path := range paths {
+		for _, id := range capabilityIDsInPath(path, aliases) {
+			cluster := clusters[id]
+			if isTest(strings.ToLower(path), filepath.Base(path)) {
+				cluster.tests = append(cluster.tests, path)
+				continue
+			}
+			cluster.add(capabilityRole(path), path)
+		}
+	}
+	result := make([]InspectionCapability, 0, len(clusters))
+	for id, cluster := range clusters {
+		candidate := InspectionCapability{
+			ID:            id,
+			EntryPoints:   limitedUnique(cluster.entryPoints),
+			UI:            limitedUnique(cluster.ui),
+			Application:   limitedUnique(cluster.application),
+			Domain:        limitedUnique(cluster.domain),
+			Data:          limitedUnique(cluster.data),
+			Contracts:     limitedUnique(cluster.contracts),
+			Tests:         limitedUnique(cluster.tests),
+			Configuration: limitedUnique(cluster.configuration),
+		}
+		if capabilitySignalGroups(candidate) >= 2 {
+			result = append(result, candidate)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
+}
+
+func (cluster *capabilityAccumulator) add(role, path string) {
+	switch role {
+	case "entry_point":
+		cluster.entryPoints = append(cluster.entryPoints, path)
+	case "ui":
+		cluster.ui = append(cluster.ui, path)
+	case "domain":
+		cluster.domain = append(cluster.domain, path)
+	case "data":
+		cluster.data = append(cluster.data, path)
+	case "contract":
+		cluster.contracts = append(cluster.contracts, path)
+	case "configuration":
+		cluster.configuration = append(cluster.configuration, path)
+	default:
+		cluster.application = append(cluster.application, path)
+	}
+}
+
+func capabilityID(path string) string {
+	parts := strings.Split(filepath.ToSlash(path), "/")
+	for index, part := range parts {
+		lower := strings.ToLower(part)
+		switch lower {
+		case "api", "controllers", "controller", "routes", "route":
+			if id := nextCapabilityPart(parts, index+1); id != "" {
+				return id
+			}
+		case "components", "component", "features", "feature", "domains", "domain", "modules", "module", "services", "service", "lib", "hooks":
+			if id := nextCapabilityPart(parts, index+1); id != "" {
+				return id
+			}
+		case "app", "pages":
+			if index+1 < len(parts) && strings.ToLower(parts[index+1]) != "api" {
+				if id := nextCapabilityPart(parts, index+1); id != "" {
+					return id
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func nextCapabilityPart(parts []string, start int) string {
+	for _, raw := range parts[start:] {
+		part := strings.ToLower(strings.TrimSuffix(raw, filepath.Ext(raw)))
+		if part == "webhooks" || part == "webhook" {
+			continue
+		}
+		if isTechnicalPathPart(part) {
+			continue
+		}
+		return normalizeCapabilityID(part)
+	}
+	return ""
+}
+
+func isTechnicalPathPart(part string) bool {
+	if part == "" || strings.HasPrefix(part, "[") || strings.HasPrefix(part, "(") {
+		return true
+	}
+	switch part {
+	case "src", "app", "api", "admin", "internal", "public", "private", "common", "shared", "core", "utils", "types", "interfaces", "providers", "actions", "handlers", "middleware", "unit", "integration", "e2e", "test", "tests", "route", "routes", "page", "layout", "index", "main", "server", "service", "services", "ui", "prisma":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeCapabilityID(value string) string {
+	value = strings.Trim(strings.ToLower(value), "-_.")
+	if strings.HasSuffix(value, "ies") && len(value) > 4 {
+		return strings.TrimSuffix(value, "ies") + "y"
+	}
+	if strings.HasSuffix(value, "s") && !strings.HasSuffix(value, "ss") && len(value) > 4 {
+		return strings.TrimSuffix(value, "s")
+	}
+	return value
+}
+
+func capabilityRole(path string) string {
+	lower := strings.ToLower(filepath.ToSlash(path))
+	base := filepath.Base(lower)
+	ext := strings.ToLower(filepath.Ext(base))
+	if isRoute(lower) || strings.Contains(lower, "/controllers/") {
+		return "entry_point"
+	}
+	if strings.Contains(lower, "/components/") || strings.HasSuffix(lower, "/page.tsx") || strings.HasSuffix(lower, "/page.jsx") || strings.Contains(lower, "/pages/") {
+		return "ui"
+	}
+	if strings.Contains(lower, "/domain/") || strings.Contains(lower, "/domains/") {
+		return "domain"
+	}
+	if isSchema(lower, ext) || strings.Contains(lower, "/models/") || strings.Contains(lower, "/entities/") {
+		return "data"
+	}
+	if isPublicContract(path, filepath.Base(path), ext) {
+		return "contract"
+	}
+	if isConfiguration(filepath.Base(path), ext) {
+		return "configuration"
+	}
+	return "application"
+}
+
+func capabilityIDsInPath(path string, aliases map[string][]string) []string {
+	matched := map[string]bool{}
+	for _, raw := range strings.Split(strings.ToLower(filepath.ToSlash(path)), "/") {
+		part := normalizeCapabilityID(strings.TrimSuffix(raw, filepath.Ext(raw)))
+		for _, id := range aliases[compactCapability(part)] {
+			matched[id] = true
+		}
+	}
+	result := make([]string, 0, len(matched))
+	for id := range matched {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func compactCapability(value string) string {
+	return strings.NewReplacer("-", "", "_", "", ".", "").Replace(value)
+}
+
+func capabilitySignalGroups(candidate InspectionCapability) int {
+	groups := 0
+	for _, count := range []int{len(candidate.EntryPoints), len(candidate.UI), len(candidate.Application), len(candidate.Domain), len(candidate.Data), len(candidate.Contracts), len(candidate.Tests), len(candidate.Configuration)} {
+		if count > 0 {
+			groups++
+		}
+	}
+	return groups
+}
+
+func limitedUnique(items []string) []string {
+	items = uniqueSorted(items)
+	if len(items) > representativeLimit {
+		return items[:representativeLimit]
+	}
+	return items
 }
 
 func uniqueSorted(items []string) []string {

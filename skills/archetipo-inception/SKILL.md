@@ -67,7 +67,7 @@ Load context progressively and keep the working context lean:
 
 ## Compile Discovery Into the Wiki
 
-After the PRD validation gate passes, follow the installed `archetipo-wiki` bootstrap workflow: inspect the codebase first, preserve the configured PRD verbatim at `<paths.wiki>/sources/prd.md`, and reconcile implemented state with product intent. Create the required codebase map plus focused draft pages for supported vision, users, outcomes, principles, capabilities, requirements, constraints, and architecture. Run `archetipo wiki validate --profile bootstrap`, repair errors, then run `archetipo wiki catalog`; leave pages draft until human review.
+After the inception artifact validation gate passes, follow the installed `archetipo-wiki` bootstrap workflow: inspect available code first, build the DDD domain/context and code maps, then archive optional project sources and reconcile implemented state with product intent. Run `archetipo wiki validate --profile bootstrap`, repair errors, then run `archetipo wiki catalog`; leave pages `generated` until explicit review.
 
 ## PRD Validation Gate
 

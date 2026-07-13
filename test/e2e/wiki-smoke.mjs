@@ -33,7 +33,7 @@ try {
 id: architecture.runtime
 type: architecture
 summary: Runtime boundaries
-status: draft
+status: generated
 ---
 # Runtime
 `);
@@ -42,10 +42,10 @@ status: draft
   assert.equal(validation.data.ok, true);
   assert.equal(run(["wiki", "search", "runtime"]).data.count, 1);
   assert.equal(run(["wiki", "catalog"]).data.cataloged, 1);
-  assert.match(readFileSync(join(pageDir, "runtime.md"), "utf8"), /status: draft/);
-  assert.match(readFileSync(join(sandbox, "docs", "wiki", "index.md"), "utf8"), /\| draft \|/);
-  assert.equal(run(["wiki", "publish"]).data.published, 1);
-  assert.match(readFileSync(join(pageDir, "runtime.md"), "utf8"), /status: verified/);
+  assert.match(readFileSync(join(pageDir, "runtime.md"), "utf8"), /status: generated/);
+  assert.match(readFileSync(join(sandbox, "docs", "wiki", "index.md"), "utf8"), /\| generated \|/);
+  assert.equal(run(["wiki", "approve", "architecture.runtime"]).data.approved, 1);
+  assert.match(readFileSync(join(pageDir, "runtime.md"), "utf8"), /status: reviewed/);
   assert.match(readFileSync(join(sandbox, "docs", "wiki", "index.md"), "utf8"), /architecture\.runtime/);
   console.log("wiki smoke: pass");
 } finally {

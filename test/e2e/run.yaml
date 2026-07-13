@@ -64,10 +64,11 @@ scenarios:
       - /archetipo-wiki Bootstrap the project Wiki from repository evidence without asking follow-up questions.
     verify_wiki_bootstrap:
       expect_prd: false
-      forbid_verified: true
+      forbid_reviewed: true
+      min_issues: 1
       required_pages:
         - overview
-        - architecture
+        - architecture.context-map
         - engineering.code-map
         - operations.development
 
@@ -79,15 +80,15 @@ scenarios:
       - /archetipo-wiki Bootstrap the project Wiki, preserve the PRD, and explicitly record every conflict with implemented code without asking follow-up questions.
     verify_wiki_bootstrap:
       expect_prd: true
-      forbid_verified: true
-      min_needs_review: 1
+      forbid_reviewed: true
+      min_issues: 1
       required_pages:
         - overview
-        - architecture
+        - architecture.context-map
         - engineering.code-map
         - operations.development
       page_assertions:
-        architecture:
+        overview:
           includes:
             - TypeScript
 

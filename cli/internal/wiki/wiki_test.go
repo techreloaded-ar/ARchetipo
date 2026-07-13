@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 )
 
-func TestLifecycleSearchAffectedAndPublish(t *testing.T) {
+func TestLifecycleSearchAffectedAndApprove(t *testing.T) {
 	project := t.TempDir()
 	root := filepath.Join(project, "docs", "wiki")
 	if _, err := Init(root); err != nil {
@@ -23,7 +25,7 @@ func TestLifecycleSearchAffectedAndPublish(t *testing.T) {
 id: architecture.auth
 type: architecture
 summary: Authentication boundaries and token flow
-status: draft
+status: generated
 sources:
   - path: src/auth.go
 ---
@@ -39,7 +41,7 @@ sources:
 	if !report.OK {
 		t.Fatalf("validation failed: %+v", report.Findings)
 	}
-	items, err := Search(root, "token", "", "", false)
+	items, err := Search(project, root, "token", "", "", false)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("search: items=%d err=%v", len(items), err)
 	}
@@ -47,16 +49,42 @@ sources:
 	if err != nil || len(affected) != 1 {
 		t.Fatalf("affected: items=%d err=%v", len(affected), err)
 	}
-	published, err := Publish(project, root)
-	if err != nil || published != 1 {
-		t.Fatalf("publish: count=%d err=%v", published, err)
+	approved, err := Approve(project, root, []string{"architecture.auth"})
+	if err != nil || approved != 1 {
+		t.Fatalf("approve: count=%d err=%v", approved, err)
 	}
-	loaded, err := Load(root, false)
-	if err != nil || loaded[0].Meta.Status != "verified" {
-		t.Fatalf("load after publish: %+v err=%v", loaded, err)
+	loaded, err := Load(root)
+	if err != nil || loaded[0].Meta.Status != "reviewed" || loaded[0].Meta.Review == nil {
+		t.Fatalf("load after approve: %+v err=%v", loaded, err)
+	}
+	reset, err := Reset(project, root, []string{"architecture.auth"})
+	if err != nil || reset != 1 {
+		t.Fatalf("reset: count=%d err=%v", reset, err)
+	}
+	loaded, err = Load(root)
+	if err != nil || loaded[0].Meta.Status != "generated" || loaded[0].Meta.Review != nil {
+		t.Fatalf("load after reset: %+v err=%v", loaded, err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "index.md")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSearchIncludesVerbatimArchivedSources(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sources", "vision.md"), []byte("# Raw source\n\nDistinctive roadmap phrase."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	items, err := Search(project, root, "distinctive roadmap", "source", "", true)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("archived source search: items=%+v err=%v", items, err)
+	}
+	if items[0].Path != "sources/vision.md" || items[0].Meta.ID != "source:vision.md" || items[0].Body != "" {
+		t.Fatalf("unexpected archived source result: %+v", items[0])
 	}
 }
 
@@ -83,7 +111,7 @@ func TestValidateRejectsNoncanonicalPagePath(t *testing.T) {
 id: architecture.auth
 type: architecture
 summary: Authentication boundaries
-status: draft
+status: generated
 ---
 # Authentication
 `
@@ -112,7 +140,7 @@ func TestValidateBrokenLinksAndStaleSources(t *testing.T) {
 id: domains.billing
 type: domain
 summary: Billing rules
-status: verified
+status: generated
 links:
   - id: missing.page
 sources:
@@ -149,7 +177,7 @@ func TestValidateRejectsBrokenBodyWikiLink(t *testing.T) {
 id: overview
 type: overview
 summary: Project overview
-status: draft
+status: generated
 ---
 # Overview
 
@@ -180,17 +208,19 @@ func TestValidateBootstrapCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeCorePage(t, root, "overview", "overview", "package.json", "")
-	writeCorePage(t, root, "architecture", "architecture", "src/index.ts", "")
+	writeCorePage(t, root, "architecture.context-map", "context-map", "src/index.ts", "")
 	writeCorePage(t, root, "operations.development", "operations", "package.json", "")
 	coverage := `coverage:
-  - path: .
-    status: documented
+  - kind: boundary
+    path: .
+    status: mapped
     pages: [overview]
-  - path: src
-    status: documented
-    pages: [architecture]
+  - kind: boundary
+    path: src
+    status: mapped
+    pages: [architecture.context-map]
 `
-	writeCorePage(t, root, "engineering.code-map", "engineering", "src", coverage)
+	writeCorePage(t, root, "engineering.code-map", "code-map", "src", coverage)
 
 	report, err := ValidateBootstrap(project, root, "")
 	if err != nil {
@@ -205,7 +235,7 @@ func TestValidateBootstrapCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw = []byte(strings.Replace(string(raw), "  - path: src\n    status: documented\n    pages: [architecture]\n", "", 1))
+	raw = []byte(strings.Replace(string(raw), "  - kind: boundary\n    path: src\n    status: mapped\n    pages: [architecture.context-map]\n", "", 1))
 	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -246,9 +276,9 @@ func TestValidateBootstrapRequiresExistingCoreEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeCorePage(t, root, "overview", "overview", "missing.md", "")
-	writeCorePage(t, root, "architecture", "architecture", "README.md", "")
+	writeCorePage(t, root, "architecture.context-map", "context-map", "README.md", "")
 	writeCorePage(t, root, "operations.development", "operations", "README.md", "")
-	writeCorePage(t, root, "engineering.code-map", "engineering", "README.md", "")
+	writeCorePage(t, root, "engineering.code-map", "code-map", "README.md", "")
 	report, err := ValidateBootstrap(project, root, "")
 	if err != nil {
 		t.Fatal(err)
@@ -264,8 +294,8 @@ func TestValidateCoverageExclusionRequiresNote(t *testing.T) {
 	if _, err := Init(root); err != nil {
 		t.Fatal(err)
 	}
-	extra := "coverage:\n  - path: legacy\n    status: excluded\n"
-	writeCorePage(t, root, "engineering.code-map", "engineering", "README.md", extra)
+	extra := "coverage:\n  - kind: boundary\n    path: legacy\n    status: excluded\n"
+	writeCorePage(t, root, "engineering.code-map", "code-map", "README.md", extra)
 	report := Validate(project, root)
 	if report.OK || !hasFinding(report, "WIKI_INVALID_COVERAGE") {
 		t.Fatalf("expected invalid coverage finding: %+v", report.Findings)
@@ -286,22 +316,186 @@ func TestValidateCoverageExclusionRequiresNote(t *testing.T) {
 	}
 }
 
-func TestCatalogPreservesDraftStatus(t *testing.T) {
+func TestCatalogPreservesGeneratedStatus(t *testing.T) {
 	project := t.TempDir()
 	root := filepath.Join(project, "docs", "wiki")
 	if _, err := Init(root); err != nil {
 		t.Fatal(err)
 	}
 	writeCorePage(t, root, "overview", "overview", "README.md", "")
-	if _, err := Catalog(root); err != nil {
+	if _, err := Catalog(project, root); err != nil {
 		t.Fatal(err)
 	}
 	index, err := os.ReadFile(filepath.Join(root, "index.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(index), "| draft |") {
-		t.Fatalf("catalog should preserve draft status:\n%s", index)
+	if !strings.Contains(string(index), "| generated |") {
+		t.Fatalf("catalog should preserve generated state:\n%s", index)
+	}
+}
+
+func TestDomainPagesRequireDDDClassificationAndSections(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	writeCorePage(t, root, "domains.trips", "domain", "README.md", "classification: candidate\n")
+	report := Validate(project, root)
+	if !report.OK {
+		t.Fatalf("complete candidate domain should validate: %+v", report.Findings)
+	}
+
+	path := filepath.Join(root, "domains", "trips.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = []byte(strings.Replace(string(raw), "<!-- archetipo:wiki section=ownership -->", "", 1))
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report = Validate(project, root)
+	if report.OK || !hasFinding(report, "WIKI_DDD_SECTION_MISSING") {
+		t.Fatalf("expected missing DDD section: %+v", report.Findings)
+	}
+}
+
+func TestDomainPagesRequireRepositoryEvidence(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	writeCorePage(t, root, "domains.trips", "domain", "README.md", "classification: candidate\n")
+	path := filepath.Join(root, "domains", "trips.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = []byte(strings.Replace(string(raw), "sources:\n  - path: README.md\n    role: application\n", "", 1))
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := Validate(project, root)
+	if report.OK || !hasFinding(report, "WIKI_DOMAIN_SOURCE_MISSING") {
+		t.Fatalf("expected missing domain evidence: %+v", report.Findings)
+	}
+}
+
+func TestValidateBootstrapRequiresConfiguredSourceArchive(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("# Project"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "docs", "Vision.MD"), []byte("# Intent"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCorePage(t, root, "overview", "overview", "README.md", "")
+	writeCorePage(t, root, "architecture.context-map", "context-map", "README.md", "")
+	writeCorePage(t, root, "operations.development", "operations", "README.md", "")
+	writeCorePage(t, root, "engineering.code-map", "code-map", "README.md", "coverage:\n  - kind: boundary\n    path: .\n    status: mapped\n    pages: [overview]\n")
+
+	report, err := ValidateBootstrap(project, root, "docs/Vision.MD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.OK || !hasFinding(report, "WIKI_PROJECT_SOURCE_NOT_ARCHIVED") {
+		t.Fatalf("expected missing source archive: %+v", report.Findings)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sources", "vision.md"), []byte("# Intent"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateBootstrap(project, root, "docs/Vision.MD")
+	if err != nil || !report.OK {
+		t.Fatalf("archived source should validate: report=%+v err=%v", report, err)
+	}
+}
+
+func TestPageStateDerivesAttentionAndStale(t *testing.T) {
+	page := Page{Meta: domain.WikiPageMeta{Status: domain.WikiStatusGenerated, Issues: []domain.WikiIssue{{Code: "CONFLICT", Summary: "Code and intent differ"}}}, Body: "body"}
+	if state := PageState(t.TempDir(), page); state != "attention" {
+		t.Fatalf("state=%s", state)
+	}
+	page.Meta.Issues = nil
+	page.Meta.Status = domain.WikiStatusReviewed
+	page.Meta.Review = &domain.WikiReview{ContentHash: "sha256:old", EvidenceRevision: "unavailable", ReviewedAt: "2026-07-13T00:00:00Z"}
+	if state := PageState(t.TempDir(), page); state != "stale" {
+		t.Fatalf("state=%s", state)
+	}
+}
+
+func TestPageStateBecomesStaleWhenSemanticMetadataChanges(t *testing.T) {
+	page := Page{
+		Meta: domain.WikiPageMeta{
+			ID:      "overview",
+			Type:    "overview",
+			Summary: "Original summary",
+			Status:  domain.WikiStatusReviewed,
+		},
+		Body: "# Overview\n",
+	}
+	page.Meta.Review = &domain.WikiReview{
+		ContentHash:      pageContentHash(page),
+		EvidenceRevision: "unavailable",
+		ReviewedAt:       "2026-07-13T00:00:00Z",
+	}
+	if state := PageState(t.TempDir(), page); state != "reviewed" {
+		t.Fatalf("state before metadata change=%s", state)
+	}
+	page.Meta.Summary = "Changed summary"
+	if state := PageState(t.TempDir(), page); state != "stale" {
+		t.Fatalf("state after metadata change=%s", state)
+	}
+}
+
+func TestApprovedPageBecomesStaleWhenEvidenceChanges(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("# Project\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "add", "README.md")
+	git(t, project, "commit", "-qm", "baseline")
+	writeCorePage(t, root, "overview", "overview", "README.md", "")
+	if _, err := Approve(project, root, []string{"overview"}); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := Load(root)
+	if err != nil || PageState(project, pages[0]) != "reviewed" {
+		t.Fatalf("expected reviewed page: %+v err=%v", pages, err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("# Changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if state := PageState(project, pages[0]); state != "stale" {
+		t.Fatalf("state=%s", state)
+	}
+}
+
+func TestApproveRejectsUnresolvedIssues(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	writeCorePage(t, root, "overview", "overview", "README.md", "issues:\n  - code: OPEN_BOUNDARY\n    summary: Ownership is unresolved\n")
+	if _, err := Approve(project, root, []string{"overview"}); err == nil || !strings.Contains(err.Error(), "unresolved issues") {
+		t.Fatalf("expected unresolved issue conflict, got %v", err)
 	}
 }
 
@@ -312,10 +506,19 @@ func writeCorePage(t *testing.T, root, id, pageType, source, extra string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := "---\nid: " + id + "\ntype: " + pageType + "\nsummary: " + id + " summary\nstatus: draft\nsources:\n  - path: " + source + "\n" + extra + "---\n# " + id + "\n"
+	body := "---\nid: " + id + "\ntype: " + pageType + "\nsummary: " + id + " summary\nstatus: generated\nsources:\n  - path: " + source + "\n    role: application\n" + extra + "---\n# " + id + "\n" + requiredSectionBody(id, pageType)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func requiredSectionBody(id, pageType string) string {
+	page := Page{Meta: domain.WikiPageMeta{ID: id, Type: pageType}}
+	var body strings.Builder
+	for _, section := range requiredSectionsForPage(page) {
+		body.WriteString("\n<!-- archetipo:wiki section=" + section + " -->\nContent for " + section + ".\n")
+	}
+	return body.String()
 }
 
 func hasFinding(report Report, code string) bool {

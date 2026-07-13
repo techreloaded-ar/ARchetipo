@@ -33,13 +33,14 @@ archetipo wiki inspect
 archetipo wiki status
 archetipo wiki validate
 archetipo wiki validate --profile bootstrap
-archetipo wiki search "authentication" --type architecture
+archetipo wiki search "authentication" --type domain
 archetipo wiki affected --base main --head HEAD
 archetipo wiki catalog
-archetipo wiki publish
+archetipo wiki reset domains.identity
+archetipo wiki approve domains.identity
 ```
 
-The CLI performs deterministic codebase inspection, storage, indexing, evidence matching, and validation. The `archetipo-wiki` skill interprets that evidence for semantic bootstrap, ingest, refresh, query, and lint workflows. Bootstrap catalogs draft pages without promoting them; `wiki publish` remains the post-review promotion step.
+The CLI performs deterministic capability clustering, code/evidence mapping, indexing, freshness checks, and DDD Wiki validation. The `archetipo-wiki` skill interprets candidates into domains or bounded contexts. Bootstrap catalogs `generated` pages; explicit `wiki approve` records review metadata for selected issue-free pages.
 
 To build all release binaries locally from the repository root:
 

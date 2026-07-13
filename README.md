@@ -89,7 +89,7 @@ flowchart LR
     subgraph Loop["Spec-Driven Loop"]
         direction TB
         S["<b>Spec</b><br/><i>.archetipo/backlog.yaml<br/>.archetipo/specs/</i>"] --> P["<b>Plan</b><br/><i>.archetipo/plans/</i>"]
-        P --> IM["<b>Implement</b><br/><i>code + tests + Wiki drafts</i>"]
+        P --> IM["<b>Implement</b><br/><i>code + tests + generated Wiki updates</i>"]
         IM --> R["<b>Review</b><br/><i>accept + publish</i>"]
         R -. next spec .-> S
     end
@@ -240,7 +240,7 @@ The CLI architecture is extensible, but the built-in connectors today are `file`
 | `archetipo-implement` | Executes a planned spec through code, tests, review, and handoff. | "implement US-005", "run the next ready spec" |
 | `archetipo-review` | Facilitates the human acceptance gate: approve to `DONE` or send back with rework feedback. | "review US-005", "accept the spec", "what's waiting for review?" |
 | `archetipo-autopilot` | Runs planning and implementation across multiple eligible specs. | "run everything", "autopilot the backlog", "implement all specs" |
-| `archetipo-wiki` | Builds a codebase-first project map, then queries, ingests, refreshes, and lints living knowledge; PRDs are optional intent sources. | "bootstrap the Wiki", "document this codebase", "refresh project knowledge" |
+| `archetipo-wiki` | Builds a codebase-first DDD map of domains, candidate bounded contexts, logical relationships, and their physical code/test ownership. | "bootstrap the Wiki", "map the domains", "refresh project knowledge" |
 
 ---
 

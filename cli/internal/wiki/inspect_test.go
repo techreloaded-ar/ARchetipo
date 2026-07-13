@@ -22,8 +22,8 @@ func TestInspectSingleProjectWithoutPRD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PRD.Present {
-		t.Fatal("PRD should be optional and absent")
+	if len(got.ProjectSources) != 0 {
+		t.Fatal("project sources should be optional and absent")
 	}
 	if !hasBoundary(got, "src") || len(got.EntryPoints) == 0 || len(got.Routes) == 0 || len(got.Schemas) == 0 || len(got.Tests) == 0 {
 		t.Fatalf("incomplete inspection: %+v", got)
@@ -44,6 +44,36 @@ func TestInspectMonorepoBoundaries(t *testing.T) {
 	}
 	if !hasBoundary(got, "apps/web") || !hasBoundary(got, "packages/core") {
 		t.Fatalf("monorepo boundaries missing: %+v", got.Boundaries)
+	}
+}
+
+func TestInspectClustersCapabilityCandidatesByCodeRole(t *testing.T) {
+	root := t.TempDir()
+	writeInspectionFile(t, root, "package.json", `{}`)
+	writeInspectionFile(t, root, "src/app/api/trips/[id]/route.ts", "export function GET() {}")
+	writeInspectionFile(t, root, "src/app/trips/page.tsx", "export default function Trips() {}")
+	writeInspectionFile(t, root, "src/lib/trips/tripService.ts", "export class TripService {}")
+	writeInspectionFile(t, root, "src/domain/trips/trip.ts", "export type Trip = {}")
+	writeInspectionFile(t, root, "src/types/trips.ts", "export type TripID = string")
+	writeInspectionFile(t, root, "src/tests/unit/api/trips/route.test.ts", "test('trips', () => {})")
+	writeInspectionFile(t, root, "src/tests/unit/types/trips.test.ts", "test('trip contract', () => {})")
+	writeInspectionFile(t, root, "src/tests/unit/schemas/trips.test.ts", "test('trip schema', () => {})")
+
+	got, err := Inspect(root, filepath.Join(root, "docs/wiki"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, ok := findCapability(got, "trip")
+	if !ok {
+		t.Fatalf("trip capability missing: %+v", got.Capabilities)
+	}
+	if len(candidate.EntryPoints) == 0 || len(candidate.UI) == 0 || len(candidate.Application) == 0 || len(candidate.Domain) == 0 || len(candidate.Tests) == 0 {
+		t.Fatalf("capability roles incomplete: %+v", candidate)
+	}
+	for _, path := range []string{"src/tests/unit/api/trips/route.test.ts", "src/tests/unit/types/trips.test.ts", "src/tests/unit/schemas/trips.test.ts"} {
+		if stringSliceContains(got.Routes, path) || stringSliceContains(got.PublicContracts, path) || stringSliceContains(got.Schemas, path) {
+			t.Fatalf("test file leaked into production evidence categories: %s in %+v", path, got)
+		}
 	}
 }
 
@@ -95,6 +125,15 @@ func hasBoundary(inspection Inspection, path string) bool {
 	return false
 }
 
+func findCapability(inspection Inspection, id string) (InspectionCapability, bool) {
+	for _, capability := range inspection.Capabilities {
+		if capability.ID == id {
+			return capability, true
+		}
+	}
+	return InspectionCapability{}, false
+}
+
 func writeInspectionFile(t *testing.T, root, rel, body string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(rel))
@@ -118,6 +157,15 @@ func git(t *testing.T, root string, args ...string) {
 func contains(value, part string) bool {
 	for i := 0; i+len(part) <= len(value); i++ {
 		if value[i:i+len(part)] == part {
+			return true
+		}
+	}
+	return false
+}
+
+func stringSliceContains(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
 			return true
 		}
 	}

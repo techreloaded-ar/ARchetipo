@@ -113,7 +113,7 @@ ARchetipo artifacts must be usable by smaller or lower-cost models during later 
 
 ## Living Wiki
 
-`paths.wiki` is connector-independent local project knowledge. Bootstrap begins with the read-only `archetipo wiki inspect`; code describes current behavior while PRDs and other documents describe intent. Read `docs/wiki/index.md` before selecting pages and use `archetipo wiki search` to keep context bounded. `archetipo wiki catalog` refreshes navigation without promoting drafts. Skills that change code use `archetipo wiki affected` to identify documentation candidates; implementation prepares draft changes and review publishes them only after acceptance. `archetipo wiki validate` reports findings through `kind:"validation_result"` and `data.ok`, not through an error envelope. Never branch Wiki behavior on connector type.
+`paths.wiki` is connector-independent local project knowledge. Bootstrap begins with the read-only `archetipo wiki inspect`, maps deterministic capability candidates into evidence-backed DDD domain pages, and separates current code behavior from optional documents of intent. Read `docs/wiki/index.md` before selecting pages and use `archetipo wiki search` to keep context bounded. `archetipo wiki catalog` refreshes navigation without changing review state. Skills that change code use `archetipo wiki affected`, reset changed pages to `generated`, and leave approval to explicit review. `archetipo wiki validate` reports findings through `kind:"validation_result"` and `data.ok`, not through an error envelope. Never branch Wiki behavior on connector type.
 - Treat warnings as quality feedback. They do not block persistence, but fix them when the repair is straightforward.
 
 ## Conversation Rules

@@ -691,7 +691,7 @@ async function verifyWikiBootstrap(context, expectations) {
   assertQuality(validationResult?.data?.ok === true, `Wiki bootstrap findings: ${JSON.stringify(validationResult?.data?.findings ?? [])}`);
 
   const wikiRoot = path.join(context.sandboxDir, "docs", "wiki");
-  const requiredPages = expectations.required_pages ?? ["overview", "architecture", "engineering.code-map", "operations.development"];
+  const requiredPages = expectations.required_pages ?? ["overview", "architecture.context-map", "engineering.code-map", "operations.development"];
   const pages = new Map();
   for (const id of requiredPages) {
     const pagePath = path.join(wikiRoot, `${id.replaceAll(".", path.sep)}.md`);
@@ -702,19 +702,19 @@ async function verifyWikiBootstrap(context, expectations) {
   }
 
   const allPagePaths = await listMarkdownFiles(wikiRoot);
-  let needsReview = 0;
+  let pagesWithIssues = 0;
   for (const pagePath of allPagePaths) {
     if (["index.md", "log.md"].includes(path.basename(pagePath)) || pagePath.includes(`${path.sep}sources${path.sep}`)) {
       continue;
     }
     const raw = await fs.readFile(pagePath, "utf8");
     const meta = parseWikiFrontmatter(raw, pagePath);
-    if (meta.status === "needs-review") needsReview += 1;
-    if (expectations.forbid_verified) {
-      assertQuality(meta.status !== "verified", `${meta.id ?? pagePath} was promoted during bootstrap`);
+    if (Array.isArray(meta.issues) && meta.issues.length > 0) pagesWithIssues += 1;
+    if (expectations.forbid_reviewed) {
+      assertQuality(meta.status !== "reviewed", `${meta.id ?? pagePath} was approved during bootstrap`);
     }
   }
-  assertQuality(needsReview >= (expectations.min_needs_review ?? 0), `expected at least ${expectations.min_needs_review ?? 0} needs-review page(s), got ${needsReview}`);
+  assertQuality(pagesWithIssues >= (expectations.min_issues ?? 0), `expected at least ${expectations.min_issues ?? 0} page(s) with issues, got ${pagesWithIssues}`);
 
   const prdPath = path.join(wikiRoot, "sources", "prd.md");
   let prdPresent = true;

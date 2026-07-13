@@ -3,6 +3,7 @@ package wiki
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -20,6 +21,22 @@ import (
 )
 
 var wikiLinkPattern = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
+var wikiSectionPattern = regexp.MustCompile(`<!--\s*archetipo:wiki\s+section=([a-z0-9-]+)\s*-->`)
+var wikiContentHashPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var wikiRevisionPattern = regexp.MustCompile(`^([0-9a-fA-F]{7,64}|unavailable)$`)
+
+var requiredPageSections = map[string][]string{
+	"domain":                   {"purpose", "language", "ownership", "contracts", "flows", "code", "invariants", "verification"},
+	"architecture.context-map": {"contexts", "relationships", "shared", "uncertainties"},
+	"engineering.code-map":     {"domain-code", "shared", "unmapped", "coverage"},
+}
+
+var (
+	ErrValidationFailed = errors.New("wiki validation failed")
+	ErrUnresolvedIssues = errors.New("wiki page has unresolved issues")
+	ErrMissingEvidence  = errors.New("wiki page has missing evidence")
+	ErrPageNotFound     = errors.New("wiki page does not exist")
+)
 
 type Page struct {
 	Meta domain.WikiPageMeta `json:"meta"`
@@ -42,7 +59,7 @@ func Init(root string) ([]string, error) {
 		}
 	}
 	files := map[string]string{
-		"index.md": "# Project Wiki\n\nThis catalog is maintained by `archetipo wiki publish`.\n",
+		"index.md": "# Project Wiki\n\nThis catalog is maintained by `archetipo wiki catalog`.\n",
 		"log.md":   "# Wiki log\n",
 	}
 	for name, body := range files {
@@ -60,14 +77,16 @@ func Init(root string) ([]string, error) {
 	return created, nil
 }
 
-func Load(root string, includeSources bool) ([]Page, error) {
+func Load(root string) ([]Page, error) {
 	pages := []Page{}
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
-			if !includeSources && path != root && filepath.Base(path) == "sources" {
+			// Archived sources are verbatim provenance, not Wiki pages with
+			// frontmatter. Search loads them separately when requested.
+			if path != root && filepath.Base(path) == "sources" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -110,13 +129,13 @@ func parsePage(root, path string) (Page, error) {
 }
 
 func Validate(projectRoot, root string) Report {
-	pages, err := Load(root, false)
+	pages, err := Load(root)
 	if err != nil {
 		return Report{Findings: []domain.WikiFinding{{Code: "WIKI_UNREADABLE", Severity: "error", Path: root, Message: err.Error()}}}
 	}
 	findings := []domain.WikiFinding{}
 	ids := map[string]Page{}
-	allowed := map[domain.WikiStatus]bool{domain.WikiStatusDraft: true, domain.WikiStatusVerified: true, domain.WikiStatusNeedsReview: true, domain.WikiStatusSuperseded: true}
+	allowed := map[domain.WikiStatus]bool{domain.WikiStatusGenerated: true, domain.WikiStatusReviewed: true}
 	for _, p := range pages {
 		add := func(code, message string) {
 			findings = append(findings, domain.WikiFinding{Code: code, Severity: "error", PageID: p.Meta.ID, Path: p.Path, Message: message})
@@ -141,7 +160,42 @@ func Validate(projectRoot, root string) Report {
 			add("WIKI_MISSING_SUMMARY", "routing summary is required")
 		}
 		if !allowed[p.Meta.Status] {
-			add("WIKI_INVALID_STATUS", "status must be draft, verified, needs-review, or superseded")
+			add("WIKI_INVALID_STATUS", "status must be generated or reviewed")
+		}
+		if p.Meta.Type == "domain" {
+			switch p.Meta.Classification {
+			case "candidate", "bounded-context":
+			default:
+				add("WIKI_INVALID_DOMAIN_CLASSIFICATION", "domain classification must be candidate or bounded-context")
+			}
+			if len(p.Meta.Sources) == 0 {
+				add("WIKI_DOMAIN_SOURCE_MISSING", "domain pages require repository evidence")
+			}
+		}
+		for _, issue := range p.Meta.Issues {
+			if strings.TrimSpace(issue.Code) == "" || strings.TrimSpace(issue.Summary) == "" {
+				add("WIKI_INVALID_ISSUE", "issues require both code and summary")
+			}
+		}
+		if p.Meta.Status == domain.WikiStatusReviewed {
+			if p.Meta.Review == nil || p.Meta.Review.ContentHash == "" || p.Meta.Review.EvidenceRevision == "" || p.Meta.Review.ReviewedAt == "" {
+				add("WIKI_REVIEW_METADATA_MISSING", "reviewed pages require content_hash, evidence_revision, and reviewed_at")
+			} else {
+				if !wikiContentHashPattern.MatchString(p.Meta.Review.ContentHash) || !wikiRevisionPattern.MatchString(p.Meta.Review.EvidenceRevision) {
+					add("WIKI_REVIEW_METADATA_INVALID", "review metadata has an invalid content hash or evidence revision")
+				}
+				if _, err := time.Parse(time.RFC3339, p.Meta.Review.ReviewedAt); err != nil {
+					add("WIKI_REVIEW_METADATA_INVALID", "reviewed_at must be RFC3339")
+				}
+				if p.Meta.Review.ContentHash != pageContentHash(p) {
+					findings = append(findings, domain.WikiFinding{Code: "WIKI_REVIEW_OUTDATED", Severity: "warning", PageID: p.Meta.ID, Path: p.Path, Message: "page content changed after review"})
+				}
+				if pageEvidenceChanged(projectRoot, p) {
+					findings = append(findings, domain.WikiFinding{Code: "WIKI_EVIDENCE_CHANGED", Severity: "warning", PageID: p.Meta.ID, Path: p.Path, Message: "cited repository evidence changed after review"})
+				}
+			}
+		} else if p.Meta.Review != nil {
+			add("WIKI_UNEXPECTED_REVIEW_METADATA", "generated pages must not carry review metadata")
 		}
 		for _, source := range p.Meta.Sources {
 			if source.Path == "" {
@@ -157,22 +211,39 @@ func Validate(projectRoot, root string) Report {
 					findings = append(findings, domain.WikiFinding{Code: "WIKI_STALE_SOURCE", Severity: "warning", PageID: p.Meta.ID, Path: p.Path, Message: "source does not exist: " + source.Path})
 				}
 			}
+			if p.Meta.Type == "domain" && strings.TrimSpace(source.Role) == "" {
+				add("WIKI_DOMAIN_SOURCE_ROLE_MISSING", "domain evidence requires a role")
+			}
 		}
+		coverageKeys := map[string]bool{}
 		for _, coverage := range p.Meta.Coverage {
+			if coverage.Kind != "boundary" && coverage.Kind != "capability" {
+				add("WIKI_INVALID_COVERAGE", "coverage kind must be boundary or capability")
+			}
 			if coverage.Path == "" {
 				add("WIKI_INVALID_COVERAGE", "coverage path is required")
 			}
+			key := coverage.Kind + ":" + coverage.Path
+			if coverageKeys[key] {
+				add("WIKI_DUPLICATE_COVERAGE", "coverage item is duplicated: "+key)
+			}
+			coverageKeys[key] = true
 			switch coverage.Status {
-			case "documented":
+			case "mapped":
 				if len(coverage.Pages) == 0 {
-					add("WIKI_INVALID_COVERAGE", "documented coverage requires at least one page id")
+					add("WIKI_INVALID_COVERAGE", "mapped coverage requires at least one page id")
 				}
-			case "mapped-only", "needs-review", "excluded":
+			case "partial", "excluded":
 				if strings.TrimSpace(coverage.Note) == "" {
 					add("WIKI_INVALID_COVERAGE", coverage.Status+" coverage requires a note")
 				}
 			default:
-				add("WIKI_INVALID_COVERAGE", "coverage status must be documented, mapped-only, needs-review, or excluded")
+				add("WIKI_INVALID_COVERAGE", "coverage status must be mapped, partial, or excluded")
+			}
+		}
+		for _, section := range requiredSectionsForPage(p) {
+			if !hasMeaningfulWikiSection(p.Body, section) {
+				add("WIKI_DDD_SECTION_MISSING", "page requires section marker "+section)
 			}
 		}
 	}
@@ -190,10 +261,17 @@ func Validate(projectRoot, root string) Report {
 			}
 		}
 		for _, coverage := range p.Meta.Coverage {
+			hasDomainPage := false
 			for _, pageID := range coverage.Pages {
-				if _, ok := ids[pageID]; !ok {
+				target, ok := ids[pageID]
+				if !ok {
 					findings = append(findings, domain.WikiFinding{Code: "WIKI_BROKEN_COVERAGE_PAGE", Severity: "error", PageID: p.Meta.ID, Path: p.Path, Message: "coverage references a missing page id: " + pageID})
+				} else if target.Meta.Type == "domain" {
+					hasDomainPage = true
 				}
+			}
+			if coverage.Kind == "capability" && coverage.Status == "mapped" && !hasDomainPage {
+				findings = append(findings, domain.WikiFinding{Code: "WIKI_CAPABILITY_WITHOUT_DOMAIN", Severity: "error", PageID: p.Meta.ID, Path: p.Path, Message: "mapped capability requires at least one domain page: " + coverage.Path})
 			}
 		}
 	}
@@ -226,7 +304,7 @@ func Validate(projectRoot, root string) Report {
 // ValidateBootstrap adds codebase coverage requirements to structural validation.
 func ValidateBootstrap(projectRoot, root, prdPath string) (Report, error) {
 	report := Validate(projectRoot, root)
-	pages, err := Load(root, false)
+	pages, err := Load(root)
 	if err != nil {
 		return report, err
 	}
@@ -238,11 +316,15 @@ func ValidateBootstrap(projectRoot, root, prdPath string) (Report, error) {
 		report.Findings = append(report.Findings, domain.WikiFinding{Code: code, Severity: "error", PageID: pageID, Path: path, Message: message})
 		report.OK = false
 	}
-	for _, id := range []string{"overview", "architecture", "engineering.code-map", "operations.development"} {
+	corePages := map[string]string{"overview": "overview", "architecture.context-map": "context-map", "engineering.code-map": "code-map", "operations.development": "operations"}
+	for _, id := range []string{"overview", "architecture.context-map", "engineering.code-map", "operations.development"} {
 		page, ok := byID[id]
 		if !ok {
 			add("WIKI_BOOTSTRAP_PAGE_MISSING", id, canonicalPagePath(id), "bootstrap requires page "+id)
 			continue
+		}
+		if page.Meta.Type != corePages[id] {
+			add("WIKI_BOOTSTRAP_PAGE_TYPE", id, page.Path, "bootstrap page "+id+" must use type "+corePages[id])
 		}
 		hasRepositoryEvidence := false
 		for _, source := range page.Meta.Sources {
@@ -271,18 +353,33 @@ func ValidateBootstrap(projectRoot, root, prdPath string) (Report, error) {
 		covered := map[string]bool{}
 		known := map[string]bool{}
 		for _, boundary := range inspection.Boundaries {
-			known[boundary.Path] = true
+			known["boundary:"+boundary.Path] = true
+		}
+		for _, capability := range inspection.Capabilities {
+			known["capability:"+capability.ID] = true
 		}
 		for _, coverage := range codeMap.Meta.Coverage {
-			covered[coverage.Path] = true
-			if !known[coverage.Path] {
-				report.Findings = append(report.Findings, domain.WikiFinding{Code: "WIKI_UNKNOWN_COVERAGE", Severity: "warning", PageID: codeMap.Meta.ID, Path: codeMap.Path, Message: "coverage path is not an inspected boundary: " + coverage.Path})
+			key := coverage.Kind + ":" + coverage.Path
+			covered[key] = true
+			if !known[key] {
+				report.Findings = append(report.Findings, domain.WikiFinding{Code: "WIKI_UNKNOWN_COVERAGE", Severity: "warning", PageID: codeMap.Meta.ID, Path: codeMap.Path, Message: "coverage item was not returned by inspection: " + key})
 			}
 		}
 		for _, boundary := range inspection.Boundaries {
-			if !covered[boundary.Path] {
+			if !covered["boundary:"+boundary.Path] {
 				add("WIKI_UNCOVERED_BOUNDARY", codeMap.Meta.ID, codeMap.Path, "inspected boundary is not represented in coverage: "+boundary.Path)
 			}
+		}
+		for _, capability := range inspection.Capabilities {
+			if !covered["capability:"+capability.ID] {
+				add("WIKI_UNMAPPED_CAPABILITY", codeMap.Meta.ID, codeMap.Path, "capability candidate is not represented in coverage: "+capability.ID)
+			}
+		}
+	}
+	for _, source := range inspection.ProjectSources {
+		archived := filepath.Join(root, "sources", strings.ToLower(filepath.Base(source.Path)))
+		if info, statErr := os.Stat(archived); statErr != nil || info.IsDir() {
+			add("WIKI_PROJECT_SOURCE_NOT_ARCHIVED", "", filepath.ToSlash(filepath.Join("sources", strings.ToLower(filepath.Base(source.Path)))), "configured project source was not archived: "+source.Path)
 		}
 	}
 	sort.Slice(report.Findings, func(i, j int) bool {
@@ -298,10 +395,17 @@ func canonicalPagePath(id string) string {
 	return strings.ReplaceAll(id, ".", "/") + ".md"
 }
 
-func Search(root, query, pageType, status string, includeSources bool) ([]Page, error) {
-	pages, err := Load(root, includeSources)
+func Search(projectRoot, root, query, pageType, status string, includeSources bool) ([]Page, error) {
+	pages, err := Load(root)
 	if err != nil {
 		return nil, err
+	}
+	if includeSources {
+		sources, sourceErr := loadArchivedSources(root)
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+		pages = append(pages, sources...)
 	}
 	q := strings.ToLower(strings.TrimSpace(query))
 	result := []Page{}
@@ -309,7 +413,7 @@ func Search(root, query, pageType, status string, includeSources bool) ([]Page, 
 		if pageType != "" && p.Meta.Type != pageType {
 			continue
 		}
-		if status != "" && string(p.Meta.Status) != status {
+		if status != "" && PageState(projectRoot, p) != status {
 			continue
 		}
 		haystack := strings.ToLower(p.Meta.ID + " " + p.Meta.Summary + " " + p.Body)
@@ -322,8 +426,46 @@ func Search(root, query, pageType, status string, includeSources bool) ([]Page, 
 	return result, nil
 }
 
+func loadArchivedSources(root string) ([]Page, error) {
+	sourceRoot := filepath.Join(root, "sources")
+	pages := []Page{}
+	err := filepath.WalkDir(sourceRoot, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		pages = append(pages, Page{
+			Meta: domain.WikiPageMeta{
+				ID:      "source:" + strings.TrimPrefix(rel, "sources/"),
+				Type:    "source",
+				Summary: "Archived project source: " + filepath.Base(path),
+				Status:  domain.WikiStatusGenerated,
+			},
+			Path: rel,
+			Body: string(raw),
+		})
+		return nil
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return pages, nil
+	}
+	sort.Slice(pages, func(i, j int) bool { return pages[i].Path < pages[j].Path })
+	return pages, err
+}
+
 func Affected(projectRoot, root string, files []string) ([]Page, error) {
-	pages, err := Load(root, false)
+	pages, err := Load(root)
 	if err != nil {
 		return nil, err
 	}
@@ -366,57 +508,142 @@ func GitChangedFiles(projectRoot, base, head string) ([]string, error) {
 	return fields, nil
 }
 
-func Publish(projectRoot, root string) (int, error) {
+// Approve marks selected generated pages as reviewed. An empty ID list approves
+// every generated page, but pages with unresolved issues are never promoted.
+func Approve(projectRoot, root string, ids []string) (int, error) {
 	report := Validate(projectRoot, root)
 	if !report.OK {
-		return 0, fmt.Errorf("wiki validation failed")
+		return 0, ErrValidationFailed
 	}
-	pages, err := Load(root, false)
+	pages, err := Load(root)
 	if err != nil {
 		return 0, err
 	}
-	published := 0
+	approved := 0
 	now := time.Now().UTC().Format(time.RFC3339)
 	revision := gitRevision(projectRoot)
-	for i := range pages {
-		p := pages[i]
-		if p.Meta.Status != domain.WikiStatusDraft {
+	if revision == "" {
+		revision = "unavailable"
+	}
+	wanted := map[string]bool{}
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	found := map[string]bool{}
+	for _, page := range pages {
+		if len(wanted) > 0 && !wanted[page.Meta.ID] {
 			continue
 		}
-		p.Meta.Status = domain.WikiStatusVerified
-		p.Meta.LastVerifiedAt = now
-		p.Meta.GitRevision = revision
+		found[page.Meta.ID] = true
+		if page.Meta.Status == domain.WikiStatusGenerated && len(page.Meta.Issues) > 0 {
+			return 0, fmt.Errorf("%w: %s", ErrUnresolvedIssues, page.Meta.ID)
+		}
+		if page.Meta.Status == domain.WikiStatusGenerated && pageHasMissingEvidence(projectRoot, page) {
+			return 0, fmt.Errorf("%w: %s", ErrMissingEvidence, page.Meta.ID)
+		}
+	}
+	for id := range wanted {
+		if !found[id] {
+			return 0, fmt.Errorf("%w: %s", ErrPageNotFound, id)
+		}
+	}
+	for i := range pages {
+		p := pages[i]
+		if len(wanted) > 0 && !wanted[p.Meta.ID] {
+			continue
+		}
+		if p.Meta.Status != domain.WikiStatusGenerated {
+			continue
+		}
+		p.Meta.Status = domain.WikiStatusReviewed
+		p.Meta.Review = &domain.WikiReview{ContentHash: pageContentHash(p), EvidenceRevision: revision, ReviewedAt: now}
 		raw, err := renderPage(p)
 		if err != nil {
-			return published, err
+			return approved, err
 		}
 		if err := atomicWrite(filepath.Join(root, filepath.FromSlash(p.Path)), raw); err != nil {
-			return published, err
+			return approved, err
 		}
 		pages[i] = p
-		published++
+		approved++
 	}
-	if err := writeIndex(root, pages); err != nil {
-		return published, err
+	if err := writeIndex(projectRoot, root, pages); err != nil {
+		return approved, err
 	}
-	if published > 0 {
-		if err := appendLog(root, fmt.Sprintf("published %d page(s) at `%s`", published, revision)); err != nil {
-			return published, err
+	if approved > 0 {
+		if err := appendLog(root, fmt.Sprintf("approved %d page(s) at `%s`", approved, revision)); err != nil {
+			return approved, err
 		}
 	}
-	return published, nil
+	return approved, nil
 }
 
-// Catalog rebuilds navigation without changing page lifecycle state.
-func Catalog(root string) (int, error) {
-	pages, err := Load(root, false)
+// Publish is kept as a compatibility alias for approving all generated pages.
+func Publish(projectRoot, root string) (int, error) { return Approve(projectRoot, root, nil) }
+
+// Reset returns selected reviewed pages to generated before semantic updates.
+func Reset(projectRoot, root string, ids []string) (int, error) {
+	pages, err := Load(root)
 	if err != nil {
 		return 0, err
 	}
-	if err := writeIndex(root, pages); err != nil {
+	wanted := map[string]bool{}
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	found := map[string]bool{}
+	for _, page := range pages {
+		if wanted[page.Meta.ID] {
+			found[page.Meta.ID] = true
+		}
+	}
+	for id := range wanted {
+		if !found[id] {
+			return 0, fmt.Errorf("%w: %s", ErrPageNotFound, id)
+		}
+	}
+	reset := 0
+	for index := range pages {
+		page := pages[index]
+		if !wanted[page.Meta.ID] {
+			continue
+		}
+		if page.Meta.Status == domain.WikiStatusGenerated && page.Meta.Review == nil {
+			continue
+		}
+		page.Meta.Status = domain.WikiStatusGenerated
+		page.Meta.Review = nil
+		raw, err := renderPage(page)
+		if err != nil {
+			return reset, err
+		}
+		if err := atomicWrite(filepath.Join(root, filepath.FromSlash(page.Path)), raw); err != nil {
+			return reset, err
+		}
+		pages[index] = page
+		reset++
+	}
+	if err := writeIndex(projectRoot, root, pages); err != nil {
+		return reset, err
+	}
+	if reset > 0 {
+		if err := appendLog(root, fmt.Sprintf("reset %d page(s) to generated", reset)); err != nil {
+			return reset, err
+		}
+	}
+	return reset, nil
+}
+
+// Catalog rebuilds navigation without changing review state.
+func Catalog(projectRoot, root string) (int, error) {
+	pages, err := Load(root)
+	if err != nil {
 		return 0, err
 	}
-	if err := appendLog(root, fmt.Sprintf("cataloged %d page(s) without promotion", len(pages))); err != nil {
+	if err := writeIndex(projectRoot, root, pages); err != nil {
+		return 0, err
+	}
+	if err := appendLog(root, fmt.Sprintf("cataloged %d page(s) without review changes", len(pages))); err != nil {
 		return 0, err
 	}
 	return len(pages), nil
@@ -442,14 +669,118 @@ func renderPage(p Page) ([]byte, error) {
 	}
 	return []byte("---\n" + string(meta) + "---\n" + p.Body), nil
 }
-func writeIndex(root string, pages []Page) error {
+func writeIndex(projectRoot, root string, pages []Page) error {
 	var b strings.Builder
-	b.WriteString("# Project Wiki\n\n| ID | Type | Status | Summary | Path |\n|---|---|---|---|---|\n")
+	b.WriteString("# Project Wiki\n\n| ID | Type | Classification | State | Summary | Path |\n|---|---|---|---|---|---|\n")
 	for _, p := range pages {
-		fmt.Fprintf(&b, "| `%s` | %s | %s | %s | [%s](%s) |\n", p.Meta.ID, p.Meta.Type, p.Meta.Status, strings.ReplaceAll(p.Meta.Summary, "|", "\\|"), p.Path, p.Path)
+		classification := p.Meta.Classification
+		if classification == "" {
+			classification = "—"
+		}
+		fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | [%s](%s) |\n", p.Meta.ID, p.Meta.Type, classification, PageState(projectRoot, p), strings.ReplaceAll(p.Meta.Summary, "|", "\\|"), p.Path, p.Path)
 	}
 	return atomicWrite(filepath.Join(root, "index.md"), []byte(b.String()))
 }
+
+func requiredSectionsForPage(page Page) []string {
+	if sections, ok := requiredPageSections[page.Meta.ID]; ok {
+		return sections
+	}
+	return requiredPageSections[page.Meta.Type]
+}
+
+func hasMeaningfulWikiSection(body, section string) bool {
+	matches := wikiSectionPattern.FindAllStringSubmatchIndex(body, -1)
+	for index, match := range matches {
+		if body[match[2]:match[3]] != section {
+			continue
+		}
+		end := len(body)
+		if index+1 < len(matches) {
+			end = matches[index+1][0]
+		}
+		for _, line := range strings.Split(body[match[1]:end], "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "<!--") && !strings.HasPrefix(line, "#") {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func pageContentHash(page Page) string {
+	meta := page.Meta
+	// Lifecycle metadata is produced by approval itself. Every other metadata
+	// field is semantic page content and must invalidate an earlier review.
+	meta.Status = ""
+	meta.Review = nil
+	encoded, err := yaml.Marshal(meta)
+	if err != nil {
+		encoded = []byte(fmt.Sprintf("%#v", meta))
+	}
+	digest := sha256.Sum256(append(encoded, []byte(strings.TrimSpace(page.Body))...))
+	return "sha256:" + fmt.Sprintf("%x", digest)
+}
+
+// PageState derives operational trust from review metadata, issues, content,
+// and evidence changes. Only generated/reviewed are persisted in the page.
+func PageState(projectRoot string, page Page) string {
+	if len(page.Meta.Issues) > 0 {
+		return "attention"
+	}
+	if page.Meta.Status != domain.WikiStatusReviewed {
+		return "generated"
+	}
+	if page.Meta.Review == nil || page.Meta.Review.ContentHash != pageContentHash(page) {
+		return "stale"
+	}
+	if pageEvidenceChanged(projectRoot, page) {
+		return "stale"
+	}
+	return "reviewed"
+}
+
+func pageEvidenceChanged(projectRoot string, page Page) bool {
+	if page.Meta.Review == nil {
+		return false
+	}
+	if page.Meta.Review.EvidenceRevision == "unavailable" {
+		return false
+	}
+	paths := []string{}
+	for _, source := range page.Meta.Sources {
+		if source.Path == "" || isExternal(source.Path) || filepath.IsAbs(source.Path) {
+			continue
+		}
+		paths = append(paths, filepath.FromSlash(source.Path))
+	}
+	if len(paths) == 0 {
+		return false
+	}
+	args := append([]string{"diff", "--quiet", page.Meta.Review.EvidenceRevision, "--"}, paths...)
+	cmd := exec.Command("git", args...)
+	cmd.Dir = projectRoot
+	return cmd.Run() != nil
+}
+
+func pageHasMissingEvidence(projectRoot string, page Page) bool {
+	for _, source := range page.Meta.Sources {
+		if source.Path == "" || isExternal(source.Path) {
+			continue
+		}
+		candidate := source.Path
+		if !filepath.IsAbs(candidate) {
+			candidate = filepath.Join(projectRoot, filepath.FromSlash(candidate))
+		}
+		if _, err := os.Stat(candidate); err != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func atomicWrite(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

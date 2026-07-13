@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -16,7 +15,7 @@ import (
 
 func newWikiCmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "wiki", Short: "Living project Wiki operations"}
-	root.AddCommand(newWikiInitCmd(s), newWikiInspectCmd(s), newWikiStatusCmd(s), newWikiValidateCmd(s), newWikiSearchCmd(s), newWikiAffectedCmd(s), newWikiCatalogCmd(s), newWikiPublishCmd(s))
+	root.AddCommand(newWikiInitCmd(s), newWikiInspectCmd(s), newWikiStatusCmd(s), newWikiValidateCmd(s), newWikiSearchCmd(s), newWikiAffectedCmd(s), newWikiCatalogCmd(s), newWikiApproveCmd(s), newWikiResetCmd(s), newWikiPublishCmd(s))
 	return root
 }
 
@@ -80,16 +79,19 @@ func newWikiInitCmd(s streams) *cobra.Command {
 func newWikiStatusCmd(s streams) *cobra.Command {
 	return &cobra.Command{Use: "status", Short: "Summarize Wiki health and lifecycle state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		return withWiki(cmd, s, "wiki_status", true, func(cfg config.Config, root string) (any, error) {
-			pages, err := wiki.Load(root, false)
+			pages, err := wiki.Load(root)
 			if err != nil {
 				return nil, iox.NewInternal("loading Wiki", err)
 			}
 			counts := map[string]int{}
+			items := []map[string]any{}
 			for _, p := range pages {
-				counts[string(p.Meta.Status)]++
+				state := wiki.PageState(cfg.ProjectRoot, p)
+				counts[state]++
+				items = append(items, map[string]any{"id": p.Meta.ID, "path": p.Path, "state": state, "issues": p.Meta.Issues})
 			}
 			report := wiki.Validate(cfg.ProjectRoot, root)
-			return map[string]any{"root": root, "pages": len(pages), "statuses": counts, "ok": report.OK, "findings": report.Findings}, nil
+			return map[string]any{"root": root, "pages": len(pages), "states": counts, "items": items, "ok": report.OK, "findings": report.Findings}, nil
 		})
 	}}
 }
@@ -127,7 +129,7 @@ func newWikiSearchCmd(s streams) *cobra.Command {
 			query = args[0]
 		}
 		return withWiki(cmd, s, "wiki_search_result", true, func(cfg config.Config, root string) (any, error) {
-			items, err := wiki.Search(root, query, pageType, status, includeSources)
+			items, err := wiki.Search(cfg.ProjectRoot, root, query, pageType, status, includeSources)
 			if err != nil {
 				return nil, iox.NewInternal("searching Wiki", err)
 			}
@@ -135,7 +137,7 @@ func newWikiSearchCmd(s streams) *cobra.Command {
 		})
 	}}
 	cmd.Flags().StringVar(&pageType, "type", "", "filter by page type")
-	cmd.Flags().StringVar(&status, "status", "", "filter by lifecycle status")
+	cmd.Flags().StringVar(&status, "status", "", "filter by derived state (generated, reviewed, stale, attention)")
 	cmd.Flags().BoolVar(&includeSources, "include-sources", false, "include archived source documents")
 	return cmd
 }
@@ -167,24 +169,59 @@ func newWikiAffectedCmd(s streams) *cobra.Command {
 }
 
 func newWikiPublishCmd(s streams) *cobra.Command {
-	return &cobra.Command{Use: "publish", Short: "Atomically promote valid draft pages", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "publish", Short: "Deprecated alias for approving all generated pages", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		return withWiki(cmd, s, "wiki_publish_result", true, func(cfg config.Config, root string) (any, error) {
 			count, err := wiki.Publish(cfg.ProjectRoot, root)
 			if err != nil {
-				if strings.Contains(err.Error(), "validation failed") {
-					return nil, iox.NewConflict("Wiki validation failed", "run `archetipo wiki validate` and repair error findings", err)
+				if errors.Is(err, wiki.ErrValidationFailed) || errors.Is(err, wiki.ErrUnresolvedIssues) || errors.Is(err, wiki.ErrMissingEvidence) {
+					return nil, iox.NewConflict("Wiki approval blocked", "repair validation findings and resolve page issues before approval", err)
 				}
 				return nil, iox.NewInternal("publishing Wiki", err)
 			}
 			return map[string]any{"published": count, "root": root}, nil
 		})
 	}}
+	cmd.Deprecated = "use `archetipo wiki approve`"
+	return cmd
+}
+
+func newWikiApproveCmd(s streams) *cobra.Command {
+	return &cobra.Command{Use: "approve [page-id...]", Short: "Mark generated pages as explicitly reviewed", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		return withWiki(cmd, s, "wiki_approve_result", true, func(cfg config.Config, root string) (any, error) {
+			count, err := wiki.Approve(cfg.ProjectRoot, root, args)
+			if err != nil {
+				if errors.Is(err, wiki.ErrValidationFailed) || errors.Is(err, wiki.ErrUnresolvedIssues) || errors.Is(err, wiki.ErrMissingEvidence) {
+					return nil, iox.NewConflict("Wiki approval blocked", "repair validation findings and resolve page issues before approval", err)
+				}
+				if errors.Is(err, wiki.ErrPageNotFound) {
+					return nil, iox.NewInvalidInput(err.Error(), "pass an existing Wiki page ID", err)
+				}
+				return nil, iox.NewInternal("approving Wiki pages", err)
+			}
+			return map[string]any{"approved": count, "root": root, "pages": args}, nil
+		})
+	}}
+}
+
+func newWikiResetCmd(s streams) *cobra.Command {
+	return &cobra.Command{Use: "reset <page-id...>", Short: "Return reviewed pages to generated before updating them", Args: cobra.MinimumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return withWiki(cmd, s, "wiki_reset_result", true, func(cfg config.Config, root string) (any, error) {
+			count, err := wiki.Reset(cfg.ProjectRoot, root, args)
+			if err != nil {
+				if errors.Is(err, wiki.ErrPageNotFound) {
+					return nil, iox.NewInvalidInput(err.Error(), "pass an existing Wiki page ID", err)
+				}
+				return nil, iox.NewInternal("resetting Wiki pages", err)
+			}
+			return map[string]any{"reset": count, "root": root, "pages": args}, nil
+		})
+	}}
 }
 
 func newWikiCatalogCmd(s streams) *cobra.Command {
-	return &cobra.Command{Use: "catalog", Short: "Rebuild the Wiki index without promoting drafts", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+	return &cobra.Command{Use: "catalog", Short: "Rebuild the Wiki index without changing review state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		return withWiki(cmd, s, "wiki_catalog_result", true, func(cfg config.Config, root string) (any, error) {
-			count, err := wiki.Catalog(root)
+			count, err := wiki.Catalog(cfg.ProjectRoot, root)
 			if err != nil {
 				return nil, iox.NewInternal("cataloging Wiki", err)
 			}

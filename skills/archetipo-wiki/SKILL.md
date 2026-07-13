@@ -1,66 +1,79 @@
 ---
 name: archetipo-wiki
-description: Bootstrap, query, ingest, refresh, and lint ARchetipo's Markdown project Wiki. Use for an existing codebase without living documentation, importing project documents, answering project questions from canonical knowledge, repairing Wiki drift, or maintaining knowledge outside a single spec workflow.
+description: Bootstrap, query, ingest, refresh, review, and lint ARchetipo's codebase-first DDD Wiki. Use for mapping an existing repository into domains and candidate bounded contexts, locating domain code, maintaining living project knowledge, or answering project questions with bounded context.
 ---
 
 # ARchetipo Wiki
 
-Maintain `paths.wiki` as the canonical, progressively loaded project knowledge base. Treat implemented code as evidence of current behavior and project documents as optional evidence of intent. Keep code as evidence, not copied content, and archived documents under `sources/` out of ordinary queries.
+Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented code is evidence of current behavior. Optional project documents are evidence of intent. Never turn a folder name, schema enum, or repeated word into a domain fact without checking executable flows.
 
 ## Start
 
 1. Locate the project root and read `.archetipo/shared-runtime.md` exactly once.
-2. Run `archetipo config show`; use `data.project_root` for CLI calls and resolve all repository reads from it.
+2. Run `archetipo config show`; resolve repository reads from `data.project_root`.
 3. Read [references/wiki-contract.md](references/wiki-contract.md) before creating or changing pages.
-4. Select exactly one operation: `bootstrap`, `ingest`, `refresh`, `query`, or `lint`. Infer it from the request; default to `query` for a question and `bootstrap` when the Wiki is absent.
+4. Select one operation: `bootstrap`, `ingest`, `refresh`, `query`, `review`, or `lint`. Default to `query` for a question and `bootstrap` when the Wiki is absent.
 
 ## Bootstrap
 
-1. Run `archetipo wiki init`.
-2. Run `archetipo wiki inspect` before opening a PRD or broad documentation. Stop on `E_PRECONDITION`; do not invent a Wiki for an evidence-free repository.
-3. Read every reported manifest, entry point, schema, configuration file, and public contract. For each `data.boundaries` item, read its representative implementation and test files. When `data.uninspected` is non-empty, preserve those limitations in the code map.
-4. Create these draft core pages with repository evidence: `overview`, `architecture`, `engineering.code-map`, and `operations.development`. In `engineering.code-map`, record every inspected boundary in `coverage` using the contract below; never omit a boundary silently.
-5. Add focused pages only when evidence supports them: product or vision from product evidence; domains from functional capabilities; components from autonomous technical boundaries; decisions from explicit rationale or trade-offs; engineering, operations, and history from corresponding repository evidence. Do not create pages merely to fill scaffold categories.
-6. If `data.prd.present` is true, read the configured PRD only now and preserve it verbatim at `<paths.wiki>/sources/prd.md`. Use it as evidence of intent, never as proof of implemented behavior. Mark material code-versus-PRD conflicts `needs-review`. Do not create a placeholder when absent.
-7. Cite repository-relative evidence in frontmatter. Link archived sources with ordinary Markdown links; reserve `[[page.id]]` for ordinary Wiki pages.
-8. Run `archetipo wiki validate --profile bootstrap`. Repair every error and record real gaps as `mapped-only`, `needs-review`, or `excluded` coverage with a reason.
-9. Run `archetipo wiki catalog`. Leave generated pages as `draft`; call `wiki publish` only after explicit human approval in a later review.
+1. Run `archetipo wiki init`, then `archetipo wiki inspect`. Stop on `E_PRECONDITION`.
+2. Read every reported manifest, entry point, schema, public contract, configuration file, and representative boundary file. For every `data.capability_candidates` item, read its reported entry points, UI, application/domain files, contracts, and tests. Record reported exclusions and sampling limits.
+3. Build an internal evidence matrix before writing pages: candidate, currently observed purpose, actors, ubiquitous terms, commands/use cases, owned data, inbound/outbound contracts, dependencies, code paths, tests, observed flows, enforced invariants, failure modes, and confidence. “Ownership” means domain ownership of data and decisions, not team ownership.
+4. Merge or split deterministic candidates by semantic evidence. A folder cluster is only a candidate. Create one `domains.<id>` page per coherent capability using `classification: candidate`; use `bounded-context` only when vocabulary, ownership, contracts, and runtime boundary are sufficiently evidenced. Candidate is a valid reviewable classification, not by itself an issue.
+5. Create these generated core pages:
+   - `overview`: system purpose, actors, stack, mapping scope, and exclusions;
+   - `architecture.context-map`: domain relationships, shared infrastructure, upstream/downstream dependencies, and unresolved boundaries;
+   - `engineering.code-map`: physical domain-to-code matrix plus shared and unmapped code;
+   - `operations.development`: build, test, runtime, deployment, and operational constraints.
+6. In `engineering.code-map`, represent every inspected physical boundary and every capability candidate in `coverage`. Map it to domain pages, mark it `partial`, or exclude it with a reason. Never omit a candidate silently.
+7. Separate observed runtime behavior from declared-but-unobserved models. For every state machine, enumerate assignments/writes to each state and derive transitions from the source-state guard plus the exact assigned target; endpoint names, comments, UI labels, and enums are not transition evidence. Cite the write path beside every claimed observed transition. Inspect code and tests for permissions, side effects, invariants, and integrations too. A type declaration or dependency is not an enforced invariant or implemented capability. Use `issues` only for actionable contradictions or missing evidence that blocks trusting the page; candidate classification, monolith boundaries, ordinary tradeoffs, and observations belong in the page body or context-map uncertainties. Do not encode uncertainty in page status.
+8. Only after the codebase map exists, archive optional `data.project_sources` verbatim below `<paths.wiki>/sources/`, using the lowercase source basename for a stable path. Reconcile them as intent, not implementation evidence.
+9. Set every created page to `status: generated` with no `review` block. Run `archetipo wiki validate --profile bootstrap`, repair errors, then run `archetipo wiki catalog`.
 
 ## Ingest
 
-1. Preserve the original document below `docs/wiki/sources/<category>/`.
-2. Read the existing index, then run `archetipo wiki search` for overlapping concepts.
-3. Update existing pages when they represent the same stable concept; create draft pages only for new concepts.
-4. Link every derived claim to the archived document or repository evidence.
-5. Reset materially changed verified pages to `draft`, validate, and run `wiki catalog`. Publish only after explicit human approval. If the new source conflicts with verified knowledge, preserve both claims, mark the page `needs-review`, and report the conflict instead of choosing silently.
+1. Preserve the original source below `paths.wiki/sources/`.
+2. Read the index and search for overlapping concepts.
+3. Update the existing stable page when it represents the same concept. Create a page only for a new concept.
+4. For every materially changed reviewed page, run `archetipo wiki reset <page-id>...` before editing. Generated pages already need no transition.
+5. Preserve disagreements as explicit `issues`, validate, and catalog.
 
 ## Refresh
 
 1. Run `archetipo wiki affected --base <revision> --head <revision>` or pass repeated `--file` flags.
-2. Inspect each returned page against the changed code. Search for related pages not directly evidenced by the changed files.
-3. Update only claims made obsolete by the changes and reset materially changed verified pages to `draft`.
-4. Validate, then run `wiki catalog`. Report changed pages and unresolved gaps; publish only after explicit human approval.
+2. Inspect affected pages and related domains against changed code and tests.
+3. Run `archetipo wiki reset <page-id>...` for reviewed pages that require changes, then update obsolete claims only and retain unresolved issues.
+4. Validate and catalog. Approval is a separate operation.
 
 ## Query
 
 1. Read `docs/wiki/index.md` first.
-2. Run `archetipo wiki search "<compact query>"`; refine with `--type` or `--status` when useful.
-3. Read only the selected page paths. Follow explicit links only when the answer requires them.
-4. Verify time-sensitive or implementation-specific claims against cited code before answering.
-5. State when the Wiki does not cover the question; do not silently scan the entire repository as if it were documented knowledge.
+2. Search with a compact query and optional type/state filters.
+3. Read only selected pages and explicit links.
+4. Treat `generated`, `stale`, and `attention` pages as routing knowledge that requires code verification. Verify implementation-specific claims against cited symbols or paths.
+5. State uncovered or contradictory areas instead of silently treating inference as fact.
+
+## Review
+
+1. Run `archetipo wiki status` and `archetipo wiki validate`.
+2. Review selected generated pages against their cited code, tests, domain ownership, contracts, flows, invariants, and issues.
+3. Resolve every issue on a page before approval. Structural validation alone never authorizes review.
+4. Only after explicit user approval, run `archetipo wiki approve <page-id>...`. With no IDs the command approves every issue-free generated page.
+5. `reviewed` records a content hash, evidence revision, and timestamp. `stale` and `attention` are derived by the CLI and never written as lifecycle states.
 
 ## Lint
 
-1. Run `archetipo wiki validate` and classify its deterministic findings.
-2. Inspect summaries, duplicated concepts, contradictory claims, missing decision rationale, and pages whose evidence no longer supports their body.
-3. Apply safe structural repairs. For semantic uncertainty, mark `needs-review` and explain the required human decision.
-4. Re-run validation. Publish only if requested or if lint is part of an already-authorized maintenance workflow.
+1. Run `archetipo wiki validate` and classify deterministic findings.
+2. Inspect duplicated domains, unjustified bounded-context claims, missing ownership, contradictory flows, orphan capability candidates, and evidence that no longer supports a page.
+3. Apply structural repairs. For semantic uncertainty, add an issue and reset the page to `generated`.
+4. Re-run validation and catalog. Do not approve without an explicit review request.
 
 ## Safety
 
 - Never branch on connector type; Wiki storage is local for every connector.
 - Branch on `error.code`, never `error.message`.
-- Do not publish invalid drafts or convert uncertain claims to `verified`.
-- Do not read secret contents surfaced by repository exploration; `wiki inspect` intentionally omits them.
-- Do not delete or modify source documents while archiving or ingesting them.
-- Do not load all source files or all Wiki pages when index and search can bound the context.
+- Do not read secret contents surfaced by inspection.
+- Do not load every Wiki page when the catalog and search can bound context.
+- Do not infer architectural rationale from implementation shape alone.
+- Do not treat a data model state as reachable until a write path proves it.
+- Do not approve pages with unresolved issues.

@@ -17,7 +17,7 @@ Read `.archetipo/shared-runtime.md` for the CLI Runtime Contract, Language Polic
 
 1. **The verdict is the user's.** This skill is the one place in the workflow where stopping to ask is the point, not a failure. Never approve, reject, or postpone a spec on your own initiative.
 2. **Everything else is autonomous.** Gathering evidence, presenting the increment, and executing the chosen verdict need no confirmation beyond the verdict itself.
-3. **Connector operations are exposed by the CLI.** This skill uses `config show`, `spec show`, `spec next`, `spec integrate`, `spec move`, and `spec request-changes`. It also uses `e2e demo` plus connector-independent `wiki affected`, `wiki validate`, and `wiki publish`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`, never on connector type.
+3. **Connector operations are exposed by the CLI.** This skill uses `config show`, `spec show`, `spec next`, `spec integrate`, `spec move`, and `spec request-changes`. It also uses `e2e demo` plus connector-independent `wiki affected`, `wiki validate`, and `wiki approve`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`, never on connector type.
 
 ## Workflow
 
@@ -66,7 +66,7 @@ If the user adds conditions to an approval ("approve, but rename that flag"), tr
 ### PHASE 3 — Execute the Verdict
 
 **Approve:**
-- Run `archetipo wiki validate`. If it reports error findings, block approval execution and present them. Otherwise run `archetipo wiki publish` so accepted draft knowledge becomes canonical in the reviewed branch.
+- Run `archetipo wiki validate`. If it reports error findings or affected pages contain unresolved issues, block approval and present them. Otherwise run `archetipo wiki approve <page-id>...` for the accepted generated pages so review metadata is anchored to their content and evidence revision.
 - When `data.spec.branch` is set and `worktree.enabled` is true in the config: run `archetipo spec integrate {US-CODE}` from `data.project_root`. It merges the branch into base, cleans up the worktree, and transitions the spec to `{config.workflow.statuses.done}` in one step.
   - On `error.code = E_CONFLICT` with unintegrated blockers: report which blocker specs must be integrated first and stop — do not integrate blockers on your own.
   - On `error.code = E_CONFLICT` with merge conflicts: report the conflicting files and tell the user to resolve them manually, then re-run the integration. Do not resolve merge conflicts yourself.

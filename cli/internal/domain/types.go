@@ -161,14 +161,13 @@ type ConfigPaths struct {
 	TestResults string `json:"test_results" yaml:"test_results"`
 }
 
-// WikiStatus is the lifecycle state of a living-knowledge page.
+// WikiStatus records whether generated knowledge received explicit review.
+// Freshness and attention are derived by the CLI from evidence and issues.
 type WikiStatus string
 
 const (
-	WikiStatusDraft       WikiStatus = "draft"
-	WikiStatusVerified    WikiStatus = "verified"
-	WikiStatusNeedsReview WikiStatus = "needs-review"
-	WikiStatusSuperseded  WikiStatus = "superseded"
+	WikiStatusGenerated WikiStatus = "generated"
+	WikiStatusReviewed  WikiStatus = "reviewed"
 )
 
 // WikiLink is an explicit relationship to another stable page ID.
@@ -181,11 +180,27 @@ type WikiLink struct {
 type WikiSource struct {
 	Path     string `json:"path" yaml:"path"`
 	Revision string `json:"revision,omitempty" yaml:"revision,omitempty"`
+	Role     string `json:"role,omitempty" yaml:"role,omitempty"`
+	Symbol   string `json:"symbol,omitempty" yaml:"symbol,omitempty"`
 	Note     string `json:"note,omitempty" yaml:"note,omitempty"`
+}
+
+// WikiIssue keeps semantic uncertainty explicit without overloading lifecycle.
+type WikiIssue struct {
+	Code    string `json:"code" yaml:"code"`
+	Summary string `json:"summary" yaml:"summary"`
+}
+
+// WikiReview anchors approval to both page content and repository evidence.
+type WikiReview struct {
+	ContentHash      string `json:"content_hash" yaml:"content_hash"`
+	EvidenceRevision string `json:"evidence_revision" yaml:"evidence_revision"`
+	ReviewedAt       string `json:"reviewed_at" yaml:"reviewed_at"`
 }
 
 // WikiCoverage records how a codebase boundary is represented in the Wiki.
 type WikiCoverage struct {
+	Kind   string   `json:"kind" yaml:"kind"`
 	Path   string   `json:"path" yaml:"path"`
 	Status string   `json:"status" yaml:"status"`
 	Pages  []string `json:"pages,omitempty" yaml:"pages,omitempty"`
@@ -198,11 +213,12 @@ type WikiPageMeta struct {
 	Type           string         `json:"type" yaml:"type"`
 	Summary        string         `json:"summary" yaml:"summary"`
 	Status         WikiStatus     `json:"status" yaml:"status"`
+	Classification string         `json:"classification,omitempty" yaml:"classification,omitempty"`
 	Links          []WikiLink     `json:"links,omitempty" yaml:"links,omitempty"`
 	Sources        []WikiSource   `json:"sources,omitempty" yaml:"sources,omitempty"`
 	Coverage       []WikiCoverage `json:"coverage,omitempty" yaml:"coverage,omitempty"`
-	GitRevision    string         `json:"git_revision,omitempty" yaml:"git_revision,omitempty"`
-	LastVerifiedAt string         `json:"last_verified_at,omitempty" yaml:"last_verified_at,omitempty"`
+	Issues         []WikiIssue    `json:"issues,omitempty" yaml:"issues,omitempty"`
+	Review         *WikiReview    `json:"review,omitempty" yaml:"review,omitempty"`
 }
 
 // WikiFinding is one deterministic structural or evidence validation result.
