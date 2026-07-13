@@ -1,0 +1,19 @@
+schema: archetipo/wiki-benchmark/v1
+
+repository:
+  # Resolved relative to this file. Override with --repository for another clone.
+  path: ../../../../RideAtlas
+  revision: a07564c
+
+agent:
+  command: pi
+  model: opencode-go/deepseek-v4-flash
+  timeout_ms: 600000
+
+conditions:
+  - raw
+  - wiki
+
+repetitions: 1
+cases_file: cases.yaml
+

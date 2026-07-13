@@ -166,6 +166,9 @@ function normalizeConfig(manifest, configPath, filterScenarios) {
     if (rawScenario.verify_integrate !== undefined && (!Array.isArray(rawScenario.verify_integrate) || !rawScenario.verify_integrate.every((code) => typeof code === "string" && code.trim() !== ""))) {
       throw new Error(`scenarios.${scenarioId}.verify_integrate must be a list of non-empty strings when specified in ${configPath}`);
     }
+    if (rawScenario.verify_wiki_bootstrap !== undefined && (!rawScenario.verify_wiki_bootstrap || typeof rawScenario.verify_wiki_bootstrap !== "object" || Array.isArray(rawScenario.verify_wiki_bootstrap))) {
+      throw new Error(`scenarios.${scenarioId}.verify_wiki_bootstrap must be an object when specified in ${configPath}`);
+    }
     scenarios.push({
       id: scenarioId,
       agentId,
@@ -176,6 +179,7 @@ function normalizeConfig(manifest, configPath, filterScenarios) {
       archetipo_pre_commands: rawScenario.archetipo_pre_commands ?? [],
       archetipo_post_commands: rawScenario.archetipo_post_commands ?? [],
       verify_integrate: rawScenario.verify_integrate ?? [],
+      verify_wiki_bootstrap: rawScenario.verify_wiki_bootstrap,
     });
   }
 
@@ -345,6 +349,12 @@ async function runConfiguredScenario({ scenario, configPath, timeoutMs, cliSourc
     logRunStepStart(scenario.id, "quality", "Validating generated artifacts");
     await verifyGeneratedArtifacts(context);
     logRunStepDone(scenario.id, "quality", "Artifact quality checks passed");
+
+    if (scenario.verify_wiki_bootstrap) {
+      logRunStepStart(scenario.id, "verify-wiki-bootstrap", "Verifying codebase-first Wiki coverage and lifecycle state");
+      await verifyWikiBootstrap(context, scenario.verify_wiki_bootstrap);
+      logRunStepDone(scenario.id, "verify-wiki-bootstrap", "Wiki bootstrap verified");
+    }
 
     const integrationStates = new Map();
     for (const code of scenario.verify_integrate) {
@@ -660,6 +670,83 @@ async function verifyGeneratedArtifacts(context) {
   if (promptText.includes("/archetipo-plan")) {
     await verifyPlanArtifacts(context);
   }
+}
+
+async function verifyWikiBootstrap(context, expectations) {
+  const validation = await runReportedCommand({
+    ...context,
+    step: "verify-wiki-bootstrap-validate",
+    command: context.cliBinaryPath,
+    args: ["wiki", "validate", "--profile", "bootstrap"],
+  });
+  if (!validation.ok) {
+    throw new Error(`Wiki bootstrap validation command failed: ${validation.stderr || validation.stdout || `exit ${validation.code}`}`);
+  }
+  let validationResult;
+  try {
+    validationResult = JSON.parse(validation.stdout);
+  } catch (error) {
+    throw new Error(`Could not parse Wiki bootstrap validation: ${error.message}`);
+  }
+  assertQuality(validationResult?.data?.ok === true, `Wiki bootstrap findings: ${JSON.stringify(validationResult?.data?.findings ?? [])}`);
+
+  const wikiRoot = path.join(context.sandboxDir, "docs", "wiki");
+  const requiredPages = expectations.required_pages ?? ["overview", "architecture", "engineering.code-map", "operations.development"];
+  const pages = new Map();
+  for (const id of requiredPages) {
+    const pagePath = path.join(wikiRoot, `${id.replaceAll(".", path.sep)}.md`);
+    const raw = await fs.readFile(pagePath, "utf8");
+    const meta = parseWikiFrontmatter(raw, pagePath);
+    assertQuality(meta.id === id, `${pagePath} has unexpected id ${meta.id ?? "(missing)"}`);
+    pages.set(id, { meta, raw, pagePath });
+  }
+
+  const allPagePaths = await listMarkdownFiles(wikiRoot);
+  let needsReview = 0;
+  for (const pagePath of allPagePaths) {
+    if (["index.md", "log.md"].includes(path.basename(pagePath)) || pagePath.includes(`${path.sep}sources${path.sep}`)) {
+      continue;
+    }
+    const raw = await fs.readFile(pagePath, "utf8");
+    const meta = parseWikiFrontmatter(raw, pagePath);
+    if (meta.status === "needs-review") needsReview += 1;
+    if (expectations.forbid_verified) {
+      assertQuality(meta.status !== "verified", `${meta.id ?? pagePath} was promoted during bootstrap`);
+    }
+  }
+  assertQuality(needsReview >= (expectations.min_needs_review ?? 0), `expected at least ${expectations.min_needs_review ?? 0} needs-review page(s), got ${needsReview}`);
+
+  const prdPath = path.join(wikiRoot, "sources", "prd.md");
+  let prdPresent = true;
+  try { await fs.access(prdPath); } catch { prdPresent = false; }
+  if (expectations.expect_prd !== undefined) {
+    assertQuality(prdPresent === expectations.expect_prd, `expected archived PRD presence=${expectations.expect_prd}, got ${prdPresent}`);
+  }
+
+  for (const [id, assertion] of Object.entries(expectations.page_assertions ?? {})) {
+    const page = pages.get(id) ?? (() => { throw new Error(`page assertion references non-required page ${id}`); })();
+    if (assertion.status) assertQuality(page.meta.status === assertion.status, `${id} expected status ${assertion.status}, got ${page.meta.status}`);
+    for (const text of assertion.includes ?? []) assertQuality(page.raw.includes(text), `${id} does not include expected text: ${text}`);
+  }
+}
+
+function parseWikiFrontmatter(raw, pagePath) {
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  if (!match) throw new Error(`Wiki page has no YAML frontmatter: ${pagePath}`);
+  return YAML.parse(match[1]);
+}
+
+async function listMarkdownFiles(root) {
+  const result = [];
+  async function walk(dir) {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) await walk(fullPath);
+      else if (entry.name.endsWith(".md")) result.push(fullPath);
+    }
+  }
+  await walk(root);
+  return result;
 }
 
 async function verifySpecArtifacts(context) {

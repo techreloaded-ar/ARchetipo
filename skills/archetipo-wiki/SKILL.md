@@ -5,7 +5,7 @@ description: Bootstrap, query, ingest, refresh, and lint ARchetipo's Markdown pr
 
 # ARchetipo Wiki
 
-Maintain `paths.wiki` as the canonical, progressively loaded project knowledge base. Keep code as evidence, not copied content. Keep archived documents under `sources/` out of ordinary queries.
+Maintain `paths.wiki` as the canonical, progressively loaded project knowledge base. Treat implemented code as evidence of current behavior and project documents as optional evidence of intent. Keep code as evidence, not copied content, and archived documents under `sources/` out of ordinary queries.
 
 ## Start
 
@@ -17,12 +17,14 @@ Maintain `paths.wiki` as the canonical, progressively loaded project knowledge b
 ## Bootstrap
 
 1. Run `archetipo wiki init`.
-2. Resolve the configured `data.paths.prd` from `data.project_root`. If a non-empty PRD exists, read it as product context and preserve it verbatim at `<paths.wiki>/sources/prd.md`. Treat the archived copy as provenance and cite it from derived pages where relevant. If the PRD is absent, continue from repository evidence without creating a placeholder source.
-3. Inventory repository boundaries using manifests, top-level directories, entry points, public contracts, configuration, and tests. Reconcile implementation evidence with the PRD instead of assuming either is current; represent material conflicts as `needs-review`. For a large repository, sample representative files per component and explicitly record uninspected areas.
-4. Create focused draft pages from the available PRD and repository evidence. Use one page per domain, component, decision, or operational concern. Derive every page path from its stable ID using the canonical mapping in the Wiki contract.
-5. Cite repository-relative source paths in frontmatter.
-6. Run `archetipo wiki validate`. Repair every error finding; review warnings and record genuine coverage gaps as `needs-review` pages.
-7. Run `archetipo wiki publish` only after the generated content is internally consistent.
+2. Run `archetipo wiki inspect` before opening a PRD or broad documentation. Stop on `E_PRECONDITION`; do not invent a Wiki for an evidence-free repository.
+3. Read every reported manifest, entry point, schema, configuration file, and public contract. For each `data.boundaries` item, read its representative implementation and test files. When `data.uninspected` is non-empty, preserve those limitations in the code map.
+4. Create these draft core pages with repository evidence: `overview`, `architecture`, `engineering.code-map`, and `operations.development`. In `engineering.code-map`, record every inspected boundary in `coverage` using the contract below; never omit a boundary silently.
+5. Add focused pages only when evidence supports them: product or vision from product evidence; domains from functional capabilities; components from autonomous technical boundaries; decisions from explicit rationale or trade-offs; engineering, operations, and history from corresponding repository evidence. Do not create pages merely to fill scaffold categories.
+6. If `data.prd.present` is true, read the configured PRD only now and preserve it verbatim at `<paths.wiki>/sources/prd.md`. Use it as evidence of intent, never as proof of implemented behavior. Mark material code-versus-PRD conflicts `needs-review`. Do not create a placeholder when absent.
+7. Cite repository-relative evidence in frontmatter. Link archived sources with ordinary Markdown links; reserve `[[page.id]]` for ordinary Wiki pages.
+8. Run `archetipo wiki validate --profile bootstrap`. Repair every error and record real gaps as `mapped-only`, `needs-review`, or `excluded` coverage with a reason.
+9. Run `archetipo wiki catalog`. Leave generated pages as `draft`; call `wiki publish` only after explicit human approval in a later review.
 
 ## Ingest
 
@@ -30,14 +32,14 @@ Maintain `paths.wiki` as the canonical, progressively loaded project knowledge b
 2. Read the existing index, then run `archetipo wiki search` for overlapping concepts.
 3. Update existing pages when they represent the same stable concept; create draft pages only for new concepts.
 4. Link every derived claim to the archived document or repository evidence.
-5. Validate and publish. If the new source conflicts with verified knowledge, preserve both claims, mark the page `needs-review`, and report the conflict instead of choosing silently.
+5. Reset materially changed verified pages to `draft`, validate, and run `wiki catalog`. Publish only after explicit human approval. If the new source conflicts with verified knowledge, preserve both claims, mark the page `needs-review`, and report the conflict instead of choosing silently.
 
 ## Refresh
 
 1. Run `archetipo wiki affected --base <revision> --head <revision>` or pass repeated `--file` flags.
 2. Inspect each returned page against the changed code. Search for related pages not directly evidenced by the changed files.
-3. Update only claims made obsolete by the changes. Refresh evidence and verification metadata through `wiki publish`.
-4. Validate, then publish draft updates. Report changed pages and unresolved gaps.
+3. Update only claims made obsolete by the changes and reset materially changed verified pages to `draft`.
+4. Validate, then run `wiki catalog`. Report changed pages and unresolved gaps; publish only after explicit human approval.
 
 ## Query
 
@@ -59,5 +61,6 @@ Maintain `paths.wiki` as the canonical, progressively loaded project knowledge b
 - Never branch on connector type; Wiki storage is local for every connector.
 - Branch on `error.code`, never `error.message`.
 - Do not publish invalid drafts or convert uncertain claims to `verified`.
+- Do not read secret contents surfaced by repository exploration; `wiki inspect` intentionally omits them.
 - Do not delete or modify source documents while archiving or ingesting them.
 - Do not load all source files or all Wiki pages when index and search can bound the context.

@@ -240,7 +240,7 @@ The CLI architecture is extensible, but the built-in connectors today are `file`
 | `archetipo-implement` | Executes a planned spec through code, tests, review, and handoff. | "implement US-005", "run the next ready spec" |
 | `archetipo-review` | Facilitates the human acceptance gate: approve to `DONE` or send back with rework feedback. | "review US-005", "accept the spec", "what's waiting for review?" |
 | `archetipo-autopilot` | Runs planning and implementation across multiple eligible specs. | "run everything", "autopilot the backlog", "implement all specs" |
-| `archetipo-wiki` | Bootstraps, queries, ingests, refreshes, and lints living project knowledge. | "bootstrap the Wiki", "document this codebase", "refresh project knowledge" |
+| `archetipo-wiki` | Builds a codebase-first project map, then queries, ingests, refreshes, and lints living knowledge; PRDs are optional intent sources. | "bootstrap the Wiki", "document this codebase", "refresh project knowledge" |
 
 ---
 

@@ -16,8 +16,23 @@ import (
 
 func newWikiCmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "wiki", Short: "Living project Wiki operations"}
-	root.AddCommand(newWikiInitCmd(s), newWikiStatusCmd(s), newWikiValidateCmd(s), newWikiSearchCmd(s), newWikiAffectedCmd(s), newWikiPublishCmd(s))
+	root.AddCommand(newWikiInitCmd(s), newWikiInspectCmd(s), newWikiStatusCmd(s), newWikiValidateCmd(s), newWikiSearchCmd(s), newWikiAffectedCmd(s), newWikiCatalogCmd(s), newWikiPublishCmd(s))
 	return root
+}
+
+func newWikiInspectCmd(s streams) *cobra.Command {
+	return &cobra.Command{Use: "inspect", Short: "Inventory codebase evidence for Wiki bootstrap", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		return withWiki(cmd, s, "wiki_inspection_result", false, func(cfg config.Config, root string) (any, error) {
+			inspection, err := wiki.Inspect(cfg.ProjectRoot, root, cfg.Paths.PRD)
+			if errors.Is(err, wiki.ErrNoProjectEvidence) {
+				return nil, iox.NewPrecondition("Project has no code, manifest, or documentation evidence", "add project evidence before bootstrapping the Wiki", err)
+			}
+			if err != nil {
+				return nil, iox.NewInternal("inspecting project", err)
+			}
+			return inspection, nil
+		})
+	}}
 }
 
 func withWiki(cmd *cobra.Command, s streams, kind string, require bool, fn func(config.Config, string) (any, error)) error {
@@ -80,9 +95,27 @@ func newWikiStatusCmd(s streams) *cobra.Command {
 }
 
 func newWikiValidateCmd(s streams) *cobra.Command {
-	return &cobra.Command{Use: "validate", Short: "Validate Wiki structure, links and evidence", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+	var profile string
+	cmd := &cobra.Command{Use: "validate", Short: "Validate Wiki structure, links and evidence", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		if profile != "" && profile != "bootstrap" {
+			return iox.NewInvalidInput("unknown Wiki validation profile: "+profile, "use --profile bootstrap or omit the flag", nil)
+		}
+		if profile == "bootstrap" {
+			return withWiki(cmd, s, "validation_result", true, func(cfg config.Config, root string) (any, error) {
+				report, err := wiki.ValidateBootstrap(cfg.ProjectRoot, root, cfg.Paths.PRD)
+				if errors.Is(err, wiki.ErrNoProjectEvidence) {
+					return nil, iox.NewPrecondition("Project has no code, manifest, or documentation evidence", "add project evidence before validating bootstrap coverage", err)
+				}
+				if err != nil {
+					return nil, iox.NewInternal("validating bootstrap coverage", err)
+				}
+				return report, nil
+			})
+		}
 		return withWiki(cmd, s, "validation_result", true, func(cfg config.Config, root string) (any, error) { return wiki.Validate(cfg.ProjectRoot, root), nil })
 	}}
+	cmd.Flags().StringVar(&profile, "profile", "", "additional validation profile (bootstrap)")
+	return cmd
 }
 
 func newWikiSearchCmd(s streams) *cobra.Command {
@@ -144,6 +177,18 @@ func newWikiPublishCmd(s streams) *cobra.Command {
 				return nil, iox.NewInternal("publishing Wiki", err)
 			}
 			return map[string]any{"published": count, "root": root}, nil
+		})
+	}}
+}
+
+func newWikiCatalogCmd(s streams) *cobra.Command {
+	return &cobra.Command{Use: "catalog", Short: "Rebuild the Wiki index without promoting drafts", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		return withWiki(cmd, s, "wiki_catalog_result", true, func(cfg config.Config, root string) (any, error) {
+			count, err := wiki.Catalog(root)
+			if err != nil {
+				return nil, iox.NewInternal("cataloging Wiki", err)
+			}
+			return map[string]any{"cataloged": count, "root": root}, nil
 		})
 	}}
 }

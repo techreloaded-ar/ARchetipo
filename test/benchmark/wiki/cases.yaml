@@ -1,0 +1,126 @@
+schema: archetipo/wiki-benchmark-cases/v1
+
+cases:
+  - id: publish-workflow
+    category: diagnosis
+    prompt: >-
+      Determina se un Ranger proprietario di un viaggio può pubblicarlo senza
+      approvazione di un Sentinel. Descrivi le transizioni di stato realmente
+      implementate, cosa valida il sistema prima della pubblicazione e gli
+      eventuali scostamenti tra i nomi degli stati e il flusso eseguibile.
+    oracle:
+      expected_files:
+        - src/app/api/trips/[id]/publish/route.ts
+        - src/components/trips/PublishTripButton.tsx
+        - src/lib/trips/tripValidationService.ts
+      required_findings:
+        - id: owner-can-publish
+          any:
+            - "proprietari[oa].{0,40}(pubblic|publish)"
+            - "Ranger.{0,60}(pubblic|publish).{0,60}senza.{0,30}Sentinel"
+        - id: direct-transition
+          any:
+            - "Bozza.{0,50}Pubblicato"
+            - "direttamente.{0,40}Pubblicato"
+        - id: validation-scope
+          any:
+            - "titolo.{0,120}descrizione.{0,120}tapp"
+            - "GPX.{0,120}descrizion"
+        - id: review-state-not-used
+          any:
+            - "Pronto[_ ]per[_ ]revisione.{0,100}(non|nessun|assente|mai)"
+            - "non.{0,100}Pronto[_ ]per[_ ]revisione"
+      forbidden_claims:
+        - "solo.{0,30}Sentinel.{0,50}(può|possono).{0,30}pubblic"
+        - "ogni.{0,30}pubblicazione.{0,50}(richiede|passa).{0,30}Sentinel"
+
+  - id: trip-builder-access
+    category: localization
+    prompt: >-
+      Individua tutti i punti applicativi principali da modificare per rendere
+      il Trip Builder disponibile anche ai Ranger, mantenendo l'autenticazione.
+      Distingui visibilità nella navigazione, autorizzazione della pagina e
+      autorizzazione delle API. Non implementare la modifica.
+    oracle:
+      expected_files:
+        - src/components/layout/Navbar.tsx
+        - src/app/trip-builder/page.tsx
+        - src/app/api/trip-builder/chat/route.ts
+        - src/app/api/trip-builder/trips/route.ts
+      required_findings:
+        - id: navbar-sentinel
+          any:
+            - "Navbar.{0,100}Sentinel"
+            - "navigazione.{0,100}Sentinel"
+        - id: page-sentinel
+          any:
+            - 'trip-builder/page\.tsx.{0,120}Sentinel'
+            - "pagina.{0,100}(solo|riservat).{0,40}Sentinel"
+        - id: api-auth-only
+          any:
+            - "API.{0,140}(sessione|autentic).{0,80}(non|senza).{0,50}ruolo"
+            - 'route.{0,120}auth\(\).{0,100}(non|nessun).{0,50}Sentinel'
+
+  - id: stripe-idempotency
+    category: planning
+    prompt: >-
+      Prepara un piano tecnico per rendere persistente e multi-instance
+      l'idempotenza dei webhook Stripe. Identifica i file attuali rilevanti,
+      il cambiamento minimo al modello dati e i test necessari. Non modificare
+      il codice.
+    oracle:
+      expected_files:
+        - src/app/api/webhooks/stripe/route.ts
+        - src/lib/payment/purchaseService.ts
+        - prisma/schema.prisma
+        - src/tests/unit/api/admin/purchases.test.ts
+      required_findings:
+        - id: in-memory-set
+          any:
+            - "PROCESSED_EVENTS"
+            - "Set.{0,80}memoria"
+        - id: persistence
+          any:
+            - "modell[oa].{0,80}(event|webhook)"
+            - "tabella.{0,80}(event|webhook)"
+        - id: unique-event-id
+          any:
+            - "event.{0,20}id.{0,80}(unique|univoc)"
+        - id: transactional-processing
+          any:
+            - "transazion"
+            - '\$transaction'
+        - id: concurrency-test
+          any:
+            - "concorren"
+            - "duplicat.{0,80}(istan|event)"
+
+  - id: batch-import-runtime
+    category: explanation
+    prompt: >-
+      Spiega come viene eseguito l'import batch di itinerari, quali dati
+      persistono e quale rischio operativo presenta l'esecuzione asincrona
+      attuale in un ambiente serverless. Indica i file essenziali da leggere.
+    oracle:
+      expected_files:
+        - src/lib/batch/BatchProcessor.ts
+        - src/lib/batch/ZipParser.ts
+        - src/app/api/trips/batch/route.ts
+        - prisma/schema.prisma
+      required_findings:
+        - id: fire-and-forget
+          any:
+            - "fire-and-forget"
+            - "setTimeout"
+        - id: batch-job
+          any:
+            - "BatchJob"
+        - id: persisted-state
+          any:
+            - "PENDING.{0,80}PROCESSING.{0,80}(COMPLETED|FAILED)"
+            - "stato.{0,100}(persist|database)"
+            - "BatchJob.{0,100}(stato|status|conteggi|errori)"
+        - id: serverless-risk
+          any:
+            - "serverless.{0,100}(interromp|effimer|termin|processo)"
+            - "processo.{0,100}(riavvi|termin|perso)"

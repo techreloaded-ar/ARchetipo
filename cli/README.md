@@ -29,14 +29,17 @@ Living project knowledge is managed locally and independently of the configured 
 
 ```bash
 archetipo wiki init
+archetipo wiki inspect
 archetipo wiki status
 archetipo wiki validate
+archetipo wiki validate --profile bootstrap
 archetipo wiki search "authentication" --type architecture
 archetipo wiki affected --base main --head HEAD
+archetipo wiki catalog
 archetipo wiki publish
 ```
 
-The CLI performs deterministic storage, indexing, evidence matching, and validation. The `archetipo-wiki` skill performs semantic bootstrap, ingest, refresh, query, and lint workflows.
+The CLI performs deterministic codebase inspection, storage, indexing, evidence matching, and validation. The `archetipo-wiki` skill interprets that evidence for semantic bootstrap, ingest, refresh, query, and lint workflows. Bootstrap catalogs draft pages without promoting them; `wiki publish` remains the post-review promotion step.
 
 To build all release binaries locally from the repository root:
 

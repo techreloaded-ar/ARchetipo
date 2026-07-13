@@ -1,0 +1,16 @@
+{
+  "name": "route-catalog",
+  "private": true,
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^5.0.0",
+    "pg": "^8.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

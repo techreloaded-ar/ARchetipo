@@ -184,16 +184,25 @@ type WikiSource struct {
 	Note     string `json:"note,omitempty" yaml:"note,omitempty"`
 }
 
+// WikiCoverage records how a codebase boundary is represented in the Wiki.
+type WikiCoverage struct {
+	Path   string   `json:"path" yaml:"path"`
+	Status string   `json:"status" yaml:"status"`
+	Pages  []string `json:"pages,omitempty" yaml:"pages,omitempty"`
+	Note   string   `json:"note,omitempty" yaml:"note,omitempty"`
+}
+
 // WikiPageMeta is the required frontmatter contract for Wiki pages.
 type WikiPageMeta struct {
-	ID             string       `json:"id" yaml:"id"`
-	Type           string       `json:"type" yaml:"type"`
-	Summary        string       `json:"summary" yaml:"summary"`
-	Status         WikiStatus   `json:"status" yaml:"status"`
-	Links          []WikiLink   `json:"links,omitempty" yaml:"links,omitempty"`
-	Sources        []WikiSource `json:"sources,omitempty" yaml:"sources,omitempty"`
-	GitRevision    string       `json:"git_revision,omitempty" yaml:"git_revision,omitempty"`
-	LastVerifiedAt string       `json:"last_verified_at,omitempty" yaml:"last_verified_at,omitempty"`
+	ID             string         `json:"id" yaml:"id"`
+	Type           string         `json:"type" yaml:"type"`
+	Summary        string         `json:"summary" yaml:"summary"`
+	Status         WikiStatus     `json:"status" yaml:"status"`
+	Links          []WikiLink     `json:"links,omitempty" yaml:"links,omitempty"`
+	Sources        []WikiSource   `json:"sources,omitempty" yaml:"sources,omitempty"`
+	Coverage       []WikiCoverage `json:"coverage,omitempty" yaml:"coverage,omitempty"`
+	GitRevision    string         `json:"git_revision,omitempty" yaml:"git_revision,omitempty"`
+	LastVerifiedAt string         `json:"last_verified_at,omitempty" yaml:"last_verified_at,omitempty"`
 }
 
 // WikiFinding is one deterministic structural or evidence validation result.

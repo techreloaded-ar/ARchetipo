@@ -22,8 +22,9 @@ Read `.archetipo/shared-runtime.md` for Language Policy, Assumptions and Questio
    - `archetipo prd write`
    - `archetipo validate prd`
    - `archetipo wiki init`
+   - `archetipo wiki inspect`
    - `archetipo wiki validate`
-   - `archetipo wiki publish`
+   - `archetipo wiki catalog`
 
 If the CLI cannot find `.archetipo/config.yaml`, it falls back to its built-in defaults for connector, paths, and workflow statuses.
 
@@ -66,7 +67,7 @@ Load context progressively and keep the working context lean:
 
 ## Compile Discovery Into the Wiki
 
-After the PRD validation gate passes, initialize the Wiki and preserve the configured PRD verbatim at `<paths.wiki>/sources/prd.md`. Convert the accepted discovery into focused draft pages for vision, users, outcomes, product principles, capabilities, requirements, constraints, and initial architecture, citing the archived PRD where relevant. The archived PRD is provenance, not an operational dependency for later skills. Follow the page contract in the installed `archetipo-wiki` skill, run `archetipo wiki validate`, repair error findings, then run `archetipo wiki publish`.
+After the PRD validation gate passes, follow the installed `archetipo-wiki` bootstrap workflow: inspect the codebase first, preserve the configured PRD verbatim at `<paths.wiki>/sources/prd.md`, and reconcile implemented state with product intent. Create the required codebase map plus focused draft pages for supported vision, users, outcomes, principles, capabilities, requirements, constraints, and architecture. Run `archetipo wiki validate --profile bootstrap`, repair errors, then run `archetipo wiki catalog`; leave pages draft until human review.
 
 ## PRD Validation Gate
 

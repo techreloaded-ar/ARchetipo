@@ -96,6 +96,7 @@ Questa repo ha una harness E2E locale in Node.js che esercita la CLI compilata d
   - `archetipo_pre_commands`: comandi CLI eseguiti prima dei prompt.
   - `archetipo_post_commands`: comandi CLI eseguiti dopo i prompt.
   - `verify_integrate`: codici spec per cui verificare l'integrazione worktree.
+  - `verify_wiki_bootstrap`: aspettative su pagine core, PRD archiviato, stati draft/needs-review e contenuti mirati; esegue anche `wiki validate --profile bootstrap`.
 - I pre/post command sono divisi con `line.split(/\s+/)`: evitare argomenti che richiedono quoting shell complesso.
 
 ### Sequenza di uno scenario `run.mjs`
@@ -114,6 +115,8 @@ Questa repo ha una harness E2E locale in Node.js che esercita la CLI compilata d
 ### Scenari attuali
 
 - `inception-creates-valid-prd`: fixture `fixtures/inception`, prompt `/archetipo-inception`, poi `validate prd`; verifica che la skill generi e persista un PRD strutturalmente valido.
+- `wiki-bootstrap-codebase-only`: fixture `fixtures/wiki-codebase`, prompt `/archetipo-wiki`; verifica una mappa codebase-first completa senza PRD e senza promozione dei draft.
+- `wiki-bootstrap-prd-conflict`: fixture `fixtures/wiki-prd-conflict`, prompt `/archetipo-wiki`; verifica archiviazione del PRD, autorità del codice sullo stato corrente e conflitto marcato `needs-review`.
 - `from-prd-to-plan`: fixture `fixtures/prd`, prompt `/archetipo-spec` e `/archetipo-plan US-001`; copre PRD -> backlog/spec -> piano.
 - `jira-init`: fixture `fixtures/jira-prd`, attualmente senza prompt; usa config connector `jira`.
 - `from-plan-to-implement`: fixture `fixtures/plan`, prompt `/archetipo-implement US-001`; worktree disabilitato.
@@ -123,6 +126,8 @@ Questa repo ha una harness E2E locale in Node.js che esercita la CLI compilata d
 ### Fixture disponibili
 
 - `fixtures/inception`: connector `file`, worktree disabilitato, senza PRD iniziale; usata per verificare la generazione via `/archetipo-inception`.
+- `fixtures/wiki-codebase`: piccolo servizio TypeScript/Express senza PRD, con route e test, usato per il bootstrap Wiki codebase-first.
+- `fixtures/wiki-prd-conflict`: servizio TypeScript/Express con PRD intenzionalmente incoerente (Python/FastAPI/MongoDB), usato per verificare la gestione dei conflitti.
 - `fixtures/prd`: connector `file`, worktree disabilitato, PRD `docs/PRD.md` sul prodotto match5.
 - `fixtures/plan`: connector `file`, worktree disabilitato, backlog/spec/plan `US-001` che chiede di creare `hello.txt` con `Hello from ARchetipo`.
 - `fixtures/worktree-plan`: come `plan`, ma con `worktree.enabled: true`, `base: main`, `dir: .archetipo/worktrees`, `branch_prefix: archetipo/`.
@@ -132,7 +137,7 @@ Questa repo ha una harness E2E locale in Node.js che esercita la CLI compilata d
 
 - `node ./test/e2e/validate-inception-smoke.mjs`: compila CLI, inizializza sandbox file/pi, scrive un PRD invalido, verifica `archetipo validate prd` con exit `0`, `kind=validation_result` e `data.ok=false` includendo `PRD_PLACEHOLDER_LEFT` e `PRD_MISSING_SECTION`, poi scrive un PRD valido e verifica `kind=validation_result` con `data.ok=true`. Produce report HTML. Opzioni: `--workspace-root`, `--cleanup`. Nota: l'help cita `npm run test:validate-inception`, ma al momento non c'è uno script package corrispondente.
 - `npm run test:view-delete-smoke`: compila CLI, inizializza sandbox, aggiunge due spec, semina plan/review per `US-901`, avvia `archetipo view` su porta random e verifica via HTTP API che `DELETE /api/spec/US-901` rimuova la card, lasci `US-902`, restituisca poi 404 su `US-901` e cancelli spec/plan/review artifact.
-- `npm run test:wiki-smoke`: compila la CLI, inizializza una Wiki in un sandbox Git, crea una pagina draft e verifica validate, search, publish, promozione a `verified` e rigenerazione di `index.md`.
+- `npm run test:wiki-smoke`: compila la CLI, ispeziona una codebase sandbox, inizializza la Wiki, crea una pagina draft e verifica validate, search, catalog senza promozione, publish a `verified` e rigenerazione di `index.md`.
 
 Quando aggiungi o modifichi E2E, preferisci fixture esplicite con `.archetipo/config.yaml` completa, usa `env_required` per credenziali esterne, mantieni i report generati fuori dal commit e aggiorna questa sezione se cambia la semantica del runner.
 
