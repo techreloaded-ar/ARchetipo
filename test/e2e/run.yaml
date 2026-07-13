@@ -134,3 +134,21 @@ scenarios:
       - spec start US-001
     prompts:
       - /archetipo-implement US-001
+
+  # Acceptance review presents and approves the generated Wiki page, commits
+  # its review metadata on the spec branch, then integrates a clean worktree.
+  worktree-review-accepts-wiki:
+    agent: pi-go-ds4-flash
+    fixture: fixtures/worktree-wiki-review
+    prompts:
+      - /archetipo-implement US-001
+      - >-
+        /archetipo-review US-001. Present the complete acceptance dossier,
+        including the Wiki page IDs and readiness, then execute Approve. This
+        message is the explicit human approval if validation is clean; do not
+        ask a follow-up question.
+    verify_review_wiki:
+      spec_code: US-001
+      reviewed_pages: [overview]
+      output_includes: [overview]
+      require_clean: true

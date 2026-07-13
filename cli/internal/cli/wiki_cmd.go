@@ -15,6 +15,7 @@ import (
 
 func newWikiCmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "wiki", Short: "Living project Wiki operations"}
+	root.PersistentFlags().String("project-root", "", "target checkout for code and Wiki operations (defaults to the configured project root)")
 	root.AddCommand(newWikiInitCmd(s), newWikiInspectCmd(s), newWikiStatusCmd(s), newWikiValidateCmd(s), newWikiSearchCmd(s), newWikiAffectedCmd(s), newWikiCatalogCmd(s), newWikiApproveCmd(s), newWikiResetCmd(s), newWikiPublishCmd(s))
 	return root
 }
@@ -42,6 +43,24 @@ func withWiki(cmd *cobra.Command, s streams, kind string, require bool, fn func(
 	cfg, err := config.Load(cwd)
 	if err != nil {
 		return iox.NewInvalidInput(err.Error(), "fix .archetipo/config.yaml", err)
+	}
+	projectRoot, err := cmd.Flags().GetString("project-root")
+	if err != nil {
+		return iox.NewInternal("reading Wiki project root", err)
+	}
+	if projectRoot != "" {
+		if !filepath.IsAbs(projectRoot) {
+			projectRoot = filepath.Join(cwd, projectRoot)
+		}
+		projectRoot, err = filepath.Abs(projectRoot)
+		if err != nil {
+			return iox.NewInvalidInput("invalid Wiki project root", "pass an existing checkout directory", err)
+		}
+		info, statErr := os.Stat(projectRoot)
+		if statErr != nil || !info.IsDir() {
+			return iox.NewInvalidInput("Wiki project root is not a directory: "+projectRoot, "pass an existing checkout directory", statErr)
+		}
+		cfg.ProjectRoot = projectRoot
 	}
 	root := cfg.Paths.Wiki
 	if !filepath.IsAbs(root) {

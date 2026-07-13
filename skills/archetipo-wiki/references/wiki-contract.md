@@ -120,6 +120,8 @@ Allowed kinds are `boundary` and `capability`. Allowed statuses are:
 
 All commands receive no stdin payload and emit the standard `archetipo/v1` envelope.
 
+All Wiki commands accept the persistent `--project-root <checkout>` flag. Spec implementation and review pass `data.workdir` explicitly so a nested Git worktree is inspected and mutated instead of the parent checkout.
+
 - `archetipo wiki init` → `kind: wiki_init_result`, `data.root`, `data.created`.
 - `archetipo wiki inspect` → `kind: wiki_inspection_result`; content-free deterministic inventory including `data.boundaries`, `data.capability_candidates`, evidence categories, exclusions, uninspected areas, and optional `data.project_sources`.
 - `archetipo wiki status` → `kind: wiki_status`; derived state counts and page items plus findings.

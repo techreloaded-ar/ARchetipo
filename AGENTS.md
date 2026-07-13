@@ -97,6 +97,7 @@ Questa repo ha una harness E2E locale in Node.js che esercita la CLI compilata d
   - `archetipo_post_commands`: comandi CLI eseguiti dopo i prompt.
   - `verify_integrate`: codici spec per cui verificare l'integrazione worktree.
   - `verify_wiki_bootstrap`: aspettative su pagine DDD core, sorgenti opzionali archiviate, stato `generated`, issue e contenuti mirati; esegue anche `wiki validate --profile bootstrap`.
+  - `verify_review_wiki`: verifica che `archetipo-review` porti la spec a `DONE`, mostri le pagine del dossier, committi come `reviewed` solo quelle attese e non lasci modifiche tracciate nel checkout integrato.
 - I pre/post command sono divisi con `line.split(/\s+/)`: evitare argomenti che richiedono quoting shell complesso.
 
 ### Sequenza di uno scenario `run.mjs`
@@ -122,6 +123,7 @@ Questa repo ha una harness E2E locale in Node.js che esercita la CLI compilata d
 - `from-plan-to-implement`: fixture `fixtures/plan`, prompt `/archetipo-implement US-001`; worktree disabilitato.
 - `worktree-from-plan-to-implement-integrate`: fixture `fixtures/worktree-plan`, prompt `/archetipo-implement US-001`, poi `spec integrate US-001` e verifica integrazione.
 - `worktree-implement-no-integrate`: fixture `fixtures/worktree-plan`, pre-command `spec start US-001`, poi `/archetipo-implement US-001`; lascia il lavoro senza integrazione.
+- `worktree-review-accepts-wiki`: implementa una modifica con `Wiki Impact`, poi `/archetipo-review` presenta e approva la pagina generata, committa i metadati di review nel worktree e integra la spec.
 
 ### Fixture disponibili
 
@@ -131,6 +133,7 @@ Questa repo ha una harness E2E locale in Node.js che esercita la CLI compilata d
 - `fixtures/prd`: connector `file`, worktree disabilitato, PRD `docs/PRD.md` sul prodotto match5.
 - `fixtures/plan`: connector `file`, worktree disabilitato, backlog/spec/plan `US-001` che chiede di creare `hello.txt` con `Hello from ARchetipo`.
 - `fixtures/worktree-plan`: come `plan`, ma con `worktree.enabled: true`, `base: main`, `dir: .archetipo/worktrees`, `branch_prefix: archetipo/`.
+- `fixtures/worktree-wiki-review`: spec e piano worktree con una pagina `overview` generata e dichiarata nel `Wiki Impact`, usata per verificare il gate congiunto codice + Wiki.
 - `fixtures/jira-prd`: connector `jira`, `base_url: https://agilereloaded.atlassian.net/`, `story_type: Task`, `subtask_type: Sub-task`, `priority_map`; `project_key` e `status_map` sono omessi intenzionalmente per lasciare alla CLI auto-discovery/auto-matching.
 
 ### Smoke test standalone

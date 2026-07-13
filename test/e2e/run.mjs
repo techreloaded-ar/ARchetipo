@@ -169,6 +169,9 @@ function normalizeConfig(manifest, configPath, filterScenarios) {
     if (rawScenario.verify_wiki_bootstrap !== undefined && (!rawScenario.verify_wiki_bootstrap || typeof rawScenario.verify_wiki_bootstrap !== "object" || Array.isArray(rawScenario.verify_wiki_bootstrap))) {
       throw new Error(`scenarios.${scenarioId}.verify_wiki_bootstrap must be an object when specified in ${configPath}`);
     }
+    if (rawScenario.verify_review_wiki !== undefined && (!rawScenario.verify_review_wiki || typeof rawScenario.verify_review_wiki !== "object" || Array.isArray(rawScenario.verify_review_wiki))) {
+      throw new Error(`scenarios.${scenarioId}.verify_review_wiki must be an object when specified in ${configPath}`);
+    }
     scenarios.push({
       id: scenarioId,
       agentId,
@@ -180,6 +183,7 @@ function normalizeConfig(manifest, configPath, filterScenarios) {
       archetipo_post_commands: rawScenario.archetipo_post_commands ?? [],
       verify_integrate: rawScenario.verify_integrate ?? [],
       verify_wiki_bootstrap: rawScenario.verify_wiki_bootstrap,
+      verify_review_wiki: rawScenario.verify_review_wiki,
     });
   }
 
@@ -330,6 +334,7 @@ async function runConfiguredScenario({ scenario, configPath, timeoutMs, cliSourc
       logRunStepDone(scenario.id, step, "Pre-command completed");
     }
 
+    const promptOutputs = [];
     for (let index = 0; index < scenario.prompts.length; index += 1) {
       const prompt = scenario.prompts[index];
       const step = `prompt-${index + 1}`;
@@ -343,6 +348,7 @@ async function runConfiguredScenario({ scenario, configPath, timeoutMs, cliSourc
       if (!promptRun.ok) {
         return finish(classifyRunFailure(context, step, promptRun));
       }
+      promptOutputs.push(`${promptRun.stdout}\n${promptRun.stderr}`);
       logRunStepDone(scenario.id, step, "Prompt completed");
     }
 
@@ -385,6 +391,12 @@ async function runConfiguredScenario({ scenario, configPath, timeoutMs, cliSourc
       logRunStepStart(scenario.id, step, `Verifying ${code} reached DONE and its worktree was cleaned up`);
       await verifyIntegration(context, code, integrationStates.get(code), step);
       logRunStepDone(scenario.id, step, "Integration verified");
+    }
+
+    if (scenario.verify_review_wiki) {
+      logRunStepStart(scenario.id, "verify-review-wiki", "Verifying review accepted and integrated the Wiki dossier");
+      await verifyReviewWiki(context, scenario.verify_review_wiki, promptOutputs.at(-1) ?? "");
+      logRunStepDone(scenario.id, "verify-review-wiki", "Review Wiki acceptance verified");
     }
 
     return finish({
@@ -727,6 +739,51 @@ async function verifyWikiBootstrap(context, expectations) {
     const page = pages.get(id) ?? (() => { throw new Error(`page assertion references non-required page ${id}`); })();
     if (assertion.status) assertQuality(page.meta.status === assertion.status, `${id} expected status ${assertion.status}, got ${page.meta.status}`);
     for (const text of assertion.includes ?? []) assertQuality(page.raw.includes(text), `${id} does not include expected text: ${text}`);
+  }
+}
+
+async function verifyReviewWiki(context, expectations, reviewOutput) {
+  const code = expectations.spec_code;
+  assertQuality(typeof code === "string" && code.length > 0, "verify_review_wiki.spec_code is required");
+  const show = await runReportedCommand({
+    ...context,
+    step: "verify-review-wiki-spec",
+    command: context.cliBinaryPath,
+    args: ["spec", "show", code],
+  });
+  if (!show.ok) throw new Error(`spec show ${code} failed: ${show.stderr || show.stdout || `exit ${show.code}`}`);
+  const spec = JSON.parse(show.stdout)?.data?.spec;
+  assertQuality(spec?.status === "DONE", `expected ${code} to be DONE after review, got ${spec?.status ?? "(missing)"}`);
+
+  const wikiRoot = path.join(context.sandboxDir, expectations.wiki_root ?? "docs/wiki");
+  for (const id of expectations.reviewed_pages ?? []) {
+    const pagePath = path.join(wikiRoot, `${id.replaceAll(".", path.sep)}.md`);
+    const meta = parseWikiFrontmatter(await fs.readFile(pagePath, "utf8"), pagePath);
+    assertQuality(meta.status === "reviewed", `${id} expected status reviewed, got ${meta.status ?? "(missing)"}`);
+    assertQuality(meta.review?.content_hash && meta.review?.evidence_revision && meta.review?.reviewed_at, `${id} is missing review metadata`);
+    const rel = path.relative(context.sandboxDir, pagePath);
+    const committed = await runProbe("git", ["show", `HEAD:${rel}`], { cwd: context.sandboxDir });
+    assertQuality(committed.ok, `${id} review metadata was not committed on the integrated branch`);
+    const committedMeta = parseWikiFrontmatter(committed.stdout, `${rel}@HEAD`);
+    assertQuality(committedMeta.status === "reviewed", `${id} is reviewed in the working tree but not in HEAD`);
+  }
+
+  const validation = await runReportedCommand({
+    ...context,
+    step: "verify-review-wiki-validate",
+    command: context.cliBinaryPath,
+    args: ["wiki", "validate"],
+  });
+  if (!validation.ok) throw new Error(`wiki validate failed: ${validation.stderr || validation.stdout || `exit ${validation.code}`}`);
+  const report = JSON.parse(validation.stdout)?.data;
+  assertQuality(report?.ok === true, `reviewed Wiki is invalid: ${JSON.stringify(report?.findings ?? [])}`);
+
+  for (const expected of expectations.output_includes ?? []) {
+    assertQuality(reviewOutput.includes(expected), `review output does not include Wiki dossier evidence: ${expected}`);
+  }
+  if (expectations.require_clean) {
+    const status = await runProbe("git", ["status", "--short", "--untracked-files=no"], { cwd: context.sandboxDir });
+    assertQuality(status.ok && status.stdout.trim() === "", `review left tracked changes in the integrated checkout: ${status.stdout || status.stderr}`);
   }
 }
 

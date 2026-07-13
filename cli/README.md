@@ -35,12 +35,13 @@ archetipo wiki validate
 archetipo wiki validate --profile bootstrap
 archetipo wiki search "authentication" --type domain
 archetipo wiki affected --base main --head HEAD
+archetipo wiki --project-root .archetipo/worktrees/US-123 status
 archetipo wiki catalog
 archetipo wiki reset domains.identity
 archetipo wiki approve domains.identity
 ```
 
-The CLI performs deterministic capability clustering, code/evidence mapping, indexing, freshness checks, and DDD Wiki validation. The `archetipo-wiki` skill interprets candidates into domains or bounded contexts. Bootstrap catalogs `generated` pages; explicit `wiki approve` records review metadata for selected issue-free pages.
+The CLI performs deterministic capability clustering, code/evidence mapping, indexing, freshness checks, and DDD Wiki validation. `wiki --project-root <checkout>` explicitly targets a spec worktree while retaining the configured Wiki paths. The `archetipo-wiki` skill interprets candidates into domains or bounded contexts. Bootstrap catalogs `generated` pages; explicit `wiki approve` records review metadata for selected issue-free pages.
 
 To build all release binaries locally from the repository root:
 

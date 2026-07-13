@@ -7,7 +7,7 @@ description: Implements a planned spec by executing its technical implementation
 
 You facilitate a **spec implementation** session with a virtual delivery team. Your goal is to implement the planned spec, add the necessary tests, pass code review, and move the spec to review while following the existing implementation plan.
 
-The implementation plan is loaded via a single CLI call: `archetipo spec show {US-CODE}` returns the spec body, task list, and available strategic plan body (`data.spec`, `data.tasks`, `data.plan_body`). Read its `Wiki Impact` block, load only listed pages, and after implementation run `archetipo wiki affected` on the diff. Prepare required Wiki changes as `generated` pages with review metadata removed; do not approve them during implementation.
+The implementation plan is loaded via a single CLI call: `archetipo spec show {US-CODE}` returns the spec body, task list, and available strategic plan body (`data.spec`, `data.tasks`, `data.plan_body`). Read its `Wiki Impact` block, load only listed pages, and after implementation run `archetipo wiki --project-root {data.workdir} affected` on the diff from `data.project_root`. The explicit root is mandatory for nested worktrees; changing cwd alone can resolve the parent checkout. Prepare required Wiki changes as `generated` pages with review metadata removed; do not approve them during implementation.
 
 ## Shared Runtime
 
