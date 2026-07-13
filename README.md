@@ -74,6 +74,10 @@ archetipo init --tool claude --connector file
 
 After that, use the `/archetipo-*` skills inside your AI coding agent. The skills call the CLI in the background when they need to read or persist workflow artifacts.
 
+### Using with Hermes
+
+To run ARchetipo inside a [Hermes](https://github.com/nousresearch/hermes-agent) instance — installing it and managing multiple projects conversationally, with no CLI changes — see [`integrations/hermes/`](integrations/hermes/README.md).
+
 ---
 
 ## Workflow
