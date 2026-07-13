@@ -130,7 +130,7 @@ The cwd only persists for the lifetime of the Hermes process. At the start of a 
 
 - **Do not re-copy the workflow skills per project.** They live once in `~/.hermes/skills/`. `new` only writes `.archetipo/` runtime assets.
 - **Never invent a projects root.** Always use the configured `archetipo.projects_root` (or its default), and create it before use.
-- **Secrets never go in `config.yaml`.** The `github` connector needs an authenticated `gh`; the `jira` connector reads `JIRA_API_TOKEN`/`JIRA_EMAIL` from the environment — put those in `~/.hermes/.env`. The default `file` connector needs nothing.
+- **Credentials stay out of the project config.** The default `file` connector needs nothing. The `github` connector uses your already-authenticated `gh` CLI. The `jira` connector reads its credentials from environment variables you configure in Hermes — never from `.archetipo/config.yaml`.
 - **Remote backends.** On Docker/SSH/Modal/Daytona, the CLI, the global skills, and `projects_root` must live in the backend where Hermes runs commands, not on the host.
 - **Do not switch the connector during creation.** New projects start on `file`; changing to `github`/`jira` is a later, explicit action (edit `.archetipo/config.yaml`).
 
