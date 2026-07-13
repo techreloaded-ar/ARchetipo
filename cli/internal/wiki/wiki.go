@@ -22,6 +22,8 @@ import (
 
 var wikiLinkPattern = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 var wikiSectionPattern = regexp.MustCompile(`<!--\s*archetipo:wiki\s+section=([a-z0-9-]+)\s*-->`)
+var wikiProtocolArtifactPattern = regexp.MustCompile(`(?m)^\s*</?(?:content|invoke|tool_use|tool_result)>\s*$`)
+var wikiBodyIssuesPattern = regexp.MustCompile(`(?m)^\s*<!--\s*archetipo:wiki\s+section=issues\s*-->`)
 var wikiContentHashPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 var wikiRevisionPattern = regexp.MustCompile(`^([0-9a-fA-F]{7,64}|unavailable)$`)
 
@@ -246,6 +248,12 @@ func Validate(projectRoot, root string) Report {
 				add("WIKI_DDD_SECTION_MISSING", "page requires section marker "+section)
 			}
 		}
+		if artifact := wikiProtocolArtifactPattern.FindString(p.Body); artifact != "" {
+			add("WIKI_PROTOCOL_ARTIFACT", "page body contains a model/tool protocol wrapper: "+strings.TrimSpace(artifact))
+		}
+		if wikiBodyIssuesPattern.MatchString(p.Body) {
+			add("WIKI_BODY_ISSUES", "issues must be structured in frontmatter, not written as a body section")
+		}
 	}
 	for _, p := range pages {
 		for _, link := range p.Meta.Links {
@@ -311,6 +319,16 @@ func ValidateBootstrap(projectRoot, root, prdPath string) (Report, error) {
 	byID := map[string]Page{}
 	for _, page := range pages {
 		byID[page.Meta.ID] = page
+		if page.Meta.Type == "domain" && page.Meta.Classification == "bounded-context" {
+			report.Findings = append(report.Findings, domain.WikiFinding{
+				Code:     "WIKI_BOOTSTRAP_BOUNDARY_UNREVIEWED",
+				Severity: "error",
+				PageID:   page.Meta.ID,
+				Path:     page.Path,
+				Message:  "bootstrap domain pages must remain candidate until an explicit semantic review confirms the bounded-context boundary",
+			})
+			report.OK = false
+		}
 	}
 	add := func(code, pageID, path, message string) {
 		report.Findings = append(report.Findings, domain.WikiFinding{Code: code, Severity: "error", PageID: pageID, Path: path, Message: message})
@@ -377,9 +395,9 @@ func ValidateBootstrap(projectRoot, root, prdPath string) (Report, error) {
 		}
 	}
 	for _, source := range inspection.ProjectSources {
-		archived := filepath.Join(root, "sources", strings.ToLower(filepath.Base(source.Path)))
-		if info, statErr := os.Stat(archived); statErr != nil || info.IsDir() {
-			add("WIKI_PROJECT_SOURCE_NOT_ARCHIVED", "", filepath.ToSlash(filepath.Join("sources", strings.ToLower(filepath.Base(source.Path)))), "configured project source was not archived: "+source.Path)
+		expectedName := strings.ToLower(filepath.Base(source.Path))
+		if !hasExactFileName(filepath.Join(root, "sources"), expectedName) {
+			add("WIKI_PROJECT_SOURCE_NOT_ARCHIVED", "", filepath.ToSlash(filepath.Join("sources", expectedName)), "configured project source was not archived with the required lowercase name: "+source.Path)
 		}
 	}
 	sort.Slice(report.Findings, func(i, j int) bool {
@@ -389,6 +407,19 @@ func ValidateBootstrap(projectRoot, root, prdPath string) (Report, error) {
 		return report.Findings[i].Path < report.Findings[j].Path
 	})
 	return report, nil
+}
+
+func hasExactFileName(dir, name string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && entry.Name() == name {
+			return true
+		}
+	}
+	return false
 }
 
 func canonicalPagePath(id string) string {

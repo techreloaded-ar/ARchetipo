@@ -192,6 +192,50 @@ See [[missing.page]].
 	}
 }
 
+func TestValidateRejectsModelProtocolArtifacts(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	writeCorePage(t, root, "overview", "overview", "README.md", "")
+	path := filepath.Join(root, "overview.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, []byte("\n</content>\n</invoke>\n")...)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := Validate(project, root)
+	if report.OK || !hasFinding(report, "WIKI_PROTOCOL_ARTIFACT") {
+		t.Fatalf("expected protocol artifact finding: %+v", report.Findings)
+	}
+}
+
+func TestValidateRejectsIssuesWrittenInBody(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	writeCorePage(t, root, "overview", "overview", "README.md", "")
+	path := filepath.Join(root, "overview.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, []byte("\n<!-- archetipo:wiki section=issues -->\n- code: LOST_ISSUE\n  summary: This would not be parsed from frontmatter.\n")...)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := Validate(project, root)
+	if report.OK || !hasFinding(report, "WIKI_BODY_ISSUES") {
+		t.Fatalf("expected body issues finding: %+v", report.Findings)
+	}
+}
+
 func TestValidateBootstrapCoverage(t *testing.T) {
 	project := t.TempDir()
 	root := filepath.Join(project, "docs", "wiki")
@@ -263,6 +307,25 @@ func TestValidateBootstrapRequiresCorePages(t *testing.T) {
 	}
 	if report.OK || !hasFinding(report, "WIKI_BOOTSTRAP_PAGE_MISSING") {
 		t.Fatalf("expected missing core page findings: %+v", report.Findings)
+	}
+}
+
+func TestValidateBootstrapRejectsUnreviewedBoundedContext(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("# Project"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCorePage(t, root, "domains.trips", "domain", "README.md", "classification: bounded-context\n")
+	report, err := ValidateBootstrap(project, root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.OK || !hasFinding(report, "WIKI_BOOTSTRAP_BOUNDARY_UNREVIEWED") {
+		t.Fatalf("expected unreviewed boundary finding: %+v", report.Findings)
 	}
 }
 
@@ -410,6 +473,16 @@ func TestValidateBootstrapRequiresConfiguredSourceArchive(t *testing.T) {
 	}
 	if report.OK || !hasFinding(report, "WIKI_PROJECT_SOURCE_NOT_ARCHIVED") {
 		t.Fatalf("expected missing source archive: %+v", report.Findings)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sources", "VISION.MD"), []byte("# Intent"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateBootstrap(project, root, "docs/Vision.MD")
+	if err != nil || report.OK || !hasFinding(report, "WIKI_PROJECT_SOURCE_NOT_ARCHIVED") {
+		t.Fatalf("wrong source casing should fail: report=%+v err=%v", report, err)
+	}
+	if err := os.Remove(filepath.Join(root, "sources", "VISION.MD")); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "sources", "vision.md"), []byte("# Intent"), 0o644); err != nil {
 		t.Fatal(err)

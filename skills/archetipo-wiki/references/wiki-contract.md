@@ -38,7 +38,7 @@ Allowed persisted statuses are only:
 
 `stale` and `attention` are derived display states. `stale` means reviewed content or cited evidence changed. `attention` means the page contains unresolved `issues`. Generated pages must not carry `review`; reviewed pages require CLI-produced `review.content_hash`, `review.evidence_revision`, and `review.reviewed_at`.
 
-An issue is an approval blocker, so reserve it for a concrete contradiction, unreachable modeled behavior, or evidence gap that makes the page unsafe to trust. Candidate classification, shared-runtime coupling, tradeoffs, and descriptive uncertainties are not issues by themselves; record them in the relevant body section.
+An issue is an approval blocker, so reserve it for a concrete contradiction, unreachable modeled behavior, or evidence gap that makes the page unsafe to trust. Candidate classification, shared-runtime coupling, a child entity lacking an independent lifecycle, test-coverage observations, release uncertainty, tradeoffs, and descriptive uncertainties are not issues by themselves; record them in the relevant body section. Issues exist only in the frontmatter `issues` array; an `archetipo:wiki section=issues` body block is invalid and produces `WIKI_BODY_ISSUES`.
 
 Delete replaced pages after updating links; Git is the history.
 
@@ -62,7 +62,7 @@ Every domain page contains these language-neutral markers with meaningful conten
 <!-- archetipo:wiki section=verification -->
 ```
 
-The code section maps UI, inbound APIs, application/domain logic, owned data, integrations, configuration, and tests. Ownership means the data and business decisions controlled by the domain, not the people maintaining it. The flows section separates observed runtime transitions from declared-but-unobserved states. For state machines, an observed transition requires an exact write assignment, its source-state guard when present, and the cited source path. Derive `A -> B` from the code that assigns `B`, never from an enum member, endpoint name, comment, UI label, or expected workflow. If code guarded on `A` writes `C` while `B` exists only in the model, document `A -> C` and flag `B` as unreachable. The invariants section separates constraints enforced by executable code/schema/tests from assumptions or declared intent; a TypeScript type alone is not runtime enforcement. `bounded-context` is never inferred from directory layout alone.
+The code section maps UI, inbound APIs, application/domain logic, owned data, integrations, configuration, and tests. Ownership means the data and business decisions controlled by the domain, not the people maintaining it. The flows section separates observed runtime transitions from declared-but-unobserved states. For state machines, an observed transition requires an exact write assignment, its source-state guard when present, and the cited source path. Derive `A -> B` from the code that assigns `B`, never from an enum member, endpoint name, comment, UI label, request-body field, delete operation, or expected workflow. If code guarded on `A` writes `C` while `B` exists only in the model, document `A -> C` and flag `B` as unreachable. The invariants section separates constraints enforced by executable code/schema/tests from assumptions or declared intent; a TypeScript type alone is not runtime enforcement. Bootstrap persists every domain as `candidate`; promotion to `bounded-context` is a separate semantic review decision. The bootstrap profile rejects premature promotion with `WIKI_BOOTSTRAP_BOUNDARY_UNREVIEWED`.
 
 ## Context map and code map
 
@@ -78,6 +78,9 @@ Its page type is `context-map`; `engineering.code-map` uses `code-map`, `overvie
 ```
 
 It describes domain responsibilities and relationships. Use specialized DDD relationship names only when evidence supports them.
+Do not combine alternatives such as `Conformist/Shared Kernel`. Name one DDD relationship only when code shows the corresponding collaboration and governance semantics; otherwise describe the observed dependency in plain language and record the relationship type as unresolved.
+
+Page bodies are plain Markdown. Model or tool protocol wrappers such as `<content>`, `</content>`, `<invoke>`, `</invoke>`, `<tool_use>`, and `<tool_result>` are invalid persisted content and produce `WIKI_PROTOCOL_ARTIFACT`.
 
 `engineering.code-map` is the physical crosswalk from domains to code. It contains:
 
