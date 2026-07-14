@@ -76,7 +76,7 @@ After that, use the `/archetipo-*` skills inside your AI coding agent. The skill
 
 ### Using with Hermes
 
-To run ARchetipo inside a [Hermes](https://github.com/nousresearch/hermes-agent) instance — installing it and managing multiple projects conversationally, with no CLI changes — see [`integrations/hermes/`](integrations/hermes/README.md).
+To use ARchetipo as the software-delivery tool inside [Hermes](https://github.com/nousresearch/hermes-agent), with one Hermes Project and Kanban board per repository, see [`integrations/hermes/`](integrations/hermes/README.md).
 
 ---
 

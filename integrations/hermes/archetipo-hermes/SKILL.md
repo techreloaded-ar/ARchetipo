@@ -1,6 +1,6 @@
 ---
 name: archetipo-hermes
-description: Install ARchetipo on a Hermes instance and manage multiple projects conversationally. Use it to install the ARchetipo CLI and workflow skills, to create a new software project (a fresh directory under the projects root, ready for the spec-driven workflow), to clone and onboard an existing repository, or to switch the active project. After this skill has set up a project, the installed ARchetipo workflow skills (/archetipo-inception, /archetipo-spec, /archetipo-plan, /archetipo-implement, /archetipo-review, and /archetipo-wiki when the package ships it) operate on it. Do not use this skill for the product work itself — it only handles installation and project lifecycle.
+description: Install ARchetipo on Hermes and manage ARchetipo projects through Hermes Projects and Kanban. Use it to install or update the ARchetipo CLI and workflow skills, create or clone a software project, switch or list projects, inspect project status, or queue one backlog spec on its project board for autonomous plan and implementation up to REVIEW. ARchetipo remains the source of truth for product workflow; Hermes Projects and Kanban provide the project registry and durable execution queue. Do not use this skill for product discovery, planning, implementation, or review directly — load the corresponding archetipo-* workflow skill instead.
 metadata:
   hermes:
     category: development
@@ -10,132 +10,213 @@ metadata:
         description: "Base directory where ARchetipo projects live"
         default: "/workspace/projects"
         prompt: "Where do you want to keep your ARchetipo projects?"
+      - key: archetipo.profile
+        description: "Hermes profile assigned to ARchetipo Kanban cards"
+        default: "default"
+        prompt: "Which Hermes profile should execute ARchetipo Kanban cards?"
 ---
 
 # ARchetipo on Hermes
 
-This skill installs ARchetipo and manages the lifecycle of your projects on a Hermes instance. It is the only ARchetipo skill that is Hermes-specific; everything else (the actual spec-driven workflow) is handled by the tool-agnostic `archetipo-*` workflow skills, which this skill installs once.
+This skill is the thin integration layer between the two products:
 
-The mental model is simple and rests on two facts:
+- **ARchetipo** owns the PRD, backlog, plans, workflow statuses, implementation and review rules.
+- **Hermes Projects** owns the persistent project registry and active-project selection.
+- **Hermes Kanban** owns the durable queue of work being executed.
 
-- **Hermes keeps the working directory across turns** (for the lifetime of the process). A `cd` persists.
-- **ARchetipo resolves the active project from the current working directory**: `archetipo config show` walks up from the cwd to `.archetipo/config.yaml` (or applies built-in defaults) and returns `data.project_root`.
+There is one Hermes Project and one same-slug Kanban board for every ARchetipo project. No specialist Hermes profiles are required: cards are assigned to the configured `archetipo.profile` (default `default`) and force-load the ARchetipo skills they need.
 
-Therefore **the active project is just the current working directory**. Switching project = `cd` into it. Nothing else to track.
+The two status systems have different meanings and must not be synchronized bidirectionally:
 
-Two locations, do not confuse them:
+- ARchetipo statuses (`TODO`, `PLANNED`, `IN PROGRESS`, `REVIEW`, `DONE`) are the source of truth for product delivery.
+- Hermes card statuses describe only execution of a queued job. Completing a card never directly changes an ARchetipo status; the loaded ARchetipo skills do that through the CLI.
 
-| What | Where | How often |
-|---|---|---|
-| Workflow skills `archetipo-*` | `~/.hermes/skills/archetipo/` (**global**) | installed **once** |
-| `.archetipo/config.yaml` + `shared-runtime.md` + backlog/plans | `<projects_root>/<name>/.archetipo/` (**per project**) | one per project |
+Resolve these values once per operation:
+
+- `PROJECTS_ROOT` from `archetipo.projects_root`; default `/workspace/projects`.
+- `PROFILE` from `archetipo.profile`; default `default`.
+- `PKG` as `$(npm root -g)/@techreloaded/archetipo` when package assets are needed.
+
+Select exactly one operation from the request: **install**, **new**, **switch**, **list**, **status**, or **queue**. Infer it; when truly ambiguous, ask one short question.
 
 ## Prerequisites
 
-- The `terminal` toolset must be enabled (`hermes tools`). Every operation below runs shell commands.
-- Node.js and npm are present in the Hermes environment (the standard install bundles them).
-- Resolve `PROJECTS_ROOT` from the `archetipo.projects_root` setting; default `/workspace/projects`.
-- The installed npm package ships the skills and runtime templates, so resolve the package directory once when needed:
-  ```bash
-  PKG="$(npm root -g)/@techreloaded/archetipo"
-  ```
+- The `terminal` toolset must be enabled (`hermes tools`).
+- Node.js, npm, Git, and a current Hermes installation must be available in the same execution backend.
+- `hermes project --help` and `hermes kanban --help` must succeed. If either command is unavailable, ask the user to update Hermes before continuing.
+- On Docker, SSH, Modal, or Daytona, ARchetipo, the project directories and the global skills must all exist in that backend.
 
-Select exactly one operation from the request: **install**, **new**, **switch**, or **list**. Infer it; when unsure, ask a single short question.
+## install — install or update ARchetipo
 
-## install
+This operation is idempotent and refreshes both the CLI and the global workflow skills.
 
-Run once per Hermes environment (idempotent — safe to repeat to upgrade).
+1. Install the latest package and verify the CLI:
 
-1. Install the CLI if missing, then verify:
    ```bash
-   command -v archetipo >/dev/null 2>&1 || npm install -g @techreloaded/archetipo
+   npm install -g @techreloaded/archetipo@latest
    archetipo --version
    ```
-2. Copy the workflow skills into the Hermes skills directory (this is what makes `/archetipo-*` available — no `archetipo init` is used for this):
+
+2. Copy the packaged workflow skills into the Hermes global skills directory:
+
    ```bash
    PKG="$(npm root -g)/@techreloaded/archetipo"
    mkdir -p "$HOME/.hermes/skills/archetipo"
    cp -R "$PKG/skills/." "$HOME/.hermes/skills/archetipo/"
    ```
-3. Ensure the projects root exists:
+
+3. Initialize Kanban storage and the projects root:
+
    ```bash
+   hermes kanban init
    mkdir -p "<PROJECTS_ROOT>"
    ```
-4. Tell the user the workflow skills are installed and that Hermes may need to re-scan them: run `/skills` to confirm `archetipo-wiki`, `archetipo-spec`, etc. appear. If they do not, restart the Hermes session/process so it re-reads `~/.hermes/skills/`.
+
+4. Run `/skills` and confirm the `archetipo-*` skills appear. If they do not, restart the Hermes session so it rescans `~/.hermes/skills/`.
 
 ## new — create or onboard a project
 
-Input: a project `<name>`, and optionally a repository `<link>` to clone.
+Input: project `<name>` and optionally repository `<link>`.
 
-1. Ensure ARchetipo is installed (run **install** first if `archetipo --version` fails).
-2. Resolve the target directory and create/clone it:
+1. Ensure **install** has succeeded.
+2. Derive `SLUG` from `<name>` using Hermes board rules: lowercase, replace runs outside `[a-z0-9_-]` with `-`, trim leading/trailing separators, maximum 64 characters. Reject an empty result.
+3. Set `DIR=<PROJECTS_ROOT>/<name>`, then:
+   - with `<link>` and no existing directory: `git clone "<link>" "$DIR"`;
+   - without `<link>` and no existing directory: `mkdir -p "$DIR" && git -C "$DIR" init`;
+   - with an existing directory: continue without deleting or overwriting it.
+4. Enter the project and install only its runtime assets. Workflow skills remain global:
+
    ```bash
-   DIR="<PROJECTS_ROOT>/<name>"
-   # with a repo link:
-   git clone "<link>" "$DIR"
-   # without a link (new empty project):
-   mkdir -p "$DIR" && git -C "$DIR" init
-   ```
-   If `$DIR` already exists, treat it as an existing project and continue (do not clobber it).
-3. Make it the active project (persistent cwd):
-   ```bash
-   cd "<PROJECTS_ROOT>/<name>"
-   ```
-4. Prepare the per-project ARchetipo assets. **Do not copy the workflow skills here** — they are already global. Only the runtime contract and (optionally) the config template:
-   ```bash
+   cd "$DIR"
    PKG="$(npm root -g)/@techreloaded/archetipo"
    mkdir -p .archetipo
    cp "$PKG/runtime/shared-runtime.md" .archetipo/shared-runtime.md
    [ -f .archetipo/config.yaml ] || cp "$PKG/runtime/config.yaml" .archetipo/config.yaml
-   ```
-   The default connector is `file` (specs and backlog are versioned in the repo). `config.yaml` is optional — without it the CLI applies the same defaults — so copying it just makes the connector explicit and editable later.
-5. Record the active project so it survives a process restart:
-   ```bash
-   echo "<PROJECTS_ROOT>/<name>" > "$HOME/.hermes/skills/archetipo/active-project"
-   ```
-6. Confirm and hand off:
-   ```bash
    archetipo config show
    ```
-   Announce the active project and `data.project_root`, then suggest the next step based on the skills actually installed (check `ls ~/.hermes/skills/archetipo/`): for a cloned/existing codebase, `/archetipo-wiki bootstrap` when the `archetipo-wiki` skill is present, otherwise `/archetipo-inception`; for a brand-new idea, `/archetipo-inception`.
+
+5. Run `hermes kanban boards list --json` and parse the array. If `SLUG` is absent, create its board:
+
+   ```bash
+   hermes kanban boards create "$SLUG" \
+     --name "<name>" \
+     --description "ARchetipo project at $DIR" \
+     --switch
+   ```
+
+   If it already exists, run `hermes kanban boards switch "$SLUG"`.
+
+6. Register and bind the first-class Hermes Project:
+   - If `hermes project show "$SLUG"` fails because the project does not exist:
+
+     ```bash
+     hermes project create "<name>" "$DIR" \
+       --slug "$SLUG" \
+       --primary "$DIR" \
+       --description "Software project managed with ARchetipo" \
+       --board "$SLUG" \
+       --use
+     ```
+
+   - If it already exists, repair the binding idempotently:
+
+     ```bash
+     hermes project add-folder "$SLUG" "$DIR" --primary
+     hermes project bind-board "$SLUG" "$SLUG"
+     hermes project use "$SLUG"
+     ```
+
+7. Confirm with `hermes project show "$SLUG"`, `hermes kanban boards show`, and `archetipo config show`. Suggest `/archetipo-inception` for a new idea or the appropriate workflow skill for an existing ARchetipo backlog.
 
 ## switch — change the active project
 
-Input: a project `<name>` (or its path).
+Input: project `<name>` or slug.
 
-1. Verify it is an ARchetipo project and switch into it:
+1. Resolve it with `hermes project show "<slug>"`; read its `primary` path and bound `board` from the output.
+2. Verify the primary directory exists and contains `.archetipo/`.
+3. Activate all three views:
+
    ```bash
-   test -d "<PROJECTS_ROOT>/<name>" || { echo "not found"; }
-   cd "<PROJECTS_ROOT>/<name>"
+   hermes project use "<slug>"
+   hermes kanban boards switch "<board-slug>"
+   cd "<primary-path>"
    archetipo config show
-   echo "<PROJECTS_ROOT>/<name>" > "$HOME/.hermes/skills/archetipo/active-project"
    ```
-2. Report `data.project_root` and the active connector. From now on every `/archetipo-*` command operates on this project because it reads the cwd.
+
+4. Report the project root, connector and active board. The persisted Hermes Project is the restart-safe selection; `cd` is only the current session's working directory.
 
 ## list — show projects
 
-1. Enumerate initialized projects and show the active one:
+Run:
+
+```bash
+hermes project list
+hermes kanban boards list
+```
+
+Present one row per Hermes Project with its primary directory and bound board. Mark the active project. Do not enumerate directories under `PROJECTS_ROOT` as a second registry; report an unregistered `.archetipo/` directory only if the user explicitly asks for discovery or repair.
+
+## status — inspect the active project and board
+
+Run `hermes project list` to identify the active project, then:
+
+```bash
+hermes project show "<active-slug>"
+hermes kanban boards show
+hermes kanban --board "<board-slug>" list
+cd "<primary-path>"
+archetipo config show
+archetipo metrics
+```
+
+Report ARchetipo workflow progress separately from Hermes card execution. A completed Hermes card with a spec still outside `REVIEW` is a mismatch to investigate, not a reason to force-move the spec.
+
+## queue — deliver one spec to REVIEW
+
+Input: spec code `<US-CODE>`. This is deliberately one spec at a time; V1 does not scan or drain the backlog automatically.
+
+1. Resolve the active Hermes Project and its primary directory and board. Enter the primary directory and run:
+
    ```bash
-   for d in "<PROJECTS_ROOT>"/*/; do [ -d "$d/.archetipo" ] && echo "$(basename "$d")"; done
-   pwd
-   cat "$HOME/.hermes/skills/archetipo/active-project" 2>/dev/null
+   archetipo config show
+   archetipo spec show "<US-CODE>"
    ```
-2. Present the list, mark the active project, and offer to `switch` or create a `new` one.
 
-## Resume after a restart
+2. Accept only these starting states:
+   - `TODO`: the card must run plan, then implement;
+   - `PLANNED`: skip planning and run implement;
+   - `IN PROGRESS`: resume implement;
+   - `REVIEW` or `DONE`: do not create a card; report that no delivery work is needed.
 
-The cwd only persists for the lifetime of the Hermes process. At the start of a session, if the cwd is not inside a project (`archetipo config show` returns the default root, i.e. no `.archetipo/config.yaml` above the cwd), read `~/.hermes/skills/archetipo/active-project` and offer to resume it (`switch`), or run **list** so the user can choose.
+3. Run `hermes kanban --board "<board-slug>" list --json`. If a non-terminal card titled exactly `[ARchetipo] <US-CODE> → REVIEW` already exists, return that card instead of creating a duplicate. A previous `done` card does not block a new card, allowing a later rework cycle.
+4. Create one card assigned to `PROFILE`, linked to the Hermes Project and pinned to the project directory. Always load `archetipo-implement`; load `archetipo-plan` too when the current status is `TODO`:
 
-## Pitfalls
+   ```bash
+   hermes kanban --board "<board-slug>" create \
+     "[ARchetipo] <US-CODE> → REVIEW" \
+     --project "<project-slug>" \
+     --workspace "dir:<absolute-primary-path>" \
+     --assignee "<PROFILE>" \
+     --skill archetipo-implement \
+     --skill archetipo-plan \
+     --body "Deliver ARchetipo spec <US-CODE> to REVIEW. Inspect its current status first. If TODO, execute /archetipo-plan <US-CODE>, then /archetipo-implement <US-CODE>. If PLANNED or IN PROGRESS, execute or resume only /archetipo-implement <US-CODE>. Stop at REVIEW: never run /archetipo-review, spec integrate, or move the spec to DONE. If an ARchetipo skill reports an explicit blocker, block this card with that reason. Complete the card only after archetipo spec show confirms REVIEW, and include tests and residual risks in the Kanban summary."
+   ```
 
-- **Do not re-copy the workflow skills per project.** They live once in `~/.hermes/skills/`. `new` only writes `.archetipo/` runtime assets.
-- **Never invent a projects root.** Always use the configured `archetipo.projects_root` (or its default), and create it before use.
-- **Credentials stay out of the project config.** The default `file` connector needs nothing. The `github` connector uses your already-authenticated `gh` CLI. The `jira` connector reads its credentials from environment variables you configure in Hermes — never from `.archetipo/config.yaml`.
-- **Remote backends.** On Docker/SSH/Modal/Daytona, the CLI, the global skills, and `projects_root` must live in the backend where Hermes runs commands, not on the host.
-- **Do not switch the connector during creation.** New projects start on `file`; changing to `github`/`jira` is a later, explicit action (edit `.archetipo/config.yaml`).
+   Omit `--skill archetipo-plan` and the planning sentence when starting from `PLANNED` or `IN PROGRESS`.
+
+5. Report the card id and board. Do not wait synchronously for completion; the Hermes gateway dispatcher owns execution. If the gateway is stopped, explain that the card will remain queued until it starts.
+
+## Safety and extension boundary
+
+- Never copy workflow skills into individual projects.
+- Never use a Hermes-managed worktree for an ARchetipo delivery card. The card uses `dir:<project-root>` and `archetipo-implement` owns any per-spec worktree configured in `.archetipo/config.yaml`.
+- Never modify an ARchetipo artifact or workflow status directly from this integration skill.
+- Never run `archetipo-review` or integrate automatically. Human acceptance remains the boundary between `REVIEW` and `DONE`.
+- Never create specialist Hermes profiles automatically. `archetipo.profile` may point to one later without changing the project/board/card contract.
+- Future versions may add backlog draining, parallel cards, notifications, budgets, or specialized profiles. V1 stores no custom orchestration state that would conflict with those additions.
 
 ## Verification
 
-- After **install**: `archetipo --version` succeeds and `ls ~/.hermes/skills/archetipo/` lists the `archetipo-*` skill directories.
-- After **new**: `pwd` is `<PROJECTS_ROOT>/<name>`, `.archetipo/shared-runtime.md` exists, and `archetipo config show` returns `data.project_root` equal to that directory with the expected connector.
-- After **switch**: `archetipo config show` reports the target project's `data.project_root`.
+- **install:** `archetipo --version` succeeds; global `archetipo-*` skill directories exist; `hermes kanban init` succeeds.
+- **new/switch:** `hermes project show` reports the correct primary directory and board; the same board is active; `archetipo config show` reports the expected project root.
+- **queue:** the card is on the project's board, linked to the project, assigned to `PROFILE`, uses `dir:<project-root>`, and loads only the required ARchetipo skills.
