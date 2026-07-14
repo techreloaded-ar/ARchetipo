@@ -39,7 +39,7 @@ ARchetipo remains the source of truth. A Kanban card tracks execution; it does n
 
    > install or update ARchetipo
 
-   The skill installs `@techreloaded/archetipo`, copies the packaged workflow skills into `~/.hermes/skills/archetipo/`, and initializes Kanban storage. Run `/skills` to verify discovery; restart the session if Hermes needs to rescan.
+   The skill installs `@techreloaded/archetipo`, copies the packaged workflow skills into `${HERMES_HOME:-$HOME/.hermes}/skills/archetipo/`, and initializes Kanban storage. This resolves to `~/.hermes/skills/archetipo/` for a standard installation and follows custom, container, or profile-specific Hermes homes. Run `/skills` to verify discovery; restart the session if Hermes needs to rescan.
 
 ## Project lifecycle
 

@@ -61,8 +61,10 @@ This operation is idempotent and refreshes both the CLI and the global workflow 
 
    ```bash
    PKG="$(npm root -g)/@techreloaded/archetipo"
-   mkdir -p "$HOME/.hermes/skills/archetipo"
-   cp -R "$PKG/skills/." "$HOME/.hermes/skills/archetipo/"
+   HERMES_DATA_DIR="${HERMES_HOME:-$HOME/.hermes}"
+   SKILLS_DIR="$HERMES_DATA_DIR/skills"
+   mkdir -p "$SKILLS_DIR/archetipo"
+   cp -R "$PKG/skills/." "$SKILLS_DIR/archetipo/"
    ```
 
 3. Initialize Kanban storage and the projects root:
@@ -72,7 +74,7 @@ This operation is idempotent and refreshes both the CLI and the global workflow 
    mkdir -p "<PROJECTS_ROOT>"
    ```
 
-4. Run `/skills` and confirm the `archetipo-*` skills appear. If they do not, restart the Hermes session so it rescans `~/.hermes/skills/`.
+4. Run `/skills` and confirm the `archetipo-*` skills appear. If they do not, restart the Hermes session so it rescans the active Hermes home's `skills/` directory.
 
 ## new — create or onboard a project
 
