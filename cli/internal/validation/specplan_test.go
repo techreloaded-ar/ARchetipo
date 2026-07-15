@@ -142,6 +142,24 @@ func TestValidatePlan_Valid(t *testing.T) {
 	}
 }
 
+func TestValidatePlan_ReworkFixTaskIsValid(t *testing.T) {
+	input := domain.PlanInput{
+		PlanBody: "## Plan\nAddress review feedback",
+		Tasks: []domain.Task{
+			canonicalTask("TASK-01", domain.TaskImpl),
+			canonicalTask("TASK-02", domain.TaskFix, "TASK-01"),
+			canonicalTask("TASK-03", domain.TaskTest, "TASK-02"),
+		},
+	}
+	r := ValidatePlan("plan.yaml", "US-001", input)
+	if !r.OK {
+		t.Fatalf("expected rework Fix task to be valid, got %+v", r.Findings)
+	}
+	if findingCodes(r)["PLAN_TASK_TYPE_INVALID"] != 0 {
+		t.Fatalf("Fix task must not produce PLAN_TASK_TYPE_INVALID: %+v", r.Findings)
+	}
+}
+
 func TestValidatePlan_DependencyAndMissingTest(t *testing.T) {
 	input := domain.PlanInput{
 		PlanBody: "## Plan",

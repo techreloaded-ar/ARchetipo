@@ -133,6 +133,10 @@ For each spec, use the Spec Template defined in `SKILL.md`.
 
 Rules:
 - acceptance criteria must be satisfiable by this spec alone
+- prefix acceptance criteria with stable sequential ids (`AC-1`, `AC-2`, ...)
+- keep one observable outcome per criterion and split compound criteria
+- make `Demonstrates` a runnable review script with starting state, action, and exact expected result
+- name the concrete visible state, message, artifact, or measurement instead of referring to implicit or "existing" behavior
 - criteria must reflect the existing stack and conventions
 - no implementation details in the spec body
 - `Blocked by` can reference only specs from the same epic

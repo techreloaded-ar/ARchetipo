@@ -3,7 +3,7 @@
 > Document template for the plan produced by the skill. Persistence is the CLI's responsibility after `archetipo spec plan {US-CODE} --file -`.
 > **Language rule:** All section headers in this template must be rendered in the detected language of the project (see Language Policy in `.archetipo/shared-runtime.md`).
 >
-> **`plan_body` vs tasks:** `plan_body` contains the **technical solution and test strategy** as markdown. The **task list** lives exclusively in the structured `tasks` array of the JSON payload — it is NOT part of `plan_body`. Do NOT include a task summary table or bullet list inside `plan_body`. The web viewer already renders the `tasks` array as an expandable table below the plan body; a duplicate inside `plan_body` would appear twice and create confusion.
+> **`plan_body` vs tasks:** `plan_body` contains the **technical solution, baseline, acceptance evidence map, and test strategy** as markdown. The **task list** lives exclusively in the structured `tasks` array of the JSON payload — it is NOT part of `plan_body`. Do NOT include a task summary table or bullet list inside `plan_body`. The web viewer already renders the `tasks` array as an expandable table below the plan body; a duplicate inside `plan_body` would appear twice and create confusion.
 
 ---
 
@@ -40,6 +40,28 @@
 
 ---
 
+## Baseline
+
+| Check | Result before implementation | Planning consequence |
+|---|---|---|
+| `{EXACT_COMMAND_1}` | {PASSED_OR_EXACT_FAILURE_BOUNDARY} | {HOW_TASK_VERIFICATION_HANDLES_IT} |
+| `{EXACT_COMMAND_2}` | {PASSED_OR_EXACT_FAILURE_BOUNDARY} | {HOW_TASK_VERIFICATION_HANDLES_IT} |
+
+Record environment prerequisites separately from code failures. A command that is already red must never appear later with an unexplained `Expect: passes`.
+
+---
+
+## Acceptance Evidence Map
+
+| Criterion | Starting state / fixture | Test layer | Observable oracle | Producing task |
+|---|---|---|---|---|
+| AC-1 | {FIXTURE_1} | {UNIT_INTEGRATION_E2E_MANUAL} | {EXACT_VISIBLE_OR_CONTRACT_ASSERTION} | {TASK_NN} |
+| AC-2 | {FIXTURE_2} | {UNIT_INTEGRATION_E2E_MANUAL} | {EXACT_VISIBLE_OR_CONTRACT_ASSERTION} | {TASK_NN} |
+
+This is an acceptance map, not a task summary. Every criterion must have evidence, and the chosen test doubles must leave the named oracle observable.
+
+---
+
 ## Test Strategy
 
 {INTRODUCTORY_SENTENCE_STRATEGY}
@@ -60,6 +82,13 @@
 | {SCENARIO_2} | {FLOW_DESCRIPTION_2} |
 {/IF_E2E_TESTS}
 
+{IF_BROWSER_E2E_WAIVED}
+### Browser E2E Waiver
+
+**Reason:** {WHY_THE_CHANGE_IS_LOCAL_AND_LOWER_LAYER_EVIDENCE_PROVES_EVERY_AFFECTED_AC}
+**Evidence layer used instead:** {DETERMINISTIC_COMPONENT_OR_INTEGRATION_SUITE}
+{/IF_BROWSER_E2E_WAIVED}
+
 ---
 
 {IF_MOCKUP_GENERATED}
@@ -74,11 +103,14 @@ _Plan generated via ARchetipo Planning — {DATE}_
 > **Task rules:**
 >
 > - Each task: small enough for a single work session, independently verifiable, ordered by dependency
-> - Task format: sequential ID (TASK-01, TASK-02...), action-oriented title, markdown `body`, type (Impl/Test), dependencies
-> - Every task body must include at least `## Descrizione`, `## File Coinvolti`, and `## Criteri di Completamento`. Keep it concrete enough that a smaller implementation model can execute the task without making new architectural decisions.
-> - In `## File Coinvolti`, reference concrete paths when they are known; otherwise stay conservative and do not invent files
-> - In `## Criteri di Completamento`, use task-specific checklist items that can be verified by the implement skill
+> - Task format: sequential ID (TASK-01, TASK-02...), action-oriented title, markdown `body`, type (Impl/Test, or Fix in rework), dependencies
+> - Every task body uses the seven canonical headings in order: `## Objective`, `## Read`, `## Change`, `## Steps`, `## Verify`, `## Done`, `## Blockers`.
+> - In `## Read` and `## Change`, reference concrete paths when they are known; otherwise stay conservative and do not invent files.
+> - In `## Verify`, give exact runnable commands and expectations consistent with the recorded baseline.
+> - In `## Done`, name the relevant `AC-N` ids and their observable completion evidence.
+> - Test tasks assert user-visible or contract outcomes, not proxies hidden behind mocks.
 > - Implementation order: follow the project's natural dependency chain — lower layers first, tests interleaved (not all at end)
+> - The final task is a Test gate that depends on all work it verifies and runs focused acceptance checks plus relevant regression/build/type/lint checks. After the gate itself is marked `DONE`, reload the spec from `data.project_root` and require every task to be `DONE` before `spec review`.
 > - Frontend tasks when mockups exist: If `mockup_generated = true`, include at least one frontend implementation task (type: Impl) that explicitly references the mockups directory `{config.paths.mockups}/{US-CODE}/`. Omitting frontend tasks when `mockup_generated = true` is a plan error — do not proceed without them.
 > - Task dependencies must only reference tasks within the same spec plan. Cross-spec task dependencies are not supported — use spec-level `Blocked by` for cross-spec sequencing
 > - If the `Blocked by` field is absent from the spec (older backlogs), treat it as `-` (no dependencies)

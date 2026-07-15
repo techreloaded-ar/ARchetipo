@@ -77,6 +77,15 @@ After selecting the spec, read ALL context in a **single turn with parallel tool
 
 **Rework mode.** A spec is "in rework" when `data.spec.rework` is `true` or `data.spec.body` contains a `## Rework Feedback` section. It means the spec was sent back from review via *request changes*, with the reviewer's inline comments recorded as bullets (each anchored to a `file:line`). In this mode the feedback is the primary planning input — see the task-construction rule in STAGE 1.
 
+#### Baseline and verification discovery
+
+Before designing tasks, discover the checks the repository actually trusts from agent instructions, CI configuration, and project scripts. Run the smallest relevant baseline commands under `data.workdir` and record the command plus result in `plan_body` under a `Baseline` section.
+
+- Include the focused tests for the behavior being changed and the compiler/type-checker, linter, build, or schema check that can catch defects in the files likely to be touched.
+- Never write `Expect: passes` for a command that already fails. If a baseline command fails, record the exact pre-existing failure boundary and design verification that proves the task adds no failures.
+- A file changed by the plan must not be left with compiler or linter diagnostics. If that file already has local diagnostics, either include their bounded cleanup in the task or choose a different seam; do not silently add more diagnostics to a degraded file.
+- Detect environment prerequisites separately from code failures. Name deterministic setup commands when available, but do not make the implementer rediscover package-manager, generated-client, database, or service requirements.
+
 #### Step 3 — Announce
 
 Output a compact announcement:
@@ -118,16 +127,18 @@ Silently perform all of the following — this is your chain of thought, not vis
 - Check for hidden dependencies or blocking issues
 - Break down into concrete tasks ordered by dependency, adapting the sequence to the project's architecture (tests interleaved, not all at end)
 - For every task, write `body` as an execution contract for smaller implementation models. Use the exact canonical headings defined under **Task execution contract**; do not substitute the older `Descrizione` / `File Coinvolti` / `Criteri di Completamento` shape.
+- Add one final `Test` gate task that depends on every implementation and acceptance-test task. It runs the exact focused checks plus the relevant regression/build/type/lint checks discovered in the baseline; the implementer must not infer the final suite from project conventions. Its `Done` section must also require a post-completion `archetipo spec show {US-CODE}` check from `data.project_root` proving every task is `DONE` before `archetipo spec review` is allowed.
 
 **As Mina (Testing):**
 
 - Define test strategy: what to test, test type (unit/integration/e2e), coverage focus
-- **If the spec involves UI or user interaction**, Mina MUST define an e2e testing strategy that includes:
-  - User scenarios to simulate (complete user flows, not isolated clicks — e.g., "user registers, logs in, creates first project")
-  - Note whether the spec's `Demonstrates` field describes a filmable user-visible increment. The demo video itself is not recorded during planning or implementation: `archetipo-review` records it at the acceptance gate (via `archetipo e2e demo`) and owns the final record/skip decision. Planning only flags whether a demo is expected
-  - The e2e framework to use, detected from the project (existing config files, `package.json`, agent instructions files, and current repository conventions). Do NOT hardcode any specific framework — adapt to whatever the project uses
-  - If no e2e infrastructure exists in the project, include a setup task (TASK) for installing and configuring the framework — for Playwright, `archetipo e2e ensure` does this idempotently and non-interactively
-  - **This e2e strategy MUST be included in the planning document — it is not optional.** The implement skill will only write e2e tests if this strategy is present in the plan. Omitting the e2e strategy for a UI spec is a planning error.
+- Build an acceptance evidence map before creating tasks. For every `AC-N`, name the test layer, exact observable oracle/assertion, fixture or starting state, and task that will produce the evidence. Include this map in `plan_body`; it is an acceptance map, not a duplicate task summary.
+- Test the specified outcome, not a proxy. Absence of cards does not prove that an empty-state message is visible; a successful mock call does not prove the returned user contract. If a test double hides the component or boundary responsible for an acceptance outcome, either remove that mock for the scenario or add a direct test of the real responsible component.
+- **If the spec involves UI or user interaction**, classify browser e2e risk explicitly:
+  - Browser e2e is required when the acceptance path crosses a route/server boundary, authentication or authorization, persistence, external integration, navigation across screens, or browser-only behavior; also use it when lower layers cannot prove the observable outcome.
+  - A local interaction within one already-tested client component may use deterministic component integration tests instead. Record the browser-e2e waiver in `plan_body`, including why the chosen layer proves every affected `AC-N`; do not bootstrap a browser framework solely for a local state/filter/presentation change.
+  - When browser e2e is required, define complete user flows, detect and reuse the repository's framework, and include an idempotent setup task if infrastructure is absent — for Playwright, use `archetipo e2e ensure`.
+  - Note whether `Demonstrates` is filmable. Planning flags the expectation only; `archetipo-review` owns video recording and the final record/skip decision.
 
 #### UI/UX Assessment & Mockup Spawn
 
@@ -189,10 +200,10 @@ Only after validation passes, invoke `archetipo spec plan {US-CODE} --file <path
 > **Temp file:** Use `.archetipo/tmp-payload-{US-CODE}-plan.json`. The code is known to you already. After the CLI command exits, delete it with `rm .archetipo/tmp-payload-{US-CODE}-plan.json` (works in both bash and PowerShell). Always clean up, regardless of CLI success or failure.
 
 ```json
-{"plan_body":"<technical solution + test strategy as markdown — do NOT include a task summary>","tasks":[{"id":"TASK-01","title":"...","body":"## Objective\n<one outcome>\n\n## Read\n- path/to/file — symbol or behavior to inspect\n\n## Change\n- path/to/file — exact allowed change\n\n## Steps\n1. <ordered action>\n\n## Verify\n- Run: `<exact command>`\n- Expect: <observable result>\n\n## Done\n- [ ] <acceptance-linked criterion>\n\n## Blockers\nNone.","type":"Impl|Test","status":"TODO","dependencies":[]}]}
+{"plan_body":"<technical solution + baseline + acceptance evidence map + test strategy as markdown — do NOT include a task summary>","tasks":[{"id":"TASK-01","title":"...","body":"## Objective\n<one outcome>\n\n## Read\n- path/to/file — symbol or behavior to inspect\n\n## Change\n- path/to/file — exact allowed change\n\n## Steps\n1. <ordered action>\n\n## Verify\n- Run: `<exact command>`\n- Expect: <observable result or explicit no-new-failures boundary from baseline>\n\n## Done\n- [ ] AC-1 — <acceptance-linked criterion>\n\n## Blockers\nNone.","type":"Impl|Test","status":"TODO","dependencies":[]}]}
 ```
 
-> **Payload field contracts:** `plan_body` contains ONLY the technical solution, test strategy, and context notes as markdown. The task list lives exclusively in the `tasks` array — do NOT duplicate it inside `plan_body` (no task summary table or bullet list). `status` uses the CLI's canonical values (`TODO`, `DONE`) — these are part of the envelope contract and are **not** the display labels from `config.workflow.statuses`. `type` is one of `Impl`, `Test`, or `Fix` (Fix only in rework mode). `dependencies` lists ids of tasks defined in the same payload; the CLI rejects references to unknown task ids. Each task must use `body` as the only produced content field and follow the complete contract below. Use concrete file paths when they are known; when they are not, stay conservative and do not invent files.
+> **Payload field contracts:** `plan_body` contains ONLY the technical solution, baseline results, acceptance evidence map, test strategy, and context notes as markdown. The task list lives exclusively in the `tasks` array — do NOT duplicate it inside `plan_body` (no task summary table or bullet list). `status` uses the CLI's canonical values (`TODO`, `DONE`) — these are part of the envelope contract and are **not** the display labels from `config.workflow.statuses`. `type` is one of `Impl`, `Test`, or `Fix` (Fix only in rework mode). `dependencies` lists ids of tasks defined in the same payload; the CLI rejects references to unknown task ids. Each task must use `body` as the only produced content field and follow the complete contract below. Use concrete file paths when they are known; when they are not, stay conservative and do not invent files.
 
 #### Task execution contract
 
@@ -202,20 +213,21 @@ Use these seven headings literally and in this order in every `task.body`. Keep 
 2. `## Read` — exact existing paths plus the symbols, tests, or behavior to inspect before editing. State `None — new file` only when appropriate.
 3. `## Change` — exact paths and allowed modifications, including important non-goals that prevent scope drift.
 4. `## Steps` — ordered, atomic actions with all local technical decisions already made. Do not leave architecture choices to the implementer.
-5. `## Verify` — exact runnable command(s), the working directory when non-obvious, and the expected evidence. Prefer a focused check plus the smallest relevant regression suite.
-6. `## Done` — checklist items tied to the task outcome and relevant spec acceptance criteria.
+5. `## Verify` — exact runnable command(s), the working directory when non-obvious, and the expected evidence. Prefer a focused check plus the smallest relevant regression suite. The expectation must agree with the recorded baseline; never promise green for a known-red command.
+6. `## Done` — checklist items tied to the task outcome and named spec acceptance ids (`AC-N`). Test tasks state the actual observable oracle, not only that a test file exists or a mock was called.
 7. `## Blockers` — prerequisites or decisions that genuinely block execution; write `None.` when there are none.
 
-Before validation, audit every task body against all seven headings. Missing sections are a planning defect, including on `Test` and `Fix` tasks. Ensure dependencies reference earlier tasks and that a smaller implementer can execute each task without rediscovering scope, paths, commands, or intended behavior.
+Before validation, audit every task body against all seven headings. Missing sections are a planning defect, including on `Test` and `Fix` tasks. Ensure dependencies reference earlier tasks and that a smaller implementer can execute each task without rediscovering scope, paths, commands, or intended behavior. Also verify that every `AC-N` appears in the acceptance evidence map and in at least one task's `Done`, every observable oracle remains visible through the chosen test doubles, and the last task is a final `Test` gate depending on all work it verifies. The gate must state the workflow order explicitly: run checks, mark the gate task `DONE`, reload the spec, confirm no task remains `TODO`, then and only then request review.
 
 **Rework mode task construction.** When the spec is in rework (see Step 2), build the `tasks` array like this instead of planning from scratch:
 
 - **Preserve every existing task** from `data.tasks` with its current `status` (tasks already `DONE` stay `DONE`). The payload replaces the whole task list, so omitting them would lose history.
 - For **each bullet** in the `## Rework Feedback` section, read the referenced `file:line` **under `data.workdir`** (see Worktree awareness in Step 2) to understand the real code, then append one task with `"type":"Fix"`, `"status":"TODO"`, a concrete `title`, and a `body` that follows the complete seven-heading task execution contract, states what to change and why, and references the reviewer's comment and anchor. Continue the existing `TASK-NN` numbering.
 - Add interleaved `Test` tasks for the fixes when the change warrants verification.
+- Append a new final `Test` gate for the rework even if the original plan already has a completed gate. It must verify the fix tasks, rerun the acceptance evidence affected by feedback, check that modified files add no compiler/linter diagnostics relative to the recorded baseline, and prove through `archetipo spec show` that all preserved and appended tasks are `DONE` before review.
 - Set `plan_body` to the existing plan body augmented with a short "Rework" note summarising the feedback being addressed; do not discard the original technical solution.
 
-This single command saves the plan AND transitions the spec to `{config.workflow.statuses.planned}` atomically (and clears the rework marker) — no separate `status set` step is needed. The CLI persists according to the active connector (file: writes `{paths.planning}/{US-CODE}-plan.yaml`; github: appends to the parent issue body and creates one sub-issue per task). For the file connector, follow the template in `./references/plan-template.md` to compose `plan_body` (technical solution + test strategy only — no task summary table).
+This single command saves the plan AND transitions the spec to `{config.workflow.statuses.planned}` atomically (and clears the rework marker) — no separate `status set` step is needed. The CLI persists according to the active connector (file: writes `{paths.planning}/{US-CODE}-plan.yaml`; github: appends to the parent issue body and creates one sub-issue per task). For the file connector, follow the template in `./references/plan-template.md` to compose `plan_body` (technical solution + baseline + acceptance evidence map + test strategy — no task summary table).
 
 Re-running the command on a spec already in `PLANNED` upserts the plan body without erroring.
 

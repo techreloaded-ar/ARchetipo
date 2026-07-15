@@ -129,6 +129,10 @@ For each epic, generate specs that are:
 
 - No implementation details inside the spec body
 - Each spec must have 2-5 acceptance criteria when possible
+- Prefix acceptance criteria with stable sequential ids (`AC-1`, `AC-2`, ...)
+- Each criterion must contain one independently observable outcome; split compound criteria
+- Write `Demonstrates` as a runnable review script with starting state, action, and exact expected result
+- Replace references to implicit or "existing" behavior with the concrete state, message, artifact, or measurement a reviewer observes
 - Acceptance criteria must be satisfiable by that spec alone
 - Specs estimated at 8 points must be split before inclusion
 
@@ -216,6 +220,8 @@ Summary:
 
 Before final output, check internally:
 - every spec is traceable to the PRD or is a justified foundational increment
+- every acceptance criterion has a stable id and one observable oracle
+- every `Demonstrates` section names its starting state, action, and expected result
 - no spec remains at 8 points or higher
 - acceptance criteria describe behavior, not implementation
 - high priority specs come first within each epic

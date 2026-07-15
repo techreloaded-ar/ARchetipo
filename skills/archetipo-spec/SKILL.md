@@ -120,7 +120,11 @@ Do not expose mode names, routing decisions, or workflow labels in user-facing m
 - Ask clarifying questions only when critical information is missing and cannot be inferred responsibly
 - Group clarifying questions in a single message when possible
 - Optimize specs for downstream low-cost implementation models: keep each spec small, independently demonstrable, and free of hidden architectural decisions.
-- Every spec body must include a concrete `Demonstrates` section and checklist acceptance criteria. If the increment is foundational, `Demonstrates` must describe what a developer or reviewer can actually run or inspect.
+- Every acceptance criterion has a stable id (`AC-1`, `AC-2`, ...), describes one observable outcome, and can be verified independently. Do not join unrelated behavior with "and" inside one criterion.
+- Every spec body must include a concrete `Demonstrates` section written as a short review script: starting state or fixture, reviewer action, and expected visible result. If the increment is foundational, describe the exact command or artifact a developer inspects and the expected evidence.
+- Name state transitions explicitly. If an action must preserve, clear, or restore another value, state both the action and the retained/reset value in an acceptance criterion.
+- Do not use proxy outcomes such as "the existing empty state is shown" or "validation works" without naming what the reviewer observes. State the visible message/state, returned contract, generated artifact, or measurable condition.
+- Add an `Out of Scope` section whenever adjacent behavior could plausibly be inferred. Keep product specs free of implementation choices; the boundary says what is excluded, not how to build the included behavior.
 
 ## Output Boundaries
 
@@ -155,12 +159,15 @@ I want [specific action or capability],
 so that [concrete benefit tied to a PRD goal].
 
 **Demonstrates**
-After implementing this spec, [describe what can be concretely observed or verified — e.g. for a feature: "the user can open the reports page, click Export, and download a CSV"; for a foundational spec: "a developer can run the test suite and see all checks pass"]
+Starting from [explicit fixture or state], the reviewer [performs the primary action] and observes [specific visible result or artifact]. The reviewer then [performs the important reset/error action] and observes [specific retained, cleared, or error state].
 
 **Acceptance Criteria**
-- [ ] [Primary happy path]
-- [ ] [Validation or error case]
-- [ ] [Relevant edge case]
+- [ ] AC-1 — [One observable primary outcome]
+- [ ] AC-2 — [One observable validation or error outcome]
+- [ ] AC-3 — [One observable state-retention, reset, or edge outcome]
+
+**Out of Scope**
+[Adjacent behavior that this spec intentionally does not require.]
 ```
 
 ## Non-Feature Specs (Refactoring / Tech Debt)
@@ -193,7 +200,10 @@ so that [the observable consequence — e.g. "providers can be swapped without t
 After implementing this spec, [observable, feature-neutral evidence — e.g. "the full test suite passes unchanged and the new module has no import from the legacy package", or "p95 latency of /search drops below 200ms in the benchmark"]
 
 **Acceptance Criteria**
-- [ ] [Regression guard: existing behavior is preserved — name the suite or contract that proves it]
-- [ ] [The measurable target of the work — metric, structure, or dependency state]
-- [ ] [Cleanup boundary: what is explicitly out of scope, when relevant]
+- [ ] AC-1 — [Regression guard: existing behavior is preserved — name the suite or contract that proves it]
+- [ ] AC-2 — [The measurable target of the work — metric, structure, or dependency state]
+- [ ] AC-3 — [Cleanup boundary: what is explicitly out of scope, when relevant]
+
+**Out of Scope**
+[Adjacent cleanup or redesign that this spec intentionally does not require.]
 ```

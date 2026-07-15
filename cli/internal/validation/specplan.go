@@ -109,8 +109,9 @@ func ValidatePlan(target, specCode string, input domain.PlanInput) domain.Valida
 		case domain.TaskImpl:
 		case domain.TaskTest:
 			hasTest = true
+		case domain.TaskFix:
 		default:
-			findings = addFinding(findings, SeverityError, "PLAN_TASK_TYPE_INVALID", base+".type", "task type must be Impl or Test", "")
+			findings = addFinding(findings, SeverityError, "PLAN_TASK_TYPE_INVALID", base+".type", "task type must be Impl, Test, or Fix", "Fix is reserved for rework plans")
 		}
 		if strings.TrimSpace(string(task.Status)) == "" {
 			findings = addFinding(findings, SeverityError, "PLAN_TASK_STATUS_EMPTY", base+".status", "task status is required", "use TODO for new tasks")
