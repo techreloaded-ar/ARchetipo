@@ -117,7 +117,7 @@ Silently perform all of the following — this is your chain of thought, not vis
 - Validate the solution is realistically implementable
 - Check for hidden dependencies or blocking issues
 - Break down into concrete tasks ordered by dependency, adapting the sequence to the project's architecture (tests interleaved, not all at end)
-- For every task, write `body` as an execution contract for smaller implementation models. Include explicit labels for Objective, Read, Change, Steps, Verify, Done, and Blockers.
+- For every task, write `body` as an execution contract for smaller implementation models. Use the exact canonical headings defined under **Task execution contract**; do not substitute the older `Descrizione` / `File Coinvolti` / `Criteri di Completamento` shape.
 
 **As Mina (Testing):**
 
@@ -189,15 +189,29 @@ Only after validation passes, invoke `archetipo spec plan {US-CODE} --file <path
 > **Temp file:** Use `.archetipo/tmp-payload-{US-CODE}-plan.json`. The code is known to you already. After the CLI command exits, delete it with `rm .archetipo/tmp-payload-{US-CODE}-plan.json` (works in both bash and PowerShell). Always clean up, regardless of CLI success or failure.
 
 ```json
-{"plan_body":"<technical solution + test strategy as markdown — do NOT include a task summary>","tasks":[{"id":"TASK-01","title":"...","body":"## Descrizione\n...\n\n## File Coinvolti\n- path/to/file — cosa fare\n\n## Criteri di Completamento\n- [ ] criterio verificabile","type":"Impl|Test","status":"TODO","dependencies":[]}]}
+{"plan_body":"<technical solution + test strategy as markdown — do NOT include a task summary>","tasks":[{"id":"TASK-01","title":"...","body":"## Objective\n<one outcome>\n\n## Read\n- path/to/file — symbol or behavior to inspect\n\n## Change\n- path/to/file — exact allowed change\n\n## Steps\n1. <ordered action>\n\n## Verify\n- Run: `<exact command>`\n- Expect: <observable result>\n\n## Done\n- [ ] <acceptance-linked criterion>\n\n## Blockers\nNone.","type":"Impl|Test","status":"TODO","dependencies":[]}]}
 ```
 
-> **Payload field contracts:** `plan_body` contains ONLY the technical solution, test strategy, and context notes as markdown. The task list lives exclusively in the `tasks` array — do NOT duplicate it inside `plan_body` (no task summary table or bullet list). `status` uses the CLI's canonical values (`TODO`, `DONE`) — these are part of the envelope contract and are **not** the display labels from `config.workflow.statuses`. `type` is one of `Impl`, `Test`, or `Fix` (Fix only in rework mode). `dependencies` lists ids of tasks defined in the same payload; the CLI rejects references to unknown task ids. Each task must use `body` as the only produced content field. The task body must be markdown and include at least `## Descrizione`, `## File Coinvolti`, and `## Criteri di Completamento`. Use concrete file paths when they are known; when they are not, stay conservative and do not invent files.
+> **Payload field contracts:** `plan_body` contains ONLY the technical solution, test strategy, and context notes as markdown. The task list lives exclusively in the `tasks` array — do NOT duplicate it inside `plan_body` (no task summary table or bullet list). `status` uses the CLI's canonical values (`TODO`, `DONE`) — these are part of the envelope contract and are **not** the display labels from `config.workflow.statuses`. `type` is one of `Impl`, `Test`, or `Fix` (Fix only in rework mode). `dependencies` lists ids of tasks defined in the same payload; the CLI rejects references to unknown task ids. Each task must use `body` as the only produced content field and follow the complete contract below. Use concrete file paths when they are known; when they are not, stay conservative and do not invent files.
+
+#### Task execution contract
+
+Use these seven headings literally and in this order in every `task.body`. Keep the headings in English as stable machine-readable labels; write their content in the detected project language.
+
+1. `## Objective` — one observable outcome for this task.
+2. `## Read` — exact existing paths plus the symbols, tests, or behavior to inspect before editing. State `None — new file` only when appropriate.
+3. `## Change` — exact paths and allowed modifications, including important non-goals that prevent scope drift.
+4. `## Steps` — ordered, atomic actions with all local technical decisions already made. Do not leave architecture choices to the implementer.
+5. `## Verify` — exact runnable command(s), the working directory when non-obvious, and the expected evidence. Prefer a focused check plus the smallest relevant regression suite.
+6. `## Done` — checklist items tied to the task outcome and relevant spec acceptance criteria.
+7. `## Blockers` — prerequisites or decisions that genuinely block execution; write `None.` when there are none.
+
+Before validation, audit every task body against all seven headings. Missing sections are a planning defect, including on `Test` and `Fix` tasks. Ensure dependencies reference earlier tasks and that a smaller implementer can execute each task without rediscovering scope, paths, commands, or intended behavior.
 
 **Rework mode task construction.** When the spec is in rework (see Step 2), build the `tasks` array like this instead of planning from scratch:
 
 - **Preserve every existing task** from `data.tasks` with its current `status` (tasks already `DONE` stay `DONE`). The payload replaces the whole task list, so omitting them would lose history.
-- For **each bullet** in the `## Rework Feedback` section, read the referenced `file:line` **under `data.workdir`** (see Worktree awareness in Step 2) to understand the real code, then append one task with `"type":"Fix"`, `"status":"TODO"`, a concrete `title`, and a `body` that states what to change and why, references the reviewer's comment and the anchor, and still includes `## File Coinvolti` plus `## Criteri di Completamento`. Continue the existing `TASK-NN` numbering.
+- For **each bullet** in the `## Rework Feedback` section, read the referenced `file:line` **under `data.workdir`** (see Worktree awareness in Step 2) to understand the real code, then append one task with `"type":"Fix"`, `"status":"TODO"`, a concrete `title`, and a `body` that follows the complete seven-heading task execution contract, states what to change and why, and references the reviewer's comment and anchor. Continue the existing `TASK-NN` numbering.
 - Add interleaved `Test` tasks for the fixes when the change warrants verification.
 - Set `plan_body` to the existing plan body augmented with a short "Rework" note summarising the feedback being addressed; do not discard the original technical solution.
 

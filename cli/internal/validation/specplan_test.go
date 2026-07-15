@@ -112,7 +112,7 @@ func canonicalTask(id string, t domain.TaskType, deps ...string) domain.Task {
 		Type:         t,
 		Status:       "TODO",
 		Dependencies: deps,
-		Body:         "## Descrizione\nFare il lavoro.\n\n## File Coinvolti\n- internal/x.go — logica\n\n## Criteri di Completamento\n- [ ] fatto",
+		Body:         "## Objective\nCompletare il task.\n\n## Read\n- internal/x.go — comportamento attuale\n\n## Change\n- internal/x.go — modifica consentita\n\n## Steps\n1. Applicare la modifica.\n\n## Verify\n- Run: `go test ./internal/...`\n- Expect: test verdi.\n\n## Done\n- [ ] comportamento verificato\n\n## Blockers\nNone.",
 	}
 }
 

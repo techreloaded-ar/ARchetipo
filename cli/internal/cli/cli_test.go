@@ -167,8 +167,8 @@ const validSpecJSON = `{"specs":[
 ]}`
 
 const validPlanJSON = `{"plan_body":"## Plan\nDo the work","tasks":[
-	{"id":"TASK-01","title":"Implement","type":"Impl","status":"TODO","body":"## Descrizione\nImplementare il comportamento.\n\n## File Coinvolti\n- internal/service.go — aggiungere la logica\n\n## Criteri di Completamento\n- [ ] comportamento implementato"},
-	{"id":"TASK-02","title":"Test","type":"Test","status":"TODO","dependencies":["TASK-01"],"body":"## Descrizione\nCoprire il comportamento con test.\n\n## File Coinvolti\n- internal/service_test.go — aggiungere i casi\n\n## Criteri di Completamento\n- [ ] test verdi"}
+	{"id":"TASK-01","title":"Implement","type":"Impl","status":"TODO","body":"## Objective\nImplementare il comportamento.\n\n## Read\n- internal/service.go — comportamento attuale\n\n## Change\n- internal/service.go — aggiungere la logica\n\n## Steps\n1. Applicare la modifica.\n\n## Verify\n- Run: go test ./internal/...\n\n## Done\n- [ ] comportamento implementato\n\n## Blockers\nNone."},
+	{"id":"TASK-02","title":"Test","type":"Test","status":"TODO","dependencies":["TASK-01"],"body":"## Objective\nCoprire il comportamento con test.\n\n## Read\n- internal/service_test.go — pattern di test\n\n## Change\n- internal/service_test.go — aggiungere i casi\n\n## Steps\n1. Aggiungere i casi.\n\n## Verify\n- Run: go test ./internal/...\n\n## Done\n- [ ] test verdi\n\n## Blockers\nNone."}
 ]}`
 
 func TestConfigShow(t *testing.T) {

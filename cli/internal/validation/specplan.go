@@ -151,20 +151,32 @@ func planResult(target string, findings []domain.ValidationFinding, checks []dom
 // canonical task body sections, in the order a smaller implementation model
 // reads them. Validation matches the markdown sections persisted by `spec plan`.
 var requiredTaskSections = []struct{ token, label string }{
-	{"descrizione", "## Descrizione"},
-	{"file coinvolti", "## File Coinvolti"},
-	{"criteri di completamento", "## Criteri di Completamento"},
+	{"objective", "## Objective"},
+	{"read", "## Read"},
+	{"change", "## Change"},
+	{"steps", "## Steps"},
+	{"verify", "## Verify"},
+	{"done", "## Done"},
+	{"blockers", "## Blockers"},
 }
 
 func validateTaskContract(path, body string) []domain.ValidationFinding {
 	findings := []domain.ValidationFinding{}
-	lower := strings.ToLower(body)
 	for _, section := range requiredTaskSections {
-		if !strings.Contains(lower, section.token) {
+		if !hasMarkdownH2(body, section.token) {
 			findings = addFinding(findings, SeverityWarning, "PLAN_TASK_CONTRACT_WEAK", path, "task execution contract is missing "+section.label, "make the contract explicit for smaller implementation models")
 		}
 	}
 	return findings
+}
+
+func hasMarkdownH2(body, heading string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.EqualFold(strings.TrimSpace(line), "## "+heading) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateTaskDependencies(tasks []domain.Task, ids map[string]int) []domain.ValidationFinding {
