@@ -213,6 +213,7 @@ type WikiPageMeta struct {
 	Type           string         `json:"type" yaml:"type"`
 	Summary        string         `json:"summary" yaml:"summary"`
 	Status         WikiStatus     `json:"status" yaml:"status"`
+	DecisionStatus string         `json:"decision_status,omitempty" yaml:"decision_status,omitempty"`
 	Classification string         `json:"classification,omitempty" yaml:"classification,omitempty"`
 	Links          []WikiLink     `json:"links,omitempty" yaml:"links,omitempty"`
 	Sources        []WikiSource   `json:"sources,omitempty" yaml:"sources,omitempty"`

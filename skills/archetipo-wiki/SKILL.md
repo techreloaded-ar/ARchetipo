@@ -25,6 +25,7 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
    - `architecture.context-map`: domain relationships, shared infrastructure, upstream/downstream dependencies, and unresolved boundaries;
    - `engineering.code-map`: physical domain-to-code matrix plus shared and unmapped code;
    - `operations.development`: build, test, runtime, deployment, and operational constraints.
+   Do not create `type: decision` pages by inferring rationale from code during a code-only bootstrap. ADRs enter the Wiki from an explicit planning choice or from an archived decision source whose rationale can be attributed.
 6. In `engineering.code-map`, represent every inspected physical boundary and every capability candidate in `coverage`. Map it to domain pages, mark it `partial`, or exclude it with a reason. Never omit a candidate silently.
 7. Separate observed runtime behavior from declared-but-unobserved models. For every state machine, enumerate assignments/writes to each state and derive transitions from the source-state guard plus the exact assigned target; endpoint names, comments, UI labels, and enums are not transition evidence. Cite the write path beside every claimed observed transition. Inspect code and tests for permissions, side effects, invariants, and integrations too. A type declaration or dependency is not an enforced invariant or implemented capability. Use `issues` only for actionable contradictions or missing evidence that blocks trusting the page; candidate classification, monolith boundaries, ordinary tradeoffs, and observations belong in the page body or context-map uncertainties. Do not encode uncertainty in page status.
 8. Only after the codebase map exists, archive optional `data.project_sources` verbatim below `<paths.wiki>/sources/`, using the lowercase source basename for a stable path. Reconcile them as intent, not implementation evidence. Attribute every document-only statement to that document and re-check it against executable code before describing current behavior; never turn a PRD claim into a code observation.
@@ -40,6 +41,7 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 3. Update the existing stable page when it represents the same concept. Create a page only for a new concept.
 4. For every materially changed reviewed page, run `archetipo wiki reset <page-id>...` before editing. Generated pages already need no transition.
 5. Preserve disagreements as explicit `issues`, validate, and catalog.
+6. When the ingested source is an explicit architecture decision, create or update its canonical `decisions.<slug>` page using the decision contract; attribute rationale to the source and verify current adoption against repository evidence.
 
 ## Refresh
 

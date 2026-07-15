@@ -17,14 +17,14 @@ Read `.archetipo/shared-runtime.md` for the CLI Runtime Contract, Language Polic
 
 1. **The verdict is the user's.** This skill is the one place in the workflow where stopping to ask is the point, not a failure. Never approve, reject, or postpone a spec on your own initiative.
 2. **Everything else is autonomous.** Gathering evidence, presenting the increment, and executing the chosen verdict need no confirmation beyond the verdict itself.
-3. **Connector operations are exposed by the CLI.** This skill uses `config show`, `spec show`, `spec next`, `spec integrate`, `spec move`, and `spec request-changes`. It also uses `e2e demo` plus connector-independent `wiki affected`, `wiki status`, `wiki validate`, and `wiki approve`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`, never on connector type.
+3. **Connector operations are exposed by the CLI.** This skill uses `config show`, `spec show`, `spec next`, `spec integrate`, `spec move`, and `spec request-changes`. It also uses `e2e demo` plus connector-independent `wiki affected`, `wiki status`, `wiki validate --profile bootstrap`, and `wiki approve`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`, never on connector type.
 4. **The verdict covers code and knowledge together.** Never ask the user to approve a spec without first showing the Wiki acceptance dossier. A required Wiki blocker makes **Approve** unavailable; it is not discovered after the verdict.
 
 Wiki command contracts used by this skill:
 
 - `archetipo wiki --project-root {data.workdir} affected [--base REV --head REV | --file PATH...]` → `kind: wiki_affected_result`, `data.items`, `data.files`;
 - `archetipo wiki --project-root {data.workdir} status` → `kind: wiki_status`, `data.items`, derived `data.states`, `data.findings`;
-- `archetipo wiki --project-root {data.workdir} validate` → `kind: validation_result`, `data.ok`, `data.findings`;
+- `archetipo wiki --project-root {data.workdir} validate --profile bootstrap` → `kind: validation_result`, `data.ok`, `data.findings`, including deterministic capability coverage;
 - `archetipo wiki --project-root {data.workdir} approve <page-id...>` → `kind: wiki_approve_result`, `data.approved`.
 
 For these commands, branch on `E_PRECONDITION` (Wiki absent), `E_INVALID_INPUT` (bad IDs or revisions), `E_CONFLICT` (approval blocked by findings/issues), and `E_INTERNAL`. An absent Wiki is valid only when the plan, diff, and implementation declare no Wiki impact.
@@ -48,7 +48,7 @@ For these commands, branch on `E_PRECONDITION` (Wiki absent), `E_INVALID_INPUT` 
    - pages returned by `archetipo wiki affected` for the exact implementation diff;
    - ordinary Wiki pages created or modified by that diff, reading their frontmatter IDs.
 6. Add `--project-root {data.workdir}` to every Wiki command, so a worktree-backed review sees the branch's code and generated Wiki changes while still loading configuration from `data.project_root`. When `data.spec.branch` and `data.spec.fork_base` are present, call `wiki --project-root {data.workdir} affected --base {fork_base} --head {branch}`. Otherwise derive the changed repository paths from the review diff and pass them with repeated `--file`; do not rely on the command's default revisions.
-7. Run `archetipo wiki --project-root {data.workdir} status` and `archetipo wiki --project-root {data.workdir} validate` before presenting the verdict. Match status items and findings to the review set. A planned `create` page that is absent, an affected `stale` or `attention` page, an unresolved issue, or any validation error is a Wiki blocker. A generated, issue-free, valid page is ready for approval; an unchanged reviewed page is already accepted.
+7. Run `archetipo wiki --project-root {data.workdir} status` and `archetipo wiki --project-root {data.workdir} validate --profile bootstrap` before presenting the verdict. Match status items and findings to the review set. A planned `create` page that is absent, an affected `stale` or `attention` page, an unresolved issue, an unmapped inspected capability, or any validation error is a Wiki blocker. A generated, issue-free, valid page is ready for approval; an unchanged reviewed page is already accepted.
 
 ### PHASE 1 — Present the Increment
 
@@ -64,6 +64,8 @@ Build a compact review dossier from these sources. Read surgically — this phas
    - cited code/test evidence paths;
    - derived state and issue/finding codes;
    - verdict readiness: `ready`, `already reviewed`, or `blocked`, with the concrete remedy.
+
+   For every `type: decision` page, additionally verify that the dossier exposes the decision context, chosen option, viable alternatives, negative as well as positive consequences, decision lifecycle, and concrete implementation/test evidence. Missing rationale or an alternatives section that only restates the chosen option is a Wiki blocker even if structural validation passes.
 
 Also list changed code with no mapped Wiki page and planned Wiki IDs that were not updated. Do not dump page bodies. If the review set is empty, state explicitly that no Wiki change is expected and why.
 
@@ -91,7 +93,7 @@ If the user adds conditions to an approval ("approve, but rename that flag"), tr
 ### PHASE 3 — Execute the Verdict
 
 **Approve:**
-- Re-run `archetipo wiki --project-root {data.workdir} status` and `archetipo wiki --project-root {data.workdir} validate` from `data.project_root` to close the time-of-check gap. If readiness changed, stop and present the new blocker.
+- Re-run `archetipo wiki --project-root {data.workdir} status` and `archetipo wiki --project-root {data.workdir} validate --profile bootstrap` from `data.project_root` to close the time-of-check gap. If readiness changed, stop and present the new blocker.
 - Run `archetipo wiki --project-root {data.workdir} approve <page-id>...` with the exact IDs that were shown as `ready`; never approve unrelated generated pages. Require `data.approved` to equal the number of requested ready IDs. If the Wiki review set has no ready pages, skip the command explicitly.
 - Immediately run `wiki --project-root {data.workdir} status` again and require every approved ID to report `state: reviewed`, with review metadata present in its frontmatter. Review never edits sources, issues, coverage, or page content merely to make approval pass: a failed approval is a blocker and must become request-changes or postpone.
 - When a worktree is active, approval changes the reviewed page files plus the Wiki index/log inside `data.workdir`. Stage only those Wiki paths and create a commit on the spec branch with subject `docs({US-CODE}): approve Wiki updates` before integration. Do not stage unrelated files. Verify the worktree is clean afterwards; otherwise stop instead of losing uncommitted review metadata during forced worktree cleanup.

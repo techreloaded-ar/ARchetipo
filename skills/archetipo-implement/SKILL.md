@@ -32,7 +32,7 @@ This section has priority over every other section in the skill.
 3. **Concurrency is conditional.** Run multiple workers concurrently only when tasks in the same wave are truly independent.
 4. **In-context fallback is non-blocking.** If workers are unavailable, unreliable, or not worth the overhead, execute the same pipeline in the current context. Lack of worker support is not an error and not a reason to stop.
 5. **Stop only for explicit blockers.** Do not invent new reasons to ask the user.
-6. **Connector operations are exposed by the CLI.** Every operation is a sub-command of `archetipo`. This skill uses `init`, `spec show`, `spec start`, `task done`, and `spec review`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`. Connector operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
+6. **Connector operations are exposed by the CLI.** Every operation is a sub-command of `archetipo`. This skill uses `init`, `spec show`, `spec start`, `task done`, and `spec review`, plus connector-independent `wiki affected`, `wiki reset`, `wiki validate`, and `wiki catalog`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`. Connector operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
 
 ## Autonomy Policy
 
@@ -216,6 +216,16 @@ Apply this section when the plan requires e2e coverage, or when Mina determines 
 
 After each wave, report briefly. See `./references/output-templates.md` for the "Wave Completion Report" template.
 
+#### Wiki maintenance gate
+
+After code and tests are stable, fulfill the plan's complete `Wiki Impact` contract before code review:
+
+1. Run `archetipo wiki --project-root {data.workdir} affected` against the exact spec diff and union its page IDs with `wiki_impact.update_after_acceptance` and `wiki_impact.create`.
+2. Reset each materially changed reviewed page with `wiki reset` before editing it. Create every planned page at its canonical ID path. Leave all changed or created pages `status: generated` with no `review` metadata.
+3. For each planned `decisions.<slug>` creation, write a `type: decision` page with `decision_status: accepted`, repository evidence in `sources`, and meaningful `context`, `decision`, `alternatives`, `consequences`, and `verification` markers. Preserve the rationale and alternatives from the plan; do not reverse-engineer rationale from the finished code. When the plan supersedes an ADR, update the old decision status and reciprocal links exactly as planned.
+4. Update `engineering.code-map` coverage when the implementation introduces or removes an inspected capability candidate, even when no new domain page is warranted.
+5. Run `wiki catalog`, then `wiki validate --profile bootstrap`. Repair all errors and coverage warnings caused by the spec. Do not approve pages here; acceptance review owns approval.
+
 #### Before code review
 
 After all implementation waves:
@@ -268,6 +278,7 @@ Proceed to Phase 5 only when all of the following are true:
 
 - no `🔴 CRITICAL` findings remain open
 - the full required final test suite passes
+- the Wiki impact contract is complete and `wiki validate --profile bootstrap` passes when a Wiki exists
 - the spec can be moved to `{config.workflow.statuses.review}` via `archetipo spec review`
 
 `🟡 IMPROVEMENT` findings do not block completion by default.

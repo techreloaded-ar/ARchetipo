@@ -88,7 +88,7 @@ flowchart LR
 
     subgraph Loop["Spec-Driven Loop"]
         direction TB
-        S["<b>Spec</b><br/><i>.archetipo/backlog.yaml<br/>.archetipo/specs/</i>"] --> P["<b>Plan</b><br/><i>.archetipo/plans/</i>"]
+        S["<b>Spec</b><br/><i>.archetipo/backlog.yaml<br/>.archetipo/specs/</i>"] --> P["<b>Plan</b><br/><i>.archetipo/plans/ + ADR intent</i>"]
         P --> IM["<b>Implement</b><br/><i>code + tests + generated Wiki updates</i>"]
         IM --> R["<b>Review</b><br/><i>accept + publish</i>"]
         R -. next spec .-> S
@@ -102,9 +102,9 @@ flowchart LR
 | 1. Discovery | `/archetipo-inception` | `docs/wiki/` | Produces a temporary PRD, compiles it into living knowledge, and archives it as a source. |
 | 2. Visual concept, optional | `/archetipo-design` | `docs/mockups/` | Creates isolated HTML/CSS mockups without touching application code. |
 | 3. Backlog | `/archetipo-spec` | `.archetipo/backlog.yaml`, `.archetipo/specs/` | Loads relevant Wiki pages and creates or extends INVEST-compliant user stories. |
-| 4. Planning | `/archetipo-plan US-001` | `.archetipo/plans/US-001-plan.yaml` | Produces the technical solution, ordered tasks, dependencies, and test strategy. |
-| 5. Code | `/archetipo-implement US-001` | Code, tests, review notes | Executes the plan, runs tests, performs review, and moves the spec toward human approval. |
-| 6. Acceptance | `/archetipo-review US-001` | Verdict: `DONE` or rework feedback | Presents the delivered increment (criteria, diff, test evidence) and executes the human verdict: approve or send back with feedback. |
+| 4. Planning | `/archetipo-plan US-001` | `.archetipo/plans/US-001-plan.yaml` | Produces the technical solution, ordered tasks, test strategy, and a `decisions.*` ADR contract when the choice crosses the architectural threshold. |
+| 5. Code | `/archetipo-implement US-001` | Code, tests, generated Wiki/ADR updates | Executes the plan, attaches repository evidence to decisions, validates capability coverage, and moves the spec toward human approval. |
+| 6. Acceptance | `/archetipo-review US-001` | Verdict: `DONE` or rework feedback | Presents code and Wiki together, including ADR rationale, alternatives, consequences, and evidence, then executes the human verdict. |
 
 ### Workflow states
 

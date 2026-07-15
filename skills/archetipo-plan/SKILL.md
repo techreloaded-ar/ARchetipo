@@ -122,6 +122,7 @@ Silently perform all of the following — this is your chain of thought, not vis
 - Read relevant codebase files to understand current patterns and conventions
 - Design the technical solution: approach, motivation, key decisions across layers
 - Evaluate alternatives if multiple viable approaches exist
+- Evaluate whether the solution crosses the ADR threshold below. Search existing pages with `archetipo wiki search --type decision` before declaring a new decision ID.
 
 **As Ugo (Development):**
 
@@ -141,6 +142,19 @@ Silently perform all of the following — this is your chain of thought, not vis
   - A local interaction within one already-tested client component may use deterministic component integration tests instead. Record the browser-e2e waiver in `plan_body`, including why the chosen layer proves every affected `AC-N`; do not bootstrap a browser framework solely for a local state/filter/presentation change.
   - When browser e2e is required, define complete user flows, detect and reuse the repository's framework, and include an idempotent setup task if infrastructure is absent — for Playwright, use `archetipo e2e ensure`.
   - Note whether `Demonstrates` is filmable. Planning flags the expectation only; `archetipo-review` owns video recording and the final record/skip decision.
+
+#### Architectural Decision Record threshold
+
+Create or update an ADR when the plan chooses between at least two viable alternatives and the choice materially affects one or more of: persistent data model, security model, integration boundary, deployment topology, consistency or failure semantics, or a cross-cutting technical policy used by multiple capabilities. Routine implementation details, a local bug fix, following an existing established pattern, or a reversible refactor do not warrant an ADR.
+
+For every qualifying choice:
+
+1. Search existing `type: decision` pages and reuse the stable ID when the decision already exists. Put that ID in `wiki_impact.update_after_acceptance` when the choice clarifies, extends, or supersedes it.
+2. Otherwise choose a specific `decisions.<slug>` ID and put it in `wiki_impact.create`. Never omit the page because the Wiki previously lacked an ADR type: `type: decision` is part of the Wiki contract.
+3. Include context, chosen option, viable alternatives, tradeoffs, and verification intent in the technical solution. Add an implementation task whose completion criteria require the generated ADR page, its repository evidence, and all decision section markers.
+4. If a new choice replaces an existing ADR, update the old page to `decision_status: superseded`, link it to the new accepted decision, and include both IDs in the Wiki impact contract.
+
+If no choice crosses this threshold, keep decision IDs out of `wiki_impact.create` and state the reason briefly in the technical solution. Do not manufacture ADRs merely to grow the Wiki.
 
 #### UI/UX Assessment & Mockup Spawn
 

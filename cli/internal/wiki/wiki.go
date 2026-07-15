@@ -29,6 +29,7 @@ var wikiRevisionPattern = regexp.MustCompile(`^([0-9a-fA-F]{7,64}|unavailable)$`
 
 var requiredPageSections = map[string][]string{
 	"domain":                   {"purpose", "language", "ownership", "contracts", "flows", "code", "invariants", "verification"},
+	"decision":                 {"context", "decision", "alternatives", "consequences", "verification"},
 	"architecture.context-map": {"contexts", "relationships", "shared", "uncertainties"},
 	"engineering.code-map":     {"domain-code", "shared", "unmapped", "coverage"},
 }
@@ -172,6 +173,16 @@ func Validate(projectRoot, root string) Report {
 			}
 			if len(p.Meta.Sources) == 0 {
 				add("WIKI_DOMAIN_SOURCE_MISSING", "domain pages require repository evidence")
+			}
+		}
+		if p.Meta.Type == "decision" {
+			switch p.Meta.DecisionStatus {
+			case "accepted", "superseded":
+			default:
+				add("WIKI_INVALID_DECISION_STATUS", "decision_status must be accepted or superseded")
+			}
+			if len(p.Meta.Sources) == 0 {
+				add("WIKI_DECISION_SOURCE_MISSING", "decision pages require repository evidence")
 			}
 		}
 		for _, issue := range p.Meta.Issues {
@@ -319,13 +330,13 @@ func ValidateBootstrap(projectRoot, root, prdPath string) (Report, error) {
 	byID := map[string]Page{}
 	for _, page := range pages {
 		byID[page.Meta.ID] = page
-		if page.Meta.Type == "domain" && page.Meta.Classification == "bounded-context" {
+		if page.Meta.Type == "domain" && page.Meta.Classification == "bounded-context" && page.Meta.Status != domain.WikiStatusReviewed {
 			report.Findings = append(report.Findings, domain.WikiFinding{
 				Code:     "WIKI_BOOTSTRAP_BOUNDARY_UNREVIEWED",
 				Severity: "error",
 				PageID:   page.Meta.ID,
 				Path:     page.Path,
-				Message:  "bootstrap domain pages must remain candidate until an explicit semantic review confirms the bounded-context boundary",
+				Message:  "generated bootstrap domain pages must remain candidate until an explicit semantic review confirms the bounded-context boundary",
 			})
 			report.OK = false
 		}

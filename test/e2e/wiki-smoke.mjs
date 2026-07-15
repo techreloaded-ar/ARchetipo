@@ -37,14 +37,43 @@ status: generated
 ---
 # Runtime
 `);
+  const decisionDir = join(sandbox, "docs", "wiki", "decisions");
+  mkdirSync(decisionDir, { recursive: true });
+  writeFileSync(join(decisionDir, "shared-runtime.md"), `---
+id: decisions.shared-runtime
+type: decision
+decision_status: accepted
+summary: Use one shared runtime implementation
+status: generated
+sources:
+  - path: src/index.ts
+    role: implementation
+---
+# Shared runtime
+
+<!-- archetipo:wiki section=context -->
+Multiple processes need consistent behavior.
+
+<!-- archetipo:wiki section=decision -->
+Use the shared runtime implementation.
+
+<!-- archetipo:wiki section=alternatives -->
+Per-process implementations were rejected because they can drift.
+
+<!-- archetipo:wiki section=consequences -->
+Consistency improves, while the shared dependency becomes operationally significant.
+
+<!-- archetipo:wiki section=verification -->
+The exported runtime and its tests verify adoption.
+`);
   const validation = run(["wiki", "validate"]);
   assert.equal(validation.kind, "validation_result");
   assert.equal(validation.data.ok, true);
-  assert.equal(run(["wiki", "search", "runtime"]).data.count, 1);
-  assert.equal(run(["wiki", "catalog"]).data.cataloged, 1);
+  assert.equal(run(["wiki", "search", "runtime", "--type", "decision"]).data.count, 1);
+  assert.equal(run(["wiki", "catalog"]).data.cataloged, 2);
   assert.match(readFileSync(join(pageDir, "runtime.md"), "utf8"), /status: generated/);
   assert.match(readFileSync(join(sandbox, "docs", "wiki", "index.md"), "utf8"), /\| generated \|/);
-  assert.equal(run(["wiki", "approve", "architecture.runtime"]).data.approved, 1);
+  assert.equal(run(["wiki", "approve", "architecture.runtime", "decisions.shared-runtime"]).data.approved, 2);
   assert.match(readFileSync(join(pageDir, "runtime.md"), "utf8"), /status: reviewed/);
   assert.match(readFileSync(join(sandbox, "docs", "wiki", "index.md"), "utf8"), /architecture\.runtime/);
   console.log("wiki smoke: pass");

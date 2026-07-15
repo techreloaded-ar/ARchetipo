@@ -42,6 +42,38 @@ An issue is an approval blocker, so reserve it for a concrete contradiction, unr
 
 Delete replaced pages after updating links; Git is the history.
 
+## Architectural decisions
+
+Architectural Decision Records are ordinary Wiki pages with stable IDs under `decisions.*`, canonical paths under `decisions/`, and `type: decision`. The Wiki lifecycle `status` remains `generated` or `reviewed`; `decision_status` records the decision lifecycle and is either `accepted` or `superseded`.
+
+```yaml
+id: decisions.shared-rate-limit-store
+type: decision
+decision_status: accepted
+summary: Use a shared Redis-backed rate-limit store with an in-memory local fallback
+status: generated
+links:
+  - id: operations.development
+    relation: affects
+sources:
+  - path: src/lib/rate-limiting/providers/RedisRateLimitStore.ts
+    role: implementation
+  - path: src/tests/unit/lib/rate-limiting.test.ts
+    role: verification
+```
+
+Every decision page contains meaningful content under these markers:
+
+```markdown
+<!-- archetipo:wiki section=context -->
+<!-- archetipo:wiki section=decision -->
+<!-- archetipo:wiki section=alternatives -->
+<!-- archetipo:wiki section=consequences -->
+<!-- archetipo:wiki section=verification -->
+```
+
+The context states the forces and scope. The decision names the chosen option. Alternatives records at least one viable alternative and why it was not selected. Consequences includes positive and negative tradeoffs plus operational implications. Verification cites the implementation and tests/configuration that demonstrate adoption. Decision pages require repository evidence in `sources`; rationale comes from the planning decision, never from reverse-engineering implementation shape. A later choice that replaces an ADR sets the old page to `decision_status: superseded`, links it to the replacement, and creates or updates the new accepted decision page instead of deleting history.
+
 ## Domain and bounded-context model
 
 Domains and contexts share one page type: `type: domain`. `classification` is required:

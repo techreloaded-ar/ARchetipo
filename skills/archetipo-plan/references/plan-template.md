@@ -38,6 +38,10 @@
 - {KEY_POINT_2}
 - {KEY_POINT_3}
 
+### Architectural Decisions
+
+{QUALIFYING_DECISIONS_WITH_ALTERNATIVES_AND_TRADEOFFS_OR_BRIEF_REASON_NO_ADR_IS_REQUIRED}
+
 ---
 
 ## Baseline
@@ -101,6 +105,7 @@ wiki_impact:
 ```
 
 Use empty arrays when no impact is expected. This block is the reviewable documentation contract consumed by implementation and acceptance review.
+New domain pages use `domains.<slug>`. New architectural decisions use `decisions.<slug>` and must follow the `type: decision` contract in the Wiki skill.
 
 ---
 

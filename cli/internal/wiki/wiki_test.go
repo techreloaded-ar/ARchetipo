@@ -327,6 +327,16 @@ func TestValidateBootstrapRejectsUnreviewedBoundedContext(t *testing.T) {
 	if report.OK || !hasFinding(report, "WIKI_BOOTSTRAP_BOUNDARY_UNREVIEWED") {
 		t.Fatalf("expected unreviewed boundary finding: %+v", report.Findings)
 	}
+	if _, err := Approve(project, root, []string{"domains.trips"}); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateBootstrap(project, root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasFinding(report, "WIKI_BOOTSTRAP_BOUNDARY_UNREVIEWED") {
+		t.Fatalf("reviewed bounded context should pass the semantic-review gate: %+v", report.Findings)
+	}
 }
 
 func TestValidateBootstrapRequiresExistingCoreEvidence(t *testing.T) {
@@ -444,6 +454,40 @@ func TestDomainPagesRequireRepositoryEvidence(t *testing.T) {
 	report := Validate(project, root)
 	if report.OK || !hasFinding(report, "WIKI_DOMAIN_SOURCE_MISSING") {
 		t.Fatalf("expected missing domain evidence: %+v", report.Findings)
+	}
+}
+
+func TestDecisionPagesRequireLifecycleEvidenceAndSections(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("# Project"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCorePage(t, root, "decisions.shared-rate-limit-store", "decision", "README.md", "decision_status: accepted\n")
+	report := Validate(project, root)
+	if !report.OK {
+		t.Fatalf("complete decision should validate: %+v", report.Findings)
+	}
+
+	path := filepath.Join(root, "decisions", "shared-rate-limit-store.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = []byte(strings.Replace(string(raw), "decision_status: accepted\n", "decision_status: proposed\n", 1))
+	raw = []byte(strings.Replace(string(raw), "sources:\n  - path: README.md\n    role: application\n", "", 1))
+	raw = []byte(strings.Replace(string(raw), "<!-- archetipo:wiki section=alternatives -->", "", 1))
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report = Validate(project, root)
+	for _, code := range []string{"WIKI_INVALID_DECISION_STATUS", "WIKI_DECISION_SOURCE_MISSING", "WIKI_DDD_SECTION_MISSING"} {
+		if !hasFinding(report, code) {
+			t.Fatalf("expected %s: %+v", code, report.Findings)
+		}
 	}
 }
 
