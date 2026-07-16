@@ -156,8 +156,83 @@ type SetupInfo struct {
 // their own section (FileConfig for the file connector).
 type ConfigPaths struct {
 	PRD         string `json:"prd" yaml:"prd"`
+	Wiki        string `json:"wiki" yaml:"wiki"`
 	Mockups     string `json:"mockups" yaml:"mockups"`
 	TestResults string `json:"test_results" yaml:"test_results"`
+}
+
+// WikiStatus records whether generated knowledge received explicit review.
+// Freshness and attention are derived by the CLI from evidence and issues.
+type WikiStatus string
+
+const (
+	WikiStatusGenerated WikiStatus = "generated"
+	WikiStatusReviewed  WikiStatus = "reviewed"
+)
+
+// WikiSource records provenance without copying source content into a page.
+type WikiSource struct {
+	Path     string `json:"path" yaml:"path"`
+	Revision string `json:"revision,omitempty" yaml:"revision,omitempty"`
+	Role     string `json:"role,omitempty" yaml:"role,omitempty"`
+	Symbol   string `json:"symbol,omitempty" yaml:"symbol,omitempty"`
+	Note     string `json:"note,omitempty" yaml:"note,omitempty"`
+}
+
+// WikiIssue keeps semantic uncertainty explicit without overloading lifecycle.
+type WikiIssue struct {
+	Code    string `json:"code" yaml:"code"`
+	Summary string `json:"summary" yaml:"summary"`
+}
+
+// WikiReview anchors approval to both page content and repository evidence.
+type WikiReview struct {
+	ContentHash      string `json:"content_hash" yaml:"content_hash"`
+	EvidenceRevision string `json:"evidence_revision" yaml:"evidence_revision"`
+	ReviewedAt       string `json:"reviewed_at" yaml:"reviewed_at"`
+}
+
+// WikiCoverage records how a codebase boundary is represented in the Wiki.
+type WikiCoverage struct {
+	Kind   string   `json:"kind" yaml:"kind"`
+	Path   string   `json:"path" yaml:"path"`
+	Status string   `json:"status" yaml:"status"`
+	Pages  []string `json:"pages,omitempty" yaml:"pages,omitempty"`
+	Note   string   `json:"note,omitempty" yaml:"note,omitempty"`
+}
+
+// WikiPageMeta is the required frontmatter contract for Wiki pages.
+type WikiPageMeta struct {
+	Type           string         `json:"type" yaml:"type"`
+	Title          string         `json:"title" yaml:"title"`
+	Description    string         `json:"description" yaml:"description"`
+	Resource       string         `json:"resource,omitempty" yaml:"resource,omitempty"`
+	Tags           []string       `json:"tags,omitempty" yaml:"tags,omitempty"`
+	Timestamp      string         `json:"timestamp,omitempty" yaml:"timestamp,omitempty"`
+	Status         WikiStatus     `json:"status" yaml:"status"`
+	DecisionStatus string         `json:"decision_status,omitempty" yaml:"decision_status,omitempty"`
+	Classification string         `json:"classification,omitempty" yaml:"classification,omitempty"`
+	Sources        []WikiSource   `json:"sources,omitempty" yaml:"sources,omitempty"`
+	Coverage       []WikiCoverage `json:"coverage,omitempty" yaml:"coverage,omitempty"`
+	Issues         []WikiIssue    `json:"issues,omitempty" yaml:"issues,omitempty"`
+	Review         *WikiReview    `json:"review,omitempty" yaml:"review,omitempty"`
+	Extra          map[string]any `json:"-" yaml:",inline"`
+}
+
+// WikiFinding is one deterministic structural or evidence validation result.
+type WikiFinding struct {
+	Code     string `json:"code" yaml:"code"`
+	Severity string `json:"severity" yaml:"severity"`
+	PageID   string `json:"page_id,omitempty" yaml:"page_id,omitempty"`
+	Path     string `json:"path,omitempty" yaml:"path,omitempty"`
+	Message  string `json:"message" yaml:"message"`
+}
+
+// WikiImpact is persisted by plans to make documentation work reviewable.
+type WikiImpact struct {
+	Read                  []string `json:"read,omitempty" yaml:"read,omitempty"`
+	UpdateAfterAcceptance []string `json:"update_after_acceptance,omitempty" yaml:"update_after_acceptance,omitempty"`
+	Create                []string `json:"create,omitempty" yaml:"create,omitempty"`
 }
 
 // FileConfig mirrors the `file:` section of .archetipo/config.yaml. Holds the

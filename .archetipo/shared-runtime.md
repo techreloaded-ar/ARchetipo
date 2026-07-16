@@ -110,6 +110,10 @@ ARchetipo artifacts must be usable by smaller or lower-cost models during later 
 - In implementation plans, split work into small tasks with local context, clear allowed changes, verification commands, done criteria, and blockers.
 - Do not leave architectural choices implicit for implementation. If a decision matters, put it in the plan.
 - Before persisting generated specs or plans, run the relevant `archetipo validate ...` command and repair blocking issues instead of saving malformed artifacts.
+
+## Living Wiki
+
+`paths.wiki` is connector-independent local project knowledge. Every concept is a Markdown file with YAML frontmatter; its stable ID is its Wiki-relative path without `.md`, and relationships use standard Markdown links. Bootstrap begins with the read-only `archetipo wiki inspect`, maps deterministic capability candidates into evidence-backed DDD domain pages, and separates current code behavior from optional `references/` concepts. Architectural choices that cross the planning ADR threshold live in first-class `type: decision` pages under `decisions/`; never infer their rationale from implementation shape alone. Read `docs/wiki/index.md` before selecting pages and use `archetipo wiki search` to keep context bounded. `archetipo wiki catalog` refreshes navigation without changing review state. For spec work, invoke every Wiki command from `data.project_root` with `wiki --project-root {data.workdir}` so nested worktrees target their own code and Wiki instead of the parent checkout. Skills that change code use `wiki affected`, reconcile inspected capability coverage, reset changed pages to `generated`, and leave approval to explicit review. `archetipo wiki validate --profile bootstrap` is the continuous structural-and-coverage gate; it reports findings through `kind:"validation_result"` and `data.ok`, not through an error envelope. Never branch Wiki behavior on connector type.
 - Treat warnings as quality feedback. They do not block persistence, but fix them when the repair is straightforward.
 
 ## Conversation Rules

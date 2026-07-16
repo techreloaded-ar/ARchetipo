@@ -78,18 +78,22 @@ After that, use the `/archetipo-*` skills inside your AI coding agent. The skill
 
 ## Workflow
 
-ARchetipo implements Spec-Driven Development: the spec is the contract, and each product increment moves through `spec -> plan -> implement`.
+ARchetipo implements Wiki-backed Spec-Driven Development: living project knowledge guides each increment and is refreshed through `spec -> plan -> implement -> review`.
+
+The living Wiki uses an [Open Knowledge Format (OKF)](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)-compliant Markdown structure.
 
 ```mermaid
 flowchart LR
-    I["<b>Inception</b><br/><i>docs/PRD.md</i>"] --> S
+    I["<b>Inception</b><br/><i>temporary PRD</i>"] --> W["<b>Living Wiki</b><br/><i>docs/wiki/</i>"]
+    W --> S
     I -. optional concept .-> D["<b>Design</b><br/><i>docs/mockups/</i>"]
 
     subgraph Loop["Spec-Driven Loop"]
         direction TB
-        S["<b>Spec</b><br/><i>.archetipo/backlog.yaml<br/>.archetipo/specs/</i>"] --> P["<b>Plan</b><br/><i>.archetipo/plans/</i>"]
-        P --> IM["<b>Implement</b><br/><i>code + tests + review</i>"]
-        IM -. next spec .-> S
+        S["<b>Spec</b><br/><i>.archetipo/backlog.yaml<br/>.archetipo/specs/</i>"] --> P["<b>Plan</b><br/><i>.archetipo/plans/ + ADR intent</i>"]
+        P --> IM["<b>Implement</b><br/><i>code + tests + generated Wiki updates</i>"]
+        IM --> R["<b>Review</b><br/><i>accept + publish</i>"]
+        R -. next spec .-> S
     end
 
     P -. UI needed .-> D
@@ -97,12 +101,12 @@ flowchart LR
 
 | Step | Skill | Output | What happens |
 |---|---|---|---|
-| 1. Discovery | `/archetipo-inception` | `docs/PRD.md` | Defines product vision, scope, personas, functional requirements, and core architecture. |
+| 1. Discovery | `/archetipo-inception` | `docs/wiki/` | Produces a temporary PRD, compiles it into living knowledge, and preserves it as a `references/` concept. |
 | 2. Visual concept, optional | `/archetipo-design` | `docs/mockups/` | Creates isolated HTML/CSS mockups without touching application code. |
-| 3. Backlog | `/archetipo-spec` | `.archetipo/backlog.yaml`, `.archetipo/specs/` | Converts the PRD into INVEST-compliant user stories or extends an existing backlog. |
-| 4. Planning | `/archetipo-plan US-001` | `.archetipo/plans/US-001-plan.yaml` | Produces the technical solution, ordered tasks, dependencies, and test strategy. |
-| 5. Code | `/archetipo-implement US-001` | Code, tests, review notes | Executes the plan, runs tests, performs review, and moves the spec toward human approval. |
-| 6. Acceptance | `/archetipo-review US-001` | Verdict: `DONE` or rework feedback | Presents the delivered increment (criteria, diff, test evidence) and executes the human verdict: approve or send back with feedback. |
+| 3. Backlog | `/archetipo-spec` | `.archetipo/backlog.yaml`, `.archetipo/specs/` | Loads relevant Wiki pages and creates or extends INVEST-compliant user stories. |
+| 4. Planning | `/archetipo-plan US-001` | `.archetipo/plans/US-001-plan.yaml` | Produces the technical solution, ordered tasks, test strategy, and a `decisions/` ADR contract when the choice crosses the architectural threshold. |
+| 5. Code | `/archetipo-implement US-001` | Code, tests, generated Wiki/ADR updates | Executes the plan, attaches repository evidence to decisions, validates capability coverage, and moves the spec toward human approval. |
+| 6. Acceptance | `/archetipo-review US-001` | Verdict: `DONE` or rework feedback | Presents code and Wiki together, including ADR rationale, alternatives, consequences, and evidence, then executes the human verdict. |
 
 ### Workflow states
 
@@ -238,6 +242,7 @@ The CLI architecture is extensible, but the built-in connectors today are `file`
 | `archetipo-implement` | Executes a planned spec through code, tests, review, and handoff. | "implement US-005", "run the next ready spec" |
 | `archetipo-review` | Facilitates the human acceptance gate: approve to `DONE` or send back with rework feedback. | "review US-005", "accept the spec", "what's waiting for review?" |
 | `archetipo-autopilot` | Runs planning and implementation across multiple eligible specs. | "run everything", "autopilot the backlog", "implement all specs" |
+| `archetipo-wiki` | Builds a codebase-first DDD map of domains, candidate bounded contexts, logical relationships, and their physical code/test ownership. | "bootstrap the Wiki", "map the domains", "refresh project knowledge" |
 
 ---
 

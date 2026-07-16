@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/e2e"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/version"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/wiki"
 )
 
 // doctorCheck is one diagnostic line. Skipped checks count as neither pass nor
@@ -97,6 +99,7 @@ func runDoctorChecks(ctx context.Context) []doctorCheck {
 	} else {
 		detail := fmt.Sprintf("connector %q, project root %s", cfg.Connector, cfg.ProjectRoot)
 		checks = append(checks, doctorCheck{name: "project config", ok: true, detail: detail})
+		checks = append(checks, checkWiki(cfg))
 	}
 
 	// 3. Skills installed in the project's tool directories.
@@ -135,6 +138,23 @@ func runDoctorChecks(ctx context.Context) []doctorCheck {
 	}
 
 	return checks
+}
+
+func checkWiki(cfg config.Config) doctorCheck {
+	root := cfg.Paths.Wiki
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(cfg.ProjectRoot, filepath.FromSlash(root))
+	}
+	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+		return doctorCheck{name: "project Wiki", detail: "not initialized", hint: "run `/archetipo-wiki bootstrap` or `archetipo wiki init`"}
+	} else if err != nil {
+		return doctorCheck{name: "project Wiki", detail: err.Error(), hint: "check paths.wiki and filesystem permissions"}
+	}
+	report := wiki.Validate(cfg.ProjectRoot, root)
+	if !report.OK {
+		return doctorCheck{name: "project Wiki", detail: fmt.Sprintf("%d page(s), %d finding(s)", report.Pages, len(report.Findings)), hint: "run `archetipo wiki validate` and repair error findings"}
+	}
+	return doctorCheck{name: "project Wiki", ok: true, detail: fmt.Sprintf("%d page(s), valid", report.Pages)}
 }
 
 // checkE2E reports the e2e toolchain state. It is informational for projects

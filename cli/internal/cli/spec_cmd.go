@@ -206,7 +206,15 @@ func loadSpecWithTasks(ctx context.Context, cfg config.Config, c connector.Conne
 		}
 	}
 	domain.NormalizeTaskBodies(tasks)
-	return map[string]any{"spec": st, "tasks": tasks, "workdir": resolveWorkdir(cfg, st)}, nil
+	planBody := ""
+	if reader, ok := c.(connector.PlanBodyReader); ok {
+		if body, readErr := reader.ReadPlanBody(ctx, st.Code); readErr == nil {
+			planBody = body
+		} else if ce, coded := readErr.(*iox.CodedError); !coded || ce.Code != iox.CodePreconditionMissing {
+			return nil, readErr
+		}
+	}
+	return map[string]any{"spec": st, "tasks": tasks, "plan_body": planBody, "workdir": resolveWorkdir(cfg, st)}, nil
 }
 
 // resolveWorkdir returns the absolute working directory for a spec. The worktree

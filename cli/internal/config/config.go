@@ -92,6 +92,7 @@ func Default() Config {
 		Connector: ConnectorFile,
 		Paths: domain.ConfigPaths{
 			PRD:         "docs/PRD.md",
+			Wiki:        "docs/wiki/",
 			Mockups:     "docs/mockups/",
 			TestResults: "docs/test-results/",
 		},
@@ -321,6 +322,9 @@ func (c *Config) applyDefaults() {
 	if c.Paths.PRD == "" {
 		c.Paths.PRD = d.Paths.PRD
 	}
+	if c.Paths.Wiki == "" {
+		c.Paths.Wiki = d.Paths.Wiki
+	}
 	if c.Paths.Mockups == "" {
 		c.Paths.Mockups = d.Paths.Mockups
 	}
@@ -373,6 +377,7 @@ func (c *Config) validate() error {
 		path string
 	}{
 		{"paths.prd", c.Paths.PRD},
+		{"paths.wiki", c.Paths.Wiki},
 		{"paths.mockups", c.Paths.Mockups},
 		{"paths.test_results", c.Paths.TestResults},
 	}

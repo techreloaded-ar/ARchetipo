@@ -56,6 +56,42 @@ scenarios:
     archetipo_post_commands:
       - validate prd
 
+  # Wiki bootstrap derives its core map from code with no PRD dependency.
+  wiki-bootstrap-codebase-only:
+    agent: pi-go-ds4-flash
+    fixture: fixtures/wiki-codebase
+    prompts:
+      - /archetipo-wiki Bootstrap the project Wiki from repository evidence without asking follow-up questions.
+    verify_wiki_bootstrap:
+      expect_prd: false
+      forbid_reviewed: true
+      min_issues: 1
+      required_pages:
+        - overview
+        - architecture/context-map
+        - engineering/code-map
+        - operations/development
+
+  # Wiki bootstrap preserves conflicting intent but describes implemented code as current state.
+  wiki-bootstrap-prd-conflict:
+    agent: pi-go-ds4-flash
+    fixture: fixtures/wiki-prd-conflict
+    prompts:
+      - /archetipo-wiki Bootstrap the project Wiki, preserve the PRD, and explicitly record every conflict with implemented code without asking follow-up questions.
+    verify_wiki_bootstrap:
+      expect_prd: true
+      forbid_reviewed: true
+      min_issues: 1
+      required_pages:
+        - overview
+        - architecture/context-map
+        - engineering/code-map
+        - operations/development
+      page_assertions:
+        overview:
+          includes:
+            - TypeScript
+
   # Spec + plam  US-001.
   from-prd-to-plan:
     agent: pi-go-ds4-flash
@@ -98,3 +134,21 @@ scenarios:
       - spec start US-001
     prompts:
       - /archetipo-implement US-001
+
+  # Acceptance review presents and approves the generated Wiki page, commits
+  # its review metadata on the spec branch, then integrates a clean worktree.
+  worktree-review-accepts-wiki:
+    agent: pi-go-ds4-flash
+    fixture: fixtures/worktree-wiki-review
+    prompts:
+      - /archetipo-implement US-001
+      - >-
+        /archetipo-review US-001. Present the complete acceptance dossier,
+        including the Wiki page IDs and readiness, then execute Approve. This
+        message is the explicit human approval if validation is clean; do not
+        ask a follow-up question.
+    verify_review_wiki:
+      spec_code: US-001
+      reviewed_pages: [overview]
+      output_includes: [overview]
+      require_clean: true

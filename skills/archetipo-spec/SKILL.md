@@ -34,7 +34,7 @@ Use this mode when:
 In this mode:
 1. Read this file
 2. Read `./references/backlog-bootstrap-flow.md`
-3. Use the PRD as the primary source and create the initial backlog
+3. Read the Wiki index and use relevant canonical pages as the primary source. Use the PRD reference concept only when the Wiki is absent or explicitly incomplete.
 
 ### `mode: extend-backlog`
 
@@ -58,16 +58,20 @@ In this mode:
    - `archetipo spec list`
    - `archetipo validate spec --file <path|->`
    - `archetipo spec add --file <path|->`
+   - `archetipo wiki search [query]`
 
 Extract and keep available from `data`:
 - `connector`
 - `paths.prd`
+- `paths.wiki`
 - `paths.backlog`
 - `paths.planning`
 - `paths.mockups`
 - `workflow.statuses`
 
 ## Backlog Discovery
+
+Before generating a spec, read `{config.paths.wiki}/index.md`, run `archetipo wiki search` with compact terms from the request, and load only selected pages. Verify implementation-specific claims against code under `data.project_root`. Record the IDs of pages used in the spec body under a compact `## Wiki context` section. Fall back to PRD discovery only when the Wiki is missing or does not cover the product context, and state that gap.
 
 Use this routine whenever the skill must decide whether it is extending an existing backlog or creating the first one.
 

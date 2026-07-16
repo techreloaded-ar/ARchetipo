@@ -1,0 +1,51 @@
+schema: archetipo/plan/v2
+spec_code: US-001
+body: |
+  # US-001 implementation plan
+
+  Create the greeting artifact and update the existing generated Wiki overview
+  in the same worktree.
+
+  ## Wiki Impact
+
+  ```yaml
+  wiki_impact:
+    read: [overview]
+    update_after_acceptance: [overview]
+    create: []
+  ```
+tasks:
+  - id: T1
+    title: Create the greeting artifact
+    type: Impl
+    status: TODO
+    body: |
+      ## Descrizione
+
+      Create `hello.txt` at the repository root with exactly `Hello from ARchetipo`.
+
+      ## File Coinvolti
+
+      - `hello.txt`
+
+      ## Criteri di Completamento
+
+      - [ ] The file exists with the exact required content.
+  - id: T2
+    title: Update the generated Wiki overview
+    type: Impl
+    status: TODO
+    body: |
+      ## Descrizione
+
+      Update `docs/wiki/overview.md` to describe the greeting artifact, cite
+      `hello.txt`, and leave the page generated for acceptance review.
+
+      ## File Coinvolti
+
+      - `docs/wiki/overview.md`
+
+      ## Criteri di Completamento
+
+      - [ ] The overview cites `hello.txt` and remains generated.
+    dependencies: [T1]

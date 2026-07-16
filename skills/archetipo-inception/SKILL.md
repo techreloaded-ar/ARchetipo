@@ -21,6 +21,10 @@ Read `.archetipo/shared-runtime.md` for Language Policy, Assumptions and Questio
    - `archetipo config show`
    - `archetipo prd write`
    - `archetipo validate prd`
+   - `archetipo wiki init`
+   - `archetipo wiki inspect`
+   - `archetipo wiki validate`
+   - `archetipo wiki catalog`
 
 If the CLI cannot find `.archetipo/config.yaml`, it falls back to its built-in defaults for connector, paths, and workflow statuses.
 
@@ -28,6 +32,7 @@ From the parsed `data` (SetupInfo), extract and keep available:
 
 - `connector`
 - `paths.prd`
+- `paths.wiki`
 - `paths.backlog`
 - `paths.planning`
 - `paths.mockups`
@@ -59,6 +64,10 @@ Load context progressively and keep the working context lean:
 - Persist the PRD by piping the markdown into `archetipo prd write` and verifying the resulting `write_result` envelope
 - Do not generate or mutate backlog artifacts in this skill
 - If the user asks for backlog generation, epics, or specs from an existing PRD, that belongs to `archetipo-spec`
+
+## Compile Discovery Into the Wiki
+
+After the inception artifact validation gate passes, follow the installed `archetipo-wiki` bootstrap workflow: inspect available code first, build the DDD domain/context and code maps, then ingest optional project sources as `references/` concepts and reconcile implemented state with product intent. Run `archetipo wiki validate --profile bootstrap`, repair errors, then run `archetipo wiki catalog`; leave pages `generated` until explicit review.
 
 ## PRD Validation Gate
 

@@ -38,6 +38,10 @@
 - {KEY_POINT_2}
 - {KEY_POINT_3}
 
+### Architectural Decisions
+
+{QUALIFYING_DECISIONS_WITH_ALTERNATIVES_AND_TRADEOFFS_OR_BRIEF_REASON_NO_ADR_IS_REQUIRED}
+
 ---
 
 ## Baseline
@@ -88,6 +92,20 @@ This is an acceptance map, not a task summary. Every criterion must have evidenc
 **Reason:** {WHY_THE_CHANGE_IS_LOCAL_AND_LOWER_LAYER_EVIDENCE_PROVES_EVERY_AFFECTED_AC}
 **Evidence layer used instead:** {DETERMINISTIC_COMPONENT_OR_INTEGRATION_SUITE}
 {/IF_BROWSER_E2E_WAIVED}
+
+---
+
+## Wiki Impact
+
+```yaml
+wiki_impact:
+  read: [{WIKI_PAGE_IDS_USED_FOR_PLANNING}]
+  update_after_acceptance: [{EXISTING_PAGE_IDS_EXPECTED_TO_CHANGE}]
+  create: [{NEW_PAGE_IDS_OR_DECISION_IDS_EXPECTED}]
+```
+
+Use empty arrays when no impact is expected. This block is the reviewable documentation contract consumed by implementation and acceptance review.
+New domain pages use `domains/<slug>`. New architectural decisions use `decisions/<slug>` and must follow the `type: decision` contract in the Wiki skill.
 
 ---
 

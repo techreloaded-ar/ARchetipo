@@ -10,7 +10,10 @@
     "publish:npm": "node ./scripts/publish-npm.mjs",
     "test:cli": "cd cli && go test ./...",
     "test:e2e": "node ./test/e2e/run.mjs",
-    "test:view-delete-smoke": "node ./test/e2e/delete-story-view-smoke.mjs"
+    "test:wiki-benchmark": "node ./test/benchmark/wiki/run.mjs",
+    "test:wiki-benchmark:unit": "node --test ./test/benchmark/wiki/run.test.mjs",
+    "test:view-delete-smoke": "node ./test/e2e/delete-story-view-smoke.mjs",
+    "test:wiki-smoke": "node ./test/e2e/wiki-smoke.mjs"
   },
   "dependencies": {
     "yaml": "^2.9.0"

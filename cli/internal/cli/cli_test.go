@@ -1162,6 +1162,9 @@ func TestDoctor_PassesAfterInit(t *testing.T) {
 	if res := runCLI(t, "", "init", "--tool", "claude", "--connector", "file", "--yes"); res.exit != 0 {
 		t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
 	}
+	if res := runCLI(t, "", "wiki", "init"); res.exit != 0 {
+		t.Fatalf("wiki init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
 	res := runCLI(t, "", "doctor")
 	if res.exit != 0 {
 		t.Fatalf("doctor failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
@@ -1172,6 +1175,28 @@ func TestDoctor_PassesAfterInit(t *testing.T) {
 	}
 	if !strings.Contains(out, "skipped (connector is not github)") {
 		t.Fatalf("expected gh check to be skipped for file connector, got:\n%s", out)
+	}
+}
+
+func TestWikiProjectRootTargetsWorktreeCheckout(t *testing.T) {
+	newProject(t)
+	mainRoot, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(mainRoot, ".archetipo", "worktrees", "US-001")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := runCLI(t, "", "wiki", "--project-root", target, "init")
+	if res.exit != 0 {
+		t.Fatalf("wiki init with project root failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(target, "docs", "wiki", "index.md")); err != nil {
+		t.Fatalf("target checkout Wiki missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(mainRoot, "docs", "wiki", "index.md")); !os.IsNotExist(err) {
+		t.Fatalf("main checkout Wiki should be untouched: %v", err)
 	}
 }
 

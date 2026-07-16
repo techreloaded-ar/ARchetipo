@@ -3,6 +3,7 @@ connector: file   # file | github | jira
 # Shared paths — used by every connector.
 paths:
   prd: docs/PRD.md
+  wiki: docs/wiki/
   mockups: docs/mockups/
   test_results: docs/test-results/
 

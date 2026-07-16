@@ -1,0 +1,24 @@
+schema: archetipo/spec/v2
+code: US-001
+title: Add a reviewed greeting artifact
+epic:
+  code: EP-001
+  title: Review Wiki smoke test
+priority: LOW
+points: 1
+status: PLANNED
+body: |
+  ## User Story
+
+  As a maintainer, I want a greeting artifact documented in the project Wiki
+  so that implementation and living knowledge are accepted together.
+
+  ## Acceptance Criteria
+
+  - [ ] A file `hello.txt` exists at the repository root.
+  - [ ] The file contains exactly `Hello from ARchetipo`.
+  - [ ] The Wiki overview records the delivered greeting and cites `hello.txt`.
+
+  ## Demonstrates
+
+  Open `hello.txt` and the Wiki overview and verify that they describe the same delivered greeting.
