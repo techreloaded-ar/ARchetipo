@@ -16,7 +16,7 @@ import (
 func newWikiCmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "wiki", Short: "Living project Wiki operations"}
 	root.PersistentFlags().String("project-root", "", "target checkout for code and Wiki operations (defaults to the configured project root)")
-	root.AddCommand(newWikiInitCmd(s), newWikiInspectCmd(s), newWikiStatusCmd(s), newWikiValidateCmd(s), newWikiSearchCmd(s), newWikiAffectedCmd(s), newWikiCatalogCmd(s), newWikiApproveCmd(s), newWikiResetCmd(s), newWikiPublishCmd(s))
+	root.AddCommand(newWikiInitCmd(s), newWikiInspectCmd(s), newWikiStatusCmd(s), newWikiValidateCmd(s), newWikiSearchCmd(s), newWikiAffectedCmd(s), newWikiCatalogCmd(s), newWikiApproveCmd(s), newWikiResetCmd(s))
 	return root
 }
 
@@ -107,7 +107,7 @@ func newWikiStatusCmd(s streams) *cobra.Command {
 			for _, p := range pages {
 				state := wiki.PageState(cfg.ProjectRoot, p)
 				counts[state]++
-				items = append(items, map[string]any{"id": p.Meta.ID, "path": p.Path, "state": state, "issues": p.Meta.Issues})
+				items = append(items, map[string]any{"id": p.ID, "path": p.Path, "state": state, "issues": p.Meta.Issues})
 			}
 			report := wiki.Validate(cfg.ProjectRoot, root)
 			return map[string]any{"root": root, "pages": len(pages), "states": counts, "items": items, "ok": report.OK, "findings": report.Findings}, nil
@@ -141,14 +141,13 @@ func newWikiValidateCmd(s streams) *cobra.Command {
 
 func newWikiSearchCmd(s streams) *cobra.Command {
 	var pageType, status string
-	var includeSources bool
 	cmd := &cobra.Command{Use: "search [query]", Short: "Search the Wiki catalog and metadata", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		query := ""
 		if len(args) > 0 {
 			query = args[0]
 		}
 		return withWiki(cmd, s, "wiki_search_result", true, func(cfg config.Config, root string) (any, error) {
-			items, err := wiki.Search(cfg.ProjectRoot, root, query, pageType, status, includeSources)
+			items, err := wiki.Search(cfg.ProjectRoot, root, query, pageType, status)
 			if err != nil {
 				return nil, iox.NewInternal("searching Wiki", err)
 			}
@@ -157,7 +156,6 @@ func newWikiSearchCmd(s streams) *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&pageType, "type", "", "filter by page type")
 	cmd.Flags().StringVar(&status, "status", "", "filter by derived state (generated, reviewed, stale, attention)")
-	cmd.Flags().BoolVar(&includeSources, "include-sources", false, "include archived source documents")
 	return cmd
 }
 
@@ -184,23 +182,6 @@ func newWikiAffectedCmd(s streams) *cobra.Command {
 	cmd.Flags().StringVar(&base, "base", "", "base Git revision (default HEAD~1)")
 	cmd.Flags().StringVar(&head, "head", "", "head Git revision (default HEAD)")
 	cmd.Flags().StringSliceVar(&files, "file", nil, "changed project path; repeat or comma-separate")
-	return cmd
-}
-
-func newWikiPublishCmd(s streams) *cobra.Command {
-	cmd := &cobra.Command{Use: "publish", Short: "Deprecated alias for approving all generated pages", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
-		return withWiki(cmd, s, "wiki_publish_result", true, func(cfg config.Config, root string) (any, error) {
-			count, err := wiki.Publish(cfg.ProjectRoot, root)
-			if err != nil {
-				if errors.Is(err, wiki.ErrValidationFailed) || errors.Is(err, wiki.ErrUnresolvedIssues) || errors.Is(err, wiki.ErrMissingEvidence) {
-					return nil, iox.NewConflict("Wiki approval blocked", "repair validation findings and resolve page issues before approval", err)
-				}
-				return nil, iox.NewInternal("publishing Wiki", err)
-			}
-			return map[string]any{"published": count, "root": root}, nil
-		})
-	}}
-	cmd.Deprecated = "use `archetipo wiki approve`"
 	return cmd
 }
 

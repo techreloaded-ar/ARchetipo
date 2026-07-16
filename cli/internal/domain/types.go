@@ -170,12 +170,6 @@ const (
 	WikiStatusReviewed  WikiStatus = "reviewed"
 )
 
-// WikiLink is an explicit relationship to another stable page ID.
-type WikiLink struct {
-	ID       string `json:"id" yaml:"id"`
-	Relation string `json:"relation,omitempty" yaml:"relation,omitempty"`
-}
-
 // WikiSource records provenance without copying source content into a page.
 type WikiSource struct {
 	Path     string `json:"path" yaml:"path"`
@@ -209,17 +203,20 @@ type WikiCoverage struct {
 
 // WikiPageMeta is the required frontmatter contract for Wiki pages.
 type WikiPageMeta struct {
-	ID             string         `json:"id" yaml:"id"`
 	Type           string         `json:"type" yaml:"type"`
-	Summary        string         `json:"summary" yaml:"summary"`
+	Title          string         `json:"title" yaml:"title"`
+	Description    string         `json:"description" yaml:"description"`
+	Resource       string         `json:"resource,omitempty" yaml:"resource,omitempty"`
+	Tags           []string       `json:"tags,omitempty" yaml:"tags,omitempty"`
+	Timestamp      string         `json:"timestamp,omitempty" yaml:"timestamp,omitempty"`
 	Status         WikiStatus     `json:"status" yaml:"status"`
 	DecisionStatus string         `json:"decision_status,omitempty" yaml:"decision_status,omitempty"`
 	Classification string         `json:"classification,omitempty" yaml:"classification,omitempty"`
-	Links          []WikiLink     `json:"links,omitempty" yaml:"links,omitempty"`
 	Sources        []WikiSource   `json:"sources,omitempty" yaml:"sources,omitempty"`
 	Coverage       []WikiCoverage `json:"coverage,omitempty" yaml:"coverage,omitempty"`
 	Issues         []WikiIssue    `json:"issues,omitempty" yaml:"issues,omitempty"`
 	Review         *WikiReview    `json:"review,omitempty" yaml:"review,omitempty"`
+	Extra          map[string]any `json:"-" yaml:",inline"`
 }
 
 // WikiFinding is one deterministic structural or evidence validation result.

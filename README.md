@@ -80,6 +80,8 @@ After that, use the `/archetipo-*` skills inside your AI coding agent. The skill
 
 ARchetipo implements Wiki-backed Spec-Driven Development: living project knowledge guides each increment and is refreshed through `spec -> plan -> implement -> review`.
 
+The living Wiki uses an [Open Knowledge Format (OKF)](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)-compliant Markdown structure.
+
 ```mermaid
 flowchart LR
     I["<b>Inception</b><br/><i>temporary PRD</i>"] --> W["<b>Living Wiki</b><br/><i>docs/wiki/</i>"]
@@ -99,10 +101,10 @@ flowchart LR
 
 | Step | Skill | Output | What happens |
 |---|---|---|---|
-| 1. Discovery | `/archetipo-inception` | `docs/wiki/` | Produces a temporary PRD, compiles it into living knowledge, and archives it as a source. |
+| 1. Discovery | `/archetipo-inception` | `docs/wiki/` | Produces a temporary PRD, compiles it into living knowledge, and preserves it as a `references/` concept. |
 | 2. Visual concept, optional | `/archetipo-design` | `docs/mockups/` | Creates isolated HTML/CSS mockups without touching application code. |
 | 3. Backlog | `/archetipo-spec` | `.archetipo/backlog.yaml`, `.archetipo/specs/` | Loads relevant Wiki pages and creates or extends INVEST-compliant user stories. |
-| 4. Planning | `/archetipo-plan US-001` | `.archetipo/plans/US-001-plan.yaml` | Produces the technical solution, ordered tasks, test strategy, and a `decisions.*` ADR contract when the choice crosses the architectural threshold. |
+| 4. Planning | `/archetipo-plan US-001` | `.archetipo/plans/US-001-plan.yaml` | Produces the technical solution, ordered tasks, test strategy, and a `decisions/` ADR contract when the choice crosses the architectural threshold. |
 | 5. Code | `/archetipo-implement US-001` | Code, tests, generated Wiki/ADR updates | Executes the plan, attaches repository evidence to decisions, validates capability coverage, and moves the spec toward human approval. |
 | 6. Acceptance | `/archetipo-review US-001` | Verdict: `DONE` or rework feedback | Presents code and Wiki together, including ADR rationale, alternatives, consequences, and evidence, then executes the human verdict. |
 

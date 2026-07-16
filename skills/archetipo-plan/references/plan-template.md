@@ -105,7 +105,7 @@ wiki_impact:
 ```
 
 Use empty arrays when no impact is expected. This block is the reviewable documentation contract consumed by implementation and acceptance review.
-New domain pages use `domains.<slug>`. New architectural decisions use `decisions.<slug>` and must follow the `type: decision` contract in the Wiki skill.
+New domain pages use `domains/<slug>`. New architectural decisions use `decisions/<slug>` and must follow the `type: decision` contract in the Wiki skill.
 
 ---
 

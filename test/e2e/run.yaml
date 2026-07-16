@@ -68,9 +68,9 @@ scenarios:
       min_issues: 1
       required_pages:
         - overview
-        - architecture.context-map
-        - engineering.code-map
-        - operations.development
+        - architecture/context-map
+        - engineering/code-map
+        - operations/development
 
   # Wiki bootstrap preserves conflicting intent but describes implemented code as current state.
   wiki-bootstrap-prd-conflict:
@@ -84,9 +84,9 @@ scenarios:
       min_issues: 1
       required_pages:
         - overview
-        - architecture.context-map
-        - engineering.code-map
-        - operations.development
+        - architecture/context-map
+        - engineering/code-map
+        - operations/development
       page_assertions:
         overview:
           includes:

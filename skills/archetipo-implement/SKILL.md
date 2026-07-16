@@ -222,8 +222,8 @@ After code and tests are stable, fulfill the plan's complete `Wiki Impact` contr
 
 1. Run `archetipo wiki --project-root {data.workdir} affected` against the exact spec diff and union its page IDs with `wiki_impact.update_after_acceptance` and `wiki_impact.create`.
 2. Reset each materially changed reviewed page with `wiki reset` before editing it. Create every planned page at its canonical ID path. Leave all changed or created pages `status: generated` with no `review` metadata.
-3. For each planned `decisions.<slug>` creation, write a `type: decision` page with `decision_status: accepted`, repository evidence in `sources`, and meaningful `context`, `decision`, `alternatives`, `consequences`, and `verification` markers. Preserve the rationale and alternatives from the plan; do not reverse-engineer rationale from the finished code. When the plan supersedes an ADR, update the old decision status and reciprocal links exactly as planned.
-4. Update `engineering.code-map` coverage when the implementation introduces or removes an inspected capability candidate, even when no new domain page is warranted.
+3. For each planned `decisions/<slug>` creation, write a `type: decision` page with `decision_status: accepted`, repository evidence in `sources`, and meaningful `context`, `decision`, `alternatives`, `consequences`, and `verification` markers. Preserve the rationale and alternatives from the plan; do not reverse-engineer rationale from the finished code. When the plan supersedes an ADR, update the old decision status and standard Markdown links exactly as planned.
+4. Update `engineering/code-map` coverage when the implementation introduces or removes an inspected capability candidate, even when no new domain page is warranted.
 5. Run `wiki catalog`, then `wiki validate --profile bootstrap`. Repair all errors and coverage warnings caused by the spec. Do not approve pages here; acceptance review owns approval.
 
 #### Before code review

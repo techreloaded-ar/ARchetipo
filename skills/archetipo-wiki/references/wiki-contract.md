@@ -2,18 +2,15 @@
 
 ## Page format
 
-Ordinary pages live below `paths.wiki`, excluding `index.md`, `log.md`, and `sources/`. A stable ID maps to a path by replacing `.` with `/` and appending `.md`.
+Concept pages live below `paths.wiki`, excluding the reserved `index.md` and `log.md` files. Every concept is a UTF-8 Markdown file with YAML frontmatter. Its stable ID is its Wiki-relative path with the `.md` suffix removed: `domains/trips.md` has ID `domains/trips`. Every concept requires non-empty `type`, `title`, and `description` fields. Relationships use standard Markdown links: `/domains/trips.md` is bundle-relative, while `../domains/trips.md` is relative to the current page. Producer-defined frontmatter fields are allowed and must be preserved when a page is rewritten.
 
 ```markdown
 ---
-id: domains.trips
 type: domain
+title: Trips
+description: Trip lifecycle, stages, publication, and owned trip data
 classification: candidate
-summary: Trip lifecycle, stages, publication, and owned trip data
 status: generated
-links:
-  - id: architecture.context-map
-    relation: participates-in
 sources:
   - path: src/app/api/trips/[id]/publish/route.ts
     role: inbound-api
@@ -29,6 +26,10 @@ issues:
 
 <!-- archetipo:wiki section=purpose -->
 ...
+
+## Related concepts
+
+Trips participates in the [context map](/architecture/context-map.md).
 ```
 
 Allowed persisted statuses are only:
@@ -42,19 +43,20 @@ An issue is an approval blocker, so reserve it for a concrete contradiction, unr
 
 Delete replaced pages after updating links; Git is the history.
 
+`index.md` has no frontmatter. `archetipo wiki catalog` groups concepts under headings and writes entries as `* [Title](relative/path.md) - description`. `log.md` has no frontmatter; it starts with `# Wiki Update Log` and groups `* **Review**:` or `* **Update**:` entries below ISO date headings such as `## 2026-07-16`, newest first. The CLI is the sole writer for both reserved files; agents must not synthesize or reformat them. Validation reports `WIKI_LOG_FORMAT` for a malformed log.
+
+Optional project documents are normal `type: reference` concepts below `references/`. A reference requires `title`, `description`, `status: generated` until reviewed, and the original project-relative path in `sources` with `role: original`. Use `resource` only for a canonical URI. Preserve the source content in the body. Do not store frontmatter-free Markdown anywhere below `paths.wiki`.
+
 ## Architectural decisions
 
-Architectural Decision Records are ordinary Wiki pages with stable IDs under `decisions.*`, canonical paths under `decisions/`, and `type: decision`. The Wiki lifecycle `status` remains `generated` or `reviewed`; `decision_status` records the decision lifecycle and is either `accepted` or `superseded`.
+Architectural Decision Records are ordinary Wiki concepts with stable IDs under `decisions/` and `type: decision`. The Wiki lifecycle `status` remains `generated` or `reviewed`; `decision_status` records the decision lifecycle and is either `accepted` or `superseded`.
 
 ```yaml
-id: decisions.shared-rate-limit-store
 type: decision
+title: Shared rate-limit store
+description: Use a shared Redis-backed rate-limit store with an in-memory local fallback
 decision_status: accepted
-summary: Use a shared Redis-backed rate-limit store with an in-memory local fallback
 status: generated
-links:
-  - id: operations.development
-    relation: affects
 sources:
   - path: src/lib/rate-limiting/providers/RedisRateLimitStore.ts
     role: implementation
@@ -72,7 +74,7 @@ Every decision page contains meaningful content under these markers:
 <!-- archetipo:wiki section=verification -->
 ```
 
-The context states the forces and scope. The decision names the chosen option. Alternatives records at least one viable alternative and why it was not selected. Consequences includes positive and negative tradeoffs plus operational implications. Verification cites the implementation and tests/configuration that demonstrate adoption. Decision pages require repository evidence in `sources`; rationale comes from the planning decision, never from reverse-engineering implementation shape. A later choice that replaces an ADR sets the old page to `decision_status: superseded`, links it to the replacement, and creates or updates the new accepted decision page instead of deleting history.
+The context states the forces and scope. The decision names the chosen option. Alternatives records at least one viable alternative and why it was not selected. Consequences includes positive and negative tradeoffs plus operational implications. Verification cites the implementation and tests/configuration that demonstrate adoption. Decision pages require repository evidence in `sources`; rationale comes from the planning decision, never from reverse-engineering implementation shape. A later choice that replaces an ADR sets the old page to `decision_status: superseded`, links it to the replacement with a standard Markdown link, and creates or updates the new accepted decision page instead of deleting history.
 
 ## Domain and bounded-context model
 
@@ -98,9 +100,11 @@ The code section maps UI, inbound APIs, application/domain logic, owned data, in
 
 ## Context map and code map
 
-`architecture.context-map` is the logical DDD view. It contains:
+`architecture/context-map` is the logical DDD view. It contains:
 
-Its page type is `context-map`; `engineering.code-map` uses `code-map`, `overview` uses `overview`, and `operations.development` uses `operations`.
+Its page type is `context-map`; `engineering/code-map` uses `code-map`, `overview` uses `overview`, and `operations/development` uses `operations`.
+
+Every bootstrap core page must participate in the concept graph through a standard Markdown link to an existing Wiki concept or an incoming link from one. The bootstrap profile rejects an isolated core page with `WIKI_BOOTSTRAP_CORE_ORPHAN`.
 
 ```markdown
 <!-- archetipo:wiki section=contexts -->
@@ -114,7 +118,7 @@ Do not combine alternatives such as `Conformist/Shared Kernel`. Name one DDD rel
 
 Page bodies are plain Markdown. Model or tool protocol wrappers such as `<content>`, `</content>`, `<invoke>`, `</invoke>`, `<tool_use>`, and `<tool_result>` are invalid persisted content and produce `WIKI_PROTOCOL_ARTIFACT`.
 
-`engineering.code-map` is the physical crosswalk from domains to code. It contains:
+`engineering/code-map` is the physical crosswalk from domains to code. It contains:
 
 ```markdown
 <!-- archetipo:wiki section=domain-code -->
@@ -127,18 +131,18 @@ Its main table maps each domain to UI, entry points, application/domain code, ow
 
 ## Deterministic coverage
 
-`engineering.code-map` frontmatter represents every item returned by `wiki inspect`:
+`engineering/code-map` frontmatter represents every item returned by `wiki inspect`:
 
 ```yaml
 coverage:
   - kind: boundary
     path: src
     status: mapped
-    pages: [engineering.code-map]
+    pages: [engineering/code-map]
   - kind: capability
     path: trip
     status: mapped
-    pages: [domains.trips]
+    pages: [domains/trips]
   - kind: capability
     path: ui
     status: partial
@@ -161,13 +165,11 @@ All Wiki commands accept the persistent `--project-root <checkout>` flag. Spec i
 - `archetipo wiki inspect` → `kind: wiki_inspection_result`; content-free deterministic inventory including `data.boundaries`, `data.capability_candidates`, evidence categories, exclusions, uninspected areas, and optional `data.project_sources`.
 - `archetipo wiki status` → `kind: wiki_status`; derived state counts and page items plus findings.
 - `archetipo wiki validate [--profile bootstrap]` → `kind: validation_result`, `data.ok`, `data.pages`, `data.findings`. Bootstrap validation also requires core DDD pages and full boundary/capability coverage.
-- `archetipo wiki search [query] [--type TYPE] [--status STATE] [--include-sources]` → `kind: wiki_search_result` without page bodies.
+- `archetipo wiki search [query] [--type TYPE] [--status STATE]` → `kind: wiki_search_result` without page bodies.
 - `archetipo wiki affected [--base REV --head REV | --file PATH...]` → `kind: wiki_affected_result`.
 - `archetipo wiki catalog` → `kind: wiki_catalog_result`, `data.cataloged`; rebuilds navigation without changing review state.
 - `archetipo wiki reset <page-id...>` → `kind: wiki_reset_result`, `data.reset`; returns selected reviewed pages to generated and removes review metadata before semantic edits.
 - `archetipo wiki approve [page-id...]` → `kind: wiki_approve_result`, `data.approved`; marks issue-free generated pages reviewed and records review metadata.
-
-`wiki publish` is a deprecated compatibility alias for approving all generated pages. Skills use `approve` only.
 
 Relevant error codes:
 

@@ -1,7 +1,7 @@
 ---
-id: overview
 type: overview
-summary: Small repository used to verify joint code and Wiki acceptance
+title: Project overview
+description: Small repository used to verify joint code and Wiki acceptance
 status: generated
 sources:
   - path: hello.txt

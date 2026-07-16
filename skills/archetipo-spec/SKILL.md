@@ -34,7 +34,7 @@ Use this mode when:
 In this mode:
 1. Read this file
 2. Read `./references/backlog-bootstrap-flow.md`
-3. Read the Wiki index and use relevant canonical pages as the primary source. Use an archived PRD only when the Wiki is absent or explicitly incomplete.
+3. Read the Wiki index and use relevant canonical pages as the primary source. Use the PRD reference concept only when the Wiki is absent or explicitly incomplete.
 
 ### `mode: extend-backlog`
 

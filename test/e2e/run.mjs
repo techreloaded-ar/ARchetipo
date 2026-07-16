@@ -703,36 +703,38 @@ async function verifyWikiBootstrap(context, expectations) {
   assertQuality(validationResult?.data?.ok === true, `Wiki bootstrap findings: ${JSON.stringify(validationResult?.data?.findings ?? [])}`);
 
   const wikiRoot = path.join(context.sandboxDir, "docs", "wiki");
-  const requiredPages = expectations.required_pages ?? ["overview", "architecture.context-map", "engineering.code-map", "operations.development"];
+  const requiredPages = expectations.required_pages ?? ["overview", "architecture/context-map", "engineering/code-map", "operations/development"];
   const pages = new Map();
   for (const id of requiredPages) {
-    const pagePath = path.join(wikiRoot, `${id.replaceAll(".", path.sep)}.md`);
+    const pagePath = path.join(wikiRoot, `${id.split("/").join(path.sep)}.md`);
     const raw = await fs.readFile(pagePath, "utf8");
     const meta = parseWikiFrontmatter(raw, pagePath);
-    assertQuality(meta.id === id, `${pagePath} has unexpected id ${meta.id ?? "(missing)"}`);
+    assertQuality(typeof meta.type === "string" && meta.type.length > 0, `${pagePath} is missing type`);
+    assertQuality(typeof meta.title === "string" && meta.title.length > 0, `${pagePath} is missing title`);
+    assertQuality(typeof meta.description === "string" && meta.description.length > 0, `${pagePath} is missing description`);
     pages.set(id, { meta, raw, pagePath });
   }
 
   const allPagePaths = await listMarkdownFiles(wikiRoot);
   let pagesWithIssues = 0;
   for (const pagePath of allPagePaths) {
-    if (["index.md", "log.md"].includes(path.basename(pagePath)) || pagePath.includes(`${path.sep}sources${path.sep}`)) {
+    if (["index.md", "log.md"].includes(path.basename(pagePath))) {
       continue;
     }
     const raw = await fs.readFile(pagePath, "utf8");
     const meta = parseWikiFrontmatter(raw, pagePath);
     if (Array.isArray(meta.issues) && meta.issues.length > 0) pagesWithIssues += 1;
     if (expectations.forbid_reviewed) {
-      assertQuality(meta.status !== "reviewed", `${meta.id ?? pagePath} was approved during bootstrap`);
+      assertQuality(meta.status !== "reviewed", `${pagePath} was approved during bootstrap`);
     }
   }
   assertQuality(pagesWithIssues >= (expectations.min_issues ?? 0), `expected at least ${expectations.min_issues ?? 0} page(s) with issues, got ${pagesWithIssues}`);
 
-  const prdPath = path.join(wikiRoot, "sources", "prd.md");
+  const prdPath = path.join(wikiRoot, "references", "prd.md");
   let prdPresent = true;
   try { await fs.access(prdPath); } catch { prdPresent = false; }
   if (expectations.expect_prd !== undefined) {
-    assertQuality(prdPresent === expectations.expect_prd, `expected archived PRD presence=${expectations.expect_prd}, got ${prdPresent}`);
+    assertQuality(prdPresent === expectations.expect_prd, `expected PRD reference presence=${expectations.expect_prd}, got ${prdPresent}`);
   }
 
   for (const [id, assertion] of Object.entries(expectations.page_assertions ?? {})) {
@@ -757,7 +759,7 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
 
   const wikiRoot = path.join(context.sandboxDir, expectations.wiki_root ?? "docs/wiki");
   for (const id of expectations.reviewed_pages ?? []) {
-    const pagePath = path.join(wikiRoot, `${id.replaceAll(".", path.sep)}.md`);
+    const pagePath = path.join(wikiRoot, `${id.split("/").join(path.sep)}.md`);
     const meta = parseWikiFrontmatter(await fs.readFile(pagePath, "utf8"), pagePath);
     assertQuality(meta.status === "reviewed", `${id} expected status reviewed, got ${meta.status ?? "(missing)"}`);
     assertQuality(meta.review?.content_hash && meta.review?.evidence_revision && meta.review?.reviewed_at, `${id} is missing review metadata`);
@@ -766,6 +768,20 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
     assertQuality(committed.ok, `${id} review metadata was not committed on the integrated branch`);
     const committedMeta = parseWikiFrontmatter(committed.stdout, `${rel}@HEAD`);
     assertQuality(committedMeta.status === "reviewed", `${id} is reviewed in the working tree but not in HEAD`);
+  }
+
+  const requiredCatalogFiles = ["index.md", "log.md"];
+  for (const filename of requiredCatalogFiles) {
+    const filePath = path.join(wikiRoot, filename);
+    const raw = await fs.readFile(filePath, "utf8");
+    const rel = path.relative(context.sandboxDir, filePath);
+    const committed = await runProbe("git", ["show", `HEAD:${rel}`], { cwd: context.sandboxDir });
+    assertQuality(committed.ok, `${filename} was not committed on the integrated branch`);
+    if (filename === "log.md") {
+      assertQuality(/^## \d{4}-\d{2}-\d{2}$/m.test(raw), "Wiki log has no ISO date heading");
+      assertQuality(/^\* \*\*Review\*\*:/m.test(raw), "Wiki log has no Review entry");
+      assertQuality(/^\* \*\*Review\*\*:/m.test(committed.stdout), "Wiki Review entry is not present in HEAD");
+    }
   }
 
   const validation = await runReportedCommand({
@@ -784,6 +800,9 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
   if (expectations.require_clean) {
     const status = await runProbe("git", ["status", "--short", "--untracked-files=no"], { cwd: context.sandboxDir });
     assertQuality(status.ok && status.stdout.trim() === "", `review left tracked changes in the integrated checkout: ${status.stdout || status.stderr}`);
+    const wikiRel = path.relative(context.sandboxDir, wikiRoot);
+    const wikiStatus = await runProbe("git", ["status", "--short", "--", wikiRel], { cwd: context.sandboxDir });
+    assertQuality(wikiStatus.ok && wikiStatus.stdout.trim() === "", `review left committed or untracked Wiki changes in the integrated checkout: ${wikiStatus.stdout || wikiStatus.stderr}`);
   }
 }
 

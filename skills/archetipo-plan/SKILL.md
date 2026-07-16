@@ -150,7 +150,7 @@ Create or update an ADR when the plan chooses between at least two viable altern
 For every qualifying choice:
 
 1. Search existing `type: decision` pages and reuse the stable ID when the decision already exists. Put that ID in `wiki_impact.update_after_acceptance` when the choice clarifies, extends, or supersedes it.
-2. Otherwise choose a specific `decisions.<slug>` ID and put it in `wiki_impact.create`. Never omit the page because the Wiki previously lacked an ADR type: `type: decision` is part of the Wiki contract.
+2. Otherwise choose a specific `decisions/<slug>` concept ID and put it in `wiki_impact.create`. Never omit the page because the Wiki previously lacked an ADR type: `type: decision` is part of the Wiki contract.
 3. Include context, chosen option, viable alternatives, tradeoffs, and verification intent in the technical solution. Add an implementation task whose completion criteria require the generated ADR page, its repository evidence, and all decision section markers.
 4. If a new choice replaces an existing ADR, update the old page to `decision_status: superseded`, link it to the new accepted decision, and include both IDs in the Wiki impact contract.
 

@@ -80,6 +80,8 @@ Dopo l'inizializzazione, usa le skill `/archetipo-*` dentro il tuo AI coding age
 
 ARchetipo implementa uno Spec-Driven Development supportato dalla Wiki: la conoscenza viva guida ogni incremento e viene aggiornata attraverso `spec -> plan -> implement -> review`.
 
+La Wiki viva usa una struttura Markdown conforme all'[Open Knowledge Format (OKF)](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
+
 ```mermaid
 flowchart LR
     I["<b>Inception</b><br/><i>PRD temporaneo</i>"] --> W["<b>Wiki viva</b><br/><i>docs/wiki/</i>"]
@@ -99,7 +101,7 @@ flowchart LR
 
 | Step | Skill | Output | Cosa succede |
 |---|---|---|---|
-| 1. Discovery | `/archetipo-inception` | `docs/wiki/` | Produce un PRD temporaneo, lo compila in conoscenza viva e lo archivia come fonte. |
+| 1. Discovery | `/archetipo-inception` | `docs/wiki/` | Produce un PRD temporaneo, lo compila in conoscenza viva e lo conserva come concept in `references/`. |
 | 2. Concept visivo, opzionale | `/archetipo-design` | `docs/mockups/` | Crea mockup HTML/CSS isolati senza toccare il codice applicativo. |
 | 3. Backlog | `/archetipo-spec` | `.archetipo/backlog.yaml`, `.archetipo/specs/` | Carica le pagine Wiki pertinenti e crea o estende user story INVEST-compliant. |
 | 4. Planning | `/archetipo-plan US-001` | `.archetipo/plans/US-001-plan.yaml` | Produce soluzione tecnica, task ordinati, dipendenze e strategia di test. |

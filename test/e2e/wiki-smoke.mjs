@@ -30,9 +30,9 @@ try {
   const pageDir = join(sandbox, "docs", "wiki", "architecture");
   mkdirSync(pageDir, { recursive: true });
   writeFileSync(join(pageDir, "runtime.md"), `---
-id: architecture.runtime
 type: architecture
-summary: Runtime boundaries
+title: Runtime
+description: Runtime boundaries
 status: generated
 ---
 # Runtime
@@ -40,10 +40,10 @@ status: generated
   const decisionDir = join(sandbox, "docs", "wiki", "decisions");
   mkdirSync(decisionDir, { recursive: true });
   writeFileSync(join(decisionDir, "shared-runtime.md"), `---
-id: decisions.shared-runtime
 type: decision
 decision_status: accepted
-summary: Use one shared runtime implementation
+title: Shared runtime
+description: Use one shared runtime implementation
 status: generated
 sources:
   - path: src/index.ts
@@ -72,10 +72,10 @@ The exported runtime and its tests verify adoption.
   assert.equal(run(["wiki", "search", "runtime", "--type", "decision"]).data.count, 1);
   assert.equal(run(["wiki", "catalog"]).data.cataloged, 2);
   assert.match(readFileSync(join(pageDir, "runtime.md"), "utf8"), /status: generated/);
-  assert.match(readFileSync(join(sandbox, "docs", "wiki", "index.md"), "utf8"), /\| generated \|/);
-  assert.equal(run(["wiki", "approve", "architecture.runtime", "decisions.shared-runtime"]).data.approved, 2);
+  assert.match(readFileSync(join(sandbox, "docs", "wiki", "index.md"), "utf8"), /\[Runtime\]\(architecture\/runtime\.md\)/);
+  assert.equal(run(["wiki", "approve", "architecture/runtime", "decisions/shared-runtime"]).data.approved, 2);
   assert.match(readFileSync(join(pageDir, "runtime.md"), "utf8"), /status: reviewed/);
-  assert.match(readFileSync(join(sandbox, "docs", "wiki", "index.md"), "utf8"), /architecture\.runtime/);
+  assert.match(readFileSync(join(sandbox, "docs", "wiki", "index.md"), "utf8"), /architecture\/runtime\.md/);
   console.log("wiki smoke: pass");
 } finally {
   rmSync(sandbox, { recursive: true, force: true });
