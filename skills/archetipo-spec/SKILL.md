@@ -64,8 +64,6 @@ Extract and keep available from `data`:
 - `connector`
 - `paths.prd`
 - `paths.wiki`
-- `paths.backlog`
-- `paths.planning`
 - `paths.mockups`
 - `workflow.statuses`
 

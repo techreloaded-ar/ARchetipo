@@ -826,9 +826,9 @@ async function listMarkdownFiles(root) {
 }
 
 async function verifySpecArtifacts(context) {
-  const backlogPath = path.join(context.sandboxDir, ".archetipo", "backlog.yaml");
-  const backlog = YAML.parse(await fs.readFile(backlogPath, "utf8"));
-  assertQuality(backlog?.schema === "archetipo/backlog/v2", "backlog.yaml has unexpected schema");
+  const backlogPath = path.join(context.sandboxDir, "docs", "wiki", "backlog", "overview.md");
+  const backlog = parseWikiFrontmatter(await fs.readFile(backlogPath, "utf8"), backlogPath);
+  assertQuality(backlog?.schema === "archetipo/backlog-wiki/v1", "Wiki backlog has unexpected schema");
   assertQuality(Array.isArray(backlog?.order) && backlog.order.length > 0, "backlog has no spec order");
 
   const seen = new Set();
@@ -836,29 +836,34 @@ async function verifySpecArtifacts(context) {
     assertQuality(/^US-\d{3,}$/.test(code), `invalid spec code in backlog order: ${code}`);
     assertQuality(!seen.has(code), `duplicate spec code in backlog order: ${code}`);
     seen.add(code);
-    const specPath = path.join(context.sandboxDir, ".archetipo", "specs", `${code}.yaml`);
-    const spec = YAML.parse(await fs.readFile(specPath, "utf8"));
-    assertQuality(spec?.schema === "archetipo/spec/v2", `${code} has unexpected schema`);
+    const specPath = path.join(context.sandboxDir, "docs", "wiki", "backlog", "specs", `${code}.md`);
+    const raw = await fs.readFile(specPath, "utf8");
+    const spec = parseWikiFrontmatter(raw, specPath);
+    assertQuality(spec?.schema === "archetipo/spec-wiki/v1", `${code} has unexpected schema`);
     assertQuality(spec?.epic?.code && /^EP-\d{3,}$/.test(spec.epic.code), `${code} has invalid epic`);
     assertQuality(["HIGH", "MEDIUM", "LOW"].includes(spec?.priority), `${code} has invalid priority`);
     assertQuality(Number(spec?.points) > 0, `${code} has invalid points`);
-    const body = String(spec?.body ?? "");
+    const body = String(raw.split("<!-- archetipo:spec-body -->")[1]?.split("<!-- archetipo:spec-links -->")[0] ?? "");
     assertQuality(/demonstr|dimostra/i.test(body), `${code} is missing Demonstrates/Dimostra`);
     assertQuality(body.includes("- [ ]"), `${code} is missing checklist acceptance criteria`);
   }
+  const legacyBacklog = path.join(context.sandboxDir, ".archetipo", "backlog.yaml");
+  assertQuality(!(await fileExists(legacyBacklog)), "legacy .archetipo/backlog.yaml still exists after Wiki persistence");
 }
 
 async function verifyPlanArtifacts(context) {
-  const planDir = path.join(context.sandboxDir, ".archetipo", "plans");
+  const planDir = path.join(context.sandboxDir, "docs", "wiki", "backlog", "plans");
   const entries = await fs.readdir(planDir);
-  const plans = entries.filter((name) => name.endsWith("-plan.yaml")).sort();
-  assertQuality(plans.length > 0, "no plan YAML files generated");
+  const plans = entries.filter((name) => name.endsWith(".md")).sort();
+  assertQuality(plans.length > 0, "no plan Wiki pages generated");
   for (const name of plans) {
     const planPath = path.join(planDir, name);
-    const plan = YAML.parse(await fs.readFile(planPath, "utf8"));
-    assertQuality(plan?.schema === "archetipo/plan/v2", `${name} has unexpected schema`);
+    const raw = await fs.readFile(planPath, "utf8");
+    const plan = parseWikiFrontmatter(raw, planPath);
+    assertQuality(plan?.schema === "archetipo/plan-wiki/v1", `${name} has unexpected schema`);
     assertQuality(/^US-\d{3,}$/.test(plan?.spec_code ?? ""), `${name} has invalid spec_code`);
-    assertQuality(String(plan?.body ?? "").trim().length > 0, `${name} has empty body`);
+    const body = String(raw.split("<!-- archetipo:plan-body -->")[1]?.split("<!-- archetipo:plan-tasks -->")[0] ?? "");
+    assertQuality(body.trim().length > 0, `${name} has empty body`);
     const tasks = plan?.tasks ?? [];
     assertQuality(Array.isArray(tasks) && tasks.length > 0, `${name} has no tasks`);
     assertQuality(tasks.some((task) => task?.type === "Test"), `${name} has no Test task`);
@@ -873,6 +878,16 @@ async function verifyPlanArtifacts(context) {
         assertQuality(ids.has(dep), `${name} ${task.id} depends on unknown or future task ${dep}`);
       }
     }
+  }
+  assertQuality(!(await fileExists(path.join(context.sandboxDir, ".archetipo", "plans"))), "legacy .archetipo/plans still exists after Wiki persistence");
+}
+
+async function fileExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
   }
 }
 

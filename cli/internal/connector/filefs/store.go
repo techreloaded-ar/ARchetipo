@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -14,12 +15,23 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/wiki"
 )
 
 const (
-	backlogSchema = "archetipo/backlog/v2"
-	specSchema    = "archetipo/spec/v2"
-	planSchema    = "archetipo/plan/v2"
+	backlogSchema     = "archetipo/backlog/v2"
+	specSchema        = "archetipo/spec/v2"
+	planSchema        = "archetipo/plan/v2"
+	wikiBacklogSchema = "archetipo/backlog-wiki/v1"
+	wikiSpecSchema    = "archetipo/spec-wiki/v1"
+	wikiPlanSchema    = "archetipo/plan-wiki/v1"
+)
+
+const (
+	specBodyMarker  = "<!-- archetipo:spec-body -->"
+	specLinksMarker = "<!-- archetipo:spec-links -->"
+	planBodyMarker  = "<!-- archetipo:plan-body -->"
+	planTasksMarker = "<!-- archetipo:plan-tasks -->"
 )
 
 type backlogDoc struct {
@@ -89,41 +101,120 @@ type planDoc struct {
 	Tasks    []domain.Task `yaml:"tasks"`
 }
 
+// The file connector persists its canonical state as ordinary Wiki pages.
+// Knowledge lifecycle (status/review) and delivery workflow (workflow_status)
+// intentionally remain separate so that a spec can move through the board
+// without overloading Wiki review semantics.
+type wikiBacklogMeta struct {
+	Type        string            `yaml:"type"`
+	Title       string            `yaml:"title"`
+	Description string            `yaml:"description"`
+	Status      domain.WikiStatus `yaml:"status"`
+	Schema      string            `yaml:"schema"`
+	Version     int               `yaml:"version"`
+	Epics       []domain.Epic     `yaml:"epics,omitempty"`
+	Order       []string          `yaml:"order"`
+}
+
+type wikiSpecMeta struct {
+	Type           string                `yaml:"type"`
+	Title          string                `yaml:"title"`
+	Description    string                `yaml:"description"`
+	Status         domain.WikiStatus     `yaml:"status"`
+	Schema         string                `yaml:"schema"`
+	Code           string                `yaml:"code"`
+	Epic           specEpicDoc           `yaml:"epic,omitempty"`
+	Priority       domain.Priority       `yaml:"priority"`
+	Points         int                   `yaml:"points"`
+	WorkflowStatus domain.Status         `yaml:"workflow_status"`
+	BlockedBy      []string              `yaml:"blocked_by,omitempty"`
+	Scope          domain.Scope          `yaml:"scope,omitempty"`
+	Branch         string                `yaml:"branch,omitempty"`
+	Worktree       string                `yaml:"worktree,omitempty"`
+	ForkBase       string                `yaml:"fork_base,omitempty"`
+	Rework         bool                  `yaml:"rework,omitempty"`
+	History        []domain.StatusChange `yaml:"history,omitempty"`
+}
+
+type wikiPlanMeta struct {
+	Type        string            `yaml:"type"`
+	Title       string            `yaml:"title"`
+	Description string            `yaml:"description"`
+	Status      domain.WikiStatus `yaml:"status"`
+	Schema      string            `yaml:"schema"`
+	SpecCode    string            `yaml:"spec_code"`
+	Tasks       []domain.Task     `yaml:"tasks"`
+}
+
 type yamlStore struct {
 	Backlog backlogDoc
 	Specs   map[string]domain.Spec
 }
 
 func (c *Connector) backlogPath() string {
-	return c.cfg.AbsPath(c.cfg.File.Backlog)
+	return filepath.Join(c.wikiBacklogDir(), "overview.md")
 }
 
 func (c *Connector) specsDir() string {
-	return filepath.Join(filepath.Dir(c.backlogPath()), "specs")
+	return filepath.Join(c.wikiBacklogDir(), "specs")
 }
 
 func (c *Connector) planPath(specRef string) string {
-	return filepath.Join(c.cfg.AbsPath(c.cfg.File.Planning), specRef+"-plan.yaml")
+	return filepath.Join(c.wikiBacklogDir(), "plans", specRef+".md")
 }
 
 func (c *Connector) specPath(specCode string) string {
-	return filepath.Join(c.specsDir(), specCode+".yaml")
+	return filepath.Join(c.specsDir(), specCode+".md")
+}
+
+func (c *Connector) wikiRoot() string       { return c.cfg.AbsPath(c.cfg.Paths.Wiki) }
+func (c *Connector) wikiBacklogDir() string { return filepath.Join(c.wikiRoot(), "backlog") }
+
+func (c *Connector) legacyYAMLBacklogPath() string { return c.cfg.AbsPath(c.cfg.File.Backlog) }
+func (c *Connector) legacyYAMLSpecsDir() string {
+	return filepath.Join(filepath.Dir(c.legacyYAMLBacklogPath()), "specs")
+}
+func (c *Connector) legacyYAMLPlanPath(specCode string) string {
+	return filepath.Join(c.cfg.AbsPath(c.cfg.File.Planning), specCode+"-plan.yaml")
 }
 
 func (c *Connector) loadStore() (yamlStore, error) {
+	store, err := c.loadWikiStore()
+	if err == nil {
+		return store, nil
+	}
+	var ce *iox.CodedError
+	if !errors.As(err, &ce) || ce.Code != iox.CodePreconditionMissing {
+		return yamlStore{}, err
+	}
+	return c.loadYAMLStore()
+}
+
+func (c *Connector) loadWikiStore() (yamlStore, error) {
 	path := c.backlogPath()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return c.loadLegacyStore()
+			return yamlStore{}, iox.NewPrecondition(
+				fmt.Sprintf("Wiki backlog not found at %s", path),
+				"run `archetipo spec add` or `archetipo-spec` first", errBacklogMissing,
+			)
 		}
-		return yamlStore{}, fmt.Errorf("reading backlog store: %w", err)
+		return yamlStore{}, fmt.Errorf("reading Wiki backlog: %w", err)
 	}
-	var backlog backlogDoc
-	if err := yaml.Unmarshal(raw, &backlog); err != nil {
-		return yamlStore{}, iox.NewInvalidInput("invalid backlog YAML", "check .archetipo/backlog.yaml", err)
+	frontmatter, _, err := splitWikiPage(raw)
+	if err != nil {
+		return yamlStore{}, iox.NewInvalidInput("invalid Wiki backlog page", "check docs/wiki/backlog/overview.md", err)
 	}
-	specs, err := c.readSpecDocs(backlog.Epics)
+	var meta wikiBacklogMeta
+	if err := yaml.Unmarshal(frontmatter, &meta); err != nil {
+		return yamlStore{}, iox.NewInvalidInput("invalid Wiki backlog frontmatter", "check docs/wiki/backlog/overview.md", err)
+	}
+	if meta.Schema != wikiBacklogSchema {
+		return yamlStore{}, iox.NewInvalidInput("unsupported Wiki backlog schema", "expected "+wikiBacklogSchema, nil)
+	}
+	backlog := backlogDoc{Schema: backlogSchema, Version: 2, Epics: meta.Epics, Order: meta.Order}
+	specs, err := c.readWikiSpecDocs(backlog.Epics)
 	if err != nil {
 		return yamlStore{}, err
 	}
@@ -131,7 +222,7 @@ func (c *Connector) loadStore() (yamlStore, error) {
 	return yamlStore{Backlog: backlog, Specs: specs}, nil
 }
 
-func (c *Connector) readSpecDocs(epics []domain.Epic) (map[string]domain.Spec, error) {
+func (c *Connector) readWikiSpecDocs(epics []domain.Epic) (map[string]domain.Spec, error) {
 	dir := c.specsDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -149,7 +240,7 @@ func (c *Connector) readSpecDocs(epics []domain.Epic) (map[string]domain.Spec, e
 	}
 	out := make(map[string]domain.Spec, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
@@ -157,9 +248,86 @@ func (c *Connector) readSpecDocs(epics []domain.Epic) (map[string]domain.Spec, e
 		if err != nil {
 			return nil, fmt.Errorf("reading spec file %s: %w", path, err)
 		}
+		frontmatter, body, err := splitWikiPage(raw)
+		if err != nil {
+			return nil, iox.NewInvalidInput(fmt.Sprintf("invalid spec Wiki page at %s", path), "", err)
+		}
+		var meta wikiSpecMeta
+		if err := yaml.Unmarshal(frontmatter, &meta); err != nil {
+			return nil, iox.NewInvalidInput(fmt.Sprintf("invalid spec Wiki frontmatter at %s", path), "", err)
+		}
+		if meta.Schema != wikiSpecSchema {
+			continue
+		}
+		sp := domain.Spec{
+			Code: meta.Code, Title: strings.TrimPrefix(meta.Title, meta.Code+": "),
+			Epic:     domain.Epic{Code: meta.Epic.Code, Title: meta.Epic.Title},
+			Priority: meta.Priority, Points: meta.Points, Status: meta.WorkflowStatus,
+			BlockedBy: meta.BlockedBy, Scope: meta.Scope, Branch: meta.Branch,
+			Worktree: meta.Worktree, ForkBase: meta.ForkBase, Rework: meta.Rework,
+			History: meta.History, Body: markerContent(body, specBodyMarker, specLinksMarker),
+		}
+		if sp.Code == "" {
+			sp.Code = strings.TrimSuffix(entry.Name(), ".md")
+		}
+		if sp.Epic.Code != "" && sp.Epic.Title == "" {
+			sp.Epic.Title = epicTitles[sp.Epic.Code]
+		}
+		if sp.Ref == "" {
+			sp.Ref = sp.Code
+		}
+		out[sp.Code] = sp
+	}
+	return out, nil
+}
+
+func (c *Connector) loadYAMLStore() (yamlStore, error) {
+	path := c.legacyYAMLBacklogPath()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return c.loadLegacyStore()
+		}
+		return yamlStore{}, fmt.Errorf("reading legacy backlog store: %w", err)
+	}
+	var backlog backlogDoc
+	if err := yaml.Unmarshal(raw, &backlog); err != nil {
+		return yamlStore{}, iox.NewInvalidInput("invalid legacy backlog YAML", "check "+path, err)
+	}
+	specs, err := c.readYAMLSpecDocs(backlog.Epics)
+	if err != nil {
+		return yamlStore{}, err
+	}
+	backlog = c.normalizeBacklog(backlog, specs)
+	return yamlStore{Backlog: backlog, Specs: specs}, nil
+}
+
+func (c *Connector) readYAMLSpecDocs(epics []domain.Epic) (map[string]domain.Spec, error) {
+	dir := c.legacyYAMLSpecsDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return map[string]domain.Spec{}, nil
+		}
+		return nil, fmt.Errorf("reading legacy specs dir: %w", err)
+	}
+	epicTitles := make(map[string]string, len(epics))
+	for _, epic := range epics {
+		epicTitles[epic.Code] = epic.Title
+	}
+	out := make(map[string]domain.Spec, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
 		var doc specDoc
 		if err := yaml.Unmarshal(raw, &doc); err != nil {
-			return nil, iox.NewInvalidInput(fmt.Sprintf("invalid spec YAML at %s", path), "", err)
+			return nil, iox.NewInvalidInput("invalid legacy spec YAML at "+path, "", err)
 		}
 		sp := doc.toSpec()
 		if sp.Code == "" {
@@ -181,13 +349,46 @@ func (c *Connector) readPlan(specCode string) (planDoc, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
+			return c.readYAMLPlan(specCode)
+		}
+		return planDoc{}, fmt.Errorf("reading Wiki plan page: %w", err)
+	}
+	frontmatter, body, err := splitWikiPage(raw)
+	if err != nil {
+		return planDoc{}, iox.NewInvalidInput("invalid Wiki plan page at "+path, "", err)
+	}
+	var meta wikiPlanMeta
+	if err := yaml.Unmarshal(frontmatter, &meta); err != nil {
+		return planDoc{}, iox.NewInvalidInput(fmt.Sprintf("invalid Wiki plan frontmatter at %s", path), "", err)
+	}
+	if meta.Schema != wikiPlanSchema {
+		return planDoc{}, iox.NewInvalidInput("unsupported Wiki plan schema", "expected "+wikiPlanSchema, nil)
+	}
+	doc := planDoc{Schema: planSchema, SpecCode: meta.SpecCode, Body: markerContent(body, planBodyMarker, planTasksMarker), Tasks: meta.Tasks}
+	if doc.SpecCode == "" {
+		doc.SpecCode = specCode
+	}
+	for i := range doc.Tasks {
+		if doc.Tasks[i].Ref == "" {
+			doc.Tasks[i].Ref = doc.Tasks[i].ID
+		}
+	}
+	domain.NormalizeTaskBodies(doc.Tasks)
+	return doc, nil
+}
+
+func (c *Connector) readYAMLPlan(specCode string) (planDoc, error) {
+	path := c.legacyYAMLPlanPath(specCode)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			return c.readLegacyPlan(specCode)
 		}
-		return planDoc{}, fmt.Errorf("reading plan file: %w", err)
+		return planDoc{}, fmt.Errorf("reading legacy plan YAML: %w", err)
 	}
 	var doc planDoc
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return planDoc{}, iox.NewInvalidInput(fmt.Sprintf("invalid plan YAML at %s", path), "", err)
+		return planDoc{}, iox.NewInvalidInput("invalid legacy plan YAML at "+path, "", err)
 	}
 	if doc.SpecCode == "" {
 		doc.SpecCode = specCode
@@ -280,40 +481,97 @@ func (c *Connector) legacyPlanningDir() string {
 
 func (c *Connector) writeStore(store yamlStore) error {
 	store.Backlog = c.normalizeBacklog(store.Backlog, store.Specs)
-	if err := writeYAML(c.backlogPath(), store.Backlog); err != nil {
+	if err := c.ensureWiki(); err != nil {
 		return err
 	}
-	for code, spec := range store.Specs {
-		doc := specDocFromSpec(spec)
-		doc.Schema = specSchema
-		doc.Ref = ""
-		doc.URL = ""
-		if err := writeYAML(c.specPath(code), doc); err != nil {
+	if err := writeWikiPage(c.backlogPath(), wikiBacklogMeta{
+		Type: "backlog", Title: "Backlog", Description: "Delivery backlog and canonical specification index",
+		Status: domain.WikiStatusGenerated, Schema: wikiBacklogSchema, Version: 1,
+		Epics: store.Backlog.Epics, Order: store.Backlog.Order,
+	}, renderBacklogWikiBody(store)); err != nil {
+		return err
+	}
+	for _, code := range store.Backlog.Order {
+		spec, ok := store.Specs[code]
+		if !ok {
+			continue
+		}
+		if err := writeWikiPage(c.specPath(code), wikiSpecMetaFromSpec(spec), renderSpecWikiBody(spec)); err != nil {
 			return err
 		}
 	}
-	return nil
+	if err := c.migrateLegacyPlans(store); err != nil {
+		return err
+	}
+	if err := wiki.RefreshCatalog(c.cfg.ProjectRoot, c.wikiRoot()); err != nil {
+		return err
+	}
+	return c.cleanupLegacyArtifacts(store)
 }
 
-func specDocFromSpec(spec domain.Spec) specDoc {
-	return specDoc{
-		Code:      spec.Code,
-		Title:     spec.Title,
-		Epic:      specEpicDoc{Code: spec.Epic.Code, Title: spec.Epic.Title},
-		Priority:  spec.Priority,
-		Points:    spec.Points,
-		Status:    spec.Status,
-		BlockedBy: spec.BlockedBy,
-		Scope:     spec.Scope,
-		Body:      spec.Body,
-		Ref:       spec.Ref,
-		URL:       spec.URL,
-		Branch:    spec.Branch,
-		Worktree:  spec.Worktree,
-		ForkBase:  spec.ForkBase,
-		Rework:    spec.Rework,
-		History:   spec.History,
+func (c *Connector) ensureWiki() error {
+	_, err := wiki.Init(c.wikiRoot())
+	return err
+}
+
+func wikiSpecMetaFromSpec(spec domain.Spec) wikiSpecMeta {
+	return wikiSpecMeta{
+		Type: "spec", Title: spec.Code + ": " + spec.Title,
+		Description: "Delivery specification " + spec.Code,
+		Status:      domain.WikiStatusGenerated, Schema: wikiSpecSchema,
+		Code: spec.Code, Epic: specEpicDoc{Code: spec.Epic.Code, Title: spec.Epic.Title},
+		Priority: spec.Priority, Points: spec.Points, WorkflowStatus: spec.Status,
+		BlockedBy: spec.BlockedBy, Scope: spec.Scope, Branch: spec.Branch,
+		Worktree: spec.Worktree, ForkBase: spec.ForkBase, Rework: spec.Rework,
+		History: spec.History,
 	}
+}
+
+func renderBacklogWikiBody(store yamlStore) string {
+	var b strings.Builder
+	b.WriteString("# Backlog\n\n")
+	b.WriteString("This page is the canonical delivery index managed by `archetipo`.\n")
+	if len(store.Backlog.Order) == 0 {
+		return b.String()
+	}
+	linked := map[string]bool{}
+	for _, epic := range store.Backlog.Epics {
+		fmt.Fprintf(&b, "\n## %s: %s\n\n", epic.Code, epic.Title)
+		for _, code := range store.Backlog.Order {
+			spec, ok := store.Specs[code]
+			if !ok || spec.Epic.Code != epic.Code {
+				continue
+			}
+			linked[code] = true
+			fmt.Fprintf(&b, "- [%s: %s](specs/%s.md) — **%s**, %d point(s)", spec.Code, spec.Title, spec.Code, spec.Status, spec.Points)
+			b.WriteString(".\n")
+		}
+	}
+	if len(linked) != len(store.Specs) {
+		b.WriteString("\n## Unassigned\n\n")
+		for _, code := range store.Backlog.Order {
+			if linked[code] {
+				continue
+			}
+			spec, ok := store.Specs[code]
+			if !ok {
+				continue
+			}
+			fmt.Fprintf(&b, "- [%s: %s](specs/%s.md) — **%s**, %d point(s).\n", spec.Code, spec.Title, spec.Code, spec.Status, spec.Points)
+		}
+	}
+	return b.String()
+}
+
+func renderSpecWikiBody(spec domain.Spec) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s: %s\n\n%s\n\n", spec.Code, spec.Title, specBodyMarker)
+	if body := strings.TrimSpace(spec.Body); body != "" {
+		b.WriteString(body + "\n\n")
+	}
+	b.WriteString(specLinksMarker + "\n\n## Related\n\n")
+	b.WriteString("- [Backlog](../overview.md)\n")
+	return b.String()
 }
 
 func (d specDoc) toSpec() domain.Spec {
@@ -339,16 +597,165 @@ func (d specDoc) toSpec() domain.Spec {
 
 func (c *Connector) writePlan(specCode string, plan domain.PlanInput) error {
 	domain.NormalizePlanInput(&plan)
-	doc := planDoc{
-		Schema:   planSchema,
-		SpecCode: specCode,
-		Body:     plan.PlanBody,
-		Tasks:    append([]domain.Task(nil), plan.Tasks...),
+	if err := c.ensureWiki(); err != nil {
+		return err
 	}
-	for i := range doc.Tasks {
-		doc.Tasks[i].Ref = ""
+	tasks := append([]domain.Task(nil), plan.Tasks...)
+	for i := range tasks {
+		tasks[i].Ref = ""
 	}
-	return writeYAML(c.planPath(specCode), doc)
+	meta := wikiPlanMeta{
+		Type: "plan", Title: "Plan for " + specCode,
+		Description: "Implementation plan and executable tasks for " + specCode,
+		Status:      domain.WikiStatusGenerated, Schema: wikiPlanSchema,
+		SpecCode: specCode, Tasks: tasks,
+	}
+	if err := writeWikiPage(c.planPath(specCode), meta, renderPlanWikiBody(specCode, plan.PlanBody, tasks)); err != nil {
+		return err
+	}
+	return wiki.RefreshCatalog(c.cfg.ProjectRoot, c.wikiRoot())
+}
+
+func renderPlanWikiBody(specCode, planBody string, tasks []domain.Task) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Plan for %s\n\n%s\n\n", specCode, planBodyMarker)
+	if body := strings.TrimSpace(planBody); body != "" {
+		b.WriteString(body + "\n\n")
+	}
+	b.WriteString(planTasksMarker + "\n\n## Implementation tasks\n")
+	for _, task := range tasks {
+		fmt.Fprintf(&b, "\n### %s: %s\n\n", task.ID, task.Title)
+		fmt.Fprintf(&b, "- **Status:** %s\n- **Type:** %s\n", task.Status, task.Type)
+		if len(task.Dependencies) > 0 {
+			fmt.Fprintf(&b, "- **Dependencies:** %s\n", strings.Join(task.Dependencies, ", "))
+		}
+		content := strings.TrimSpace(task.Body)
+		if content == "" {
+			content = strings.TrimSpace(task.Description)
+		}
+		if content != "" {
+			b.WriteString("\n" + content + "\n")
+		}
+	}
+	b.WriteString("\n## Related\n\n")
+	fmt.Fprintf(&b, "- [Specification](../specs/%s.md)\n- [Backlog](../overview.md)\n", specCode)
+	return b.String()
+}
+
+func writeWikiPage(path string, meta any, body string) error {
+	frontmatter, err := yaml.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("encoding Wiki frontmatter: %w", err)
+	}
+	desiredBody := strings.TrimLeft(body, "\n")
+	if raw, readErr := os.ReadFile(path); readErr == nil {
+		existingFrontmatter, existingBody, splitErr := splitWikiPage(raw)
+		if splitErr == nil && sameManagedWikiContent(existingFrontmatter, frontmatter, existingBody, desiredBody) {
+			return nil
+		}
+	}
+	return atomicWriteFile(path, []byte("---\n"+string(frontmatter)+"---\n"+desiredBody))
+}
+
+func sameManagedWikiContent(existing, desired []byte, existingBody, desiredBody string) bool {
+	var existingMeta, desiredMeta map[string]any
+	if yaml.Unmarshal(existing, &existingMeta) != nil || yaml.Unmarshal(desired, &desiredMeta) != nil {
+		return false
+	}
+	delete(existingMeta, "status")
+	delete(existingMeta, "review")
+	delete(desiredMeta, "status")
+	delete(desiredMeta, "review")
+	return reflect.DeepEqual(existingMeta, desiredMeta) && strings.TrimSpace(existingBody) == strings.TrimSpace(desiredBody)
+}
+
+func splitWikiPage(raw []byte) ([]byte, string, error) {
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	if !strings.HasPrefix(text, "---\n") {
+		return nil, "", errors.New("missing YAML frontmatter")
+	}
+	rest := text[4:]
+	end := strings.Index(rest, "\n---\n")
+	if end < 0 {
+		return nil, "", errors.New("unterminated YAML frontmatter")
+	}
+	return []byte(rest[:end]), rest[end+5:], nil
+}
+
+func markerContent(body, startMarker, endMarker string) string {
+	start := strings.Index(body, startMarker)
+	if start < 0 {
+		return strings.TrimSpace(body)
+	}
+	content := body[start+len(startMarker):]
+	if end := strings.Index(content, endMarker); end >= 0 {
+		content = content[:end]
+	}
+	return strings.TrimSpace(content)
+}
+
+func atomicWriteFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".archetipo-wiki-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err = tmp.Write(data); err == nil {
+		err = tmp.Close()
+	} else {
+		_ = tmp.Close()
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(name, path)
+}
+
+func (c *Connector) migrateLegacyPlans(store yamlStore) error {
+	for code := range store.Specs {
+		if _, err := os.Stat(c.planPath(code)); err == nil {
+			continue
+		}
+		plan, err := c.readYAMLPlan(code)
+		if err != nil {
+			var ce *iox.CodedError
+			if errors.As(err, &ce) && ce.Code == iox.CodePreconditionMissing {
+				continue
+			}
+			return err
+		}
+		if err := c.writePlan(code, domain.PlanInput{PlanBody: plan.Body, Tasks: plan.Tasks}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Connector) cleanupLegacyArtifacts(store yamlStore) error {
+	paths := []string{c.legacyYAMLBacklogPath(), c.legacyBacklogPath()}
+	for code := range store.Specs {
+		paths = append(paths, filepath.Join(c.legacyYAMLSpecsDir(), code+".yaml"), c.legacyYAMLPlanPath(code), filepath.Join(c.legacyPlanningDir(), code+".md"))
+	}
+	for _, path := range paths {
+		if path == "" || path == c.backlogPath() {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("removing migrated legacy artifact %s: %w", path, err)
+		}
+	}
+	for _, dir := range []string{c.legacyYAMLSpecsDir(), c.cfg.AbsPath(c.cfg.File.Planning), c.legacyPlanningDir()} {
+		if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, fs.ErrInvalid) {
+			// Non-empty legacy directories may contain reviews or user-owned
+			// files. Their known backlog artifacts are already removed above.
+			continue
+		}
+	}
+	return nil
 }
 
 func writeYAML(path string, v any) error {

@@ -100,7 +100,8 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
   - `env_required`: overrides for the agent's environment requirements.
   - `archetipo_pre_commands`: CLI commands run before prompts.
   - `archetipo_post_commands`: CLI commands run after prompts.
-  - `verify_integrate`: spec codes whose worktree integration must be verified.
+- `verify_integrate`: spec codes whose worktree integration must be verified.
+- Prompts using `/archetipo-spec` or `/archetipo-plan` are verified against the canonical Wiki-backed file store: `docs/wiki/backlog/overview.md`, `docs/wiki/backlog/specs/*.md`, and `docs/wiki/backlog/plans/*.md`. The verifier also rejects leftover `.archetipo/backlog.yaml` and `.archetipo/plans/` artifacts after migration.
   - `verify_wiki_bootstrap`: expectations for core DDD pages, optional sources represented as `references/` concepts, `generated` state, issues, and targeted content; it also runs `wiki validate --profile bootstrap`.
   - `verify_review_wiki`: verifies that `archetipo-review` moves the spec to `DONE`, presents dossier pages, commits only the expected pages as `reviewed` together with `index.md` and a `log.md` containing a `Review` entry, and leaves no tracked or untracked Wiki changes in the integrated checkout.
 - Pre/post commands are split with `line.split(/\s+/)`. Avoid arguments that require complex shell quoting.

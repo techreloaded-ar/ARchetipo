@@ -235,8 +235,9 @@ type WikiImpact struct {
 	Create                []string `json:"create,omitempty" yaml:"create,omitempty"`
 }
 
-// FileConfig mirrors the `file:` section of .archetipo/config.yaml. Holds the
-// paths used exclusively by the file connector.
+// FileConfig mirrors the `file:` section of .archetipo/config.yaml. Backlog and
+// Planning are legacy import locations; canonical file-connector delivery
+// artifacts live below ConfigPaths.Wiki/backlog.
 type FileConfig struct {
 	Backlog  string `json:"backlog" yaml:"backlog"`
 	Planning string `json:"planning" yaml:"planning"`

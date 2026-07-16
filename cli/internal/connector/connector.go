@@ -11,7 +11,7 @@ import (
 
 // Connector is the abstract backend behind the CLI. Implementations:
 //
-//   - filefs.Connector: stores PRD, backlog and plans as YAML files.
+//   - filefs.Connector: stores PRD locally and backlog/spec/plan artifacts as Wiki pages.
 //   - github.Connector: stores backlog and plans as GitHub issues + Projects v2.
 //
 // Operations match the CLI surface. Methods take a context.Context so

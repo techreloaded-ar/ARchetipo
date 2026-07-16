@@ -703,6 +703,18 @@ func Catalog(projectRoot, root string) (int, error) {
 	return len(pages), nil
 }
 
+// RefreshCatalog rebuilds index.md without appending an Update entry to the
+// Wiki log. Connector-managed pages call this after operational writes so new
+// specs and plans become navigable without turning every task transition into
+// an editorial Wiki event.
+func RefreshCatalog(projectRoot, root string) error {
+	pages, err := Load(root)
+	if err != nil {
+		return err
+	}
+	return writeIndex(projectRoot, root, pages)
+}
+
 func appendLog(root, kind, action string) error {
 	logPath := filepath.Join(root, "log.md")
 	raw, err := os.ReadFile(logPath)

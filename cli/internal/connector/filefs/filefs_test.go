@@ -9,6 +9,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/wiki"
 )
 
 func newTestConnector(t *testing.T) *Connector {
@@ -236,8 +237,11 @@ func TestSavePlanRoundTripKeepsRichTaskBody(t *testing.T) {
 	if !strings.Contains(text, "body: |") {
 		t.Fatalf("expected YAML task body block, got:\n%s", text)
 	}
-	if strings.Contains(text, "description:") {
-		t.Fatalf("did not expect canonical YAML plan to persist description, got:\n%s", text)
+	if strings.Contains(text, "\n      description:") {
+		t.Fatalf("did not expect canonical Wiki task metadata to persist legacy description, got:\n%s", text)
+	}
+	if !strings.Contains(text, planBodyMarker) || !strings.Contains(text, "## Implementation tasks") {
+		t.Fatalf("expected human-navigable Wiki plan sections, got:\n%s", text)
 	}
 }
 
@@ -369,7 +373,7 @@ func TestSpecFilesStoreEpicWithCodeAndTitle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(c.cfg.ProjectRoot, ".archetipo", "specs", "US-001.yaml"))
+	raw, err := os.ReadFile(c.specPath("US-001"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,6 +383,9 @@ func TestSpecFilesStoreEpicWithCodeAndTitle(t *testing.T) {
 	}
 	if !strings.Contains(text, "title: Foundations") {
 		t.Fatalf("expected epic title in spec file, got:\n%s", text)
+	}
+	if !strings.Contains(text, "schema: archetipo/spec-wiki/v1") || !strings.Contains(text, specBodyMarker) {
+		t.Fatalf("expected canonical Wiki spec format, got:\n%s", text)
 	}
 
 	store, err := c.loadStore()
@@ -487,5 +494,110 @@ func TestDeleteSpecIgnoresMissingOptionalArtifacts(t *testing.T) {
 	}
 	if _, err := os.Stat(c.specPath("US-001")); !os.IsNotExist(err) {
 		t.Fatalf("expected spec file removed, stat err=%v", err)
+	}
+}
+
+func TestBacklogSpecsAndPlansAreNavigableWikiPages(t *testing.T) {
+	c := newTestConnector(t)
+	ctx := context.Background()
+	_, err := c.SaveInitialBacklog(ctx, []domain.Spec{{
+		Code: "US-001", Title: "Wiki backlog", Epic: domain.Epic{Code: "EP-001", Title: "Knowledge"},
+		Priority: domain.PriorityHigh, Points: 3, Status: domain.StatusTodo, Body: "## Acceptance Criteria\n\n- AC-1: searchable",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.SavePlan(ctx, "US-001", domain.PlanInput{PlanBody: "## Solution\n\nPersist in Wiki.", Tasks: []domain.Task{{ID: "TASK-01", Title: "Implement", Type: domain.TaskImpl, Status: domain.StatusTodo}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, pageType := range []string{"backlog", "spec", "plan"} {
+		pages, err := wiki.Search(c.cfg.ProjectRoot, c.wikiRoot(), "", pageType, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pages) != 1 {
+			t.Fatalf("expected one %s Wiki page, got %+v", pageType, pages)
+		}
+	}
+	report := wiki.Validate(c.cfg.ProjectRoot, c.wikiRoot())
+	if !report.OK {
+		t.Fatalf("generated backlog Wiki is invalid: %+v", report.Findings)
+	}
+	if _, err := os.Stat(c.legacyYAMLBacklogPath()); !os.IsNotExist(err) {
+		t.Fatalf("legacy backlog must not be generated, stat err=%v", err)
+	}
+}
+
+func TestOperationalWritePreservesUnchangedReviewedSpec(t *testing.T) {
+	c := newTestConnector(t)
+	ctx := context.Background()
+	_, err := c.SaveInitialBacklog(ctx, []domain.Spec{
+		{Code: "US-001", Title: "First", Epic: domain.Epic{Code: "EP-001", Title: "E"}, Priority: domain.PriorityHigh, Points: 1, Status: domain.StatusTodo},
+		{Code: "US-002", Title: "Second", Epic: domain.Epic{Code: "EP-001", Title: "E"}, Priority: domain.PriorityMedium, Points: 1, Status: domain.StatusTodo},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wiki.Approve(c.cfg.ProjectRoot, c.wikiRoot(), []string{"backlog/specs/US-002"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.TransitionStatus(ctx, "US-001", domain.StatusPlanned); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := wiki.Search(c.cfg.ProjectRoot, c.wikiRoot(), "US-002", "spec", "reviewed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("unrelated reviewed spec was reset: %+v", pages)
+	}
+}
+
+func TestLegacyYAMLStoreMigratesToWikiOnWrite(t *testing.T) {
+	c := newTestConnector(t)
+	if err := os.MkdirAll(c.legacyYAMLSpecsDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(c.legacyYAMLPlanPath("US-001")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	backlog := "schema: archetipo/backlog/v2\nversion: 2\nepics:\n  - code: EP-001\n    title: Foundations\norder: [US-001]\n"
+	spec := "schema: archetipo/spec/v2\ncode: US-001\ntitle: Setup\nepic:\n  code: EP-001\n  title: Foundations\npriority: HIGH\npoints: 3\nstatus: TODO\nbody: Legacy body\n"
+	plan := "schema: archetipo/plan/v2\nspec_code: US-001\nbody: Legacy plan\ntasks:\n  - id: TASK-01\n    title: Migrate\n    type: Impl\n    status: TODO\n"
+	if err := os.WriteFile(c.legacyYAMLBacklogPath(), []byte(backlog), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(c.legacyYAMLSpecsDir(), "US-001.yaml"), []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(c.legacyYAMLPlanPath("US-001"), []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := c.TransitionStatus(context.Background(), "US-001", domain.StatusPlanned); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{c.backlogPath(), c.specPath("US-001"), c.planPath("US-001")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("missing migrated Wiki page %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{c.legacyYAMLBacklogPath(), filepath.Join(c.legacyYAMLSpecsDir(), "US-001.yaml"), c.legacyYAMLPlanPath("US-001")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("legacy artifact remains at %s: %v", path, err)
+		}
+	}
+	got, err := c.ReadSpecDetail(context.Background(), "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.StatusPlanned || got.Body != "Legacy body" {
+		t.Fatalf("migration lost spec data: %+v", got)
+	}
+	tasks, err := c.ReadSpecTasks(context.Background(), "US-001")
+	if err != nil || len(tasks) != 1 || tasks[0].ID != "TASK-01" {
+		t.Fatalf("migration lost plan tasks: %+v, %v", tasks, err)
 	}
 }

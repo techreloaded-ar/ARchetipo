@@ -94,7 +94,7 @@ flowchart LR
 
     subgraph Loop["Spec-Driven Loop"]
         direction TB
-        S["<b>Spec</b><br/><i>.archetipo/backlog.yaml<br/>.archetipo/specs/</i>"] --> P["<b>Plan</b><br/><i>.archetipo/plans/ + ADR intent</i>"]
+        S["<b>Spec</b><br/><i>docs/wiki/backlog/specs/</i>"] --> P["<b>Plan</b><br/><i>docs/wiki/backlog/plans/ + ADR intent</i>"]
         P --> IM["<b>Implement</b><br/><i>code + tests + generated Wiki updates</i>"]
         IM --> R["<b>Review</b><br/><i>accept + publish</i>"]
         R -. next spec .-> S
@@ -107,8 +107,8 @@ flowchart LR
 |---|---|---|---|
 | 1. Discovery | `/archetipo-inception` | `docs/wiki/` | Produces a temporary PRD, compiles it into living knowledge, and preserves it as a `references/` concept. |
 | 2. Visual concept, optional | `/archetipo-design` | `docs/mockups/` | Creates isolated HTML/CSS mockups without touching application code. |
-| 3. Backlog | `/archetipo-spec` | `.archetipo/backlog.yaml`, `.archetipo/specs/` | Loads relevant Wiki pages and creates or extends INVEST-compliant user stories. |
-| 4. Planning | `/archetipo-plan US-001` | `.archetipo/plans/US-001-plan.yaml` | Produces the technical solution, ordered tasks, test strategy, and a `decisions/` ADR contract when the choice crosses the architectural threshold. |
+| 3. Backlog | `/archetipo-spec` | `docs/wiki/backlog/overview.md`, `docs/wiki/backlog/specs/` | Loads relevant Wiki pages and creates or extends INVEST-compliant user stories inside the same navigable knowledge graph. |
+| 4. Planning | `/archetipo-plan US-001` | `docs/wiki/backlog/plans/US-001.md` | Produces the technical solution, ordered tasks, test strategy, and a `decisions/` ADR contract when the choice crosses the architectural threshold. |
 | 5. Code | `/archetipo-implement US-001` | Code, tests, generated Wiki/ADR updates | Executes the plan, attaches repository evidence to decisions, validates capability coverage, and moves the spec toward human approval. |
 | 6. Acceptance | `/archetipo-review US-001` | Verdict: `DONE` or rework feedback | Presents code and Wiki together, including ADR rationale, alternatives, consequences, and evidence, then executes the human verdict. |
 
@@ -166,7 +166,7 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 |---|---|
 | `archetipo init` | Installs ARchetipo into the current project and creates `.archetipo/config.yaml` plus `.archetipo/shared-runtime.md`. |
 | `archetipo doctor` | Diagnoses the installation: data directory, packaged and installed skills, project config, git, and gh auth (github connector). |
-| `archetipo view` | Starts a local Kanban view for `.archetipo/backlog.yaml`, `.archetipo/specs/`, and `.archetipo/plans/`. |
+| `archetipo view` | Starts a local Kanban view backed by the spec and plan pages under `docs/wiki/backlog/`. |
 | `archetipo config show` | Initializes the connector and prints metadata. |
 | `archetipo prd write [--file PRD.md]` | Saves PRD markdown from `--file` or stdin. |
 | `archetipo validate prd [--file PRD.md]` | Validates the PRD against structural PRD rules. |
@@ -200,20 +200,20 @@ Skills never decide where artifacts live. They apply the shared runtime rules, c
 
 | Connector | Where artifacts live | Best for |
 |---|---|---|
-| `file` | Local project files under `.archetipo/` plus `docs/PRD.md` and `docs/mockups/` | Solo work, early product phases, offline workflows |
+| `file` | Backlog, specs, and plans under `docs/wiki/backlog/`, plus local PRD and mockups | Solo work, early product phases, offline workflows |
 | `github` | GitHub Issues plus GitHub Projects v2 | Team tracking, cloud collaboration, project board workflows |
 | `jira` | Jira Cloud issues (Story) plus Sub-tasks | Teams already standardized on Jira |
 
 ### `file` connector
 
-- Backlog: `.archetipo/backlog.yaml`
-- Spec documents: `.archetipo/specs/US-XXX.yaml`
-- Plans: `.archetipo/plans/US-XXX-plan.yaml`
+- Backlog index: `docs/wiki/backlog/overview.md`
+- Spec pages: `docs/wiki/backlog/specs/US-XXX.md`
+- Plan and task pages: `docs/wiki/backlog/plans/US-XXX.md`
 - PRD: `docs/PRD.md`
 - Mockups: `docs/mockups/`
 - Test results: `docs/test-results/`
 
-No authentication is required. Everything is local and versionable.
+No authentication is required. Everything is local, versionable, searchable with `archetipo wiki search`, and cataloged in `docs/wiki/index.md`. Existing `.archetipo/backlog.yaml`, `.archetipo/specs/`, `.archetipo/plans/`, `docs/BACKLOG.md`, and `docs/planning/` artifacts are read as legacy input and migrated to Wiki pages on the next backlog write.
 
 ### `github` connector
 
@@ -273,6 +273,7 @@ workflow:
 
 # Used only when connector == file
 file:
+  # Legacy import locations only; new backlog content is written under paths.wiki/backlog/.
   backlog: .archetipo/backlog.yaml
   planning: .archetipo/plans/
 

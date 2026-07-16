@@ -26,7 +26,7 @@ type reviewDoc struct {
 // reviewsDir is the directory holding per-spec review files, a sibling of the
 // specs/ directory under .archetipo/.
 func (c *Connector) reviewsDir() string {
-	return filepath.Join(filepath.Dir(c.backlogPath()), "reviews")
+	return filepath.Join(filepath.Dir(c.legacyYAMLBacklogPath()), "reviews")
 }
 
 func (c *Connector) reviewPath(specCode string) string {

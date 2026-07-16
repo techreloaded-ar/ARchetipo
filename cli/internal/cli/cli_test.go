@@ -109,7 +109,7 @@ func writeInputFile(t *testing.T, name, content string) string {
 }
 
 func expectedPlanPath(code string) string {
-	return filepath.Join(".", ".archetipo", "plans", code+"-plan.yaml")
+	return filepath.Join(".", "docs", "wiki", "backlog", "plans", code+".md")
 }
 
 func decodeOK(t *testing.T, res result) (string, map[string]any) {

@@ -17,6 +17,8 @@ workflow:
 
 # Used only when connector == file
 file:
+  # Legacy import locations only. New backlog/spec/plan artifacts are canonical
+  # Wiki pages below paths.wiki/backlog/.
   backlog: .archetipo/backlog.yaml
   planning: .archetipo/plans/
 

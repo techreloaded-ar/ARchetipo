@@ -33,8 +33,6 @@ From the parsed `data` (SetupInfo), extract and keep available:
 - `connector`
 - `paths.prd`
 - `paths.wiki`
-- `paths.backlog`
-- `paths.planning`
 - `paths.mockups`
 - `workflow.statuses`
 - connector-specific settings if present

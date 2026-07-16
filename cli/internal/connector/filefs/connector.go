@@ -16,6 +16,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/wiki"
 )
 
 // Connector is the file-system implementation of connector.Connector.
@@ -377,7 +378,7 @@ func (c *Connector) CompleteTask(ctx context.Context, parentRef, taskRef string)
 			"", nil,
 		)
 	}
-	if err := writeYAML(c.planPath(parentRef), plan); err != nil {
+	if err := c.writePlan(parentRef, domain.PlanInput{PlanBody: plan.Body, Tasks: plan.Tasks}); err != nil {
 		return domain.WriteResult{}, err
 	}
 	return domain.WriteResult{OK: true, Refs: []domain.Ref{{Code: taskRef, Path: c.planPath(parentRef)}}}, nil
@@ -444,11 +445,18 @@ func (c *Connector) DeleteSpec(ctx context.Context, code string) (domain.WriteRe
 	}
 
 	refs := []domain.Ref{{Code: code, Path: c.backlogPath()}}
-	for _, path := range []string{c.specPath(code), c.planPath(code), c.reviewPath(code)} {
+	for _, path := range []string{
+		c.specPath(code), c.planPath(code), c.reviewPath(code),
+		filepath.Join(c.legacyYAMLSpecsDir(), code+".yaml"), c.legacyYAMLPlanPath(code),
+		filepath.Join(c.legacyPlanningDir(), code+".md"),
+	} {
 		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return domain.WriteResult{}, iox.NewInternal(fmt.Sprintf("deleting %s", path), err)
 		}
 		refs = append(refs, domain.Ref{Code: code, Path: path})
+	}
+	if err := wiki.RefreshCatalog(c.cfg.ProjectRoot, c.wikiRoot()); err != nil {
+		return domain.WriteResult{}, err
 	}
 	return domain.WriteResult{OK: true, Refs: refs}, nil
 }
