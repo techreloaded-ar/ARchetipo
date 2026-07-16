@@ -257,7 +257,17 @@ func (c *Connector) readWikiSpecDocs(epics []domain.Epic) (map[string]domain.Spe
 			return nil, iox.NewInvalidInput(fmt.Sprintf("invalid spec Wiki frontmatter at %s", path), "", err)
 		}
 		if meta.Schema != wikiSpecSchema {
-			continue
+			return nil, iox.NewInvalidInput(
+				fmt.Sprintf("unsupported spec Wiki schema at %s", path),
+				"expected "+wikiSpecSchema, nil,
+			)
+		}
+		fileCode := strings.TrimSuffix(entry.Name(), ".md")
+		if meta.Code != "" && meta.Code != fileCode {
+			return nil, iox.NewInvalidInput(
+				fmt.Sprintf("spec Wiki code %s does not match file %s", meta.Code, entry.Name()),
+				"rename the file or restore its managed code frontmatter", nil,
+			)
 		}
 		sp := domain.Spec{
 			Code: meta.Code, Title: strings.TrimPrefix(meta.Title, meta.Code+": "),
@@ -268,7 +278,7 @@ func (c *Connector) readWikiSpecDocs(epics []domain.Epic) (map[string]domain.Spe
 			History: meta.History, Body: markerContent(body, specBodyMarker, specLinksMarker),
 		}
 		if sp.Code == "" {
-			sp.Code = strings.TrimSuffix(entry.Name(), ".md")
+			sp.Code = fileCode
 		}
 		if sp.Epic.Code != "" && sp.Epic.Title == "" {
 			sp.Epic.Title = epicTitles[sp.Epic.Code]
@@ -484,6 +494,9 @@ func (c *Connector) writeStore(store yamlStore) error {
 	if err := c.ensureWiki(); err != nil {
 		return err
 	}
+	if err := c.preflightWikiCatalog(); err != nil {
+		return err
+	}
 	if err := writeWikiPage(c.backlogPath(), wikiBacklogMeta{
 		Type: "backlog", Title: "Backlog", Description: "Delivery backlog and canonical specification index",
 		Status: domain.WikiStatusGenerated, Schema: wikiBacklogSchema, Version: 1,
@@ -512,6 +525,18 @@ func (c *Connector) writeStore(store yamlStore) error {
 func (c *Connector) ensureWiki() error {
 	_, err := wiki.Init(c.wikiRoot())
 	return err
+}
+
+// preflightWikiCatalog verifies that all existing Wiki pages are readable
+// before connector-managed files are changed. RefreshCatalog performs the same
+// load after writes; doing it first prevents malformed unrelated pages from
+// causing a command to report failure after its primary state already changed.
+func (c *Connector) preflightWikiCatalog() error {
+	_, err := wiki.Load(c.wikiRoot())
+	if err != nil {
+		return iox.NewInvalidInput("cannot refresh Wiki catalog", "fix malformed Wiki pages before changing the backlog", err)
+	}
+	return nil
 }
 
 func wikiSpecMetaFromSpec(spec domain.Spec) wikiSpecMeta {
@@ -598,6 +623,9 @@ func (d specDoc) toSpec() domain.Spec {
 func (c *Connector) writePlan(specCode string, plan domain.PlanInput) error {
 	domain.NormalizePlanInput(&plan)
 	if err := c.ensureWiki(); err != nil {
+		return err
+	}
+	if err := c.preflightWikiCatalog(); err != nil {
 		return err
 	}
 	tasks := append([]domain.Task(nil), plan.Tasks...)

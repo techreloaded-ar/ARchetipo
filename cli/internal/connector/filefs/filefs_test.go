@@ -601,3 +601,104 @@ func TestLegacyYAMLStoreMigratesToWikiOnWrite(t *testing.T) {
 		t.Fatalf("migration lost plan tasks: %+v, %v", tasks, err)
 	}
 }
+
+func TestWikiSpecRejectsInvalidManagedIdentity(t *testing.T) {
+	tests := []struct {
+		name        string
+		replaceFrom string
+		replaceTo   string
+		wantError   string
+	}{
+		{
+			name:        "unsupported schema",
+			replaceFrom: "schema: archetipo/spec-wiki/v1",
+			replaceTo:   "schema: archetipo/spec-wiki/v99",
+			wantError:   "unsupported spec Wiki schema",
+		},
+		{
+			name:        "code differs from filename",
+			replaceFrom: "code: US-001",
+			replaceTo:   "code: US-999",
+			wantError:   "does not match file US-001.md",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestConnector(t)
+			_, err := c.SaveInitialBacklog(context.Background(), []domain.Spec{{
+				Code: "US-001", Title: "Managed identity", Epic: domain.Epic{Code: "EP-001", Title: "E"},
+				Priority: domain.PriorityHigh, Points: 1, Status: domain.StatusTodo,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := c.specPath("US-001")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			changed := strings.Replace(string(raw), tt.replaceFrom, tt.replaceTo, 1)
+			if changed == string(raw) {
+				t.Fatalf("test fixture did not contain %q", tt.replaceFrom)
+			}
+			if err := os.WriteFile(path, []byte(changed), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = c.ReadSpecDetail(context.Background(), "US-001")
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantError, err)
+			}
+		})
+	}
+}
+
+func TestMalformedWikiPreflightPreventsManagedWrites(t *testing.T) {
+	t.Run("backlog", func(t *testing.T) {
+		c := newTestConnector(t)
+		if err := os.MkdirAll(c.wikiRoot(), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(c.wikiRoot(), "broken.md"), []byte("# Missing frontmatter\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := c.SaveInitialBacklog(context.Background(), []domain.Spec{{
+			Code: "US-001", Title: "Preflight", Epic: domain.Epic{Code: "EP-001", Title: "E"},
+			Priority: domain.PriorityHigh, Points: 1, Status: domain.StatusTodo,
+		}})
+		if err == nil || !strings.Contains(err.Error(), "cannot refresh Wiki catalog") {
+			t.Fatalf("expected catalog preflight error, got %v", err)
+		}
+		for _, path := range []string{c.backlogPath(), c.specPath("US-001")} {
+			if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+				t.Fatalf("managed state changed despite failed preflight at %s: %v", path, statErr)
+			}
+		}
+	})
+
+	t.Run("plan", func(t *testing.T) {
+		c := newTestConnector(t)
+		_, err := c.SaveInitialBacklog(context.Background(), []domain.Spec{{
+			Code: "US-001", Title: "Preflight", Epic: domain.Epic{Code: "EP-001", Title: "E"},
+			Priority: domain.PriorityHigh, Points: 1, Status: domain.StatusTodo,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(c.wikiRoot(), "broken.md"), []byte("# Missing frontmatter\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = c.SavePlan(context.Background(), "US-001", domain.PlanInput{
+			PlanBody: "## Plan", Tasks: []domain.Task{{ID: "TASK-01", Title: "Implement", Type: domain.TaskImpl, Status: domain.StatusTodo}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "cannot refresh Wiki catalog") {
+			t.Fatalf("expected catalog preflight error, got %v", err)
+		}
+		if _, statErr := os.Stat(c.planPath("US-001")); !os.IsNotExist(statErr) {
+			t.Fatalf("plan changed despite failed preflight: %v", statErr)
+		}
+	})
+}

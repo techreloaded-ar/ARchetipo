@@ -13,7 +13,6 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
-	"path/filepath"
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
@@ -55,14 +54,13 @@ func NewServer(conn connector.Connector, cfg config.Config, addr string) (*Serve
 }
 
 // resolveWatchRoot picks the directory the filesystem watcher should observe.
-// The viewer cares about anything that affects the rendered board, so we watch
-// the parent of the backlog file (typically .archetipo/), which also contains
-// stories/ and plans/.
+// File-connector backlog, spec, and plan pages are canonical Wiki content, so
+// watching paths.wiki covers board changes and honors custom Wiki locations.
 func resolveWatchRoot(cfg config.Config) string {
-	if cfg.File.Backlog == "" {
+	if cfg.Paths.Wiki == "" {
 		return ""
 	}
-	return cfg.AbsPath(filepath.Dir(cfg.File.Backlog))
+	return cfg.AbsPath(cfg.Paths.Wiki)
 }
 
 // Addr returns the address the server listens on.

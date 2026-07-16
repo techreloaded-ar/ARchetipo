@@ -826,7 +826,8 @@ async function listMarkdownFiles(root) {
 }
 
 async function verifySpecArtifacts(context) {
-  const backlogPath = path.join(context.sandboxDir, "docs", "wiki", "backlog", "overview.md");
+  const artifactPaths = await resolveArtifactPaths(context);
+  const backlogPath = path.join(artifactPaths.wikiRoot, "backlog", "overview.md");
   const backlog = parseWikiFrontmatter(await fs.readFile(backlogPath, "utf8"), backlogPath);
   assertQuality(backlog?.schema === "archetipo/backlog-wiki/v1", "Wiki backlog has unexpected schema");
   assertQuality(Array.isArray(backlog?.order) && backlog.order.length > 0, "backlog has no spec order");
@@ -836,7 +837,7 @@ async function verifySpecArtifacts(context) {
     assertQuality(/^US-\d{3,}$/.test(code), `invalid spec code in backlog order: ${code}`);
     assertQuality(!seen.has(code), `duplicate spec code in backlog order: ${code}`);
     seen.add(code);
-    const specPath = path.join(context.sandboxDir, "docs", "wiki", "backlog", "specs", `${code}.md`);
+    const specPath = path.join(artifactPaths.wikiRoot, "backlog", "specs", `${code}.md`);
     const raw = await fs.readFile(specPath, "utf8");
     const spec = parseWikiFrontmatter(raw, specPath);
     assertQuality(spec?.schema === "archetipo/spec-wiki/v1", `${code} has unexpected schema`);
@@ -847,12 +848,12 @@ async function verifySpecArtifacts(context) {
     assertQuality(/demonstr|dimostra/i.test(body), `${code} is missing Demonstrates/Dimostra`);
     assertQuality(body.includes("- [ ]"), `${code} is missing checklist acceptance criteria`);
   }
-  const legacyBacklog = path.join(context.sandboxDir, ".archetipo", "backlog.yaml");
-  assertQuality(!(await fileExists(legacyBacklog)), "legacy .archetipo/backlog.yaml still exists after Wiki persistence");
+  assertQuality(!(await fileExists(artifactPaths.legacyBacklog)), `legacy backlog still exists after Wiki persistence: ${artifactPaths.legacyBacklog}`);
 }
 
 async function verifyPlanArtifacts(context) {
-  const planDir = path.join(context.sandboxDir, "docs", "wiki", "backlog", "plans");
+  const artifactPaths = await resolveArtifactPaths(context);
+  const planDir = path.join(artifactPaths.wikiRoot, "backlog", "plans");
   const entries = await fs.readdir(planDir);
   const plans = entries.filter((name) => name.endsWith(".md")).sort();
   assertQuality(plans.length > 0, "no plan Wiki pages generated");
@@ -879,7 +880,18 @@ async function verifyPlanArtifacts(context) {
       }
     }
   }
-  assertQuality(!(await fileExists(path.join(context.sandboxDir, ".archetipo", "plans"))), "legacy .archetipo/plans still exists after Wiki persistence");
+  assertQuality(!(await fileExists(artifactPaths.legacyPlanning)), `legacy planning path still exists after Wiki persistence: ${artifactPaths.legacyPlanning}`);
+}
+
+async function resolveArtifactPaths(context) {
+  const configPath = path.join(context.sandboxDir, ".archetipo", "config.yaml");
+  const config = YAML.parse(await fs.readFile(configPath, "utf8")) ?? {};
+  const resolveFromSandbox = (configuredPath) => path.resolve(context.sandboxDir, configuredPath);
+  return {
+    wikiRoot: resolveFromSandbox(config?.paths?.wiki ?? "docs/wiki/"),
+    legacyBacklog: resolveFromSandbox(config?.file?.backlog ?? ".archetipo/backlog.yaml"),
+    legacyPlanning: resolveFromSandbox(config?.file?.planning ?? ".archetipo/plans/"),
+  };
 }
 
 async function fileExists(filePath) {

@@ -6,7 +6,22 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 )
+
+func TestResolveWatchRootUsesConfiguredWiki(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.ProjectRoot = root
+	cfg.Paths.Wiki = "knowledge/project-wiki"
+	cfg.File.Backlog = ".legacy/backlog.yaml"
+
+	want := filepath.Join(root, "knowledge", "project-wiki")
+	if got := resolveWatchRoot(cfg); got != want {
+		t.Fatalf("watch root = %q, want %q", got, want)
+	}
+}
 
 func TestWatcherPublishesOnYamlChange(t *testing.T) {
 	root := t.TempDir()
