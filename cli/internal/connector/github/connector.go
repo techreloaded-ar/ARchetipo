@@ -60,6 +60,8 @@ func Register() {
 	})
 }
 
+var _ connector.PlanBodyReader = (*Connector)(nil)
+
 // SETUP
 
 func (c *Connector) InitializeConnector(ctx context.Context) (domain.SetupInfo, error) {
@@ -180,6 +182,25 @@ func (c *Connector) ReadSpecTasks(ctx context.Context, parentRef string) ([]doma
 	return subs, nil
 }
 
+// ReadPlanBody returns the strategic plan stored after the separator in the
+// parent issue body.
+func (c *Connector) ReadPlanBody(ctx context.Context, specCode string) (string, error) {
+	if err := c.ensureSetup(ctx); err != nil {
+		return "", err
+	}
+	num, err := c.resolveIssueNumber(ctx, specCode)
+	if err != nil {
+		return "", err
+	}
+	raw, err := c.viewIssueRaw(ctx, num)
+	if err != nil {
+		return "", err
+	}
+	cleanBody, _ := specmeta.Parse(raw.Body)
+	_, planBody := splitPlanSections(cleanBody)
+	return planBody, nil
+}
+
 func (c *Connector) ReadExistingBacklog(ctx context.Context) (domain.BacklogSummary, error) {
 	if err := c.ensureSetup(ctx); err != nil {
 		return domain.BacklogSummary{}, err
@@ -288,8 +309,11 @@ func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.Pl
 	if err != nil {
 		return domain.WriteResult{}, err
 	}
-	// Append the strategic plan body to the parent issue.
-	updatedBody := parent.Body + "\n\n---\n\n" + strings.TrimSpace(plan.PlanBody)
+	// Upsert the strategic plan while keeping the specification and its hidden
+	// metadata intact.
+	cleanBody, meta := specmeta.Parse(parent.Body)
+	specBody, _ := splitPlanSections(cleanBody)
+	updatedBody := specmeta.Render(joinPlanSections(specBody, plan.PlanBody), meta)
 	if _, err := c.editIssueBody(ctx, parentNum, updatedBody); err != nil {
 		return domain.WriteResult{}, err
 	}
@@ -422,6 +446,7 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 	}
 	// Parse current body to separate user content from embedded metadata.
 	cleanBody, meta := specmeta.Parse(raw.Body)
+	specBody, planBody := splitPlanSections(cleanBody)
 
 	// Track what changed for the REST PATCH.
 	patchFields := map[string]any{}
@@ -430,7 +455,7 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 	}
 
 	if patch.Body != nil {
-		cleanBody = *patch.Body
+		specBody = *patch.Body
 	}
 	if patch.Scope != nil {
 		meta.Scope = string(*patch.Scope)
@@ -455,7 +480,7 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 	if patch.Body != nil || patch.Scope != nil || patch.BlockedBy != nil ||
 		patch.Branch != nil || patch.Worktree != nil || patch.ForkBase != nil ||
 		patch.Rework != nil {
-		patchFields["body"] = specmeta.Render(cleanBody, meta)
+		patchFields["body"] = specmeta.Render(joinPlanSections(specBody, planBody), meta)
 	}
 
 	// Handle epic (label) changes.
@@ -830,6 +855,7 @@ func (c *Connector) viewIssueAsSpec(ctx context.Context, num int) (domain.Spec, 
 		return domain.Spec{}, err
 	}
 	cleanBody, meta := specmeta.Parse(raw.Body)
+	specBody, _ := splitPlanSections(cleanBody)
 	epic := domain.Epic{}
 	for _, l := range raw.Labels {
 		if strings.HasPrefix(l.Name, "EP-") {
@@ -841,7 +867,7 @@ func (c *Connector) viewIssueAsSpec(ctx context.Context, num int) (domain.Spec, 
 	return domain.Spec{
 		Code:      codeFromTitle(raw.Title),
 		Title:     titleAfterCode(raw.Title),
-		Body:      cleanBody,
+		Body:      specBody,
 		Scope:     domain.Scope(meta.Scope),
 		BlockedBy: append([]string(nil), meta.BlockedBy...),
 		Epic:      epic,

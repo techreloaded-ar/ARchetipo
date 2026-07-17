@@ -2,12 +2,112 @@ package github
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/specmeta"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 )
+
+func TestReadPlanBodySeparatesSpecAndPreservesMetadata(t *testing.T) {
+	const specBody = "## Spec\n\nAs a user, I want X."
+	const planBody = "## Technical solution\n\nUse the existing service."
+	storedBody := specmeta.Render(joinPlanSections(specBody, planBody), specmeta.Meta{Scope: "MVP"})
+	m := newMock(t).
+		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":`+strconv.Quote(storedBody)+`,"url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`)
+
+	cfg := config.Default()
+	cfg.Connector = config.ConnectorGitHub
+	c := NewWithRunner(cfg, m)
+	c.state.repo = &domain.RepoInfo{Slug: "acme/web"}
+	c.state.project = &domain.ProjectInfo{}
+
+	gotPlan, err := c.ReadPlanBody(context.Background(), "10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPlan != planBody {
+		t.Fatalf("plan body = %q, want %q", gotPlan, planBody)
+	}
+
+	gotSpec, err := c.viewIssueAsSpec(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSpec.Body != specBody {
+		t.Fatalf("spec body contains plan: %q", gotSpec.Body)
+	}
+	if gotSpec.Scope != domain.Scope("MVP") {
+		t.Fatalf("spec metadata lost: scope = %q", gotSpec.Scope)
+	}
+}
+
+func TestSavePlanUpsertsExistingSection(t *testing.T) {
+	const specBody = "## Spec\n\nAs a user, I want X."
+	storedBody := specmeta.Render(joinPlanSections(specBody, "## Old plan"), specmeta.Meta{Scope: "MVP"})
+	m := newMock(t).
+		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":`+strconv.Quote(storedBody)+`,"url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`).
+		on("api -X PATCH repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","url":"https://gh/i/10"}`)
+
+	cfg := config.Default()
+	cfg.Connector = config.ConnectorGitHub
+	c := NewWithRunner(cfg, m)
+	c.state.repo = &domain.RepoInfo{Slug: "acme/web"}
+	c.state.project = &domain.ProjectInfo{}
+
+	if _, err := c.SavePlan(context.Background(), "10", domain.PlanInput{PlanBody: "## New plan"}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, call := range m.calls {
+		args := strings.Join(call.args, " ")
+		if !strings.HasPrefix(args, "api -X PATCH repos/acme/web/issues/10") {
+			continue
+		}
+		if strings.Contains(args, "Old plan") || !strings.Contains(args, "New plan") {
+			t.Fatalf("plan was appended instead of replaced: %s", args)
+		}
+		if strings.Count(args, "\n---\n") != 1 {
+			t.Fatalf("expected one plan separator, got: %s", args)
+		}
+		if !strings.Contains(args, `"scope":"MVP"`) {
+			t.Fatalf("spec metadata was not preserved: %s", args)
+		}
+		return
+	}
+	t.Fatal("expected parent issue PATCH")
+}
+
+func TestUpdateSpecPreservesPlanSection(t *testing.T) {
+	const planBody = "## Technical solution\n\nKeep this plan."
+	storedBody := specmeta.Render(joinPlanSections("## Spec\n\nOriginal.", planBody), specmeta.Meta{})
+	m := newMock(t).
+		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":`+strconv.Quote(storedBody)+`,"url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`).
+		on("api -X PATCH repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","url":"https://gh/i/10"}`)
+
+	cfg := config.Default()
+	cfg.Connector = config.ConnectorGitHub
+	c := NewWithRunner(cfg, m)
+	c.state.repo = &domain.RepoInfo{Slug: "acme/web"}
+	c.state.project = &domain.ProjectInfo{}
+
+	newBody := "## Spec\n\nUpdated."
+	if _, err := c.UpdateSpec(context.Background(), "10", domain.SpecUpdate{Body: &newBody}); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range m.calls {
+		args := strings.Join(call.args, " ")
+		if strings.HasPrefix(args, "api -X PATCH repos/acme/web/issues/10") {
+			if !strings.Contains(args, newBody) || !strings.Contains(args, planBody) {
+				t.Fatalf("spec update did not preserve both sections: %s", args)
+			}
+			return
+		}
+	}
+	t.Fatal("expected issue PATCH")
+}
 
 // TestSavePlan_TaskDescriptionFallback verifies that when a task has
 // Description but empty Body, the GitHub connector uses Description as

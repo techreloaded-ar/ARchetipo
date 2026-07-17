@@ -138,6 +138,31 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
+const planSeparator = "\n\n---\n\n"
+
+func splitPlanSections(body string) (specBody, planBody string) {
+	body = strings.TrimSpace(body)
+	if strings.HasPrefix(body, "---\n") {
+		return "", strings.TrimSpace(strings.TrimPrefix(body, "---\n"))
+	}
+	if idx := strings.Index(body, "\n---\n"); idx >= 0 {
+		return strings.TrimSpace(body[:idx]), strings.TrimSpace(body[idx+len("\n---\n"):])
+	}
+	return body, ""
+}
+
+func joinPlanSections(specBody, planBody string) string {
+	specBody = strings.TrimSpace(specBody)
+	planBody = strings.TrimSpace(planBody)
+	if planBody == "" {
+		return specBody
+	}
+	if specBody == "" {
+		return "---\n\n" + planBody
+	}
+	return specBody + planSeparator + planBody
+}
+
 // adfFromText converts ARchetipo markdown/plain text into the smallest ADF
 // shape Jira v3 accepts, preserving the original text paragraph by paragraph.
 func adfFromText(s string) map[string]any {

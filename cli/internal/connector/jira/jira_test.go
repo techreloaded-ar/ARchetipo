@@ -598,16 +598,38 @@ func TestReadPlanBody(t *testing.T) {
 	if _, err := c.SaveInitialBacklog(ctx, sampleSpecs()); err != nil {
 		t.Fatal(err)
 	}
-	plan := domain.PlanInput{PlanBody: "## Soluzione Tecnica\n\nSpiegazione."}
-	if _, err := c.SavePlan(ctx, "US-001", plan); err != nil {
+	if _, err := c.SavePlan(ctx, "US-001", domain.PlanInput{PlanBody: "## Piano precedente"}); err != nil {
+		t.Fatal(err)
+	}
+	const newPlan = "## Soluzione Tecnica\n\nSpiegazione."
+	if _, err := c.SavePlan(ctx, "US-001", domain.PlanInput{PlanBody: newPlan}); err != nil {
 		t.Fatal(err)
 	}
 	body, err := c.ReadPlanBody(ctx, "US-001")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(body, "Soluzione Tecnica") {
-		t.Errorf("plan body not returned: %q", body)
+	if body != newPlan {
+		t.Errorf("plan body was appended instead of replaced: %q", body)
+	}
+	det, err := c.ReadSpecDetail(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(det.Body, "Soluzione Tecnica") || det.Body != sampleSpecs()[0].Body {
+		t.Errorf("plan leaked into spec body: %q", det.Body)
+	}
+
+	newScope := domain.Scope("MVP")
+	if _, err := c.UpdateSpec(ctx, "US-001", domain.SpecUpdate{Scope: &newScope}); err != nil {
+		t.Fatal(err)
+	}
+	body, err = c.ReadPlanBody(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != newPlan {
+		t.Errorf("metadata update lost the plan: %q", body)
 	}
 }
 

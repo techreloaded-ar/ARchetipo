@@ -100,11 +100,8 @@ func (c *Connector) ReadPlanBody(ctx context.Context, specCode string) (string, 
 		return "", err
 	}
 	desc, _, _ := parseDescription(c.decodeFields(issue).Description)
-	idx := strings.Index(desc, "\n---\n")
-	if idx == -1 {
-		return "", nil
-	}
-	return strings.TrimSpace(desc[idx+len("\n---\n"):]), nil
+	_, planBody := splitPlanSections(desc)
+	return planBody, nil
 }
 
 // SETUP
@@ -474,14 +471,16 @@ func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.Pl
 	if err != nil {
 		return domain.WriteResult{}, err
 	}
-	// Append the strategic plan body to the story description, preserving the
-	// epic marker.
+	// Upsert the strategic plan in the story description, preserving the
+	// specification and its hidden metadata markers.
 	var issue jiraIssue
 	if err := c.do(ctx, "GET", "/rest/api/3/issue/"+key+"?fields=description", nil, &issue); err != nil {
 		return domain.WriteResult{}, err
 	}
 	current := c.decodeFields(issue).Description
-	updated := strings.TrimRight(current, "\n") + "\n\n---\n\n" + strings.TrimSpace(plan.PlanBody)
+	cleanBody, epic, meta := parseDescription(current)
+	specBody, _ := splitPlanSections(cleanBody)
+	updated := renderDescription(joinPlanSections(specBody, plan.PlanBody), epic, meta)
 	if err := c.do(ctx, "PUT", "/rest/api/3/issue/"+key,
 		map[string]any{"fields": map[string]any{"description": adfFromText(updated)}}, nil); err != nil {
 		return domain.WriteResult{}, err
@@ -591,6 +590,8 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 		return domain.WriteResult{}, err
 	}
 	cur := c.specFromIssue(issue)
+	cleanBody, _, _ := parseDescription(c.decodeFields(issue).Description)
+	_, planBody := splitPlanSections(cleanBody)
 
 	// Build the current meta from the spec (mirrors specFromIssue round-trip).
 	meta := specmeta.Meta{
@@ -651,7 +652,7 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 		descChanged = true
 	}
 	if descChanged {
-		fields["description"] = adfFromText(renderDescription(body, epic, meta))
+		fields["description"] = adfFromText(renderDescription(joinPlanSections(body, planBody), epic, meta))
 	}
 	if len(fields) == 0 {
 		return domain.WriteResult{OK: true, Refs: []domain.Ref{{Code: cur.Code, URL: c.browseURL(key)}}}, nil
@@ -770,6 +771,7 @@ func (c *Connector) decodeFields(it jiraIssue) knownFields {
 func (c *Connector) specFromIssue(it jiraIssue) domain.Spec {
 	f := c.decodeFields(it)
 	body, epic, meta := parseDescription(f.Description)
+	specBody, _ := splitPlanSections(body)
 	status := domain.StatusTodo
 	if f.Status != nil {
 		status = c.statusFromJira(f.Status.Name)
@@ -795,7 +797,7 @@ func (c *Connector) specFromIssue(it jiraIssue) domain.Spec {
 		Status:    status,
 		Scope:     domain.Scope(meta.Scope),
 		BlockedBy: append([]string(nil), meta.BlockedBy...),
-		Body:      body,
+		Body:      specBody,
 		Ref:       it.Key,
 		URL:       c.browseURL(it.Key),
 		Branch:    meta.Branch,
