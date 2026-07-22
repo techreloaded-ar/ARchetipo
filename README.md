@@ -154,7 +154,7 @@ Use this decision guide inside your AI coding agent:
 | Is a spec ready for implementation? | Plan it first. | Run `/archetipo-implement US-001`. |
 | Is a spec waiting in `REVIEW`? | Implement it first. | Run `/archetipo-review US-001` to accept it or send it back. |
 
-For batch work, `/archetipo-autopilot` can run the plan and implement pipeline across eligible backlog specs with filters such as epic, priority, maximum spec count, or stop conditions.
+For batch work, `/archetipo-autopilot` runs the complete plan-to-implementation pipeline until every eligible spec reaches `REVIEW`. Run it without arguments for the whole eligible backlog, with `EP-XXX` for one epic, or with `US-XXX` for one spec.
 
 ---
 
@@ -333,7 +333,7 @@ Yes. Add or refine specs with `/archetipo-spec`, plan them with `/archetipo-plan
 <details>
 <summary><b>What if my AI tool does not support subagents?</b></summary>
 
-The main skills still work in-context. Subagents improve separation of duties, but they are not required for the workflow.
+The main skills still work in-context. Autopilot is the exception: it requires a fresh isolated worker for every planning and implementation phase and stops before mutation when the runtime cannot provide one.
 </details>
 
 <details>

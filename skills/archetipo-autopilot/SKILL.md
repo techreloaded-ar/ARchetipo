@@ -1,469 +1,222 @@
 ---
 name: archetipo-autopilot
-description: Runs the full archetipo pipeline autonomously on backlog specs — for each TODO spec (by priority), spawns clean isolated subagents to plan and implement in sequence, verifying status transitions between steps. Use this skill when the user wants to "run everything", "implement all specs", "autopilot the backlog", "plan and implement everything", "batch process the entire backlog", "fai tutto in autonomia", "esegui tutto dal backlog", or any variation of fully autonomous end-to-end execution from backlog to working code. This skill differs from archetipo-loop because it chains multiple steps (plan → implement) per spec as an atomic pipeline unit, rather than running a single command repeatedly.
+description: Runs the ARchetipo plan-to-implementation pipeline autonomously until the selected backlog specs reach REVIEW. Accepts no argument for every eligible spec, one EP-XXX code for an epic, or one US-XXX code for a single spec. Requires a fresh isolated worker for every planning and implementation phase. Use when the user asks to run everything, implement the backlog, process an epic autonomously, or autopilot one or more specs end to end.
 ---
 
-## Compatibility
+# ARchetipo Autopilot
 
-This skill requires **isolated subagent/worker support** from your AI coding tool.
+Act as a lightweight controller. Reconcile each selected spec from its current workflow state to `REVIEW` by running `archetipo-plan` and `archetipo-implement` in separate fresh workers. Never read source code, plans, PRDs, or Wiki pages in the controller context.
 
-| Tool | Status |
-|---|---|
-| Claude Code (Agent tool) | Supported |
-| Cursor (Task tool) | Supported |
-| Gemini CLI (`create_sub_agent`) | Supported |
-| Roo Code (`new_task` / Orchestrator) | Supported |
-| Codex.ai | **Not supported** — lacks subagents |
-| GitHub Copilot | **Not supported** — lacks subagents |
-| OpenCode | **Not supported** — lacks subagents |
+## Shared runtime
 
-**If your tool is not supported**, run the pipeline manually:
-1. `/archetipo-plan US-XXX` for each spec
-2. `/archetipo-implement US-XXX` for each spec
+Read `.archetipo/shared-runtime.md` exactly once at activation time. Apply its JSON envelope, project-root, language, and error rules throughout this run.
 
-# ARchetipo Autopilot — Autonomous Pipeline Execution
+## Execution contract
 
-You are a **Direttore d'Orchestra** (orchestra conductor): you don't play any instrument, you coordinate the performers. For each spec in the backlog, you spawn isolated subagents to execute the pipeline steps (plan → implement), verify status transitions between steps, and move to the next spec. Your context stays lightweight — you never read source code, plans, or PRDs.
+1. Require a foreground worker/subagent mechanism that creates a fresh isolated context for every invocation and lets the controller wait for its result.
+2. Stop before creating state or mutating the project when that capability is unavailable or cannot be established. Do not execute either phase in the controller context.
+3. Run one phase at a time. Never run two spec-writing workers concurrently.
+4. Treat CLI state as authoritative. A worker summary is telemetry, never proof of success.
+5. Stop at the first failed worker, unresolved dependency, invalid transition, or failed verification. Do not skip and do not retry automatically.
+6. Target `{config.workflow.statuses.review}`. Final human acceptance through `archetipo-review` remains outside this skill.
+7. Do not start, detect, or depend on a vendor-native goal, loop, or autopilot mode.
 
----
+## Input
 
-## Input Parameters
+Accept exactly one of these forms:
 
-| Parameter | Format | Default | Example |
-|---|---|---|---|
-| **--epic** | Filter by epic code | all epics | `--epic EP-002` |
-| **--priority** | Minimum priority level | all priorities | `--priority HIGH` |
-| **--max-specs** | Maximum specs to process | 5 | `--max-specs 10` |
-| **--stop-when** | Exit condition in natural language | all matching specs processed | `--stop-when "EP-001 completato"` |
-| **--steps** | Pipeline steps to execute | `plan,implement` | `--steps plan` |
-| **--on-error** | Error strategy | `ask` | `--on-error skip` |
-
-**Argument parsing:**
-- `--steps` accepts a comma-separated list: `plan`, `implement`, or `plan,implement`
-- `--on-error` accepts: `ask` (default — prompt user), `skip` (log and continue), `stop` (halt immediately)
-- `--priority` filters specs with priority >= the specified level (HIGH > MEDIUM > LOW)
-
-**Invocation examples:**
-```
+```text
 /archetipo-autopilot
-/archetipo-autopilot --epic EP-002 --max-specs 3
-/archetipo-autopilot --priority HIGH --on-error skip --max-specs 10
-/archetipo-autopilot --steps plan --max-specs 20
-/archetipo-autopilot --stop-when "tutte le spec di EP-001 sono in REVIEW"
+/archetipo-autopilot EP-002
+/archetipo-autopilot US-017
 ```
 
----
+Interpret them as follows:
 
-## Architecture
+- no argument: select every eligible spec;
+- one `EP-[0-9]{3}` token: select eligible specs whose `epic.code` matches it;
+- one `US-[0-9]{3}` token: select that exact spec.
 
+Reject flags, free-form conditions, malformed identifiers, extra tokens, and multiple identifiers before any mutation. Do not normalize lowercase or infer a partial code.
+
+## Direct CLI operations
+
+Invoke only these CLI operations in the controller:
+
+- `archetipo config show`
+- `archetipo spec list`
+- `archetipo spec show <US-CODE>`
+
+Run them from `data.project_root`, parse stdout and stderr as the shared JSON envelopes, and branch on `error.code`. Phase workers invoke the additional commands declared by their own skills.
+
+## Isolated worker contract
+
+A compatible worker mechanism must:
+
+- start each invocation with a fresh context that does not contain prior phase conversation or tool output;
+- receive a bounded prompt and the absolute project root;
+- load and execute the installed phase skill;
+- have the tools and permissions needed by that skill;
+- run in the foreground so the controller can wait;
+- terminate after returning a concise result.
+
+Nested workers are not required. The phase worker may complete its entire phase itself when its skill provides an inline execution path.
+
+If the contract is unavailable, stop with a message equivalent to:
+
+```text
+ARchetipo Autopilot is unavailable because this runtime cannot create a fresh
+isolated worker for every planning and implementation phase. Run each phase in
+a separate agent session or use a compatible runtime.
 ```
-Autopilot Controller (main context, lightweight — never reads codebase)
-  │
-  ├─ Spec US-001
-  │   ├─ Subagent A → /archetipo-plan US-001   → [context destroyed]
-  │   └─ Subagent B → /archetipo-implement US-001 → [context destroyed]
-  │
-  ├─ Spec US-002
-  │   ├─ Subagent C → /archetipo-plan US-002   → [context destroyed]
-  │   └─ Subagent D → /archetipo-implement US-002 → [context destroyed]
-  │
-  └─ ...
+
+## Run state
+
+Persist an active run in:
+
+```text
+.archetipo/autopilot-state-{UTC_TIMESTAMP}-{SHORT_SUFFIX}.yaml
 ```
 
-**Context isolation is absolute.** Each subagent:
-- Starts with an empty context — no residue from any previous subagent
-- Receives ONLY: the command to execute, the working directory, and a 1-2 sentence summary of previous specs
-- Reads the project context, config, backlog, and codebase from scratch — exactly as if the user typed the command in a new terminal session
-- Terminates completely after execution — its context is destroyed
-- Returns only a 1-3 sentence summary to the controller
-
-This means subagent C (plan US-002) knows nothing about what subagent B (implement US-001) did. The controller never accumulates codebase knowledge.
-
----
-
-## State File
-
-Each autopilot run generates a **unique state file**:
-
-```
-.archetipo/autopilot-state-{unix_timestamp}.yaml
-```
-
-If the `.archetipo` folder does not exist, create it before writing the state file.
+Use this minimal shape:
 
 ```yaml
 autopilot:
-  steps: [plan, implement]
-  filters:
-    epic: null
-    priority: null
-  max_specs: 5
-  exit_condition: null
-  on_error: ask
-  current_spec_index: 1
-  status: running  # running | completed | max_reached | error | stopped
-  started_at: "2026-03-29T10:30:00"
-  updated_at: "2026-03-29T11:15:30"
-
-queue:
-  - code: US-001
-    title: "Login utente"
-    epic: EP-001
-    priority: HIGH
-    points: 3
-    pipeline:
-      plan:
-        status: success  # pending | success | error | skipped
-        summary: "Piano creato con 8 task (5 impl, 2 test)"
-        timestamp: "2026-03-29T10:35:00"
-      implement:
-        status: success
-        summary: "Implementati 8 task, 12 test scritti, code review superata"
-        timestamp: "2026-03-29T11:10:00"
-    result: completed  # completed | partial | error | skipped | pending
-
-  - code: US-002
-    title: "Dashboard principale"
-    epic: EP-001
-    priority: HIGH
-    points: 5
-    pipeline:
-      plan:
-        status: pending
-        summary: null
-        timestamp: null
-      implement:
-        status: pending
-        summary: null
-        timestamp: null
-    result: pending
+  id: "20260722T103000Z-a1b2"
+  scope: ALL       # ALL | EP-XXX | US-XXX
+  selected_specs: [US-001, US-002]
+  current_spec: US-001
+  status: running  # running | error
+  started_at: "2026-07-22T10:30:00Z"
+  updated_at: "2026-07-22T10:35:00Z"
+  last_error: null
 ```
 
-The state file has two purposes:
-1. **Resilience** — if the session is interrupted, the autopilot can resume from the exact step where it stopped
-2. **Summaries for subagents** — each subagent receives only the summary strings from completed specs, never detailed content
+Write state updates atomically through a sibling temporary file followed by replacement when the available file tools support it. Never store phase summaries, duplicated workflow states, plans, task bodies, or source-code observations.
 
----
+Before creating a run:
+
+1. Find active `autopilot-state-*.yaml` files with `status: running` or `status: error`.
+2. If exactly one file exists and its `scope` equals the requested scope, resume it automatically from its frozen `selected_specs`; set `status: running` and clear `last_error`.
+3. If an active file has a different scope, or multiple active files exist, stop without mutation and report the conflicting paths.
+4. Never silently discard an active run.
+
+Delete the state file only after every selected spec is verified at `REVIEW` or `DONE`. Retain it after errors or interruption so a later invocation with the same scope can resume.
 
 ## Workflow
 
-### PHASE 0 — Initialization
+### Phase 0 — Initialize
 
-1. Parse user arguments (steps, epic, priority, max-specs, stop-when, on-error)
+1. Validate the input.
+2. Verify the isolated worker contract.
+3. Run `archetipo config show` and retain `data.project_root`, configured workflow labels, and paths.
+4. Detect and resume a matching active run when present.
+5. Otherwise run `archetipo spec list` and freeze the selection:
+   - `ALL`: specs in configured `TODO`, `PLANNED`, or `IN PROGRESS` states;
+   - `EP-XXX`: the same eligible states within that epic;
+   - `US-XXX`: the exact spec, including `REVIEW` or `DONE` so an already-satisfied invocation can finish as a no-op.
+6. For an unknown `EP-XXX` or `US-XXX`, stop before creating state and report the missing scope.
+7. If `ALL` or an epic contains no eligible specs, report that the scope already has no work requiring Autopilot and stop successfully without creating state.
+8. Validate dependencies and order the frozen selection as described below.
+9. Create the state file and announce the frozen queue.
 
-2. Run `archetipo config show` and parse the stdout JSON envelope; keep `data` (SetupInfo) available.
-   Parse stderr as the JSON error envelope and branch on `error.code`.
-   This skill uses only these CLI operations directly:
-   - `archetipo config show`
-   - `archetipo spec list [--status STATUS]`
+### Dependency ordering
 
-3. **Cleanup residual state files:** find all `.archetipo/autopilot-state-*.yaml` files with terminal status (`completed`, `max_reached`, `stopped`) and delete them.
+Use `blocked_by` from `archetipo spec list` to build a dependency graph.
 
-4. **Active state detection:** find all `.archetipo/autopilot-state-*.yaml` files with `status: running` or `status: error`.
+- Place every selected blocker before its dependent spec.
+- Among currently dependency-ready specs, sort by priority `HIGH`, `MEDIUM`, `LOW`, then by code.
+- Treat a dependency outside the frozen selection as satisfied only when its current status is configured `REVIEW` or `DONE`.
+- Treat a missing blocker, a dependency cycle, or an external blocker below `REVIEW` as a blocking error. Do not widen an explicit epic or spec scope automatically.
 
-   **If none found:** proceed normally to step 5.
+### Phase 1 — Reconcile specs
 
-   **If one found:**
-   - Check the `updated_at` field: if it is older than **2 hours**, flag it as a probable orphan:
-     ```
-     Trovato un autopilot in stato "running", ma l'ultima attività risale a {tempo_fa}.
-     Probabilmente la sessione si è interrotta.
-     - **Spec processate:** {N}/{total}
-     - **Ultima spec:** {US-CODE}
-     - **Ultimo step:** {plan/implement}
+For each frozen spec code:
 
-     Vuoi riprenderlo o scartarlo e avviarne uno nuovo?
-     ```
-   - If `updated_at` is recent (less than 2 hours), warn the user it may be active elsewhere.
-   - If the user wants to **resume**: read the state file, find the first spec with `result: pending` or `result: error`, determine which pipeline step to resume from, and continue from PHASE 1.
-   - If the user wants to **discard**: delete the state file and proceed normally.
-   - If the user wants to **start an independent run**: proceed normally (new timestamp = new file).
+1. Set `current_spec` and update `updated_at` in the state file.
+2. Run `archetipo spec show <US-CODE>`.
+3. Choose exactly one action from the observed state:
+   - configured `TODO`: run the planning phase;
+   - configured `PLANNED` or `IN PROGRESS`: run the implementation phase;
+   - configured `REVIEW` or `DONE`: mark the spec satisfied and continue;
+   - any other state: fail the run.
+4. After a successful planning phase, observe the spec again and continue reconciliation of the same spec; do not advance directly from the worker summary.
+5. After a successful implementation phase, observe and verify the spec, then advance to the next code.
 
-   **If more than one found:** present a list and ask the user how to proceed.
+#### Planning phase
 
-5. **Build the spec queue.** Read the backlog once and select specs.
+Spawn one fresh worker with a prompt containing only:
 
-   Run `archetipo spec list` (no `--status` flag) and parse the JSON envelope to evaluate every item against the pipeline steps.
+```text
+Working directory: {data.project_root}
+Spec: {US-CODE}
+Phase skill: archetipo-plan
+Expected terminal state: {config.workflow.statuses.planned}
 
-   **Spec selection rules:**
-   - If `--steps` includes `plan`: select specs with `status: TODO`
-   - If `--steps` is `implement` only: select specs with `status: PLANNED`
-   - Apply `--epic` filter if provided
-   - Apply `--priority` filter if provided (include the specified level and above)
-   - Sort by: priority (HIGH > MEDIUM > LOW), then by spec number (US-001 before US-002)
-   - Take at most `--max-specs` specs
-
-   If no specs match the filters, inform the user and stop:
-   ```
-   Nessuna spec trovata con i filtri specificati.
-   - Stato richiesto: {TODO/PLANNED}
-   - Epic: {epic or "tutti"}
-   - Priorità minima: {priority or "tutte"}
-   ```
-
-6. Generate the current unix timestamp as the autopilot ID and create the initial state file.
-
-7. **Announce the queue:**
-
-```
-🎼 **ARchetipo Autopilot** — Avviato
-
-**Spec in coda:** {N}
-**Pipeline:** {steps}
-**Max spec:** {max-specs}
-**Epic:** {epic or "tutti"}
-**Priorità minima:** {priority or "tutte"}
-**Gestione errori:** {on-error}
-
-| # | Spec | Epic | Priorità | SP |
-|---|---|---|---|---|
-| 1 | US-XXX: {title} | EP-XXX | HIGH | 3 |
-| 2 | US-YYY: {title} | EP-YYY | MEDIUM | 5 |
-
-Avvio pipeline sulla prima spec...
+Load the installed archetipo-plan skill and execute it for {US-CODE}. Read the
+project instructions and current repository state yourself. Do not assume any
+knowledge from earlier Autopilot phases. Complete the whole planning phase in
+this worker and return a concise outcome.
 ```
 
----
+After the worker terminates, run `archetipo spec show <US-CODE>` regardless of its textual result. Accept the phase only when:
 
-### PHASE 1 — Spec Pipeline Execution
+- `data.spec.status` equals configured `PLANNED`; and
+- `data.tasks` is non-empty.
 
-For each spec in the queue, execute the pipeline steps **sequentially**. Each step is a separate subagent invocation.
+Otherwise fail the run with the observed status and task count.
 
-#### Step A — Plan
+#### Implementation phase
 
-**Condition:** `plan` is in `--steps` AND the spec status is `TODO`.
+Spawn a different fresh worker with a prompt containing only:
 
-If the spec is already `PLANNED` (e.g., from a previous partial run), skip this step.
+```text
+Working directory: {data.project_root}
+Spec: {US-CODE}
+Phase skill: archetipo-implement
+Expected terminal state: {config.workflow.statuses.review}
 
-Spawn a subagent with this prompt:
-
-```
-## Operational Context
-
-- **Working directory:** {absolute path to project root}
-- **Autopilot Mode:** Spec {N} of {total} in an autonomous pipeline run.
-
-### Previous Specs Summary
-{summaries from completed specs in state file, or "First spec — no prior context."}
-
-## Task
-
-Execute /archetipo-plan {US-CODE}
-
-## Instructions
-
-1. Read the project context and configuration files if present (for example `.archetipo/config.yaml`, `CLAUDE.md`, `AGENTS.md`, or other agent-instructions files) to understand the project structure and conventions
-2. Execute the planning skill for spec {US-CODE}
-3. When done, return a concise summary (1-2 sentences) of the plan produced and whether it succeeded
+Load the installed archetipo-implement skill and execute it for {US-CODE}.
+Read the persisted plan, project instructions, and current repository state
+yourself. Do not assume any knowledge from planning or earlier specs. Complete
+the whole implementation phase in this worker and return a concise outcome.
 ```
 
-**After the subagent returns:**
+After the worker terminates, run `archetipo spec show <US-CODE>` regardless of its textual result. Accept the phase only when:
 
-Trust the subagent's result — do not re-read the backlog. The plan skill already verifies the status transition internally.
+- `data.spec.status` equals configured `REVIEW`; and
+- `data.tasks` is non-empty; and
+- every `data.tasks[].status` is canonical `DONE`.
 
-1. If the subagent returns successfully (no error):
-   - Record `plan.status: success` and the summary in the state file
-   - Update `updated_at`
-   - **Mockup artifact verification:** If the plan summary mentions UI work, mockups, or design:
-     1. Check if `{config.paths.mockups}/{US-CODE}/` contains at least one file (use `ls` or glob)
-     2. If mockup files are found: record `mockup_verified: true` in the state file and proceed
-     3. If NO mockup files are found:
-        - Spawn a dedicated mockup subagent: execute `/archetipo-design {US-CODE}` with the spec title and plan summary as context
-        - Wait for completion (do NOT run in background)
-        - Verify files exist after completion
-        - If still no files: log `mockup_missing: true` in the state file and proceed anyway (do not block the pipeline)
-   - Proceed to Step B
-2. If the subagent returns an error or failure:
-   - Record `plan.status: error` with the subagent's return as error detail
-   - Apply error strategy (see Error Handling section)
+Otherwise fail the run with the observed status and remaining task IDs.
 
-#### Step B — Implement
+Mockups, E2E coverage, task execution, fix loops, Wiki maintenance, and code review belong entirely to the phase skills. Do not duplicate or infer those responsibilities from worker summaries.
 
-**Condition:** `implement` is in `--steps` AND the spec status is `PLANNED`.
+### Phase 2 — Complete
 
-Spawn a subagent with this prompt:
+After the queue is exhausted:
 
-```
-## Operational Context
+1. Run `archetipo spec show` once more for every frozen code.
+2. Require every spec status to be configured `REVIEW` or `DONE`.
+3. Delete the state file.
+4. Report the scope, verified spec codes, final statuses, and that human acceptance remains pending for specs in `REVIEW`.
 
-- **Working directory:** {absolute path to project root}
-- **Autopilot Mode:** Spec {N} of {total} in an autonomous pipeline run.
+## Failure handling
 
-### Previous Specs Summary
-{summaries from completed specs in state file}
+On any worker failure, CLI error, unresolved dependency, unexpected state, or verification failure:
 
-## Task
+1. Re-read the current spec with `archetipo spec show` when possible.
+2. When the state file already exists, set `status: error`, update `updated_at`, and record a concise `last_error` containing the spec, phase, observed state, and stable `error.code` when available. Failures detected before state creation remain mutation-free.
+3. Stop immediately. Do not retry, skip, start another worker, delete the state file, or continue to another spec.
+4. If state was created, report its retained path and explain that invoking Autopilot again with the same scope resumes from authoritative CLI state. Otherwise report that no run state was created.
 
-Execute /archetipo-implement {US-CODE}
+## User-facing progress
 
-## Instructions
+Keep controller output compact:
 
-1. Read the project context and configuration files if present (for example `.archetipo/config.yaml`, `CLAUDE.md`, `AGENTS.md`, or other agent-instructions files) to understand the project structure and conventions
-2. Execute the implementation skill for spec {US-CODE}
-3. When done, return a concise summary (2-3 sentences) of what was implemented, tests written, and code review result
-```
+- opening: scope and frozen queue;
+- after each verified phase: spec, phase, observed transition;
+- after each satisfied spec: progress count;
+- closure: verified final states or the first blocking error.
 
-**After the subagent returns:**
-
-Trust the subagent's result — do not re-read the backlog. The implement skill already verifies status transitions internally.
-
-1. If the subagent returns successfully (no error):
-   - Record `implement.status: success` and the summary in the state file
-   - Mark spec `result: completed`
-   - Update `updated_at`
-   - **E2E verification:** If the spec involves UI work and the implement summary does NOT mention e2e tests:
-     1. Log `e2e_missing: true` in the spec's state entry
-     2. Include a warning in the spec progress update: `⚠️ E2E test non scritti per questa spec`
-     3. Do NOT block the pipeline — proceed to the next spec
-2. If the subagent returns an error or failure:
-   - Record `implement.status: error`
-   - Mark spec `result: partial` (plan succeeded but implement failed)
-   - Apply error strategy
-
-#### Between specs
-
-After completing a spec's pipeline, output a brief progress update:
-
-```
-### US-XXX completata ({N}/{total})
-- **Plan:** {plan summary}
-- **Implement:** {implement summary}
-
-Prossima: US-YYY — {title}
-```
-
-Then proceed to PHASE 2 before starting the next spec.
-
----
-
-### PHASE 2 — Exit Condition Evaluation
-
-After each spec pipeline completes, run these checks in order:
-
-**Check A — Exit condition met:**
-If `--stop-when` was specified, verify the condition. This requires re-reading the backlog to check current statuses.
-
-Re-run `archetipo spec list` to get current statuses.
-
-Evaluate the `--stop-when` condition against the current state (e.g., "EP-001 completato" → check if all EP-001 specs are in REVIEW or DONE).
-
-If the condition is met → set `status: completed` → go to PHASE 3.
-
-**Check B — Queue exhausted:**
-If all specs in the queue have been processed → set `status: completed` → go to PHASE 3.
-
-**Check C — Max specs reached:**
-If the number of processed specs equals `--max-specs` → set `status: max_reached` → go to PHASE 3.
-
-**If no exit condition is satisfied** → return to PHASE 1 with the next spec.
-
----
-
-### PHASE 3 — Closure
-
-1. Update the state file with the final status.
-
-2. Present the final summary:
-
-```
-## Autopilot {completed/max_reached/error/stopped}
-
-{closing message — see below}
-
-### Riepilogo spec
-
-| # | Spec | Plan | Implement | Risultato |
-|---|---|---|---|---|
-| 1 | US-XXX: {title} | ✅ | ✅ | completata |
-| 2 | US-YYY: {title} | ✅ | ❌ | parziale |
-| 3 | US-ZZZ: {title} | ⏭️ | ⏭️ | saltata |
-
-**Spec completate:** {N}/{total}
-**Spec con errori:** {N}
-**Spec saltate:** {N}
-```
-
-**Result icons:**
-- ✅ success
-- ❌ error
-- ⏭️ skipped
-- ⏸️ pending (not reached)
-
-**Closing messages by status:**
-
-- `completed`: *"Tutte le spec in coda sono state processate."* — or if stop-when was used: *"La condizione di uscita è stata raggiunta: \"{stop-when}\""*
-- `max_reached`: Include the suggestion to continue with a realistic estimate:
-  ```
-  Raggiunte {max-specs} spec senza soddisfare la condizione di uscita: "{stop-when}".
-
-  **Per proseguire**, riesegui:
-  /archetipo-autopilot {original filters} --max-specs {suggested value} --stop-when "{stop-when}"
-  ```
-  The suggested value should be based on remaining work — if 7 specs remain, suggest `--max-specs 7`.
-- `error`: *"L'autopilot è stato interrotto a causa di un errore sulla spec {US-CODE}."*
-- `stopped`: *"L'autopilot è stato fermato dall'utente alla spec {US-CODE}."*
-
-3. **Delete the state file.** The summary has been communicated and there is no need to keep it.
-
----
-
-## Error Handling
-
-When a pipeline step fails (plan or implement), the behavior depends on `--on-error`:
-
-### `ask` (default)
-
-Prompt the user:
-```
-⚠️ **Errore sulla spec {US-CODE}** — Step: {plan|implement}
-
-{error summary from subagent}
-
-Come vuoi procedere?
-- **Riprova** — riesegui lo step {plan|implement} su {US-CODE}
-- **Salta** — passa alla prossima spec
-- **Ferma** — termina l'autopilot
-```
-
-Record the user's choice in the state file.
-
-### `skip`
-
-Log the error, mark the spec's result as `error` (or `partial` if plan succeeded), and proceed to the next spec. No user interaction.
-
-### `stop`
-
-Log the error, set `status: error`, and go to PHASE 3 (Closure). No user interaction.
-
-### Partial failure
-
-If plan succeeds but implement fails, the spec is marked as `partial`. On resumption, the controller sees the spec is already PLANNED and only retries the implement step — it does not re-run plan.
-
----
-
-## Resumption Logic
-
-When the controller finds an existing `running` or `error` state file and the user chooses to resume:
-
-1. Load the state file (queue, summaries, pipeline statuses)
-2. Find the first spec with `result: pending` or `result: error`
-3. Determine which pipeline step to resume from:
-   - `plan.status: pending` → start from plan
-   - `plan.status: error` → retry plan
-   - `plan.status: success` + `implement.status: pending` → start from implement
-   - `plan.status: success` + `implement.status: error` → retry implement
-4. Continue the normal loop from that spec onward
-
-Specs with `result: completed` or `result: skipped` are never re-processed.
-
----
-
-## Requirements
-
-This skill requires an AI coding tool that supports these capabilities:
-- Isolated subagents or worker contexts
-- Passing a working directory and a short task prompt to each subagent
-- Independent execution of sequential pipeline steps without shared residual context
-- Reading project context, config, backlog, and repository files from the subagent context itself
-
-Any agentic IDE or CLI that provides these capabilities is compatible; the skill logic must remain capability-based rather than vendor-specific.
+Render all messages in the language selected by the shared runtime.
