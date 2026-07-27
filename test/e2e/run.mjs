@@ -172,6 +172,31 @@ function normalizeConfig(manifest, configPath, filterScenarios) {
     if (rawScenario.verify_review_wiki !== undefined && (!rawScenario.verify_review_wiki || typeof rawScenario.verify_review_wiki !== "object" || Array.isArray(rawScenario.verify_review_wiki))) {
       throw new Error(`scenarios.${scenarioId}.verify_review_wiki must be an object when specified in ${configPath}`);
     }
+    if (rawScenario.verify_review_wiki) {
+      const review = rawScenario.verify_review_wiki;
+      for (const key of ["exact_reviewed_pages", "reviewed_pages", "review_commit_pages", "affected_only_stale_pages", "context_fresh_pages", "unchanged_review_metadata_pages"]) {
+        if (review[key] !== undefined && (!Array.isArray(review[key]) || !review[key].every((value) => typeof value === "string" && value.trim() !== ""))) {
+          throw new Error(`scenarios.${scenarioId}.verify_review_wiki.${key} must be a list of non-empty strings in ${configPath}`);
+        }
+      }
+      for (const key of ["branch", "worktree"]) {
+        if (typeof review[key] !== "string" || review[key].trim() === "") {
+          throw new Error(`scenarios.${scenarioId}.verify_review_wiki.${key} must be a non-empty string in ${configPath}`);
+        }
+      }
+      if (review.implemented_file_contents !== undefined) {
+        if (!review.implemented_file_contents || typeof review.implemented_file_contents !== "object" || Array.isArray(review.implemented_file_contents)) {
+          throw new Error(`scenarios.${scenarioId}.verify_review_wiki.implemented_file_contents must be a path-to-content object in ${configPath}`);
+        }
+        for (const [file, content] of Object.entries(review.implemented_file_contents)) {
+          const portable = file.replaceAll("\\", "/");
+          const normalized = path.posix.normalize(portable);
+          if (!file || typeof content !== "string" || path.posix.isAbsolute(portable) || /^[A-Za-z]:/.test(portable) || normalized === ".." || normalized.startsWith("../")) {
+            throw new Error(`scenarios.${scenarioId}.verify_review_wiki.implemented_file_contents must contain safe project-relative paths and string contents in ${configPath}`);
+          }
+        }
+      }
+    }
     scenarios.push({
       id: scenarioId,
       agentId,
@@ -313,6 +338,23 @@ async function runConfiguredScenario({ scenario, configPath, timeoutMs, cliSourc
       logRunStepDone(scenario.id, "fixture", "Fixture overlay ready");
     }
 
+    const seedReviewedPages = scenario.verify_review_wiki?.seed_reviewed_pages ?? [];
+    if (seedReviewedPages.length > 0) {
+      logRunStepStart(scenario.id, "seed-reviewed-wiki", `Approving baseline Wiki pages: ${seedReviewedPages.join(", ")}`);
+      const seedRun = await runReportedCommand({
+        ...context,
+        step: "seed-reviewed-wiki",
+        command: context.cliBinaryPath,
+        args: ["wiki", "approve", ...seedReviewedPages],
+      });
+      if (!seedRun.ok) {
+        return finish(classifyRunFailure(context, "seed-reviewed-wiki", seedRun));
+      }
+      const seeded = JSON.parse(seedRun.stdout)?.data?.approved;
+      assertQuality(seeded === seedReviewedPages.length, `expected ${seedReviewedPages.length} seeded Wiki approvals, got ${seeded}`);
+      logRunStepDone(scenario.id, "seed-reviewed-wiki", "Baseline Wiki review metadata seeded by the CLI");
+    }
+
     logRunStepStart(scenario.id, "git-init", "Initializing sandbox git repository");
     await initSandboxGitRepo(context);
     logRunStepDone(scenario.id, "git-init", "Sandbox git repository ready");
@@ -446,15 +488,17 @@ function assertSandboxBinary({ cliBinaryPath, sandboxDir }) {
 }
 
 // initSandboxGitRepo turns the sandbox into a git repository with a `main`
-// branch carrying a single empty commit. The empty base commit avoids tracking
-// the copied CLI binary while still giving `spec start` a base branch to fork
-// the per-spec worktree from. Identity is set on the local repo config so the
-// linked worktrees the agent commits in inherit it.
+// branch carrying an empty commit by default. A focused scenario may list
+// baseline fixture paths that must exist in a worktree before implementation;
+// installed skills and the copied CLI remain untracked. Identity is set on the
+// local repo config so linked worktrees inherit it.
 async function initSandboxGitRepo(context) {
+  const baselinePaths = context.scenario.verify_review_wiki?.seed_baseline_paths ?? [];
   const steps = [
     ["init", "-b", "main"],
     ["config", "user.email", "archetipo-e2e@example.com"],
     ["config", "user.name", "ARchetipo E2E"],
+    ...(baselinePaths.length > 0 ? [["add", "--", ...baselinePaths]] : []),
     ["commit", "--allow-empty", "-m", "chore: e2e sandbox base"],
   ];
   for (let index = 0; index < steps.length; index += 1) {
@@ -756,8 +800,50 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
   if (!show.ok) throw new Error(`spec show ${code} failed: ${show.stderr || show.stdout || `exit ${show.code}`}`);
   const spec = JSON.parse(show.stdout)?.data?.spec;
   assertQuality(spec?.status === "DONE", `expected ${code} to be DONE after review, got ${spec?.status ?? "(missing)"}`);
+  assertQuality(!spec?.branch && !spec?.worktree, `${code} retained branch/worktree metadata after integration`);
+
+  const branchProbe = await runProbe("git", ["rev-parse", "--verify", "--quiet", `${expectations.branch}^{commit}`], { cwd: context.sandboxDir });
+  assertQuality(!branchProbe.ok, `expected integrated review branch ${expectations.branch} to be deleted`);
+  const worktreeAbs = resolveSandboxPath(context.sandboxDir, expectations.worktree);
+  try {
+    await fs.access(worktreeAbs);
+    throw new Error(`expected integrated review worktree ${worktreeAbs} to be removed`);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const worktreeList = await runProbe("git", ["worktree", "list", "--porcelain"], { cwd: context.sandboxDir });
+  assertQuality(worktreeList.ok, `git worktree list failed: ${worktreeList.stderr || `exit ${worktreeList.code}`}`);
+  const listedWorktrees = worktreeList.stdout
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => path.resolve(line.slice("worktree ".length)));
+  assertQuality(!listedWorktrees.includes(path.resolve(worktreeAbs)), `removed review worktree still appears in git worktree list: ${worktreeAbs}`);
 
   const wikiRoot = path.join(context.sandboxDir, expectations.wiki_root ?? "docs/wiki");
+  const statusRun = await runReportedCommand({
+    ...context,
+    step: "verify-review-wiki-status",
+    command: context.cliBinaryPath,
+    args: ["wiki", "status"],
+  });
+  if (!statusRun.ok) throw new Error(`wiki status failed: ${statusRun.stderr || statusRun.stdout || `exit ${statusRun.code}`}`);
+  const wikiStatus = JSON.parse(statusRun.stdout)?.data;
+  const stateByID = new Map((wikiStatus?.items ?? []).map((item) => [item.id, item.state]));
+
+  if (expectations.exact_reviewed_pages) {
+    const persistedReviewed = [];
+    for (const pagePath of await listMarkdownFiles(wikiRoot)) {
+      if (["index.md", "log.md"].includes(path.basename(pagePath))) continue;
+      const meta = parseWikiFrontmatter(await fs.readFile(pagePath, "utf8"), pagePath);
+      if (meta.status === "reviewed") {
+        persistedReviewed.push(path.relative(wikiRoot, pagePath).split(path.sep).join("/").replace(/\.md$/, ""));
+      }
+    }
+    persistedReviewed.sort();
+    const expectedReviewed = [...expectations.exact_reviewed_pages].sort();
+    assertQuality(JSON.stringify(persistedReviewed) === JSON.stringify(expectedReviewed), `persisted reviewed pages mismatch: expected ${expectedReviewed.join(", ")}, got ${persistedReviewed.join(", ")}`);
+  }
+
   for (const id of expectations.reviewed_pages ?? []) {
     const pagePath = path.join(wikiRoot, `${id.split("/").join(path.sep)}.md`);
     const meta = parseWikiFrontmatter(await fs.readFile(pagePath, "utf8"), pagePath);
@@ -768,6 +854,60 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
     assertQuality(committed.ok, `${id} review metadata was not committed on the integrated branch`);
     const committedMeta = parseWikiFrontmatter(committed.stdout, `${rel}@HEAD`);
     assertQuality(committedMeta.status === "reviewed", `${id} is reviewed in the working tree but not in HEAD`);
+  }
+
+  for (const id of expectations.affected_only_stale_pages ?? []) {
+    assertQuality(stateByID.get(id) === "stale", `${id} expected persistent affected-only stale state, got ${stateByID.get(id) ?? "(missing)"}`);
+    const findings = (wikiStatus?.findings ?? []).filter((finding) => finding.page_id === id);
+    assertQuality(findings.some((finding) => finding.code === "WIKI_EVIDENCE_CHANGED"), `${id} has no persistent WIKI_EVIDENCE_CHANGED warning`);
+    assertQuality(findings.every((finding) => finding.code === "WIKI_EVIDENCE_CHANGED"), `${id} has a strong finding that should not be treated as evidence-only: ${JSON.stringify(findings)}`);
+  }
+  for (const id of expectations.context_fresh_pages ?? []) {
+    assertQuality(stateByID.get(id) === "reviewed", `${id} expected reviewed/fresh context state, got ${stateByID.get(id) ?? "(missing)"}`);
+  }
+
+  if (expectations.affected_file) {
+    const affectedRun = await runReportedCommand({
+      ...context,
+      step: "verify-review-wiki-affected",
+      command: context.cliBinaryPath,
+      args: ["wiki", "affected", "--file", expectations.affected_file],
+    });
+    if (!affectedRun.ok) throw new Error(`wiki affected failed: ${affectedRun.stderr || affectedRun.stdout || `exit ${affectedRun.code}`}`);
+    const affectedIDs = new Set((JSON.parse(affectedRun.stdout)?.data?.items ?? []).map((item) => item.id));
+    for (const id of expectations.affected_only_stale_pages ?? []) {
+      assertQuality(affectedIDs.has(id), `${id} expected in affected results for ${expectations.affected_file}`);
+    }
+    for (const id of expectations.context_fresh_pages ?? []) {
+      assertQuality(!affectedIDs.has(id), `${id} context source unexpectedly appeared in affected results for ${expectations.affected_file}`);
+    }
+  }
+
+  const initialCommit = await runProbe("git", ["rev-list", "--max-parents=0", "HEAD"], { cwd: context.sandboxDir });
+  assertQuality(initialCommit.ok && initialCommit.stdout.trim(), `cannot resolve initial fixture commit: ${initialCommit.stderr}`);
+  for (const id of expectations.unchanged_review_metadata_pages ?? []) {
+    const pagePath = path.join(wikiRoot, `${id.split("/").join(path.sep)}.md`);
+    const rel = path.relative(context.sandboxDir, pagePath);
+    const baseline = await runProbe("git", ["show", `${initialCommit.stdout.trim()}:${rel}`], { cwd: context.sandboxDir });
+    assertQuality(baseline.ok, `cannot read baseline metadata for ${id}: ${baseline.stderr}`);
+    const baselineMeta = parseWikiFrontmatter(baseline.stdout, `${rel}@baseline`);
+    const finalMeta = parseWikiFrontmatter(await fs.readFile(pagePath, "utf8"), pagePath);
+    assertQuality(JSON.stringify(finalMeta.review) === JSON.stringify(baselineMeta.review), `${id} review metadata changed during affected-only acceptance`);
+  }
+
+  if ((expectations.review_commit_pages ?? []).length > 0) {
+    const subject = `docs(${code}): approve Wiki updates`;
+    const commit = await runProbe("git", ["log", "--format=%H", "--grep", `^${subject}$`, "-1"], { cwd: context.sandboxDir });
+    assertQuality(commit.ok && commit.stdout.trim(), `missing dedicated Wiki approval commit: ${subject}`);
+    const names = await runProbe("git", ["diff-tree", "--no-commit-id", "--name-only", "-r", commit.stdout.trim()], { cwd: context.sandboxDir });
+    assertQuality(names.ok, `cannot inspect Wiki approval commit: ${names.stderr}`);
+    const actual = names.stdout.trim().split(/\r?\n/).filter(Boolean).sort();
+    const expected = [
+      ...(expectations.review_commit_pages ?? []).map((id) => path.posix.join(expectations.wiki_root ?? "docs/wiki", `${id}.md`)),
+      path.posix.join(expectations.wiki_root ?? "docs/wiki", "index.md"),
+      path.posix.join(expectations.wiki_root ?? "docs/wiki", "log.md"),
+    ].sort();
+    assertQuality(JSON.stringify(actual) === JSON.stringify(expected), `Wiki approval commit paths mismatch: expected ${expected.join(", ")}, got ${actual.join(", ")}`);
   }
 
   const requiredCatalogFiles = ["index.md", "log.md"];
@@ -784,6 +924,15 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
     }
   }
 
+  for (const [file, expectedContent] of Object.entries(expectations.implemented_file_contents ?? {})) {
+    const filePath = path.join(context.sandboxDir, file.split("/").join(path.sep));
+    const actualContent = await fs.readFile(filePath, "utf8");
+    assertQuality(actualContent === expectedContent, `${file} content mismatch: expected ${JSON.stringify(expectedContent)}, got ${JSON.stringify(actualContent)}`);
+    const committedPath = path.relative(context.sandboxDir, filePath).split(path.sep).join("/");
+    const committed = await runProbe("git", ["show", `HEAD:${committedPath}`], { cwd: context.sandboxDir });
+    assertQuality(committed.ok && committed.stdout === expectedContent, `${file} exact content is not committed on the integrated branch`);
+  }
+
   const validation = await runReportedCommand({
     ...context,
     step: "verify-review-wiki-validate",
@@ -796,6 +945,11 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
 
   for (const expected of expectations.output_includes ?? []) {
     assertQuality(reviewOutput.includes(expected), `review output does not include Wiki dossier evidence: ${expected}`);
+  }
+  for (const id of expectations.warning_output_pages ?? []) {
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const warningNearPage = new RegExp(`(?:${escaped}[\\s\\S]{0,500}(?:warning|non-blocking|stale)|(?:warning|non-blocking|stale)[\\s\\S]{0,500}${escaped})`, "i");
+    assertQuality(warningNearPage.test(reviewOutput), `review dossier does not present ${id} as a warning/non-blocking stale page`);
   }
   if (expectations.require_clean) {
     const status = await runProbe("git", ["status", "--short", "--untracked-files=no"], { cwd: context.sandboxDir });

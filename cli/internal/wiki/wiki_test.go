@@ -1,7 +1,9 @@
 package wiki
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -597,13 +599,13 @@ sources:
 
 func TestPageStateDerivesAttentionAndStale(t *testing.T) {
 	page := Page{Meta: domain.WikiPageMeta{Status: domain.WikiStatusGenerated, Issues: []domain.WikiIssue{{Code: "CONFLICT", Summary: "Code and intent differ"}}}, Body: "body"}
-	if state := PageState(t.TempDir(), page); state != "attention" {
+	if state := PageState(t.TempDir(), t.TempDir(), page); state != "attention" {
 		t.Fatalf("state=%s", state)
 	}
 	page.Meta.Issues = nil
 	page.Meta.Status = domain.WikiStatusReviewed
 	page.Meta.Review = &domain.WikiReview{ContentHash: "sha256:old", EvidenceRevision: "unavailable", ReviewedAt: "2026-07-13T00:00:00Z"}
-	if state := PageState(t.TempDir(), page); state != "stale" {
+	if state := PageState(t.TempDir(), t.TempDir(), page); state != "stale" {
 		t.Fatalf("state=%s", state)
 	}
 }
@@ -624,18 +626,253 @@ func TestPageStateBecomesStaleWhenSemanticMetadataChanges(t *testing.T) {
 		EvidenceRevision: "unavailable",
 		ReviewedAt:       "2026-07-13T00:00:00Z",
 	}
-	if state := PageState(t.TempDir(), page); state != "reviewed" {
+	if state := PageState(t.TempDir(), t.TempDir(), page); state != "reviewed" {
 		t.Fatalf("state before metadata change=%s", state)
 	}
 	page.Meta.Description = "Changed description"
-	if state := PageState(t.TempDir(), page); state != "stale" {
+	if state := PageState(t.TempDir(), t.TempDir(), page); state != "stale" {
 		t.Fatalf("state after metadata change=%s", state)
 	}
 	page.Meta.Description = "Original description"
 	page.Meta.Review.ContentHash = pageContentHash(page)
 	page.ID = "renamed-overview"
-	if state := PageState(t.TempDir(), page); state != "stale" {
+	if state := PageState(t.TempDir(), t.TempDir(), page); state != "stale" {
 		t.Fatalf("state after identity change=%s", state)
+	}
+}
+
+func TestSourceFreshnessControlsEvidenceAndAffected(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, body := range map[string]string{
+		"docs/PRD.md":    "authoritative product intent\n",
+		"src/hub.ts":     "export const hub = true;\n",
+		"src/omitted.ts": "export const omitted = true;\n",
+		"src/tracked.ts": "export const tracked = true;\n",
+	} {
+		if err := os.WriteFile(filepath.Join(project, filepath.FromSlash(path)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSimplePage(t, root, "omitted", "src/omitted.ts")
+	tracked := `---
+type: guide
+title: tracked
+description: tracked description
+status: generated
+sources:
+  - path: src/tracked.ts
+    freshness: tracked
+---
+# tracked
+`
+	if err := os.WriteFile(filepath.Join(root, "tracked.md"), []byte(tracked), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reference := `---
+type: reference
+title: Product requirements
+description: Authoritative product requirements
+status: generated
+sources:
+  - path: docs/PRD.md
+    role: original
+    freshness: tracked
+  - path: src/hub.ts
+    role: implementation
+    freshness: context
+---
+# Product requirements
+`
+	if err := os.WriteFile(filepath.Join(root, "references", "prd.md"), []byte(reference), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if approved, err := Approve(project, root, []string{"omitted", "tracked", "references/prd"}); err != nil || approved != 3 {
+		t.Fatalf("approve source relevance pages: approved=%d err=%v", approved, err)
+	}
+
+	referencePath := filepath.Join(root, "references", "prd.md")
+	approvedReference, err := os.ReadFile(referencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(approvedReference), "freshness: context") || !strings.Contains(string(approvedReference), "freshness: tracked") {
+		t.Fatalf("source freshness was not serialized:\n%s", approvedReference)
+	}
+	changedFreshness := strings.Replace(string(approvedReference), "freshness: context", "freshness: tracked", 1)
+	if err := os.WriteFile(referencePath, []byte(changedFreshness), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changedPages, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := PageState(project, root, pagesByID(changedPages)["references/prd"]); state != "stale" {
+		t.Fatalf("changing source freshness did not invalidate content review: %s", state)
+	}
+	if report := Validate(project, root); !hasFinding(report, "WIKI_REVIEW_OUTDATED") {
+		t.Fatalf("changing source freshness did not produce an outdated review: %+v", report.Findings)
+	}
+	if err := os.WriteFile(referencePath, approvedReference, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(project, "src", "hub.ts"), []byte("export const hub = false;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := PageState(project, root, pagesByID(pages)["references/prd"]); state != "reviewed" {
+		t.Fatalf("context source changed reference state: %s", state)
+	}
+	affected, err := Affected(project, root, []string{"src/hub.ts"})
+	if err != nil || len(affected) != 0 {
+		t.Fatalf("context source appeared in affected: pages=%+v err=%v", affected, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(project, "docs", "PRD.md"), []byte("changed product intent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pages, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := PageState(project, root, pagesByID(pages)["references/prd"]); state != "stale" {
+		t.Fatalf("authoritative PRD change did not stale reference: %s", state)
+	}
+	affected, err = Affected(project, root, []string{"docs/PRD.md"})
+	if err != nil || len(affected) != 1 || affected[0].ID != "references/prd" {
+		t.Fatalf("authoritative PRD was not affected: pages=%+v err=%v", affected, err)
+	}
+
+	for _, id := range []string{"omitted", "tracked"} {
+		path := "src/" + id + ".ts"
+		affected, err = Affected(project, root, []string{path})
+		if err != nil || len(affected) != 1 || affected[0].ID != id {
+			t.Fatalf("%s freshness affected mismatch: pages=%+v err=%v", id, affected, err)
+		}
+		if err := os.WriteFile(filepath.Join(project, filepath.FromSlash(path)), []byte("changed\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pages, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"omitted", "tracked"} {
+		if state := PageState(project, root, pagesByID(pages)[id]); state != "stale" {
+			t.Fatalf("%s source did not retain tracked compatibility: %s", id, state)
+		}
+	}
+}
+
+func TestAffectedNormalizesProjectRelativePaths(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	writePage := func(id, source, freshness string) {
+		t.Helper()
+		page := Page{
+			ID:   id,
+			Path: id + ".md",
+			Meta: domain.WikiPageMeta{
+				Type:        "guide",
+				Title:       id,
+				Description: id + " description",
+				Status:      domain.WikiStatusGenerated,
+				Sources:     []domain.WikiSource{{Path: source, Freshness: freshness}},
+			},
+			Body: "# " + id + "\n",
+		}
+		raw, err := renderPage(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, page.Path), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writePage("root", ".", "")
+	writePage("root-slash", "./", "tracked")
+	writePage("src", "src", "tracked")
+	writePage("context-root", ".", "context")
+	writePage("external", "https://example.test/evidence", "tracked")
+	writePage("absolute", filepath.Join(project, "src"), "tracked")
+	writePage("outside", "../outside", "tracked")
+
+	tests := []struct {
+		name  string
+		files []string
+		want  []string
+	}{
+		{name: "root and directory", files: []string{"src/a.go"}, want: []string{"root", "root-slash", "src"}},
+		{name: "normalized changed path", files: []string{"./src/a.go"}, want: []string{"root", "root-slash", "src"}},
+		{name: "component boundary", files: []string{"src2/a.go"}, want: []string{"root", "root-slash"}},
+		{name: "outside changed path", files: []string{"../outside/a.go"}, want: nil},
+		{name: "absolute changed path", files: []string{filepath.Join(project, "src", "a.go")}, want: nil},
+		{name: "external changed path", files: []string{"https://example.test/src/a.go"}, want: nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pages, err := Affected(project, root, test.files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := make([]string, 0, len(pages))
+			for _, page := range pages {
+				got = append(got, page.ID)
+			}
+			if strings.Join(got, ",") != strings.Join(test.want, ",") {
+				t.Fatalf("Affected(%v)=%v want=%v", test.files, got, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidSourceFreshnessAndChecksContextPaths(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "existing.md"), []byte("existing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw := `---
+type: guide
+title: Invalid freshness
+description: Invalid freshness value
+status: generated
+sources:
+  - path: existing.md
+    freshness: sometimes
+  - path: missing-context.md
+    freshness: context
+---
+# Invalid freshness
+`
+	if err := os.WriteFile(filepath.Join(root, "invalid.md"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := Validate(project, root)
+	if report.OK || !hasFinding(report, "WIKI_INVALID_SOURCE_FRESHNESS") {
+		t.Fatalf("invalid source freshness validated: %+v", report.Findings)
+	}
+	if !hasFinding(report, "WIKI_STALE_SOURCE") {
+		t.Fatalf("invalid/context source skipped existing path validation: %+v", report.Findings)
 	}
 }
 
@@ -658,14 +895,1382 @@ func TestApprovedPageBecomesStaleWhenEvidenceChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	pages, err := Load(root)
-	if err != nil || PageState(project, pages[0]) != "reviewed" {
+	if err != nil || PageState(project, root, pages[0]) != "reviewed" {
 		t.Fatalf("expected reviewed page: %+v err=%v", pages, err)
 	}
 	if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("# Changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if state := PageState(project, pages[0]); state != "stale" {
+	if state := PageState(project, root, pages[0]); state != "stale" {
 		t.Fatalf("state=%s", state)
+	}
+}
+
+func TestApproveKeepsSameBatchWikiEvidenceFreshAcrossCommit(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("# Project\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "guides"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	guidePath := filepath.Join(root, "guides", "runtime.md")
+	guide := `---
+type: guide
+title: Runtime guide
+description: Runtime operating guide
+status: generated
+sources:
+  - path: README.md
+---
+# Runtime guide
+
+Original guidance.
+
+See [decision](/decisions/runtime.md).
+`
+	if err := os.WriteFile(guidePath, []byte(guide), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "decisions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	decision := `---
+type: decision
+title: Runtime decision
+description: Runtime architecture decision
+decision_status: accepted
+status: generated
+sources:
+  - path: docs/wiki/guides/runtime.md
+---
+# Runtime decision
+` + requiredSectionBody("decisions/runtime", "decision") + `
+See [runtime guide](/guides/runtime.md).
+`
+	if err := os.WriteFile(filepath.Join(root, "decisions", "runtime.md"), []byte(decision), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "add", ".")
+	git(t, project, "commit", "-qm", "generated baseline")
+
+	guide = strings.Replace(guide, "Original guidance.", "Semantically updated guidance.", 1)
+	if err := os.WriteFile(guidePath, []byte(guide), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if approved, err := Approve(project, root, []string{"guides/runtime", "decisions/runtime"}); err != nil || approved != 2 {
+		t.Fatalf("same-batch approve: approved=%d err=%v", approved, err)
+	}
+	pages, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range pages {
+		if state := PageState(project, root, page); state != "reviewed" {
+			t.Fatalf("%s state before commit=%s", page.ID, state)
+		}
+		if page.Meta.Review == nil || !wikiContentHashPattern.MatchString(page.Meta.Review.EvidenceHash) {
+			t.Fatalf("%s missing evidence hash: %+v", page.ID, page.Meta.Review)
+		}
+	}
+	approvedGuide, err := os.ReadFile(guidePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "add", "docs/wiki")
+	git(t, project, "commit", "-qm", "approve Wiki batch")
+
+	pages, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range pages {
+		if state := PageState(project, root, page); state != "reviewed" {
+			t.Fatalf("%s state after commit=%s", page.ID, state)
+		}
+	}
+	if report := Validate(project, root); hasFinding(report, "WIKI_EVIDENCE_CHANGED") {
+		t.Fatalf("same-batch approval became stale after commit: %+v", report.Findings)
+	}
+
+	if err := os.WriteFile(guidePath, append(approvedGuide, []byte("\nSemantic change after review.\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pages, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := pagesByID(pages)
+	if state := PageState(project, root, byID["decisions/runtime"]); state != "stale" {
+		t.Fatalf("decision did not detect semantic Wiki evidence change: %s", state)
+	}
+
+	if err := os.WriteFile(guidePath, approvedGuide, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if reset, err := Reset(project, root, []string{"guides/runtime"}); err != nil || reset != 1 {
+		t.Fatalf("reset guide: reset=%d err=%v", reset, err)
+	}
+	pages, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := PageState(project, root, pagesByID(pages)["decisions/runtime"]); state != "reviewed" {
+		t.Fatalf("decision stale after lifecycle-only reset: %s", state)
+	}
+	if approved, err := Approve(project, root, []string{"guides/runtime"}); err != nil || approved != 1 {
+		t.Fatalf("reapprove guide: approved=%d err=%v", approved, err)
+	}
+	pages, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := PageState(project, root, pagesByID(pages)["decisions/runtime"]); state != "reviewed" {
+		t.Fatalf("decision stale after lifecycle-only reapproval: %s", state)
+	}
+}
+
+func TestEvidenceHashCapturesDirtyUntrackedAndDeletedFiles(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, "evidence"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "evidence", "dirty.txt"), []byte("committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "evidence", "delete.txt"), []byte("delete later\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "add", "evidence")
+	git(t, project, "commit", "-qm", "evidence baseline")
+	if err := os.WriteFile(filepath.Join(project, "evidence", "dirty.txt"), []byte("dirty at review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "evidence", "untracked.txt"), []byte("untracked at review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSimplePage(t, root, "dirty", "evidence/dirty.txt")
+	writeSimplePage(t, root, "untracked", "evidence/untracked.txt")
+	writeSimplePage(t, root, "deleted", "evidence/delete.txt")
+	if approved, err := Approve(project, root, []string{"dirty", "untracked", "deleted"}); err != nil || approved != 3 {
+		t.Fatalf("approve working-tree evidence: approved=%d err=%v", approved, err)
+	}
+	pages, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range pages {
+		if state := PageState(project, root, page); state != "reviewed" {
+			t.Fatalf("%s was stale immediately after approval: %s", page.ID, state)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(project, "evidence", "dirty.txt"), []byte("dirty changed again\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "evidence", "untracked.txt"), []byte("untracked changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(project, "evidence", "delete.txt")); err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range pages {
+		if state := PageState(project, root, page); state != "stale" {
+			t.Fatalf("%s did not detect changed working-tree evidence: %s", page.ID, state)
+		}
+	}
+}
+
+func TestSourcePathResolverRejectsLexicalEscapesAndPreservesMissingEvidence(t *testing.T) {
+	project := t.TempDir()
+	resolver, err := newEvidencePathResolver(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{"../outside", "nested/../../outside", `..\outside`} {
+		t.Run(source, func(t *testing.T) {
+			if _, err := resolver.resolve(source); !errors.Is(err, ErrUnsafeSourcePath) {
+				t.Fatalf("resolve(%q) error=%v", source, err)
+			}
+		})
+	}
+	for _, source := range []string{"/absolute", `C:\outside`, `\\server\share\outside`} {
+		t.Run(source, func(t *testing.T) {
+			if _, err := resolver.resolve(source); !errors.Is(err, ErrInvalidSourcePath) {
+				t.Fatalf("resolve(%q) error=%v", source, err)
+			}
+		})
+	}
+	missing, err := resolver.resolve("missing/terminal.txt")
+	if err != nil || missing.Exists || missing.Relative != "missing/terminal.txt" {
+		t.Fatalf("missing terminal resolution=%+v err=%v", missing, err)
+	}
+	root, err := resolver.resolve("./")
+	if err != nil || !root.Exists || !root.Info.IsDir() || root.Relative != "." {
+		t.Fatalf("root resolution=%+v err=%v", root, err)
+	}
+}
+
+func TestSourcePathResolverSymlink(t *testing.T) {
+	t.Run("real symlink integration", testSourcePathResolverRealSymlinkIntegration)
+}
+
+func testSourcePathResolverRealSymlinkIntegration(t *testing.T) {
+	project := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "outside.txt"), []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(project, "redirect")); err != nil {
+		t.Skipf("real symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "outside.txt"), filepath.Join(project, "terminal")); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver, err := newEvidencePathResolver(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolver.resolve("redirect/outside.txt"); !errors.Is(err, ErrUnsafeSourcePath) {
+		t.Fatalf("intermediate symlink error=%v", err)
+	}
+	terminal, err := resolver.resolve("terminal")
+	if err != nil || !terminal.Exists || terminal.Info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("terminal symlink resolution=%+v err=%v", terminal, err)
+	}
+	missing, err := pageHasMissingEvidence(resolver, Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "terminal"}}}})
+	if err != nil || missing {
+		t.Fatalf("terminal symlink was treated as missing: missing=%v err=%v", missing, err)
+	}
+
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	writeSimplePage(t, root, "unsafe", "redirect/outside.txt")
+	report := Validate(project, root)
+	if report.OK || !hasFinding(report, "WIKI_UNSAFE_SOURCE_PATH") {
+		t.Fatalf("unsafe source validated: %+v", report.Findings)
+	}
+	pages, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := evidenceFingerprint(project, root, pages[0]); !errors.Is(err, ErrUnsafeSourcePath) {
+		t.Fatalf("fingerprinting unsafe source error=%v", err)
+	}
+	if _, err := pageHasMissingEvidence(resolver, pages[0]); !errors.Is(err, ErrUnsafeSourcePath) {
+		t.Fatalf("missing-evidence check unsafe source error=%v", err)
+	}
+
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "terminal"}}}}
+	before, err := evidenceFingerprint(project, root, page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "outside.txt"), []byte("changed outside content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := evidenceFingerprint(project, root, page)
+	if err != nil || after != before {
+		t.Fatalf("terminal symlink followed its target: before=%s after=%s err=%v", before, after, err)
+	}
+
+	aliasParent := t.TempDir()
+	alias := filepath.Join(aliasParent, "project-alias")
+	if err := os.Symlink(project, alias); err != nil {
+		t.Fatal(err)
+	}
+	aliasResolver, err := newEvidencePathResolver(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := aliasResolver.resolve(".")
+	physicalProject, evalErr := filepath.EvalSymlinks(project)
+	if err != nil || evalErr != nil || resolvedRoot.Path != physicalProject {
+		t.Fatalf("root alias did not resolve to trusted anchor: resolved=%+v physical=%s err=%v evalErr=%v", resolvedRoot, physicalProject, err, evalErr)
+	}
+}
+
+func TestMissingEvidenceUsesTerminalLstat(t *testing.T) {
+	project := t.TempDir()
+	resolver, err := newEvidencePathResolver(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "missing.txt"}}}}
+	missing, err := pageHasMissingEvidence(resolver, page)
+	if err != nil || !missing {
+		t.Fatalf("missing evidence result=%v err=%v", missing, err)
+	}
+}
+
+func TestEvidenceFingerprintDirectoryModeAndMissingDeterminism(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(project, "evidence")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.sh"), []byte("echo a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence"}}}}
+	first, err := evidenceFingerprint(project, root, page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := evidenceFingerprint(project, root, page)
+	if err != nil || second != first {
+		t.Fatalf("directory fingerprint is not deterministic: first=%s second=%s err=%v", first, second, err)
+	}
+	missingPage := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "missing.txt"}}}}
+	missingBefore, err := evidenceFingerprint(project, root, missingPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "missing.txt"), []byte("present\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	present, err := evidenceFingerprint(project, root, missingPage)
+	if err != nil || present == missingBefore {
+		t.Fatalf("missing and regular entries collided: missing=%s present=%s err=%v", missingBefore, present, err)
+	}
+	if err := os.Remove(filepath.Join(project, "missing.txt")); err != nil {
+		t.Fatal(err)
+	}
+	missingAfter, err := evidenceFingerprint(project, root, missingPage)
+	if err != nil || missingAfter != missingBefore {
+		t.Fatalf("missing entry fingerprint is not deterministic: before=%s after=%s err=%v", missingBefore, missingAfter, err)
+	}
+
+	wikiDirectoryPage := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "docs/wiki"}}}}
+	reservedBefore, err := evidenceFingerprint(project, root, wikiDirectoryPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "index.md"), []byte("generated catalog changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "log.md"), []byte("generated log changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reservedAfter, err := evidenceFingerprint(project, root, wikiDirectoryPage)
+	if err != nil || reservedAfter != reservedBefore {
+		t.Fatalf("indirect reserved Wiki artifacts affected fingerprint: before=%s after=%s err=%v", reservedBefore, reservedAfter, err)
+	}
+}
+
+func TestGitIndexParserIsNULSafeAndRejectsUnmergedStages(t *testing.T) {
+	oid := strings.Repeat("a", 64)
+	path := "dir/name\twith\ncontrols.txt"
+	entries, err := parseGitIndex([]byte("100755 " + oid + " 0\t" + path + "\x00"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("parseGitIndex entries=%+v err=%v", entries, err)
+	}
+	entry := entries[0]
+	if entry.Mode != "100755" || entry.OID != oid || entry.Stage != 0 || entry.Path != path {
+		t.Fatalf("parsed index entry=%+v", entry)
+	}
+	index := &gitIndex{byPath: map[string][]gitIndexEntry{
+		"conflicted.txt": {
+			{Mode: "100644", OID: strings.Repeat("b", 40), Stage: 1, Path: "conflicted.txt"},
+			{Mode: "100644", OID: strings.Repeat("c", 40), Stage: 2, Path: "conflicted.txt"},
+		},
+	}}
+	if _, err := index.entry("conflicted.txt"); !errors.Is(err, ErrGitIndexConflict) {
+		t.Fatalf("unmerged index error=%v", err)
+	}
+	if _, err := index.pathsWithin("."); !errors.Is(err, ErrGitIndexConflict) {
+		t.Fatalf("parent directory hid unmerged index error=%v", err)
+	}
+}
+
+func TestGitIndexExecutableModeIsAuthoritative(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(project, "script.sh")
+	if err := os.WriteFile(script, []byte("echo portable\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "add", "script.sh")
+	git(t, project, "commit", "-qm", "tracked script")
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "script.sh"}}}}
+
+	nonExecutable, err := evidenceFingerprint(project, root, page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "update-index", "--chmod=+x", "script.sh")
+	executable, err := evidenceFingerprint(project, root, page)
+	if err != nil || executable == nonExecutable {
+		t.Fatalf("index executable mode did not change fingerprint: before=%s after=%s err=%v", nonExecutable, executable, err)
+	}
+	git(t, project, "config", "core.fileMode", "false")
+	withFileModeDisabled, err := evidenceFingerprint(project, root, page)
+	if err != nil || withFileModeDisabled != executable {
+		t.Fatalf("core.fileMode changed index-authoritative hash: executable=%s disabled=%s err=%v", executable, withFileModeDisabled, err)
+	}
+	git(t, project, "update-index", "--chmod=-x", "script.sh")
+	restored, err := evidenceFingerprint(project, root, page)
+	if err != nil || restored != nonExecutable {
+		t.Fatalf("restoring index mode did not restore fingerprint: initial=%s restored=%s err=%v", nonExecutable, restored, err)
+	}
+}
+
+func TestExecutableMarkerIgnoresUntrackedHostMode(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(project, "untracked.sh")
+	if err := os.WriteFile(path, []byte("echo portable\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "untracked.sh"}}}}
+	first, err := evidenceFingerprint(project, root, page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("echo portable\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second, err := evidenceFingerprint(project, root, page)
+	if err != nil || second != first {
+		t.Fatalf("host mode changed untracked fingerprint: first=%s second=%s err=%v", first, second, err)
+	}
+}
+
+func TestTrackedSymlinkUsesPortableGitIndexMode(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "config", "core.symlinks", "false")
+	linkPath := filepath.Join(project, "portable-link")
+	if err := os.WriteFile(linkPath, []byte("target.txt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "hash-object", "-w", "--stdin")
+	cmd.Dir = project
+	cmd.Stdin = strings.NewReader("target.txt")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("hashing symlink blob: %v", err)
+	}
+	oid := strings.TrimSpace(string(out))
+	git(t, project, "update-index", "--add", "--cacheinfo", "120000", oid, "portable-link")
+	git(t, project, "commit", "-qm", "tracked portable symlink")
+
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "portable-link"}}}}
+	materialized, err := evidenceFingerprint(project, root, page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "config", "core.symlinks", "true")
+	withConfigChanged, err := evidenceFingerprint(project, root, page)
+	if err != nil || withConfigChanged != materialized {
+		t.Fatalf("core.symlinks changed materialized hash: before=%s after=%s err=%v", materialized, withConfigChanged, err)
+	}
+
+	t.Run("real OS symlink integration", func(t *testing.T) {
+		if err := os.Remove(linkPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("target.txt", linkPath); err != nil {
+			if writeErr := os.WriteFile(linkPath, []byte("target.txt"), 0o644); writeErr != nil {
+				t.Fatalf("restoring materialized link after symlink failure: %v", writeErr)
+			}
+			t.Skipf("real symlinks unavailable: %v", err)
+		}
+		actualLink, err := evidenceFingerprint(project, root, page)
+		if err != nil || actualLink != materialized {
+			t.Fatalf("OS and materialized symlink hashes differ: materialized=%s symlink=%s err=%v", materialized, actualLink, err)
+		}
+	})
+	if err := os.Remove(linkPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(linkPath, []byte("other-target.txt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := evidenceFingerprint(project, root, page)
+	if err != nil || changed == materialized {
+		t.Fatalf("tracked symlink payload change was not fingerprinted: baseline=%s changed=%s err=%v", materialized, changed, err)
+	}
+}
+
+type wikiSubmoduleFixture struct {
+	project string
+	root    string
+	origin  string
+	module  string
+}
+
+func newWikiSubmoduleFixture(t *testing.T) wikiSubmoduleFixture {
+	t.Helper()
+	origin := t.TempDir()
+	git(t, origin, "init", "-q")
+	git(t, origin, "config", "user.email", "wiki-test@example.test")
+	git(t, origin, "config", "user.name", "Wiki Test")
+	if err := os.WriteFile(filepath.Join(origin, "module.txt"), []byte("first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, origin, "add", "module.txt")
+	git(t, origin, "commit", "-qm", "first module revision")
+
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "-c", "protocol.file.allow=always", "submodule", "add", "-q", origin, "modules/component")
+	git(t, project, "add", ".gitmodules", "modules/component")
+	git(t, project, "commit", "-qm", "add module")
+	return wikiSubmoduleFixture{project: project, root: root, origin: origin, module: filepath.Join(project, "modules", "component")}
+}
+
+func (fixture wikiSubmoduleFixture) addOriginRevision(t *testing.T) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(fixture.origin, "module.txt"), []byte("second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, fixture.origin, "add", "module.txt")
+	git(t, fixture.origin, "commit", "-qm", "second module revision")
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = fixture.origin
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func (fixture wikiSubmoduleFixture) checkoutModule(t *testing.T, oid string) {
+	t.Helper()
+	git(t, fixture.module, "fetch", "-q", "origin")
+	git(t, fixture.module, "checkout", "-q", oid)
+}
+
+func TestSubmoduleCleanApprovalAndParentDirectoryFingerprint(t *testing.T) {
+	fixture := newWikiSubmoduleFixture(t)
+	writeSimplePage(t, fixture.root, "direct", "modules/component")
+	writeSimplePage(t, fixture.root, "parent", "modules")
+	if approved, err := Approve(fixture.project, fixture.root, []string{"direct", "parent"}); err != nil || approved != 2 {
+		t.Fatalf("clean submodule approval: approved=%d err=%v", approved, err)
+	}
+	pages, err := Load(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range pages {
+		if state := PageState(fixture.project, fixture.root, page); state != "reviewed" {
+			t.Fatalf("clean submodule page %s state=%s", page.ID, state)
+		}
+	}
+}
+
+func TestGitlinkStagedUpdateChangesFingerprint(t *testing.T) {
+	fixture := newWikiSubmoduleFixture(t)
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "modules/component"}}}}
+	before, err := evidenceFingerprint(fixture.project, fixture.root, page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := fixture.addOriginRevision(t)
+	fixture.checkoutModule(t, second)
+	git(t, fixture.project, "add", "modules/component")
+	after, err := evidenceFingerprint(fixture.project, fixture.root, page)
+	if err != nil || after == before {
+		t.Fatalf("staged matching gitlink did not change fingerprint: before=%s after=%s err=%v", before, after, err)
+	}
+}
+
+func TestSubmoduleBlocksHeadMismatchDirtyAndUninitializedStates(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		mutate func(*testing.T, wikiSubmoduleFixture)
+	}{
+		{name: "HEAD mismatch", source: "modules/component", mutate: func(t *testing.T, fixture wikiSubmoduleFixture) {
+			fixture.checkoutModule(t, fixture.addOriginRevision(t))
+		}},
+		{name: "dirty tracked", source: "modules/component", mutate: func(t *testing.T, fixture wikiSubmoduleFixture) {
+			if err := os.WriteFile(filepath.Join(fixture.module, "module.txt"), []byte("dirty\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "dirty untracked through parent", source: "modules", mutate: func(t *testing.T, fixture wikiSubmoduleFixture) {
+			if err := os.WriteFile(filepath.Join(fixture.module, "untracked.txt"), []byte("dirty\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "conflicted", source: "modules/component", mutate: func(t *testing.T, fixture wikiSubmoduleFixture) {
+			git(t, fixture.module, "config", "user.email", "wiki-test@example.test")
+			git(t, fixture.module, "config", "user.name", "Wiki Test")
+			if err := os.WriteFile(filepath.Join(fixture.module, "module.txt"), []byte("local\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			git(t, fixture.module, "add", "module.txt")
+			git(t, fixture.module, "commit", "-qm", "local conflicting revision")
+			git(t, fixture.project, "add", "modules/component")
+			remote := fixture.addOriginRevision(t)
+			git(t, fixture.module, "fetch", "-q", "origin")
+			cmd := exec.Command("git", "merge", "--no-edit", remote)
+			cmd.Dir = fixture.module
+			if err := cmd.Run(); err == nil {
+				t.Fatal("expected submodule merge conflict")
+			}
+		}},
+		{name: "uninitialized", source: "modules/component", mutate: func(t *testing.T, fixture wikiSubmoduleFixture) {
+			git(t, fixture.project, "submodule", "deinit", "-q", "-f", "modules/component")
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newWikiSubmoduleFixture(t)
+			test.mutate(t, fixture)
+			page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: test.source}}}}
+			if _, err := evidenceFingerprint(fixture.project, fixture.root, page); !errors.Is(err, ErrSubmoduleEvidence) {
+				t.Fatalf("unsafe submodule fingerprint error=%v", err)
+			}
+		})
+	}
+}
+
+func TestSubmoduleNestedDirtyStateIsBlocked(t *testing.T) {
+	nestedOrigin := t.TempDir()
+	git(t, nestedOrigin, "init", "-q")
+	git(t, nestedOrigin, "config", "user.email", "wiki-test@example.test")
+	git(t, nestedOrigin, "config", "user.name", "Wiki Test")
+	if err := os.WriteFile(filepath.Join(nestedOrigin, "nested.txt"), []byte("clean\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, nestedOrigin, "add", "nested.txt")
+	git(t, nestedOrigin, "commit", "-qm", "nested baseline")
+
+	moduleOrigin := t.TempDir()
+	git(t, moduleOrigin, "init", "-q")
+	git(t, moduleOrigin, "config", "user.email", "wiki-test@example.test")
+	git(t, moduleOrigin, "config", "user.name", "Wiki Test")
+	if err := os.WriteFile(filepath.Join(moduleOrigin, "module.txt"), []byte("clean\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, moduleOrigin, "add", "module.txt")
+	git(t, moduleOrigin, "commit", "-qm", "module baseline")
+	git(t, moduleOrigin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", nestedOrigin, "nested/child")
+	git(t, moduleOrigin, "add", ".gitmodules", "nested/child")
+	git(t, moduleOrigin, "commit", "-qm", "add nested module")
+
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "-c", "protocol.file.allow=always", "submodule", "add", "-q", moduleOrigin, "modules/component")
+	git(t, project, "-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", "--recursive")
+	git(t, project, "add", ".gitmodules", "modules/component")
+	git(t, project, "commit", "-qm", "add nested module tree")
+	if err := os.WriteFile(filepath.Join(project, "modules", "component", "nested", "child", "nested.txt"), []byte("dirty nested\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "modules/component"}}}}
+	if _, err := evidenceFingerprint(project, root, page); !errors.Is(err, ErrSubmoduleEvidence) {
+		t.Fatalf("nested dirty submodule error=%v", err)
+	}
+}
+
+func TestGitDirectoryFingerprintIncludesUntrackedAndDeletedEntries(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, "evidence"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	trackedPath := filepath.Join(project, "evidence", "tracked.txt")
+	untrackedPath := filepath.Join(project, "evidence", "untracked.txt")
+	if err := os.WriteFile(trackedPath, []byte("tracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "add", "evidence/tracked.txt")
+	git(t, project, "commit", "-qm", "tracked evidence")
+	if err := os.WriteFile(untrackedPath, []byte("untracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence"}}}}
+	baseline, err := evidenceFingerprint(project, root, page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(untrackedPath, []byte("changed untracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	untrackedChanged, err := evidenceFingerprint(project, root, page)
+	if err != nil || untrackedChanged == baseline {
+		t.Fatalf("untracked directory entry was not fingerprinted: hash=%s err=%v", untrackedChanged, err)
+	}
+	if err := os.WriteFile(untrackedPath, []byte("untracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(trackedPath); err != nil {
+		t.Fatal(err)
+	}
+	trackedDeleted, err := evidenceFingerprint(project, root, page)
+	if err != nil || trackedDeleted == baseline {
+		t.Fatalf("deleted tracked directory entry was not fingerprinted: hash=%s err=%v", trackedDeleted, err)
+	}
+}
+
+func TestValidateRejectsMalformedEvidenceHashAndAcceptsLegacyReview(t *testing.T) {
+	t.Run("malformed hash", func(t *testing.T) {
+		project := t.TempDir()
+		root := filepath.Join(project, "docs", "wiki")
+		if _, err := Init(root); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("# Project\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		writeSimplePage(t, root, "overview", "README.md")
+		if _, err := Approve(project, root, []string{"overview"}); err != nil {
+			t.Fatal(err)
+		}
+		pages, err := Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pages[0].Meta.Review.EvidenceHash = "sha256:ABC"
+		raw, err := renderPage(pages[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, pages[0].Path), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		report := Validate(project, root)
+		if report.OK || !hasFinding(report, "WIKI_REVIEW_METADATA_INVALID") {
+			t.Fatalf("malformed evidence hash validated: %+v", report.Findings)
+		}
+	})
+
+	t.Run("legacy revision fallback", func(t *testing.T) {
+		project := t.TempDir()
+		root := filepath.Join(project, "docs", "wiki")
+		if _, err := Init(root); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("# Project\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(project, "context.md"), []byte("context\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		git(t, project, "init", "-q")
+		git(t, project, "config", "user.email", "wiki-test@example.test")
+		git(t, project, "config", "user.name", "Wiki Test")
+		git(t, project, "add", "README.md", "context.md")
+		git(t, project, "commit", "-qm", "baseline")
+		writeSimplePage(t, root, "overview", "README.md")
+		pages, err := Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pages[0].Meta.Sources = append(pages[0].Meta.Sources, domain.WikiSource{Path: "context.md", Freshness: "context"})
+		raw, err := renderPage(pages[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, pages[0].Path), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Approve(project, root, []string{"overview"}); err != nil {
+			t.Fatal(err)
+		}
+		pages, err = Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pages[0].Meta.Review.EvidenceHash = ""
+		raw, err = renderPage(pages[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, pages[0].Path), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		pages, err = Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report := Validate(project, root); !report.OK || hasFinding(report, "WIKI_REVIEW_METADATA_INVALID") {
+			t.Fatalf("legacy review became invalid: %+v", report.Findings)
+		}
+		if state := PageState(project, root, pages[0]); state != "reviewed" {
+			t.Fatalf("legacy review state=%s", state)
+		}
+		if err := os.WriteFile(filepath.Join(project, "context.md"), []byte("changed context\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if state := PageState(project, root, pages[0]); state != "reviewed" {
+			t.Fatalf("legacy revision fallback included context source: %s", state)
+		}
+		if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("# Changed\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if state := PageState(project, root, pages[0]); state != "stale" {
+			t.Fatalf("legacy revision fallback did not detect change: %s", state)
+		}
+	})
+}
+
+func TestReconfirmRefreshesStaleEvidenceAndPreservesSemanticContent(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "evidence.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw := `---
+type: guide
+title: Behavioral guide
+description: Reviewed behavioral guidance
+status: generated
+sources:
+  - path: evidence.txt
+    freshness: tracked
+owner:
+  team: platform
+---
+# Behavioral guide
+
+Unchanged guidance.
+`
+	pagePath := filepath.Join(root, "behavior.md")
+	if err := os.WriteFile(pagePath, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if approved, err := Approve(project, root, []string{"behavior"}); err != nil || approved != 1 {
+		t.Fatalf("approve: approved=%d err=%v", approved, err)
+	}
+	pages, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := pages[0]
+	if err := os.WriteFile(filepath.Join(project, "evidence.txt"), []byte("changed evidence\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if state := PageState(project, root, before); state != "stale" {
+		t.Fatalf("expected stale evidence before reconfirmation, got %s", state)
+	}
+	if reconfirmed, err := Reconfirm(project, root, []string{"behavior"}); err != nil || reconfirmed != 1 {
+		t.Fatalf("reconfirm: count=%d err=%v", reconfirmed, err)
+	}
+	pages, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := pages[0]
+	if state := PageState(project, root, after); state != "reviewed" {
+		t.Fatalf("state after reconfirmation=%s", state)
+	}
+	if after.Meta.Review.ContentHash != before.Meta.Review.ContentHash || after.Body != before.Body || after.Meta.Sources[0].Freshness != "tracked" {
+		t.Fatalf("reconfirmation changed semantic page content: before=%+v after=%+v", before, after)
+	}
+	if after.Meta.Review.EvidenceHash == before.Meta.Review.EvidenceHash {
+		t.Fatal("reconfirmation did not refresh the evidence hash")
+	}
+	persisted, err := os.ReadFile(pagePath)
+	if err != nil || !strings.Contains(string(persisted), "owner:\n    team: platform") {
+		t.Fatalf("unknown frontmatter was not preserved:\n%s\nerr=%v", persisted, err)
+	}
+	log, err := os.ReadFile(filepath.Join(root, "log.md"))
+	if err != nil || strings.Count(string(log), "Reconfirmed 1 page(s)") != 1 {
+		t.Fatalf("reconfirm audit entry mismatch:\n%s\nerr=%v", log, err)
+	}
+}
+
+func TestReconfirmContextChangeAndFreshHashAreNoOpsAndLegacyUpgrades(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "tracked.txt"), []byte("tracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "context.txt"), []byte("context\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw := `---
+type: guide
+title: Stable guide
+description: Stable reviewed guidance
+status: generated
+sources:
+  - path: tracked.txt
+  - path: context.txt
+    freshness: context
+---
+# Stable guide
+`
+	pagePath := filepath.Join(root, "stable.md")
+	if err := os.WriteFile(pagePath, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Approve(project, root, []string{"stable"}); err != nil {
+		t.Fatal(err)
+	}
+	beforePage, err := os.ReadFile(pagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeLog, err := os.ReadFile(filepath.Join(root, "log.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "context.txt"), []byte("changed context\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if reconfirmed, err := Reconfirm(project, root, []string{"stable"}); err != nil || reconfirmed != 0 {
+		t.Fatalf("context-only reconfirm: count=%d err=%v", reconfirmed, err)
+	}
+	afterPage, _ := os.ReadFile(pagePath)
+	afterLog, _ := os.ReadFile(filepath.Join(root, "log.md"))
+	if string(afterPage) != string(beforePage) || string(afterLog) != string(beforeLog) {
+		t.Fatalf("fresh no-op churned page or log:\npage before=%s\npage after=%s\nlog before=%s\nlog after=%s", beforePage, afterPage, beforeLog, afterLog)
+	}
+
+	pages, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages[0].Meta.Review.EvidenceHash = ""
+	legacyRaw, err := renderPage(pages[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pagePath, legacyRaw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if reconfirmed, err := Reconfirm(project, root, []string{"stable"}); err != nil || reconfirmed != 1 {
+		t.Fatalf("legacy upgrade: count=%d err=%v", reconfirmed, err)
+	}
+	pages, err = Load(root)
+	if err != nil || pages[0].Meta.Review.EvidenceHash == "" {
+		t.Fatalf("legacy page did not gain evidence hash: pages=%+v err=%v", pages, err)
+	}
+	logAfterUpgrade, err := os.ReadFile(filepath.Join(root, "log.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconfirmed, err := Reconfirm(project, root, []string{"stable"}); err != nil || reconfirmed != 0 {
+		t.Fatalf("fresh reconfirm after upgrade: count=%d err=%v", reconfirmed, err)
+	}
+	finalLog, _ := os.ReadFile(filepath.Join(root, "log.md"))
+	if string(finalLog) != string(logAfterUpgrade) {
+		t.Fatalf("fresh reconfirm appended audit log:\nbefore=%s\nafter=%s", logAfterUpgrade, finalLog)
+	}
+}
+
+func TestReconfirmRejectsIneligiblePages(t *testing.T) {
+	newProjectPage := func(t *testing.T) (string, string) {
+		t.Helper()
+		project := t.TempDir()
+		root := filepath.Join(project, "docs", "wiki")
+		if _, err := Init(root); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(project, "evidence.txt"), []byte("evidence\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		writeSimplePage(t, root, "page", "evidence.txt")
+		return project, root
+	}
+
+	t.Run("generated", func(t *testing.T) {
+		project, root := newProjectPage(t)
+		if _, err := Reconfirm(project, root, []string{"page"}); !errors.Is(err, ErrReconfirmIneligible) {
+			t.Fatalf("generated page error=%v", err)
+		}
+	})
+	t.Run("content changed", func(t *testing.T) {
+		project, root := newProjectPage(t)
+		if _, err := Approve(project, root, []string{"page"}); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(root, "page.md")
+		raw, _ := os.ReadFile(path)
+		if err := os.WriteFile(path, append(raw, []byte("changed content\n")...), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Reconfirm(project, root, []string{"page"}); !errors.Is(err, ErrReconfirmIneligible) {
+			t.Fatalf("content-changed page error=%v", err)
+		}
+	})
+	t.Run("issues", func(t *testing.T) {
+		project, root := newProjectPage(t)
+		if _, err := Approve(project, root, []string{"page"}); err != nil {
+			t.Fatal(err)
+		}
+		pages, err := Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pages[0].Meta.Issues = []domain.WikiIssue{{Code: "OPEN", Summary: "Still unresolved"}}
+		pages[0].Meta.Review.ContentHash = pageContentHash(pages[0])
+		raw, err := renderPage(pages[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "page.md"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Reconfirm(project, root, []string{"page"}); !errors.Is(err, ErrUnresolvedIssues) {
+			t.Fatalf("issue page error=%v", err)
+		}
+	})
+	t.Run("missing evidence", func(t *testing.T) {
+		project, root := newProjectPage(t)
+		if _, err := Approve(project, root, []string{"page"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(project, "evidence.txt")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Reconfirm(project, root, []string{"page"}); !errors.Is(err, ErrMissingEvidence) {
+			t.Fatalf("missing-evidence page error=%v", err)
+		}
+	})
+	t.Run("global validation", func(t *testing.T) {
+		project, root := newProjectPage(t)
+		if _, err := Approve(project, root, []string{"page"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "invalid.md"), []byte("---\ntype: guide\nstatus: generated\n---\n# Invalid\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Reconfirm(project, root, []string{"page"}); !errors.Is(err, ErrValidationFailed) {
+			t.Fatalf("global validation error=%v", err)
+		}
+	})
+}
+
+func TestReconfirmPreflightsEveryFingerprintBeforeWriting(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "good.txt"), []byte("good\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "unsupported"), []byte("regular before review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSimplePage(t, root, "a-good", "good.txt")
+	writeSimplePage(t, root, "b-unsupported", "unsupported")
+	if approved, err := Approve(project, root, []string{"a-good", "b-unsupported"}); err != nil || approved != 2 {
+		t.Fatalf("approve: count=%d err=%v", approved, err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "good.txt"), []byte("changed good\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setUnmergedGitIndex(t, project, "unsupported")
+	goodPath := filepath.Join(root, "a-good.md")
+	before, err := os.ReadFile(goodPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconfirmed, err := Reconfirm(project, root, []string{"a-good", "b-unsupported"}); err == nil || reconfirmed != 0 {
+		t.Fatalf("expected fingerprint preflight failure: count=%d err=%v", reconfirmed, err)
+	}
+	after, err := os.ReadFile(goodPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("first page mutated before batch preflight completed:\nbefore=%s\nafter=%s", before, after)
+	}
+}
+
+func TestApprovePreflightsEveryFingerprintBeforeWriting(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "good.txt"), []byte("good\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "unsupported.txt"), []byte("conflicted evidence\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setUnmergedGitIndex(t, project, "unsupported.txt")
+	writeSimplePage(t, root, "a-good", "good.txt")
+	writeSimplePage(t, root, "b-unsupported", "unsupported.txt")
+	goodPath := filepath.Join(root, "a-good.md")
+	before, err := os.ReadFile(goodPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved, err := Approve(project, root, []string{"a-good", "b-unsupported"}); err == nil || approved != 0 {
+		t.Fatalf("expected fingerprint preflight failure with zero approvals: approved=%d err=%v", approved, err)
+	}
+	after, err := os.ReadFile(goodPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("first selected page mutated before every fingerprint succeeded:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	pages, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range pages {
+		if page.Meta.Status != domain.WikiStatusGenerated || page.Meta.Review != nil {
+			t.Fatalf("page partially approved after preflight failure: %+v", page)
+		}
+	}
+}
+
+func TestEvidenceRecomputationErrorsFailClosed(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	evidenceDir := filepath.Join(project, "evidence")
+	if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(evidenceDir, "item.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSimplePage(t, root, "overview", "evidence/item.txt")
+	if _, err := Approve(project, root, []string{"overview"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(evidenceDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evidenceDir, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := PageState(project, root, pages[0]); state != "stale" {
+		t.Fatalf("fingerprint recomputation error did not fail closed: %s", state)
+	}
+	report := Validate(project, root)
+	if report.OK || !hasFinding(report, "WIKI_EVIDENCE_UNREADABLE") {
+		t.Fatalf("validation did not report unreadable evidence: %+v", report.Findings)
+	}
+	if hasFinding(report, "WIKI_EVIDENCE_CHANGED") {
+		t.Fatalf("recomputation error was also reported as changed evidence: %+v", report.Findings)
+	}
+}
+
+func TestEvidenceChangedRequiresSuccessfulRecomputation(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := filepath.Join(project, "evidence.txt")
+	if err := os.WriteFile(evidencePath, []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSimplePage(t, root, "overview", "evidence.txt")
+	if _, err := Approve(project, root, []string{"overview"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evidencePath, []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := Validate(project, root)
+	if !report.OK || !hasFinding(report, "WIKI_EVIDENCE_CHANGED") {
+		t.Fatalf("successful mismatch was not reported as a warning: %+v", report.Findings)
+	}
+	for _, code := range []string{"WIKI_EVIDENCE_UNREADABLE", "WIKI_EVIDENCE_RECOMPUTE_FAILED", "WIKI_UNSAFE_SOURCE_PATH"} {
+		if hasFinding(report, code) {
+			t.Fatalf("successful mismatch also reported %s: %+v", code, report.Findings)
+		}
+	}
+}
+
+func TestUnsafeSourcePathIsAnErrorNotEvidenceChanged(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "evidence.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSimplePage(t, root, "overview", "evidence.txt")
+	if _, err := Approve(project, root, []string{"overview"}); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages[0].Meta.Sources[0].Path = "../outside.txt"
+	pages[0].Meta.Review.ContentHash = pageContentHash(pages[0])
+	raw, err := renderPage(pages[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, pages[0].Path), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := Validate(project, root)
+	if report.OK || !hasFinding(report, "WIKI_UNSAFE_SOURCE_PATH") {
+		t.Fatalf("unsafe traversal did not block validation: %+v", report.Findings)
+	}
+	if hasFinding(report, "WIKI_EVIDENCE_CHANGED") {
+		t.Fatalf("unsafe traversal was mislabeled as changed evidence: %+v", report.Findings)
+	}
+}
+
+func TestLegacyEvidenceRecomputationFailure(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "evidence.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "add", "evidence.txt")
+	git(t, project, "commit", "-qm", "baseline")
+	writeSimplePage(t, root, "overview", "evidence.txt")
+	if _, err := Approve(project, root, []string{"overview"}); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages[0].Meta.Review.EvidenceHash = ""
+	pages[0].Meta.Review.EvidenceRevision = "deadbeef"
+	raw, err := renderPage(pages[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, pages[0].Path), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pages, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := PageState(project, root, pages[0]); state != "stale" {
+		t.Fatalf("broken legacy revision state=%s", state)
+	}
+	report := Validate(project, root)
+	if report.OK || !hasFinding(report, "WIKI_EVIDENCE_RECOMPUTE_FAILED") {
+		t.Fatalf("broken legacy revision did not produce an error: %+v", report.Findings)
+	}
+	if hasFinding(report, "WIKI_EVIDENCE_CHANGED") {
+		t.Fatalf("broken legacy revision was mislabeled as changed evidence: %+v", report.Findings)
+	}
+}
+
+func TestWikiApproveBlocksUnreadableEvidence(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "evidence"), []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSimplePage(t, root, "overview", "evidence/item.txt")
+	if _, err := Approve(project, root, []string{"overview"}); !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("approval error=%v", err)
+	}
+}
+
+func TestWikiReconfirmBlocksUnreadableEvidence(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	evidenceDir := filepath.Join(project, "evidence")
+	if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(evidenceDir, "item.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSimplePage(t, root, "overview", "evidence/item.txt")
+	if _, err := Approve(project, root, []string{"overview"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(evidenceDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evidenceDir, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reconfirm(project, root, []string{"overview"}); !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("reconfirmation error=%v", err)
 	}
 }
 
@@ -705,11 +2310,17 @@ func TestApproveAndResetPreserveUnknownFrontmatter(t *testing.T) {
 	if _, err := Init(root); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(project, "context.md"), []byte("context\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	raw := `---
 type: overview
 title: Project overview
 description: Project scope
 status: generated
+sources:
+  - path: context.md
+    freshness: context
 owner:
   team: platform
 ---
@@ -725,8 +2336,8 @@ owner:
 		t.Fatal(err)
 	}
 	persisted, err := os.ReadFile(filepath.Join(root, "overview.md"))
-	if err != nil || !strings.Contains(string(persisted), "owner:\n    team: platform") {
-		t.Fatalf("unknown metadata was not preserved:\n%s\nerr=%v", persisted, err)
+	if err != nil || !strings.Contains(string(persisted), "owner:\n    team: platform") || !strings.Contains(string(persisted), "freshness: context") {
+		t.Fatalf("unknown metadata or source freshness was not preserved:\n%s\nerr=%v", persisted, err)
 	}
 }
 
@@ -750,6 +2361,48 @@ func TestLogGroupsNewestEntriesByDate(t *testing.T) {
 	today := time.Now().UTC().Format(time.DateOnly)
 	if strings.Count(string(raw), "## "+today) != 1 || strings.Count(string(raw), "* **Update**:") != 2 {
 		t.Fatalf("unexpected grouped log:\n%s", raw)
+	}
+}
+
+func setUnmergedGitIndex(t *testing.T, project, path string) {
+	t.Helper()
+	if !isGitRepository(project) {
+		git(t, project, "init", "-q")
+	}
+	cmd := exec.Command("git", "hash-object", "-w", "--stdin")
+	cmd.Dir = project
+	cmd.Stdin = strings.NewReader("conflicted evidence\n")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("hashing conflicted evidence: %v", err)
+	}
+	oid := strings.TrimSpace(string(out))
+	zero := strings.Repeat("0", len(oid))
+	cmd = exec.Command("git", "update-index", "--index-info")
+	cmd.Dir = project
+	cmd.Stdin = strings.NewReader("0 " + zero + "\t" + path + "\n100644 " + oid + " 1\t" + path + "\n100644 " + oid + " 2\t" + path + "\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("creating unmerged index entry: %v\n%s", err, out)
+	}
+}
+
+func pagesByID(pages []Page) map[string]Page {
+	result := make(map[string]Page, len(pages))
+	for _, page := range pages {
+		result[page.ID] = page
+	}
+	return result
+}
+
+func writeSimplePage(t *testing.T, root, id, source string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(id+".md"))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := "---\ntype: guide\ntitle: " + id + "\ndescription: " + id + " description\nstatus: generated\nsources:\n  - path: " + source + "\n---\n# " + id + "\n"
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -3,8 +3,10 @@ package wiki
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -39,10 +41,18 @@ var requiredPageSections = map[string][]string{
 }
 
 var (
-	ErrValidationFailed = errors.New("wiki validation failed")
-	ErrUnresolvedIssues = errors.New("wiki page has unresolved issues")
-	ErrMissingEvidence  = errors.New("wiki page has missing evidence")
-	ErrPageNotFound     = errors.New("wiki page does not exist")
+	ErrValidationFailed         = errors.New("wiki validation failed")
+	ErrUnresolvedIssues         = errors.New("wiki page has unresolved issues")
+	ErrMissingEvidence          = errors.New("wiki page has missing evidence")
+	ErrPageNotFound             = errors.New("wiki page does not exist")
+	ErrReconfirmIneligible      = errors.New("wiki page is not eligible for reconfirmation")
+	ErrInvalidSourcePath        = errors.New("invalid project-relative evidence path")
+	ErrUnsafeSourcePath         = errors.New("unsafe evidence path redirection")
+	ErrEvidenceUnreadable       = errors.New("evidence path is unreadable")
+	ErrEvidenceRecomputeFailed  = errors.New("evidence recomputation failed")
+	ErrGitIndexConflict         = errors.New("git index has unmerged evidence")
+	ErrSubmoduleEvidence        = errors.New("submodule evidence is not clean and reproducible")
+	ErrUnsupportedEvidenceEntry = errors.New("unsupported evidence entry")
 )
 
 type Page struct {
@@ -180,6 +190,10 @@ func Validate(projectRoot, root string) Report {
 	if err != nil {
 		return Report{Findings: []domain.WikiFinding{{Code: "WIKI_UNREADABLE", Severity: "error", Path: root, Message: err.Error()}}}
 	}
+	resolver, err := newEvidencePathResolver(projectRoot)
+	if err != nil {
+		return Report{Pages: len(pages), Findings: []domain.WikiFinding{{Code: "WIKI_UNREADABLE", Severity: "error", Path: ".", Message: err.Error()}}}
+	}
 	findings := validateWikiLog(root)
 	ids := map[string]Page{}
 	allowed := map[domain.WikiStatus]bool{domain.WikiStatusGenerated: true, domain.WikiStatusReviewed: true}
@@ -234,8 +248,9 @@ func Validate(projectRoot, root string) Report {
 			if p.Meta.Review == nil || p.Meta.Review.ContentHash == "" || p.Meta.Review.EvidenceRevision == "" || p.Meta.Review.ReviewedAt == "" {
 				add("WIKI_REVIEW_METADATA_MISSING", "reviewed pages require content_hash, evidence_revision, and reviewed_at")
 			} else {
-				if !wikiContentHashPattern.MatchString(p.Meta.Review.ContentHash) || !wikiRevisionPattern.MatchString(p.Meta.Review.EvidenceRevision) {
-					add("WIKI_REVIEW_METADATA_INVALID", "review metadata has an invalid content hash or evidence revision")
+				if !wikiContentHashPattern.MatchString(p.Meta.Review.ContentHash) || !wikiRevisionPattern.MatchString(p.Meta.Review.EvidenceRevision) ||
+					(p.Meta.Review.EvidenceHash != "" && !wikiContentHashPattern.MatchString(p.Meta.Review.EvidenceHash)) {
+					add("WIKI_REVIEW_METADATA_INVALID", "review metadata has an invalid content hash, evidence hash, or evidence revision")
 				}
 				if _, err := time.Parse(time.RFC3339, p.Meta.Review.ReviewedAt); err != nil {
 					add("WIKI_REVIEW_METADATA_INVALID", "reviewed_at must be RFC3339")
@@ -243,7 +258,10 @@ func Validate(projectRoot, root string) Report {
 				if p.Meta.Review.ContentHash != pageContentHash(p) {
 					findings = append(findings, domain.WikiFinding{Code: "WIKI_REVIEW_OUTDATED", Severity: "warning", PageID: p.ID, Path: p.Path, Message: "page content changed after review"})
 				}
-				if pageEvidenceChanged(projectRoot, p) {
+				changed, evidenceErr := pageEvidenceChanged(projectRoot, root, p)
+				if evidenceErr != nil {
+					appendEvidenceErrorFinding(&findings, p, evidenceErr)
+				} else if changed {
 					findings = append(findings, domain.WikiFinding{Code: "WIKI_EVIDENCE_CHANGED", Severity: "warning", PageID: p.ID, Path: p.Path, Message: "cited repository evidence changed after review"})
 				}
 			}
@@ -251,16 +269,18 @@ func Validate(projectRoot, root string) Report {
 			add("WIKI_UNEXPECTED_REVIEW_METADATA", "generated pages must not carry review metadata")
 		}
 		for _, source := range p.Meta.Sources {
+			if source.Freshness != "" && source.Freshness != "tracked" && source.Freshness != "context" {
+				add("WIKI_INVALID_SOURCE_FRESHNESS", "source freshness must be tracked, context, or omitted")
+			}
 			if source.Path == "" {
 				add("WIKI_INVALID_SOURCE", "source path is required")
 				continue
 			}
 			if !isExternal(source.Path) {
-				candidate := source.Path
-				if !filepath.IsAbs(candidate) {
-					candidate = filepath.Join(projectRoot, filepath.FromSlash(candidate))
-				}
-				if _, err := os.Stat(candidate); errors.Is(err, fs.ErrNotExist) {
+				resolved, resolveErr := resolver.resolve(source.Path)
+				if resolveErr != nil {
+					appendEvidenceErrorFinding(&findings, p, resolveErr)
+				} else if !resolved.Exists {
 					findings = append(findings, domain.WikiFinding{Code: "WIKI_STALE_SOURCE", Severity: "warning", PageID: p.ID, Path: p.Path, Message: "source does not exist: " + source.Path})
 				}
 			}
@@ -353,6 +373,28 @@ func Validate(projectRoot, root string) Report {
 	return Report{OK: ok, Pages: len(pages), Findings: findings}
 }
 
+func appendEvidenceErrorFinding(findings *[]domain.WikiFinding, page Page, err error) {
+	code := "WIKI_EVIDENCE_RECOMPUTE_FAILED"
+	message := "cited repository evidence could not be recomputed: " + err.Error()
+	switch {
+	case errors.Is(err, ErrInvalidSourcePath):
+		code = "WIKI_INVALID_SOURCE"
+		message = err.Error()
+	case errors.Is(err, ErrUnsafeSourcePath):
+		code = "WIKI_UNSAFE_SOURCE_PATH"
+		message = "source path cannot be inspected safely: " + err.Error()
+	case errors.Is(err, ErrEvidenceUnreadable), errors.Is(err, ErrGitIndexConflict), errors.Is(err, ErrSubmoduleEvidence), errors.Is(err, ErrUnsupportedEvidenceEntry):
+		code = "WIKI_EVIDENCE_UNREADABLE"
+		message = "cited repository evidence is unreadable or unsupported: " + err.Error()
+	}
+	for _, finding := range *findings {
+		if finding.PageID == page.ID && finding.Code == code {
+			return
+		}
+	}
+	*findings = append(*findings, domain.WikiFinding{Code: code, Severity: "error", PageID: page.ID, Path: page.Path, Message: message})
+}
+
 func validateWikiLog(root string) []domain.WikiFinding {
 	path := filepath.Join(root, "log.md")
 	raw, err := os.ReadFile(path)
@@ -377,6 +419,10 @@ func validateWikiLog(root string) []domain.WikiFinding {
 func ValidateBootstrap(projectRoot, root, prdPath string) (Report, error) {
 	report := Validate(projectRoot, root)
 	pages, err := Load(root)
+	if err != nil {
+		return report, err
+	}
+	resolver, err := newEvidencePathResolver(projectRoot)
 	if err != nil {
 		return report, err
 	}
@@ -427,11 +473,8 @@ func ValidateBootstrap(projectRoot, root, prdPath string) (Report, error) {
 			if source.Path == "" || isExternal(source.Path) {
 				continue
 			}
-			candidate := source.Path
-			if !filepath.IsAbs(candidate) {
-				candidate = filepath.Join(projectRoot, filepath.FromSlash(candidate))
-			}
-			if _, statErr := os.Stat(candidate); statErr == nil {
+			resolved, resolveErr := resolver.resolve(source.Path)
+			if resolveErr == nil && resolved.Exists {
 				hasRepositoryEvidence = true
 				break
 			}
@@ -497,6 +540,13 @@ func pageCitesSource(page Page, sourcePath string) bool {
 	return false
 }
 
+// sourceTracksFreshness reports whether a source participates in evidence
+// freshness and affected-page discovery. Omitted freshness is tracked for
+// compatibility with pages created before source relevance was explicit.
+func sourceTracksFreshness(source domain.WikiSource) bool {
+	return source.Freshness == "" || source.Freshness == "tracked"
+}
+
 func Search(projectRoot, root, query, pageType, status string) ([]Page, error) {
 	pages, err := Load(root)
 	if err != nil {
@@ -508,7 +558,7 @@ func Search(projectRoot, root, query, pageType, status string) ([]Page, error) {
 		if pageType != "" && p.Meta.Type != pageType {
 			continue
 		}
-		if status != "" && PageState(projectRoot, p) != status {
+		if status != "" && PageState(projectRoot, root, p) != status {
 			continue
 		}
 		haystack := strings.ToLower(p.ID + " " + p.Meta.Title + " " + p.Meta.Description + " " + p.Body)
@@ -526,16 +576,42 @@ func Affected(projectRoot, root string, files []string) ([]Page, error) {
 	if err != nil {
 		return nil, err
 	}
+	resolver, err := newEvidencePathResolver(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	changed := []string{}
+	for _, file := range files {
+		if file == "" || isExternal(file) {
+			continue
+		}
+		normalized, normalizeErr := resolver.normalize(file)
+		if normalizeErr != nil {
+			continue
+		}
+		changed = append(changed, normalized)
+	}
+	changed = uniqueSorted(changed)
+
 	result := []Page{}
 	for _, p := range pages {
 		matched := false
-		for _, s := range p.Meta.Sources {
-			for _, f := range files {
-				clean := filepath.ToSlash(strings.TrimPrefix(f, "./"))
-				src := filepath.ToSlash(strings.TrimPrefix(s.Path, "./"))
-				if clean == src || strings.HasPrefix(clean, strings.TrimSuffix(src, "/")+"/") {
+		for _, source := range p.Meta.Sources {
+			if !sourceTracksFreshness(source) || source.Path == "" || isExternal(source.Path) {
+				continue
+			}
+			sourcePath, normalizeErr := resolver.normalize(source.Path)
+			if normalizeErr != nil {
+				continue
+			}
+			for _, file := range changed {
+				if pathContains(sourcePath, file) {
 					matched = true
+					break
 				}
+			}
+			if matched {
+				break
 			}
 		}
 		if matched {
@@ -543,7 +619,6 @@ func Affected(projectRoot, root string, files []string) ([]Page, error) {
 			result = append(result, p)
 		}
 	}
-	_ = projectRoot
 	return result, nil
 }
 
@@ -572,6 +647,10 @@ func Approve(projectRoot, root string, ids []string) (int, error) {
 	if !report.OK {
 		return 0, ErrValidationFailed
 	}
+	resolver, err := newEvidencePathResolver(projectRoot)
+	if err != nil {
+		return 0, err
+	}
 	pages, err := Load(root)
 	if err != nil {
 		return 0, err
@@ -595,14 +674,34 @@ func Approve(projectRoot, root string, ids []string) (int, error) {
 		if page.Meta.Status == domain.WikiStatusGenerated && len(page.Meta.Issues) > 0 {
 			return 0, fmt.Errorf("%w: %s", ErrUnresolvedIssues, page.ID)
 		}
-		if page.Meta.Status == domain.WikiStatusGenerated && pageHasMissingEvidence(projectRoot, page) {
-			return 0, fmt.Errorf("%w: %s", ErrMissingEvidence, page.ID)
+		if page.Meta.Status == domain.WikiStatusGenerated {
+			missing, missingErr := pageHasMissingEvidence(resolver, page)
+			if missingErr != nil {
+				return 0, missingErr
+			}
+			if missing {
+				return 0, fmt.Errorf("%w: %s", ErrMissingEvidence, page.ID)
+			}
 		}
 	}
 	for id := range wanted {
 		if !found[id] {
 			return 0, fmt.Errorf("%w: %s", ErrPageNotFound, id)
 		}
+	}
+	fingerprints := map[string]string{}
+	for _, page := range pages {
+		if len(wanted) > 0 && !wanted[page.ID] {
+			continue
+		}
+		if page.Meta.Status != domain.WikiStatusGenerated {
+			continue
+		}
+		fingerprint, err := evidenceFingerprintWithResolver(resolver, projectRoot, root, page)
+		if err != nil {
+			return 0, fmt.Errorf("fingerprinting evidence for %s: %w", page.ID, err)
+		}
+		fingerprints[page.ID] = fingerprint
 	}
 	for i := range pages {
 		p := pages[i]
@@ -613,7 +712,7 @@ func Approve(projectRoot, root string, ids []string) (int, error) {
 			continue
 		}
 		p.Meta.Status = domain.WikiStatusReviewed
-		p.Meta.Review = &domain.WikiReview{ContentHash: pageContentHash(p), EvidenceRevision: revision, ReviewedAt: now}
+		p.Meta.Review = &domain.WikiReview{ContentHash: pageContentHash(p), EvidenceRevision: revision, EvidenceHash: fingerprints[p.ID], ReviewedAt: now}
 		raw, err := renderPage(p)
 		if err != nil {
 			return approved, err
@@ -633,6 +732,107 @@ func Approve(projectRoot, root string, ids []string) (int, error) {
 		}
 	}
 	return approved, nil
+}
+
+// Reconfirm refreshes evidence review metadata for explicitly selected,
+// unchanged reviewed pages after a human verifies they remain accurate.
+func Reconfirm(projectRoot, root string, ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, fmt.Errorf("%w: at least one page ID is required", ErrPageNotFound)
+	}
+	report := Validate(projectRoot, root)
+	if !report.OK {
+		return 0, ErrValidationFailed
+	}
+	resolver, err := newEvidencePathResolver(projectRoot)
+	if err != nil {
+		return 0, err
+	}
+	pages, err := Load(root)
+	if err != nil {
+		return 0, err
+	}
+	wanted := map[string]bool{}
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	found := map[string]bool{}
+	for _, page := range pages {
+		if !wanted[page.ID] {
+			continue
+		}
+		found[page.ID] = true
+		if page.Meta.Status != domain.WikiStatusReviewed || page.Meta.Review == nil {
+			return 0, fmt.Errorf("%w: %s is not persisted as reviewed", ErrReconfirmIneligible, page.ID)
+		}
+		if len(page.Meta.Issues) > 0 {
+			return 0, fmt.Errorf("%w: %s", ErrUnresolvedIssues, page.ID)
+		}
+		if len(page.Meta.Sources) == 0 {
+			return 0, fmt.Errorf("%w: %s", ErrMissingEvidence, page.ID)
+		}
+		missing, missingErr := pageHasMissingEvidence(resolver, page)
+		if missingErr != nil {
+			return 0, missingErr
+		}
+		if missing {
+			return 0, fmt.Errorf("%w: %s", ErrMissingEvidence, page.ID)
+		}
+		if page.Meta.Review.ContentHash != pageContentHash(page) {
+			return 0, fmt.Errorf("%w: %s content changed after review", ErrReconfirmIneligible, page.ID)
+		}
+	}
+	for id := range wanted {
+		if !found[id] {
+			return 0, fmt.Errorf("%w: %s", ErrPageNotFound, id)
+		}
+	}
+
+	fingerprints := map[string]string{}
+	for _, page := range pages {
+		if !wanted[page.ID] {
+			continue
+		}
+		fingerprint, err := evidenceFingerprintWithResolver(resolver, projectRoot, root, page)
+		if err != nil {
+			return 0, fmt.Errorf("fingerprinting evidence for %s: %w", page.ID, err)
+		}
+		fingerprints[page.ID] = fingerprint
+	}
+
+	revision := gitRevision(projectRoot)
+	if revision == "" {
+		revision = "unavailable"
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	reconfirmed := 0
+	for index := range pages {
+		page := pages[index]
+		if !wanted[page.ID] || page.Meta.Review.EvidenceHash == fingerprints[page.ID] {
+			continue
+		}
+		page.Meta.Review.EvidenceHash = fingerprints[page.ID]
+		page.Meta.Review.EvidenceRevision = revision
+		page.Meta.Review.ReviewedAt = now
+		raw, err := renderPage(page)
+		if err != nil {
+			return reconfirmed, err
+		}
+		if err := atomicWrite(filepath.Join(root, filepath.FromSlash(page.Path)), raw); err != nil {
+			return reconfirmed, err
+		}
+		pages[index] = page
+		reconfirmed++
+	}
+	if err := writeIndex(projectRoot, root, pages); err != nil {
+		return reconfirmed, err
+	}
+	if reconfirmed > 0 {
+		if err := appendLog(root, "Review", fmt.Sprintf("Reconfirmed %d page(s) at `%s`", reconfirmed, revision)); err != nil {
+			return reconfirmed, err
+		}
+	}
+	return reconfirmed, nil
 }
 
 // Reset returns selected reviewed pages to generated before semantic updates.
@@ -758,7 +958,7 @@ func writeIndex(projectRoot, root string, pages []Page) error {
 		for _, p := range groups[group] {
 			title := strings.ReplaceAll(p.Meta.Title, "]", "\\]")
 			description := strings.TrimSuffix(strings.TrimSpace(p.Meta.Description), ".")
-			fmt.Fprintf(&b, "* [%s](%s) - %s. _State: %s._\n", title, p.Path, description, PageState(projectRoot, p))
+			fmt.Fprintf(&b, "* [%s](%s) - %s. _State: %s._\n", title, p.Path, description, PageState(projectRoot, root, p))
 		}
 	}
 	return atomicWrite(filepath.Join(root, "index.md"), []byte(b.String()))
@@ -820,7 +1020,7 @@ func pageContentHash(page Page) string {
 
 // PageState derives operational trust from review metadata, issues, content,
 // and evidence changes. Only generated/reviewed are persisted in the page.
-func PageState(projectRoot string, page Page) string {
+func PageState(projectRoot, root string, page Page) string {
 	if len(page.Meta.Issues) > 0 {
 		return "attention"
 	}
@@ -830,49 +1030,376 @@ func PageState(projectRoot string, page Page) string {
 	if page.Meta.Review == nil || page.Meta.Review.ContentHash != pageContentHash(page) {
 		return "stale"
 	}
-	if pageEvidenceChanged(projectRoot, page) {
+	changed, err := pageEvidenceChanged(projectRoot, root, page)
+	if err != nil || changed {
 		return "stale"
 	}
 	return "reviewed"
 }
 
-func pageEvidenceChanged(projectRoot string, page Page) bool {
+func pageEvidenceChanged(projectRoot, root string, page Page) (bool, error) {
 	if page.Meta.Review == nil {
-		return false
+		return false, nil
+	}
+	if page.Meta.Review.EvidenceHash != "" {
+		fingerprint, err := evidenceFingerprint(projectRoot, root, page)
+		if err != nil {
+			return false, err
+		}
+		return fingerprint != page.Meta.Review.EvidenceHash, nil
 	}
 	if page.Meta.Review.EvidenceRevision == "unavailable" {
-		return false
+		return false, nil
 	}
 	paths := []string{}
 	for _, source := range page.Meta.Sources {
-		if source.Path == "" || isExternal(source.Path) || filepath.IsAbs(source.Path) {
+		if !sourceTracksFreshness(source) {
 			continue
 		}
-		paths = append(paths, filepath.FromSlash(source.Path))
+		rel, ok, err := projectRelativeSource(projectRoot, source.Path)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			continue
+		}
+		paths = append(paths, filepath.FromSlash(rel))
 	}
 	if len(paths) == 0 {
-		return false
+		return false, nil
 	}
-	args := append([]string{"diff", "--quiet", page.Meta.Review.EvidenceRevision, "--"}, paths...)
+	args := append([]string{"diff", "--quiet", page.Meta.Review.EvidenceRevision, "--"}, uniqueSorted(paths)...)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = projectRoot
-	return cmd.Run() != nil
+	err := cmd.Run()
+	if err == nil {
+		return false, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return true, nil
+	}
+	return false, fmt.Errorf("%w: comparing legacy revision", errors.Join(ErrEvidenceRecomputeFailed, err))
 }
 
-func pageHasMissingEvidence(projectRoot string, page Page) bool {
+type evidenceManifest struct {
+	hash hash.Hash
+}
+
+func newEvidenceManifest() *evidenceManifest {
+	manifest := &evidenceManifest{hash: sha256.New()}
+	manifest.record("archetipo-wiki-evidence-v1")
+	return manifest
+}
+
+func (manifest *evidenceManifest) record(fields ...string) {
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(fields)))
+	_, _ = manifest.hash.Write(length[:])
+	for _, field := range fields {
+		binary.BigEndian.PutUint64(length[:], uint64(len(field)))
+		_, _ = manifest.hash.Write(length[:])
+		_, _ = manifest.hash.Write([]byte(field))
+	}
+}
+
+func (manifest *evidenceManifest) sum() string {
+	return "sha256:" + fmt.Sprintf("%x", manifest.hash.Sum(nil))
+}
+
+func evidenceFingerprint(projectRoot, root string, page Page) (string, error) {
+	resolver, err := newEvidencePathResolver(projectRoot)
+	if err != nil {
+		return "", err
+	}
+	return evidenceFingerprintWithResolver(resolver, projectRoot, root, page)
+}
+
+func evidenceFingerprintWithResolver(resolver *evidencePathResolver, projectRoot, root string, page Page) (string, error) {
+	physicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("%w: resolving Wiki root: %v", ErrEvidenceUnreadable, err)
+	}
+	root, err = filepath.Abs(physicalRoot)
+	if err != nil {
+		return "", fmt.Errorf("%w: resolving Wiki root: %v", ErrEvidenceUnreadable, err)
+	}
+	sources := map[string]bool{}
+	for _, source := range page.Meta.Sources {
+		if !sourceTracksFreshness(source) || isExternal(source.Path) {
+			continue
+		}
+		rel, err := resolver.normalize(source.Path)
+		if err != nil {
+			return "", err
+		}
+		sources[rel] = true
+	}
+	paths := make([]string, 0, len(sources))
+	for source := range sources {
+		paths = append(paths, source)
+	}
+	sort.Strings(paths)
+
+	manifest := newEvidenceManifest()
+	var index *gitIndex
+	if isGitRepository(projectRoot) {
+		var err error
+		index, err = loadGitIndex(projectRoot)
+		if err != nil {
+			return "", err
+		}
+	}
+	for _, source := range paths {
+		manifest.record("source", source)
+		if err := fingerprintEvidencePath(manifest, resolver, projectRoot, root, source, true, false, index); err != nil {
+			return "", err
+		}
+	}
+	return manifest.sum(), nil
+}
+
+func projectRelativeSource(projectRoot, sourcePath string) (string, bool, error) {
+	if sourcePath == "" || isExternal(sourcePath) {
+		return "", false, nil
+	}
+	resolver, err := newEvidencePathResolver(projectRoot)
+	if err != nil {
+		return "", false, err
+	}
+	rel, err := resolver.normalize(sourcePath)
+	if err != nil {
+		return "", false, err
+	}
+	return rel, true, nil
+}
+
+func fingerprintEvidencePath(manifest *evidenceManifest, resolver *evidencePathResolver, projectRoot, root, rel string, recurse, indirect bool, index *gitIndex) error {
+	var tracked *gitIndexEntry
+	if index != nil {
+		var err error
+		tracked, err = index.entry(rel)
+		if err != nil {
+			return err
+		}
+	}
+	resolved, err := resolver.resolve(rel)
+	if err != nil {
+		return err
+	}
+	candidate := resolved.Path
+	if indirect && isReservedWikiArtifact(root, candidate) {
+		return nil
+	}
+	if tracked != nil && tracked.Mode == "160000" {
+		return fingerprintGitlink(manifest, rel, tracked, resolved)
+	}
+	if !resolved.Exists {
+		manifest.record("missing", rel)
+		return nil
+	}
+	info := resolved.Info
+
+	if tracked != nil {
+		executable, regular, symlink, modeErr := gitIndexMode(tracked)
+		if modeErr != nil {
+			return modeErr
+		}
+		if regular {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("%w: tracked regular file %s has worktree type %s", ErrUnsupportedEvidenceEntry, rel, info.Mode().Type())
+			}
+			return fingerprintRegularEvidence(manifest, root, rel, candidate, executable)
+		}
+		if symlink {
+			return fingerprintTrackedSymlink(manifest, rel, candidate, info)
+		}
+	}
+
+	switch mode := info.Mode(); {
+	case mode.IsRegular():
+		return fingerprintRegularEvidence(manifest, root, rel, candidate, "0")
+	case mode.IsDir():
+		manifest.record("directory", rel)
+		if !recurse {
+			return nil
+		}
+		entries, err := evidenceDirectoryEntries(resolver, projectRoot, rel, index)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if err := fingerprintEvidencePath(manifest, resolver, projectRoot, root, entry, false, true, index); err != nil {
+				return err
+			}
+		}
+	case mode&os.ModeSymlink != 0:
+		target, err := os.Readlink(candidate)
+		if err != nil {
+			return fmt.Errorf("reading symlink %s: %w", rel, errors.Join(ErrEvidenceUnreadable, err))
+		}
+		manifest.record("symlink", rel, target)
+	default:
+		return fmt.Errorf("%w: %s (%s)", ErrUnsupportedEvidenceEntry, rel, mode.Type())
+	}
+	return nil
+}
+
+func fingerprintRegularEvidence(manifest *evidenceManifest, root, rel, candidate, executable string) error {
+	if isWikiConcept(root, candidate) {
+		page, err := parsePage(root, candidate)
+		if err != nil {
+			return fmt.Errorf("%w: parsing Wiki evidence %s: %v", ErrEvidenceUnreadable, rel, err)
+		}
+		manifest.record("wiki-concept", rel, pageContentHash(page))
+		return nil
+	}
+	raw, err := os.ReadFile(candidate)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", rel, errors.Join(ErrEvidenceUnreadable, err))
+	}
+	digest := sha256.Sum256(raw)
+	manifest.record("regular", rel, executable, fmt.Sprintf("%x", digest))
+	return nil
+}
+
+func fingerprintTrackedSymlink(manifest *evidenceManifest, rel, candidate string, info fs.FileInfo) error {
+	var target string
+	switch mode := info.Mode(); {
+	case mode&os.ModeSymlink != 0:
+		value, err := os.Readlink(candidate)
+		if err != nil {
+			return fmt.Errorf("reading tracked symlink %s: %w", rel, errors.Join(ErrEvidenceUnreadable, err))
+		}
+		target = value
+	case mode.IsRegular():
+		raw, err := os.ReadFile(candidate)
+		if err != nil {
+			return fmt.Errorf("reading materialized tracked symlink %s: %w", rel, errors.Join(ErrEvidenceUnreadable, err))
+		}
+		target = string(raw)
+	default:
+		return fmt.Errorf("%w: tracked symlink %s has worktree type %s", ErrUnsupportedEvidenceEntry, rel, mode.Type())
+	}
+	manifest.record("symlink", rel, target)
+	return nil
+}
+
+func evidenceDirectoryEntries(resolver *evidencePathResolver, projectRoot, rel string, index *gitIndex) ([]string, error) {
+	if index != nil {
+		entries, err := index.pathsWithin(rel)
+		if err != nil {
+			return nil, err
+		}
+		cmd := exec.Command("git", "ls-files", "-z", "--others", "--exclude-standard", "--", ":(literal)"+filepath.ToSlash(rel))
+		cmd.Dir = projectRoot
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("%w: listing untracked Git evidence in %s: %v", ErrEvidenceUnreadable, rel, err)
+		}
+		for _, entry := range strings.Split(string(out), "\x00") {
+			if entry == "" {
+				continue
+			}
+			normalized, err := resolver.normalize(filepath.ToSlash(entry))
+			if err != nil {
+				return nil, err
+			}
+			if pathContains(rel, normalized) {
+				entries = append(entries, normalized)
+			}
+		}
+		return uniqueSorted(entries), nil
+	}
+
+	resolvedBase, err := resolver.resolve(rel)
+	if err != nil {
+		return nil, err
+	}
+	base := resolvedBase.Path
+	entries := []string{}
+	err = filepath.WalkDir(base, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == base {
+			return nil
+		}
+		if entry.IsDir() && entry.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		entryRel, err := filepath.Rel(resolver.root, path)
+		if err != nil {
+			return err
+		}
+		normalized, err := resolver.normalize(filepath.ToSlash(entryRel))
+		if err != nil {
+			return err
+		}
+		entries = append(entries, normalized)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walking evidence directory %s: %w", rel, err)
+	}
+	return uniqueSorted(entries), nil
+}
+
+func pathContains(parent, child string) bool {
+	parent = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(parent)), "/")
+	child = filepath.ToSlash(filepath.Clean(child))
+	if parent == "." {
+		return child != ".." && !strings.HasPrefix(child, "../")
+	}
+	return child == parent || strings.HasPrefix(child, parent+"/")
+}
+
+func isGitRepository(projectRoot string) bool {
+	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+	cmd.Dir = projectRoot
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+func isWikiConcept(root, candidate string) bool {
+	return strings.EqualFold(filepath.Ext(candidate), ".md") && pathWithin(root, candidate) && !isReservedWikiArtifact(root, candidate)
+}
+
+func isReservedWikiArtifact(root, candidate string) bool {
+	if !pathWithin(root, candidate) {
+		return false
+	}
+	base := strings.ToLower(filepath.Base(candidate))
+	return base == "index.md" || base == "log.md"
+}
+
+func pathWithin(root, candidate string) bool {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	candidateAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(rootAbs, candidateAbs)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func pageHasMissingEvidence(resolver *evidencePathResolver, page Page) (bool, error) {
 	for _, source := range page.Meta.Sources {
 		if source.Path == "" || isExternal(source.Path) {
 			continue
 		}
-		candidate := source.Path
-		if !filepath.IsAbs(candidate) {
-			candidate = filepath.Join(projectRoot, filepath.FromSlash(candidate))
+		resolved, err := resolver.resolve(source.Path)
+		if err != nil {
+			return false, err
 		}
-		if _, err := os.Stat(candidate); err != nil {
-			return true
+		if !resolved.Exists {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func atomicWrite(path string, data []byte) error {

@@ -107,6 +107,8 @@ wiki_impact:
 Use empty arrays when no impact is expected. This block is the reviewable documentation contract consumed by implementation and acceptance review.
 New domain pages use `domains/<slug>`. New architectural decisions use `decisions/<slug>` and must follow the `type: decision` contract in the Wiki skill.
 
+When concrete expected implementation paths are known, `wiki affected --file <path>...` may be used to discover candidate pages. Treat the result as a reading list, not an automatic contract: include a candidate in `update_after_acceptance` only when the planned change is expected to alter its knowledge. Do not copy tracked-source path fan-out into Wiki Impact. Co-cited-but-still-accurate pages remain affected-only follow-up, and context sources are excluded from affected discovery.
+
 ---
 
 {IF_MOCKUP_GENERATED}

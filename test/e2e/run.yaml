@@ -135,20 +135,37 @@ scenarios:
     prompts:
       - /archetipo-implement US-001
 
-  # Acceptance review presents and approves the generated Wiki page, commits
-  # its review metadata on the spec branch, then integrates a clean worktree.
+  # Acceptance review approves only the required generated page, preserves an
+  # affected-only stale warning and a fresh context reference, then integrates.
   worktree-review-accepts-wiki:
     agent: pi-go-ds4-flash
     fixture: fixtures/worktree-wiki-review
     prompts:
       - /archetipo-implement US-001
       - >-
-        /archetipo-review US-001. Present the complete acceptance dossier,
-        including the Wiki page IDs and readiness, then execute Approve. This
-        message is the explicit human approval if validation is clean; do not
-        ask a follow-up question.
+        /archetipo-review US-001. Present the complete reason-labelled
+        acceptance dossier for overview, behavior, and references/prd. Treat
+        required-ready overview as the only approval candidate; treat
+        affected-only behavior with only WIKI_EVIDENCE_CHANGED as a persistent
+        non-blocking warning; verify references/prd stays reviewed and outside
+        affected because hello.txt is context. Then execute Approve. This
+        message is the explicit human approval; do not ask a follow-up question
+        and do not reset, approve, or reconfirm affected-only pages.
     verify_review_wiki:
       spec_code: US-001
+      seed_reviewed_pages: [behavior, references/prd]
+      seed_baseline_paths: [docs, hello.txt, package.json]
       reviewed_pages: [overview]
-      output_includes: [overview]
+      exact_reviewed_pages: [behavior, overview, references/prd]
+      review_commit_pages: [overview]
+      affected_only_stale_pages: [behavior]
+      context_fresh_pages: [references/prd]
+      unchanged_review_metadata_pages: [behavior, references/prd]
+      affected_file: hello.txt
+      branch: archetipo/US-001
+      worktree: .archetipo/worktrees/US-001
+      implemented_file_contents:
+        hello.txt: "Hello from ARchetipo"
+      output_includes: [overview, behavior, references/prd]
+      warning_output_pages: [behavior]
       require_clean: true

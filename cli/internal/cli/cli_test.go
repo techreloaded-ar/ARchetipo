@@ -796,6 +796,187 @@ func TestSpecReview_CommitSubjectCiWithDifferentCode(t *testing.T) {
 	}
 }
 
+func initCLIWiki(t *testing.T) {
+	t.Helper()
+	if res := runCLI(t, "", "wiki", "init"); res.exit != 0 {
+		t.Fatalf("Wiki init failed: %s", res.stderr.String())
+	}
+}
+
+func writeCLIWikiPage(t *testing.T, id, source string) {
+	t.Helper()
+	path := filepath.Join("docs", "wiki", filepath.FromSlash(id+".md"))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := "---\ntype: guide\ntitle: " + id + "\ndescription: " + id + " description\nstatus: generated\nsources:\n  - path: " + source + "\n---\n# " + id + "\n"
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func TestWikiApproveGitlinkBlockerReturnsConflict(t *testing.T) {
+	newProject(t)
+	origin := t.TempDir()
+	mustRun(t, "git", "-C", origin, "init", "-q")
+	mustRun(t, "git", "-C", origin, "config", "user.email", "wiki-test@example.test")
+	mustRun(t, "git", "-C", origin, "config", "user.name", "Wiki Test")
+	if err := os.WriteFile(filepath.Join(origin, "module.txt"), []byte("clean\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, "git", "-C", origin, "add", "module.txt")
+	mustRun(t, "git", "-C", origin, "commit", "-qm", "module baseline")
+
+	mustRun(t, "git", "init", "-q")
+	mustRun(t, "git", "config", "user.email", "wiki-test@example.test")
+	mustRun(t, "git", "config", "user.name", "Wiki Test")
+	mustRun(t, "git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", origin, "modules/component")
+	mustRun(t, "git", "add", ".gitmodules", "modules/component")
+	mustRun(t, "git", "commit", "-qm", "add module")
+	initCLIWiki(t)
+	writeCLIWikiPage(t, "module", "modules/component")
+	mustRun(t, "git", "submodule", "deinit", "-q", "-f", "modules/component")
+
+	_, code := decodeError(t, runCLI(t, "", "wiki", "approve", "module"))
+	if code != iox.CodeConflict {
+		t.Fatalf("expected E_CONFLICT, got %s", code)
+	}
+}
+
+func TestWikiAffectedRepeatedFilesMatchRootSource(t *testing.T) {
+	newProject(t)
+	initCLIWiki(t)
+	writeCLIWikiPage(t, "root", ".")
+	res := runCLI(t, "", "wiki", "affected", "--file", "src/a.go", "--file", "src2/b.go")
+	kind, data := decodeOK(t, res)
+	if kind != "wiki_affected_result" || data["count"] != float64(1) {
+		t.Fatalf("unexpected affected envelope: kind=%s data=%v", kind, data)
+	}
+	files, ok := data["files"].([]any)
+	if !ok || len(files) != 2 || files[0] != "src/a.go" || files[1] != "src2/b.go" {
+		t.Fatalf("repeated --file values were not preserved: %v", data["files"])
+	}
+	items, ok := data["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("unexpected affected items: %v", data["items"])
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok || item["id"] != "root" {
+		t.Fatalf("root source did not match project file: %v", items[0])
+	}
+}
+
+func TestWikiEvidenceUnreadableValidationEnvelope(t *testing.T) {
+	newProject(t)
+	initCLIWiki(t)
+	if err := os.MkdirAll(filepath.Join("evidence"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("evidence", "item.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCLIWikiPage(t, "overview", "evidence/item.txt")
+	if res := runCLI(t, "", "wiki", "approve", "overview"); res.exit != 0 {
+		t.Fatalf("approval failed: %s", res.stderr.String())
+	}
+	if err := os.RemoveAll("evidence"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("evidence", []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	kind, data := decodeOK(t, runCLI(t, "", "wiki", "validate"))
+	if kind != "validation_result" || data["ok"] != false {
+		t.Fatalf("unexpected validation envelope: kind=%s data=%v", kind, data)
+	}
+	codes := collectFindingCodes(t, data["findings"])
+	if !containsString(codes, "WIKI_EVIDENCE_UNREADABLE") || containsString(codes, "WIKI_EVIDENCE_CHANGED") {
+		t.Fatalf("unexpected evidence findings: %v", codes)
+	}
+}
+
+func TestWikiApproveEvidenceBlockersReturnConflict(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		setup  func(*testing.T)
+	}{
+		{name: "unsafe traversal", source: "../outside.txt", setup: func(*testing.T) {}},
+		{name: "unreadable path", source: "evidence/item.txt", setup: func(t *testing.T) {
+			if err := os.WriteFile("evidence", []byte("not a directory\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			newProject(t)
+			initCLIWiki(t)
+			test.setup(t)
+			writeCLIWikiPage(t, "overview", test.source)
+			_, code := decodeError(t, runCLI(t, "", "wiki", "approve", "overview"))
+			if code != iox.CodeConflict {
+				t.Fatalf("expected E_CONFLICT, got %s", code)
+			}
+		})
+	}
+}
+
+func TestWikiReconfirmEvidenceBlockerReturnsConflict(t *testing.T) {
+	newProject(t)
+	initCLIWiki(t)
+	if err := os.MkdirAll("evidence", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("evidence", "item.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCLIWikiPage(t, "overview", "evidence/item.txt")
+	if res := runCLI(t, "", "wiki", "approve", "overview"); res.exit != 0 {
+		t.Fatalf("approval failed: %s", res.stderr.String())
+	}
+	if err := os.RemoveAll("evidence"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("evidence", []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, code := decodeError(t, runCLI(t, "", "wiki", "reconfirm", "overview"))
+	if code != iox.CodeConflict {
+		t.Fatalf("expected E_CONFLICT, got %s", code)
+	}
+}
+
+func TestWikiApproveAndReconfirmUnknownIDsAreInvalidInput(t *testing.T) {
+	newProject(t)
+	initCLIWiki(t)
+	for _, command := range [][]string{{"wiki", "approve", "missing"}, {"wiki", "reconfirm", "missing"}} {
+		_, code := decodeError(t, runCLI(t, "", command...))
+		if code != iox.CodeInvalidInput {
+			t.Fatalf("%v: expected E_INVALID_INPUT, got %s", command, code)
+		}
+	}
+}
+
+func TestWikiReconfirmRequiresExplicitPageID(t *testing.T) {
+	newProject(t)
+	res := runCLI(t, "", "wiki", "reconfirm")
+	_, code := decodeError(t, res)
+	if code != iox.CodeInvalidInput {
+		t.Fatalf("expected E_INVALID_INPUT, got %s", code)
+	}
+}
+
 func TestSpecReview_InvalidCommitType(t *testing.T) {
 	newProject(t)
 	seedStartedWorktreeSpec(t)

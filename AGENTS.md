@@ -50,7 +50,7 @@ Skills must explicitly include only the CLI subcommands they actually use, toget
 
 ## Rules for CLI changes
 
-- The 13 public CLI operations are stable. Any incompatible change is a breaking change and must be versioned accordingly.
+- The 14 public CLI operations are stable. Any incompatible change is a breaking change and must be versioned accordingly.
 - Keep the conformance suite (`cli/internal/connector/conformance/`) green for all implementations: file, github, and inmemory.
 - All GitHub connector GraphQL queries live in `cli/internal/connector/github/templates.go`. Add snapshot tests before modifying them.
 - Distribution: the binary and skills share one repository tag. For `v*` tags, `release.yml` runs GoReleaser to produce binaries in `cli/dist/`; `scripts/build-npm.mjs` then copies them into the six `@techreloaded/archetipo-{os}-{arch}` packages and copies the skills into the main `@techreloaded/archetipo` package; finally, `scripts/publish-npm.mjs` publishes all seven npm packages.
@@ -102,7 +102,7 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
   - `archetipo_post_commands`: CLI commands run after prompts.
   - `verify_integrate`: spec codes whose worktree integration must be verified.
   - `verify_wiki_bootstrap`: expectations for core DDD pages, optional sources represented as `references/` concepts, `generated` state, issues, and targeted content; it also runs `wiki validate --profile bootstrap`.
-  - `verify_review_wiki`: verifies that `archetipo-review` moves the spec to `DONE`, presents dossier pages, commits only the expected pages as `reviewed` together with `index.md` and a `log.md` containing a `Review` entry, and leaves no tracked or untracked Wiki changes in the integrated checkout.
+  - `verify_review_wiki`: can seed baseline reviewed pages through the CLI before the initial commit, then verifies `archetipo-review` from machine effects: the exact expected persisted page set is reviewed, required-ready pages alone appear in the dedicated approval commit, affected-only evidence-stale pages remain warnings with unchanged review metadata, context-only references remain fresh and outside `wiki affected`, configured implementation artifacts have exact committed content, the spec reaches `DONE`, branch/worktree metadata and resources are removed, validation is clean, and the integrated checkout has no tracked or untracked Wiki changes.
 - Pre/post commands are split with `line.split(/\s+/)`. Avoid arguments that require complex shell quoting.
 
 ### Scenario execution sequence in `run.mjs`
@@ -111,12 +111,13 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 2. Run `archetipo init --tool <tool> --connector file --yes` in the sandbox as a non-interactive baseline.
 3. Verify `.archetipo/config.yaml`, `.archetipo/shared-runtime.md`, and the skills required by the prompts.
 4. Overlay the fixture, when configured. The fixture's `.archetipo/config.yaml` is authoritative and determines connector, worktree, paths, and related settings; do not add runner flags for these.
-5. Initialize a Git repository in the sandbox on `main`, configure a local identity, and create an empty base commit.
+5. Initialize a Git repository in the sandbox on `main`, configure a local identity, and create an empty base commit by default. Focused review fixtures may declare `seed_baseline_paths` so CLI-seeded reviewed pages and their evidence are committed into the base worktree without tracking installed skills or the copied binary.
 6. Run any `archetipo_pre_commands` using the CLI copied into the sandbox.
 7. Run prompts through the agent with interpolated arguments.
 8. For `verify_integrate`, capture the branch, worktree, and tip before post-commands using `spec show` and `git rev-parse`.
 9. Run any `archetipo_post_commands`.
 10. Verify integration: the spec is `DONE`, the pre-integration tip is reachable from `main`, the per-spec branch is deleted, and the worktree directory has been removed and no longer appears in `git worktree list --porcelain`.
+11. For focused Wiki review scenarios, verify acceptance from persisted/committed effects (including exact artifact content and exact approval commit paths), then assert branch/worktree cleanup directly without relying on a natural-language verdict.
 
 ### Current scenarios
 
@@ -128,7 +129,7 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 - `from-plan-to-implement`: fixture `fixtures/plan`, prompt `/archetipo-implement US-001`; worktrees disabled.
 - `worktree-from-plan-to-implement-integrate`: fixture `fixtures/worktree-plan`, prompt `/archetipo-implement US-001`, then `spec integrate US-001`; verifies integration.
 - `worktree-implement-no-integrate`: fixture `fixtures/worktree-plan`, pre-command `spec start US-001`, then `/archetipo-implement US-001`; leaves the work unintegrated.
-- `worktree-review-accepts-wiki`: implements a change with `Wiki Impact`, then `/archetipo-review` presents and approves the generated page, commits review metadata in the worktree, and integrates the spec.
+- `worktree-review-accepts-wiki`: implements an exact greeting change with one required generated page, one affected-only tracked behavioral page, and one reviewed reference whose shared hub source is context; review approves only the required page, preserves the stale warning and fresh reference, commits only the expected Wiki approval paths, integrates the spec, and removes its branch/worktree.
 
 ### Available fixtures
 
@@ -138,14 +139,14 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 - `fixtures/prd`: `file` connector, worktrees disabled, and a `docs/PRD.md` for the match5 product.
 - `fixtures/plan`: `file` connector, worktrees disabled, and backlog/spec/plan `US-001`, which requests `hello.txt` containing `Hello from ARchetipo`.
 - `fixtures/worktree-plan`: equivalent to `plan`, but with `worktree.enabled: true`, `base: main`, `dir: .archetipo/worktrees`, and `branch_prefix: archetipo/`.
-- `fixtures/worktree-wiki-review`: a worktree spec and plan with a generated `overview` page declared in `Wiki Impact`; used to verify the combined code + Wiki gate.
+- `fixtures/worktree-wiki-review`: a worktree spec and plan with a required generated `overview`, a reviewed behavioral page tracking the changed greeting hub, and a reviewed PRD reference that marks that hub context; used to verify the reason-aware code + Wiki gate.
 - `fixtures/jira-prd`: `jira` connector with `base_url: https://agilereloaded.atlassian.net/`, `story_type: Task`, `subtask_type: Sub-task`, and `priority_map`; `project_key` and `status_map` are intentionally omitted to let the CLI perform auto-discovery and auto-matching.
 
 ### Standalone smoke tests
 
 - `node ./test/e2e/validate-inception-smoke.mjs`: builds the CLI, initializes a file/pi sandbox, writes an invalid PRD, verifies `archetipo validate prd` exits with `0` and returns `kind=validation_result`, `data.ok=false`, `PRD_PLACEHOLDER_LEFT`, and `PRD_MISSING_SECTION`; then writes a valid PRD and verifies `kind=validation_result` with `data.ok=true`. Produces an HTML report. Options: `--workspace-root`, `--cleanup`. Note: the help text mentions `npm run test:validate-inception`, but no corresponding package script currently exists.
 - `npm run test:view-delete-smoke`: builds the CLI, initializes a sandbox, adds two specs, seeds plan/review artifacts for `US-901`, starts `archetipo view` on a random port, and verifies through the HTTP API that `DELETE /api/spec/US-901` removes that card, retains `US-902`, subsequently returns 404 for `US-901`, and deletes its spec/plan/review artifacts.
-- `npm run test:wiki-smoke`: builds the CLI, inspects a sandbox codebase, initializes the Wiki, creates ordinary `generated` pages and a `type: decision` page, then verifies validation, ADR search by type, catalog generation, selective approval to `reviewed`, and `index.md` regeneration.
+- `npm run test:wiki-smoke`: builds the CLI, inspects a sandbox codebase, initializes the Wiki, creates ordinary and decision/reference pages, then verifies validation, unsafe-path errors, root-source affected matching, ADR search, cataloging, selective approval, tracked-versus-context freshness, explicit reconfirmation, distinct unreadable-evidence findings, and index regeneration. This credential-free smoke runs unchanged in the Ubuntu/macOS/Windows CI test matrix after Node setup.
 
 When adding or modifying E2E tests, prefer explicit fixtures with a complete `.archetipo/config.yaml`, use `env_required` for external credentials, keep generated reports out of commits, and update this section whenever runner semantics change.
 

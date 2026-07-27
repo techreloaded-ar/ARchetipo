@@ -16,7 +16,7 @@ import (
 func newWikiCmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "wiki", Short: "Living project Wiki operations"}
 	root.PersistentFlags().String("project-root", "", "target checkout for code and Wiki operations (defaults to the configured project root)")
-	root.AddCommand(newWikiInitCmd(s), newWikiInspectCmd(s), newWikiStatusCmd(s), newWikiValidateCmd(s), newWikiSearchCmd(s), newWikiAffectedCmd(s), newWikiCatalogCmd(s), newWikiApproveCmd(s), newWikiResetCmd(s))
+	root.AddCommand(newWikiInitCmd(s), newWikiInspectCmd(s), newWikiStatusCmd(s), newWikiValidateCmd(s), newWikiSearchCmd(s), newWikiAffectedCmd(s), newWikiCatalogCmd(s), newWikiApproveCmd(s), newWikiReconfirmCmd(s), newWikiResetCmd(s))
 	return root
 }
 
@@ -105,7 +105,7 @@ func newWikiStatusCmd(s streams) *cobra.Command {
 			counts := map[string]int{}
 			items := []map[string]any{}
 			for _, p := range pages {
-				state := wiki.PageState(cfg.ProjectRoot, p)
+				state := wiki.PageState(cfg.ProjectRoot, root, p)
 				counts[state]++
 				items = append(items, map[string]any{"id": p.ID, "path": p.Path, "state": state, "issues": p.Meta.Issues})
 			}
@@ -190,7 +190,7 @@ func newWikiApproveCmd(s streams) *cobra.Command {
 		return withWiki(cmd, s, "wiki_approve_result", true, func(cfg config.Config, root string) (any, error) {
 			count, err := wiki.Approve(cfg.ProjectRoot, root, args)
 			if err != nil {
-				if errors.Is(err, wiki.ErrValidationFailed) || errors.Is(err, wiki.ErrUnresolvedIssues) || errors.Is(err, wiki.ErrMissingEvidence) {
+				if isWikiEvidenceConflict(err) || errors.Is(err, wiki.ErrUnresolvedIssues) || errors.Is(err, wiki.ErrMissingEvidence) {
 					return nil, iox.NewConflict("Wiki approval blocked", "repair validation findings and resolve page issues before approval", err)
 				}
 				if errors.Is(err, wiki.ErrPageNotFound) {
@@ -201,6 +201,40 @@ func newWikiApproveCmd(s streams) *cobra.Command {
 			return map[string]any{"approved": count, "root": root, "pages": args}, nil
 		})
 	}}
+}
+
+func newWikiReconfirmCmd(s streams) *cobra.Command {
+	return &cobra.Command{Use: "reconfirm <page-id...>", Short: "Reconfirm unchanged reviewed pages against current evidence", Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.MinimumNArgs(1)(cmd, args); err != nil {
+			return errInvalidUsage(err.Error(), "pass at least one explicitly verified Wiki page ID")
+		}
+		return nil
+	}, RunE: func(cmd *cobra.Command, args []string) error {
+		return withWiki(cmd, s, "wiki_reconfirm_result", true, func(cfg config.Config, root string) (any, error) {
+			count, err := wiki.Reconfirm(cfg.ProjectRoot, root, args)
+			if err != nil {
+				if errors.Is(err, wiki.ErrPageNotFound) {
+					return nil, iox.NewInvalidInput(err.Error(), "pass at least one existing Wiki page ID", err)
+				}
+				if isWikiEvidenceConflict(err) || errors.Is(err, wiki.ErrReconfirmIneligible) || errors.Is(err, wiki.ErrUnresolvedIssues) || errors.Is(err, wiki.ErrMissingEvidence) {
+					return nil, iox.NewConflict("Wiki reconfirmation blocked", "select reviewed, unchanged, issue-free pages with current evidence", err)
+				}
+				return nil, iox.NewInternal("reconfirming Wiki pages", err)
+			}
+			return map[string]any{"reconfirmed": count, "root": root, "pages": args}, nil
+		})
+	}}
+}
+
+func isWikiEvidenceConflict(err error) bool {
+	return errors.Is(err, wiki.ErrValidationFailed) ||
+		errors.Is(err, wiki.ErrInvalidSourcePath) ||
+		errors.Is(err, wiki.ErrUnsafeSourcePath) ||
+		errors.Is(err, wiki.ErrEvidenceUnreadable) ||
+		errors.Is(err, wiki.ErrEvidenceRecomputeFailed) ||
+		errors.Is(err, wiki.ErrGitIndexConflict) ||
+		errors.Is(err, wiki.ErrSubmoduleEvidence) ||
+		errors.Is(err, wiki.ErrUnsupportedEvidenceEntry)
 }
 
 func newWikiResetCmd(s streams) *cobra.Command {

@@ -172,11 +172,12 @@ const (
 
 // WikiSource records provenance without copying source content into a page.
 type WikiSource struct {
-	Path     string `json:"path" yaml:"path"`
-	Revision string `json:"revision,omitempty" yaml:"revision,omitempty"`
-	Role     string `json:"role,omitempty" yaml:"role,omitempty"`
-	Symbol   string `json:"symbol,omitempty" yaml:"symbol,omitempty"`
-	Note     string `json:"note,omitempty" yaml:"note,omitempty"`
+	Path      string `json:"path" yaml:"path"`
+	Revision  string `json:"revision,omitempty" yaml:"revision,omitempty"`
+	Role      string `json:"role,omitempty" yaml:"role,omitempty"`
+	Symbol    string `json:"symbol,omitempty" yaml:"symbol,omitempty"`
+	Note      string `json:"note,omitempty" yaml:"note,omitempty"`
+	Freshness string `json:"freshness,omitempty" yaml:"freshness,omitempty"`
 }
 
 // WikiIssue keeps semantic uncertainty explicit without overloading lifecycle.
@@ -189,6 +190,7 @@ type WikiIssue struct {
 type WikiReview struct {
 	ContentHash      string `json:"content_hash" yaml:"content_hash"`
 	EvidenceRevision string `json:"evidence_revision" yaml:"evidence_revision"`
+	EvidenceHash     string `json:"evidence_hash,omitempty" yaml:"evidence_hash,omitempty"`
 	ReviewedAt       string `json:"reviewed_at" yaml:"reviewed_at"`
 }
 

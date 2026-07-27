@@ -11,3 +11,5 @@ sources:
 
 The greeting artifact is delivered in `hello.txt` and must contain exactly
 `Hello from ARchetipo`.
+
+See the [context map](/architecture/context-map.md) for the fixture boundary.

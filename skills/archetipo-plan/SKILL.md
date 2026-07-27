@@ -50,6 +50,9 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
    - `archetipo validate plan {US-CODE} --file <path>`
    - `archetipo spec plan {US-CODE} --file <path>`
    - `archetipo wiki search [query]`
+   - `archetipo wiki --project-root {data.workdir} affected --file <expected-path>...` (only when concrete expected changed paths are known)
+
+   `wiki affected` emits the standard envelope with `kind: wiki_affected_result`, `data.items`, `data.files`, and `data.count`. Branch on `E_PRECONDITION` when the Wiki is absent, `E_INVALID_INPUT` for bad paths/revisions/config, and `E_INTERNAL` for filesystem or Git failures. Its results are discovery candidates, not an automatic Wiki Impact list.
 
 #### Step 1 — Spec Selection
 
@@ -72,6 +75,7 @@ After selecting the spec, read ALL context in a **single turn with parallel tool
 - `{config.paths.mockups}/` contents (if exists)
 - Relevant codebase files: schema/model definition files, existing related source files, existing tests
 - `{config.paths.wiki}/index.md` and only the pages selected from the spec's `Wiki context` IDs or `archetipo wiki search`
+- When the planned implementation names concrete expected changed paths, run `archetipo wiki --project-root {data.workdir} affected` with repeated `--file` flags and inspect the returned candidate pages. Do not use speculative paths, default Git revisions, or copy the returned fan-out directly into `wiki_impact.update_after_acceptance`.
 - If the target spec has a `Blocked by` field with values other than `-`, read those blocking specs from the backlog to understand preconditions and shared context
 - If `data.tasks` from Step 1 was non-empty, a plan already exists. In **Rework mode** (see below) do NOT ask — preserve the existing tasks and append. Otherwise ask the user: overwrite, create a new revision, or skip. Never silently overwrite.
 
@@ -155,6 +159,10 @@ For every qualifying choice:
 4. If a new choice replaces an existing ADR, update the old page to `decision_status: superseded`, link it to the new accepted decision, and include both IDs in the Wiki impact contract.
 
 If no choice crosses this threshold, keep decision IDs out of `wiki_impact.create` and state the reason briefly in the technical solution. Do not manufacture ADRs merely to grow the Wiki.
+
+#### Wiki impact source relevance
+
+Treat `wiki affected` as bounded discovery. For every candidate page, decide whether the planned change is expected to alter the page's actual knowledge, not merely one cited file. Put an existing ID in `wiki_impact.update_after_acceptance` only when a semantic page update is expected; put a new ID in `create` only when the plan genuinely requires a new concept. A tracked co-citation that may become evidence-stale but whose claims remain accurate stays out of the required contract, and a `freshness: context` source should not be returned at all. Record useful existing pages in `read` when they inform planning. Never convert path fan-out into a documentation work contract without this reason-aware decision.
 
 #### UI/UX Assessment & Mockup Spawn
 

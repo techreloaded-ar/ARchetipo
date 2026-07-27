@@ -3,8 +3,9 @@ spec_code: US-001
 body: |
   # US-001 implementation plan
 
-  Create the greeting artifact and update the existing generated Wiki overview
-  in the same worktree.
+  Update the greeting artifact and update the existing generated Wiki overview
+  in the same worktree. Leave co-cited reviewed pages unchanged unless their
+  knowledge is semantically obsolete.
 
   ## Wiki Impact
 
@@ -16,13 +17,13 @@ body: |
   ```
 tasks:
   - id: T1
-    title: Create the greeting artifact
+    title: Update the greeting artifact
     type: Impl
     status: TODO
     body: |
       ## Descrizione
 
-      Create `hello.txt` at the repository root with exactly `Hello from ARchetipo`.
+      Update `hello.txt` at the repository root to contain exactly `Hello from ARchetipo`.
 
       ## File Coinvolti
 

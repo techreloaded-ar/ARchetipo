@@ -49,3 +49,5 @@ cli/archetipo-bin
 *env*
 .plans
 graphify-out
+.taskman
+.pi-subagents

@@ -45,6 +45,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: cli/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Tests
         working-directory: cli
         run: go test ./...
+      - name: Wiki smoke
+        run: npm run test:wiki-smoke
