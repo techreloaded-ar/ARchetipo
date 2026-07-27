@@ -18,6 +18,7 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 
 - Every source may set `freshness: tracked` or `freshness: context`; omitted means `tracked` for compatibility.
 - Tracked sources are authoritative freshness evidence and participate in evidence hashes, legacy revision fallback, and `wiki affected`. A tracked source of `.` or `./` represents the whole project for affected discovery; directory matching is component-aware, so `src` never includes `src2`.
+- Only syntactically valid absolute `http` or `https` URLs with a host are external evidence. Scheme matching is case-insensitive. Malformed URLs, unknown schemes, Windows-looking `C://...` values, and traversal strings containing `://` remain local-source candidates and must pass normal project-relative validation.
 - Context sources remain serialized provenance, remain semantic page content, and must still have valid/existing paths, but do not stale a page or make it affected when their bytes change.
 - Reference pages keep the immutable original artifact (`role: original`) tracked. Implementation files used only for comparison or navigation belong in ordinary Markdown links or context sources; never make an unchanged PRD reference depend on hub-file churn.
 - To migrate an existing reference that incorrectly tracks implementation pointers, reset it once, remove those sources in favor of links or mark them `freshness: context`, validate, and approve the corrected page once. Do not reinterpret old approval metadata automatically.
@@ -54,7 +55,7 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 
 ## Refresh
 
-1. Run `archetipo wiki affected --base <revision> --head <revision>` or pass repeated `--file` flags.
+1. Run `archetipo wiki affected --base <revision> --head <revision>` or pass repeated `--file` flags. Revision-based discovery is lossless for whitespace-bearing names and treats a rename as removal plus addition, so both source and destination paths participate in matching. A copied destination appears as an addition while the unchanged source remains unchanged.
 2. Inspect affected pages and related domains against changed code and tests. Treat affected results as discovery, not a mass reset list.
 3. Run `archetipo wiki reset <page-id>...` only for reviewed pages whose knowledge is obsolete, then update obsolete claims and retain unresolved issues. Leave accurate co-cited pages unchanged and stale for explicit follow-up; context-only pointers do not appear in affected results.
 4. Validate and catalog. Approval is a separate operation.
@@ -93,4 +94,6 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 - Do not treat a data model state as reachable until a write path proves it.
 - Do not approve pages with unresolved issues.
 - Cite only normalized project-relative evidence paths. Never work around `WIKI_UNSAFE_SOURCE_PATH` or evidence-readability errors with absolute paths or link traversal.
-- Treat tracked executable identity as Git-index metadata, tracked symlinks as link-target evidence, and submodules as eligible only when initialized, HEAD-matched, and completely clean (including nested and untracked state).
+- Treat tracked ordinary files as current worktree evidence normalized by Git clean/EOL/filter rules, with executable identity from the Git index. Untracked and non-Git files retain raw-byte identity; tracked symlinks use link-target evidence.
+- Cite a clean submodule only at its exact gitlink root (or through a containing parent directory). Descendants below a gitlink are unsupported even when the submodule is initialized and clean; exact gitlinks additionally require HEAD/index agreement and completely clean tracked, untracked, conflicted, and nested state.
+- Never cite or traverse an embedded Git repository, linked worktree, or bare repository below the configured project root. Cite evidence owned by the trusted project repository instead.

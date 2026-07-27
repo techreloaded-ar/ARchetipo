@@ -842,6 +842,79 @@ func TestAffectedNormalizesProjectRelativePaths(t *testing.T) {
 	}
 }
 
+func TestGitChangedFilesPreservesNamesAndBothRenameSides(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "config", "commit.gpgSign", "false")
+	if err := os.MkdirAll(filepath.Join(project, "evidence"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"evidence/name with spaces.txt": "before\n",
+		"evidence/old-name.txt":         "renamed\n",
+	} {
+		if err := os.WriteFile(filepath.Join(project, filepath.FromSlash(name)), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(t, project, "add", ".")
+	git(t, project, "commit", "-qm", "baseline")
+	base := gitRevision(project)
+
+	if err := os.WriteFile(filepath.Join(project, "evidence", "name with spaces.txt"), []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(project, "evidence", "old-name.txt"), filepath.Join(project, "evidence", "new-name.txt")); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "add", "-A")
+	git(t, project, "commit", "-qm", "change and rename")
+
+	changed, err := GitChangedFiles(project, base, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"evidence/name with spaces.txt", "evidence/new-name.txt", "evidence/old-name.txt"}
+	if strings.Join(changed, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("GitChangedFiles=%q want=%q", changed, want)
+	}
+
+	writeSimplePage(t, root, "spaces", "evidence/name with spaces.txt")
+	writeSimplePage(t, root, "old", "evidence/old-name.txt")
+	writeSimplePage(t, root, "new", "evidence/new-name.txt")
+	affected, err := Affected(project, root, changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotIDs := make([]string, 0, len(affected))
+	for _, page := range affected {
+		gotIDs = append(gotIDs, page.ID)
+	}
+	if got, expected := strings.Join(gotIDs, ","), "new,old,spaces"; got != expected {
+		t.Fatalf("Affected IDs=%s want=%s", got, expected)
+	}
+}
+
+func TestGitChangedFilesNULParserPreservesControlCharacters(t *testing.T) {
+	raw := []byte("name with spaces\x00name\twith-tab\x00name\nwith-newline\x00Unicode-è.txt\x00")
+	got := parseNULPathList(raw)
+	want := []string{"name with spaces", "name\twith-tab", "name\nwith-newline", "Unicode-è.txt"}
+	if len(got) != len(want) {
+		t.Fatalf("parseNULPathList=%q want=%q", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("parseNULPathList[%d]=%q want=%q", index, got[index], want[index])
+		}
+	}
+}
+
 func TestValidateRejectsInvalidSourceFreshnessAndChecksContextPaths(t *testing.T) {
 	project := t.TempDir()
 	root := filepath.Join(project, "docs", "wiki")
@@ -1094,6 +1167,67 @@ func TestEvidenceHashCapturesDirtyUntrackedAndDeletedFiles(t *testing.T) {
 	}
 }
 
+func TestExternalSourceClassification(t *testing.T) {
+	tests := []struct {
+		name     string
+		source   string
+		external bool
+	}{
+		{name: "HTTP", source: "http://example.test/evidence", external: true},
+		{name: "HTTPS", source: "https://example.test/evidence", external: true},
+		{name: "uppercase scheme", source: "HTTPS://example.test/evidence", external: true},
+		{name: "hostless HTTP", source: "https:///evidence"},
+		{name: "malformed HTTP", source: "https://[invalid"},
+		{name: "unknown scheme", source: "ftp://example.test/evidence"},
+		{name: "Windows-looking path", source: "C://evidence/file.txt"},
+		{name: "traversal containing delimiter", source: "../outside://secret"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isExternal(test.source); got != test.external {
+				t.Fatalf("isExternal(%q)=%v want=%v", test.source, got, test.external)
+			}
+		})
+	}
+}
+
+func TestExternalSourcesRemainOptionalWhileURILookingPathsAreValidated(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	writeSimplePage(t, root, "external", "HTTPS://example.test/evidence")
+	if report := Validate(project, root); !report.OK {
+		t.Fatalf("valid external source failed validation: %+v", report.Findings)
+	}
+
+	resolver, err := newEvidencePathResolver(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{"../outside://secret", "C://evidence/file.txt", "ftp://example.test/evidence", "https:///missing-host"} {
+		t.Run(source, func(t *testing.T) {
+			page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: source}}}}
+			if isExternal(source) {
+				t.Fatalf("URI-looking local source classified as external: %q", source)
+			}
+			missing, missingErr := pageHasMissingEvidence(resolver, page)
+			if missingErr == nil && !missing {
+				t.Fatalf("URI-looking local source bypassed path checks: source=%q", source)
+			}
+		})
+	}
+	writeSimplePage(t, root, "malformed-http", "https:///missing-host")
+	report := Validate(project, root)
+	if !hasFinding(report, "WIKI_STALE_SOURCE") {
+		t.Fatalf("malformed HTTP source bypassed local-source validation: %+v", report.Findings)
+	}
+	if _, err := Approve(project, root, []string{"malformed-http"}); !errors.Is(err, ErrMissingEvidence) {
+		t.Fatalf("malformed HTTP source bypassed approval: %v", err)
+	}
+}
+
 func TestSourcePathResolverRejectsLexicalEscapesAndPreservesMissingEvidence(t *testing.T) {
 	project := t.TempDir()
 	resolver, err := newEvidencePathResolver(project)
@@ -1297,12 +1431,147 @@ func TestGitIndexParserIsNULSafeAndRejectsUnmergedStages(t *testing.T) {
 			{Mode: "100644", OID: strings.Repeat("b", 40), Stage: 1, Path: "conflicted.txt"},
 			{Mode: "100644", OID: strings.Repeat("c", 40), Stage: 2, Path: "conflicted.txt"},
 		},
+		"modules/component": {
+			{Mode: "160000", OID: strings.Repeat("d", 40), Stage: 0, Path: "modules/component"},
+		},
+		"broken/ancestor": {
+			{Mode: "160000", OID: strings.Repeat("e", 40), Stage: 2, Path: "broken/ancestor"},
+		},
 	}}
 	if _, err := index.entry("conflicted.txt"); !errors.Is(err, ErrGitIndexConflict) {
 		t.Fatalf("unmerged index error=%v", err)
 	}
 	if _, err := index.pathsWithin("."); !errors.Is(err, ErrGitIndexConflict) {
 		t.Fatalf("parent directory hid unmerged index error=%v", err)
+	}
+	ancestor, err := index.strictGitlinkAncestor("modules/component/file.txt")
+	if err != nil || ancestor == nil || ancestor.Path != "modules/component" {
+		t.Fatalf("strict gitlink ancestor=%+v err=%v", ancestor, err)
+	}
+	if ancestor, err := index.strictGitlinkAncestor("modules/component-extra/file.txt"); err != nil || ancestor != nil {
+		t.Fatalf("component-prefix lookalike matched gitlink: ancestor=%+v err=%v", ancestor, err)
+	}
+	if _, err := index.strictGitlinkAncestor("broken/ancestor/file.txt"); !errors.Is(err, ErrGitIndexConflict) {
+		t.Fatalf("unmerged ancestor was not fail-closed: %v", err)
+	}
+}
+
+func TestTrackedRegularEvidenceUsesGitCleanIdentity(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "config", "commit.gpgSign", "false")
+	git(t, project, "config", "core.autocrlf", "false")
+	if err := os.WriteFile(filepath.Join(project, ".gitattributes"), []byte("evidence.txt text eol=lf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := filepath.Join(project, "evidence.txt")
+	if err := os.WriteFile(evidencePath, []byte("working\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "add", ".gitattributes", "evidence.txt")
+	git(t, project, "commit", "-qm", "tracked evidence")
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence.txt"}}}}
+
+	baseline, err := evidenceFingerprint(project, root, page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evidencePath, []byte("working\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	crlf, err := evidenceFingerprint(project, root, page)
+	if err != nil || crlf != baseline {
+		t.Fatalf("Git-clean-equivalent EOL changed fingerprint: LF=%s CRLF=%s err=%v", baseline, crlf, err)
+	}
+	if err := os.WriteFile(evidencePath, []byte("changed\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	semanticChange, err := evidenceFingerprint(project, root, page)
+	if err != nil || semanticChange == baseline {
+		t.Fatalf("semantic content change was not detected: baseline=%s changed=%s err=%v", baseline, semanticChange, err)
+	}
+
+	if err := os.WriteFile(evidencePath, []byte("staged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "add", "evidence.txt")
+	if err := os.WriteFile(evidencePath, []byte("working\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	worktree, err := evidenceFingerprint(project, root, page)
+	if err != nil || worktree != baseline {
+		t.Fatalf("tracked fingerprint used staged blob instead of worktree bytes: baseline=%s got=%s err=%v", baseline, worktree, err)
+	}
+
+	untrackedPath := filepath.Join(project, "untracked.txt")
+	untrackedPage := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "untracked.txt"}}}}
+	if err := os.WriteFile(untrackedPath, []byte("raw\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	untrackedLF, err := evidenceFingerprint(project, root, untrackedPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(untrackedPath, []byte("raw\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	untrackedCRLF, err := evidenceFingerprint(project, root, untrackedPage)
+	if err != nil || untrackedCRLF == untrackedLF {
+		t.Fatalf("untracked raw EOL representations were normalized: LF=%s CRLF=%s err=%v", untrackedLF, untrackedCRLF, err)
+	}
+
+	nonGit := t.TempDir()
+	nonGitRoot := filepath.Join(nonGit, "docs", "wiki")
+	if _, err := Init(nonGitRoot); err != nil {
+		t.Fatal(err)
+	}
+	nonGitPath := filepath.Join(nonGit, "evidence.txt")
+	if err := os.WriteFile(nonGitPath, []byte("raw\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nonGitPage := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence.txt"}}}}
+	nonGitLF, err := evidenceFingerprint(nonGit, nonGitRoot, nonGitPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nonGitPath, []byte("raw\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nonGitCRLF, err := evidenceFingerprint(nonGit, nonGitRoot, nonGitPage)
+	if err != nil || nonGitCRLF == nonGitLF {
+		t.Fatalf("non-Git raw EOL representations were normalized: LF=%s CRLF=%s err=%v", nonGitLF, nonGitCRLF, err)
+	}
+}
+
+func TestTrackedRegularEvidenceRequiredCleanFilterFailureIsUnreadable(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "config", "commit.gpgSign", "false")
+	if err := os.WriteFile(filepath.Join(project, "evidence.txt"), []byte("tracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "add", "evidence.txt")
+	git(t, project, "commit", "-qm", "tracked evidence")
+	if err := os.WriteFile(filepath.Join(project, ".gitattributes"), []byte("evidence.txt filter=required-evidence\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "config", "filter.required-evidence.required", "true")
+	git(t, project, "config", "filter.required-evidence.clean", "archetipo-wiki-missing-clean-filter")
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence.txt"}}}}
+	if _, err := evidenceFingerprint(project, root, page); !errors.Is(err, ErrEvidenceUnreadable) {
+		t.Fatalf("required clean-filter failure error=%v", err)
 	}
 }
 
@@ -1507,6 +1776,51 @@ func TestSubmoduleCleanApprovalAndParentDirectoryFingerprint(t *testing.T) {
 	}
 }
 
+func TestSubmoduleGitlinkDescendantsAreRejectedBeforeWorktreeAccess(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, wikiSubmoduleFixture)
+	}{
+		{name: "clean", mutate: func(*testing.T, wikiSubmoduleFixture) {}},
+		{name: "dirty", mutate: func(t *testing.T, fixture wikiSubmoduleFixture) {
+			if err := os.WriteFile(filepath.Join(fixture.module, "module.txt"), []byte("dirty\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "missing", mutate: func(t *testing.T, fixture wikiSubmoduleFixture) {
+			if err := os.RemoveAll(fixture.module); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "uninitialized", mutate: func(t *testing.T, fixture wikiSubmoduleFixture) {
+			git(t, fixture.project, "submodule", "deinit", "-q", "-f", "modules/component")
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newWikiSubmoduleFixture(t)
+			test.mutate(t, fixture)
+			page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "modules/component/module.txt"}}}}
+			if _, err := evidenceFingerprint(fixture.project, fixture.root, page); !errors.Is(err, ErrSubmoduleEvidence) {
+				t.Fatalf("gitlink descendant fingerprint error=%v", err)
+			}
+		})
+	}
+
+	fixture := newWikiSubmoduleFixture(t)
+	lookalike := filepath.Join(fixture.project, "modules", "component-extra", "file.txt")
+	if err := os.MkdirAll(filepath.Dir(lookalike), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lookalike, []byte("ordinary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "modules/component-extra/file.txt"}}}}
+	if _, err := evidenceFingerprint(fixture.project, fixture.root, page); err != nil {
+		t.Fatalf("component-prefix lookalike was rejected: %v", err)
+	}
+}
+
 func TestGitlinkStagedUpdateChangesFingerprint(t *testing.T) {
 	fixture := newWikiSubmoduleFixture(t)
 	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "modules/component"}}}}
@@ -1663,6 +1977,201 @@ func TestGitDirectoryFingerprintIncludesUntrackedAndDeletedEntries(t *testing.T)
 	trackedDeleted, err := evidenceFingerprint(project, root, page)
 	if err != nil || trackedDeleted == baseline {
 		t.Fatalf("deleted tracked directory entry was not fingerprinted: hash=%s err=%v", trackedDeleted, err)
+	}
+}
+
+func TestEmbeddedGitRepositoriesAreRejectedAsEvidenceBoundaries(t *testing.T) {
+	t.Run("Git parent direct descendant and directory expansion", func(t *testing.T) {
+		project := t.TempDir()
+		root := filepath.Join(project, "docs", "wiki")
+		if _, err := Init(root); err != nil {
+			t.Fatal(err)
+		}
+		git(t, project, "init", "-q")
+		git(t, project, "config", "user.email", "wiki-test@example.test")
+		git(t, project, "config", "user.name", "Wiki Test")
+		git(t, project, "config", "commit.gpgSign", "false")
+		if err := os.MkdirAll(filepath.Join(project, "evidence", "ordinary"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(project, "evidence", "ordinary", "item.txt"), []byte("ordinary\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		repository := filepath.Join(project, "evidence", "repository")
+		if err := os.MkdirAll(repository, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		git(t, repository, "init", "-q")
+		git(t, repository, "config", "user.email", "wiki-test@example.test")
+		git(t, repository, "config", "user.name", "Wiki Test")
+		git(t, repository, "config", "commit.gpgSign", "false")
+		if err := os.WriteFile(filepath.Join(repository, "nested.txt"), []byte("nested\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		git(t, repository, "add", "nested.txt")
+		git(t, repository, "commit", "-qm", "nested baseline")
+
+		for _, source := range []string{"evidence/repository", "evidence/repository/nested.txt", "evidence"} {
+			t.Run(source, func(t *testing.T) {
+				page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: source}}}}
+				if _, err := evidenceFingerprint(project, root, page); !errors.Is(err, ErrUnsupportedEvidenceEntry) {
+					t.Fatalf("embedded repository source %q error=%v", source, err)
+				}
+			})
+		}
+		ordinary := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence/ordinary"}}}}
+		before, err := evidenceFingerprint(project, root, ordinary)
+		if err != nil {
+			t.Fatalf("ordinary directory rejected: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(project, "evidence", "ordinary", "item.txt"), []byte("changed\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		after, err := evidenceFingerprint(project, root, ordinary)
+		if err != nil || after == before {
+			t.Fatalf("ordinary directory was not content-sensitive: before=%s after=%s err=%v", before, after, err)
+		}
+	})
+
+	t.Run("non-Git parent", func(t *testing.T) {
+		project := t.TempDir()
+		root := filepath.Join(project, "docs", "wiki")
+		if _, err := Init(root); err != nil {
+			t.Fatal(err)
+		}
+		repository := filepath.Join(project, "evidence", "repository")
+		if err := os.MkdirAll(repository, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		git(t, repository, "init", "-q")
+		page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence"}}}}
+		if _, err := evidenceFingerprint(project, root, page); err == nil || (!errors.Is(err, ErrUnsupportedEvidenceEntry) && !errors.Is(err, ErrEvidenceUnreadable)) {
+			t.Fatalf("non-Git parent hid embedded repository: %v", err)
+		}
+	})
+
+	t.Run("Git confirmation failure is fail-closed", func(t *testing.T) {
+		project := t.TempDir()
+		root := filepath.Join(project, "docs", "wiki")
+		if _, err := Init(root); err != nil {
+			t.Fatal(err)
+		}
+		repository := filepath.Join(project, "evidence", "repository")
+		if err := os.MkdirAll(repository, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		git(t, repository, "init", "-q")
+		t.Setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+		page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence/repository"}}}}
+		if _, err := evidenceFingerprint(project, root, page); !errors.Is(err, ErrEvidenceUnreadable) {
+			t.Fatalf("failed repository confirmation was not fail-closed: %v", err)
+		}
+	})
+
+	t.Run("linked worktree git file", func(t *testing.T) {
+		origin := t.TempDir()
+		git(t, origin, "init", "-q")
+		git(t, origin, "config", "user.email", "wiki-test@example.test")
+		git(t, origin, "config", "user.name", "Wiki Test")
+		git(t, origin, "config", "commit.gpgSign", "false")
+		if err := os.WriteFile(filepath.Join(origin, "item.txt"), []byte("item\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		git(t, origin, "add", "item.txt")
+		git(t, origin, "commit", "-qm", "baseline")
+
+		project := t.TempDir()
+		root := filepath.Join(project, "docs", "wiki")
+		if _, err := Init(root); err != nil {
+			t.Fatal(err)
+		}
+		worktree := filepath.Join(project, "evidence", "worktree")
+		if err := os.MkdirAll(filepath.Dir(worktree), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		git(t, origin, "worktree", "add", "-q", "--detach", worktree)
+		page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence/worktree"}}}}
+		if _, err := evidenceFingerprint(project, root, page); !errors.Is(err, ErrUnsupportedEvidenceEntry) {
+			t.Fatalf("linked worktree was not rejected: %v", err)
+		}
+	})
+
+	t.Run("bare repository", func(t *testing.T) {
+		project := t.TempDir()
+		root := filepath.Join(project, "docs", "wiki")
+		if _, err := Init(root); err != nil {
+			t.Fatal(err)
+		}
+		bare := filepath.Join(project, "evidence", "bare.git")
+		if err := os.MkdirAll(filepath.Dir(bare), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		git(t, project, "init", "--bare", "-q", bare)
+		for _, source := range []string{"evidence/bare.git", "evidence"} {
+			page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: source}}}}
+			if _, err := evidenceFingerprint(project, root, page); !errors.Is(err, ErrUnsupportedEvidenceEntry) {
+				t.Fatalf("bare repository source %q error=%v", source, err)
+			}
+		}
+	})
+}
+
+func TestEmbeddedGitRepositoryIgnoredParentAndProjectRootRules(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "init", "-q")
+	git(t, project, "config", "user.email", "wiki-test@example.test")
+	git(t, project, "config", "user.name", "Wiki Test")
+	git(t, project, "config", "commit.gpgSign", "false")
+	if err := os.WriteFile(filepath.Join(project, ".gitignore"), []byte("evidence/ignored/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, "evidence"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "evidence", "ordinary.txt"), []byte("ordinary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, project, "add", ".gitignore", "evidence/ordinary.txt")
+	git(t, project, "commit", "-qm", "baseline")
+
+	rootPage := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "."}}}}
+	if _, err := evidenceFingerprint(project, root, rootPage); err != nil {
+		t.Fatalf("project repository root was rejected: %v", err)
+	}
+	ignored := filepath.Join(project, "evidence", "ignored")
+	if err := os.MkdirAll(ignored, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, ignored, "init", "-q")
+	parentPage := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence"}}}}
+	if _, err := evidenceFingerprint(project, root, parentPage); err != nil {
+		t.Fatalf("ignored embedded repository affected parent fingerprint: %v", err)
+	}
+	directPage := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence/ignored"}}}}
+	if _, err := evidenceFingerprint(project, root, directPage); !errors.Is(err, ErrUnsupportedEvidenceEntry) {
+		t.Fatalf("directly cited ignored repository error=%v", err)
+	}
+
+	outer := t.TempDir()
+	git(t, outer, "init", "-q")
+	projectSubdir := filepath.Join(outer, "configured-project")
+	if err := os.MkdirAll(projectSubdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	subdirRoot := filepath.Join(projectSubdir, "docs", "wiki")
+	if _, err := Init(subdirRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectSubdir, "item.txt"), []byte("item\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	subdirPage := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "item.txt"}}}}
+	if _, err := evidenceFingerprint(projectSubdir, subdirRoot, subdirPage); err != nil {
+		t.Fatalf("outer repository was misclassified as embedded: %v", err)
 	}
 }
 

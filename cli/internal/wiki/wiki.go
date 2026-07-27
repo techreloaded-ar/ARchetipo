@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	pathpkg "path"
@@ -29,6 +30,7 @@ var wikiSectionPattern = regexp.MustCompile(`<!--\s*archetipo:wiki\s+section=([a
 var wikiProtocolArtifactPattern = regexp.MustCompile(`(?m)^\s*</?(?:content|invoke|tool_use|tool_result)>\s*$`)
 var wikiBodyIssuesPattern = regexp.MustCompile(`(?m)^\s*<!--\s*archetipo:wiki\s+section=issues\s*-->`)
 var wikiContentHashPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var gitObjectIDPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 var wikiRevisionPattern = regexp.MustCompile(`^([0-9a-fA-F]{7,64}|unavailable)$`)
 var wikiLogDatePattern = regexp.MustCompile(`^## \d{4}-\d{2}-\d{2}$`)
 var wikiLogEntryPattern = regexp.MustCompile(`^\* \*\*(?:Review|Update)\*\*: .+\.$`)
@@ -629,15 +631,21 @@ func GitChangedFiles(projectRoot, base, head string) ([]string, error) {
 	if head == "" {
 		head = "HEAD"
 	}
-	cmd := exec.Command("git", "diff", "--name-only", base+"..."+head)
+	cmd := exec.Command("git", "diff", "--name-only", "-z", "--no-renames", base+"..."+head)
 	cmd.Dir = projectRoot
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
-	fields := strings.Fields(string(out))
-	sort.Strings(fields)
-	return fields, nil
+	return uniqueSorted(parseNULPathList(out)), nil
+}
+
+func parseNULPathList(raw []byte) []string {
+	records := strings.Split(string(raw), "\x00")
+	if len(records) > 0 && records[len(records)-1] == "" {
+		records = records[:len(records)-1]
+	}
+	return records
 }
 
 // Approve marks selected generated pages as reviewed. An empty ID list approves
@@ -1177,7 +1185,13 @@ func projectRelativeSource(projectRoot, sourcePath string) (string, bool, error)
 func fingerprintEvidencePath(manifest *evidenceManifest, resolver *evidencePathResolver, projectRoot, root, rel string, recurse, indirect bool, index *gitIndex) error {
 	var tracked *gitIndexEntry
 	if index != nil {
-		var err error
+		gitlink, err := index.strictGitlinkAncestor(rel)
+		if err != nil {
+			return err
+		}
+		if gitlink != nil {
+			return fmt.Errorf("%w: evidence source %s is below gitlink %s", ErrSubmoduleEvidence, rel, gitlink.Path)
+		}
 		tracked, err = index.entry(rel)
 		if err != nil {
 			return err
@@ -1188,11 +1202,18 @@ func fingerprintEvidencePath(manifest *evidenceManifest, resolver *evidencePathR
 		return err
 	}
 	candidate := resolved.Path
-	if indirect && isReservedWikiArtifact(root, candidate) {
-		return nil
-	}
 	if tracked != nil && tracked.Mode == "160000" {
 		return fingerprintGitlink(manifest, rel, tracked, resolved)
+	}
+	boundary, err := resolver.embeddedRepositoryBoundary(rel)
+	if err != nil {
+		return err
+	}
+	if boundary != "" {
+		return fmt.Errorf("%w: evidence source %s crosses embedded Git repository %s", ErrUnsupportedEvidenceEntry, rel, boundary)
+	}
+	if indirect && isReservedWikiArtifact(root, candidate) {
+		return nil
 	}
 	if !resolved.Exists {
 		manifest.record("missing", rel)
@@ -1209,7 +1230,7 @@ func fingerprintEvidencePath(manifest *evidenceManifest, resolver *evidencePathR
 			if !info.Mode().IsRegular() {
 				return fmt.Errorf("%w: tracked regular file %s has worktree type %s", ErrUnsupportedEvidenceEntry, rel, info.Mode().Type())
 			}
-			return fingerprintRegularEvidence(manifest, root, rel, candidate, executable)
+			return fingerprintRegularEvidence(manifest, projectRoot, root, rel, candidate, executable, true)
 		}
 		if symlink {
 			return fingerprintTrackedSymlink(manifest, rel, candidate, info)
@@ -1218,7 +1239,7 @@ func fingerprintEvidencePath(manifest *evidenceManifest, resolver *evidencePathR
 
 	switch mode := info.Mode(); {
 	case mode.IsRegular():
-		return fingerprintRegularEvidence(manifest, root, rel, candidate, "0")
+		return fingerprintRegularEvidence(manifest, projectRoot, root, rel, candidate, "0", false)
 	case mode.IsDir():
 		manifest.record("directory", rel)
 		if !recurse {
@@ -1245,7 +1266,7 @@ func fingerprintEvidencePath(manifest *evidenceManifest, resolver *evidencePathR
 	return nil
 }
 
-func fingerprintRegularEvidence(manifest *evidenceManifest, root, rel, candidate, executable string) error {
+func fingerprintRegularEvidence(manifest *evidenceManifest, projectRoot, root, rel, candidate, executable string, tracked bool) error {
 	if isWikiConcept(root, candidate) {
 		page, err := parsePage(root, candidate)
 		if err != nil {
@@ -1254,12 +1275,37 @@ func fingerprintRegularEvidence(manifest *evidenceManifest, root, rel, candidate
 		manifest.record("wiki-concept", rel, pageContentHash(page))
 		return nil
 	}
+	if tracked {
+		return fingerprintTrackedRegularEvidence(manifest, projectRoot, rel, candidate, executable)
+	}
 	raw, err := os.ReadFile(candidate)
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", rel, errors.Join(ErrEvidenceUnreadable, err))
 	}
 	digest := sha256.Sum256(raw)
 	manifest.record("regular", rel, executable, fmt.Sprintf("%x", digest))
+	return nil
+}
+
+func fingerprintTrackedRegularEvidence(manifest *evidenceManifest, projectRoot, rel, candidate, executable string) error {
+	file, err := os.Open(candidate)
+	if err != nil {
+		return fmt.Errorf("opening tracked evidence %s: %w", rel, errors.Join(ErrEvidenceUnreadable, err))
+	}
+	defer file.Close()
+
+	cmd := exec.Command("git", "hash-object", "--stdin", "--path="+filepath.ToSlash(rel))
+	cmd.Dir = projectRoot
+	cmd.Stdin = file
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("%w: Git clean normalization failed for %s: %v", ErrEvidenceUnreadable, rel, err)
+	}
+	oid := strings.ToLower(strings.TrimSpace(string(out)))
+	if !gitObjectIDPattern.MatchString(oid) {
+		return fmt.Errorf("%w: Git returned an invalid object identity for %s", ErrEvidenceUnreadable, rel)
+	}
+	manifest.record("tracked-regular", rel, executable, oid)
 	return nil
 }
 
@@ -1431,4 +1477,10 @@ func gitRevision(root string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
-func isExternal(path string) bool { return strings.Contains(path, "://") }
+func isExternal(sourcePath string) bool {
+	parsed, err := url.Parse(sourcePath)
+	if err != nil || parsed.Host == "" || !parsed.IsAbs() {
+		return false
+	}
+	return strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")
+}

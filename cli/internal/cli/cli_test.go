@@ -843,8 +843,7 @@ func TestWikiApproveGitlinkBlockerReturnsConflict(t *testing.T) {
 	mustRun(t, "git", "add", ".gitmodules", "modules/component")
 	mustRun(t, "git", "commit", "-qm", "add module")
 	initCLIWiki(t)
-	writeCLIWikiPage(t, "module", "modules/component")
-	mustRun(t, "git", "submodule", "deinit", "-q", "-f", "modules/component")
+	writeCLIWikiPage(t, "module", "modules/component/module.txt")
 
 	_, code := decodeError(t, runCLI(t, "", "wiki", "approve", "module"))
 	if code != iox.CodeConflict {
@@ -905,6 +904,37 @@ func TestWikiEvidenceUnreadableValidationEnvelope(t *testing.T) {
 	}
 }
 
+func TestWikiEmbeddedRepositoryEvidenceEnvelopes(t *testing.T) {
+	newProject(t)
+	initCLIWiki(t)
+	repository := filepath.Join("evidence", "repository")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeCLIWikiPage(t, "overview", "evidence/repository")
+	if res := runCLI(t, "", "wiki", "approve", "overview"); res.exit != 0 {
+		t.Fatalf("ordinary-directory approval failed: %s", res.stderr.String())
+	}
+	mustRun(t, "git", "-C", repository, "init", "-q")
+
+	kind, data := decodeOK(t, runCLI(t, "", "wiki", "validate"))
+	if kind != "validation_result" || data["ok"] != false {
+		t.Fatalf("unexpected validation envelope: kind=%s data=%v", kind, data)
+	}
+	codes := collectFindingCodes(t, data["findings"])
+	if !containsString(codes, "WIKI_EVIDENCE_UNREADABLE") || containsString(codes, "WIKI_EVIDENCE_CHANGED") {
+		t.Fatalf("unexpected embedded-repository findings: %v", codes)
+	}
+	if err := os.Remove(filepath.Join("docs", "wiki", "overview.md")); err != nil {
+		t.Fatal(err)
+	}
+	writeCLIWikiPage(t, "blocked", "evidence/repository")
+	_, code := decodeError(t, runCLI(t, "", "wiki", "approve", "blocked"))
+	if code != iox.CodeConflict {
+		t.Fatalf("expected E_CONFLICT, got %s", code)
+	}
+}
+
 func TestWikiApproveEvidenceBlockersReturnConflict(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -912,6 +942,10 @@ func TestWikiApproveEvidenceBlockersReturnConflict(t *testing.T) {
 		setup  func(*testing.T)
 	}{
 		{name: "unsafe traversal", source: "../outside.txt", setup: func(*testing.T) {}},
+		{name: "URI-looking traversal", source: "../outside://secret", setup: func(*testing.T) {}},
+		{name: "Windows-looking URI", source: "C://evidence/file.txt", setup: func(*testing.T) {}},
+		{name: "malformed HTTP URI", source: "https:///missing-host", setup: func(*testing.T) {}},
+		{name: "unknown URI scheme", source: "ftp://example.test/evidence", setup: func(*testing.T) {}},
 		{name: "unreadable path", source: "evidence/item.txt", setup: func(t *testing.T) {
 			if err := os.WriteFile("evidence", []byte("not a directory\n"), 0o644); err != nil {
 				t.Fatal(err)

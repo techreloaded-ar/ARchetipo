@@ -36,7 +36,8 @@ type resolvedEvidencePath struct {
 }
 
 type evidencePathResolver struct {
-	root string
+	root                 string
+	embeddedRepositories map[string]bool
 }
 
 func newEvidencePathResolver(projectRoot string) (*evidencePathResolver, error) {
@@ -64,7 +65,10 @@ func newEvidencePathResolver(projectRoot string) (*evidencePathResolver, error) 
 	if !info.IsDir() {
 		return nil, &EvidencePathError{Source: projectRoot, Err: errors.Join(ErrInvalidSourcePath, errors.New("project root is not a directory"))}
 	}
-	return &evidencePathResolver{root: filepath.Clean(physical)}, nil
+	return &evidencePathResolver{
+		root:                 filepath.Clean(physical),
+		embeddedRepositories: map[string]bool{},
+	}, nil
 }
 
 func (resolver *evidencePathResolver) normalize(sourcePath string) (string, error) {

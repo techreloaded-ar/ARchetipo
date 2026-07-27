@@ -79,6 +79,21 @@ func (index *gitIndex) entry(path string) (*gitIndexEntry, error) {
 	return stageZero, nil
 }
 
+func (index *gitIndex) strictGitlinkAncestor(path string) (*gitIndexEntry, error) {
+	components := strings.Split(path, "/")
+	for count := 1; count < len(components); count++ {
+		ancestor := strings.Join(components[:count], "/")
+		entry, err := index.entry(ancestor)
+		if err != nil {
+			return nil, err
+		}
+		if entry != nil && entry.Mode == "160000" {
+			return entry, nil
+		}
+	}
+	return nil, nil
+}
+
 func (index *gitIndex) pathsWithin(parent string) ([]string, error) {
 	paths := []string{}
 	for path := range index.byPath {
