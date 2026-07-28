@@ -21,6 +21,18 @@ agents:
       - "{model}"
       - "{prompt}"
 
+  claude-haiku:
+    tool: claude
+    command: claude
+    model: haiku
+    args:
+      - --print
+      - --no-session-persistence
+      - --dangerously-skip-permissions
+      - --model
+      - "{model}"
+      - "{prompt}"
+
 scenarios:
 
   # Inception creates and persists a structurally valid PRD.
@@ -138,7 +150,7 @@ scenarios:
   # Acceptance review approves only the required generated page, preserves an
   # affected-only stale warning and a fresh context reference, then integrates.
   worktree-review-accepts-wiki:
-    agent: pi-go-ds4-flash
+    agent: claude-haiku
     fixture: fixtures/worktree-wiki-review
     prompts:
       - /archetipo-implement US-001
