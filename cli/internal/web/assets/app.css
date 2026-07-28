@@ -484,6 +484,12 @@ html[data-theme="light"] .theme-ico-moon {
 .mockups-section-body.hidden {
 	display: none;
 }
+.mockups-section-stories .mockups-section-body {
+	max-height: min(50vh, 360px);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-gutter: stable;
+}
 
 .hidden {
 	display: none !important;
