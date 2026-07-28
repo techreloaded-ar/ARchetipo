@@ -28,9 +28,9 @@ Read `.archetipo/shared-runtime.md` for Language Policy, Assumptions and Questio
 This section has priority over every other section in the skill.
 
 1. **Autonomous by default.** Proceed without asking for confirmation unless an explicit blocker is hit.
-2. **Worker-backed execution is preferred.** When the runtime supports reliable workers/subagents, execute every wave through worker contexts with clean handoffs, even when tasks inside that wave must run sequentially.
-3. **Concurrency is conditional.** Run multiple workers concurrently only when tasks in the same wave are truly independent.
-4. **In-context fallback is non-blocking.** If workers are unavailable, unreliable, or not worth the overhead, execute the same pipeline in the current context. Lack of worker support is not an error and not a reason to stop.
+2. **Worker-backed execution is preferred when it adds value.** When the runtime exposes usable individual workers/subagents, use them for plans that benefit from clean handoffs, isolated implementation or test context, independent review, or safe parallelism. This skill is explicit authorization to use individual workers; do not require an additional user opt-in unless the runtime itself requires one.
+3. **In-context execution is valid for simple work.** Select it when the plan is small and tightly coupled enough that handoffs would cost more than they add. Make this decision from the criteria below, not from a generic preference for one mode.
+4. **Concurrency is conditional.** Run multiple workers concurrently only when tasks in the same wave are truly independent.
 5. **Stop only for explicit blockers.** Do not invent new reasons to ask the user.
 6. **Connector operations are exposed by the CLI.** Every operation is a sub-command of `archetipo`. This skill uses `init`, `spec show`, `spec start`, `task done`, and `spec review`, plus connector-independent `wiki affected`, `wiki reset`, `wiki validate`, and `wiki catalog`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`: `E_INVALID_INPUT` covers malformed explicit paths/revisions/config, `E_CONFLICT` covers invalid or unreadable persisted Wiki evidence and other deterministic eligibility blockers, and `E_INTERNAL` is unexpected implementation failure. Never branch on connector type or message text. Connector operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
 
@@ -58,12 +58,14 @@ If a situation is ambiguous, prefer continuing when the adaptation is local and 
 
 ### Worker-backed preferred
 
-Use workers/subagents when:
+Use workers/subagents when one or more of these conditions applies:
 
-- the runtime supports parallel work reliably
-- clean execution context per wave or task is valuable
-- Mina can work from stable interfaces or contracts
-- Cesare can review diffs in a separate context
+- two or more tasks in a wave are genuinely independent and can run safely in parallel;
+- implementation, tests, or review benefit from a clean context and a concrete handoff;
+- the plan spans distinct areas or interfaces, so independent investigation reduces coupling or context pressure;
+- a fresh Cesare review provides meaningful independent scrutiny of a non-trivial diff.
+
+Treat a worker/subagent tool exposed by the runtime as available. This skill authorizes individual workers: the absence of an explicit user request does not select in-context execution.
 
 In worker-backed mode:
 
@@ -73,14 +75,20 @@ In worker-backed mode:
 
 ### In-context fallback
 
-Use a single orchestrator when:
+Use a single orchestrator when workers are unavailable or unreliable, or when the plan is simple enough that coordination would not add meaningful value. Treat a plan as suitable for in-context execution when all or most of these signals apply:
 
-- worker/subagent support is missing or unreliable
-- the repo or runtime makes coordination costlier than execution
+- the plan has one small task, or a few tightly coupled sequential tasks in the same local area;
+- the change and its verification are bounded and use established patterns;
+- there is no safe independent parallel work and no meaningful interface handoff to Mina;
+- a separate worker review would duplicate a small, easily inspected diff rather than add useful independence.
+
+Also use in-context execution when the runtime exposes no usable worker/subagent tool, explicitly prohibits workers, or a worker creation attempt fails or times out. Retry once when the runtime allows it before treating workers as unreliable.
+
+State the concise reason for the selected execution context in the wave execution plan before starting implementation. For in-context execution, name the relevant plan characteristics or worker limitation.
 
 **Important:** Worker-backed execution and concurrent execution are separate decisions.
 **Important:** Lack of worker/subagent support is not a blocker. Continue in `in-context fallback`.
-Do not avoid worker-backed execution only because a wave must be scheduled sequentially.
+Do not treat the absence of an explicit user request as a reason for in-context execution. Sequential work and shared files are signals to evaluate: they can favor in-context execution for a small local change, or sequential workers for a larger change that still benefits from isolation.
 
 ## Working Rules
 
@@ -135,13 +143,14 @@ When loading tasks via `archetipo spec show`, apply these validation rules to th
 1. Build the dependency graph from the implementation plan.
 2. Form execution waves by grouping tasks whose dependencies are already satisfied.
 3. Choose the execution context:
-   - if the runtime supports reliable workers, use `worker-backed preferred`
-   - otherwise use `in-context fallback`
+   - use `worker-backed preferred` when the plan meets one or more worker-value criteria
+   - use `in-context fallback` when the plan is simple and tightly coupled, or workers are unavailable or unreliable
+   - record the concise rationale in the execution plan
 4. For each wave, choose the scheduling strategy:
    - `concurrent workers` when the wave contains 2 or more truly independent tasks
    - `sequential workers` when dependencies, shared files, or unstable interfaces require ordering
    - in `in-context fallback`, execute the same wave sequentially in the current context
-5. In `worker-backed preferred`, execute every wave through worker contexts. For sequential waves, wait for one worker to finish before starting the next dependent worker.
+5. In `worker-backed preferred`, execute every selected worker wave through worker contexts. For sequential waves, wait for one worker to finish before starting the next dependent worker.
 6. Present the execution plan and proceed automatically. See `references/output-templates.md` for the "Wave Execution Plan" template.
 
 ### PHASE 2 - Implementation

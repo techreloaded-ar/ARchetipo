@@ -69,7 +69,7 @@ Starting implementation...
 - 🔧 Ugo: TASK-03 [title or body excerpt]
 - 🧪 Mina: TASK-04 [title or body excerpt]
 
-**Fallback to current context:** [only if workers are unavailable or unreliable]
+**Execution context rationale:** [worker value: parallelism | clean handoff | isolated test/review; or in-context: small tightly coupled plan | bounded local change | workers unavailable/unreliable]
 
 Proceeding.
 ```
