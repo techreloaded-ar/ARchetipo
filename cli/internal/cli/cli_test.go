@@ -1005,6 +1005,9 @@ func TestWikiAffectedCallerAndPersistedErrorsUseStableCodes(t *testing.T) {
 }
 
 func TestWikiAffectedRevisionPreservesNewlineGitFilename(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filesystems reject newline filenames; Unix hosts prove NUL-safe revision parsing")
+	}
 	newProject(t)
 	mustRun(t, "git", "init", "-q")
 	mustRun(t, "git", "config", "user.email", "wiki-test@example.test")

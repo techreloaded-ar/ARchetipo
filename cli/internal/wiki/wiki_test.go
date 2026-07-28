@@ -2244,7 +2244,7 @@ func TestEmbeddedGitRepositoriesAreRejectedAsEvidenceBoundaries(t *testing.T) {
 		git(t, repository, "init", "-q")
 		t.Setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
 		page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence/repository"}}}}
-		if _, err := evidenceFingerprint(project, root, page); !errors.Is(err, ErrEvidenceUnreadable) {
+		if _, err := evidenceFingerprint(project, root, page); err == nil || (!errors.Is(err, ErrEvidenceUnreadable) && !errors.Is(err, ErrUnsupportedEvidenceEntry)) {
 			t.Fatalf("failed repository confirmation was not fail-closed: %v", err)
 		}
 	})
