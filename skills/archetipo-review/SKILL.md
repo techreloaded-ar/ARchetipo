@@ -29,7 +29,7 @@ Wiki command contracts used by this skill:
 - `archetipo wiki --project-root {data.workdir} validate --profile bootstrap` → `kind: validation_result`, `data.ok`, `data.findings`, including deterministic capability coverage;
 - `archetipo wiki --project-root {data.workdir} approve <page-id...>` → `kind: wiki_approve_result`, `data.approved`.
 
-For these commands, branch on `E_PRECONDITION` (Wiki absent), `E_INVALID_INPUT` (bad explicit IDs, paths, or revisions), `E_CONFLICT` (approval blocked by findings/issues or deterministic evidence ineligibility such as unsafe traversal, unreadable entries, unmerged index state, or non-clean submodules), and `E_INTERNAL` (unexpected implementation failure). An absent Wiki is valid only when the plan, diff, and implementation declare no Wiki impact.
+For these commands, branch on `E_PRECONDITION` (Wiki absent), `E_INVALID_INPUT` (bad explicit IDs, config, revisions, or `--file` values; every file must be a nonempty exact portable project-relative local path), `E_CONFLICT` (invalid/unreadable persisted evidence or approval blocked by findings/issues and deterministic evidence ineligibility such as unsafe traversal, unmerged index state, or non-clean submodules), and `E_INTERNAL` (unexpected implementation failure). Persisted-source discovery failures close the operation without a partial affected set. Branch only on `error.code`, never message text. An absent Wiki is valid only when the plan, diff, and implementation declare no Wiki impact.
 
 ### Wiki inclusion-reason matrix
 
@@ -51,7 +51,7 @@ Do not create backlog specs or Wiki log entries merely because a page is affecte
 
 ### PHASE 0 — Setup and Spec Selection
 
-1. Run `archetipo config show`; keep `data` (SetupInfo) available. Run every CLI command from `data.project_root`. After resolving the spec, target code and Wiki operations explicitly with `--project-root {data.workdir}`; changing shell cwd alone is insufficient because a worktree nested below `.archetipo/worktrees/` can otherwise resolve the parent checkout's config.
+1. Run `archetipo config show`; keep `data` (SetupInfo) available. Run every CLI command from `data.project_root`. After resolving the spec, target code and Wiki operations explicitly with `--project-root {data.workdir}`; changing shell cwd alone is insufficient because a worktree nested below `.archetipo/worktrees/` can otherwise resolve the parent checkout's config. The target checkout's nearest config is authoritative; when it has none, invoking-checkout settings are inherited and retargeted to `data.workdir`.
 2. Load the spec under review:
    - If a code was passed: `archetipo spec show {US-CODE}`
    - Otherwise: `archetipo spec next --status {config.workflow.statuses.review}`
@@ -64,7 +64,7 @@ Do not create backlog specs or Wiki log entries merely because a page is affecte
    - mark ordinary Wiki pages created or modified by the exact implementation diff as **required** (`modified page`);
    - add pages returned by `archetipo wiki affected` as `affected evidence`, but classify them **affected-only** only when no required reason exists.
    Required always wins when reasons overlap. Never flatten this into an unlabelled union.
-6. Add `--project-root {data.workdir}` to every Wiki command, so a worktree-backed review sees the branch's code and generated Wiki changes while still loading configuration from `data.project_root`. When `data.spec.branch` and `data.spec.fork_base` are present, call `wiki --project-root {data.workdir} affected --base {fork_base} --head {branch}`. Otherwise derive the changed repository paths from the review diff and pass them with repeated `--file`; do not rely on the command's default revisions.
+6. Add `--project-root {data.workdir}` to every Wiki command, so a worktree-backed review sees the branch's code and generated Wiki changes with target-first configuration and invoking-config fallback. When `data.spec.branch` and `data.spec.fork_base` are present, call `wiki --project-root {data.workdir} affected --base {fork_base} --head {branch}`; a target project nested in a larger repository still receives only target-local, project-relative paths and both rename sides. Otherwise derive changed paths from the review diff and pass repeated validated `--file` values; do not rely on default revisions and never rewrite case, Unicode, 8.3, ADS, device, trailing-dot/space, or traversal aliases to make evidence pass.
 7. Run `archetipo wiki --project-root {data.workdir} status` and `archetipo wiki --project-root {data.workdir} validate --profile bootstrap` before presenting the verdict. Match status items and findings to the reason-labelled review set, then apply the Wiki inclusion-reason matrix exactly. In particular, affected-only stale pages with only `WIKI_EVIDENCE_CHANGED` are persistent non-blocking warnings. Unsafe paths, unreadable/unsupported evidence, failed legacy recomputation, dirty or mismatched submodules, `WIKI_REVIEW_OUTDATED`, attention/issues, missing sources, structural errors, and global validation/coverage errors remain blockers even though status conservatively displays `stale`. Generated affected-only pages are warnings but are never ready or auto-approved.
 
 ### PHASE 1 — Present the Increment

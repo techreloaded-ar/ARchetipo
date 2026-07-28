@@ -946,6 +946,9 @@ func TestWikiApproveEvidenceBlockersReturnConflict(t *testing.T) {
 		{name: "Windows-looking URI", source: "C://evidence/file.txt", setup: func(*testing.T) {}},
 		{name: "malformed HTTP URI", source: "https:///missing-host", setup: func(*testing.T) {}},
 		{name: "unknown URI scheme", source: "ftp://example.test/evidence", setup: func(*testing.T) {}},
+		{name: "Windows ADS", source: "evidence.txt:secret", setup: func(*testing.T) {}},
+		{name: "DOS device", source: "CON.txt", setup: func(*testing.T) {}},
+		{name: "trailing dot", source: "evidence.", setup: func(*testing.T) {}},
 		{name: "unreadable path", source: "evidence/item.txt", setup: func(t *testing.T) {
 			if err := os.WriteFile("evidence", []byte("not a directory\n"), 0o644); err != nil {
 				t.Fatal(err)
@@ -963,6 +966,75 @@ func TestWikiApproveEvidenceBlockersReturnConflict(t *testing.T) {
 				t.Fatalf("expected E_CONFLICT, got %s", code)
 			}
 		})
+	}
+}
+
+func TestWikiAffectedCallerAndPersistedErrorsUseStableCodes(t *testing.T) {
+	newProject(t)
+	initCLIWiki(t)
+	writeCLIWikiPage(t, "overview", ".")
+	_, code := decodeError(t, runCLI(t, "", "wiki", "affected", "--file", "../outside"))
+	if code != iox.CodeInvalidInput {
+		t.Fatalf("invalid caller path: expected E_INVALID_INPUT, got %s", code)
+	}
+
+	kind, data := decodeOK(t, runCLI(t, "", "wiki", "affected", "--file", "./src/item.go"))
+	if kind != "wiki_affected_result" {
+		t.Fatalf("unexpected success kind %s", kind)
+	}
+	files, _ := data["files"].([]any)
+	if len(files) != 1 || files[0] != "./src/item.go" {
+		t.Fatalf("successful files echo=%v", data["files"])
+	}
+
+	if err := os.Remove(filepath.Join("docs", "wiki", "overview.md")); err != nil {
+		t.Fatal(err)
+	}
+	mixed := "---\ntype: guide\ntitle: mixed\ndescription: mixed description\nstatus: generated\nsources:\n  - path: .\n  - path: ../outside\n---\n# mixed\n"
+	if err := os.WriteFile(filepath.Join("docs", "wiki", "mixed.md"), []byte(mixed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result := runCLI(t, "", "wiki", "affected", "--file", "src/item.go")
+	_, code = decodeError(t, result)
+	if code != iox.CodeConflict {
+		t.Fatalf("invalid persisted source after matching source: expected E_CONFLICT, got %s", code)
+	}
+	if result.stdout.Len() != 0 || strings.Contains(result.stderr.String(), "\"items\"") {
+		t.Fatalf("persisted source conflict returned partial affected output: stdout=%s stderr=%s", result.stdout.String(), result.stderr.String())
+	}
+}
+
+func TestWikiAffectedRevisionPreservesNewlineGitFilename(t *testing.T) {
+	newProject(t)
+	mustRun(t, "git", "init", "-q")
+	mustRun(t, "git", "config", "user.email", "wiki-test@example.test")
+	mustRun(t, "git", "config", "user.name", "Wiki Test")
+	if err := os.WriteFile("baseline.txt", []byte("baseline\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, "git", "add", "baseline.txt")
+	mustRun(t, "git", "commit", "-qm", "baseline")
+	initCLIWiki(t)
+	writeCLIWikiPage(t, "src", "src")
+
+	newlineName := "odd\nname.txt"
+	if err := os.WriteFile(newlineName, []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, "git", "add", "--", newlineName)
+	mustRun(t, "git", "commit", "-qm", "add control filename")
+
+	kind, data := decodeOK(t, runCLI(t, "", "wiki", "affected", "--base", "HEAD~1", "--head", "HEAD"))
+	if kind != "wiki_affected_result" {
+		t.Fatalf("unexpected affected kind %s", kind)
+	}
+	files, _ := data["files"].([]any)
+	if len(files) != 1 || files[0] != newlineName {
+		t.Fatalf("revision files lost newline identity: %#v", data["files"])
+	}
+	items, _ := data["items"].([]any)
+	if len(items) != 0 || data["count"] != float64(0) {
+		t.Fatalf("unrelated control filename unexpectedly matched: items=%v count=%v", data["items"], data["count"])
 	}
 }
 
@@ -1412,6 +1484,38 @@ func TestWikiProjectRootTargetsWorktreeCheckout(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(mainRoot, "docs", "wiki", "index.md")); !os.IsNotExist(err) {
 		t.Fatalf("main checkout Wiki should be untouched: %v", err)
+	}
+}
+
+func TestWikiProjectRootUsesNearestTargetConfigAndRetargetsNestedCheckout(t *testing.T) {
+	newProject(t)
+	mainRoot, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetConfigRoot := filepath.Join(mainRoot, "target-checkout")
+	target := filepath.Join(targetConfigRoot, "nested", "checkout")
+	if err := os.MkdirAll(filepath.Join(targetConfigRoot, ".archetipo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configRaw := "connector: file\npaths:\n  wiki: target/wiki\n  prd: target/PRD.md\n"
+	if err := os.WriteFile(filepath.Join(targetConfigRoot, ".archetipo", "config.yaml"), []byte(configRaw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := runCLI(t, "", "wiki", "--project-root", target, "init")
+	if res.exit != 0 {
+		t.Fatalf("wiki nested target config init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(target, "target", "wiki", "index.md")); err != nil {
+		t.Fatalf("retargeted nested Wiki missing: %v", err)
+	}
+	for _, wrong := range []string{filepath.Join(target, "docs", "wiki", "index.md"), filepath.Join(targetConfigRoot, "target", "wiki", "index.md"), filepath.Join(mainRoot, "target", "wiki", "index.md")} {
+		if _, err := os.Stat(wrong); !os.IsNotExist(err) {
+			t.Fatalf("wrong Wiki path should be untouched: %s (%v)", wrong, err)
+		}
 	}
 }
 

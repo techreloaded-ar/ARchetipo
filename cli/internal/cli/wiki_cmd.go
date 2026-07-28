@@ -60,7 +60,10 @@ func withWiki(cmd *cobra.Command, s streams, kind string, require bool, fn func(
 		if statErr != nil || !info.IsDir() {
 			return iox.NewInvalidInput("Wiki project root is not a directory: "+projectRoot, "pass an existing checkout directory", statErr)
 		}
-		cfg.ProjectRoot = projectRoot
+		cfg, err = config.LoadForTarget(cwd, projectRoot)
+		if err != nil {
+			return iox.NewInvalidInput(err.Error(), "fix the target .archetipo/config.yaml", err)
+		}
 	}
 	root := cfg.Paths.Wiki
 	if !filepath.IsAbs(root) {
@@ -98,18 +101,17 @@ func newWikiInitCmd(s streams) *cobra.Command {
 func newWikiStatusCmd(s streams) *cobra.Command {
 	return &cobra.Command{Use: "status", Short: "Summarize Wiki health and lifecycle state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		return withWiki(cmd, s, "wiki_status", true, func(cfg config.Config, root string) (any, error) {
-			pages, err := wiki.Load(root)
+			pages, states, report, err := wiki.Status(cfg.ProjectRoot, root)
 			if err != nil {
-				return nil, iox.NewInternal("loading Wiki", err)
+				return nil, iox.NewInternal("loading Wiki status", err)
 			}
 			counts := map[string]int{}
 			items := []map[string]any{}
-			for _, p := range pages {
-				state := wiki.PageState(cfg.ProjectRoot, root, p)
+			for index, p := range pages {
+				state := states[index]
 				counts[state]++
 				items = append(items, map[string]any{"id": p.ID, "path": p.Path, "state": state, "issues": p.Meta.Issues})
 			}
-			report := wiki.Validate(cfg.ProjectRoot, root)
 			return map[string]any{"root": root, "pages": len(pages), "states": counts, "items": items, "ok": report.OK, "findings": report.Findings}, nil
 		})
 	}}
@@ -163,17 +165,29 @@ func newWikiAffectedCmd(s streams) *cobra.Command {
 	var base, head string
 	var files []string
 	cmd := &cobra.Command{Use: "affected", Short: "Find pages whose evidence intersects changed files", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		explicitFiles := cmd.Flags().Changed("file")
 		return withWiki(cmd, s, "wiki_affected_result", true, func(cfg config.Config, root string) (any, error) {
 			changed := files
 			var err error
-			if len(changed) == 0 {
+			if !explicitFiles {
 				changed, err = wiki.GitChangedFiles(cfg.ProjectRoot, base, head)
 				if err != nil {
 					return nil, iox.NewInvalidInput("cannot resolve Git diff", "pass --file or valid --base/--head revisions", err)
 				}
 			}
-			items, err := wiki.Affected(cfg.ProjectRoot, root, changed)
+			var items []wiki.Page
+			if explicitFiles {
+				items, err = wiki.Affected(cfg.ProjectRoot, root, changed)
+			} else {
+				items, err = wiki.AffectedFromGit(cfg.ProjectRoot, root, changed)
+			}
 			if err != nil {
+				if errors.Is(err, wiki.ErrInvalidChangedFile) {
+					return nil, iox.NewInvalidInput("invalid changed file path", "pass a nonempty portable project-relative --file path", err)
+				}
+				if isWikiEvidenceConflict(err) {
+					return nil, iox.NewConflict("Wiki affected discovery blocked", "repair invalid or unreadable persisted Wiki evidence", err)
+				}
 				return nil, iox.NewInternal("resolving affected Wiki pages", err)
 			}
 			return map[string]any{"files": changed, "items": items, "count": len(items)}, nil

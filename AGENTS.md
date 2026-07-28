@@ -102,7 +102,8 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
   - `archetipo_post_commands`: CLI commands run after prompts.
   - `verify_integrate`: spec codes whose worktree integration must be verified.
   - `verify_wiki_bootstrap`: expectations for core DDD pages, optional sources represented as `references/` concepts, `generated` state, issues, and targeted content; it also runs `wiki validate --profile bootstrap`.
-  - `verify_review_wiki`: can seed baseline reviewed pages through the CLI before the initial commit, then verifies `archetipo-review` from machine effects: the exact expected persisted page set is reviewed, required-ready pages alone appear in the dedicated approval commit, affected-only evidence-stale pages remain warnings with unchanged review metadata, context-only references remain fresh and outside `wiki affected`, configured implementation artifacts have exact committed content, the spec reaches `DONE`, branch/worktree metadata and resources are removed, validation is clean, and the integrated checkout has no tracked or untracked Wiki changes.
+  - `verify_review_wiki`: first commits configured fixture evidence, then seeds CLI approvals and commits only their page metadata plus Wiki `index.md`/`log.md`. It captures that seeded-review commit, requires every seeded page to be persisted reviewed, fresh, structurally valid, and free of `WIKI_EVIDENCE_CHANGED` before prompts, then verifies `archetipo-review` from machine effects: the exact expected persisted page set is reviewed, required-ready pages alone appear in the dedicated approval commit, affected-only evidence-stale pages remain warnings with review metadata unchanged from the captured seeded-review commit, context-only references remain fresh and outside `wiki affected`, configured implementation artifacts have exact committed content, the spec reaches `DONE`, branch/worktree metadata and resources are removed, validation is clean, and the integrated checkout has no tracked or untracked Wiki changes.
+  - Every known `verify_review_wiki` field is type-checked before the runner builds the CLI; all configured filesystem paths use one Windows/macOS/Linux-safe project-relative grammar. Unknown extension keys are retained for forward compatibility.
 - Pre/post commands are split with `line.split(/\s+/)`. Avoid arguments that require complex shell quoting.
 
 ### Scenario execution sequence in `run.mjs`
@@ -111,13 +112,15 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 2. Run `archetipo init --tool <tool> --connector file --yes` in the sandbox as a non-interactive baseline.
 3. Verify `.archetipo/config.yaml`, `.archetipo/shared-runtime.md`, and the skills required by the prompts.
 4. Overlay the fixture, when configured. The fixture's `.archetipo/config.yaml` is authoritative and determines connector, worktree, paths, and related settings; do not add runner flags for these.
-5. Initialize a Git repository in the sandbox on `main`, configure a local identity, and create an empty base commit by default. Focused review fixtures may declare `seed_baseline_paths` so CLI-seeded reviewed pages and their evidence are committed into the base worktree without tracking installed skills or the copied binary.
-6. Run any `archetipo_pre_commands` using the CLI copied into the sandbox.
-7. Run prompts through the agent with interpolated arguments.
-8. For `verify_integrate`, capture the branch, worktree, and tip before post-commands using `spec show` and `git rev-parse`.
-9. Run any `archetipo_post_commands`.
-10. Verify integration: the spec is `DONE`, the pre-integration tip is reachable from `main`, the per-spec branch is deleted, and the worktree directory has been removed and no longer appears in `git worktree list --porcelain`.
-11. For focused Wiki review scenarios, verify acceptance from persisted/committed effects (including exact artifact content and exact approval commit paths), then assert branch/worktree cleanup directly without relying on a natural-language verdict.
+5. Initialize a Git repository in the sandbox on `main`, configure a local identity, stage only `seed_baseline_paths` when configured, and commit the generated fixture baseline. Installed skills and the copied binary remain untracked.
+6. For focused review fixtures, approve `seed_reviewed_pages` only after their evidence is Git-tracked, stage only those reviewed page files plus Wiki `index.md`/`log.md`, commit the seeded-review baseline, and capture its exact hash in scenario context and reports.
+7. Before any pre-command or prompt, run Wiki status and validation and require each seeded page to be persisted reviewed, fresh, structurally valid, and free of `WIKI_EVIDENCE_CHANGED`.
+8. Run any `archetipo_pre_commands` using the CLI copied into the sandbox.
+9. Run prompts through the agent with interpolated arguments.
+10. For `verify_integrate`, capture the branch, worktree, and tip before post-commands using `spec show` and `git rev-parse`.
+11. Run any `archetipo_post_commands`.
+12. Verify integration: the spec is `DONE`, the pre-integration tip is reachable from `main`, the per-spec branch is deleted, and the worktree directory has been removed and no longer appears in `git worktree list --porcelain`.
+13. For focused Wiki review scenarios, compare unchanged review metadata to the captured seeded-review baseline, verify acceptance from persisted/committed effects (including exact artifact content and exact approval commit paths), then assert branch/worktree cleanup directly without relying on a natural-language verdict.
 
 ### Current scenarios
 
@@ -129,7 +132,7 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 - `from-plan-to-implement`: fixture `fixtures/plan`, prompt `/archetipo-implement US-001`; worktrees disabled.
 - `worktree-from-plan-to-implement-integrate`: fixture `fixtures/worktree-plan`, prompt `/archetipo-implement US-001`, then `spec integrate US-001`; verifies integration.
 - `worktree-implement-no-integrate`: fixture `fixtures/worktree-plan`, pre-command `spec start US-001`, then `/archetipo-implement US-001`; leaves the work unintegrated.
-- `worktree-review-accepts-wiki`: implements an exact greeting change with one required generated page, one affected-only tracked behavioral page, and one reviewed reference whose shared hub source is context; review approves only the required page, preserves the stale warning and fresh reference, commits only the expected Wiki approval paths, integrates the spec, and removes its branch/worktree.
+- `worktree-review-accepts-wiki`: creates a generated-evidence baseline commit, then a separate seeded-review metadata commit and verifies both seeded pages are fresh before prompting. It implements an exact greeting change with one required generated page, one affected-only tracked behavioral page, and one reviewed reference whose shared hub source is context; review approves only the required page, preserves the stale warning and fresh reference, leaves seeded review metadata semantically unchanged from the captured review baseline, commits only the expected Wiki approval paths, integrates the spec, and removes its branch/worktree.
 
 ### Available fixtures
 
@@ -144,6 +147,7 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 
 ### Standalone smoke tests
 
+- `npm run test:e2e:unit`: credential-free Node tests for the known-field/unknown-extension manifest contract and the two-commit focused Wiki baseline, including exact commit paths and pre-prompt freshness.
 - `node ./test/e2e/validate-inception-smoke.mjs`: builds the CLI, initializes a file/pi sandbox, writes an invalid PRD, verifies `archetipo validate prd` exits with `0` and returns `kind=validation_result`, `data.ok=false`, `PRD_PLACEHOLDER_LEFT`, and `PRD_MISSING_SECTION`; then writes a valid PRD and verifies `kind=validation_result` with `data.ok=true`. Produces an HTML report. Options: `--workspace-root`, `--cleanup`. Note: the help text mentions `npm run test:validate-inception`, but no corresponding package script currently exists.
 - `npm run test:view-delete-smoke`: builds the CLI, initializes a sandbox, adds two specs, seeds plan/review artifacts for `US-901`, starts `archetipo view` on a random port, and verifies through the HTTP API that `DELETE /api/spec/US-901` removes that card, retains `US-902`, subsequently returns 404 for `US-901`, and deletes its spec/plan/review artifacts.
 - `npm run test:wiki-smoke`: builds the CLI, inspects a sandbox codebase, initializes the Wiki, creates ordinary and decision/reference pages, then verifies validation, unsafe-path errors, root-source affected matching, ADR search, cataloging, selective approval, tracked-versus-context freshness, explicit reconfirmation, distinct unreadable-evidence findings, and index regeneration. This credential-free smoke runs unchanged in the Ubuntu/macOS/Windows CI test matrix after Node setup.

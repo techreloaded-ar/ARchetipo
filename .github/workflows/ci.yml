@@ -48,8 +48,126 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Tests
+
+      - name: Set up native Linux bind-mount fixture
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_root="$(mktemp -d)"
+          project="$fixture_root/project"
+          source="$fixture_root/source"
+          mounted="$project/mounted"
+          mkdir -p "$source" "$mounted"
+          printf 'native bind evidence\n' > "$source/evidence.txt"
+          {
+            echo "ARCHETIPO_NATIVE_FIXTURE_ROOT=$fixture_root"
+            echo "ARCHETIPO_LINUX_BIND_PROJECT=$project"
+            echo "ARCHETIPO_LINUX_BIND_MOUNT=$mounted"
+          } >> "$GITHUB_ENV"
+          sudo mount --bind "$source" "$mounted"
+          mountpoint -q "$mounted"
+          echo "Linux bind fixture: $source -> $mounted"
+
+      - name: Set up native macOS mounted-image fixture
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_root="$(mktemp -d)"
+          project="$fixture_root/project"
+          mounted="$project/mounted"
+          image="$fixture_root/wiki-evidence.dmg"
+          mkdir -p "$mounted"
+          {
+            echo "ARCHETIPO_NATIVE_FIXTURE_ROOT=$fixture_root"
+            echo "ARCHETIPO_DARWIN_MOUNT_PROJECT=$project"
+            echo "ARCHETIPO_DARWIN_MOUNT_POINT=$mounted"
+            echo "ARCHETIPO_DARWIN_IMAGE=$image"
+          } >> "$GITHUB_ENV"
+          hdiutil create -quiet -size 16m -fs HFS+ -volname ArchetipoEvidence -ov "$image"
+          attach_output="$(hdiutil attach -nobrowse -noverify -mountpoint "$mounted" "$image")"
+          printf '%s\n' "$attach_output"
+          device="$(printf '%s\n' "$attach_output" | awk '$1 ~ /^\/dev\/disk/ { value=$1 } END { print value }')"
+          if [[ ! "$device" =~ ^/dev/disk ]]; then
+            echo "failed to capture mounted image device" >&2
+            exit 1
+          fi
+          echo "ARCHETIPO_DARWIN_DEVICE=$device" >> "$GITHUB_ENV"
+          printf 'native mounted-image evidence\n' > "$mounted/evidence.txt"
+          if [ "$(stat -f %d "$project")" = "$(stat -f %d "$mounted")" ]; then
+            echo "mounted image did not cross device identity" >&2
+            exit 1
+          fi
+          echo "macOS mounted-image fixture: $image ($device) -> $mounted"
+
+      - name: Native Linux bind-mount portability gate
+        if: runner.os == 'Linux'
         working-directory: cli
-        run: go test ./...
+        run: go test ./internal/wiki -run '^TestLinuxNativeBindMountIsRejected$' -count=1 -v
+
+      - name: Native macOS mounted-image portability gate
+        if: runner.os == 'macOS'
+        working-directory: cli
+        run: go test ./internal/wiki -run '^TestDarwinNativeMountedImageIsRejected$' -count=1 -v
+
+      - name: Native Windows evidence portability gate
+        if: runner.os == 'Windows'
+        working-directory: cli
+        run: go test ./internal/wiki -run '^(TestWindowsEvidencePathCanonicalCasingAndADS|TestWindowsGitIndexPortableCollision|TestWindowsEvidencePathSupportsLongCanonicalPaths|TestWindowsEvidencePathRejectsJunction|TestWindowsEvidencePathRejectsAvailableShortNameAlias|TestTrackedSymlinkUsesPortableGitIndexMode)$' -count=1 -v
+
+      - name: Uncached Go tests
+        working-directory: cli
+        run: go test ./... -count=1
+
+      - name: E2E schema and baseline unit tests
+        run: npm run test:e2e:unit
+
       - name: Wiki smoke
         run: npm run test:wiki-smoke
+
+      - name: Supplemental cross-platform test compilation
+        if: runner.os == 'Linux'
+        working-directory: cli
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOOS=windows GOARCH=amd64 go test -c ./internal/wiki -o /tmp/wiki-windows.test.exe
+          GOOS=linux GOARCH=amd64 go test -c ./internal/wiki -o /tmp/wiki-linux.test
+          GOOS=darwin GOARCH=amd64 go test -c ./internal/wiki -o /tmp/wiki-darwin.test
+
+      - name: Clean up native Linux bind-mount fixture
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${ARCHETIPO_LINUX_BIND_MOUNT:-}" ] && mountpoint -q "$ARCHETIPO_LINUX_BIND_MOUNT"; then
+            sudo umount "$ARCHETIPO_LINUX_BIND_MOUNT"
+          fi
+          if [ -n "${ARCHETIPO_LINUX_BIND_MOUNT:-}" ] && mountpoint -q "$ARCHETIPO_LINUX_BIND_MOUNT"; then
+            echo "bind mount cleanup failed: $ARCHETIPO_LINUX_BIND_MOUNT" >&2
+            exit 1
+          fi
+          if [ -n "${ARCHETIPO_NATIVE_FIXTURE_ROOT:-}" ]; then
+            rm -rf -- "$ARCHETIPO_NATIVE_FIXTURE_ROOT"
+          fi
+          echo "Linux native fixture cleanup complete"
+
+      - name: Clean up native macOS mounted-image fixture
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${ARCHETIPO_DARWIN_DEVICE:-}" ] && hdiutil info | grep -Fq "$ARCHETIPO_DARWIN_DEVICE"; then
+            hdiutil detach -force "$ARCHETIPO_DARWIN_DEVICE"
+          elif [ -n "${ARCHETIPO_DARWIN_IMAGE:-}" ] && hdiutil info | grep -Fq "$ARCHETIPO_DARWIN_IMAGE"; then
+            hdiutil detach -force "$ARCHETIPO_DARWIN_MOUNT_POINT"
+          fi
+          if [ -n "${ARCHETIPO_DARWIN_IMAGE:-}" ] && hdiutil info | grep -Fq "$ARCHETIPO_DARWIN_IMAGE"; then
+            echo "mounted image cleanup failed: $ARCHETIPO_DARWIN_IMAGE" >&2
+            exit 1
+          fi
+          if [ -n "${ARCHETIPO_NATIVE_FIXTURE_ROOT:-}" ]; then
+            rm -rf -- "$ARCHETIPO_NATIVE_FIXTURE_ROOT"
+          fi
+          echo "macOS native fixture cleanup complete"

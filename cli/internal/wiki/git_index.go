@@ -1,8 +1,8 @@
 package wiki
 
 import (
+	"errors"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -15,13 +15,12 @@ type gitIndexEntry struct {
 }
 
 type gitIndex struct {
-	byPath map[string][]gitIndexEntry
+	byPath           map[string][]gitIndexEntry
+	portablePrefixes map[string]map[string]struct{}
 }
 
-func loadGitIndex(projectRoot string) (*gitIndex, error) {
-	cmd := exec.Command("git", "ls-files", "--stage", "-z")
-	cmd.Dir = projectRoot
-	raw, err := cmd.Output()
+func loadGitIndexWithRunner(projectRoot string, runner gitCommandRunner) (*gitIndex, error) {
+	raw, err := runner.Output(projectRoot, nil, "ls-files", "--stage", "-z")
 	if err != nil {
 		return nil, fmt.Errorf("%w: listing Git index: %v", ErrEvidenceUnreadable, err)
 	}
@@ -64,6 +63,13 @@ func parseGitIndex(raw []byte) ([]gitIndexEntry, error) {
 }
 
 func (index *gitIndex) entry(path string) (*gitIndexEntry, error) {
+	if err := index.validatePathIdentity(path); err != nil {
+		return nil, err
+	}
+	return index.exactEntry(path)
+}
+
+func (index *gitIndex) exactEntry(path string) (*gitIndexEntry, error) {
 	entries := index.byPath[path]
 	var stageZero *gitIndexEntry
 	for entryIndex := range entries {
@@ -79,11 +85,78 @@ func (index *gitIndex) entry(path string) (*gitIndexEntry, error) {
 	return stageZero, nil
 }
 
+// validatePathIdentity enforces exact index spelling component by component.
+// It scans only prefixes portable-equivalent to the cited path, so collisions
+// elsewhere in the repository do not poison unrelated evidence.
+func (index *gitIndex) validatePathIdentity(path string) error {
+	normalized, err := normalizePortableEvidencePath(path)
+	if err != nil {
+		return err
+	}
+	if normalized == "." {
+		return nil
+	}
+	index.ensurePortablePrefixes()
+	components := strings.Split(normalized, "/")
+	keys := make([]string, 0, len(components))
+	for depth, component := range components {
+		key, keyErr := portableComponentKey(component)
+		if keyErr != nil {
+			return keyErr
+		}
+		keys = append(keys, key)
+		spellings := index.portablePrefixes[strings.Join(keys, "/")]
+		if len(spellings) > 1 {
+			return errors.Join(ErrEvidenceUnreadable, errPortablePathCollision)
+		}
+		for spelling := range spellings {
+			if spelling != strings.Join(components[:depth+1], "/") {
+				return errors.Join(ErrInvalidSourcePath, errNonCanonicalPath)
+			}
+		}
+	}
+	return nil
+}
+
+func (index *gitIndex) ensurePortablePrefixes() {
+	if index.portablePrefixes != nil {
+		return
+	}
+	index.portablePrefixes = map[string]map[string]struct{}{}
+	for indexPath := range index.byPath {
+		components := strings.Split(indexPath, "/")
+		keys := make([]string, 0, len(components))
+		for depth, component := range components {
+			// Git records slash separators on every host. A literal backslash is
+			// therefore a non-portable separator alias, not a valid index
+			// component. Preserve every valid ancestor before the first invalid
+			// component so an invalid descendant cannot hide an intersecting
+			// case/NFC collision.
+			if component == "" || strings.Contains(component, `\`) {
+				break
+			}
+			key, err := portableComponentKey(component)
+			if err != nil {
+				break
+			}
+			keys = append(keys, key)
+			portablePrefix := strings.Join(keys, "/")
+			if index.portablePrefixes[portablePrefix] == nil {
+				index.portablePrefixes[portablePrefix] = map[string]struct{}{}
+			}
+			index.portablePrefixes[portablePrefix][strings.Join(components[:depth+1], "/")] = struct{}{}
+		}
+	}
+}
+
 func (index *gitIndex) strictGitlinkAncestor(path string) (*gitIndexEntry, error) {
+	if err := index.validatePathIdentity(path); err != nil {
+		return nil, err
+	}
 	components := strings.Split(path, "/")
 	for count := 1; count < len(components); count++ {
 		ancestor := strings.Join(components[:count], "/")
-		entry, err := index.entry(ancestor)
+		entry, err := index.exactEntry(ancestor)
 		if err != nil {
 			return nil, err
 		}
@@ -95,17 +168,27 @@ func (index *gitIndex) strictGitlinkAncestor(path string) (*gitIndexEntry, error
 }
 
 func (index *gitIndex) pathsWithin(parent string) ([]string, error) {
+	if err := index.validatePathIdentity(parent); err != nil {
+		return nil, err
+	}
 	paths := []string{}
-	for path := range index.byPath {
-		if !pathContains(parent, path) {
+	for indexPath := range index.byPath {
+		if !pathContains(parent, indexPath) {
 			continue
 		}
-		entry, err := index.entry(path)
+		normalized, err := normalizePortableEvidencePath(indexPath)
+		if err != nil || normalized != indexPath {
+			return nil, fmt.Errorf("%w: non-portable Git index path %q", ErrEvidenceUnreadable, indexPath)
+		}
+		if err := index.validatePathIdentity(indexPath); err != nil {
+			return nil, err
+		}
+		entry, err := index.exactEntry(indexPath)
 		if err != nil {
 			return nil, err
 		}
 		if entry != nil {
-			paths = append(paths, path)
+			paths = append(paths, indexPath)
 		}
 	}
 	return uniqueSorted(paths), nil

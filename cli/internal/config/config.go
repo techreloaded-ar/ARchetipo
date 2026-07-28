@@ -140,6 +140,40 @@ func Load(startDir string) (Config, error) {
 	return parseRaw(root, cfgPath, []byte(raw))
 }
 
+// LoadForTarget resolves runtime configuration for an explicit checkout path.
+// The nearest config found by walking upward from the target is authoritative,
+// but runtime paths are always retargeted to the exact checkout path supplied
+// by the caller. When no target-nearest config exists, invoking settings are
+// inherited and likewise retargeted.
+func LoadForTarget(invokingDir, targetRoot string) (Config, error) {
+	absoluteTarget, err := filepath.Abs(targetRoot)
+	if err != nil {
+		return Config{}, err
+	}
+	targetConfigRoot, targetConfigPath, err := find(absoluteTarget)
+	if err != nil {
+		return Config{}, err
+	}
+	if targetConfigPath != "" {
+		raw, _, _, readErr := ReadRaw(targetConfigRoot)
+		if readErr != nil {
+			return Config{}, readErr
+		}
+		target, parseErr := parseRaw(targetConfigRoot, targetConfigPath, []byte(raw))
+		if parseErr != nil {
+			return Config{}, parseErr
+		}
+		target.ProjectRoot = absoluteTarget
+		return target, nil
+	}
+	invoking, err := Load(invokingDir)
+	if err != nil {
+		return Config{}, err
+	}
+	invoking.ProjectRoot = absoluteTarget
+	return invoking, nil
+}
+
 // ReadRaw returns the raw config.yaml contents for a known project root. When
 // the file is missing, exists is false and path still points at the canonical
 // target location under .archetipo/.

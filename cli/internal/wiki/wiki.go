@@ -55,6 +55,7 @@ var (
 	ErrGitIndexConflict         = errors.New("git index has unmerged evidence")
 	ErrSubmoduleEvidence        = errors.New("submodule evidence is not clean and reproducible")
 	ErrUnsupportedEvidenceEntry = errors.New("unsupported evidence entry")
+	ErrInvalidChangedFile       = errors.New("invalid changed file path")
 )
 
 type Page struct {
@@ -192,10 +193,14 @@ func Validate(projectRoot, root string) Report {
 	if err != nil {
 		return Report{Findings: []domain.WikiFinding{{Code: "WIKI_UNREADABLE", Severity: "error", Path: root, Message: err.Error()}}}
 	}
-	resolver, err := newEvidencePathResolver(projectRoot)
+	snapshot, err := newEvidenceSnapshot(projectRoot, root)
 	if err != nil {
 		return Report{Pages: len(pages), Findings: []domain.WikiFinding{{Code: "WIKI_UNREADABLE", Severity: "error", Path: ".", Message: err.Error()}}}
 	}
+	return validatePagesWithSnapshot(snapshot, root, pages)
+}
+
+func validatePagesWithSnapshot(snapshot *evidenceSnapshot, root string, pages []Page) Report {
 	findings := validateWikiLog(root)
 	ids := map[string]Page{}
 	allowed := map[domain.WikiStatus]bool{domain.WikiStatusGenerated: true, domain.WikiStatusReviewed: true}
@@ -260,7 +265,7 @@ func Validate(projectRoot, root string) Report {
 				if p.Meta.Review.ContentHash != pageContentHash(p) {
 					findings = append(findings, domain.WikiFinding{Code: "WIKI_REVIEW_OUTDATED", Severity: "warning", PageID: p.ID, Path: p.Path, Message: "page content changed after review"})
 				}
-				changed, evidenceErr := pageEvidenceChanged(projectRoot, root, p)
+				changed, evidenceErr := pageEvidenceChangedWithSnapshot(snapshot, p)
 				if evidenceErr != nil {
 					appendEvidenceErrorFinding(&findings, p, evidenceErr)
 				} else if changed {
@@ -279,7 +284,7 @@ func Validate(projectRoot, root string) Report {
 				continue
 			}
 			if !isExternal(source.Path) {
-				resolved, resolveErr := resolver.resolve(source.Path)
+				resolved, resolveErr := snapshot.resolveAndAttest(source.Path)
 				if resolveErr != nil {
 					appendEvidenceErrorFinding(&findings, p, resolveErr)
 				} else if !resolved.Exists {
@@ -419,15 +424,15 @@ func validateWikiLog(root string) []domain.WikiFinding {
 
 // ValidateBootstrap adds codebase coverage requirements to structural validation.
 func ValidateBootstrap(projectRoot, root, prdPath string) (Report, error) {
-	report := Validate(projectRoot, root)
 	pages, err := Load(root)
 	if err != nil {
-		return report, err
+		return Report{}, err
 	}
-	resolver, err := newEvidencePathResolver(projectRoot)
+	snapshot, err := newEvidenceSnapshot(projectRoot, root)
 	if err != nil {
-		return report, err
+		return Report{}, err
 	}
+	report := validatePagesWithSnapshot(snapshot, root, pages)
 	byID := map[string]Page{}
 	for _, page := range pages {
 		byID[page.ID] = page
@@ -475,7 +480,7 @@ func ValidateBootstrap(projectRoot, root, prdPath string) (Report, error) {
 			if source.Path == "" || isExternal(source.Path) {
 				continue
 			}
-			resolved, resolveErr := resolver.resolve(source.Path)
+			resolved, resolveErr := snapshot.resolveAndAttest(source.Path)
 			if resolveErr == nil && resolved.Exists {
 				hasRepositoryEvidence = true
 				break
@@ -549,18 +554,56 @@ func sourceTracksFreshness(source domain.WikiSource) bool {
 	return source.Freshness == "" || source.Freshness == "tracked"
 }
 
+// Status loads pages once and derives lifecycle state and validation findings
+// through one operation-scoped evidence snapshot.
+func Status(projectRoot, root string) ([]Page, []string, Report, error) {
+	pages, err := Load(root)
+	if err != nil {
+		return nil, nil, Report{}, err
+	}
+	snapshot, err := newEvidenceSnapshot(projectRoot, root)
+	if err != nil {
+		states := make([]string, len(pages))
+		for index, page := range pages {
+			switch {
+			case len(page.Meta.Issues) > 0:
+				states[index] = "attention"
+			case page.Meta.Status != domain.WikiStatusReviewed:
+				states[index] = "generated"
+			default:
+				states[index] = "stale"
+			}
+		}
+		report := Report{Pages: len(pages), Findings: []domain.WikiFinding{{Code: "WIKI_UNREADABLE", Severity: "error", Path: ".", Message: err.Error()}}}
+		return pages, states, report, nil
+	}
+	states := make([]string, len(pages))
+	for index, page := range pages {
+		states[index] = pageStateWithSnapshot(snapshot, page)
+	}
+	return pages, states, validatePagesWithSnapshot(snapshot, root, pages), nil
+}
+
 func Search(projectRoot, root, query, pageType, status string) ([]Page, error) {
 	pages, err := Load(root)
 	if err != nil {
 		return nil, err
 	}
+	snapshot, err := newEvidenceSnapshot(projectRoot, root)
+	if err != nil {
+		return nil, err
+	}
+	return searchPagesWithSnapshot(snapshot, pages, query, pageType, status), nil
+}
+
+func searchPagesWithSnapshot(snapshot *evidenceSnapshot, pages []Page, query, pageType, status string) []Page {
 	q := strings.ToLower(strings.TrimSpace(query))
 	result := []Page{}
 	for _, p := range pages {
 		if pageType != "" && p.Meta.Type != pageType {
 			continue
 		}
-		if status != "" && PageState(projectRoot, root, p) != status {
+		if status != "" && pageStateWithSnapshot(snapshot, p) != status {
 			continue
 		}
 		haystack := strings.ToLower(p.ID + " " + p.Meta.Title + " " + p.Meta.Description + " " + p.Body)
@@ -570,42 +613,76 @@ func Search(projectRoot, root, query, pageType, status string) ([]Page, error) {
 		p.Body = ""
 		result = append(result, p)
 	}
-	return result, nil
+	return result
 }
 
+// Affected validates caller-authored changed paths using the portable evidence
+// namespace before matching them against persisted tracked sources.
 func Affected(projectRoot, root string, files []string) ([]Page, error) {
+	return affected(projectRoot, root, files, true)
+}
+
+// AffectedFromGit matches NUL-delimited paths returned by Git without applying
+// the authored evidence namespace to them. Git permits newline/control bytes in
+// repository paths; persisted Wiki sources remain strictly portable.
+func AffectedFromGit(projectRoot, root string, files []string) ([]Page, error) {
+	return affected(projectRoot, root, files, false)
+}
+
+func affected(projectRoot, root string, files []string, explicitFiles bool) ([]Page, error) {
 	pages, err := Load(root)
 	if err != nil {
 		return nil, err
 	}
-	resolver, err := newEvidencePathResolver(projectRoot)
+	snapshot, err := newEvidenceSnapshot(projectRoot, root)
 	if err != nil {
 		return nil, err
 	}
-	changed := []string{}
+	changed := make([]string, 0, len(files))
 	for _, file := range files {
-		if file == "" || isExternal(file) {
+		if !explicitFiles {
+			changed = append(changed, file)
 			continue
 		}
-		normalized, normalizeErr := resolver.normalize(file)
+		if strings.TrimSpace(file) == "" || isExternal(file) {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidChangedFile, file)
+		}
+		normalized, normalizeErr := snapshot.resolver.normalize(file)
 		if normalizeErr != nil {
-			continue
+			return nil, fmt.Errorf("%w: %v", ErrInvalidChangedFile, normalizeErr)
 		}
-		changed = append(changed, normalized)
+		resolved, resolveErr := snapshot.resolveAndAttest(normalized)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidChangedFile, resolveErr)
+		}
+		changed = append(changed, resolved.Relative)
 	}
 	changed = uniqueSorted(changed)
 
+	// Validate every persisted tracked source before producing any matches. A
+	// match on an earlier source must not hide a later invalid source on the same
+	// page or any other page, and failures never return a partial affected set.
+	sourcesByPage := make([][]string, len(pages))
+	for pageIndex, page := range pages {
+		for _, source := range page.Meta.Sources {
+			if !sourceTracksFreshness(source) || isExternal(source.Path) {
+				continue
+			}
+			if source.Path == "" {
+				return nil, &EvidencePathError{Source: source.Path, Err: ErrInvalidSourcePath}
+			}
+			resolved, resolveErr := snapshot.resolveAndAttest(source.Path)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			sourcesByPage[pageIndex] = append(sourcesByPage[pageIndex], resolved.Relative)
+		}
+	}
+
 	result := []Page{}
-	for _, p := range pages {
+	for pageIndex, page := range pages {
 		matched := false
-		for _, source := range p.Meta.Sources {
-			if !sourceTracksFreshness(source) || source.Path == "" || isExternal(source.Path) {
-				continue
-			}
-			sourcePath, normalizeErr := resolver.normalize(source.Path)
-			if normalizeErr != nil {
-				continue
-			}
+		for _, sourcePath := range sourcesByPage[pageIndex] {
 			for _, file := range changed {
 				if pathContains(sourcePath, file) {
 					matched = true
@@ -617,8 +694,8 @@ func Affected(projectRoot, root string, files []string) ([]Page, error) {
 			}
 		}
 		if matched {
-			p.Body = ""
-			result = append(result, p)
+			page.Body = ""
+			result = append(result, page)
 		}
 	}
 	return result, nil
@@ -631,7 +708,7 @@ func GitChangedFiles(projectRoot, base, head string) ([]string, error) {
 	if head == "" {
 		head = "HEAD"
 	}
-	cmd := exec.Command("git", "diff", "--name-only", "-z", "--no-renames", base+"..."+head)
+	cmd := exec.Command("git", "diff", "--name-only", "-z", "--no-renames", "--relative", base+"..."+head, "--", ".")
 	cmd.Dir = projectRoot
 	out, err := cmd.Output()
 	if err != nil {
@@ -651,21 +728,21 @@ func parseNULPathList(raw []byte) []string {
 // Approve marks selected generated pages as reviewed. An empty ID list approves
 // every generated page, but pages with unresolved issues are never promoted.
 func Approve(projectRoot, root string, ids []string) (int, error) {
-	report := Validate(projectRoot, root)
-	if !report.OK {
-		return 0, ErrValidationFailed
-	}
-	resolver, err := newEvidencePathResolver(projectRoot)
-	if err != nil {
-		return 0, err
-	}
 	pages, err := Load(root)
 	if err != nil {
 		return 0, err
 	}
+	snapshot, err := newEvidenceSnapshot(projectRoot, root)
+	if err != nil {
+		return 0, err
+	}
+	report := validatePagesWithSnapshot(snapshot, root, pages)
+	if !report.OK {
+		return 0, ErrValidationFailed
+	}
 	approved := 0
 	now := time.Now().UTC().Format(time.RFC3339)
-	revision := gitRevision(projectRoot)
+	revision := gitRevisionWithRunner(snapshot.runner, snapshot.projectRoot)
 	if revision == "" {
 		revision = "unavailable"
 	}
@@ -683,7 +760,7 @@ func Approve(projectRoot, root string, ids []string) (int, error) {
 			return 0, fmt.Errorf("%w: %s", ErrUnresolvedIssues, page.ID)
 		}
 		if page.Meta.Status == domain.WikiStatusGenerated {
-			missing, missingErr := pageHasMissingEvidence(resolver, page)
+			missing, missingErr := pageHasMissingEvidenceWithSnapshot(snapshot, page)
 			if missingErr != nil {
 				return 0, missingErr
 			}
@@ -705,7 +782,7 @@ func Approve(projectRoot, root string, ids []string) (int, error) {
 		if page.Meta.Status != domain.WikiStatusGenerated {
 			continue
 		}
-		fingerprint, err := evidenceFingerprintWithResolver(resolver, projectRoot, root, page)
+		fingerprint, err := evidenceFingerprintWithSnapshot(snapshot, page)
 		if err != nil {
 			return 0, fmt.Errorf("fingerprinting evidence for %s: %w", page.ID, err)
 		}
@@ -731,7 +808,7 @@ func Approve(projectRoot, root string, ids []string) (int, error) {
 		pages[i] = p
 		approved++
 	}
-	if err := writeIndex(projectRoot, root, pages); err != nil {
+	if err := writeIndexWithSnapshot(snapshot, root, pages); err != nil {
 		return approved, err
 	}
 	if approved > 0 {
@@ -748,17 +825,17 @@ func Reconfirm(projectRoot, root string, ids []string) (int, error) {
 	if len(ids) == 0 {
 		return 0, fmt.Errorf("%w: at least one page ID is required", ErrPageNotFound)
 	}
-	report := Validate(projectRoot, root)
-	if !report.OK {
-		return 0, ErrValidationFailed
-	}
-	resolver, err := newEvidencePathResolver(projectRoot)
-	if err != nil {
-		return 0, err
-	}
 	pages, err := Load(root)
 	if err != nil {
 		return 0, err
+	}
+	snapshot, err := newEvidenceSnapshot(projectRoot, root)
+	if err != nil {
+		return 0, err
+	}
+	report := validatePagesWithSnapshot(snapshot, root, pages)
+	if !report.OK {
+		return 0, ErrValidationFailed
 	}
 	wanted := map[string]bool{}
 	for _, id := range ids {
@@ -779,7 +856,7 @@ func Reconfirm(projectRoot, root string, ids []string) (int, error) {
 		if len(page.Meta.Sources) == 0 {
 			return 0, fmt.Errorf("%w: %s", ErrMissingEvidence, page.ID)
 		}
-		missing, missingErr := pageHasMissingEvidence(resolver, page)
+		missing, missingErr := pageHasMissingEvidenceWithSnapshot(snapshot, page)
 		if missingErr != nil {
 			return 0, missingErr
 		}
@@ -801,14 +878,14 @@ func Reconfirm(projectRoot, root string, ids []string) (int, error) {
 		if !wanted[page.ID] {
 			continue
 		}
-		fingerprint, err := evidenceFingerprintWithResolver(resolver, projectRoot, root, page)
+		fingerprint, err := evidenceFingerprintWithSnapshot(snapshot, page)
 		if err != nil {
 			return 0, fmt.Errorf("fingerprinting evidence for %s: %w", page.ID, err)
 		}
 		fingerprints[page.ID] = fingerprint
 	}
 
-	revision := gitRevision(projectRoot)
+	revision := gitRevisionWithRunner(snapshot.runner, snapshot.projectRoot)
 	if revision == "" {
 		revision = "unavailable"
 	}
@@ -832,7 +909,7 @@ func Reconfirm(projectRoot, root string, ids []string) (int, error) {
 		pages[index] = page
 		reconfirmed++
 	}
-	if err := writeIndex(projectRoot, root, pages); err != nil {
+	if err := writeIndexWithSnapshot(snapshot, root, pages); err != nil {
 		return reconfirmed, err
 	}
 	if reconfirmed > 0 {
@@ -902,7 +979,11 @@ func Catalog(projectRoot, root string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := writeIndex(projectRoot, root, pages); err != nil {
+	snapshot, err := newEvidenceSnapshot(projectRoot, root)
+	if err != nil {
+		return 0, err
+	}
+	if err := writeIndexWithSnapshot(snapshot, root, pages); err != nil {
 		return 0, err
 	}
 	if err := appendLog(root, "Update", fmt.Sprintf("Cataloged %d page(s) without review changes", len(pages))); err != nil {
@@ -946,6 +1027,14 @@ func renderPage(p Page) ([]byte, error) {
 	return []byte("---\n" + string(meta) + "---\n" + p.Body), nil
 }
 func writeIndex(projectRoot, root string, pages []Page) error {
+	snapshot, err := newEvidenceSnapshot(projectRoot, root)
+	if err != nil {
+		return err
+	}
+	return writeIndexWithSnapshot(snapshot, root, pages)
+}
+
+func writeIndexWithSnapshot(snapshot *evidenceSnapshot, root string, pages []Page) error {
 	var b strings.Builder
 	b.WriteString("# Project Wiki\n")
 	groups := map[string][]Page{}
@@ -966,7 +1055,7 @@ func writeIndex(projectRoot, root string, pages []Page) error {
 		for _, p := range groups[group] {
 			title := strings.ReplaceAll(p.Meta.Title, "]", "\\]")
 			description := strings.TrimSuffix(strings.TrimSpace(p.Meta.Description), ".")
-			fmt.Fprintf(&b, "* [%s](%s) - %s. _State: %s._\n", title, p.Path, description, PageState(projectRoot, root, p))
+			fmt.Fprintf(&b, "* [%s](%s) - %s. _State: %s._\n", title, p.Path, description, pageStateWithSnapshot(snapshot, p))
 		}
 	}
 	return atomicWrite(filepath.Join(root, "index.md"), []byte(b.String()))
@@ -1029,6 +1118,14 @@ func pageContentHash(page Page) string {
 // PageState derives operational trust from review metadata, issues, content,
 // and evidence changes. Only generated/reviewed are persisted in the page.
 func PageState(projectRoot, root string, page Page) string {
+	snapshot, err := newEvidenceSnapshot(projectRoot, root)
+	if err != nil {
+		return "stale"
+	}
+	return pageStateWithSnapshot(snapshot, page)
+}
+
+func pageStateWithSnapshot(snapshot *evidenceSnapshot, page Page) string {
 	if len(page.Meta.Issues) > 0 {
 		return "attention"
 	}
@@ -1038,19 +1135,19 @@ func PageState(projectRoot, root string, page Page) string {
 	if page.Meta.Review == nil || page.Meta.Review.ContentHash != pageContentHash(page) {
 		return "stale"
 	}
-	changed, err := pageEvidenceChanged(projectRoot, root, page)
+	changed, err := pageEvidenceChangedWithSnapshot(snapshot, page)
 	if err != nil || changed {
 		return "stale"
 	}
 	return "reviewed"
 }
 
-func pageEvidenceChanged(projectRoot, root string, page Page) (bool, error) {
+func pageEvidenceChangedWithSnapshot(snapshot *evidenceSnapshot, page Page) (bool, error) {
 	if page.Meta.Review == nil {
 		return false, nil
 	}
 	if page.Meta.Review.EvidenceHash != "" {
-		fingerprint, err := evidenceFingerprint(projectRoot, root, page)
+		fingerprint, err := evidenceFingerprintWithSnapshot(snapshot, page)
 		if err != nil {
 			return false, err
 		}
@@ -1064,7 +1161,7 @@ func pageEvidenceChanged(projectRoot, root string, page Page) (bool, error) {
 		if !sourceTracksFreshness(source) {
 			continue
 		}
-		rel, ok, err := projectRelativeSource(projectRoot, source.Path)
+		rel, ok, err := projectRelativeSourceWithResolver(snapshot.resolver, source.Path)
 		if err != nil {
 			return false, err
 		}
@@ -1077,9 +1174,7 @@ func pageEvidenceChanged(projectRoot, root string, page Page) (bool, error) {
 		return false, nil
 	}
 	args := append([]string{"diff", "--quiet", page.Meta.Review.EvidenceRevision, "--"}, uniqueSorted(paths)...)
-	cmd := exec.Command("git", args...)
-	cmd.Dir = projectRoot
-	err := cmd.Run()
+	_, err := snapshot.runner.Output(snapshot.projectRoot, nil, args...)
 	if err == nil {
 		return false, nil
 	}
@@ -1116,28 +1211,20 @@ func (manifest *evidenceManifest) sum() string {
 }
 
 func evidenceFingerprint(projectRoot, root string, page Page) (string, error) {
-	resolver, err := newEvidencePathResolver(projectRoot)
+	snapshot, err := newEvidenceSnapshot(projectRoot, root)
 	if err != nil {
 		return "", err
 	}
-	return evidenceFingerprintWithResolver(resolver, projectRoot, root, page)
+	return evidenceFingerprintWithSnapshot(snapshot, page)
 }
 
-func evidenceFingerprintWithResolver(resolver *evidencePathResolver, projectRoot, root string, page Page) (string, error) {
-	physicalRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", fmt.Errorf("%w: resolving Wiki root: %v", ErrEvidenceUnreadable, err)
-	}
-	root, err = filepath.Abs(physicalRoot)
-	if err != nil {
-		return "", fmt.Errorf("%w: resolving Wiki root: %v", ErrEvidenceUnreadable, err)
-	}
+func evidenceFingerprintWithSnapshot(snapshot *evidenceSnapshot, page Page) (string, error) {
 	sources := map[string]bool{}
 	for _, source := range page.Meta.Sources {
 		if !sourceTracksFreshness(source) || isExternal(source.Path) {
 			continue
 		}
-		rel, err := resolver.normalize(source.Path)
+		rel, err := snapshot.resolver.normalize(source.Path)
 		if err != nil {
 			return "", err
 		}
@@ -1150,30 +1237,22 @@ func evidenceFingerprintWithResolver(resolver *evidencePathResolver, projectRoot
 	sort.Strings(paths)
 
 	manifest := newEvidenceManifest()
-	var index *gitIndex
-	if isGitRepository(projectRoot) {
-		var err error
-		index, err = loadGitIndex(projectRoot)
-		if err != nil {
-			return "", err
-		}
+	index, err := snapshot.gitIndex()
+	if err != nil {
+		return "", err
 	}
 	for _, source := range paths {
 		manifest.record("source", source)
-		if err := fingerprintEvidencePath(manifest, resolver, projectRoot, root, source, true, false, index); err != nil {
+		if err := fingerprintEvidencePath(manifest, snapshot, source, true, false, index); err != nil {
 			return "", err
 		}
 	}
 	return manifest.sum(), nil
 }
 
-func projectRelativeSource(projectRoot, sourcePath string) (string, bool, error) {
+func projectRelativeSourceWithResolver(resolver *evidencePathResolver, sourcePath string) (string, bool, error) {
 	if sourcePath == "" || isExternal(sourcePath) {
 		return "", false, nil
-	}
-	resolver, err := newEvidencePathResolver(projectRoot)
-	if err != nil {
-		return "", false, err
 	}
 	rel, err := resolver.normalize(sourcePath)
 	if err != nil {
@@ -1182,7 +1261,17 @@ func projectRelativeSource(projectRoot, sourcePath string) (string, bool, error)
 	return rel, true, nil
 }
 
-func fingerprintEvidencePath(manifest *evidenceManifest, resolver *evidencePathResolver, projectRoot, root, rel string, recurse, indirect bool, index *gitIndex) error {
+func fingerprintEvidencePath(manifest *evidenceManifest, snapshot *evidenceSnapshot, rel string, recurse, indirect bool, index *gitIndex) error {
+	resolver := snapshot.resolver
+	root := snapshot.wikiRoot
+	// Filesystem spelling and redirection are attested before deciding whether
+	// an entry is tracked. This prevents a wrong-case path from silently
+	// downgrading to raw/untracked hashing while still allowing an exact deleted
+	// stage-0 entry to retain tracked missing semantics.
+	resolved, err := resolver.resolve(rel)
+	if err != nil {
+		return err
+	}
 	var tracked *gitIndexEntry
 	if index != nil {
 		gitlink, err := index.strictGitlinkAncestor(rel)
@@ -1197,13 +1286,9 @@ func fingerprintEvidencePath(manifest *evidenceManifest, resolver *evidencePathR
 			return err
 		}
 	}
-	resolved, err := resolver.resolve(rel)
-	if err != nil {
-		return err
-	}
 	candidate := resolved.Path
 	if tracked != nil && tracked.Mode == "160000" {
-		return fingerprintGitlink(manifest, rel, tracked, resolved)
+		return fingerprintGitlink(manifest, tracked.Path, tracked, resolved)
 	}
 	boundary, err := resolver.embeddedRepositoryBoundary(rel)
 	if err != nil {
@@ -1228,29 +1313,29 @@ func fingerprintEvidencePath(manifest *evidenceManifest, resolver *evidencePathR
 		}
 		if regular {
 			if !info.Mode().IsRegular() {
-				return fmt.Errorf("%w: tracked regular file %s has worktree type %s", ErrUnsupportedEvidenceEntry, rel, info.Mode().Type())
+				return fmt.Errorf("%w: tracked regular file %s has worktree type %s", ErrUnsupportedEvidenceEntry, tracked.Path, info.Mode().Type())
 			}
-			return fingerprintRegularEvidence(manifest, projectRoot, root, rel, candidate, executable, true)
+			return fingerprintRegularEvidence(manifest, snapshot, tracked.Path, candidate, executable, true)
 		}
 		if symlink {
-			return fingerprintTrackedSymlink(manifest, rel, candidate, info)
+			return fingerprintTrackedSymlink(manifest, tracked.Path, candidate, info)
 		}
 	}
 
 	switch mode := info.Mode(); {
 	case mode.IsRegular():
-		return fingerprintRegularEvidence(manifest, projectRoot, root, rel, candidate, "0", false)
+		return fingerprintRegularEvidence(manifest, snapshot, rel, candidate, "0", false)
 	case mode.IsDir():
 		manifest.record("directory", rel)
 		if !recurse {
 			return nil
 		}
-		entries, err := evidenceDirectoryEntries(resolver, projectRoot, rel, index)
+		entries, err := evidenceDirectoryEntries(snapshot, rel, index)
 		if err != nil {
 			return err
 		}
 		for _, entry := range entries {
-			if err := fingerprintEvidencePath(manifest, resolver, projectRoot, root, entry, false, true, index); err != nil {
+			if err := fingerprintEvidencePath(manifest, snapshot, entry, false, true, index); err != nil {
 				return err
 			}
 		}
@@ -1266,7 +1351,8 @@ func fingerprintEvidencePath(manifest *evidenceManifest, resolver *evidencePathR
 	return nil
 }
 
-func fingerprintRegularEvidence(manifest *evidenceManifest, projectRoot, root, rel, candidate, executable string, tracked bool) error {
+func fingerprintRegularEvidence(manifest *evidenceManifest, snapshot *evidenceSnapshot, rel, candidate, executable string, tracked bool) error {
+	root := snapshot.wikiRoot
 	if isWikiConcept(root, candidate) {
 		page, err := parsePage(root, candidate)
 		if err != nil {
@@ -1276,9 +1362,9 @@ func fingerprintRegularEvidence(manifest *evidenceManifest, projectRoot, root, r
 		return nil
 	}
 	if tracked {
-		return fingerprintTrackedRegularEvidence(manifest, projectRoot, rel, candidate, executable)
+		return fingerprintTrackedRegularEvidence(manifest, snapshot, rel, candidate, executable)
 	}
-	raw, err := os.ReadFile(candidate)
+	raw, err := readRegularEvidence(candidate)
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", rel, errors.Join(ErrEvidenceUnreadable, err))
 	}
@@ -1287,19 +1373,20 @@ func fingerprintRegularEvidence(manifest *evidenceManifest, projectRoot, root, r
 	return nil
 }
 
-func fingerprintTrackedRegularEvidence(manifest *evidenceManifest, projectRoot, rel, candidate, executable string) error {
-	file, err := os.Open(candidate)
+func fingerprintTrackedRegularEvidence(manifest *evidenceManifest, snapshot *evidenceSnapshot, rel, candidate, executable string) error {
+	file, verify, err := openEvidenceRegular(candidate)
 	if err != nil {
 		return fmt.Errorf("opening tracked evidence %s: %w", rel, errors.Join(ErrEvidenceUnreadable, err))
 	}
-	defer file.Close()
 
-	cmd := exec.Command("git", "hash-object", "--stdin", "--path="+filepath.ToSlash(rel))
-	cmd.Dir = projectRoot
-	cmd.Stdin = file
-	out, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("%w: Git clean normalization failed for %s: %v", ErrEvidenceUnreadable, rel, err)
+	out, commandErr := snapshot.runner.Output(snapshot.projectRoot, file, "hash-object", "--stdin", "--path="+filepath.ToSlash(rel))
+	verifyErr := verify()
+	closeErr := file.Close()
+	if commandErr != nil {
+		return fmt.Errorf("%w: Git clean normalization failed for %s: %v", ErrEvidenceUnreadable, rel, commandErr)
+	}
+	if verifyErr != nil || closeErr != nil {
+		return fmt.Errorf("%w: verifying tracked evidence %s: %v", ErrEvidenceUnreadable, rel, errors.Join(verifyErr, closeErr))
 	}
 	oid := strings.ToLower(strings.TrimSpace(string(out)))
 	if !gitObjectIDPattern.MatchString(oid) {
@@ -1319,7 +1406,7 @@ func fingerprintTrackedSymlink(manifest *evidenceManifest, rel, candidate string
 		}
 		target = value
 	case mode.IsRegular():
-		raw, err := os.ReadFile(candidate)
+		raw, err := readRegularEvidence(candidate)
 		if err != nil {
 			return fmt.Errorf("reading materialized tracked symlink %s: %w", rel, errors.Join(ErrEvidenceUnreadable, err))
 		}
@@ -1331,15 +1418,14 @@ func fingerprintTrackedSymlink(manifest *evidenceManifest, rel, candidate string
 	return nil
 }
 
-func evidenceDirectoryEntries(resolver *evidencePathResolver, projectRoot, rel string, index *gitIndex) ([]string, error) {
+func evidenceDirectoryEntries(snapshot *evidenceSnapshot, rel string, index *gitIndex) ([]string, error) {
+	resolver := snapshot.resolver
 	if index != nil {
 		entries, err := index.pathsWithin(rel)
 		if err != nil {
 			return nil, err
 		}
-		cmd := exec.Command("git", "ls-files", "-z", "--others", "--exclude-standard", "--", ":(literal)"+filepath.ToSlash(rel))
-		cmd.Dir = projectRoot
-		out, err := cmd.Output()
+		out, err := snapshot.runner.Output(snapshot.projectRoot, nil, "ls-files", "-z", "--others", "--exclude-standard", "--", ":(literal)"+filepath.ToSlash(rel))
 		if err != nil {
 			return nil, fmt.Errorf("%w: listing untracked Git evidence in %s: %v", ErrEvidenceUnreadable, rel, err)
 		}
@@ -1351,41 +1437,54 @@ func evidenceDirectoryEntries(resolver *evidencePathResolver, projectRoot, rel s
 			if err != nil {
 				return nil, err
 			}
-			if pathContains(rel, normalized) {
-				entries = append(entries, normalized)
+			if !pathContains(rel, normalized) {
+				continue
 			}
+			if _, err := resolver.resolve(normalized); err != nil {
+				return nil, err
+			}
+			entries = append(entries, normalized)
 		}
 		return uniqueSorted(entries), nil
 	}
 
-	resolvedBase, err := resolver.resolve(rel)
-	if err != nil {
+	if _, err := resolver.resolve(rel); err != nil {
 		return nil, err
 	}
-	base := resolvedBase.Path
 	entries := []string{}
-	err = filepath.WalkDir(base, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if path == base {
-			return nil
-		}
-		if entry.IsDir() && entry.Name() == ".git" {
-			return filepath.SkipDir
-		}
-		entryRel, err := filepath.Rel(resolver.root, path)
+	var visit func(string) error
+	visit = func(parent string) error {
+		resolvedParent, err := resolver.resolve(parent)
 		if err != nil {
 			return err
 		}
-		normalized, err := resolver.normalize(filepath.ToSlash(entryRel))
+		children, err := resolver.directoryEntries(resolvedParent.Path)
 		if err != nil {
-			return err
+			return errors.Join(ErrEvidenceUnreadable, err)
 		}
-		entries = append(entries, normalized)
+		for _, child := range children {
+			childRel := child.Name()
+			if parent != "." {
+				childRel = parent + "/" + childRel
+			}
+			normalized, err := resolver.normalize(childRel)
+			if err != nil {
+				return err
+			}
+			resolvedChild, err := resolver.resolve(normalized)
+			if err != nil {
+				return err
+			}
+			entries = append(entries, normalized)
+			if resolvedChild.Info != nil && resolvedChild.Info.IsDir() && child.Name() != ".git" {
+				if err := visit(normalized); err != nil {
+					return err
+				}
+			}
+		}
 		return nil
-	})
-	if err != nil {
+	}
+	if err := visit(rel); err != nil {
 		return nil, fmt.Errorf("walking evidence directory %s: %w", rel, err)
 	}
 	return uniqueSorted(entries), nil
@@ -1448,6 +1547,22 @@ func pageHasMissingEvidence(resolver *evidencePathResolver, page Page) (bool, er
 	return false, nil
 }
 
+func pageHasMissingEvidenceWithSnapshot(snapshot *evidenceSnapshot, page Page) (bool, error) {
+	for _, source := range page.Meta.Sources {
+		if source.Path == "" || isExternal(source.Path) {
+			continue
+		}
+		resolved, err := snapshot.resolveAndAttest(source.Path)
+		if err != nil {
+			return false, err
+		}
+		if !resolved.Exists {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func atomicWrite(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -1469,9 +1584,11 @@ func atomicWrite(path string, data []byte) error {
 	return os.Rename(name, path)
 }
 func gitRevision(root string) string {
-	cmd := exec.Command("git", "rev-parse", "HEAD")
-	cmd.Dir = root
-	out, err := cmd.Output()
+	return gitRevisionWithRunner(execGitCommandRunner{}, root)
+}
+
+func gitRevisionWithRunner(runner gitCommandRunner, root string) string {
+	out, err := runner.Output(root, nil, "rev-parse", "HEAD")
 	if err != nil {
 		return ""
 	}
@@ -1479,7 +1596,7 @@ func gitRevision(root string) string {
 }
 func isExternal(sourcePath string) bool {
 	parsed, err := url.Parse(sourcePath)
-	if err != nil || parsed.Host == "" || !parsed.IsAbs() {
+	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" {
 		return false
 	}
 	return strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")

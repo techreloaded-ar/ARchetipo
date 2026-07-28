@@ -6,6 +6,8 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
+import { createGitAndWikiBaselines, literalGitPathspec } from "./baseline.mjs";
+import { normalizeConfig } from "./config.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -108,126 +110,6 @@ Usage:
   npm run test:e2e
   npm run test:e2e -- --scenario worktree-implement
 `);
-}
-
-function normalizeConfig(manifest, configPath, filterScenarios) {
-  // Agents + Scenarios format
-  const agents = manifest?.agents;
-  const rawScenarios = manifest?.scenarios;
-
-  if (!agents || typeof agents !== "object" || Object.keys(agents).length === 0) {
-    throw new Error(`Missing or empty 'agents' object in ${configPath}`);
-  }
-  if (!rawScenarios || typeof rawScenarios !== "object" || Object.keys(rawScenarios).length === 0) {
-    throw new Error(`Missing or empty 'scenarios' object in ${configPath}`);
-  }
-
-  // Validate agents
-  for (const [agentId, agent] of Object.entries(agents)) {
-    if (!agent || typeof agent !== "object") {
-      throw new Error(`agents.${agentId} must be an object in ${configPath}`);
-    }
-    for (const key of ["tool", "command"]) {
-      if (!agent[key] || typeof agent[key] !== "string") {
-        throw new Error(`agents.${agentId}.${key} must be a non-empty string in ${configPath}`);
-      }
-    }
-    if (!Array.isArray(agent.args) || agent.args.length === 0 || !agent.args.every((arg) => typeof arg === "string")) {
-      throw new Error(`agents.${agentId}.args must be a non-empty list of strings in ${configPath}`);
-    }
-  }
-
-  // Build resolved scenarios
-  const scenarios = [];
-  for (const [scenarioId, rawScenario] of Object.entries(rawScenarios)) {
-    if (!rawScenario || typeof rawScenario !== "object") {
-      throw new Error(`scenarios.${scenarioId} must be an object in ${configPath}`);
-    }
-    const agentId = rawScenario.agent;
-    if (!agentId || typeof agentId !== "string") {
-      throw new Error(`scenarios.${scenarioId}.agent must be a non-empty string referencing an agent in ${configPath}`);
-    }
-    const agent = agents[agentId];
-    if (!agent) {
-      throw new Error(`scenarios.${scenarioId} references unknown agent '${agentId}' in ${configPath}`);
-    }
-    const prompts = rawScenario.prompts ?? [];
-    if (!Array.isArray(prompts) || !prompts.every((prompt) => typeof prompt === "string")) {
-      throw new Error(`scenarios.${scenarioId}.prompts must be a list of strings when specified in ${configPath}`);
-    }
-    if (rawScenario.fixture !== undefined && (typeof rawScenario.fixture !== "string" || rawScenario.fixture.trim() === "")) {
-      throw new Error(`scenarios.${scenarioId}.fixture must be a non-empty string when specified in ${configPath}`);
-    }
-    for (const key of ["archetipo_pre_commands", "archetipo_post_commands"]) {
-      if (rawScenario[key] !== undefined && (!Array.isArray(rawScenario[key]) || !rawScenario[key].every((cmd) => typeof cmd === "string" && cmd.trim() !== ""))) {
-        throw new Error(`scenarios.${scenarioId}.${key} must be a list of non-empty strings when specified in ${configPath}`);
-      }
-    }
-    if (rawScenario.verify_integrate !== undefined && (!Array.isArray(rawScenario.verify_integrate) || !rawScenario.verify_integrate.every((code) => typeof code === "string" && code.trim() !== ""))) {
-      throw new Error(`scenarios.${scenarioId}.verify_integrate must be a list of non-empty strings when specified in ${configPath}`);
-    }
-    if (rawScenario.verify_wiki_bootstrap !== undefined && (!rawScenario.verify_wiki_bootstrap || typeof rawScenario.verify_wiki_bootstrap !== "object" || Array.isArray(rawScenario.verify_wiki_bootstrap))) {
-      throw new Error(`scenarios.${scenarioId}.verify_wiki_bootstrap must be an object when specified in ${configPath}`);
-    }
-    if (rawScenario.verify_review_wiki !== undefined && (!rawScenario.verify_review_wiki || typeof rawScenario.verify_review_wiki !== "object" || Array.isArray(rawScenario.verify_review_wiki))) {
-      throw new Error(`scenarios.${scenarioId}.verify_review_wiki must be an object when specified in ${configPath}`);
-    }
-    if (rawScenario.verify_review_wiki) {
-      const review = rawScenario.verify_review_wiki;
-      for (const key of ["exact_reviewed_pages", "reviewed_pages", "review_commit_pages", "affected_only_stale_pages", "context_fresh_pages", "unchanged_review_metadata_pages"]) {
-        if (review[key] !== undefined && (!Array.isArray(review[key]) || !review[key].every((value) => typeof value === "string" && value.trim() !== ""))) {
-          throw new Error(`scenarios.${scenarioId}.verify_review_wiki.${key} must be a list of non-empty strings in ${configPath}`);
-        }
-      }
-      for (const key of ["branch", "worktree"]) {
-        if (typeof review[key] !== "string" || review[key].trim() === "") {
-          throw new Error(`scenarios.${scenarioId}.verify_review_wiki.${key} must be a non-empty string in ${configPath}`);
-        }
-      }
-      if (review.implemented_file_contents !== undefined) {
-        if (!review.implemented_file_contents || typeof review.implemented_file_contents !== "object" || Array.isArray(review.implemented_file_contents)) {
-          throw new Error(`scenarios.${scenarioId}.verify_review_wiki.implemented_file_contents must be a path-to-content object in ${configPath}`);
-        }
-        for (const [file, content] of Object.entries(review.implemented_file_contents)) {
-          const portable = file.replaceAll("\\", "/");
-          const normalized = path.posix.normalize(portable);
-          if (!file || typeof content !== "string" || path.posix.isAbsolute(portable) || /^[A-Za-z]:/.test(portable) || normalized === ".." || normalized.startsWith("../")) {
-            throw new Error(`scenarios.${scenarioId}.verify_review_wiki.implemented_file_contents must contain safe project-relative paths and string contents in ${configPath}`);
-          }
-        }
-      }
-    }
-    scenarios.push({
-      id: scenarioId,
-      agentId,
-      agent: { id: agentId, ...agent },
-      prompts,
-      env_required: rawScenario.env_required ?? agent.env_required,
-      fixture: rawScenario.fixture,
-      archetipo_pre_commands: rawScenario.archetipo_pre_commands ?? [],
-      archetipo_post_commands: rawScenario.archetipo_post_commands ?? [],
-      verify_integrate: rawScenario.verify_integrate ?? [],
-      verify_wiki_bootstrap: rawScenario.verify_wiki_bootstrap,
-      verify_review_wiki: rawScenario.verify_review_wiki,
-    });
-  }
-
-  return filterScenarioList(scenarios, filterScenarios, configPath);
-}
-
-function filterScenarioList(scenarios, filter, configPath) {
-  if (!filter) {
-    return scenarios;
-  }
-  const requested = filter.split(",").map((s) => s.trim()).filter(Boolean);
-  const filtered = scenarios.filter((s) => requested.includes(s.id));
-  const found = new Set(filtered.map((s) => s.id));
-  const missing = requested.filter((id) => !found.has(id));
-  if (missing.length > 0) {
-    const available = scenarios.map((s) => s.id).join(", ");
-    throw new Error(`Scenario(s) not found: ${missing.join(", ")}. Available scenarios: ${available}`);
-  }
-  return filtered;
 }
 
 async function buildArchetipoBinary() {
@@ -338,26 +220,13 @@ async function runConfiguredScenario({ scenario, configPath, timeoutMs, cliSourc
       logRunStepDone(scenario.id, "fixture", "Fixture overlay ready");
     }
 
-    const seedReviewedPages = scenario.verify_review_wiki?.seed_reviewed_pages ?? [];
-    if (seedReviewedPages.length > 0) {
-      logRunStepStart(scenario.id, "seed-reviewed-wiki", `Approving baseline Wiki pages: ${seedReviewedPages.join(", ")}`);
-      const seedRun = await runReportedCommand({
-        ...context,
-        step: "seed-reviewed-wiki",
-        command: context.cliBinaryPath,
-        args: ["wiki", "approve", ...seedReviewedPages],
-      });
-      if (!seedRun.ok) {
-        return finish(classifyRunFailure(context, "seed-reviewed-wiki", seedRun));
-      }
-      const seeded = JSON.parse(seedRun.stdout)?.data?.approved;
-      assertQuality(seeded === seedReviewedPages.length, `expected ${seedReviewedPages.length} seeded Wiki approvals, got ${seeded}`);
-      logRunStepDone(scenario.id, "seed-reviewed-wiki", "Baseline Wiki review metadata seeded by the CLI");
-    }
-
-    logRunStepStart(scenario.id, "git-init", "Initializing sandbox git repository");
-    await initSandboxGitRepo(context);
-    logRunStepDone(scenario.id, "git-init", "Sandbox git repository ready");
+    logRunStepStart(scenario.id, "baseline", "Creating Git-tracked fixture and seeded Wiki review baselines");
+    const baselines = await initSandboxGitRepo(context);
+    context.generatedBaselineCommit = baselines.generatedBaselineCommit;
+    context.seededReviewBaselineCommit = baselines.seededReviewBaselineCommit;
+    report.generatedBaselineCommit = baselines.generatedBaselineCommit;
+    report.seededReviewBaselineCommit = baselines.seededReviewBaselineCommit;
+    logRunStepDone(scenario.id, "baseline", `Baselines ready (generated ${baselines.generatedBaselineCommit}, seeded review ${baselines.seededReviewBaselineCommit})`);
 
     assertSandboxBinary(context);
     for (let index = 0; index < scenario.archetipo_pre_commands.length; index += 1) {
@@ -487,31 +356,68 @@ function assertSandboxBinary({ cliBinaryPath, sandboxDir }) {
   }
 }
 
-// initSandboxGitRepo turns the sandbox into a git repository with a `main`
-// branch carrying an empty commit by default. A focused scenario may list
-// baseline fixture paths that must exist in a worktree before implementation;
-// installed skills and the copied CLI remain untracked. Identity is set on the
-// local repo config so linked worktrees inherit it.
+// initSandboxGitRepo creates two explicit baselines for focused Wiki review
+// scenarios. Fixture evidence is staged and committed first so approvals record
+// Git identities. The approval metadata is then staged separately with only its
+// pages and Wiki catalog files. Installed skills and the copied CLI stay
+// untracked, and identity is configured before either commit so worktrees inherit
+// it. The exact seeded-review commit is returned for later metadata comparisons.
 async function initSandboxGitRepo(context) {
-  const baselinePaths = context.scenario.verify_review_wiki?.seed_baseline_paths ?? [];
-  const steps = [
-    ["init", "-b", "main"],
-    ["config", "user.email", "archetipo-e2e@example.com"],
-    ["config", "user.name", "ARchetipo E2E"],
-    ...(baselinePaths.length > 0 ? [["add", "--", ...baselinePaths]] : []),
-    ["commit", "--allow-empty", "-m", "chore: e2e sandbox base"],
-  ];
-  for (let index = 0; index < steps.length; index += 1) {
-    const args = steps[index];
-    const run = await runReportedCommand({
+  const review = context.scenario.verify_review_wiki;
+  return createGitAndWikiBaselines({
+    baselinePaths: review?.seed_baseline_paths ?? [],
+    seedReviewedPages: review?.seed_reviewed_pages ?? [],
+    wikiRoot: review?.wiki_root ?? "docs/wiki",
+    runGit: (phase, args) => runReportedCommand({
       ...context,
-      step: `git-init-${index + 1}`,
+      step: `baseline-${phase}`,
       command: "git",
       args,
-    });
-    if (!run.ok) {
-      throw new Error(`Sandbox git ${args[0]} failed: ${run.stderr || run.stdout || `exit ${run.code}`}`);
-    }
+    }),
+    approvePages: (pages) => runReportedCommand({
+      ...context,
+      step: "baseline-seed-reviewed-wiki",
+      command: context.cliBinaryPath,
+      args: ["wiki", "approve", ...pages],
+    }),
+    verifySeededPages: (pages) => verifySeededWikiBaseline(context, review, pages),
+  });
+}
+
+async function verifySeededWikiBaseline(context, review, pageIDs) {
+  const wikiRoot = path.join(context.sandboxDir, review?.wiki_root ?? "docs/wiki");
+  const statusRun = await runReportedCommand({
+    ...context,
+    step: "baseline-verify-seeded-status",
+    command: context.cliBinaryPath,
+    args: ["wiki", "status"],
+  });
+  if (!statusRun.ok) {
+    throw new Error(`Sandbox baseline phase verify-seeded-status failed: ${statusRun.stderr || statusRun.stdout || `exit ${statusRun.code}`}`);
+  }
+  const status = JSON.parse(statusRun.stdout)?.data;
+  const stateByID = new Map((status?.items ?? []).map((item) => [item.id, item.state]));
+
+  const validationRun = await runReportedCommand({
+    ...context,
+    step: "baseline-verify-seeded-validation",
+    command: context.cliBinaryPath,
+    args: ["wiki", "validate"],
+  });
+  if (!validationRun.ok) {
+    throw new Error(`Sandbox baseline phase verify-seeded-validation failed: ${validationRun.stderr || validationRun.stdout || `exit ${validationRun.code}`}`);
+  }
+  const validation = JSON.parse(validationRun.stdout)?.data;
+
+  for (const id of pageIDs) {
+    const pagePath = path.join(wikiRoot, `${id.split("/").join(path.sep)}.md`);
+    const metadata = parseWikiFrontmatter(await fs.readFile(pagePath, "utf8"), pagePath);
+    assertQuality(metadata.status === "reviewed", `seeded Wiki page ${id} is not persisted as reviewed before prompts`);
+    assertQuality(stateByID.get(id) === "reviewed", `seeded Wiki page ${id} is not fresh before prompts: ${stateByID.get(id) ?? "(missing)"}`);
+    const statusFindings = (status?.findings ?? []).filter((finding) => finding.page_id === id);
+    assertQuality(!statusFindings.some((finding) => finding.code === "WIKI_EVIDENCE_CHANGED"), `seeded Wiki page ${id} has WIKI_EVIDENCE_CHANGED before prompts`);
+    const validationFindings = (validation?.findings ?? []).filter((finding) => finding.page_id === id);
+    assertQuality(validationFindings.length === 0, `seeded Wiki page ${id} is invalid before prompts: ${JSON.stringify(validationFindings)}`);
   }
 }
 
@@ -883,12 +789,12 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
     }
   }
 
-  const initialCommit = await runProbe("git", ["rev-list", "--max-parents=0", "HEAD"], { cwd: context.sandboxDir });
-  assertQuality(initialCommit.ok && initialCommit.stdout.trim(), `cannot resolve initial fixture commit: ${initialCommit.stderr}`);
+  const seededReviewBaseline = context.seededReviewBaselineCommit;
+  assertQuality(typeof seededReviewBaseline === "string" && seededReviewBaseline !== "", "missing captured seeded-review baseline commit");
   for (const id of expectations.unchanged_review_metadata_pages ?? []) {
     const pagePath = path.join(wikiRoot, `${id.split("/").join(path.sep)}.md`);
     const rel = path.relative(context.sandboxDir, pagePath);
-    const baseline = await runProbe("git", ["show", `${initialCommit.stdout.trim()}:${rel}`], { cwd: context.sandboxDir });
+    const baseline = await runProbe("git", ["show", `${seededReviewBaseline}:${rel}`], { cwd: context.sandboxDir });
     assertQuality(baseline.ok, `cannot read baseline metadata for ${id}: ${baseline.stderr}`);
     const baselineMeta = parseWikiFrontmatter(baseline.stdout, `${rel}@baseline`);
     const finalMeta = parseWikiFrontmatter(await fs.readFile(pagePath, "utf8"), pagePath);
@@ -955,7 +861,7 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
     const status = await runProbe("git", ["status", "--short", "--untracked-files=no"], { cwd: context.sandboxDir });
     assertQuality(status.ok && status.stdout.trim() === "", `review left tracked changes in the integrated checkout: ${status.stdout || status.stderr}`);
     const wikiRel = path.relative(context.sandboxDir, wikiRoot);
-    const wikiStatus = await runProbe("git", ["status", "--short", "--", wikiRel], { cwd: context.sandboxDir });
+    const wikiStatus = await runProbe("git", ["status", "--short", "--", literalGitPathspec(wikiRel)], { cwd: context.sandboxDir });
     assertQuality(wikiStatus.ok && wikiStatus.stdout.trim() === "", `review left committed or untracked Wiki changes in the integrated checkout: ${wikiStatus.stdout || wikiStatus.stderr}`);
   }
 }
@@ -1277,6 +1183,8 @@ function renderHtmlReport(report) {
         ${renderMeta("Sandbox", report.sandboxDir)}
         ${renderMeta("Config", report.configPath)}
         ${renderMeta("Fixture", report.fixtureSourcePath)}
+        ${renderMeta("Generated baseline", report.generatedBaselineCommit)}
+        ${renderMeta("Seeded review baseline", report.seededReviewBaselineCommit)}
       </div>
       <div class="skills">
         <span class="badge ${escapeHtml(result.status ?? "skip")}">status ${escapeHtml(result.status ?? "unknown")}</span>
@@ -1489,6 +1397,8 @@ function finalizeResult(context, result) {
       sandboxDir: context.sandboxDir,
       reportPath: context.reportPath,
       summaryPath: context.summaryPath,
+      generatedBaselineCommit: context.generatedBaselineCommit,
+      seededReviewBaselineCommit: context.seededReviewBaselineCommit,
     };
   }
 
@@ -1502,6 +1412,8 @@ function finalizeResult(context, result) {
     sandboxDir: result.sandboxDir ?? context.sandboxDir,
     reportPath: context.reportPath,
     summaryPath: context.summaryPath,
+    generatedBaselineCommit: context.generatedBaselineCommit,
+    seededReviewBaselineCommit: context.seededReviewBaselineCommit,
   };
 }
 

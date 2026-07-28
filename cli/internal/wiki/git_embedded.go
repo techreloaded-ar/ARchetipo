@@ -34,19 +34,16 @@ func (resolver *evidencePathResolver) embeddedRepositoryBoundary(sourcePath stri
 			break
 		}
 
-		embedded, checked := resolver.embeddedRepositories[boundary]
-		if !checked {
-			suspected, suspectErr := suspectedEmbeddedRepository(candidate)
-			if suspectErr != nil {
-				return "", &EvidencePathError{Source: sourcePath, Component: boundary, Err: errors.Join(ErrEvidenceUnreadable, suspectErr)}
+		suspected, suspectErr := suspectedEmbeddedRepository(candidate)
+		if suspectErr != nil {
+			return "", &EvidencePathError{Source: sourcePath, Component: boundary, Err: errors.Join(ErrEvidenceUnreadable, suspectErr)}
+		}
+		embedded := false
+		if suspected {
+			embedded, err = confirmedEmbeddedRepository(candidate)
+			if err != nil {
+				return "", &EvidencePathError{Source: sourcePath, Component: boundary, Err: errors.Join(ErrEvidenceUnreadable, err)}
 			}
-			if suspected {
-				embedded, err = confirmedEmbeddedRepository(candidate)
-				if err != nil {
-					return "", &EvidencePathError{Source: sourcePath, Component: boundary, Err: errors.Join(ErrEvidenceUnreadable, err)}
-				}
-			}
-			resolver.embeddedRepositories[boundary] = embedded
 		}
 		if embedded {
 			return boundary, nil
@@ -63,14 +60,27 @@ func suspectedEmbeddedRepository(candidate string) (bool, error) {
 	}
 
 	head, headErr := os.Lstat(filepath.Join(candidate, "HEAD"))
-	objects, objectsErr := os.Lstat(filepath.Join(candidate, "objects"))
-	refs, refsErr := os.Lstat(filepath.Join(candidate, "refs"))
-	for _, err := range []error{headErr, objectsErr, refsErr} {
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if headErr != nil {
+		if errors.Is(headErr, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, headErr
+	}
+	if !head.Mode().IsRegular() && head.Mode()&os.ModeSymlink == 0 {
+		return false, nil
+	}
+
+	// Bare repository layouts are not limited to loose refs. Reftable and
+	// future layouts still carry HEAD plus repository metadata. Suspicion is
+	// deliberately broad; Git confirmation below is authoritative and closed.
+	for _, marker := range []string{"objects", "refs", "packed-refs", "reftable", "config", "commondir"} {
+		if _, err := os.Lstat(filepath.Join(candidate, marker)); err == nil {
+			return true, nil
+		} else if !errors.Is(err, fs.ErrNotExist) {
 			return false, err
 		}
 	}
-	return headErr == nil && head.Mode().IsRegular() && objectsErr == nil && objects.IsDir() && refsErr == nil && refs.IsDir(), nil
+	return false, nil
 }
 
 func confirmedEmbeddedRepository(candidate string) (bool, error) {

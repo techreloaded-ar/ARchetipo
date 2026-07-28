@@ -52,7 +52,7 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
    - `archetipo wiki search [query]`
    - `archetipo wiki --project-root {data.workdir} affected --file <expected-path>...` (only when concrete expected changed paths are known)
 
-   `wiki affected` emits the standard envelope with `kind: wiki_affected_result`, `data.items`, `data.files`, and `data.count`. Branch on `E_PRECONDITION` when the Wiki is absent, `E_INVALID_INPUT` for bad paths/revisions/config, and `E_INTERNAL` for filesystem or Git failures. Its results are discovery candidates, not an automatic Wiki Impact list.
+   `wiki affected` emits the standard envelope with `kind: wiki_affected_result`, `data.items`, `data.files`, and `data.count`. Every explicit `--file` must be a nonempty exact portable project-relative local path; caller mistakes are `E_INVALID_INPUT`. Invalid or unreadable persisted tracked sources fail discovery closed as `E_CONFLICT`, never a partial or empty success. Branch on `E_PRECONDITION` when the Wiki is absent and `E_INTERNAL` only for unexpected implementation failures. Its results are discovery candidates, not an automatic Wiki Impact list.
 
 #### Step 1 — Spec Selection
 
@@ -79,7 +79,7 @@ After selecting the spec, read ALL context in a **single turn with parallel tool
 - If the target spec has a `Blocked by` field with values other than `-`, read those blocking specs from the backlog to understand preconditions and shared context
 - If `data.tasks` from Step 1 was non-empty, a plan already exists. In **Rework mode** (see below) do NOT ask — preserve the existing tasks and append. Otherwise ask the user: overwrite, create a new revision, or skip. Never silently overwrite.
 
-**Worktree awareness.** Apply the **Worktree Working Directory** rule from `.archetipo/shared-runtime.md`: run `config show`, `spec show`/`next`, and `spec plan` from `data.project_root`, but do ALL codebase reading and analysis (including the Rework Feedback `file:line` lookups) under `data.workdir` returned by the `spec show`/`next` call in Step 1. That directory is the spec's worktree when one exists — holding the changes already made for this spec, so the plan reflects the real current state — and the project root otherwise. Branch only on `data.workdir`, never on connector type.
+**Worktree awareness.** Apply the **Worktree Working Directory** rule from `.archetipo/shared-runtime.md`: run `config show`, `spec show`/`next`, and `spec plan` from `data.project_root`, but do ALL codebase reading and analysis (including the Rework Feedback `file:line` lookups) under `data.workdir` returned by the `spec show`/`next` call in Step 1. That directory is the spec's worktree when one exists — holding the changes already made for this spec, so the plan reflects the real current state — and the project root otherwise. For Wiki commands, `--project-root {data.workdir}` loads the target checkout's nearest configuration; if it has none, it inherits the invoking checkout settings and retargets them to `data.workdir`. Changing cwd alone is insufficient. Branch only on `data.workdir` and JSON `error.code`, never on connector type or error text.
 
 **Rework mode.** A spec is "in rework" when `data.spec.rework` is `true` or `data.spec.body` contains a `## Rework Feedback` section. It means the spec was sent back from review via *request changes*, with the reviewer's inline comments recorded as bullets (each anchored to a `file:line`). In this mode the feedback is the primary planning input — see the task-construction rule in STAGE 1.
 

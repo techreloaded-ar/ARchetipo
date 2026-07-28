@@ -810,24 +810,30 @@ func TestAffectedNormalizesProjectRelativePaths(t *testing.T) {
 	writePage("src", "src", "tracked")
 	writePage("context-root", ".", "context")
 	writePage("external", "https://example.test/evidence", "tracked")
-	writePage("absolute", filepath.Join(project, "src"), "tracked")
-	writePage("outside", "../outside", "tracked")
 
 	tests := []struct {
-		name  string
-		files []string
-		want  []string
+		name      string
+		files     []string
+		want      []string
+		wantError bool
 	}{
 		{name: "root and directory", files: []string{"src/a.go"}, want: []string{"root", "root-slash", "src"}},
 		{name: "normalized changed path", files: []string{"./src/a.go"}, want: []string{"root", "root-slash", "src"}},
 		{name: "component boundary", files: []string{"src2/a.go"}, want: []string{"root", "root-slash"}},
-		{name: "outside changed path", files: []string{"../outside/a.go"}, want: nil},
-		{name: "absolute changed path", files: []string{filepath.Join(project, "src", "a.go")}, want: nil},
-		{name: "external changed path", files: []string{"https://example.test/src/a.go"}, want: nil},
+		{name: "empty changed path", files: []string{""}, wantError: true},
+		{name: "outside changed path", files: []string{"../outside/a.go"}, wantError: true},
+		{name: "absolute changed path", files: []string{filepath.Join(project, "src", "a.go")}, wantError: true},
+		{name: "external changed path", files: []string{"https://example.test/src/a.go"}, wantError: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			pages, err := Affected(project, root, test.files)
+			if test.wantError {
+				if !errors.Is(err, ErrInvalidChangedFile) {
+					t.Fatalf("Affected(%v) error=%v", test.files, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -839,6 +845,59 @@ func TestAffectedNormalizesProjectRelativePaths(t *testing.T) {
 				t.Fatalf("Affected(%v)=%v want=%v", test.files, got, test.want)
 			}
 		})
+	}
+}
+
+func TestAffectedFailsClosedOnInvalidPersistedSource(t *testing.T) {
+	for _, source := range []string{"", "../outside"} {
+		t.Run(source, func(t *testing.T) {
+			project := t.TempDir()
+			root := filepath.Join(project, "docs", "wiki")
+			if _, err := Init(root); err != nil {
+				t.Fatal(err)
+			}
+			writeSimplePage(t, root, "invalid", source)
+			if _, err := Affected(project, root, []string{"src/item.go"}); err == nil || (!errors.Is(err, ErrInvalidSourcePath) && !errors.Is(err, ErrUnsafeSourcePath)) {
+				t.Fatalf("invalid persisted source error=%v", err)
+			}
+		})
+	}
+}
+
+func TestAffectedValidatesLaterPersistedSourceAfterEarlierMatch(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	page := Page{
+		ID:   "mixed",
+		Path: "mixed.md",
+		Meta: domain.WikiPageMeta{
+			Type:        "guide",
+			Title:       "mixed",
+			Description: "mixed description",
+			Status:      domain.WikiStatusGenerated,
+			Sources: []domain.WikiSource{
+				{Path: "src/item.go"},
+				{Path: "../outside"},
+			},
+		},
+		Body: "# mixed\n",
+	}
+	raw, err := renderPage(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, page.Path), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	items, err := Affected(project, root, []string{"src/item.go"})
+	if !errors.Is(err, ErrUnsafeSourcePath) {
+		t.Fatalf("later invalid source error=%v items=%v", err, items)
+	}
+	if items != nil {
+		t.Fatalf("persisted source failure returned partial items: %v", items)
 	}
 }
 
@@ -1167,6 +1226,44 @@ func TestEvidenceHashCapturesDirtyUntrackedAndDeletedFiles(t *testing.T) {
 	}
 }
 
+func TestGitChangedFilesNestedProjectRootIsLocalAndRelative(t *testing.T) {
+	repository := t.TempDir()
+	project := filepath.Join(repository, "apps", "service")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repository, "init", "-q")
+	git(t, repository, "config", "user.email", "wiki-test@example.test")
+	git(t, repository, "config", "user.name", "Wiki Test")
+	for file, content := range map[string]string{"apps/service/item.txt": "before\n", "outside.txt": "before\n"} {
+		path := filepath.Join(repository, filepath.FromSlash(file))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(t, repository, "add", ".")
+	git(t, repository, "commit", "-qm", "baseline")
+	base := gitRevision(repository)
+	if err := os.WriteFile(filepath.Join(project, "item.txt"), []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "outside.txt"), []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repository, "add", ".")
+	git(t, repository, "commit", "-qm", "changes")
+	changed, err := GitChangedFiles(project, base, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(changed, ",") != "item.txt" {
+		t.Fatalf("nested changed files=%q", changed)
+	}
+}
+
 func TestExternalSourceClassification(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1177,6 +1274,9 @@ func TestExternalSourceClassification(t *testing.T) {
 		{name: "HTTPS", source: "https://example.test/evidence", external: true},
 		{name: "uppercase scheme", source: "HTTPS://example.test/evidence", external: true},
 		{name: "hostless HTTP", source: "https:///evidence"},
+		{name: "port-only authority", source: "https://:443/evidence"},
+		{name: "IPv4 with port", source: "https://127.0.0.1:8443/evidence", external: true},
+		{name: "IPv6 with port", source: "https://[::1]:8443/evidence", external: true},
 		{name: "malformed HTTP", source: "https://[invalid"},
 		{name: "unknown scheme", source: "ftp://example.test/evidence"},
 		{name: "Windows-looking path", source: "C://evidence/file.txt"},
@@ -1220,10 +1320,10 @@ func TestExternalSourcesRemainOptionalWhileURILookingPathsAreValidated(t *testin
 	}
 	writeSimplePage(t, root, "malformed-http", "https:///missing-host")
 	report := Validate(project, root)
-	if !hasFinding(report, "WIKI_STALE_SOURCE") {
-		t.Fatalf("malformed HTTP source bypassed local-source validation: %+v", report.Findings)
+	if !hasFinding(report, "WIKI_INVALID_SOURCE") {
+		t.Fatalf("malformed HTTP source bypassed portable local-source validation: %+v", report.Findings)
 	}
-	if _, err := Approve(project, root, []string{"malformed-http"}); !errors.Is(err, ErrMissingEvidence) {
+	if _, err := Approve(project, root, []string{"malformed-http"}); !errors.Is(err, ErrValidationFailed) {
 		t.Fatalf("malformed HTTP source bypassed approval: %v", err)
 	}
 }
@@ -1269,7 +1369,10 @@ func testSourcePathResolverRealSymlinkIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(project, "redirect")); err != nil {
-		t.Skipf("real symlinks unavailable: %v", err)
+		if symlinkCapabilityUnavailable(err) {
+			t.Skipf("real symlink capability explicitly unavailable: %v", err)
+		}
+		t.Fatalf("creating intermediate symlink failed unexpectedly: %v", err)
 	}
 	if err := os.Symlink(filepath.Join(outside, "outside.txt"), filepath.Join(project, "terminal")); err != nil {
 		t.Fatal(err)
@@ -1684,7 +1787,10 @@ func TestTrackedSymlinkUsesPortableGitIndexMode(t *testing.T) {
 			if writeErr := os.WriteFile(linkPath, []byte("target.txt"), 0o644); writeErr != nil {
 				t.Fatalf("restoring materialized link after symlink failure: %v", writeErr)
 			}
-			t.Skipf("real symlinks unavailable: %v", err)
+			if symlinkCapabilityUnavailable(err) {
+				t.Skipf("real symlink capability explicitly unavailable: %v", err)
+			}
+			t.Fatalf("creating real symlink failed unexpectedly: %v", err)
 		}
 		actualLink, err := evidenceFingerprint(project, root, page)
 		if err != nil || actualLink != materialized {
@@ -1773,6 +1879,40 @@ func TestSubmoduleCleanApprovalAndParentDirectoryFingerprint(t *testing.T) {
 		if state := PageState(fixture.project, fixture.root, page); state != "reviewed" {
 			t.Fatalf("clean submodule page %s state=%s", page.ID, state)
 		}
+	}
+}
+
+func TestSubmoduleIgnoredFilesRemainGitClean(t *testing.T) {
+	fixture := newWikiSubmoduleFixture(t)
+	// Submodule .git is commonly a gitfile, so resolve the actual Git directory.
+	cmd := exec.Command("git", "rev-parse", "--git-dir")
+	cmd.Dir = fixture.module
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitDir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(fixture.module, gitDir)
+	}
+	infoExclude := filepath.Join(gitDir, "info", "exclude")
+	file, err := os.OpenFile(infoExclude, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("ignored.tmp\n"); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture.module, "ignored.tmp"), []byte("ignored\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "modules/component"}}}}
+	if _, err := evidenceFingerprint(fixture.project, fixture.root, page); err != nil {
+		t.Fatalf("ignored submodule file was not Git-clean: %v", err)
 	}
 }
 
@@ -1887,6 +2027,47 @@ func TestSubmoduleBlocksHeadMismatchDirtyAndUninitializedStates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSubmoduleNestedUninitializedWorktreeFollowsGitCleanStatus(t *testing.T) {
+	fixture := newWikiSubmoduleFixture(t)
+	nestedOrigin := t.TempDir()
+	git(t, nestedOrigin, "init", "-q")
+	git(t, nestedOrigin, "config", "user.email", "wiki-test@example.test")
+	git(t, nestedOrigin, "config", "user.name", "Wiki Test")
+	if err := os.WriteFile(filepath.Join(nestedOrigin, "nested.txt"), []byte("nested\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, nestedOrigin, "add", "nested.txt")
+	git(t, nestedOrigin, "commit", "-qm", "nested baseline")
+	git(t, fixture.module, "config", "user.email", "wiki-test@example.test")
+	git(t, fixture.module, "config", "user.name", "Wiki Test")
+	git(t, fixture.module, "-c", "protocol.file.allow=always", "submodule", "add", "-q", nestedOrigin, "nested/child")
+	git(t, fixture.module, "add", ".gitmodules", "nested/child")
+	git(t, fixture.module, "commit", "-qm", "add nested module")
+	git(t, fixture.project, "add", "modules/component")
+	git(t, fixture.module, "submodule", "deinit", "-q", "-f", "nested/child")
+
+	status := gitSubmoduleStatusForTest(t, fixture.module)
+	page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "modules/component"}}}}
+	_, err := evidenceFingerprint(fixture.project, fixture.root, page)
+	if len(status) == 0 && err != nil {
+		t.Fatalf("Git-clean nested uninitialized worktree was rejected: %v", err)
+	}
+	if len(status) != 0 && !errors.Is(err, ErrSubmoduleEvidence) {
+		t.Fatalf("Git-dirty nested uninitialized worktree was accepted: status=%q err=%v", status, err)
+	}
+}
+
+func gitSubmoduleStatusForTest(t *testing.T, dir string) []byte {
+	t.Helper()
+	cmd := exec.Command("git", "status", "--porcelain=v2", "-z", "--untracked-files=all", "--ignore-submodules=none")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 func TestSubmoduleNestedDirtyStateIsBlocked(t *testing.T) {
@@ -2114,6 +2295,96 @@ func TestEmbeddedGitRepositoriesAreRejectedAsEvidenceBoundaries(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("bare repository with symlink HEAD", func(t *testing.T) {
+		project := t.TempDir()
+		root := filepath.Join(project, "docs", "wiki")
+		if _, err := Init(root); err != nil {
+			t.Fatal(err)
+		}
+		bare := filepath.Join(project, "evidence", "symlink-head.git")
+		if err := os.MkdirAll(filepath.Dir(bare), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		git(t, project, "init", "--bare", "-q", bare)
+		if err := os.Rename(filepath.Join(bare, "HEAD"), filepath.Join(bare, "HEAD.real")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("HEAD.real", filepath.Join(bare, "HEAD")); err != nil {
+			if symlinkCapabilityUnavailable(err) {
+				t.Skipf("real symlink capability explicitly unavailable: %v", err)
+			}
+			t.Fatalf("creating symlink HEAD failed unexpectedly: %v", err)
+		}
+		page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence/symlink-head.git"}}}}
+		if _, err := evidenceFingerprint(project, root, page); !errors.Is(err, ErrUnsupportedEvidenceEntry) && !errors.Is(err, ErrEvidenceUnreadable) {
+			t.Fatalf("symlink-HEAD bare repository was not rejected fail-closed: %v", err)
+		}
+	})
+
+	t.Run("reftable bare repository", func(t *testing.T) {
+		project := t.TempDir()
+		root := filepath.Join(project, "docs", "wiki")
+		if _, err := Init(root); err != nil {
+			t.Fatal(err)
+		}
+		bare := filepath.Join(project, "evidence", "reftable.git")
+		if err := os.MkdirAll(filepath.Dir(bare), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("git", "init", "--bare", "--ref-format=reftable", "-q", bare)
+		cmd.Dir = project
+		if out, err := cmd.CombinedOutput(); err != nil {
+			if isUnsupportedReftableDiagnostic(string(out)) {
+				t.Skipf("Git explicitly reports reftable unsupported: %v (%s)", err, out)
+			}
+			t.Fatalf("reftable initialization failed unexpectedly: %v (%s)", err, out)
+		}
+		page := Page{Meta: domain.WikiPageMeta{Sources: []domain.WikiSource{{Path: "evidence/reftable.git"}}}}
+		if _, err := evidenceFingerprint(project, root, page); !errors.Is(err, ErrUnsupportedEvidenceEntry) {
+			t.Fatalf("reftable bare repository error=%v", err)
+		}
+	})
+}
+
+func isUnsupportedReftableDiagnostic(output string) bool {
+	message := strings.ToLower(output)
+	return strings.Contains(message, "unknown option `ref-format") ||
+		strings.Contains(message, "unknown option 'ref-format") ||
+		strings.Contains(message, "unknown option: --ref-format") ||
+		strings.Contains(message, "unknown option --ref-format") ||
+		strings.Contains(message, "unknown ref storage format 'reftable'") ||
+		strings.Contains(message, "unknown ref storage format `reftable`") ||
+		strings.Contains(message, "unsupported ref storage format 'reftable'") ||
+		strings.Contains(message, "unsupported ref storage format `reftable`") ||
+		strings.Contains(message, "reftable is not supported") ||
+		strings.Contains(message, "does not support reftable")
+}
+
+func TestUnsupportedReftableDiagnosticIsExplicit(t *testing.T) {
+	for _, diagnostic := range []string{
+		"error: unknown option `ref-format=reftable'",
+		"fatal: unsupported ref storage format 'reftable'",
+		"reftable is not supported by this Git build",
+	} {
+		if !isUnsupportedReftableDiagnostic(diagnostic) {
+			t.Fatalf("explicit unsupported diagnostic was not recognized: %q", diagnostic)
+		}
+	}
+	for _, diagnostic := range []string{
+		"permission denied",
+		"disk full",
+		"fatal: repository initialization failed",
+		"fatal: cannot create /tmp/reftable.git: resource not available",
+		"fatal: invalid value for ref-format config: permission denied",
+		"fatal: ref-format setup failed: device not available",
+		"fatal: ref-format config contains unknown option 'foo'",
+		"fatal: /tmp/reftable.git config contains unknown option 'foo'",
+	} {
+		if isUnsupportedReftableDiagnostic(diagnostic) {
+			t.Fatalf("unexpected infrastructure failure would skip: %q", diagnostic)
+		}
+	}
 }
 
 func TestEmbeddedGitRepositoryIgnoredParentAndProjectRootRules(t *testing.T) {

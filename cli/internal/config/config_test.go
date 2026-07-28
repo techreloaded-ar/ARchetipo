@@ -31,6 +31,42 @@ func TestDefaultWhenConfigMissing(t *testing.T) {
 	}
 }
 
+func TestLoadForTargetUsesTargetConfigOrInvokingFallback(t *testing.T) {
+	invoking := t.TempDir()
+	targetWithConfig := t.TempDir()
+	targetWithoutConfig := t.TempDir()
+	for root, wikiPath := range map[string]string{invoking: "outer/wiki", targetWithConfig: "target/wiki"} {
+		must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+		must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte("connector: file\npaths:\n  wiki: "+wikiPath+"\n"), 0o644))
+	}
+
+	target, err := LoadForTarget(invoking, targetWithConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.ProjectRoot != targetWithConfig || target.Paths.Wiki != "target/wiki" {
+		t.Fatalf("target config = root %q wiki %q", target.ProjectRoot, target.Paths.Wiki)
+	}
+
+	nestedTarget := filepath.Join(targetWithConfig, "nested", "checkout")
+	must(t, os.MkdirAll(nestedTarget, 0o755))
+	nested, err := LoadForTarget(invoking, nestedTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nested.ProjectRoot != nestedTarget || nested.Paths.Wiki != "target/wiki" {
+		t.Fatalf("nested target config = root %q wiki %q", nested.ProjectRoot, nested.Paths.Wiki)
+	}
+
+	fallback, err := LoadForTarget(invoking, targetWithoutConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback.ProjectRoot != targetWithoutConfig || fallback.Paths.Wiki != "outer/wiki" {
+		t.Fatalf("fallback config = root %q wiki %q", fallback.ProjectRoot, fallback.Paths.Wiki)
+	}
+}
+
 func TestLoadFromConfigFile(t *testing.T) {
 	root := t.TempDir()
 	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
