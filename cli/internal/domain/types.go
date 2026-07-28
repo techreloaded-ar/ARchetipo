@@ -232,9 +232,9 @@ type WikiFinding struct {
 
 // WikiImpact is persisted by plans to make documentation work reviewable.
 type WikiImpact struct {
-	Read                  []string `json:"read,omitempty" yaml:"read,omitempty"`
-	UpdateAfterAcceptance []string `json:"update_after_acceptance,omitempty" yaml:"update_after_acceptance,omitempty"`
-	Create                []string `json:"create,omitempty" yaml:"create,omitempty"`
+	Read   []string `json:"read,omitempty" yaml:"read,omitempty"`
+	Update []string `json:"update,omitempty" yaml:"update,omitempty"`
+	Create []string `json:"create,omitempty" yaml:"create,omitempty"`
 }
 
 // FileConfig mirrors the `file:` section of .archetipo/config.yaml. Holds the

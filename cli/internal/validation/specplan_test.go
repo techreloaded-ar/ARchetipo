@@ -142,6 +142,64 @@ func TestValidatePlan_Valid(t *testing.T) {
 	}
 }
 
+func TestValidatePlan_WikiImpactRequiresAssignedImplementationTasks(t *testing.T) {
+	input := domain.PlanInput{
+		PlanBody: "## Technical solution\n\n## Wiki Impact\n\n```yaml\nwiki_impact:\n  read: []\n  update: [domains/users]\n  create: [decisions/user-surname-authority]\n```\n",
+		Tasks: []domain.Task{
+			canonicalTask("TASK-01", domain.TaskImpl),
+			canonicalTask("TASK-02", domain.TaskImpl, "TASK-01"),
+			canonicalTask("TASK-03", domain.TaskTest, "TASK-02"),
+		},
+	}
+	input.Tasks[0].Title = "Wiki: update domains/users"
+	input.Tasks[1].Body += "\n\n## Wiki\n- Create decisions/user-surname-authority with repository evidence."
+
+	r := ValidatePlan("plan.yaml", "US-001", input)
+	if !r.OK {
+		t.Fatalf("expected Wiki Impact tasks to validate, got %+v", r.Findings)
+	}
+	if got := checkStatuses(r)["PLAN_WIKI_IMPACT_COVERED"]; got != CheckPassed {
+		t.Fatalf("expected Wiki Impact coverage check to pass, got %q", got)
+	}
+}
+
+func TestValidatePlan_WikiImpactRejectsUnassignedPages(t *testing.T) {
+	input := domain.PlanInput{
+		PlanBody: "## Wiki Impact\n\n```yaml\nwiki_impact:\n  update: [domains/users]\n  create: [decisions/user-surname-authority]\n```\n",
+		Tasks: []domain.Task{
+			canonicalTask("TASK-01", domain.TaskImpl),
+			canonicalTask("TASK-02", domain.TaskTest, "TASK-01"),
+		},
+	}
+	input.Tasks[0].Body += "\n\n## Wiki\n- Update domains/users."
+
+	r := ValidatePlan("plan.yaml", "US-001", input)
+	if r.OK {
+		t.Fatal("expected an unassigned Wiki page to invalidate the plan")
+	}
+	if got := findingCodes(r)["PLAN_WIKI_IMPACT_TASK_MISSING"]; got != 1 {
+		t.Fatalf("expected one missing Wiki task finding, got %+v", r.Findings)
+	}
+	if got := checkStatuses(r)["PLAN_WIKI_IMPACT_COVERED"]; got != CheckFailed {
+		t.Fatalf("expected Wiki Impact coverage check to fail, got %q", got)
+	}
+}
+
+func TestValidatePlan_WikiImpactRejectsInvalidYAML(t *testing.T) {
+	input := domain.PlanInput{
+		PlanBody: "## Wiki Impact\n\n```yaml\nwiki_impact: [\n```\n",
+		Tasks: []domain.Task{
+			canonicalTask("TASK-01", domain.TaskImpl),
+			canonicalTask("TASK-02", domain.TaskTest, "TASK-01"),
+		},
+	}
+
+	r := ValidatePlan("plan.yaml", "US-001", input)
+	if r.OK || findingCodes(r)["PLAN_WIKI_IMPACT_INVALID"] != 1 {
+		t.Fatalf("expected invalid Wiki Impact YAML finding, got %+v", r.Findings)
+	}
+}
+
 func TestValidatePlan_ReworkFixTaskIsValid(t *testing.T) {
 	input := domain.PlanInput{
 		PlanBody: "## Plan\nAddress review feedback",

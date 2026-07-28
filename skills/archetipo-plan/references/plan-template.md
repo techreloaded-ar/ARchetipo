@@ -100,14 +100,14 @@ This is an acceptance map, not a task summary. Every criterion must have evidenc
 ```yaml
 wiki_impact:
   read: [{WIKI_PAGE_IDS_USED_FOR_PLANNING}]
-  update_after_acceptance: [{EXISTING_PAGE_IDS_EXPECTED_TO_CHANGE}]
+  update: [{EXISTING_PAGE_IDS_EXPECTED_TO_CHANGE}]
   create: [{NEW_PAGE_IDS_OR_DECISION_IDS_EXPECTED}]
 ```
 
-Use empty arrays when no impact is expected. This block is the reviewable documentation contract consumed by implementation and acceptance review.
+Use empty arrays when no impact is expected. This block is the reviewable documentation contract consumed by implementation and acceptance review. Every ID in `update` or `create` must have a dedicated `Impl` task that names the exact canonical page ID and states the required knowledge change, evidence, and done condition.
 New domain pages use `domains/<slug>`. New architectural decisions use `decisions/<slug>` and must follow the `type: decision` contract in the Wiki skill.
 
-When concrete expected implementation paths are known, `wiki affected --file <path>...` may be used to discover candidate pages. Treat the result as a reading list, not an automatic contract: include a candidate in `update_after_acceptance` only when the planned change is expected to alter its knowledge. Do not copy tracked-source path fan-out into Wiki Impact. Co-cited-but-still-accurate pages remain affected-only follow-up, and context sources are excluded from affected discovery.
+When concrete expected implementation paths are known, `wiki affected --file <path>...` may be used to discover candidate pages. Treat the result as a reading list, not an automatic contract: include a candidate in `update` only when the planned change is expected to alter its knowledge. Do not copy tracked-source path fan-out into Wiki Impact. Co-cited-but-still-accurate pages remain affected-only follow-up, and context sources are excluded from affected discovery.
 
 ---
 

@@ -19,7 +19,7 @@ Read `.archetipo/shared-runtime.md` for the CLI Runtime Contract, Language Polic
 2. **Everything else is autonomous.** Gathering evidence, presenting the increment, and executing the chosen verdict need no confirmation beyond the verdict itself.
 3. **Connector operations are exposed by the CLI.** This skill uses `config show`, `spec show`, `spec next`, `spec integrate`, `spec move`, and `spec request-changes`. It also uses `e2e demo` plus connector-independent `wiki affected`, `wiki status`, `wiki validate --profile bootstrap`, and `wiki approve`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`, never on connector type.
 4. **The verdict covers code and required knowledge together.** Never ask the user to approve a spec without first showing the Wiki acceptance dossier. A required Wiki blocker makes **Approve** unavailable; an affected-only evidence warning does not.
-5. **Inclusion reasons are retained.** Classify each page before deciding readiness. A page is **required** when its ID is in `wiki_impact.update_after_acceptance` or `wiki_impact.create`, or its Wiki Markdown file is created or modified by the implementation diff. A page is **affected-only** only when its sole reason is tracked-source overlap returned by `wiki affected`. Required wins whenever reasons overlap.
+5. **Inclusion reasons are retained.** Classify each page before deciding readiness. A page is **required** when its ID is in `wiki_impact.update` or `wiki_impact.create`, or its Wiki Markdown file is created or modified by the implementation diff. A page is **affected-only** only when its sole reason is tracked-source overlap returned by `wiki affected`. Required wins whenever reasons overlap.
 6. **Reconfirmation is never implicit.** This skill never invokes `wiki reconfirm` during spec approval. It may mention that command as a separate later action only for an affected-only behavioral page the human actually verified against changed evidence; it is not routine cleanup for references or PRDs.
 
 Wiki command contracts used by this skill:
@@ -60,7 +60,7 @@ Do not create backlog specs or Wiki log entries merely because a page is affecte
    - The spec exists but its status is not `{config.workflow.statuses.review}`: tell the user which status it is in and which skill handles that stage (plan → `/archetipo-plan`, implement → `/archetipo-implement`), then stop.
 4. Keep `data.spec`, `data.tasks`, and `data.workdir` in memory.
 5. Read the `Wiki Impact` contract from `data.plan_body` when present. Build the Wiki review set while retaining every inclusion reason:
-   - mark IDs in `wiki_impact.update_after_acceptance` and `wiki_impact.create` as **required** (`planned update` or `planned creation`);
+   - mark IDs in `wiki_impact.update` and `wiki_impact.create` as **required** (`planned update` or `planned creation`);
    - mark ordinary Wiki pages created or modified by the exact implementation diff as **required** (`modified page`);
    - add pages returned by `archetipo wiki affected` as `affected evidence`, but classify them **affected-only** only when no required reason exists.
    Required always wins when reasons overlap. Never flatten this into an unlabelled union.

@@ -54,6 +54,7 @@ var specCheckRules = []validationRule{
 var planCheckRules = []validationRule{
 	{checkCode: "PLAN_SPEC_CODE_VALID", message: "plan spec code matches US-NNN", findingCodes: []string{"PLAN_SPEC_CODE_INVALID"}},
 	{checkCode: "PLAN_BODY_PRESENT", message: "plan body is present", findingCodes: []string{"PLAN_BODY_EMPTY"}},
+	{checkCode: "PLAN_WIKI_IMPACT_COVERED", message: "every required Wiki page has an implementation task", findingCodes: []string{"PLAN_WIKI_IMPACT_INVALID", "PLAN_WIKI_IMPACT_ID_EMPTY", "PLAN_WIKI_IMPACT_TASK_MISSING"}},
 	{checkCode: "PLAN_TASKS_PRESENT", message: "plan includes at least one task", findingCodes: []string{"PLAN_TASKS_EMPTY"}},
 	{checkCode: "PLAN_TASK_COUNT_REASONABLE", message: "plan task count stays within the recommended limit", findingCodes: []string{"PLAN_TOO_MANY_TASKS"}},
 	{checkCode: "PLAN_TASK_IDS_VALID", message: "task ids are present, unique, and match TASK-NN", findingCodes: []string{"PLAN_TASK_ID_INVALID", "PLAN_TASK_ID_DUPLICATE"}},

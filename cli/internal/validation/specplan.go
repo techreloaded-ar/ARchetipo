@@ -7,13 +7,15 @@ import (
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"gopkg.in/yaml.v3"
 )
 
 // Structural identifier patterns shared by the spec and plan validators.
 var (
-	specCodeRE = regexp.MustCompile(`^US-\d{3,}$`)
-	epicCodeRE = regexp.MustCompile(`^EP-\d{3,}$`)
-	taskIDRE   = regexp.MustCompile(`^TASK-\d{2,}$`)
+	specCodeRE   = regexp.MustCompile(`^US-\d{3,}$`)
+	epicCodeRE   = regexp.MustCompile(`^EP-\d{3,}$`)
+	taskIDRE     = regexp.MustCompile(`^TASK-\d{2,}$`)
+	wikiImpactRE = regexp.MustCompile("(?ms)^##[ \\t]+Wiki Impact[ \\t]*\\r?$.*?^```(?:yaml|yml)[ \\t]*\\r?\\n(.*?)^```[ \\t]*\\r?$")
 )
 
 // ValidateSpecs runs deterministic structural rules over a spec add payload
@@ -83,6 +85,8 @@ func ValidatePlan(target, specCode string, input domain.PlanInput) domain.Valida
 	}
 	if strings.TrimSpace(input.PlanBody) == "" {
 		findings = addFinding(findings, SeverityError, "PLAN_BODY_EMPTY", "plan_body", "plan body is required", "")
+	} else {
+		findings = append(findings, validateWikiImpact(input.PlanBody, input.Tasks)...)
 	}
 	if len(input.Tasks) == 0 {
 		findings = addFinding(findings, SeverityError, "PLAN_TASKS_EMPTY", "tasks", "plan must include at least one task", "")
@@ -127,6 +131,60 @@ func ValidatePlan(target, specCode string, input domain.PlanInput) domain.Valida
 	}
 	findings = append(findings, validateTaskDependencies(input.Tasks, ids)...)
 	return planResult(target, findings, buildChecks(planCheckRules, findings))
+}
+
+// validateWikiImpact keeps the plan's documentation contract executable. A
+// Wiki Impact section is optional, but once it declares an update or creation,
+// every page must be assigned to a task rather than being left for review to
+// discover after implementation.
+func validateWikiImpact(planBody string, tasks []domain.Task) []domain.ValidationFinding {
+	if !strings.Contains(strings.ToLower(planBody), "## wiki impact") {
+		return nil
+	}
+	match := wikiImpactRE.FindStringSubmatch(planBody)
+	if len(match) != 2 {
+		return addFinding(nil, SeverityError, "PLAN_WIKI_IMPACT_INVALID", "plan_body", "Wiki Impact must contain a fenced YAML block with wiki_impact", "use the canonical Wiki Impact block from the plan template")
+	}
+	var payload struct {
+		WikiImpact domain.WikiImpact `yaml:"wiki_impact"`
+	}
+	if err := yaml.Unmarshal([]byte(match[1]), &payload); err != nil {
+		return addFinding(nil, SeverityError, "PLAN_WIKI_IMPACT_INVALID", "plan_body", "Wiki Impact YAML is invalid", "repair the wiki_impact YAML block")
+	}
+
+	findings := []domain.ValidationFinding{}
+	for _, requirement := range []struct {
+		kind  string
+		pages []string
+	}{
+		{kind: "update", pages: payload.WikiImpact.Update},
+		{kind: "create", pages: payload.WikiImpact.Create},
+	} {
+		for i, pageID := range requirement.pages {
+			pageID = strings.TrimSpace(pageID)
+			path := fmt.Sprintf("plan_body.wiki_impact.%s[%d]", requirement.kind, i)
+			if pageID == "" {
+				findings = addFinding(findings, SeverityError, "PLAN_WIKI_IMPACT_ID_EMPTY", path, "Wiki Impact contains an empty page ID", "use a canonical Wiki page ID or remove the entry")
+				continue
+			}
+			if !wikiPageAssignedToTask(pageID, tasks) {
+				findings = addFinding(findings, SeverityError, "PLAN_WIKI_IMPACT_TASK_MISSING", path, fmt.Sprintf("Wiki %s %q is not assigned to an implementation task", requirement.kind, pageID), "add an Impl task that names the exact page ID in its title or execution contract")
+			}
+		}
+	}
+	return findings
+}
+
+func wikiPageAssignedToTask(pageID string, tasks []domain.Task) bool {
+	for _, task := range tasks {
+		if task.Type != domain.TaskImpl {
+			continue
+		}
+		if strings.Contains(task.Title, pageID) || strings.Contains(task.Body, pageID) {
+			return true
+		}
+	}
+	return false
 }
 
 func specResult(target string, findings []domain.ValidationFinding, checks []domain.ValidationCheck) domain.ValidationResult {
