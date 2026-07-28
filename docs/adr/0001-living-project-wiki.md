@@ -11,7 +11,7 @@ ARchetipo currently treats the PRD, backlog and implementation plans as separate
 
 ARchetipo uses a local, Markdown, Git-versioned Wiki as the canonical project knowledge base. Bootstrap is codebase-first and organizes current-system knowledge around DDD domains and candidate bounded contexts. `architecture/context-map` describes logical relationships; `engineering/code-map` maps those domains to physical code, data, contracts, and tests. A concept's stable identity is its Wiki-relative path without `.md`; relationships use standard Markdown links.
 
-Every concept has YAML frontmatter with `type`, `title`, `description`, lifecycle metadata, and evidence where applicable. Persisted review state is only `generated` or `reviewed`. The CLI derives `stale` from identity/content/evidence changes and `attention` from explicit issues.
+Every concept has YAML frontmatter with `type`, `title`, `description`, lifecycle metadata, and evidence where applicable. Persisted review state is only `generated` or `reviewed`. The CLI derives `evidence-changed` from a successful tracked-evidence mismatch, `stale` from outdated semantic review metadata or evidence inspection failures, and `attention` from explicit issues. An acceptance review may reconfirm an unchanged non-reference page only after reason-aware verification against the exact spec diff and explicit human approval.
 
 The CLI owns deterministic repository inspection, capability clustering, parsing, indexing, search, graph/DDD validation, evidence freshness, affected-page discovery, and review metadata. Skills own semantic DDD interpretation, reference ingestion, and content generation. Connectors continue to own backlog and workflow only; Wiki commands never branch on connector type.
 

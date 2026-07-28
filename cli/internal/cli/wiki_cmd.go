@@ -157,7 +157,7 @@ func newWikiSearchCmd(s streams) *cobra.Command {
 		})
 	}}
 	cmd.Flags().StringVar(&pageType, "type", "", "filter by page type")
-	cmd.Flags().StringVar(&status, "status", "", "filter by derived state (generated, reviewed, stale, attention)")
+	cmd.Flags().StringVar(&status, "status", "", "filter by derived state (generated, reviewed, evidence-changed, stale, attention)")
 	return cmd
 }
 

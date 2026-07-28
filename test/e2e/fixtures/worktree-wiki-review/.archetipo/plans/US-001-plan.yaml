@@ -12,7 +12,7 @@ body: |
   ```yaml
   wiki_impact:
     read: [overview]
-    update_after_acceptance: [overview]
+    update: [overview]
     create: []
   ```
 tasks:

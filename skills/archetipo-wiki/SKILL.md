@@ -57,7 +57,7 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 
 1. Run `archetipo wiki affected --base <revision> --head <revision>` or pass repeated `--file` flags. Revision-based discovery is lossless for whitespace-bearing names and treats a rename as removal plus addition, so both source and destination paths participate in matching. A copied destination appears as an addition while the unchanged source remains unchanged.
 2. Inspect affected pages and related domains against changed code and tests. Treat affected results as discovery, not a mass reset list.
-3. Run `archetipo wiki reset <page-id>...` only for reviewed pages whose knowledge is obsolete, then update obsolete claims and retain unresolved issues. Leave accurate co-cited pages unchanged and stale for explicit follow-up; context-only pointers do not appear in affected results.
+3. Run `archetipo wiki reset <page-id>...` only for reviewed pages whose knowledge is obsolete, then update obsolete claims and retain unresolved issues. Leave accurate co-cited non-reference pages unchanged in `evidence-changed` for explicit reason-aware reconciliation; context-only pointers do not appear in affected results.
 4. Validate and catalog. Approval is a separate operation.
 
 ## Query
@@ -65,7 +65,7 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 1. Read `docs/wiki/index.md` first.
 2. Search with a compact query and optional type/state filters.
 3. Read only selected pages and explicit links.
-4. Treat `generated`, `stale`, and `attention` pages as routing knowledge that requires code verification. Verify implementation-specific claims against cited symbols or paths.
+4. Treat `generated`, `evidence-changed`, `stale`, and `attention` pages as routing knowledge that requires code verification. `evidence-changed` specifically means tracked evidence moved after review, not that the page was proven obsolete. Verify implementation-specific claims against cited symbols or paths.
 5. State uncovered or contradictory areas instead of silently treating inference as fact.
 
 ## Review
@@ -74,8 +74,8 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 2. Review selected generated pages against their cited code, tests, domain ownership, contracts, flows, invariants, and issues.
 3. Resolve every issue on a page before approval. Structural validation alone never authorizes review.
 4. Only after explicit user approval, run `archetipo wiki approve <page-id>...`. With no IDs the command approves every issue-free generated page.
-5. Use `archetipo wiki reconfirm <page-id...>` only after a human explicitly verifies that an unchanged reviewed **behavioral** page remains accurate against changed tracked evidence. IDs are mandatory. Reconfirmation is not approval, is never automatic, and is not recurring cleanup for PRD/reference pages; fix their source relevance instead.
-6. `reviewed` records a content hash, evidence revision, evidence hash, and timestamp. `stale` and `attention` are derived by the CLI and never written as lifecycle states. Only a successful mismatch reported as `WIKI_EVIDENCE_CHANGED` is a non-blocking affected-only warning; `WIKI_UNSAFE_SOURCE_PATH`, `WIKI_EVIDENCE_UNREADABLE`, and `WIKI_EVIDENCE_RECOMPUTE_FAILED` are blocking errors.
+5. Use `archetipo wiki reconfirm <page-id...>` only after a human explicitly accepts a reason-aware verification that an unchanged reviewed non-reference page remains accurate against changed tracked evidence. IDs are mandatory. A spec acceptance review may perform this explicit reconfirmation when its dossier names the exact pages and checks; it is not automatic cleanup. Never routinely reconfirm PRD/reference pages whose tracked original changed—refresh and approve them instead.
+6. `reviewed` records a content hash, evidence revision, evidence hash, and timestamp. `evidence-changed`, `stale`, and `attention` are derived by the CLI and never written as lifecycle states. A successful mismatch reported as `WIKI_EVIDENCE_CHANGED` derives `evidence-changed`; `stale` is reserved for outdated semantic review metadata or evidence that cannot be recomputed safely. `WIKI_UNSAFE_SOURCE_PATH`, `WIKI_EVIDENCE_UNREADABLE`, and `WIKI_EVIDENCE_RECOMPUTE_FAILED` are blocking errors.
 
 ## Lint
 

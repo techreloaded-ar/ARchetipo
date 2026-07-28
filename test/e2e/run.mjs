@@ -762,11 +762,10 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
     assertQuality(committedMeta.status === "reviewed", `${id} is reviewed in the working tree but not in HEAD`);
   }
 
-  for (const id of expectations.affected_only_stale_pages ?? []) {
-    assertQuality(stateByID.get(id) === "stale", `${id} expected persistent affected-only stale state, got ${stateByID.get(id) ?? "(missing)"}`);
+  for (const id of expectations.affected_only_reconfirmed_pages ?? []) {
+    assertQuality(stateByID.get(id) === "reviewed", `${id} expected reviewed state after explicit reconfirmation, got ${stateByID.get(id) ?? "(missing)"}`);
     const findings = (wikiStatus?.findings ?? []).filter((finding) => finding.page_id === id);
-    assertQuality(findings.some((finding) => finding.code === "WIKI_EVIDENCE_CHANGED"), `${id} has no persistent WIKI_EVIDENCE_CHANGED warning`);
-    assertQuality(findings.every((finding) => finding.code === "WIKI_EVIDENCE_CHANGED"), `${id} has a strong finding that should not be treated as evidence-only: ${JSON.stringify(findings)}`);
+    assertQuality(!findings.some((finding) => finding.code === "WIKI_EVIDENCE_CHANGED"), `${id} retained WIKI_EVIDENCE_CHANGED after explicit reconfirmation`);
   }
   for (const id of expectations.context_fresh_pages ?? []) {
     assertQuality(stateByID.get(id) === "reviewed", `${id} expected reviewed/fresh context state, got ${stateByID.get(id) ?? "(missing)"}`);
@@ -781,7 +780,7 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
     });
     if (!affectedRun.ok) throw new Error(`wiki affected failed: ${affectedRun.stderr || affectedRun.stdout || `exit ${affectedRun.code}`}`);
     const affectedIDs = new Set((JSON.parse(affectedRun.stdout)?.data?.items ?? []).map((item) => item.id));
-    for (const id of expectations.affected_only_stale_pages ?? []) {
+    for (const id of expectations.affected_only_reconfirmed_pages ?? []) {
       assertQuality(affectedIDs.has(id), `${id} expected in affected results for ${expectations.affected_file}`);
     }
     for (const id of expectations.context_fresh_pages ?? []) {
@@ -799,6 +798,17 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
     const baselineMeta = parseWikiFrontmatter(baseline.stdout, `${rel}@baseline`);
     const finalMeta = parseWikiFrontmatter(await fs.readFile(pagePath, "utf8"), pagePath);
     assertQuality(JSON.stringify(finalMeta.review) === JSON.stringify(baselineMeta.review), `${id} review metadata changed during affected-only acceptance`);
+  }
+  for (const id of expectations.changed_review_metadata_pages ?? []) {
+    const pagePath = path.join(wikiRoot, `${id.split("/").join(path.sep)}.md`);
+    const rel = path.relative(context.sandboxDir, pagePath);
+    const baseline = await runProbe("git", ["show", `${seededReviewBaseline}:${rel}`], { cwd: context.sandboxDir });
+    assertQuality(baseline.ok, `cannot read baseline metadata for ${id}: ${baseline.stderr}`);
+    const baselineMeta = parseWikiFrontmatter(baseline.stdout, `${rel}@baseline`);
+    const finalMeta = parseWikiFrontmatter(await fs.readFile(pagePath, "utf8"), pagePath);
+    assertQuality(finalMeta.review?.content_hash === baselineMeta.review?.content_hash, `${id} semantic content hash changed during reconfirmation`);
+    assertQuality(finalMeta.review?.evidence_hash !== baselineMeta.review?.evidence_hash, `${id} evidence hash did not change during reconfirmation`);
+    assertQuality(finalMeta.review?.evidence_revision !== baselineMeta.review?.evidence_revision || finalMeta.review?.reviewed_at !== baselineMeta.review?.reviewed_at, `${id} review baseline did not advance during reconfirmation`);
   }
 
   if ((expectations.review_commit_pages ?? []).length > 0) {
@@ -852,10 +862,11 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
   for (const expected of expectations.output_includes ?? []) {
     assertQuality(reviewOutput.includes(expected), `review output does not include Wiki dossier evidence: ${expected}`);
   }
-  for (const id of expectations.warning_output_pages ?? []) {
+  for (const id of expectations.reconfirm_output_pages ?? []) {
     const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const warningNearPage = new RegExp(`(?:${escaped}[\\s\\S]{0,500}(?:warning|non-blocking|stale)|(?:warning|non-blocking|stale)[\\s\\S]{0,500}${escaped})`, "i");
-    assertQuality(warningNearPage.test(reviewOutput), `review dossier does not present ${id} as a warning/non-blocking stale page`);
+    const reconfirmLanguage = "(?:reconfirm|riconferm|semantically verified|semanticamente verific|verified unchanged|remains accurate|rimane accurat)";
+    const reconfirmNearPage = new RegExp(`(?:${escaped}[\\s\\S]{0,500}${reconfirmLanguage}|${reconfirmLanguage}[\\s\\S]{0,500}${escaped})`, "i");
+    assertQuality(reconfirmNearPage.test(reviewOutput), `review dossier does not present ${id} as explicitly reconfirm-ready`);
   }
   if (expectations.require_clean) {
     const status = await runProbe("git", ["status", "--short", "--untracked-files=no"], { cwd: context.sandboxDir });

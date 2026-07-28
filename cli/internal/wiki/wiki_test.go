@@ -748,8 +748,8 @@ sources:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state := PageState(project, root, pagesByID(pages)["references/prd"]); state != "stale" {
-		t.Fatalf("authoritative PRD change did not stale reference: %s", state)
+	if state := PageState(project, root, pagesByID(pages)["references/prd"]); state != "evidence-changed" {
+		t.Fatalf("authoritative PRD change did not mark reference evidence changed: %s", state)
 	}
 	affected, err = Affected(project, root, []string{"docs/PRD.md"})
 	if err != nil || len(affected) != 1 || affected[0].ID != "references/prd" {
@@ -771,7 +771,7 @@ sources:
 		t.Fatal(err)
 	}
 	for _, id := range []string{"omitted", "tracked"} {
-		if state := PageState(project, root, pagesByID(pages)[id]); state != "stale" {
+		if state := PageState(project, root, pagesByID(pages)[id]); state != "evidence-changed" {
 			t.Fatalf("%s source did not retain tracked compatibility: %s", id, state)
 		}
 	}
@@ -1008,7 +1008,7 @@ sources:
 	}
 }
 
-func TestApprovedPageBecomesStaleWhenEvidenceChanges(t *testing.T) {
+func TestApprovedPageBecomesEvidenceChangedWhenEvidenceChanges(t *testing.T) {
 	project := t.TempDir()
 	root := filepath.Join(project, "docs", "wiki")
 	if _, err := Init(root); err != nil {
@@ -1033,8 +1033,16 @@ func TestApprovedPageBecomesStaleWhenEvidenceChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("# Changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if state := PageState(project, root, pages[0]); state != "stale" {
+	if state := PageState(project, root, pages[0]); state != "evidence-changed" {
 		t.Fatalf("state=%s", state)
+	}
+	statusPages, states, _, err := Status(project, root)
+	if err != nil || len(statusPages) != 1 || len(states) != 1 || states[0] != "evidence-changed" {
+		t.Fatalf("status did not expose evidence-changed: pages=%d states=%v err=%v", len(statusPages), states, err)
+	}
+	items, err := Search(project, root, "", "", "evidence-changed")
+	if err != nil || len(items) != 1 || items[0].ID != "overview" {
+		t.Fatalf("evidence-changed search mismatch: items=%+v err=%v", items, err)
 	}
 }
 
@@ -1140,7 +1148,7 @@ See [runtime guide](/guides/runtime.md).
 		t.Fatal(err)
 	}
 	byID := pagesByID(pages)
-	if state := PageState(project, root, byID["decisions/runtime"]); state != "stale" {
+	if state := PageState(project, root, byID["decisions/runtime"]); state != "evidence-changed" {
 		t.Fatalf("decision did not detect semantic Wiki evidence change: %s", state)
 	}
 
@@ -1220,7 +1228,7 @@ func TestEvidenceHashCapturesDirtyUntrackedAndDeletedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, page := range pages {
-		if state := PageState(project, root, page); state != "stale" {
+		if state := PageState(project, root, page); state != "evidence-changed" {
 			t.Fatalf("%s did not detect changed working-tree evidence: %s", page.ID, state)
 		}
 	}
@@ -2542,13 +2550,13 @@ func TestValidateRejectsMalformedEvidenceHashAndAcceptsLegacyReview(t *testing.T
 		if err := os.WriteFile(filepath.Join(project, "README.md"), []byte("# Changed\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if state := PageState(project, root, pages[0]); state != "stale" {
+		if state := PageState(project, root, pages[0]); state != "evidence-changed" {
 			t.Fatalf("legacy revision fallback did not detect change: %s", state)
 		}
 	})
 }
 
-func TestReconfirmRefreshesStaleEvidenceAndPreservesSemanticContent(t *testing.T) {
+func TestReconfirmRefreshesChangedEvidenceAndPreservesSemanticContent(t *testing.T) {
 	project := t.TempDir()
 	root := filepath.Join(project, "docs", "wiki")
 	if _, err := Init(root); err != nil {
@@ -2587,8 +2595,8 @@ Unchanged guidance.
 	if err := os.WriteFile(filepath.Join(project, "evidence.txt"), []byte("changed evidence\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if state := PageState(project, root, before); state != "stale" {
-		t.Fatalf("expected stale evidence before reconfirmation, got %s", state)
+	if state := PageState(project, root, before); state != "evidence-changed" {
+		t.Fatalf("expected changed evidence before reconfirmation, got %s", state)
 	}
 	if reconfirmed, err := Reconfirm(project, root, []string{"behavior"}); err != nil || reconfirmed != 1 {
 		t.Fatalf("reconfirm: count=%d err=%v", reconfirmed, err)

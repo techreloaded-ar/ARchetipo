@@ -1117,6 +1117,10 @@ func pageContentHash(page Page) string {
 
 // PageState derives operational trust from review metadata, issues, content,
 // and evidence changes. Only generated/reviewed are persisted in the page.
+// A successful evidence mismatch is distinct from stale semantic content:
+// evidence-changed means the reviewed page needs reason-aware reconciliation,
+// while stale remains the conservative state for invalid review metadata or
+// evidence that cannot be inspected safely.
 func PageState(projectRoot, root string, page Page) string {
 	snapshot, err := newEvidenceSnapshot(projectRoot, root)
 	if err != nil {
@@ -1136,8 +1140,11 @@ func pageStateWithSnapshot(snapshot *evidenceSnapshot, page Page) string {
 		return "stale"
 	}
 	changed, err := pageEvidenceChangedWithSnapshot(snapshot, page)
-	if err != nil || changed {
+	if err != nil {
 		return "stale"
+	}
+	if changed {
+		return "evidence-changed"
 	}
 	return "reviewed"
 }

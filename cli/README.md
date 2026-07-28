@@ -39,9 +39,10 @@ archetipo wiki --project-root .archetipo/worktrees/US-123 status
 archetipo wiki catalog
 archetipo wiki reset domains/identity
 archetipo wiki approve domains/identity
+archetipo wiki reconfirm engineering/code-map
 ```
 
-The CLI performs deterministic capability clustering, code/evidence mapping, indexing, freshness checks, and DDD Wiki validation. `wiki --project-root <checkout>` explicitly targets a spec worktree while retaining the configured Wiki paths. The `archetipo-wiki` skill interprets candidates into domains or bounded contexts. Bootstrap catalogs `generated` pages; explicit `wiki approve` records review metadata for selected issue-free pages.
+The CLI performs deterministic capability clustering, code/evidence mapping, indexing, freshness checks, and DDD Wiki validation. `wiki --project-root <checkout>` explicitly targets a spec worktree while retaining the configured Wiki paths. The `archetipo-wiki` skill interprets candidates into domains or bounded contexts. Bootstrap catalogs `generated` pages; explicit `wiki approve` records review metadata for selected issue-free pages. A successful tracked-evidence mismatch derives `evidence-changed`, while `stale` is reserved for outdated semantic review metadata or evidence inspection failures. After explicit reason-aware verification, `wiki reconfirm` advances only the evidence baseline of unchanged reviewed pages.
 
 To build all release binaries locally from the repository root:
 

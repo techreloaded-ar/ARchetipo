@@ -147,8 +147,9 @@ scenarios:
     prompts:
       - /archetipo-implement US-001
 
-  # Acceptance review approves only the required generated page, preserves an
-  # affected-only stale warning and a fresh context reference, then integrates.
+  # Acceptance review approves the required generated page, explicitly
+  # reconfirms an accurate affected-only page, preserves a fresh context
+  # reference, then integrates.
   worktree-review-accepts-wiki:
     agent: claude-haiku
     fixture: fixtures/worktree-wiki-review
@@ -157,27 +158,30 @@ scenarios:
       - >-
         /archetipo-review US-001. Present the complete reason-labelled
         acceptance dossier for overview, behavior, and references/prd. Treat
-        required-ready overview as the only approval candidate; treat
-        affected-only behavior with only WIKI_EVIDENCE_CHANGED as a persistent
-        non-blocking warning; verify references/prd stays reviewed and outside
-        affected because hello.txt is context. Then execute Approve. This
-        message is the explicit human approval; do not ask a follow-up question
-        and do not reset, approve, or reconfirm affected-only pages.
+        required-ready overview as the approval candidate; verify the
+        affected-only behavior page remains semantically accurate, classify it
+        reconfirm-ready, and state that approval will reconfirm it; verify
+        references/prd stays reviewed and outside affected because hello.txt is
+        context. Then execute Approve. This message is the explicit human
+        approval of both lists; do not ask a follow-up question. Integrate only
+        with archetipo spec integrate, never with raw Git plus spec move, and
+        verify that branch/worktree/fork-base metadata is cleared afterwards.
     verify_review_wiki:
       spec_code: US-001
       seed_reviewed_pages: [behavior, references/prd]
       seed_baseline_paths: [docs, hello.txt, package.json]
-      reviewed_pages: [overview]
+      reviewed_pages: [overview, behavior]
       exact_reviewed_pages: [behavior, overview, references/prd]
-      review_commit_pages: [overview]
-      affected_only_stale_pages: [behavior]
+      review_commit_pages: [behavior, overview]
+      affected_only_reconfirmed_pages: [behavior]
       context_fresh_pages: [references/prd]
-      unchanged_review_metadata_pages: [behavior, references/prd]
+      unchanged_review_metadata_pages: [references/prd]
+      changed_review_metadata_pages: [behavior]
       affected_file: hello.txt
       branch: archetipo/US-001
       worktree: .archetipo/worktrees/US-001
       implemented_file_contents:
         hello.txt: "Hello from ARchetipo"
       output_includes: [overview, behavior, references/prd]
-      warning_output_pages: [behavior]
+      reconfirm_output_pages: [behavior]
       require_clean: true

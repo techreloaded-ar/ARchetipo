@@ -3,10 +3,11 @@ const REVIEW_PAGE_ARRAY_FIELDS = [
   "reviewed_pages",
   "exact_reviewed_pages",
   "review_commit_pages",
-  "affected_only_stale_pages",
+  "affected_only_reconfirmed_pages",
   "context_fresh_pages",
   "unchanged_review_metadata_pages",
-  "warning_output_pages",
+  "changed_review_metadata_pages",
+  "reconfirm_output_pages",
 ];
 
 const REVIEW_STRING_ARRAY_FIELDS = ["output_includes"];

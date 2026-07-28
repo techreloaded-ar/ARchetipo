@@ -160,15 +160,15 @@ sources:
 
   writeFileSync(join(sandbox, "docs", "PRD.md"), "# Product requirements\n\nChanged authoritative intent.\n");
   const prdStatus = run(["wiki", "status"]);
-  assert.equal(prdStatus.data.items.find((item) => item.id === "references/prd")?.state, "stale");
+  assert.equal(prdStatus.data.items.find((item) => item.id === "references/prd")?.state, "evidence-changed");
   const prdAffected = run(["wiki", "affected", "--file", "docs/PRD.md"]);
   assert.equal(prdAffected.data.items.some((item) => item.id === "references/prd"), true);
 
   writeFileSync(join(pageDir, "runtime.md"), `${approvedRuntime}\nSemantic runtime guidance changed after review.\n`);
-  const staleStatus = run(["wiki", "status"]);
-  assert.equal(staleStatus.data.items.find((item) => item.id === "decisions/shared-runtime")?.state, "stale");
-  const staleValidation = run(["wiki", "validate"]);
-  assert.equal(staleValidation.data.findings.some((finding) => finding.code === "WIKI_EVIDENCE_CHANGED" && finding.page_id === "decisions/shared-runtime"), true);
+  const changedStatus = run(["wiki", "status"]);
+  assert.equal(changedStatus.data.items.find((item) => item.id === "decisions/shared-runtime")?.state, "evidence-changed");
+  const changedValidation = run(["wiki", "validate"]);
+  assert.equal(changedValidation.data.findings.some((finding) => finding.code === "WIKI_EVIDENCE_CHANGED" && finding.page_id === "decisions/shared-runtime"), true);
 
   const reconfirmed = run(["wiki", "reconfirm", "decisions/shared-runtime"]);
   assert.equal(reconfirmed.kind, "wiki_reconfirm_result");
@@ -176,7 +176,7 @@ sources:
   assert.deepEqual(reconfirmed.data.pages, ["decisions/shared-runtime"]);
   const reconfirmedStatus = run(["wiki", "status"]);
   assert.equal(reconfirmedStatus.data.items.find((item) => item.id === "decisions/shared-runtime")?.state, "reviewed");
-  assert.equal(reconfirmedStatus.data.items.find((item) => item.id === "references/prd")?.state, "stale");
+  assert.equal(reconfirmedStatus.data.items.find((item) => item.id === "references/prd")?.state, "evidence-changed");
 
   const evidenceDir = join(sandbox, "evidence");
   mkdirSync(evidenceDir);
