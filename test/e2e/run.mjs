@@ -304,6 +304,20 @@ async function runConfiguredScenario({ scenario, configPath, timeoutMs, cliSourc
       logRunStepDone(scenario.id, step, "Integration verified");
     }
 
+    for (const [code, expected] of Object.entries(scenario.verify_spec_status)) {
+      const step = `verify-spec-status-${code}`;
+      logRunStepStart(scenario.id, step, `Verifying ${code} persisted status ${expected}`);
+      await verifySpecStatus(context, code, expected, step);
+      logRunStepDone(scenario.id, step, "Spec status verified");
+    }
+
+    for (const expectation of scenario.verify_worktree_cleanup) {
+      const step = `verify-worktree-cleanup-${expectation.spec}`;
+      logRunStepStart(scenario.id, step, `Verifying ${expectation.spec} left no branch or worktree behind`);
+      await verifyWorktreeCleanup(context, expectation, step);
+      logRunStepDone(scenario.id, step, "Worktree cleanup verified");
+    }
+
     if (scenario.verify_review_wiki) {
       logRunStepStart(scenario.id, "verify-review-wiki", "Verifying review accepted and integrated the Wiki dossier");
       await verifyReviewWiki(context, scenario.verify_review_wiki, promptOutputs.at(-1) ?? "");
@@ -421,7 +435,10 @@ async function verifySeededWikiBaseline(context, review, pageIDs) {
   }
 }
 
-async function captureIntegrationState(context, code, step) {
+// readSpecShow runs `spec show` through the sandbox CLI and returns `data.spec`.
+// Every persisted-state assertion goes through it, so no verifier ever trusts the
+// agent's prose over the connector's own record.
+async function readSpecShow(context, code, step) {
   const show = await runReportedCommand({
     ...context,
     step,
@@ -431,12 +448,15 @@ async function captureIntegrationState(context, code, step) {
   if (!show.ok) {
     throw new Error(`spec show ${code} failed: ${show.stderr || show.stdout || `exit ${show.code}`}`);
   }
-  let spec;
   try {
-    spec = JSON.parse(show.stdout)?.data?.spec;
+    return JSON.parse(show.stdout)?.data?.spec;
   } catch (err) {
     throw new Error(`could not parse spec show ${code} output: ${err.message}`);
   }
+}
+
+async function captureIntegrationState(context, code, step) {
+  const spec = await readSpecShow(context, code, step);
   const branch = spec?.branch || `archetipo/${code}`;
   const worktree = spec?.worktree || "";
   if (!worktree) {
@@ -465,21 +485,7 @@ async function verifyIntegration(context, code, beforeIntegrate, step) {
     throw new Error(`missing pre-integrate branch tip for ${code}`);
   }
 
-  const show = await runReportedCommand({
-    ...context,
-    step,
-    command: context.cliBinaryPath,
-    args: ["spec", "show", code],
-  });
-  if (!show.ok) {
-    throw new Error(`spec show ${code} failed: ${show.stderr || show.stdout || `exit ${show.code}`}`);
-  }
-  let spec;
-  try {
-    spec = JSON.parse(show.stdout)?.data?.spec;
-  } catch (err) {
-    throw new Error(`could not parse spec show ${code} output: ${err.message}`);
-  }
+  const spec = await readSpecShow(context, code, step);
   const status = spec?.status ?? "";
   if (status !== "DONE") {
     throw new Error(`expected ${code} to be DONE after integrate, got ${status || "(empty)"}`);
@@ -504,6 +510,62 @@ async function verifyIntegration(context, code, beforeIntegrate, step) {
   try {
     await fs.access(worktreeAbs);
     throw new Error(`expected worktree directory ${worktreeAbs} to be removed after integrate`);
+  } catch (err) {
+    if (err?.code !== "ENOENT") {
+      throw err;
+    }
+  }
+
+  const worktreeList = await runProbe("git", ["worktree", "list", "--porcelain"], {
+    cwd: context.sandboxDir,
+  });
+  if (!worktreeList.ok) {
+    throw new Error(`git worktree list --porcelain failed: ${worktreeList.stderr || worktreeList.stdout || `exit ${worktreeList.code}`}`);
+  }
+  const listedWorktrees = worktreeList.stdout
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => path.resolve(line.slice("worktree ".length)));
+  if (listedWorktrees.includes(path.resolve(worktreeAbs))) {
+    throw new Error(`expected git worktree list --porcelain to omit ${worktreeAbs}`);
+  }
+}
+
+// verifySpecStatus asserts the workflow status a scenario expects. It covers runs
+// whose final transition happens inside the agent — autopilot accepting a spec
+// itself — where there is no post-command whose exit code could carry the proof.
+async function verifySpecStatus(context, code, expected, step) {
+  const spec = await readSpecShow(context, code, step);
+  const status = spec?.status ?? "";
+  if (status !== expected) {
+    throw new Error(`expected ${code} to be ${expected}, got ${status || "(empty)"}`);
+  }
+}
+
+// verifyWorktreeCleanup is verify_integrate's counterpart for an integration the
+// agent already performed: it cannot compare a pre-integration tip, so it asserts
+// only that the spec metadata, the branch, and the worktree are gone.
+async function verifyWorktreeCleanup(context, expectation, step) {
+  const { spec: code, branch, worktree } = expectation;
+  const spec = await readSpecShow(context, code, step);
+
+  for (const field of ["branch", "worktree", "fork_base"]) {
+    if (spec?.[field]) {
+      throw new Error(`expected ${code} to clear data.spec.${field} after integration, got ${spec[field]}`);
+    }
+  }
+
+  const branchProbe = await runProbe("git", ["rev-parse", "--verify", "--quiet", `${branch}^{commit}`], {
+    cwd: context.sandboxDir,
+  });
+  if (branchProbe.ok) {
+    throw new Error(`expected branch ${branch} to be deleted after ${code} was integrated, but it still exists`);
+  }
+
+  const worktreeAbs = resolveSandboxPath(context.sandboxDir, worktree);
+  try {
+    await fs.access(worktreeAbs);
+    throw new Error(`expected worktree directory ${worktreeAbs} to be removed after ${code} was integrated`);
   } catch (err) {
     if (err?.code !== "ENOENT") {
       throw err;

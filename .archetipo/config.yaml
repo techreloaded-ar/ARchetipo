@@ -13,7 +13,7 @@ workflow:
     planned: PLANNED
     in_progress: IN PROGRESS
     review: REVIEW
-    done: DONE        # human-gated: only /archetipo-review moves a spec here, after explicit user approval
+    done: DONE        # gated: /archetipo-review (explicit human approval) or /archetipo-autopilot (autonomous acceptance)
 
 # Used only when connector == file
 file:

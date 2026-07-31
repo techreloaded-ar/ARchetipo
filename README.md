@@ -114,15 +114,15 @@ flowchart LR
 
 ### Workflow states
 
-Specs move through standardized states. ARchetipo automates the loop, while final acceptance stays human.
+Specs move through standardized states. ARchetipo automates the loop; acceptance is human by default, or autonomous when you run Autopilot.
 
 | State | Meaning | Transition |
 |---|---|---|
 | `TODO` | Spec exists in the backlog and has not been planned yet. | Created by spec |
 | `PLANNED` | Technical planning is complete. | Set by plan |
 | `IN PROGRESS` | Implementation has started. | Set by implement |
-| `REVIEW` | Code review and tests are complete; ready for human review. | Set by implement |
-| `DONE` | Spec accepted and released. | Human approval via `/archetipo-review` |
+| `REVIEW` | Code review and tests are complete; ready for review. | Set by implement |
+| `DONE` | Spec accepted and released. | Human approval via `/archetipo-review`, or autonomous acceptance via `/archetipo-autopilot` |
 
 ### The AI team
 
@@ -154,7 +154,9 @@ Use this decision guide inside your AI coding agent:
 | Is a spec ready for implementation? | Plan it first. | Run `/archetipo-implement US-001`. |
 | Is a spec waiting in `REVIEW`? | Implement it first. | Run `/archetipo-review US-001` to accept it or send it back. |
 
-For batch work, `/archetipo-autopilot` runs the complete plan-to-implementation pipeline until every eligible spec reaches `REVIEW`. Run it without arguments for the whole eligible backlog, with `EP-XXX` for one epic, or with `US-XXX` for one spec.
+For batch work, `/archetipo-autopilot` runs the complete pipeline — planning, implementation, and autonomous acceptance — until every eligible spec reaches `DONE`. Run it without arguments for the whole eligible backlog, with `EP-XXX` for one epic, or with `US-XXX` for one spec.
+
+Autonomous acceptance applies the same gate as `/archetipo-review`, verdict included: it approves only when every acceptance criterion is met, every task is done, and the Wiki has no blocker. When it is not, it sends the spec back with structured feedback for at most three rework cycles; a spec that is still not acceptable stays in `REVIEW` for you, and Autopilot moves on to the remaining unblocked specs.
 
 ---
 
@@ -245,7 +247,7 @@ The CLI architecture is extensible, but the built-in connectors today are `file`
 | `archetipo-plan` | Plans one spec with architecture, tasks, dependencies, and tests. | "plan US-005", "how do we build this?", "break this into tasks" |
 | `archetipo-implement` | Executes a planned spec through code, tests, review, and handoff. | "implement US-005", "run the next ready spec" |
 | `archetipo-review` | Facilitates the human acceptance gate: approve to `DONE` or send back with rework feedback. | "review US-005", "accept the spec", "what's waiting for review?" |
-| `archetipo-autopilot` | Runs planning and implementation across multiple eligible specs. | "run everything", "autopilot the backlog", "implement all specs" |
+| `archetipo-autopilot` | Runs planning, implementation, and autonomous acceptance across multiple eligible specs, up to `DONE`. | "run everything", "autopilot the backlog", "implement all specs" |
 | `archetipo-wiki` | Builds a codebase-first DDD map of domains, candidate bounded contexts, logical relationships, and their physical code/test ownership. | "bootstrap the Wiki", "map the domains", "refresh project knowledge" |
 
 ---
@@ -269,7 +271,7 @@ workflow:
     planned: PLANNED
     in_progress: IN PROGRESS
     review: REVIEW
-    done: DONE   # human-gated: only /archetipo-review moves a spec here, after explicit approval
+    done: DONE   # gated: /archetipo-review (explicit human approval) or /archetipo-autopilot (autonomous acceptance)
 
 # Used only when connector == file
 file:

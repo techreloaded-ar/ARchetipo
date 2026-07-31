@@ -79,6 +79,40 @@ test("normalizeConfig requires spec_code, branch, worktree, and boolean require_
   assert.throws(() => normalizeConfig(withoutRequireClean, configPath), /verify_review_wiki\.require_clean must be a boolean/);
 });
 
+function normalizeScenario(overrides) {
+  return normalizeConfig({
+    agents: { test: { tool: "pi", command: "pi", args: ["--print", "{prompt}"] } },
+    scenarios: { autopilot: { agent: "test", prompts: [], ...overrides } },
+  }, configPath)[0];
+}
+
+test("verify_spec_status defaults to empty and requires non-empty status strings", () => {
+  assert.deepEqual(Object.entries(normalizeScenario({}).verify_spec_status), []);
+  assert.deepEqual(
+    Object.entries(normalizeScenario({ verify_spec_status: { "US-001": "DONE" } }).verify_spec_status),
+    [["US-001", "DONE"]],
+  );
+  assert.throws(() => normalizeScenario({ verify_spec_status: ["US-001"] }), /verify_spec_status must be a spec-code-to-status object/);
+  assert.throws(() => normalizeScenario({ verify_spec_status: { "US-001": "  " } }), /verify_spec_status\.US-001 must be a non-empty string/);
+});
+
+test("verify_worktree_cleanup requires an explicit spec, branch, and portable worktree per entry", () => {
+  assert.deepEqual(normalizeScenario({}).verify_worktree_cleanup, []);
+  assert.deepEqual(
+    normalizeScenario({ verify_worktree_cleanup: [{ spec: "US-001", branch: "archetipo/US-001", worktree: ".archetipo\\worktrees\\US-001" }] }).verify_worktree_cleanup,
+    [{ spec: "US-001", branch: "archetipo/US-001", worktree: ".archetipo/worktrees/US-001" }],
+  );
+  assert.throws(() => normalizeScenario({ verify_worktree_cleanup: { spec: "US-001" } }), /verify_worktree_cleanup must be a list of objects/);
+  assert.throws(
+    () => normalizeScenario({ verify_worktree_cleanup: [{ spec: "US-001", branch: "b", worktree: "../outside" }] }),
+    /verify_worktree_cleanup\[0\]\.worktree must be a safe portable project-relative path/,
+  );
+  assert.throws(
+    () => normalizeScenario({ verify_worktree_cleanup: [{ branch: "b", worktree: "w" }] }),
+    /verify_worktree_cleanup\[0\]\.spec must be a non-empty string/,
+  );
+});
+
 test("branch uses its non-empty Git-ref string contract", () => {
   assert.equal(normalize({ branch: "release/candidate" }).branch, "release/candidate");
 });

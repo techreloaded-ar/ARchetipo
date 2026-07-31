@@ -106,6 +106,44 @@ function normalizeReviewWiki(review, scenarioId, configPath) {
   return normalized;
 }
 
+// normalizeSpecStatusExpectations accepts a spec-code -> workflow-status map. It
+// exists for scenarios whose agent performs the final transition itself, where the
+// only machine-checkable proof is the persisted status read back from the CLI.
+function normalizeSpecStatusExpectations(raw, scenarioId, configPath) {
+  const prefix = `scenarios.${scenarioId}.verify_spec_status`;
+  if (raw === undefined) return {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`${prefix} must be a spec-code-to-status object when specified in ${configPath}`);
+  }
+  const normalized = Object.create(null);
+  for (const [code, status] of Object.entries(raw)) {
+    requireNonEmptyString(code, `${prefix} key`, configPath);
+    normalized[code] = requireNonEmptyString(status, `${prefix}.${code}`, configPath);
+  }
+  return normalized;
+}
+
+// normalizeWorktreeCleanup accepts explicit branch and worktree names per spec.
+// Unlike verify_integrate it captures nothing beforehand, so it can assert the
+// cleanup of an integration that already happened inside a prompt.
+function normalizeWorktreeCleanup(raw, scenarioId, configPath) {
+  const prefix = `scenarios.${scenarioId}.verify_worktree_cleanup`;
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error(`${prefix} must be a list of objects when specified in ${configPath}`);
+  }
+  return raw.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`${prefix}[${index}] must be an object in ${configPath}`);
+    }
+    return {
+      spec: requireNonEmptyString(entry.spec, `${prefix}[${index}].spec`, configPath),
+      branch: requireNonEmptyString(entry.branch, `${prefix}[${index}].branch`, configPath),
+      worktree: portableProjectRelativePath(entry.worktree, `${prefix}[${index}].worktree`, configPath),
+    };
+  });
+}
+
 export function normalizeConfig(manifest, configPath, filterScenarios) {
   const agents = manifest?.agents;
   const rawScenarios = manifest?.scenarios;
@@ -159,6 +197,8 @@ export function normalizeConfig(manifest, configPath, filterScenarios) {
     if (rawScenario.verify_integrate !== undefined) {
       requireStringArray(rawScenario.verify_integrate, `scenarios.${scenarioId}.verify_integrate`, configPath);
     }
+    const verifySpecStatus = normalizeSpecStatusExpectations(rawScenario.verify_spec_status, scenarioId, configPath);
+    const verifyWorktreeCleanup = normalizeWorktreeCleanup(rawScenario.verify_worktree_cleanup, scenarioId, configPath);
     if (rawScenario.verify_wiki_bootstrap !== undefined && (!rawScenario.verify_wiki_bootstrap || typeof rawScenario.verify_wiki_bootstrap !== "object" || Array.isArray(rawScenario.verify_wiki_bootstrap))) {
       throw new Error(`scenarios.${scenarioId}.verify_wiki_bootstrap must be an object when specified in ${configPath}`);
     }
@@ -177,6 +217,8 @@ export function normalizeConfig(manifest, configPath, filterScenarios) {
       archetipo_pre_commands: rawScenario.archetipo_pre_commands ?? [],
       archetipo_post_commands: rawScenario.archetipo_post_commands ?? [],
       verify_integrate: rawScenario.verify_integrate ?? [],
+      verify_spec_status: verifySpecStatus,
+      verify_worktree_cleanup: verifyWorktreeCleanup,
       verify_wiki_bootstrap: rawScenario.verify_wiki_bootstrap,
       verify_review_wiki: verifyReviewWiki,
     });

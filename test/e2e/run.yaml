@@ -147,6 +147,30 @@ scenarios:
     prompts:
       - /archetipo-implement US-001
 
+  # Autopilot drives US-001 from TODO to DONE on its own, worktrees enabled:
+  # plan, implement, then autonomous acceptance ending in `spec integrate`.
+  autopilot-worktree-full:
+    agent: claude-haiku
+    fixture: fixtures/worktree-plan
+    prompts:
+      - /archetipo-autopilot US-001
+    verify_spec_status:
+      US-001: DONE
+    verify_worktree_cleanup:
+      - spec: US-001
+        branch: archetipo/US-001
+        worktree: .archetipo/worktrees/US-001
+
+  # Same end-to-end run with worktrees disabled: acceptance must reach DONE
+  # through `spec move --to done` instead of integrating a branch.
+  autopilot-in-context-full:
+    agent: claude-haiku
+    fixture: fixtures/plan
+    prompts:
+      - /archetipo-autopilot US-001
+    verify_spec_status:
+      US-001: DONE
+
   # Acceptance review approves the required generated page, explicitly
   # reconfirms an accurate affected-only page, preserves a fresh context
   # reference, then integrates.

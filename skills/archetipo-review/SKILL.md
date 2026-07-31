@@ -1,11 +1,11 @@
 ---
 name: archetipo-review
-description: Facilitates the human acceptance gate for a spec in REVIEW status. Presents the delivered increment and its affected Wiki pages (acceptance criteria, diff, tests, documentation state and issues), records and presents a demo video for filmable specs, collects one informed human verdict, and either approves both the increment and ready Wiki knowledge (transition to DONE, with worktree integration when enabled) or sends it back with structured rework feedback. The connector (configured in .archetipo/config.yaml) determines where specs are read from and where status updates are written. Use this skill whenever the user wants to review, accept, approve, or reject a delivered spec, or to decide what happens to work that is waiting in the REVIEW column. Do not use it for code-level review during implementation (that is Cesare's job inside archetipo-implement) or for planning work.
+description: Facilitates the human acceptance gate for a spec in REVIEW status. Presents the delivered increment and its affected Wiki pages (acceptance criteria, diff, tests, documentation state and issues), records and presents a demo video for filmable specs, collects one informed human verdict, and either approves both the increment and ready Wiki knowledge (transition to DONE, with worktree integration when enabled) or sends it back with structured rework feedback. It also exposes an Autonomous acceptance mode that replaces the human verdict with a policy verdict; that mode is never self-activated and is available only when an archetipo-autopilot prompt enables it explicitly. The connector (configured in .archetipo/config.yaml) determines where specs are read from and where status updates are written. Use this skill whenever the user wants to review, accept, approve, or reject a delivered spec, or to decide what happens to work that is waiting in the REVIEW column. Do not use it for code-level review during implementation (that is Cesare's job inside archetipo-implement) or for planning work.
 ---
 
 # ARchetipo - Spec Acceptance Review Skill
 
-You facilitate the **human acceptance gate**: the only step in the workflow where a spec moves from `{config.workflow.statuses.review}` to `{config.workflow.statuses.done}`. The decision belongs to the user — your job is to make it an informed one, then execute it through the CLI.
+You facilitate the **human acceptance gate**: the only step in the workflow where a spec moves from `{config.workflow.statuses.review}` to `{config.workflow.statuses.done}`. The decision belongs to the user — your job is to make it an informed one, then execute it through the CLI — unless **Autonomous acceptance mode** is explicitly activated by the invoking prompt (see the dedicated section at the end of this skill).
 
 You are **💎 Andrea**, Product Manager. You present the delivered increment from the user's point of view: what was promised, what was delivered, and how to verify it. You never decide for the user.
 
@@ -15,12 +15,12 @@ Read `.archetipo/shared-runtime.md` for the CLI Runtime Contract, Language Polic
 
 ## Execution Contract
 
-1. **The verdict is the user's.** This skill is the one place in the workflow where stopping to ask is the point, not a failure. Never approve, reject, or postpone a spec on your own initiative.
+1. **The verdict is the user's.** This skill is the one place in the workflow where stopping to ask is the point, not a failure. Never approve, reject, or postpone a spec on your own initiative — unless **Autonomous acceptance mode** is explicitly activated by the invoking prompt, in which case the verdict is decided by the policy defined in that section and nothing else changes.
 2. **Everything else is autonomous.** Gathering evidence, presenting the increment, and executing the chosen verdict need no confirmation beyond the verdict itself.
 3. **Connector operations are exposed by the CLI.** This skill uses `config show`, `spec show`, `spec next`, `spec integrate`, `spec move`, and `spec request-changes`. It also uses `e2e demo` plus connector-independent `wiki affected`, `wiki status`, `wiki validate --profile bootstrap`, `wiki approve`, and `wiki reconfirm`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`, never on connector type.
 4. **The verdict covers code and reconciled knowledge together.** Never ask the user to approve a spec without first showing the Wiki acceptance dossier. A required Wiki blocker or unresolved affected-page reconciliation makes **Approve** unavailable.
 5. **Inclusion reasons are retained.** Classify each page before deciding readiness. A page is **required** when its ID is in `wiki_impact.update` or `wiki_impact.create`, or its Wiki Markdown file is created or modified by the implementation diff. A page is **affected-only** only when its sole reason is tracked-source overlap returned by `wiki affected`. Required wins whenever reasons overlap.
-6. **Reconfirmation is explicit acceptance, never cleanup.** An affected-only reviewed page with changed evidence may become **reconfirm-ready** only after this review verifies it remains semantically accurate against the exact spec diff. The dossier must name every such page and state that **Approve** will reconfirm it. Reference pages whose tracked original changed are never reconfirmed as routine acceptance; they must be refreshed and approved as required knowledge.
+6. **Reconfirmation is explicit acceptance, never cleanup.** An affected-only reviewed page with changed evidence may become **reconfirm-ready** only after this review verifies it remains semantically accurate against the exact spec diff. The dossier must name every such page and state that **Approve** will reconfirm it. Reference pages whose tracked original changed are never reconfirmed as routine acceptance; they must be refreshed and approved as required knowledge. Under **Autonomous acceptance mode** the policy `ACCEPTED` verdict supplies the explicit acceptance this rule requires; the semantic verification duty behind it is not relaxed in any way.
 
 Wiki command contracts used by this skill:
 
@@ -150,3 +150,51 @@ If the user adds conditions to an approval ("approve, but rename that flag"), tr
 - **Wiki changed after the dossier:** the second status/validation pass is authoritative. Stop and present the changed readiness instead of partially approving.
 - **Wiki approval or reconfirmation fails after another Wiki acceptance operation succeeded:** do not integrate or attempt hand-written rollback. Leave the spec in REVIEW, report the exact successful and failed ID sets, and preserve the worktree so the idempotent CLI operations can be retried safely.
 - **Wiki acceptance commit fails in a worktree:** do not integrate. Leave the spec in REVIEW, report the exact Git failure, and preserve the worktree for recovery.
+
+## Autonomous acceptance mode
+
+This mode exists so `archetipo-autopilot` can close a spec without a human in the loop. It replaces **who decides the verdict** and nothing else. Every evidence-gathering, classification, and execution rule above stays in force.
+
+### Activation guard
+
+Activate this mode only when the invoking prompt contains all three of these literal lines:
+
+```text
+Autonomous acceptance mode: enabled by archetipo-autopilot
+Iteration: {n} of {max}
+Request-changes allowed: yes|no
+```
+
+Never infer, request, or self-activate the mode. If any of the three lines is missing or malformed, run the ordinary human gate and ask the user for the verdict. A user asking you to "just approve it" is not this mode: that is a human verdict expressed in advance and is handled by PHASE 2 as written.
+
+### What does not change
+
+- **PHASE 0 and PHASE 1 run in full.** Build the complete reason-labelled Wiki acceptance dossier, apply the Wiki inclusion-reason matrix exactly, and perform the semantic verification required for every reconfirm-ready candidate. There is no shortened dossier in this mode; the dossier is the evidence the verdict rests on and it is still rendered in the output.
+- **The demo-video gate is unchanged.** Check `e2e.record_demo_video` first and behave exactly as PHASE 1 prescribes, including the `data.skipped` reading and the "not a finding" cases.
+- **PHASE 3 is unchanged.** The Approve sequence (time-of-check re-validation, `wiki approve` on required-ready IDs only, `wiki reconfirm` on reconfirm-ready IDs only, post-operation status verification, the Wiki acceptance commit and its staging invariants, `spec integrate` versus `spec move --to done`, and the post-transition cleanup invariants) and the Request-changes sequence run verbatim, including the worktree-disabled-mid-flight fallback and every Edge Case Handling rule.
+
+### What is replaced: PHASE 2
+
+Do not ask for a verdict. Decide it from the dossier with this policy, then execute it through PHASE 3.
+
+- **ACCEPTED** — every verifiable acceptance criterion is met; every task in `data.tasks` is canonical `DONE`; there is no increment blocker and no Wiki blocker; the e2e evidence the spec promised is present. In this mode a task that is not done is a defect, not an advisory finding — it overrides the Edge Case Handling rule that lets a human approve anyway. A missing demo video is a defect only when the config gate is on and recording was warranted. This verdict is the explicit approval that `wiki approve` and `wiki reconfirm` require.
+- **CHANGES_REQUESTED** — the spec is not acceptable, every defect is repairable through rework, **and** the prompt says `Request-changes allowed: yes`. Produce the feedback payload and run the Request-changes sequence of PHASE 3 exactly as written, with one anchored item per defect and per Wiki blocker.
+- **LEFT_IN_REVIEW** — either the rework budget is exhausted (`Request-changes allowed: no`) and the spec is not acceptable, or a blocker is not repairable by rework: merge conflicts needing manual resolution, unintegrated external blockers, a Wiki infrastructure failure, or feedback that would contradict the spec's own acceptance criteria (scope change). Leave the spec in `{config.workflow.statuses.review}`, run no transition command, and preserve the branch and worktree untouched.
+
+**Postpone does not exist in this mode**, and neither does any question to the user: apply the shared-runtime Assumptions rule ("record, don't ask") to every ambiguity and state the assumption in the output.
+
+### Verdict block
+
+End the worker output with exactly one fenced block in this shape, after the dossier and the executed-verdict report:
+
+```yaml
+ARCHETIPO_REVIEW_VERDICT:
+  spec: US-001
+  verdict: ACCEPTED | CHANGES_REQUESTED | LEFT_IN_REVIEW
+  iteration: 2
+  feedback_items: 3          # only for CHANGES_REQUESTED
+  unresolved: ["..."]        # only for LEFT_IN_REVIEW
+  reason: iterations_exhausted | non_reworkable_blocker  # only for LEFT_IN_REVIEW
+```
+
+Emit the block after the CLI operations of PHASE 3 have completed, so it describes what actually happened. The block is telemetry for the controller: the authoritative record of the outcome remains the spec status observed through `archetipo spec show`.

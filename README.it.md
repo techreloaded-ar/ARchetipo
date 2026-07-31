@@ -110,15 +110,15 @@ flowchart LR
 
 ### Stati workflow
 
-Le spec attraversano stati standardizzati. ARchetipo automatizza il loop, mentre l'accettazione finale resta umana.
+Le spec attraversano stati standardizzati. ARchetipo automatizza il loop; l'accettazione è umana per default, oppure autonoma quando usi l'Autopilot.
 
 | Stato | Significato | Transizione |
 |---|---|---|
 | `TODO` | Spec presente nel backlog, non ancora pianificata. | Creata da spec |
 | `PLANNED` | Pianificazione tecnica completata. | Impostata da plan |
 | `IN PROGRESS` | Implementazione avviata. | Impostata da implement |
-| `REVIEW` | Code review e test completati; pronta per review umana. | Impostata da implement |
-| `DONE` | Spec accettata e rilasciata. | Approvazione umana via `/archetipo-review` |
+| `REVIEW` | Code review e test completati; pronta per la review. | Impostata da implement |
+| `DONE` | Spec accettata e rilasciata. | Approvazione umana via `/archetipo-review`, oppure accettazione autonoma via `/archetipo-autopilot` |
 
 ### Il team AI
 
@@ -150,7 +150,9 @@ Usa questa guida dentro il tuo AI coding agent:
 | Una spec è pronta per l'implementazione? | Pianificala prima. | Lancia `/archetipo-implement US-001`. |
 | Una spec è in attesa in `REVIEW`? | Implementala prima. | Lancia `/archetipo-review US-001` per accettarla o rimandarla indietro. |
 
-Per il lavoro batch, `/archetipo-autopilot` esegue l'intera pipeline dal planning all'implementazione finché ogni spec eleggibile raggiunge `REVIEW`. Avvialo senza argomenti per tutto il backlog eleggibile, con `EP-XXX` per un epic oppure con `US-XXX` per una singola spec.
+Per il lavoro batch, `/archetipo-autopilot` esegue l'intera pipeline — planning, implementazione e accettazione autonoma — finché ogni spec eleggibile raggiunge `DONE`. Avvialo senza argomenti per tutto il backlog eleggibile, con `EP-XXX` per un epic oppure con `US-XXX` per una singola spec.
+
+L'accettazione autonoma applica lo stesso gate di `/archetipo-review`, verdetto compreso: approva solo se tutti i criteri di accettazione sono soddisfatti, tutti i task sono done e la Wiki non ha blocker. Altrimenti rimanda indietro la spec con feedback strutturato per al massimo tre cicli di rework; una spec ancora non accettabile resta in `REVIEW` per te, e l'Autopilot prosegue con le spec rimanenti non bloccate.
 
 ---
 
@@ -234,7 +236,7 @@ L'architettura della CLI è estendibile, ma i connector integrati oggi sono `fil
 | `archetipo-plan` | Pianifica una spec con architettura, task, dipendenze e test. | "pianifica US-005", "come lo costruiamo?", "rompi questa spec in task" |
 | `archetipo-implement` | Esegue una spec pianificata attraverso codice, test, review e handoff. | "implementa US-005", "esegui la prossima spec pronta" |
 | `archetipo-review` | Facilita il gate di accettazione umano: approva verso `DONE` o rimanda indietro con feedback di rework. | "review US-005", "accetta la spec", "cosa c'è in attesa di review?" |
-| `archetipo-autopilot` | Esegue planning e implementazione su più spec eleggibili. | "fai tutto", "autopilot del backlog", "implementa tutte le spec" |
+| `archetipo-autopilot` | Esegue planning, implementazione e accettazione autonoma su più spec eleggibili, fino a `DONE`. | "fai tutto", "autopilot del backlog", "implementa tutte le spec" |
 | `archetipo-wiki` | Costruisce una mappa DDD codebase-first di domini, bounded context candidati, relazioni logiche e ownership fisica di codice e test. | "inizializza la Wiki", "mappa i domini", "aggiorna la conoscenza" |
 
 ---
@@ -259,7 +261,7 @@ workflow:
     planned: PLANNED
     in_progress: IN PROGRESS
     review: REVIEW
-    done: DONE   # gate umano: solo /archetipo-review porta una spec qui, dopo approvazione esplicita
+    done: DONE   # gate: /archetipo-review (approvazione umana esplicita) o /archetipo-autopilot (accettazione autonoma)
 
 github:
   # owner: auto-detected from repo

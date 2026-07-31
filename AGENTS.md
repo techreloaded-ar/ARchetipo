@@ -100,7 +100,9 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
   - `env_required`: overrides for the agent's environment requirements.
   - `archetipo_pre_commands`: CLI commands run before prompts.
   - `archetipo_post_commands`: CLI commands run after prompts.
-  - `verify_integrate`: spec codes whose worktree integration must be verified.
+  - `verify_integrate`: spec codes whose worktree integration must be verified. It captures the branch tip before post-commands, so it fits only scenarios where a post-command performs the integration.
+  - `verify_spec_status`: a spec-code-to-status map asserted from `spec show` after the post-commands. Use it when the agent itself performs the final transition and no post-command exit code can carry the proof.
+  - `verify_worktree_cleanup`: entries of `spec`, `branch`, and `worktree` asserting that an integration the agent already performed cleared the spec metadata and removed both branch and worktree. It is `verify_integrate`'s counterpart without the pre-integration tip comparison.
   - `verify_wiki_bootstrap`: expectations for core DDD pages, optional sources represented as `references/` concepts, `generated` state, issues, and targeted content; it also runs `wiki validate --profile bootstrap`.
   - `verify_review_wiki`: first commits configured fixture evidence, then seeds CLI approvals and commits only their page metadata plus Wiki `index.md`/`log.md`. It captures that seeded-review commit, requires every seeded page to be persisted reviewed, fresh, structurally valid, and free of `WIKI_EVIDENCE_CHANGED` before prompts, then verifies `archetipo-review` from machine effects: the exact expected persisted page set is reviewed, required-ready and explicitly reconfirmed affected-only pages appear in the dedicated approval commit, reconfirmed pages preserve their semantic content hash while advancing evidence review metadata and clearing `WIKI_EVIDENCE_CHANGED`, context-only references remain fresh and outside `wiki affected`, configured implementation artifacts have exact committed content, the spec reaches `DONE`, branch/worktree metadata and resources are removed, validation is clean, and the integrated checkout has no tracked or untracked Wiki changes.
   - Every known `verify_review_wiki` field is type-checked before the runner builds the CLI; all configured filesystem paths use one Windows/macOS/Linux-safe project-relative grammar. Unknown extension keys are retained for forward compatibility.
@@ -120,7 +122,8 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 10. For `verify_integrate`, capture the branch, worktree, and tip before post-commands using `spec show` and `git rev-parse`.
 11. Run any `archetipo_post_commands`.
 12. Verify integration: the spec is `DONE`, the pre-integration tip is reachable from `main`, the per-spec branch is deleted, and the worktree directory has been removed and no longer appears in `git worktree list --porcelain`.
-13. For focused Wiki review scenarios, compare unchanged review metadata to the captured seeded-review baseline, verify acceptance from persisted/committed effects (including exact artifact content and exact approval commit paths), then assert branch/worktree cleanup directly without relying on a natural-language verdict.
+13. Assert any `verify_spec_status` expectation from `spec show`, then any `verify_worktree_cleanup` entry: cleared `branch`/`worktree`/`fork_base` metadata, a deleted branch, and a worktree absent from both disk and `git worktree list --porcelain`.
+14. For focused Wiki review scenarios, compare unchanged review metadata to the captured seeded-review baseline, verify acceptance from persisted/committed effects (including exact artifact content and exact approval commit paths), then assert branch/worktree cleanup directly without relying on a natural-language verdict.
 
 ### Current scenarios
 
@@ -132,6 +135,8 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 - `from-plan-to-implement`: fixture `fixtures/plan`, prompt `/archetipo-implement US-001`; worktrees disabled.
 - `worktree-from-plan-to-implement-integrate`: fixture `fixtures/worktree-plan`, prompt `/archetipo-implement US-001`, then `spec integrate US-001`; verifies integration.
 - `worktree-implement-no-integrate`: fixture `fixtures/worktree-plan`, pre-command `spec start US-001`, then `/archetipo-implement US-001`; leaves the work unintegrated.
+- `autopilot-worktree-full`: fixture `fixtures/worktree-plan`, prompt `/archetipo-autopilot US-001`; verifies the full autonomous run — plan, implement, autonomous acceptance — reaches `DONE` and leaves no branch or worktree behind.
+- `autopilot-in-context-full`: fixture `fixtures/plan` (worktrees disabled), prompt `/archetipo-autopilot US-001`; verifies the same run reaches `DONE` through `spec move` rather than integration.
 - `worktree-review-accepts-wiki`: creates a generated-evidence baseline commit, then a separate seeded-review metadata commit and verifies both seeded pages are fresh before prompting. It implements an exact greeting change with one required generated page, one affected-only tracked behavioral page, and one reviewed reference whose shared hub source is context; review approves the required page, explicitly reconfirms the verified-accurate affected-only page, preserves the fresh reference, commits exactly the accepted Wiki paths, integrates the spec, and removes its branch/worktree.
 
 ### Available fixtures
