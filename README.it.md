@@ -150,7 +150,7 @@ Usa questa guida dentro il tuo AI coding agent:
 | Una spec è pronta per l'implementazione? | Pianificala prima. | Lancia `/archetipo-implement US-001`. |
 | Una spec è in attesa in `REVIEW`? | Implementala prima. | Lancia `/archetipo-review US-001` per accettarla o rimandarla indietro. |
 
-Per il lavoro batch, `/archetipo-autopilot` esegue l'intera pipeline — planning, implementazione e accettazione autonoma — finché ogni spec eleggibile raggiunge `DONE`. Avvialo senza argomenti per tutto il backlog eleggibile, con `EP-XXX` per un epic oppure con `US-XXX` per una singola spec.
+Per il lavoro batch, `/archetipo-autopilot` esegue l'intera pipeline — planning, implementazione e accettazione autonoma — finché ogni spec eleggibile raggiunge `DONE`. Avvialo senza argomenti per tutto il backlog eleggibile, oppure passa una qualsiasi combinazione di selettori `EP-XXX` e `US-XXX`: `/archetipo-autopilot EP-002 US-011 US-030` lavora sull'unione di ciò che selezionano. Aggiungi `--max-specs N` per limitare il run a `N` spec: la coda viene troncata al momento del congelamento, quindi le spec escluse non vengono mai toccate e il report finale le elenca.
 
 L'accettazione autonoma applica lo stesso gate di `/archetipo-review`, verdetto compreso: approva solo se tutti i criteri di accettazione sono soddisfatti, tutti i task sono done e la Wiki non ha blocker. Altrimenti rimanda indietro la spec con feedback strutturato per al massimo tre cicli di rework; una spec ancora non accettabile resta in `REVIEW` per te, e l'Autopilot prosegue con le spec rimanenti non bloccate.
 
@@ -236,7 +236,7 @@ L'architettura della CLI è estendibile, ma i connector integrati oggi sono `fil
 | `archetipo-plan` | Pianifica una spec con architettura, task, dipendenze e test. | "pianifica US-005", "come lo costruiamo?", "rompi questa spec in task" |
 | `archetipo-implement` | Esegue una spec pianificata attraverso codice, test, review e handoff. | "implementa US-005", "esegui la prossima spec pronta" |
 | `archetipo-review` | Facilita il gate di accettazione umano: approva verso `DONE` o rimanda indietro con feedback di rework. | "review US-005", "accetta la spec", "cosa c'è in attesa di review?" |
-| `archetipo-autopilot` | Esegue planning, implementazione e accettazione autonoma su più spec eleggibili, fino a `DONE`. | "fai tutto", "autopilot del backlog", "implementa tutte le spec" |
+| `archetipo-autopilot` | Esegue planning, implementazione e accettazione autonoma su più spec eleggibili, fino a `DONE`. Accetta più selettori `EP-XXX`/`US-XXX` e `--max-specs N`. | "fai tutto", "autopilot del backlog", "implementa al massimo due spec" |
 | `archetipo-wiki` | Costruisce una mappa DDD codebase-first di domini, bounded context candidati, relazioni logiche e ownership fisica di codice e test. | "inizializza la Wiki", "mappa i domini", "aggiorna la conoscenza" |
 
 ---

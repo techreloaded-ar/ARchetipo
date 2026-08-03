@@ -171,6 +171,18 @@ scenarios:
     verify_spec_status:
       US-001: DONE
 
+  # Multi-selector scope plus `--max-specs`: both specs of EP-001 are eligible,
+  # but the cap freezes only the first of the ordered queue (US-001, HIGH). The
+  # excluded spec must stay untouched in PLANNED, never started.
+  autopilot-max-specs:
+    agent: claude-haiku
+    fixture: fixtures/autopilot-multi
+    prompts:
+      - /archetipo-autopilot EP-001 --max-specs 1
+    verify_spec_status:
+      US-001: DONE
+      US-002: PLANNED
+
   # Acceptance review approves the required generated page, explicitly
   # reconfirms an accurate affected-only page, preserves a fresh context
   # reference, then integrates.

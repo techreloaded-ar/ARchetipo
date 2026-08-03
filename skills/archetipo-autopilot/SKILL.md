@@ -1,6 +1,6 @@
 ---
 name: archetipo-autopilot
-description: Runs the ARchetipo pipeline autonomously end to end, from planning through implementation to autonomous acceptance, until the selected backlog specs reach DONE. Applies a bounded fix loop of at most three rework cycles per spec; a spec that is still not acceptable stays in REVIEW for a human while the run continues with the remaining specs. Accepts no argument for every eligible spec, one EP-XXX code for an epic, or one US-XXX code for a single spec. Requires a fresh isolated worker for every planning, implementation, and acceptance phase. Use when the user asks to run everything, implement the backlog, process an epic autonomously, or autopilot one or more specs end to end.
+description: Runs the ARchetipo pipeline autonomously end to end, from planning through implementation to autonomous acceptance, until the selected backlog specs reach DONE. Applies a bounded fix loop of at most three rework cycles per spec; a spec that is still not acceptable stays in REVIEW for a human while the run continues with the remaining specs. Accepts no argument for every eligible spec, or any combination of EP-XXX and US-XXX selectors whose eligible specs are unioned, plus an optional --max-specs N flag that caps how many specs the run freezes and completes. Requires a fresh isolated worker for every planning, implementation, and acceptance phase. Use when the user asks to run everything, implement the backlog, process an epic autonomously, or autopilot one or more specs end to end.
 ---
 
 # ARchetipo Autopilot
@@ -25,21 +25,27 @@ Read `./references/acceptance-loop.md` exactly once at activation time as well. 
 
 ## Input
 
-Accept exactly one of these forms:
+The argument list is a sequence of **selectors** plus optional **flags**, in any order:
 
 ```text
 /archetipo-autopilot
 /archetipo-autopilot EP-002
 /archetipo-autopilot US-017
+/archetipo-autopilot EP-002 US-011 US-030
+/archetipo-autopilot --max-specs 3
+/archetipo-autopilot EP-002 --max-specs 2
 ```
 
-Interpret them as follows:
+Interpret selectors as follows:
 
-- no argument: select every eligible spec;
-- one `EP-[0-9]{3}` token: select eligible specs whose `epic.code` matches it;
-- one `US-[0-9]{3}` token: select that exact spec.
+- no selector: select every eligible spec;
+- an `EP-[0-9]{3}` selector: select eligible specs whose `epic.code` matches it;
+- a `US-[0-9]{3}` selector: select that exact spec;
+- several selectors: select the **union** of what each one contributes. A spec named explicitly and also reached through its epic collapses into a single entry.
 
-Reject flags, free-form conditions, malformed identifiers, extra tokens, and multiple identifiers before any mutation. Do not normalize lowercase or infer a partial code.
+Interpret `--max-specs N` as the maximum number of specs this run freezes and completes. `N` is an integer `>= 1`. The cap truncates the ordered queue in Phase 0, so the announced queue is already the definitive one; excluded specs never enter the state file and are never touched. A spec already in configured `{config.workflow.statuses.done}` at freeze time does not consume the cap, because it needs no worker.
+
+Reject unknown flags, free-form conditions, malformed identifiers, and a malformed `--max-specs` value — missing, non-integer, `<= 0`, or the flag repeated — before any mutation. Do not normalize lowercase or infer a partial code.
 
 ## Direct CLI operations
 
@@ -85,8 +91,10 @@ Use this minimal shape:
 ```yaml
 autopilot:
   id: "20260722T103000Z-a1b2"
-  scope: ALL       # ALL | EP-XXX | US-XXX
+  scope: "EP-002 US-011 US-030"   # ALL, or the normalized selector list
+  max_specs: 3                    # null when --max-specs was not passed
   selected_specs: [US-001, US-002, US-003]
+  excluded_by_max_specs: [US-009, US-012]   # [] when the cap did not truncate
   current_spec: US-002
   status: running  # running | error
   started_at: "2026-07-22T10:30:00Z"
@@ -99,16 +107,19 @@ autopilot:
     US-003: { outcome: pending, review_iterations: 0 }
 ```
 
-`outcome` is autopilot bookkeeping, not a mirror of workflow state — the authoritative status always comes from `archetipo spec show`. Terminal values are `done`, `left_in_review`, and `skipped_blocked`; a `left_in_review` entry also records `unresolved: ["..."]` and a `skipped_blocked` entry records the blocking chain. Freeze `max_review_iterations` at `3` when the file is created and never change it during the run.
+`scope` is the **normalized selector list**: the literal `ALL` when the invocation carried no selector, otherwise the deduplicated selectors sorted `EP` codes first, then `US` codes, each group by code, joined by single spaces. Resume matching compares this normalized string, so `EP-002 US-011` and `US-011 EP-002` are the same scope.
+
+`outcome` is autopilot bookkeeping, not a mirror of workflow state — the authoritative status always comes from `archetipo spec show`. Terminal values are `done`, `left_in_review`, and `skipped_blocked`; a `left_in_review` entry also records `unresolved: ["..."]` and a `skipped_blocked` entry records the blocking chain. Freeze `max_review_iterations` at `3` and `max_specs` at the requested value when the file is created, and never change either during the run.
 
 Write state updates atomically through a sibling temporary file followed by replacement when the available file tools support it. Never store phase summaries, duplicated workflow states, plans, task bodies, or source-code observations.
 
 Before creating a run:
 
 1. Find active `autopilot-state-*.yaml` files with `status: running` or `status: error`.
-2. If exactly one file exists and its `scope` equals the requested scope, resume it automatically from its frozen `selected_specs`, `specs` bookkeeping, and `max_review_iterations`; set `status: running` and clear `last_error`.
-3. If an active file has a different scope, or multiple active files exist, stop without mutation and report the conflicting paths.
-4. Never silently discard an active run.
+2. If exactly one file exists and its `scope` equals the requested normalized scope, resume it automatically from its frozen `selected_specs`, `specs` bookkeeping, `max_review_iterations`, and `max_specs`; set `status: running` and clear `last_error`.
+3. A resume inherits the frozen `max_specs`. When the invocation passed a `--max-specs` value different from the frozen one, ignore it, keep the frozen queue, and say so explicitly in the opening message. The cap is never renegotiated mid-run: widening it would require re-freezing a selection the run has already been reporting against.
+4. If an active file has a different scope, or multiple active files exist, stop without mutation and report the conflicting paths.
+5. Never silently discard an active run.
 
 Resume mid-rework as described in `./references/acceptance-loop.md`: a spec in configured `TODO` with `review_iterations > 0` is inside a fix cycle and continues plan → implement → acceptance with the recorded budget, never as fresh work.
 
@@ -118,18 +129,22 @@ Delete the state file only after every selected spec holds a terminal `outcome` 
 
 ### Phase 0 — Initialize
 
-1. Validate the input.
+1. Validate the input and compute the normalized scope.
 2. Verify the isolated worker contract.
 3. Run `archetipo config show` and retain `data.project_root`, configured workflow labels, and paths.
 4. Detect and resume a matching active run when present.
-5. Otherwise run `archetipo spec list` and freeze the selection:
-   - `ALL`: specs in configured `TODO`, `PLANNED`, `IN PROGRESS`, or `REVIEW` states — a spec waiting in review is remaining work now that the target is `{config.workflow.statuses.done}`;
+5. Otherwise run `archetipo spec list` and build the selection as the union of what every selector contributes:
+   - no selector (`ALL`): specs in configured `TODO`, `PLANNED`, `IN PROGRESS`, or `REVIEW` states — a spec waiting in review is remaining work now that the target is `{config.workflow.statuses.done}`;
    - `EP-XXX`: the same eligible states within that epic;
    - `US-XXX`: the exact spec, including configured `DONE` so an already-satisfied invocation can finish as a no-op.
-6. For an unknown `EP-XXX` or `US-XXX`, stop before creating state and report the missing scope.
-7. If `ALL` or an epic contains no eligible specs, report that the scope already has no work requiring Autopilot and stop successfully without creating state.
-8. Validate dependencies and order the frozen selection as described below.
-9. Create the state file with one `specs` entry per selected code (`outcome: pending`, `review_iterations: 0`) and announce the frozen queue.
+
+   Deduplicate by spec code: a spec contributed by several selectors is one entry.
+6. For unknown `EP-XXX` or `US-XXX` selectors, stop before creating state and report **every** missing selector, not just the first.
+7. If the union is empty, report that the scope already has no work requiring Autopilot and stop successfully without creating state.
+8. Order the union as described below. A dependency cycle or a missing blocker is a blocking error here, because it leaves the order undefined.
+9. When `max_specs` is set, walk the ordered queue and retain: every spec already in configured `DONE`, which consumes no budget because it needs no worker, plus the first `N` specs below `DONE`. Drop the rest, preserving the order of what stays, and record the dropped codes in `excluded_by_max_specs`.
+10. **Only now** validate external blockers, and only for the retained specs: a dependency outside the frozen selection counts as satisfied solely when its current status is configured `DONE`. Running this check after truncation is deliberate — checking it before would fail the run over a blocker of a spec the cap excluded anyway.
+11. Create the state file with one `specs` entry per retained code (`outcome: pending`, `review_iterations: 0`) and announce the frozen queue, including how many eligible specs the cap left out.
 
 ### Dependency ordering
 
@@ -139,6 +154,8 @@ Use `blocked_by` from `archetipo spec list` to build a dependency graph.
 - Among currently dependency-ready specs, sort by priority `HIGH`, `MEDIUM`, `LOW`, then by code.
 - Treat a dependency outside the frozen selection as satisfied only when its current status is configured `DONE`. The threshold is `DONE` rather than `REVIEW` because this run accepts specs: in the worktree workflow `spec integrate` refuses a spec with unintegrated blockers, and outside it, accepting work built on unaccepted work is incoherent.
 - Treat a missing blocker, a dependency cycle, or an external blocker below `DONE` as a blocking error. Do not widen an explicit epic or spec scope automatically.
+
+Because every selected blocker precedes its dependent, any prefix of this order is closed under internal blockers: a retained spec can never lose a blocker that was part of the selection. This is what makes `--max-specs` truncation safe — it drops dependents, never their prerequisites, and cannot manufacture spurious `skipped_blocked` outcomes.
 
 ### Phase 1 — Reconcile specs
 
@@ -226,7 +243,8 @@ After the queue is exhausted:
 1. Run `archetipo spec show` once more for every frozen code.
 2. Require each observed status to match the recorded outcome: `done` ⇒ configured `DONE`, `left_in_review` ⇒ configured `REVIEW`. A `skipped_blocked` spec was never touched, so any status is acceptable. A mismatch fails the run.
 3. Delete the state file.
-4. Report the scope and, per spec, its outcome, final status, and the rework iterations consumed. For every `left_in_review` spec add the unresolved findings and the suggested action `/archetipo-review US-XXX`; for every `skipped_blocked` spec add the blocking chain that stopped it.
+4. Report the normalized scope and, per spec, its outcome, final status, and the rework iterations consumed. For every `left_in_review` spec add the unresolved findings and the suggested action `/archetipo-review US-XXX`; for every `skipped_blocked` spec add the blocking chain that stopped it.
+5. When `excluded_by_max_specs` is non-empty, state how many eligible specs `--max-specs` left out, list their codes, and suggest re-running Autopilot with the same selectors to continue. Never let a capped run read as an exhausted backlog.
 
 ## Failure handling
 
@@ -245,10 +263,10 @@ Two outcomes look similar and must not be confused.
 
 Keep controller output compact:
 
-- opening: scope and frozen queue;
+- opening: normalized scope, frozen queue, and — when `--max-specs` truncated it — the number of eligible specs left out;
 - after each verified phase: spec, phase, observed transition;
 - after each acceptance phase additionally: the verdict and the iterations used out of `max_review_iterations`;
 - after each spec reaching a terminal outcome: that outcome and the progress count;
-- closure: per-spec outcomes and final states, or the first blocking error.
+- closure: per-spec outcomes and final states plus the specs the cap excluded, or the first blocking error.
 
 Render all messages in the language selected by the shared runtime.

@@ -154,7 +154,7 @@ Use this decision guide inside your AI coding agent:
 | Is a spec ready for implementation? | Plan it first. | Run `/archetipo-implement US-001`. |
 | Is a spec waiting in `REVIEW`? | Implement it first. | Run `/archetipo-review US-001` to accept it or send it back. |
 
-For batch work, `/archetipo-autopilot` runs the complete pipeline — planning, implementation, and autonomous acceptance — until every eligible spec reaches `DONE`. Run it without arguments for the whole eligible backlog, with `EP-XXX` for one epic, or with `US-XXX` for one spec.
+For batch work, `/archetipo-autopilot` runs the complete pipeline — planning, implementation, and autonomous acceptance — until every eligible spec reaches `DONE`. Run it without arguments for the whole eligible backlog, or pass any combination of `EP-XXX` and `US-XXX` selectors — `/archetipo-autopilot EP-002 US-011 US-030` works on the union of what they select. Add `--max-specs N` to cap the run at `N` specs: the queue is truncated when it is frozen, so the specs left out are never touched and the closing report lists them.
 
 Autonomous acceptance applies the same gate as `/archetipo-review`, verdict included: it approves only when every acceptance criterion is met, every task is done, and the Wiki has no blocker. When it is not, it sends the spec back with structured feedback for at most three rework cycles; a spec that is still not acceptable stays in `REVIEW` for you, and Autopilot moves on to the remaining unblocked specs.
 
@@ -247,7 +247,7 @@ The CLI architecture is extensible, but the built-in connectors today are `file`
 | `archetipo-plan` | Plans one spec with architecture, tasks, dependencies, and tests. | "plan US-005", "how do we build this?", "break this into tasks" |
 | `archetipo-implement` | Executes a planned spec through code, tests, review, and handoff. | "implement US-005", "run the next ready spec" |
 | `archetipo-review` | Facilitates the human acceptance gate: approve to `DONE` or send back with rework feedback. | "review US-005", "accept the spec", "what's waiting for review?" |
-| `archetipo-autopilot` | Runs planning, implementation, and autonomous acceptance across multiple eligible specs, up to `DONE`. | "run everything", "autopilot the backlog", "implement all specs" |
+| `archetipo-autopilot` | Runs planning, implementation, and autonomous acceptance across multiple eligible specs, up to `DONE`. Accepts several `EP-XXX`/`US-XXX` selectors and `--max-specs N`. | "run everything", "autopilot the backlog", "implement two specs at most" |
 | `archetipo-wiki` | Builds a codebase-first DDD map of domains, candidate bounded contexts, logical relationships, and their physical code/test ownership. | "bootstrap the Wiki", "map the domains", "refresh project knowledge" |
 
 ---

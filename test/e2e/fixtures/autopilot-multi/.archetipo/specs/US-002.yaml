@@ -1,0 +1,23 @@
+schema: archetipo/spec/v2
+code: US-002
+title: Aggiungi un file di congedo
+epic:
+  code: EP-001
+  title: Smoke test
+priority: LOW
+points: 1
+status: PLANNED
+body: |
+  ## User Story
+
+  As a maintainer, I want a second trivial file added to the repository so that
+  a run capped with --max-specs has a spec left to skip.
+
+  ## Acceptance Criteria
+
+  - A file `goodbye.txt` exists at the repository root.
+  - The file contains the single line `Goodbye from ARchetipo`.
+
+  ## Scope
+
+  Create one new text file. No build, dependencies, or existing files change.
