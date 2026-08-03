@@ -15,7 +15,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/viewreg"
@@ -48,13 +47,9 @@ path changes. The server binds to the loopback interface only; no
 authentication is performed.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cwd, err := os.Getwd()
+			cfg, err := loadConfigFor(cmd)
 			if err != nil {
-				return iox.NewInternal("cwd unavailable", err)
-			}
-			cfg, err := config.Load(cwd)
-			if err != nil {
-				return iox.NewInvalidInput(err.Error(), "fix the file or remove it to fall back to defaults", err)
+				return err
 			}
 			conn, err := connector.New(cfg)
 			if err != nil {

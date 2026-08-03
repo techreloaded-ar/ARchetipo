@@ -32,10 +32,16 @@ const (
 )
 
 // Envelope is the shape written to stdout for every successful command.
+//
+// Warnings carries non-fatal notices about how the command resolved its inputs
+// (today: the nested-worktree project-root correction). It is optional and
+// omitted when empty: consumers must tolerate its absence and must never branch
+// on its text.
 type Envelope struct {
-	Schema string `json:"schema"`
-	Kind   string `json:"kind"`
-	Data   any    `json:"data,omitempty"`
+	Schema   string   `json:"schema"`
+	Kind     string   `json:"kind"`
+	Data     any      `json:"data,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // ErrorEnvelope is the shape written to stderr on failure.
@@ -127,9 +133,15 @@ func NewConflict(message, hint string, cause error) *CodedError {
 
 // WriteOK marshals data as a success envelope on the given writer.
 func WriteOK(w io.Writer, kind string, data any) error {
+	return WriteOKWithWarnings(w, kind, data, nil)
+}
+
+// WriteOKWithWarnings marshals data as a success envelope carrying non-fatal
+// notices. Empty warnings produce exactly the same output as WriteOK.
+func WriteOKWithWarnings(w io.Writer, kind string, data any, warnings []string) error {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	return enc.Encode(Envelope{Schema: Schema, Kind: kind, Data: data})
+	return enc.Encode(Envelope{Schema: Schema, Kind: kind, Data: data, Warnings: warnings})
 }
 
 // WriteError marshals err as an error envelope on the given writer. Errors

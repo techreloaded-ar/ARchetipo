@@ -42,7 +42,7 @@ func newDoctorCmd(s streams) *cobra.Command {
 			"Exits non-zero when a check fails.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			checks := runDoctorChecks(cmd.Context())
+			checks := runDoctorChecks(cmd)
 			failed := 0
 			fmt.Fprintf(s.out, "archetipo %s\n\n", version.Version)
 			for _, c := range checks {
@@ -71,7 +71,8 @@ func newDoctorCmd(s streams) *cobra.Command {
 	}
 }
 
-func runDoctorChecks(ctx context.Context) []doctorCheck {
+func runDoctorChecks(cmd *cobra.Command) []doctorCheck {
+	ctx := cmd.Context()
 	var checks []doctorCheck
 
 	// 1. Data directory (skills + runtime shipped with the CLI).
@@ -89,7 +90,7 @@ func runDoctorChecks(ctx context.Context) []doctorCheck {
 	}
 
 	// 2. Project config.
-	cfg, cfgErr := config.Load(".")
+	cfg, cfgErr := loadConfigFor(cmd)
 	if cfgErr != nil {
 		checks = append(checks, doctorCheck{
 			name:   "project config",
@@ -98,6 +99,11 @@ func runDoctorChecks(ctx context.Context) []doctorCheck {
 		})
 	} else {
 		detail := fmt.Sprintf("connector %q, project root %s", cfg.Connector, cfg.ProjectRoot)
+		// doctor prints human-readable text instead of an envelope, so the
+		// root-resolution notices ride along in the check detail.
+		for _, notice := range cfg.ResolutionNotices {
+			detail += "; " + notice
+		}
 		checks = append(checks, doctorCheck{name: "project config", ok: true, detail: detail})
 		checks = append(checks, checkWiki(cfg))
 	}

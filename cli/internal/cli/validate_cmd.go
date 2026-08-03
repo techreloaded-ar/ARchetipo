@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/validation"
@@ -54,13 +53,9 @@ structured data.findings. Use those findings to correct the PRD and retry.`,
 
 func runValidatePRD(s streams, filePath *string) func(cmd *cobra.Command, _ []string) error {
 	return func(cmd *cobra.Command, _ []string) error {
-		cwd, err := os.Getwd()
+		cfg, err := loadConfigFor(cmd)
 		if err != nil {
-			return iox.NewInternal("cwd unavailable", err)
-		}
-		cfg, err := config.Load(cwd)
-		if err != nil {
-			return iox.NewInvalidInput(err.Error(), "fix the file or remove it to fall back to defaults", err)
+			return err
 		}
 
 		var markdown string
@@ -99,7 +94,7 @@ func runValidatePRD(s streams, filePath *string) func(cmd *cobra.Command, _ []st
 		}
 
 		result := validation.ValidatePRD(target, markdown)
-		return iox.WriteOK(s.out, "validation_result", result)
+		return iox.WriteOKWithWarnings(s.out, "validation_result", result, cfg.ResolutionNotices)
 	}
 }
 

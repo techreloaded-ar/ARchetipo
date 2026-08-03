@@ -2026,3 +2026,142 @@ Performance and reliability requirements.
 Concrete next steps.
 `
 }
+
+// decodeOKEnvelope is decodeOK plus the optional warnings[] field, so tests can
+// assert both the payload and the root-resolution notices.
+func decodeOKEnvelope(t *testing.T, res result) (string, map[string]any, []string) {
+	t.Helper()
+	if res.exit != 0 {
+		t.Fatalf("expected exit 0, got %d. stderr=%s", res.exit, res.stderr.String())
+	}
+	var env struct {
+		Schema   string         `json:"schema"`
+		Kind     string         `json:"kind"`
+		Data     map[string]any `json:"data"`
+		Warnings []string       `json:"warnings"`
+	}
+	if err := json.Unmarshal(res.stdout.Bytes(), &env); err != nil {
+		t.Fatalf("decoding stdout: %v\nraw=%s", err, res.stdout.String())
+	}
+	return env.Kind, env.Data, env.Warnings
+}
+
+// specStatus reads the status out of a `spec show` payload.
+func specStatus(t *testing.T, data map[string]any) string {
+	t.Helper()
+	spec, ok := data["spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload has no spec object: %v", data)
+	}
+	status, _ := spec["status"].(string)
+	return status
+}
+
+// seedCommittedWorktreeSpec reproduces the layout behind the real incident:
+// .archetipo/ is tracked, so the per-spec worktree carries a copy of both
+// config.yaml and backlog.yaml frozen at its fork base. The spec is PLANNED in
+// that frozen copy and IN PROGRESS in the parent checkout, so a stale read is
+// visible in the status alone.
+func seedCommittedWorktreeSpec(t *testing.T) (projectRoot, worktree string) {
+	t.Helper()
+	newProject(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeWorktreeConfig(t)
+	initGitMain(t)
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	planFile := writeInputFile(t, "plan.json", planJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "plan", "US-001", "--file", planFile); res.exit != 0 {
+		t.Fatalf("plan failed: %s", res.stderr.String())
+	}
+	mustRun(t, "git", "add", ".archetipo")
+	mustRun(t, "git", "commit", "-m", "track archetipo state")
+	if res := runCLI(t, "", "spec", "start", "US-001"); res.exit != 0 {
+		t.Fatalf("start failed: %s", res.stderr.String())
+	}
+	worktree = filepath.Join(root, ".archetipo", "worktrees", "US-001")
+	if _, err := os.Stat(filepath.Join(worktree, ".archetipo", "config.yaml")); err != nil {
+		t.Fatalf("worktree is missing its frozen config copy: %v", err)
+	}
+	return root, worktree
+}
+
+func TestSpecShowFromInsideWorktreeResolvesParentAndWarns(t *testing.T) {
+	projectRoot, worktree := seedCommittedWorktreeSpec(t)
+	t.Chdir(worktree)
+
+	kind, data, warnings := decodeOKEnvelope(t, runCLI(t, "", "spec", "show", "US-001"))
+	if kind != "spec" {
+		t.Fatalf("kind = %q", kind)
+	}
+	if status := specStatus(t, data); status != "IN PROGRESS" {
+		t.Fatalf("read stale state from the worktree copy: status = %q", status)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want exactly one", warnings)
+	}
+	if !strings.Contains(warnings[0], "US-001") || !strings.Contains(warnings[0], projectRoot) {
+		t.Fatalf("warning does not name the worktree and the resolved root: %q", warnings[0])
+	}
+}
+
+func TestChdirFlagResolvesProjectFromOutside(t *testing.T) {
+	projectRoot, _ := seedCommittedWorktreeSpec(t)
+	t.Chdir(t.TempDir())
+
+	_, data, warnings := decodeOKEnvelope(t, runCLI(t, "", "-C", projectRoot, "spec", "show", "US-001"))
+	if status := specStatus(t, data); status != "IN PROGRESS" {
+		t.Fatalf("status = %q, want IN PROGRESS", status)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("an explicit root must not warn, got %v", warnings)
+	}
+}
+
+func TestChdirFlagDisablesNestedWorktreeGuard(t *testing.T) {
+	_, worktree := seedCommittedWorktreeSpec(t)
+	t.Chdir(t.TempDir())
+
+	// The explicit flag wins: the worktree's own frozen state is returned, and
+	// there is nothing to warn about because the user named the root.
+	_, data, warnings := decodeOKEnvelope(t, runCLI(t, "", "-C", worktree, "spec", "show", "US-001"))
+	if status := specStatus(t, data); status != "PLANNED" {
+		t.Fatalf("guard should be off with -C: status = %q, want the frozen PLANNED", status)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("an explicit root must not warn, got %v", warnings)
+	}
+}
+
+func TestChdirFlagRejectsMissingDirectory(t *testing.T) {
+	newProject(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exit, code := decodeError(t, runCLI(t, "", "-C", filepath.Join(root, "nope"), "spec", "list"))
+	if code != iox.CodeInvalidInput {
+		t.Fatalf("code = %q exit = %d, want %q", code, exit, iox.CodeInvalidInput)
+	}
+}
+
+func TestWikiProjectRootStillTargetsWorktreeFromInsideIt(t *testing.T) {
+	projectRoot, worktree := seedCommittedWorktreeSpec(t)
+	t.Chdir(worktree)
+
+	res := runCLI(t, "", "wiki", "--project-root", worktree, "init")
+	if res.exit != 0 {
+		t.Fatalf("wiki init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(worktree, "docs", "wiki", "index.md")); err != nil {
+		t.Fatalf("worktree Wiki missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(projectRoot, "docs", "wiki", "index.md")); !os.IsNotExist(err) {
+		t.Fatalf("parent checkout Wiki should be untouched: %v", err)
+	}
+}

@@ -529,6 +529,8 @@ func TestRenderFullRendersCanonicalConfig(t *testing.T) {
 	c := Default()
 	c.Connector = ConnectorJira
 	c.Jira.BaseURL = "https://acme.atlassian.net"
+	c.ProjectRoot = "/tmp/project"
+	c.ResolutionNotices = []string{"cwd is inside ARchetipo worktree US-001"}
 	out, err := RenderFull(c)
 	must(t, err)
 	s := string(out)
@@ -545,8 +547,10 @@ func TestRenderFullRendersCanonicalConfig(t *testing.T) {
 			t.Fatalf("rendered config missing %q:\n%s", want, s)
 		}
 	}
-	if strings.Contains(s, "project_root") {
-		t.Fatalf("rendered config leaked runtime field:\n%s", s)
+	for _, runtimeOnly := range []string{"project_root", "resolutionnotices", "resolution_notices", "US-001"} {
+		if strings.Contains(s, runtimeOnly) {
+			t.Fatalf("rendered config leaked runtime field %q:\n%s", runtimeOnly, s)
+		}
 	}
 }
 
@@ -610,5 +614,148 @@ func TestSaveRawCreatesBackupOnOverwrite(t *testing.T) {
 	must(t, err)
 	if string(got) != "connector: github\n" {
 		t.Fatalf("saved config mismatch: %q", string(got))
+	}
+}
+
+// seedNestedWorktree builds the layout that made a real autopilot run read
+// stale state: a parent checkout plus a per-spec git worktree carrying its own
+// committed copy of .archetipo/config.yaml, deliberately pointing at different
+// paths so a wrong resolution is visible in the assertions.
+func seedNestedWorktree(t *testing.T, parentWorktreeDir string) (parent, worktree string) {
+	t.Helper()
+	parent = t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(parent, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(parent, RelativePath),
+		[]byte("connector: file\npaths:\n  wiki: parent/wiki\nworktree:\n  dir: "+parentWorktreeDir+"\n"), 0o644))
+
+	worktree = filepath.Join(parent, filepath.FromSlash(".archetipo/worktrees"), "US-001")
+	must(t, os.MkdirAll(filepath.Join(worktree, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(worktree, RelativePath),
+		[]byte("connector: file\npaths:\n  wiki: stale/wiki\n"), 0o644))
+	return parent, worktree
+}
+
+func TestLoadResolvesParentCheckoutFromNestedWorktree(t *testing.T) {
+	parent, worktree := seedNestedWorktree(t, ".archetipo/worktrees")
+
+	c, err := Load(worktree)
+	must(t, err)
+	if c.ProjectRoot != parent {
+		t.Fatalf("ProjectRoot = %q, want parent %q", c.ProjectRoot, parent)
+	}
+	if c.Paths.Wiki != "parent/wiki" {
+		t.Fatalf("read stale worktree config: wiki = %q", c.Paths.Wiki)
+	}
+	if len(c.ResolutionNotices) != 1 {
+		t.Fatalf("ResolutionNotices = %v, want exactly one", c.ResolutionNotices)
+	}
+	if !strings.Contains(c.ResolutionNotices[0], "US-001") || !strings.Contains(c.ResolutionNotices[0], parent) {
+		t.Fatalf("notice does not name the worktree and the resolved root: %q", c.ResolutionNotices[0])
+	}
+}
+
+func TestLoadResolvesParentFromDeepInsideWorktree(t *testing.T) {
+	parent, worktree := seedNestedWorktree(t, ".archetipo/worktrees")
+	deep := filepath.Join(worktree, "src", "sub")
+	must(t, os.MkdirAll(deep, 0o755))
+
+	// The guard acts on the resolved root, not on the literal cwd.
+	c, err := Load(deep)
+	must(t, err)
+	if c.ProjectRoot != parent || c.Paths.Wiki != "parent/wiki" {
+		t.Fatalf("root = %q wiki = %q, want parent %q / parent/wiki", c.ProjectRoot, c.Paths.Wiki, parent)
+	}
+	if len(c.ResolutionNotices) != 1 {
+		t.Fatalf("ResolutionNotices = %v, want exactly one", c.ResolutionNotices)
+	}
+}
+
+func TestLoadFromProjectRootIsUnchanged(t *testing.T) {
+	parent, _ := seedNestedWorktree(t, ".archetipo/worktrees")
+
+	c, err := Load(parent)
+	must(t, err)
+	if c.ProjectRoot != parent {
+		t.Fatalf("ProjectRoot = %q, want %q", c.ProjectRoot, parent)
+	}
+	if len(c.ResolutionNotices) != 0 {
+		t.Fatalf("unexpected notices from the project root: %v", c.ResolutionNotices)
+	}
+}
+
+func TestLoadExactKeepsWorktreeConfig(t *testing.T) {
+	_, worktree := seedNestedWorktree(t, ".archetipo/worktrees")
+
+	c, err := LoadExact(worktree)
+	must(t, err)
+	if c.ProjectRoot != worktree {
+		t.Fatalf("LoadExact ProjectRoot = %q, want worktree %q", c.ProjectRoot, worktree)
+	}
+	if c.Paths.Wiki != "stale/wiki" {
+		t.Fatalf("LoadExact wiki = %q, want the worktree's own value", c.Paths.Wiki)
+	}
+	if len(c.ResolutionNotices) != 0 {
+		t.Fatalf("LoadExact must not emit notices, got %v", c.ResolutionNotices)
+	}
+}
+
+func TestLoadForTargetKeepsWorktreeTarget(t *testing.T) {
+	parent, worktree := seedNestedWorktree(t, ".archetipo/worktrees")
+
+	// `wiki --project-root <worktree>` must keep targeting the worktree.
+	c, err := LoadForTarget(parent, worktree)
+	must(t, err)
+	if c.ProjectRoot != worktree {
+		t.Fatalf("LoadForTarget ProjectRoot = %q, want worktree %q", c.ProjectRoot, worktree)
+	}
+	if c.Paths.Wiki != "stale/wiki" {
+		t.Fatalf("LoadForTarget wiki = %q, want the worktree's own value", c.Paths.Wiki)
+	}
+	if len(c.ResolutionNotices) != 0 {
+		t.Fatalf("LoadForTarget must not emit notices, got %v", c.ResolutionNotices)
+	}
+}
+
+func TestLoadDoesNotAscendWhenWorktreeDirDiffers(t *testing.T) {
+	// The parent stores its worktrees under .wt, so a directory under
+	// .archetipo/worktrees is not one of its worktrees and must be left alone.
+	_, worktree := seedNestedWorktree(t, ".wt")
+
+	c, err := Load(worktree)
+	must(t, err)
+	if c.ProjectRoot != worktree || c.Paths.Wiki != "stale/wiki" {
+		t.Fatalf("unexpected ascent: root = %q wiki = %q", c.ProjectRoot, c.Paths.Wiki)
+	}
+	if len(c.ResolutionNotices) != 0 {
+		t.Fatalf("unexpected notices: %v", c.ResolutionNotices)
+	}
+}
+
+func TestLoadAscendsWithForeignSeparatorInConfig(t *testing.T) {
+	// A config authored on Windows keeps working on Unix and vice versa.
+	parent, worktree := seedNestedWorktree(t, `.archetipo\worktrees`)
+
+	c, err := Load(worktree)
+	must(t, err)
+	if c.ProjectRoot != parent || c.Paths.Wiki != "parent/wiki" {
+		t.Fatalf("root = %q wiki = %q, want parent %q / parent/wiki", c.ProjectRoot, c.Paths.Wiki, parent)
+	}
+	if len(c.ResolutionNotices) != 1 {
+		t.Fatalf("ResolutionNotices = %v, want exactly one", c.ResolutionNotices)
+	}
+}
+
+func TestLoadKeepsWorktreeWhenParentConfigIsMalformed(t *testing.T) {
+	parent, worktree := seedNestedWorktree(t, ".archetipo/worktrees")
+	must(t, os.WriteFile(filepath.Join(parent, RelativePath), []byte("connector: file\n  bad: [yaml\n"), 0o644))
+
+	// The guard never turns a parent problem into a Load failure.
+	c, err := Load(worktree)
+	must(t, err)
+	if c.ProjectRoot != worktree || c.Paths.Wiki != "stale/wiki" {
+		t.Fatalf("unexpected ascent on malformed parent: root = %q wiki = %q", c.ProjectRoot, c.Paths.Wiki)
+	}
+	if len(c.ResolutionNotices) != 0 {
+		t.Fatalf("unexpected notices: %v", c.ResolutionNotices)
 	}
 }

@@ -36,13 +36,13 @@ func newWikiInspectCmd(s streams) *cobra.Command {
 }
 
 func withWiki(cmd *cobra.Command, s streams, kind string, require bool, fn func(config.Config, string) (any, error)) error {
+	cfg, err := loadConfigFor(cmd)
+	if err != nil {
+		return err
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return iox.NewInternal("cwd unavailable", err)
-	}
-	cfg, err := config.Load(cwd)
-	if err != nil {
-		return iox.NewInvalidInput(err.Error(), "fix .archetipo/config.yaml", err)
 	}
 	projectRoot, err := cmd.Flags().GetString("project-root")
 	if err != nil {
@@ -64,6 +64,10 @@ func withWiki(cmd *cobra.Command, s streams, kind string, require bool, fn func(
 		if err != nil {
 			return iox.NewInvalidInput(err.Error(), "fix the target .archetipo/config.yaml", err)
 		}
+		// The user named the checkout explicitly: there is nothing to warn
+		// about, and any notice inherited through the LoadForTarget fallback
+		// would describe a root that has just been retargeted.
+		cfg.ResolutionNotices = nil
 	}
 	root := cfg.Paths.Wiki
 	if !filepath.IsAbs(root) {
@@ -80,7 +84,7 @@ func withWiki(cmd *cobra.Command, s streams, kind string, require bool, fn func(
 	if err != nil {
 		return err
 	}
-	if err := iox.WriteOK(s.out, kind, data); err != nil {
+	if err := iox.WriteOKWithWarnings(s.out, kind, data, cfg.ResolutionNotices); err != nil {
 		return iox.NewInternal("encoding output", err)
 	}
 	return nil

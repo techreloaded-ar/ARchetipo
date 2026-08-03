@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -60,6 +62,34 @@ func newRootCmd(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 	}
 	cmd.SetVersionTemplate(versionLine())
 	cmd.SetContext(context.Background())
+
+	// -C works like `git -C`: a real chdir before the sub-command runs, so every
+	// relative path (--file, git invocations, the connector) behaves exactly as
+	// if the command had been launched from there. It is also the explicit
+	// override for the nested-worktree guard in config.Load (see loadConfigFor):
+	// an implicit cwd is not trusted, an explicit root is.
+	cmd.PersistentFlags().StringP(chdirFlag, "C", "", "run as if started from <dir> (resolution root, nested-worktree guard disabled)")
+	cmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
+		dir, err := c.Flags().GetString(chdirFlag)
+		if err != nil {
+			return iox.NewInternal("reading --"+chdirFlag, err)
+		}
+		if dir == "" {
+			return nil
+		}
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return iox.NewInvalidInput("invalid --"+chdirFlag+" directory: "+dir, "pass an existing directory", err)
+		}
+		info, err := os.Stat(abs)
+		if err != nil || !info.IsDir() {
+			return iox.NewInvalidInput("--"+chdirFlag+" directory not found: "+abs, "pass an existing directory", err)
+		}
+		if err := os.Chdir(abs); err != nil {
+			return iox.NewInvalidInput("cannot enter --"+chdirFlag+" directory: "+abs, "pass an existing directory", err)
+		}
+		return nil
+	}
 
 	s := streams{in: stdin, out: stdout, err: stderr}
 	cmd.AddCommand(

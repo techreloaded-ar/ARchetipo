@@ -1,11 +1,8 @@
 package cli
 
 import (
-	"os"
-
 	"github.com/spf13/cobra"
 
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/e2e"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
@@ -18,17 +15,15 @@ func newE2ECmd(s streams) *cobra.Command {
 	return root
 }
 
-// projectRoot loads the config from cwd and returns its ProjectRoot. config.Load
-// falls back to a default rooted at cwd when no .archetipo/config.yaml exists,
-// so this never fails just because the project is not initialized.
-func projectRoot() (string, error) {
-	cwd, err := os.Getwd()
+// projectRoot resolves the config for this invocation and returns its
+// ProjectRoot. Resolution falls back to a default rooted at cwd when no
+// .archetipo/config.yaml exists, so this never fails just because the project is
+// not initialized. Inside a per-spec worktree the nested-worktree guard resolves
+// the parent checkout: pass `-C {workdir}` to run the worktree's own tests.
+func projectRoot(cmd *cobra.Command) (string, error) {
+	cfg, err := loadConfigFor(cmd)
 	if err != nil {
-		return "", iox.NewInternal("cwd unavailable", err)
-	}
-	cfg, err := config.Load(cwd)
-	if err != nil {
-		return "", iox.NewInvalidInput(err.Error(), "fix .archetipo/config.yaml or remove it to fall back to defaults", err)
+		return "", err
 	}
 	return cfg.ProjectRoot, nil
 }
@@ -39,7 +34,7 @@ func newE2EDetectCmd(s streams) *cobra.Command {
 		Short: "Report the e2e framework state of the project",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			root, err := projectRoot()
+			root, err := projectRoot(cmd)
 			if err != nil {
 				return err
 			}
@@ -63,7 +58,7 @@ func newE2EEnsureCmd(s streams) *cobra.Command {
 			"Non-interactive and idempotent: safe to run repeatedly.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			root, err := projectRoot()
+			root, err := projectRoot(cmd)
 			if err != nil {
 				return err
 			}
@@ -90,7 +85,7 @@ func newE2ERunCmd(s streams) *cobra.Command {
 		Short: "Run the Playwright functional suite headless (no video)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			root, err := projectRoot()
+			root, err := projectRoot(cmd)
 			if err != nil {
 				return err
 			}
@@ -115,13 +110,9 @@ func newE2EDemoCmd(s streams) *cobra.Command {
 			"settings are injected via an ephemeral config, so the demo test file stays a plain scenario.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cwd, err := os.Getwd()
+			cfg, err := loadConfigFor(cmd)
 			if err != nil {
-				return iox.NewInternal("cwd unavailable", err)
-			}
-			cfg, err := config.Load(cwd)
-			if err != nil {
-				return iox.NewInvalidInput(err.Error(), "fix .archetipo/config.yaml or remove it to fall back to defaults", err)
+				return err
 			}
 			if !cfg.E2E.RecordDemoVideo {
 				return iox.WriteOK(s.out, "e2e_demo", e2e.DemoResult{

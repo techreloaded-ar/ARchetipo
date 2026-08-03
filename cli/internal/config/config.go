@@ -13,9 +13,11 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -51,6 +53,11 @@ type Config struct {
 	// ProjectRoot is the absolute path of the directory that contains
 	// .archetipo/. Set by Load; not present in the YAML file.
 	ProjectRoot string `yaml:"-" json:"project_root"`
+	// ResolutionNotices records non-fatal corrections applied while resolving
+	// the project root (today: the nested-worktree guard in Load). Runtime-only:
+	// never serialized to the config file nor to the viewer JSON; commands
+	// surface it as the optional `warnings[]` field of the success envelope.
+	ResolutionNotices []string `yaml:"-" json:"-"`
 }
 
 // GitHubConfig holds connector-specific overrides. Owner and project number
@@ -118,10 +125,122 @@ func Default() Config {
 	}
 }
 
-// Load locates `.archetipo/config.yaml` starting from startDir, walking up
-// the directory tree until found or the filesystem root is reached. When
-// not found, the default config rooted at startDir is returned.
+// maxWorktreeAscents bounds the nested-worktree fixed-point walk in Load. A
+// worktree of a worktree is already exotic; eight hops is a hard stop against a
+// pathological (or hand-crafted) layout, never a limit real projects can reach.
+const maxWorktreeAscents = 8
+
+// Load locates `.archetipo/config.yaml` starting from startDir and corrects for
+// the nested-worktree case: a per-spec git worktree carries a committed copy of
+// .archetipo/ frozen at its fork base, so resolving it would silently return
+// stale backlog state. When startDir resolves inside
+// <parent>/<parent.worktree.dir>/<CODE>, the parent checkout is authoritative
+// and a ResolutionNotices entry records the correction.
+//
+// Callers that received an explicit root from the user (the -C flag, `wiki
+// --project-root`) must use LoadExact or LoadForTarget instead: an explicit
+// root is trusted, an implicit cwd is not.
 func Load(startDir string) (Config, error) {
+	cfg, err := LoadExact(startDir)
+	if err != nil {
+		return Config{}, err
+	}
+	innermostCode := ""
+	for hop := 0; hop < maxWorktreeAscents; hop++ {
+		parentRoot, worktreeCode, found := resolveNestedWorktreeParent(cfg.ProjectRoot)
+		if !found {
+			break
+		}
+		parent, parentErr := LoadExact(parentRoot)
+		if parentErr != nil {
+			// The guard never makes Load fail: a broken parent config leaves
+			// the worktree-resolved config in place.
+			break
+		}
+		if innermostCode == "" {
+			innermostCode = worktreeCode
+		}
+		cfg = parent
+	}
+	if innermostCode != "" {
+		cfg.ResolutionNotices = []string{fmt.Sprintf(
+			"cwd is inside ARchetipo worktree %s; resolved project root to %s (pass -C to override)",
+			innermostCode, cfg.ProjectRoot)}
+	}
+	return cfg, nil
+}
+
+// resolveNestedWorktreeParent reports whether worktreeRoot is a per-spec git
+// worktree living under a parent checkout's configured worktree directory, and
+// returns that parent root plus the spec code. The parent config owns the
+// layout, so the parent's `worktree.dir` is what the path is matched against;
+// `worktree.enabled` is deliberately ignored, since the shape of the path is the
+// evidence and a drifted config must not switch the guard off.
+//
+// The match is lexical first (to extract the code) and then confirmed with
+// os.SameFile, which compares real file identity and is therefore immune to
+// case-insensitive filesystems, separator style, Windows 8.3 short names and
+// symlinks such as macOS /tmp -> /private/tmp. Any doubt resolves to false: a
+// missed correction is a return to today's behaviour, a wrong one is a silent
+// redirect to another project.
+func resolveNestedWorktreeParent(worktreeRoot string) (parentRoot, worktreeCode string, found bool) {
+	parentRoot, parentCfgPath, err := find(filepath.Dir(worktreeRoot))
+	if err != nil || parentCfgPath == "" {
+		return "", "", false
+	}
+	raw, exists, _, err := ReadRaw(parentRoot)
+	if err != nil || !exists {
+		return "", "", false
+	}
+	parentCfg, err := parseRaw(parentRoot, parentCfgPath, []byte(raw))
+	if err != nil {
+		return "", "", false
+	}
+	// The config is hand-written and may carry either separator; rel carries the
+	// platform separator. Normalize both to slashes before comparing. The
+	// config value is rewritten unconditionally (not via filepath.ToSlash, which
+	// is a no-op off Windows) so a project authored on Windows still matches
+	// when the same checkout is used on macOS or Linux.
+	worktreeDir := path.Clean(strings.ReplaceAll(parentCfg.Worktree.Dir, `\`, "/"))
+	if worktreeDir == "" || worktreeDir == "." {
+		return "", "", false
+	}
+	rel, err := filepath.Rel(parentRoot, worktreeRoot)
+	if err != nil {
+		// Legitimate on Windows when the two paths sit on different volumes.
+		return "", "", false
+	}
+	relSlash := path.Clean(filepath.ToSlash(rel))
+	prefix := worktreeDir + "/"
+	if len(relSlash) <= len(prefix) || !strings.EqualFold(relSlash[:len(prefix)], prefix) {
+		return "", "", false
+	}
+	// Exactly one segment beyond worktree.dir, the same convention as
+	// gitwt.WorktreeRel.
+	worktreeCode = relSlash[len(prefix):]
+	if worktreeCode == "" || strings.Contains(worktreeCode, "/") {
+		return "", "", false
+	}
+	expected := filepath.Join(parentRoot, filepath.FromSlash(worktreeDir), worktreeCode)
+	expectedInfo, err := os.Stat(expected)
+	if err != nil {
+		return "", "", false
+	}
+	actualInfo, err := os.Stat(worktreeRoot)
+	if err != nil {
+		return "", "", false
+	}
+	if !os.SameFile(expectedInfo, actualInfo) {
+		return "", "", false
+	}
+	return parentRoot, worktreeCode, true
+}
+
+// LoadExact locates `.archetipo/config.yaml` starting from startDir, walking up
+// the directory tree until found or the filesystem root is reached, with no
+// nested-worktree correction: the nearest config wins. When not found, the
+// default config rooted at startDir is returned.
+func LoadExact(startDir string) (Config, error) {
 	root, cfgPath, err := find(startDir)
 	if err != nil {
 		return Config{}, err
@@ -197,6 +316,7 @@ func ReadRaw(root string) (raw string, exists bool, path string, err error) {
 func RenderFull(c Config) ([]byte, error) {
 	c.applyDefaults()
 	c.ProjectRoot = ""
+	c.ResolutionNotices = nil
 	return yaml.Marshal(&c)
 }
 
