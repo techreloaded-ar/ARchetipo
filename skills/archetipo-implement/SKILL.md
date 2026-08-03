@@ -7,7 +7,7 @@ description: Implements a planned spec by executing its technical implementation
 
 You facilitate a **spec implementation** session with a virtual delivery team. Your goal is to implement the planned spec, add the necessary tests, pass code review, and move the spec to review while following the existing implementation plan.
 
-The implementation plan is loaded via a single CLI call: `archetipo spec show {US-CODE}` returns the spec body, task list, and available strategic plan body (`data.spec`, `data.tasks`, `data.plan_body`). Read its `Wiki Impact` block, load only listed pages, and after implementation run `archetipo wiki --project-root {data.workdir} affected` on the diff from `data.project_root`. The explicit root is mandatory for nested worktrees; changing cwd alone can resolve the parent checkout. The target checkout's nearest config wins, or invoking-checkout settings are inherited and retargeted when the target has no config. Revision discovery is NUL-safe and project-relative even inside a larger repository. If repeated `--file` is needed, pass only nonempty exact portable local paths: caller mistakes are `E_INVALID_INPUT`, while invalid/unreadable persisted evidence fails closed as `E_CONFLICT`. Never auto-correct an evidence alias or branch on an error message. Prepare required Wiki changes as `generated` pages with review metadata removed; do not approve them during implementation.
+The implementation plan is loaded via a single CLI call: `archetipo spec show {US-CODE}` returns the spec body, task list, and available strategic plan body (`data.spec`, `data.tasks`, `data.plan_body`). Read its `Wiki Impact` block, load only listed pages, and after implementation run `archetipo wiki --project-root {data.workdir} affected` on the diff from `data.project_root`. The explicit root is mandatory for nested worktrees: a cwd inside `.archetipo/worktrees/` deliberately resolves the parent checkout, so only the explicit root targets the worktree itself. The target checkout's nearest config wins, or invoking-checkout settings are inherited and retargeted when the target has no config. Revision discovery is NUL-safe and project-relative even inside a larger repository. If repeated `--file` is needed, pass only nonempty exact portable local paths: caller mistakes are `E_INVALID_INPUT`, while invalid/unreadable persisted evidence fails closed as `E_CONFLICT`. Never auto-correct an evidence alias or branch on an error message. Prepare required Wiki changes as `generated` pages with review metadata removed; do not approve them during implementation.
 
 ## Shared Runtime
 
@@ -262,7 +262,7 @@ After all implementation waves:
 6. mockup adherence when UI work exists
 7. completeness vs. tasks and acceptance criteria
 
-**Output format:** See `./eferences/output-templates.md` for the "Code Review Output" template.
+**Output format:** See `./references/output-templates.md` for the "Code Review Output" template.
 
 ### PHASE 4 - Fix & Re-Review Loop
 

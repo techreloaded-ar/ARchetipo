@@ -54,7 +54,7 @@ Do not classify from the state label alone. `evidence-changed` means repository 
 
 ### PHASE 0 — Setup and Spec Selection
 
-1. Run `archetipo config show`; keep `data` (SetupInfo) available. Run every CLI command from `data.project_root`. After resolving the spec, target code and Wiki operations explicitly with `--project-root {data.workdir}`; changing shell cwd alone is insufficient because a worktree nested below `.archetipo/worktrees/` can otherwise resolve the parent checkout's config. The target checkout's nearest config is authoritative; when it has none, invoking-checkout settings are inherited and retargeted to `data.workdir`.
+1. Run `archetipo config show`; keep `data` (SetupInfo) available. Run every CLI command from `data.project_root`. After resolving the spec, target code and Wiki operations explicitly with `--project-root {data.workdir}`; a cwd inside `.archetipo/worktrees/` now deliberately resolves the parent checkout — that is the stale-state guard — so only `--project-root {data.workdir}` targets the worktree itself. The target checkout's nearest config is authoritative; when it has none, invoking-checkout settings are inherited and retargeted to `data.workdir`.
 2. Load the spec under review:
    - If a code was passed: `archetipo spec show {US-CODE}`
    - Otherwise: `archetipo spec next --status {config.workflow.statuses.review}`

@@ -22,6 +22,8 @@ Common rules:
 {"schema":"archetipo/v1","kind":"error","error":{"code":"E_*","message":"...","hint":"..."}}
 ```
 
+- Success envelopes MAY include an optional top-level `warnings[]` field: non-fatal notices about how the command resolved its inputs (today: the project root corrected from inside a per-spec worktree). Tolerate its absence, never branch on its text, and surface it to the user when present — it reports a silent correction, not a failure.
+
 - Error envelopes MAY include an optional `error.details` field with machine-readable corrective data. Skills must tolerate its absence and must never branch on its shape alone — always branch on `error.code` first, then use `details` only as corrective instructions.
 
 - `archetipo validate ...` commands return a normal stdout envelope with `kind:"validation_result"`. Structural validation outcomes are reported in `data.ok` and `data.findings`; error envelopes are reserved for process failures such as unreadable input, missing files, config errors, or internal failures.
@@ -37,6 +39,14 @@ Common rules:
 - Command-specific invocation forms, payloads, and semantics belong in each skill that uses them. Do not infer CLI operations from documentation files.
 - `archetipo config show` returns `data.project_root`: the ABSOLUTE project root containing `.archetipo/config.yaml` (or the current directory when defaults are used). Run connector/backlog commands from this root unless a command-specific rule says otherwise.
 
+- **Never change the shell working directory persistently.** A `cd` survives the command that issued it and silently re-roots every later command in the session — the failure mode is wrong data, not an error. Scope the directory to the single command instead:
+
+  ```bash
+  (cd {data.project_root} && archetipo spec show US-XXX)
+  # or, equivalently:
+  archetipo -C {data.project_root} spec show US-XXX
+  ```
+
 ## Worktree Working Directory
 
 Specs may be implemented inside a per-spec git worktree (worktree workflow). To make every skill operate on the right files **deterministically** — never depending on the model remembering to prefix paths — the spec envelope carries the resolved working directory.
@@ -47,6 +57,8 @@ Specs may be implemented inside a per-spec git worktree (worktree workflow). To 
 - run every shell/git/test command for the spec with `data.workdir` as the working directory.
 
 Connector commands (`archetipo spec plan`, `archetipo task done`, `archetipo spec review`, etc.) still operate on backlog/config state and must be run from `data.project_root` from `config show`. Work on the codebase for a spec happens under `data.workdir`.
+
+CLI commands that act on the **code** of the worktree (`archetipo e2e run`, `archetipo wiki ...`) must name that root explicitly — `archetipo -C {data.workdir} e2e run`, `archetipo wiki --project-root {data.workdir} affected` — because a cwd inside a per-spec worktree deliberately resolves the parent checkout. The worktree carries a copy of `.archetipo/` frozen at its fork base, so resolving it would return stale backlog state; the CLI corrects for this and reports the correction in `warnings[]`. An explicit root is always trusted, an implicit cwd never is.
 
 When the spec has no worktree, `data.workdir` is just the project root and nothing changes. Branch only on this value — never on connector type. (`data.spec.worktree` is the raw, project-root-relative field; always prefer `data.workdir`, which is absolute and filesystem-checked.) If a command such as `archetipo spec start` may create a worktree, run `archetipo spec show <US-CODE>` again afterwards and replace the in-memory spec/tasks/workdir with that post-start envelope before touching files.
 
