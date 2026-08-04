@@ -32,7 +32,8 @@ This section has priority over every other section in the skill.
 3. **In-context execution is valid for simple work.** Select it when the plan is small and tightly coupled enough that handoffs would cost more than they add. Make this decision from the criteria below, not from a generic preference for one mode.
 4. **Concurrency is conditional.** Run multiple workers concurrently only when tasks in the same wave are truly independent.
 5. **Stop only for explicit blockers.** Do not invent new reasons to ask the user.
-6. **Connector operations are exposed by the CLI.** Every operation is a sub-command of `archetipo`. This skill uses `init`, `spec show`, `spec start`, `task done`, and `spec review`, plus connector-independent `wiki affected`, `wiki reset`, `wiki validate`, and `wiki catalog`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`: `E_INVALID_INPUT` covers malformed explicit paths/revisions/config, `E_CONFLICT` covers invalid or unreadable persisted Wiki evidence and other deterministic eligibility blockers, and `E_INTERNAL` is unexpected implementation failure. Never branch on connector type or message text. Connector operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
+6. **Nothing asynchronous inside this phase.** No `name` on a sub-worker, no background commands, no messages to other agents. See **Asynchrony inside a worker** in `.archetipo/shared-runtime.md` for why all three fail the same way, and **Spawning a sub-worker** below for the form that works.
+7. **Connector operations are exposed by the CLI.** Every operation is a sub-command of `archetipo`. This skill uses `init`, `spec show`, `spec start`, `task done`, and `spec review`, plus connector-independent `wiki affected`, `wiki reset`, `wiki validate`, and `wiki catalog`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`: `E_INVALID_INPUT` covers malformed explicit paths/revisions/config, `E_CONFLICT` covers invalid or unreadable persisted Wiki evidence and other deterministic eligibility blockers, and `E_INTERNAL` is unexpected implementation failure. Never branch on connector type or message text. Connector operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
 
 ## Autonomy Policy
 
@@ -85,6 +86,38 @@ Use a single orchestrator when workers are unavailable or unreliable, or when th
 Also use in-context execution when the runtime exposes no usable worker/subagent tool, explicitly prohibits workers, or a worker creation attempt fails or times out. Retry once when the runtime allows it before treating workers as unreliable.
 
 State the concise reason for the selected execution context in the wave execution plan before starting implementation. For in-context execution, name the relevant plan characteristics or worker limitation.
+
+### Spawning a sub-worker
+
+A sub-worker is an ordinary blocking call: it runs while you wait and hands back its result inline. Three choices decide whether that holds.
+
+| | | |
+|---|---|---|
+| `name` | **never pass it** | It is an addressing handle, not a label. Passing it registers the worker as a teammate of the session instead of a child of yours, and the call returns an acknowledgement rather than a result. See `.archetipo/shared-runtime.md`. |
+| background execution | **never** | Same delivery problem, same silent ending. |
+| persona | **in the prompt** | Ugo, Mina and Cesare are prompt content and are unaffected by the above. Put the readable label in `description` (`🔧 Ugo — TASK-01`). |
+
+Spawn every sub-worker with a bounded prompt that declares **both** roots explicitly:
+
+```text
+You are {🔧 Ugo | 🧪 Mina | 🔍 Cesare}, {role}.
+Code working directory: {data.workdir}
+Backlog root (connector commands only): {data.project_root}
+Spec: {US-CODE}
+Tasks: {TASK-IDs}
+
+Load the installed archetipo-implement skill. Read the plan, the task bodies,
+and the repository state yourself. Do not assume knowledge from the orchestrator.
+Execute your own tasks: do not spawn further sub-workers.
+```
+
+Both roots are mandatory because they are two different things (see **Worktree Working Directory** in `.archetipo/shared-runtime.md`): files are touched under `data.workdir`, while connector commands — including the `archetipo task done` the sub-worker runs itself in PHASE 2 step 6 — resolve from `data.project_root`. A sub-worker given neither resolves its own root from cwd.
+
+**A sub-worker never delegates further.** It loads this same skill, which authorizes worker-backed execution; without this rule the third level would spawn a fourth. One task per sub-worker, executed by that sub-worker.
+
+**Verify the outcome from CLI state, not from the sub-worker's prose.** `archetipo spec show {US-CODE}` from `data.project_root` is what says a task is `DONE`; the returned text is a report about the work, not the work.
+
+When a sub-worker returns and its tasks are still not `DONE`, the work genuinely ended without completing — a synchronous call that has returned is over. Execute that piece in-context, declare the degradation in the `Execution context rationale` field of the "Wave Execution Plan" template, and do not respawn the same sub-worker.
 
 **Important:** Worker-backed execution and concurrent execution are separate decisions.
 **Important:** Lack of worker/subagent support is not a blocker. Continue in `in-context fallback`.
@@ -217,7 +250,8 @@ Apply this section when the plan requires e2e coverage, or when Mina determines 
 
 **Run and artifacts**
 - Run the functional e2e suite with `archetipo e2e run` (Playwright) or the project's e2e command. It runs headless with **no video** — recording is a review concern.
-- Start background services only when needed and wait for readiness.
+- Run the suite in the foreground with an explicit timeout sized for it. If it genuinely exceeds the runtime's per-call limit, split it — never move it to the background, because you will not be there when the notification arrives.
+- Start background services only when needed, and wait for readiness with a blocking check inside the same call (`until curl -sf localhost:3000 >/dev/null; do sleep 2; done`), never by ending your turn.
 - Verify the expected (non-video) artifacts, such as test reports, are produced.
 - Retry flaky or timeout-based failures once; if they fail again, report them clearly as non-transient.
 

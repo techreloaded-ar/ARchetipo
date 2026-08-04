@@ -184,7 +184,7 @@ If the spec requires mockups per the triggers above:
    - Frontend framework/design system info
    - Instruction to save mockups in `{config.paths.mockups}/{US-CODE}/`
    - Instruction to analyze existing mockups in `{config.paths.mockups}/` for visual consistency
-2. **Wait for mockup completion before proceeding.** When running inside an autopilot pipeline, background agents are destroyed when the parent subagent's context is destroyed. The mockup agent MUST complete within the plan subagent's lifecycle.
+2. **Spawn it without a `name` and never in the background**, so the call blocks and returns the mockup agent's result inline. This phase may itself be running inside an autopilot worker, and a worker cannot receive a completion notification — see **Asynchrony inside a worker** in `.archetipo/shared-runtime.md`. The mockup agent MUST complete within this phase's own lifecycle.
 3. After the mockup agent completes, verify that at least one file exists in `{config.paths.mockups}/{US-CODE}/` before setting `mockup_generated = true`. If no files exist, log a warning and set `mockup_generated = false`.
 
 **If subagent/worker support is NOT available:**
@@ -271,7 +271,7 @@ After saving the plan:
 - Backlog status: {config.workflow.statuses.planned} ✅
 ```
 
-If mockup generation was spawned, add: `🎨 Mockups generating in background — available in {config.paths.mockups}/{US-CODE}/ shortly.`
+If mockup generation ran, add: `🎨 Mockups available in {config.paths.mockups}/{US-CODE}/.` Report this only after step 3 verified the files exist — mockups are never still generating at this point, because the spawn blocked until they were done.
 
 ---
 
