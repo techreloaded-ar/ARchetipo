@@ -213,19 +213,29 @@ In a **single turn**, produce both:
 
 **2. Save the plan and transition the spec:**
 
-Construct the full JSON payload string in your own context (not via shell heredoc or inline script). Choose a unique temp filename using the spec code (e.g. `tmp-payload-US-005-plan.json`). Write the file to `.archetipo/` under `data.project_root` using your file-writing tool. Then invoke `archetipo validate plan {US-CODE} --file <path>` from `data.project_root` before saving the plan.
+Stage the payload as **part files** and let the assembler build it. Read `./references/payload-assembly.md` for the staging layout, the task part file format, and the exact commands; the rules that follow are binding.
 
-If validation returns `kind: "validation_result"` with `data.ok: false`, do not call `archetipo spec plan`. Read `data.findings`, repair every `severity: "error"` in the payload, and rerun validation. Treat warnings as quality feedback; fix them when straightforward, but they do not block persistence.
+- **Never produce the payload as one large response.** Write one part file per unit of content — each `plan_body` section and each task — using your file-writing tool. Every write ends a response, which is what keeps a single response small no matter how big the plan is. A response carrying the whole payload is a defect even when it succeeds.
+- **Never regenerate content that already exists.** In rework mode, run the `carry-over` step first: it copies the persisted plan body and every persisted task verbatim from the CLI into the staging directory. Only genuinely new content is written by you.
+- **Never assemble the JSON yourself**, by hand, by heredoc, or by inline script. Run the `build` step; it escapes the markdown and checks ids and dependencies.
 
-Only after validation passes, invoke `archetipo spec plan {US-CODE} --file <path>` from `data.project_root`. After the CLI exits, delete the temp file.
+Then, from `data.project_root`:
 
-> **⚠️ Cross-platform warning:** Do NOT pipe the JSON through stdin via shell (`--file -` with shell pipe). Shell pipes are OS-dependent and can corrupt JSON that contains markdown with special characters (`` ` ``, `$`, `{`, line breaks, Unicode). Use your file-writing tool to write the JSON file first, then pass its path to `--file`.
+1. `build` the payload into `.archetipo/tmp-payload-{US-CODE}-plan.json` and read back the reported task count and `plan_body` size. A count or size that contradicts your intent is a staging defect — fix the parts and rebuild.
+2. Invoke `archetipo validate plan {US-CODE} --file <path>`.
+3. If validation returns `kind: "validation_result"` with `data.ok: false`, do not call `archetipo spec plan`. Read `data.findings`, repair the offending **part file**, rebuild, and rerun validation. Treat warnings as quality feedback; fix them when straightforward, but they do not block persistence.
+4. Only after validation passes, invoke `archetipo spec plan {US-CODE} --file <path>`.
+5. Run the `clean` step to remove the staging directory and the payload file. Clean up only after the CLI has answered — a staging directory left behind by an interrupted attempt is recoverable work, not garbage.
+
+> **⚠️ Cross-platform warning:** Do NOT pipe the JSON through stdin via shell (`--file -` with shell pipe). Shell pipes are OS-dependent and can corrupt JSON that contains markdown with special characters (`` ` ``, `$`, `{`, line breaks, Unicode). Always pass a real file path to `--file`, and use the assembler's `clean` mode rather than `rm` or `Remove-Item` so cleanup behaves the same on every platform.
 >
-> **Temp file:** Use `.archetipo/tmp-payload-{US-CODE}-plan.json`. The code is known to you already. After the CLI command exits, delete it with `rm .archetipo/tmp-payload-{US-CODE}-plan.json` (works in both bash and PowerShell). Always clean up, regardless of CLI success or failure.
+> **Resuming an interrupted attempt:** when `.archetipo/tmp-plan-{US-CODE}/` already exists at the start of this stage, follow the recovery procedure in `./references/payload-assembly.md` before writing anything. Check the persisted status first: the previous attempt may have saved the plan already.
 
 ```json
 {"plan_body":"<technical solution + baseline + acceptance evidence map + test strategy as markdown — do NOT include a task summary>","tasks":[{"id":"TASK-01","title":"...","body":"## Objective\n<one outcome>\n\n## Read\n- path/to/file — symbol or behavior to inspect\n\n## Change\n- path/to/file — exact allowed change\n\n## Steps\n1. <ordered action>\n\n## Verify\n- Run: `<exact command>`\n- Expect: <observable result or explicit no-new-failures boundary from baseline>\n\n## Done\n- [ ] AC-1 — <acceptance-linked criterion>\n\n## Blockers\nNone.","type":"Impl|Test","status":"TODO","dependencies":[]}]}
 ```
+
+The shape above is what the assembler **produces**, shown here so you know the target. You never type it: `plan_body` comes from the `plan-body*.md` parts and each task from its own `task-*.md` part.
 
 > **Payload field contracts:** `plan_body` contains ONLY the technical solution, baseline results, acceptance evidence map, test strategy, and context notes as markdown. The task list lives exclusively in the `tasks` array — do NOT duplicate it inside `plan_body` (no task summary table or bullet list). `status` uses the CLI's canonical values (`TODO`, `DONE`) — these are part of the envelope contract and are **not** the display labels from `config.workflow.statuses`. `type` is one of `Impl`, `Test`, or `Fix` (Fix only in rework mode). `dependencies` lists ids of tasks defined in the same payload; the CLI rejects references to unknown task ids. Each task must use `body` as the only produced content field and follow the complete contract below. Use concrete file paths when they are known; when they are not, stay conservative and do not invent files.
 
@@ -243,15 +253,15 @@ Use these seven headings literally and in this order in every `task.body`. Keep 
 
 Before validation, audit every task body against all seven headings. Missing sections are a planning defect, including on `Test` and `Fix` tasks. Ensure dependencies reference earlier tasks and that a smaller implementer can execute each task without rediscovering scope, paths, commands, or intended behavior. Also verify that every `AC-N` appears in the acceptance evidence map and in at least one task's `Done`, every observable oracle remains visible through the chosen test doubles, and the last task is a final `Test` gate depending on all work it verifies. The gate must state the workflow order explicitly: run checks, mark the gate task `DONE`, reload the spec, confirm no task remains `TODO`, then and only then request review.
 
-**Rework mode task construction.** When the spec is in rework (see Step 2), build the `tasks` array like this instead of planning from scratch:
+**Rework mode task construction.** When the spec is in rework (see Step 2), stage the tasks like this instead of planning from scratch:
 
-- **Preserve every existing task** from `data.tasks` with its current `status` (tasks already `DONE` stay `DONE`). The payload replaces the whole task list, so omitting them would lose history.
-- For **each bullet** in the `## Rework Feedback` section, read the referenced `file:line` **under `data.workdir`** (see Worktree awareness in Step 2) to understand the real code, then append one task with `"type":"Fix"`, `"status":"TODO"`, a concrete `title`, and a `body` that follows the complete seven-heading task execution contract, states what to change and why, and references the reviewer's comment and anchor. Continue the existing `TASK-NN` numbering.
+- **Preserve every existing task** with its current `status` (tasks already `DONE` stay `DONE`). The payload replaces the whole task list, so omitting them would lose history. Preservation is **mechanical**: the `carry-over` step copies them verbatim into the staging directory. Never retype, summarize, shorten, or otherwise regenerate a persisted task body — the carried bodies are the history, and rewriting them from context is how it gets corrupted.
+- For **each bullet** in the `## Rework Feedback` section, read the referenced `file:line` **under `data.workdir`** (see Worktree awareness in Step 2) to understand the real code, then write **one part file** per new task with `type: Fix`, `status: TODO`, a concrete `title`, and a body that follows the complete seven-heading task execution contract, states what to change and why, and references the reviewer's comment and anchor. Continue the existing `TASK-NN` numbering.
 - Add interleaved `Test` tasks for the fixes when the change warrants verification.
 - Append a new final `Test` gate for the rework even if the original plan already has a completed gate. It must verify the fix tasks, rerun the acceptance evidence affected by feedback, check that modified files add no compiler/linter diagnostics relative to the recorded baseline, and prove through `archetipo spec show` that all preserved and appended tasks are `DONE` before review.
-- Set `plan_body` to the existing plan body augmented with a short "Rework" note summarising the feedback being addressed; do not discard the original technical solution.
+- Do not rewrite the existing plan body: `carry-over` stages it as `plan-body-00-carried.md`. Add your "Rework" note summarising the feedback being addressed as a **separate** part file, which the assembler appends after it.
 
-This single command saves the plan AND transitions the spec to `{config.workflow.statuses.planned}` atomically (and clears the rework marker) — no separate `status set` step is needed. The CLI persists according to the active connector (file: writes `{paths.planning}/{US-CODE}-plan.yaml`; github: appends to the parent issue body and creates one sub-issue per task). For the file connector, follow the template in `./references/plan-template.md` to compose `plan_body` (technical solution + baseline + acceptance evidence map + test strategy — no task summary table).
+`archetipo spec plan` saves the plan AND transitions the spec to `{config.workflow.statuses.planned}` atomically (and clears the rework marker) — no separate `status set` step is needed. It is the **only** mutation of this stage: staging and assembly touch nothing but the temporary files, so an attempt that dies before this command leaves the spec exactly as it was. The CLI persists according to the active connector (file: writes `{paths.planning}/{US-CODE}-plan.yaml`; github: appends to the parent issue body and creates one sub-issue per task). For the file connector, follow the template in `./references/plan-template.md` to compose `plan_body` (technical solution + baseline + acceptance evidence map + test strategy — no task summary table).
 
 Re-running the command on a spec already in `PLANNED` upserts the plan body without erroring.
 

@@ -19,7 +19,7 @@ Read `./references/acceptance-loop.md` exactly once at activation time as well. 
 2. Stop before creating state or mutating the project when that capability is unavailable or cannot be established. Do not execute any phase in the controller context.
 3. Run one phase at a time. Never run two spec-writing workers concurrently.
 4. Treat CLI state as authoritative. A worker summary — including an acceptance verdict block — is telemetry, never proof of success.
-5. **Failure policy is asymmetric, by design.** Stop the whole run at the first failed worker, CLI error, unresolved dependency, invalid transition, or failed verification. Do not skip and do not retry automatically. The single exception is the `left_in_review` acceptance outcome, which is an expected semantic result rather than a malfunction: record it and continue with the remaining specs. See *Failure handling*.
+5. **Failure policy is asymmetric, by design.** Stop the whole run at the first failed worker, CLI error, unresolved dependency, invalid transition, or failed verification. Do not skip and do not retry automatically. There are exactly two exceptions, both narrow and both defined in *Failure handling*: the `left_in_review` acceptance outcome, which is an expected semantic result rather than a malfunction; and a **planning** worker killed by a transport failure that provably persisted nothing, which is retried once.
 6. Target `{config.workflow.statuses.done}` through autonomous acceptance. A spec that is still not acceptable after `max_review_iterations` rework cycles stays in `{config.workflow.statuses.review}` for human review through `/archetipo-review`.
 7. Do not start, detect, or depend on a vendor-native goal, loop, or autopilot mode.
 
@@ -107,13 +107,15 @@ autopilot:
   max_review_iterations: 3   # frozen at run creation
   specs:
     US-001: { outcome: done, review_iterations: 0 }
-    US-002: { outcome: pending, review_iterations: 2 }
+    US-002: { outcome: pending, review_iterations: 2, planning_transport_retries: 1 }
     US-003: { outcome: pending, review_iterations: 0 }
 ```
 
 `scope` is the **normalized selector list**: the literal `ALL` when the invocation carried no selector, otherwise the deduplicated selectors sorted `EP` codes first, then `US` codes, each group by code, joined by single spaces. Resume matching compares this normalized string, so `EP-002 US-011` and `US-011 EP-002` are the same scope.
 
 `outcome` is autopilot bookkeeping, not a mirror of workflow state — the authoritative status always comes from `archetipo spec show`. Terminal values are `done`, `left_in_review`, and `skipped_blocked`; a `left_in_review` entry also records `unresolved: ["..."]` and a `skipped_blocked` entry records the blocking chain. Freeze `max_review_iterations` at `3` and `max_specs` at the requested value when the file is created, and never change either during the run.
+
+`planning_transport_retries` counts the planning retries described in *Failure handling*. It is absent until the first one, is capped at `1` per spec for the whole run — a resumed run inherits the count and does not get a fresh allowance — and is entirely separate from `review_iterations`: a transport failure never consumes rework budget, because no review happened.
 
 Write state updates atomically through a sibling temporary file followed by replacement when the available file tools support it. Never store phase summaries, duplicated workflow states, plans, task bodies, or source-code observations.
 
@@ -167,7 +169,7 @@ For each frozen spec code:
 
 1. Skip the code when its recorded `outcome` is already terminal — a resumed run does not redo settled specs. Otherwise set `current_spec` and update `updated_at` in the state file.
 2. **Pre-dispatch blocker check.** Walk the `blocked_by` chain inside the frozen selection, transitively. If any blocker already holds outcome `left_in_review` or `skipped_blocked`, set this spec's outcome to `skipped_blocked` with the recorded chain, spawn no worker, and advance to the next code.
-3. Run `archetipo spec show <US-CODE>`.
+3. Run `archetipo spec show <US-CODE>`. Retain this observation as the **pre-dispatch fingerprint** of the phase you are about to run: `data.spec.status`, `data.spec.rework`, `data.spec.branch`, `data.spec.worktree`, `data.spec.fork_base`, and the ordered list of `data.tasks[].id` with each `status`. It is what makes the planning retry in *Failure handling* decidable; keep it in the controller context only, never in the state file.
 4. Choose exactly one action from the observed state:
    - configured `TODO`: run the planning phase;
    - configured `PLANNED` or `IN PROGRESS`: run the implementation phase;
@@ -197,7 +199,9 @@ After the worker terminates, run `archetipo spec show <US-CODE>` regardless of i
 - `data.spec.status` equals configured `PLANNED`; and
 - `data.tasks` is non-empty.
 
-Otherwise fail the run with the observed status and task count.
+This is deliberately blind to how the worker ended: a worker killed right after `archetipo spec plan` succeeded produced a correct phase, and CLI state says so.
+
+Otherwise, when the observation does not accept the phase, apply the **planning transport retry** of *Failure handling* before failing. Fail the run with the observed status and task count whenever that check does not authorize a retry.
 
 The same phase handles a spec that came back from acceptance: `archetipo-plan` turns the persisted rework feedback into Fix tasks. The controller needs no variant prompt for it.
 
@@ -252,14 +256,25 @@ After the queue is exhausted:
 
 ## Failure handling
 
-Two outcomes look similar and must not be confused.
+Three outcomes look similar and must not be confused.
 
-**Hard stop** — any worker failure, CLI error, unresolved dependency, unexpected state, or verification failure, in any phase including acceptance. Continuing past broken infrastructure would burn every remaining spec:
+**Hard stop** — any worker failure, CLI error, unresolved dependency, unexpected state, or verification failure, in any phase including acceptance, once the planning transport retry below has been ruled out. Continuing past broken infrastructure would burn every remaining spec:
 
 1. Re-read the current spec with `archetipo spec show` when possible.
 2. When the state file already exists, set `status: error`, update `updated_at`, and record a concise `last_error` containing the spec, phase, observed state, and stable `error.code` when available. Failures detected before state creation remain mutation-free.
 3. Stop immediately. Do not retry, skip, start another worker, delete the state file, or continue to another spec.
 4. If state was created, report its retained path and explain that invoking Autopilot again with the same scope resumes from authoritative CLI state. Otherwise report that no run state was created.
+
+**Planning transport retry** — a planning worker that was killed by its infrastructure and provably persisted nothing. A transport failure is not a malfunction of the work: the phase never ran to completion, and CLI state proves it left no trace. Retry it exactly once, and only when **all** of these hold:
+
+1. The phase was **planning**. Implementation and acceptance are excluded on purpose: their workers mutate the worktree continuously, so an unchanged CLI fingerprint does not prove an unchanged working tree, and re-running one over half-finished edits is not equivalent to running it fresh. Planning writes nothing but temporary files until a single atomic `archetipo spec plan`, so for it the proof holds.
+2. The worker did **not** return its own outcome: the worker mechanism reports that it was terminated by an infrastructure or transport failure — a connection or API error, a truncated response, or no result at all. A worker that ran to completion and reported a problem is a real failure; do not retry it.
+3. The post-worker observation is **identical to the pre-dispatch fingerprint** taken in Phase 1, field by field: same status, same rework marker, same branch/worktree/fork_base, same task ids in the same order with the same statuses. Any difference means the worker got somewhere, and the run stops.
+4. `planning_transport_retries` for this spec is absent or `0`.
+
+Then: set `planning_transport_retries: 1`, update `updated_at`, keep `status: running`, report the retry to the user in one line, and spawn a fresh planning worker with the **same prompt**, unchanged. A second transport failure on the same spec is a hard stop — at that point the failure is systematic, not incidental.
+
+Do not carry any knowledge of the dead attempt into the new prompt. The planning skill finds and validates the leftover staging directory itself; the controller stays out of it.
 
 **Continue past** — the `left_in_review` acceptance outcome only. Non-acceptance is the review gate working, not a malfunction, so the run keeps going: the spec stays in `{config.workflow.statuses.review}` with its branch and worktree preserved, its outcome and unresolved findings are recorded, and the queue advances. The tradeoff is deliberate: its dependents inside the selection are then marked `skipped_blocked` and never started, because building acceptance on unaccepted work would either fail at `spec integrate` with `E_CONFLICT` or produce incoherent acceptance without worktrees. That cost is preferred to blocking every unrelated spec behind one unacceptable increment.
 
@@ -270,6 +285,7 @@ Keep controller output compact:
 - opening: normalized scope, frozen queue, and — when `--max-specs` truncated it — the number of eligible specs left out;
 - after each verified phase: spec, phase, observed transition;
 - after each acceptance phase additionally: the verdict and the iterations used out of `max_review_iterations`;
+- on a planning transport retry: one line stating the spec, that the worker died without persisting anything, and that this is the single retry allowed;
 - after each spec reaching a terminal outcome: that outcome and the progress count;
 - closure: per-spec outcomes and final states plus the specs the cap excluded, or the first blocking error.
 
