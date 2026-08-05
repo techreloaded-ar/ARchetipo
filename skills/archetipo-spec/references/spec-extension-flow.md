@@ -156,18 +156,25 @@ Proceed with adding them? Or tell me what to change.
 
 ## Phase 3 - Output
 
-Construct the full JSON payload string in your own context (not via shell heredoc or inline script). Choose a unique temp filename using the new spec codes (e.g. `tmp-payload-US-016-US-018.json`). Write the file to `.archetipo/` using your file-writing tool. Then invoke `archetipo validate spec --file <path>` before appending anything.
+Even for a small batch (1-4 specs), never construct the whole JSON payload in a single model response — **stage one part file per spec, then assemble and persist with the script**, the same way `backlog-bootstrap-flow.md` does. Read `references/specs-payload-assembly.md` for the staging layout, the part file format, and the exact commands; `{SKILL_DIR}/references/assemble-specs-payload.mjs` is the assembler. When it is not there, the skill installation is incomplete: stop and report it rather than hand-writing the payload.
 
-If validation returns `kind: "validation_result"` with `data.ok: false`, do not call `archetipo spec add`. Read `data.findings`, repair every `severity: "error"` in the payload, and rerun validation. Treat warnings as quality feedback; fix them when straightforward, but they do not block persistence.
+> **Resuming an interrupted attempt:** before staging anything, check whether `.archetipo/tmp/specs-*/` already exists from a previous attempt on this same batch. If it does, follow the recovery procedure in `references/specs-payload-assembly.md` instead of staging from scratch. Clean up the staging directory and the payload file only after `archetipo spec add` has answered — a directory left behind by an interrupted attempt is recoverable work, not garbage, but leaving it behind after a successful persist is an orphan: always run `clean` once `spec add` has returned, whether it succeeded or failed on unrelated grounds.
 
-Only after validation passes, invoke `archetipo spec add --file <path>`. After the CLI exits, delete the temp file.
+For each spec, write `.archetipo/tmp/specs-{first-new-code}-{last-new-code}/spec-NN.md` with the front matter (`code`, `title`, `epic_code`, `epic_title`, `priority`, `points`, `status`, `scope`, `blocked_by`) and the markdown body using the Spec Template defined in `SKILL.md`.
 
-> **⚠️ Cross-platform warning:** Do NOT generate the JSON via shell scripting (PowerShell heredoc, bash `cat <<EOF`, or pipe-to-stdin). Shell heredocs break when markdown bodies contain `$`, `{`, or `` ` `` characters. Shell variable interpolation converts objects to `[object Object]`. Use your file-writing tool to write the JSON file directly — this works correctly on every OS.
->
-> **Temp file:** Use `.archetipo/tmp-payload-{first-new-code}-{last-new-code}.json`. The codes are known to you already. After the CLI command exits, delete it with `rm .archetipo/tmp-payload-{first-new-code}-{last-new-code}.json` (works in both bash and PowerShell). Always clean up, regardless of CLI success or failure.
+Once every spec is staged, run:
 
-```json
-{"specs":[{"code":"US-NNN","title":"...","points":N,...}]}
+```bash
+node {SKILL_DIR}/references/assemble-specs-payload.mjs build .archetipo/tmp/specs-{first-new-code}-{last-new-code} .archetipo/tmp/payload-{first-new-code}-{last-new-code}.json
+archetipo validate spec --file .archetipo/tmp/payload-{first-new-code}-{last-new-code}.json
+```
+
+If validation returns `kind: "validation_result"` with `data.ok: false`, do not call `archetipo spec add`. Read `data.findings`, repair the offending `spec-NN.md` part file(s), rerun `build`, then revalidate. Treat warnings as quality feedback; fix them when straightforward, but they do not block persistence.
+
+Only after validation passes, invoke `archetipo spec add --file .archetipo/tmp/payload-{first-new-code}-{last-new-code}.json`. After the CLI exits, clean up regardless of success or failure:
+
+```bash
+node {SKILL_DIR}/references/assemble-specs-payload.mjs clean .archetipo/tmp/specs-{first-new-code}-{last-new-code} .archetipo/tmp/payload-{first-new-code}-{last-new-code}.json
 ```
 
 The CLI handles the persistence details (file append, issue creation, project field updates, label creation for new epics, etc.). The same command works whether the backlog already exists or is being created fresh — specs whose `code` already exists are listed in `data.skipped` and not re-written.

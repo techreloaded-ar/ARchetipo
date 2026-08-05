@@ -221,7 +221,7 @@ Stage the payload as **part files** and let the assembler build it. Read `./refe
 
 Then, from `data.project_root`:
 
-1. `build` the payload into `.archetipo/tmp-payload-{US-CODE}-plan.json` and read back the reported task count and `plan_body` size. A count or size that contradicts your intent is a staging defect — fix the parts and rebuild.
+1. `build` the payload into `.archetipo/tmp/payload-{US-CODE}-plan.json` and read back the reported task count and `plan_body` size. A count or size that contradicts your intent is a staging defect — fix the parts and rebuild.
 2. Invoke `archetipo validate plan {US-CODE} --file <path>`.
 3. If validation returns `kind: "validation_result"` with `data.ok: false`, do not call `archetipo spec plan`. Read `data.findings`, repair the offending **part file**, rebuild, and rerun validation. Treat warnings as quality feedback; fix them when straightforward, but they do not block persistence.
 4. Only after validation passes, invoke `archetipo spec plan {US-CODE} --file <path>`.
@@ -229,7 +229,7 @@ Then, from `data.project_root`:
 
 > **⚠️ Cross-platform warning:** Do NOT pipe the JSON through stdin via shell (`--file -` with shell pipe). Shell pipes are OS-dependent and can corrupt JSON that contains markdown with special characters (`` ` ``, `$`, `{`, line breaks, Unicode). Always pass a real file path to `--file`, and use the assembler's `clean` mode rather than `rm` or `Remove-Item` so cleanup behaves the same on every platform.
 >
-> **Resuming an interrupted attempt:** when `.archetipo/tmp-plan-{US-CODE}/` already exists at the start of this stage, follow the recovery procedure in `./references/payload-assembly.md` before writing anything. Check the persisted status first: the previous attempt may have saved the plan already.
+> **Resuming an interrupted attempt:** when `.archetipo/tmp/plan-{US-CODE}/` already exists at the start of this stage, follow the recovery procedure in `./references/payload-assembly.md` before writing anything. Check the persisted status first: the previous attempt may have saved the plan already.
 
 ```json
 {"plan_body":"<technical solution + baseline + acceptance evidence map + test strategy as markdown — do NOT include a task summary>","tasks":[{"id":"TASK-01","title":"...","body":"## Objective\n<one outcome>\n\n## Read\n- path/to/file — symbol or behavior to inspect\n\n## Change\n- path/to/file — exact allowed change\n\n## Steps\n1. <ordered action>\n\n## Verify\n- Run: `<exact command>`\n- Expect: <observable result or explicit no-new-failures boundary from baseline>\n\n## Done\n- [ ] AC-1 — <acceptance-linked criterion>\n\n## Blockers\nNone.","type":"Impl|Test","status":"TODO","dependencies":[]}]}

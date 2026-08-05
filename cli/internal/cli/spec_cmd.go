@@ -488,7 +488,16 @@ func newSpecIntegrateCmd(s streams) *cobra.Command {
 					// Non-fatal: the merge already succeeded.
 					fmt.Fprintf(s.err, "warning: could not clear worktree metadata: %v\n", err)
 				}
-				return c.TransitionStatus(ctx, ref, domain.StatusDone)
+				res, err := c.TransitionStatus(ctx, ref, domain.StatusDone)
+				if err != nil {
+					return nil, err
+				}
+				// The spec's lifecycle ends here, so its staging leftovers do
+				// too. Non-fatal: the spec is already DONE.
+				if err := removeSpecTemporaryArtifacts(cfg.ProjectRoot, ref); err != nil {
+					fmt.Fprintf(s.err, "warning: %v\n", err)
+				}
+				return res, nil
 			})
 		},
 	}
@@ -636,8 +645,19 @@ func newSpecMoveCmd(s streams) *cobra.Command {
 				return errInvalidUsage("before and after are mutually exclusive", "pass only one anchor")
 			}
 			ref := args[0]
-			return withConnector(cmd, s, "write_result", func(ctx context.Context, c connector.Connector) (any, error) {
-				return c.MoveBoardCard(ctx, ref, target, domain.ReorderAnchor{Before: before, After: after})
+			return withConnectorCfg(cmd, s, "write_result", func(ctx context.Context, cfg config.Config, c connector.Connector) (any, error) {
+				res, err := c.MoveBoardCard(ctx, ref, target, domain.ReorderAnchor{Before: before, After: after})
+				if err != nil {
+					return nil, err
+				}
+				// Same end-of-lifecycle sweep as `spec integrate`, for the
+				// non-worktree path that reaches DONE through a plain move.
+				if target == "done" {
+					if err := removeSpecTemporaryArtifacts(cfg.ProjectRoot, ref); err != nil {
+						fmt.Fprintf(s.err, "warning: %v\n", err)
+					}
+				}
+				return res, nil
 			})
 		},
 	}

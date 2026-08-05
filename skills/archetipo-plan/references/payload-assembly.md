@@ -15,10 +15,10 @@ Assembly also removes hand-escaped JSON: part files are plain markdown, and `JSO
 
 ## Staging layout
 
-One directory per spec under `.archetipo/` in `data.project_root`:
+Every temporary artifact this skill writes lives under `.archetipo/tmp/` in `data.project_root` — one staging directory per spec, plus the assembled payload beside it. Nothing temporary is ever written outside that root, so a leftover is always visible in one place:
 
 ```text
-.archetipo/tmp-plan-{US-CODE}/
+.archetipo/tmp/plan-{US-CODE}/
   plan-body-00-carried.md    # rework only — written by carry-over, do not edit
   plan-body-01-*.md          # written by the worker, merged in numeric order
   existing-tasks.json        # rework only — written by carry-over, do not edit
@@ -70,17 +70,17 @@ Run from `data.project_root`. `{SKILL_DIR}` is this skill's own base directory �
 
 ```bash
 # 1. Rework only: carry over the persisted plan body and every persisted task.
-node {SKILL_DIR}/references/assemble-plan-payload.mjs carry-over {US-CODE} .archetipo/tmp-plan-{US-CODE}
+node {SKILL_DIR}/references/assemble-plan-payload.mjs carry-over {US-CODE} .archetipo/tmp/plan-{US-CODE}
 
 # 2. Assemble the payload from the staged parts.
-node {SKILL_DIR}/references/assemble-plan-payload.mjs build {US-CODE} .archetipo/tmp-plan-{US-CODE} .archetipo/tmp-payload-{US-CODE}-plan.json
+node {SKILL_DIR}/references/assemble-plan-payload.mjs build {US-CODE} .archetipo/tmp/plan-{US-CODE} .archetipo/tmp/payload-{US-CODE}-plan.json
 
 # 3. Validate, then persist.
-archetipo validate plan {US-CODE} --file .archetipo/tmp-payload-{US-CODE}-plan.json
-archetipo spec plan {US-CODE} --file .archetipo/tmp-payload-{US-CODE}-plan.json
+archetipo validate plan {US-CODE} --file .archetipo/tmp/payload-{US-CODE}-plan.json
+archetipo spec plan {US-CODE} --file .archetipo/tmp/payload-{US-CODE}-plan.json
 
 # 4. Clean up both the staging directory and the payload (cross-platform).
-node {SKILL_DIR}/references/assemble-plan-payload.mjs clean .archetipo/tmp-plan-{US-CODE} .archetipo/tmp-payload-{US-CODE}-plan.json
+node {SKILL_DIR}/references/assemble-plan-payload.mjs clean .archetipo/tmp/plan-{US-CODE} .archetipo/tmp/payload-{US-CODE}-plan.json
 ```
 
 `build` fails on a duplicate task id, a dependency on an unknown id, a malformed header, or an empty body. It reports the task count and the assembled `plan_body` size — check both before validating.
@@ -96,3 +96,7 @@ The staging directory survives a worker that died mid-phase, and nothing was per
 3. Discard any part file that does not match the current feedback, keep the rest, and write only what is missing.
 
 When in doubt, `clean` and stage again. Correctness outranks the saved work.
+
+## The safety net
+
+Running `clean` remains your responsibility and must not be skipped: it frees the staging area as soon as the CLI has answered. But it is no longer the only guarantee. When the spec reaches `{config.workflow.statuses.done}` — through `archetipo spec integrate` or `archetipo spec move --to done` — the CLI itself removes `.archetipo/tmp/plan-{US-CODE}/` and `.archetipo/tmp/payload-{US-CODE}-plan.json`, in the same step that removes the worktree. An attempt that died before reaching its own `clean` therefore cannot leave anything behind past the end of the spec's lifecycle.

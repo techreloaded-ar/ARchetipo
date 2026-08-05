@@ -129,13 +129,13 @@ If the user adds conditions to an approval ("approve, but rename that flag"), tr
 
 **Request changes:**
 1. Turn the user's feedback and accepted Wiki blockers into discrete items. For each item, attach a `file` and `line` anchor when the feedback maps to a specific place in the code or Wiki diff; leave the anchor out for general feedback. Do not invent anchors.
-2. Construct the JSON payload in your own context and write it to `.archetipo/tmp-payload-{US-CODE}-feedback.json` under `data.project_root` with your file-writing tool (never pipe JSON through shell stdin — same cross-platform rule as archetipo-plan):
+2. Construct the JSON payload in your own context and write it to `.archetipo/tmp/payload-{US-CODE}-feedback.json` under `data.project_root` with your file-writing tool (never pipe JSON through shell stdin — same cross-platform rule as archetipo-plan):
 
 ```json
 {"comments":[{"file":"src/app.js","line":12,"body":"<what to change and why>"},{"body":"<general feedback without anchor>"}]}
 ```
 
-3. Run `archetipo spec request-changes {US-CODE} --file .archetipo/tmp-payload-{US-CODE}-feedback.json` from `data.project_root`, then delete the temp file regardless of success or failure.
+3. Run `archetipo spec request-changes {US-CODE} --file .archetipo/tmp/payload-{US-CODE}-feedback.json` from `data.project_root`, then delete the temp file regardless of success or failure.
 4. The CLI appends the feedback to the spec body as a `## Rework Feedback` section, flags the spec as in rework, and moves it back to `{config.workflow.statuses.todo}`. Tell the user the next step: `/archetipo-plan {US-CODE}` converts each feedback item into a Fix task.
 
 **Postpone:**

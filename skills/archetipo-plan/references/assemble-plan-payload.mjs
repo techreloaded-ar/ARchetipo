@@ -181,8 +181,11 @@ function runClean(stagingDir, outFile) {
   // This is the only destructive operation in the script: guard it so a wrong
   // argument can never remove anything but a staging directory.
   const resolved = path.resolve(stagingDir);
-  if (path.basename(resolved).startsWith("tmp-plan-") === false) {
-    fail(`refusing to remove ${resolved}: a staging directory must be named tmp-plan-<US-CODE>`);
+  if (
+    path.basename(resolved).startsWith("plan-") === false ||
+    path.basename(path.dirname(resolved)) !== "tmp"
+  ) {
+    fail(`refusing to remove ${resolved}: a staging directory must be <...>/tmp/plan-<US-CODE>`);
   }
   if (resolved === path.resolve(process.cwd()) || process.cwd().startsWith(`${resolved}${path.sep}`)) {
     fail(`refusing to remove ${resolved}: it contains the current working directory`);

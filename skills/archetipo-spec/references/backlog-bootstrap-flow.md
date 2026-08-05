@@ -186,21 +186,28 @@ Emanuele validates:
 
 ## Phase 5 - Output Generation
 
-Construct the full JSON payload string in your own context (not via shell heredoc or inline script). Choose a unique temp filename using the spec code range (e.g. `tmp-payload-US-001-US-015.json`). Write the file to `.archetipo/` using your file-writing tool. Then invoke `archetipo validate spec --file <path>` before writing the backlog.
+Never construct the whole JSON payload in a single model response — a bootstrap can generate 15+ specs with full markdown bodies, and one large response risks being cut off mid-stream, losing the entire phase. Instead, **stage one part file per spec, then assemble and persist with the script**. Read `references/specs-payload-assembly.md` for the staging layout, the part file format, and the exact commands; `{SKILL_DIR}/references/assemble-specs-payload.mjs` is the assembler. When it is not there, the skill installation is incomplete: stop and report it rather than hand-writing the payload.
 
-If validation returns `kind: "validation_result"` with `data.ok: false`, do not call `archetipo spec add`. Read `data.findings`, repair every `severity: "error"` in the payload, and rerun validation. Treat warnings as quality feedback; fix them when straightforward, but they do not block persistence.
+> **Resuming an interrupted attempt:** before staging anything, check whether `.archetipo/tmp/specs-*/` already exists from a previous attempt on this same batch. If it does, follow the recovery procedure in `references/specs-payload-assembly.md` instead of staging from scratch. Clean up the staging directory and the payload file only after `archetipo spec add` has answered — a directory left behind by an interrupted attempt is recoverable work, not garbage, but leaving it behind after a successful persist is an orphan: always run `clean` once `spec add` has returned, whether it succeeded or failed on unrelated grounds.
 
-Only after validation passes, invoke `archetipo spec add --file <path>`. After the CLI exits, delete the temp file.
+For each spec, write `.archetipo/tmp/specs-{first-US-code}-{last-US-code}/spec-NN.md` with the front matter (`code`, `title`, `epic_code`, `epic_title`, `priority`, `points`, `status`, `scope`, `blocked_by`) and the markdown body using the Spec Template defined in `SKILL.md`. One tool call per part file keeps every response small regardless of backlog size.
 
-> **⚠️ Cross-platform warning:** Do NOT generate the JSON via shell scripting (PowerShell heredoc, bash `cat <<EOF`, or pipe-to-stdin). Shell heredocs break when markdown bodies contain `$`, `{`, or `` ` `` characters. Shell variable interpolation converts objects to `[object Object]`. Use your file-writing tool to write the JSON file directly — this works correctly on every OS.
->
-> **Temp file:** Use `.archetipo/tmp-payload-{first-US-code}-{last-US-code}.json`. The codes are known to you already. After the CLI command exits, delete it with `rm .archetipo/tmp-payload-{first-US-code}-{last-US-code}.json` (works in both bash and PowerShell). Always clean up, regardless of CLI success or failure.
+Once every spec is staged, run:
 
-```json
-{"specs":[{"code":"US-001","title":"...","epic":{"code":"EP-001","title":"..."},"priority":"HIGH","points":3,"status":"TODO","scope":"MVP","blocked_by":[],"body":"<spec markdown>"}, ...]}
+```bash
+node {SKILL_DIR}/references/assemble-specs-payload.mjs build .archetipo/tmp/specs-{first-US-code}-{last-US-code} .archetipo/tmp/payload-{first-US-code}-{last-US-code}.json
+archetipo validate spec --file .archetipo/tmp/payload-{first-US-code}-{last-US-code}.json
 ```
 
-The CLI persists according to the active connector. The `body` field carries the markdown narrative for each individual spec, using the Spec Template defined in `SKILL.md`. The CLI handles formatting and aggregation; the skill only produces the per-spec body.
+If validation returns `kind: "validation_result"` with `data.ok: false`, do not call `archetipo spec add`. Read `data.findings`, repair the offending `spec-NN.md` part file(s), rerun `build`, then revalidate. Treat warnings as quality feedback; fix them when straightforward, but they do not block persistence.
+
+Only after validation passes, invoke `archetipo spec add --file .archetipo/tmp/payload-{first-US-code}-{last-US-code}.json`. After the CLI exits, clean up regardless of success or failure:
+
+```bash
+node {SKILL_DIR}/references/assemble-specs-payload.mjs clean .archetipo/tmp/specs-{first-US-code}-{last-US-code} .archetipo/tmp/payload-{first-US-code}-{last-US-code}.json
+```
+
+The CLI persists according to the active connector. The `body` field carries the markdown narrative for each individual spec. The CLI handles formatting and aggregation; the skill only produces the per-spec body.
 
 Output this closing confirmation:
 
