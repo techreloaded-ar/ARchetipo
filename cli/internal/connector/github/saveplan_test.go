@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -48,6 +49,7 @@ func TestSavePlanUpsertsExistingSection(t *testing.T) {
 	const specBody = "## Spec\n\nAs a user, I want X."
 	storedBody := specmeta.Render(joinPlanSections(specBody, "## Old plan"), specmeta.Meta{Scope: "MVP"})
 	m := newMock(t).
+		on("api repos/acme/web/issues/10/sub_issues?per_page=100&page=1", `[]`).
 		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":`+strconv.Quote(storedBody)+`,"url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`).
 		on("api -X PATCH repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","url":"https://gh/i/10"}`)
 
@@ -126,6 +128,7 @@ func TestSavePlan_TaskDescriptionFallback(t *testing.T) {
 		on("api graphql -f query=\nquery($projectId: ID!, $after: String)", `{"data":{"node":{"items":{"pageInfo":{"endCursor":"","hasNextPage":false},"nodes":[
 			{"id":"PVTI_story","content":{"__typename":"Issue","number":10,"title":"US-001: Setup","body":"`+issueBody+`","url":"https://gh/i/10","labels":{"nodes":[{"name":"archetipo-backlog"}]}},"status":{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"TODO"}}
 		]}}}}`).
+		on("api repos/acme/web/issues/10/sub_issues?per_page=100&page=1", `[]`).
 		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":"`+issueBody+`","url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`).
 		on("api -X PATCH repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","url":"https://gh/i/10"}`).
 		// Sub-issue create: the body must contain the Description text.
@@ -184,6 +187,7 @@ func TestSavePlan_BodyTakesPrecedenceOverDescription(t *testing.T) {
 		on("api graphql -f query=\nquery($projectId: ID!, $after: String)", `{"data":{"node":{"items":{"pageInfo":{"endCursor":"","hasNextPage":false},"nodes":[
 			{"id":"PVTI_story","content":{"__typename":"Issue","number":10,"title":"US-001: Setup","body":"`+issueBody+`","url":"https://gh/i/10","labels":{"nodes":[{"name":"archetipo-backlog"}]}},"status":{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"TODO"}}
 		]}}}}`).
+		on("api repos/acme/web/issues/10/sub_issues?per_page=100&page=1", `[]`).
 		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":"`+issueBody+`","url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`).
 		on("api -X PATCH repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","url":"https://gh/i/10"}`).
 		// Sub-issue create: Body takes precedence.
@@ -226,6 +230,50 @@ func TestSavePlan_BodyTakesPrecedenceOverDescription(t *testing.T) {
 	}
 }
 
+func TestListSubIssuesPaginates(t *testing.T) {
+	// Simulate 101 sub-issues across two pages: 100 on page 1, 1 on page 2.
+	var page1Items, page2Items []string
+	for i := 1; i <= 100; i++ {
+		page1Items = append(page1Items,
+			fmt.Sprintf(`{"number":%d,"title":"TASK-%02d: Task %d","body":"","state":"open"}`, i, i, i))
+	}
+	page2Items = append(page2Items,
+		`{"number":101,"title":"TASK-101: Task 101","body":"","state":"closed"}`)
+
+	m := newMock(t).
+		on("repo view --json", `{"id":"R","owner":{"login":"acme"},"name":"web","nameWithOwner":"acme/web"}`).
+		on("project list --owner acme", `{"projects":[{"number":4,"id":"PVT4","title":"web Backlog","url":"https://gh/p/4"}]}`).
+		on("api repos/acme/web/issues/10/sub_issues?per_page=100&page=1", `[`+strings.Join(page1Items, ",")+`]`).
+		on("api repos/acme/web/issues/10/sub_issues?per_page=100&page=2", `[`+strings.Join(page2Items, ",")+`]`)
+
+	cfg := config.Default()
+	cfg.Connector = config.ConnectorGitHub
+	c := NewWithRunner(cfg, m)
+	c.state.repo = &domain.RepoInfo{Slug: "acme/web"}
+	c.state.project = &domain.ProjectInfo{}
+
+	tasks, err := c.ReadSpecTasks(context.Background(), "10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 101 {
+		t.Fatalf("expected 101 tasks from 2 pages, got %d", len(tasks))
+	}
+	if tasks[99].ID != "TASK-100" {
+		t.Errorf("last page-1 task ID: got %s, want TASK-100", tasks[99].ID)
+	}
+	if tasks[100].ID != "TASK-101" {
+		t.Errorf("first page-2 task ID: got %s, want TASK-101", tasks[100].ID)
+	}
+	if tasks[100].Status != domain.StatusDone {
+		t.Errorf("page-2 task should be DONE (closed), got %s", tasks[100].Status)
+	}
+	// Verify the paginated calls were actually made.
+	if !m.calledWithPrefix("api repos/acme/web/issues/10/sub_issues?per_page=100&page=2") {
+		t.Error("expected page 2 call")
+	}
+}
+
 func TestReadSpecTasksReturnsCleanRichBody(t *testing.T) {
 	richTaskBody := "## Descrizione\n\nBody wins\n\n## File Coinvolti\n- internal/schema.sql — creare lo schema\n\n## Criteri di Completamento\n- [ ] checklist"
 	escapedRichTaskBody := strings.ReplaceAll(richTaskBody, "\n", "\\n")
@@ -255,5 +303,173 @@ func TestReadSpecTasksReturnsCleanRichBody(t *testing.T) {
 	}
 	if tasks[0].Status != domain.StatusTodo {
 		t.Fatalf("expected open sub-issue to map to TODO, got %s", tasks[0].Status)
+	}
+}
+
+func TestSavePlan_SkipsDONETask(t *testing.T) {
+	issueBody := "## Spec\\n\\nAs a user, I want X."
+	m := newMock(t).
+		on("repo view --json", `{"id":"R","owner":{"login":"acme"},"name":"web","nameWithOwner":"acme/web"}`).
+		on("project list --owner acme", `{"projects":[{"number":4,"id":"PVT4","title":"web Backlog","url":"https://gh/p/4"}]}`).
+		on("api graphql -f query=\nquery($projectId: ID!)", `{"data":{"node":{"fields":{"nodes":[
+			{"id":"FID_status","name":"Status","dataType":"SINGLE_SELECT","options":[
+				{"id":"OPT_todo","name":"TODO"},{"id":"OPT_planned","name":"PLANNED"}
+			]}
+		]}}}}`).
+		on("api graphql -f query=\nquery($projectId: ID!, $after: String)", `{"data":{"node":{"items":{"pageInfo":{"endCursor":"","hasNextPage":false},"nodes":[
+			{"id":"PVTI_story","content":{"__typename":"Issue","number":10,"title":"US-001: Setup","body":"`+issueBody+`","url":"https://gh/i/10","labels":{"nodes":[{"name":"archetipo-backlog"}]}},"status":{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"TODO"}}
+		]}}}}`).
+		// Existing DONE sub-issue.
+		on("api repos/acme/web/issues/10/sub_issues?per_page=100&page=1", `[{"number":20,"title":"TASK-01: Schema DB","body":"Old body","state":"closed"}]`).
+		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":"`+issueBody+`","url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`).
+		on("api -X PATCH repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","url":"https://gh/i/10"}`)
+
+	cfg := config.Default()
+	cfg.Connector = config.ConnectorGitHub
+	c := NewWithRunner(cfg, m)
+
+	plan := domain.PlanInput{
+		PlanBody: "## Soluzione\\n\\nDetail.",
+		Tasks: []domain.Task{
+			{ID: "TASK-01", Title: "Schema DB", Description: "Should be ignored", Type: domain.TaskImpl, Status: domain.StatusDone},
+		},
+	}
+	res, err := c.SavePlan(context.Background(), "US-001", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.OK {
+		t.Error("expected ok=true")
+	}
+	// Must not create or update any sub-issue.
+	if m.calledWithPrefix("api -X POST repos/acme/web/issues -f title=") {
+		t.Error("expected no sub-issue creation for DONE task")
+	}
+	if m.calledWithPrefix("api -X PATCH repos/acme/web/issues/20") {
+		t.Error("expected no sub-issue update for DONE task")
+	}
+	// Should still include the existing DONE ref in output.
+	found := false
+	for _, r := range res.Refs {
+		if r.Code == "TASK-01" && r.Number == 20 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected DONE task ref in result")
+	}
+}
+
+func TestSavePlan_UpdatesExistingTodoSubIssue(t *testing.T) {
+	issueBody := "## Spec\\n\\nAs a user, I want X."
+	m := newMock(t).
+		on("repo view --json", `{"id":"R","owner":{"login":"acme"},"name":"web","nameWithOwner":"acme/web"}`).
+		on("project list --owner acme", `{"projects":[{"number":4,"id":"PVT4","title":"web Backlog","url":"https://gh/p/4"}]}`).
+		on("api graphql -f query=\nquery($projectId: ID!)", `{"data":{"node":{"fields":{"nodes":[
+			{"id":"FID_status","name":"Status","dataType":"SINGLE_SELECT","options":[
+				{"id":"OPT_todo","name":"TODO"},{"id":"OPT_planned","name":"PLANNED"}
+			]}
+		]}}}}`).
+		on("api graphql -f query=\nquery($projectId: ID!, $after: String)", `{"data":{"node":{"items":{"pageInfo":{"endCursor":"","hasNextPage":false},"nodes":[
+			{"id":"PVTI_story","content":{"__typename":"Issue","number":10,"title":"US-001: Setup","body":"`+issueBody+`","url":"https://gh/i/10","labels":{"nodes":[{"name":"archetipo-backlog"}]}},"status":{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"TODO"}}
+		]}}}}`).
+		// Existing TODO sub-issue.
+		on("api repos/acme/web/issues/10/sub_issues?per_page=100&page=1", `[{"number":20,"title":"TASK-01: Old Title","body":"Old body","state":"open"}]`).
+		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":"`+issueBody+`","url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`).
+		on("api -X PATCH repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","url":"https://gh/i/10"}`).
+		// The update must use the new title and body.
+		on("api -X PATCH repos/acme/web/issues/20", `{"number":20,"title":"TASK-01: Schema DB","body":"Create database schema","url":"https://gh/i/20"}`)
+
+	cfg := config.Default()
+	cfg.Connector = config.ConnectorGitHub
+	c := NewWithRunner(cfg, m)
+
+	plan := domain.PlanInput{
+		PlanBody: "## Soluzione\\n\\nDetail.",
+		Tasks: []domain.Task{
+			{ID: "TASK-01", Title: "Schema DB", Description: "Create database schema", Type: domain.TaskImpl, Status: domain.StatusTodo},
+		},
+	}
+	res, err := c.SavePlan(context.Background(), "US-001", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.OK {
+		t.Error("expected ok=true")
+	}
+	// Must update the existing sub-issue, not create a new one.
+	if m.calledWithPrefix("api -X POST repos/acme/web/issues -f title=") {
+		t.Error("expected no sub-issue creation when updating existing")
+	}
+	if !m.calledWithPrefix("api -X PATCH repos/acme/web/issues/20") {
+		t.Error("expected sub-issue update for existing TODO task")
+	}
+	// Must not link (already linked).
+	if m.calledWithPrefix("api -X POST repos/acme/web/issues/10/sub_issues") {
+		t.Error("expected no sub-issue linking for updated existing task")
+	}
+}
+
+func TestSavePlan_CreatesNewTaskAlongsideExisting(t *testing.T) {
+	issueBody := "## Spec\\n\\nAs a user, I want X."
+	m := newMock(t).
+		on("repo view --json", `{"id":"R","owner":{"login":"acme"},"name":"web","nameWithOwner":"acme/web"}`).
+		on("project list --owner acme", `{"projects":[{"number":4,"id":"PVT4","title":"web Backlog","url":"https://gh/p/4"}]}`).
+		on("api graphql -f query=\nquery($projectId: ID!)", `{"data":{"node":{"fields":{"nodes":[
+			{"id":"FID_status","name":"Status","dataType":"SINGLE_SELECT","options":[
+				{"id":"OPT_todo","name":"TODO"},{"id":"OPT_planned","name":"PLANNED"}
+			]}
+		]}}}}`).
+		on("api graphql -f query=\nquery($projectId: ID!, $after: String)", `{"data":{"node":{"items":{"pageInfo":{"endCursor":"","hasNextPage":false},"nodes":[
+			{"id":"PVTI_story","content":{"__typename":"Issue","number":10,"title":"US-001: Setup","body":"`+issueBody+`","url":"https://gh/i/10","labels":{"nodes":[{"name":"archetipo-backlog"}]}},"status":{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"TODO"}}
+		]}}}}`).
+		// Existing DONE sub-issue.
+		on("api repos/acme/web/issues/10/sub_issues?per_page=100&page=1", `[{"number":20,"title":"TASK-01: Schema DB","body":"Old body","state":"closed"}]`).
+		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":"`+issueBody+`","url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`).
+		on("api -X PATCH repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","url":"https://gh/i/10"}`).
+		// New task TASK-02 gets created.
+		on("api -X POST repos/acme/web/issues -f title=TASK-02: New Task", `{"number":21,"id":21,"node_id":"I_21","title":"TASK-02: New Task","body":"New task body","url":"https://gh/i/21"}`).
+		on("api -X POST repos/acme/web/issues/10/sub_issues", "ok")
+
+	cfg := config.Default()
+	cfg.Connector = config.ConnectorGitHub
+	c := NewWithRunner(cfg, m)
+
+	plan := domain.PlanInput{
+		PlanBody: "## Soluzione\\n\\nDetail.",
+		Tasks: []domain.Task{
+			{ID: "TASK-01", Title: "Schema DB", Status: domain.StatusDone},
+			{ID: "TASK-02", Title: "New Task", Description: "New task body", Type: domain.TaskImpl, Status: domain.StatusTodo},
+		},
+	}
+	res, err := c.SavePlan(context.Background(), "US-001", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.OK {
+		t.Error("expected ok=true")
+	}
+	// TASK-01 must not be created or updated.
+	if m.calledWithPrefix("api -X PATCH repos/acme/web/issues/20") {
+		t.Error("expected no sub-issue update for DONE TASK-01")
+	}
+	// TASK-02 must be created.
+	if !m.calledWithPrefix("api -X POST repos/acme/web/issues -f title=TASK-02:") {
+		t.Error("expected sub-issue creation for new TASK-02")
+	}
+	// TASK-02 must be linked (only new sub-issues get linked).
+	if !m.calledWithPrefix("api -X POST repos/acme/web/issues/10/sub_issues") {
+		t.Error("expected sub-issue linking for new TASK-02")
+	}
+	// Both tasks must appear in refs.
+	codes := map[string]bool{}
+	for _, r := range res.Refs {
+		codes[r.Code] = true
+	}
+	if !codes["TASK-01"] {
+		t.Error("expected TASK-01 ref in result")
+	}
+	if !codes["TASK-02"] {
+		t.Error("expected TASK-02 ref in result")
 	}
 }

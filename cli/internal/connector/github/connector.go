@@ -326,14 +326,51 @@ func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.Pl
 		}
 	}
 	refs := []domain.Ref{{Code: specRef, Number: parentNum, URL: parent.URL}}
+
+	// Load existing sub-issues so we can reconcile by task ID instead of
+	// blindly recreating every issue on every plan run.
+	existingRaw, err := c.listRawSubIssues(ctx, parentNum)
+	if err != nil {
+		return domain.WriteResult{}, err
+	}
+	existingByID := make(map[string]rawSubIssue, len(existingRaw))
+	for _, s := range existingRaw {
+		id := taskIDFromTitle(s.Title)
+		if id == "" {
+			continue
+		}
+		existingByID[id] = s
+	}
+
 	subNumbers := make([]int, 0, len(plan.Tasks))
 	subIDs := make([]int64, 0, len(plan.Tasks))
 	for _, t := range plan.Tasks {
+		// Preserve DONE sub-issues: do not recreate or update them.
+		if t.Status == domain.StatusDone {
+			if existing, ok := existingByID[t.ID]; ok {
+				refs = append(refs, domain.Ref{Code: t.ID, Number: existing.Number, URL: ""})
+			}
+			continue
+		}
+
+		title := fmt.Sprintf("%s: %s", t.ID, t.Title)
+		body := firstNonEmpty(t.Body, t.Description)
 		labels := []string{}
 		if epicLabel != "" {
 			labels = append(labels, epicLabel)
 		}
-		created, err := c.createIssue(ctx, fmt.Sprintf("%s: %s", t.ID, t.Title), firstNonEmpty(t.Body, t.Description), labels)
+
+		if existing, ok := existingByID[t.ID]; ok {
+			// Update the existing sub-issue instead of creating a new one.
+			updated, err := c.updateIssue(ctx, existing.Number, title, body, labels)
+			if err != nil {
+				return domain.WriteResult{}, err
+			}
+			refs = append(refs, domain.Ref{Code: t.ID, Number: updated.Number, URL: updated.URL})
+			continue
+		}
+
+		created, err := c.createIssue(ctx, title, body, labels)
 		if err != nil {
 			return domain.WriteResult{}, err
 		}
@@ -346,7 +383,7 @@ func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.Pl
 		subIDs = append(subIDs, created.ID)
 		refs = append(refs, domain.Ref{Code: t.ID, Number: created.Number, URL: created.URL})
 	}
-	// Link sub-issues to parent via REST API.
+	// Link only newly created sub-issues to the parent; existing ones are already linked.
 	for i := range subNumbers {
 		if _, stderr, err := c.runner.Run(ctx, nil,
 			"api", "-X", "POST",
@@ -944,6 +981,27 @@ func (c *Connector) editIssueBody(ctx context.Context, num int, body string) (ra
 	return raw, nil
 }
 
+// updateIssue patches an existing issue's title, body, and labels in a single
+// REST PATCH call. Used by SavePlan to reconcile sub-issues by task ID.
+func (c *Connector) updateIssue(ctx context.Context, num int, title, body string, labels []string) (rawIssue, error) {
+	args := []string{
+		"api", "-X", "PATCH", fmt.Sprintf("repos/%s/issues/%d", c.state.repo.Slug, num),
+		"-f", "title=" + title,
+		"-f", "body=" + body,
+	}
+	for _, label := range labels {
+		args = append(args, "-f", "labels[]="+label)
+	}
+	var raw rawIssue
+	if err := runJSON(ctx, c.runner, &raw, args...); err != nil {
+		return rawIssue{}, err
+	}
+	if raw.URL == "" {
+		raw.URL = raw.HTMLURL
+	}
+	return raw, nil
+}
+
 func (c *Connector) closeIssue(ctx context.Context, num int) (rawIssue, error) {
 	var raw rawIssue
 	if err := runJSON(ctx, c.runner, &raw,
@@ -972,18 +1030,43 @@ func (c *Connector) postIssueComment(ctx context.Context, num int, body string) 
 	return raw, nil
 }
 
-func (c *Connector) listSubIssues(ctx context.Context, parentNum int) ([]domain.Task, error) {
-	var raw []struct {
-		Number int    `json:"number"`
-		Title  string `json:"title"`
-		Body   string `json:"body"`
-		State  string `json:"state"`
+// rawSubIssue is the JSON shape of an item returned by GET .../sub_issues.
+type rawSubIssue struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	State  string `json:"state"`
+}
+
+const subIssuesPerPage = 100
+
+// listRawSubIssues returns the raw GitHub sub-issue objects for a parent
+// issue, paginating through all available pages.
+func (c *Connector) listRawSubIssues(ctx context.Context, parentNum int) ([]rawSubIssue, error) {
+	var all []rawSubIssue
+	page := 1
+	for {
+		var pageItems []rawSubIssue
+		if err := runJSON(ctx, c.runner, &pageItems,
+			"api",
+			fmt.Sprintf("repos/%s/issues/%d/sub_issues?per_page=%d&page=%d",
+				c.state.repo.Slug, parentNum, subIssuesPerPage, page),
+			"-H", "X-GitHub-Api-Version: 2026-03-10",
+		); err != nil {
+			return nil, err
+		}
+		all = append(all, pageItems...)
+		if len(pageItems) < subIssuesPerPage {
+			break
+		}
+		page++
 	}
-	if err := runJSON(ctx, c.runner, &raw,
-		"api",
-		fmt.Sprintf("repos/%s/issues/%d/sub_issues", c.state.repo.Slug, parentNum),
-		"-H", "X-GitHub-Api-Version: 2026-03-10",
-	); err != nil {
+	return all, nil
+}
+
+func (c *Connector) listSubIssues(ctx context.Context, parentNum int) ([]domain.Task, error) {
+	raw, err := c.listRawSubIssues(ctx, parentNum)
+	if err != nil {
 		return nil, err
 	}
 	out := make([]domain.Task, 0, len(raw))
