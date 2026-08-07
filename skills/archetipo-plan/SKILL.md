@@ -164,6 +164,10 @@ If no choice crosses this threshold, keep decision IDs out of `wiki_impact.creat
 
 Treat `wiki affected` as bounded discovery. For every candidate page, decide whether the planned change is expected to alter the page's actual knowledge, not merely one cited file. Put an existing ID in `wiki_impact.update` only when a semantic page update is expected; put a new ID in `create` only when the plan genuinely requires a new concept. For every ID in either list, add a dedicated `Impl` task that names the exact page ID and explains the knowledge change, evidence, and done condition. A tracked co-citation that may become `evidence-changed` but whose claims are expected to remain accurate stays out of the required contract and is reconciled explicitly during acceptance; a `freshness: context` source should not be returned at all. Record useful existing pages in `read` when they inform planning. Never convert path fan-out into a documentation work contract without this reason-aware decision.
 
+**Every task that edits an existing Wiki page must start by resetting it.** Apply the **Wiki page state transitions** table from `.archetipo/shared-runtime.md`: editing a `reviewed` page derives `stale`, it never demotes the page to `generated`, and `archetipo wiki reset` is the only transition back. Therefore each `Impl` task in `wiki_impact.update` carries `archetipo wiki --project-root {data.workdir} reset <page-id>` as its **first step**, and its Done criteria must require that the page reports `state: generated` in `archetipo wiki status`.
+
+Never write a Non-goal, note, or constraint that predicts review-state behavior — statements such as "the page will return to `generated` by itself" or "do not touch the review state" are false or ambiguous and will make a compliant implementer leave the page `stale`. The only permitted formulation of the prohibition is: **do not hand-edit the `review` block — use `archetipo wiki reset`.**
+
 #### UI/UX Assessment & Mockup Spawn
 
 Decide whether the spec needs mockups using these explicit triggers. The spec needs mockups when **at least one** holds:

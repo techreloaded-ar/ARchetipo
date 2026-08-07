@@ -109,6 +109,8 @@ New domain pages use `domains/<slug>`. New architectural decisions use `decision
 
 When concrete expected implementation paths are known, `wiki affected --file <path>...` may be used to discover candidate pages. Treat the result as a reading list, not an automatic contract: include a candidate in `update` only when the planned change is expected to alter its knowledge. Do not copy tracked-source path fan-out into Wiki Impact. Co-cited-but-still-accurate non-reference pages remain affected-only candidates for explicit acceptance-time reconciliation, and context sources are excluded from affected discovery.
 
+Every `Impl` task for an ID in `update` must reset the page first with `archetipo wiki --project-root {data.workdir} reset <page-id>`: editing a `reviewed` page derives `stale`, never `generated`. See **Wiki page state transitions** in `.archetipo/shared-runtime.md`.
+
 ---
 
 {IF_MOCKUP_GENERATED}
@@ -131,6 +133,7 @@ _Plan generated via ARchetipo Planning — {DATE}_
 > - Test tasks assert user-visible or contract outcomes, not proxies hidden behind mocks.
 > - Implementation order: follow the project's natural dependency chain — lower layers first, tests interleaved (not all at end)
 > - The final task is a Test gate that depends on all work it verifies and runs focused acceptance checks plus relevant regression/build/type/lint checks. After the gate itself is marked `DONE`, reload the spec from `data.project_root` and require every task to be `DONE` before `spec review`.
+> - Wiki page tasks: a task that edits an existing page has `archetipo wiki --project-root {data.workdir} reset <page-id>` as the first entry of `## Steps`, and a `## Done` entry requiring the page to report `state: generated` in `archetipo wiki status`. Never state or imply in any heading that a page returns to `generated` on its own, and never phrase the prohibition as "do not touch the review state" — the only permitted wording is "do not hand-edit the `review` block, use `archetipo wiki reset`".
 > - Frontend tasks when mockups exist: If `mockup_generated = true`, include at least one frontend implementation task (type: Impl) that explicitly references the mockups directory `{config.paths.mockups}/{US-CODE}/`. Omitting frontend tasks when `mockup_generated = true` is a plan error — do not proceed without them.
 > - Task dependencies must only reference tasks within the same spec plan. Cross-spec task dependencies are not supported — use spec-level `Blocked by` for cross-spec sequencing
 > - If the `Blocked by` field is absent from the spec (older backlogs), treat it as `-` (no dependencies)

@@ -185,7 +185,7 @@ All Wiki commands accept the persistent `--project-root <checkout>` flag. The ne
 
 - `archetipo wiki init` → `kind: wiki_init_result`, `data.root`, `data.created`.
 - `archetipo wiki inspect` → `kind: wiki_inspection_result`; content-free deterministic inventory including `data.boundaries`, `data.capability_candidates`, evidence categories, exclusions, uninspected areas, and optional `data.project_sources`.
-- `archetipo wiki status` → `kind: wiki_status`; derived state counts and page items plus findings.
+- `archetipo wiki status [--require-generated PAGE-ID...]` → `kind: wiki_status`; derived state counts and page items plus findings. With `--require-generated` it becomes a gate: any listed page that is absent or not `generated` fails with `E_CONFLICT` naming the offending IDs and their derived states, and a blank ID is `E_INVALID_INPUT`. Without the flag the behaviour is unchanged. This is the only check that catches a page edited after review: `WIKI_REVIEW_OUTDATED` and `WIKI_EVIDENCE_CHANGED` are warnings, so `wiki validate` still reports `ok: true`.
 - `archetipo wiki validate [--profile bootstrap]` → `kind: validation_result`, `data.ok`, `data.pages`, `data.findings`. Bootstrap validation also requires core DDD pages and full boundary/capability coverage.
 - `archetipo wiki search [query] [--type TYPE] [--status STATE]` → `kind: wiki_search_result` without page bodies.
 - `archetipo wiki affected [--base REV --head REV | --file PATH...]` → `kind: wiki_affected_result`.

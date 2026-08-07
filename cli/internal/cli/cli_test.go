@@ -851,6 +851,87 @@ func TestWikiApproveGitlinkBlockerReturnsConflict(t *testing.T) {
 	}
 }
 
+// The acceptance gate this test protects: editing a reviewed page derives
+// `stale`, `wiki validate` still reports ok because WIKI_REVIEW_OUTDATED is a
+// warning, and only `status --require-generated` catches it before review.
+func TestWikiStatusRequireGeneratedGate(t *testing.T) {
+	newProject(t)
+	initCLIWiki(t)
+	if err := os.MkdirAll("evidence", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("evidence", "item.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCLIWikiPage(t, "overview", "evidence/item.txt")
+
+	if _, data := decodeOK(t, runCLI(t, "", "wiki", "status", "--require-generated", "overview")); data["ok"] != true {
+		t.Fatalf("a freshly generated required page must pass the gate: %v", data)
+	}
+
+	if res := runCLI(t, "", "wiki", "approve", "overview"); res.exit != 0 {
+		t.Fatalf("approval failed: %s", res.stderr.String())
+	}
+	if _, code := decodeError(t, runCLI(t, "", "wiki", "status", "--require-generated", "overview")); code != iox.CodeConflict {
+		t.Fatalf("a reviewed required page must be a conflict, got %s", code)
+	}
+
+	pagePath := filepath.Join("docs", "wiki", "overview.md")
+	raw, err := os.ReadFile(pagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pagePath, append(raw, []byte("\nEdited without reset.\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The blindness that let the defect through: validation stays green.
+	if _, data := decodeOK(t, runCLI(t, "", "wiki", "validate")); data["ok"] != true {
+		t.Fatalf("WIKI_REVIEW_OUTDATED must remain a warning: %v", data)
+	}
+	if _, code := decodeError(t, runCLI(t, "", "wiki", "status", "--require-generated", "overview")); code != iox.CodeConflict {
+		t.Fatalf("a stale required page must be a conflict, got %s", code)
+	}
+	if _, code := decodeError(t, runCLI(t, "", "wiki", "status", "--require-generated", "missing/page")); code != iox.CodeConflict {
+		t.Fatalf("an absent required page must be a conflict, got %s", code)
+	}
+	if _, code := decodeError(t, runCLI(t, "", "wiki", "status", "--require-generated", " ")); code != iox.CodeInvalidInput {
+		t.Fatalf("a blank required page ID must be E_INVALID_INPUT, got %s", code)
+	}
+
+	// Reset repairs the state after the edit exactly as it would have before it.
+	if res := runCLI(t, "", "wiki", "reset", "overview"); res.exit != 0 {
+		t.Fatalf("reset failed: %s", res.stderr.String())
+	}
+	_, data := decodeOK(t, runCLI(t, "", "wiki", "status", "--require-generated", "overview"))
+	if data["ok"] != true {
+		t.Fatalf("reset must clear the gate: %v", data)
+	}
+	states, ok := data["states"].(map[string]any)
+	if !ok || states["generated"] != float64(1) {
+		t.Fatalf("expected exactly one generated page after reset: %v", data["states"])
+	}
+}
+
+func TestWikiStatusWithoutRequireGeneratedIsUnchanged(t *testing.T) {
+	newProject(t)
+	initCLIWiki(t)
+	if err := os.MkdirAll("evidence", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("evidence", "item.txt"), []byte("reviewed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCLIWikiPage(t, "overview", "evidence/item.txt")
+	if res := runCLI(t, "", "wiki", "approve", "overview"); res.exit != 0 {
+		t.Fatalf("approval failed: %s", res.stderr.String())
+	}
+	kind, data := decodeOK(t, runCLI(t, "", "wiki", "status"))
+	if kind != "wiki_status" || data["ok"] != true {
+		t.Fatalf("plain status must stay a success envelope: kind=%s data=%v", kind, data)
+	}
+}
+
 func TestWikiAffectedRepeatedFilesMatchRootSource(t *testing.T) {
 	newProject(t)
 	initCLIWiki(t)

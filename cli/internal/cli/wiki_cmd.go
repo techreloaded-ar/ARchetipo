@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -103,7 +104,12 @@ func newWikiInitCmd(s streams) *cobra.Command {
 }
 
 func newWikiStatusCmd(s streams) *cobra.Command {
-	return &cobra.Command{Use: "status", Short: "Summarize Wiki health and lifecycle state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+	var requireGenerated []string
+	cmd := &cobra.Command{Use: "status", Short: "Summarize Wiki health and lifecycle state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		required, err := normalizeRequiredPageIDs(requireGenerated)
+		if err != nil {
+			return err
+		}
 		return withWiki(cmd, s, "wiki_status", true, func(cfg config.Config, root string) (any, error) {
 			pages, states, report, err := wiki.Status(cfg.ProjectRoot, root)
 			if err != nil {
@@ -111,14 +117,65 @@ func newWikiStatusCmd(s streams) *cobra.Command {
 			}
 			counts := map[string]int{}
 			items := []map[string]any{}
+			byID := map[string]string{}
 			for index, p := range pages {
 				state := states[index]
 				counts[state]++
+				byID[p.ID] = state
 				items = append(items, map[string]any{"id": p.ID, "path": p.Path, "state": state, "issues": p.Meta.Issues})
+			}
+			if err := requireGeneratedPages(required, byID); err != nil {
+				return nil, err
 			}
 			return map[string]any{"root": root, "pages": len(pages), "states": counts, "items": items, "ok": report.OK, "findings": report.Findings}, nil
 		})
 	}}
+	cmd.Flags().StringSliceVar(&requireGenerated, "require-generated", nil, "page ID that must report state generated; repeat or comma-separate")
+	return cmd
+}
+
+// normalizeRequiredPageIDs rejects blank --require-generated values before any
+// I/O, so a caller mistake never reads as a Wiki state conflict.
+func normalizeRequiredPageIDs(ids []string) ([]string, error) {
+	normalized := make([]string, 0, len(ids))
+	for _, id := range ids {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			return nil, iox.NewInvalidInput("empty --require-generated page ID", "pass a nonempty canonical Wiki page ID", nil)
+		}
+		normalized = append(normalized, trimmed)
+	}
+	return normalized, nil
+}
+
+// requireGeneratedPages turns the acceptance-review post-condition into a
+// deterministic gate: a required page that is missing or not `generated` is a
+// conflict, not a warning. `wiki validate` cannot cover this because
+// WIKI_REVIEW_OUTDATED and WIKI_EVIDENCE_CHANGED are warning findings.
+func requireGeneratedPages(required []string, states map[string]string) error {
+	offending := []string{}
+	seen := map[string]bool{}
+	for _, id := range required {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		state, exists := states[id]
+		if !exists {
+			offending = append(offending, id+" (absent)")
+			continue
+		}
+		if state != "generated" {
+			offending = append(offending, id+" ("+state+")")
+		}
+	}
+	if len(offending) == 0 {
+		return nil
+	}
+	return iox.NewConflict(
+		"required Wiki pages are not generated: "+strings.Join(offending, ", "),
+		"run `archetipo wiki reset <page-id>...` for pages edited after review, resolve page issues for `attention`, and create missing pages",
+		nil)
 }
 
 func newWikiValidateCmd(s streams) *cobra.Command {
