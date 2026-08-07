@@ -1,6 +1,6 @@
 ---
 name: archetipo-wiki
-description: Bootstrap, query, ingest, review, and lint ARchetipo's codebase-first DDD Wiki. Use for mapping an existing repository into domains and candidate bounded contexts, locating domain code, maintaining living project knowledge, or answering project questions with bounded context.
+description: Bootstrap, query, ingest, refresh, review, and lint ARchetipo's codebase-first DDD Wiki. Use for mapping an existing repository into domains and candidate bounded contexts, locating domain code, maintaining living project knowledge, or answering project questions with bounded context.
 ---
 
 # ARchetipo Wiki
@@ -12,7 +12,9 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 1. Locate the project root and read `.archetipo/shared-runtime.md` exactly once.
 2. Run `archetipo config show`; resolve repository reads from `data.project_root`.
 3. Read [references/wiki-contract.md](references/wiki-contract.md) before creating or changing pages.
-4. Select one operation: `bootstrap`, `ingest`, `query`, `review`, or `lint`. Default to `query` for a question and `bootstrap` when the Wiki is absent.
+4. Select one operation: `bootstrap`, `ingest`, `refresh`, `query`, `review`, or `lint`. Default to `query` for a question and `bootstrap` when the Wiki is absent.
+
+`refresh` and `lint` are the two maintenance operations, and they start from different signals: `refresh` reacts to **changed code**, `lint` reacts to **validation findings**. Reach for `refresh` after work landed outside the spec workflow; reach for `lint` when the Wiki itself is structurally wrong.
 
 ## Source relevance
 
@@ -52,6 +54,16 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 5. Preserve disagreements as explicit `issues`, validate, and catalog.
 6. When the ingested source is an explicit architecture decision, create or update its canonical `decisions/<slug>` page using the decision contract; attribute rationale to the source and verify current adoption against repository evidence.
 
+## Refresh
+
+Bring the Wiki back in line with code that landed outside the spec workflow — a direct commit, a merged branch, a manual fix.
+
+1. Run `archetipo wiki affected --base <revision> --head <revision>`, or pass repeated `--file` flags when you already know the paths. A rename is observed as removal plus addition, so both the old and the new path participate.
+2. Read each affected page against the changed code and tests. This is discovery, not a reset list: a page appearing here is a question, not a verdict.
+3. Ask what the change did that the page **claims**, not only whether the file that triggered the match is important. Pay attention to statements about sets of files — coverage notes, counts, exhaustive lists — because those go false through code added anywhere.
+4. For a page whose knowledge is now wrong: `archetipo wiki reset <page-id>`, correct it, keep unresolved issues. Leave an accurate page untouched.
+5. Validate and catalog. Approval is a separate operation.
+
 ## Query
 
 1. Read `docs/wiki/index.md` first.
@@ -71,10 +83,11 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 
 ## Lint
 
-1. Run `archetipo wiki validate` and classify deterministic findings.
+1. Run `archetipo wiki validate --profile bootstrap` and classify deterministic findings.
 2. Inspect duplicated domains, unjustified bounded-context claims, missing ownership, contradictory flows, orphan capability candidates, and evidence that no longer supports a page.
 3. Apply structural repairs. For semantic uncertainty, add an issue and reset the page to `generated`.
-4. Re-run validation and catalog. Do not approve without an explicit review request.
+4. Repair `WIKI_CORE_PAGE_UNANCHORED` by adding the directory the page's aggregate claims are about — the narrowest one that covers them, not `.` by reflex, because a whole-project source makes the page a candidate on every future spec. Read the page first: the right directory is the area it summarizes. While you are there, rewrite enumerations that will age on their own ("three modules", "13 migrations") as structural statements. Adding a source is a content change, so the sequence is `reset`, edit, validate, `approve`.
+5. Re-run validation and catalog. Do not approve without an explicit review request.
 
 ## Safety
 
