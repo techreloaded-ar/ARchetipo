@@ -52,7 +52,7 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
    - `archetipo wiki search [query]`
    - `archetipo wiki --project-root {data.workdir} affected --file <expected-path>...` (only when concrete expected changed paths are known)
 
-   `wiki affected` emits the standard envelope with `kind: wiki_affected_result`, `data.items`, `data.files`, and `data.count`. Every explicit `--file` must be a nonempty exact portable project-relative local path; caller mistakes are `E_INVALID_INPUT`. Invalid or unreadable persisted tracked sources fail discovery closed as `E_CONFLICT`, never a partial or empty success. Branch on `E_PRECONDITION` when the Wiki is absent and `E_INTERNAL` only for unexpected implementation failures. Its results are discovery candidates, not an automatic Wiki Impact list.
+   `wiki affected` returns `kind: wiki_affected_result` with `data.items`. Its results are discovery candidates, not an automatic Wiki Impact list. Branch on `error.code` per `references/wiki-contract.md`.
 
 #### Step 1 — Spec Selection
 
@@ -79,7 +79,7 @@ After selecting the spec, read ALL context in a **single turn with parallel tool
 - If the target spec has a `Blocked by` field with values other than `-`, read those blocking specs from the backlog to understand preconditions and shared context
 - If `data.tasks` from Step 1 was non-empty, a plan already exists. In **Rework mode** (see below) do NOT ask — preserve the existing tasks and append. Otherwise ask the user: overwrite, create a new revision, or skip. Never silently overwrite.
 
-**Worktree awareness.** Apply the **Worktree Working Directory** rule from `.archetipo/shared-runtime.md`: run `config show`, `spec show`/`next`, and `spec plan` from `data.project_root`, but do ALL codebase reading and analysis (including the Rework Feedback `file:line` lookups) under `data.workdir` returned by the `spec show`/`next` call in Step 1. That directory is the spec's worktree when one exists — holding the changes already made for this spec, so the plan reflects the real current state — and the project root otherwise. For Wiki commands, `--project-root {data.workdir}` loads the target checkout's nearest configuration; if it has none, it inherits the invoking checkout settings and retargets them to `data.workdir`. Changing cwd alone is insufficient. Branch only on `data.workdir` and JSON `error.code`, never on connector type or error text.
+**Worktree awareness.** Apply the **Worktree Working Directory** rule from `.archetipo/shared-runtime.md`: run `config show`, `spec show`/`next`, and `spec plan` from `data.project_root`, but do ALL codebase reading and analysis (including the Rework Feedback `file:line` lookups) under `data.workdir` returned by the `spec show`/`next` call in Step 1. That directory is the spec's worktree when one exists — holding the changes already made for this spec, so the plan reflects the real current state — and the project root otherwise.
 
 **Rework mode.** A spec is "in rework" when `data.spec.rework` is `true` or `data.spec.body` contains a `## Rework Feedback` section. It means the spec was sent back from review via *request changes*, with the reviewer's inline comments recorded as bullets (each anchored to a `file:line`). In this mode the feedback is the primary planning input — see the task-construction rule in STAGE 1.
 
@@ -160,13 +160,17 @@ For every qualifying choice:
 
 If no choice crosses this threshold, keep decision IDs out of `wiki_impact.create` and state the reason briefly in the technical solution. Do not manufacture ADRs merely to grow the Wiki.
 
-#### Wiki impact source relevance
+#### Wiki impact
 
-Treat `wiki affected` as bounded discovery. For every candidate page, decide whether the planned change is expected to alter the page's actual knowledge, not merely one cited file. Put an existing ID in `wiki_impact.update` only when a semantic page update is expected; put a new ID in `create` only when the plan genuinely requires a new concept. For every ID in either list, add a dedicated `Impl` task that names the exact page ID and explains the knowledge change, evidence, and done condition. A tracked co-citation that may become `evidence-changed` but whose claims are expected to remain accurate stays out of the required contract and is reconciled explicitly during acceptance; a `freshness: context` source should not be returned at all. Record useful existing pages in `read` when they inform planning. Never convert path fan-out into a documentation work contract without this reason-aware decision.
+`wiki affected` is bounded discovery, never a work contract. Deciding what goes into `wiki_impact` is this skill's job and **the only place in the workflow where it is done**: implementation fulfils the contract and acceptance approves it, so a page missed here is a page nobody looks at.
 
-**Every task that edits an existing Wiki page must start by resetting it.** Apply the **Wiki page state transitions** table from `.archetipo/shared-runtime.md`: editing a `reviewed` page derives `stale`, it never demotes the page to `generated`, and `archetipo wiki reset` is the only transition back. Therefore each `Impl` task in `wiki_impact.update` carries `archetipo wiki --project-root {data.workdir} reset <page-id>` as its **first step**, and its Done criteria must require that the page reports `state: generated` in `archetipo wiki status`.
+Ask, for each candidate, **"what does this spec do that this page claims?"** — not "does the file that triggered the match matter?". Those are different questions, and only the first one finds a page whose claim covers an area the spec grew. Pay particular attention to statements about *sets* of files ("the suite covers…", "the rest has no…", counts, exhaustive lists): they become false because of code added anywhere, including files the page does not cite.
 
-Never write a Non-goal, note, or constraint that predicts review-state behavior — statements such as "the page will return to `generated` by itself" or "do not touch the review state" are false or ambiguous and will make a compliant implementer leave the page `stale`. The only permitted formulation of the prohibition is: **do not hand-edit the `review` block — use `archetipo wiki reset`.**
+**Write one line of reasoning per candidate ID.** A single justification covering several pages is a planning defect: it is how a judgment that is right for most of them gets applied to the one it is wrong for.
+
+Then: put an existing ID in `wiki_impact.update` only when a semantic page update is expected, and a new ID in `create` only when the plan genuinely requires a new concept. Record pages that merely informed planning in `read`. For every ID in `update` or `create`, add a dedicated `Impl` task that names the exact page ID and states the knowledge change, its evidence, and its done condition.
+
+**Every task that edits an existing Wiki page must start by resetting it.** Editing a `reviewed` page derives `stale` and never `generated` (see **Wiki page state transitions** in `.archetipo/shared-runtime.md`), so each `Impl` task in `wiki_impact.update` carries `archetipo wiki --project-root {data.workdir} reset <page-id>` as its **first step**, and its Done criteria require the page to report `state: generated` in `archetipo wiki status`. Never predict review-state behavior in a note or non-goal — "the page will return to `generated` by itself" and "do not touch the review state" both leave a compliant implementer with a `stale` page. The only permitted wording is: **do not hand-edit the `review` block — use `archetipo wiki reset`.**
 
 #### UI/UX Assessment & Mockup Spawn
 

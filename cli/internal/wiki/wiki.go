@@ -476,18 +476,30 @@ func ValidateBootstrap(projectRoot, root, prdPath string) (Report, error) {
 			add("WIKI_BOOTSTRAP_CORE_ORPHAN", id, page.Path, "bootstrap core page must link to or be linked from another Wiki concept")
 		}
 		hasRepositoryEvidence := false
+		hasDirectoryAnchor := false
 		for _, source := range page.Meta.Sources {
 			if source.Path == "" || isExternal(source.Path) {
 				continue
 			}
 			resolved, resolveErr := snapshot.resolveAndAttest(source.Path)
-			if resolveErr == nil && resolved.Exists {
-				hasRepositoryEvidence = true
+			if resolveErr != nil || !resolved.Exists {
+				continue
+			}
+			hasRepositoryEvidence = true
+			// A core page summarizes a whole area, so its knowledge ages because of
+			// files it never names. Only a tracked directory source grows with that
+			// area: it fingerprints files added later and matches them in affected
+			// discovery. Individual file sources cannot report that growth at all.
+			if sourceTracksFreshness(source) && resolved.Info != nil && resolved.Info.IsDir() {
+				hasDirectoryAnchor = true
 				break
 			}
 		}
-		if !hasRepositoryEvidence {
+		switch {
+		case !hasRepositoryEvidence:
 			add("WIKI_BOOTSTRAP_SOURCE_MISSING", id, page.Path, "bootstrap core page requires repository evidence")
+		case !hasDirectoryAnchor:
+			add("WIKI_CORE_PAGE_UNANCHORED", id, page.Path, "bootstrap core page requires at least one tracked directory source: a page anchored only on individual files cannot become affected when the area it describes grows")
 		}
 	}
 	inspection, err := Inspect(projectRoot, root, prdPath)

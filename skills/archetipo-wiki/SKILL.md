@@ -1,6 +1,6 @@
 ---
 name: archetipo-wiki
-description: Bootstrap, query, ingest, refresh, review, and lint ARchetipo's codebase-first DDD Wiki. Use for mapping an existing repository into domains and candidate bounded contexts, locating domain code, maintaining living project knowledge, or answering project questions with bounded context.
+description: Bootstrap, query, ingest, review, and lint ARchetipo's codebase-first DDD Wiki. Use for mapping an existing repository into domains and candidate bounded contexts, locating domain code, maintaining living project knowledge, or answering project questions with bounded context.
 ---
 
 # ARchetipo Wiki
@@ -12,16 +12,13 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 1. Locate the project root and read `.archetipo/shared-runtime.md` exactly once.
 2. Run `archetipo config show`; resolve repository reads from `data.project_root`.
 3. Read [references/wiki-contract.md](references/wiki-contract.md) before creating or changing pages.
-4. Select one operation: `bootstrap`, `ingest`, `refresh`, `query`, `review`, or `lint`. Default to `query` for a question and `bootstrap` when the Wiki is absent.
+4. Select one operation: `bootstrap`, `ingest`, `query`, `review`, or `lint`. Default to `query` for a question and `bootstrap` when the Wiki is absent.
 
 ## Source relevance
 
-- Every source may set `freshness: tracked` or `freshness: context`; omitted means `tracked` for compatibility.
-- Tracked sources are authoritative freshness evidence and participate in evidence hashes, legacy revision fallback, and `wiki affected`. A tracked source of `.` or `./` represents the whole project for affected discovery; directory matching is component-aware, so `src` never includes `src2`.
-- Only syntactically valid absolute `http` or `https` URLs with a nonempty hostname are external evidence. Scheme matching is case-insensitive; a port-only authority is not external. Malformed URLs, unknown schemes, Windows-looking `C://...` values, and traversal strings containing `://` remain local-source candidates and must pass normal project-relative validation.
-- Context sources remain serialized provenance, remain semantic page content, and must still have valid/existing paths, but do not stale a page or make it affected when their bytes change.
-- Reference pages keep the immutable original artifact (`role: original`) tracked. Implementation files used only for comparison or navigation belong in ordinary Markdown links or context sources; never make an unchanged PRD reference depend on hub-file churn.
-- To migrate an existing reference that incorrectly tracks implementation pointers, reset it once, remove those sources in favor of links or mark them `freshness: context`, validate, and approve the corrected page once. Do not reinterpret old approval metadata automatically.
+- A source is `freshness: tracked` (the default when omitted) or `freshness: context`. Tracked sources are the page's freshness evidence: they feed the evidence hash and `wiki affected`. Context sources are provenance only — they never make a page affected.
+- Cite a **directory** when the page's knowledge is about a set of files rather than specific ones. Directory sources match every file below them and their fingerprint covers files added later, so a page anchored on `tests` notices a new test; a page citing only individual files cannot.
+- A reference page tracks its immutable original (`role: original`). Implementation files cited only for comparison or navigation belong in Markdown links or `freshness: context`, so an unchanged reference does not churn whenever a shared hub file changes.
 
 ## Bootstrap
 
@@ -34,15 +31,17 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
    - `architecture/context-map`: domain relationships, shared infrastructure, upstream/downstream dependencies, and unresolved boundaries;
    - `engineering/code-map`: physical domain-to-code matrix plus shared and unmapped code;
    - `operations/development`: build, test, runtime, deployment, and operational constraints.
+
+   Core pages summarize the state of the whole project, so each one must cite **at least one directory** among its tracked sources — the directory whose growth would change what the page says. A core page anchored only on individual files is structurally unable to notice the project growing around it, and the bootstrap profile rejects it with `WIKI_CORE_PAGE_UNANCHORED`.
+
    Connect every core page to the concept graph with at least one standard Markdown relationship to an existing Wiki concept, or an incoming relationship from one. No core page may remain isolated.
+
    Do not create `type: decision` pages by inferring rationale from code during a code-only bootstrap. ADRs enter the Wiki from an explicit planning choice or from a reference concept whose rationale can be attributed.
 6. In `engineering/code-map`, represent every inspected physical boundary and every capability candidate in `coverage`. Map it to domain pages, mark it `partial`, or exclude it with a reason. Never omit a candidate silently.
-7. Separate observed runtime behavior from declared-but-unobserved models. For every state machine, enumerate assignments/writes to each state and derive transitions from the source-state guard plus the exact assigned target; endpoint names, comments, UI labels, and enums are not transition evidence. Cite the write path beside every claimed observed transition. Inspect code and tests for permissions, side effects, invariants, and integrations too. A type declaration or dependency is not an enforced invariant or implemented capability. Use `issues` only for actionable contradictions or missing evidence that blocks trusting the page; candidate classification, monolith boundaries, ordinary tradeoffs, and observations belong in the page body or context-map uncertainties. Do not encode uncertainty in page status.
-8. Only after the codebase map exists, represent each optional `data.project_sources` item as a generated `type: reference` concept below `<paths.wiki>/references/`, using the lowercase source basename without its extension as the concept filename. Give it `title` and `description`, cite the exact original project-relative path in `sources` with `role: original` and tracked freshness (explicitly or by omission), set `status: generated`, and preserve the source content in the concept body. Any implementation paths included only for comparison or navigation must be standard Markdown links or sources marked `freshness: context`. Use `resource` only when the underlying asset has a canonical URI. Reconcile references as intent, not implementation evidence. Attribute every document-only statement to that document and re-check it against executable code before describing current behavior; never turn a PRD claim into a code observation.
-9. Keep model and tool protocol syntax out of persisted Markdown. Never copy wrapper tags such as `<content>`, `</content>`, `<invoke>`, `</invoke>`, `<tool_use>`, or `<tool_result>` into a page.
-10. Before validation, perform an adversarial state-machine audit. For every claimed transition, re-open the cited write path and verify the exact target assignment plus the source-state guard. A request-body field, enum member, endpoint name, delete operation, UI label, or intended workflow is not a transition. If any modeled state has no assignment, remove the false transition and add an issue when the gap blocks trust.
-11. Audit every issue. Keep it only when it identifies a concrete contradiction or missing evidence that makes the page unsafe to trust. Move ordinary tradeoffs, missing independence, candidate classification, test-coverage observations, release uncertainty, and non-blocking limitations into the body or context-map uncertainties. Re-open every source needed by an issue; do not base an issue on a project document when executable code resolves the claim.
-12. Set every created page to `status: generated` with no `review` block. Run the exact command `archetipo wiki validate --profile bootstrap` and inspect its JSON envelope. A plain `archetipo wiki validate` does not satisfy the bootstrap gate. Repair every error (including `WIKI_PROTOCOL_ARTIFACT`, `WIKI_BOOTSTRAP_BOUNDARY_UNREVIEWED`, and `WIKI_BOOTSTRAP_CORE_ORPHAN`), run `archetipo wiki catalog`, then run `archetipo wiki validate --profile bootstrap` again. Report bootstrap success only when the final envelope has `kind: validation_result` and `data.ok: true`; otherwise continue repairing or report the bootstrap as failed.
+7. Separate observed runtime behavior from declared-but-unobserved models. For every state machine, enumerate assignments/writes to each state and derive transitions from the source-state guard plus the exact assigned target; endpoint names, comments, UI labels, request-body fields, delete operations, and enums are not transition evidence. Cite the write path beside every claimed observed transition, then re-open each cited path once more before validation and confirm the exact target assignment and its guard. If a modeled state has no assignment, remove the false transition and flag the state as unreachable. Inspect code and tests for permissions, side effects, invariants, and integrations with the same discipline: a type declaration or dependency is not an enforced invariant or an implemented capability.
+8. Audit every issue. Keep it only when it identifies a concrete contradiction or missing evidence that makes the page unsafe to trust. Move ordinary tradeoffs, missing independence, candidate classification, test-coverage observations, release uncertainty, and non-blocking limitations into the body or the context-map uncertainties. Re-open every source an issue rests on; do not base an issue on a project document when executable code resolves the claim. Do not encode uncertainty in page status.
+9. Only after the codebase map exists, represent each optional `data.project_sources` item as a generated `type: reference` concept below `<paths.wiki>/references/`, using the lowercase source basename without its extension as the concept filename. Give it `title` and `description`, cite the exact original project-relative path in `sources` with `role: original`, set `status: generated`, and preserve the source content in the body. Use `resource` only when the underlying asset has a canonical URI. Reconcile references as intent, not implementation evidence. Attribute every document-only statement to that document and re-check it against executable code before describing current behavior; never turn a PRD claim into a code observation.
+10. Set every created page to `status: generated` with no `review` block. Run the exact command `archetipo wiki validate --profile bootstrap` and inspect its JSON envelope — a plain `archetipo wiki validate` does not satisfy the bootstrap gate. Repair every error, run `archetipo wiki catalog`, then run `archetipo wiki validate --profile bootstrap` again. Report bootstrap success only when the final envelope has `kind: validation_result` and `data.ok: true`; otherwise continue repairing or report the bootstrap as failed.
 
 ## Ingest
 
@@ -53,29 +52,22 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 5. Preserve disagreements as explicit `issues`, validate, and catalog.
 6. When the ingested source is an explicit architecture decision, create or update its canonical `decisions/<slug>` page using the decision contract; attribute rationale to the source and verify current adoption against repository evidence.
 
-## Refresh
-
-1. Run `archetipo wiki affected --base <revision> --head <revision>` or pass repeated `--file` flags. Revision-based discovery is lossless for whitespace-bearing names and treats a rename as removal plus addition, so both source and destination paths participate in matching. A copied destination appears as an addition while the unchanged source remains unchanged.
-2. Inspect affected pages and related domains against changed code and tests. Treat affected results as discovery, not a mass reset list.
-3. Run `archetipo wiki reset <page-id>...` only for reviewed pages whose knowledge is obsolete, then update obsolete claims and retain unresolved issues. Leave accurate co-cited non-reference pages unchanged in `evidence-changed` for explicit reason-aware reconciliation; context-only pointers do not appear in affected results.
-4. Validate and catalog. Approval is a separate operation.
-
 ## Query
 
 1. Read `docs/wiki/index.md` first.
 2. Search with a compact query and optional type/state filters.
 3. Read only selected pages and explicit links.
-4. Treat `generated`, `evidence-changed`, `stale`, and `attention` pages as routing knowledge that requires code verification. `evidence-changed` specifically means tracked evidence moved after review, not that the page was proven obsolete. Verify implementation-specific claims against cited symbols or paths.
+4. Treat `generated`, `evidence-changed`, `stale`, and `attention` pages as routing knowledge that requires code verification. Verify implementation-specific claims against cited symbols or paths.
 5. State uncovered or contradictory areas instead of silently treating inference as fact.
 
 ## Review
 
 1. Run `archetipo wiki status` and `archetipo wiki validate`.
-2. Review selected generated pages against their cited code, tests, domain ownership, contracts, flows, invariants, and issues.
-3. Resolve every issue on a page before approval. Structural validation alone never authorizes review.
+2. Review selected generated pages against their cited code, tests, domain ownership, contracts, flows, invariants, and issues. Structural validation alone never authorizes review.
+3. Resolve every issue on a page before approval.
 4. Only after explicit user approval, run `archetipo wiki approve <page-id>...`. With no IDs the command approves every issue-free generated page.
-5. Use `archetipo wiki reconfirm <page-id...>` only after a human explicitly accepts a reason-aware verification that an unchanged reviewed non-reference page remains accurate against changed tracked evidence. IDs are mandatory. A spec acceptance review may perform this explicit reconfirmation when its dossier names the exact pages and checks; it is not automatic cleanup. Never routinely reconfirm PRD/reference pages whose tracked original changed—refresh and approve them instead.
-6. `reviewed` records a content hash, evidence revision, evidence hash, and timestamp. `evidence-changed`, `stale`, and `attention` are derived by the CLI and never written as lifecycle states. A successful mismatch reported as `WIKI_EVIDENCE_CHANGED` derives `evidence-changed`; `stale` is reserved for outdated semantic review metadata or evidence that cannot be recomputed safely. `WIKI_UNSAFE_SOURCE_PATH`, `WIKI_EVIDENCE_UNREADABLE`, and `WIKI_EVIDENCE_RECOMPUTE_FAILED` are blocking errors.
+
+`reviewed` records a content hash, evidence revision, evidence hash, and timestamp. `evidence-changed`, `stale`, and `attention` are derived by the CLI and never written as lifecycle states.
 
 ## Lint
 
@@ -86,18 +78,11 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 
 ## Safety
 
-- Never branch on connector type; Wiki storage is local for every connector.
-- Branch on `error.code`, never `error.message`.
+- Never branch on connector type; Wiki storage is local for every connector. Branch on `error.code`, never `error.message`.
+- Cite exact project-relative evidence paths written with `/` separators. The evidence namespace is fail-closed by design: never auto-correct an alias and never work around `WIKI_UNSAFE_SOURCE_PATH`, `WIKI_EVIDENCE_UNREADABLE`, or `WIKI_EVIDENCE_RECOMPUTE_FAILED` — propagate them and cite evidence the project actually owns.
 - Do not read secret contents surfaced by inspection.
 - Do not load every Wiki page when the catalog and search can bound context.
 - Do not infer architectural rationale from implementation shape alone.
 - Do not treat a data model state as reachable until a write path proves it.
 - Do not approve pages with unresolved issues.
-- Cite only exact, normalized project-relative evidence paths and author `/` separators in persisted metadata. The portable namespace accepts `/` or `\` as input separators for command processing and normalizes them to `/` internally without rewriting stored sources. It preserves `.` as whole-project evidence and legitimate Unicode/interior spaces/dots, but rejects traversal; absolute, rooted, drive-relative, UNC, device, or extended paths; controls/NUL; `:<>"|?*`; trailing dot/space components; and case-insensitive DOS device names including extension forms. Never auto-correct an alias or work around `WIKI_UNSAFE_SOURCE_PATH` or evidence-readability errors.
-- Exact Git-index spelling is authoritative for tracked evidence and exact stored directory-entry spelling otherwise. Wrong case, Unicode-normalization aliases, and available Windows 8.3 aliases fail closed. An intersecting component collision under deterministic NFC plus Unicode case-fold equivalence blocks that evidence on every OS; an unrelated collision does not poison the repository.
-- Windows rejects ADS/device/trailing aliases before I/O and rejects intermediate reparses and junctions. A supported terminal symlink is evidence only as link-target text and is never followed. Linux rejects mount-ID crossings, including same-filesystem bind mounts; macOS rejects mounted-on/filesystem identity crossings. Verified hard links remain allowed.
-- Treat tracked ordinary files as current worktree evidence normalized by Git clean/EOL/filter rules, with executable identity from the exact Git index path. Untracked and non-Git files retain raw-byte identity; tracked symlinks use link-target evidence.
-- Cite a clean submodule only at its exact gitlink root (or through a containing parent directory). Descendants below a gitlink are unsupported even when the submodule is initialized and clean; exact gitlinks require HEAD/index agreement and empty Git porcelain status. Ignored files and uninitialized nested submodule worktrees are allowed only when Git still reports the cited submodule clean; dirty, conflicted, untracked non-ignored, or nested-dirty state blocks.
-- Never cite or traverse an embedded Git repository, linked worktree, or bare/reftable repository below the configured project root. Repository-like markers are confirmed by Git and confirmation failures close evidence inspection; cite evidence owned by the trusted project repository instead.
-- With `--project-root`, the nearest configuration belonging to the target checkout wins; when the target has no configuration, invoking-checkout settings are inherited but all runtime paths are retargeted to the explicit checkout. Never rely on cwd alone for a nested worktree.
-- For `wiki affected`, every explicit `--file` must be a nonempty exact portable local path: caller mistakes are `E_INVALID_INPUT`. Invalid persisted tracked sources fail discovery closed as `E_CONFLICT`. Revision discovery stays NUL-safe, returns only target-project-relative paths for a project nested in a larger repository, and retains both rename sides.
+- Keep model and tool protocol syntax out of persisted Markdown. Never copy wrapper tags such as `<content>`, `<invoke>`, or `<tool_result>` into a page.

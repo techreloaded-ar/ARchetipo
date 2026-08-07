@@ -276,9 +276,9 @@ func TestValidateBootstrapCoverage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(project, "src", "index.ts"), []byte("export {}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeCorePage(t, root, "overview", "overview", "package.json", "")
-	writeCorePage(t, root, "architecture/context-map", "context-map", "src/index.ts", "")
-	writeCorePage(t, root, "operations/development", "operations", "package.json", "")
+	writeCorePage(t, root, "overview", "overview", ".", "")
+	writeCorePage(t, root, "architecture/context-map", "context-map", "src", "")
+	writeCorePage(t, root, "operations/development", "operations", ".", "")
 	coverage := `coverage:
   - kind: boundary
     path: .
@@ -415,6 +415,77 @@ func TestValidateBootstrapRequiresExistingCoreEvidence(t *testing.T) {
 	}
 	if report.OK || !hasFinding(report, "WIKI_BOOTSTRAP_SOURCE_MISSING") {
 		t.Fatalf("expected missing concrete evidence: %+v", report.Findings)
+	}
+}
+
+// A core page summarizes an area, so it must be anchored on that area's
+// directory: a page citing only individual files cannot become affected when
+// the area grows around it, which is how aggregate claims silently go false.
+func TestValidateBootstrapRequiresCorePageDirectoryAnchor(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "src", "index.ts"), []byte("export {}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCorePage(t, root, "overview", "overview", "src", "")
+	writeCorePage(t, root, "architecture/context-map", "context-map", "src/index.ts", "")
+	writeCorePage(t, root, "operations/development", "operations", "src", "")
+	writeCorePage(t, root, "engineering/code-map", "code-map", "src", "")
+
+	report, err := ValidateBootstrap(project, root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.OK || !hasFinding(report, "WIKI_CORE_PAGE_UNANCHORED") {
+		t.Fatalf("expected unanchored core page finding: %+v", report.Findings)
+	}
+	for _, finding := range report.Findings {
+		if finding.Code == "WIKI_CORE_PAGE_UNANCHORED" && finding.PageID != "architecture/context-map" {
+			t.Fatalf("only the file-anchored page should be reported, got %q", finding.PageID)
+		}
+	}
+
+	writeCorePage(t, root, "architecture/context-map", "context-map", "src", "")
+	report, err = ValidateBootstrap(project, root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasFinding(report, "WIKI_CORE_PAGE_UNANCHORED") {
+		t.Fatalf("a directory-anchored core page must pass: %+v", report.Findings)
+	}
+}
+
+// A context source is excluded from affected discovery, so it cannot anchor a
+// core page even when it points at a directory.
+func TestValidateBootstrapRejectsContextOnlyDirectoryAnchor(t *testing.T) {
+	project := t.TempDir()
+	root := filepath.Join(project, "docs", "wiki")
+	if _, err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "src", "index.ts"), []byte("export {}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCorePage(t, root, "overview", "overview", "src", "")
+	writeCorePage(t, root, "engineering/code-map", "code-map", "src", "")
+	writeCorePage(t, root, "operations/development", "operations", "src", "")
+	writeCorePage(t, root, "architecture/context-map", "context-map", "src/index.ts", "  - path: src\n    role: application\n    freshness: context\n")
+
+	report, err := ValidateBootstrap(project, root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.OK || !hasFinding(report, "WIKI_CORE_PAGE_UNANCHORED") {
+		t.Fatalf("a context directory source must not anchor a core page: %+v", report.Findings)
 	}
 }
 
@@ -563,10 +634,10 @@ func TestValidateBootstrapRequiresConfiguredSourceReference(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(project, "docs", "Vision.MD"), []byte("# Intent"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeCorePage(t, root, "overview", "overview", "README.md", "")
-	writeCorePage(t, root, "architecture/context-map", "context-map", "README.md", "")
-	writeCorePage(t, root, "operations/development", "operations", "README.md", "")
-	writeCorePage(t, root, "engineering/code-map", "code-map", "README.md", "coverage:\n  - kind: boundary\n    path: .\n    status: mapped\n    pages: [overview]\n")
+	writeCorePage(t, root, "overview", "overview", ".", "")
+	writeCorePage(t, root, "architecture/context-map", "context-map", ".", "")
+	writeCorePage(t, root, "operations/development", "operations", ".", "")
+	writeCorePage(t, root, "engineering/code-map", "code-map", ".", "coverage:\n  - kind: boundary\n    path: .\n    status: mapped\n    pages: [overview]\n")
 
 	report, err := ValidateBootstrap(project, root, "docs/Vision.MD")
 	if err != nil {

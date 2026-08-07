@@ -859,7 +859,7 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
     assertQuality(baseline.ok, `cannot read baseline metadata for ${id}: ${baseline.stderr}`);
     const baselineMeta = parseWikiFrontmatter(baseline.stdout, `${rel}@baseline`);
     const finalMeta = parseWikiFrontmatter(await fs.readFile(pagePath, "utf8"), pagePath);
-    assertQuality(JSON.stringify(finalMeta.review) === JSON.stringify(baselineMeta.review), `${id} review metadata changed during affected-only acceptance`);
+    assertQuality(JSON.stringify(finalMeta.review) === JSON.stringify(baselineMeta.review), `${id} review metadata changed although the page was not required and not evidence-changed`);
   }
   for (const id of expectations.changed_review_metadata_pages ?? []) {
     const pagePath = path.join(wikiRoot, `${id.split("/").join(path.sep)}.md`);
@@ -923,12 +923,6 @@ async function verifyReviewWiki(context, expectations, reviewOutput) {
 
   for (const expected of expectations.output_includes ?? []) {
     assertQuality(reviewOutput.includes(expected), `review output does not include Wiki dossier evidence: ${expected}`);
-  }
-  for (const id of expectations.reconfirm_output_pages ?? []) {
-    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const reconfirmLanguage = "(?:reconfirm|riconferm|semantically verified|semanticamente verific|verified unchanged|remains accurate|rimane accurat)";
-    const reconfirmNearPage = new RegExp(`(?:${escaped}[\\s\\S]{0,500}${reconfirmLanguage}|${reconfirmLanguage}[\\s\\S]{0,500}${escaped})`, "i");
-    assertQuality(reconfirmNearPage.test(reviewOutput), `review dossier does not present ${id} as explicitly reconfirm-ready`);
   }
   if (expectations.require_clean) {
     const status = await runProbe("git", ["status", "--short", "--untracked-files=no"], { cwd: context.sandboxDir });

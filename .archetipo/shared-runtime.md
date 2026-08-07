@@ -139,7 +139,18 @@ ARchetipo artifacts must be usable by smaller or lower-cost models during later 
 
 ## Living Wiki
 
-`paths.wiki` is connector-independent local project knowledge. Every concept is a Markdown file with YAML frontmatter; its stable ID is its Wiki-relative path without `.md`, and relationships use standard Markdown links. Bootstrap begins with the read-only `archetipo wiki inspect`, maps deterministic capability candidates into evidence-backed DDD domain pages, and separates current code behavior from optional `references/` concepts. Architectural choices that cross the planning ADR threshold live in first-class `type: decision` pages under `decisions/`; never infer their rationale from implementation shape alone. Read `docs/wiki/index.md` before selecting pages and use `archetipo wiki search` to keep context bounded. `archetipo wiki catalog` refreshes navigation without changing review state. For spec work, invoke every Wiki command from `data.project_root` with `wiki --project-root {data.workdir}` so nested worktrees target their own code and Wiki instead of the parent checkout. Skills that change code use `wiki affected`, reconcile inspected capability coverage, reset changed pages to `generated`, and leave approval plus explicit reason-aware reconfirmation to acceptance review. A successful tracked-evidence mismatch derives `evidence-changed`, not semantic staleness; review must compare the page against the exact diff before reconfirming it. `archetipo wiki validate --profile bootstrap` is the continuous structural-and-coverage gate; it reports findings through `kind:"validation_result"` and `data.ok`, not through an error envelope. Never branch Wiki behavior on connector type.
+`paths.wiki` is connector-independent local project knowledge — identical for every connector, so never branch Wiki behavior on connector type. Every concept is a Markdown file with YAML frontmatter and its stable ID is the Wiki-relative path without `.md`. Read `docs/wiki/index.md` before selecting pages and use `archetipo wiki search` to keep context bounded. The page format, the section markers, the coverage model and the CLI operations live in the `archetipo-wiki` skill and its `references/wiki-contract.md`: read them there instead of restating them.
+
+Wiki commands act on the code of a spec, so they follow the **Worktree Working Directory** rule above: run them from `data.project_root` and name the target explicitly with `wiki --project-root {data.workdir}`.
+
+### Required pages
+
+A Wiki page is **required** for a spec when either holds:
+
+- its ID appears in the plan's `wiki_impact.update` or `wiki_impact.create`;
+- its Markdown file is created or modified by the implementation diff.
+
+Required pages are the ones the spec is answerable for: implementation leaves them `generated`, acceptance approves them. A page that is merely co-cited by a changed file is not required and is not this spec's business.
 
 ### Wiki page state transitions
 
@@ -148,12 +159,14 @@ ARchetipo artifacts must be usable by smaller or lower-cost models during later 
 | derived state | how a page gets there | how it leaves | meaning in acceptance |
 |---|---|---|---|
 | `generated` | new page, or `archetipo wiki reset` | `archetipo wiki approve` | required page: ready for approval |
-| `reviewed` | `archetipo wiki approve` or `archetipo wiki reconfirm` | editing the page (→ `stale`), or evidence moving (→ `evidence-changed`) | affected-only page: already reviewed |
-| `stale` | **the page content changed after approval**, or review metadata is invalid/unreadable | `archetipo wiki reset` | blocker |
-| `evidence-changed` | a tracked source changed after approval, page content untouched | `archetipo wiki reconfirm`, in acceptance review only | affected-only: reconfirm-ready once semantically verified |
-| `attention` | the page carries `issues` | resolve the issues in the page | blocker |
+| `reviewed` | `archetipo wiki approve` or `archetipo wiki reconfirm` | editing the page (→ `stale`), or evidence moving (→ `evidence-changed`) | nothing to do |
+| `stale` | **the page content changed after approval**, or review metadata is invalid/unreadable | `archetipo wiki reset` | blocker on a required page |
+| `evidence-changed` | a tracked source changed after approval, page content untouched | `archetipo wiki reconfirm` | not a verdict input: acceptance advances the baseline mechanically |
+| `attention` | the page carries `issues` | resolve the issues in the page | blocker on a required page |
 
 **Editing a `reviewed` page derives `stale`; it never demotes the page to `generated`.** The only transition back to `generated` is `archetipo wiki reset`, and it is idempotent with respect to ordering: running it after the edit produces exactly the same result as running it before. `WIKI_REVIEW_OUTDATED` and `WIKI_EVIDENCE_CHANGED` are `warning` findings, so `wiki validate` can return `ok: true` while pages sit in `stale` or `evidence-changed`; only `wiki status` exposes these states.
+
+`evidence-changed` fires whenever any tracked source moves, including the shared hub files that many pages cite, so it is churn and not a signal about a specific page. It is never an acceptance verdict input: acceptance advances the baseline of every `evidence-changed` page in one mechanical step. What makes a page the spec's business is being **required**, never being co-cited.
 
 - Treat warnings as quality feedback. They do not block persistence, but fix them when the repair is straightforward.
 

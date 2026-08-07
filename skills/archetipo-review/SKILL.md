@@ -1,6 +1,6 @@
 ---
 name: archetipo-review
-description: Facilitates the human acceptance gate for a spec in REVIEW status. Presents the delivered increment and its affected Wiki pages (acceptance criteria, diff, tests, documentation state and issues), records and presents a demo video for filmable specs, collects one informed human verdict, and either approves both the increment and ready Wiki knowledge (transition to DONE, with worktree integration when enabled) or sends it back with structured rework feedback. It also exposes an Autonomous acceptance mode that replaces the human verdict with a policy verdict; that mode is never self-activated and is available only when an archetipo-autopilot prompt enables it explicitly. The connector (configured in .archetipo/config.yaml) determines where specs are read from and where status updates are written. Use this skill whenever the user wants to review, accept, approve, or reject a delivered spec, or to decide what happens to work that is waiting in the REVIEW column. Do not use it for code-level review during implementation (that is Cesare's job inside archetipo-implement) or for planning work.
+description: Facilitates the human acceptance gate for a spec in REVIEW status. Presents the delivered increment and the Wiki pages it is required to update (acceptance criteria, diff, tests, documentation state and issues), records and presents a demo video for filmable specs, collects one informed human verdict, and either approves both the increment and ready Wiki knowledge (transition to DONE, with worktree integration when enabled) or sends it back with structured rework feedback. It also exposes an Autonomous acceptance mode that replaces the human verdict with a policy verdict; that mode is never self-activated and is available only when an archetipo-autopilot prompt enables it explicitly. The connector (configured in .archetipo/config.yaml) determines where specs are read from and where status updates are written. Use this skill whenever the user wants to review, accept, approve, or reject a delivered spec, or to decide what happens to work that is waiting in the REVIEW column. Do not use it for code-level review during implementation (that is Cesare's job inside archetipo-implement) or for planning work.
 ---
 
 # ARchetipo - Spec Acceptance Review Skill
@@ -17,36 +17,17 @@ Read `.archetipo/shared-runtime.md` for the CLI Runtime Contract, Language Polic
 
 1. **The verdict is the user's.** This skill is the one place in the workflow where stopping to ask is the point, not a failure. Never approve, reject, or postpone a spec on your own initiative — unless **Autonomous acceptance mode** is explicitly activated by the invoking prompt, in which case the verdict is decided by the policy defined in that section and nothing else changes.
 2. **Everything else is autonomous.** Gathering evidence, presenting the increment, and executing the chosen verdict need no confirmation beyond the verdict itself.
-3. **Connector operations are exposed by the CLI.** This skill uses `config show`, `spec show`, `spec next`, `spec integrate`, `spec move`, and `spec request-changes`. It also uses `e2e demo` plus connector-independent `wiki affected`, `wiki status`, `wiki validate --profile bootstrap`, `wiki approve`, and `wiki reconfirm`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code`, never on connector type.
-4. **The verdict covers code and reconciled knowledge together.** Never ask the user to approve a spec without first showing the Wiki acceptance dossier. A required Wiki blocker or unresolved affected-page reconciliation makes **Approve** unavailable.
-5. **Inclusion reasons are retained.** Classify each page before deciding readiness. A page is **required** when its ID is in `wiki_impact.update` or `wiki_impact.create`, or its Wiki Markdown file is created or modified by the implementation diff. A page is **affected-only** only when its sole reason is tracked-source overlap returned by `wiki affected`. Required wins whenever reasons overlap.
-6. **Reconfirmation is explicit acceptance, never cleanup.** An affected-only reviewed page with changed evidence may become **reconfirm-ready** only after this review verifies it remains semantically accurate against the exact spec diff. The dossier must name every such page and state that **Approve** will reconfirm it. Reference pages whose tracked original changed are never reconfirmed as routine acceptance; they must be refreshed and approved as required knowledge. Under **Autonomous acceptance mode** the policy `ACCEPTED` verdict supplies the explicit acceptance this rule requires; the semantic verification duty behind it is not relaxed in any way.
+3. **Connector operations are exposed by the CLI.** This skill uses `config show`, `spec show`, `spec next`, `spec integrate`, `spec move`, and `spec request-changes`. It also uses `e2e demo` plus connector-independent `wiki status`, `wiki validate --profile bootstrap`, `wiki approve`, and `wiki reconfirm`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code` per `archetipo-wiki/references/wiki-contract.md`, never on connector type. An absent Wiki is valid only when the plan, diff, and implementation declare no Wiki impact.
+4. **The verdict covers code and required knowledge together.** Never ask the user to approve a spec without first showing the Wiki acceptance dossier. A required Wiki blocker makes **Approve** unavailable.
+5. **The dossier covers required pages, and only those.** A page is **required** when its ID is in `wiki_impact.update` or `wiki_impact.create`, or its Wiki Markdown file is created or modified by the implementation diff (see `.archetipo/shared-runtime.md`). A page that a changed file merely co-cites is not part of the verdict: `evidence-changed` is churn from shared hub files, and PHASE 3 advances the baseline of every such page in one mechanical step. Do not review it page by page, do not classify it, do not block on it.
 
-Wiki command contracts used by this skill:
+### Wiki readiness
 
-- `archetipo wiki --project-root {data.workdir} affected [--base REV --head REV | --file PATH...]` → `kind: wiki_affected_result`, `data.items`, `data.files`;
-- `archetipo wiki --project-root {data.workdir} status` → `kind: wiki_status`, `data.items`, derived `data.states`, `data.findings`;
-- `archetipo wiki --project-root {data.workdir} validate --profile bootstrap` → `kind: validation_result`, `data.ok`, `data.findings`, including deterministic capability coverage;
-- `archetipo wiki --project-root {data.workdir} approve <page-id...>` → `kind: wiki_approve_result`, `data.approved`.
-- `archetipo wiki --project-root {data.workdir} reconfirm <page-id...>` → `kind: wiki_reconfirm_result`, `data.reconfirmed`, `data.pages`.
-
-For these commands, branch on `E_PRECONDITION` (Wiki absent), `E_INVALID_INPUT` (bad explicit IDs, config, revisions, or `--file` values; every file must be a nonempty exact portable project-relative local path), `E_CONFLICT` (invalid/unreadable persisted evidence or approval blocked by findings/issues and deterministic evidence ineligibility such as unsafe traversal, unmerged index state, or non-clean submodules), and `E_INTERNAL` (unexpected implementation failure). Persisted-source discovery failures close the operation without a partial affected set. Branch only on `error.code`, never message text. An absent Wiki is valid only when the plan, diff, and implementation declare no Wiki impact.
-
-### Wiki inclusion-reason matrix
-
-| Classification | State/findings | Review result |
-|---|---|---|
-| Required | generated, valid, issue-free | ready; approve with spec |
-| Required | absent, evidence-changed, stale, attention, invalid, missing evidence | blocker |
-| Affected-only | reviewed/fresh | already reviewed |
-| Affected-only, non-reference | evidence-changed with only `WIKI_EVIDENCE_CHANGED`, semantically verified against the exact diff | reconfirm-ready; reconfirm with explicit approval |
-| Affected-only, non-reference | evidence-changed but semantic accuracy is uncertain or false | blocker; update the page through rework |
-| Affected-only reference | evidence-changed | blocker; refresh the reference from its tracked original |
-| Affected-only | generated | warning; not ready and never auto-approved |
-| Affected-only | attention/issues, `WIKI_REVIEW_OUTDATED`, missing source, `WIKI_UNSAFE_SOURCE_PATH`, `WIKI_EVIDENCE_UNREADABLE`, `WIKI_EVIDENCE_RECOMPUTE_FAILED`, or another structural/operational error | blocker |
-| Any | existing global validation/coverage error under the strong gate | blocker |
-
-Do not classify from the state label alone. `evidence-changed` means repository evidence moved after review; it does not prove the page is obsolete or accurate. The semantic comparison performed in this acceptance gate decides whether the page is reconfirm-ready or requires an update.
+| Required page state | Review result |
+|---|---|
+| `generated`, valid, issue-free | ready; approve with the spec |
+| absent, `stale`, `attention`, invalid, or missing evidence | blocker |
+| global validation or coverage error under `--profile bootstrap` | blocker |
 
 ## Workflow
 
@@ -62,13 +43,9 @@ Do not classify from the state label alone. `evidence-changed` means repository 
    - `error.code = E_PRECONDITION` and no code was passed: nothing is waiting for review. Tell the user the REVIEW column is empty and stop.
    - The spec exists but its status is not `{config.workflow.statuses.review}`: tell the user which status it is in and which skill handles that stage (plan → `/archetipo-plan`, implement → `/archetipo-implement`), then stop.
 4. Keep `data.spec`, `data.tasks`, and `data.workdir` in memory.
-5. Read the `Wiki Impact` contract from `data.plan_body` when present. Build the Wiki review set while retaining every inclusion reason:
-   - mark IDs in `wiki_impact.update` and `wiki_impact.create` as **required** (`planned update` or `planned creation`);
-   - mark ordinary Wiki pages created or modified by the exact implementation diff as **required** (`modified page`);
-   - add pages returned by `archetipo wiki affected` as `affected evidence`, but classify them **affected-only** only when no required reason exists.
-   Required always wins when reasons overlap. Never flatten this into an unlabelled union.
-6. Add `--project-root {data.workdir}` to every Wiki command, so a worktree-backed review sees the branch's code and generated Wiki changes with target-first configuration and invoking-config fallback. When `data.spec.branch` and `data.spec.fork_base` are present, call `wiki --project-root {data.workdir} affected --base {fork_base} --head {branch}`; a target project nested in a larger repository still receives only target-local, project-relative paths and both rename sides. Otherwise derive changed paths from the review diff and pass repeated validated `--file` values; do not rely on default revisions and never rewrite case, Unicode, 8.3, ADS, device, trailing-dot/space, or traversal aliases to make evidence pass.
-7. Run `archetipo wiki --project-root {data.workdir} status` and `archetipo wiki --project-root {data.workdir} validate --profile bootstrap` before presenting the verdict. Match status items and findings to the reason-labelled review set, then apply the Wiki inclusion-reason matrix exactly. For each affected-only non-reference page in `evidence-changed` with only `WIKI_EVIDENCE_CHANGED`, read the page and the exact changed code/test evidence and verify every relevant claim still holds. For `engineering/code-map`, explicitly verify boundary/capability coverage, domain-to-code assignments, entry points, owned data, integrations, tests, and unmapped-code claims. Classify the page as reconfirm-ready only when that comparison is conclusive. Unsafe paths, unreadable/unsupported evidence, failed legacy recomputation, dirty or mismatched submodules, `WIKI_REVIEW_OUTDATED`, attention/issues, missing sources, structural errors, evidence-changed references, and global validation/coverage errors remain blockers. Generated affected-only pages are warnings but are never ready or auto-approved.
+5. Read the `Wiki Impact` contract from `data.plan_body` when present and build the **required** page list: the IDs in `wiki_impact.update` and `wiki_impact.create`, plus every Wiki Markdown file created or modified by the exact implementation diff.
+6. Add `--project-root {data.workdir}` to every Wiki command, so a worktree-backed review sees the branch's code and generated Wiki changes (see **Worktree Working Directory** in `.archetipo/shared-runtime.md`).
+7. Run `archetipo wiki --project-root {data.workdir} status` and `archetipo wiki --project-root {data.workdir} validate --profile bootstrap` before presenting the verdict. Match status items and findings to the required list and apply the readiness table. For `engineering/code-map`, verify boundary/capability coverage, domain-to-code assignments, entry points, owned data, integrations, tests, and unmapped-code claims against the diff.
 
 ### PHASE 1 — Present the Increment
 
@@ -78,18 +55,16 @@ Build a compact review dossier from these sources. Read surgically — this phas
 2. **The work.** From `data.tasks`: completed vs total tasks. Flag any task not marked done.
 3. **The diff.** When `data.spec.branch` is set (worktree workflow): run `git diff {data.spec.fork_base}...{data.spec.branch} --stat` from `data.project_root` and report files touched and overall size. Otherwise mention that the changes live on the main working tree and that `archetipo view` offers a browsable diff against the configured base.
 4. **The evidence.** Look in `{config.paths.test_results}/{US-CODE}/` for test output and a demo video; point the user at the video file when it exists. If the spec promised e2e coverage and the folder is empty, say so explicitly — absence of evidence is a finding, not a detail to skip. Exception: when demo recording is disabled in config (`e2e.record_demo_video: false`, the default), the absence of a video is expected and **not** a finding — see below.
-5. **The Wiki acceptance dossier.** For every page in the Wiki review set, show one compact entry containing:
-   - page ID, every inclusion reason (`planned update`, `planned creation`, `affected evidence`, or `modified page`), and resulting classification (`required` or `affected-only`);
-   - concise knowledge change being accepted, or for affected-only pages, why no semantic update was made;
+5. **The Wiki acceptance dossier.** For every **required** page, show one compact entry containing:
+   - page ID and why it is required (`planned update`, `planned creation`, or `modified page`);
+   - the concise knowledge change being accepted;
    - cited code/test evidence paths;
    - derived state and issue/finding codes;
-   - verdict readiness: `ready`, `already reviewed`, `reconfirm-ready`, `warning`, or `blocked`, with the concrete remedy.
-
-   Present a reconfirm-ready page as verified unchanged, not as a stale warning. State the semantic checks performed and that approval will advance its evidence baseline without changing page content. Affected-only generated pages are not approval candidates.
+   - readiness — `ready` or `blocked` — with the concrete remedy.
 
    For every `type: decision` page, additionally verify that the dossier exposes the decision context, chosen option, viable alternatives, negative as well as positive consequences, decision lifecycle, and concrete implementation/test evidence. Missing rationale or an alternatives section that only restates the chosen option is a Wiki blocker even if structural validation passes.
 
-Also list changed code with no mapped Wiki page and planned Wiki IDs that were not updated. Do not dump page bodies. If the review set is empty, state explicitly that no Wiki change is expected and why.
+Also list changed code with no mapped Wiki page and planned Wiki IDs that were not updated. Do not dump page bodies. If there are no required pages, state explicitly that no Wiki change is expected and why.
 
 **Demo video (recorded here, on demand — gated by config).** Recording the demo is a review responsibility, not an implementation one. Recording is also **opt-in**: the CLI records only when `e2e.record_demo_video: true` is set in `.archetipo/config.yaml`. So first check the gate, then decide whether to record:
 
@@ -108,7 +83,7 @@ If there are no increment or Wiki blockers, ask the user for exactly one of:
 2. **Request changes** — the increment needs rework; collect the feedback items.
 3. **Postpone** — leave the spec in `{config.workflow.statuses.review}`; nothing changes.
 
-State that **Approve** accepts the delivered increment, the **required** Wiki pages marked `ready`, and the exact affected-only pages marked `reconfirm-ready` in the dossier. Name both ID lists explicitly before asking. Pass only required-ready IDs to `wiki approve` and only reconfirm-ready IDs to `wiki reconfirm`. If blockers exist, do not offer Approve: present them before asking and offer only **Request changes** or **Postpone**. If the user's initial request already contains an explicit verdict, treat it as the answer only after building and presenting the dossier; execute it immediately when eligible, but never bypass the dossier or blockers.
+State that **Approve** accepts the delivered increment and the **required** Wiki pages marked `ready`, naming that ID list explicitly before asking. If blockers exist, do not offer Approve: present them before asking and offer only **Request changes** or **Postpone**. If the user's initial request already contains an explicit verdict, treat it as the answer only after building and presenting the dossier; execute it immediately when eligible, but never bypass the dossier or blockers.
 
 If the user adds conditions to an approval ("approve, but rename that flag"), treat it as **request changes** with that condition as the feedback item — a spec is either accepted as delivered or it goes back with feedback. Say so when you reclassify.
 
@@ -116,9 +91,9 @@ If the user adds conditions to an approval ("approve, but rename that flag"), tr
 
 **Approve:**
 - Re-run `archetipo wiki --project-root {data.workdir} status` and `archetipo wiki --project-root {data.workdir} validate --profile bootstrap` from `data.project_root` to close the time-of-check gap. If readiness changed, stop and present the new blocker.
-- Run `archetipo wiki --project-root {data.workdir} approve <page-id>...` with only the exact **required-ready** IDs shown in the dossier; never pass affected-only pages or unrelated generated pages. Require `data.approved` to equal the number of requested required-ready IDs. If there are no required-ready pages, skip the command explicitly.
-- Run `archetipo wiki --project-root {data.workdir} reconfirm <page-id...>` with only the exact **reconfirm-ready** IDs shown in the dossier. Require `data.reconfirmed` to equal the number requested and `data.pages` to contain exactly those IDs. If there are no reconfirm-ready pages, skip the command explicitly. Reconfirmation changes only review evidence metadata; never edit page content, sources, issues, or coverage to make it eligible.
-- Immediately run `wiki --project-root {data.workdir} status` again. Require every approved and reconfirmed ID to report `state: reviewed`, with review metadata present, and require no `WIKI_EVIDENCE_CHANGED` finding for any reconfirmed ID. A failed approval or reconfirmation is a blocker: leave the spec in review and preserve the worktree for recovery.
+- Run `archetipo wiki --project-root {data.workdir} approve <page-id>...` with only the exact **required-ready** IDs shown in the dossier; never pass unrelated generated pages. Require `data.approved` to equal the number of requested IDs. If there are no required-ready pages, skip the command explicitly.
+- Advance the evidence baseline: run `archetipo wiki --project-root {data.workdir} reconfirm <page-id...>` on every page that `wiki status` reports as `evidence-changed`. This is bookkeeping, not a judgment — it clears the churn that shared hub files produce and needs no per-page reasoning. It only rewrites review evidence metadata; never edit page content, sources, issues, or coverage to make a page eligible. Skip the command explicitly when no page is `evidence-changed`.
+- Immediately run `wiki --project-root {data.workdir} status` again. Require every approved ID to report `state: reviewed` with review metadata present. A failed approval is a blocker: leave the spec in review and preserve the worktree for recovery.
 - `archetipo wiki approve` and `archetipo wiki reconfirm` are the only writers for review metadata, `index.md`, and `log.md`. Never synthesize, replace, or reformat those artifacts by hand. The generated log must retain the `# Wiki Update Log` heading and contain the current `* **Review**:` entry below an ISO date heading such as `## 2026-07-16`; run `archetipo wiki --project-root {data.workdir} validate` after both operations and stop if it reports `WIKI_LOG_FORMAT`.
 - When a worktree is active, acceptance changes the approved and reconfirmed page files plus `<paths.wiki>/index.md` and `<paths.wiki>/log.md` inside `data.workdir`. Build the exact path list from the union of approved and reconfirmed IDs, add both generated catalog files even when `log.md` is new and untracked, and run `git add -- <accepted-page-paths> <paths.wiki>/index.md <paths.wiki>/log.md`. Before committing, use `git diff --cached --name-only -- <paths.wiki>` and require every accepted page, `index.md`, and `log.md` to be present; also require the staged `log.md` to contain the CLI-produced current `**Review**` entry. Stage no unrelated files. Create a commit on the spec branch with subject `docs({US-CODE}): approve Wiki updates`, then require `git status --short -- <paths.wiki>` to be empty. Stop instead of integrating if any Wiki change, including an untracked log, remains outside the commit.
 - When `data.spec.branch` is set and `worktree.enabled` is true in the config: run `archetipo spec integrate {US-CODE}` from `data.project_root`. It merges the branch into base, cleans up the worktree, clears the persisted branch/worktree/fork-base metadata, and transitions the spec to `{config.workflow.statuses.done}` in one step. This command is mandatory: never replace it with raw `git merge` plus `spec move`, even when those operations appear equivalent.
@@ -169,15 +144,15 @@ Never infer, request, or self-activate the mode. If any of the three lines is mi
 
 ### What does not change
 
-- **PHASE 0 and PHASE 1 run in full.** Build the complete reason-labelled Wiki acceptance dossier, apply the Wiki inclusion-reason matrix exactly, and perform the semantic verification required for every reconfirm-ready candidate. There is no shortened dossier in this mode; the dossier is the evidence the verdict rests on and it is still rendered in the output.
+- **PHASE 0 and PHASE 1 run in full.** Build the complete Wiki acceptance dossier for every required page and apply the readiness table exactly. There is no shortened dossier in this mode; the dossier is the evidence the verdict rests on and it is still rendered in the output.
 - **The demo-video gate is unchanged.** Check `e2e.record_demo_video` first and behave exactly as PHASE 1 prescribes, including the `data.skipped` reading and the "not a finding" cases.
-- **PHASE 3 is unchanged.** The Approve sequence (time-of-check re-validation, `wiki approve` on required-ready IDs only, `wiki reconfirm` on reconfirm-ready IDs only, post-operation status verification, the Wiki acceptance commit and its staging invariants, `spec integrate` versus `spec move --to done`, and the post-transition cleanup invariants) and the Request-changes sequence run verbatim, including the worktree-disabled-mid-flight fallback and every Edge Case Handling rule.
+- **PHASE 3 is unchanged.** The Approve sequence (time-of-check re-validation, `wiki approve` on required-ready IDs only, the mechanical `wiki reconfirm` baseline advance, post-operation status verification, the Wiki acceptance commit and its staging invariants, `spec integrate` versus `spec move --to done`, and the post-transition cleanup invariants) and the Request-changes sequence run verbatim, including the worktree-disabled-mid-flight fallback and every Edge Case Handling rule.
 
 ### What is replaced: PHASE 2
 
 Do not ask for a verdict. Decide it from the dossier with this policy, then execute it through PHASE 3.
 
-- **ACCEPTED** — every verifiable acceptance criterion is met; every task in `data.tasks` is canonical `DONE`; there is no increment blocker and no Wiki blocker; the e2e evidence the spec promised is present. In this mode a task that is not done is a defect, not an advisory finding — it overrides the Edge Case Handling rule that lets a human approve anyway. A missing demo video is a defect only when the config gate is on and recording was warranted. This verdict is the explicit approval that `wiki approve` and `wiki reconfirm` require.
+- **ACCEPTED** — every verifiable acceptance criterion is met; every task in `data.tasks` is canonical `DONE`; there is no increment blocker and no Wiki blocker; the e2e evidence the spec promised is present. In this mode a task that is not done is a defect, not an advisory finding — it overrides the Edge Case Handling rule that lets a human approve anyway. A missing demo video is a defect only when the config gate is on and recording was warranted. This verdict is the explicit approval that `wiki approve` requires.
 - **CHANGES_REQUESTED** — the spec is not acceptable, every defect is repairable through rework, **and** the prompt says `Request-changes allowed: yes`. Produce the feedback payload and run the Request-changes sequence of PHASE 3 exactly as written, with one anchored item per defect and per Wiki blocker.
 - **LEFT_IN_REVIEW** — either the rework budget is exhausted (`Request-changes allowed: no`) and the spec is not acceptable, or a blocker is not repairable by rework: merge conflicts needing manual resolution, unintegrated external blockers, a Wiki infrastructure failure, or feedback that would contradict the spec's own acceptance criteria (scope change). Leave the spec in `{config.workflow.statuses.review}`, run no transition command, and preserve the branch and worktree untouched.
 
