@@ -1,9 +1,57 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// Overwriting the config must leave the customizations recoverable, so the
+// previous content has to land intact in the backup file.
+func TestBackupExistingConfigPreservesContent(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	original := "connector: jira\nwiki:\n  enabled: false\n"
+	if err := os.WriteFile(configPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	backupPath, err := backupExistingConfig(configPath)
+	if err != nil {
+		t.Fatalf("backup failed: %v", err)
+	}
+	saved, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("backup not readable: %v", err)
+	}
+	if string(saved) != original {
+		t.Fatalf("backup content differs:\n%s", saved)
+	}
+	if !strings.HasPrefix(filepath.Base(backupPath), "config.yaml.backup-") {
+		t.Fatalf("unexpected backup name: %s", backupPath)
+	}
+}
+
+// Two init runs in the same second must not overwrite each other's backup.
+func TestUniqueBackupPathAvoidsCollisions(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+
+	first := uniqueBackupPath(configPath, now)
+	if err := os.WriteFile(first, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second := uniqueBackupPath(configPath, now)
+	if second == first {
+		t.Fatalf("collision not avoided: %s", second)
+	}
+	if !strings.HasSuffix(second, "-2") {
+		t.Fatalf("unexpected collision suffix: %s", second)
+	}
+}
 
 // The shipped template carries `wiki:` with a commented preamble, so the
 // rewrite must land on the mapping's own `enabled:` key without disturbing the

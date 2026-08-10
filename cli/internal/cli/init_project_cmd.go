@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -318,9 +319,16 @@ func installRuntimeAssets(s streams, runtimeDir, connector string, assumeYes, no
 		if !overwrite {
 			fmt.Fprintln(s.out, "  config left unchanged")
 		} else {
+			// The overwrite discards every customization in the file, so the
+			// previous config is saved first: it is the only way back.
+			backupPath, err := backupExistingConfig(configPath)
+			if err != nil {
+				return err
+			}
 			if err := writeConfig(filepath.Join(root, "config.yaml"), configPath, connector, noWiki); err != nil {
 				return err
 			}
+			fmt.Fprintf(s.out, "  ✓ backup of the previous config: %s\n", backupPath)
 			fmt.Fprintf(s.out, "  ✓ .archetipo/config.yaml (connector: %s)\n", connector)
 		}
 	} else {
@@ -339,6 +347,30 @@ func installRuntimeAssets(s streams, runtimeDir, connector string, assumeYes, no
 		fmt.Fprintln(s.out, "  ✓ .archetipo/shared-runtime.md")
 	}
 	return nil
+}
+
+// backupExistingConfig copies the current config next to it, with a timestamped
+// name so that repeated init runs never clobber an earlier backup. Returns the
+// path of the file that was written.
+func backupExistingConfig(configPath string) (string, error) {
+	backupPath := uniqueBackupPath(configPath, time.Now())
+	if err := copyFile(configPath, backupPath); err != nil {
+		return "", iox.NewInternal("cannot back up "+configPath, err)
+	}
+	return backupPath, nil
+}
+
+// uniqueBackupPath builds `<config>.backup-<timestamp>`, adding a numeric suffix
+// when two init runs land within the same second.
+func uniqueBackupPath(configPath string, now time.Time) string {
+	base := configPath + ".backup-" + now.Format("20060102-150405")
+	candidate := base
+	for attempt := 2; ; attempt++ {
+		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+			return candidate
+		}
+		candidate = base + "-" + strconv.Itoa(attempt)
+	}
 }
 
 func writeConfig(src, dst, connector string, noWiki bool) error {
