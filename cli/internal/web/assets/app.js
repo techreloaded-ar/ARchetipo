@@ -1189,10 +1189,10 @@
 			"";
 		configField("status_done").value =
 			(cfg.workflow && cfg.workflow.statuses && cfg.workflow.statuses.done) || "";
-		// The Wiki gate defaults to on, so an absent section or key means
-		// enabled: only an explicit false unchecks the box.
-		configField("wiki_enabled").checked = !(
-			cfg.wiki && cfg.wiki.enabled === false
+		// The Wiki gate defaults to off, so an absent section or key means
+		// disabled: only an explicit true checks the box.
+		configField("wiki_enabled").checked = !!(
+			cfg.wiki && cfg.wiki.enabled
 		);
 		configField("worktree_enabled").checked = !!(
 			cfg.worktree && cfg.worktree.enabled

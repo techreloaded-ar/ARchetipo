@@ -137,16 +137,16 @@ func TestLoad_E2ERecordDemoVideoDefaultsFalse(t *testing.T) {
 	}
 }
 
-// The Wiki gate is the one boolean in the config whose default is true, so the
-// three states a YAML file can express — key absent, explicitly true,
-// explicitly false — must resolve to enabled, enabled, disabled.
+// The Wiki gate is off by default, so the three states a YAML file can express
+// — key absent, explicitly true, explicitly false — must resolve to disabled,
+// enabled, disabled.
 func TestLoad_WikiEnabled(t *testing.T) {
 	for name, tc := range map[string]struct {
 		yaml string
 		want bool
 	}{
-		"section absent":  {"connector: file\n", true},
-		"section empty":   {"connector: file\nwiki:\n", true},
+		"section absent":  {"connector: file\n", false},
+		"section empty":   {"connector: file\nwiki:\n", false},
 		"explicitly true": {"connector: file\nwiki:\n  enabled: true\n", true},
 		"explicitly off":  {"connector: file\nwiki:\n  enabled: false\n", false},
 	} {
@@ -161,30 +161,27 @@ func TestLoad_WikiEnabled(t *testing.T) {
 			if got := c.WikiEnabled(); got != tc.want {
 				t.Errorf("WikiEnabled() = %v, want %v for:\n%s", got, tc.want, tc.yaml)
 			}
-			if c.Wiki.Enabled == nil {
-				t.Error("Load must resolve the pointer so callers never see an unset gate")
-			}
 		})
 	}
 }
 
-// A disabled gate must survive a render/parse round-trip: RenderFull applies
-// defaults, and a default applied to the wrong field would silently re-enable
+// An enabled gate must survive a render/parse round-trip: RenderFull applies
+// defaults, and a default applied to the wrong field would silently disable
 // the Wiki of every project that saves its config from the viewer.
-func TestRenderFullPreservesDisabledWiki(t *testing.T) {
+func TestRenderFullPreservesEnabledWiki(t *testing.T) {
 	root := t.TempDir()
 	c := Default()
 	c.ProjectRoot = root
-	c.Wiki.Enabled = boolPtr(false)
+	c.Wiki.Enabled = true
 	out, err := RenderFull(c)
 	must(t, err)
-	if !strings.Contains(string(out), "enabled: false") {
-		t.Fatalf("rendered config lost the disabled gate:\n%s", out)
+	if !strings.Contains(string(out), "enabled: true") {
+		t.Fatalf("rendered config lost the enabled gate:\n%s", out)
 	}
 	reparsed, err := ValidateRaw(root, out)
 	must(t, err)
-	if reparsed.WikiEnabled() {
-		t.Errorf("round-trip re-enabled the Wiki:\n%s", out)
+	if !reparsed.WikiEnabled() {
+		t.Errorf("round-trip disabled the Wiki:\n%s", out)
 	}
 }
 
@@ -194,13 +191,13 @@ func TestRenderFullPreservesDisabledWiki(t *testing.T) {
 func TestSetupBaseReportsEveryOptionalSection(t *testing.T) {
 	c := Default()
 	c.ProjectRoot = "/tmp/project"
-	c.Wiki.Enabled = boolPtr(false)
+	c.Wiki.Enabled = true
 	c.Worktree.Enabled = true
 	c.E2E.RecordDemoVideo = true
 
 	setup := c.SetupBase(ConnectorFile)
-	if setup.Wiki.Enabled {
-		t.Error("setup.wiki.enabled must mirror the disabled gate")
+	if !setup.Wiki.Enabled {
+		t.Error("setup.wiki.enabled must mirror the enabled gate")
 	}
 	if !setup.Worktree.Enabled || setup.Worktree.Base != "main" {
 		t.Errorf("setup.worktree = %+v", setup.Worktree)
@@ -213,12 +210,12 @@ func TestSetupBaseReportsEveryOptionalSection(t *testing.T) {
 	}
 }
 
-// An omitted section must report enabled, not the zero value of the bool the
-// pointer points at.
-func TestSetupBaseReportsWikiEnabledWhenSectionOmitted(t *testing.T) {
+// An omitted section must report disabled: the automatic Wiki is opt-in, so a
+// project that never configured it maintains no pages.
+func TestSetupBaseReportsWikiDisabledWhenSectionOmitted(t *testing.T) {
 	setup := Config{}.SetupBase(ConnectorFile)
-	if !setup.Wiki.Enabled {
-		t.Error("an unset wiki section must report enabled")
+	if setup.Wiki.Enabled {
+		t.Error("an unset wiki section must report disabled")
 	}
 }
 

@@ -145,7 +145,7 @@ Wiki commands act on the code of a spec, so they follow the **Worktree Working D
 
 ### Wiki gate
 
-The Living Wiki is optional. `archetipo config show` reports the gate as `data.wiki.enabled` — it is `true` unless the project set `wiki.enabled: false` in `.archetipo/config.yaml`, and it is the only place to read it: an absent key means enabled, so never infer the gate by looking for the config file, for `paths.wiki`, or for an existing Wiki directory.
+The Living Wiki is opt-in. `archetipo config show` reports the gate as `data.wiki.enabled` — it is `false` unless the project set `wiki.enabled: true` in `.archetipo/config.yaml`, and it is the only place to read it: never infer the gate by looking for the config file, for `paths.wiki`, or for an existing Wiki directory, because a project can maintain a Wiki by hand with the automatic maintenance off.
 
 When `data.wiki.enabled` is `false`, the standard workflow skills — `archetipo-inception`, `archetipo-spec`, `archetipo-plan`, `archetipo-implement`, `archetipo-review`, and every worker `archetipo-autopilot` runs — perform **no Wiki work at all**: they run no `archetipo wiki` command, read no Wiki page as a source, write no `wiki_impact` contract, plan no Wiki task, and leave any existing pages and their review state untouched. Wiki absence is then the configured state, never a gap to report and never a blocker on a verdict.
 

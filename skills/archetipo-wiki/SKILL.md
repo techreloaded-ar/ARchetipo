@@ -11,7 +11,7 @@ Maintain `paths.wiki` as a progressively loaded, codebase-first map. Implemented
 
 1. Locate the project root and read `.archetipo/shared-runtime.md` exactly once.
 2. Run `archetipo config show`; resolve repository reads from `data.project_root`.
-   This skill is **never** gated: it runs in full whatever `data.wiki.enabled` says, because being invoked explicitly is the request. When the value is `false`, say once — at the end, not as a question — that the standard workflow will not maintain what you produced, and carry on.
+   This skill is **never** gated: it runs in full whatever `data.wiki.enabled` says, because being invoked explicitly is the request. When the value is `false` — the default, so this is the common case — say once, at the end and not as a question, that the standard workflow will not maintain what you produced and that `wiki.enabled: true` in `.archetipo/config.yaml` turns that maintenance on; then carry on.
 3. Read [references/wiki-contract.md](references/wiki-contract.md) before creating or changing pages.
 4. Select one operation: `bootstrap`, `ingest`, `refresh`, `query`, `review`, or `lint`. Default to `query` for a question and `bootstrap` when the Wiki is absent.
 

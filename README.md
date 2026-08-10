@@ -266,9 +266,9 @@ paths:
   mockups: docs/mockups/
   test_results: docs/test-results/
 
-# Living Wiki, on by default
+# Living Wiki, off by default
 wiki:
-  enabled: true
+  enabled: false
 
 workflow:
   statuses:
@@ -297,7 +297,7 @@ jira:
   # status_map: { TODO: To Do, PLANNED: Selected for Development, IN PROGRESS: In Progress, REVIEW: In Review, DONE: Done }
 ```
 
-**`wiki.enabled` gates the automatic Wiki, not the Wiki itself.** With `false`, the standard workflow — inception, spec, plan, implement, review — neither reads nor maintains Wiki pages: plans carry no `Wiki Impact` contract and acceptance approves no page. The `archetipo wiki ...` commands and an explicit `/archetipo-wiki` invocation keep working exactly as before, so the Wiki stays available on demand. `archetipo init --no-wiki` starts a project with the gate already off; the key can be flipped at any time here or from the config tab of `archetipo view`.
+**`wiki.enabled` gates the automatic Wiki, not the Wiki itself.** It is `false` by default, so the automatic Wiki is opt-in: the standard workflow — inception, spec, plan, implement, review — neither reads nor maintains Wiki pages, plans carry no `Wiki Impact` contract, and acceptance approves no page. The `archetipo wiki ...` commands and an explicit `/archetipo-wiki` invocation keep working regardless, so the Wiki stays available on demand. `archetipo init --wiki` starts a project with the gate already on; the key can be flipped at any time here or from the config tab of `archetipo view`.
 
 Each connector reads only its dedicated section: configuring `file:` while the active connector is `github` (or vice versa) has no effect. Legacy configs with `paths.backlog` / `paths.planning` are refused at load time with a migration hint — there is no auto-migration.
 

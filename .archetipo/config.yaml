@@ -20,12 +20,12 @@ file:
   backlog: .archetipo/backlog.yaml
   planning: .archetipo/plans/
 
-# Living Wiki, on by default. When enabled: false, the standard workflow
-# (inception, spec, plan, implement, review) stops reading and maintaining the
-# Wiki. The `archetipo wiki ...` commands and an explicit `/archetipo-wiki`
-# invocation keep working either way, so the Wiki stays available on demand.
+# Living Wiki, off by default. With enabled: true the standard workflow
+# (inception, spec, plan, implement, review) reads and maintains the Wiki. The
+# `archetipo wiki ...` commands and an explicit `/archetipo-wiki` invocation
+# keep working either way, so the Wiki stays available on demand.
 wiki:
-  enabled: true
+  enabled: false
 
 # Optional per-spec git worktree workflow. When enabled, `archetipo spec start`
 # creates a branch + worktree per spec so the review diff is isolated to a

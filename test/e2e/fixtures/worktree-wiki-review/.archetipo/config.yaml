@@ -23,3 +23,7 @@ worktree:
   base: main
   dir: .archetipo/worktrees
   branch_prefix: archetipo/
+
+# The e2e scenario exercises the automatic Wiki, which is off by default.
+wiki:
+  enabled: true

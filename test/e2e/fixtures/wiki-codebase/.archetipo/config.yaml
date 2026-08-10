@@ -20,3 +20,7 @@ file:
 
 worktree:
   enabled: false
+
+# The e2e scenario exercises the automatic Wiki, which is off by default.
+wiki:
+  enabled: true

@@ -449,17 +449,10 @@ type WorktreeConfig struct {
 // an explicit invocation of the archetipo-wiki skill: those always run, so a
 // project with the automatic Wiki off can still build and query one by hand.
 //
-// Enabled is a pointer because the default is true: with a plain bool an
-// omitted key would be indistinguishable from `enabled: false`, which is the
-// exact opposite of the intended default. Use IsEnabled to read the resolved
-// value; Load applies the default so the pointer is non-nil after parsing.
+// The gate is off by default, so an absent key means disabled and only a
+// literal `enabled: true` turns the automatic maintenance on.
 type WikiConfig struct {
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
-}
-
-// IsEnabled reports the resolved gate. An absent key means enabled.
-func (w WikiConfig) IsEnabled() bool {
-	return w.Enabled == nil || *w.Enabled
+	Enabled bool `json:"enabled" yaml:"enabled"`
 }
 
 // E2EConfig mirrors the optional `e2e:` section of .archetipo/config.yaml.

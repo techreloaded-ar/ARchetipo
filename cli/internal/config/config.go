@@ -44,7 +44,7 @@ type Config struct {
 	GitHub    GitHubConfig          `yaml:"github" json:"github,omitempty"`
 	Jira      JiraConfig            `yaml:"jira" json:"jira,omitempty"`
 	// Wiki is the optional `wiki:` section. Enabled gates the Living Wiki inside
-	// the standard workflow only (see domain.WikiConfig); on by default.
+	// the standard workflow only (see domain.WikiConfig); off by default.
 	Wiki domain.WikiConfig `yaml:"wiki" json:"wiki,omitempty"`
 	// Worktree is the optional per-spec git worktree workflow. Disabled by
 	// default; when enabled, `archetipo spec start` creates a branch + worktree
@@ -119,7 +119,7 @@ func Default() Config {
 				Done:       string(domain.StatusDone),
 			},
 		},
-		Wiki: domain.WikiConfig{Enabled: boolPtr(true)},
+		Wiki: domain.WikiConfig{Enabled: false},
 		Worktree: domain.WorktreeConfig{
 			Enabled:      false,
 			Base:         "main",
@@ -510,11 +510,8 @@ func (c *Config) applyDefaults() {
 	if c.Workflow.Statuses.Done == "" {
 		c.Workflow.Statuses.Done = d.Workflow.Statuses.Done
 	}
-	// The Wiki gate defaults to on, so an omitted key must resolve to true
-	// rather than to the zero value of the pointed-to bool.
-	if c.Wiki.Enabled == nil {
-		c.Wiki.Enabled = d.Wiki.Enabled
-	}
+	// The Wiki gate defaults to off, so an omitted key needs no correction:
+	// the zero value already is the intended default.
 	if c.Worktree.Base == "" {
 		c.Worktree.Base = d.Worktree.Base
 	}
@@ -634,10 +631,8 @@ func (c Config) SetupBase(connectorName string) domain.SetupInfo {
 // It is a gate on the workflow skills only: the `archetipo wiki` sub-commands
 // run regardless of it.
 func (c Config) WikiEnabled() bool {
-	return c.Wiki.IsEnabled()
+	return c.Wiki.Enabled
 }
-
-func boolPtr(v bool) *bool { return &v }
 
 // AbsPath joins p against the project root if p is relative.
 func (c Config) AbsPath(p string) string {
