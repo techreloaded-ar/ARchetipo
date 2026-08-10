@@ -1205,6 +1205,7 @@
 		configField("e2e_record_demo_video").checked = !!(
 			cfg.e2e && cfg.e2e.record_demo_video
 		);
+		configField("git_auto_commit").checked = !!(cfg.git && cfg.git.auto_commit);
 		setConnectorSelection(cfg.connector || "file");
 		configField("github_owner").value = (cfg.github && cfg.github.owner) || "";
 		configField("github_project_number").value =
@@ -1310,6 +1311,9 @@
 			},
 			e2e: {
 				record_demo_video: !!configField("e2e_record_demo_video").checked,
+			},
+			git: {
+				auto_commit: !!configField("git_auto_commit").checked,
 			},
 		};
 	}

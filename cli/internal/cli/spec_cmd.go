@@ -513,9 +513,11 @@ func newSpecReviewCmd(s streams) *cobra.Command {
 		Long: "Transitions the spec from IN PROGRESS to REVIEW and, when a non-empty body is provided " +
 			"via --file or stdin, posts it as a closing comment on the parent issue. Connectors " +
 			"without comment support silently ignore the body.\n\n" +
-			"When the worktree workflow is active and the spec has a dirty worktree, changes are " +
-			"auto-committed before the transition. --commit-type and --commit-summary control the " +
-			"Conventional Commit subject of that auto-commit (default: chore({code}): {title}).",
+			"Any dirty or untracked change is auto-committed before the transition. In the spec " +
+			"worktree this always happens; in the project root it requires git.auto_commit: true " +
+			"in .archetipo/config.yaml, and is skipped when the project is not a git repository. " +
+			"--commit-type and --commit-summary control the Conventional Commit subject of that " +
+			"auto-commit (default: chore({code}): {title}).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := strings.TrimSpace(args[0])
@@ -538,10 +540,22 @@ func newSpecReviewCmd(s streams) *cobra.Command {
 				if err != nil {
 					return nil, err
 				}
-				if spec.Status != domain.StatusReview && cfg.Worktree.Enabled && spec.Branch != "" && spec.Worktree != "" {
-					opts := gitwt.CommitMessageOptions{Type: commitType, Summary: commitSummary}
-					if err := gitwt.CommitWorktreeChanges(ctx, cfg.ProjectRoot, spec.Worktree, spec.Code, spec.Title, opts); err != nil {
-						return nil, err
+				if spec.Status != domain.StatusReview {
+					// A worktree-backed spec is always committed: its branch
+					// diff is the review artifact. In the project root the
+					// commit is opt-in through git.auto_commit, because there
+					// the agent shares the working tree with the developer.
+					workdir := ""
+					commit := cfg.Git.AutoCommit
+					if cfg.Worktree.Enabled && spec.Branch != "" && spec.Worktree != "" {
+						workdir = spec.Worktree
+						commit = true
+					}
+					if commit {
+						opts := gitwt.CommitMessageOptions{Type: commitType, Summary: commitSummary}
+						if err := gitwt.CommitSpecChanges(ctx, cfg.ProjectRoot, workdir, spec.Code, spec.Title, opts); err != nil {
+							return nil, err
+						}
 					}
 				}
 				res, err := transitionWithValidation(ctx, c, ref, "review", domain.StatusInProgress, domain.StatusReview)

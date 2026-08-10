@@ -74,6 +74,22 @@ worktree:
 	}
 }
 
+// writeAutoCommitConfig enables the per-spec commit in the project root, with
+// the worktree workflow left off.
+func writeAutoCommitConfig(t *testing.T) {
+	t.Helper()
+	if err := os.MkdirAll(".archetipo", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `connector: file
+git:
+  auto_commit: true
+`
+	if err := os.WriteFile(filepath.Join(".archetipo", "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func initGitMain(t *testing.T) {
 	t.Helper()
 	mustRun(t, "git", "init", "-b", "main")
@@ -752,6 +768,107 @@ func TestSpecReview_CommitsDirtyWorktreeBeforeReview(t *testing.T) {
 	want := "chore(US-001): First"
 	if subject != want {
 		t.Fatalf("expected commit subject %q, got %q", want, subject)
+	}
+}
+
+func TestSpecReview_CommitsProjectRootWhenAutoCommitEnabled(t *testing.T) {
+	newProject(t)
+	writeAutoCommitConfig(t)
+	initGitMain(t)
+
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	planFile := writeInputFile(t, "plan.json", planJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "plan", "US-001", "--file", planFile); res.exit != 0 {
+		t.Fatalf("plan failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "start", "US-001"); res.exit != 0 {
+		t.Fatalf("start failed: %s", res.stderr.String())
+	}
+	if err := os.WriteFile("archetipo.txt", []byte("from ARchetipo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runCLI(t, "", "spec", "review", "US-001", "--commit-type", "feat", "--commit-summary", "add invite flow")
+	if res.exit != 0 {
+		t.Fatalf("review failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	// The backlog transition follows the commit, so only the spec file may stay
+	// dirty: the implementation increment itself must be committed.
+	if status := mustOutput(t, "git", "status", "--porcelain"); strings.Contains(status, "archetipo.txt") {
+		t.Fatalf("expected the increment to be committed, got %q", status)
+	}
+	subject := mustOutput(t, "git", "log", "-1", "--pretty=%s")
+	want := "feat(US-001): add invite flow"
+	if subject != want {
+		t.Fatalf("expected commit subject %q, got %q", want, subject)
+	}
+	files := mustOutput(t, "git", "show", "--name-only", "--pretty=format:", "HEAD")
+	if !strings.Contains(files, "archetipo.txt") {
+		t.Fatalf("expected the increment commit to include archetipo.txt, got:\n%s", files)
+	}
+}
+
+func TestSpecReview_LeavesProjectRootUncommittedByDefault(t *testing.T) {
+	newProject(t)
+	initGitMain(t)
+
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	planFile := writeInputFile(t, "plan.json", planJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "plan", "US-001", "--file", planFile); res.exit != 0 {
+		t.Fatalf("plan failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "start", "US-001"); res.exit != 0 {
+		t.Fatalf("start failed: %s", res.stderr.String())
+	}
+	if err := os.WriteFile("archetipo.txt", []byte("from ARchetipo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := runCLI(t, "", "spec", "review", "US-001")
+	if res.exit != 0 {
+		t.Fatalf("review failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	if status := mustOutput(t, "git", "status", "--porcelain"); !strings.Contains(status, "archetipo.txt") {
+		t.Fatalf("expected the increment to stay uncommitted without git.auto_commit, got %q", status)
+	}
+	if subject := mustOutput(t, "git", "log", "-1", "--pretty=%s"); subject != "base" {
+		t.Fatalf("expected no new commit, got %q", subject)
+	}
+}
+
+func TestSpecReview_SucceedsWithoutGitRepository(t *testing.T) {
+	newProject(t)
+	// auto_commit on, but the project is not a git repository: the commit is
+	// skipped instead of failing the transition.
+	writeAutoCommitConfig(t)
+
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	planFile := writeInputFile(t, "plan.json", planJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "plan", "US-001", "--file", planFile); res.exit != 0 {
+		t.Fatalf("plan failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "start", "US-001"); res.exit != 0 {
+		t.Fatalf("start failed: %s", res.stderr.String())
+	}
+
+	res := runCLI(t, "", "spec", "review", "US-001")
+	if res.exit != 0 {
+		t.Fatalf("review failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	show := runCLI(t, "", "spec", "show", "US-001")
+	_, data := decodeOK(t, show)
+	spec, _ := data["spec"].(map[string]any)
+	if spec["status"] != "REVIEW" {
+		t.Fatalf("expected REVIEW, got %v", spec["status"])
 	}
 }
 

@@ -178,7 +178,7 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 | `archetipo spec next --status TODO` | Auto-selects the first eligible spec by status. |
 | `archetipo spec plan US-001 --file plan.yaml` | Saves the implementation plan and moves the spec to `PLANNED`. |
 | `archetipo spec start US-001` | Moves a planned spec to `IN PROGRESS`. |
-| `archetipo spec review US-001 [--file note.md] [--commit-type feat] [--commit-summary "summary"]` | Moves a spec to `REVIEW`, posts a closing comment, and auto-commits dirty worktree changes with a Conventional Commit subject (default: `chore(US-001): {title}`). |
+| `archetipo spec review US-001 [--file note.md] [--commit-type feat] [--commit-summary "summary"]` | Moves a spec to `REVIEW`, posts a closing comment, and auto-commits dirty changes — always in the spec worktree, and in the project root when `git.auto_commit` is on — with a Conventional Commit subject (default: `chore(US-001): {title}`). |
 | `archetipo spec request-changes US-001 --file feedback.json` | Sends a spec in `REVIEW` back to `TODO` with structured rework feedback appended to its body. |
 | `archetipo spec update US-001 --file patch.yaml` | Applies a partial patch (title, priority, points, scope, blocked_by, body, epic, rework) to an existing spec. All connectors supported. |
 | `archetipo spec integrate US-001` | Merges a reviewed spec's worktree branch into base, cleans up, and marks it `DONE` (worktree workflow). |
@@ -270,6 +270,10 @@ paths:
 wiki:
   enabled: false
 
+# One commit per spec without worktrees, off by default
+git:
+  auto_commit: false
+
 workflow:
   statuses:
     todo: TODO
@@ -298,6 +302,8 @@ jira:
 ```
 
 **`wiki.enabled` gates the automatic Wiki, not the Wiki itself.** It is `false` by default, so the automatic Wiki is opt-in: the standard workflow — inception, spec, plan, implement, review — neither reads nor maintains Wiki pages, plans carry no `Wiki Impact` contract, and acceptance approves no page. The `archetipo wiki ...` commands and an explicit `/archetipo-wiki` invocation keep working regardless, so the Wiki stays available on demand. `archetipo init --wiki` starts a project with the gate already on; the key can be flipped at any time here or from the config tab of `archetipo view`.
+
+**`git.auto_commit` only matters for projects without worktrees.** When `true`, `archetipo spec review` stages and commits everything dirty in the project root before moving the spec to `REVIEW`, so each increment lands as its own `<type>(US-XXX): <summary>` commit instead of piling up in the working tree. Turn it on if you run `/archetipo-autopilot` without worktrees — the autopilot completes several specs in a row, and without this key their changes accumulate into one indistinguishable blob. It is `false` by default because when you implement one spec at a time you normally want to commit yourself, and the commit stages the whole working tree, including any unrelated change of yours. **It does not affect the worktree workflow**: with `worktree.enabled: true` the per-spec commit always happens, because the branch diff is what review and `spec integrate` consume. Projects that are not git repositories are always left alone.
 
 Each connector reads only its dedicated section: configuring `file:` while the active connector is `github` (or vice versa) has no effect. Legacy configs with `paths.backlog` / `paths.planning` are refused at load time with a migration hint — there is no auto-migration.
 

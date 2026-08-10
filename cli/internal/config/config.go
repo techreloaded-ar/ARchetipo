@@ -53,6 +53,10 @@ type Config struct {
 	// E2E is the optional `e2e:` section. RecordDemoVideo gates demo recording
 	// (`archetipo e2e demo`); off by default, so videos are opt-in.
 	E2E domain.E2EConfig `yaml:"e2e" json:"e2e,omitempty"`
+	// Git is the optional `git:` section. AutoCommit gates the per-spec commit
+	// created by `archetipo spec review` when the worktree workflow is off; off
+	// by default (see domain.GitConfig).
+	Git domain.GitConfig `yaml:"git" json:"git,omitempty"`
 	// ProjectRoot is the absolute path of the directory that contains
 	// .archetipo/. Set by Load; not present in the YAML file.
 	ProjectRoot string `yaml:"-" json:"project_root"`

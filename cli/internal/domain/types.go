@@ -455,6 +455,16 @@ type WikiConfig struct {
 	Enabled bool `json:"enabled" yaml:"enabled"`
 }
 
+// GitConfig mirrors the optional `git:` section of .archetipo/config.yaml.
+// AutoCommit gates the per-spec commit `archetipo spec review` creates when the
+// worktree workflow is off and implementation happens in the project root. Off
+// by default, so a manual run keeps committing by hand. It does not gate the
+// worktree case: a worktree-backed spec is always committed, otherwise its
+// branch diff — and the merge that integrates it — would be incomplete.
+type GitConfig struct {
+	AutoCommit bool `json:"auto_commit" yaml:"auto_commit"`
+}
+
 // E2EConfig mirrors the optional `e2e:` section of .archetipo/config.yaml.
 // RecordDemoVideo gates `archetipo e2e demo`: the demo video is recorded only
 // when it is true. Off by default, so videos are opt-in.

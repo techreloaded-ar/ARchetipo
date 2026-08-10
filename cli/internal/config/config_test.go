@@ -137,6 +137,33 @@ func TestLoad_E2ERecordDemoVideoDefaultsFalse(t *testing.T) {
 	}
 }
 
+// git.auto_commit is off by default, so the three states a YAML file can
+// express — key absent, explicitly true, explicitly false — must resolve to
+// disabled, enabled, disabled.
+func TestLoad_GitAutoCommit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		yaml string
+		want bool
+	}{
+		"section absent":   {"connector: file\n", false},
+		"explicitly true":  {"connector: file\ngit:\n  auto_commit: true\n", true},
+		"explicitly false": {"connector: file\ngit:\n  auto_commit: false\n", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+			must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(tc.yaml), 0o644))
+			c, err := Load(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Git.AutoCommit != tc.want {
+				t.Errorf("auto_commit: got %v, want %v", c.Git.AutoCommit, tc.want)
+			}
+		})
+	}
+}
+
 // The Wiki gate is off by default, so the three states a YAML file can express
 // — key absent, explicitly true, explicitly false — must resolve to disabled,
 // enabled, disabled.

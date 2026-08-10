@@ -321,6 +321,10 @@
                                     <label class="field"><span>Worktree directory</span><input type="text" name="worktree_dir" /></label>
                                     <label class="field"><span>Branch prefix</span><input type="text" name="worktree_branch_prefix" /></label>
                                     <div class="field full config-toggle-field">
+                                        <span>Commit each spec automatically</span>
+                                        <label class="config-toggle-row"><input type="checkbox" name="git_auto_commit" /><span>Without worktrees, <code>archetipo spec review</code> commits the increment in the project root. Worktrees always commit.</span></label>
+                                    </div>
+                                    <div class="field full config-toggle-field">
                                         <span>Record E2E demo video</span>
                                         <label class="config-toggle-row"><input type="checkbox" name="e2e_record_demo_video" /><span>Allows <code>archetipo e2e demo</code> to record a video.</span></label>
                                     </div>

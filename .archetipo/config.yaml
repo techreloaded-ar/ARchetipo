@@ -36,6 +36,24 @@ worktree:
   dir: .archetipo/worktrees
   branch_prefix: archetipo/
 
+# One commit per spec, without the worktree workflow. With auto_commit: true,
+# `archetipo spec review` stages and commits everything dirty in the project
+# root before moving the spec to REVIEW, so each increment lands as its own
+# `<type>(US-XXX): <summary>` commit instead of piling up in the working tree.
+# Turn it on when you run /archetipo-autopilot on a project without worktrees:
+# the autopilot completes several specs in a row, and without this their changes
+# accumulate into one indistinguishable blob.
+#
+# Off by default: when you implement one spec at a time you normally want to
+# commit yourself, and the commit stages the whole working tree — including any
+# unrelated change of yours.
+#
+# This key does NOT affect the worktree workflow. With worktree.enabled: true
+# the per-spec commit always happens, because the branch diff is what review and
+# `spec integrate` consume. Non-git projects are always left alone.
+git:
+  auto_commit: false
+
 # Optional end-to-end demo recording. `archetipo e2e demo` produces a video
 # ONLY when record_demo_video is true; otherwise it records nothing and reports
 # the skip. Off by default, so demo videos are opt-in.

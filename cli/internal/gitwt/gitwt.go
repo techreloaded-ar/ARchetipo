@@ -276,7 +276,7 @@ var ValidCommitTypes = map[string]struct{}{
 }
 
 // CommitMessageOptions carries the caller's intent for the auto-commit subject
-// used by CommitWorktreeChanges.
+// used by CommitSpecChanges.
 type CommitMessageOptions struct {
 	Type    string
 	Summary string
@@ -307,7 +307,7 @@ func sanitizeSummary(raw string) string {
 }
 
 // ReviewCommitMessage returns a Conventional Commit subject for the auto-commit
-// created by `archetipo spec review` when the spec has a dirty worktree.
+// created by `archetipo spec review` when the spec has uncommitted changes.
 func ReviewCommitMessage(code string, opts CommitMessageOptions, fallbackTitle string) string {
 	typ, err := NormalizeCommitType(opts.Type)
 	if err != nil {
@@ -323,42 +323,47 @@ func ReviewCommitMessage(code string, opts CommitMessageOptions, fallbackTitle s
 	return fmt.Sprintf("%s(%s): %s", typ, code, summary)
 }
 
-// CommitWorktreeChanges stages and commits any dirty or untracked changes in a
-// spec worktree so the review diff, which is branch-based, includes all files.
-func CommitWorktreeChanges(ctx context.Context, repoRoot, worktreeRel, code, title string, opts CommitMessageOptions) error {
-	if strings.TrimSpace(worktreeRel) == "" {
-		return iox.NewPrecondition(
-			fmt.Sprintf("spec %s has no worktree path", code),
-			"run `archetipo spec start` with worktree enabled first", nil)
+// CommitSpecChanges stages and commits any dirty or untracked changes produced
+// while implementing a spec, so every increment lands as its own commit.
+//
+// workdirRel is the spec worktree when the worktree workflow is active; pass an
+// empty string to commit in the project root, which is where implementation
+// happens when the workflow is off. A project root that is not a git work tree
+// is not an error: the spec simply moves to review without a commit.
+func CommitSpecChanges(ctx context.Context, repoRoot, workdirRel, code, title string, opts CommitMessageOptions) error {
+	workdirAbs := repoRoot
+	if rel := strings.TrimSpace(workdirRel); rel != "" {
+		workdirAbs = rel
+		if !filepath.IsAbs(workdirAbs) {
+			workdirAbs = filepath.Join(repoRoot, rel)
+		}
+		if fi, err := os.Stat(workdirAbs); err != nil || !fi.IsDir() {
+			return iox.NewPrecondition(
+				fmt.Sprintf("worktree for spec %s not found at %s", code, workdirAbs),
+				"run `archetipo spec start` with worktree enabled first", err)
+		}
+	} else if !gitOK(ctx, workdirAbs, "rev-parse", "--is-inside-work-tree") {
+		return nil
 	}
-	worktreeAbs := worktreeRel
-	if !filepath.IsAbs(worktreeAbs) {
-		worktreeAbs = filepath.Join(repoRoot, worktreeRel)
-	}
-	if fi, err := os.Stat(worktreeAbs); err != nil || !fi.IsDir() {
-		return iox.NewPrecondition(
-			fmt.Sprintf("worktree for spec %s not found at %s", code, worktreeAbs),
-			"run `archetipo spec start` with worktree enabled first", err)
-	}
-	status, err := runGitInDir(ctx, worktreeAbs, "status", "--porcelain")
+	status, err := runGitInDir(ctx, workdirAbs, "status", "--porcelain")
 	if err != nil {
 		return iox.NewConflict(
-			fmt.Sprintf("could not inspect worktree changes for %s", code),
-			"ensure the spec worktree is a valid git checkout", err)
+			fmt.Sprintf("could not inspect changes for %s", code),
+			"ensure the working directory is a valid git checkout", err)
 	}
 	if strings.TrimSpace(status) == "" {
 		return nil
 	}
-	if _, err := runGitInDir(ctx, worktreeAbs, "add", "-A"); err != nil {
+	if _, err := runGitInDir(ctx, workdirAbs, "add", "-A"); err != nil {
 		return iox.NewConflict(
-			fmt.Sprintf("could not stage worktree changes for %s", code),
-			"inspect the worktree and retry `archetipo spec review`", err)
+			fmt.Sprintf("could not stage changes for %s", code),
+			"inspect the working directory and retry `archetipo spec review`", err)
 	}
 	msg := ReviewCommitMessage(code, opts, title)
-	if _, err := runGitInDir(ctx, worktreeAbs, "commit", "-m", msg); err != nil {
+	if _, err := runGitInDir(ctx, workdirAbs, "commit", "-m", msg); err != nil {
 		return iox.NewConflict(
-			fmt.Sprintf("could not commit worktree changes for %s", code),
-			"inspect the worktree and retry `archetipo spec review`", err)
+			fmt.Sprintf("could not commit changes for %s", code),
+			"inspect the working directory and retry `archetipo spec review`", err)
 	}
 	return nil
 }
