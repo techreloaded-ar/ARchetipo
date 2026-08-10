@@ -187,6 +187,67 @@ func TestConfigShow(t *testing.T) {
 	}
 }
 
+// `config show` is the only channel a skill has for reading the optional
+// sections, so every one of them must be present in the envelope with its
+// default already applied — `wiki.enabled` above all, since an absent key means
+// enabled and a skill that had to guess would disable the Wiki everywhere.
+func TestConfigShow_ReportsOptionalSections(t *testing.T) {
+	newProject(t)
+	_, data := decodeOK(t, runCLI(t, "", "config", "show"))
+
+	wiki, ok := data["wiki"].(map[string]any)
+	if !ok || wiki["enabled"] != true {
+		t.Fatalf("expected wiki.enabled=true by default, got %v", data["wiki"])
+	}
+	worktree, ok := data["worktree"].(map[string]any)
+	if !ok || worktree["enabled"] != false || worktree["base"] != "main" {
+		t.Fatalf("expected the resolved worktree section, got %v", data["worktree"])
+	}
+	e2e, ok := data["e2e"].(map[string]any)
+	if !ok || e2e["record_demo_video"] != false {
+		t.Fatalf("expected the resolved e2e section, got %v", data["e2e"])
+	}
+}
+
+func TestConfigShow_ReportsDisabledWikiGate(t *testing.T) {
+	newProject(t)
+	writeCLIConfig(t, "connector: file\nwiki:\n  enabled: false\n")
+	_, data := decodeOK(t, runCLI(t, "", "config", "show"))
+	wiki, ok := data["wiki"].(map[string]any)
+	if !ok || wiki["enabled"] != false {
+		t.Fatalf("expected wiki.enabled=false, got %v", data["wiki"])
+	}
+}
+
+// The gate stops the workflow skills, never the commands: a user who disabled
+// the automatic Wiki must still be able to build and inspect one by hand.
+func TestWikiCommandsRunWithDisabledGate(t *testing.T) {
+	newProject(t)
+	writeCLIConfig(t, "connector: file\nwiki:\n  enabled: false\n")
+
+	initCLIWiki(t)
+	if err := os.MkdirAll("evidence", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("evidence", "item.txt"), []byte("evidence\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCLIWikiPage(t, "overview", "evidence/item.txt")
+
+	if _, data := decodeOK(t, runCLI(t, "", "wiki", "validate")); data["ok"] != true {
+		t.Fatalf("validate must run with the gate off: %v", data)
+	}
+	if res := runCLI(t, "", "wiki", "catalog"); res.exit != 0 {
+		t.Fatalf("catalog must run with the gate off: %s", res.stderr.String())
+	}
+	if _, data := decodeOK(t, runCLI(t, "", "wiki", "status", "--require-generated", "overview")); data["ok"] != true {
+		t.Fatalf("status must run with the gate off: %v", data)
+	}
+	if res := runCLI(t, "", "wiki", "approve", "overview"); res.exit != 0 {
+		t.Fatalf("approve must run with the gate off: %s", res.stderr.String())
+	}
+}
+
 func TestValidateSpecs_OK(t *testing.T) {
 	newProject(t)
 	specsFile := writeInputFile(t, "specs.json", validSpecJSON)
@@ -793,6 +854,16 @@ func TestSpecReview_CommitSubjectCiWithDifferentCode(t *testing.T) {
 	want := "ci(US-125): add release workflow"
 	if subject != want {
 		t.Fatalf("expected commit subject %q, got %q", want, subject)
+	}
+}
+
+func writeCLIConfig(t *testing.T, body string) {
+	t.Helper()
+	if err := os.MkdirAll(".archetipo", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(".archetipo", "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1546,6 +1617,44 @@ func TestDoctor_PassesAfterInit(t *testing.T) {
 	}
 	if !strings.Contains(out, "skipped (connector is not github)") {
 		t.Fatalf("expected gh check to be skipped for file connector, got:\n%s", out)
+	}
+}
+
+// `init --no-wiki` writes the gate off, and doctor must then read an absent
+// Wiki as the configured state instead of an unfinished setup.
+func TestInitNoWiki_WritesGateAndSkipsDoctorWikiCheck(t *testing.T) {
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+	res := runCLI(t, "", "init", "--tool", "claude", "--connector", "file", "--yes", "--no-wiki")
+	if res.exit != 0 {
+		t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	if strings.Contains(res.stdout.String(), "/archetipo-wiki bootstrap") {
+		t.Fatalf("init must not suggest the bootstrap when the gate is off:\n%s", res.stdout.String())
+	}
+
+	raw, err := os.ReadFile(filepath.Join(".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "enabled: false") {
+		t.Fatalf("expected wiki.enabled: false in the written config:\n%s", raw)
+	}
+	if _, data := decodeOK(t, runCLI(t, "", "config", "show")); data["wiki"].(map[string]any)["enabled"] != false {
+		t.Fatalf("the written config must resolve to a disabled gate, got %v", data["wiki"])
+	}
+
+	// The skill stays installed: re-enabling is a config change, not a reinstall.
+	if _, err := os.Stat(filepath.Join(".claude", "skills", "archetipo-wiki")); err != nil {
+		t.Fatalf("archetipo-wiki must be installed even with --no-wiki: %v", err)
+	}
+
+	doctor := runCLI(t, "", "doctor")
+	if doctor.exit != 0 {
+		t.Fatalf("doctor failed: stdout=%s stderr=%s", doctor.stdout.String(), doctor.stderr.String())
+	}
+	if !strings.Contains(doctor.stdout.String(), "skipped (wiki.enabled: false)") {
+		t.Fatalf("expected the Wiki check to be skipped, got:\n%s", doctor.stdout.String())
 	}
 }
 

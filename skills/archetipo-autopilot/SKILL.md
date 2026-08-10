@@ -242,7 +242,7 @@ After the worker terminates, run `archetipo spec show <US-CODE>` regardless of i
 
 The verdict block is telemetry. When it is missing, truncated, or unparsable, the observed CLI status decides; record that the worker returned no verdict.
 
-Mockups, E2E coverage, task execution, fix loops, Wiki maintenance, demo-video recording, acceptance classification, and code review belong entirely to the phase skills. Do not duplicate or infer those responsibilities from worker summaries.
+Mockups, E2E coverage, task execution, fix loops, Wiki maintenance, demo-video recording, acceptance classification, and code review belong entirely to the phase skills. Do not duplicate or infer those responsibilities from worker summaries. The same holds for the config gates each of them owns — the **Wiki gate** in `.archetipo/shared-runtime.md` included: the controller neither reads them nor mentions them to a worker.
 
 ### Phase 2 — Complete
 

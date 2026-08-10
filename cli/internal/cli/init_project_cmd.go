@@ -54,6 +54,7 @@ func newInitProjectCmd(s streams) *cobra.Command {
 	var toolFlags []string
 	var connectorFlag string
 	var assumeYes bool
+	var noWiki bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -62,16 +63,17 @@ func newInitProjectCmd(s streams) *cobra.Command {
 			"Also creates .archetipo/config.yaml and .archetipo/shared-runtime.md in the current directory.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runInitProject(s, toolFlags, connectorFlag, assumeYes)
+			return runInitProject(s, toolFlags, connectorFlag, assumeYes, noWiki)
 		},
 	}
 	cmd.Flags().StringSliceVar(&toolFlags, "tool", nil, "Tool key(s) to install for: "+validToolKeysHint()+". Repeat or comma-separate.")
 	cmd.Flags().StringVar(&connectorFlag, "connector", "", "Connector for .archetipo/config.yaml: file|github|jira")
 	cmd.Flags().BoolVar(&assumeYes, "yes", false, "Assume 'yes' to overwrite prompts (non-interactive).")
+	cmd.Flags().BoolVar(&noWiki, "no-wiki", false, "Write wiki.enabled: false, so the standard workflow does not maintain the Living Wiki. The archetipo-wiki skill is installed either way and stays usable on demand.")
 	return cmd
 }
 
-func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeYes bool) error {
+func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeYes, noWiki bool) error {
 	dataDir, err := discoverDataDir()
 	if err != nil {
 		return err
@@ -137,11 +139,18 @@ func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeY
 		fmt.Fprintf(s.out, "  ✓ %s → %s\n", t.Name, target)
 	}
 
-	if err := installRuntimeAssets(s, runtimeDir, conn, assumeYes); err != nil {
+	if err := installRuntimeAssets(s, runtimeDir, conn, assumeYes, noWiki); err != nil {
 		return err
 	}
 
 	fmt.Fprintln(s.out, "Done.")
+	if noWiki {
+		// The skill is installed regardless: the gate only stops the standard
+		// workflow from maintaining a Wiki, never the on-demand use of one.
+		fmt.Fprintln(s.out, "Automatic Wiki disabled (wiki.enabled: false). Run /archetipo-wiki explicitly to build or query one.")
+		fmt.Fprintln(s.out, "Next: run /archetipo-inception")
+		return nil
+	}
 	fmt.Fprintln(s.out, "Next: run /archetipo-wiki bootstrap")
 	return nil
 }
@@ -278,7 +287,7 @@ func pickConnectorInteractive(s streams) (string, error) {
 	return "", iox.NewInvalidInput("invalid connector choice: "+line, "enter 1, 2 or 3", nil)
 }
 
-func installRuntimeAssets(s streams, runtimeDir, connector string, assumeYes bool) error {
+func installRuntimeAssets(s streams, runtimeDir, connector string, assumeYes, noWiki bool) error {
 	root := runtimeDir
 	if _, err := os.Stat(filepath.Join(root, "config.yaml")); err != nil {
 		// dataDir/runtime missing -> try repo .archetipo/
@@ -309,13 +318,13 @@ func installRuntimeAssets(s streams, runtimeDir, connector string, assumeYes boo
 		if !overwrite {
 			fmt.Fprintln(s.out, "  config left unchanged")
 		} else {
-			if err := writeConfig(filepath.Join(root, "config.yaml"), configPath, connector); err != nil {
+			if err := writeConfig(filepath.Join(root, "config.yaml"), configPath, connector, noWiki); err != nil {
 				return err
 			}
 			fmt.Fprintf(s.out, "  ✓ .archetipo/config.yaml (connector: %s)\n", connector)
 		}
 	} else {
-		if err := writeConfig(filepath.Join(root, "config.yaml"), configPath, connector); err != nil {
+		if err := writeConfig(filepath.Join(root, "config.yaml"), configPath, connector, noWiki); err != nil {
 			return err
 		}
 		fmt.Fprintf(s.out, "  ✓ .archetipo/config.yaml (connector: %s)\n", connector)
@@ -332,12 +341,15 @@ func installRuntimeAssets(s streams, runtimeDir, connector string, assumeYes boo
 	return nil
 }
 
-func writeConfig(src, dst, connector string) error {
+func writeConfig(src, dst, connector string, noWiki bool) error {
 	body, err := os.ReadFile(src)
 	if err != nil {
 		return iox.NewInternal("read config template", err)
 	}
 	out := setConnectorField(string(body), connector)
+	if noWiki {
+		out = setWikiEnabledField(out, false)
+	}
 	if err := os.WriteFile(dst, []byte(out), 0o644); err != nil {
 		return iox.NewInternal("write "+dst, err)
 	}
@@ -358,6 +370,46 @@ func setConnectorField(body, connector string) string {
 	}
 	// no existing field -> prepend
 	return "connector: " + connector + "\n" + body
+}
+
+// setWikiEnabledField rewrites `enabled:` inside the top-level `wiki:` mapping
+// of the YAML template, preserving the surrounding comments. The key is written
+// explicitly rather than left to the default because an omitted `wiki.enabled`
+// resolves to true: only a literal `false` in the file turns the gate off.
+// When the template carries no `wiki:` section, the section is appended.
+func setWikiEnabledField(body string, enabled bool) string {
+	value := "false"
+	if enabled {
+		value = "true"
+	}
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		if strings.TrimRight(line, "\r") != "wiki:" {
+			continue
+		}
+		for j := i + 1; j < len(lines); j++ {
+			trimmed := strings.TrimSpace(strings.TrimRight(lines[j], "\r"))
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			// A non-indented line ends the mapping: the key is absent.
+			if !strings.HasPrefix(lines[j], " ") && !strings.HasPrefix(lines[j], "\t") {
+				break
+			}
+			if strings.HasPrefix(trimmed, "enabled:") {
+				lines[j] = "  enabled: " + value
+				return strings.Join(lines, "\n")
+			}
+		}
+		// `wiki:` exists without `enabled:`: insert it as the first child.
+		rest := append([]string{"  enabled: " + value}, lines[i+1:]...)
+		return strings.Join(append(lines[:i+1], rest...), "\n")
+	}
+	separator := "\n"
+	if strings.HasSuffix(body, "\n") {
+		separator = ""
+	}
+	return body + separator + "\nwiki:\n  enabled: " + value + "\n"
 }
 
 func copyTree(src, dst string) error {

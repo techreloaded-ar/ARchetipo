@@ -109,6 +109,48 @@ func TestSaveConfigStructuredCreatesBackup(t *testing.T) {
 	}
 }
 
+// The guided form always sends the gate explicitly, so unchecking the box must
+// reach the file as `enabled: false` and survive the reload. A default applied
+// on the way out would turn the Wiki back on behind the user.
+func TestSaveConfigPersistsDisabledWikiGate(t *testing.T) {
+	srv, cfg := newFileServer(t)
+	mustWriteConfig(t, cfg.ProjectRoot, "connector: file\n")
+
+	disabled := false
+	payload := saveConfigReq{Config: func() *config.Config {
+		c := config.Default()
+		c.ProjectRoot = cfg.ProjectRoot
+		c.Wiki.Enabled = &disabled
+		return &c
+	}()}
+	body, _ := json.Marshal(payload)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	srv.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	raw, err := os.ReadFile(filepath.Join(cfg.ProjectRoot, config.RelativePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "enabled: false") {
+		t.Fatalf("saved config lost the disabled gate:\n%s", raw)
+	}
+
+	w = httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	var got configView
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Config.WikiEnabled() {
+		t.Errorf("reloaded config re-enabled the Wiki: %s", got.Raw)
+	}
+}
+
 func TestSaveConfigRejectsInvalidRaw(t *testing.T) {
 	srv, cfg := newFileServer(t)
 	mustWriteConfig(t, cfg.ProjectRoot, "connector: file\n")

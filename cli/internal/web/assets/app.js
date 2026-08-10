@@ -1189,6 +1189,11 @@
 			"";
 		configField("status_done").value =
 			(cfg.workflow && cfg.workflow.statuses && cfg.workflow.statuses.done) || "";
+		// The Wiki gate defaults to on, so an absent section or key means
+		// enabled: only an explicit false unchecks the box.
+		configField("wiki_enabled").checked = !(
+			cfg.wiki && cfg.wiki.enabled === false
+		);
 		configField("worktree_enabled").checked = !!(
 			cfg.worktree && cfg.worktree.enabled
 		);
@@ -1293,6 +1298,9 @@
 				points_field: configField("jira_points_field").value.trim(),
 				status_map: parseKVMap(configField("jira_status_map").value),
 				priority_map: parseKVMap(configField("jira_priority_map").value),
+			},
+			wiki: {
+				enabled: !!configField("wiki_enabled").checked,
 			},
 			worktree: {
 				enabled: !!configField("worktree_enabled").checked,

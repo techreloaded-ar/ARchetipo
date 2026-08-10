@@ -54,6 +54,8 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
 
    `wiki affected` returns `kind: wiki_affected_result` with `data.items`. Its results are discovery candidates, not an automatic Wiki Impact list. Branch on `error.code` per `references/wiki-contract.md`.
 
+   Both `wiki` operations run only when `data.wiki.enabled` is `true`. When the gate is off (see **Wiki gate** in `.archetipo/shared-runtime.md`) this skill produces a plan with **no Wiki work whatsoever**: no `wiki` command, no Wiki page read in Step 2, no `wiki_impact` block in the plan body, and no Wiki task. Architectural decisions that would have become a `type: decision` page are then described in the technical solution itself — context, chosen option, viable alternatives, tradeoffs, verification intent — and nowhere else.
+
 #### Step 1 — Spec Selection
 
 Pick one of the two mutually exclusive forms:
@@ -74,8 +76,8 @@ After selecting the spec, read ALL context in a **single turn with parallel tool
 - `{config.paths.prd}` (if exists)
 - `{config.paths.mockups}/` contents (if exists)
 - Relevant codebase files: schema/model definition files, existing related source files, existing tests
-- `{config.paths.wiki}/index.md` and only the pages selected from the spec's `Wiki context` IDs or `archetipo wiki search`
-- When the planned implementation names concrete expected changed paths, run `archetipo wiki --project-root {data.workdir} affected` with repeated `--file` flags and inspect the returned candidate pages. Do not use speculative paths, default Git revisions, or copy the returned fan-out directly into `wiki_impact.update`.
+- `{config.paths.wiki}/index.md` and only the pages selected from the spec's `Wiki context` IDs or `archetipo wiki search` — **both skipped when `data.wiki.enabled` is `false`**
+- When the planned implementation names concrete expected changed paths, run `archetipo wiki --project-root {data.workdir} affected` with repeated `--file` flags and inspect the returned candidate pages. Do not use speculative paths, default Git revisions, or copy the returned fan-out directly into `wiki_impact.update`. Skipped when the Wiki gate is off.
 - If the target spec has a `Blocked by` field with values other than `-`, read those blocking specs from the backlog to understand preconditions and shared context
 - If `data.tasks` from Step 1 was non-empty, a plan already exists. In **Rework mode** (see below) do NOT ask — preserve the existing tasks and append. Otherwise ask the user: overwrite, create a new revision, or skip. Never silently overwrite.
 
@@ -126,7 +128,7 @@ Silently perform all of the following — this is your chain of thought, not vis
 - Read relevant codebase files to understand current patterns and conventions
 - Design the technical solution: approach, motivation, key decisions across layers
 - Evaluate alternatives if multiple viable approaches exist
-- Evaluate whether the solution crosses the ADR threshold below. Search existing pages with `archetipo wiki search --type decision` before declaring a new decision ID.
+- Evaluate whether the solution crosses the ADR threshold below. Search existing pages with `archetipo wiki search --type decision` before declaring a new decision ID (Wiki gate on only).
 
 **As Ugo (Development):**
 
@@ -149,6 +151,8 @@ Silently perform all of the following — this is your chain of thought, not vis
 
 #### Architectural Decision Record threshold
 
+**When `data.wiki.enabled` is `false`, an ADR has no page to live in.** The threshold still matters, but a qualifying choice is recorded in full inside the technical solution — context, chosen option, viable alternatives, tradeoffs, verification intent — with no page ID, no `wiki_impact` entry, and no Wiki task. Skip the four numbered steps below and the entire **Wiki impact** section that follows them.
+
 Create or update an ADR when the plan chooses between at least two viable alternatives and the choice materially affects one or more of: persistent data model, security model, integration boundary, deployment topology, consistency or failure semantics, or a cross-cutting technical policy used by multiple capabilities. Routine implementation details, a local bug fix, following an existing established pattern, or a reversible refactor do not warrant an ADR.
 
 For every qualifying choice:
@@ -161,6 +165,8 @@ For every qualifying choice:
 If no choice crosses this threshold, keep decision IDs out of `wiki_impact.create` and state the reason briefly in the technical solution. Do not manufacture ADRs merely to grow the Wiki.
 
 #### Wiki impact
+
+**Skipped entirely when `data.wiki.enabled` is `false`:** emit no `wiki_impact` block and no Wiki task, and leave the `## Wiki Impact` heading out of the plan body. The validation rule that requires a task per declared page only fires on a declared contract, so a plan without the section is valid.
 
 `wiki affected` is bounded discovery, never a work contract. Deciding what goes into `wiki_impact` is this skill's job and **the only place in the workflow where it is done**: implementation fulfils the contract and acceptance approves it, so a page missed here is a page nobody looks at.
 

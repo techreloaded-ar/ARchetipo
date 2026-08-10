@@ -33,7 +33,7 @@ This section has priority over every other section in the skill.
 4. **Concurrency is conditional.** Run multiple workers concurrently only when tasks in the same wave are truly independent.
 5. **Stop only for explicit blockers.** Do not invent new reasons to ask the user.
 6. **Nothing asynchronous inside this phase.** No `name` on a sub-worker, no background commands, no messages to other agents. See **Asynchrony inside a worker** in `.archetipo/shared-runtime.md` for why all three fail the same way, and **Spawning a sub-worker** below for the form that works.
-7. **Connector operations are exposed by the CLI.** Every operation is a sub-command of `archetipo`. This skill uses `init`, `spec show`, `spec start`, `task done`, and `spec review`, plus connector-independent `wiki affected`, `wiki reset`, `wiki validate`, `wiki catalog`, and `wiki status`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code` per `archetipo-wiki/references/wiki-contract.md`. Never branch on connector type or message text. Connector operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
+7. **Connector operations are exposed by the CLI.** Every operation is a sub-command of `archetipo`. This skill uses `init`, `spec show`, `spec start`, `task done`, and `spec review`, plus connector-independent `wiki affected`, `wiki reset`, `wiki validate`, `wiki catalog`, and `wiki status` — the five `wiki` operations only when `data.wiki.enabled` is `true`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code` per `archetipo-wiki/references/wiki-contract.md`. Never branch on connector type or message text. Connector operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
 
 ## Autonomy Policy
 
@@ -152,7 +152,7 @@ Do not treat the absence of an explicit user request as a reason for in-context 
 
 4. Run `archetipo spec start {US-CODE}` from `data.project_root` to transition the spec to `{config.workflow.statuses.in_progress}`. The verb is idempotent — re-running on a spec already `IN PROGRESS` is a safe no-op.
    - Immediately after `spec start`, run `archetipo spec show {US-CODE}` again from `data.project_root`. Replace the in-memory `spec`, `tasks`, and `workdir` with this post-start envelope before reading or editing any code. This second read is mandatory because `spec start` may have just created the worktree, so the pre-start `data.workdir` can still be the project root.
-   - **Worktree workflow (optional):** when `worktree.enabled` is set in `.archetipo/config.yaml`, `spec start` also creates a dedicated git branch + worktree for the spec (forked dependency-aware from the base or a blocker branch). Apply the **Worktree Working Directory** rule from `.archetipo/shared-runtime.md`: do all implementation work — every file edit, test run, and optional local commit — under the post-start `data.workdir`, so the review diff (`git diff <fork_base>...<branch>`) stays isolated to this spec. When the spec has no worktree, `data.workdir` is the project root and nothing changes. Never branch on connector type; branch only on `data.workdir`. The final `archetipo spec review` command is the authoritative review gate: for worktree-backed specs it stages and commits any dirty or untracked worktree changes before moving the spec to review, so the branch diff is complete even if the agent did not commit manually.
+   - **Worktree workflow (optional):** when `data.worktree.enabled` is `true` in the `config show` envelope, `spec start` also creates a dedicated git branch + worktree for the spec (forked dependency-aware from the base or a blocker branch). Apply the **Worktree Working Directory** rule from `.archetipo/shared-runtime.md`: do all implementation work — every file edit, test run, and optional local commit — under the post-start `data.workdir`, so the review diff (`git diff <fork_base>...<branch>`) stays isolated to this spec. When the spec has no worktree, `data.workdir` is the project root and nothing changes. Never branch on connector type; branch only on `data.workdir`. The final `archetipo spec review` command is the authoritative review gate: for worktree-backed specs it stages and commits any dirty or untracked worktree changes before moving the spec to review, so the branch diff is complete even if the agent did not commit manually.
 
    - **Rework cycle:** when a spec returns from review via *request changes* it goes back to TODO with the feedback recorded in its body; after archetipo-plan re-plans it, its branch and worktree already exist. `spec start` is idempotent and reuses the existing worktree — it does not recreate anything. Resume implementation under the post-start `data.workdir` so the new Fix tasks build on the changes already committed there.
 5. Load the relevant project context under the post-start `data.workdir`: agent instructions (CLAUDE.md, AGENTS.md), project config, conventions, and existing patterns in the touched area.
@@ -261,6 +261,8 @@ After each wave, report briefly. See `./references/output-templates.md` for the 
 
 #### Wiki maintenance gate
 
+**This entire gate is skipped when `data.wiki.enabled` is `false`** (see **Wiki gate** in `.archetipo/shared-runtime.md`): run no `wiki` command, edit no page, and go straight to **Before code review**. A plan produced with the gate off carries no `Wiki Impact` contract, so there is nothing to fulfil; if an old plan still declares one, say so in the completion summary and leave the pages untouched rather than acting on it.
+
 After code and tests are stable, fulfill the plan's `Wiki Impact` contract before code review. It covers **required** pages only — the definition is in `.archetipo/shared-runtime.md`. A page that a changed file merely co-cites is not your business: leave its content, status, and review metadata alone, and never invoke `wiki reconfirm`.
 
 1. **Write the required pages.** Complete the dedicated task for every ID in `wiki_impact.update` and `wiki_impact.create`. Reset a reviewed page with `archetipo wiki --project-root {data.workdir} reset <page-id>` before editing it; create every planned page at its canonical ID path. Leave them `status: generated` with no `review` metadata.
@@ -322,7 +324,7 @@ Proceed to Phase 5 only when all of the following are true:
 
 - no `🔴 CRITICAL` findings remain open
 - the full required final test suite passes
-- the Wiki impact contract is complete, `wiki validate --profile bootstrap` passes, and `wiki status --require-generated <required-id>...` returns `ok: true` for every required page, when a Wiki exists
+- the Wiki impact contract is complete, `wiki validate --profile bootstrap` passes, and `wiki status --require-generated <required-id>...` returns `ok: true` for every required page, when a Wiki exists and `data.wiki.enabled` is `true` (with the gate off this criterion does not apply)
 - the spec can be moved to `{config.workflow.statuses.review}` via `archetipo spec review`
 
 `🟡 IMPROVEMENT` findings do not block completion by default.

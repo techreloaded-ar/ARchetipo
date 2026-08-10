@@ -141,14 +141,30 @@ func NormalizeTaskBodies(tasks []Task) {
 
 // SetupInfo is the output of initialize_connector. Fields populated depend on
 // the connector: filefs fills Paths + File; github fills Paths + Repo + Project.
+//
+// Wiki, Worktree and E2E are connector-independent: they mirror the optional
+// sections of .archetipo/config.yaml with defaults already applied, so a skill
+// reads every configured behaviour from this single envelope instead of parsing
+// the YAML file itself. A key omitted from config.yaml is reported here with its
+// resolved default value, never as an absent field.
 type SetupInfo struct {
 	Connector   string         `json:"connector" yaml:"connector"`
 	ProjectRoot string         `json:"project_root" yaml:"project_root"`
 	Paths       ConfigPaths    `json:"paths" yaml:"paths"`
 	Workflow    WorkflowConfig `json:"workflow" yaml:"workflow"`
+	Wiki        WikiInfo       `json:"wiki" yaml:"wiki"`
+	Worktree    WorktreeConfig `json:"worktree" yaml:"worktree"`
+	E2E         E2EConfig      `json:"e2e" yaml:"e2e"`
 	File        *FileConfig    `json:"file,omitempty" yaml:"file,omitempty"`
 	Repo        *RepoInfo      `json:"repo,omitempty" yaml:"repo,omitempty"`
 	Project     *ProjectInfo   `json:"project,omitempty" yaml:"project,omitempty"`
+}
+
+// WikiInfo is the resolved `wiki:` section as reported by initialize_connector.
+// Unlike WikiConfig it carries a plain bool: the default has already been
+// applied, so a consumer never has to reason about an absent key.
+type WikiInfo struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
 }
 
 // ConfigPaths mirrors the shared paths section of .archetipo/config.yaml.
@@ -424,6 +440,26 @@ type WorktreeConfig struct {
 	Base         string `json:"base" yaml:"base"`
 	Dir          string `json:"dir" yaml:"dir"`
 	BranchPrefix string `json:"branch_prefix" yaml:"branch_prefix"`
+}
+
+// WikiConfig mirrors the optional `wiki:` section of .archetipo/config.yaml.
+// Enabled gates the Living Wiki *inside the standard workflow*: when it is
+// false, the inception, spec, plan, implement and review skills neither read
+// nor maintain Wiki pages. It never gates the `archetipo wiki` sub-commands nor
+// an explicit invocation of the archetipo-wiki skill: those always run, so a
+// project with the automatic Wiki off can still build and query one by hand.
+//
+// Enabled is a pointer because the default is true: with a plain bool an
+// omitted key would be indistinguishable from `enabled: false`, which is the
+// exact opposite of the intended default. Use IsEnabled to read the resolved
+// value; Load applies the default so the pointer is non-nil after parsing.
+type WikiConfig struct {
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+}
+
+// IsEnabled reports the resolved gate. An absent key means enabled.
+func (w WikiConfig) IsEnabled() bool {
+	return w.Enabled == nil || *w.Enabled
 }
 
 // E2EConfig mirrors the optional `e2e:` section of .archetipo/config.yaml.

@@ -43,6 +43,9 @@ type Config struct {
 	File      domain.FileConfig     `yaml:"file" json:"file,omitempty"`
 	GitHub    GitHubConfig          `yaml:"github" json:"github,omitempty"`
 	Jira      JiraConfig            `yaml:"jira" json:"jira,omitempty"`
+	// Wiki is the optional `wiki:` section. Enabled gates the Living Wiki inside
+	// the standard workflow only (see domain.WikiConfig); on by default.
+	Wiki domain.WikiConfig `yaml:"wiki" json:"wiki,omitempty"`
 	// Worktree is the optional per-spec git worktree workflow. Disabled by
 	// default; when enabled, `archetipo spec start` creates a branch + worktree
 	// per spec so the review diff can be isolated and integrated with one merge.
@@ -116,6 +119,7 @@ func Default() Config {
 				Done:       string(domain.StatusDone),
 			},
 		},
+		Wiki: domain.WikiConfig{Enabled: boolPtr(true)},
 		Worktree: domain.WorktreeConfig{
 			Enabled:      false,
 			Base:         "main",
@@ -506,6 +510,11 @@ func (c *Config) applyDefaults() {
 	if c.Workflow.Statuses.Done == "" {
 		c.Workflow.Statuses.Done = d.Workflow.Statuses.Done
 	}
+	// The Wiki gate defaults to on, so an omitted key must resolve to true
+	// rather than to the zero value of the pointed-to bool.
+	if c.Wiki.Enabled == nil {
+		c.Wiki.Enabled = d.Wiki.Enabled
+	}
 	if c.Worktree.Base == "" {
 		c.Worktree.Base = d.Worktree.Base
 	}
@@ -600,6 +609,35 @@ func endsWithSep(s string) bool {
 	}
 	return s[len(s)-1] == filepath.Separator || s[len(s)-1] == '/'
 }
+
+// SetupBase returns the connector-independent part of the initialize_connector
+// envelope: everything a skill needs to know about how this project is
+// configured, regardless of where specs are stored. Each connector fills in its
+// own name and connector-specific sections on top of it.
+//
+// Every optional section is reported with its defaults already applied, so a
+// skill reads one envelope instead of parsing .archetipo/config.yaml — the only
+// way for it to tell an omitted key from an explicitly false one.
+func (c Config) SetupBase(connectorName string) domain.SetupInfo {
+	return domain.SetupInfo{
+		Connector:   connectorName,
+		ProjectRoot: c.ProjectRoot,
+		Paths:       c.Paths,
+		Workflow:    c.Workflow,
+		Wiki:        domain.WikiInfo{Enabled: c.WikiEnabled()},
+		Worktree:    c.Worktree,
+		E2E:         c.E2E,
+	}
+}
+
+// WikiEnabled reports whether the standard workflow maintains the Living Wiki.
+// It is a gate on the workflow skills only: the `archetipo wiki` sub-commands
+// run regardless of it.
+func (c Config) WikiEnabled() bool {
+	return c.Wiki.IsEnabled()
+}
+
+func boolPtr(v bool) *bool { return &v }
 
 // AbsPath joins p against the project root if p is relative.
 func (c Config) AbsPath(p string) string {

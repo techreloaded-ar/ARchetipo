@@ -26,6 +26,8 @@ Read `.archetipo/shared-runtime.md` for Language Policy, Assumptions and Questio
    - `archetipo wiki validate`
    - `archetipo wiki catalog`
 
+   The four `wiki` operations run only when the Wiki gate is on — see **Wiki gate** in `.archetipo/shared-runtime.md`.
+
 If the CLI cannot find `.archetipo/config.yaml`, it falls back to its built-in defaults for connector, paths, and workflow statuses.
 
 From the parsed `data` (SetupInfo), extract and keep available:
@@ -37,6 +39,7 @@ From the parsed `data` (SetupInfo), extract and keep available:
 - `paths.planning`
 - `paths.mockups`
 - `workflow.statuses`
+- `wiki.enabled`
 - connector-specific settings if present
 
 ## Context Discipline
@@ -66,6 +69,8 @@ Load context progressively and keep the working context lean:
 - If the user asks for backlog generation, epics, or specs from an existing PRD, that belongs to `archetipo-spec`
 
 ## Compile Discovery Into the Wiki
+
+**Skip this whole section when `data.wiki.enabled` is `false`.** The project maintains no automatic Wiki: run no `wiki` command, promise no Wiki in the PRD, and close the inception on the PRD alone. Mention once that the Wiki is disabled and that `/archetipo-wiki bootstrap` can still build one on demand.
 
 After the inception artifact validation gate passes, follow the installed `archetipo-wiki` bootstrap workflow: inspect available code first, build the DDD domain/context and code maps, then ingest optional project sources as `references/` concepts and reconcile implemented state with product intent. Run `archetipo wiki validate --profile bootstrap`, repair errors, then run `archetipo wiki catalog`; leave pages `generated` until explicit review.
 

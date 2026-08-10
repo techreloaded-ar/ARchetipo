@@ -125,12 +125,7 @@ func (c *Connector) InitializeConnector(ctx context.Context) (domain.SetupInfo, 
 	}
 	c.buildMaps()
 	c.ready = true
-	return domain.SetupInfo{
-		Connector:   config.ConnectorJira,
-		ProjectRoot: c.cfg.ProjectRoot,
-		Paths:       c.cfg.Paths,
-		Workflow:    c.cfg.Workflow,
-	}, nil
+	return c.cfg.SetupBase(config.ConnectorJira), nil
 }
 
 // loadCredentials resolves email + token. The token is environment-only.

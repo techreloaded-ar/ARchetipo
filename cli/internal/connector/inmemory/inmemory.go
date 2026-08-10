@@ -37,12 +37,7 @@ func New(cfg config.Config) *Connector {
 }
 
 func (c *Connector) InitializeConnector(ctx context.Context) (domain.SetupInfo, error) {
-	return domain.SetupInfo{
-		Connector:   "inmemory",
-		ProjectRoot: c.cfg.ProjectRoot,
-		Paths:       c.cfg.Paths,
-		Workflow:    c.cfg.Workflow,
-	}, nil
+	return c.cfg.SetupBase("inmemory"), nil
 }
 
 func (c *Connector) FetchBacklogItems(ctx context.Context, statusFilter domain.Status) ([]domain.Spec, error) {

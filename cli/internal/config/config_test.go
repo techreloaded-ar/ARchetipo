@@ -137,6 +137,91 @@ func TestLoad_E2ERecordDemoVideoDefaultsFalse(t *testing.T) {
 	}
 }
 
+// The Wiki gate is the one boolean in the config whose default is true, so the
+// three states a YAML file can express — key absent, explicitly true,
+// explicitly false — must resolve to enabled, enabled, disabled.
+func TestLoad_WikiEnabled(t *testing.T) {
+	for name, tc := range map[string]struct {
+		yaml string
+		want bool
+	}{
+		"section absent":  {"connector: file\n", true},
+		"section empty":   {"connector: file\nwiki:\n", true},
+		"explicitly true": {"connector: file\nwiki:\n  enabled: true\n", true},
+		"explicitly off":  {"connector: file\nwiki:\n  enabled: false\n", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+			must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte(tc.yaml), 0o644))
+			c, err := Load(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := c.WikiEnabled(); got != tc.want {
+				t.Errorf("WikiEnabled() = %v, want %v for:\n%s", got, tc.want, tc.yaml)
+			}
+			if c.Wiki.Enabled == nil {
+				t.Error("Load must resolve the pointer so callers never see an unset gate")
+			}
+		})
+	}
+}
+
+// A disabled gate must survive a render/parse round-trip: RenderFull applies
+// defaults, and a default applied to the wrong field would silently re-enable
+// the Wiki of every project that saves its config from the viewer.
+func TestRenderFullPreservesDisabledWiki(t *testing.T) {
+	root := t.TempDir()
+	c := Default()
+	c.ProjectRoot = root
+	c.Wiki.Enabled = boolPtr(false)
+	out, err := RenderFull(c)
+	must(t, err)
+	if !strings.Contains(string(out), "enabled: false") {
+		t.Fatalf("rendered config lost the disabled gate:\n%s", out)
+	}
+	reparsed, err := ValidateRaw(root, out)
+	must(t, err)
+	if reparsed.WikiEnabled() {
+		t.Errorf("round-trip re-enabled the Wiki:\n%s", out)
+	}
+}
+
+// SetupBase is what `config show` returns, and it is the only channel a skill
+// has for reading the optional sections: a key missing here sends the skill
+// back to parsing config.yaml by hand.
+func TestSetupBaseReportsEveryOptionalSection(t *testing.T) {
+	c := Default()
+	c.ProjectRoot = "/tmp/project"
+	c.Wiki.Enabled = boolPtr(false)
+	c.Worktree.Enabled = true
+	c.E2E.RecordDemoVideo = true
+
+	setup := c.SetupBase(ConnectorFile)
+	if setup.Wiki.Enabled {
+		t.Error("setup.wiki.enabled must mirror the disabled gate")
+	}
+	if !setup.Worktree.Enabled || setup.Worktree.Base != "main" {
+		t.Errorf("setup.worktree = %+v", setup.Worktree)
+	}
+	if !setup.E2E.RecordDemoVideo {
+		t.Error("setup.e2e.record_demo_video must mirror the config")
+	}
+	if setup.Connector != ConnectorFile || setup.ProjectRoot != "/tmp/project" || setup.Paths.Wiki != "docs/wiki/" {
+		t.Errorf("setup base fields = %+v", setup)
+	}
+}
+
+// An omitted section must report enabled, not the zero value of the bool the
+// pointer points at.
+func TestSetupBaseReportsWikiEnabledWhenSectionOmitted(t *testing.T) {
+	setup := Config{}.SetupBase(ConnectorFile)
+	if !setup.Wiki.Enabled {
+		t.Error("an unset wiki section must report enabled")
+	}
+}
+
 func TestLoadFromSubdirectoryWalksUp(t *testing.T) {
 	root := t.TempDir()
 	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))

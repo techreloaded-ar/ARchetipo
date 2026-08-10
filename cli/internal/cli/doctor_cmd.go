@@ -152,6 +152,13 @@ func checkWiki(cfg config.Config) doctorCheck {
 		root = filepath.Join(cfg.ProjectRoot, filepath.FromSlash(root))
 	}
 	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+		// With the workflow gate off, no Wiki is the configured state, not a
+		// gap: the project opted out of maintaining one automatically. A Wiki
+		// that exists is still validated below, because `archetipo wiki` and an
+		// explicit /archetipo-wiki invocation stay available either way.
+		if !cfg.WikiEnabled() {
+			return doctorCheck{name: "project Wiki", skipped: true, detail: "skipped (wiki.enabled: false)"}
+		}
 		return doctorCheck{name: "project Wiki", detail: "not initialized", hint: "run `/archetipo-wiki bootstrap` or `archetipo wiki init`"}
 	} else if err != nil {
 		return doctorCheck{name: "project Wiki", detail: err.Error(), hint: "check paths.wiki and filesystem permissions"}

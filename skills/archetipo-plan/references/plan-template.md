@@ -95,6 +95,7 @@ This is an acceptance map, not a task summary. Every criterion must have evidenc
 
 ---
 
+{IF_WIKI_ENABLED}
 ## Wiki Impact
 
 ```yaml
@@ -108,6 +109,9 @@ Use empty arrays when no impact is expected. This block is the reviewable docume
 New domain pages use `domains/<slug>`. New architectural decisions use `decisions/<slug>` and must follow the `type: decision` contract in the Wiki skill.
 
 Record one line of reasoning per candidate page, never one justification covering several. See **Wiki impact** in the skill for how the decision is made.
+{/IF_WIKI_ENABLED}
+
+Emit the whole `## Wiki Impact` section only when `data.wiki.enabled` is `true`. With the Wiki gate off the section — heading included — is absent from the plan body, and architectural decisions are recorded in the technical solution instead.
 
 ---
 
@@ -131,7 +135,7 @@ _Plan generated via ARchetipo Planning — {DATE}_
 > - Test tasks assert user-visible or contract outcomes, not proxies hidden behind mocks.
 > - Implementation order: follow the project's natural dependency chain — lower layers first, tests interleaved (not all at end)
 > - The final task is a Test gate that depends on all work it verifies and runs focused acceptance checks plus relevant regression/build/type/lint checks. After the gate itself is marked `DONE`, reload the spec from `data.project_root` and require every task to be `DONE` before `spec review`.
-> - Wiki page tasks: a task that edits an existing page has `archetipo wiki --project-root {data.workdir} reset <page-id>` as the first entry of `## Steps`, and a `## Done` entry requiring the page to report `state: generated` in `archetipo wiki status`.
+> - Wiki page tasks: a task that edits an existing page has `archetipo wiki --project-root {data.workdir} reset <page-id>` as the first entry of `## Steps`, and a `## Done` entry requiring the page to report `state: generated` in `archetipo wiki status`. With the Wiki gate off there are no Wiki page tasks at all.
 > - Frontend tasks when mockups exist: If `mockup_generated = true`, include at least one frontend implementation task (type: Impl) that explicitly references the mockups directory `{config.paths.mockups}/{US-CODE}/`. Omitting frontend tasks when `mockup_generated = true` is a plan error — do not proceed without them.
 > - Task dependencies must only reference tasks within the same spec plan. Cross-spec task dependencies are not supported — use spec-level `Blocked by` for cross-spec sequencing
 > - If the `Blocked by` field is absent from the spec (older backlogs), treat it as `-` (no dependencies)

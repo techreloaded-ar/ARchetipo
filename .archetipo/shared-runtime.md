@@ -143,6 +143,14 @@ ARchetipo artifacts must be usable by smaller or lower-cost models during later 
 
 Wiki commands act on the code of a spec, so they follow the **Worktree Working Directory** rule above: run them from `data.project_root` and name the target explicitly with `wiki --project-root {data.workdir}`.
 
+### Wiki gate
+
+The Living Wiki is optional. `archetipo config show` reports the gate as `data.wiki.enabled` — it is `true` unless the project set `wiki.enabled: false` in `.archetipo/config.yaml`, and it is the only place to read it: an absent key means enabled, so never infer the gate by looking for the config file, for `paths.wiki`, or for an existing Wiki directory.
+
+When `data.wiki.enabled` is `false`, the standard workflow skills — `archetipo-inception`, `archetipo-spec`, `archetipo-plan`, `archetipo-implement`, `archetipo-review`, and every worker `archetipo-autopilot` runs — perform **no Wiki work at all**: they run no `archetipo wiki` command, read no Wiki page as a source, write no `wiki_impact` contract, plan no Wiki task, and leave any existing pages and their review state untouched. Wiki absence is then the configured state, never a gap to report and never a blocker on a verdict.
+
+The gate never applies to the Wiki itself. `archetipo wiki ...` invoked by the user and the `archetipo-wiki` skill invoked explicitly always run in full, gate or no gate: a project with the automatic Wiki off can still bootstrap, query, refresh, and lint one on demand. Only the automatic maintenance inside the workflow is switched off.
+
 ### Required pages
 
 A Wiki page is **required** for a spec when either holds:

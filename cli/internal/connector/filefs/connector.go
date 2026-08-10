@@ -55,13 +55,9 @@ var mockupSpecCodeRE = regexp.MustCompile(`^(US|EP)-\d+$`)
 
 func (c *Connector) InitializeConnector(ctx context.Context) (domain.SetupInfo, error) {
 	file := c.cfg.File
-	return domain.SetupInfo{
-		Connector:   config.ConnectorFile,
-		ProjectRoot: c.cfg.ProjectRoot,
-		Paths:       c.cfg.Paths,
-		Workflow:    c.cfg.Workflow,
-		File:        &file,
-	}, nil
+	setup := c.cfg.SetupBase(config.ConnectorFile)
+	setup.File = &file
+	return setup, nil
 }
 
 func (c *Connector) FetchBacklogItems(ctx context.Context, statusFilter domain.Status) ([]domain.Spec, error) {

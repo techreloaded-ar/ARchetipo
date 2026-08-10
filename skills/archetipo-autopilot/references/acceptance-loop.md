@@ -24,8 +24,8 @@ Expected terminal state: {config.workflow.statuses.done} (accepted),
 {config.workflow.statuses.review} (left in review)
 
 Load the installed archetipo-review skill and execute it for {US-CODE} in its
-Autonomous acceptance mode. Read the spec, the increment, the Wiki dossier, and
-the current repository state yourself. Do not assume any knowledge from planning,
+Autonomous acceptance mode. Read the spec, the increment, the Wiki dossier when
+the Wiki gate is on, and the current repository state yourself. Do not assume any knowledge from planning,
 implementation, or earlier specs. Decide and execute the verdict in this worker,
 ask no questions, and end your output with the ARCHETIPO_REVIEW_VERDICT block.
 ```

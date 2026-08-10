@@ -250,10 +250,15 @@ connector: file   # file | github
 
 paths:
   prd: docs/PRD.md
+  wiki: docs/wiki/
   backlog: .archetipo/backlog.yaml   # solo connector file
   planning: .archetipo/plans/
   mockups: docs/mockups/
   test_results: docs/test-results/
+
+# Wiki viva, attiva di default
+wiki:
+  enabled: true
 
 workflow:
   statuses:
@@ -267,6 +272,8 @@ github:
   # owner: auto-detected from repo
   # project_number: auto-detected from repo
 ```
+
+**`wiki.enabled` governa la Wiki automatica, non la Wiki.** Con `false` il workflow standard — inception, spec, plan, implement, review — non legge né mantiene pagine: i piani non producono un contratto `Wiki Impact` e l'accettazione non approva pagine. I comandi `archetipo wiki ...` e l'invocazione esplicita di `/archetipo-wiki` continuano a funzionare come prima, quindi la Wiki resta disponibile su richiesta. `archetipo init --no-wiki` crea un progetto con il gate già spento; la chiave si cambia in qualsiasi momento qui o dal tab config di `archetipo view`.
 
 ---
 

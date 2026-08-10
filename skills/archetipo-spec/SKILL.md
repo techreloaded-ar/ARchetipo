@@ -58,7 +58,7 @@ In this mode:
    - `archetipo spec list`
    - `archetipo validate spec --file <path|->`
    - `archetipo spec add --file <path|->`
-   - `archetipo wiki search [query]`
+   - `archetipo wiki search [query]` (only when the Wiki gate is on)
 
 Extract and keep available from `data`:
 - `connector`
@@ -68,10 +68,13 @@ Extract and keep available from `data`:
 - `paths.planning`
 - `paths.mockups`
 - `workflow.statuses`
+- `wiki.enabled`
 
 ## Backlog Discovery
 
 Before generating a spec, read `{config.paths.wiki}/index.md`, run `archetipo wiki search` with compact terms from the request, and load only selected pages. Verify implementation-specific claims against code under `data.project_root`. Record the IDs of pages used in the spec body under a compact `## Wiki context` section. Fall back to PRD discovery only when the Wiki is missing or does not cover the product context, and state that gap.
+
+**When `data.wiki.enabled` is `false`** (see **Wiki gate** in `.archetipo/shared-runtime.md`), skip the paragraph above entirely: run no `wiki search`, read no Wiki page, and write no `## Wiki context` section. Go straight to PRD discovery and do **not** report the absent Wiki as a gap — it is the configured state, not a missing input.
 
 Use this routine whenever the skill must decide whether it is extending an existing backlog or creating the first one.
 
