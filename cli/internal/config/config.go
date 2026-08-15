@@ -56,7 +56,8 @@ type Config struct {
 	// Git is the optional `git:` section. AutoCommit gates the per-spec commit
 	// created by `archetipo spec review` when the worktree workflow is off; off
 	// by default (see domain.GitConfig).
-	Git domain.GitConfig `yaml:"git" json:"git,omitempty"`
+	Git       domain.GitConfig `yaml:"git" json:"git,omitempty"`
+	Execution ExecutionConfig  `yaml:"execution,omitempty" json:"execution,omitempty"`
 	// ProjectRoot is the absolute path of the directory that contains
 	// .archetipo/. Set by Load; not present in the YAML file.
 	ProjectRoot string `yaml:"-" json:"project_root"`
@@ -65,6 +66,15 @@ type Config struct {
 	// never serialized to the config file nor to the viewer JSON; commands
 	// surface it as the optional `warnings[]` field of the success envelope.
 	ResolutionNotices []string `yaml:"-" json:"-"`
+}
+
+type ExecutionConfig struct {
+	DefaultProvider *DefaultProviderConfig `yaml:"default_provider,omitempty" json:"default_provider,omitempty"`
+}
+
+type DefaultProviderConfig struct {
+	ID     string         `yaml:"id" json:"id"`
+	Config map[string]any `yaml:"config,omitempty" json:"config,omitempty"`
 }
 
 // GitHubConfig holds connector-specific overrides. Owner and project number
@@ -379,6 +389,51 @@ func SaveRaw(root string, raw []byte) (backupPath string, err error) {
 		return backupPath, fmt.Errorf("replacing %s: %w", path, err)
 	}
 	return backupPath, nil
+}
+
+// UpdateDefaultProvider replaces only execution.default_provider while
+// preserving comments, ordering, and unrelated config sections.
+func UpdateDefaultProvider(root string, selection DefaultProviderConfig) (string, error) {
+	raw, exists, _, err := ReadRaw(root)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		cfg := Default()
+		cfg.Execution.DefaultProvider = &selection
+		candidate, renderErr := RenderFull(cfg)
+		if renderErr != nil {
+			return "", renderErr
+		}
+		return SaveRaw(root, candidate)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+		return "", fmt.Errorf("parsing config: %w", err)
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("config root is not a mapping")
+	}
+	executionNode := findOrCreateChildMapping(doc.Content[0], "execution")
+	if executionNode == nil {
+		executionNode = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		doc.Content[0].Content = append(doc.Content[0].Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "execution"}, executionNode)
+	}
+	var selectionNode yaml.Node
+	encoded, err := yaml.Marshal(selection)
+	if err != nil {
+		return "", fmt.Errorf("encoding default provider: %w", err)
+	}
+	if err := yaml.Unmarshal(encoded, &selectionNode); err != nil || len(selectionNode.Content) == 0 {
+		return "", fmt.Errorf("encoding default provider: %w", err)
+	}
+	setMappingChild(executionNode, "default_provider", selectionNode.Content[0])
+	candidate, err := yaml.Marshal(&doc)
+	if err != nil {
+		return "", fmt.Errorf("encoding config: %w", err)
+	}
+	return SaveRaw(root, candidate)
 }
 
 func parseRaw(root, cfgPath string, raw []byte) (Config, error) {

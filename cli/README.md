@@ -25,6 +25,20 @@ archetipo validate plan US-001 --file plan.yaml
 
 Validation returns a normal JSON success envelope with `kind: "validation_result"` and `data.ok` set to `true` or `false` when validation runs successfully. Structural issues are reported in `data.findings`; error envelopes are reserved for process failures, so skills can repair artifacts before calling `prd write`, `spec add`, or `spec plan`.
 
+Execution providers use a separate, injectable boundary from backlog connectors:
+
+```bash
+archetipo execution provider set-default <id> --file provider.yaml
+archetipo execution provider show-default
+archetipo execution run US-001 plan
+archetipo execution run US-001 plan --provider <id>
+archetipo execution show <execution-id>
+```
+
+`provider.yaml` is a JSON or YAML mapping of non-secret settings. The selected ID and mapping are stored under `execution.default_provider`; tokens and credentials must come from the environment or another secret mechanism. The provider owns validation, which runs before the atomic config update and again before dispatch. Without `--provider`, `run` uses the workspace default; an explicit override takes precedence and receives an empty configuration.
+
+Each accepted run creates one JSON record under `.archetipo/executions/`, then updates that record to `SUCCEEDED` with an opaque JSON result or `FAILED` with a structured provider error. A recorded provider failure is a domain outcome and still returns exit 0 with `kind: "execution"`. Unknown providers, invalid configuration fields, and providers missing `spec.plan` fail closed before dispatch and record creation. The directory is ignored runtime state, and this foundation intentionally contains no production provider.
+
 Living project knowledge is managed locally and independently of the configured connector:
 
 ```bash

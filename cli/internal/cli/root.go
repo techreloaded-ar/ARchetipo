@@ -11,6 +11,7 @@ import (
 
 	// Concrete connectors register themselves via init().
 	_ "github.com/techreloaded-ar/ARchetipo/cli/internal/connector/builtin"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/version"
 )
@@ -52,6 +53,17 @@ func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func newRootCmd(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
+	return newRootCmdWithExecution(stdin, stdout, stderr, executionDependencies{
+		registry: execution.NewRegistry(),
+		newID:    execution.RandomID,
+		now:      time.Now,
+		storeFactory: func(projectRoot string) (execution.Store, error) {
+			return execution.NewFileStore(projectRoot)
+		},
+	})
+}
+
+func newRootCmdWithExecution(stdin io.Reader, stdout, stderr io.Writer, deps executionDependencies) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "archetipo",
 		Short:         "ARchetipo connector CLI",
@@ -101,6 +113,7 @@ func newRootCmd(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 		newPRDCmd(s),
 		newSpecCmd(s),
 		newE2ECmd(s),
+		newExecutionCmd(s, deps),
 		newMetricsCmd(s),
 		newTaskCmd(s),
 		newValidateCmd(s),

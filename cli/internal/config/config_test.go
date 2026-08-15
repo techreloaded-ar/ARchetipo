@@ -726,6 +726,66 @@ func TestSaveRawCreatesBackupOnOverwrite(t *testing.T) {
 	}
 }
 
+func TestDefaultProviderRoundTripAndAtomicUpdate(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	path := filepath.Join(root, RelativePath)
+	original := "# workspace comment\nconnector: file\ncustom:\n  keep: true\n"
+	must(t, os.WriteFile(path, []byte(original), 0o644))
+	selection := DefaultProviderConfig{ID: "fake-valid", Config: map[string]any{
+		"endpoint": "https://runner.test",
+		"regions":  []any{"eu", "us"},
+		"nested":   map[string]any{"retries": 2},
+	}}
+	backup, err := UpdateDefaultProvider(root, selection)
+	must(t, err)
+	if backup == "" {
+		t.Fatal("expected backup for existing config")
+	}
+	backupRaw, err := os.ReadFile(backup)
+	must(t, err)
+	if string(backupRaw) != original {
+		t.Fatalf("backup mismatch: %q", string(backupRaw))
+	}
+	updated, err := os.ReadFile(path)
+	must(t, err)
+	if !strings.Contains(string(updated), "# workspace comment") || !strings.Contains(string(updated), "custom:\n    keep: true") {
+		t.Fatalf("unrelated content was not preserved:\n%s", updated)
+	}
+	cfg, err := LoadExact(root)
+	must(t, err)
+	if cfg.Execution.DefaultProvider == nil || cfg.Execution.DefaultProvider.ID != "fake-valid" {
+		t.Fatalf("default provider not loaded: %#v", cfg.Execution.DefaultProvider)
+	}
+	if cfg.Execution.DefaultProvider.Config["endpoint"] != "https://runner.test" {
+		t.Fatalf("provider config mismatch: %#v", cfg.Execution.DefaultProvider.Config)
+	}
+}
+
+func TestUpdateDefaultProviderRejectsInvalidDocumentWithoutChangingIt(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	path := filepath.Join(root, RelativePath)
+	original := "- not\n- a mapping\n"
+	must(t, os.WriteFile(path, []byte(original), 0o644))
+	if _, err := UpdateDefaultProvider(root, DefaultProviderConfig{ID: "fake"}); err == nil {
+		t.Fatal("expected non-mapping document rejection")
+	}
+	got, err := os.ReadFile(path)
+	must(t, err)
+	if string(got) != original {
+		t.Fatalf("invalid update changed file: %q", got)
+	}
+}
+
+func TestRenderFullDoesNotInventDefaultProvider(t *testing.T) {
+	out, err := RenderFull(Default())
+	must(t, err)
+	if strings.Contains(string(out), "default_provider") {
+		t.Fatalf("render invented a default provider:\n%s", out)
+	}
+}
+
 // seedNestedWorktree builds the layout that made a real autopilot run read
 // stale state: a parent checkout plus a per-spec git worktree carrying its own
 // committed copy of .archetipo/config.yaml, deliberately pointing at different

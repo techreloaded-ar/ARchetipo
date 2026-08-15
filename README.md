@@ -183,12 +183,18 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 | `archetipo spec update US-001 --file patch.yaml` | Applies a partial patch (title, priority, points, scope, blocked_by, body, epic, rework) to an existing spec. All connectors supported. |
 | `archetipo spec integrate US-001` | Merges a reviewed spec's worktree branch into base, cleans up, and marks it `DONE` (worktree workflow). |
 | `archetipo task done US-001 TASK-01` | Marks one task as completed. |
+| `archetipo execution provider set-default <id> --file provider.yaml` | Validates and atomically saves the workspace default provider and its non-secret configuration. |
+| `archetipo execution provider show-default` | Reads the configured default provider without exposing environment credentials. |
+| `archetipo execution run US-001 plan [--provider <id>]` | Creates one durable execution and dispatches `plan`; an explicit provider overrides the workspace default. |
+| `archetipo execution show <execution-id>` | Reads the persisted success result or provider error for an execution. |
 | `archetipo metrics` | Reports backlog progress: totals, completion, per-epic breakdown, WIP, rework, blocked specs, and average cycle/lead time from the recorded status history. |
 | `archetipo spec move US-001 --to review` | Reorders or moves a spec across workflow columns. |
 | `archetipo validate spec --file specs.yaml` | Validates a generated spec payload without persisting it. |
 | `archetipo validate plan US-001 --file plan.yaml` | Validates a generated plan payload without changing the spec status. |
 
 The CLI reads `.archetipo/config.yaml` from the project to choose the active connector and artifact paths. All `archetipo validate ...` commands return `kind: "validation_result"` on stdout with `data.ok` set to `true` or `false`; error envelopes are reserved for process failures.
+
+Execution records are local runtime state under `.archetipo/executions/` and are ignored by Git. The optional `execution.default_provider` section stores a registered provider ID and non-secret configuration; tokens and credentials must remain outside `.archetipo/config.yaml`. `set-default` validates before an atomic update, while a run without `--provider` validates the saved configuration again before dispatch. An explicit `--provider` always wins and receives an empty configuration. This repository intentionally ships without a production provider: integrations register providers in process, while tests use injected fakes. Both successful dispatches and recorded provider failures return a `kind: "execution"` envelope; provider lookup, configuration, and capability failures return an error envelope before any record is created.
 
 ### Hybrid model workflow
 

@@ -179,12 +179,18 @@ ARchetipo usa una CLI deterministica scritta in Go, `archetipo`, per persistenza
 | `archetipo spec update US-001 --file patch.yaml` | Applica una patch parziale (title, priority, points, scope, blocked_by, body, epic, rework) a una spec esistente. Supportato su tutti i connector. |
 | `archetipo spec integrate US-001` | Fonde il branch worktree di una spec approvata nel base, pulisce e la marca `DONE` (workflow worktree). |
 | `archetipo task done US-001 TASK-01` | Marca un task come completato. |
+| `archetipo execution provider set-default <id> --file provider.yaml` | Valida e salva atomicamente il provider predefinito del workspace e la sua configurazione non segreta. |
+| `archetipo execution provider show-default` | Rilegge il provider predefinito senza esporre credenziali d'ambiente. |
+| `archetipo execution run US-001 plan [--provider <id>]` | Crea una sola execution durevole e invia `plan`; un provider esplicito prevale sul default del workspace. |
+| `archetipo execution show <execution-id>` | Rilegge il risultato persistito o l'errore del provider per una execution. |
 | `archetipo metrics` | Riporta l'avanzamento del backlog: totali, completamento, dettaglio per epic, WIP, rework, spec bloccate e cycle/lead time medi dalla history degli stati. |
 | `archetipo spec move US-001 --to review` | Riordina o sposta una spec tra colonne del workflow. |
 | `archetipo validate spec --file specs.yaml` | Valida un payload di spec generato senza salvarlo. |
 | `archetipo validate plan US-001 --file plan.yaml` | Valida un payload di piano senza cambiare lo stato della spec. |
 
 La CLI legge `.archetipo/config.yaml` dal progetto per scegliere connector attivo e percorsi degli artefatti. Tutti i comandi `archetipo validate ...` restituiscono `kind: "validation_result"` su stdout con `data.ok` a `true` o `false`; gli error envelope restano riservati agli errori di processo.
+
+I record delle execution sono stato runtime locale sotto `.archetipo/executions/` e sono ignorati da Git. La sezione opzionale `execution.default_provider` conserva l'ID di un provider registrato e una configurazione non segreta; token e credenziali devono restare fuori da `.archetipo/config.yaml`. `set-default` valida prima dell'aggiornamento atomico, mentre una run senza `--provider` valida nuovamente la configurazione salvata prima del dispatch. Un `--provider` esplicito prevale sempre e riceve una configurazione vuota. Questa foundation non include intenzionalmente un provider di produzione: le integrazioni registrano provider in-process, mentre i test usano fake iniettati. Sia i dispatch riusciti sia i fallimenti del provider già registrati restituiscono un envelope `kind: "execution"`; errori di lookup, configurazione o capability vengono rifiutati prima di creare record.
 
 Per sviluppo locale della CLI senza pubblicare pacchetti npm, vedi [`guides/dev-local-cli.md`](guides/dev-local-cli.md).
 
