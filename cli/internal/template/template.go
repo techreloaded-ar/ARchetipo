@@ -33,15 +33,52 @@ const (
 // local builds, and would therefore record something that is not the process.
 const fabbricaVersion = "1.0.0"
 
+// Action is a step the process offers on a spec. ID is stable and is what a
+// program keys on; Label is what a person reads; Skill is the capability that
+// realizes it; Statuses are the workflow statuses in which it is admissible.
+type Action struct {
+	ID       string          `json:"id"`
+	Label    string          `json:"label"`
+	Skill    string          `json:"skill"`
+	Statuses []domain.Status `json:"statuses"`
+}
+
+// clone detaches the mutable slice so a caller that edits Statuses cannot reach
+// back into the registry.
+func (a Action) clone() Action {
+	statuses := make([]domain.Status, len(a.Statuses))
+	copy(statuses, a.Statuses)
+	a.Statuses = statuses
+	return a
+}
+
 // Template is a declared development process. Skills are the skill directories
-// a workspace receives at initialization; Statuses are the workflow labels that
-// process works with.
+// a workspace receives at initialization; Actions are the steps the process
+// offers on a spec and the statuses that admit them; Statuses are the workflow
+// labels that process works with.
 type Template struct {
 	ID       string              `json:"id"`
 	Version  string              `json:"version"`
 	Label    string              `json:"label"`
 	Skills   []string            `json:"skills"`
+	Actions  []Action            `json:"actions"`
 	Statuses domain.StatusLabels `json:"statuses"`
+}
+
+// ActionsFor returns the actions the process admits in status, in declaration
+// order. The result is always non-nil: a status with no admissible action is
+// an empty list, never an absence and never a failure.
+func (t Template) ActionsFor(status domain.Status) []Action {
+	out := make([]Action, 0, len(t.Actions))
+	for _, action := range t.Actions {
+		for _, candidate := range action.Statuses {
+			if candidate == status {
+				out = append(out, action.clone())
+				break
+			}
+		}
+	}
+	return out
 }
 
 // RegistryError is the typed failure of registry operations. Callers branch on
@@ -114,12 +151,17 @@ func (r *Registry) IDs() []string {
 	return out
 }
 
-// clone detaches the mutable slice so a caller that edits Skills cannot reach
-// back into the registry.
+// clone detaches the mutable slices so a caller that edits Skills or Actions
+// cannot reach back into the registry.
 func (t Template) clone() Template {
 	skills := make([]string, len(t.Skills))
 	copy(skills, t.Skills)
 	t.Skills = skills
+	actions := make([]Action, len(t.Actions))
+	for i, action := range t.Actions {
+		actions[i] = action.clone()
+	}
+	t.Actions = actions
 	return t
 }
 
@@ -142,6 +184,26 @@ func Builtin() *Registry {
 			"archetipo-review",
 			"archetipo-spec",
 			"archetipo-wiki",
+		},
+		Actions: []Action{
+			{
+				ID:       "plan",
+				Label:    "Pianifica",
+				Skill:    "archetipo-plan",
+				Statuses: []domain.Status{domain.StatusTodo},
+			},
+			{
+				ID:       "implement",
+				Label:    "Implementa",
+				Skill:    "archetipo-implement",
+				Statuses: []domain.Status{domain.StatusPlanned, domain.StatusInProgress},
+			},
+			{
+				ID:       "review",
+				Label:    "Rivedi",
+				Skill:    "archetipo-review",
+				Statuses: []domain.Status{domain.StatusReview},
+			},
 		},
 		Statuses: domain.StatusLabels{
 			Todo:       string(domain.StatusTodo),

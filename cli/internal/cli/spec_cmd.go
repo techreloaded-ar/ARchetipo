@@ -16,24 +16,29 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
-// newSpecCmd builds `archetipo spec ...` with eight leaves:
+// newSpecCmd builds `archetipo spec ...` with twelve leaves:
 //
 //	spec add    -> idempotent backlog create-or-append (stdin: {"specs":[...]})
 //	spec show   -> read spec body + tasks by code
+//	spec actions -> read the actions the workspace Template admits for the spec's current status
 //	spec next   -> auto-pick first eligible spec by --status (priority+code)
 //	spec list   -> aggregated read: items (optionally filtered) + summary metadata
 //	spec plan   -> save plan + transition TODO → PLANNED (stdin: {"plan_body","tasks"})
 //	spec start  -> transition PLANNED → IN PROGRESS (idempotent)
 //	spec review -> transition IN PROGRESS → REVIEW; --file (optional) is a closing comment
 //	spec request-changes -> REVIEW → TODO with rework feedback appended to the body (stdin: {"comments":[...]})
+//	spec integrate -> merge the spec's worktree branch into base, clean up and transition to DONE
 //	spec move   -> reposition a spec within the board or across workflow columns
+//	spec update -> apply a partial patch to an existing spec (--file, a domain.SpecUpdate)
 func newSpecCmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "spec", Short: "Spec operations (user story is the spec body)"}
 	root.AddCommand(
 		newSpecAddCmd(s),
 		newSpecShowCmd(s),
+		newSpecActionsCmd(s),
 		newSpecNextCmd(s),
 		newSpecListCmd(s),
 		newSpecPlanCmd(s),
@@ -157,6 +162,56 @@ func newSpecShowCmd(s streams) *cobra.Command {
 					return nil, err
 				}
 				return loadSpecWithTasks(ctx, cfg, c, st)
+			})
+		},
+	}
+}
+
+// newSpecActionsCmd builds `archetipo spec actions US-XXX`.
+//
+// The reported version is the one of the *resolved* Template, not the pair
+// persisted in .archetipo/config.yaml: the actions come from the definition
+// resolved in-process, so reporting the persisted revision next to them would
+// attribute them to something they do not derive from. The persisted selection
+// stays exposed by `config show`, which is where that datum belongs; the
+// accepted decision rules out any reconciliation between the two.
+func newSpecActionsCmd(s streams) *cobra.Command {
+	return &cobra.Command{
+		Use:   "actions US-XXX",
+		Short: "List the actions the workspace Template admits for the spec's current status",
+		Long: "Reads the spec's current status and returns the actions the workspace process " +
+			"Template admits in that status, each with a stable id, a user-facing label and the " +
+			"skill that realizes it. A status with no admissible action returns an empty list, not an error.",
+		// MaximumNArgs, not ExactArgs: a missing code is an input error of this
+		// command, reported as E_INVALID_INPUT with a hint, exactly like `spec
+		// show`. Letting cobra reject it would surface E_INTERNAL instead.
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
+			}
+			ref := strings.TrimSpace(args[0])
+			if ref == "" {
+				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
+			}
+			return withConnectorCfg(cmd, s, "spec_actions", func(ctx context.Context, cfg config.Config, c connector.Connector) (any, error) {
+				spec, err := c.ReadSpecDetail(ctx, ref)
+				if err != nil {
+					return nil, err
+				}
+				tpl, err := template.Resolve(cfg.Template.ID)
+				if err != nil {
+					return nil, iox.NewInvalidInput(
+						"unknown template: "+cfg.Template.ID,
+						"valid: "+strings.Join(template.Builtin().IDs(), ", "),
+						err,
+					)
+				}
+				return map[string]any{
+					"spec":     map[string]any{"code": spec.Code, "status": spec.Status},
+					"template": map[string]any{"id": tpl.ID, "version": tpl.Version},
+					"actions":  tpl.ActionsFor(spec.Status),
+				}, nil
 			})
 		},
 	}

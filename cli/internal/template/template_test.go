@@ -22,6 +22,41 @@ var processSkills = []string{
 	"archetipo-wiki",
 }
 
+// processActions is written out in full for the same reason as processSkills:
+// the actions are the contract the process offers on a spec, so adding, removing
+// or re-scoping one must break this test explicitly rather than silently change
+// what a workspace is told it can do.
+var processActions = []Action{
+	{
+		ID:       "plan",
+		Label:    "Pianifica",
+		Skill:    "archetipo-plan",
+		Statuses: []domain.Status{domain.StatusTodo},
+	},
+	{
+		ID:       "implement",
+		Label:    "Implementa",
+		Skill:    "archetipo-implement",
+		Statuses: []domain.Status{domain.StatusPlanned, domain.StatusInProgress},
+	},
+	{
+		ID:       "review",
+		Label:    "Rivedi",
+		Skill:    "archetipo-review",
+		Statuses: []domain.Status{domain.StatusReview},
+	},
+}
+
+// actionIDs collapses a result to the identifiers a caller keys on, so a table
+// can name the expected content instead of asserting the absence of an error.
+func actionIDs(actions []Action) []string {
+	out := make([]string, 0, len(actions))
+	for _, action := range actions {
+		out = append(out, action.ID)
+	}
+	return out
+}
+
 func TestDefaultTemplateDeclaresTheCurrentProcess(t *testing.T) {
 	got := Default()
 	if got.ID != FabbricaDelSoftware {
@@ -104,5 +139,81 @@ func TestDefaultSkillsAreNotAliased(t *testing.T) {
 	first.Skills[0] = "tampered"
 	if got := Default().Skills[0]; got != processSkills[0] {
 		t.Fatalf("registry skills were mutated through the returned slice: %q", got)
+	}
+}
+
+func TestDefaultTemplateDeclaresItsActions(t *testing.T) {
+	got := Default().Actions
+	if !reflect.DeepEqual(got, processActions) {
+		t.Fatalf("actions = %+v, want %+v", got, processActions)
+	}
+	for _, action := range got {
+		if action.ID == "" {
+			t.Fatalf("action %+v has an empty id", action)
+		}
+		if action.Label == "" {
+			t.Fatalf("action %q has an empty label", action.ID)
+		}
+		if action.Skill == "" {
+			t.Fatalf("action %q has an empty skill", action.ID)
+		}
+	}
+}
+
+func TestActionsForReturnsOnlyTheActionsAdmittedInTheStatus(t *testing.T) {
+	cases := []struct {
+		status domain.Status
+		want   []string
+	}{
+		{status: domain.StatusTodo, want: []string{"plan"}},
+		{status: domain.StatusPlanned, want: []string{"implement"}},
+		{status: domain.StatusInProgress, want: []string{"implement"}},
+		{status: domain.StatusReview, want: []string{"review"}},
+		{status: domain.StatusDone, want: []string{}},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.status), func(t *testing.T) {
+			got := actionIDs(Default().ActionsFor(tc.status))
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ActionsFor(%q) = %v, want %v", tc.status, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestActionsForEmptyListIsNeverNil(t *testing.T) {
+	for _, status := range []domain.Status{domain.StatusDone, domain.Status("SCONOSCIUTO"), domain.Status("")} {
+		got := Default().ActionsFor(status)
+		if got == nil {
+			t.Fatalf("ActionsFor(%q) is nil, want an empty list", status)
+		}
+		if len(got) != 0 {
+			t.Fatalf("ActionsFor(%q) = %+v, want an empty list", status, got)
+		}
+	}
+}
+
+// TestDefaultActionsAreNotAliased resolves twice from the SAME registry on
+// purpose. Two calls to Default() each build a fresh registry, so they can
+// never alias each other and the test would pass even with no copy at all:
+// only a second resolution of the same instance can observe a write that
+// reached the registry.
+func TestDefaultActionsAreNotAliased(t *testing.T) {
+	registry := Builtin()
+	first, err := registry.Resolve(DefaultID)
+	if err != nil {
+		t.Fatalf("resolving the default template failed: %v", err)
+	}
+	first.Actions[0].ID = "tampered"
+	first.Actions[0].Statuses[0] = domain.Status("TAMPERED")
+	second, err := registry.Resolve(DefaultID)
+	if err != nil {
+		t.Fatalf("resolving the default template again failed: %v", err)
+	}
+	if got := second.Actions[0].ID; got != processActions[0].ID {
+		t.Fatalf("registry actions were mutated through the returned slice: id = %q", got)
+	}
+	if got := second.Actions[0].Statuses[0]; got != processActions[0].Statuses[0] {
+		t.Fatalf("registry action statuses were mutated through the returned slice: status = %q", got)
 	}
 }

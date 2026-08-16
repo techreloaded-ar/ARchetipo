@@ -22,11 +22,13 @@ sources:
       role: process-definition
     - path: cli/internal/cli/init_project_cmd.go
       role: workspace-bootstrap
+    - path: cli/internal/cli/spec_cmd.go
+      role: process-actions
 review:
-    content_hash: sha256:1e436fcbc592945c3e2b34976ab84d3295590cdbafa14d8168436f14a6eb47f6
-    evidence_revision: d19036939e60214eff4bb0f89b76ce0685298ba1
-    evidence_hash: sha256:257c46d9841cf1795edafda29f4319bbdecd9d6ce0910067d4e1d5b09c817e71
-    reviewed_at: "2026-08-16T09:36:01Z"
+    content_hash: sha256:2200af0eccc16f77a7f5b47879c398fcbb41714e3dacd2746f7568d37dccfc45
+    evidence_revision: aff2c2f75381020af04298015fb37c51fc7eddfc
+    evidence_hash: sha256:fd80fe7241d20317eeb90ee20e530b9b7b9a876e36f1e083c41beeb7f15b5cfc
+    reviewed_at: "2026-08-16T11:33:43Z"
 ---
 # Mappa dei contesti di ARchetipo
 
@@ -34,7 +36,7 @@ review:
 ## Contesti osservati
 
 - **Workflow dell'agente.** Le skill orchestrano le fasi di prodotto e invocano operazioni esplicite della CLI; i loro helper assemblano payload deterministici senza diventare un runtime applicativo separato.
-- **Template di processo.** Quali skill un workspace possiede, e quali stati usa il suo workflow, non sono piu impliciti in una costante della CLI: sono dichiarati da un Template risolto per identificativo all'inizializzazione. Il package `template` e la sorgente unica di quella definizione; il workspace ne conserva identificativo e versione.
+- **Template di processo.** Quali skill un workspace possiede, quali stati usa il suo workflow e quali azioni sono ammesse in ciascuno stato non sono piu impliciti in una costante della CLI: sono dichiarati da un Template risolto per identificativo all'inizializzazione. Ogni azione porta un identificativo stabile su cui un programma fa match, un'etichetta destinata a chi legge, la skill che la realizza e gli stati che la ammettono. Il package `template` e la sorgente unica di quella definizione; il workspace ne conserva identificativo e versione.
 - **CLI e workflow persistente.** `cli/internal/cli/root.go` compone i comandi pubblici e instrada le operazioni verso configurazione, validazione, Wiki, worktree e connector.
 - **Connector.** `connector.Connector` definisce lettura e scrittura di PRD, backlog, spec, piani, task e stato del workflow. Le implementazioni file, GitHub, Jira e in-memory condividono questo contratto.
 - **Esecuzione tramite provider.** Il package `execution` seleziona un provider per ID e capability; per `plan` richiede `spec.plan` prima del dispatch e persiste l'outcome separatamente dagli artefatti del connector.
@@ -50,6 +52,8 @@ La [panoramica](/overview.md) definisce il perimetro e la [mappa del codice](/en
 Le skill dipendono dalla superficie pubblica della CLI e dal suo envelope JSON. La CLI carica configurazione e connector per leggere o modificare il source of truth del workflow. Il viewer dipende dallo stesso connector, ma aggiunge un'interfaccia HTTP locale e asset incorporati.
 
 All'inizializzazione la CLI risolve il Template prima di scrivere qualunque cosa, installa le skill che quel Template dichiara e ne conserva identificativo e versione nella configurazione del workspace; le skill rileggono quella selezione dall'envelope di `config show`, dove leggono gia ogni altro metadato di workspace. Un workspace privo del blocco risolve comunque il Template predefinito. Le alternative valutate e i limiti accettati sono nel [Template di processo del workspace](/decisions/workspace-process-template.md).
+
+Oltre alla selezione, un client puo chiedere alla CLI quali azioni sono disponibili per una singola spec: `archetipo spec actions US-XXX` restituisce l'envelope `spec_actions` con il codice e lo stato della spec, l'identificativo e la versione del Template risolto, e le azioni ammesse in quello stato. È il confine che rende il processo consumabile da un programma: il client sceglie un'azione per identificativo stabile e mostra l'etichetta, mentre la skill che la realizza arriva insieme all'azione e non deve essere nota in anticipo. L'elenco non è persistito da nessuna parte: viene ricalcolato a ogni richiesta leggendo lo stato corrente della spec dal connector e filtrando le azioni dichiarate dal Template, e uno stato senza azioni ammesse produce una lista vuota, non un errore. La versione riportata accanto alle azioni è quella del Template risolto in-process, non la coppia persistita nella configurazione del workspace, che resta esposta da `config show`.
 
 Il servizio di esecuzione riceve dalla CLI una spec gia letta e un registry di provider, ma non riceve `connector.Connector`: il provider non puo invocare transizioni di stato della spec. La verifica fail-closed della capability `spec.plan`, il singolo record durevole e gli outcome `SUCCEEDED` o `FAILED` sono fissati nella [decisione sul confine dei provider](/decisions/execution-provider-boundary.md).
 

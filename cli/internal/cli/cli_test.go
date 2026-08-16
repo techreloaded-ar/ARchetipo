@@ -460,6 +460,181 @@ func TestSpecShow_MissingCodeRejected(t *testing.T) {
 	}
 }
 
+// TestSpecActionsFollowTheSpecStatus walks a single spec through the workflow
+// and reads the admitted actions after every transition: the list is recomputed
+// from the Template each time, and DONE — a status with no admitted action — is
+// an empty list inside a success envelope, never an error.
+func TestSpecActionsFollowTheSpecStatus(t *testing.T) {
+	newProject(t)
+
+	// readActionsData reads one `spec actions` envelope and fails unless the
+	// command succeeded with the expected kind.
+	readActionsData := func(t *testing.T) map[string]any {
+		t.Helper()
+		res := runCLI(t, "", "spec", "actions", "US-001")
+		kind, data := decodeOK(t, res)
+		if kind != "spec_actions" {
+			t.Fatalf("expected kind=spec_actions, got %s", kind)
+		}
+		return data
+	}
+	// readActionIDs returns the action ids in the order the CLI emitted them.
+	// The type assertion on []any is deliberate: a null payload must fail here
+	// rather than silently read as an empty list.
+	readActionIDs := func(t *testing.T) []string {
+		t.Helper()
+		data := readActionsData(t)
+		actions, ok := data["actions"].([]any)
+		if !ok {
+			t.Fatalf("expected actions to be a JSON list, got %v (%T)", data["actions"], data["actions"])
+		}
+		ids := make([]string, 0, len(actions))
+		for i, raw := range actions {
+			action, ok := raw.(map[string]any)
+			if !ok {
+				t.Fatalf("expected action %d to be an object, got %v (%T)", i, raw, raw)
+			}
+			id, _ := action["id"].(string)
+			ids = append(ids, id)
+		}
+		return ids
+	}
+
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+
+	// AC-2: in TODO only `plan` is admitted, with its user-facing label and skill.
+	todo := readActionsData(t)
+	spec, _ := todo["spec"].(map[string]any)
+	if spec["status"] != "TODO" {
+		t.Fatalf("expected spec status TODO, got %v", spec["status"])
+	}
+	todoActions, ok := todo["actions"].([]any)
+	if !ok {
+		t.Fatalf("expected actions to be a JSON list, got %v (%T)", todo["actions"], todo["actions"])
+	}
+	if len(todoActions) != 1 {
+		t.Fatalf("expected exactly 1 action in TODO, got %d: %v", len(todoActions), todoActions)
+	}
+	first, _ := todoActions[0].(map[string]any)
+	if first["id"] != "plan" {
+		t.Fatalf("expected action id=plan, got %v", first["id"])
+	}
+	if first["label"] != "Pianifica" {
+		t.Fatalf("expected label=Pianifica, got %v", first["label"])
+	}
+	if first["skill"] != "archetipo-plan" {
+		t.Fatalf("expected skill=archetipo-plan, got %v", first["skill"])
+	}
+
+	// AC-3: every transition recomputes the list from the Template.
+	planFile := writeInputFile(t, "plan.json", validPlanJSON)
+	if res := runCLI(t, "", "spec", "plan", "US-001", "--file", planFile); res.exit != 0 {
+		t.Fatalf("plan failed: %s", res.stderr.String())
+	}
+	if got := readActionIDs(t); !reflect.DeepEqual(got, []string{"implement"}) {
+		t.Fatalf("expected [implement] in PLANNED, got %v", got)
+	}
+
+	if res := runCLI(t, "", "spec", "start", "US-001"); res.exit != 0 {
+		t.Fatalf("start failed: %s", res.stderr.String())
+	}
+	started := readActionsData(t)
+	startedSpec, _ := started["spec"].(map[string]any)
+	if startedSpec["status"] != "IN PROGRESS" {
+		t.Fatalf("expected spec status IN PROGRESS, got %v", startedSpec["status"])
+	}
+	if got := readActionIDs(t); !reflect.DeepEqual(got, []string{"implement"}) {
+		t.Fatalf("expected [implement] in IN PROGRESS, got %v", got)
+	}
+
+	if res := runCLI(t, "", "spec", "review", "US-001"); res.exit != 0 {
+		t.Fatalf("review failed: %s", res.stderr.String())
+	}
+	if got := readActionIDs(t); !reflect.DeepEqual(got, []string{"review"}) {
+		t.Fatalf("expected [review] in REVIEW, got %v", got)
+	}
+
+	// AC-4: DONE admits no action — an empty list in a success envelope.
+	if res := runCLI(t, "", "spec", "move", "US-001", "--to", "done"); res.exit != 0 {
+		t.Fatalf("move to done failed: %s", res.stderr.String())
+	}
+	doneRes := runCLI(t, "", "spec", "actions", "US-001")
+	if doneRes.exit != 0 {
+		t.Fatalf("expected exit 0 for a DONE spec, got %d. stderr=%s", doneRes.exit, doneRes.stderr.String())
+	}
+	if strings.Contains(doneRes.stderr.String(), `"error"`) {
+		t.Fatalf("expected no error envelope on stderr, got %s", doneRes.stderr.String())
+	}
+	doneKind, doneData := decodeOK(t, doneRes)
+	if doneKind != "spec_actions" {
+		t.Fatalf("expected kind=spec_actions, got %s", doneKind)
+	}
+	doneActions, ok := doneData["actions"].([]any)
+	if !ok {
+		t.Fatalf("expected an empty list, not an absence: got %v (%T)", doneData["actions"], doneData["actions"])
+	}
+	if len(doneActions) != 0 {
+		t.Fatalf("expected 0 actions in DONE, got %d: %v", len(doneActions), doneActions)
+	}
+}
+
+// TestSpecActionsReportTheResolvedTemplate checks that the envelope names the
+// Template the actions were resolved from, so a consumer can tell which process
+// produced them.
+func TestSpecActionsReportTheResolvedTemplate(t *testing.T) {
+	newProject(t)
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	res := runCLI(t, "", "spec", "actions", "US-001")
+	kind, data := decodeOK(t, res)
+	if kind != "spec_actions" {
+		t.Fatalf("expected kind=spec_actions, got %s", kind)
+	}
+	tpl, ok := data["template"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a template object, got %v (%T)", data["template"], data["template"])
+	}
+	if tpl["id"] != template.DefaultID {
+		t.Fatalf("expected template id=%s, got %v", template.DefaultID, tpl["id"])
+	}
+	if version, _ := tpl["version"].(string); strings.TrimSpace(version) == "" {
+		t.Fatalf("expected a non-empty template version, got %v", tpl["version"])
+	}
+}
+
+func TestSpecActionsMissingCodeRejected(t *testing.T) {
+	newProject(t)
+	res := runCLI(t, "", "spec", "actions")
+	exit, code := decodeError(t, res)
+	if exit != iox.ExitInvalidInput {
+		t.Fatalf("expected exit %d, got %d", iox.ExitInvalidInput, exit)
+	}
+	if code != iox.CodeInvalidInput {
+		t.Fatalf("expected %s, got %s", iox.CodeInvalidInput, code)
+	}
+}
+
+func TestSpecActionsUnknownSpecRejected(t *testing.T) {
+	newProject(t)
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	res := runCLI(t, "", "spec", "actions", "US-999")
+	exit, code := decodeError(t, res)
+	if exit != iox.ExitPreconditionMissing {
+		t.Fatalf("expected exit %d, got %d", iox.ExitPreconditionMissing, exit)
+	}
+	if code != iox.CodePreconditionMissing {
+		t.Fatalf("expected %s, got %s", iox.CodePreconditionMissing, code)
+	}
+}
+
 func TestSpecNext_AutoPickByStatus(t *testing.T) {
 	newProject(t)
 	specsFile := writeInputFile(t, "specs.json", specJSON)

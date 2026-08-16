@@ -181,6 +181,7 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 | `archetipo spec add --file specs.yaml` | Creates or extends the backlog with specs (user-story body). |
 | `archetipo spec show US-001` | Reads one spec and its tasks by code. |
 | `archetipo spec next --status TODO` | Auto-selects the first eligible spec by status. |
+| `archetipo spec actions US-001` | Lists the actions the workspace process Template admits for the spec's current status, each with a stable id, a user-facing label and the skill that realizes it. A status with no admissible action returns an empty list. |
 | `archetipo spec plan US-001 --file plan.yaml` | Saves the implementation plan and moves the spec to `PLANNED`. |
 | `archetipo spec start US-001` | Moves a planned spec to `IN PROGRESS`. |
 | `archetipo spec review US-001 [--file note.md] [--commit-type feat] [--commit-summary "summary"]` | Moves a spec to `REVIEW`, posts a closing comment, and auto-commits dirty changes — always in the spec worktree, and in the project root when `git.auto_commit` is on — with a Conventional Commit subject (default: `chore(US-001): {title}`). |
