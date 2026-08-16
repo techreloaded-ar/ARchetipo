@@ -65,12 +65,17 @@ archetipo init
 
 # oppure in modo non interattivo:
 archetipo init --tool claude --connector file
+
+# scegliendo esplicitamente il Template di processo:
+archetipo init --tool claude --connector file --template fabbrica-del-software
 ```
 
-`archetipo init` copia le skill ARchetipo nella directory del tool AI selezionato, per esempio `.claude/skills/`, `.cursor/skills/` o `.gemini/skills/`, e crea:
+`archetipo init` copia le skill del **Template di processo** selezionato nella directory del tool AI, per esempio `.claude/skills/`, `.cursor/skills/` o `.gemini/skills/`, e crea:
 
-- `.archetipo/config.yaml`
+- `.archetipo/config.yaml`, con un blocco `template:` che riporta `id` e `version` del Template che ha dato forma al workspace
 - `.archetipo/shared-runtime.md`
+
+Il Template decide quali skill riceve il workspace e quali stati usa il suo workflow. Omettere `--template` seleziona `fabbrica-del-software`, il processo descritto in questo README: un'inizializzazione senza scelta esplicita si comporta quindi esattamente come prima. Un identificativo di Template sconosciuto viene rifiutato prima di scrivere qualunque cosa, quindi non lascia mai un workspace inizializzato a metà.
 
 Dopo l'inizializzazione, usa le skill `/archetipo-*` dentro il tuo AI coding agent. Le skill invocano la CLI in background quando devono leggere o salvare gli artefatti del workflow.
 
@@ -162,10 +167,10 @@ ARchetipo usa una CLI deterministica scritta in Go, `archetipo`, per persistenza
 
 | Comando | Scopo |
 |---|---|
-| `archetipo init` | Installa ARchetipo nel progetto corrente e crea `.archetipo/config.yaml` più `.archetipo/shared-runtime.md`. |
+| `archetipo init [--template <id>]` | Installa nel progetto corrente le skill del Template di processo selezionato e crea `.archetipo/config.yaml` — con `id` e `version` del Template — più `.archetipo/shared-runtime.md`. |
 | `archetipo doctor` | Diagnostica l'installazione: data directory, skill nel pacchetto e installate, config di progetto, git e autenticazione gh (connettore github). |
 | `archetipo view` | Avvia una board Kanban locale per `.archetipo/backlog.yaml`, `.archetipo/specs/` e `.archetipo/plans/`. |
-| `archetipo config show` | Inizializza il connector e stampa i metadati. |
+| `archetipo config show` | Inizializza il connector e stampa i metadati, incluso il Template di processo del workspace (`id` e `version`). |
 | `archetipo prd write [--file PRD.md]` | Salva il markdown del PRD da `--file` o stdin. |
 | `archetipo validate prd [--file PRD.md]` | Valida il PRD contro le regole strutturali del PRD. |
 | `archetipo spec list [--status STATUS]` | Legge backlog e metadati riassuntivi, opzionalmente filtrato per stato. |

@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
 type toolDef struct {
@@ -40,41 +41,48 @@ func validToolKeysHint() string {
 	return strings.Join(keys, ", ")
 }
 
-var allSkills = []string{
-	"archetipo-autopilot",
-	"archetipo-design",
-	"archetipo-implement",
-	"archetipo-inception",
-	"archetipo-plan",
-	"archetipo-review",
-	"archetipo-spec",
-	"archetipo-wiki",
-}
+// allSkills is the skill set of the default process Template. The Template
+// package is the single place where a process is written down; `uninstall` and
+// `doctor` keep reading this variable.
+var allSkills = template.Default().Skills
 
 func newInitProjectCmd(s streams) *cobra.Command {
 	var toolFlags []string
 	var connectorFlag string
+	var templateFlag string
 	var assumeYes bool
 	var withWiki bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Install ARchetipo skills into the project",
-		Long: "Copies ARchetipo skills into the selected tool directories. " +
+		Long: "Copies the skills of the selected process Template into the chosen tool directories. " +
 			"Also creates .archetipo/config.yaml and .archetipo/shared-runtime.md in the current directory.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runInitProject(s, toolFlags, connectorFlag, assumeYes, withWiki)
+			return runInitProject(s, toolFlags, connectorFlag, templateFlag, assumeYes, withWiki)
 		},
 	}
 	cmd.Flags().StringSliceVar(&toolFlags, "tool", nil, "Tool key(s) to install for: "+validToolKeysHint()+". Repeat or comma-separate.")
 	cmd.Flags().StringVar(&connectorFlag, "connector", "", "Connector for .archetipo/config.yaml: file|github|jira")
+	cmd.Flags().StringVar(&templateFlag, "template", "", "Process Template id (default: "+template.DefaultID+")")
 	cmd.Flags().BoolVar(&assumeYes, "yes", false, "Assume 'yes' to overwrite prompts (non-interactive).")
 	cmd.Flags().BoolVar(&withWiki, "wiki", false, "Write wiki.enabled: true, so the standard workflow maintains the Living Wiki. Off by default; the archetipo-wiki skill is installed either way and stays usable on demand.")
 	return cmd
 }
 
-func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeYes, withWiki bool) error {
+func runInitProject(s streams, toolFlags []string, connectorFlag, templateFlag string, assumeYes, withWiki bool) error {
+	// Resolved first, before anything on disk is created or written: an unknown
+	// Template must be rejected without leaving a partial initialization behind.
+	tpl, err := template.Resolve(strings.TrimSpace(templateFlag))
+	if err != nil {
+		return iox.NewInvalidInput(
+			"unknown template: "+strings.TrimSpace(templateFlag),
+			"valid: "+strings.Join(template.Builtin().IDs(), ", "),
+			err,
+		)
+	}
+
 	dataDir, err := discoverDataDir()
 	if err != nil {
 		return err
@@ -124,7 +132,7 @@ func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeY
 		if err := os.MkdirAll(target, 0o755); err != nil {
 			return iox.NewInternal("cannot create "+target, err)
 		}
-		for _, sk := range allSkills {
+		for _, sk := range tpl.Skills {
 			src := filepath.Join(skillsDir, sk)
 			dst := filepath.Join(target, sk)
 			if _, err := os.Stat(src); err != nil {
@@ -140,7 +148,7 @@ func runInitProject(s streams, toolFlags []string, connectorFlag string, assumeY
 		fmt.Fprintf(s.out, "  ✓ %s → %s\n", t.Name, target)
 	}
 
-	if err := installRuntimeAssets(s, runtimeDir, conn, assumeYes, withWiki); err != nil {
+	if err := installRuntimeAssets(s, runtimeDir, conn, tpl, assumeYes, withWiki); err != nil {
 		return err
 	}
 
@@ -289,7 +297,7 @@ func pickConnectorInteractive(s streams) (string, error) {
 	return "", iox.NewInvalidInput("invalid connector choice: "+line, "enter 1, 2 or 3", nil)
 }
 
-func installRuntimeAssets(s streams, runtimeDir, connector string, assumeYes, withWiki bool) error {
+func installRuntimeAssets(s streams, runtimeDir, connector string, tpl template.Template, assumeYes, withWiki bool) error {
 	root := runtimeDir
 	if _, err := os.Stat(filepath.Join(root, "config.yaml")); err != nil {
 		// dataDir/runtime missing -> try repo .archetipo/
@@ -318,6 +326,8 @@ func installRuntimeAssets(s streams, runtimeDir, connector string, assumeYes, wi
 			overwrite = ans == "s" || ans == "y"
 		}
 		if !overwrite {
+			// Declining the overwrite must leave the config untouched, template
+			// block included.
 			fmt.Fprintln(s.out, "  config left unchanged")
 		} else {
 			// The overwrite discards every customization in the file, so the
@@ -326,17 +336,17 @@ func installRuntimeAssets(s streams, runtimeDir, connector string, assumeYes, wi
 			if err != nil {
 				return err
 			}
-			if err := writeConfig(filepath.Join(root, "config.yaml"), configPath, connector, withWiki); err != nil {
+			if err := writeConfig(filepath.Join(root, "config.yaml"), configPath, connector, tpl, withWiki); err != nil {
 				return err
 			}
 			fmt.Fprintf(s.out, "  ✓ backup of the previous config: %s\n", backupPath)
-			fmt.Fprintf(s.out, "  ✓ .archetipo/config.yaml (connector: %s)\n", connector)
+			printConfigWritten(s, connector, tpl)
 		}
 	} else {
-		if err := writeConfig(filepath.Join(root, "config.yaml"), configPath, connector, withWiki); err != nil {
+		if err := writeConfig(filepath.Join(root, "config.yaml"), configPath, connector, tpl, withWiki); err != nil {
 			return err
 		}
-		fmt.Fprintf(s.out, "  ✓ .archetipo/config.yaml (connector: %s)\n", connector)
+		printConfigWritten(s, connector, tpl)
 	}
 
 	sharedSrc := filepath.Join(root, "shared-runtime.md")
@@ -374,7 +384,12 @@ func uniqueBackupPath(configPath string, now time.Time) string {
 	}
 }
 
-func writeConfig(src, dst, connector string, withWiki bool) error {
+func printConfigWritten(s streams, connector string, tpl template.Template) {
+	fmt.Fprintf(s.out, "  ✓ .archetipo/config.yaml (connector: %s)\n", connector)
+	fmt.Fprintf(s.out, "  ✓ template: %s (%s %s)\n", tpl.Label, tpl.ID, tpl.Version)
+}
+
+func writeConfig(src, dst, connector string, tpl template.Template, withWiki bool) error {
 	body, err := os.ReadFile(src)
 	if err != nil {
 		return iox.NewInternal("read config template", err)
@@ -383,6 +398,7 @@ func writeConfig(src, dst, connector string, withWiki bool) error {
 	if withWiki {
 		out = setWikiEnabledField(out, true)
 	}
+	out = setTemplateFields(out, tpl.ID, tpl.Version)
 	if err := os.WriteFile(dst, []byte(out), 0o644); err != nil {
 		return iox.NewInternal("write "+dst, err)
 	}
@@ -443,6 +459,64 @@ func setWikiEnabledField(body string, enabled bool) string {
 		separator = ""
 	}
 	return body + separator + "\nwiki:\n  enabled: " + value + "\n"
+}
+
+// setTemplateFields rewrites `template.id` and `template.version` in the YAML
+// template, appending the whole block when the key is absent (an older packaged
+// asset). Deliberately textual, like setConnectorField: a yaml.Node round-trip
+// would reflow indentation and blank lines of the generated config, which is an
+// observable change to what a plain initialization produces today.
+func setTemplateFields(body, id, version string) string {
+	lines := strings.Split(body, "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.TrimRight(line, "\r") == "template:" {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return strings.TrimRight(body, "\n") + "\n\ntemplate:\n  id: " + id + "\n  version: \"" + version + "\"\n"
+	}
+
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		trimmed := strings.TrimRight(lines[i], "\r")
+		if strings.TrimSpace(trimmed) == "" {
+			continue
+		}
+		if trimmed[0] != ' ' && trimmed[0] != '\t' {
+			end = i
+			break
+		}
+	}
+
+	sawID, sawVersion, lastChild := false, false, start
+	for i := start + 1; i < end; i++ {
+		indent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
+		switch content := strings.TrimSpace(lines[i]); {
+		case strings.HasPrefix(content, "id:"):
+			lines[i] = indent + "id: " + id
+			sawID, lastChild = true, i
+		case strings.HasPrefix(content, "version:"):
+			lines[i] = indent + "version: \"" + version + "\""
+			sawVersion, lastChild = true, i
+		case content != "":
+			lastChild = i
+		}
+	}
+
+	var missing []string
+	if !sawID {
+		missing = append(missing, "  id: "+id)
+	}
+	if !sawVersion {
+		missing = append(missing, "  version: \""+version+"\"")
+	}
+	if len(missing) > 0 {
+		lines = append(lines[:lastChild+1], append(missing, lines[lastChild+1:]...)...)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func copyTree(src, dst string) error {

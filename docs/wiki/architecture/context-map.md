@@ -2,7 +2,7 @@
 type: context-map
 title: Mappa dei contesti di ARchetipo
 description: Confini runtime osservabili e dipendenze tra skill, CLI, connector, provider, viewer e distribuzione
-status: reviewed
+status: generated
 sources:
     - path: cli/internal/cli/root.go
       role: runtime-composition
@@ -18,11 +18,10 @@ sources:
       role: execution-contract
     - path: cli/internal/execution/arcipelago/provider.go
       role: implementation
-review:
-    content_hash: sha256:c0d776f763a4d761686f9d6e20263f47533cc9791423320b580cdd44222351e6
-    evidence_revision: 9971aeffca5b0e72438e465a01df7e07dd7459e4
-    evidence_hash: sha256:eea75b41d1cd929c9ebf75ee461a85670f2f9cd40af75410756fbd3807bdfddf
-    reviewed_at: "2026-08-16T00:05:04Z"
+    - path: cli/internal/template/template.go
+      role: process-definition
+    - path: cli/internal/cli/init_project_cmd.go
+      role: workspace-bootstrap
 ---
 # Mappa dei contesti di ARchetipo
 
@@ -30,6 +29,7 @@ review:
 ## Contesti osservati
 
 - **Workflow dell'agente.** Le skill orchestrano le fasi di prodotto e invocano operazioni esplicite della CLI; i loro helper assemblano payload deterministici senza diventare un runtime applicativo separato.
+- **Template di processo.** Quali skill un workspace possiede, e quali stati usa il suo workflow, non sono piu impliciti in una costante della CLI: sono dichiarati da un Template risolto per identificativo all'inizializzazione. Il package `template` e la sorgente unica di quella definizione; il workspace ne conserva identificativo e versione.
 - **CLI e workflow persistente.** `cli/internal/cli/root.go` compone i comandi pubblici e instrada le operazioni verso configurazione, validazione, Wiki, worktree e connector.
 - **Connector.** `connector.Connector` definisce lettura e scrittura di PRD, backlog, spec, piani, task e stato del workflow. Le implementazioni file, GitHub, Jira e in-memory condividono questo contratto.
 - **Esecuzione tramite provider.** Il package `execution` seleziona un provider per ID e capability; per `plan` richiede `spec.plan` prima del dispatch e persiste l'outcome separatamente dagli artefatti del connector.
@@ -43,6 +43,8 @@ La [panoramica](/overview.md) definisce il perimetro e la [mappa del codice](/en
 ## Relazioni
 
 Le skill dipendono dalla superficie pubblica della CLI e dal suo envelope JSON. La CLI carica configurazione e connector per leggere o modificare il source of truth del workflow. Il viewer dipende dallo stesso connector, ma aggiunge un'interfaccia HTTP locale e asset incorporati.
+
+All'inizializzazione la CLI risolve il Template prima di scrivere qualunque cosa, installa le skill che quel Template dichiara e ne conserva identificativo e versione nella configurazione del workspace; le skill rileggono quella selezione dall'envelope di `config show`, dove leggono gia ogni altro metadato di workspace. Un workspace privo del blocco risolve comunque il Template predefinito. Le alternative valutate e i limiti accettati sono nel [Template di processo del workspace](/decisions/workspace-process-template.md).
 
 Il servizio di esecuzione riceve dalla CLI una spec gia letta e un registry di provider, ma non riceve `connector.Connector`: il provider non puo invocare transizioni di stato della spec. La verifica fail-closed della capability `spec.plan`, il singolo record durevole e gli outcome `SUCCEEDED` o `FAILED` sono fissati nella [decisione sul confine dei provider](/decisions/execution-provider-boundary.md).
 
@@ -61,7 +63,7 @@ Il packaging npm dipende dagli artefatti GoReleaser e dalle skill sorgente. Lo s
 <!-- archetipo:wiki section=shared -->
 ## Infrastruttura condivisa
 
-La configurazione `.archetipo/config.yaml`, il formato di envelope JSON, i tipi di dominio, le regole del runtime condiviso e il filesystem Git sono infrastruttura attraversata da piu flussi. Gli script Node.js supportano assemblaggio, packaging e test; non possiedono dati di dominio autonomi. I comandi e i vincoli sono raccolti in [sviluppo e operazioni](/operations/development.md).
+La configurazione `.archetipo/config.yaml` — che porta anche il blocco `template:` con identificativo e versione del processo installato — il formato di envelope JSON, i tipi di dominio, le regole del runtime condiviso e il filesystem Git sono infrastruttura attraversata da piu flussi. Gli script Node.js supportano assemblaggio, packaging e test; non possiedono dati di dominio autonomi. I comandi e i vincoli sono raccolti in [sviluppo e operazioni](/operations/development.md).
 
 <!-- archetipo:wiki section=uncertainties -->
 ## Confini non ancora risolti

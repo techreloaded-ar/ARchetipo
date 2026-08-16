@@ -65,12 +65,17 @@ archetipo init
 
 # or non-interactive:
 archetipo init --tool claude --connector file
+
+# picking the process Template explicitly:
+archetipo init --tool claude --connector file --template fabbrica-del-software
 ```
 
-`archetipo init` copies the ARchetipo skills into the selected AI tool directory, for example `.claude/skills/`, `.cursor/skills/`, or `.gemini/skills/`, and creates:
+`archetipo init` copies the skills of the selected **process Template** into the AI tool directory, for example `.claude/skills/`, `.cursor/skills/`, or `.gemini/skills/`, and creates:
 
-- `.archetipo/config.yaml`
+- `.archetipo/config.yaml`, including a `template:` block with the `id` and `version` of the Template that shaped the workspace
 - `.archetipo/shared-runtime.md`
+
+The Template decides which skills the workspace receives and which workflow statuses its process uses. Omitting `--template` selects `fabbrica-del-software`, the process this README describes, so an initialization without an explicit choice behaves exactly as before. An unknown Template id is rejected before anything is written, so it never leaves a partial workspace behind.
 
 After that, use the `/archetipo-*` skills inside your AI coding agent. The skills call the CLI in the background when they need to read or persist workflow artifacts.
 
@@ -166,10 +171,10 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 
 | Command | Purpose |
 |---|---|
-| `archetipo init` | Installs ARchetipo into the current project and creates `.archetipo/config.yaml` plus `.archetipo/shared-runtime.md`. |
+| `archetipo init [--template <id>]` | Installs the skills of the selected process Template into the current project and creates `.archetipo/config.yaml` — with the Template `id` and `version` — plus `.archetipo/shared-runtime.md`. |
 | `archetipo doctor` | Diagnoses the installation: data directory, packaged and installed skills, project config, git, and gh auth (github connector). |
 | `archetipo view` | Starts a local Kanban view for `.archetipo/backlog.yaml`, `.archetipo/specs/`, and `.archetipo/plans/`. |
-| `archetipo config show` | Initializes the connector and prints metadata. |
+| `archetipo config show` | Initializes the connector and prints metadata, including the workspace process Template (`id` and `version`). |
 | `archetipo prd write [--file PRD.md]` | Saves PRD markdown from `--file` or stdin. |
 | `archetipo validate prd [--file PRD.md]` | Validates the PRD against structural PRD rules. |
 | `archetipo spec list [--status STATUS]` | Reads backlog items and summary metadata, optionally filtered by status. |

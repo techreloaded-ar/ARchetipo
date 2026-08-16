@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
 func TestDefaultWhenConfigMissing(t *testing.T) {
@@ -926,5 +928,59 @@ func TestLoadKeepsWorktreeWhenParentConfigIsMalformed(t *testing.T) {
 	}
 	if len(c.ResolutionNotices) != 0 {
 		t.Fatalf("unexpected notices: %v", c.ResolutionNotices)
+	}
+}
+
+func TestDefaultConfigCarriesDefaultTemplate(t *testing.T) {
+	d := Default()
+	if d.Template.ID != template.DefaultID {
+		t.Fatalf("template id = %q, want %q", d.Template.ID, template.DefaultID)
+	}
+	if d.Template.Version != template.Default().Version {
+		t.Fatalf("template version = %q, want %q", d.Template.Version, template.Default().Version)
+	}
+}
+
+func TestLoadWithoutTemplateBlockResolvesDefaultTemplate(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte("connector: file\n"), 0o644))
+
+	c, err := Load(root)
+	must(t, err)
+	if c.Template.ID != template.DefaultID {
+		t.Fatalf("template id = %q, want %q", c.Template.ID, template.DefaultID)
+	}
+	if c.Template.Version != template.Default().Version {
+		t.Fatalf("template version = %q, want %q", c.Template.Version, template.Default().Version)
+	}
+}
+
+func TestLoadKeepsExplicitTemplateSelection(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, RelativePath),
+		[]byte("connector: file\ntemplate:\n  id: fabbrica-del-software\n  version: \"9.9.9\"\n"), 0o644))
+
+	c, err := Load(root)
+	must(t, err)
+	if c.Template.ID != "fabbrica-del-software" || c.Template.Version != "9.9.9" {
+		t.Fatalf("template = %+v, want id fabbrica-del-software version 9.9.9", c.Template)
+	}
+}
+
+func TestLoadFillsMissingTemplateVersionOnly(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, RelativePath),
+		[]byte("connector: file\ntemplate:\n  id: fabbrica-del-software\n"), 0o644))
+
+	c, err := Load(root)
+	must(t, err)
+	if c.Template.ID != "fabbrica-del-software" {
+		t.Fatalf("template id = %q, want it preserved", c.Template.ID)
+	}
+	if c.Template.Version != template.Default().Version {
+		t.Fatalf("template version = %q, want the default %q", c.Template.Version, template.Default().Version)
 	}
 }

@@ -15,6 +15,14 @@ workflow:
     review: REVIEW
     done: DONE        # gated: /archetipo-review (explicit human approval) or /archetipo-autopilot (autonomous acceptance)
 
+# Process Template installed in this workspace. `id` selects the process —
+# which skills are installed and which workflow statuses it uses — and
+# `version` records the revision that `archetipo init` wrote here. Written by
+# `archetipo init [--template <id>]`; omitting the flag selects the default.
+template:
+  id: fabbrica-del-software
+  version: "1.0.0"
+
 # Used only when connector == file
 file:
   backlog: .archetipo/backlog.yaml
@@ -59,6 +67,15 @@ git:
 # the skip. Off by default, so demo videos are opt-in.
 e2e:
   record_demo_video: false
+
+# Optional default execution provider. Only non-secret provider settings belong
+# here: keep tokens and credentials in the environment or an external secret
+# mechanism. Configure this block with `archetipo execution provider set-default`.
+# execution:
+#   default_provider:
+#     id: <registered-provider-id>
+#     config:
+#       endpoint: https://runner.example
 
 # Used only when connector == github. owner/project_number are auto-detected
 # from `gh`; the remaining keys are populated automatically by the CLI during

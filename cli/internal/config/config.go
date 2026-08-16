@@ -23,6 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
 // Path of the config file relative to the project root.
@@ -58,6 +59,10 @@ type Config struct {
 	// by default (see domain.GitConfig).
 	Git       domain.GitConfig `yaml:"git" json:"git,omitempty"`
 	Execution ExecutionConfig  `yaml:"execution,omitempty" json:"execution,omitempty"`
+	// Template records which process Template shaped this workspace. Absent
+	// from a workspace initialized before Templates existed, in which case
+	// applyDefaults resolves the default one.
+	Template TemplateConfig `yaml:"template,omitempty" json:"template,omitempty"`
 	// ProjectRoot is the absolute path of the directory that contains
 	// .archetipo/. Set by Load; not present in the YAML file.
 	ProjectRoot string `yaml:"-" json:"project_root"`
@@ -66,6 +71,14 @@ type Config struct {
 	// never serialized to the config file nor to the viewer JSON; commands
 	// surface it as the optional `warnings[]` field of the success envelope.
 	ResolutionNotices []string `yaml:"-" json:"-"`
+}
+
+// TemplateConfig is the persisted identity of the workspace process Template.
+// ID selects the process — which skills are installed and which workflow
+// statuses it uses — and Version records the revision `archetipo init` wrote.
+type TemplateConfig struct {
+	ID      string `yaml:"id" json:"id"`
+	Version string `yaml:"version" json:"version"`
 }
 
 type ExecutionConfig struct {
@@ -139,6 +152,10 @@ func Default() Config {
 			Base:         "main",
 			Dir:          ".archetipo/worktrees",
 			BranchPrefix: "archetipo/",
+		},
+		Template: TemplateConfig{
+			ID:      template.DefaultID,
+			Version: template.Default().Version,
 		},
 	}
 }
@@ -579,6 +596,14 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Worktree.BranchPrefix == "" {
 		c.Worktree.BranchPrefix = d.Worktree.BranchPrefix
+	}
+	// Filled independently: a config that declares only `template.id` keeps
+	// that id and still receives the default version.
+	if c.Template.ID == "" {
+		c.Template.ID = d.Template.ID
+	}
+	if c.Template.Version == "" {
+		c.Template.Version = d.Template.Version
 	}
 }
 

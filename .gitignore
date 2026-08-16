@@ -34,6 +34,7 @@ cli/archetipo
 .dev/
 
 .archetipo/stories/*
+.archetipo/specs/*
 .archetipo/plans/*
 .archetipo/backlog.yaml
 .archetipo/executions/*

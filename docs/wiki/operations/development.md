@@ -2,7 +2,7 @@
 type: operations
 title: Sviluppo e operazioni di ARchetipo
 description: Comandi locali, pipeline CI, packaging, release e vincoli operativi del repository
-status: reviewed
+status: generated
 sources:
     - path: AGENTS.md
       role: development-contract
@@ -18,11 +18,6 @@ sources:
       role: packaging-implementation
     - path: test/e2e/run.mjs
       role: e2e-harness
-review:
-    content_hash: sha256:225fd7a3df2ec993bedf68b23bfabcc481a12a8b1fd1b5818a3b5d5af2627541
-    evidence_revision: cc9ba1eabbd6187a04b50d84b69f7f434f3a4935
-    evidence_hash: sha256:257c258a2e1d7401c278800a35c037ecf9e398dbc0aecbbff2132d480fccc5b1
-    reviewed_at: "2026-08-15T20:45:26Z"
 ---
 # Sviluppo e operazioni di ARchetipo
 
@@ -30,7 +25,7 @@ review:
 
 Lo sviluppo richiede Go secondo `cli/go.mod` e Node.js con le dipendenze del `package-lock.json`. Il binario si avvia dal modulo Go; `npm run build:cli:dev`, `npm run install:dev` e `npm run uninstall:dev` gestiscono il ciclo locale. `archetipo view` avvia il viewer HTTP locale, che per impostazione predefinita ascolta su loopback e non offre autenticazione.
 
-La CLI legge `.archetipo/config.yaml`, emette envelope JSON su stdout o stderr e puo operare con connector file, GitHub o Jira. `execution.default_provider` contiene soltanto ID e configurazione non segreta del provider; token e credenziali restano nell'ambiente o in un meccanismo esterno. `archetipo execution provider set-default <id> --file <path>` valida e salva atomicamente la selezione, `show-default` la verifica, mentre `execution run` la usa in assenza di `--provider`. Le integrazioni remote richiedono le rispettive credenziali; i test unitari e gli smoke Wiki sono progettati per non richiederle.
+La CLI legge `.archetipo/config.yaml`, emette envelope JSON su stdout o stderr e puo operare con connector file, GitHub o Jira. Il blocco `template:` conserva identificativo e versione del Template di processo installato nel workspace, cioe quali skill sono state installate e quali stati usa il suo workflow. `archetipo init --template <id>` seleziona il Template; omettere il flag seleziona `fabbrica-del-software`, e un identificativo sconosciuto viene rifiutato prima di scrivere qualunque file, senza lasciare un'inizializzazione parziale. `archetipo config show` riporta la selezione insieme agli altri metadati di workspace. `execution.default_provider` contiene soltanto ID e configurazione non segreta del provider; token e credenziali restano nell'ambiente o in un meccanismo esterno. `archetipo execution provider set-default <id> --file <path>` valida e salva atomicamente la selezione, `show-default` la verifica, mentre `execution run` la usa in assenza di `--provider`. Le integrazioni remote richiedono le rispettive credenziali; i test unitari e gli smoke Wiki sono progettati per non richiederle.
 
 ## Build e controlli
 
@@ -58,6 +53,7 @@ Le release richiedono `GITHUB_TOKEN` per GoReleaser e `NPM_TOKEN` per la pubblic
 
 - `.archetipo/executions/` contiene stato runtime locale ed e ignorata da Git.
 - La configurazione provider versionabile deve essere non segreta; un override `--provider` prevale sul default e non eredita la sua mappa.
+- I Template di processo sono risolti in-process dal binario: introdurne uno nuovo richiede una release della CLI. Un workspace preesistente, privo del blocco `template:`, risolve comunque la Fabbrica del software.
 - Le directory generate `cli/dist`, `test/e2e/.bin` e `test/workspaces` non sono sorgenti da versionare.
 - I connector remoti possono dipendere da rete e autenticazione; il connector file consente il flusso offline.
 - Il viewer e destinato all'uso locale singolo e chiude il server con un periodo di grazia quando il contesto viene cancellato.

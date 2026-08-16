@@ -7,12 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/cli"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
 // Each test uses t.Chdir(t.TempDir()) so the file connector picks up an empty
@@ -2496,5 +2499,136 @@ func TestWikiProjectRootStillTargetsWorktreeFromInsideIt(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(projectRoot, "docs", "wiki", "index.md")); !os.IsNotExist(err) {
 		t.Fatalf("parent checkout Wiki should be untouched: %v", err)
+	}
+}
+
+// initProject runs a full non-interactive init in a fresh project directory and
+// returns nothing: the assertions live in the callers, which inspect the files
+// the real binary left behind.
+func initProject(t *testing.T, args ...string) result {
+	t.Helper()
+	newProject(t)
+	t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))
+	base := []string{"init", "--tool", "claude", "--connector", "file", "--yes"}
+	return runCLI(t, "", append(base, args...)...)
+}
+
+func TestInit_FabbricaDelSoftwareTemplateInstallsProcessSkills(t *testing.T) {
+	res := initProject(t, "--template", template.FabbricaDelSoftware)
+	if res.exit != 0 {
+		t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	for _, sk := range template.Default().Skills {
+		path := filepath.Join(".claude", "skills", sk, "SKILL.md")
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected skill at %s: %v", path, err)
+		}
+	}
+	if out := res.stdout.String(); !strings.Contains(out, template.FabbricaDelSoftware) {
+		t.Fatalf("expected the template to be named in the output, got:\n%s", out)
+	}
+}
+
+func TestInit_RecordsTemplateIdentityAndVersion(t *testing.T) {
+	if res := initProject(t, "--template", template.FabbricaDelSoftware); res.exit != 0 {
+		t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+	}
+	want := template.Default()
+
+	raw, err := os.ReadFile(filepath.Join(".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "template:") ||
+		!strings.Contains(body, "id: "+want.ID) ||
+		!strings.Contains(body, "version: \""+want.Version+"\"") {
+		t.Fatalf("config.yaml does not record the template:\n%s", body)
+	}
+
+	_, data := decodeOK(t, runCLI(t, "", "config", "show"))
+	tpl, _ := data["template"].(map[string]any)
+	if tpl == nil || tpl["id"] != want.ID || tpl["version"] != want.Version {
+		t.Fatalf("config show template = %v, want id %q version %q", data["template"], want.ID, want.Version)
+	}
+	// The pre-existing setup fields must survive the envelope change.
+	if data["connector"] != "file" || data["project_root"] == nil || data["paths"] == nil || data["workflow"] == nil {
+		t.Fatalf("config show lost a setup field: %v", data)
+	}
+}
+
+func TestInit_WithoutTemplateMatchesFabbricaDelSoftware(t *testing.T) {
+	read := func(t *testing.T, args ...string) (skills []string, config string) {
+		t.Helper()
+		if res := initProject(t, args...); res.exit != 0 {
+			t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
+		}
+		entries, err := os.ReadDir(filepath.Join(".claude", "skills"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			skills = append(skills, e.Name())
+		}
+		sort.Strings(skills)
+		raw, err := os.ReadFile(filepath.Join(".archetipo", "config.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return skills, string(raw)
+	}
+
+	var implicitSkills, explicitSkills []string
+	var implicitConfig, explicitConfig string
+	t.Run("implicit", func(t *testing.T) {
+		implicitSkills, implicitConfig = read(t)
+	})
+	t.Run("explicit", func(t *testing.T) {
+		explicitSkills, explicitConfig = read(t, "--template", template.FabbricaDelSoftware)
+	})
+
+	if !reflect.DeepEqual(implicitSkills, explicitSkills) {
+		t.Fatalf("skills differ: implicit %v, explicit %v", implicitSkills, explicitSkills)
+	}
+	if implicitConfig != explicitConfig {
+		t.Fatalf("config differs:\n--- implicit ---\n%s\n--- explicit ---\n%s", implicitConfig, explicitConfig)
+	}
+
+	// A workspace written before Templates existed carries no `template:` block
+	// and must still resolve the Fabbrica del software.
+	t.Run("legacy workspace", func(t *testing.T) {
+		newProject(t)
+		if err := os.MkdirAll(".archetipo", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(".archetipo", "config.yaml"), []byte("connector: file\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, data := decodeOK(t, runCLI(t, "", "config", "show"))
+		tpl, _ := data["template"].(map[string]any)
+		if tpl == nil || tpl["id"] != template.DefaultID {
+			t.Fatalf("legacy workspace template = %v, want id %q", data["template"], template.DefaultID)
+		}
+	})
+}
+
+func TestInit_UnknownTemplateLeavesNoPartialWorkspace(t *testing.T) {
+	res := initProject(t, "--template", "inesistente")
+	exit, code := decodeError(t, res)
+	if code != iox.CodeInvalidInput {
+		t.Fatalf("expected %s, got %s", iox.CodeInvalidInput, code)
+	}
+	if exit != iox.ExitInvalidInput {
+		t.Fatalf("expected exit %d, got %d", iox.ExitInvalidInput, exit)
+	}
+	// The rejection must precede every mutation: nothing may exist afterwards.
+	for _, path := range []string{
+		filepath.Join(".claude", "skills"),
+		filepath.Join(".archetipo", "config.yaml"),
+		filepath.Join(".archetipo", "shared-runtime.md"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("unknown template left %s behind (%v)", path, err)
+		}
 	}
 }

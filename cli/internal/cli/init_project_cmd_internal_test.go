@@ -101,3 +101,59 @@ func TestSetWikiEnabledFieldInsertsKeyIntoExistingSection(t *testing.T) {
 		t.Fatalf("worktree section lost:\n%s", out)
 	}
 }
+
+// setTemplateFields rewrites YAML textually, so both of its branches — patching
+// an existing block and appending a missing one — are exercised here. The
+// append branch is what an older packaged runtime asset hits, and it has no
+// coverage from the CLI-level tests, which always run against the current asset.
+func TestSetTemplateFields(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "patches an existing block and keeps its comment",
+			body: "connector: file\n\n# the process\ntemplate:\n  id: old\n  version: \"0.0.1\"\n\nfile:\n  backlog: b\n",
+			want: "connector: file\n\n# the process\ntemplate:\n  id: fabbrica\n  version: \"2.0.0\"\n\nfile:\n  backlog: b\n",
+		},
+		{
+			name: "appends the whole block when the key is absent",
+			body: "connector: file\n",
+			want: "connector: file\n\ntemplate:\n  id: fabbrica\n  version: \"2.0.0\"\n",
+		},
+		{
+			name: "completes a block that declares only the id",
+			body: "template:\n  id: old\n\nfile:\n  backlog: b\n",
+			want: "template:\n  id: fabbrica\n  version: \"2.0.0\"\n\nfile:\n  backlog: b\n",
+		},
+		{
+			name: "leaves unrelated children of the block untouched",
+			body: "template:\n  id: old\n  note: keep me\n  version: \"0.0.1\"\n",
+			want: "template:\n  id: fabbrica\n  note: keep me\n  version: \"2.0.0\"\n",
+		},
+		{
+			name: "does not confuse a nested template key with the top-level one",
+			body: "other:\n  template:\n    id: nested\n",
+			want: "other:\n  template:\n    id: nested\n\ntemplate:\n  id: fabbrica\n  version: \"2.0.0\"\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := setTemplateFields(tc.body, "fabbrica", "2.0.0"); got != tc.want {
+				t.Fatalf("got:\n%q\nwant:\n%q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The packaged asset must already carry the block, so a normal init patches it
+// instead of appending: appending would move the template away from the comment
+// that explains it.
+func TestSetTemplateFieldsIsIdempotent(t *testing.T) {
+	body := "connector: file\ntemplate:\n  id: a\n  version: \"1\"\n"
+	once := setTemplateFields(body, "fabbrica", "2.0.0")
+	if twice := setTemplateFields(once, "fabbrica", "2.0.0"); twice != once {
+		t.Fatalf("not idempotent:\nfirst:\n%q\nsecond:\n%q", once, twice)
+	}
+}
