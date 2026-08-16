@@ -27,9 +27,9 @@ sources:
       role: verification
 review:
     content_hash: sha256:b0da9bfdbdf997f61184bdd4159b9f1ac62e1b52d201d5c2fb42916ce96f7e5e
-    evidence_revision: 9971aeffca5b0e72438e465a01df7e07dd7459e4
-    evidence_hash: sha256:69a782b4855b54142e797c6c04b94fdd533e5ff4c63da3df14156afa335ed445
-    reviewed_at: "2026-08-16T00:05:04Z"
+    evidence_revision: d19036939e60214eff4bb0f89b76ce0685298ba1
+    evidence_hash: sha256:7929bfb49f16e27cd9ac0eaeefd67eadb80cf13fc850dc8a44104594c9e47009
+    reviewed_at: "2026-08-16T09:36:03Z"
 ---
 # Confine dei provider di esecuzione
 

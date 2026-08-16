@@ -2,7 +2,7 @@
 type: operations
 title: Sviluppo e operazioni di ARchetipo
 description: Comandi locali, pipeline CI, packaging, release e vincoli operativi del repository
-status: generated
+status: reviewed
 sources:
     - path: AGENTS.md
       role: development-contract
@@ -18,6 +18,11 @@ sources:
       role: packaging-implementation
     - path: test/e2e/run.mjs
       role: e2e-harness
+review:
+    content_hash: sha256:b4c7956bea6fa91a74a24666ca9d67ee0efed9aa88ddaee09a204c58b3a263a8
+    evidence_revision: d19036939e60214eff4bb0f89b76ce0685298ba1
+    evidence_hash: sha256:bc0c1e5745f5124550f530f9bfd5d1e15867866345150f3d0f40cacf953ec095
+    reviewed_at: "2026-08-16T09:36:01Z"
 ---
 # Sviluppo e operazioni di ARchetipo
 

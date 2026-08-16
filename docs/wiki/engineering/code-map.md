@@ -2,7 +2,7 @@
 type: code-map
 title: Mappa del codice di ARchetipo
 description: Corrispondenza fisica tra responsabilita osservabili, entry point, integrazioni, test e boundary ispezionati
-status: generated
+status: reviewed
 sources:
     - path: cli/cmd/archetipo/main.go
       role: cli-entrypoint
@@ -62,6 +62,11 @@ coverage:
       path: trip
       status: excluded
       note: Fixture isolata in test/e2e/fixtures/wiki-codebase usata per verificare il bootstrap Wiki; non e una capability del prodotto ARchetipo.
+review:
+    content_hash: sha256:8a9df57d17130d4db86b72cbf0c04d856310541550925a66349a8ef672ec867e
+    evidence_revision: d19036939e60214eff4bb0f89b76ce0685298ba1
+    evidence_hash: sha256:c4ecf2cd839e4b3a58ebf881e2c9c317f49b8a6b08492f6845129c57d07897df
+    reviewed_at: "2026-08-16T09:36:01Z"
 ---
 # Mappa del codice di ARchetipo
 

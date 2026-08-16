@@ -2,7 +2,7 @@
 type: context-map
 title: Mappa dei contesti di ARchetipo
 description: Confini runtime osservabili e dipendenze tra skill, CLI, connector, provider, viewer e distribuzione
-status: generated
+status: reviewed
 sources:
     - path: cli/internal/cli/root.go
       role: runtime-composition
@@ -22,6 +22,11 @@ sources:
       role: process-definition
     - path: cli/internal/cli/init_project_cmd.go
       role: workspace-bootstrap
+review:
+    content_hash: sha256:1e436fcbc592945c3e2b34976ab84d3295590cdbafa14d8168436f14a6eb47f6
+    evidence_revision: d19036939e60214eff4bb0f89b76ce0685298ba1
+    evidence_hash: sha256:257c46d9841cf1795edafda29f4319bbdecd9d6ce0910067d4e1d5b09c817e71
+    reviewed_at: "2026-08-16T09:36:01Z"
 ---
 # Mappa dei contesti di ARchetipo
 

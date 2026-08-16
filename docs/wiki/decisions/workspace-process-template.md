@@ -2,7 +2,7 @@
 type: decision
 title: Template di processo del workspace
 description: Il processo di un workspace è una definizione registrata in-process, selezionata per ID all'inizializzazione e conservata nella configurazione
-status: generated
+status: reviewed
 decision_status: accepted
 sources:
     - path: cli/internal/template/template.go
@@ -19,6 +19,11 @@ sources:
       role: verification
     - path: .archetipo/config.yaml
       role: workspace-config-template
+review:
+    content_hash: sha256:4c32f57a58b7f742e370f1f2f1360f4cf0cde3c56b33adc15b55376b5f6d1c4a
+    evidence_revision: d19036939e60214eff4bb0f89b76ce0685298ba1
+    evidence_hash: sha256:fe6279d31448de1b0ce32d62557b93a3763524bba8926c17e705caf0784b1951
+    reviewed_at: "2026-08-16T09:36:01Z"
 ---
 # Template di processo del workspace
 
