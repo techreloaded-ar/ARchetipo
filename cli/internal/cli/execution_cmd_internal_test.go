@@ -25,6 +25,7 @@ type executionFakeProvider struct {
 	calls        int
 	requests     []execution.Request
 	validate     func(map[string]any) error
+	effect       func()
 }
 
 func (p *executionFakeProvider) ID() string { return p.id }
@@ -40,7 +41,39 @@ func (p *executionFakeProvider) ValidateConfig(_ context.Context, config map[str
 func (p *executionFakeProvider) Execute(_ context.Context, request execution.Request) (execution.Result, error) {
 	p.calls++
 	p.requests = append(p.requests, request)
+	// effect stands for the work a real provider makes happen elsewhere. A
+	// provider that claims a plan without one is refused by the run command, so a
+	// fake that only returns a payload cannot stand in for a successful plan.
+	if p.effect != nil {
+		p.effect()
+	}
 	return p.result, p.err
+}
+
+// planExecutionSpec persists a plan for the seeded spec through the CLI and the
+// configured connector, exactly as the remote agent of a real provider does.
+func planExecutionSpec(t *testing.T, deps executionDependencies) {
+	t.Helper()
+	body, err := json.Marshal(domain.PlanInput{
+		PlanBody: "# US-001 — Piano di implementazione\n\nProdotto dal provider.\n",
+		Tasks: []domain.Task{{
+			ID:     "TASK-01",
+			Title:  "Implementa la slice",
+			Body:   "## Objective\n\nImplementa la slice pianificata.\n",
+			Type:   "Impl",
+			Status: "TODO",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "plan.json")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if planned := runExecutionRoot(t, deps, "spec", "plan", "US-001", "--file", path); planned.exit != 0 {
+		t.Fatalf("seeding the plan failed: exit=%d stderr=%s", planned.exit, planned.stderr.String())
+	}
 }
 
 type executionCLIResult struct {
@@ -161,6 +194,7 @@ func TestExecutionRunShowSuccess(t *testing.T) {
 	success := &executionFakeProvider{id: "fake-success", capabilities: []execution.Capability{execution.CapabilitySpecPlan}, result: execution.Result{Payload: wantPayload}}
 	deps := executionTestDeps(t, success)
 	seedExecutionSpec(t, deps)
+	success.effect = func() { planExecutionSpec(t, deps) }
 	run := decodeExecution(t, runExecutionRoot(t, deps, "execution", "run", "US-001", "plan", "--provider", "fake-success"))
 	if run.Status != execution.StatusSucceeded || run.ProviderID != "fake-success" || run.SpecCode != "US-001" || run.Capability != execution.CapabilitySpecPlan || run.Result == nil || run.Error != nil || success.calls != 1 {
 		t.Fatalf("run=%#v calls=%d", run, success.calls)
@@ -355,6 +389,9 @@ func TestExecutionRunUsesDefaultAndExplicitOverrideWins(t *testing.T) {
 	overrideProvider := &executionFakeProvider{id: "fake-override", capabilities: []execution.Capability{execution.CapabilitySpecPlan}, result: execution.Result{Payload: json.RawMessage(`{"provider":"override"}`)}}
 	deps := executionTestDeps(t, defaultProvider, overrideProvider)
 	seedExecutionSpec(t, deps)
+	// Only the first dispatch has to produce the plan: the second one runs
+	// against a spec the connector already reports as planned.
+	defaultProvider.effect = func() { planExecutionSpec(t, deps) }
 	payload := writeExecutionProviderPayload(t, "default.yaml", "endpoint: https://runner.test\n")
 	decodeExecutionProvider(t, runExecutionRoot(t, deps, "execution", "provider", "set-default", "fake-default", "--file", payload))
 	first := decodeExecution(t, runExecutionRoot(t, deps, "execution", "run", "US-001", "plan"))

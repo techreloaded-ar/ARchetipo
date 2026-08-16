@@ -12,6 +12,7 @@ import (
 	// Concrete connectors register themselves via init().
 	_ "github.com/techreloaded-ar/ARchetipo/cli/internal/connector/builtin"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/arcipelago"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/version"
 )
@@ -52,9 +53,19 @@ func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// defaultExecutionRegistry is the registry the real CLI runs with. Registering
+// a single static provider cannot fail — the registry is fresh and the id is a
+// non-empty constant — so the error is deliberately discarded rather than
+// turned into an unreachable failure path.
+func defaultExecutionRegistry() *execution.Registry {
+	registry := execution.NewRegistry()
+	_ = registry.Register(arcipelago.New(arcipelago.Options{}))
+	return registry
+}
+
 func newRootCmd(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 	return newRootCmdWithExecution(stdin, stdout, stderr, executionDependencies{
-		registry: execution.NewRegistry(),
+		registry: defaultExecutionRegistry(),
 		newID:    execution.RandomID,
 		now:      time.Now,
 		storeFactory: func(projectRoot string) (execution.Store, error) {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"gopkg.in/yaml.v3"
@@ -65,7 +66,7 @@ func newExecutionProviderSetDefaultCmd(s streams, deps executionDependencies) *c
 				return iox.NewInvalidInput("invalid execution.default_provider.id", "register the requested provider before selecting it", err)
 			}
 			if err := provider.ValidateConfig(cmd.Context(), execution.CloneConfig(providerConfig)); err != nil {
-				return mapProviderConfigurationError(err)
+				return mapProviderConfigurationError(err, defaultProviderConfigPath)
 			}
 			cfg, err := loadConfigFor(cmd)
 			if err != nil {
@@ -123,6 +124,7 @@ func writeExecutionProvider(s streams, cfg config.Config, selection config.Defau
 
 func newExecutionRunCmd(s streams, deps executionDependencies) *cobra.Command {
 	var providerID string
+	var requestID string
 	cmd := &cobra.Command{
 		Use:   "run US-XXX action",
 		Short: "Run an action through the workspace default or an explicit execution provider",
@@ -137,6 +139,9 @@ func newExecutionRunCmd(s streams, deps executionDependencies) *cobra.Command {
 			}
 			if _, err := execution.RequiredCapability(action); err != nil {
 				return mapExecutionError(err)
+			}
+			if cmd.Flags().Changed("request-id") && strings.TrimSpace(requestID) == "" {
+				return errInvalidUsage("--request-id requires a non-empty value", "pass --request-id <key> or omit it")
 			}
 			return withConnectorCfg(cmd, s, "execution", func(ctx context.Context, cfg config.Config, conn connector.Connector) (any, error) {
 				resolvedProviderID := strings.TrimSpace(providerID)
@@ -163,29 +168,137 @@ func newExecutionRunCmd(s streams, deps executionDependencies) *cobra.Command {
 				if err != nil {
 					return nil, iox.NewInternal("creating execution service", err)
 				}
-				outcome, err := service.Run(ctx, spec, action, resolvedProviderID, providerConfig)
+				var outcome execution.Execution
+				reused := false
+				if key := strings.TrimSpace(requestID); key != "" {
+					outcome, reused, err = service.RunIdempotent(ctx, spec, action, resolvedProviderID, providerConfig, key)
+				} else {
+					outcome, err = service.Run(ctx, spec, action, resolvedProviderID, providerConfig)
+				}
 				if err != nil {
 					return nil, mapExecutionRunError(err, fromDefault)
 				}
-				return outcome, nil
+				// A reused record is not re-verified: its effect was already
+				// confirmed when it was created, and the spec has legitimately
+				// moved on since then.
+				if !reused {
+					if err := confirmActionEffect(ctx, conn, store, action, specCode, &outcome); err != nil {
+						return nil, err
+					}
+				}
+				return executionRunResult{Execution: outcome, Reused: reused}, nil
 			})
 		},
 	}
-	cmd.Flags().StringVar(&providerID, "provider", "", "execution provider id (overrides the workspace default)")
+	cmd.Flags().StringVar(&providerID, "provider", "", "execution provider id (overrides the workspace default and runs with an empty configuration, so it only fits providers that need none)")
+	cmd.Flags().StringVar(&requestID, "request-id", "", "idempotency key: repeating the same value returns the execution already created, in whatever state it is in")
 	return cmd
 }
 
-func mapProviderConfigurationError(err error) error {
+// executionRunResult is the envelope payload of `execution run`. It inlines the
+// record and adds whether it was reused: without that flag a repeated
+// --request-id is indistinguishable from a fresh dispatch, and a record left
+// RUNNING by an interrupted process would come back for ever with no sign that
+// nothing new was started.
+type executionRunResult struct {
+	execution.Execution
+	Reused bool `json:"reused"`
+}
+
+// confirmActionEffect turns a self-declared success into a verified one.
+//
+// The provider only ever sees a receipt written by the remote agent: it cannot
+// read the connector, and the execution-provider boundary deliberately keeps it
+// that way, so that a remote failure can never move a spec. But a receipt is a
+// declaration. A remote skill that fails halfway, or an agent that hallucinates
+// its own closure, produces a well-formed receipt with the spec still TODO and
+// no plan persisted anywhere. This layer already holds the connector — it read
+// the spec through it a few lines above — so it is where the claim is checked
+// against the state.
+//
+// A claim the state denies is not a success: the record is rewritten with the
+// reason and the command exits in error.
+func confirmActionEffect(ctx context.Context, conn connector.Connector, store execution.Store, action execution.ActionID, specCode string, outcome *execution.Execution) error {
+	if outcome.Status != execution.StatusSucceeded || action != execution.ActionPlan {
+		return nil
+	}
+	reason := planEffect(ctx, conn, specCode)
+	if reason == nil {
+		return nil
+	}
+	message := fmt.Sprintf(
+		"the execution reported success but the connector does not confirm it: %v",
+		reason,
+	)
+	remoteID := ""
+	if outcome.Result != nil {
+		remoteID = outcome.Result.ExternalID
+	}
+	// Result and Error are mutually exclusive on a record, so the external
+	// identifier moves into the error rather than being lost with the result.
+	outcome.Status = execution.StatusFailed
+	outcome.Result = nil
+	outcome.Error = &execution.ExecutionError{Code: "UNCONFIRMED_EFFECT", Message: message, ExternalID: remoteID}
+	if err := store.Update(context.WithoutCancel(ctx), *outcome); err != nil {
+		return iox.NewInternal("recording the unconfirmed execution "+outcome.ID, err)
+	}
+	return iox.NewPrecondition(
+		"execution "+outcome.ID+": "+message,
+		"inspect the remote run, then retry with a new --request-id once the cause is fixed",
+		nil,
+	)
+}
+
+// planEffect reports why the connector does not back a claimed plan, or nil when
+// it does. Both halves matter: a spec that is PLANNED with an empty task list is
+// as unusable as one still sitting in TODO.
+func planEffect(ctx context.Context, conn connector.Connector, specCode string) error {
+	spec, err := conn.ReadSpecDetail(ctx, specCode)
+	if err != nil {
+		return fmt.Errorf("re-reading %s failed: %w", specCode, err)
+	}
+	if spec.Status != domain.StatusPlanned {
+		return fmt.Errorf("%s is %s, not %s", specCode, spec.Status, domain.StatusPlanned)
+	}
+	tasks, err := conn.ReadSpecTasks(ctx, specCode)
+	if err != nil {
+		return fmt.Errorf("reading the plan tasks of %s failed: %w", specCode, err)
+	}
+	if len(tasks) == 0 {
+		return fmt.Errorf("%s is %s but holds no plan task", specCode, domain.StatusPlanned)
+	}
+	return nil
+}
+
+// defaultProviderConfigPath is the configuration path a provider field belongs
+// to when the provider came from the workspace default.
+const defaultProviderConfigPath = "execution.default_provider.config"
+
+// explicitProviderConfigPath names the configuration of a provider selected
+// with --provider. It is deliberately not execution.default_provider.config:
+// that path is not where an explicit provider reads its configuration from.
+const explicitProviderConfigPath = "--provider configuration"
+
+// mapProviderConfigurationError renders a provider configuration rejection with
+// the exact field that caused it. The path prefix is a parameter because the
+// remedy differs: on the workspace-default path the user fixes
+// execution.default_provider.config.<field>, while an explicit --provider
+// receives no configuration at all, so pointing there would send the user to
+// correct a field that is not the cause.
+func mapProviderConfigurationError(err error, pathPrefix string) error {
 	var configErr *execution.ConfigurationError
 	if errors.As(err, &configErr) {
 		field := strings.TrimSpace(configErr.Field)
-		path := "execution.default_provider.config"
+		path := pathPrefix
 		if field != "" {
 			path += "." + field
 		}
+		if pathPrefix != defaultProviderConfigPath {
+			return iox.NewInvalidInput("invalid "+path+": "+configErr.Error(), "--provider receives no configuration; configure the workspace default with execution provider set-default <id> --file <path>", err)
+		}
 		return iox.NewInvalidInput("invalid "+path+": "+configErr.Error(), "fix "+path+" and retry", err)
 	}
-	return iox.NewInvalidInput("invalid execution.default_provider.config", "fix the provider configuration and retry", err)
+	return iox.NewInvalidInput("invalid "+pathPrefix, "fix the provider configuration and retry", err)
 }
 
 func mapExecutionRunError(err error, fromDefault bool) error {
@@ -196,7 +309,7 @@ func mapExecutionRunError(err error, fromDefault bool) error {
 		}
 		var configErr *execution.ConfigurationError
 		if errors.As(err, &configErr) {
-			return mapProviderConfigurationError(err)
+			return mapProviderConfigurationError(err, defaultProviderConfigPath)
 		}
 	}
 	return mapExecutionError(err)
@@ -254,6 +367,12 @@ func mapExecutionError(err error) error {
 		case execution.StoreInvalidID:
 			return iox.NewInvalidInput("invalid execution id", "use the id returned by execution run", err)
 		}
+	}
+	// Without this branch `--provider <id>` without configuration would surface
+	// as a misleading E_INTERNAL instead of naming the missing field.
+	var configErr *execution.ConfigurationError
+	if errors.As(err, &configErr) {
+		return mapProviderConfigurationError(err, explicitProviderConfigPath)
 	}
 	return iox.NewInternal("execution operation failed", err)
 }

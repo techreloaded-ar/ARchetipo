@@ -14,9 +14,9 @@ sources:
       role: project-manifest
 review:
     content_hash: sha256:737dda677be3357b3c83c043f1ef682a0186353906bf04b1026e20b859a96f9e
-    evidence_revision: cc9ba1eabbd6187a04b50d84b69f7f434f3a4935
-    evidence_hash: sha256:570afef9af2deaa4f533c62fd5ceeea08ea933f8b0d2c44c5cb92cca0ae15a57
-    reviewed_at: "2026-08-15T20:45:27Z"
+    evidence_revision: 9971aeffca5b0e72438e465a01df7e07dd7459e4
+    evidence_hash: sha256:81ded459802ee204adcefc2a79995ca45657de512c920fa6c07090c14a7c33b3
+    reviewed_at: "2026-08-16T00:05:11Z"
 ---
 # Panoramica di ARchetipo
 

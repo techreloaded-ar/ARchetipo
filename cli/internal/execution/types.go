@@ -36,7 +36,30 @@ type Result struct {
 type ExecutionError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// ExternalID names the remote unit of work when the failure happened after
+	// that work already existed. Without it the identifier of a task that is
+	// still alive on the remote system would live only inside prose, so a
+	// program could not follow it.
+	ExternalID string `json:"external_id,omitempty"`
 }
+
+// RemoteError is the error a provider returns when the dispatch failed after a
+// remote unit of work had already been created. It carries the identifier of
+// that work so the failed record can name it in a structured field and not only
+// in the message.
+type RemoteError struct {
+	ExternalID string
+	Err        error
+}
+
+func (e *RemoteError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("remote work %q failed", e.ExternalID)
+	}
+	return e.Err.Error()
+}
+
+func (e *RemoteError) Unwrap() error { return e.Err }
 
 type Execution struct {
 	ID               string          `json:"id"`
@@ -44,6 +67,7 @@ type Execution struct {
 	Action           ActionID        `json:"action"`
 	Capability       Capability      `json:"capability"`
 	ProviderID       string          `json:"provider_id"`
+	RequestID        string          `json:"request_id,omitempty"`
 	SpecStatusBefore domain.Status   `json:"spec_status_before"`
 	Status           ExecutionStatus `json:"status"`
 	Result           *Result         `json:"result,omitempty"`
