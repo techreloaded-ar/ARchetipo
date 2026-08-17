@@ -128,7 +128,7 @@ func newRootCmdWithExecution(stdin io.Reader, stdout, stderr io.Writer, deps exe
 		newMetricsCmd(s),
 		newTaskCmd(s),
 		newValidateCmd(s),
-		newViewCmd(s),
+		newViewCmd(s, deps.registry),
 		newWikiCmd(s),
 		newVersionCmd(s),
 	)

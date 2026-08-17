@@ -173,7 +173,7 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 |---|---|
 | `archetipo init [--template <id>]` | Installs the skills of the selected process Template into the current project and creates `.archetipo/config.yaml` — with the Template `id` and `version` — plus `.archetipo/shared-runtime.md`. |
 | `archetipo doctor` | Diagnoses the installation: data directory, packaged and installed skills, project config, git, and gh auth (github connector). |
-| `archetipo view` | Starts a local Kanban view for `.archetipo/backlog.yaml`, `.archetipo/specs/`, and `.archetipo/plans/`. |
+| `archetipo view` | Starts a local Kanban view for `.archetipo/backlog.yaml`, `.archetipo/specs/`, and `.archetipo/plans/`. Its Execution panel selects the workspace default provider from the registered ones — non-secret settings only — and each spec shows the actions its process Template admits in the spec's current status. |
 | `archetipo config show` | Initializes the connector and prints metadata, including the workspace process Template (`id` and `version`). |
 | `archetipo prd write [--file PRD.md]` | Saves PRD markdown from `--file` or stdin. |
 | `archetipo validate prd [--file PRD.md]` | Validates the PRD against structural PRD rules. |

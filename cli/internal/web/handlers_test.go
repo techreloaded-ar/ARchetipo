@@ -25,7 +25,7 @@ func newTestServer(t *testing.T) (*Server, *inmemory.Connector) {
 	t.Helper()
 	cfg := config.Default()
 	conn := inmemory.New(cfg)
-	srv, err := NewServer(conn, cfg, "127.0.0.1:0")
+	srv, err := NewServer(conn, cfg, nil, "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func newFileServer(t *testing.T) (*Server, config.Config) {
 	cfg := config.Default()
 	cfg.ProjectRoot = dir
 	conn := filefs.New(cfg)
-	srv, err := NewServer(conn, cfg, "127.0.0.1:0")
+	srv, err := NewServer(conn, cfg, nil, "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

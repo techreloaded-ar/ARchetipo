@@ -60,6 +60,12 @@
 	const configSummaryExists = document.getElementById("config-summary-exists");
 	const configValidation = document.getElementById("config-validation");
 	const configConnectorGrid = document.getElementById("config-connector-grid");
+	const configSummaryProvider = document.getElementById("config-summary-provider");
+	const executionProviderGrid = document.getElementById("execution-provider-grid");
+	const executionFields = document.getElementById("execution-fields");
+	const executionSaveBtn = document.getElementById("execution-save-btn");
+	const executionStatus = document.getElementById("execution-status");
+	const storyActions = document.getElementById("story-actions");
 	const mockupsBtn = document.getElementById("mockups-btn");
 	const mockupsMenu = document.getElementById("mockups-menu");
 	const mockupsDropdown = document.getElementById("mockups-dropdown");
@@ -160,6 +166,8 @@
 	let currentConfigExists = false; // whether config.yaml existed on open
 	let activeConfigTab = "guided";
 	let mockupsCache = []; // cached list of mockups (refreshed lazily)
+	let executionProviders = []; // providers offered by the server, in its order
+	let executionDefault = null; // persisted workspace default, or null
 
 	refreshBtn.addEventListener("click", loadBoard);
 	modalClose.addEventListener("click", closeModal);
@@ -228,6 +236,8 @@
 		tab.addEventListener("click", () => activateConfigTab(tab.dataset.configTab)),
 	);
 	configConnectorGrid.addEventListener("change", updateConnectorSections);
+	executionProviderGrid.addEventListener("change", onExecutionProviderSelected);
+	executionSaveBtn.addEventListener("click", saveExecutionProvider);
 
 	mockupsBtn.addEventListener("click", toggleMockupsMenu);
 	document.addEventListener("click", (e) => {
@@ -467,6 +477,7 @@
 		activateTab("story");
 		specStatus.textContent = "Loading...";
 		planStatus.textContent = "";
+		storyActions.innerHTML = "";
 		showSpecView();
 		showPlanView();
 		reviewLoaded = false;
@@ -479,6 +490,7 @@
 				tasks: detail.tasks || [],
 			};
 			fillSpecView(currentSpecSnapshot);
+			renderSpecActions(detail.actions);
 			fillSpecForm(currentSpecSnapshot);
 			fillPlanView(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
 			fillPlanForm(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
@@ -1339,7 +1351,199 @@
 		setConfigStatus("Loading...", null);
 		setConfigValidation("Not tested in this session.", null);
 		configRestartNotice.classList.add("hidden");
-		await loadConfig();
+		setExecutionStatus("", null);
+		await Promise.all([loadConfig(), loadExecutionProviders()]);
+	}
+
+	// ---- Execution provider --------------------------------------------------
+	//
+	// The browser knows nothing about any provider: the list, the labels and the
+	// fields to fill all come from the server, which asks the provider itself.
+
+	function setExecutionStatus(message, kind) {
+		executionStatus.textContent = message || "";
+		executionStatus.className = "status-msg";
+		if (kind) executionStatus.classList.add(kind);
+	}
+
+	function selectedProviderID() {
+		const checked = executionProviderGrid.querySelector(
+			'input[name="execution_provider"]:checked',
+		);
+		return (checked && checked.value) || "";
+	}
+
+	function findProvider(id) {
+		return executionProviders.find((p) => p.id === id) || null;
+	}
+
+	async function loadExecutionProviders() {
+		try {
+			const data = await apiGet("/api/execution/providers");
+			executionProviders = (data && data.providers) || [];
+			executionDefault = (data && data.default) || null;
+			renderProviderGrid();
+			const selected = executionDefault
+				? executionDefault.id
+				: executionProviders.length
+					? executionProviders[0].id
+					: "";
+			selectProvider(selected);
+			updateProviderSummary();
+			setExecutionStatus("", null);
+		} catch (err) {
+			executionProviders = [];
+			executionDefault = null;
+			renderProviderGrid();
+			setExecutionStatus(`Load failed: ${err.message || err}`, "err");
+		}
+	}
+
+	function renderProviderGrid() {
+		if (!executionProviders.length) {
+			executionProviderGrid.innerHTML =
+				'<p class="config-copy">No execution provider is registered in this build.</p>';
+			executionFields.innerHTML = "";
+			return;
+		}
+		executionProviderGrid.innerHTML = executionProviders
+			.map((p) => {
+				const caps = (p.capabilities || []).join(", ") || "no capability declared";
+				return `<label class="config-connector-card"><input type="radio" name="execution_provider" value="${escapeHtml(p.id)}" /><strong>${escapeHtml(p.label || p.id)}</strong><small>${escapeHtml(caps)}</small></label>`;
+			})
+			.join("");
+	}
+
+	function selectProvider(id) {
+		executionProviderGrid
+			.querySelectorAll('input[name="execution_provider"]')
+			.forEach((input) => {
+				input.checked = input.value === id;
+				input.closest(".config-connector-card").classList.toggle(
+					"active",
+					input.checked,
+				);
+			});
+		const values =
+			executionDefault && executionDefault.id === id
+				? executionDefault.config || {}
+				: {};
+		renderProviderFields(findProvider(id), values);
+	}
+
+	function onExecutionProviderSelected() {
+		setExecutionStatus("", null);
+		selectProvider(selectedProviderID());
+	}
+
+	function renderProviderFields(provider, values) {
+		if (!provider) {
+			executionFields.innerHTML = "";
+			return;
+		}
+		const fields = provider.config_fields || [];
+		if (!fields.length) {
+			executionFields.innerHTML =
+				'<p class="config-copy">This provider declares no configurable setting.</p>';
+			return;
+		}
+		executionFields.innerHTML = fields
+			.map((f) => {
+				const value = values[f.name];
+				const inputType = f.type === "integer" ? "number" : "text";
+				const required = f.required
+					? ' <span class="field-required">required</span>'
+					: "";
+				const help = f.help
+					? `<small class="field-help">${escapeHtml(f.help)}</small>`
+					: "";
+				return `<label class="field full" data-provider-field="${escapeHtml(f.name)}"><span>${escapeHtml(f.label || f.name)}${required}</span><input type="${inputType}" name="provider_${escapeHtml(f.name)}" placeholder="${escapeHtml(f.placeholder || "")}" value="${value === undefined || value === null ? "" : escapeHtml(String(value))}" />${help}</label>`;
+			})
+			.join("");
+	}
+
+	function collectProviderConfig(provider) {
+		const config = {};
+		(provider.config_fields || []).forEach((f) => {
+			const input = executionFields.querySelector(
+				`[name="provider_${cssEscape(f.name)}"]`,
+			);
+			if (!input) return;
+			const raw = input.value.trim();
+			// An empty optional field means "use the provider default": sending it
+			// as an empty string would be a value, and the provider would rightly
+			// reject it.
+			if (raw === "") return;
+			config[f.name] = f.type === "integer" ? Number(raw) : raw;
+		});
+		return config;
+	}
+
+	function markProviderFieldError(name) {
+		executionFields
+			.querySelectorAll("[data-provider-field]")
+			.forEach((label) => label.classList.remove("field-error"));
+		if (!name) return;
+		const label = executionFields.querySelector(
+			`[data-provider-field="${cssEscape(name)}"]`,
+		);
+		if (!label) return;
+		label.classList.add("field-error");
+		const input = label.querySelector("input");
+		if (input) input.focus();
+	}
+
+	function updateProviderSummary() {
+		configSummaryProvider.textContent = executionDefault
+			? executionDefault.id
+			: "not configured";
+	}
+
+	async function saveExecutionProvider() {
+		const id = selectedProviderID();
+		if (!id) {
+			setExecutionStatus("Select a provider first.", "err");
+			return;
+		}
+		const provider = findProvider(id);
+		if (!provider) return;
+		markProviderFieldError("");
+		setExecutionStatus("Saving…", null);
+		try {
+			await apiPut("/api/execution/provider/default", {
+				id,
+				config: collectProviderConfig(provider),
+			});
+			// Reload from the server instead of trusting the local form: what the
+			// panel shows is then exactly what was persisted.
+			await loadExecutionProviders();
+			setExecutionStatus(`${id} saved as workspace default.`, "ok");
+			showToast(`Execution provider set to ${id}`, "ok");
+		} catch (err) {
+			markProviderFieldError(err.field || "");
+			setExecutionStatus(`Rejected: ${err.message || err}`, "err");
+		}
+	}
+
+	// ---- Spec actions --------------------------------------------------------
+
+	// renderSpecActions shows the actions the workspace process Template admits
+	// for the spec in its current status. The list is computed server-side and
+	// recomputed on every open, so a status change is reflected without any
+	// process rule living here.
+	function renderSpecActions(actions) {
+		const list = actions || [];
+		if (!list.length) {
+			storyActions.innerHTML =
+				'<span class="story-actions-empty">No action is available in this status</span>';
+			return;
+		}
+		storyActions.innerHTML = list
+			.map(
+				(a) =>
+					`<span class="action-chip"><span class="action-chip-label">${escapeHtml(a.label || a.id)}</span><code class="action-chip-id">${escapeHtml(a.id)}</code></span>`,
+			)
+			.join("");
 	}
 
 	async function loadConfig() {
@@ -1457,7 +1661,13 @@
 		}
 		if (!r.ok) {
 			const msg = data && data.error ? data.error : `HTTP ${r.status}`;
-			throw new Error(msg);
+			const err = new Error(msg);
+			// Structured error details travel with the error: without `field` the
+			// provider form could report a rejection but not point at the input
+			// that caused it.
+			if (data && data.code) err.code = data.code;
+			if (data && data.field) err.field = data.field;
+			throw err;
 		}
 		return data;
 	}

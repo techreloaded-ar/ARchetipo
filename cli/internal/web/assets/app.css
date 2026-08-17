@@ -2353,3 +2353,71 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	background: var(--surface-3);
 	color: var(--priority-high);
 }
+
+/* Actions the process Template admits for a spec in its current status.
+   Informational: running them is not part of this surface. */
+.story-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+	margin: 0 0 14px;
+}
+
+.action-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 4px 10px;
+	background: var(--accent-soft);
+}
+
+.action-chip-label {
+	font-size: 12px;
+	color: var(--text-strong);
+}
+
+.action-chip-id {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+
+.story-actions-empty {
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+/* Execution provider panel */
+.config-actions-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 4px 0 10px;
+}
+
+.field-required {
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--accent-strong);
+}
+
+.field-help {
+	color: var(--text-muted);
+	font-size: 11px;
+	line-height: 1.5;
+	margin-top: 4px;
+}
+
+.field.field-error input {
+	border-color: var(--priority-high);
+}
+
+.field.field-error > span {
+	color: var(--priority-high);
+}

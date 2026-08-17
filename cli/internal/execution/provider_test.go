@@ -81,6 +81,55 @@ func TestRegistry(t *testing.T) {
 	}
 }
 
+type describingProvider struct {
+	testProvider
+	fields []ConfigField
+}
+
+func (p *describingProvider) ConfigFields() []ConfigField { return p.fields }
+
+func TestRegistryListKeepsRegistrationOrder(t *testing.T) {
+	registry := NewRegistry()
+	for _, id := range []string{"zeta", "alpha", "mid"} {
+		if err := registry.Register(&testProvider{id: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"zeta", "alpha", "mid"}
+	got := registry.List()
+	if len(got) != len(want) {
+		t.Fatalf("expected %d providers, got %d", len(want), len(got))
+	}
+	for i, provider := range got {
+		if provider.ID() != want[i] {
+			t.Fatalf("provider %d: expected %q, got %q", i, want[i], provider.ID())
+		}
+	}
+	got[0] = &testProvider{id: "tampered"}
+	if again := registry.List(); again[0].ID() != "zeta" {
+		t.Fatalf("returned slice is not detached from the registry: %q", again[0].ID())
+	}
+	if (*Registry)(nil).List() != nil {
+		t.Fatal("nil registry must list nothing")
+	}
+}
+
+func TestDescribeConfig(t *testing.T) {
+	if fields := DescribeConfig(&testProvider{id: "plain"}); fields == nil || len(fields) != 0 {
+		t.Fatalf("a provider without fields must describe an empty, non-nil list, got %#v", fields)
+	}
+	declared := []ConfigField{{Name: "endpoint", Label: "Endpoint", Type: "text", Required: true}}
+	describer := &describingProvider{testProvider: testProvider{id: "rich"}, fields: declared}
+	fields := DescribeConfig(describer)
+	if len(fields) != 1 || fields[0].Name != "endpoint" {
+		t.Fatalf("declared fields lost: %#v", fields)
+	}
+	fields[0].Name = "tampered"
+	if declared[0].Name != "endpoint" {
+		t.Fatal("DescribeConfig did not detach the returned slice")
+	}
+}
+
 func TestConfigurationErrorAndCloneConfig(t *testing.T) {
 	cause := context.Canceled
 	err := &ConfigurationError{Field: "endpoint", Reason: "is required", Err: cause}

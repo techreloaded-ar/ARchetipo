@@ -104,6 +104,7 @@
                         </div>
                     </div>
                     <h3 class="story-view-title" id="story-view-title"></h3>
+                    <div class="story-actions" id="story-actions"></div>
                     <div class="markdown-rendered" id="story-body-view"></div>
                     <div class="form-actions">
                         <button type="button" id="story-edit-btn" class="primary-btn">Edit</button>
@@ -273,6 +274,7 @@
             <nav class="modal-tabs config-modal-tabs" role="tablist">
                 <button type="button" class="tab active" data-config-tab="guided" role="tab" aria-selected="true">Guided</button>
                 <button type="button" class="tab" data-config-tab="connector" role="tab" aria-selected="false">Connector</button>
+                <button type="button" class="tab" data-config-tab="execution" role="tab" aria-selected="false">Execution</button>
                 <button type="button" class="tab" data-config-tab="advanced" role="tab" aria-selected="false">Advanced YAML</button>
             </nav>
             <div class="config-layout">
@@ -281,6 +283,7 @@
                         <h3>Current state</h3>
                         <div class="config-kv"><span>Connector</span><span id="config-summary-connector">—</span></div>
                         <div class="config-kv"><span>Config file</span><span id="config-summary-exists">—</span></div>
+                        <div class="config-kv"><span>Execution provider</span><span id="config-summary-provider">—</span></div>
                         <div class="config-kv"><span>Secrets</span><span>env only</span></div>
                     </div>
                     <div class="config-sidebar-section">
@@ -396,6 +399,27 @@
                                 <label class="field full"><span>Priority map (KEY: value)</span><textarea name="jira_priority_map" rows="4" spellcheck="false"></textarea></label>
                             </div>
                         </div>
+                    </section>
+                    <section class="tab-panel config-panel" data-config-panel="execution">
+                        <div class="config-section-head">
+                            <div>
+                                <h3 class="config-section-title">Execution provider</h3>
+                                <p class="config-copy">The workspace default used to run process actions. Non-secret settings only: a provider that needs a credential names the environment variable holding it, never the credential itself.</p>
+                            </div>
+                        </div>
+                        <div class="config-group">
+                            <h4>Registered providers</h4>
+                            <div class="config-connector-grid" id="execution-provider-grid"></div>
+                        </div>
+                        <div class="config-group">
+                            <h4>Provider settings</h4>
+                            <div class="form-grid config-form-grid" id="execution-fields"></div>
+                        </div>
+                        <div class="config-actions-row">
+                            <button type="button" id="execution-save-btn" class="primary-btn">Save provider</button>
+                            <span class="status-msg" id="execution-status"></span>
+                        </div>
+                        <p class="config-copy">Saving here writes only <code>execution.default_provider</code> in <code>.archetipo/config.yaml</code>, immediately and independently of <em>Save config</em>.</p>
                     </section>
                     <section class="tab-panel config-panel" data-config-panel="advanced">
                         <div class="config-section-head">

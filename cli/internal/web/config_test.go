@@ -150,6 +150,54 @@ func TestSaveConfigPersistsEnabledWikiGate(t *testing.T) {
 	}
 }
 
+// The guided form does not carry the execution block: without the carry-over
+// in decodeConfigPayload, saving any path from the form would silently delete
+// the workspace execution provider chosen in its own panel.
+func TestSaveConfigStructuredPreservesDefaultProvider(t *testing.T) {
+	srv, cfg := newFileServer(t)
+	mustWriteConfig(t, cfg.ProjectRoot, "connector: file\n")
+	if _, err := config.UpdateDefaultProvider(cfg.ProjectRoot, config.DefaultProviderConfig{
+		ID:     "arcipelago",
+		Config: map[string]any{"base_url": "https://hub.test", "workspace_id": "ws-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := saveConfigReq{Config: func() *config.Config {
+		c := config.Default()
+		c.ProjectRoot = cfg.ProjectRoot
+		c.Paths.PRD = "docs/PRD-3.md"
+		return &c
+	}()}
+	body, _ := json.Marshal(payload)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	srv.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	raw, err := os.ReadFile(filepath.Join(cfg.ProjectRoot, config.RelativePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, "prd: docs/PRD-3.md") {
+		t.Fatalf("the guided change was not saved:\n%s", text)
+	}
+	saved, err := config.ValidateRaw(cfg.ProjectRoot, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Execution.DefaultProvider == nil || saved.Execution.DefaultProvider.ID != "arcipelago" {
+		t.Fatalf("the guided save deleted the default provider:\n%s", text)
+	}
+	if saved.Execution.DefaultProvider.Config["workspace_id"] != "ws-1" {
+		t.Fatalf("the provider configuration was not preserved: %#v", saved.Execution.DefaultProvider.Config)
+	}
+}
+
 func TestSaveConfigRejectsInvalidRaw(t *testing.T) {
 	srv, cfg := newFileServer(t)
 	mustWriteConfig(t, cfg.ProjectRoot, "connector: file\n")

@@ -40,6 +40,55 @@ var knownConfigKeys = map[string]struct{}{
 	"timeout_seconds":       {},
 }
 
+// ConfigFields declares the non-secret settings this provider accepts, so a
+// caller that does not know ARcipelago — the viewer's configuration form — can
+// offer them without hard-coding this package's keys. The names are exactly the
+// keys parseConfig accepts, and none of them carries the credential: the token
+// stays in the environment and only the *name* of its variable is configured.
+func (p *Provider) ConfigFields() []execution.ConfigField {
+	return []execution.ConfigField{
+		{
+			Name:        "base_url",
+			Label:       "Hub base URL",
+			Type:        "text",
+			Help:        "Absolute http or https URL of the ARcipelago hub.",
+			Placeholder: "https://arcipelago.example",
+			Required:    true,
+		},
+		{
+			Name:        "workspace_id",
+			Label:       "Workspace id",
+			Type:        "text",
+			Help:        fmt.Sprintf("Identifier of the ARcipelago workspace, at most %d characters.", maxWorkspaceIDLength),
+			Placeholder: "my-workspace",
+			Required:    true,
+		},
+		{
+			Name:        "token_env",
+			Label:       "Token environment variable",
+			Type:        "text",
+			Help:        "Name of the environment variable holding the ARcipelago token. The token itself is never stored in the configuration. Defaults to " + defaultTokenEnv + ".",
+			Placeholder: defaultTokenEnv,
+		},
+		{
+			Name:        "poll_interval_seconds",
+			Label:       "Poll interval (seconds)",
+			Type:        "integer",
+			Help:        fmt.Sprintf("How often the run is polled, between %d and %d. Defaults to %d.", minPollInterval, maxPollInterval, defaultPollInterval),
+			Placeholder: fmt.Sprintf("%d", defaultPollInterval),
+		},
+		{
+			Name:        "timeout_seconds",
+			Label:       "Timeout (seconds)",
+			Type:        "integer",
+			Help:        fmt.Sprintf("How long the run may take, between %d and %d and never below the poll interval. Defaults to %d.", minTimeout, maxTimeout, defaultTimeout),
+			Placeholder: fmt.Sprintf("%d", defaultTimeout),
+		},
+	}
+}
+
+var _ execution.ConfigDescriber = (*Provider)(nil)
+
 func configErr(field, reason string) error {
 	return &execution.ConfigurationError{Field: field, Reason: reason}
 }

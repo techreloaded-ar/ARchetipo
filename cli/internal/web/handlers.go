@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/metrics"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
 // boardColumnView is the JSON shape of one Kanban column in GET /api/board.
@@ -173,10 +175,23 @@ func (s *Server) handleStreamBoard(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// templateView identifies the process Template the actions were derived from.
+// It is the resolved definition, not the pair persisted in config.yaml — the
+// same distinction `archetipo spec actions` makes.
+type templateView struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
+}
+
 type specDetailView struct {
 	Spec     domain.Spec   `json:"spec"`
 	PlanBody string        `json:"plan_body"`
 	Tasks    []domain.Task `json:"tasks"`
+	// Template and Actions answer "what can I do with this spec now?" with the
+	// process rules, so the browser never has to know them. Actions is always a
+	// list: a status with no admissible action is an empty one, never a null.
+	Template templateView      `json:"template"`
+	Actions  []template.Action `json:"actions"`
 }
 
 func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
@@ -199,7 +214,22 @@ func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
 	if tasks == nil {
 		tasks = []domain.Task{}
 	}
-	writeJSON(w, http.StatusOK, specDetailView{Spec: spec, PlanBody: planBody, Tasks: tasks})
+	tpl, err := template.Resolve(s.cfg.Template.ID)
+	if err != nil {
+		writeError(w, iox.NewInvalidInput(
+			"unknown template: "+s.cfg.Template.ID,
+			"valid: "+strings.Join(template.Builtin().IDs(), ", "),
+			err,
+		))
+		return
+	}
+	writeJSON(w, http.StatusOK, specDetailView{
+		Spec:     spec,
+		PlanBody: planBody,
+		Tasks:    tasks,
+		Template: templateView{ID: tpl.ID, Version: tpl.Version},
+		Actions:  tpl.ActionsFor(spec.Status),
+	})
 }
 
 // readPlanForSpec returns the tasks and (when readable) the plan body for a

@@ -150,6 +150,18 @@ func decodeConfigPayload(root string, req saveConfigReq) ([]byte, config.Config,
 	} else {
 		candidate := *req.Config
 		candidate.ProjectRoot = root
+		// The guided form does not manage the execution provider — it is chosen
+		// in its own panel and written by config.UpdateDefaultProvider. Since a
+		// structured save re-renders the whole file, omitting the carry-over
+		// would silently delete the workspace default the first time anyone
+		// saved a path from the form. The raw branch is deliberately left
+		// alone: there the user is writing the whole YAML, so an omission is a
+		// decision.
+		if candidate.Execution.DefaultProvider == nil {
+			if current, _, exists, _, readErr := readConfigState(root); readErr == nil && exists {
+				candidate.Execution.DefaultProvider = current.Execution.DefaultProvider
+			}
+		}
 		rendered, err := config.RenderFull(candidate)
 		if err != nil {
 			return nil, config.Config{}, iox.NewInvalidInput("invalid config", "could not serialize the guided form values", err)

@@ -14,6 +14,56 @@ func validConfig() map[string]any {
 	return map[string]any{"base_url": "https://hub.test", "workspace_id": "ws-1"}
 }
 
+// TestConfigFieldsMatchAcceptedKeys is the guard against the most insidious
+// defect of a declared form: a field the validator does not accept, or an
+// accepted key nobody can fill in. Both directions are checked.
+func TestConfigFieldsMatchAcceptedKeys(t *testing.T) {
+	fields := New(Options{}).ConfigFields()
+	declared := make(map[string]execution.ConfigField, len(fields))
+	for _, field := range fields {
+		if _, duplicate := declared[field.Name]; duplicate {
+			t.Fatalf("field %q declared twice", field.Name)
+		}
+		if strings.TrimSpace(field.Label) == "" {
+			t.Fatalf("field %q has no label", field.Name)
+		}
+		if field.Type != "text" && field.Type != "integer" {
+			t.Fatalf("field %q has unsupported type %q", field.Name, field.Type)
+		}
+		declared[field.Name] = field
+	}
+	for name := range knownConfigKeys {
+		if _, ok := declared[name]; !ok {
+			t.Fatalf("accepted key %q is not declared as a configurable field", name)
+		}
+	}
+	for name := range declared {
+		if _, ok := knownConfigKeys[name]; !ok {
+			t.Fatalf("declared field %q is not an accepted configuration key", name)
+		}
+	}
+	// The credential never becomes a configuration field: the only key that may
+	// mention a token is the *name* of the environment variable holding it.
+	for name := range declared {
+		if strings.Contains(name, "token") && name != "token_env" {
+			t.Fatalf("field %q looks like a credential; secrets stay in the environment", name)
+		}
+	}
+	required := map[string]any{}
+	for name, field := range declared {
+		if field.Required {
+			required[name] = "https://hub.test"
+		}
+	}
+	if len(required) == 0 {
+		t.Fatal("no required field declared: a provider that needs a hub cannot be configured by defaults alone")
+	}
+	required["workspace_id"] = "ws-1"
+	if err := New(Options{}).ValidateConfig(context.Background(), required); err != nil {
+		t.Fatalf("a configuration filling only the required fields must validate: %v", err)
+	}
+}
+
 func TestParseConfigAppliesDefaults(t *testing.T) {
 	got, err := parseConfig(map[string]any{"base_url": "https://hub.test/", "workspace_id": "ws-1"})
 	if err != nil {

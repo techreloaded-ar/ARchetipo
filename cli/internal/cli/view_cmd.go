@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/viewreg"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/web"
@@ -25,7 +26,11 @@ import (
 // not set explicitly, the command scans upward from here for a free port.
 const defaultViewPort = 8080
 
-func newViewCmd(s streams) *cobra.Command {
+// newViewCmd builds `archetipo view`. registry is the same execution provider
+// registry the `execution` commands use: root.go stays the single place where
+// providers are registered, so the viewer can never offer a provider the CLI
+// would refuse to run.
+func newViewCmd(s streams, registry *execution.Registry) *cobra.Command {
 	var port int
 	var host string
 	var noOpen bool
@@ -69,7 +74,7 @@ authentication is performed.`,
 				port = free
 			}
 			addr := net.JoinHostPort(host, strconv.Itoa(port))
-			srv, err := web.NewServer(conn, cfg, addr)
+			srv, err := web.NewServer(conn, cfg, registry, addr)
 			if err != nil {
 				return iox.NewInternal("creating server", err)
 			}

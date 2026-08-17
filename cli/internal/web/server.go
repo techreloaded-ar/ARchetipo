@@ -18,12 +18,14 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 )
 
 // Server wires the connector backend to HTTP handlers and the embedded UI.
 type Server struct {
 	conn       connector.Connector
 	cfg        config.Config
+	registry   *execution.Registry
 	mux        *http.ServeMux
 	httpSrv    *http.Server
 	mockupsDir string
@@ -34,12 +36,15 @@ type Server struct {
 // NewServer constructs a Server bound to addr (e.g. "127.0.0.1:8080").
 // The returned server has all routes registered but is not listening yet:
 // call Run to start serving. cfg is used to resolve the on-disk location of
-// design mockups served under /mockups/.
-func NewServer(conn connector.Connector, cfg config.Config, addr string) (*Server, error) {
+// design mockups served under /mockups/. registry is the execution provider
+// registry the viewer offers for selection; a nil registry simply offers no
+// provider, which is not an error.
+func NewServer(conn connector.Connector, cfg config.Config, registry *execution.Registry, addr string) (*Server, error) {
 	mux := http.NewServeMux()
 	s := &Server{
 		conn:       conn,
 		cfg:        cfg,
+		registry:   registry,
 		mux:        mux,
 		mockupsDir: cfg.AbsPath(cfg.Paths.Mockups),
 		broker:     NewBroker(),
@@ -126,6 +131,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/spec/{code}/integrate", s.handleIntegrate)
 	s.mux.HandleFunc("GET /api/prd", s.handleGetPRD)
 	s.mux.HandleFunc("PUT /api/prd", s.handleSavePRD)
+	s.mux.HandleFunc("GET /api/execution/providers", s.handleListExecutionProviders)
+	s.mux.HandleFunc("PUT /api/execution/provider/default", s.handleSaveDefaultExecutionProvider)
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	s.mux.HandleFunc("PUT /api/config", s.handleSaveConfig)
 	s.mux.HandleFunc("POST /api/config/test", s.handleTestConfig)
