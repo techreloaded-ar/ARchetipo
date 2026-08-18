@@ -207,12 +207,12 @@ func TestBuildArgsKeepsExecFirstAndThePromptLast(t *testing.T) {
 		{
 			name: "defaults",
 			cfg:  settings{Command: "codex"},
-			want: []string{"exec", "--full-auto", "--skip-git-repo-check", prompt},
+			want: []string{"exec", "-s", "workspace-write", "--skip-git-repo-check", prompt},
 		},
 		{
 			name: "with model",
 			cfg:  settings{Command: "codex", Model: "gpt-5-codex"},
-			want: []string{"exec", "--full-auto", "--skip-git-repo-check", "--model", "gpt-5-codex", prompt},
+			want: []string{"exec", "-s", "workspace-write", "--skip-git-repo-check", "--model", "gpt-5-codex", prompt},
 		},
 		{
 			name: "exec_args replaces the intermediate flags",

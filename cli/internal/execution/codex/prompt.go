@@ -43,13 +43,12 @@ func buildPrompt(req execution.Request) string {
 // single place where the flags live, so changing how Codex is called never
 // means touching Execute.
 //
-// The defaults are `exec --full-auto --skip-git-repo-check`: a non-interactive
-// run that may act on the workspace without asking, and that does not refuse to
-// start when the workspace is not a git checkout. They were not verified
-// against a working `codex exec --help` — the baseline machine has no usable
-// Codex runtime — which is precisely why `exec_args` exists: a machine whose
-// Codex spells these flags differently overrides them from configuration
-// instead of waiting for a release.
+// The defaults are `exec -s workspace-write --skip-git-repo-check`: a
+// non-interactive run whose sandbox may write inside the workspace — planning
+// has to persist a plan — and that does not refuse to start when the workspace
+// is not a git checkout. They are verified against codex-cli 0.147.0, whose
+// `exec` rejects the interactive CLI's --full-auto outright. `exec_args` stays
+// the escape hatch for a Codex release that spells them differently.
 //
 // An `exec_args` value replaces the intermediate default flags only. The `exec`
 // subcommand stays first and the prompt stays last, because those two are not

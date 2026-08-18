@@ -34,7 +34,7 @@ func TestConfigAppliesFullOverride(t *testing.T) {
 	got, err := parseConfig(map[string]any{
 		"command":         "/opt/homebrew/bin/codex",
 		"model":           "gpt-5-codex",
-		"exec_args":       "--full-auto --skip-git-repo-check",
+		"exec_args":       "-s read-only --skip-git-repo-check",
 		"timeout_seconds": 120,
 	})
 	if err != nil {
@@ -46,7 +46,7 @@ func TestConfigAppliesFullOverride(t *testing.T) {
 	if got.Model != "gpt-5-codex" {
 		t.Fatalf("model = %q", got.Model)
 	}
-	if want := []string{"--full-auto", "--skip-git-repo-check"}; !reflect.DeepEqual(got.ExecArgs, want) {
+	if want := []string{"-s", "read-only", "--skip-git-repo-check"}; !reflect.DeepEqual(got.ExecArgs, want) {
 		t.Fatalf("exec_args = %#v, want %#v", got.ExecArgs, want)
 	}
 	if got.Timeout != 120*time.Second {
@@ -64,7 +64,7 @@ func TestConfigRejectsInvalidFields(t *testing.T) {
 		{"command empty", map[string]any{"command": "   "}, "command"},
 		{"command relative path", map[string]any{"command": "./bin/codex"}, "command"},
 		{"model not a string", map[string]any{"model": true}, "model"},
-		{"exec_args not a string", map[string]any{"exec_args": []string{"--full-auto"}}, "exec_args"},
+		{"exec_args not a string", map[string]any{"exec_args": []string{"-s"}}, "exec_args"},
 		{"exec_args empty", map[string]any{"exec_args": ""}, "exec_args"},
 		{"exec_args blank", map[string]any{"exec_args": "   "}, "exec_args"},
 		{"timeout_seconds not an integer", map[string]any{"timeout_seconds": "3600"}, "timeout_seconds"},

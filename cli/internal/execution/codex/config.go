@@ -26,7 +26,11 @@ const (
 // not configured. They live here, in one place, because the exec_args help text
 // quotes them: a default described in prose next to a default written in code
 // is a pair that drifts, and this one drifted once already.
-var defaultExecArgs = []string{"--full-auto", "--skip-git-repo-check"}
+//
+// Verified against codex-cli 0.147.0: `codex exec` has no --full-auto (that
+// flag belongs to the interactive CLI and makes exec exit on argument parsing).
+// The sandbox mode is what grants the write access planning needs.
+var defaultExecArgs = []string{"-s", "workspace-write", "--skip-git-repo-check"}
 
 // settings is the parsed, non-secret provider configuration. Codex
 // authenticates by itself, so no credential — and no path to its session
@@ -72,9 +76,10 @@ func (p *Provider) ConfigFields() []execution.ConfigField {
 			Type:  "text",
 			// The wording says "replace" because buildArgs replaces: whatever is
 			// set here stands in for the default flags rather than joining them.
-			// Reading it as "append" is the expensive mistake — dropping
-			// --full-auto leaves Codex unable to write the plan, so every run
-			// fails — which is why the default is spelled out here.
+			// Reading it as "append" is the expensive mistake — dropping the
+			// workspace-write sandbox leaves Codex unable to persist the plan,
+			// so every run fails — which is why the default is spelled out
+			// here.
 			Help:        "Space-separated arguments that replace the default Codex exec flags (" + strings.Join(defaultExecArgs, " ") + "). Left empty, those defaults are used.",
 			Placeholder: strings.Join(defaultExecArgs, " "),
 		},
