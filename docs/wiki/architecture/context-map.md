@@ -26,9 +26,9 @@ sources:
       role: process-actions
 review:
     content_hash: sha256:2200af0eccc16f77a7f5b47879c398fcbb41714e3dacd2746f7568d37dccfc45
-    evidence_revision: aff2c2f75381020af04298015fb37c51fc7eddfc
-    evidence_hash: sha256:fd80fe7241d20317eeb90ee20e530b9b7b9a876e36f1e083c41beeb7f15b5cfc
-    reviewed_at: "2026-08-16T11:33:43Z"
+    evidence_revision: 2201575f267382e7dbffa2b8d4565dae55ee9abf
+    evidence_hash: sha256:10240147fe7deea6d72bcf2deb1f2abc681d7529537643411f1977bac3f94421
+    reviewed_at: "2026-08-18T11:51:28Z"
 ---
 # Mappa dei contesti di ARchetipo
 

@@ -6,9 +6,9 @@
 
 ## Decisions
 
-* [Confine dei provider di esecuzione](decisions/execution-provider-boundary.md) - Separa l'esecuzione delle azioni dai connector e conserva ogni outcome in un record locale interrogabile. _State: reviewed._
+* [Confine dei provider di esecuzione](decisions/execution-provider-boundary.md) - Separa l'esecuzione delle azioni dai connector e conserva ogni outcome in un record locale interrogabile. _State: evidence-changed._
 * [Proprietà remota della scrittura del piano](decisions/remote-plan-ownership.md) - L'agente remoto scrive il piano attraverso il connector condiviso e ARchetipo ne accetta il successo solo dietro ricevuta. _State: evidence-changed._
-* [Template di processo del workspace](decisions/workspace-process-template.md) - Il processo di un workspace è una definizione registrata in-process, selezionata per ID all'inizializzazione e conservata nella configurazione. _State: reviewed._
+* [Template di processo del workspace](decisions/workspace-process-template.md) - Il processo di un workspace è una definizione registrata in-process, selezionata per ID all'inizializzazione e conservata nella configurazione. _State: evidence-changed._
 
 ## Engineering
 
@@ -16,8 +16,8 @@
 
 ## Operations
 
-* [Sviluppo e operazioni di ARchetipo](operations/development.md) - Comandi locali, pipeline CI, packaging, release e vincoli operativi del repository. _State: reviewed._
+* [Sviluppo e operazioni di ARchetipo](operations/development.md) - Comandi locali, pipeline CI, packaging, release e vincoli operativi del repository. _State: evidence-changed._
 
 ## Project
 
-* [Panoramica di ARchetipo](overview.md) - Scopo, attori, stack e perimetro della mappa codebase-first di ARchetipo. _State: reviewed._
+* [Panoramica di ARchetipo](overview.md) - Scopo, attori, stack e perimetro della mappa codebase-first di ARchetipo. _State: evidence-changed._

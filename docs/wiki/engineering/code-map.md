@@ -43,6 +43,10 @@ coverage:
         - decisions/remote-plan-ownership
         - decisions/workspace-process-template
     - kind: boundary
+      path: docs
+      status: excluded
+      note: 'docs/ raccoglie il PRD, la Wiki stessa e i prototipi isolati prodotti da archetipo-design in docs/mockups/: e documentazione e materiale di prototipazione, non codice di prodotto distribuito. L''ispezione lo classifica come boundary di tipo source solo perche i mockup includono file JavaScript.'
+    - kind: boundary
       path: npm
       status: mapped
       pages:
@@ -67,10 +71,10 @@ coverage:
       status: excluded
       note: Fixture isolata in test/e2e/fixtures/wiki-codebase usata per verificare il bootstrap Wiki; non e una capability del prodotto ARchetipo.
 review:
-    content_hash: sha256:7de1f57f9c4962619275317fce83ff16c9f7fe8cf3989cbe023cc17fb4916fd0
-    evidence_revision: aff2c2f75381020af04298015fb37c51fc7eddfc
-    evidence_hash: sha256:3afbdc91a1542da84c4adfa6dfa00802363b82e5cf765165191e8735bc5a5c3d
-    reviewed_at: "2026-08-16T11:33:43Z"
+    content_hash: sha256:63bdba953f9c5430abae0a494daf333daa255d39be861d6d03cdbf64887f9a8d
+    evidence_revision: 2201575f267382e7dbffa2b8d4565dae55ee9abf
+    evidence_hash: sha256:9ba19712dbbdca335e4134c4acc11a71c27092cb002dec827c76adbfd35d50f7
+    reviewed_at: "2026-08-18T11:51:27Z"
 ---
 # Mappa del codice di ARchetipo
 
@@ -102,4 +106,4 @@ Non emergono capability di prodotto non coperte dall'inventario corrente. `trip`
 <!-- archetipo:wiki section=coverage -->
 ## Copertura deterministica
 
-Il frontmatter copre tutti i boundary restituiti dall'ultima ispezione: `.` e `skills` rimandano alla panoramica; `cli` a questa mappa, alla decisione sul confine dei provider, alla decisione sulla proprietà remota del piano e alla decisione sul Template di processo del workspace; `npm`, `scripts` e `test` alle operazioni di sviluppo. La candidate `trip` e marcata `excluded` con la motivazione della fixture. La copertura va riallineata quando `wiki inspect` aggiunge o rimuove boundary o candidate.
+Il frontmatter copre tutti i boundary restituiti dall'ultima ispezione: `.` e `skills` rimandano alla panoramica; `cli` a questa mappa, alla decisione sul confine dei provider, alla decisione sulla proprietà remota del piano e alla decisione sul Template di processo del workspace; `npm`, `scripts` e `test` alle operazioni di sviluppo. Il boundary `docs` e invece marcato `excluded`: raccoglie il PRD, la Wiki stessa e i prototipi isolati prodotti da `archetipo-design` in `docs/mockups/`, quindi e documentazione e materiale di prototipazione e non codice di prodotto distribuito; compare nell'ispezione come boundary di tipo `source` solo perche i mockup includono file JavaScript. La candidate `trip` e marcata `excluded` con la motivazione della fixture. La copertura va riallineata quando `wiki inspect` aggiunge o rimuove boundary o candidate.
