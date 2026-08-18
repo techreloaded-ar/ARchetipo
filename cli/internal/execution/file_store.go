@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -117,6 +118,53 @@ func (s *FileStore) Update(ctx context.Context, execution Execution) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+// ListBySpec reads the whole record directory and keeps the records of one
+// spec. There is no index and no cache on purpose: the number of local records
+// is small, and a cache would add a state to invalidate for a gain nobody can
+// measure.
+func (s *FileStore) ListBySpec(ctx context.Context, specCode string) ([]Execution, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := []Execution{}
+	code := strings.TrimSpace(specCode)
+	entries, err := os.ReadDir(s.dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(s.dir, entry.Name())
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read execution record %q: %w", entry.Name(), err)
+		}
+		var record Execution
+		// An unreadable record fails the whole read instead of being skipped: a
+		// truncated history is indistinguishable from an absent one, and the
+		// caller would draw the wrong conclusion from it in silence.
+		if err := json.Unmarshal(body, &record); err != nil {
+			return nil, fmt.Errorf("decode execution record %q: %w", entry.Name(), err)
+		}
+		if record.SpecCode != code {
+			continue
+		}
+		out = append(out, record)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID > out[j].ID
+	})
+	return out, nil
 }
 
 func (s *FileStore) Get(ctx context.Context, id string) (Execution, error) {

@@ -6,14 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/metrics"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
 // boardColumnView is the JSON shape of one Kanban column in GET /api/board.
@@ -190,8 +189,13 @@ type specDetailView struct {
 	// Template and Actions answer "what can I do with this spec now?" with the
 	// process rules, so the browser never has to know them. Actions is always a
 	// list: a status with no admissible action is an empty one, never a null.
-	Template templateView      `json:"template"`
-	Actions  []template.Action `json:"actions"`
+	Template templateView     `json:"template"`
+	Actions  []specActionView `json:"actions"`
+	// Execution is the most recent execution of this spec, or null when it has
+	// none. It travels with the detail rather than behind a separate call so a
+	// browser that was just reloaded finds the run it started without having
+	// remembered any identifier.
+	Execution *execution.Execution `json:"execution"`
 }
 
 func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
@@ -214,21 +218,25 @@ func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
 	if tasks == nil {
 		tasks = []domain.Task{}
 	}
-	tpl, err := template.Resolve(s.cfg.Template.ID)
+	tpl, err := s.resolveTemplate()
 	if err != nil {
-		writeError(w, iox.NewInvalidInput(
-			"unknown template: "+s.cfg.Template.ID,
-			"valid: "+strings.Join(template.Builtin().IDs(), ", "),
-			err,
-		))
+		writeError(w, err)
+		return
+	}
+	// A record that cannot be read is a failed request, not an absent execution:
+	// answering "no execution" would tell the browser it may start a second one.
+	latest, err := s.latestExecution(ctx, code)
+	if err != nil {
+		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, specDetailView{
-		Spec:     spec,
-		PlanBody: planBody,
-		Tasks:    tasks,
-		Template: templateView{ID: tpl.ID, Version: tpl.Version},
-		Actions:  tpl.ActionsFor(spec.Status),
+		Spec:      spec,
+		PlanBody:  planBody,
+		Tasks:     tasks,
+		Template:  templateView{ID: tpl.ID, Version: tpl.Version},
+		Actions:   s.decorateActions(ctx, code, tpl.ActionsFor(spec.Status)),
+		Execution: latest,
 	})
 }
 

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,5 +98,104 @@ func TestFileStoreFailedRoundTrip(t *testing.T) {
 	got, err := store.Get(context.Background(), exec.ID)
 	if err != nil || got.Error == nil || got.Result != nil {
 		t.Fatalf("failed round trip: %#v %v", got, err)
+	}
+}
+
+func writeRecord(t *testing.T, store *FileStore, record Execution) {
+	t.Helper()
+	if err := store.Create(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// AC-5: a client that kept no identifier finds the history of its spec, newest
+// first, and never sees another spec's records.
+func TestFileStoreListBySpecReturnsOnlyThatSpecNewestFirst(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
+	writeRecord(t, store, Execution{ID: "exec-old", SpecCode: "US-001", Status: StatusFailed, CreatedAt: base})
+	writeRecord(t, store, Execution{ID: "exec-mid", SpecCode: "US-001", Status: StatusSucceeded, CreatedAt: base.Add(time.Minute)})
+	writeRecord(t, store, Execution{ID: "exec-new", SpecCode: "US-001", Status: StatusRunning, CreatedAt: base.Add(2 * time.Minute)})
+	writeRecord(t, store, Execution{ID: "exec-other", SpecCode: "US-002", Status: StatusRunning, CreatedAt: base.Add(3 * time.Minute)})
+
+	got, err := store.ListBySpec(context.Background(), "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, record := range got {
+		ids = append(ids, record.ID)
+	}
+	want := []string{"exec-new", "exec-mid", "exec-old"}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("order: got %v, want %v", ids, want)
+	}
+	if got[0].Status != StatusRunning {
+		t.Fatalf("the most recent record lost its state: %#v", got[0])
+	}
+}
+
+func TestFileStoreListBySpecTreatsAbsenceAsAnEmptyList(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.ListBySpec(context.Background(), "US-001")
+	if err != nil {
+		t.Fatalf("a spec with no execution is not a failure: %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Fatalf("absence must be an empty non-nil slice: %#v", got)
+	}
+}
+
+// A truncated history is indistinguishable from an absent one, so a record that
+// cannot be decoded must fail the read and name the file.
+func TestFileStoreListBySpecFailsNamingTheUnreadableRecord(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRecord(t, store, Execution{ID: "exec-good", SpecCode: "US-001", Status: StatusSucceeded, CreatedAt: time.Now().UTC()})
+	if err := os.WriteFile(filepath.Join(root, ".archetipo", "executions", "exec-broken.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.ListBySpec(context.Background(), "US-001")
+	if err == nil {
+		t.Fatalf("a corrupt record produced a partial list: %#v", got)
+	}
+	if !strings.Contains(err.Error(), "exec-broken.json") {
+		t.Fatalf("the error does not name the file: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("a failed read still returned records: %#v", got)
+	}
+}
+
+func TestFileStoreListBySpecIgnoresNonRecordFiles(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRecord(t, store, Execution{ID: "exec-one", SpecCode: "US-001", Status: StatusSucceeded, CreatedAt: time.Now().UTC()})
+	dir := filepath.Join(root, ".archetipo", "executions")
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not a record"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".execution-123.tmp"), []byte("half written"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.ListBySpec(context.Background(), "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "exec-one" {
+		t.Fatalf("foreign files leaked into the result: %#v", got)
 	}
 }

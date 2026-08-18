@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,6 +42,21 @@ func (s *spyStore) Get(_ context.Context, id string) (Execution, error) {
 		return Execution{}, &StoreError{Kind: StoreNotFound, ID: id}
 	}
 	return e, nil
+}
+func (s *spyStore) ListBySpec(_ context.Context, specCode string) ([]Execution, error) {
+	out := []Execution{}
+	for _, e := range s.records {
+		if e.SpecCode == strings.TrimSpace(specCode) {
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID > out[j].ID
+	})
+	return out, nil
 }
 
 func newTestService(t *testing.T, provider *testProvider, store *spyStore) *Service {
@@ -368,4 +385,302 @@ func TestRunIdempotentRejectsEmptyRequestID(t *testing.T) {
 			t.Fatalf("request id %q: err=%v reused=%t creates=%d calls=%d", requestID, err, reused, store.creates, p.calls)
 		}
 	}
+}
+
+// blockingProvider stays inside Execute until the test releases it. It is what
+// makes "the record exists before the provider is contacted" observable without
+// a single sleep: the order is imposed, not hoped for.
+type blockingProvider struct {
+	id           string
+	capabilities []Capability
+	release      chan struct{}
+	entered      chan struct{}
+	result       Result
+	err          error
+	calls        atomic.Int32
+}
+
+func newBlockingProvider(id string) *blockingProvider {
+	return &blockingProvider{
+		id:           id,
+		capabilities: []Capability{CapabilitySpecPlan},
+		release:      make(chan struct{}),
+		entered:      make(chan struct{}, 1),
+		result:       Result{Payload: json.RawMessage(`{"artifact":"plan-123"}`)},
+	}
+}
+
+func (p *blockingProvider) ID() string { return p.id }
+func (p *blockingProvider) Capabilities(context.Context) ([]Capability, error) {
+	return p.capabilities, nil
+}
+func (p *blockingProvider) ValidateConfig(context.Context, map[string]any) error { return nil }
+func (p *blockingProvider) Execute(ctx context.Context, _ Request) (Result, error) {
+	p.calls.Add(1)
+	select {
+	case p.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-p.release:
+	case <-ctx.Done():
+		return Result{}, ctx.Err()
+	}
+	return p.result, p.err
+}
+
+func newBlockingService(t *testing.T, provider *blockingProvider, store Store) *Service {
+	t.Helper()
+	registry := NewRegistry()
+	if err := registry.Register(provider); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 17, 9, 0, 0, 0, time.UTC)
+	service, err := NewService(registry, store, func() (string, error) { return "exec-start-001", nil }, func() time.Time { now = now.Add(time.Second); return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+// AC-1: the record the UI receives exists, and is RUNNING, before the provider
+// is contacted at all.
+func TestStartPersistsRunningRecordBeforeDispatch(t *testing.T) {
+	p := newBlockingProvider("fake")
+	store := &spyStore{records: map[string]Execution{}}
+	started, continuation, err := newBlockingService(t, p, store).Start(context.Background(), domain.Spec{Code: "US-001", Status: domain.StatusTodo}, ActionPlan, "fake", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continuation == nil {
+		t.Fatal("Start returned no continuation")
+	}
+	if p.calls.Load() != 0 {
+		t.Fatalf("the provider was contacted before Start returned: calls=%d", p.calls.Load())
+	}
+	if started.Status != StatusRunning || started.CompletedAt != nil || started.SpecStatusBefore != domain.StatusTodo || started.SpecCode != "US-001" || started.ProviderID != "fake" {
+		t.Fatalf("started record: %#v", started)
+	}
+	persisted, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatalf("the record was not persisted by Start: %v", err)
+	}
+	if persisted.Status != StatusRunning || persisted.CompletedAt != nil || store.creates != 1 || store.updates != 0 {
+		t.Fatalf("persisted record: %#v creates=%d updates=%d", persisted, store.creates, store.updates)
+	}
+	close(p.release)
+}
+
+func TestStartContinuationClosesTheRecordOnSuccess(t *testing.T) {
+	p := newBlockingProvider("fake")
+	store := &spyStore{records: map[string]Execution{}}
+	started, continuation, err := newBlockingService(t, p, store).Start(context.Background(), domain.Spec{Code: "US-001", Status: domain.StatusTodo}, ActionPlan, "fake", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(p.release)
+	outcome, err := continuation(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.ID != started.ID || outcome.Status != StatusSucceeded || outcome.Result == nil || outcome.CompletedAt == nil {
+		t.Fatalf("continuation outcome: %#v", outcome)
+	}
+	persisted, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(persisted, outcome) {
+		t.Fatalf("persisted record drifted from the returned one: %#v", persisted)
+	}
+}
+
+// AC-3/AC-4: the caller's verdict is part of the terminal write, not a second
+// write after it.
+//
+// An asynchronous caller is read while it works, so a record closed as
+// SUCCEEDED and demoted a moment later is a success somebody can read in
+// between. The store is the witness: it must be updated exactly once, and the
+// single state it ever receives must already be the verified one.
+func TestStartConfirmsTheOutcomeBeforeClosingTheRecord(t *testing.T) {
+	p := newBlockingProvider("fake")
+	store := &spyStore{records: map[string]Execution{}}
+	var sawStatus ExecutionStatus
+	confirm := func(_ context.Context, outcome *Execution) {
+		// What the confirmation is handed is the success it has to judge, and the
+		// store has not seen it yet.
+		sawStatus = outcome.Status
+		if store.updates != 0 {
+			t.Errorf("the record was closed before the verdict: updates=%d", store.updates)
+		}
+		outcome.Status = StatusFailed
+		outcome.Result = nil
+		outcome.Error = &ExecutionError{Code: "UNCONFIRMED_EFFECT", Message: "the connector does not confirm it"}
+	}
+	started, continuation, err := newBlockingService(t, p, store).Start(context.Background(), domain.Spec{Code: "US-001", Status: domain.StatusTodo}, ActionPlan, "fake", nil, confirm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(p.release)
+	outcome, err := continuation(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sawStatus != StatusSucceeded {
+		t.Fatalf("the confirmation judged %s instead of the provider's claim", sawStatus)
+	}
+	if outcome.Status != StatusFailed || outcome.Error == nil || outcome.Error.Code != "UNCONFIRMED_EFFECT" || outcome.Result != nil {
+		t.Fatalf("the returned outcome is not the verdict: %#v", outcome)
+	}
+	if store.updates != 1 {
+		t.Fatalf("the verdict cost a second write: updates=%d", store.updates)
+	}
+	persisted, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != StatusFailed || persisted.Error == nil || persisted.Error.Code != "UNCONFIRMED_EFFECT" {
+		t.Fatalf("the store saw an unverified state: %#v", persisted)
+	}
+	// A verdict that approves changes nothing: the same single write carries the
+	// success through.
+	approving := newBlockingProvider("fake")
+	approvingStore := &spyStore{records: map[string]Execution{}}
+	_, approvingContinuation, err := newBlockingService(t, approving, approvingStore).Start(context.Background(), domain.Spec{Code: "US-001", Status: domain.StatusTodo}, ActionPlan, "fake", nil, func(context.Context, *Execution) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(approving.release)
+	approved, err := approvingContinuation(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.Status != StatusSucceeded || approvingStore.updates != 1 {
+		t.Fatalf("an approved outcome: %#v updates=%d", approved, approvingStore.updates)
+	}
+}
+
+// The confirmation only ever judges a success: a dispatch that already failed
+// has nothing for it to disown, and calling it would let a verdict resurrect a
+// record the provider already closed.
+func TestStartDoesNotConfirmAFailedDispatch(t *testing.T) {
+	p := newBlockingProvider("fake")
+	p.err = errors.New("boom")
+	store := &spyStore{records: map[string]Execution{}}
+	called := false
+	_, continuation, err := newBlockingService(t, p, store).Start(context.Background(), domain.Spec{Code: "US-001", Status: domain.StatusTodo}, ActionPlan, "fake", nil, func(_ context.Context, outcome *Execution) {
+		called = outcome.Status == StatusSucceeded
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(p.release)
+	outcome, err := continuation(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("the confirmation was handed a failure to judge")
+	}
+	if outcome.Status != StatusFailed || outcome.Error == nil || outcome.Error.Code != "PROVIDER_ERROR" {
+		t.Fatalf("the provider failure was rewritten: %#v", outcome)
+	}
+}
+
+// AC-4: a dispatch that fails closes the record with a readable reason, and a
+// failure that happened after remote work existed keeps that identifier.
+func TestStartContinuationClosesTheRecordOnFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		err            error
+		wantExternalID string
+	}{
+		{"local failure", errors.New("boom"), ""},
+		{"remote failure", &RemoteError{ExternalID: "task-remote-9", Err: errors.New("remote planning aborted")}, "task-remote-9"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newBlockingProvider("fake")
+			p.err = tc.err
+			close(p.release)
+			store := &spyStore{records: map[string]Execution{}}
+			_, continuation, err := newBlockingService(t, p, store).Start(context.Background(), domain.Spec{Code: "US-001", Status: domain.StatusTodo}, ActionPlan, "fake", nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outcome, err := continuation(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if outcome.Status != StatusFailed || outcome.Result != nil || outcome.Error == nil || outcome.Error.Code != "PROVIDER_ERROR" {
+				t.Fatalf("failed outcome: %#v", outcome)
+			}
+			if outcome.Error.Message == "" || outcome.Error.ExternalID != tc.wantExternalID {
+				t.Fatalf("failure reason: %#v", outcome.Error)
+			}
+		})
+	}
+}
+
+// Nothing is created when the request cannot even be dispatched: a caller that
+// gets an error from Start has no record to close.
+func TestStartCreatesNoRecordWhenItFails(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		action   ActionID
+		provider string
+		validate func(context.Context, map[string]any) error
+	}{
+		{"unknown action", "unknown", "fake", nil},
+		{"unknown provider", ActionPlan, "missing", nil},
+		{"rejected configuration", ActionPlan, "fake", func(context.Context, map[string]any) error {
+			return &ConfigurationError{Field: "endpoint", Reason: "must use https"}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &testProvider{id: "fake", capabilities: []Capability{CapabilitySpecPlan}, validate: tc.validate, result: Result{Payload: json.RawMessage(`{"ok":true}`)}}
+			store := &spyStore{records: map[string]Execution{}}
+			started, continuation, err := newTestService(t, p, store).Start(context.Background(), domain.Spec{Code: "US-001"}, tc.action, tc.provider, nil, nil)
+			if err == nil {
+				t.Fatal("expected Start to fail")
+			}
+			if continuation != nil || started.ID != "" {
+				t.Fatalf("a failed Start handed back work to do: %#v", started)
+			}
+			if store.creates != 0 || p.calls != 0 {
+				t.Fatalf("creates=%d calls=%d", store.creates, p.calls)
+			}
+		})
+	}
+}
+
+// A shutdown cancels the dispatch context, and the record must still be closed:
+// otherwise it would stay RUNNING for ever with nobody left to close it.
+func TestStartContinuationClosesTheRecordOnACancelledContext(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := newBlockingProvider("fake")
+	started, continuation, err := newBlockingService(t, p, store).Start(context.Background(), domain.Spec{Code: "US-001", Status: domain.StatusTodo}, ActionPlan, "fake", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	outcome, err := continuation(ctx)
+	if err != nil {
+		t.Fatalf("the continuation refused to close the record: %v", err)
+	}
+	if outcome.Status != StatusFailed || outcome.Error == nil || outcome.CompletedAt == nil {
+		t.Fatalf("interrupted outcome: %#v", outcome)
+	}
+	persisted, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != StatusFailed {
+		t.Fatalf("the interrupted record stayed %s on disk", persisted.Status)
+	}
+	close(p.release)
 }

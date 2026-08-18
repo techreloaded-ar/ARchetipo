@@ -66,6 +66,7 @@
 	const executionSaveBtn = document.getElementById("execution-save-btn");
 	const executionStatus = document.getElementById("execution-status");
 	const storyActions = document.getElementById("story-actions");
+	const storyExecution = document.getElementById("story-execution");
 	const mockupsBtn = document.getElementById("mockups-btn");
 	const mockupsMenu = document.getElementById("mockups-menu");
 	const mockupsDropdown = document.getElementById("mockups-dropdown");
@@ -168,6 +169,8 @@
 	let mockupsCache = []; // cached list of mockups (refreshed lazily)
 	let executionProviders = []; // providers offered by the server, in its order
 	let executionDefault = null; // persisted workspace default, or null
+	let executionPollTimer = null; // interval following the open spec's execution
+	let lastExecutionRecord = null; // execution shown in the panel, for a failed poll
 
 	refreshBtn.addEventListener("click", loadBoard);
 	modalClose.addEventListener("click", closeModal);
@@ -196,6 +199,13 @@
 	addTaskBtn.addEventListener("click", () => addTaskRow());
 	reviewRequestBtn.addEventListener("click", onRequestChanges);
 	reviewIntegrateBtn.addEventListener("click", onIntegrate);
+	// The action chips are re-rendered on every open, so the handler lives on
+	// their container instead of on buttons that no longer exist.
+	storyActions.addEventListener("click", (e) => {
+		const btn = e.target.closest(".action-chip-run");
+		if (!btn) return;
+		startSpecAction(btn.dataset.actionId, btn);
+	});
 
 	prdBtn.addEventListener("click", openPRD);
 	prdModalClose.addEventListener("click", closePRD);
@@ -471,6 +481,10 @@
 	}
 
 	async function openEditor(code) {
+		// A timer from the previously open spec must not survive this call: it
+		// would keep polling an execution nobody is looking at, and would reload
+		// the detail of a spec the user has already left.
+		stopExecutionPolling();
 		currentSpecCode = code;
 		modalTitle.textContent = `Spec ${code}`;
 		modal.classList.remove("hidden");
@@ -478,6 +492,7 @@
 		specStatus.textContent = "Loading...";
 		planStatus.textContent = "";
 		storyActions.innerHTML = "";
+		renderExecution(null);
 		showSpecView();
 		showPlanView();
 		reviewLoaded = false;
@@ -491,6 +506,10 @@
 			};
 			fillSpecView(currentSpecSnapshot);
 			renderSpecActions(detail.actions);
+			// The server hands back the last execution of the spec on every read,
+			// so a reload finds the run it left behind — and resumes following it
+			// without ever starting a second one.
+			resumeExecution(detail.execution, code);
 			fillSpecForm(currentSpecSnapshot);
 			fillPlanView(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
 			fillPlanForm(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
@@ -793,6 +812,7 @@
 
 	function closeModal() {
 		modal.classList.add("hidden");
+		stopExecutionPolling();
 		currentSpecCode = null;
 		currentSpecSnapshot = null;
 		currentPlanSnapshot = null;
@@ -1531,6 +1551,10 @@
 	// for the spec in its current status. The list is computed server-side and
 	// recomputed on every open, so a status change is reflected without any
 	// process rule living here.
+	//
+	// Whether an action can actually be started is a server verdict too: this
+	// code reads `runnable` and `unavailable_reason` and knows nothing about
+	// statuses, providers or capabilities.
 	function renderSpecActions(actions) {
 		const list = actions || [];
 		if (!list.length) {
@@ -1538,12 +1562,216 @@
 				'<span class="story-actions-empty">No action is available in this status</span>';
 			return;
 		}
-		storyActions.innerHTML = list
-			.map(
-				(a) =>
-					`<span class="action-chip"><span class="action-chip-label">${escapeHtml(a.label || a.id)}</span><code class="action-chip-id">${escapeHtml(a.id)}</code></span>`,
-			)
-			.join("");
+		storyActions.innerHTML = list.map(renderSpecActionChip).join("");
+	}
+
+	function renderSpecActionChip(action) {
+		const label = escapeHtml(action.label || action.id);
+		const id = escapeHtml(action.id);
+		const body = `<span class="action-chip-label">${label}</span><code class="action-chip-id">${id}</code>`;
+		if (action.runnable) {
+			return `<button type="button" class="action-chip action-chip-run" data-action-id="${id}" title="Run ${label}">${body}</button>`;
+		}
+		const reason = action.unavailable_reason
+			? ` title="${escapeHtml(action.unavailable_reason)}"`
+			: "";
+		return `<span class="action-chip"${reason}>${body}</span>`;
+	}
+
+	// ---- Spec execution ------------------------------------------------------
+
+	const EXECUTION_POLL_MS = 2000;
+
+	function isExecutionTerminal(record) {
+		return (
+			!!record && (record.status === "SUCCEEDED" || record.status === "FAILED")
+		);
+	}
+
+	// startSpecAction turns one press into exactly one execution: the button is
+	// disabled before the request leaves and is only given back when the server
+	// refuses, so a double click cannot ask for a second run.
+	async function startSpecAction(actionID, button) {
+		if (!actionID || !currentSpecCode) return;
+		const code = currentSpecCode;
+		if (button) button.disabled = true;
+		try {
+			const record = await apiPost(
+				`/api/spec/${encodeURIComponent(code)}/execution`,
+				{ action: actionID },
+			);
+			if (currentSpecCode !== code) return;
+			renderExecution(record);
+			await followExecution(record, code);
+		} catch (err) {
+			showToast(err.message || String(err), "err");
+			if (button) button.disabled = false;
+		}
+	}
+
+	// resumeExecution renders the execution that came with the detail and picks
+	// its polling back up when it is still open. It never starts anything: a
+	// page load must show the run, not launch one.
+	function resumeExecution(record, code) {
+		renderExecution(record);
+		if (record && !isExecutionTerminal(record)) {
+			startExecutionPolling(record.id, code);
+		}
+	}
+
+	// followExecution either keeps watching a still open execution, or settles
+	// one that is already over.
+	async function followExecution(record, code) {
+		if (!record) return;
+		if (!isExecutionTerminal(record)) {
+			startExecutionPolling(record.id, code);
+			return;
+		}
+		await settleExecution(record, code);
+	}
+
+	// settleExecution reloads the detail once the run is over: the plan, the spec
+	// status, the actions and the execution panel are all redrawn from the server
+	// rather than guessed here. The board follows only on success, because that
+	// is the only outcome that can have moved the card.
+	async function settleExecution(record, code) {
+		if (currentSpecCode !== code) return;
+		const succeeded = record.status === "SUCCEEDED";
+		await openEditor(code);
+		if (succeeded) await loadBoard();
+	}
+
+	function stopExecutionPolling() {
+		if (executionPollTimer === null) return;
+		clearInterval(executionPollTimer);
+		executionPollTimer = null;
+	}
+
+	// startExecutionPolling follows one execution of one spec. Every tick checks
+	// that the spec it was started for is still the open one: the modal stays
+	// closable and the board navigable while the provider works, so the timer
+	// must be able to notice it has been left behind.
+	function startExecutionPolling(executionID, code) {
+		stopExecutionPolling();
+		if (!executionID || !code) return;
+		executionPollTimer = setInterval(async () => {
+			if (currentSpecCode !== code) {
+				stopExecutionPolling();
+				return;
+			}
+			let record;
+			try {
+				record = await apiGet(
+					`/api/execution/${encodeURIComponent(executionID)}`,
+				);
+			} catch (err) {
+				stopExecutionPolling();
+				renderExecution(
+					lastExecutionRecord,
+					`Status unavailable: ${err.message || err}. Reopen the spec to check again.`,
+				);
+				return;
+			}
+			if (currentSpecCode !== code) {
+				stopExecutionPolling();
+				return;
+			}
+			renderExecution(record);
+			if (!isExecutionTerminal(record)) return;
+			stopExecutionPolling();
+			await settleExecution(record, code);
+		}, EXECUTION_POLL_MS);
+	}
+
+	// renderExecution draws the execution panel from the record alone. No record
+	// means no panel: a spec that was never run shows nothing at all.
+	function renderExecution(record, note) {
+		lastExecutionRecord = record || null;
+		if (!record) {
+			storyExecution.innerHTML = "";
+			return;
+		}
+		const state =
+			record.status === "SUCCEEDED"
+				? "ok"
+				: record.status === "FAILED"
+					? "err"
+					: "running";
+		const action = escapeHtml(record.action || "");
+		const headline =
+			state === "ok"
+				? `${action} succeeded`
+				: state === "err"
+					? `${action} failed`
+					: `${action} is running`;
+		const lines = [];
+		if (record.provider_id) {
+			lines.push(`provider ${escapeHtml(record.provider_id)}`);
+		}
+		const stamp = formatExecutionTime(record.completed_at || record.created_at);
+		if (stamp) {
+			lines.push(
+				`${isExecutionTerminal(record) ? "completed" : "started"} ${escapeHtml(stamp)}`,
+			);
+		}
+		const blocks = [];
+		if (lines.length) {
+			blocks.push(`<div class="execution-meta">${lines.join(" · ")}</div>`);
+		}
+		if (record.error) {
+			const code = record.error.code
+				? `<code class="execution-code">${escapeHtml(record.error.code)}</code>`
+				: "";
+			blocks.push(
+				`<div class="execution-message">${code}<span>${escapeHtml(record.error.message || "the provider gave no reason")}</span></div>`,
+			);
+			if (record.error.external_id) {
+				blocks.push(
+					`<div class="execution-meta">external id ${escapeHtml(record.error.external_id)}</div>`,
+				);
+			}
+		}
+		if (record.result) {
+			if (record.result.external_id) {
+				blocks.push(
+					`<div class="execution-meta">external id ${escapeHtml(record.result.external_id)}</div>`,
+				);
+			}
+			const payload = formatExecutionPayload(record.result.payload);
+			if (payload) {
+				blocks.push(
+					`<details class="execution-payload"><summary>Provider result</summary><pre>${escapeHtml(payload)}</pre></details>`,
+				);
+			}
+		}
+		if (note) {
+			blocks.push(`<div class="execution-message">${escapeHtml(note)}</div>`);
+		}
+		storyExecution.innerHTML = `<div class="execution-panel execution-${state}">
+			<div class="execution-head">
+				<span class="execution-dot" aria-hidden="true"></span>
+				<span class="execution-headline">${headline}</span>
+				<code class="execution-id">${escapeHtml(record.id || "")}</code>
+			</div>
+			${blocks.join("")}
+		</div>`;
+	}
+
+	function formatExecutionTime(value) {
+		if (!value) return "";
+		const at = new Date(value);
+		if (Number.isNaN(at.getTime())) return String(value);
+		return at.toLocaleString();
+	}
+
+	function formatExecutionPayload(payload) {
+		if (payload === null || payload === undefined) return "";
+		if (typeof payload === "string") return payload.trim();
+		try {
+			return JSON.stringify(payload, null, 2);
+		} catch (_) {
+			return "";
+		}
 	}
 
 	async function loadConfig() {

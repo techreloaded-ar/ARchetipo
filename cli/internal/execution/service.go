@@ -42,6 +42,51 @@ func NewService(registry *Registry, store Store, newID IDGenerator, now Clock) (
 	return &Service{registry: registry, store: store, newID: newID, now: now}, nil
 }
 
+// Continuation dispatches an already persisted execution to its provider and
+// closes the record with the outcome. It is returned by Start and takes its own
+// context, because the caller that dispatches is not necessarily the one that
+// created the record: an HTTP handler answers and dies, while the dispatch has
+// to outlive the response.
+type Continuation func(context.Context) (Execution, error)
+
+// Confirmation is the caller's last word on a dispatch that declared success.
+// It runs inside the continuation, after the provider has answered and before
+// the record is closed, and may rewrite outcome into a failure — which is then
+// the only terminal state that ever reaches the store.
+//
+// It exists for the asynchronous caller. A record dispatched on a goroutine is
+// readable while it works, so a success closed first and demoted afterwards is
+// a success a client can read in between; verifying inside the single terminal
+// write leaves no such window. VerifyActionEffect is the implementation both
+// callers share.
+//
+// It returns nothing on purpose. The continuation is about to write whatever
+// outcome holds and has nobody to report to, so mutating outcome is the only
+// channel there is — an error return would promise one that cannot be honoured,
+// and a verdict expressed that way would be written out as a success.
+type Confirmation func(ctx context.Context, outcome *Execution)
+
+// Start performs every phase up to persisting the RUNNING record and returns
+// that record together with the continuation that dispatches it.
+//
+// When Start returns an error no record was created, so there is nothing to
+// close. When it returns successfully the record already exists on the store as
+// RUNNING, and the caller MUST invoke the continuation exactly once: skipping it
+// leaves the execution RUNNING for ever, because nothing else will ever close
+// it, while invoking it twice dispatches to the provider twice and closes the
+// same record twice.
+//
+// confirm may be nil, which means the outcome is taken at face value. When it
+// is not, it runs before the terminal write, so the record is never briefly
+// something the caller is about to disown.
+//
+// Start deliberately starts no goroutine. Whether the dispatch runs inline (the
+// CLI) or on a background context (the viewer) is the caller's choice, not this
+// package's.
+func (s *Service) Start(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any, confirm Confirmation) (Execution, Continuation, error) {
+	return s.start(ctx, spec, action, providerID, providerConfig, "", s.newID, confirm)
+}
+
 // Run dispatches the action through the provider with a freshly generated
 // execution id. Every invocation creates a new record.
 func (s *Service) Run(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any) (Execution, error) {
@@ -81,69 +126,96 @@ func (s *Service) RunIdempotent(ctx context.Context, spec domain.Spec, action Ac
 	return outcome, false, nil
 }
 
+// run is Start immediately followed by its continuation: the synchronous shape
+// the CLI needs, expressed over the same single code path so the two callers
+// can never drift. It passes no Confirmation because the synchronous caller
+// holds the closed record and confirms it itself, with nobody able to read it
+// in between.
 func (s *Service) run(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any, requestID string, resolveID func() (string, error)) (Execution, error) {
+	_, continuation, err := s.start(ctx, spec, action, providerID, providerConfig, requestID, resolveID, nil)
+	if err != nil {
+		return Execution{}, err
+	}
+	return continuation(ctx)
+}
+
+func (s *Service) start(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any, requestID string, resolveID func() (string, error), confirm Confirmation) (Execution, Continuation, error) {
 	if strings.TrimSpace(spec.Code) == "" {
-		return Execution{}, fmt.Errorf("spec code is required")
+		return Execution{}, nil, fmt.Errorf("spec code is required")
 	}
 	capability, err := RequiredCapability(action)
 	if err != nil {
-		return Execution{}, err
+		return Execution{}, nil, err
 	}
 	provider, err := s.registry.Resolve(providerID)
 	if err != nil {
-		return Execution{}, err
+		return Execution{}, nil, err
 	}
 	capabilities, err := provider.Capabilities(ctx)
 	if err != nil {
-		return Execution{}, &CapabilityError{ProviderID: providerID, Capability: capability, Err: err}
+		return Execution{}, nil, &CapabilityError{ProviderID: providerID, Capability: capability, Err: err}
 	}
 	if !Supports(capabilities, capability) {
-		return Execution{}, &CapabilityError{ProviderID: providerID, Capability: capability}
+		return Execution{}, nil, &CapabilityError{ProviderID: providerID, Capability: capability}
 	}
 	validatedConfig := CloneConfig(providerConfig)
 	if err := provider.ValidateConfig(ctx, CloneConfig(validatedConfig)); err != nil {
-		return Execution{}, err
+		return Execution{}, nil, err
 	}
 	id, err := resolveID()
 	if err != nil {
-		return Execution{}, fmt.Errorf("generate execution id: %w", err)
+		return Execution{}, nil, fmt.Errorf("generate execution id: %w", err)
 	}
 	if !validID(id) {
-		return Execution{}, fmt.Errorf("generated invalid execution id %q", id)
+		return Execution{}, nil, fmt.Errorf("generated invalid execution id %q", id)
 	}
 	created := s.now().UTC()
-	execution := Execution{ID: id, SpecCode: spec.Code, Action: action, Capability: capability, ProviderID: providerID, RequestID: requestID, SpecStatusBefore: spec.Status, Status: StatusRunning, CreatedAt: created}
-	if err := s.store.Create(ctx, execution); err != nil {
-		return Execution{}, err
+	started := Execution{ID: id, SpecCode: spec.Code, Action: action, Capability: capability, ProviderID: providerID, RequestID: requestID, SpecStatusBefore: spec.Status, Status: StatusRunning, CreatedAt: created}
+	if err := s.store.Create(ctx, started); err != nil {
+		return Execution{}, nil, err
 	}
 	request := Request{ExecutionID: id, SpecCode: spec.Code, Action: action, Capability: capability, ProviderConfig: CloneConfig(validatedConfig)}
-	result, dispatchErr := provider.Execute(ctx, request)
-	if dispatchErr == nil {
-		dispatchErr = ctx.Err()
-	}
-	completed := s.now().UTC()
-	execution.CompletedAt = &completed
-	if dispatchErr != nil {
-		execution.Status = StatusFailed
-		execution.Error = &ExecutionError{Code: "PROVIDER_ERROR", Message: dispatchErr.Error()}
-		// A failure that happened after the remote work existed keeps that
-		// identifier in a structured field: the record is the only trace left of
-		// work that may still be running on the other side.
-		var remoteErr *RemoteError
-		if errors.As(dispatchErr, &remoteErr) && strings.TrimSpace(remoteErr.ExternalID) != "" {
-			execution.Error.ExternalID = strings.TrimSpace(remoteErr.ExternalID)
+	continuation := func(ctx context.Context) (Execution, error) {
+		execution := started
+		result, dispatchErr := provider.Execute(ctx, request)
+		if dispatchErr == nil {
+			dispatchErr = ctx.Err()
 		}
-	} else {
-		if len(result.Payload) == 0 || !json.Valid(result.Payload) {
+		completed := s.now().UTC()
+		execution.CompletedAt = &completed
+		if dispatchErr != nil {
 			execution.Status = StatusFailed
-			execution.Error = &ExecutionError{Code: "INVALID_PROVIDER_RESULT", Message: fmt.Sprintf("provider %q returned invalid JSON payload", providerID)}
+			execution.Error = &ExecutionError{Code: "PROVIDER_ERROR", Message: dispatchErr.Error()}
+			// A failure that happened after the remote work existed keeps that
+			// identifier in a structured field: the record is the only trace left of
+			// work that may still be running on the other side.
+			var remoteErr *RemoteError
+			if errors.As(dispatchErr, &remoteErr) && strings.TrimSpace(remoteErr.ExternalID) != "" {
+				execution.Error.ExternalID = strings.TrimSpace(remoteErr.ExternalID)
+			}
 		} else {
-			execution.Status = StatusSucceeded
-			execution.Result = &result
+			if len(result.Payload) == 0 || !json.Valid(result.Payload) {
+				execution.Status = StatusFailed
+				execution.Error = &ExecutionError{Code: "INVALID_PROVIDER_RESULT", Message: fmt.Sprintf("provider %q returned invalid JSON payload", providerID)}
+			} else {
+				execution.Status = StatusSucceeded
+				execution.Result = &result
+			}
 		}
+		// The caller's verdict is applied before the record is closed, never after,
+		// so the store only ever receives the terminal state the caller stands
+		// behind. WithoutCancel for the same reason as the write below: a shutdown
+		// racing the verdict must not turn a real success into an unverified one.
+		if confirm != nil {
+			confirm(context.WithoutCancel(ctx), &execution)
+		}
+		// WithoutCancel is what makes the record survive a cancelled dispatch: an
+		// interrupted run closes as FAILED with the reason instead of staying
+		// RUNNING for ever with nobody left to close it.
+		if err := s.store.Update(context.WithoutCancel(ctx), execution); err != nil {
+			return Execution{}, err
+		}
+		return execution, nil
 	}
-	if err := s.store.Update(context.WithoutCancel(ctx), execution); err != nil {
-		return Execution{}, err
-	}
-	return execution, nil
+	return started, continuation, nil
 }

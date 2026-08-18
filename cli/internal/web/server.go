@@ -31,6 +31,14 @@ type Server struct {
 	mockupsDir string
 	broker     *Broker
 	watchRoot  string
+
+	// store and service dispatch spec actions. The store is always present (it
+	// only needs the project root); the service is nil when no provider registry
+	// was supplied, which makes the run route answer "no provider" instead of
+	// panicking.
+	store    execution.Store
+	service  *execution.Service
+	dispatch *dispatchGroup
 }
 
 // NewServer constructs a Server bound to addr (e.g. "127.0.0.1:8080").
@@ -41,6 +49,10 @@ type Server struct {
 // provider, which is not an error.
 func NewServer(conn connector.Connector, cfg config.Config, registry *execution.Registry, addr string) (*Server, error) {
 	mux := http.NewServeMux()
+	store, err := execution.NewFileStore(cfg.ProjectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("creating the execution store: %w", err)
+	}
 	s := &Server{
 		conn:       conn,
 		cfg:        cfg,
@@ -49,6 +61,18 @@ func NewServer(conn connector.Connector, cfg config.Config, registry *execution.
 		mockupsDir: cfg.AbsPath(cfg.Paths.Mockups),
 		broker:     NewBroker(),
 		watchRoot:  resolveWatchRoot(cfg),
+		store:      store,
+		dispatch:   newDispatchGroup(),
+	}
+	// A nil registry is not an error: the viewer simply has no provider to run
+	// with, and the run route says so. Building a service over it would be the
+	// only way to turn that into a panic.
+	if registry != nil {
+		service, serviceErr := execution.NewService(registry, store, execution.RandomID, time.Now)
+		if serviceErr != nil {
+			return nil, fmt.Errorf("creating the execution service: %w", serviceErr)
+		}
+		s.service = service
 	}
 	s.registerRoutes()
 	s.httpSrv = &http.Server{
@@ -73,9 +97,25 @@ func resolveWatchRoot(cfg config.Config) string {
 // Addr returns the address the server listens on.
 func (s *Server) Addr() string { return s.httpSrv.Addr }
 
+// dispatchDrainTimeout bounds how long shutdown waits for in-flight dispatches.
+// It is a window, not a promise: an execution the provider is still polling gets
+// its context cancelled, closes its record as FAILED, and is done well inside
+// it; a provider that ignores cancellation must not hold the process hostage.
+const dispatchDrainTimeout = 5 * time.Second
+
 // Run starts listening and blocks until ctx is done or the server errors.
 // When ctx is cancelled the server is shut down with a 5s grace period.
 func (s *Server) Run(ctx context.Context, onReady func(url string)) error {
+	// Dispatches outlive the request that started them, so they run on a context
+	// owned by the server rather than by any client. Cancelling it on the way out
+	// is what turns an interrupted execution into a FAILED record with a reason
+	// instead of one left RUNNING for ever.
+	dispatchCtx, cancelDispatch := context.WithCancel(context.WithoutCancel(ctx))
+	s.dispatch.bind(dispatchCtx)
+	defer func() {
+		cancelDispatch()
+		s.dispatch.wait(dispatchDrainTimeout)
+	}()
 	ln, err := net.Listen("tcp", s.httpSrv.Addr)
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", s.httpSrv.Addr, err)
@@ -133,6 +173,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("PUT /api/prd", s.handleSavePRD)
 	s.mux.HandleFunc("GET /api/execution/providers", s.handleListExecutionProviders)
 	s.mux.HandleFunc("PUT /api/execution/provider/default", s.handleSaveDefaultExecutionProvider)
+	s.mux.HandleFunc("POST /api/spec/{code}/execution", s.handleRunSpecAction)
+	s.mux.HandleFunc("GET /api/execution/{id}", s.handleGetExecution)
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	s.mux.HandleFunc("PUT /api/config", s.handleSaveConfig)
 	s.mux.HandleFunc("POST /api/config/test", s.handleTestConfig)

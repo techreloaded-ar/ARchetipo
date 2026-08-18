@@ -2386,9 +2386,180 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	color: var(--text-muted);
 }
 
+/* A runnable action is a button; a non-runnable one keeps the plain chip and
+   explains itself through its title. */
+.action-chip-run {
+	font-family: var(--font-sans);
+	cursor: pointer;
+	border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+	transition:
+		background var(--transition),
+		border-color var(--transition),
+		transform 0.1s var(--ease);
+}
+
+.action-chip-run:hover:not(:disabled) {
+	background: var(--accent);
+	border-color: var(--accent);
+}
+
+.action-chip-run:hover:not(:disabled) .action-chip-label {
+	color: var(--accent-ink);
+}
+
+.action-chip-run:hover:not(:disabled) .action-chip-id {
+	color: var(--accent-ink);
+	opacity: 0.75;
+}
+
+.action-chip-run:active:not(:disabled) {
+	transform: translateY(1px);
+}
+
+.action-chip-run:disabled {
+	cursor: default;
+	opacity: 0.55;
+}
+
 .story-actions-empty {
 	font-size: 12px;
 	color: var(--text-muted);
+}
+
+/* ---- Spec execution panel ---------------------------------------------
+   Reuses the status palette: in progress is the running colour, success and
+   failure the ones already used for done and high priority. */
+.story-execution {
+	margin: 0 0 14px;
+}
+
+.story-execution:empty {
+	margin: 0;
+}
+
+.execution-panel {
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--status-todo);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.execution-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.execution-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--status-todo);
+	flex-shrink: 0;
+}
+
+.execution-headline {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--text-strong);
+}
+
+.execution-id,
+.execution-code {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+
+.execution-meta {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.03em;
+	color: var(--text-muted);
+}
+
+.execution-message {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	flex-wrap: wrap;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--text);
+}
+
+.execution-payload summary {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.03em;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.execution-payload pre {
+	margin: 6px 0 0;
+	padding: 8px 10px;
+	max-height: 220px;
+	overflow: auto;
+	border-radius: var(--radius-sm);
+	background: var(--surface-3);
+	font-family: var(--font-mono);
+	font-size: 11px;
+	line-height: 1.5;
+	color: var(--text);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.execution-panel.execution-running {
+	border-left-color: var(--status-progress);
+}
+
+.execution-running .execution-dot {
+	background: var(--status-progress);
+	animation: execution-pulse 1.4s var(--ease) infinite;
+}
+
+.execution-panel.execution-ok {
+	border-left-color: var(--status-done);
+}
+
+.execution-ok .execution-dot {
+	background: var(--status-done);
+}
+
+.execution-panel.execution-err {
+	border-left-color: var(--priority-high);
+}
+
+.execution-err .execution-dot {
+	background: var(--priority-high);
+}
+
+.execution-err .execution-message {
+	color: var(--priority-high);
+}
+
+@keyframes execution-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.3;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.execution-running .execution-dot {
+		animation: none;
+	}
 }
 
 /* Execution provider panel */

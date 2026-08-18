@@ -11,7 +11,6 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"gopkg.in/yaml.v3"
@@ -205,69 +204,24 @@ type executionRunResult struct {
 	Reused bool `json:"reused"`
 }
 
-// confirmActionEffect turns a self-declared success into a verified one.
-//
-// The provider only ever sees a receipt written by the remote agent: it cannot
-// read the connector, and the execution-provider boundary deliberately keeps it
-// that way, so that a remote failure can never move a spec. But a receipt is a
-// declaration. A remote skill that fails halfway, or an agent that hallucinates
-// its own closure, produces a well-formed receipt with the spec still TODO and
-// no plan persisted anywhere. This layer already holds the connector — it read
-// the spec through it a few lines above — so it is where the claim is checked
-// against the state.
-//
-// A claim the state denies is not a success: the record is rewritten with the
-// reason and the command exits in error.
+// confirmActionEffect renders execution.ConfirmActionEffect in the CLI's own
+// envelope. The rule itself lives in the execution package, so the viewer
+// applies the identical check instead of a second copy of it that would drift;
+// only the remedy is local, because a CLI user retries with a new --request-id.
 func confirmActionEffect(ctx context.Context, conn connector.Connector, store execution.Store, action execution.ActionID, specCode string, outcome *execution.Execution) error {
-	if outcome.Status != execution.StatusSucceeded || action != execution.ActionPlan {
+	err := execution.ConfirmActionEffect(ctx, conn, store, action, specCode, outcome)
+	if err == nil {
 		return nil
 	}
-	reason := planEffect(ctx, conn, specCode)
-	if reason == nil {
-		return nil
+	var unconfirmed *execution.UnconfirmedEffectError
+	if errors.As(err, &unconfirmed) {
+		return iox.NewPrecondition(
+			unconfirmed.Error(),
+			"inspect the remote run, then retry with a new --request-id once the cause is fixed",
+			nil,
+		)
 	}
-	message := fmt.Sprintf(
-		"the execution reported success but the connector does not confirm it: %v",
-		reason,
-	)
-	remoteID := ""
-	if outcome.Result != nil {
-		remoteID = outcome.Result.ExternalID
-	}
-	// Result and Error are mutually exclusive on a record, so the external
-	// identifier moves into the error rather than being lost with the result.
-	outcome.Status = execution.StatusFailed
-	outcome.Result = nil
-	outcome.Error = &execution.ExecutionError{Code: "UNCONFIRMED_EFFECT", Message: message, ExternalID: remoteID}
-	if err := store.Update(context.WithoutCancel(ctx), *outcome); err != nil {
-		return iox.NewInternal("recording the unconfirmed execution "+outcome.ID, err)
-	}
-	return iox.NewPrecondition(
-		"execution "+outcome.ID+": "+message,
-		"inspect the remote run, then retry with a new --request-id once the cause is fixed",
-		nil,
-	)
-}
-
-// planEffect reports why the connector does not back a claimed plan, or nil when
-// it does. Both halves matter: a spec that is PLANNED with an empty task list is
-// as unusable as one still sitting in TODO.
-func planEffect(ctx context.Context, conn connector.Connector, specCode string) error {
-	spec, err := conn.ReadSpecDetail(ctx, specCode)
-	if err != nil {
-		return fmt.Errorf("re-reading %s failed: %w", specCode, err)
-	}
-	if spec.Status != domain.StatusPlanned {
-		return fmt.Errorf("%s is %s, not %s", specCode, spec.Status, domain.StatusPlanned)
-	}
-	tasks, err := conn.ReadSpecTasks(ctx, specCode)
-	if err != nil {
-		return fmt.Errorf("reading the plan tasks of %s failed: %w", specCode, err)
-	}
-	if len(tasks) == 0 {
-		return fmt.Errorf("%s is %s but holds no plan task", specCode, domain.StatusPlanned)
-	}
-	return nil
+	return iox.NewInternal("recording the unconfirmed execution "+outcome.ID, err)
 }
 
 // defaultProviderConfigPath is the configuration path a provider field belongs
