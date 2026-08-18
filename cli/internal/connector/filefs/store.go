@@ -374,15 +374,25 @@ func (c *Connector) normalizeBacklog(doc backlogDoc, specs map[string]domain.Spe
 	doc.Schema = backlogSchema
 	doc.Version = 2
 	epics := map[string]domain.Epic{}
+	for _, epic := range doc.Epics {
+		if epic.Code == "" {
+			continue
+		}
+		epics[epic.Code] = epic
+	}
 	for _, spec := range specs {
 		if spec.Ref == "" {
 			spec.Ref = spec.Code
 		}
-		if spec.Epic.Code != "" {
-			epics[spec.Epic.Code] = spec.Epic
+		if spec.Epic.Code == "" {
+			continue
 		}
+		if _, ok := epics[spec.Epic.Code]; ok {
+			continue
+		}
+		epics[spec.Epic.Code] = spec.Epic
 	}
-	doc.Epics = doc.Epics[:0]
+	doc.Epics = make([]domain.Epic, 0, len(epics))
 	for _, epic := range epics {
 		doc.Epics = append(doc.Epics, epic)
 	}

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 )
@@ -487,5 +489,128 @@ func TestDeleteSpecIgnoresMissingOptionalArtifacts(t *testing.T) {
 	}
 	if _, err := os.Stat(c.specPath("US-001")); !os.IsNotExist(err) {
 		t.Fatalf("expected spec file removed, stat err=%v", err)
+	}
+}
+
+// seedDeclaredEpicsWorkspace writes a backlog that declares two epics — one
+// that owns a spec and one that owns none — plus a spec whose epic is only
+// known through the spec file itself. It is the on-disk state where the
+// declared-but-empty epic used to disappear.
+func seedDeclaredEpicsWorkspace(t *testing.T, c *Connector) {
+	t.Helper()
+	specsDir := filepath.Join(c.cfg.ProjectRoot, ".archetipo", "specs")
+	if err := os.MkdirAll(specsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	backlog := "schema: archetipo/backlog/v2\n" +
+		"version: 2\n" +
+		"epics:\n" +
+		"  - code: EP-900\n" +
+		"    title: Declared With Specs\n" +
+		"  - code: EP-901\n" +
+		"    title: Declared Without Specs\n" +
+		"order:\n" +
+		"  - US-900\n" +
+		"  - US-902\n"
+	if err := os.WriteFile(filepath.Join(c.cfg.ProjectRoot, ".archetipo", "backlog.yaml"), []byte(backlog), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	specWithDeclaredEpic := "schema: archetipo/spec/v2\ncode: US-900\ntitle: Prima spec\nepic:\n  code: EP-900\n  title: Declared With Specs\npriority: HIGH\npoints: 3\nstatus: TODO\n"
+	if err := os.WriteFile(filepath.Join(specsDir, "US-900.yaml"), []byte(specWithDeclaredEpic), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	specWithUndeclaredEpic := "schema: archetipo/spec/v2\ncode: US-902\ntitle: Spec di epica non dichiarata\nepic:\n  code: EP-902\n  title: Undeclared From Spec\npriority: LOW\npoints: 1\nstatus: TODO\n"
+	if err := os.WriteFile(filepath.Join(specsDir, "US-902.yaml"), []byte(specWithUndeclaredEpic), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func epicTitleByCode(epics []domain.Epic, code string) (string, bool) {
+	for _, epic := range epics {
+		if epic.Code == code {
+			return epic.Title, true
+		}
+	}
+	return "", false
+}
+
+func TestReadExistingBacklogIncludesDeclaredEpics(t *testing.T) {
+	c := newTestConnector(t)
+	seedDeclaredEpicsWorkspace(t, c)
+
+	out, err := c.ReadExistingBacklog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	title, ok := epicTitleByCode(out.Epics, "EP-900")
+	if !ok {
+		t.Fatalf("declared epic EP-900 missing from summary: %+v", out.Epics)
+	}
+	if title != "Declared With Specs" {
+		t.Errorf("EP-900 title = %q, want %q", title, "Declared With Specs")
+	}
+
+	title, ok = epicTitleByCode(out.Epics, "EP-901")
+	if !ok {
+		t.Fatalf("declared epic without specs EP-901 missing from summary: %+v", out.Epics)
+	}
+	if title != "Declared Without Specs" {
+		t.Errorf("EP-901 title = %q, want %q", title, "Declared Without Specs")
+	}
+
+	// Symmetric case that must stay unchanged: an epic known only through a
+	// spec is still reported.
+	title, ok = epicTitleByCode(out.Epics, "EP-902")
+	if !ok {
+		t.Fatalf("epic derived from specs EP-902 missing from summary: %+v", out.Epics)
+	}
+	if title != "Undeclared From Spec" {
+		t.Errorf("EP-902 title = %q, want %q", title, "Undeclared From Spec")
+	}
+}
+
+func TestAppendSpecsPreservesDeclaredEpics(t *testing.T) {
+	c := newTestConnector(t)
+	seedDeclaredEpicsWorkspace(t, c)
+
+	if _, err := c.AppendSpecs(context.Background(), []domain.Spec{{
+		Code:     "US-903",
+		Title:    "Nuova spec",
+		Epic:     domain.Epic{Code: "EP-900", Title: "Declared With Specs"},
+		Priority: domain.PriorityMedium,
+		Points:   2,
+		Status:   domain.StatusTodo,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(c.cfg.ProjectRoot, ".archetipo", "backlog.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc backlogDoc
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	title, ok := epicTitleByCode(doc.Epics, "EP-901")
+	if !ok {
+		t.Fatalf("declared epic without specs erased by backlog rewrite: %+v", doc.Epics)
+	}
+	if title != "Declared Without Specs" {
+		t.Errorf("EP-901 title = %q, want %q", title, "Declared Without Specs")
+	}
+	if _, ok := epicTitleByCode(doc.Epics, "EP-900"); !ok {
+		t.Errorf("declared epic EP-900 erased by backlog rewrite: %+v", doc.Epics)
+	}
+
+	// Symmetric case: the epic known only through a spec must survive too.
+	title, ok = epicTitleByCode(doc.Epics, "EP-902")
+	if !ok {
+		t.Fatalf("epic derived from specs erased by backlog rewrite: %+v", doc.Epics)
+	}
+	if title != "Undeclared From Spec" {
+		t.Errorf("EP-902 title = %q, want %q", title, "Undeclared From Spec")
 	}
 }

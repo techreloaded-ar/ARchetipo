@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-031 · A — Form iniziale</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-031</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-form-iniziale.html" class="current">A · iniziale</a>
+        <a href="stato-b-form-compilato.html">B · compilato</a>
+        <a href="stato-c-errori-validazione.html">C · errori</a>
+        <a href="stato-d-conferma-e-creazione.html">D · creazione</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">Stato A · AC-1</p>
+    <h1 class="mk-title">Form iniziale</h1>
+    <p class="mk-lede">
+        La modale si apre dalla topbar. Il codice non è un campo: è una targa
+        vuota e tratteggiata, con la promessa scritta sopra («assegnato alla
+        conferma»). Le epiche del select sono soltanto quelle già presenti nel
+        workspace; il corpo markdown nasce con lo scheletro della storia.
+    </p>
+
+    <p class="mk-section-title">Topbar del viewer</p>
+    <div class="mk-stage-flat">
+        <header class="topbar">
+            <div class="brand">
+                <span class="brand-mark"><em>A</em></span>
+                <div class="brand-stack">
+                    <span class="brand-name">ARchetipo</span>
+                    <span class="brand-sub">by Tech Reloaded</span>
+                </div>
+            </div>
+            <div class="topbar-stats">
+                <span class="stat"><span class="stat-num">15</span><span class="stat-label">stories</span></span>
+                <span class="stat-sep">/</span>
+                <span class="stat"><span class="stat-num">2</span><span class="stat-label">in flight</span></span>
+                <span class="stat-sep">/</span>
+                <span class="stat"><span class="stat-num">6</span><span class="stat-label">done</span></span>
+            </div>
+            <div class="topbar-actions">
+                <button type="button" class="ghost-btn new-spec-btn">
+                    <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                    <span>New spec</span>
+                </button>
+                <span class="action-sep" aria-hidden="true"></span>
+                <button type="button" class="ghost-btn"><span>Metrics</span></button>
+                <button type="button" class="ghost-btn"><span>PRD</span></button>
+                <button type="button" class="ghost-btn"><span>Mockups</span></button>
+                <button type="button" class="ghost-btn"><span>Config</span></button>
+            </div>
+        </header>
+    </div>
+
+    <p class="mk-note" style="margin-top:22px">
+        <strong>Perché il pulsante sta a sinistra del separatore.</strong>
+        Metrics, PRD, Mockups e Config aprono viste. <em>New spec</em> è l'unica
+        azione della topbar che scrive nel backlog: prende il bordo dell'accento
+        e sta prima del separatore, in un gruppo suo.
+    </p>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Modale · form vuota</p>
+    <div class="mk-stage">
+        <div class="modal-root">
+            <div class="modal new-spec-modal">
+                <header class="modal-header">
+                    <div class="new-spec-header">
+                        <div>
+                            <span class="new-spec-eyebrow">nuova spec</span>
+                            <h2 class="modal-title">Aggiungi una storia al backlog</h2>
+                        </div>
+                        <span class="code-slot" title="Il codice è assegnato dal server alla conferma">
+                            US-•••
+                            <span class="code-slot-note">assegnato alla conferma</span>
+                        </span>
+                    </div>
+                    <button type="button" class="icon-btn" aria-label="Chiudi">
+                        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                    </button>
+                </header>
+                <section class="tab-panel">
+                    <form class="form-grid">
+                        <label class="field full">
+                            <span>Title</span>
+                            <input type="text" name="title" placeholder="Una riga: cosa deve poter fare l'utente" required />
+                        </label>
+                        <label class="field">
+                            <span>Epic</span>
+                            <select name="epic">
+                                <option value="">Scegli un'epica…</option>
+                                <option value="EP-003">EP-003 · Esecuzione gestita e portabile</option>
+                                <option value="EP-004">EP-004 · Workspace predisposti ai Template</option>
+                                <option value="EP-005">EP-005 · Esperienza operativa ARchetipo</option>
+                                <option value="EP-006">EP-006 · Esecuzione locale e ciclo di delivery</option>
+                                <option value="EP-007">EP-007 · Archetipi installabili</option>
+                            </select>
+                        </label>
+                        <label class="field">
+                            <span>Priority</span>
+                            <select name="priority">
+                                <option value="HIGH">HIGH</option>
+                                <option value="MEDIUM" selected>MEDIUM</option>
+                                <option value="LOW">LOW</option>
+                            </select>
+                        </label>
+                        <label class="field">
+                            <span>Story points</span>
+                            <input type="number" name="story_points" min="0" max="100" placeholder="3" />
+                        </label>
+                        <label class="field">
+                            <span>Scope <em style="font-style:normal;color:var(--text-dim)">· opzionale</em></span>
+                            <input type="text" name="scope" placeholder="MVP / Growth / Vision" />
+                        </label>
+                        <label class="field">
+                            <span>Blocked by <em style="font-style:normal;color:var(--text-dim)">· opzionale</em></span>
+                            <input type="text" name="blocked_by" placeholder="US-028, US-029" />
+                        </label>
+                        <div class="field full">
+                            <span>Body (markdown)</span>
+                            <div class="EasyMDEContainer">
+                                <div class="editor-toolbar">
+                                    <button type="button" title="Grassetto"><strong>B</strong></button>
+                                    <button type="button" title="Corsivo"><em>I</em></button>
+                                    <button type="button" title="Titolo">H</button>
+                                    <i class="separator"></i>
+                                    <button type="button" title="Elenco">•</button>
+                                    <button type="button" title="Elenco numerato">1.</button>
+                                    <button type="button" title="Citazione">&rdquo;</button>
+                                    <i class="separator"></i>
+                                    <button type="button" title="Anteprima">👁</button>
+                                    <button type="button" title="Schermo intero">⛶</button>
+                                </div>
+                                <pre class="CodeMirror">## User Story
+
+Come **&lt;ruolo&gt;**, voglio **&lt;capacità&gt;**, così da **&lt;beneficio&gt;**.
+
+## Dimostrazione
+
+&lt;Cosa fa il revisore, cosa osserva, con quale esito.&gt;
+
+## Criteri di accettazione
+
+- [ ] AC-1 —
+- [ ] AC-2 —
+- [ ] AC-3 — </pre>
+                            </div>
+                        </div>
+                        <div class="form-actions full">
+                            <button type="button" class="primary-btn" data-submit-demo>Crea spec</button>
+                            <button type="button" class="ghost-btn">Annulla</button>
+                            <span class="status-msg" data-submit-status>lo scheletro è modificabile · nulla è ancora scritto nel backlog</span>
+                        </div>
+                    </form>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Variante · nessuna epica disponibile</p>
+    <p class="mk-note">
+        Senza epiche il form non avrebbe un valore ammesso da offrire per
+        <code>Epic</code>. Il pulsante resta visibile e spento: il vuoto si
+        spiega, non si nasconde. Passa sopra al pulsante per leggere l'hint.
+    </p>
+    <div class="mk-stage-flat">
+        <header class="topbar">
+            <div class="brand">
+                <span class="brand-mark"><em>A</em></span>
+                <div class="brand-stack">
+                    <span class="brand-name">ARchetipo</span>
+                    <span class="brand-sub">by Tech Reloaded</span>
+                </div>
+            </div>
+            <div class="topbar-stats">
+                <span class="stat"><span class="stat-num">0</span><span class="stat-label">stories</span></span>
+                <span class="stat-sep">/</span>
+                <span class="stat"><span class="stat-num">0</span><span class="stat-label">in flight</span></span>
+                <span class="stat-sep">/</span>
+                <span class="stat"><span class="stat-num">0</span><span class="stat-label">done</span></span>
+            </div>
+            <div class="topbar-actions">
+                <span class="new-spec-wrap">
+                    <button type="button" class="ghost-btn new-spec-btn" disabled data-hint-toggle
+                            title="Nessuna epica nel workspace: crea prima il backlog">
+                        <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                        <span>New spec</span>
+                    </button>
+                    <span class="new-spec-hint hidden">
+                        Nessuna epica nel workspace. Genera prima il backlog con
+                        <code>/archetipo-spec</code>: la nuova spec deve appartenere
+                        a un'epica già esistente.
+                    </span>
+                </span>
+                <span class="action-sep" aria-hidden="true"></span>
+                <button type="button" class="ghost-btn"><span>Metrics</span></button>
+                <button type="button" class="ghost-btn"><span>PRD</span></button>
+                <button type="button" class="ghost-btn"><span>Config</span></button>
+            </div>
+        </header>
+    </div>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-031</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

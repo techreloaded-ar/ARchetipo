@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-031 · C — Errori di validazione</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-031</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-form-iniziale.html">A · iniziale</a>
+        <a href="stato-b-form-compilato.html">B · compilato</a>
+        <a href="stato-c-errori-validazione.html" class="current">C · errori</a>
+        <a href="stato-d-conferma-e-creazione.html">D · creazione</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">Stato C · AC-3</p>
+    <h1 class="mk-title">Errori sui campi,<br />backlog intatto</h1>
+    <p class="mk-lede">
+        Il server ha rifiutato la conferma e ha restituito un errore per nome di
+        campo. Ogni messaggio vive sotto il suo campo; l'avviso in cima non li
+        ripete, dice soltanto quanti sono e — la cosa che conta davvero — che il
+        backlog non è cambiato. La targa del codice resta vuota: nessun
+        progressivo è stato consumato.
+    </p>
+
+    <div class="mk-stage">
+        <div class="modal-root">
+            <div class="modal new-spec-modal">
+                <header class="modal-header">
+                    <div class="new-spec-header">
+                        <div>
+                            <span class="new-spec-eyebrow">nuova spec</span>
+                            <h2 class="modal-title">Aggiungi una storia al backlog</h2>
+                        </div>
+                        <span class="code-slot" title="Nessun codice assegnato: la conferma è stata rifiutata">
+                            US-•••
+                            <span class="code-slot-note">nessun codice consumato</span>
+                        </span>
+                    </div>
+                    <button type="button" class="icon-btn" aria-label="Chiudi">
+                        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                    </button>
+                </header>
+                <section class="tab-panel">
+                    <form class="form-grid">
+                        <div class="form-notice err">
+                            <span class="form-notice-mark">rifiutata</span>
+                            <span>
+                                <strong>Tre campi da correggere.</strong>
+                                Il backlog non è stato modificato e nessun codice è stato
+                                assegnato: correggi i campi segnati e riprova.
+                            </span>
+                        </div>
+
+                        <label class="field full has-error">
+                            <span>Title</span>
+                            <input type="text" name="title" value="" placeholder="Una riga: cosa deve poter fare l'utente"
+                                   aria-invalid="true" aria-describedby="err-title" />
+                            <span class="field-error" id="err-title">Il titolo è obbligatorio.</span>
+                        </label>
+                        <label class="field has-error">
+                            <span>Epic</span>
+                            <select name="epic" aria-invalid="true" aria-describedby="err-epic">
+                                <option value="" selected>Scegli un'epica…</option>
+                                <option value="EP-003">EP-003 · Esecuzione gestita e portabile</option>
+                                <option value="EP-004">EP-004 · Workspace predisposti ai Template</option>
+                                <option value="EP-005">EP-005 · Esperienza operativa ARchetipo</option>
+                                <option value="EP-006">EP-006 · Esecuzione locale e ciclo di delivery</option>
+                                <option value="EP-007">EP-007 · Archetipi installabili</option>
+                            </select>
+                            <span class="field-error" id="err-epic">Scegli una delle epiche del workspace.</span>
+                        </label>
+                        <label class="field">
+                            <span>Priority</span>
+                            <select name="priority">
+                                <option value="HIGH">HIGH</option>
+                                <option value="MEDIUM" selected>MEDIUM</option>
+                                <option value="LOW">LOW</option>
+                            </select>
+                        </label>
+                        <label class="field has-error">
+                            <span>Story points</span>
+                            <input type="number" name="story_points" value="-2"
+                                   aria-invalid="true" aria-describedby="err-points" />
+                            <span class="field-error" id="err-points">I punti devono essere un intero fra 0 e 100.</span>
+                        </label>
+                        <label class="field">
+                            <span>Scope <em style="font-style:normal;color:var(--text-dim)">· opzionale</em></span>
+                            <input type="text" name="scope" value="MVP" />
+                        </label>
+                        <label class="field">
+                            <span>Blocked by <em style="font-style:normal;color:var(--text-dim)">· opzionale</em></span>
+                            <input type="text" name="blocked_by" value="US-029" />
+                        </label>
+                        <div class="field full">
+                            <span>Body (markdown)</span>
+                            <div class="EasyMDEContainer">
+                                <div class="editor-toolbar">
+                                    <button type="button" title="Grassetto"><strong>B</strong></button>
+                                    <button type="button" title="Corsivo"><em>I</em></button>
+                                    <button type="button" title="Titolo">H</button>
+                                    <i class="separator"></i>
+                                    <button type="button" title="Elenco">•</button>
+                                    <button type="button" title="Elenco numerato">1.</button>
+                                    <button type="button" title="Citazione">&rdquo;</button>
+                                    <i class="separator"></i>
+                                    <button type="button" title="Anteprima">👁</button>
+                                    <button type="button" title="Schermo intero">⛶</button>
+                                </div>
+                                <pre class="CodeMirror">## User Story
+
+Come **membro di un team di prodotto**, voglio **filtrare la board per epica**,
+così da **leggere lo stato di una sola linea di lavoro**.
+
+## Dimostrazione
+
+Il revisore sceglie un'epica dal filtro e osserva le colonne ridotte.
+
+## Criteri di accettazione
+
+- [ ] AC-1 — La UI espone le epiche del workspace come filtro della board. </pre>
+                            </div>
+                        </div>
+
+                        <div class="form-actions full">
+                            <button type="button" class="primary-btn" data-submit-demo>Crea spec</button>
+                            <button type="button" class="ghost-btn">Annulla</button>
+                            <span class="status-msg err" data-submit-status>3 campi non validi · nessuna spec creata</span>
+                        </div>
+                    </form>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Anatomia dell'errore per campo</p>
+    <div class="mk-grid">
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">1</span>
+                <h3 class="mk-card-title">Campo obbligatorio vuoto</h3>
+            </div>
+            <div class="mk-card-body">
+                <label class="field has-error">
+                    <span>Title</span>
+                    <input type="text" value="" placeholder="Una riga: cosa deve poter fare l'utente" />
+                    <span class="field-error">Il titolo è obbligatorio.</span>
+                </label>
+            </div>
+            <p class="mk-card-sub">
+                Etichetta, bordo e testo dell'errore passano a <code>--priority-high</code>.
+                Il campo conserva il valore digitato: nessun form viene svuotato.
+            </p>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">2</span>
+                <h3 class="mk-card-title">Valore fuori dai valori ammessi</h3>
+            </div>
+            <div class="mk-card-body">
+                <label class="field has-error">
+                    <span>Story points</span>
+                    <input type="number" value="-2" />
+                    <span class="field-error">I punti devono essere un intero fra 0 e 100.</span>
+                </label>
+            </div>
+            <p class="mk-card-sub">
+                Il messaggio dichiara il dominio ammesso, non solo il rifiuto:
+                è la stessa regola che il connector applica lato file.
+            </p>
+        </article>
+    </div>
+
+    <p class="mk-note" style="margin-top:22px">
+        <strong>Un solo posto per la verità.</strong> Gli errori arrivano dal
+        server come mappa <code>campo → messaggio</code>. La UI non duplica la
+        validazione: si limita a montare ogni messaggio sotto il suo campo e a
+        contarli nell'avviso. Un campo senza errore non ha decorazioni.
+    </p>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-031</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

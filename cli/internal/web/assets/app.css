@@ -982,6 +982,182 @@ html[data-theme="light"] .theme-ico-moon {
 	display: block;
 }
 
+/* ---- New spec modal ---------------------------------------------------- */
+/* The only topbar action that writes to the backlog: it carries the accent. */
+.new-spec-btn {
+	border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+	color: var(--accent);
+}
+
+.new-spec-btn:hover:not(:disabled) {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-ink);
+}
+
+#new-spec-modal .modal {
+	width: min(860px, 100%);
+	max-height: calc(100vh - 60px);
+}
+
+#new-spec-modal .tab-panel {
+	overflow-y: auto;
+}
+
+.new-spec-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	flex: 1 1 auto;
+	padding-right: 16px;
+	flex-wrap: wrap;
+}
+
+.new-spec-eyebrow {
+	display: block;
+	margin-bottom: 3px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+}
+
+/* The code is not a form field: it stays an empty, dashed plate until the
+   server assigns the progressive code on confirmation. */
+.code-slot {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 5px 12px;
+	border: 1px dashed var(--border-strong);
+	border-radius: var(--radius-sm);
+	background: repeating-linear-gradient(
+		135deg,
+		transparent 0 6px,
+		color-mix(in srgb, var(--text-dim) 8%, transparent) 6px 12px
+	);
+	font-family: var(--font-mono);
+	font-size: 13px;
+	font-weight: 600;
+	letter-spacing: 0.12em;
+	color: var(--text-dim);
+}
+
+.code-slot-note {
+	font-family: var(--font-sans);
+	font-size: 10.5px;
+	font-weight: 400;
+	letter-spacing: 0.02em;
+	text-transform: none;
+	color: var(--text-dim);
+}
+
+/* Per-field errors (AC-3): the server returns them by field name and each
+   message lives under its own field, next to a matching border. */
+.field > span.field-error {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	margin-top: 1px;
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	line-height: 1.45;
+	letter-spacing: 0.02em;
+	text-transform: none;
+	color: var(--priority-high);
+}
+
+.field > span.field-error:empty {
+	display: none;
+}
+
+.field-error::before {
+	content: "!";
+	flex: 0 0 auto;
+	width: 13px;
+	height: 13px;
+	margin-top: 1px;
+	border-radius: 50%;
+	background: var(--priority-high);
+	color: var(--surface-2);
+	font-size: 9px;
+	font-weight: 700;
+	line-height: 13px;
+	text-align: center;
+}
+
+.field.has-error > span {
+	color: var(--priority-high);
+}
+
+.field.has-error input,
+.field.has-error select,
+.field.has-error textarea,
+.field.has-error .EasyMDEContainer .CodeMirror,
+.field.has-error .EasyMDEContainer .editor-toolbar {
+	border-color: var(--priority-high);
+	background: color-mix(in srgb, var(--priority-high) 5%, var(--surface-2));
+}
+
+.field.has-error input:focus,
+.field.has-error select:focus,
+.field.has-error textarea:focus {
+	border-color: var(--priority-high);
+	box-shadow: 0 0 0 3px
+		color-mix(in srgb, var(--priority-high) 16%, transparent);
+}
+
+/* Form-level notice: says what happened, never repeats the field messages. */
+.form-notice {
+	grid-column: 1 / -1;
+	display: flex;
+	align-items: flex-start;
+	gap: 9px;
+	margin-bottom: 14px;
+	padding: 9px 12px;
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--border-strong);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	font-size: 12.5px;
+	line-height: 1.5;
+	color: var(--text-muted);
+}
+
+.form-notice.hidden {
+	display: none;
+}
+
+.form-notice strong {
+	color: var(--text-strong);
+	font-weight: 600;
+}
+
+.form-notice-mark {
+	flex: 0 0 auto;
+	margin-top: 1px;
+	padding: 2px 7px;
+	border-radius: var(--radius-sm);
+	background: var(--surface-3);
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+}
+
+#new-spec-no-epics {
+	border-left-color: var(--status-todo);
+}
+
+/* A confirmation in flight disables the submit and says so (AC-4). */
+#new-spec-submit:disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+
 /* ---- Config modal ------------------------------------------------------ */
 .config-modal-shell {
 	width: min(1120px, 100%);
@@ -2562,36 +2738,6 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	}
 }
 
-/* Execution provider panel */
-.config-actions-row {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	margin: 4px 0 10px;
-}
-
-.field-required {
-	font-family: var(--font-mono);
-	font-size: 9.5px;
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
-	color: var(--accent-strong);
-}
-
-.field-help {
-	color: var(--text-muted);
-	font-size: 11px;
-	line-height: 1.5;
-	margin-top: 4px;
-}
-
-.field.field-error input {
-	border-color: var(--priority-high);
-}
-
-.field.field-error > span {
-	color: var(--priority-high);
-}
 /* ---- Remote run panel --------------------------------------------------
    The collaborative half of an execution, drawn from docs/mockups/US-030.
    It speaks the vocabulary the execution panel established — same surface,
@@ -3412,3 +3558,33 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	}
 }
 
+/* Execution provider panel */
+.config-actions-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 4px 0 10px;
+}
+
+.field-required {
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--accent-strong);
+}
+
+.field-help {
+	color: var(--text-muted);
+	font-size: 11px;
+	line-height: 1.5;
+	margin-top: 4px;
+}
+
+.field.field-error input {
+	border-color: var(--priority-high);
+}
+
+.field.field-error > span {
+	color: var(--priority-high);
+}

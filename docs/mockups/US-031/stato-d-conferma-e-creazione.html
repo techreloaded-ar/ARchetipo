@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-031 · D — Conferma e spec creata</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-031</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-form-iniziale.html">A · iniziale</a>
+        <a href="stato-b-form-compilato.html">B · compilato</a>
+        <a href="stato-c-errori-validazione.html">C · errori</a>
+        <a href="stato-d-conferma-e-creazione.html" class="current">D · creazione</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">Stato D · AC-2 · AC-4</p>
+    <h1 class="mk-title">Conferma,<br />poi il timbro</h1>
+    <p class="mk-lede">
+        Due tempi, un solo invio. Mentre la richiesta è in volo la form si
+        congela e il bottone dichiara il proprio stato; quando il server
+        risponde, la targa vuota viene timbrata con il progressivo assegnato e
+        la card <code>TODO</code> atterra in cima alla prima colonna.
+    </p>
+
+    <div class="mk-steps">
+        <button type="button" class="mk-step current" data-step="1">1 · conferma in volo</button>
+        <button type="button" class="mk-step" data-step="2">2 · spec creata</button>
+    </div>
+
+    <!-- ---------------------------------------------------------------- -->
+    <div data-step-panel="1">
+        <div class="mk-stage">
+            <div class="modal-root">
+                <div class="modal new-spec-modal">
+                    <header class="modal-header">
+                        <div class="new-spec-header">
+                            <div>
+                                <span class="new-spec-eyebrow">nuova spec</span>
+                                <h2 class="modal-title">Aggiungi una storia al backlog</h2>
+                            </div>
+                            <span class="code-slot">
+                                US-•••
+                                <span class="code-slot-note">in assegnazione…</span>
+                            </span>
+                        </div>
+                        <button type="button" class="icon-btn" aria-label="Chiudi" disabled>
+                            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                        </button>
+                    </header>
+                    <section class="tab-panel">
+                        <form class="form-grid is-submitting">
+                            <label class="field full">
+                                <span>Title</span>
+                                <input type="text" value="Filtrare la board per epica" readonly />
+                            </label>
+                            <label class="field">
+                                <span>Epic</span>
+                                <select disabled>
+                                    <option selected>EP-005 · Esperienza operativa ARchetipo</option>
+                                </select>
+                            </label>
+                            <label class="field">
+                                <span>Priority</span>
+                                <select disabled><option selected>MEDIUM</option></select>
+                            </label>
+                            <label class="field">
+                                <span>Story points</span>
+                                <input type="number" value="3" readonly />
+                            </label>
+                            <label class="field">
+                                <span>Scope</span>
+                                <input type="text" value="MVP" readonly />
+                            </label>
+                            <label class="field">
+                                <span>Blocked by</span>
+                                <input type="text" value="US-029" readonly />
+                            </label>
+                            <div class="field full">
+                                <span>Body (markdown)</span>
+                                <div class="EasyMDEContainer">
+                                    <div class="editor-toolbar">
+                                        <button type="button"><strong>B</strong></button>
+                                        <button type="button"><em>I</em></button>
+                                        <button type="button">H</button>
+                                        <i class="separator"></i>
+                                        <button type="button">•</button>
+                                        <button type="button">1.</button>
+                                    </div>
+                                    <pre class="CodeMirror">## User Story
+
+Come **membro di un team di prodotto**, voglio **filtrare la board per epica**,
+così da **leggere lo stato di una sola linea di lavoro**.
+
+## Criteri di accettazione
+
+- [ ] AC-1 — La UI espone le epiche del workspace come filtro della board. </pre>
+                                </div>
+                            </div>
+                            <div class="form-actions full">
+                                <button type="button" class="primary-btn" disabled>
+                                    <span class="btn-spinner" aria-hidden="true"></span> Creazione…
+                                </button>
+                                <button type="button" class="ghost-btn" disabled>Annulla</button>
+                                <span class="status-msg" aria-live="polite">conferma in volo · un solo invio accettato</span>
+                            </div>
+                        </form>
+                    </section>
+                </div>
+            </div>
+        </div>
+
+        <p class="mk-note" style="margin-top:22px">
+            <strong>Anti doppio invio (AC-4).</strong> Il bottone si disabilita
+            al primo clic e cambia etichetta, la form si opacizza, la chiusura
+            della modale è sospesa. Una seconda conferma non può partire dalla
+            UI; e se partisse comunque — doppio clic ravvicinato, invio
+            ripetuto dopo un timeout di rete — il server risponde con la stessa
+            spec già creata, mai con una seconda.
+        </p>
+    </div>
+
+    <!-- ---------------------------------------------------------------- -->
+    <div data-step-panel="2" class="hidden">
+        <div class="mk-stage">
+            <div class="modal-root">
+                <div class="modal new-spec-modal">
+                    <header class="modal-header">
+                        <div class="new-spec-header">
+                            <div>
+                                <span class="new-spec-eyebrow">spec creata</span>
+                                <h2 class="modal-title">Aggiunta al backlog</h2>
+                            </div>
+                            <span class="code-slot is-assigned">
+                                US-038
+                                <span class="code-slot-note">assegnato dal server</span>
+                            </span>
+                        </div>
+                        <button type="button" class="icon-btn" aria-label="Chiudi">
+                            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                        </button>
+                    </header>
+                    <section class="tab-panel">
+                        <div class="new-spec-result">
+                            <div class="form-notice ok">
+                                <span class="form-notice-mark">creata</span>
+                                <span>
+                                    <strong>US-038 è nel backlog, in stato TODO.</strong>
+                                    Il contenuto è già rileggibile dal connector: la board
+                                    qui sotto mostra la card appena atterrata.
+                                </span>
+                            </div>
+
+                            <h3 class="result-headline">Filtrare la board per epica</h3>
+
+                            <div class="result-recap">
+                                <span class="meta-chip status-todo">TODO</span>
+                                <span class="meta-chip">EP-005</span>
+                                <span class="meta-chip">MEDIUM</span>
+                                <span class="meta-chip">3 pt</span>
+                                <span class="meta-chip">MVP</span>
+                                <span class="meta-chip">bloccata da US-029</span>
+                            </div>
+
+                            <pre class="result-preview">## User Story
+
+Come **membro di un team di prodotto**, voglio **filtrare la board per epica**,
+così da **leggere lo stato di una sola linea di lavoro**.
+
+## Criteri di accettazione
+
+- [ ] AC-1 — La UI espone le epiche del workspace come filtro della board.</pre>
+
+                            <div class="form-actions">
+                                <button type="button" class="primary-btn">Apri US-038</button>
+                                <button type="button" class="ghost-btn">Crea un'altra spec</button>
+                                <button type="button" class="ghost-btn">Chiudi</button>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </div>
+
+        <p class="mk-section-title" style="margin-top:26px">La board dopo la conferma</p>
+        <div class="mk-stage-flat">
+            <div class="board">
+                <section class="column" data-id="todo">
+                    <header class="column-header">
+                        <span class="column-title"><span class="column-dot"></span>To do</span>
+                        <span class="column-count">4</span>
+                    </header>
+                    <div class="column-body">
+                        <article class="card prio-MEDIUM is-fresh">
+                            <div class="card-top">
+                                <span class="card-code">US-038</span>
+                                <span class="priority-badge priority-MEDIUM">MEDIUM</span>
+                                <span class="card-fresh-mark">nuova</span>
+                            </div>
+                            <div class="card-title">Filtrare la board per epica</div>
+                            <div class="card-meta">
+                                <span class="card-epic">EP-005</span>
+                                <span class="card-points">3 pt</span>
+                            </div>
+                        </article>
+                        <article class="card prio-HIGH">
+                            <div class="card-top">
+                                <span class="card-code">US-032</span>
+                                <span class="priority-badge priority-HIGH">HIGH</span>
+                            </div>
+                            <div class="card-title">Avviare una run locale dal viewer</div>
+                            <div class="card-meta">
+                                <span class="card-epic">EP-006</span>
+                                <span class="card-points">5 pt</span>
+                            </div>
+                        </article>
+                        <article class="card prio-LOW">
+                            <div class="card-top">
+                                <span class="card-code">US-035</span>
+                                <span class="priority-badge priority-LOW">LOW</span>
+                            </div>
+                            <div class="card-title">Installare un archetipo da un registry</div>
+                            <div class="card-meta">
+                                <span class="card-epic">EP-007</span>
+                                <span class="card-points">2 pt</span>
+                            </div>
+                        </article>
+                    </div>
+                </section>
+
+                <section class="column" data-id="planned">
+                    <header class="column-header">
+                        <span class="column-title"><span class="column-dot"></span>Planned</span>
+                        <span class="column-count">1</span>
+                    </header>
+                    <div class="column-body">
+                        <article class="card prio-MEDIUM">
+                            <div class="card-top">
+                                <span class="card-code">US-030</span>
+                                <span class="priority-badge priority-MEDIUM">MEDIUM</span>
+                            </div>
+                            <div class="card-title">Interagire con una run remota dalla UI</div>
+                            <div class="card-meta">
+                                <span class="card-epic">EP-005</span>
+                                <span class="card-points">5 pt</span>
+                            </div>
+                        </article>
+                    </div>
+                </section>
+
+                <section class="column" data-id="in_progress">
+                    <header class="column-header">
+                        <span class="column-title"><span class="column-dot"></span>In progress</span>
+                        <span class="column-count">1</span>
+                    </header>
+                    <div class="column-body">
+                        <article class="card prio-HIGH">
+                            <div class="card-top">
+                                <span class="card-code">US-029</span>
+                                <span class="priority-badge priority-HIGH">HIGH</span>
+                            </div>
+                            <div class="card-title">Pianificare una spec dal viewer</div>
+                            <div class="card-meta">
+                                <span class="card-epic">EP-005</span>
+                                <span class="card-points">3 pt</span>
+                            </div>
+                        </article>
+                    </div>
+                </section>
+
+                <section class="column" data-id="done">
+                    <header class="column-header">
+                        <span class="column-title"><span class="column-dot"></span>Done</span>
+                        <span class="column-count">6</span>
+                    </header>
+                    <div class="column-body">
+                        <article class="card prio-MEDIUM">
+                            <div class="card-top">
+                                <span class="card-code">US-028</span>
+                                <span class="priority-badge priority-MEDIUM">MEDIUM</span>
+                            </div>
+                            <div class="card-title">Configurare l'esecuzione dal viewer</div>
+                            <div class="card-meta">
+                                <span class="card-epic">EP-005</span>
+                                <span class="card-points">3 pt</span>
+                            </div>
+                        </article>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <p class="mk-note" style="margin-top:22px">
+            <strong>Una sola card, e si vede quale.</strong> La card nuova
+            atterra con un'animazione breve e conserva l'anello d'accento e il
+            marchio <em>nuova</em> fino al successivo refresh della board. È
+            l'unica differenza rispetto a una card normale: nessuna colonna
+            speciale, nessuno stato intermedio.
+        </p>
+    </div>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-031</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

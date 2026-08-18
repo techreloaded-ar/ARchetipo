@@ -43,6 +43,14 @@
 	const metricsModalClose = document.getElementById("metrics-modal-close");
 	const metricsBody = document.getElementById("metrics-body");
 	const metricsStatus = document.getElementById("metrics-status");
+	const newSpecBtn = document.getElementById("new-spec-btn");
+	const newSpecModal = document.getElementById("new-spec-modal");
+	const newSpecModalClose = document.getElementById("new-spec-modal-close");
+	const newSpecForm = document.getElementById("new-spec-form");
+	const newSpecStatus = document.getElementById("new-spec-status");
+	const newSpecSubmit = document.getElementById("new-spec-submit");
+	const newSpecCancel = document.getElementById("new-spec-cancel");
+	const newSpecNoEpics = document.getElementById("new-spec-no-epics");
 	const configBtn = document.getElementById("config-btn");
 	const configModal = document.getElementById("config-modal");
 	const configModalClose = document.getElementById("config-modal-close");
@@ -67,6 +75,7 @@
 	const executionStatus = document.getElementById("execution-status");
 	const storyActions = document.getElementById("story-actions");
 	const storyExecution = document.getElementById("story-execution");
+	const storyRun = document.getElementById("story-run");
 	const mockupsBtn = document.getElementById("mockups-btn");
 	const mockupsMenu = document.getElementById("mockups-menu");
 	const mockupsDropdown = document.getElementById("mockups-dropdown");
@@ -75,7 +84,6 @@
 	const statProgress = document.getElementById("stat-progress");
 	const statDone = document.getElementById("stat-done");
 	const reviewTab = document.getElementById("review-tab");
-	const storyRun = document.getElementById("story-run");
 	const reviewBranch = document.getElementById("review-branch");
 	const reviewDiff = document.getElementById("review-diff");
 	const reviewStatus = document.getElementById("review-status");
@@ -155,6 +163,15 @@
 		toolbar: editorToolbar,
 		minHeight: "360px",
 	});
+	const newSpecEditor = new EasyMDE({
+		element: newSpecForm.body,
+		spellChecker: false,
+		status: false,
+		autoDownloadFontAwesome: true,
+		previewRender: (plainText) => marked.parse(plainText),
+		toolbar: editorToolbar,
+		minHeight: "300px",
+	});
 
 	let currentSpecCode = null;
 	let reviewComments = []; // inline comments for the spec currently under review
@@ -163,6 +180,10 @@
 	let currentPlanSnapshot = null; // last loaded plan (for cancel + re-render after save)
 	let boardSnapshot = null; // last loaded board (for undo on failed drag)
 	let currentPrdSnapshot = ""; // last loaded PRD body
+	// Client-side guard against a double submit of the creation form. It keeps
+	// the user from firing twice; the server, not this flag, is what guarantees
+	// that a repeated confirmation never creates a second spec.
+	let newSpecBusy = false;
 	let currentConfigSnapshot = null; // last loaded effective config
 	let currentConfigRaw = ""; // last loaded/saved config YAML
 	let currentConfigExists = false; // whether config.yaml existed on open
@@ -172,27 +193,6 @@
 	let executionDefault = null; // persisted workspace default, or null
 	let executionPollTimer = null; // interval following the open spec's execution
 	let lastExecutionRecord = null; // execution shown in the panel, for a failed poll
-
-	refreshBtn.addEventListener("click", loadBoard);
-	modalClose.addEventListener("click", closeModal);
-	modal.addEventListener("click", (e) => {
-		if (e.target === modal) closeModal();
-	});
-	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && !modal.classList.contains("hidden")) closeModal();
-	});
-	tabs.forEach((t) =>
-		t.addEventListener("click", () => activateTab(t.dataset.tab)),
-	);
-	specForm.addEventListener("submit", onSaveSpec);
-	planForm.addEventListener("submit", onSavePlan);
-	specEditBtn.addEventListener("click", () => enterSpecEditMode());
-	specDeleteBtn.addEventListener("click", () => {
-		if (currentSpecCode)
-			confirmAndDeleteSpec(
-				currentSpecCode,
-				currentSpecSnapshot && currentSpecSnapshot.title,
-			);
 	let runPollTimer = null; // interval following the run behind the open execution
 	let runExecutionID = null; // execution whose run the panel is following
 	let runAfterID = 0; // highest event id already rendered — the only cursor
@@ -215,6 +215,27 @@
 	let runCancelSent = false; // a cancel was delivered — a fact about the command, not the run
 	let runSeams = new Set(); // event ids the timeline resumed at after a dropped channel
 	let runSeamPending = false; // the channel dropped: the next appended event opens a seam
+
+	refreshBtn.addEventListener("click", loadBoard);
+	modalClose.addEventListener("click", closeModal);
+	modal.addEventListener("click", (e) => {
+		if (e.target === modal) closeModal();
+	});
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && !modal.classList.contains("hidden")) closeModal();
+	});
+	tabs.forEach((t) =>
+		t.addEventListener("click", () => activateTab(t.dataset.tab)),
+	);
+	specForm.addEventListener("submit", onSaveSpec);
+	planForm.addEventListener("submit", onSavePlan);
+	specEditBtn.addEventListener("click", () => enterSpecEditMode());
+	specDeleteBtn.addEventListener("click", () => {
+		if (currentSpecCode)
+			confirmAndDeleteSpec(
+				currentSpecCode,
+				currentSpecSnapshot && currentSpecSnapshot.title,
+			);
 	});
 	specCancelBtn.addEventListener("click", () => exitSpecEditMode());
 	planEditBtn.addEventListener("click", () => enterPlanEditMode());
@@ -230,27 +251,6 @@
 		startSpecAction(btn.dataset.actionId, btn);
 	});
 
-	prdBtn.addEventListener("click", openPRD);
-	prdModalClose.addEventListener("click", closePRD);
-	prdModal.addEventListener("click", (e) => {
-		if (e.target === prdModal) closePRD();
-	});
-	prdEditBtn.addEventListener("click", enterPrdEditMode);
-	prdCancelBtn.addEventListener("click", exitPrdEditMode);
-	prdForm.addEventListener("submit", onSavePRD);
-	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && !prdModal.classList.contains("hidden"))
-			closePRD();
-	});
-
-	metricsBtn.addEventListener("click", openMetrics);
-	metricsModalClose.addEventListener("click", closeMetrics);
-	metricsModal.addEventListener("click", (e) => {
-		if (e.target === metricsModal) closeMetrics();
-	});
-	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && !metricsModal.classList.contains("hidden"))
-			closeMetrics();
 	// The run panel is redrawn on every poll, so its controls cannot own their
 	// handlers: the container does, and each control declares what it is through
 	// its class and data attributes.
@@ -297,7 +297,40 @@
 		}
 	});
 
+	prdBtn.addEventListener("click", openPRD);
+	prdModalClose.addEventListener("click", closePRD);
+	prdModal.addEventListener("click", (e) => {
+		if (e.target === prdModal) closePRD();
 	});
+	prdEditBtn.addEventListener("click", enterPrdEditMode);
+	prdCancelBtn.addEventListener("click", exitPrdEditMode);
+	prdForm.addEventListener("submit", onSavePRD);
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && !prdModal.classList.contains("hidden"))
+			closePRD();
+	});
+
+	metricsBtn.addEventListener("click", openMetrics);
+	metricsModalClose.addEventListener("click", closeMetrics);
+	metricsModal.addEventListener("click", (e) => {
+		if (e.target === metricsModal) closeMetrics();
+	});
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && !metricsModal.classList.contains("hidden"))
+			closeMetrics();
+	});
+
+	newSpecBtn.addEventListener("click", openNewSpec);
+	newSpecModalClose.addEventListener("click", closeNewSpec);
+	newSpecCancel.addEventListener("click", closeNewSpec);
+	newSpecModal.addEventListener("click", (e) => {
+		if (e.target === newSpecModal) closeNewSpec();
+	});
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && !newSpecModal.classList.contains("hidden"))
+			closeNewSpec();
+	});
+	newSpecForm.addEventListener("submit", onCreateSpec);
 
 	configBtn.addEventListener("click", openConfig);
 	configModalClose.addEventListener("click", closeConfig);
@@ -354,6 +387,7 @@
 			if (!modal.classList.contains("hidden")) return;
 			if (!prdModal.classList.contains("hidden")) return;
 			if (!configModal.classList.contains("hidden")) return;
+			if (!newSpecModal.classList.contains("hidden")) return;
 			loadBoard();
 		}, 150);
 	}
@@ -372,7 +406,18 @@
 			renderBoard(view);
 			updateStats(view);
 			boardSnapshot = view;
+			// A workspace without epics has no admissible value for a new spec:
+			// the action is switched off at the source instead of opening a
+			// modal that can only explain why it cannot be used.
+			const hasEpics = (view.epics || []).length > 0;
+			newSpecBtn.disabled = !hasEpics;
+			newSpecBtn.title = hasEpics
+				? ""
+				: "Define at least one epic in the backlog before creating a spec";
 		} catch (err) {
+			// A board that could not be read cannot vouch for its epics either.
+			newSpecBtn.disabled = true;
+			newSpecBtn.title = "The backlog could not be read";
 			boardEl.innerHTML = `<div class="empty-board">Error: ${escapeHtml(err.message || err)}</div>`;
 		}
 	}
@@ -562,6 +607,7 @@
 		planStatus.textContent = "";
 		storyActions.innerHTML = "";
 		renderExecution(null);
+		resetRunState();
 		showSpecView();
 		showPlanView();
 		reviewLoaded = false;
@@ -607,7 +653,6 @@
 		}
 		if (s.scope)
 			metaParts.push(`<span class="meta-chip">${escapeHtml(s.scope)}</span>`);
-		resetRunState();
 		if (s.blocked_by && s.blocked_by.length)
 			metaParts.push(
 				`<span class="meta-chip blocked">blocked by ${escapeHtml(s.blocked_by.join(", "))}</span>`,
@@ -1687,6 +1732,7 @@
 		if (record && !isExecutionTerminal(record)) {
 			startExecutionPolling(record.id, code);
 		}
+		resumeRun(record, code);
 	}
 
 	// followExecution either keeps watching a still open execution, or settles
@@ -1695,6 +1741,7 @@
 		if (!record) return;
 		if (!isExecutionTerminal(record)) {
 			startExecutionPolling(record.id, code);
+			resumeRun(record, code);
 			return;
 		}
 		await settleExecution(record, code);
@@ -1712,6 +1759,9 @@
 	}
 
 	function stopExecutionPolling() {
+		// The run of an execution nobody is watching must not keep being read
+		// either: leaving a spec stops both timers, always together.
+		stopRunPolling();
 		if (executionPollTimer === null) return;
 		clearInterval(executionPollTimer);
 		executionPollTimer = null;
@@ -1732,7 +1782,6 @@
 			let record;
 			try {
 				record = await apiGet(
-		resumeRun(record, code);
 					`/api/execution/${encodeURIComponent(executionID)}`,
 				);
 			} catch (err) {
@@ -1741,7 +1790,6 @@
 					lastExecutionRecord,
 					`Status unavailable: ${err.message || err}. Reopen the spec to check again.`,
 				);
-			resumeRun(record, code);
 				return;
 			}
 			if (currentSpecCode !== code) {
@@ -1759,9 +1807,6 @@
 	// means no panel: a spec that was never run shows nothing at all.
 	function renderExecution(record, note) {
 		lastExecutionRecord = record || null;
-		// The run of an execution nobody is watching must not keep being read
-		// either: leaving a spec stops both timers, always together.
-		stopRunPolling();
 		if (!record) {
 			storyExecution.innerHTML = "";
 			return;
@@ -1849,51 +1894,6 @@
 		}
 	}
 
-	async function loadConfig() {
-		try {
-			const data = await apiGet("/api/config");
-			currentConfigSnapshot = (data && data.config) || {};
-			currentConfigRaw = (data && data.raw) || "";
-			currentConfigExists = !!(data && data.exists);
-			fillConfigForm(currentConfigSnapshot);
-			configRaw.value = currentConfigRaw;
-			configPath.textContent = `${data.path || ".archetipo/config.yaml"} · ${currentConfigExists ? "present" : "will be created on save"}`;
-			configSummaryConnector.textContent =
-				(currentConfigSnapshot && currentConfigSnapshot.connector) || "file";
-			configSummaryExists.textContent = currentConfigExists ? "present" : "missing";
-			setConfigStatus("", null);
-		} catch (err) {
-			setConfigStatus(`Load failed: ${err.message || err}`, "err");
-		}
-	}
-
-	function closeConfig() {
-		configModal.classList.add("hidden");
-		setConfigStatus("", null);
-		setConfigValidation("Not tested in this session.", null);
-	}
-
-	function configPayload() {
-		if (activeConfigTab === "advanced") {
-			return { raw: configRaw.value };
-		}
-		return { config: buildGuidedConfig() };
-	}
-
-	async function validateConfig() {
-		setConfigStatus("Validating...", null);
-		try {
-			const result = await apiPost("/api/config/test", configPayload());
-			const warnings = (result && result.warnings) || [];
-			if (warnings.length > 0) {
-				setConfigValidation(warnings.join(" "), "warn");
-			} else if (result && result.info && result.info.connector) {
-				setConfigValidation(
-					`Validation ok · ${result.info.connector} connector is ready.`,
-					"ok",
-				);
-			} else {
-				setConfigValidation("Validation ok.", "ok");
 	// ---- Remote run ----------------------------------------------------------
 	//
 	// The run panel is the collaborative half of an execution: the history the
@@ -2624,6 +2624,51 @@
 		return at.toLocaleTimeString();
 	}
 
+	async function loadConfig() {
+		try {
+			const data = await apiGet("/api/config");
+			currentConfigSnapshot = (data && data.config) || {};
+			currentConfigRaw = (data && data.raw) || "";
+			currentConfigExists = !!(data && data.exists);
+			fillConfigForm(currentConfigSnapshot);
+			configRaw.value = currentConfigRaw;
+			configPath.textContent = `${data.path || ".archetipo/config.yaml"} · ${currentConfigExists ? "present" : "will be created on save"}`;
+			configSummaryConnector.textContent =
+				(currentConfigSnapshot && currentConfigSnapshot.connector) || "file";
+			configSummaryExists.textContent = currentConfigExists ? "present" : "missing";
+			setConfigStatus("", null);
+		} catch (err) {
+			setConfigStatus(`Load failed: ${err.message || err}`, "err");
+		}
+	}
+
+	function closeConfig() {
+		configModal.classList.add("hidden");
+		setConfigStatus("", null);
+		setConfigValidation("Not tested in this session.", null);
+	}
+
+	function configPayload() {
+		if (activeConfigTab === "advanced") {
+			return { raw: configRaw.value };
+		}
+		return { config: buildGuidedConfig() };
+	}
+
+	async function validateConfig() {
+		setConfigStatus("Validating...", null);
+		try {
+			const result = await apiPost("/api/config/test", configPayload());
+			const warnings = (result && result.warnings) || [];
+			if (warnings.length > 0) {
+				setConfigValidation(warnings.join(" "), "warn");
+			} else if (result && result.info && result.info.connector) {
+				setConfigValidation(
+					`Validation ok · ${result.info.connector} connector is ready.`,
+					"ok",
+				);
+			} else {
+				setConfigValidation("Validation ok.", "ok");
 			}
 			setConfigStatus("Validation complete", "ok");
 		} catch (err) {
@@ -2700,9 +2745,181 @@
 			// that caused it.
 			if (data && data.code) err.code = data.code;
 			if (data && data.field) err.field = data.field;
+			if (data && Array.isArray(data.fields)) err.fields = data.fields;
+			// The hint explains a refusal, and the status tells a refusal from a
+			// fault: the run panel treats a 409 as "no interactive run here"
+			// rather than as an error to paint red.
+			if (data && data.hint) err.hint = data.hint;
+			err.status = r.status;
 			throw err;
 		}
 		return data;
+	}
+
+	// ---- New spec ----------------------------------------------------------
+
+	// The skeleton a new story starts from: it makes the spec born already in
+	// the shape the validator expects. It does not replace validation — the
+	// server still rejects a body that stays empty.
+	function specBodyTemplate() {
+		return [
+			"**User Story**",
+			"Come **<ruolo>**, voglio **<capacità>**, così da **<beneficio>**.",
+			"",
+			"**Dimostrazione**",
+			"<Cosa fa il revisore, cosa osserva, con quale esito.>",
+			"",
+			"**Criteri di accettazione**",
+			"- [ ] AC-1 — ",
+			"",
+		].join("\n");
+	}
+
+	function openNewSpec() {
+		newSpecForm.reset();
+		clearNewSpecErrors();
+		newSpecBusy = false;
+		newSpecStatus.textContent = "";
+		newSpecStatus.className = "status-msg";
+		newSpecForm.priority.value = "MEDIUM";
+		newSpecForm.story_points.value = "3";
+
+		// The epic list is the workspace's own: the form never offers a value
+		// the backlog does not already know.
+		const epics = (boardSnapshot && boardSnapshot.epics) || [];
+		const select = newSpecForm.epic_code;
+		select.textContent = "";
+		// No epic is preselected: the choice must be explicit, so a story is
+		// never filed under an epic the author never looked at.
+		const placeholder = document.createElement("option");
+		placeholder.value = "";
+		placeholder.disabled = true;
+		placeholder.selected = true;
+		placeholder.textContent = "Choose an epic…";
+		select.appendChild(placeholder);
+		epics.forEach((epic) => {
+			const opt = document.createElement("option");
+			opt.value = epic.code;
+			opt.textContent = `${epic.code} — ${epic.title}`;
+			select.appendChild(opt);
+		});
+
+		if (epics.length === 0) {
+			// Without an epic there is no admissible value to submit: the modal
+			// opens, explains itself, and refuses the confirmation.
+			newSpecNoEpics.classList.remove("hidden");
+			newSpecSubmit.disabled = true;
+			newSpecModal.classList.remove("hidden");
+			return;
+		}
+
+		newSpecNoEpics.classList.add("hidden");
+		newSpecSubmit.disabled = false;
+		newSpecEditor.value(specBodyTemplate());
+		newSpecModal.classList.remove("hidden");
+		setTimeout(() => newSpecEditor.codemirror.refresh(), 0);
+	}
+
+	function closeNewSpec() {
+		// While a confirmation is in flight the modal cannot be dismissed:
+		// closing it would let a late response reopen the editor on top of a
+		// draft the user has already started rewriting.
+		if (newSpecBusy) return;
+		newSpecModal.classList.add("hidden");
+		clearNewSpecErrors();
+		newSpecBusy = false;
+		newSpecSubmit.disabled = false;
+	}
+
+	function clearNewSpecErrors() {
+		newSpecForm.querySelectorAll(".field-error").forEach((el) => {
+			el.textContent = "";
+		});
+		newSpecForm.querySelectorAll(".field.has-error").forEach((el) => {
+			el.classList.remove("has-error");
+		});
+	}
+
+	// The server owns validation: every message is rendered where it belongs,
+	// as text, and a finding without a field falls back to the global status.
+	function showNewSpecErrors(fields) {
+		const orphans = [];
+		// The slots are indexed once instead of being looked up with a selector
+		// built from a server value: an unexpected field name becomes an orphan
+		// message, never a selector syntax error.
+		const slots = new Map();
+		newSpecForm.querySelectorAll(".field-error").forEach((el) => {
+			slots.set(el.dataset.errorFor, el);
+		});
+		fields.forEach((f) => {
+			const name = f && f.field;
+			const slot = name ? slots.get(name) : null;
+			if (!slot) {
+				orphans.push((f && f.message) || "invalid value");
+				return;
+			}
+			slot.textContent = f.message || "invalid value";
+			const field = slot.closest(".field");
+			if (field) field.classList.add("has-error");
+		});
+		const counted = fields.length - orphans.length;
+		const parts = [];
+		if (counted > 0)
+			parts.push(
+				`${counted} ${counted === 1 ? "field" : "fields"} to fix · nothing was written to the backlog`,
+			);
+		parts.push(...orphans);
+		newSpecStatus.textContent = parts.join(" · ");
+		newSpecStatus.className = "status-msg err";
+	}
+
+	async function onCreateSpec(e) {
+		e.preventDefault();
+		if (newSpecBusy) return;
+		clearNewSpecErrors();
+		newSpecBusy = true;
+		newSpecSubmit.disabled = true;
+		newSpecStatus.textContent = "Creating…";
+		newSpecStatus.className = "status-msg";
+		const blocked = newSpecForm.blocked_by.value
+			.split(",")
+			.map((s) => s.trim())
+			.filter(Boolean);
+		// The code is deliberately absent: it is assigned by the server from the
+		// persisted backlog and never computed here.
+		const payload = {
+			title: newSpecForm.title.value,
+			epic_code: newSpecForm.epic_code.value,
+			priority: newSpecForm.priority.value,
+			points: parseInt(newSpecForm.story_points.value, 10) || 0,
+			scope: newSpecForm.scope.value,
+			blocked_by: blocked,
+			body: newSpecEditor.value(),
+		};
+		try {
+			const res = await apiPost("/api/spec", payload);
+			const code = res && res.spec && res.spec.code;
+			// The request is over, so the modal may close again.
+			newSpecBusy = false;
+			closeNewSpec();
+			await loadBoard();
+			if (res && res.created === false) {
+				showToast(`${code} already existed — nothing created`, "ok");
+			} else {
+				showToast(`${code} created`, "ok");
+			}
+			if (code) await openEditor(code);
+		} catch (err) {
+			if (Array.isArray(err.fields) && err.fields.length > 0) {
+				showNewSpecErrors(err.fields);
+			} else {
+				newSpecStatus.textContent = `Create failed: ${err.message || err}`;
+				newSpecStatus.className = "status-msg err";
+			}
+		} finally {
+			newSpecBusy = false;
+			newSpecSubmit.disabled = false;
+		}
 	}
 
 	// ---- Metrics -----------------------------------------------------------
@@ -2745,12 +2962,6 @@
                         ${totals.done_points || 0}/${totals.points || 0} points ·
                         ${totals.done_specs || 0}/${totals.specs || 0} specs done ·
                         ${totals.wip_specs || 0} in flight
-			if (data && Array.isArray(data.fields)) err.fields = data.fields;
-			// The hint explains a refusal, and the status tells a refusal from a
-			// fault: the run panel treats a 409 as "no interactive run here"
-			// rather than as an error to paint red.
-			if (data && data.hint) err.hint = data.hint;
-			err.status = r.status;
                     </div>
                 </div>
             </div>

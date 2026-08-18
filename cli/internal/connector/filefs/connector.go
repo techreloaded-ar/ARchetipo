@@ -142,6 +142,12 @@ func (c *Connector) ReadExistingBacklog(ctx context.Context) (domain.BacklogSumm
 	}
 	out := domain.BacklogSummary{}
 	seenEpics := map[string]domain.Epic{}
+	for _, epic := range store.Backlog.Epics {
+		if epic.Code == "" {
+			continue
+		}
+		seenEpics[epic.Code] = epic
+	}
 	for _, code := range store.Backlog.Order {
 		spec, ok := store.Specs[code]
 		if !ok {
@@ -150,7 +156,9 @@ func (c *Connector) ReadExistingBacklog(ctx context.Context) (domain.BacklogSumm
 		out.Codes = append(out.Codes, spec.Code)
 		out.Titles = append(out.Titles, spec.Title)
 		if spec.Epic.Code != "" {
-			seenEpics[spec.Epic.Code] = spec.Epic
+			if _, ok := seenEpics[spec.Epic.Code]; !ok {
+				seenEpics[spec.Epic.Code] = spec.Epic
+			}
 		}
 	}
 	sortedCodes := append([]string(nil), out.Codes...)
@@ -242,8 +250,9 @@ func (c *Connector) SaveInitialBacklog(ctx context.Context, specs []domain.Spec)
 	if len(specs) == 0 {
 		return domain.WriteResult{}, iox.NewInvalidInput("no specs to write", "stdin must contain a non-empty specs array", nil)
 	}
-	if store, err := c.loadStore(); err == nil {
-		if len(store.Specs) > 0 {
+	var declaredEpics []domain.Epic
+	if existing, err := c.loadStore(); err == nil {
+		if len(existing.Specs) > 0 {
 			return domain.WriteResult{}, iox.NewConnector(
 				iox.CodeConflict,
 				"backlog already exists with specs",
@@ -251,6 +260,7 @@ func (c *Connector) SaveInitialBacklog(ctx context.Context, specs []domain.Spec)
 				nil,
 			)
 		}
+		declaredEpics = append([]domain.Epic(nil), existing.Backlog.Epics...)
 	} else {
 		var ce *iox.CodedError
 		if !errors.As(err, &ce) || ce.Code != iox.CodePreconditionMissing {
@@ -263,6 +273,7 @@ func (c *Connector) SaveInitialBacklog(ctx context.Context, specs []domain.Spec)
 			Schema:  backlogSchema,
 			Version: 2,
 			Order:   []string{},
+			Epics:   declaredEpics,
 		}, map[string]domain.Spec{}),
 		Specs: map[string]domain.Spec{},
 	}

@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-031 · Creare una spec dalla UI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-031</span>
+    <nav class="mk-nav">
+        <a href="index.html" class="current">Indice</a>
+        <a href="stato-a-form-iniziale.html">A · iniziale</a>
+        <a href="stato-b-form-compilato.html">B · compilato</a>
+        <a href="stato-c-errori-validazione.html">C · errori</a>
+        <a href="stato-d-conferma-e-creazione.html">D · creazione</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">EP-005 · MEDIUM · 3 punti</p>
+    <h1 class="mk-title">Creare una spec<br />dalla UI</h1>
+    <p class="mk-lede">
+        Un pulsante in più nella topbar del viewer e una modale dedicata,
+        costruita con la stessa grammatica di PRD, Metrics e Config: nessun
+        colore nuovo, nessun font nuovo, nessun raggio nuovo. Quattro stati
+        coprono l'intero percorso, dall'apertura della form alla card
+        <code>TODO</code> che atterra sulla board.
+    </p>
+
+    <p class="mk-note">
+        <strong>Il principio del disegno.</strong> Il codice della spec non
+        appartiene all'utente: lo assegna il server. Da qui la forma della
+        modale — una <em>targa</em> in testata, vuota e tratteggiata mentre si
+        compila, timbrata con il progressivo solo quando la conferma è andata a
+        buon fine. La targa è anche il modo più diretto per dire che un tentativo
+        rifiutato non ha consumato nulla, e che una conferma ripetuta timbra
+        sempre lo stesso codice.
+    </p>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">L'elemento firma · la targa del codice</p>
+    <div class="mk-stage" style="display:flex;gap:18px;flex-wrap:wrap;justify-content:center;align-items:center">
+        <span class="code-slot">US-•••<span class="code-slot-note">assegnato alla conferma</span></span>
+        <span class="code-slot">US-•••<span class="code-slot-note">in assegnazione…</span></span>
+        <span class="code-slot">US-•••<span class="code-slot-note">nessun codice consumato</span></span>
+        <span class="code-slot is-assigned">US-038<span class="code-slot-note">assegnato dal server</span></span>
+    </div>
+    <p class="mk-note" style="margin-top:18px">
+        Quattro letture di uno stesso elemento: in attesa, in volo, rifiutata,
+        assegnata. Nessun campo di input per il codice esiste in nessuno dei
+        quattro momenti.
+    </p>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Attacco in topbar</p>
+    <div class="mk-stage-flat">
+        <header class="topbar">
+            <div class="brand">
+                <span class="brand-mark"><em>A</em></span>
+                <div class="brand-stack">
+                    <span class="brand-name">ARchetipo</span>
+                    <span class="brand-sub">by Tech Reloaded</span>
+                </div>
+            </div>
+            <div class="topbar-stats">
+                <span class="stat"><span class="stat-num">15</span><span class="stat-label">stories</span></span>
+                <span class="stat-sep">/</span>
+                <span class="stat"><span class="stat-num">2</span><span class="stat-label">in flight</span></span>
+                <span class="stat-sep">/</span>
+                <span class="stat"><span class="stat-num">6</span><span class="stat-label">done</span></span>
+            </div>
+            <div class="topbar-actions">
+                <button type="button" class="ghost-btn new-spec-btn">
+                    <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                    <span>New spec</span>
+                </button>
+                <span class="action-sep" aria-hidden="true"></span>
+                <button type="button" class="ghost-btn"><span>Metrics</span></button>
+                <button type="button" class="ghost-btn"><span>PRD</span></button>
+                <button type="button" class="ghost-btn"><span>Mockups</span></button>
+                <button type="button" class="ghost-btn"><span>Config</span></button>
+            </div>
+        </header>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">I quattro stati</p>
+
+    <div class="mk-grid">
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">A</span>
+                <h3 class="mk-card-title">Form iniziale</h3>
+                <span class="mk-ac">AC-1</span>
+            </div>
+            <p class="mk-card-sub">
+                Modale vuota, epiche del workspace nel select, corpo markdown
+                precompilato con lo scheletro della storia. Include la variante
+                «nessuna epica disponibile» con il pulsante spento e l'hint.
+            </p>
+            <div class="mk-card-body">
+                <div class="new-spec-header" style="justify-content:space-between">
+                    <div>
+                        <span class="new-spec-eyebrow">nuova spec</span>
+                        <span style="font-family:var(--font-display);font-size:19px;color:var(--text-strong)">Aggiungi una storia</span>
+                    </div>
+                    <span class="code-slot">US-•••<span class="code-slot-note">alla conferma</span></span>
+                </div>
+                <div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                    <label class="field"><span>Epic</span><select><option>Scegli un'epica…</option></select></label>
+                    <label class="field"><span>Priority</span><select><option>MEDIUM</option></select></label>
+                </div>
+            </div>
+            <a class="mk-card-link" href="stato-a-form-iniziale.html">apri lo stato A →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">B</span>
+                <h3 class="mk-card-title">Pronto alla conferma</h3>
+                <span class="mk-ac">AC-1</span>
+            </div>
+            <p class="mk-card-sub">
+                Dati minimi completi e storia scritta sopra lo scheletro. Il
+                bottone di conferma è vivo; la targa è ancora vuota.
+            </p>
+            <div class="mk-card-body">
+                <label class="field full" style="margin-bottom:10px">
+                    <span>Title</span>
+                    <input type="text" value="Filtrare la board per epica" readonly />
+                </label>
+                <div class="form-actions">
+                    <button type="button" class="primary-btn">Crea spec</button>
+                    <span class="status-msg">dati minimi completi</span>
+                </div>
+            </div>
+            <a class="mk-card-link" href="stato-b-form-compilato.html">apri lo stato B →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">C</span>
+                <h3 class="mk-card-title">Errori di validazione</h3>
+                <span class="mk-ac">AC-3</span>
+            </div>
+            <p class="mk-card-sub">
+                Un messaggio sotto ogni campo rifiutato, un avviso generale che
+                li conta e dichiara il backlog invariato. Nessun codice consumato.
+            </p>
+            <div class="mk-card-body">
+                <div class="form-notice err" style="margin-bottom:12px">
+                    <span class="form-notice-mark">rifiutata</span>
+                    <span><strong>Tre campi da correggere.</strong> Il backlog non è stato modificato.</span>
+                </div>
+                <label class="field has-error">
+                    <span>Title</span>
+                    <input type="text" value="" placeholder="Una riga: cosa deve poter fare l'utente" readonly />
+                    <span class="field-error">Il titolo è obbligatorio.</span>
+                </label>
+            </div>
+            <a class="mk-card-link" href="stato-c-errori-validazione.html">apri lo stato C →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">D</span>
+                <h3 class="mk-card-title">Conferma e spec creata</h3>
+                <span class="mk-ac">AC-2</span>
+                <span class="mk-ac">AC-4</span>
+            </div>
+            <p class="mk-card-sub">
+                Due tempi: conferma in volo con la form congelata, poi il codice
+                timbrato, il riepilogo rileggibile e la card TODO sulla board.
+            </p>
+            <div class="mk-card-body">
+                <div class="form-actions" style="margin-bottom:14px">
+                    <button type="button" class="primary-btn" disabled>
+                        <span class="btn-spinner" aria-hidden="true"></span> Creazione…
+                    </button>
+                    <span class="status-msg">un solo invio accettato</span>
+                </div>
+                <article class="card prio-MEDIUM is-fresh">
+                    <div class="card-top">
+                        <span class="card-code">US-038</span>
+                        <span class="priority-badge priority-MEDIUM">MEDIUM</span>
+                        <span class="card-fresh-mark">nuova</span>
+                    </div>
+                    <div class="card-title">Filtrare la board per epica</div>
+                    <div class="card-meta">
+                        <span class="card-epic">EP-005</span>
+                        <span class="card-points">3 pt</span>
+                    </div>
+                </article>
+            </div>
+            <a class="mk-card-link" href="stato-d-conferma-e-creazione.html">apri lo stato D →</a>
+        </article>
+
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Dove vive il componente</p>
+    <p class="mk-note">
+        Nella topbar di <code>cli/internal/web/assets/index.html</code>, un
+        <code>#new-spec-btn</code> prima del separatore delle azioni, e in fondo
+        al documento una nuova <code>#new-spec-modal</code>, fratello di
+        <code>#modal-root</code>, <code>#prd-modal</code> e
+        <code>#config-modal</code>: stessa <code>.modal-root</code>, stessa
+        <code>.modal</code>, stessa <code>.form-grid</code> con i
+        <code>.field</code> già a tema, stesso montaggio EasyMDE del campo
+        <code>body</code>. Le uniche regole nuove sono in
+        <code>shared.css</code>, PARTE 2 — targa del codice, errori per campo,
+        avviso generale, spinner di conferma, card fresca — pensata per essere
+        incollata in <code>app.css</code> senza riscritture.
+    </p>
+
+    <p class="mk-section-title">Criteri di accettazione coperti</p>
+    <ul class="mk-legend">
+        <li><span class="mk-ac">AC-1</span> dati minimi ed epiche del workspace <code>A · B</code></li>
+        <li><span class="mk-ac">AC-2</span> una sola card TODO con codice progressivo <code>D · tempo 2</code></li>
+        <li><span class="mk-ac">AC-3</span> errori per campo, backlog invariato <code>C</code></li>
+        <li><span class="mk-ac">AC-4</span> conferma in volo e nessun duplicato <code>D · tempo 1</code></li>
+    </ul>
+
+    <p class="mk-section-title">Fuori ambito, e si vede</p>
+    <ul class="mk-legend">
+        <li>nessun bottone «genera con AI» nella form <code>—</code></li>
+        <li>nessuna creazione o modifica di epiche <code>—</code></li>
+        <li>nessun import massivo, nessun nuovo PRD <code>—</code></li>
+    </ul>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-031</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

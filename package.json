@@ -13,11 +13,12 @@
     "test:e2e:unit": "node --test ./test/e2e/config.test.mjs ./test/e2e/baseline.test.mjs",
     "test:wiki-benchmark": "node ./test/benchmark/wiki/run.mjs",
     "test:wiki-benchmark:unit": "node --test ./test/benchmark/wiki/run.test.mjs",
+    "test:view-create-smoke": "node ./test/e2e/create-spec-view-smoke.mjs",
     "test:view-delete-smoke": "node ./test/e2e/delete-story-view-smoke.mjs",
     "test:view-execution-smoke": "node ./test/e2e/execution-config-view-smoke.mjs",
     "test:view-plan-smoke": "node ./test/e2e/plan-from-view-smoke.mjs",
-    "test:wiki-smoke": "node ./test/e2e/wiki-smoke.mjs"
     "test:view-run-smoke": "node ./test/e2e/run-from-view-smoke.mjs",
+    "test:wiki-smoke": "node ./test/e2e/wiki-smoke.mjs"
   },
   "dependencies": {
     "yaml": "^2.9.0"
