@@ -282,8 +282,13 @@ func timeoutError(cfg settings, taskID, lastStatus string) error {
 // resultFor accepts the completed task only against a valid receipt, then
 // builds the compact payload the execution record carries.
 func (p *Provider) resultFor(cfg settings, req execution.Request, task remoteTask) (execution.Result, error) {
-	got, err := parseReceipt(task.ResultSummary)
-	if err != nil || got.Status != plannedStatus || got.Tasks <= 0 || got.SpecCode != req.SpecCode {
+	// The acceptance rule is the shared one: a receipt this provider accepted
+	// and another rejected would be a contract that exists twice. Its two
+	// distinct causes collapse into one message here on purpose, because from
+	// the hub's side both read the same way — the remote task ended `completed`
+	// and no plan came out of it — and the summary is quoted in full anyway.
+	got, err := execution.AcceptPlanReceipt(task.ResultSummary, req.SpecCode)
+	if err != nil {
 		return execution.Result{}, fmt.Errorf(
 			"arcipelago task %s ended completed without having produced a plan for %s%s",
 			task.ID, req.SpecCode, summarySuffix(task.ResultSummary),

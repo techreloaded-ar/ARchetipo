@@ -322,33 +322,6 @@ func TestReceiptStatusIsBoundToTheCanonicalSpecStatus(t *testing.T) {
 	}
 }
 
-// Taking the last decodable JSON object would let anything printed after the
-// receipt — an error dump, a fragment of tool output — shadow a plan that was
-// produced correctly.
-func TestParseReceiptIgnoresJSONPrintedAfterTheReceipt(t *testing.T) {
-	summary := strings.Join([]string{
-		"planning complete",
-		`{"spec_code":"US-001","status":"PLANNED","tasks":7}`,
-		`{"level":"error","msg":"post-run telemetry flush failed"}`,
-		`{"tool":"bash","exit":0}`,
-	}, "\n")
-	got, err := parseReceipt(summary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.SpecCode != "US-001" || got.Status != plannedStatus || got.Tasks != 7 {
-		t.Fatalf("receipt = %#v", got)
-	}
-}
-
-func TestParseReceiptRejectsASummaryWithoutOne(t *testing.T) {
-	for _, summary := range []string{"", "all done", `{"level":"error","msg":"boom"}`, "{not json"} {
-		if _, err := parseReceipt(summary); err == nil {
-			t.Fatalf("summary %q was accepted as a receipt", summary)
-		}
-	}
-}
-
 // A body cut on a byte boundary would emit U+FFFD inside a message meant to be
 // read by an operator.
 func TestTruncateDoesNotSplitARune(t *testing.T) {

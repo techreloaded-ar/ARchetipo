@@ -195,6 +195,25 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	providerID := strings.TrimSpace(selection.ID)
+	// A runtime that cannot be used is refused before any record exists, with
+	// the same sentence the spec detail already shows next to the disabled
+	// action. Letting the dispatch start would create a RUNNING record only to
+	// close it a moment later with this very diagnostic, and leave the user a
+	// failed execution to read instead of an action they can still press once
+	// the runtime is fixed. A provider that does not report availability is
+	// unaffected: CheckAvailability returns nil for it.
+	if s.registry != nil {
+		if provider, resolveErr := s.registry.Resolve(providerID); resolveErr == nil {
+			if err := execution.CheckAvailability(ctx, provider, selection.Config); err != nil {
+				writeError(w, iox.NewConflict(
+					"the default execution provider "+quoted(providerID)+" is not usable: "+err.Error(),
+					"make its runtime usable, or pick another provider in the Execution panel of the configuration",
+					err,
+				))
+				return
+			}
+		}
+	}
 
 	if err := s.guardSingleExecution(ctx, code); err != nil {
 		writeError(w, err)
@@ -335,13 +354,18 @@ type specActionView struct {
 // The whole computation lives on the server on purpose: the browser must not
 // learn which provider exists, what a capability is, or when a spec is busy.
 type actionAvailability struct {
-	providerID     string
-	capabilities   []execution.Capability
-	providerErr    error
-	noDefault      bool
-	noRegistry     bool
-	runningID      string
-	specHasRunning bool
+	providerID   string
+	capabilities []execution.Capability
+	providerErr  error
+	// unavailableReason is the default provider's own diagnostic when its
+	// runtime cannot be used: a binary that is not installed, or one that is
+	// not authenticated. It is empty when the runtime is usable, or when the
+	// provider does not report availability at all.
+	unavailableReason string
+	noDefault         bool
+	noRegistry        bool
+	runningID         string
+	specHasRunning    bool
 }
 
 func (s *Server) actionAvailabilityFor(ctx context.Context, code string) actionAvailability {
@@ -385,6 +409,12 @@ func (s *Server) actionAvailabilityFor(ctx context.Context, code string) actionA
 		return availability
 	}
 	availability.capabilities = capabilities
+	// The probe runs once per request, right here, and is never cached: it
+	// costs a short `--version` call, and a cached answer would keep reporting
+	// a runtime as missing after the user has just installed it.
+	if err := execution.CheckAvailability(ctx, provider, selection.Config); err != nil {
+		availability.unavailableReason = err.Error()
+	}
 	return availability
 }
 
@@ -410,6 +440,9 @@ func (a actionAvailability) reasonFor(actionID string) string {
 	}
 	if a.providerErr != nil {
 		return "the default execution provider " + quoted(a.providerID) + " is unavailable: " + a.providerErr.Error()
+	}
+	if a.unavailableReason != "" {
+		return "the default execution provider " + quoted(a.providerID) + " is not usable: " + a.unavailableReason
 	}
 	if !execution.Supports(a.capabilities, capability) {
 		return "the default execution provider " + quoted(a.providerID) + " does not declare the " + quoted(string(capability)) + " capability"

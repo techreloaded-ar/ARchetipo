@@ -1,0 +1,227 @@
+package codex
+
+import (
+	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+)
+
+const (
+	// ProviderID is the identifier this provider is registered and configured
+	// under.
+	ProviderID = "codex"
+
+	defaultCommand = "codex"
+	defaultTimeout = 3600
+
+	minTimeout = 1
+	maxTimeout = 86400
+)
+
+// defaultExecArgs are the intermediate flags buildArgs emits when exec_args is
+// not configured. They live here, in one place, because the exec_args help text
+// quotes them: a default described in prose next to a default written in code
+// is a pair that drifts, and this one drifted once already.
+var defaultExecArgs = []string{"--full-auto", "--skip-git-repo-check"}
+
+// settings is the parsed, non-secret provider configuration. Codex
+// authenticates by itself, so no credential — and no path to its session
+// material — is ever part of this struct.
+type settings struct {
+	Command  string
+	Model    string
+	ExecArgs []string
+	Timeout  time.Duration
+}
+
+var knownConfigKeys = map[string]struct{}{
+	"command":         {},
+	"model":           {},
+	"exec_args":       {},
+	"timeout_seconds": {},
+}
+
+// ConfigFields declares the non-secret settings this provider accepts, so a
+// caller that does not know Codex — the viewer's configuration form — can offer
+// them without hard-coding this package's keys. The names are exactly the keys
+// parseConfig accepts, and none of them carries a credential: Codex owns its
+// own authentication and ARchetipo never touches that material.
+func (p *Provider) ConfigFields() []execution.ConfigField {
+	return []execution.ConfigField{
+		{
+			Name:        "command",
+			Label:       "Codex command",
+			Type:        "text",
+			Help:        "Name of the Codex executable to look up on PATH, or an absolute path to it. Defaults to " + defaultCommand + ".",
+			Placeholder: defaultCommand,
+		},
+		{
+			Name:        "model",
+			Label:       "Model",
+			Type:        "text",
+			Help:        "Model Codex is asked to use. Left empty, no model flag is passed and Codex picks its own default.",
+			Placeholder: "gpt-5-codex",
+		},
+		{
+			Name:  "exec_args",
+			Label: "Exec arguments",
+			Type:  "text",
+			// The wording says "replace" because buildArgs replaces: whatever is
+			// set here stands in for the default flags rather than joining them.
+			// Reading it as "append" is the expensive mistake — dropping
+			// --full-auto leaves Codex unable to write the plan, so every run
+			// fails — which is why the default is spelled out here.
+			Help:        "Space-separated arguments that replace the default Codex exec flags (" + strings.Join(defaultExecArgs, " ") + "). Left empty, those defaults are used.",
+			Placeholder: strings.Join(defaultExecArgs, " "),
+		},
+		{
+			Name:        "timeout_seconds",
+			Label:       "Timeout (seconds)",
+			Type:        "integer",
+			Help:        fmt.Sprintf("How long the local Codex process may run, between %d and %d. Defaults to %d.", minTimeout, maxTimeout, defaultTimeout),
+			Placeholder: fmt.Sprintf("%d", defaultTimeout),
+		},
+	}
+}
+
+var _ execution.ConfigDescriber = (*Provider)(nil)
+
+func configErr(field, reason string) error {
+	return &execution.ConfigurationError{Field: field, Reason: reason}
+}
+
+// parseConfig validates the shape of the provider configuration and applies the
+// documented defaults. Every rejection names the exact offending key, so the
+// CLI can render it as execution.default_provider.config.<field>.
+//
+// It reads no environment variable and never looks the command up on PATH:
+// `execution provider set-default` must stay runnable on a machine that does
+// not have Codex installed.
+func parseConfig(raw map[string]any) (settings, error) {
+	if err := rejectUnknownKeys(raw); err != nil {
+		return settings{}, err
+	}
+	command, err := parseCommand(raw["command"])
+	if err != nil {
+		return settings{}, err
+	}
+	model, err := parseModel(raw["model"])
+	if err != nil {
+		return settings{}, err
+	}
+	execArgs, err := parseExecArgs(raw["exec_args"])
+	if err != nil {
+		return settings{}, err
+	}
+	timeoutSeconds, err := parseSeconds(raw, "timeout_seconds", defaultTimeout, minTimeout, maxTimeout)
+	if err != nil {
+		return settings{}, err
+	}
+	return settings{
+		Command:  command,
+		Model:    model,
+		ExecArgs: execArgs,
+		Timeout:  time.Duration(timeoutSeconds) * time.Second,
+	}, nil
+}
+
+// rejectUnknownKeys catches typos before any other check, and sorts the keys so
+// the reported field is deterministic when more than one is unknown.
+func rejectUnknownKeys(raw map[string]any) error {
+	unknown := make([]string, 0, len(raw))
+	for key := range raw {
+		if _, ok := knownConfigKeys[key]; !ok {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return configErr(unknown[0], "is not a recognized codex provider configuration key")
+}
+
+// parseCommand accepts a bare executable name to resolve on PATH, or an
+// absolute path to the binary. A relative path with separators is refused
+// because it would silently depend on the working directory.
+func parseCommand(value any) (string, error) {
+	if value == nil {
+		return defaultCommand, nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", configErr("command", "must be a string")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", configErr("command", "must not be empty")
+	}
+	if strings.ContainsRune(text, filepath.Separator) || strings.ContainsRune(text, '/') {
+		if !filepath.IsAbs(text) {
+			return "", configErr("command", "must be an executable name or an absolute path")
+		}
+	}
+	return text, nil
+}
+
+func parseModel(value any) (string, error) {
+	if value == nil {
+		return "", nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", configErr("model", "must be a string")
+	}
+	return strings.TrimSpace(text), nil
+}
+
+// parseExecArgs takes the arguments as a single space-separated string, the
+// shape a configuration form can offer, and splits it into the slice the
+// invocation needs. A key that is present must carry something: an empty string
+// is a mistake, while omitting the key is the documented default.
+func parseExecArgs(value any) ([]string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return nil, configErr("exec_args", "must be a string")
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return nil, configErr("exec_args", "must not be empty")
+	}
+	return fields, nil
+}
+
+// parseSeconds accepts the numeric forms a provider config can arrive in: YAML
+// decodes integers as int, JSON decodes every number as float64, and an int64
+// can reach here through a programmatic caller.
+func parseSeconds(raw map[string]any, field string, fallback, minimum, maximum int) (int, error) {
+	value, present := raw[field]
+	if !present || value == nil {
+		return fallback, nil
+	}
+	var seconds int
+	switch typed := value.(type) {
+	case int:
+		seconds = typed
+	case int64:
+		seconds = int(typed)
+	case float64:
+		if typed != float64(int(typed)) {
+			return 0, configErr(field, "must be a whole number of seconds")
+		}
+		seconds = int(typed)
+	default:
+		return 0, configErr(field, "must be an integer number of seconds")
+	}
+	if seconds < minimum || seconds > maximum {
+		return 0, configErr(field, fmt.Sprintf("must be between %d and %d", minimum, maximum))
+	}
+	return seconds, nil
+}

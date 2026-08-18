@@ -53,13 +53,38 @@ async function main() {
     if (fieldNames.join(",") !== wantFields.join(",")) {
       throw new Error(`Unexpected configurable fields: [${fieldNames.join(", ")}]`);
     }
+    const codex = (providers.providers || []).find((p) => p.id === "codex");
+    if (!codex) {
+      throw new Error(`Expected the codex provider to be listed; got ${JSON.stringify(providers.providers)}`);
+    }
+    if (!codex.label || !(codex.capabilities || []).includes("spec.plan")) {
+      throw new Error(`The codex provider does not declare the spec.plan capability: ${JSON.stringify(codex)}`);
+    }
+    const codexFields = (codex.config_fields || []).map((f) => f.name).sort();
+    const wantCodexFields = ["command", "exec_args", "model", "timeout_seconds"];
+    if (codexFields.join(",") !== wantCodexFields.join(",")) {
+      throw new Error(`Unexpected configurable fields for codex: [${codexFields.join(", ")}]`);
+    }
+    assertNoCredentialFields(codex);
+    // Availability is observed, not required: the smoke must pass on a machine
+    // with Codex installed and on one without it. What must always hold is that
+    // the field exists and that an unavailable provider says why.
+    if (typeof codex.available !== "boolean") {
+      throw new Error(`The codex provider must report a boolean 'available'; got ${JSON.stringify(codex.available)}`);
+    }
+    if (codex.available === false && !(codex.unavailable_reason || "").trim()) {
+      throw new Error(`An unavailable codex provider must state a reason; got ${JSON.stringify(codex)}`);
+    }
+    if (typeof arcipelago.available !== "boolean") {
+      throw new Error(`The arcipelago provider must report a boolean 'available'; got ${JSON.stringify(arcipelago.available)}`);
+    }
     if (JSON.stringify(providers).includes(TOKEN_SENTINEL)) {
       throw new Error("The provider list leaked the credential held in the environment");
     }
     if (providers.default !== null && providers.default !== undefined) {
       throw new Error(`A fresh workspace must report no default provider; got ${JSON.stringify(providers.default)}`);
     }
-    console.log("-> AC-1 ok: providers listed without secrets");
+    console.log("-> AC-1 ok: providers listed with availability and without secrets");
 
     // AC-2 — a valid configuration is saved and survives a reload.
     await apiJSON(`${view.url}/api/execution/provider/default`, {
@@ -128,6 +153,20 @@ async function main() {
     if (options.cleanup) {
       await fs.rm(runDir, { recursive: true, force: true });
       console.log(`-> cleaned workspace: ${runDir}`);
+    }
+  }
+}
+
+// A local provider never needs a credential, so a configurable field whose very
+// name asks for one is a design regression the smoke must catch before it ships.
+const CREDENTIAL_FIELD_HINTS = ["token", "secret", "password", "passwd", "credential", "api_key", "apikey", "auth"];
+
+function assertNoCredentialFields(provider) {
+  for (const field of provider.config_fields || []) {
+    const name = String(field.name || "").toLowerCase();
+    const hint = CREDENTIAL_FIELD_HINTS.find((h) => name.includes(h));
+    if (hint) {
+      throw new Error(`Provider ${provider.id} exposes a credential-shaped configurable field: ${field.name}`);
     }
   }
 }

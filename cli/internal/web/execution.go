@@ -19,6 +19,13 @@ type executionProviderView struct {
 	Label        string                  `json:"label"`
 	Capabilities []execution.Capability  `json:"capabilities"`
 	ConfigFields []execution.ConfigField `json:"config_fields"`
+	// Available says whether the provider's runtime can be used right now, and
+	// UnavailableReason says why not. A provider that does not report
+	// availability has nothing that can be missing, so it stays available with
+	// no reason. Neither field can carry a secret: the reason is the provider's
+	// own diagnostic about a missing or unauthenticated runtime.
+	Available         bool   `json:"available"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
 }
 
 // executionProviderSelectionView is the persisted workspace default.
@@ -36,6 +43,21 @@ type executionProvidersView struct {
 // choose from, and which one is chosen now?".
 func (s *Server) handleListExecutionProviders(w http.ResponseWriter, r *http.Request) {
 	view := executionProvidersView{Providers: []executionProviderView{}}
+	// The default is read from disk rather than from the config the server
+	// started with: it changes while the viewer runs, and the panel must show
+	// what is persisted, not what was loaded at boot. It is read before the
+	// provider loop because only the current default has a persisted
+	// configuration to probe with.
+	current, _, _, _, err := readConfigState(s.cfg.ProjectRoot)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	selection := current.Execution.DefaultProvider
+	defaultID := ""
+	if selection != nil {
+		defaultID = strings.TrimSpace(selection.ID)
+	}
 	for _, provider := range s.registry.List() {
 		capabilities, err := provider.Capabilities(r.Context())
 		if err != nil {
@@ -46,24 +68,31 @@ func (s *Server) handleListExecutionProviders(w http.ResponseWriter, r *http.Req
 		if normalized == nil {
 			normalized = []execution.Capability{}
 		}
+		// Only the current default is probed with the persisted configuration;
+		// every other provider is probed with nil and applies its own defaults,
+		// because a configuration saved for one provider means nothing to
+		// another. An unusable runtime is a fact to report, never an HTTP
+		// error, so the probe result only fills two fields of the view.
+		var providerConfig map[string]any
+		if defaultID != "" && provider.ID() == defaultID && selection != nil {
+			providerConfig = selection.Config
+		}
+		reason := ""
+		if err := execution.CheckAvailability(r.Context(), provider, providerConfig); err != nil {
+			reason = err.Error()
+		}
 		view.Providers = append(view.Providers, executionProviderView{
-			ID:           provider.ID(),
-			Label:        provider.ID(),
-			Capabilities: normalized,
-			ConfigFields: execution.DescribeConfig(provider),
+			ID:                provider.ID(),
+			Label:             provider.ID(),
+			Capabilities:      normalized,
+			ConfigFields:      execution.DescribeConfig(provider),
+			Available:         reason == "",
+			UnavailableReason: reason,
 		})
 	}
-	// The default is read from disk rather than from the config the server
-	// started with: it changes while the viewer runs, and the panel must show
-	// what is persisted, not what was loaded at boot.
-	current, _, _, _, err := readConfigState(s.cfg.ProjectRoot)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if selection := current.Execution.DefaultProvider; selection != nil && strings.TrimSpace(selection.ID) != "" {
+	if defaultID != "" {
 		view.Default = &executionProviderSelectionView{
-			ID:     selection.ID,
+			ID:     defaultID,
 			Config: execution.CloneConfig(selection.Config),
 		}
 	}

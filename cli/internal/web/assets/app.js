@@ -1518,14 +1518,27 @@
 			executionProviders = (data && data.providers) || [];
 			executionDefault = (data && data.default) || null;
 			renderProviderGrid();
+			// The initial pick never lands on a provider the server declared
+			// unusable: a default already saved stays shown, otherwise the first
+			// available one is selected, and when none is usable nothing is.
+			const firstAvailable = executionProviders.find(
+				(p) => p.available !== false,
+			);
 			const selected = executionDefault
 				? executionDefault.id
-				: executionProviders.length
-					? executionProviders[0].id
+				: firstAvailable
+					? firstAvailable.id
 					: "";
 			selectProvider(selected);
 			updateProviderSummary();
-			setExecutionStatus("", null);
+			if (!selected && executionProviders.length) {
+				setExecutionStatus(
+					"No execution provider is usable on this machine.",
+					"err",
+				);
+			} else {
+				setExecutionStatus("", null);
+			}
 		} catch (err) {
 			executionProviders = [];
 			executionDefault = null;
@@ -1544,7 +1557,20 @@
 		executionProviderGrid.innerHTML = executionProviders
 			.map((p) => {
 				const caps = (p.capabilities || []).join(", ") || "no capability declared";
-				return `<label class="config-connector-card"><input type="radio" name="execution_provider" value="${escapeHtml(p.id)}" /><strong>${escapeHtml(p.label || p.id)}</strong><small>${escapeHtml(caps)}</small></label>`;
+				// `available` is a server verdict: the panel only renders it. An
+				// unusable provider stays visible — with its reason — but cannot be
+				// picked, so nobody saves a default that could never run.
+				const unavailable = p.available === false;
+				const reason = p.unavailable_reason || "runtime not usable";
+				const cls = unavailable
+					? "config-connector-card unavailable"
+					: "config-connector-card";
+				const title = unavailable ? ` title="${escapeHtml(reason)}"` : "";
+				const note = unavailable
+					? `<small class="connector-unavailable">${escapeHtml(reason)}</small>`
+					: "";
+				const disabled = unavailable ? " disabled" : "";
+				return `<label class="${cls}"${title}><input type="radio" name="execution_provider" value="${escapeHtml(p.id)}"${disabled} /><strong>${escapeHtml(p.label || p.id)}</strong><small>${escapeHtml(caps)}</small>${note}</label>`;
 			})
 			.join("");
 	}
@@ -1642,6 +1668,15 @@
 		}
 		const provider = findProvider(id);
 		if (!provider) return;
+		// The server remains the authority on this; refusing here only spares the
+		// user a round trip that could not succeed.
+		if (provider.available === false) {
+			setExecutionStatus(
+				`Rejected: ${provider.unavailable_reason || "runtime not usable"}`,
+				"err",
+			);
+			return;
+		}
 		markProviderFieldError("");
 		setExecutionStatus("Saving…", null);
 		try {

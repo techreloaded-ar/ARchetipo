@@ -626,3 +626,83 @@ var errRemoteRefused = &remoteRefusal{}
 type remoteRefusal struct{}
 
 func (*remoteRefusal) Error() string { return "the remote hub refused the task" }
+
+// AC-4: a default provider whose runtime cannot be used takes the plan action
+// away and says why, in the provider's own words.
+func TestSpecDetailBlocksTheActionWhenTheDefaultProviderIsUnusable(t *testing.T) {
+	const reason = "the local agent is not authenticated: run its login command"
+	provider := newProbeProvider("local", reason)
+	srv, _, _ := newRunServer(t, provider, true)
+
+	detail := runSpecDetail(t, srv, "US-901")
+	found := false
+	for _, action := range detail.Actions {
+		if action.ID != "plan" {
+			continue
+		}
+		found = true
+		if action.Runnable {
+			t.Fatalf("plan is offered on an unusable provider: %#v", action)
+		}
+		if !strings.Contains(action.UnavailableReason, provider.ID()) {
+			t.Fatalf("the reason does not name the provider: %q", action.UnavailableReason)
+		}
+		if !strings.Contains(action.UnavailableReason, reason) {
+			t.Fatalf("the reason drops the provider's own diagnostic: %q", action.UnavailableReason)
+		}
+	}
+	if !found {
+		t.Fatal("the plan action disappeared from a TODO spec")
+	}
+}
+
+// AC-4, the other half: the new check refuses an unusable runtime and nothing
+// else. The same workspace with a usable provider still offers the action.
+func TestSpecDetailKeepsTheActionRunnableWhenTheProviderIsUsable(t *testing.T) {
+	srv, _, _ := newRunServer(t, newProbeProvider("local", ""), true)
+
+	detail := runSpecDetail(t, srv, "US-901")
+	for _, action := range detail.Actions {
+		if action.ID == "plan" && (!action.Runnable || action.UnavailableReason != "") {
+			t.Fatalf("a provider that reports itself available blocks the action: %#v", action)
+		}
+	}
+}
+
+// AC-4: the refusal is enforced on the server, not only in the payload the
+// browser renders. A POST against an unusable runtime is answered with the
+// reason and creates no execution at all.
+func TestRunSpecActionRefusesAnUnusableProviderWithoutCreatingARecord(t *testing.T) {
+	const reason = "the local agent is not installed: install it and try again"
+	provider := newProbeProvider("local", reason)
+	srv, cfg, _ := newRunServer(t, provider, true)
+
+	status, body := startAction(t, srv, "US-901", "plan")
+	if status != http.StatusConflict {
+		t.Fatalf("unusable provider: %d %v", status, body)
+	}
+	message, _ := body["error"].(string)
+	if !strings.Contains(message, provider.ID()) || !strings.Contains(message, reason) {
+		t.Fatalf("the refusal is not readable: %q", message)
+	}
+	if got := recordFileCount(t, cfg.ProjectRoot, "US-901"); got != 0 {
+		t.Fatalf("a refused action created %d records", got)
+	}
+	// The spec must also look untouched to the browser: no execution to poll,
+	// and the action still offered with its reason instead of a phantom run.
+	detail := runSpecDetail(t, srv, "US-901")
+	if detail.Execution != nil {
+		t.Fatalf("a refused action left an execution on the spec: %#v", detail.Execution)
+	}
+	if detail.Spec.Status != domain.StatusTodo {
+		t.Fatalf("a refused action moved the spec to %s", detail.Spec.Status)
+	}
+	// A second press is refused the same way, so the refusal never leaves the
+	// spec reserved.
+	if status, body := startAction(t, srv, "US-901", "plan"); status != http.StatusConflict {
+		t.Fatalf("second POST: %d %v", status, body)
+	}
+	if got := recordFileCount(t, cfg.ProjectRoot, "US-901"); got != 0 {
+		t.Fatalf("a second refused action created %d records", got)
+	}
+}

@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
@@ -308,5 +310,153 @@ func TestSpecDetailRecomputesActionsAfterStatusChange(t *testing.T) {
 	}
 	if !strings.Contains(raw, `"actions":[]`) {
 		t.Fatalf("an empty action list must serialize as [], not null:\n%s", raw)
+	}
+}
+
+// probeProvider is a provider that reports its own availability. It is a double
+// on purpose: what is under test here is how the viewer treats *any* provider
+// that declares a runtime, not the diagnostics of one particular provider.
+//
+// It records every configuration the probe receives, which is how the test can
+// tell "the persisted configuration was handed to the default provider" from
+// "it was handed to every provider".
+type probeProvider struct {
+	*runTestProvider
+	reason string
+
+	mu     sync.Mutex
+	probes []map[string]any
+}
+
+func newProbeProvider(id, reason string) *probeProvider {
+	return &probeProvider{runTestProvider: releasedProvider(id, nil), reason: reason}
+}
+
+func (p *probeProvider) Available(_ context.Context, providerConfig map[string]any) error {
+	p.mu.Lock()
+	p.probes = append(p.probes, providerConfig)
+	p.mu.Unlock()
+	if p.reason == "" {
+		return nil
+	}
+	return errors.New(p.reason)
+}
+
+// probedConfigs returns the configurations the probe was called with, in order.
+func (p *probeProvider) probedConfigs() []map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]map[string]any, len(p.probes))
+	copy(out, p.probes)
+	return out
+}
+
+// newProviderListServer builds a viewer over the given providers, optionally
+// with a persisted default, so the provider list can be observed with runtimes
+// the test controls.
+func newProviderListServer(t *testing.T, defaultSelection *config.DefaultProviderConfig, providers ...execution.Provider) *Server {
+	t.Helper()
+	cfg := config.Default()
+	cfg.ProjectRoot = t.TempDir()
+	conn := inmemory.New(cfg)
+	registry := execution.NewRegistry()
+	for _, provider := range providers {
+		if err := registry.Register(provider); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if defaultSelection != nil {
+		if _, err := config.UpdateDefaultProvider(cfg.ProjectRoot, *defaultSelection); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv, err := NewServer(conn, cfg, registry, "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv
+}
+
+func providerViewByID(t *testing.T, view executionProvidersView, id string) executionProviderView {
+	t.Helper()
+	for _, provider := range view.Providers {
+		if provider.ID == id {
+			return provider
+		}
+	}
+	t.Fatalf("provider %q is missing from the list: %#v", id, view.Providers)
+	return executionProviderView{}
+}
+
+// AC-1: a provider that does not report availability has nothing that can be
+// missing, so the viewer offers it without a reason.
+func TestListExecutionProvidersMarksASilentProviderAvailable(t *testing.T) {
+	srv := newProviderListServer(t, nil, releasedProvider("silent", nil))
+
+	provider := providerViewByID(t, readProviders(t, srv), "silent")
+	if !provider.Available || provider.UnavailableReason != "" {
+		t.Fatalf("a provider that declares no availability must stay available: %#v", provider)
+	}
+	// The reason is omitted from the wire too, so no client can render an empty
+	// explanation next to a usable provider.
+	raw := doJSON(t, srv, http.MethodGet, "/api/execution/providers", nil).Body.String()
+	if strings.Contains(raw, "unavailable_reason") {
+		t.Fatalf("an available provider carries an unavailable_reason:\n%s", raw)
+	}
+}
+
+// AC-1: an unusable runtime is reported as a fact of the list, with the
+// provider's own words, and never as an HTTP failure.
+func TestListExecutionProvidersReportsAnUnavailableProviderWithItsReason(t *testing.T) {
+	const reason = "codex is not installed: install it and run `codex login`"
+	srv := newProviderListServer(t, nil, newProbeProvider("broken", reason), newProbeProvider("ready", ""))
+
+	view := readProviders(t, srv)
+	if len(view.Providers) != 2 {
+		t.Fatalf("unexpected provider list: %#v", view.Providers)
+	}
+	broken := providerViewByID(t, view, "broken")
+	if broken.Available {
+		t.Fatalf("an unusable provider is offered as available: %#v", broken)
+	}
+	if broken.UnavailableReason != reason {
+		t.Fatalf("the provider's own diagnostic was rewritten: %q", broken.UnavailableReason)
+	}
+	// The unusable provider is still listed with everything the panel needs to
+	// render it, so the user sees a disabled card instead of a missing one.
+	if len(broken.Capabilities) == 0 || strings.TrimSpace(broken.Label) == "" {
+		t.Fatalf("an unavailable provider lost its descriptive fields: %#v", broken)
+	}
+	if ready := providerViewByID(t, view, "ready"); !ready.Available || ready.UnavailableReason != "" {
+		t.Fatalf("a usable provider was dragged down by another one: %#v", ready)
+	}
+}
+
+// AC-1: the persisted configuration belongs to the provider it was saved for,
+// so only that provider is probed with it.
+func TestListExecutionProvidersProbesOnlyTheDefaultWithThePersistedConfig(t *testing.T) {
+	chosen := newProbeProvider("chosen", "")
+	other := newProbeProvider("other", "")
+	saved := map[string]any{"model": "gpt-test", "profile": "workspace"}
+	srv := newProviderListServer(t, &config.DefaultProviderConfig{ID: "chosen", Config: saved}, chosen, other)
+
+	view := readProviders(t, srv)
+	if view.Default == nil || view.Default.ID != "chosen" {
+		t.Fatalf("the persisted default is not reported: %#v", view.Default)
+	}
+
+	chosenProbes := chosen.probedConfigs()
+	if len(chosenProbes) != 1 {
+		t.Fatalf("the default provider was probed %d times", len(chosenProbes))
+	}
+	if chosenProbes[0]["model"] != "gpt-test" || chosenProbes[0]["profile"] != "workspace" {
+		t.Fatalf("the default provider was not probed with the persisted configuration: %#v", chosenProbes[0])
+	}
+	otherProbes := other.probedConfigs()
+	if len(otherProbes) != 1 {
+		t.Fatalf("a non-default provider was probed %d times", len(otherProbes))
+	}
+	if len(otherProbes[0]) != 0 {
+		t.Fatalf("a configuration saved for another provider reached %q: %#v", other.ID(), otherProbes[0])
 	}
 }

@@ -13,6 +13,7 @@ import (
 	_ "github.com/techreloaded-ar/ARchetipo/cli/internal/connector/builtin"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/arcipelago"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/codex"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/version"
 )
@@ -54,12 +55,20 @@ func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 // defaultExecutionRegistry is the registry the real CLI runs with. Registering
-// a single static provider cannot fail — the registry is fresh and the id is a
-// non-empty constant — so the error is deliberately discarded rather than
-// turned into an unreachable failure path.
+// these static providers cannot fail — the registry is fresh and each id is a
+// distinct non-empty constant — so the errors are deliberately discarded rather
+// than turned into unreachable failure paths.
+//
+// Registration order is the order the UI shows, so new providers are appended:
+// moving an existing one would move the card an existing workspace picked.
+// Registering a provider says nothing about whether its runtime is usable on
+// this machine — that is reported per provider by execution.CheckAvailability,
+// precisely so an absent runtime reads as an explicit reason instead of an
+// absent card.
 func defaultExecutionRegistry() *execution.Registry {
 	registry := execution.NewRegistry()
 	_ = registry.Register(arcipelago.New(arcipelago.Options{}))
+	_ = registry.Register(codex.New(codex.Options{}))
 	return registry
 }
 

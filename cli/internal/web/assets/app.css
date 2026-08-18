@@ -1355,6 +1355,30 @@ html[data-theme="light"] .theme-ico-moon {
 	box-shadow: inset 3px 0 0 var(--accent);
 }
 
+/* A provider whose runtime the server declared unusable stays on the grid but
+   is not actionable: same treatment as a non-runnable action chip. */
+.config-connector-card.unavailable {
+	cursor: default;
+	opacity: 0.55;
+}
+
+.config-connector-card.unavailable:hover {
+	border-color: var(--border);
+	transform: none;
+}
+
+/* The reason comes from the runtime and can be a long diagnostic: the card
+   shows the opening lines and the full text stays in the title. */
+.config-connector-card .connector-unavailable {
+	color: var(--priority-high);
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+}
+
 .config-connector-card input {
 	position: absolute;
 	opacity: 0;
