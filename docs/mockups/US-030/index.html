@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-030 · Interagire con una run remota dalla UI</title>
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-030</span>
+    <nav class="mk-nav">
+        <a href="index.html" class="current">Indice</a>
+        <a href="stato-a-run-attiva.html">A · attiva</a>
+        <a href="stato-b-riconnessione.html">B · riconnessione</a>
+        <a href="stato-c-approvazione.html">C · approvazione</a>
+        <a href="stato-d-messaggio-in-attesa.html">D · in attesa</a>
+        <a href="stato-e-comando-rifiutato.html">E · rifiuto</a>
+        <a href="stato-f-run-terminata.html">F · terminata</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">EP-005 · HIGH · 5 punti</p>
+    <h1 class="mk-title">Interagire con una run<br />remota dalla UI</h1>
+    <p class="mk-lede">
+        Un solo componente dentro la scheda <em>Story</em> della spec, subito sotto il
+        pannello di esecuzione già esistente: intestazione della run, storico degli eventi,
+        approvazioni, composer e annullamento. Sei stati, tutti disegnati con i token della
+        shell reale del viewer — nessun colore, nessun font e nessun raggio nuovi.
+    </p>
+
+    <p class="mk-note">
+        <strong>Il principio del disegno.</strong> La timeline è la proiezione del provider,
+        e soltanto sua. Tutto ciò che la UI sa ma il provider non ha ancora confermato —
+        un messaggio inviato, una richiesta di annullamento, un comando rifiutato — vive
+        <em>fuori</em> dalla timeline, in una fascia dedicata sotto di essa. Da qui la
+        forma del componente: uno storico che non si sporca mai, e una zona di controllo
+        che porta tutta l'incertezza.
+    </p>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Anatomia del pannello</p>
+    <div class="mk-modal-stage">
+        <section class="run-panel run-live" style="max-width:760px;margin:0 auto">
+            <div class="run-head">
+                <span class="run-badge">attiva</span>
+                <code class="run-id">run_01J9F4K2QX7B</code>
+                <span class="run-head-spacer"></span>
+                <span class="run-link listening"><span class="run-link-mark" aria-hidden="true"></span> in ascolto</span>
+            </div>
+            <ol class="run-timeline" style="max-height:none">
+                <li class="run-event ev-user">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#1</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head"><span class="run-event-kind">tu</span><span class="run-event-time">09:41:02</span></div>
+                        <p class="run-event-text">Il messaggio dell'operatore, restituito dal provider con il suo id.</p>
+                    </div>
+                </li>
+                <li class="run-event ev-thinking">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#2</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head"><span class="run-event-kind">ragionamento</span><span class="run-event-time">09:41:04</span></div>
+                        <p class="run-event-text">Il pensiero dell'agente: corsivo, attenuato, mai in evidenza.</p>
+                    </div>
+                </li>
+                <li class="run-event ev-tool-start">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#3</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head"><span class="run-event-kind">strumento · avvio</span><span class="run-event-time">09:41:05</span></div>
+                        <p class="run-event-text"><code class="run-event-tool">wiki_query</code></p>
+                        <p class="run-event-detail">gli argomenti in una riga sola, in monospazio</p>
+                    </div>
+                </li>
+                <li class="run-event ev-tool-end">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#4</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head"><span class="run-event-kind">strumento · esito</span><span class="run-event-time">09:41:07</span></div>
+                        <p class="run-event-text"><code class="run-event-tool">wiki_query</code> completato</p>
+                        <p class="run-event-detail">verde di --status-done quando riesce</p>
+                    </div>
+                </li>
+                <li class="run-event ev-tool-error">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#5</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head"><span class="run-event-kind">strumento · errore</span><span class="run-event-time">09:41:13</span></div>
+                        <p class="run-event-text"><code class="run-event-tool">file_write</code> fallito</p>
+                        <p class="run-event-detail">rosso di --priority-high quando fallisce</p>
+                    </div>
+                </li>
+                <li class="run-event ev-assistant">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#6</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head"><span class="run-event-kind">agente</span><span class="run-event-time">09:41:15</span></div>
+                        <p class="run-event-text">Il testo dell'agente, il genere di evento più leggibile della lista.</p>
+                    </div>
+                </li>
+                <li class="run-event ev-unknown">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#7</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head"><span class="run-event-kind">evento</span><span class="run-event-time">09:41:16</span></div>
+                        <p class="run-event-text">Un tipo sconosciuto viene mostrato, non nascosto: bordo tratteggiato, nessuna interpretazione.</p>
+                    </div>
+                </li>
+            </ol>
+            <div class="run-composer">
+                <textarea class="run-composer-input" rows="2" placeholder="Scrivi un messaggio per l'agente…"></textarea>
+                <div class="run-composer-row">
+                    <span class="run-cancel">
+                        <button type="button" class="ghost-btn danger-ghost-btn" data-cancel-open>Annulla run</button>
+                        <span class="run-cancel-confirm is-hidden">
+                            <span class="run-cancel-question">Confermi?</span>
+                            <button type="button" class="approval-btn deny">Sì, annulla</button>
+                            <button type="button" class="approval-btn" data-cancel-abort>No</button>
+                        </span>
+                    </span>
+                    <span class="run-composer-spacer"></span>
+                    <span class="run-composer-hint">prova il controllo di annullamento</span>
+                    <button type="button" class="primary-btn">Invia</button>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">I sei stati</p>
+
+    <div class="mk-grid">
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">A</span>
+                <h3 class="mk-card-title">Run attiva</h3>
+                <span class="mk-ac">AC-1</span>
+            </div>
+            <p class="mk-card-sub">Storico ordinato per id monotòno, canale in ascolto, composer pronto.</p>
+            <div class="run-panel run-live">
+                <div class="run-head">
+                    <span class="run-badge">attiva</span>
+                    <code class="run-id">run_01J9F4K2QX7B</code>
+                    <span class="run-head-spacer"></span>
+                    <span class="run-link listening"><span class="run-link-mark"></span> in ascolto</span>
+                </div>
+                <ol class="run-timeline" style="max-height:none">
+                    <li class="run-event ev-assistant">
+                        <div class="run-event-rail"><span class="run-event-glyph"></span>#5</div>
+                        <div class="run-event-body">
+                            <div class="run-event-head"><span class="run-event-kind">agente</span><span class="run-event-time">09:41:09</span></div>
+                            <p class="run-event-text">Procedo dal pannello del viewer.</p>
+                        </div>
+                    </li>
+                    <li class="run-event ev-tool-start">
+                        <div class="run-event-rail"><span class="run-event-glyph"></span>#6</div>
+                        <div class="run-event-body">
+                            <div class="run-event-head"><span class="run-event-kind">strumento · avvio</span><span class="run-event-time">09:41:12</span></div>
+                            <p class="run-event-text"><code class="run-event-tool">file_write</code></p>
+                        </div>
+                    </li>
+                </ol>
+                <div class="run-tail"><span class="run-tail-dots"><span></span><span></span><span></span></span> l'agente sta scrivendo</div>
+                <div class="run-composer">
+                    <div class="run-composer-row">
+                        <span class="run-composer-hint">composer attivo</span>
+                        <span class="run-composer-spacer"></span>
+                        <button type="button" class="primary-btn">Invia</button>
+                    </div>
+                </div>
+            </div>
+            <a class="mk-card-link" href="stato-a-run-attiva.html">apri lo stato A →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">B</span>
+                <h3 class="mk-card-title">Riconnessione</h3>
+                <span class="mk-ac">AC-2</span>
+            </div>
+            <p class="mk-card-sub">Indicatore di stato esplicito e cucitura di ripresa nello storico.</p>
+            <div class="run-panel run-live">
+                <div class="run-head">
+                    <span class="run-badge">attiva</span>
+                    <code class="run-id">run_01J9F4K2QX7B</code>
+                    <span class="run-head-spacer"></span>
+                    <span class="run-link reconnecting"><span class="run-link-mark"></span> riconnessione…</span>
+                </div>
+                <ol class="run-timeline" style="max-height:none">
+                    <li class="run-event ev-assistant">
+                        <div class="run-event-rail"><span class="run-event-glyph"></span>#5</div>
+                        <div class="run-event-body">
+                            <div class="run-event-head"><span class="run-event-kind">agente</span><span class="run-event-time">09:41:09</span></div>
+                            <p class="run-event-text">Ultimo evento ricevuto prima della caduta.</p>
+                        </div>
+                    </li>
+                    <li class="run-seam">ripresa da #5 · 09:41:11</li>
+                    <li class="run-event ev-tool-start">
+                        <div class="run-event-rail"><span class="run-event-glyph"></span>#6</div>
+                        <div class="run-event-body">
+                            <div class="run-event-head"><span class="run-event-kind">strumento · avvio</span><span class="run-event-time">09:41:12</span></div>
+                            <p class="run-event-text">Nessun buco, nessun doppione.</p>
+                        </div>
+                    </li>
+                </ol>
+                <div class="run-composer">
+                    <div class="run-composer-row">
+                        <span class="run-composer-hint">comandi sospesi</span>
+                        <span class="run-composer-spacer"></span>
+                        <button type="button" class="primary-btn" disabled>Invia</button>
+                    </div>
+                </div>
+            </div>
+            <a class="mk-card-link" href="stato-b-riconnessione.html">apri lo stato B →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">C</span>
+                <h3 class="mk-card-title">Approvazione pendente</h3>
+                <span class="mk-ac">AC-4</span>
+            </div>
+            <p class="mk-card-sub">Una carta sopra il composer, un bottone per opzione, poi l'esito del provider.</p>
+            <div class="run-panel run-live">
+                <div class="run-head">
+                    <span class="run-badge">attiva</span>
+                    <code class="run-id">run_01J9F4K2QX7B</code>
+                    <span class="run-head-spacer"></span>
+                    <span class="run-link listening"><span class="run-link-mark"></span> in ascolto</span>
+                </div>
+                <div class="run-approval" style="margin-top:10px">
+                    <div class="run-approval-head">
+                        <span class="run-approval-eyebrow">approvazione richiesta</span>
+                        <code class="run-approval-tool">file_write</code>
+                    </div>
+                    <p class="run-approval-title">Scrivere il pannello negli asset del viewer?</p>
+                    <pre class="run-approval-args">percorso  cli/internal/web/assets/app.js
+modifica  +214 righe, -6 righe</pre>
+                    <div class="run-approval-options">
+                        <button type="button" class="approval-btn allow">Consenti una volta</button>
+                        <button type="button" class="approval-btn allow">Consenti sempre</button>
+                        <button type="button" class="approval-btn deny">Rifiuta una volta</button>
+                        <button type="button" class="approval-btn deny">Rifiuta sempre</button>
+                    </div>
+                </div>
+            </div>
+            <a class="mk-card-link" href="stato-c-approvazione.html">apri lo stato C →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">D</span>
+                <h3 class="mk-card-title">Messaggio in attesa</h3>
+                <span class="mk-ac">AC-3</span>
+            </div>
+            <p class="mk-card-sub">Accettato dal provider, non ancora storico: vive in una pillola tratteggiata.</p>
+            <div class="run-panel run-live">
+                <div class="run-head">
+                    <span class="run-badge">attiva</span>
+                    <code class="run-id">run_01J9F4K2QX7B</code>
+                    <span class="run-head-spacer"></span>
+                    <span class="run-link listening"><span class="run-link-mark"></span> in ascolto</span>
+                </div>
+                <ol class="run-timeline" style="max-height:none">
+                    <li class="run-event ev-unknown">
+                        <div class="run-event-rail"><span class="run-event-glyph"></span>#8</div>
+                        <div class="run-event-body">
+                            <div class="run-event-head"><span class="run-event-kind">evento</span><span class="run-event-time">09:41:13</span></div>
+                            <p class="run-event-text">La timeline resta ferma qui.</p>
+                        </div>
+                    </li>
+                </ol>
+                <div class="run-composer">
+                    <div class="run-composer-row">
+                        <span class="run-pending">
+                            <span class="run-pending-mark"></span>
+                            in attesa di conferma
+                        </span>
+                        <span class="run-composer-spacer"></span>
+                        <button type="button" class="primary-btn" disabled>Invia</button>
+                    </div>
+                </div>
+            </div>
+            <a class="mk-card-link" href="stato-d-messaggio-in-attesa.html">apri lo stato D →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">E</span>
+                <h3 class="mk-card-title">Comando rifiutato</h3>
+                <span class="mk-ac">AC-6</span>
+            </div>
+            <p class="mk-card-sub">Avviso in linea, non distruttivo: la proiezione locale della run non cambia.</p>
+            <div class="run-panel run-closed">
+                <div class="run-head">
+                    <span class="run-badge">chiusa</span>
+                    <code class="run-id">run_01J9F4K2QX7B</code>
+                    <span class="run-head-spacer"></span>
+                    <span class="run-link offline"><span class="run-link-mark"></span> connessione chiusa</span>
+                </div>
+                <div class="run-notice refused" style="margin-top:10px">
+                    <span class="run-notice-mark">rifiutato</span>
+                    <span class="run-notice-body">
+                        <strong>La run non è più attiva.</strong>
+                        Il messaggio non è stato consegnato e lo storico è rimasto invariato.
+                    </span>
+                </div>
+                <ol class="run-timeline" style="max-height:none">
+                    <li class="run-event ev-assistant">
+                        <div class="run-event-rail"><span class="run-event-glyph"></span>#12</div>
+                        <div class="run-event-body">
+                            <div class="run-event-head"><span class="run-event-kind">agente</span><span class="run-event-time">09:43:57</span></div>
+                            <p class="run-event-text">Ultimo evento della run: nessuna riga aggiunta dal rifiuto.</p>
+                        </div>
+                    </li>
+                </ol>
+            </div>
+            <a class="mk-card-link" href="stato-e-comando-rifiutato.html">apri lo stato E →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">F</span>
+                <h3 class="mk-card-title">Run annullata</h3>
+                <span class="mk-ac">AC-5</span>
+            </div>
+            <p class="mk-card-sub">Stato terminale confermato dal provider: archivio consultabile, nessuna riapertura.</p>
+            <div class="run-panel run-cancelled">
+                <div class="run-head">
+                    <span class="run-badge">annullata</span>
+                    <code class="run-id">run_01J9F4K2QX7B</code>
+                    <span class="run-head-spacer"></span>
+                    <span class="run-link offline"><span class="run-link-mark"></span> connessione chiusa</span>
+                </div>
+                <ol class="run-timeline is-frozen" style="max-height:none">
+                    <li class="run-event ev-unknown">
+                        <div class="run-event-rail"><span class="run-event-glyph"></span>#13</div>
+                        <div class="run-event-body">
+                            <div class="run-event-head"><span class="run-event-kind">run · fine</span><span class="run-event-time">09:44:31</span></div>
+                            <p class="run-event-text">Run chiusa dal provider: <code class="run-event-tool">cancelled</code>.</p>
+                        </div>
+                    </li>
+                </ol>
+                <div class="run-composer">
+                    <div class="run-composer-row">
+                        <span class="run-cancel"><span class="run-cancel-state confirmed">annullamento confermato · 09:44:31</span></span>
+                        <span class="run-composer-spacer"></span>
+                        <button type="button" class="primary-btn" disabled>Invia</button>
+                    </div>
+                </div>
+            </div>
+            <a class="mk-card-link" href="stato-f-run-terminata.html">apri lo stato F →</a>
+        </article>
+
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Dove vive il componente</p>
+    <p class="mk-note">
+        Dentro <code>#modal-root</code>, scheda <code>story-view</code>, subito sotto
+        <code>#story-execution</code>: un nuovo contenitore <code>#story-run</code> con la
+        stessa grammatica del pannello di esecuzione (bordo sinistro di 3&nbsp;px con il
+        colore di stato, superficie <code>--surface-2</code>, raggio standard).
+        Compare soltanto quando l'esecuzione aperta ha una run remota.
+        Il foglio <code>shared.css</code> di questo mockup tiene separate le regole copiate
+        dalla shell (parte 1) da quelle nuove proposte per US-030 (parte 2), così la
+        traduzione in <code>app.css</code> è un taglia e incolla della sola parte 2.
+    </p>
+
+    <p class="mk-section-title">Criteri di accettazione coperti</p>
+    <ul class="mk-legend">
+        <li><span class="mk-ac">AC-1</span> storico ordinato, id monotòno sulla guida <code>A · anatomia</code></li>
+        <li><span class="mk-ac">AC-2</span> indicatore di connessione e cucitura di ripresa <code>B</code></li>
+        <li><span class="mk-ac">AC-3</span> pillola «in attesa di conferma» fuori dalla timeline <code>D</code></li>
+        <li><span class="mk-ac">AC-4</span> carta di approvazione e esito del provider <code>C</code></li>
+        <li><span class="mk-ac">AC-5</span> conferma in due tempi e stato terminale <code>F</code></li>
+        <li><span class="mk-ac">AC-6</span> avviso di rifiuto non distruttivo <code>E</code></li>
+    </ul>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-030</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

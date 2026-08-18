@@ -39,6 +39,11 @@ type Server struct {
 	store    execution.Store
 	service  *execution.Service
 	dispatch *dispatchGroup
+
+	// followers holds the server-side projection of the remote run behind an
+	// execution, one per execution and only for the executions someone is
+	// actually looking at.
+	followers *runFollowers
 }
 
 // NewServer constructs a Server bound to addr (e.g. "127.0.0.1:8080").
@@ -63,6 +68,7 @@ func NewServer(conn connector.Connector, cfg config.Config, registry *execution.
 		watchRoot:  resolveWatchRoot(cfg),
 		store:      store,
 		dispatch:   newDispatchGroup(),
+		followers:  newRunFollowers(),
 	}
 	// A nil registry is not an error: the viewer simply has no provider to run
 	// with, and the run route says so. Building a service over it would be the
@@ -146,11 +152,13 @@ func (s *Server) Run(ctx context.Context, onReady func(url string)) error {
 	select {
 	case <-ctx.Done():
 		s.broker.Close()
+		s.followers.closeAll()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return s.httpSrv.Shutdown(shutdownCtx)
 	case err := <-errCh:
 		s.broker.Close()
+		s.followers.closeAll()
 		return err
 	}
 }
@@ -176,6 +184,10 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/spec/{code}/execution", s.handleRunSpecAction)
 	s.mux.HandleFunc("GET /api/execution/{id}", s.handleGetExecution)
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
+	s.mux.HandleFunc("GET /api/execution/{id}/run", s.handleGetExecutionRun)
+	s.mux.HandleFunc("POST /api/execution/{id}/run/messages", s.handleSendRunMessage)
+	s.mux.HandleFunc("POST /api/execution/{id}/run/approvals/{approvalId}", s.handleRespondRunApproval)
+	s.mux.HandleFunc("POST /api/execution/{id}/run/cancel", s.handleCancelRun)
 	s.mux.HandleFunc("PUT /api/config", s.handleSaveConfig)
 	s.mux.HandleFunc("POST /api/config/test", s.handleTestConfig)
 	s.mux.HandleFunc("GET /api/mockups", s.handleListMockups)

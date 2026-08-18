@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-030 · D — Messaggio in attesa di conferma</title>
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-030</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-run-attiva.html">A · attiva</a>
+        <a href="stato-b-riconnessione.html">B · riconnessione</a>
+        <a href="stato-c-approvazione.html">C · approvazione</a>
+        <a href="stato-d-messaggio-in-attesa.html" class="current">D · in attesa</a>
+        <a href="stato-e-comando-rifiutato.html">E · rifiuto</a>
+        <a href="stato-f-run-terminata.html">F · terminata</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">Stato D</p>
+    <h1 class="mk-title">Messaggio inviato, in attesa di conferma</h1>
+    <p class="mk-lede">
+        Il messaggio è stato accettato dal provider ma non è ancora tornato come evento.
+        Vive in una pillola tratteggiata accanto al bottone di invio, fuori dalla timeline,
+        finché il provider non lo restituisce con un id.
+    </p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-3</span>
+        Nessuna scrittura ottimistica: <strong>la timeline resta ferma a #8</strong>.
+        La pillola è l'unico posto in cui il messaggio esiste prima della conferma, e il
+        tratteggio dice esattamente questo — non è ancora storico.
+    </p>
+
+    <div class="mk-modal-stage">
+    <div class="modal-root" role="dialog" aria-modal="true" aria-label="Story US-030">
+        <div class="modal">
+            <header class="modal-header">
+                <h2 class="modal-title">Story</h2>
+                <button type="button" class="icon-btn" aria-label="Chiudi">
+                    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                </button>
+            </header>
+            <nav class="modal-tabs" role="tablist">
+                <button type="button" class="tab active" role="tab" aria-selected="true">Story</button>
+                <button type="button" class="tab" role="tab" aria-selected="false">Plan</button>
+            </nav>
+            <section class="tab-panel">
+                <div class="story-view">
+                    <div class="story-view-topbar">
+                        <div class="story-view-meta">
+                            <span class="meta-chip">US-030</span>
+                            <span class="meta-chip">EP-005</span>
+                            <span class="meta-chip">HIGH</span>
+                            <span class="meta-chip">5 pt</span>
+                            <span class="meta-chip">IN PROGRESS</span>
+                        </div>
+                        <div class="story-view-actions">
+                            <button type="button" class="ghost-btn danger-ghost-btn">Elimina story</button>
+                        </div>
+                    </div>
+                    <h3 class="story-view-title">Interagire con una run remota dalla UI</h3>
+
+                    <div class="story-execution">
+                        <div class="execution-panel execution-running">
+                            <div class="execution-head">
+                                <span class="execution-dot" aria-hidden="true"></span>
+                                <span class="execution-headline">implement is running</span>
+                                <code class="execution-id">exec_7f31c9a2</code>
+                            </div>
+                            <div class="execution-meta">provider arcipelago · started 18/08/2026, 09:41:01</div>
+                        </div>
+                    </div>
+
+                    <div class="story-run">
+                        <section class="run-panel run-live" aria-label="Run remota">
+                            <div class="run-head">
+                                <span class="run-badge">attiva</span>
+                                <code class="run-id">run_01J9F4K2QX7B</code>
+                                <span class="run-head-spacer"></span>
+                                <span class="run-link listening">
+                                    <span class="run-link-mark" aria-hidden="true"></span>
+                                    in ascolto
+                                </span>
+                            </div>
+
+                            <ol class="run-timeline">
+                                <li class="run-event ev-assistant">
+                                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#5</div>
+                                    <div class="run-event-body">
+                                        <div class="run-event-head">
+                                            <span class="run-event-kind">agente</span>
+                                            <span class="run-event-time">09:41:09</span>
+                                        </div>
+                                        <p class="run-event-text">Il confine con il provider è già fissato: la UI proietta soltanto gli eventi ricevuti.</p>
+                                    </div>
+                                </li>
+                                <li class="run-event ev-tool-start">
+                                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#6</div>
+                                    <div class="run-event-body">
+                                        <div class="run-event-head">
+                                            <span class="run-event-kind">strumento · avvio</span>
+                                            <span class="run-event-time">09:41:12</span>
+                                        </div>
+                                        <p class="run-event-text"><code class="run-event-tool">file_write</code></p>
+                                        <p class="run-event-detail">cli/internal/web/assets/app.js</p>
+                                    </div>
+                                </li>
+                                <li class="run-event ev-tool-error">
+                                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#7</div>
+                                    <div class="run-event-body">
+                                        <div class="run-event-head">
+                                            <span class="run-event-kind">strumento · errore</span>
+                                            <span class="run-event-time">09:41:13</span>
+                                        </div>
+                                        <p class="run-event-text"><code class="run-event-tool">file_write</code> fallito</p>
+                                        <p class="run-event-detail">EPERM · scrittura non consentita senza approvazione dell'operatore</p>
+                                    </div>
+                                </li>
+                                <li class="run-event ev-unknown">
+                                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#8</div>
+                                    <div class="run-event-body">
+                                        <div class="run-event-head">
+                                            <span class="run-event-kind">evento</span>
+                                            <span class="run-event-time">09:41:13</span>
+                                        </div>
+                                        <p class="run-event-text">Tipo non riconosciuto <code class="run-event-tool">session.usage</code>: mostrato senza interpretarlo.</p>
+                                    </div>
+                                </li>
+                            </ol>
+
+                            <div class="run-composer">
+                                <textarea class="run-composer-input" rows="2" disabled>Aggiungi anche il caso in cui la UI resta aperta mentre la run finisce.</textarea>
+                                <div class="run-composer-row">
+                                    <span class="run-pending" role="status">
+                                        <span class="run-pending-mark" aria-hidden="true"></span>
+                                        in attesa di conferma
+                                        <span class="run-pending-text">«Aggiungi anche il caso in cui la UI resta aperta…»</span>
+                                    </span>
+                                    <span class="run-composer-spacer"></span>
+                                    <button type="button" class="primary-btn" disabled>Invia</button>
+                                </div>
+                                <span class="run-composer-hint">accettato dal provider alle 09:41:21 · comparirà nello storico solo quando tornerà con il suo id</span>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Dopo la conferma del provider</p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-3</span>
+        <span class="mk-ac ghost">AC-1</span>
+        Il provider restituisce il messaggio come evento <code>#9</code>: la pillola sparisce,
+        il composer si svuota e si riabilita. Se il messaggio arrivasse due volte, l'id
+        monotòno lo rende riconoscibile e non viene ridisegnato.
+    </p>
+
+    <div class="mk-modal-stage">
+        <section class="run-panel run-live" style="max-width:820px;margin:0 auto" aria-label="Run remota dopo la conferma">
+            <div class="run-head">
+                <span class="run-badge">attiva</span>
+                <code class="run-id">run_01J9F4K2QX7B</code>
+                <span class="run-head-spacer"></span>
+                <span class="run-link listening"><span class="run-link-mark" aria-hidden="true"></span> in ascolto</span>
+            </div>
+
+            <ol class="run-timeline">
+                <li class="run-event ev-unknown">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#8</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head">
+                            <span class="run-event-kind">evento</span>
+                            <span class="run-event-time">09:41:13</span>
+                        </div>
+                        <p class="run-event-text">Tipo non riconosciuto <code class="run-event-tool">session.usage</code>: mostrato senza interpretarlo.</p>
+                    </div>
+                </li>
+                <li class="run-event ev-user">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#9</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head">
+                            <span class="run-event-kind">tu</span>
+                            <span class="run-event-time">09:41:22</span>
+                        </div>
+                        <p class="run-event-text">Aggiungi anche il caso in cui la UI resta aperta mentre la run finisce.</p>
+                    </div>
+                </li>
+                <li class="run-event ev-thinking">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#10</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head">
+                            <span class="run-event-kind">ragionamento</span>
+                            <span class="run-event-time">09:41:24</span>
+                        </div>
+                        <p class="run-event-text">Aggiungo il caso al piano e verifico che il pannello regga la transizione a run terminale.</p>
+                    </div>
+                </li>
+            </ol>
+
+            <div class="run-composer">
+                <textarea class="run-composer-input" rows="2" placeholder="Scrivi un messaggio per l'agente…"></textarea>
+                <div class="run-composer-row">
+                    <span class="run-cancel">
+                        <button type="button" class="ghost-btn danger-ghost-btn" data-cancel-open>Annulla run</button>
+                        <span class="run-cancel-confirm is-hidden">
+                            <span class="run-cancel-question">Confermi?</span>
+                            <button type="button" class="approval-btn deny">Sì, annulla</button>
+                            <button type="button" class="approval-btn" data-cancel-abort>No</button>
+                        </span>
+                    </span>
+                    <span class="run-composer-spacer"></span>
+                    <span class="run-composer-hint">messaggio confermato · #9</span>
+                    <button type="button" class="primary-btn">Invia</button>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-030</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

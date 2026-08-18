@@ -59,6 +59,10 @@ type remoteTask struct {
 	ID            string `json:"id"`
 	Status        string `json:"status"`
 	ResultSummary string `json:"resultSummary"`
+	// RunID names the run the hub assigned to this task, and is empty until it
+	// assigns one. It is the only bridge from an execution record to the
+	// interactive run behind it.
+	RunID string `json:"runId"`
 }
 
 type taskEnvelope struct {
@@ -75,17 +79,27 @@ type errorResponse struct {
 // status alongside the error so the caller can discriminate causes. The token
 // is never included in a returned message.
 func (p *Provider) do(ctx context.Context, cfg settings, token, method, path string, body, out any) (int, error) {
+	status, _, err := p.doWithBody(ctx, cfg, token, method, path, body, out)
+	return status, err
+}
+
+// doWithBody is do with the raw response echoed back to the caller. It exists
+// because a refusal the hub encodes inside the body — the two distinct causes
+// it both answers with 409 — cannot be classified from the status alone, and
+// re-deriving it from the text of the error classify built would be branching
+// on a message this package writes itself.
+func (p *Provider) doWithBody(ctx context.Context, cfg settings, token, method, path string, body, out any) (int, []byte, error) {
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
-			return 0, fmt.Errorf("encoding arcipelago request body: %w", err)
+			return 0, nil, fmt.Errorf("encoding arcipelago request body: %w", err)
 		}
 		reader = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, cfg.BaseURL+path, reader)
 	if err != nil {
-		return 0, fmt.Errorf("building arcipelago request: %w", err)
+		return 0, nil, fmt.Errorf("building arcipelago request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
@@ -95,7 +109,7 @@ func (p *Provider) do(ctx context.Context, cfg settings, token, method, path str
 
 	resp, err := p.doer.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("arcipelago request to %s failed: %w", path, err)
+		return 0, nil, fmt.Errorf("arcipelago request to %s failed: %w", path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	// The read error is not discarded and the body is bounded: a connection that
@@ -104,21 +118,21 @@ func (p *Provider) do(ctx context.Context, cfg settings, token, method, path str
 	// unbounded body must not be buffered whole.
 	payload, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
 	if err != nil {
-		return resp.StatusCode, fmt.Errorf("reading the arcipelago response from %s failed: %w", path, err)
+		return resp.StatusCode, nil, fmt.Errorf("reading the arcipelago response from %s failed: %w", path, err)
 	}
 	if len(payload) > maxResponseBody {
-		return resp.StatusCode, fmt.Errorf("the arcipelago response from %s exceeds %d bytes", path, maxResponseBody)
+		return resp.StatusCode, nil, fmt.Errorf("the arcipelago response from %s exceeds %d bytes", path, maxResponseBody)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return resp.StatusCode, classify(resp.StatusCode, payload, cfg)
+		return resp.StatusCode, payload, classify(resp.StatusCode, payload, cfg)
 	}
 	if out == nil || len(payload) == 0 {
-		return resp.StatusCode, nil
+		return resp.StatusCode, payload, nil
 	}
 	if err := json.Unmarshal(payload, out); err != nil {
-		return resp.StatusCode, fmt.Errorf("decoding arcipelago response from %s: %w", path, err)
+		return resp.StatusCode, payload, fmt.Errorf("decoding arcipelago response from %s: %w", path, err)
 	}
-	return resp.StatusCode, nil
+	return resp.StatusCode, payload, nil
 }
 
 // externalIdentityConflictError is the one 409 cause the caller acts on rather

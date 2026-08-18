@@ -2592,3 +2592,823 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 .field.field-error > span {
 	color: var(--priority-high);
 }
+/* ---- Remote run panel --------------------------------------------------
+   The collaborative half of an execution, drawn from docs/mockups/US-030.
+   It speaks the vocabulary the execution panel established — same surface,
+   same left rule carrying the state, same monospace metadata — and adds what
+   a conversation needs: a timeline that is the provider's projection and
+   nothing else, and a control band under it that carries everything the UI
+   knows but the provider has not confirmed yet.
+
+   The mockup declares its own :root; none of it is imported here. Every value
+   below resolves against the viewer's own tokens. */
+.story-run {
+	margin: 0 0 14px;
+}
+
+.story-run:empty {
+	margin: 0;
+}
+
+.run-panel {
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--status-todo);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.run-panel.run-live {
+	border-left-color: var(--status-progress);
+}
+
+.run-panel.run-closed {
+	border-left-color: var(--status-done);
+}
+
+.run-panel.run-failed {
+	border-left-color: var(--priority-high);
+}
+
+.run-panel.run-cancelled {
+	border-left-color: var(--status-todo);
+}
+
+/* ---- Run header -------------------------------------------------------- */
+.run-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 10px 12px;
+	border-bottom: 1px solid var(--rule);
+	background: color-mix(in srgb, var(--surface-3) 45%, transparent);
+}
+
+.run-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 2px 10px 2px 8px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--text-muted);
+	background: var(--surface-2);
+}
+
+.run-badge::before {
+	content: "";
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: currentColor;
+	flex-shrink: 0;
+}
+
+.run-live .run-badge {
+	color: var(--status-progress);
+	border-color: color-mix(in srgb, var(--status-progress) 40%, var(--border));
+}
+
+.run-live .run-badge::before {
+	animation: execution-pulse 1.4s var(--ease) infinite;
+}
+
+.run-closed .run-badge {
+	color: var(--status-done);
+	border-color: color-mix(in srgb, var(--status-done) 40%, var(--border));
+}
+
+.run-failed .run-badge {
+	color: var(--priority-high);
+	border-color: color-mix(in srgb, var(--priority-high) 40%, var(--border));
+}
+
+.run-cancelled .run-badge {
+	color: var(--text-muted);
+	border-color: var(--border-strong);
+}
+
+.run-id {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+
+.run-head-spacer {
+	flex: 1 1 auto;
+}
+
+/* The transport is a visible state, not a silent retry: three spellings, and
+   only the server's `connected` decides between the first two. */
+.run-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+}
+
+.run-link-mark {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: currentColor;
+	flex-shrink: 0;
+}
+
+.run-link.listening {
+	color: var(--status-done);
+}
+
+.run-link.reconnecting {
+	color: var(--status-progress);
+}
+
+.run-link.reconnecting .run-link-mark {
+	border-radius: 50%;
+	background: none;
+	border: 1.5px solid currentColor;
+	border-top-color: transparent;
+	width: 9px;
+	height: 9px;
+	animation: run-spin 0.9s linear infinite;
+}
+
+.run-link.offline {
+	color: var(--text-dim);
+}
+
+@keyframes run-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* ---- Timeline ---------------------------------------------------------- */
+.run-timeline {
+	list-style: none;
+	margin: 0;
+	padding: 10px 12px 12px;
+	max-height: 320px;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	/* Deliberately not `scroll-behavior: smooth`: the panel is redrawn on every
+	   poll and the reading position is restored by assigning scrollTop, which
+	   smooth scrolling would turn into a visible crawl on every tick. */
+}
+
+.run-timeline.is-frozen {
+	opacity: 0.62;
+	filter: saturate(0.7);
+}
+
+.run-timeline-empty {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.03em;
+	color: var(--text-dim);
+}
+
+/* Every event is two columns: the rail carrying the monotonic id, and the
+   body. The rail is what makes the ordering — and the absence of duplicates —
+   readable at a glance. */
+.run-event {
+	display: grid;
+	grid-template-columns: 46px 1fr;
+	gap: 10px;
+	padding: 6px 0;
+	position: relative;
+}
+
+.run-event + .run-event {
+	border-top: 1px solid color-mix(in srgb, var(--rule) 70%, transparent);
+}
+
+.run-event-rail {
+	display: flex;
+	align-items: baseline;
+	justify-content: flex-end;
+	gap: 5px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.02em;
+	color: var(--text-dim);
+	padding-top: 1px;
+	position: relative;
+}
+
+.run-event-rail::after {
+	content: "";
+	position: absolute;
+	right: -5px;
+	top: 4px;
+	bottom: -11px;
+	width: 1px;
+	background: var(--rule);
+}
+
+.run-event:last-child .run-event-rail::after {
+	bottom: 0;
+}
+
+.run-event-glyph {
+	width: 7px;
+	height: 7px;
+	border-radius: 2px;
+	background: var(--text-dim);
+	flex-shrink: 0;
+	transform: translateY(-1px);
+}
+
+.run-event-body {
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.run-event-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.run-event-kind {
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+	color: var(--text-muted);
+}
+
+.run-event-time {
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	letter-spacing: 0.03em;
+	color: var(--text-dim);
+}
+
+.run-event-text {
+	margin: 0;
+	font-size: 12.5px;
+	line-height: 1.55;
+	color: var(--text);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.run-event-tool {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--accent);
+	background: var(--surface-3);
+	border-radius: 3px;
+	padding: 1px 6px;
+}
+
+.run-event-detail {
+	margin: 0;
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.02em;
+	color: var(--text-muted);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* Per-kind variants. The class is chosen from a closed table in app.js, never
+   built from the remote kind string. */
+.ev-assistant .run-event-glyph {
+	background: var(--text);
+}
+
+.ev-thinking .run-event-glyph {
+	background: none;
+	border: 1px solid var(--text-dim);
+}
+
+.ev-thinking .run-event-text {
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.ev-tool-start .run-event-glyph {
+	background: var(--status-planned);
+}
+
+.ev-tool-start .run-event-kind {
+	color: var(--status-planned);
+}
+
+.ev-tool-end .run-event-glyph {
+	background: var(--status-done);
+}
+
+.ev-tool-end .run-event-kind {
+	color: var(--status-done);
+}
+
+.ev-tool-error .run-event-glyph {
+	background: var(--priority-high);
+}
+
+.ev-tool-error .run-event-kind,
+.ev-tool-error .run-event-detail {
+	color: var(--priority-high);
+}
+
+.ev-user .run-event-glyph {
+	background: var(--accent);
+	border-radius: 50%;
+}
+
+.ev-user .run-event-kind {
+	color: var(--accent-strong);
+}
+
+.ev-user .run-event-text {
+	color: var(--text-strong);
+	font-weight: 500;
+}
+
+/* The end of a turn is a beat in the conversation, not a contribution to it:
+   it is marked but deliberately quieter than the events around it. */
+.ev-turn-end .run-event-glyph {
+	background: none;
+	border: 1px solid var(--rule);
+}
+
+.ev-turn-end .run-event-kind {
+	color: var(--text-dim);
+}
+
+.ev-unknown .run-event-glyph {
+	background: none;
+	border: 1px dashed var(--border-strong);
+}
+
+.ev-unknown .run-event-text {
+	color: var(--text-muted);
+}
+
+/* The seam marks where the timeline resumed after a dropped channel, so the
+   operator can see that nothing was lost and nothing was repeated. */
+.run-seam {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 4px 0 2px;
+	padding-left: 56px;
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--status-progress);
+}
+
+.run-seam::after {
+	content: "";
+	flex: 1 1 auto;
+	height: 0;
+	border-top: 1px dashed color-mix(in srgb, var(--status-progress) 55%, transparent);
+}
+
+.run-tail {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 12px 10px 68px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.06em;
+	color: var(--text-muted);
+}
+
+.run-tail-dots span {
+	display: inline-block;
+	width: 4px;
+	height: 4px;
+	margin-right: 3px;
+	border-radius: 50%;
+	background: currentColor;
+	animation: execution-pulse 1.2s var(--ease) infinite;
+}
+
+.run-tail-dots span:nth-child(2) {
+	animation-delay: 0.2s;
+}
+
+.run-tail-dots span:nth-child(3) {
+	animation-delay: 0.4s;
+}
+
+/* ---- Pending approval card --------------------------------------------- */
+.run-head + .run-notice,
+.run-head + .run-approval {
+	margin-top: 10px;
+}
+
+.run-approval {
+	margin: 0 12px 10px;
+	border: 1px solid color-mix(in srgb, var(--status-review) 42%, var(--border));
+	border-left: 3px solid var(--status-review);
+	border-radius: var(--radius);
+	background: color-mix(in srgb, var(--status-review) 7%, var(--surface));
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.run-approval-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.run-approval-eyebrow {
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+	color: var(--status-review);
+}
+
+.run-approval-tool {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--text-strong);
+	background: var(--surface-3);
+	border-radius: 3px;
+	padding: 1px 6px;
+}
+
+.run-approval-title {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-strong);
+	margin: 0;
+	line-height: 1.4;
+}
+
+.run-approval-args {
+	margin: 0;
+	padding: 8px 10px;
+	max-height: 120px;
+	overflow: auto;
+	border-radius: var(--radius-sm);
+	background: var(--surface-3);
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	line-height: 1.55;
+	color: var(--text);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.run-approval-options {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.approval-btn {
+	font-family: var(--font-sans);
+	font-size: 12px;
+	font-weight: 500;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	color: var(--text);
+	padding: 6px 11px;
+	cursor: pointer;
+	transition:
+		background var(--transition),
+		border-color var(--transition),
+		color var(--transition);
+}
+
+.approval-btn:hover:not(:disabled) {
+	border-color: var(--border-strong);
+	background: var(--surface-hover);
+}
+
+.approval-btn.allow {
+	border-color: color-mix(in srgb, var(--status-done) 45%, var(--border));
+	color: var(--status-done);
+}
+
+.approval-btn.allow:hover:not(:disabled) {
+	background: var(--status-done);
+	border-color: var(--status-done);
+	color: var(--surface);
+}
+
+.approval-btn.deny {
+	border-color: color-mix(in srgb, var(--priority-high) 45%, var(--border));
+	color: var(--priority-high);
+}
+
+.approval-btn.deny:hover:not(:disabled) {
+	background: var(--priority-high);
+	border-color: var(--priority-high);
+	color: var(--accent-ink);
+}
+
+.approval-btn:disabled {
+	cursor: default;
+	opacity: 0.45;
+}
+
+.approval-btn.is-chosen:disabled {
+	opacity: 1;
+	border-color: var(--status-done);
+	background: color-mix(in srgb, var(--status-done) 16%, transparent);
+	color: var(--status-done);
+}
+
+.approval-btn.deny.is-chosen:disabled {
+	border-color: var(--priority-high);
+	background: color-mix(in srgb, var(--priority-high) 14%, transparent);
+	color: var(--priority-high);
+}
+
+/* What the provider answered, read back from its projection. */
+.run-approval-outcome {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	flex-wrap: wrap;
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.03em;
+	color: var(--status-done);
+	border-top: 1px solid var(--rule);
+	padding-top: 8px;
+}
+
+.run-approval-outcome.denied {
+	color: var(--priority-high);
+}
+
+.run-approval.is-answered {
+	border-left-color: var(--status-done);
+	background: color-mix(in srgb, var(--status-done) 6%, var(--surface));
+	border-color: color-mix(in srgb, var(--status-done) 30%, var(--border));
+}
+
+.run-approval.is-answered .run-approval-eyebrow {
+	color: var(--status-done);
+}
+
+.run-approval.is-answered.is-denied {
+	border-left-color: var(--priority-high);
+	background: color-mix(in srgb, var(--priority-high) 6%, var(--surface));
+	border-color: color-mix(in srgb, var(--priority-high) 30%, var(--border));
+}
+
+.run-approval.is-answered.is-denied .run-approval-eyebrow {
+	color: var(--priority-high);
+}
+
+/* ---- Notices ------------------------------------------------------------
+   Non-destructive by construction: a notice lives outside the timeline, which
+   a refused command never touches. */
+.run-notice {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 0 12px 10px;
+	padding: 8px 10px;
+	border: 1px dashed var(--border-strong);
+	border-radius: var(--radius);
+	background: var(--surface);
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--text-muted);
+}
+
+.run-notice-mark {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	flex-shrink: 0;
+	padding-top: 1px;
+}
+
+.run-notice-body {
+	min-width: 0;
+	word-break: break-word;
+}
+
+.run-notice-body strong {
+	display: block;
+	color: var(--text-strong);
+	font-weight: 600;
+	margin-bottom: 2px;
+}
+
+.run-notice.refused {
+	border-color: color-mix(in srgb, var(--priority-high) 45%, var(--border));
+	background: color-mix(in srgb, var(--priority-high) 7%, transparent);
+	color: var(--priority-high);
+}
+
+.run-notice.refused .run-notice-body strong {
+	color: var(--priority-high);
+}
+
+.run-notice.info {
+	border-color: color-mix(in srgb, var(--status-planned) 40%, var(--border));
+	background: color-mix(in srgb, var(--status-planned) 7%, transparent);
+}
+
+.run-notice.ok {
+	border-style: solid;
+	border-color: color-mix(in srgb, var(--status-done) 40%, var(--border));
+	background: color-mix(in srgb, var(--status-done) 7%, transparent);
+	color: var(--status-done);
+}
+
+.run-notice.ok .run-notice-body strong {
+	color: var(--status-done);
+}
+
+.run-notice-dismiss {
+	margin-left: auto;
+	background: none;
+	border: none;
+	color: inherit;
+	opacity: 0.6;
+	cursor: pointer;
+	font-family: var(--font-mono);
+	font-size: 11px;
+	padding: 0 2px;
+}
+
+.run-notice-dismiss:hover {
+	opacity: 1;
+}
+
+/* ---- Composer and cancel control --------------------------------------- */
+.run-composer {
+	border-top: 1px solid var(--rule);
+	background: color-mix(in srgb, var(--surface-3) 35%, transparent);
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.run-composer-input {
+	width: 100%;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--text);
+	font-family: var(--font-sans);
+	font-size: 12.5px;
+	line-height: 1.55;
+	padding: 9px 11px;
+	resize: vertical;
+	min-height: 62px;
+	transition:
+		border-color var(--transition),
+		box-shadow var(--transition);
+}
+
+.run-composer-input::placeholder {
+	color: var(--text-dim);
+}
+
+.run-composer-input:focus {
+	outline: none;
+	border-color: var(--accent);
+	box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.run-composer-input:disabled {
+	background: var(--surface-3);
+	color: var(--text-muted);
+	cursor: not-allowed;
+}
+
+.run-composer-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.run-composer-hint {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	color: var(--text-dim);
+}
+
+.run-composer-spacer {
+	flex: 1 1 auto;
+}
+
+/* A message accepted by the provider is not history until the run publishes
+   it back. This pill is the only place it lives in the meantime. */
+.run-pending {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border));
+	border-radius: 999px;
+	background: var(--accent-soft);
+	padding: 4px 11px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--accent-strong);
+	max-width: 100%;
+}
+
+.run-pending-mark {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	border: 1.5px solid currentColor;
+	border-top-color: transparent;
+	flex-shrink: 0;
+	animation: run-spin 0.9s linear infinite;
+}
+
+.run-pending-text {
+	font-family: var(--font-sans);
+	font-size: 11.5px;
+	letter-spacing: 0;
+	text-transform: none;
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 34ch;
+}
+
+.run-cancel {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.run-cancel-confirm {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 11.5px;
+	color: var(--priority-high);
+}
+
+.run-cancel-question {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+}
+
+.run-cancel-state {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.03em;
+	color: var(--text-muted);
+}
+
+.run-cancel-state.confirmed {
+	color: var(--status-done);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.run-live .run-badge::before,
+	.run-link.reconnecting .run-link-mark,
+	.run-pending-mark,
+	.run-tail-dots span {
+		animation: none;
+	}
+
+	.run-timeline {
+		scroll-behavior: auto;
+	}
+}
+

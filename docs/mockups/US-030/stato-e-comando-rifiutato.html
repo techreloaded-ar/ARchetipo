@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-030 · E — Comando rifiutato</title>
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-030</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-run-attiva.html">A · attiva</a>
+        <a href="stato-b-riconnessione.html">B · riconnessione</a>
+        <a href="stato-c-approvazione.html">C · approvazione</a>
+        <a href="stato-d-messaggio-in-attesa.html">D · in attesa</a>
+        <a href="stato-e-comando-rifiutato.html" class="current">E · rifiuto</a>
+        <a href="stato-f-run-terminata.html">F · terminata</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">Stato E</p>
+    <h1 class="mk-title">Comando rifiutato, storico intatto</h1>
+    <p class="mk-lede">
+        L'operatore invia un messaggio a una run che nel frattempo si è chiusa. Il provider
+        rifiuta il comando: la UI lo dice in chiaro, senza cancellare nulla e senza
+        inventare un evento locale che il provider non ha mai emesso.
+    </p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-6</span>
+        L'avviso vive <strong>fuori dalla timeline</strong>, tratteggiato e richiudibile:
+        è un fatto sul comando, non sulla run. L'ultimo id resta <code>#12</code> prima e
+        dopo il rifiuto, e il testo scritto non viene perso.
+    </p>
+
+    <div class="mk-modal-stage">
+    <div class="modal-root" role="dialog" aria-modal="true" aria-label="Story US-030">
+        <div class="modal">
+            <header class="modal-header">
+                <h2 class="modal-title">Story</h2>
+                <button type="button" class="icon-btn" aria-label="Chiudi">
+                    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                </button>
+            </header>
+            <nav class="modal-tabs" role="tablist">
+                <button type="button" class="tab active" role="tab" aria-selected="true">Story</button>
+                <button type="button" class="tab" role="tab" aria-selected="false">Plan</button>
+            </nav>
+            <section class="tab-panel">
+                <div class="story-view">
+                    <div class="story-view-topbar">
+                        <div class="story-view-meta">
+                            <span class="meta-chip">US-030</span>
+                            <span class="meta-chip">EP-005</span>
+                            <span class="meta-chip">HIGH</span>
+                            <span class="meta-chip">5 pt</span>
+                            <span class="meta-chip">REVIEW</span>
+                        </div>
+                        <div class="story-view-actions">
+                            <button type="button" class="ghost-btn danger-ghost-btn">Elimina story</button>
+                        </div>
+                    </div>
+                    <h3 class="story-view-title">Interagire con una run remota dalla UI</h3>
+
+                    <div class="story-execution">
+                        <div class="execution-panel execution-ok">
+                            <div class="execution-head">
+                                <span class="execution-dot" aria-hidden="true"></span>
+                                <span class="execution-headline">implement succeeded</span>
+                                <code class="execution-id">exec_7f31c9a2</code>
+                            </div>
+                            <div class="execution-meta">provider arcipelago · completed 18/08/2026, 09:43:58</div>
+                        </div>
+                    </div>
+
+                    <div class="story-run">
+                        <section class="run-panel run-closed" aria-label="Run remota">
+                            <div class="run-head">
+                                <span class="run-badge">chiusa</span>
+                                <code class="run-id">run_01J9F4K2QX7B</code>
+                                <span class="run-head-spacer"></span>
+                                <span class="run-link offline">
+                                    <span class="run-link-mark" aria-hidden="true"></span>
+                                    connessione chiusa
+                                </span>
+                            </div>
+
+                            <div class="run-notice refused" role="alert">
+                                <span class="run-notice-mark">rifiutato</span>
+                                <span class="run-notice-body">
+                                    <strong>Comando rifiutato: la run non è più attiva.</strong>
+                                    Il provider ha chiuso la run alle 09:43:58. Il messaggio non è stato consegnato e lo storico qui sotto è rimasto invariato.
+                                </span>
+                                <button type="button" class="run-notice-dismiss" data-notice-dismiss aria-label="Chiudi l'avviso">✕</button>
+                            </div>
+
+                            <ol class="run-timeline">
+                                <li class="run-event ev-user">
+                                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#9</div>
+                                    <div class="run-event-body">
+                                        <div class="run-event-head">
+                                            <span class="run-event-kind">tu</span>
+                                            <span class="run-event-time">09:41:22</span>
+                                        </div>
+                                        <p class="run-event-text">Aggiungi anche il caso in cui la UI resta aperta mentre la run finisce.</p>
+                                    </div>
+                                </li>
+                                <li class="run-event ev-tool-start">
+                                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#10</div>
+                                    <div class="run-event-body">
+                                        <div class="run-event-head">
+                                            <span class="run-event-kind">strumento · avvio</span>
+                                            <span class="run-event-time">09:43:40</span>
+                                        </div>
+                                        <p class="run-event-text"><code class="run-event-tool">go_test</code></p>
+                                        <p class="run-event-detail">./cli/internal/web/...</p>
+                                    </div>
+                                </li>
+                                <li class="run-event ev-tool-end">
+                                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#11</div>
+                                    <div class="run-event-body">
+                                        <div class="run-event-head">
+                                            <span class="run-event-kind">strumento · esito</span>
+                                            <span class="run-event-time">09:43:55</span>
+                                        </div>
+                                        <p class="run-event-text"><code class="run-event-tool">go_test</code> completato</p>
+                                        <p class="run-event-detail">42 test · 0 falliti · 15,1 s</p>
+                                    </div>
+                                </li>
+                                <li class="run-event ev-assistant">
+                                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#12</div>
+                                    <div class="run-event-body">
+                                        <div class="run-event-head">
+                                            <span class="run-event-kind">agente</span>
+                                            <span class="run-event-time">09:43:57</span>
+                                        </div>
+                                        <p class="run-event-text">Ho concluso l'incremento e lascio la spec in REVIEW.</p>
+                                    </div>
+                                </li>
+                            </ol>
+
+                            <div class="run-composer">
+                                <textarea class="run-composer-input" rows="2" disabled>Puoi aggiungere anche un test sul rifiuto?</textarea>
+                                <div class="run-composer-row">
+                                    <span class="run-cancel">
+                                        <button type="button" class="ghost-btn danger-ghost-btn" disabled>Annulla run</button>
+                                    </span>
+                                    <span class="run-composer-spacer"></span>
+                                    <span class="run-composer-hint">run terminale · nessun comando accettato</span>
+                                    <button type="button" class="primary-btn" disabled>Invia</button>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Le forme del rifiuto</p>
+    <p class="mk-note">
+        Stessa struttura, tre motivi diversi. Nessuna delle tre tocca la timeline: cambiano
+        soltanto il marcatore e la frase restituita dal provider.
+    </p>
+    <div class="mk-grid">
+        <div class="mk-card">
+            <div class="run-notice refused">
+                <span class="run-notice-mark">rifiutato</span>
+                <span class="run-notice-body">
+                    <strong>La run non è più attiva.</strong>
+                    Chiusa alle 09:43:58: messaggi, approvazioni e annullamenti non vengono più accettati.
+                </span>
+            </div>
+            <p class="mk-card-sub">Run terminale. Il pannello resta consultabile, il composer è disabilitato.</p>
+        </div>
+        <div class="mk-card">
+            <div class="run-notice refused">
+                <span class="run-notice-mark">rifiutato</span>
+                <span class="run-notice-body">
+                    <strong>Non autorizzato.</strong>
+                    Il provider non riconosce a questa sessione il permesso di intervenire sulla run.
+                </span>
+            </div>
+            <p class="mk-card-sub">Comando non autorizzato. Lo storico ricevuto finora resta visibile così com'è.</p>
+        </div>
+        <div class="mk-card">
+            <div class="run-notice refused">
+                <span class="run-notice-mark">rifiutato</span>
+                <span class="run-notice-body">
+                    <strong>Approvazione non più valida.</strong>
+                    La domanda è già stata risolta altrove: la carta viene aggiornata con l'esito reale.
+                </span>
+            </div>
+            <p class="mk-card-sub">Comando fuori tempo. La UI si riallinea al provider, non alla propria attesa.</p>
+        </div>
+    </div>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-030</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

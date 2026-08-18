@@ -75,6 +75,7 @@
 	const statProgress = document.getElementById("stat-progress");
 	const statDone = document.getElementById("stat-done");
 	const reviewTab = document.getElementById("review-tab");
+	const storyRun = document.getElementById("story-run");
 	const reviewBranch = document.getElementById("review-branch");
 	const reviewDiff = document.getElementById("review-diff");
 	const reviewStatus = document.getElementById("review-status");
@@ -192,6 +193,28 @@
 				currentSpecCode,
 				currentSpecSnapshot && currentSpecSnapshot.title,
 			);
+	let runPollTimer = null; // interval following the run behind the open execution
+	let runExecutionID = null; // execution whose run the panel is following
+	let runAfterID = 0; // highest event id already rendered — the only cursor
+	let runEvents = []; // timeline, appended to and never rebuilt
+	let runSnapshot = null; // run identity and state, exactly as the server reports it
+	let runApprovals = []; // approvals the run is waiting on, verbatim from the provider
+	let runPendingMessage = ""; // text delivered to the run and not yet confirmed by it
+	let runNotice = ""; // server-side note about the projection (window, transport)
+	let runConnected = true; // whether the server is currently attached to the run
+	let runTruncated = false; // whether older history fell outside the retained window
+	let runRefusal = ""; // last refused command, shown inline until the next one
+	let runOutcome = ""; // outcome of the last accepted command
+	let runDraft = ""; // composer text, preserved across re-renders
+	let runBusy = false; // a command is in flight: the controls stay disabled
+	let runCancelArmed = false; // the inline cancel confirmation is showing
+	let runPollAbandoned = false; // the client gave up reading: it is not reconnecting
+	let runPollBusy = false; // a poll is in flight: ticks never overlap
+	let runPollFailures = 0; // consecutive failed reads, for the give-up threshold
+	let runAnswered = null; // approval answered from here, kept as its resolved card
+	let runCancelSent = false; // a cancel was delivered — a fact about the command, not the run
+	let runSeams = new Set(); // event ids the timeline resumed at after a dropped channel
+	let runSeamPending = false; // the channel dropped: the next appended event opens a seam
 	});
 	specCancelBtn.addEventListener("click", () => exitSpecEditMode());
 	planEditBtn.addEventListener("click", () => enterPlanEditMode());
@@ -228,6 +251,52 @@
 	document.addEventListener("keydown", (e) => {
 		if (e.key === "Escape" && !metricsModal.classList.contains("hidden"))
 			closeMetrics();
+	// The run panel is redrawn on every poll, so its controls cannot own their
+	// handlers: the container does, and each control declares what it is through
+	// its class and data attributes.
+	storyRun.addEventListener("click", (e) => {
+		const option = e.target.closest("[data-option-id]");
+		if (option) {
+			respondRunApproval(option.dataset.approvalId, option.dataset.optionId);
+			return;
+		}
+		if (e.target.closest("[data-cancel-open]")) {
+			runCancelArmed = true;
+			renderRun();
+			return;
+		}
+		if (e.target.closest("[data-cancel-abort]")) {
+			runCancelArmed = false;
+			renderRun();
+			return;
+		}
+		if (e.target.closest("[data-cancel-confirm]")) {
+			cancelRun();
+			return;
+		}
+		const dismiss = e.target.closest("[data-notice-dismiss]");
+		if (dismiss) dismissRunNotice(dismiss.dataset.noticeDismiss);
+	});
+	storyRun.addEventListener("submit", (e) => {
+		const form = e.target.closest(".run-composer");
+		if (!form) return;
+		e.preventDefault();
+		sendRunMessage();
+	});
+	storyRun.addEventListener("input", (e) => {
+		const input = e.target.closest(".run-composer-input");
+		if (input) runDraft = input.value;
+	});
+	storyRun.addEventListener("keydown", (e) => {
+		const input = e.target.closest(".run-composer-input");
+		if (!input) return;
+		if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+			e.preventDefault();
+			runDraft = input.value;
+			sendRunMessage();
+		}
+	});
+
 	});
 
 	configBtn.addEventListener("click", openConfig);
@@ -538,6 +607,7 @@
 		}
 		if (s.scope)
 			metaParts.push(`<span class="meta-chip">${escapeHtml(s.scope)}</span>`);
+		resetRunState();
 		if (s.blocked_by && s.blocked_by.length)
 			metaParts.push(
 				`<span class="meta-chip blocked">blocked by ${escapeHtml(s.blocked_by.join(", "))}</span>`,
@@ -1662,6 +1732,7 @@
 			let record;
 			try {
 				record = await apiGet(
+		resumeRun(record, code);
 					`/api/execution/${encodeURIComponent(executionID)}`,
 				);
 			} catch (err) {
@@ -1670,6 +1741,7 @@
 					lastExecutionRecord,
 					`Status unavailable: ${err.message || err}. Reopen the spec to check again.`,
 				);
+			resumeRun(record, code);
 				return;
 			}
 			if (currentSpecCode !== code) {
@@ -1687,6 +1759,9 @@
 	// means no panel: a spec that was never run shows nothing at all.
 	function renderExecution(record, note) {
 		lastExecutionRecord = record || null;
+		// The run of an execution nobody is watching must not keep being read
+		// either: leaving a spec stops both timers, always together.
+		stopRunPolling();
 		if (!record) {
 			storyExecution.innerHTML = "";
 			return;
@@ -1819,6 +1894,736 @@
 				);
 			} else {
 				setConfigValidation("Validation ok.", "ok");
+	// ---- Remote run ----------------------------------------------------------
+	//
+	// The run panel is the collaborative half of an execution: the history the
+	// provider publishes, the messages sent into it, the approvals it waits on,
+	// and the cancel request. It shares the cadence of the execution panel but
+	// keeps its own cursor, because the two read different resources and stop
+	// for different reasons.
+	//
+	// Everything drawn here is remote text. It is escaped on the way into the
+	// markup, without exception: a run is written by an agent and by the tools
+	// it calls, so its content is data and never markup.
+
+	// A read may fail transiently — the run is not lost, only momentarily
+	// unreachable — so the cursor survives and the loop keeps trying. It gives
+	// up only after this many consecutive failures, to avoid polling forever
+	// against a viewer that is gone.
+	const RUN_POLL_FAILURE_LIMIT = 3;
+
+	// The kinds the timeline knows how to label, each with the modifier class
+	// the stylesheet differentiates it by. The vocabulary belongs to the
+	// provider and may grow, so an unknown kind degrades to a readable generic
+	// row instead of disappearing — and it takes the `ev-unknown` variant, which
+	// is drawn as explicitly uninterpreted rather than disguised as agent text.
+	const RUN_EVENT_KINDS = {
+		text: { label: "agent", variant: "ev-assistant" },
+		thinking: { label: "thinking", variant: "ev-thinking" },
+		user_message: { label: "you", variant: "ev-user" },
+		tool_start: { label: "tool · start", variant: "ev-tool-start" },
+		tool_end: { label: "tool · done", variant: "ev-tool-end" },
+		tool_error: { label: "tool · error", variant: "ev-tool-error" },
+		turn_end: { label: "turn end", variant: "ev-turn-end" },
+	};
+
+	// The wire carries three states today. CANCELLED is listed because the
+	// approved design fixed the vocabulary, so a provider that grows one gets
+	// its own panel instead of the neutral fallback — nothing local ever picks
+	// a row here.
+	const RUN_STATE_LABELS = {
+		ACTIVE: "active",
+		CLOSED: "closed",
+		CRASHED: "ended badly",
+		CANCELLED: "cancelled",
+	};
+
+	// The panel variant drives the whole colour scheme of the card, so it is
+	// picked from a closed table rather than interpolated from the remote state.
+	const RUN_STATE_VARIANTS = {
+		ACTIVE: "run-live",
+		CLOSED: "run-closed",
+		CRASHED: "run-failed",
+		CANCELLED: "run-cancelled",
+	};
+
+	// How an approval option is presented. The keys are the kinds a provider
+	// declares; anything else falls through to the neutral button, because
+	// guessing the meaning of an unknown kind is how a "deny" ends up looking
+	// like the safe choice.
+	const RUN_OPTION_TONES = {
+		allow: " allow",
+		approve: " allow",
+		accept: " allow",
+		deny: " deny",
+		reject: " deny",
+	};
+
+	function stopRunPolling() {
+		if (runPollTimer === null) return;
+		clearInterval(runPollTimer);
+		runPollTimer = null;
+	}
+
+	// resetRunState forgets the run of the spec being left. It is called before
+	// a detail is loaded, exactly like renderExecution(null), so nothing of the
+	// previous run can survive into the next one.
+	function resetRunState() {
+		stopRunPolling();
+		runExecutionID = null;
+		runAfterID = 0;
+		runEvents = [];
+		runSnapshot = null;
+		runApprovals = [];
+		runPendingMessage = "";
+		runNotice = "";
+		runConnected = true;
+		runTruncated = false;
+		runRefusal = "";
+		runOutcome = "";
+		runDraft = "";
+		runBusy = false;
+		runCancelArmed = false;
+		runCancelSent = false;
+		runAnswered = null;
+		runSeams = new Set();
+		runSeamPending = false;
+		runPollBusy = false;
+		runPollFailures = 0;
+		runPollAbandoned = false;
+		storyRun.innerHTML = "";
+	}
+
+	// resumeRun asks once whether the execution has an interactive run, and
+	// starts following it when it has.
+	//
+	// A 409 is an answer, not a failure: this provider exposes no run, or the
+	// workspace has no provider that could. The panel simply does not appear.
+	async function resumeRun(record, code) {
+		if (!record || !record.id || !code) return;
+		const executionID = record.id;
+		let view;
+		try {
+			view = await apiGet(
+				`/api/execution/${encodeURIComponent(executionID)}/run?after_id=0`,
+			);
+		} catch (err) {
+			if (currentSpecCode !== code) return;
+			if (err.status === 409 || err.code === "E_CONFLICT") return;
+			runNotice = `The run of this execution cannot be read: ${err.message || err}`;
+			renderRun();
+			return;
+		}
+		if (currentSpecCode !== code) return;
+		runExecutionID = executionID;
+		applyRunView(view);
+		renderRun();
+		if (!view || !view.run) {
+			// The remote work exists but has not been handed to a run yet. That is
+			// worth waiting for while the execution can still get one, and worth
+			// nothing once the execution is over.
+			if (!isExecutionTerminal(record)) startRunPolling(executionID, code);
+			return;
+		}
+		startRunPolling(executionID, code);
+	}
+
+	// startRunPolling follows one run of one spec, with the discipline of
+	// startExecutionPolling: every tick checks that the spec it was started for
+	// is still the open one, and stops itself when it is not.
+	//
+	// The loop keeps going after the run has left ACTIVE, because a closed run
+	// can still have a final turn to deliver. It stops when the state is no
+	// longer ACTIVE *and* a read brought nothing new, so the last turn is never
+	// cut off.
+	function startRunPolling(executionID, code) {
+		stopRunPolling();
+		if (!executionID || !code) return;
+		runPollTimer = setInterval(async () => {
+			if (currentSpecCode !== code) {
+				stopRunPolling();
+				return;
+			}
+			if (runPollBusy) return;
+			runPollBusy = true;
+			let view;
+			try {
+				view = await apiGet(
+					`/api/execution/${encodeURIComponent(executionID)}/run?after_id=${runAfterID}`,
+				);
+			} catch (err) {
+				runPollBusy = false;
+				if (currentSpecCode !== code) {
+					stopRunPolling();
+					return;
+				}
+				runPollFailures += 1;
+				runConnected = false;
+				runSeamPending = true;
+				if (runPollFailures >= RUN_POLL_FAILURE_LIMIT) {
+					stopRunPolling();
+					// Nothing is reconnecting any more, so the panel must stop
+					// saying that it is.
+					runPollAbandoned = true;
+					runNotice = `Run unavailable: ${err.message || err}. Reopen the spec to follow it again.`;
+				}
+				renderRun();
+				return;
+			}
+			runPollBusy = false;
+			if (currentSpecCode !== code) {
+				stopRunPolling();
+				return;
+			}
+			runPollFailures = 0;
+			const appended = applyRunView(view);
+			renderRun();
+			if (runSnapshot && runSnapshot.state !== "ACTIVE" && appended === 0) {
+				stopRunPolling();
+			}
+		}, EXECUTION_POLL_MS);
+	}
+
+	// applyRunView folds one server view into the local projection and returns
+	// how many events it appended.
+	//
+	// Events are only ever appended, and only when their id is beyond the
+	// cursor: the list is never rebuilt. That is the client half of the
+	// de-duplication — the server drops what it has already published, and this
+	// drops what has already been drawn, so a re-read after a reconnection
+	// cannot show the same line twice.
+	function applyRunView(view) {
+		if (!view) return 0;
+		const events = Array.isArray(view.events) ? view.events : [];
+		let appended = 0;
+		for (const event of events) {
+			if (!event || typeof event.id !== "number") continue;
+			if (event.id <= runAfterID) continue;
+			// The seam is a mark drawn before the first row that arrived after the
+			// channel came back. It is decoration over the same list: no event is
+			// inserted, removed or renumbered by it, and the cursor is untouched.
+			if (runSeamPending) {
+				runSeams.add(event.id);
+				runSeamPending = false;
+			}
+			runEvents.push(event);
+			runAfterID = event.id;
+			appended += 1;
+		}
+		if (typeof view.last_id === "number" && view.last_id > runAfterID) {
+			runAfterID = view.last_id;
+		}
+		runSnapshot = view.run || null;
+		runApprovals = Array.isArray(view.approvals) ? view.approvals : [];
+		runConnected = view.connected !== false;
+		// The seam follows the indicator, and the indicator is the server's
+		// statement: the UI marks a gap only where the server reported one.
+		if (!runConnected) runSeamPending = true;
+		runTruncated = !!view.truncated;
+		runNotice = view.notice || "";
+		// A message is confirmed by the run republishing it, never by the 202
+		// that accepted it.
+		if (runPendingMessage && isMessageConfirmed(events, runPendingMessage)) {
+			runPendingMessage = "";
+		}
+		return appended;
+	}
+
+	function isMessageConfirmed(events, message) {
+		const wanted = message.trim();
+		return events.some(
+			(event) =>
+				event &&
+				event.kind === "user_message" &&
+				String(event.text || "").trim() === wanted,
+		);
+	}
+
+	// showRunRefusal reports a command the run would not take. It writes to the
+	// toast and to one inline row, and to nothing else: the timeline, the cursor
+	// and the run state are what the server said they were, and a refused
+	// command did not change any of them.
+	function showRunRefusal(err) {
+		const message = (err && err.message) || String(err);
+		const hint = err && err.hint ? ` — ${err.hint}` : "";
+		runRefusal = `${message}${hint}`;
+		showToast(message, "err");
+	}
+
+	async function sendRunMessage() {
+		if (runBusy || !runExecutionID) return;
+		const message = runDraft.trim();
+		if (!message) return;
+		const code = currentSpecCode;
+		runBusy = true;
+		renderRun();
+		try {
+			const view = await apiPost(
+				`/api/execution/${encodeURIComponent(runExecutionID)}/run/messages?after_id=${runAfterID}`,
+				{ message },
+			);
+			if (currentSpecCode !== code) return;
+			// Accepted means delivered to the runner, not published: the text
+			// stays out of the timeline until a user_message event carries it
+			// back. Until then it is visible as pending, and only as pending.
+			runPendingMessage = message;
+			runDraft = "";
+			runRefusal = "";
+			runOutcome = "";
+			applyRunView(view);
+		} catch (err) {
+			if (currentSpecCode !== code) return;
+			showRunRefusal(err);
+		} finally {
+			runBusy = false;
+			if (currentSpecCode === code) renderRun();
+		}
+	}
+
+	async function respondRunApproval(approvalID, optionID) {
+		if (runBusy || !runExecutionID || !approvalID || !optionID) return;
+		const code = currentSpecCode;
+		const answering = findRunApproval(approvalID);
+		const option = findRunApprovalOption(answering, optionID);
+		const label = (option && (option.label || option.id)) || optionID;
+		runBusy = true;
+		renderRun();
+		try {
+			const view = await apiPost(
+				`/api/execution/${encodeURIComponent(runExecutionID)}/run/approvals/${encodeURIComponent(approvalID)}?after_id=${runAfterID}`,
+				{ option_id: optionID },
+			);
+			if (currentSpecCode !== code) return;
+			runRefusal = "";
+			applyRunView(view);
+			// The outcome is read back from the projection the server returned,
+			// not asserted from the answer that was sent.
+			const stillPending = runApprovals.some(
+				(item) => item && item.id === approvalID,
+			);
+			runOutcome = stillPending
+				? `Answered “${label}” — the run is still waiting on this approval.`
+				: `Answered “${label}” — the run took the decision.`;
+			// The resolved card keeps the decision readable once the provider
+			// stops listing it as pending. It shows the provider's own options,
+			// verbatim and disabled, with the answered one marked.
+			if (answering) {
+				runAnswered = {
+					id: approvalID,
+					approval: answering,
+					optionID,
+					denied: approvalOptionTone(option) === " deny",
+					outcome: runOutcome,
+				};
+			}
+		} catch (err) {
+			if (currentSpecCode !== code) return;
+			showRunRefusal(err);
+		} finally {
+			runBusy = false;
+			if (currentSpecCode === code) renderRun();
+		}
+	}
+
+	function findRunApproval(approvalID) {
+		for (const approval of runApprovals) {
+			if (approval && approval.id === approvalID) return approval;
+		}
+		if (runAnswered && runAnswered.id === approvalID) return runAnswered.approval;
+		return null;
+	}
+
+	function findRunApprovalOption(approval, optionID) {
+		if (!approval) return null;
+		for (const option of approval.options || []) {
+			if (option && option.id === optionID) return option;
+		}
+		return null;
+	}
+
+	// The affirmative/negative tone comes from the option's own kind when it
+	// declares one, never from parsing its label.
+	function approvalOptionTone(option) {
+		const kind = option && typeof option.kind === "string" ? option.kind : "";
+		// hasOwnProperty, not a bare lookup: the kind is remote text, and a kind
+		// spelled "constructor" or "toString" would otherwise resolve to an
+		// inherited member and be interpolated into the class attribute.
+		return Object.prototype.hasOwnProperty.call(RUN_OPTION_TONES, kind)
+			? RUN_OPTION_TONES[kind]
+			: "";
+	}
+
+	async function cancelRun() {
+		if (runBusy || !runExecutionID) return;
+		const code = currentSpecCode;
+		runCancelArmed = false;
+		runBusy = true;
+		renderRun();
+		try {
+			const view = await apiPost(
+				`/api/execution/${encodeURIComponent(runExecutionID)}/run/cancel?after_id=${runAfterID}`,
+				{},
+			);
+			if (currentSpecCode !== code) return;
+			runRefusal = "";
+			// runCancelSent records that the command was delivered — a fact about
+			// the command, never about the run. No terminal state is written
+			// here: whether the run is over stays the server's statement, carried
+			// by this view and by the reads that follow.
+			runCancelSent = true;
+			applyRunView(view);
+			startRunPolling(runExecutionID, code);
+		} catch (err) {
+			if (currentSpecCode !== code) return;
+			showRunRefusal(err);
+		} finally {
+			runBusy = false;
+			if (currentSpecCode === code) renderRun();
+		}
+	}
+
+	// renderRun draws the panel from the local projection alone. It never
+	// fetches, never derives a state the server did not report, and preserves
+	// the two things a re-render would otherwise steal: the text being typed
+	// and the reading position in the timeline.
+	function renderRun() {
+		if (!runSnapshot && !runNotice) {
+			storyRun.innerHTML = "";
+			return;
+		}
+		const timeline = storyRun.querySelector(".run-timeline");
+		const previousTop = timeline ? timeline.scrollTop : 0;
+		const wasAtBottom = timeline
+			? timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 24
+			: true;
+		const focused = document.activeElement;
+		const composerHadFocus = !!(
+			focused &&
+			focused.classList &&
+			focused.classList.contains("run-composer-input")
+		);
+		const caret = composerHadFocus ? focused.selectionStart : 0;
+
+		if (!runSnapshot) {
+			storyRun.innerHTML = `<section class="run-panel">
+				${runNotice ? renderRunNotice("info", "waiting", runNotice) : ""}
+			</section>`;
+			return;
+		}
+
+		const variant = RUN_STATE_VARIANTS[runSnapshot.state] || "run-closed";
+		// An approval answered from here keeps its card only once the provider
+		// has stopped listing it as pending. While it is still pending the
+		// provider's own card stands, and the answer is reported as a notice.
+		const answeredShown = !!(
+			runAnswered &&
+			!runApprovals.some((item) => item && item.id === runAnswered.id)
+		);
+		const blocks = [];
+		if (runSnapshot.error) {
+			blocks.push(renderRunNotice("refused", "error", runSnapshot.error));
+		}
+		if (runRefusal) {
+			blocks.push(renderRunNotice("refused", "refused", runRefusal, "refusal"));
+		}
+		if (runOutcome && !answeredShown) {
+			blocks.push(renderRunNotice("ok", "confirmed", runOutcome, "outcome"));
+		}
+		if (runNotice) {
+			blocks.push(renderRunNotice("info", "channel", runNotice));
+		}
+		const closedAt = formatExecutionTime(runSnapshot.closed_at);
+		if (closedAt) {
+			blocks.push(
+				renderRunNotice("info", "ended", `The provider closed this run at ${closedAt}.`),
+			);
+		}
+		if (runTruncated) {
+			blocks.push(
+				renderRunNotice(
+					"info",
+					"window",
+					"Older history is beyond the window this viewer keeps; the provider still holds it.",
+				),
+			);
+		}
+		blocks.push(renderRunTimeline());
+		// The tail says the run is still speaking. It is drawn from the state the
+		// server reported and from its connection flag, never from a local guess.
+		if (runSnapshot.state === "ACTIVE" && runConnected && runEvents.length) {
+			blocks.push(
+				'<div class="run-tail"><span class="run-tail-dots" aria-hidden="true"><span></span><span></span><span></span></span>the run is still working</div>',
+			);
+		}
+		blocks.push(
+			runApprovals.map((item) => renderRunApproval(item, null)).join(""),
+		);
+		if (answeredShown) {
+			blocks.push(renderRunApproval(runAnswered.approval, runAnswered));
+		}
+		blocks.push(renderRunComposer());
+
+		storyRun.innerHTML = `<section class="run-panel ${variant}" aria-label="Remote run">
+			<div class="run-head">
+				<span class="run-badge">${escapeHtml(RUN_STATE_LABELS[runSnapshot.state] || "run")}</span>
+				<code class="run-id">${escapeHtml(runSnapshot.run_id || "")}</code>
+				<span class="run-head-spacer"></span>
+				${renderRunLink()}
+			</div>
+			${blocks.join("")}
+		</section>`;
+
+		const nextTimeline = storyRun.querySelector(".run-timeline");
+		if (nextTimeline) {
+			nextTimeline.scrollTop = wasAtBottom
+				? nextTimeline.scrollHeight
+				: previousTop;
+		}
+		const input = storyRun.querySelector(".run-composer-input");
+		if (input) {
+			// The draft is restored as a value and never as markup, so no amount
+			// of typing can reach the parser.
+			input.value = runDraft;
+			if (composerHadFocus && !input.disabled) {
+				input.focus();
+				const at = Math.min(caret, input.value.length);
+				input.setSelectionRange(at, at);
+			}
+		}
+	}
+
+	// renderRunNotice draws one additive row above the timeline. Every caller
+	// passes a tone from the stylesheet's closed set — info, refused, ok — so a
+	// provider string can never choose how it is presented.
+	function renderRunNotice(tone, mark, body, dismiss) {
+		const close = dismiss
+			? `<button type="button" class="run-notice-dismiss" data-notice-dismiss="${escapeHtml(dismiss)}" aria-label="Dismiss this notice">✕</button>`
+			: "";
+		return `<div class="run-notice ${tone}"${tone === "refused" ? ' role="alert"' : ""}>
+			<span class="run-notice-mark">${escapeHtml(mark)}</span>
+			<span class="run-notice-body">${escapeHtml(body)}</span>
+			${close}
+		</div>`;
+	}
+
+	// dismissRunNotice closes one inline notice and only that: the projection it
+	// was reporting on — timeline, cursor, run state — is untouched.
+	function dismissRunNotice(which) {
+		if (which === "refusal") runRefusal = "";
+		else if (which === "outcome") runOutcome = "";
+		else return;
+		renderRun();
+	}
+
+	// renderRunLink shows the transport, and says so only when it is degraded:
+	// a run being followed needs no announcement, a run being reconnected does.
+	//
+	// The run state is read first, because a run that has ended has no stream to
+	// reconnect to: reporting "reconnecting…" next to a "Run closed" badge would
+	// be two contradictory statements about the same run.
+	function renderRunLink() {
+		const mark = '<span class="run-link-mark" aria-hidden="true"></span>';
+		if (runSnapshot && runSnapshot.state !== "ACTIVE") {
+			return `<span class="run-link offline">${mark}channel closed</span>`;
+		}
+		if (runPollAbandoned) {
+			return `<span class="run-link offline">${mark}not following</span>`;
+		}
+		if (runConnected) {
+			return `<span class="run-link listening">${mark}following</span>`;
+		}
+		return `<span class="run-link reconnecting">${mark}reconnecting…</span>`;
+	}
+
+	// The cancel control exists only while the run is active. A run that has
+	// ended cannot be reopened, so offering to close it again would be a lie.
+	//
+	// The confirmation is inline rather than a window.confirm: a modal dialog
+	// would block the polling loop that keeps the panel current, and the run
+	// would freeze behind it.
+	function renderRunCancel() {
+		if (!runSnapshot) return "";
+		if (runSnapshot.state !== "ACTIVE") {
+			// When a cancel was asked for from here, what confirms it is the
+			// terminal state the server ended up reporting — never the request.
+			if (!runCancelSent) return "";
+			// The same instant as the "ended" notice, so it is formatted the same
+			// way: one panel must not show one moment in two spellings.
+			const stamp = formatExecutionTime(runSnapshot.closed_at);
+			const settled = stamp ? `cancel confirmed · ${stamp}` : "cancel confirmed";
+			return `<span class="run-cancel"><span class="run-cancel-state confirmed">${escapeHtml(settled)}</span></span>`;
+		}
+		if (runCancelSent) {
+			return '<span class="run-cancel"><span class="run-cancel-state">cancel delivered · waiting for the run to report its state</span></span>';
+		}
+		const disabled = runBusy ? " disabled" : "";
+		if (!runCancelArmed) {
+			return `<span class="run-cancel">
+				<button type="button" class="ghost-btn danger-ghost-btn" data-cancel-open${disabled}>Cancel run</button>
+			</span>`;
+		}
+		return `<span class="run-cancel">
+			<span class="run-cancel-confirm">
+				<span class="run-cancel-question">Stop the agent where it is?</span>
+				<button type="button" class="approval-btn deny" data-cancel-confirm${disabled}>Yes, cancel</button>
+				<button type="button" class="approval-btn" data-cancel-abort${disabled}>No</button>
+			</span>
+		</span>`;
+	}
+
+	function renderRunTimeline() {
+		// A terminal run's history is frozen: it stays readable, and the styling
+		// says at a glance that nothing more will be added to it.
+		const frozen =
+			runSnapshot && runSnapshot.state !== "ACTIVE" ? " is-frozen" : "";
+		if (!runEvents.length) {
+			return `<ol class="run-timeline${frozen}"><li class="run-timeline-empty">Nothing has been published on this run yet.</li></ol>`;
+		}
+		const rows = runEvents
+			.map((event) => renderRunSeam(event) + renderRunEvent(event))
+			.join("");
+		return `<ol class="run-timeline${frozen}">${rows}</ol>`;
+	}
+
+	// The seam is where the timeline picked up again after the channel dropped.
+	// It shows both halves of AC-2 at a glance: the resume point, and that
+	// nothing was lost or repeated around it.
+	function renderRunSeam(event) {
+		if (!runSeams.has(event.id)) return "";
+		return `<li class="run-seam" role="separator">resumed at #${escapeHtml(String(event.id))}</li>`;
+	}
+
+	// renderRunEvent draws one row: the rail carries the glyph and the event id,
+	// the body carries the head and the text. The id is shown because it is what
+	// makes the de-duplication legible — an operator can see that the timeline
+	// went 5, 6, 7 across a reconnection and repeated nothing.
+	function renderRunEvent(event) {
+		const kind = event && typeof event.kind === "string" ? event.kind : "";
+		// The variant is picked from the known table, never built from the remote
+		// string: an unknown kind gets the generic row rather than a class name
+		// written by the provider.
+		const known = Object.prototype.hasOwnProperty.call(RUN_EVENT_KINDS, kind);
+		const variant = known ? RUN_EVENT_KINDS[kind].variant : "ev-unknown";
+		const label = known ? RUN_EVENT_KINDS[kind].label : kind || "event";
+		const head = [`<span class="run-event-kind">${escapeHtml(label)}</span>`];
+		const stamp = formatRunTime(event.at);
+		if (stamp) {
+			head.push(`<span class="run-event-time">${escapeHtml(stamp)}</span>`);
+		}
+		// A tool event names its tool where the text would be; an event that has
+		// both keeps the tool as the lead-in to the text.
+		const text = String(event.text || "");
+		const lines = [];
+		if (event.tool) {
+			lines.push(
+				`<p class="run-event-text"><code class="run-event-tool">${escapeHtml(event.tool)}</code></p>`,
+			);
+			if (text) {
+				lines.push(`<p class="run-event-detail">${escapeHtml(text)}</p>`);
+			}
+		} else if (text) {
+			lines.push(`<p class="run-event-text">${escapeHtml(text)}</p>`);
+		}
+		const body = lines.join("");
+		return `<li class="run-event ${variant}">
+			<div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#${escapeHtml(String(event.id))}</div>
+			<div class="run-event-body">
+				<div class="run-event-head">${head.join("")}</div>
+				${body}
+			</div>
+		</li>`;
+	}
+
+	// renderRunApproval shows the decision verbatim: which answers exist is the
+	// provider's statement, so the buttons are its options and nothing else.
+	// A resolved card carries the same options, disabled, with the answered one
+	// marked: its label stays the provider's, unchanged.
+	function renderRunApproval(approval, answered) {
+		if (!approval || !approval.id) return "";
+		const id = escapeHtml(approval.id);
+		const head = [
+			`<span class="run-approval-eyebrow">${answered ? "approval resolved" : "approval requested"}</span>`,
+		];
+		if (approval.tool_name) {
+			head.push(
+				`<code class="run-approval-tool">${escapeHtml(approval.tool_name)}</code>`,
+			);
+		}
+		const stamp = formatRunTime(approval.created_at);
+		if (stamp) {
+			head.push(`<span class="run-event-time">${escapeHtml(stamp)}</span>`);
+		}
+		const args = answered ? "" : formatExecutionPayload(approval.args);
+		const argsBlock = args
+			? `<pre class="run-approval-args">${escapeHtml(args)}</pre>`
+			: "";
+		const options = (approval.options || [])
+			.filter((option) => option && option.id)
+			.map((option) => {
+				// The affirmative/negative styling comes from the option's own kind
+				// when it declares one, never from parsing its label. The kind is
+				// the provider's word, so both spellings of a refusal are honoured
+				// and an unknown one simply gets the neutral button.
+				const tone = approvalOptionTone(option);
+				const chosen =
+					answered && answered.optionID === option.id ? " is-chosen" : "";
+				const off = answered || runBusy ? " disabled" : "";
+				return `<button type="button" class="approval-btn${tone}${chosen}" data-approval-id="${id}" data-option-id="${escapeHtml(option.id)}"${off}>${escapeHtml(option.label || option.id)}</button>`;
+			})
+			.join("");
+		const card = ["run-approval"];
+		if (answered) card.push("is-answered");
+		if (answered && answered.denied) card.push("is-denied");
+		// The outcome is the sentence built from the projection the server
+		// returned, never from the answer that was sent.
+		const outcome = answered
+			? `<div class="run-approval-outcome${answered.denied ? " denied" : ""}">${escapeHtml(answered.outcome)}</div>`
+			: "";
+		return `<div class="${card.join(" ")}" role="group" aria-label="${answered ? "Resolved approval" : "Pending approval"}">
+			<div class="run-approval-head">${head.join("")}</div>
+			<p class="run-approval-title">${escapeHtml(approval.title || "The run is waiting for a decision")}</p>
+			${argsBlock}
+			<div class="run-approval-options">${options}</div>
+			${outcome}
+		</div>`;
+	}
+
+	function renderRunComposer() {
+		const closed = runSnapshot && runSnapshot.state !== "ACTIVE";
+		const disabled = runBusy || closed ? " disabled" : "";
+		const placeholder = closed
+			? "This run has ended and takes no more messages"
+			: "Write a message to the agent…";
+		// The pending pill sits in the composer row, not in the timeline: a
+		// message that has been accepted but not yet republished is a state of
+		// the composer, and putting it among the events would be exactly the
+		// optimistic write AC-3 forbids.
+		const pending = runPendingMessage
+			? `<span class="run-pending" role="status">
+					<span class="run-pending-mark" aria-hidden="true"></span>
+					awaiting confirmation
+					<span class="run-pending-text">«${escapeHtml(runPendingMessage)}»</span>
+				</span>`
+			: "";
+		return `<form class="run-composer">
+			<textarea class="run-composer-input" rows="2" placeholder="${escapeHtml(placeholder)}"${disabled}></textarea>
+			<div class="run-composer-row">
+				${renderRunCancel()}
+				${pending}
+				<span class="run-composer-spacer"></span>
+				<span class="run-composer-hint">${closed ? "the run is terminal" : "⌘ + enter to send"}</span>
+				<button type="submit" class="primary-btn"${disabled}>Send</button>
+			</div>
+		</form>`;
+	}
+
+	function formatRunTime(value) {
+		if (!value) return "";
+		const at = new Date(value);
+		if (Number.isNaN(at.getTime())) return "";
+		return at.toLocaleTimeString();
+	}
+
 			}
 			setConfigStatus("Validation complete", "ok");
 		} catch (err) {
@@ -1940,6 +2745,12 @@
                         ${totals.done_points || 0}/${totals.points || 0} points ·
                         ${totals.done_specs || 0}/${totals.specs || 0} specs done ·
                         ${totals.wip_specs || 0} in flight
+			if (data && Array.isArray(data.fields)) err.fields = data.fields;
+			// The hint explains a refusal, and the status tells a refusal from a
+			// fault: the run panel treats a 409 as "no interactive run here"
+			// rather than as an error to paint red.
+			if (data && data.hint) err.hint = data.hint;
+			err.status = r.status;
                     </div>
                 </div>
             </div>

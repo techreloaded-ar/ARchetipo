@@ -46,18 +46,23 @@ type Doer interface {
 // Options carries the injectable seams of the provider. Every field is
 // optional: New fills the zero values with the real implementations.
 type Options struct {
-	Doer   Doer
-	Getenv func(string) string
-	Sleep  func(context.Context, time.Duration) error
-	Now    func() time.Time
+	Doer Doer
+	// StreamDoer performs the run event stream. It is separate from Doer
+	// because the two have opposite needs, and defaults to Doer when a test
+	// injects one.
+	StreamDoer Doer
+	Getenv     func(string) string
+	Sleep      func(context.Context, time.Duration) error
+	Now        func() time.Time
 }
 
 // Provider dispatches spec.plan actions to an ARcipelago hub.
 type Provider struct {
-	doer   Doer
-	getenv func(string) string
-	sleep  func(context.Context, time.Duration) error
-	now    func() time.Time
+	doer       Doer
+	streamDoer Doer
+	getenv     func(string) string
+	sleep      func(context.Context, time.Duration) error
+	now        func() time.Time
 }
 
 var _ execution.Provider = (*Provider)(nil)
@@ -66,9 +71,23 @@ var _ execution.Provider = (*Provider)(nil)
 // implementation. It never returns nil and never reads the environment: the
 // secret is only looked up during Execute.
 func New(options Options) *Provider {
-	p := &Provider{doer: options.Doer, getenv: options.Getenv, sleep: options.Sleep, now: options.Now}
+	p := &Provider{
+		doer:       options.Doer,
+		streamDoer: options.StreamDoer,
+		getenv:     options.Getenv,
+		sleep:      options.Sleep,
+		now:        options.Now,
+	}
 	if p.doer == nil {
 		p.doer = &http.Client{Timeout: 30 * time.Second}
+	}
+	if p.streamDoer == nil {
+		// A test that injects one client means it for every call it can observe,
+		// so the stream follows Doer rather than reaching for the network.
+		p.streamDoer = options.Doer
+	}
+	if p.streamDoer == nil {
+		p.streamDoer = newStreamClient()
 	}
 	if p.getenv == nil {
 		p.getenv = os.Getenv
@@ -80,6 +99,25 @@ func New(options Options) *Provider {
 		p.now = time.Now
 	}
 	return p
+}
+
+// streamHeaderTimeout bounds how long the hub may take to answer the headers of
+// the event stream. It is the only timeout a stream can carry.
+const streamHeaderTimeout = 30 * time.Second
+
+// newStreamClient builds the client the run event stream uses.
+//
+// It deliberately has no Client.Timeout. That field bounds the whole exchange,
+// body included, so a client carrying it cannot hold a text/event-stream open
+// at all: the connection is killed on the deadline no matter how healthy it is,
+// and the follower above sees a perfectly good stream as a drop to reconnect
+// from — for ever, at the deadline's period. The stream is bounded where a
+// stream can be bounded: the header phase has its own timeout, and the rest is
+// governed by the request context, which the caller already cancels.
+func newStreamClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = streamHeaderTimeout
+	return &http.Client{Transport: transport}
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {

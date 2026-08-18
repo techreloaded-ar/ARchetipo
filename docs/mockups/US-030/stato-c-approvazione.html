@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-030 · C — Approvazione pendente</title>
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-030</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-run-attiva.html">A · attiva</a>
+        <a href="stato-b-riconnessione.html">B · riconnessione</a>
+        <a href="stato-c-approvazione.html" class="current">C · approvazione</a>
+        <a href="stato-d-messaggio-in-attesa.html">D · in attesa</a>
+        <a href="stato-e-comando-rifiutato.html">E · rifiuto</a>
+        <a href="stato-f-run-terminata.html">F · terminata</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">Stato C</p>
+    <h1 class="mk-title">Approvazione pendente</h1>
+    <p class="mk-lede">
+        Quando la run si blocca su una domanda, la carta di approvazione si inserisce fra
+        la timeline e il composer: è l'unico elemento che chiede un'azione, e porta con sé
+        lo strumento, il titolo, il riassunto degli argomenti e una opzione per bottone.
+    </p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-4</span>
+        La risposta non viene interpretata dalla UI: la carta resta al suo posto e mostra
+        <strong>l'esito restituito dal provider</strong>, mentre la run riparte con i nuovi
+        eventi in coda alla timeline.
+    </p>
+
+    <div class="mk-modal-stage">
+    <div class="modal-root" role="dialog" aria-modal="true" aria-label="Story US-030">
+        <div class="modal">
+            <header class="modal-header">
+                <h2 class="modal-title">Story</h2>
+                <button type="button" class="icon-btn" aria-label="Chiudi">
+                    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                </button>
+            </header>
+            <nav class="modal-tabs" role="tablist">
+                <button type="button" class="tab active" role="tab" aria-selected="true">Story</button>
+                <button type="button" class="tab" role="tab" aria-selected="false">Plan</button>
+            </nav>
+            <section class="tab-panel">
+                <div class="story-view">
+                    <div class="story-view-topbar">
+                        <div class="story-view-meta">
+                            <span class="meta-chip">US-030</span>
+                            <span class="meta-chip">EP-005</span>
+                            <span class="meta-chip">HIGH</span>
+                            <span class="meta-chip">5 pt</span>
+                            <span class="meta-chip">IN PROGRESS</span>
+                        </div>
+                        <div class="story-view-actions">
+                            <button type="button" class="ghost-btn danger-ghost-btn">Elimina story</button>
+                        </div>
+                    </div>
+                    <h3 class="story-view-title">Interagire con una run remota dalla UI</h3>
+
+                    <div class="story-execution">
+                        <div class="execution-panel execution-running">
+                            <div class="execution-head">
+                                <span class="execution-dot" aria-hidden="true"></span>
+                                <span class="execution-headline">implement is running</span>
+                                <code class="execution-id">exec_7f31c9a2</code>
+                            </div>
+                            <div class="execution-meta">provider arcipelago · started 18/08/2026, 09:41:01</div>
+                        </div>
+                    </div>
+
+                    <div class="story-run">
+                        <section class="run-panel run-live" aria-label="Run remota">
+                            <div class="run-head">
+                                <span class="run-badge">attiva</span>
+                                <code class="run-id">run_01J9F4K2QX7B</code>
+                                <span class="run-head-spacer"></span>
+                                <span class="run-link listening">
+                                    <span class="run-link-mark" aria-hidden="true"></span>
+                                    in ascolto
+                                </span>
+                            </div>
+
+                            <!-- La timeline è scorsa in fondo: gli eventi precedenti restano sopra. -->
+                            <ol class="run-timeline">
+                                <li class="run-event ev-tool-end">
+                                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#4</div>
+                                    <div class="run-event-body">
+                                        <div class="run-event-head">
+                                            <span class="run-event-kind">strumento · esito</span>
+                                            <span class="run-event-time">09:41:07</span>
+                                        </div>
+                                        <p class="run-event-text"><code class="run-event-tool">wiki_query</code> completato</p>
+                                        <p class="run-event-detail">3 pagine · 812 token · 1,4 s</p>
+                                    </div>
+                                </li>
+                                <li class="run-event ev-assistant">
+                                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#5</div>
+                                    <div class="run-event-body">
+                                        <div class="run-event-head">
+                                            <span class="run-event-kind">agente</span>
+                                            <span class="run-event-time">09:41:09</span>
+                                        </div>
+                                        <p class="run-event-text">Il confine con il provider è già fissato: la UI proietta soltanto gli eventi ricevuti.</p>
+                                    </div>
+                                </li>
+                                <li class="run-event ev-tool-error">
+                                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#7</div>
+                                    <div class="run-event-body">
+                                        <div class="run-event-head">
+                                            <span class="run-event-kind">strumento · errore</span>
+                                            <span class="run-event-time">09:41:13</span>
+                                        </div>
+                                        <p class="run-event-text"><code class="run-event-tool">file_write</code> fallito</p>
+                                        <p class="run-event-detail">EPERM · scrittura non consentita senza approvazione dell'operatore</p>
+                                    </div>
+                                </li>
+                                <li class="run-event ev-assistant">
+                                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#9</div>
+                                    <div class="run-event-body">
+                                        <div class="run-event-head">
+                                            <span class="run-event-kind">agente</span>
+                                            <span class="run-event-time">09:41:16</span>
+                                        </div>
+                                        <p class="run-event-text">Ho bisogno del permesso di scrittura sugli asset del viewer per creare il pannello della run.</p>
+                                    </div>
+                                </li>
+                            </ol>
+
+                            <div class="run-approval" role="group" aria-label="Approvazione pendente">
+                                <div class="run-approval-head">
+                                    <span class="run-approval-eyebrow">approvazione richiesta</span>
+                                    <code class="run-approval-tool">file_write</code>
+                                    <span class="run-event-time">09:41:17</span>
+                                </div>
+                                <p class="run-approval-title">Scrivere il pannello della run negli asset del viewer?</p>
+                                <pre class="run-approval-args">percorso  cli/internal/web/assets/app.js
+modifica  +214 righe, -6 righe
+ambito    workspace corrente</pre>
+                                <div class="run-approval-options">
+                                    <button type="button" class="approval-btn allow">Consenti una volta</button>
+                                    <button type="button" class="approval-btn allow">Consenti sempre</button>
+                                    <button type="button" class="approval-btn deny">Rifiuta una volta</button>
+                                    <button type="button" class="approval-btn deny">Rifiuta sempre</button>
+                                </div>
+                            </div>
+
+                            <div class="run-composer">
+                                <textarea class="run-composer-input" rows="2" placeholder="Scrivi un messaggio per l'agente…"></textarea>
+                                <div class="run-composer-row">
+                                    <span class="run-cancel">
+                                        <button type="button" class="ghost-btn danger-ghost-btn" data-cancel-open>Annulla run</button>
+                                        <span class="run-cancel-confirm is-hidden">
+                                            <span class="run-cancel-question">Confermi?</span>
+                                            <button type="button" class="approval-btn deny">Sì, annulla</button>
+                                            <button type="button" class="approval-btn" data-cancel-abort>No</button>
+                                        </span>
+                                    </span>
+                                    <span class="run-composer-spacer"></span>
+                                    <span class="run-composer-hint">la run resta ferma in attesa della risposta</span>
+                                    <button type="button" class="primary-btn">Invia</button>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Dopo la risposta · esito restituito dal provider</p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-4</span>
+        I bottoni si disattivano, l'opzione scelta resta evidenziata e la carta espone la
+        frase esatta del provider. La run riprende: i nuovi eventi (<code>#10</code>,
+        <code>#11</code>) arrivano in coda con i loro id.
+    </p>
+
+    <div class="mk-modal-stage">
+        <section class="run-panel run-live" style="max-width:820px;margin:0 auto" aria-label="Run remota dopo la risposta">
+            <div class="run-head">
+                <span class="run-badge">attiva</span>
+                <code class="run-id">run_01J9F4K2QX7B</code>
+                <span class="run-head-spacer"></span>
+                <span class="run-link listening"><span class="run-link-mark" aria-hidden="true"></span> in ascolto</span>
+            </div>
+
+            <ol class="run-timeline">
+                <li class="run-event ev-assistant">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#9</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head">
+                            <span class="run-event-kind">agente</span>
+                            <span class="run-event-time">09:41:16</span>
+                        </div>
+                        <p class="run-event-text">Ho bisogno del permesso di scrittura sugli asset del viewer.</p>
+                    </div>
+                </li>
+                <li class="run-event ev-tool-start">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#10</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head">
+                            <span class="run-event-kind">strumento · avvio</span>
+                            <span class="run-event-time">09:41:32</span>
+                        </div>
+                        <p class="run-event-text"><code class="run-event-tool">file_write</code></p>
+                        <p class="run-event-detail">cli/internal/web/assets/app.js</p>
+                    </div>
+                </li>
+                <li class="run-event ev-tool-end">
+                    <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#11</div>
+                    <div class="run-event-body">
+                        <div class="run-event-head">
+                            <span class="run-event-kind">strumento · esito</span>
+                            <span class="run-event-time">09:41:34</span>
+                        </div>
+                        <p class="run-event-text"><code class="run-event-tool">file_write</code> completato</p>
+                        <p class="run-event-detail">214 righe aggiunte · 6 rimosse</p>
+                    </div>
+                </li>
+            </ol>
+
+            <div class="run-approval is-answered" role="group" aria-label="Approvazione risolta">
+                <div class="run-approval-head">
+                    <span class="run-approval-eyebrow">approvazione risolta</span>
+                    <code class="run-approval-tool">file_write</code>
+                    <span class="run-event-time">09:41:31</span>
+                </div>
+                <p class="run-approval-title">Scrivere il pannello della run negli asset del viewer?</p>
+                <div class="run-approval-options">
+                    <button type="button" class="approval-btn allow is-chosen" disabled>✓ Consenti una volta</button>
+                    <button type="button" class="approval-btn" disabled>Consenti sempre</button>
+                    <button type="button" class="approval-btn" disabled>Rifiuta una volta</button>
+                    <button type="button" class="approval-btn" disabled>Rifiuta sempre</button>
+                </div>
+                <div class="run-approval-outcome">
+                    <span>esito del provider: permesso concesso per questa sola chiamata</span>
+                    <span class="run-composer-spacer"></span>
+                    <span>09:41:31 · run ripresa</span>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Variante · risposta di rifiuto</p>
+    <div class="mk-modal-stage">
+        <div class="run-approval is-answered" style="max-width:820px;margin:0 auto;border-left-color:var(--priority-high);border-color:color-mix(in srgb, var(--priority-high) 30%, var(--border));background:color-mix(in srgb, var(--priority-high) 6%, var(--surface))">
+            <div class="run-approval-head">
+                <span class="run-approval-eyebrow" style="color:var(--priority-high)">approvazione risolta</span>
+                <code class="run-approval-tool">file_write</code>
+                <span class="run-event-time">09:41:31</span>
+            </div>
+            <p class="run-approval-title">Scrivere il pannello della run negli asset del viewer?</p>
+            <div class="run-approval-options">
+                <button type="button" class="approval-btn" disabled>Consenti una volta</button>
+                <button type="button" class="approval-btn" disabled>Consenti sempre</button>
+                <button type="button" class="approval-btn deny is-chosen" disabled style="border-color:var(--priority-high);background:color-mix(in srgb, var(--priority-high) 14%, transparent);color:var(--priority-high)">✕ Rifiuta una volta</button>
+                <button type="button" class="approval-btn" disabled>Rifiuta sempre</button>
+            </div>
+            <div class="run-approval-outcome denied">
+                <span>esito del provider: permesso negato, l'agente proseguirà senza scrivere</span>
+                <span class="run-composer-spacer"></span>
+                <span>09:41:31 · run ripresa</span>
+            </div>
+        </div>
+    </div>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-030</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
