@@ -51,6 +51,28 @@
 	const newSpecSubmit = document.getElementById("new-spec-submit");
 	const newSpecCancel = document.getElementById("new-spec-cancel");
 	const newSpecNoEpics = document.getElementById("new-spec-no-epics");
+	const newWorkspaceBtn = document.getElementById("new-workspace-btn");
+	const newWorkspaceModal = document.getElementById("new-workspace-modal");
+	const newWorkspaceModalClose = document.getElementById(
+		"new-workspace-modal-close",
+	);
+	const newWorkspaceForm = document.getElementById("new-workspace-form");
+	const newWorkspaceStatus = document.getElementById("new-workspace-status");
+	const newWorkspaceSubmit = document.getElementById("new-workspace-submit");
+	const newWorkspaceCancel = document.getElementById("new-workspace-cancel");
+	const newWorkspaceTools = document.getElementById("new-workspace-tools");
+	const newWorkspaceTemplate = document.getElementById(
+		"new-workspace-template",
+	);
+	const newWorkspaceUnavailable = document.getElementById(
+		"new-workspace-unavailable",
+	);
+	const newWorkspaceUnavailableText = document.getElementById(
+		"new-workspace-unavailable-text",
+	);
+	const newWorkspaceWorktreeEnabled = document.getElementById(
+		"new-workspace-worktree-enabled",
+	);
 	const configBtn = document.getElementById("config-btn");
 	const configModal = document.getElementById("config-modal");
 	const configModalClose = document.getElementById("config-modal-close");
@@ -184,6 +206,7 @@
 	// the user from firing twice; the server, not this flag, is what guarantees
 	// that a repeated confirmation never creates a second spec.
 	let newSpecBusy = false;
+	let newWorkspaceBusy = false;
 	let currentConfigSnapshot = null; // last loaded effective config
 	let currentConfigRaw = ""; // last loaded/saved config YAML
 	let currentConfigExists = false; // whether config.yaml existed on open
@@ -332,6 +355,19 @@
 	});
 	newSpecForm.addEventListener("submit", onCreateSpec);
 
+	newWorkspaceBtn.addEventListener("click", openNewWorkspace);
+	newWorkspaceModalClose.addEventListener("click", closeNewWorkspace);
+	newWorkspaceCancel.addEventListener("click", closeNewWorkspace);
+	newWorkspaceModal.addEventListener("click", (e) => {
+		if (e.target === newWorkspaceModal) closeNewWorkspace();
+	});
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && !newWorkspaceModal.classList.contains("hidden"))
+			closeNewWorkspace();
+	});
+	newWorkspaceWorktreeEnabled.addEventListener("change", syncWorktreeFields);
+	newWorkspaceForm.addEventListener("submit", onCreateWorkspace);
+
 	configBtn.addEventListener("click", openConfig);
 	configModalClose.addEventListener("click", closeConfig);
 	configCancelBtn.addEventListener("click", closeConfig);
@@ -388,6 +424,7 @@
 			if (!prdModal.classList.contains("hidden")) return;
 			if (!configModal.classList.contains("hidden")) return;
 			if (!newSpecModal.classList.contains("hidden")) return;
+			if (!newWorkspaceModal.classList.contains("hidden")) return;
 			loadBoard();
 		}, 150);
 	}
@@ -2877,13 +2914,14 @@
 
 	// The server owns validation: every message is rendered where it belongs,
 	// as text, and a finding without a field falls back to the global status.
-	function showNewSpecErrors(fields) {
+	// Shared by every form that submits to a route answering with `fields[]`.
+	function renderFieldErrors(form, statusEl, fields) {
 		const orphans = [];
 		// The slots are indexed once instead of being looked up with a selector
 		// built from a server value: an unexpected field name becomes an orphan
 		// message, never a selector syntax error.
 		const slots = new Map();
-		newSpecForm.querySelectorAll(".field-error").forEach((el) => {
+		form.querySelectorAll(".field-error").forEach((el) => {
 			slots.set(el.dataset.errorFor, el);
 		});
 		fields.forEach((f) => {
@@ -2901,11 +2939,15 @@
 		const parts = [];
 		if (counted > 0)
 			parts.push(
-				`${counted} ${counted === 1 ? "field" : "fields"} to fix · nothing was written to the backlog`,
+				`${counted} ${counted === 1 ? "field" : "fields"} to fix · nothing was written`,
 			);
 		parts.push(...orphans);
-		newSpecStatus.textContent = parts.join(" · ");
-		newSpecStatus.className = "status-msg err";
+		statusEl.textContent = parts.join(" · ");
+		statusEl.className = "status-msg err";
+	}
+
+	function showNewSpecErrors(fields) {
+		renderFieldErrors(newSpecForm, newSpecStatus, fields);
 	}
 
 	async function onCreateSpec(e) {
@@ -2954,6 +2996,168 @@
 		} finally {
 			newSpecBusy = false;
 			newSpecSubmit.disabled = false;
+		}
+	}
+
+	// ---- New workspace ------------------------------------------------------
+
+	// The choices are fetched on every opening rather than cached at load time:
+	// this form must offer what the server accepts now, and there is no list of
+	// connectors, tools or defaults written down anywhere in the frontend.
+	async function openNewWorkspace() {
+		newWorkspaceForm.reset();
+		clearWorkspaceErrors();
+		newWorkspaceBusy = false;
+		newWorkspaceStatus.textContent = "";
+		newWorkspaceStatus.className = "status-msg";
+		newWorkspaceUnavailable.classList.add("hidden");
+		newWorkspaceSubmit.disabled = true;
+		newWorkspaceModal.classList.remove("hidden");
+
+		let options;
+		try {
+			options = await apiGet("/api/workspace/options");
+		} catch (err) {
+			// Without the contract there is nothing legitimate to offer, so the
+			// form says why instead of inventing a plausible list.
+			newWorkspaceUnavailableText.textContent = `The initialization options could not be read: ${err.message || err}`;
+			newWorkspaceUnavailable.classList.remove("hidden");
+			return;
+		}
+
+		const connectorSelect = newWorkspaceForm.connector;
+		connectorSelect.textContent = "";
+		(options.connectors || []).forEach((c, index) => {
+			const opt = document.createElement("option");
+			opt.value = c.id;
+			opt.textContent = c.label || c.id;
+			if (index === 0) opt.selected = true;
+			connectorSelect.appendChild(opt);
+		});
+
+		newWorkspaceTools.textContent = "";
+		(options.tools || []).forEach((tool) => {
+			const label = document.createElement("label");
+			const input = document.createElement("input");
+			input.type = "checkbox";
+			input.name = "tool";
+			input.value = tool.id;
+			const text = document.createElement("span");
+			text.textContent = tool.label || tool.id;
+			label.appendChild(input);
+			label.appendChild(text);
+			newWorkspaceTools.appendChild(label);
+		});
+
+		const paths = options.paths || {};
+		newWorkspaceForm["paths.prd"].value = paths.prd || "";
+		newWorkspaceForm["paths.wiki"].value = paths.wiki || "";
+		newWorkspaceForm["paths.mockups"].value = paths.mockups || "";
+		newWorkspaceForm["paths.test_results"].value = paths.test_results || "";
+
+		const worktree = options.worktree || {};
+		newWorkspaceWorktreeEnabled.checked = Boolean(worktree.enabled);
+		newWorkspaceForm["worktree.base"].value = worktree.base || "";
+		newWorkspaceForm["worktree.dir"].value = worktree.dir || "";
+		newWorkspaceForm["worktree.branch_prefix"].value =
+			worktree.branch_prefix || "";
+		syncWorktreeFields();
+
+		// The Archetype is reported, not chosen: there is exactly one installed
+		// process, and a choice with a single element is not a choice.
+		const tpl = options.template || {};
+		newWorkspaceTemplate.childNodes[0].nodeValue = tpl.id
+			? `${tpl.id} ${tpl.version || ""}`.trim()
+			: "—";
+
+		newWorkspaceSubmit.disabled = false;
+		newWorkspaceForm.dir.focus();
+	}
+
+	function closeNewWorkspace() {
+		// While a creation is in flight the modal cannot be dismissed: closing it
+		// would hide an operation that is still writing to disk.
+		if (newWorkspaceBusy) return;
+		newWorkspaceModal.classList.add("hidden");
+		clearWorkspaceErrors();
+		newWorkspaceSubmit.disabled = false;
+	}
+
+	function clearWorkspaceErrors() {
+		newWorkspaceForm.querySelectorAll(".field-error").forEach((el) => {
+			el.textContent = "";
+		});
+		newWorkspaceForm.querySelectorAll(".field.has-error").forEach((el) => {
+			el.classList.remove("has-error");
+		});
+	}
+
+	// The three worktree settings are only read when the workflow is on, so they
+	// are editable only then: an enabled input nobody reads invites a value that
+	// silently does nothing.
+	function syncWorktreeFields() {
+		const on = newWorkspaceWorktreeEnabled.checked;
+		["worktree.base", "worktree.dir", "worktree.branch_prefix"].forEach(
+			(name) => {
+				newWorkspaceForm[name].disabled = !on;
+			},
+		);
+	}
+
+	function selectedWorkspaceTools() {
+		return Array.from(
+			newWorkspaceTools.querySelectorAll("input[type=checkbox]"),
+		)
+			.filter((input) => input.checked)
+			.map((input) => input.value);
+	}
+
+	async function onCreateWorkspace(e) {
+		e.preventDefault();
+		if (newWorkspaceBusy) return;
+		clearWorkspaceErrors();
+		newWorkspaceBusy = true;
+		newWorkspaceSubmit.disabled = true;
+		newWorkspaceStatus.textContent = "Creating…";
+		newWorkspaceStatus.className = "status-msg";
+
+		const worktreeOn = newWorkspaceWorktreeEnabled.checked;
+		const payload = {
+			dir: newWorkspaceForm.dir.value.trim(),
+			connector: newWorkspaceForm.connector.value,
+			tools: selectedWorkspaceTools(),
+			paths: {
+				prd: newWorkspaceForm["paths.prd"].value.trim(),
+				wiki: newWorkspaceForm["paths.wiki"].value.trim(),
+				mockups: newWorkspaceForm["paths.mockups"].value.trim(),
+				test_results: newWorkspaceForm["paths.test_results"].value.trim(),
+			},
+			worktree: {
+				enabled: worktreeOn,
+				base: newWorkspaceForm["worktree.base"].value.trim(),
+				dir: newWorkspaceForm["worktree.dir"].value.trim(),
+				branch_prefix:
+					newWorkspaceForm["worktree.branch_prefix"].value.trim(),
+			},
+		};
+
+		try {
+			const res = await apiPost("/api/workspace", payload);
+			newWorkspaceBusy = false;
+			newWorkspaceStatus.textContent =
+				res.hint || `Workspace created in ${res.dir}`;
+			newWorkspaceStatus.className = "status-msg ok";
+			showToast(`Workspace created in ${res.dir}`, "ok");
+		} catch (err) {
+			if (Array.isArray(err.fields) && err.fields.length > 0) {
+				renderFieldErrors(newWorkspaceForm, newWorkspaceStatus, err.fields);
+			} else {
+				newWorkspaceStatus.textContent = `Create failed: ${err.message || err}`;
+				newWorkspaceStatus.className = "status-msg err";
+			}
+		} finally {
+			newWorkspaceBusy = false;
+			newWorkspaceSubmit.disabled = false;
 		}
 	}
 

@@ -44,7 +44,7 @@ func runUninstall(s streams, toolFlags []string) error {
 
 	fmt.Fprintln(s.out, "Removing...")
 	for _, t := range tools {
-		target := t.ProjectPath
+		target := t.SkillsDir
 		removed := 0
 		for _, sk := range allSkills {
 			dst := filepath.Join(target, sk)

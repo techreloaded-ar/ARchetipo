@@ -13,32 +13,22 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
-type toolDef struct {
-	Key         string
-	Name        string
-	ProjectPath string // relative to cwd, e.g. ".claude/skills"
-}
+// toolDef and allTools are the workspace tool registry, aliased here so
+// `doctor` and `uninstall` keep reading the names they always have. The
+// registry itself lives in internal/workspace: it is the single place that
+// says what an initialization accepts, CLI and viewer alike.
+type toolDef = workspace.Tool
 
-var allTools = []toolDef{
-	{Key: "claude", Name: "Claude Code", ProjectPath: ".claude/skills"},
-	{Key: "codex", Name: "Codex", ProjectPath: ".agents/skills"},
-	{Key: "cursor", Name: "Cursor", ProjectPath: ".cursor/skills"},
-	{Key: "gemini", Name: "Gemini CLI", ProjectPath: ".gemini/skills"},
-	{Key: "opencode", Name: "OpenCode", ProjectPath: ".opencode/skills"},
-	{Key: "copilot", Name: "GitHub Copilot", ProjectPath: ".github/skills"},
-	{Key: "pi", Name: "Pi", ProjectPath: ".pi/skills"},
-}
+var allTools = workspace.Tools()
 
 func validToolKeysHint() string {
-	keys := make([]string, len(allTools))
-	for i, t := range allTools {
-		keys[i] = t.Key
-	}
-	return strings.Join(keys, ", ")
+	return workspace.ToolKeysHint()
 }
 
 // allSkills is the skill set of the default process Template. The Template
@@ -115,7 +105,7 @@ func runInitProject(s streams, toolFlags []string, connectorFlag, templateFlag s
 
 	var conn string
 	if connectorFlag != "" {
-		if connectorFlag != "file" && connectorFlag != "github" && connectorFlag != "jira" {
+		if !workspace.IsConnector(connectorFlag) {
 			return iox.NewInvalidInput("--connector must be 'file', 'github' or 'jira'", "", nil)
 		}
 		conn = connectorFlag
@@ -128,7 +118,7 @@ func runInitProject(s streams, toolFlags []string, connectorFlag, templateFlag s
 
 	fmt.Fprintln(s.out, "Installing...")
 	for _, t := range tools {
-		target := t.ProjectPath
+		target := t.SkillsDir
 		if err := os.MkdirAll(target, 0o755); err != nil {
 			return iox.NewInternal("cannot create "+target, err)
 		}
@@ -141,7 +131,7 @@ func runInitProject(s streams, toolFlags []string, connectorFlag, templateFlag s
 			if err := os.RemoveAll(dst); err != nil {
 				return iox.NewInternal("cannot clean "+dst, err)
 			}
-			if err := copyTree(src, dst); err != nil {
+			if err := workspace.CopyTree(src, dst); err != nil {
 				return iox.NewInternal("copy "+sk, err)
 			}
 		}
@@ -165,71 +155,23 @@ func runInitProject(s streams, toolFlags []string, connectorFlag, templateFlag s
 	return nil
 }
 
-// discoverDataDir returns the directory containing skills/ and runtime/.
-// Resolution order:
-//  1. ARCHETIPO_DATA_DIR env var (set by the npm shim)
-//  2. directory of the running binary, looking for skills/ alongside or in parent
-//  3. the repo layout when running from source (skills/ + .archetipo/ at repo root)
+// discoverDataDir locates the directory containing skills/ and runtime/. The
+// resolution lives in internal/workspace, which the viewer uses as well.
 func discoverDataDir() (string, error) {
-	if env := strings.TrimSpace(os.Getenv("ARCHETIPO_DATA_DIR")); env != "" {
-		if _, err := os.Stat(filepath.Join(env, "skills")); err == nil {
-			return env, nil
-		}
-	}
-	exe, err := os.Executable()
-	if err == nil {
-		resolved, _ := filepath.EvalSymlinks(exe)
-		if resolved != "" {
-			exe = resolved
-		}
-		for _, base := range []string{filepath.Dir(exe), filepath.Dir(filepath.Dir(exe))} {
-			if _, err := os.Stat(filepath.Join(base, "skills")); err == nil {
-				return base, nil
-			}
-		}
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		if _, statErr := os.Stat(filepath.Join(cwd, "skills")); statErr == nil {
-			return repoFallbackDataDir(cwd), nil
-		}
-	}
-	return "", iox.NewPrecondition(
-		"could not locate ARchetipo data directory",
-		"set ARCHETIPO_DATA_DIR or reinstall via `npm i -g @techreloaded/archetipo`",
-		nil,
-	)
-}
-
-// repoFallbackDataDir maps the repo layout (skills/ + .archetipo/) onto the
-// expected runtime layout by treating .archetipo/ as runtime/.
-func repoFallbackDataDir(repoRoot string) string {
-	// The init code uses dataDir/skills and dataDir/runtime, while the repo
-	// has skills/ and .archetipo/. We return the repo root and let
-	// installRuntimeAssets look in either runtime/ or .archetipo/.
-	return repoRoot
+	return workspace.DiscoverDataDir()
 }
 
 func resolveToolFlags(flags []string) ([]toolDef, error) {
 	if len(flags) == 0 {
 		return nil, nil
 	}
-	keysByKey := map[string]toolDef{}
-	for _, t := range allTools {
-		keysByKey[t.Key] = t
-	}
-	seen := map[string]struct{}{}
-	out := []toolDef{}
-	for _, raw := range flags {
-		key := strings.ToLower(strings.TrimSpace(raw))
-		t, ok := keysByKey[key]
-		if !ok {
-			return nil, iox.NewInvalidInput("unknown tool: "+raw, "valid: "+validToolKeysHint(), nil)
+	out, err := workspace.ResolveTools(flags)
+	if err != nil {
+		var unknown *workspace.UnknownToolError
+		if errors.As(err, &unknown) {
+			return nil, iox.NewInvalidInput("unknown tool: "+unknown.Key, "valid: "+validToolKeysHint(), nil)
 		}
-		if _, dup := seen[t.Key]; dup {
-			continue
-		}
-		seen[t.Key] = struct{}{}
-		out = append(out, t)
+		return nil, err
 	}
 	return out, nil
 }
@@ -352,7 +294,7 @@ func installRuntimeAssets(s streams, runtimeDir, connector string, tpl template.
 	sharedSrc := filepath.Join(root, "shared-runtime.md")
 	sharedDst := ".archetipo/shared-runtime.md"
 	if _, err := os.Stat(sharedSrc); err == nil {
-		if err := copyFile(sharedSrc, sharedDst); err != nil {
+		if err := workspace.CopyFile(sharedSrc, sharedDst); err != nil {
 			return iox.NewInternal("copy shared-runtime.md", err)
 		}
 		fmt.Fprintln(s.out, "  ✓ .archetipo/shared-runtime.md")
@@ -365,7 +307,7 @@ func installRuntimeAssets(s streams, runtimeDir, connector string, tpl template.
 // path of the file that was written.
 func backupExistingConfig(configPath string) (string, error) {
 	backupPath := uniqueBackupPath(configPath, time.Now())
-	if err := copyFile(configPath, backupPath); err != nil {
+	if err := workspace.CopyFile(configPath, backupPath); err != nil {
 		return "", iox.NewInternal("cannot back up "+configPath, err)
 	}
 	return backupPath, nil
@@ -394,173 +336,18 @@ func writeConfig(src, dst, connector string, tpl template.Template, withWiki boo
 	if err != nil {
 		return iox.NewInternal("read config template", err)
 	}
-	out := setConnectorField(string(body), connector)
-	if withWiki {
-		out = setWikiEnabledField(out, true)
-	}
-	out = setTemplateFields(out, tpl.ID, tpl.Version)
+	defaults := config.Default()
+	out := workspace.RenderConfig(string(body), workspace.RenderInput{
+		Connector: connector,
+		Paths:     defaults.Paths,
+		Worktree:  defaults.Worktree,
+		Wiki:      withWiki,
+		Template:  tpl,
+	})
 	if err := os.WriteFile(dst, []byte(out), 0o644); err != nil {
 		return iox.NewInternal("write "+dst, err)
 	}
 	return nil
-}
-
-// setConnectorField rewrites the top-level `connector:` line of the YAML
-// template. It only touches lines that look like `connector:` at column 0 to
-// avoid clobbering nested keys.
-func setConnectorField(body, connector string) string {
-	lines := strings.Split(body, "\n")
-	for i, line := range lines {
-		trim := strings.TrimRight(line, "\r")
-		if strings.HasPrefix(trim, "connector:") {
-			lines[i] = "connector: " + connector
-			return strings.Join(lines, "\n")
-		}
-	}
-	// no existing field -> prepend
-	return "connector: " + connector + "\n" + body
-}
-
-// setWikiEnabledField rewrites `enabled:` inside the top-level `wiki:` mapping
-// of the YAML template, preserving the surrounding comments. The key is written
-// explicitly rather than left to the default because an omitted `wiki.enabled`
-// resolves to false: only a literal `true` in the file turns the gate on.
-// When the template carries no `wiki:` section, the section is appended.
-func setWikiEnabledField(body string, enabled bool) string {
-	value := "false"
-	if enabled {
-		value = "true"
-	}
-	lines := strings.Split(body, "\n")
-	for i, line := range lines {
-		if strings.TrimRight(line, "\r") != "wiki:" {
-			continue
-		}
-		for j := i + 1; j < len(lines); j++ {
-			trimmed := strings.TrimSpace(strings.TrimRight(lines[j], "\r"))
-			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-				continue
-			}
-			// A non-indented line ends the mapping: the key is absent.
-			if !strings.HasPrefix(lines[j], " ") && !strings.HasPrefix(lines[j], "\t") {
-				break
-			}
-			if strings.HasPrefix(trimmed, "enabled:") {
-				lines[j] = "  enabled: " + value
-				return strings.Join(lines, "\n")
-			}
-		}
-		// `wiki:` exists without `enabled:`: insert it as the first child.
-		rest := append([]string{"  enabled: " + value}, lines[i+1:]...)
-		return strings.Join(append(lines[:i+1], rest...), "\n")
-	}
-	separator := "\n"
-	if strings.HasSuffix(body, "\n") {
-		separator = ""
-	}
-	return body + separator + "\nwiki:\n  enabled: " + value + "\n"
-}
-
-// setTemplateFields rewrites `template.id` and `template.version` in the YAML
-// template, appending the whole block when the key is absent (an older packaged
-// asset). Deliberately textual, like setConnectorField: a yaml.Node round-trip
-// would reflow indentation and blank lines of the generated config, which is an
-// observable change to what a plain initialization produces today.
-func setTemplateFields(body, id, version string) string {
-	lines := strings.Split(body, "\n")
-	start := -1
-	for i, line := range lines {
-		if strings.TrimRight(line, "\r") == "template:" {
-			start = i
-			break
-		}
-	}
-	if start < 0 {
-		return strings.TrimRight(body, "\n") + "\n\ntemplate:\n  id: " + id + "\n  version: \"" + version + "\"\n"
-	}
-
-	end := len(lines)
-	for i := start + 1; i < len(lines); i++ {
-		trimmed := strings.TrimRight(lines[i], "\r")
-		if strings.TrimSpace(trimmed) == "" {
-			continue
-		}
-		if trimmed[0] != ' ' && trimmed[0] != '\t' {
-			end = i
-			break
-		}
-	}
-
-	sawID, sawVersion, lastChild := false, false, start
-	for i := start + 1; i < end; i++ {
-		indent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
-		switch content := strings.TrimSpace(lines[i]); {
-		case strings.HasPrefix(content, "id:"):
-			lines[i] = indent + "id: " + id
-			sawID, lastChild = true, i
-		case strings.HasPrefix(content, "version:"):
-			lines[i] = indent + "version: \"" + version + "\""
-			sawVersion, lastChild = true, i
-		case content != "":
-			lastChild = i
-		}
-	}
-
-	var missing []string
-	if !sawID {
-		missing = append(missing, "  id: "+id)
-	}
-	if !sawVersion {
-		missing = append(missing, "  version: \""+version+"\"")
-	}
-	if len(missing) > 0 {
-		lines = append(lines[:lastChild+1], append(missing, lines[lastChild+1:]...)...)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func copyTree(src, dst string) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return copyFile(src, dst)
-	}
-	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	info, err := in.Stat()
-	if err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 func readLine(r io.Reader) (string, error) {

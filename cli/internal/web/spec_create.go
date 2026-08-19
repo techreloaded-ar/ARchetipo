@@ -250,14 +250,12 @@ func trimCodes(codes []string) []string {
 	return out
 }
 
-// writeCreateSpecFieldErrors answers 400 keeping the error/code/hint keys the
-// rest of the viewer already understands, and adds the per-field detail under
-// "fields" so an older client still shows the message.
+// writeCreateSpecFieldErrors answers 400 with the per-field detail of a refused
+// spec creation. The rendering itself is shared with the other form routes.
 func writeCreateSpecFieldErrors(w http.ResponseWriter, fields []fieldError) {
-	writeJSON(w, http.StatusBadRequest, map[string]any{
-		"error":  "the spec could not be created: some fields are invalid",
-		"code":   iox.CodeInvalidInput,
-		"hint":   "fix the highlighted fields and confirm again",
-		"fields": fields,
-	})
+	writeFieldErrors(w,
+		"the spec could not be created: some fields are invalid",
+		"fix the highlighted fields and confirm again",
+		fields,
+	)
 }

@@ -289,12 +289,12 @@ func checkInstalledSkills() doctorCheck {
 	var found []string
 	var stale []string
 	for _, t := range allTools {
-		if _, err := os.Stat(t.ProjectPath); err != nil {
+		if _, err := os.Stat(t.SkillsDir); err != nil {
 			continue
 		}
 		installed := 0
 		for _, sk := range allSkills {
-			if _, err := os.Stat(filepath.Join(t.ProjectPath, sk)); err == nil {
+			if _, err := os.Stat(filepath.Join(t.SkillsDir, sk)); err == nil {
 				installed++
 			}
 		}
