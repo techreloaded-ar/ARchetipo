@@ -72,3 +72,35 @@ func buildArgs(cfg settings) []string {
 	}
 	return args
 }
+
+// buildInceptionPrompt renders the single instruction that opens an inception
+// conversation.
+//
+// It is pure and deterministic for the same reasons buildPrompt is, and it
+// differs from it in exactly the two ways the work differs. It asks for one
+// question at a time, because the person answering reads them in a chat and can
+// only answer the last one; and it asks for the receipt only once the PRD has
+// been persisted through `archetipo prd write`, because the receipt is the only
+// thing that ends the conversation and a receipt emitted early would end it on
+// a document that does not exist.
+//
+// The path is asked for, not dictated: where the PRD lives is a fact of the
+// workspace configuration, which this package deliberately cannot read. The
+// value is informative anyway — the confirmation of the effect happens one
+// layer up, against the connector.
+func buildInceptionPrompt(_ execution.Request) string {
+	return strings.Join([]string{
+		"Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed.",
+		"Run the product inception for this workspace by invoking the ARchetipo inception skill:",
+		"",
+		"/archetipo-inception",
+		"",
+		"You are talking to a person through a chat, one message at a time: ask a single question per message and wait for the answer before asking the next one. Never bundle several questions into one message.",
+		"Persist the PRD with `archetipo prd write`, exactly as the skill prescribes. Do not paste the PRD into your final message.",
+		"Close your run with a single JSON receipt line and nothing after it:",
+		"",
+		`{"artifact":"prd","status":"` + execution.WrittenStatus + `","path":"<path>"}`,
+		"",
+		"<path> is the configured PRD path you actually wrote, as reported by `archetipo config show`. Emit the receipt only after the PRD is persisted, and never before: it is what ends the conversation.",
+	}, "\n")
+}

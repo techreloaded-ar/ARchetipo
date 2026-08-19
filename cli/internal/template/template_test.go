@@ -47,6 +47,17 @@ var processActions = []Action{
 	},
 }
 
+// processWorkspaceActions is written out in full for the same reason as
+// processActions: these are the steps the process offers on the workspace as a
+// whole, so adding, removing or renaming one must break this test explicitly.
+var processWorkspaceActions = []WorkspaceAction{
+	{
+		ID:    "inception",
+		Label: "Avvia inception",
+		Skill: "archetipo-inception",
+	},
+}
+
 // actionIDs collapses a result to the identifiers a caller keys on, so a table
 // can name the expected content instead of asserting the absence of an error.
 func actionIDs(actions []Action) []string {
@@ -215,5 +226,42 @@ func TestDefaultActionsAreNotAliased(t *testing.T) {
 	}
 	if got := second.Actions[0].Statuses[0]; got != processActions[0].Statuses[0] {
 		t.Fatalf("registry action statuses were mutated through the returned slice: status = %q", got)
+	}
+}
+
+func TestDefaultTemplateDeclaresItsWorkspaceActions(t *testing.T) {
+	got := Default().WorkspaceActions
+	if !reflect.DeepEqual(got, processWorkspaceActions) {
+		t.Fatalf("workspace actions = %+v, want %+v", got, processWorkspaceActions)
+	}
+	for _, action := range got {
+		if action.ID == "" {
+			t.Fatalf("workspace action %+v has an empty id", action)
+		}
+		if action.Label == "" {
+			t.Fatalf("workspace action %q has an empty label", action.ID)
+		}
+		if action.Skill == "" {
+			t.Fatalf("workspace action %q has an empty skill", action.ID)
+		}
+	}
+}
+
+// TestDefaultWorkspaceActionsAreNotAliased resolves twice from the SAME
+// registry, for the same reason as TestDefaultActionsAreNotAliased: two calls
+// to Default() build two registries and could never alias each other.
+func TestDefaultWorkspaceActionsAreNotAliased(t *testing.T) {
+	registry := Builtin()
+	first, err := registry.Resolve(DefaultID)
+	if err != nil {
+		t.Fatalf("resolving the default template failed: %v", err)
+	}
+	first.WorkspaceActions[0].ID = "tampered"
+	second, err := registry.Resolve(DefaultID)
+	if err != nil {
+		t.Fatalf("resolving the default template again failed: %v", err)
+	}
+	if got := second.WorkspaceActions[0].ID; got != processWorkspaceActions[0].ID {
+		t.Fatalf("registry workspace actions were mutated through the returned slice: id = %q", got)
 	}
 }

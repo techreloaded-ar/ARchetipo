@@ -60,12 +60,37 @@ type controlOutcome struct {
 	err     string
 }
 
+// TurnOutcome is what one finished turn says about itself, published the
+// instant the process declares the turn over. It carries the two facts a caller
+// that has to decide whether to keep the conversation open needs: whether the
+// process finished the turn without error, and the text it finished on — which
+// is where a receipt is expected, and otherwise the question the agent is
+// waiting on an answer for.
+type TurnOutcome struct {
+	Completed bool
+	Final     string
+}
+
+// turnBuffer bounds the outcomes kept for a caller that is not reading them.
+// A conversation has far fewer turns than this before it ends one way or
+// another, and publishing is non-blocking on purpose: the protocol reader must
+// never wait on whoever is following the run.
+const turnBuffer = 64
+
 // streamSession drives one live `claude` process over stream-json and projects
 // its frames into a local session. It is the only place in this package that
 // knows the protocol.
 type streamSession struct {
 	process localrun.Process
 	session *localrun.Session
+	// conversational says whether the end of a turn ends the session. It is an
+	// explicit mode rather than the new behaviour of every session because the
+	// two semantics are genuinely different: a single-turn run that ends its
+	// turn without a receipt is a failure to be reported at once, while the same
+	// moment in a conversation is the agent asking a question and waiting.
+	// Making every session multi-turn would silently turn the first diagnostic
+	// into a wait for the timeout.
+	conversational bool
 
 	mu                sync.Mutex
 	seq               int
@@ -80,19 +105,26 @@ type streamSession struct {
 	// work instead of with the turn.
 	tools map[string]string
 
+	// turnDone is re-armable: it is closed when the current turn ends and
+	// replaced by a fresh one when the next turn opens. It lives under mu, like
+	// everything else a turn changes, so the close and the replacement cannot
+	// interleave.
+	turnDone   chan struct{}
+	turnClosed bool
+	turns      chan TurnOutcome
+
 	readyOnce sync.Once
 	ready     chan struct{}
-	turnOnce  sync.Once
-	turnDone  chan struct{}
 	gone      chan struct{}
 }
 
 var _ localrun.Dialogue = (*streamSession)(nil)
 
-func newStreamSession(process localrun.Process, session *localrun.Session) *streamSession {
+func newStreamSession(process localrun.Process, session *localrun.Session, conversational bool) *streamSession {
 	return &streamSession{
-		process: process,
-		session: session,
+		process:        process,
+		session:        session,
+		conversational: conversational,
 		// The first turn is seq 1, not 0. Codex numbers its turns from one, and
 		// the seq of an event is served to the caller beside its kind: a run
 		// that started at zero would say which provider produced it just as
@@ -102,6 +134,7 @@ func newStreamSession(process localrun.Process, session *localrun.Session) *stre
 		tools:    make(map[string]string),
 		ready:    make(chan struct{}),
 		turnDone: make(chan struct{}),
+		turns:    make(chan TurnOutcome, turnBuffer),
 		gone:     make(chan struct{}),
 	}
 }
@@ -206,20 +239,62 @@ func (s *streamSession) start(ctx context.Context, prompt string) error {
 // A turn that is over is a decision the caller must be able to branch on; a
 // write that failed is a fault, because nothing was decided and a retry can
 // still change the outcome.
+//
+// What "over" means is the one thing the mode changes, and it is explicit for
+// the reason given on the field: in a single-turn run the end of the turn is
+// the end of the work, while in a conversation it is the agent's question, and
+// the answer to it opens the next turn.
 func (s *streamSession) Send(ctx context.Context, text string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	select {
-	case <-s.turnDone:
-		return &execution.RunCommandError{
-			Reason: execution.RunRefusedNotActive,
-			RunID:  s.session.RunID(),
-			Err:    fmt.Errorf("the claude turn is already over"),
+	if s.conversational {
+		if s.sessionOver() {
+			return &execution.RunCommandError{
+				Reason: execution.RunRefusedNotActive,
+				RunID:  s.session.RunID(),
+				Err:    fmt.Errorf("the claude session is already over"),
+			}
 		}
-	default:
+		// The turn is re-armed before the frame is written, never after: a
+		// process that answers immediately would otherwise end a turn that the
+		// re-arming is about to reopen, and the caller would wait for a turn that
+		// already finished.
+		//
+		// A message landing while the previous turn is still being closed out —
+		// after its result was recorded, before its wait was closed — finds the
+		// turn already claimed by claimTurnEnd, and so re-arms here like any
+		// other. That is what keeps the close of the old turn from landing on the
+		// new one, which a later Interrupt would otherwise read as "between two
+		// turns" and answer by closing the process's input on work in progress.
+		s.armTurn()
+	} else {
+		select {
+		case <-s.TurnDone():
+			return &execution.RunCommandError{
+				Reason: execution.RunRefusedNotActive,
+				RunID:  s.session.RunID(),
+				Err:    fmt.Errorf("the claude turn is already over"),
+			}
+		default:
+		}
 	}
 	if err := s.writeUserText(text); err != nil {
+		// The guard above and the write are not one atomic act, and they cannot
+		// be: the process can leave in between. When it has, the write failed for
+		// a reason the caller must be able to branch on — the run is no longer
+		// there — and not as the fault a failed write otherwise is. Re-reading
+		// `gone` here is what keeps that answer stable whichever side of the
+		// window the message arrived on. Only in a conversation: a single-turn run
+		// judges liveness by its turn and not by the process, and that judgement
+		// is left exactly as it was.
+		if s.conversational && s.sessionOver() {
+			return &execution.RunCommandError{
+				Reason: execution.RunRefusedNotActive,
+				RunID:  s.session.RunID(),
+				Err:    fmt.Errorf("the claude session is already over"),
+			}
+		}
 		return fmt.Errorf("sending the message to the claude session: %w", err)
 	}
 	return nil
@@ -235,12 +310,24 @@ func (s *streamSession) Interrupt(ctx context.Context) error {
 	// differently in the instant between the end of the turn and the end of the
 	// session.
 	select {
-	case <-s.turnDone:
-		return &execution.RunCommandError{
-			Reason: execution.RunRefusedNotActive,
-			RunID:  s.session.RunID(),
-			Err:    fmt.Errorf("the claude turn is already over"),
+	case <-s.TurnDone():
+		if !s.conversational {
+			return &execution.RunCommandError{
+				Reason: execution.RunRefusedNotActive,
+				RunID:  s.session.RunID(),
+				Err:    fmt.Errorf("the claude turn is already over"),
+			}
 		}
+		// Between two turns there is no turn to interrupt: what is being
+		// cancelled is the conversation itself. Closing the process's standard
+		// input ends it at its source, which is the only thing this command can
+		// honestly do. It does not make the run terminal: the end of the run
+		// stays observed, through the end of the process's output, and is never
+		// deduced from the fact that this command succeeded.
+		if err := s.process.Close(); err != nil {
+			return fmt.Errorf("closing the input of the claude session: %w", err)
+		}
+		return nil
 	default:
 	}
 	s.mu.Lock()
@@ -296,10 +383,70 @@ func refusalText(outcome controlOutcome) string {
 	return "no reason given"
 }
 
-// endTurn closes the wait for the turn exactly once.
-func (s *streamSession) endTurn() {
-	s.turnOnce.Do(func() { close(s.turnDone) })
+// claimTurnEnd takes ownership of the end of the current turn and hands back the
+// wait that has to be closed for it, or nil when the turn was already over.
+//
+// Claiming and closing are two acts because the end of a turn is not one
+// instant: between the result frame and the close there is an outcome to publish
+// and an event to append, and a message sent in that gap opens the next turn.
+// Marking the turn over here, under the same lock that guards the wait, is what
+// keeps the close bound to the turn that produced it: whoever opens the next
+// turn in the meantime installs its own wait, and the channel returned here
+// stays the one belonging to the turn that ended.
+func (s *streamSession) claimTurnEnd() chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.turnClosed {
+		return nil
+	}
+	s.turnClosed = true
+	return s.turnDone
 }
+
+// endTurn closes the wait for the current turn exactly once. A turn that is
+// already over stays over until armTurn opens the next one.
+func (s *streamSession) endTurn() {
+	if done := s.claimTurnEnd(); done != nil {
+		close(done)
+	}
+}
+
+// armTurn opens a new turn by installing a fresh wait, so that whoever asks for
+// TurnDone from now on waits for the turn that is starting and not for the one
+// that ended.
+func (s *streamSession) armTurn() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.turnClosed {
+		return
+	}
+	s.turnDone = make(chan struct{})
+	s.turnClosed = false
+}
+
+// sessionOver reports whether the process's output has already ended.
+func (s *streamSession) sessionOver() bool {
+	select {
+	case <-s.gone:
+		return true
+	default:
+		return false
+	}
+}
+
+// publishTurn records how a turn ended without ever blocking the reader of the
+// protocol. A caller that is not listening cannot slow down the process, and an
+// outcome dropped because nobody is following the turns is an outcome nobody
+// was going to act on.
+func (s *streamSession) publishTurn(outcome TurnOutcome) {
+	select {
+	case s.turns <- outcome:
+	default:
+	}
+}
+
+// Turns yields the outcome of every turn the process itself declared finished.
+func (s *streamSession) Turns() <-chan TurnOutcome { return s.turns }
 
 // Completed reports whether the process itself said the turn was over and went
 // well, as opposed to the turn ending because the process disappeared or
@@ -310,8 +457,14 @@ func (s *streamSession) Completed() bool {
 	return s.completed
 }
 
-// TurnDone is closed when the turn has ended, whichever way it ended.
-func (s *streamSession) TurnDone() <-chan struct{} { return s.turnDone }
+// TurnDone is closed when the current turn has ended, whichever way it ended.
+// In a conversation the next turn brings a new channel, so the value must be
+// read again after every answer rather than kept.
+func (s *streamSession) TurnDone() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turnDone
+}
 
 // Gone is closed when the process's output has ended.
 func (s *streamSession) Gone() <-chan struct{} { return s.gone }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -683,4 +685,194 @@ func TestStartContinuationClosesTheRecordOnACancelledContext(t *testing.T) {
 		t.Fatalf("the interrupted record stayed %s on disk", persisted.Status)
 	}
 	close(p.release)
+}
+
+// --- Workspace-scoped executions (US-040) -----------------------------------
+
+// The scope of an action is derived from the action itself and is total: every
+// known action answers, and an invented one is an *ActionError rather than a
+// silent default.
+func TestActionScopeIsDerivedFromTheAction(t *testing.T) {
+	for _, tc := range []struct {
+		action ActionID
+		want   Scope
+	}{
+		{ActionPlan, ScopeSpec},
+		{ActionInception, ScopeWorkspace},
+	} {
+		got, err := ActionScope(tc.action)
+		if err != nil || got != tc.want {
+			t.Fatalf("ActionScope(%q) = %q, %v; want %q", tc.action, got, err, tc.want)
+		}
+	}
+	for _, action := range []ActionID{"", "unknown", "workspace.inception"} {
+		got, err := ActionScope(action)
+		var actionErr *ActionError
+		if !errors.As(err, &actionErr) || actionErr.Action != action || got != "" {
+			t.Fatalf("ActionScope(%q) = %q, %v; want an *ActionError", action, got, err)
+		}
+	}
+}
+
+func TestRequiredCapabilityOfInception(t *testing.T) {
+	got, err := RequiredCapability(ActionInception)
+	if err != nil || got != CapabilityWorkspaceInception {
+		t.Fatalf("RequiredCapability(inception) = %q, %v; want %q", got, err, CapabilityWorkspaceInception)
+	}
+}
+
+func newInceptionProvider() *blockingProvider {
+	p := newBlockingProvider("fake")
+	p.capabilities = []Capability{CapabilityWorkspaceInception}
+	p.result = Result{Payload: json.RawMessage(`{"artifact":"prd","status":"WRITTEN"}`)}
+	return p
+}
+
+// AC-1: an execution whose object is the workspace goes through the same
+// pipeline as a spec-scoped one and lands as a record with an empty spec_code.
+func TestStartWorkspacePersistsRunningRecordWithoutSpecCode(t *testing.T) {
+	p := newInceptionProvider()
+	store := &spyStore{records: map[string]Execution{}}
+	started, continuation, err := newBlockingService(t, p, store).StartWorkspace(context.Background(), ActionInception, "fake", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continuation == nil {
+		t.Fatal("StartWorkspace returned no continuation")
+	}
+	if p.calls.Load() != 0 {
+		t.Fatalf("the provider was contacted before StartWorkspace returned: calls=%d", p.calls.Load())
+	}
+	if started.SpecCode != "" || started.Action != ActionInception || started.Capability != CapabilityWorkspaceInception {
+		t.Fatalf("started record: %#v", started)
+	}
+	if started.Status != StatusRunning || started.CompletedAt != nil || started.ProviderID != "fake" {
+		t.Fatalf("started record: %#v", started)
+	}
+	persisted, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatalf("the record was not persisted by StartWorkspace: %v", err)
+	}
+	if persisted.Status != StatusRunning || persisted.SpecCode != "" || store.creates != 1 || store.updates != 0 {
+		t.Fatalf("persisted record: %#v creates=%d updates=%d", persisted, store.creates, store.updates)
+	}
+
+	close(p.release)
+	outcome, err := continuation(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.ID != started.ID || outcome.Status != StatusSucceeded || outcome.Result == nil || outcome.CompletedAt == nil {
+		t.Fatalf("continuation outcome: %#v", outcome)
+	}
+	assertJSONSemanticEqual(t, json.RawMessage(`{"artifact":"prd","status":"WRITTEN"}`), outcome.Result.Payload)
+	if p.calls.Load() != 1 || store.updates != 1 {
+		t.Fatalf("calls=%d updates=%d", p.calls.Load(), store.updates)
+	}
+	closed, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(closed, outcome) {
+		t.Fatalf("persisted record drifted from the returned one: %#v", closed)
+	}
+}
+
+// What the provider is handed carries the workspace scope too: no spec code,
+// the inception action, and the capability it declared.
+func TestStartWorkspaceDispatchesARequestWithoutSpecCode(t *testing.T) {
+	p := &testProvider{id: "fake", capabilities: []Capability{CapabilityWorkspaceInception}, result: Result{Payload: json.RawMessage(`{"artifact":"prd","status":"WRITTEN"}`)}}
+	store := &spyStore{records: map[string]Execution{}}
+	started, continuation, err := newTestService(t, p, store).StartWorkspace(context.Background(), ActionInception, "fake", map[string]any{"model": "sonnet"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := continuation(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p.calls != 1 {
+		t.Fatalf("calls=%d", p.calls)
+	}
+	if p.request.SpecCode != "" || p.request.Action != ActionInception || p.request.Capability != CapabilityWorkspaceInception || p.request.ExecutionID != started.ID {
+		t.Fatalf("provider request: %#v", p.request)
+	}
+	if p.request.ProviderConfig["model"] != "sonnet" {
+		t.Fatalf("the provider configuration did not reach the request: %#v", p.request.ProviderConfig)
+	}
+}
+
+// A provider that does not declare workspace.inception leaves nothing behind:
+// the refusal happens before any record is written to disk.
+func TestStartWorkspaceWithoutCapabilityCreatesNoRecord(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := newBlockingProvider("fake")
+	p.capabilities = []Capability{CapabilitySpecPlan}
+	started, continuation, err := newBlockingService(t, p, store).StartWorkspace(context.Background(), ActionInception, "fake", nil, nil)
+	var capabilityErr *CapabilityError
+	if !errors.As(err, &capabilityErr) {
+		t.Fatalf("want a *CapabilityError, got %v", err)
+	}
+	if capabilityErr.ProviderID != "fake" || capabilityErr.Capability != CapabilityWorkspaceInception {
+		t.Fatalf("capability error: %#v", capabilityErr)
+	}
+	if continuation != nil || started.ID != "" {
+		t.Fatalf("a refused StartWorkspace handed back work to do: %#v", started)
+	}
+	if p.calls.Load() != 0 {
+		t.Fatalf("the provider was dispatched anyway: calls=%d", p.calls.Load())
+	}
+	entries, err := os.ReadDir(filepath.Join(root, ".archetipo", "executions"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a refused start left %d record(s) on disk", len(entries))
+	}
+}
+
+// The object of an action is not negotiable in either direction: a
+// workspace-scoped action cannot be started against a spec, and a spec-scoped
+// one cannot be started without it.
+func TestStartAndStartWorkspaceRejectTheWrongActionObject(t *testing.T) {
+	t.Run("inception through Start", func(t *testing.T) {
+		p := newInceptionProvider()
+		close(p.release)
+		store := &spyStore{records: map[string]Execution{}}
+		started, continuation, err := newBlockingService(t, p, store).Start(context.Background(), domain.Spec{Code: "US-001", Status: domain.StatusTodo}, ActionInception, "fake", nil, nil)
+		if err == nil {
+			t.Fatal("a workspace-scoped action was accepted with a spec on it")
+		}
+		if !strings.Contains(err.Error(), string(ActionInception)) {
+			t.Fatalf("the refusal does not name the action: %v", err)
+		}
+		if continuation != nil || started.ID != "" || store.creates != 0 || p.calls.Load() != 0 {
+			t.Fatalf("started=%#v creates=%d calls=%d", started, store.creates, p.calls.Load())
+		}
+	})
+	t.Run("plan through StartWorkspace", func(t *testing.T) {
+		p := newBlockingProvider("fake")
+		close(p.release)
+		store := &spyStore{records: map[string]Execution{}}
+		started, continuation, err := newBlockingService(t, p, store).StartWorkspace(context.Background(), ActionPlan, "fake", nil, nil)
+		if err == nil {
+			t.Fatal("a spec-scoped action was accepted without a spec")
+		}
+		if continuation != nil || started.ID != "" || store.creates != 0 || p.calls.Load() != 0 {
+			t.Fatalf("started=%#v creates=%d calls=%d", started, store.creates, p.calls.Load())
+		}
+	})
+	t.Run("unknown action through StartWorkspace", func(t *testing.T) {
+		p := newInceptionProvider()
+		close(p.release)
+		store := &spyStore{records: map[string]Execution{}}
+		_, continuation, err := newBlockingService(t, p, store).StartWorkspace(context.Background(), "unknown", "fake", nil, nil)
+		var actionErr *ActionError
+		if !errors.As(err, &actionErr) || continuation != nil || store.creates != 0 {
+			t.Fatalf("err=%v creates=%d", err, store.creates)
+		}
+	})
 }

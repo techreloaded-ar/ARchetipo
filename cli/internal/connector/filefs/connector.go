@@ -40,6 +40,7 @@ func Register() {
 // methods becomes a build error rather than a silent runtime gap.
 var (
 	_ connector.PRDReader        = (*Connector)(nil)
+	_ connector.PRDDiscarder     = (*Connector)(nil)
 	_ connector.PlanBodyReader   = (*Connector)(nil)
 	_ connector.MockupLister     = (*Connector)(nil)
 	_ connector.BoardOrderReader = (*Connector)(nil)
@@ -208,6 +209,20 @@ func (c *Connector) ReadPRD(ctx context.Context) (string, error) {
 		return "", iox.NewInternal(fmt.Sprintf("reading %s", path), err)
 	}
 	return string(b), nil
+}
+
+// DiscardPRD removes the configured PRD file and reports whether one was there
+// to remove. A missing file answers (false, nil): the rollback of a run that
+// never got as far as writing a document is a no-op, not a failure.
+func (c *Connector) DiscardPRD(ctx context.Context) (bool, error) {
+	path := c.cfg.AbsPath(c.cfg.Paths.PRD)
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, iox.NewInternal(fmt.Sprintf("removing %s", path), err)
+	}
+	return true, nil
 }
 
 // ListMockups enumerates subfolders of paths.mockups that contain an

@@ -245,3 +245,210 @@ func TestConfirmActionEffectReportsAFailedDemotionWrite(t *testing.T) {
 		t.Fatalf("the error does not name the execution: %v", err)
 	}
 }
+
+// prdReader is the workspace double for an inception: it decides what a re-read
+// of the PRD finds. It also satisfies SpecStateReader because VerifyActionEffect
+// takes one reader for every action and narrows it at the only point that knows
+// which action is being verified.
+type prdReader struct {
+	stateReader
+	body   string
+	prdErr error
+	prdRe  int
+}
+
+func (r *prdReader) ReadPRD(context.Context) (string, error) {
+	r.prdRe++
+	if r.prdErr != nil {
+		return "", r.prdErr
+	}
+	return r.body, nil
+}
+
+func inceptionRecord() Execution {
+	record := succeededRecord()
+	record.ID = "exec-inception-1"
+	record.SpecCode = ""
+	record.Action = ActionInception
+	record.Capability = CapabilityWorkspaceInception
+	return record
+}
+
+// AC-3, negative side: a success is a success only when the PRD can be read
+// back from the configured path. The receipt is the agent's word; this is the
+// workspace's.
+func TestVerifyActionEffectConfirmsAnInceptionOnlyWhenThePRDIsReadable(t *testing.T) {
+	confirmed := inceptionRecord()
+	reader := &prdReader{body: "# PRD\n\nVisione del prodotto.\n"}
+	if err := VerifyActionEffect(context.Background(), reader, ActionInception, "", &confirmed); err != nil {
+		t.Fatalf("a confirmed inception was rejected: %v", err)
+	}
+	if confirmed.Status != StatusSucceeded || confirmed.Result == nil || confirmed.Error != nil {
+		t.Fatalf("a confirmed record was rewritten: %#v", confirmed)
+	}
+	if reader.prdRe != 1 {
+		t.Fatalf("the PRD was read %d times", reader.prdRe)
+	}
+}
+
+func TestVerifyActionEffectDemotesAnInceptionWithoutAPersistedPRD(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		reader      SpecStateReader
+		wantMessage string
+	}{
+		{
+			name:        "no PRD at the configured path",
+			reader:      &prdReader{body: ""},
+			wantMessage: "no PRD was persisted at the configured path",
+		},
+		{
+			name:        "a PRD made of whitespace only",
+			reader:      &prdReader{body: "   \n\t\n"},
+			wantMessage: "no PRD was persisted at the configured path",
+		},
+		{
+			name:        "the PRD cannot be re-read",
+			reader:      &prdReader{prdErr: errors.New("workspace unavailable")},
+			wantMessage: "workspace unavailable",
+		},
+		{
+			name:        "the connector cannot read a PRD at all",
+			reader:      &stateReader{},
+			wantMessage: "the connector cannot read the PRD back",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := inceptionRecord()
+			err := VerifyActionEffect(context.Background(), tc.reader, ActionInception, "", &record)
+			var unconfirmed *UnconfirmedEffectError
+			if !errors.As(err, &unconfirmed) {
+				t.Fatalf("an unconfirmed inception passed: %v", err)
+			}
+			if unconfirmed.ExecutionID != record.ID {
+				t.Fatalf("the error does not name the execution: %v", err)
+			}
+			if !strings.Contains(unconfirmed.Message, tc.wantMessage) {
+				t.Fatalf("the reason is unreadable: %q", unconfirmed.Message)
+			}
+			if record.Status != StatusFailed || record.Result != nil || record.Error == nil {
+				t.Fatalf("the demoted record: %#v", record)
+			}
+			if record.Error.Code != "UNCONFIRMED_EFFECT" || record.Error.ExternalID != "task-remote-7" {
+				t.Fatalf("the demoted record lost code or remote identifier: %#v", record.Error)
+			}
+		})
+	}
+}
+
+// prdDiscarder counts what it was asked to do, so a test can prove the rollback
+// did not run at all.
+type prdDiscarder struct {
+	removed bool
+	err     error
+	calls   int
+}
+
+func (d *prdDiscarder) DiscardPRD(context.Context) (bool, error) {
+	d.calls++
+	return d.removed, d.err
+}
+
+func failedInceptionRecord(message string) Execution {
+	record := inceptionRecord()
+	record.Status = StatusFailed
+	record.Result = nil
+	record.Error = &ExecutionError{Code: "PROVIDER_FAILED", Message: message}
+	return record
+}
+
+// AC-4: a PRD born inside a run that ended badly is taken back, and the note
+// about the removal never replaces the reason the run failed.
+func TestDiscardPartialPRDRemovesADocumentBornInsideAFailedRun(t *testing.T) {
+	discarder := &prdDiscarder{removed: true}
+	record := failedInceptionRecord("the agent was interrupted")
+
+	DiscardPartialPRD(context.Background(), discarder, false, &record)
+
+	if discarder.calls != 1 {
+		t.Fatalf("the discarder was called %d times", discarder.calls)
+	}
+	if !strings.Contains(record.Error.Message, "the agent was interrupted") {
+		t.Fatalf("the original reason was lost: %q", record.Error.Message)
+	}
+	if !strings.Contains(record.Error.Message, "removed") {
+		t.Fatalf("the removal is not reported: %q", record.Error.Message)
+	}
+}
+
+// A discarder that finds nothing to remove has nothing to report either: the
+// record keeps exactly the reason it failed for.
+func TestDiscardPartialPRDStaysSilentWhenThereWasNothingToRemove(t *testing.T) {
+	discarder := &prdDiscarder{removed: false}
+	record := failedInceptionRecord("the agent was interrupted")
+
+	DiscardPartialPRD(context.Background(), discarder, false, &record)
+
+	if discarder.calls != 1 {
+		t.Fatalf("the discarder was called %d times", discarder.calls)
+	}
+	if record.Error.Message != "the agent was interrupted" {
+		t.Fatalf("the message was touched: %q", record.Error.Message)
+	}
+}
+
+// A rollback that cannot be performed is worth recording, but it never hides
+// why the run failed in the first place.
+func TestDiscardPartialPRDReportsAFailedRemovalWithoutHidingTheCause(t *testing.T) {
+	discarder := &prdDiscarder{err: errors.New("permission denied")}
+	record := failedInceptionRecord("the agent was interrupted")
+
+	DiscardPartialPRD(context.Background(), discarder, false, &record)
+
+	if !strings.Contains(record.Error.Message, "the agent was interrupted") ||
+		!strings.Contains(record.Error.Message, "permission denied") {
+		t.Fatalf("the message lost one of its two halves: %q", record.Error.Message)
+	}
+}
+
+// AC-5, first half: a PRD the workspace already had belongs to the workspace,
+// not to this run, and a succeeded run is precisely the one whose document must
+// stay. Neither case may reach the discarder at all.
+func TestDiscardPartialPRDNeverRemovesADocumentItDoesNotOwn(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		existedBefor bool
+		status       ExecutionStatus
+	}{
+		{"a PRD that predates the run", true, StatusFailed},
+		{"a run that succeeded", false, StatusSucceeded},
+		{"a run that succeeded over a pre-existing PRD", true, StatusSucceeded},
+		{"a run still going", false, StatusRunning},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			discarder := &prdDiscarder{removed: true}
+			record := failedInceptionRecord("the agent was interrupted")
+			record.Status = tc.status
+
+			DiscardPartialPRD(context.Background(), discarder, tc.existedBefor, &record)
+
+			if discarder.calls != 0 {
+				t.Fatalf("the discarder was called %d times", discarder.calls)
+			}
+			if record.Error.Message != "the agent was interrupted" {
+				t.Fatalf("the message was touched: %q", record.Error.Message)
+			}
+		})
+	}
+}
+
+// A connector without the rollback capability is not itself a failure: skipping
+// the rollback must leave the record exactly as it was.
+func TestDiscardPartialPRDToleratesAConnectorWithoutADiscarder(t *testing.T) {
+	record := failedInceptionRecord("the agent was interrupted")
+	DiscardPartialPRD(context.Background(), nil, false, &record)
+	if record.Error.Message != "the agent was interrupted" {
+		t.Fatalf("the message was touched: %q", record.Error.Message)
+	}
+	DiscardPartialPRD(context.Background(), &prdDiscarder{removed: true}, false, nil)
+}

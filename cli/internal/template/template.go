@@ -52,17 +52,32 @@ func (a Action) clone() Action {
 	return a
 }
 
+// WorkspaceAction is a step the process offers on the workspace as a whole
+// rather than on a spec. It deliberately has no Statuses field: an action on a
+// spec is admissible in a set of workflow statuses, which the process knows,
+// while an action on the workspace is admissible under a condition the process
+// does not know — whether a PRD already exists, for instance, is a fact about
+// the filesystem that only the server can establish. Declaring the action here
+// says the process offers it; whether it can run now is decided elsewhere.
+type WorkspaceAction struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Skill string `json:"skill"`
+}
+
 // Template is a declared development process. Skills are the skill directories
 // a workspace receives at initialization; Actions are the steps the process
-// offers on a spec and the statuses that admit them; Statuses are the workflow
-// labels that process works with.
+// offers on a spec and the statuses that admit them; WorkspaceActions are the
+// steps it offers on the workspace itself; Statuses are the workflow labels
+// that process works with.
 type Template struct {
-	ID       string              `json:"id"`
-	Version  string              `json:"version"`
-	Label    string              `json:"label"`
-	Skills   []string            `json:"skills"`
-	Actions  []Action            `json:"actions"`
-	Statuses domain.StatusLabels `json:"statuses"`
+	ID               string              `json:"id"`
+	Version          string              `json:"version"`
+	Label            string              `json:"label"`
+	Skills           []string            `json:"skills"`
+	Actions          []Action            `json:"actions"`
+	WorkspaceActions []WorkspaceAction   `json:"workspace_actions"`
+	Statuses         domain.StatusLabels `json:"statuses"`
 }
 
 // ActionsFor returns the actions the process admits in status, in declaration
@@ -162,6 +177,9 @@ func (t Template) clone() Template {
 		actions[i] = action.clone()
 	}
 	t.Actions = actions
+	workspaceActions := make([]WorkspaceAction, len(t.WorkspaceActions))
+	copy(workspaceActions, t.WorkspaceActions)
+	t.WorkspaceActions = workspaceActions
 	return t
 }
 
@@ -203,6 +221,13 @@ func Builtin() *Registry {
 				Label:    "Rivedi",
 				Skill:    "archetipo-review",
 				Statuses: []domain.Status{domain.StatusReview},
+			},
+		},
+		WorkspaceActions: []WorkspaceAction{
+			{
+				ID:    "inception",
+				Label: "Avvia inception",
+				Skill: "archetipo-inception",
 			},
 		},
 		Statuses: domain.StatusLabels{

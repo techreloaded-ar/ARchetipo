@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 )
@@ -15,6 +16,22 @@ import (
 type SpecStateReader interface {
 	ReadSpecDetail(context.Context, string) (domain.Spec, error)
 	ReadSpecTasks(context.Context, string) ([]domain.Task, error)
+}
+
+// PRDStateReader is the minimal view of the workspace that confirming an
+// inception needs: re-read the PRD. It is declared here, as an interface of the
+// consumer and for the same reason as SpecStateReader, so this package never
+// imports connector; a connector exposing the PRDReader capability satisfies it
+// without any adapter.
+type PRDStateReader interface {
+	ReadPRD(ctx context.Context) (string, error)
+}
+
+// PRDDiscarder is the workspace's own undo, mirrored here as a consumer
+// interface: it removes the PRD and reports whether one was there. A connector
+// exposing the PRDDiscarder capability satisfies it as is.
+type PRDDiscarder interface {
+	DiscardPRD(ctx context.Context) (bool, error)
 }
 
 // UnconfirmedEffectError reports an execution that declared success while the
@@ -76,10 +93,27 @@ func ConfirmActionEffect(ctx context.Context, reader SpecStateReader, store Stor
 // It returns nil when the claim holds (or when there is nothing to verify), and
 // an *UnconfirmedEffectError once it has rewritten outcome as FAILED.
 func VerifyActionEffect(ctx context.Context, reader SpecStateReader, action ActionID, specCode string, outcome *Execution) error {
-	if outcome.Status != StatusSucceeded || action != ActionPlan {
+	if outcome.Status != StatusSucceeded {
 		return nil
 	}
-	reason := planEffect(ctx, reader, specCode)
+	var reason error
+	switch action {
+	case ActionPlan:
+		reason = planEffect(ctx, reader, specCode)
+	case ActionInception:
+		// The parameter keeps SpecStateReader as its static type so the two
+		// callers pass the same connector for every action; what an inception
+		// needs from it is the PRD, asked for at the only point that knows the
+		// action. A reader that cannot answer is not a success it can back.
+		prd, ok := reader.(PRDStateReader)
+		if !ok {
+			reason = fmt.Errorf("the connector cannot read the PRD back")
+		} else {
+			reason = inceptionEffect(ctx, prd)
+		}
+	default:
+		return nil
+	}
 	if reason == nil {
 		return nil
 	}
@@ -118,4 +152,68 @@ func planEffect(ctx context.Context, reader SpecStateReader, specCode string) er
 		return fmt.Errorf("%s is %s but holds no plan task", specCode, domain.StatusPlanned)
 	}
 	return nil
+}
+
+// inceptionEffect reports why the connector does not back a claimed inception,
+// or nil when it does. The whole condition is "a non-empty PRD can be read back
+// from the configured path": the receipt is the agent's word, this is the
+// workspace's. Structural validation of the document is deliberately out of
+// scope here — `archetipo validate prd` and the skill own that — because this
+// boundary only answers whether the run produced a document at all.
+func inceptionEffect(ctx context.Context, reader PRDStateReader) error {
+	body, err := reader.ReadPRD(ctx)
+	if err != nil {
+		return fmt.Errorf("re-reading the PRD failed: %w", err)
+	}
+	if strings.TrimSpace(body) == "" {
+		return fmt.Errorf("no PRD was persisted at the configured path")
+	}
+	return nil
+}
+
+// DiscardPartialPRD takes back a PRD that was born inside a run that ended
+// badly, so a first inception either lands whole or leaves no trace (AC-4).
+//
+// The rollback is deliberately narrow, and both halves of the condition are
+// load-bearing:
+//   - existedBefore captures, before the run starts, whether the workspace
+//     already had a PRD. A pre-existing document belongs to the workspace, not
+//     to this run, and is never removed whatever the outcome — which is also
+//     half of the "nothing is implicitly overwritten" guarantee (AC-5).
+//   - only a FAILED outcome rolls back. A succeeded (and, above, confirmed)
+//     execution is precisely the one whose document must stay.
+//
+// A discarder that fails does not hide why the run failed: the note is appended
+// to the existing message, never substituted for it. The caller is expected to
+// pass nil when the connector exposes no discarder — skipping the rollback is
+// not itself a failure.
+func DiscardPartialPRD(ctx context.Context, discarder PRDDiscarder, existedBefore bool, outcome *Execution) {
+	if discarder == nil || existedBefore || outcome == nil || outcome.Status != StatusFailed {
+		return
+	}
+	removed, err := discarder.DiscardPRD(ctx)
+	if err != nil {
+		appendErrorNote(outcome, fmt.Sprintf("the partial PRD could not be removed: %v", err))
+		return
+	}
+	if removed {
+		appendErrorNote(outcome, "the partial PRD written by this run has been removed")
+	}
+}
+
+// appendErrorNote adds a sentence to a failed record's message without ever
+// losing what was already there: the original reason is the diagnosis, the note
+// is only what was done about it.
+func appendErrorNote(outcome *Execution, note string) {
+	if outcome.Error == nil {
+		// Defensive: a FAILED record normally already carries its reason. If it
+		// does not, the note is still worth recording rather than dropping.
+		outcome.Error = &ExecutionError{Code: "PARTIAL_PRD_DISCARDED", Message: note}
+		return
+	}
+	if strings.TrimSpace(outcome.Error.Message) == "" {
+		outcome.Error.Message = note
+		return
+	}
+	outcome.Error.Message = outcome.Error.Message + "; " + note
 }

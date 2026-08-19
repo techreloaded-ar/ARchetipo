@@ -199,3 +199,54 @@ func TestFileStoreListBySpecIgnoresNonRecordFiles(t *testing.T) {
 		t.Fatalf("foreign files leaked into the result: %#v", got)
 	}
 }
+
+// US-040: an empty spec code is not a wildcard, it is the workspace. A
+// workspace-scoped execution never appears in the history of a spec, and a
+// spec's executions never appear in the workspace history.
+func TestFileStoreListBySpecKeepsWorkspaceAndSpecExecutionsApart(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	writeRecord(t, store, Execution{ID: "exec-spec", SpecCode: "US-901", Action: ActionPlan, Capability: CapabilitySpecPlan, Status: StatusSucceeded, CreatedAt: base})
+	writeRecord(t, store, Execution{ID: "exec-workspace", SpecCode: "", Action: ActionInception, Capability: CapabilityWorkspaceInception, Status: StatusRunning, CreatedAt: base.Add(time.Minute)})
+
+	spec, err := store.ListBySpec(context.Background(), "US-901")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec) != 1 || spec[0].ID != "exec-spec" {
+		t.Fatalf("the spec history is not only its own: %#v", spec)
+	}
+
+	workspace, err := store.ListBySpec(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workspace) != 1 || workspace[0].ID != "exec-workspace" || workspace[0].Action != ActionInception {
+		t.Fatalf("the workspace history is not only its own: %#v", workspace)
+	}
+	if workspace[0].Status != StatusRunning {
+		t.Fatalf("the workspace record lost its state: %#v", workspace[0])
+	}
+
+	// A blank spec code is the same read as the empty one, not a third history.
+	blank, err := store.ListBySpec(context.Background(), "   ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(blank, workspace) {
+		t.Fatalf("a padded empty spec code produced a different history: %#v", blank)
+	}
+
+	// A spec that never ran is empty even though a workspace execution exists.
+	other, err := store.ListBySpec(context.Background(), "US-902")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) != 0 {
+		t.Fatalf("an unrelated spec inherited records: %#v", other)
+	}
+}

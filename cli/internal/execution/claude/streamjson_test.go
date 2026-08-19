@@ -38,6 +38,10 @@ type fakeClaude struct {
 	// silent keeps the process from announcing itself, which is how a process
 	// that dies before the handshake behaves.
 	silent bool
+	// sendHook, when set, answers a user frame instead of the ordinary handling.
+	// It is how a test reproduces a process that leaves in the middle of a write,
+	// which is otherwise a window too narrow to hit on purpose.
+	sendHook func(line []byte) error
 	// controlSubtype and controlError describe how a control request is
 	// answered. The default is the acknowledgement the real build sends.
 	controlSubtype string
@@ -101,6 +105,12 @@ func (f *fakeClaude) Send(line []byte) error {
 		return err
 	}
 	f.mu.Lock()
+	hook := f.sendHook
+	f.mu.Unlock()
+	if hook != nil && incoming.Type == frameUser {
+		return hook(line)
+	}
+	f.mu.Lock()
 	f.sent = append(f.sent, append(json.RawMessage(nil), line...))
 	announce := incoming.Type == frameUser && !f.announced && !f.silent
 	if announce {
@@ -148,6 +158,24 @@ func (f *fakeClaude) end() {
 		close(f.lines)
 		close(f.done)
 	})
+}
+
+// onSend installs the answer to the next user frames.
+func (f *fakeClaude) onSend(hook func(line []byte) error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sendHook = hook
+}
+
+// alive reports whether the process is still there, which is what a cancellation
+// that closed its standard input would have changed.
+func (f *fakeClaude) alive() bool {
+	select {
+	case <-f.done:
+		return false
+	default:
+		return true
+	}
 }
 
 func (f *fakeClaude) Lines() <-chan []byte { return f.lines }
@@ -209,8 +237,20 @@ func userFrame(text string, replay bool) string {
 // past the handshake.
 func openStreamSession(t *testing.T, fake *fakeClaude) (*streamSession, *localrun.Session) {
 	t.Helper()
+	return openStreamSessionMode(t, fake, false)
+}
+
+// openConversation is the same handshake in the mode where the end of a turn is
+// the agent's question and not the end of the work.
+func openConversation(t *testing.T, fake *fakeClaude) (*streamSession, *localrun.Session) {
+	t.Helper()
+	return openStreamSessionMode(t, fake, true)
+}
+
+func openStreamSessionMode(t *testing.T, fake *fakeClaude, conversational bool) (*streamSession, *localrun.Session) {
+	t.Helper()
 	session := localrun.NewSession("run-1", nil)
-	client := newStreamSession(fake, session)
+	client := newStreamSession(fake, session, conversational)
 	go client.consume()
 	if err := client.start(context.Background(), "PROMPT"); err != nil {
 		t.Fatalf("handshake failed: %v", err)
@@ -287,7 +327,7 @@ func TestStreamSessionFailsWhenTheProcessDiesBeforeAnnouncingItself(t *testing.T
 	fake := newFakeClaude()
 	fake.silent = true
 	session := localrun.NewSession("run-1", nil)
-	client := newStreamSession(fake, session)
+	client := newStreamSession(fake, session, false)
 	go client.consume()
 
 	failed := make(chan error, 1)
@@ -601,5 +641,139 @@ func TestStreamSessionKeepsTheOrderOfArrival(t *testing.T) {
 		if event.Text != fmt.Sprintf("%d", i+1) {
 			t.Fatalf("event %d carries %q", i, event.Text)
 		}
+	}
+}
+
+// The end of a turn is not one instant: the translation records the result,
+// publishes the outcome and appends the turn_end event before it closes the
+// wait. A message sent inside that window opens the next turn, and the close
+// that follows belongs to the turn that ended — never to the one just opened.
+//
+// The window is entered through the real translation and nothing is simulated:
+// the message is sent from the session's own clock, which is called while the
+// turn_end event is being appended — after the result of the turn has been
+// taken and before its wait is closed. There is no sleep and no interleaving to
+// hope for; the moment is reached by construction every time.
+//
+// A caller that lost this race would find the fresh turn already over, and a
+// later Interrupt would answer it by closing the process's standard input on
+// work that is still running.
+func TestStreamSessionOpensTheNextTurnWhileThePreviousOneIsBeingClosed(t *testing.T) {
+	fake := newFakeClaude()
+
+	var client *streamSession
+	var once sync.Once
+	sent := make(chan error, 1)
+	// The handshake appends nothing — the announcement is protocol and not
+	// history — so the first event of this run is the turn_end below, and the
+	// message is written exactly inside its window.
+	session := localrun.NewSession("run-1", func() time.Time {
+		once.Do(func() { sent <- client.Send(context.Background(), "la risposta alla domanda") })
+		return time.Now().UTC()
+	})
+	client = newStreamSession(fake, session, true)
+	go client.consume()
+	if err := client.start(context.Background(), "PROMPT"); err != nil {
+		t.Fatalf("handshake failed: %v", err)
+	}
+	session.AttachDialogue(client)
+	t.Cleanup(fake.end)
+
+	fake.emit(`{"type":"result","subtype":"success","is_error":false,"result":"di che colore lo vuoi?"}`)
+	if err := <-sent; err != nil {
+		t.Fatalf("Send failed inside the window: %v", err)
+	}
+	// A frame that arrives after the result is the proof the translation has
+	// finished closing the turn that ended, which is the close under test.
+	after := lastEventID(session)
+	fake.emit(`{"type":"assistant","message":{"content":[{"type":"text","text":"rosso"}]}}`)
+	waitFor(t, func() bool { return len(session.Events(after)) == 1 })
+
+	select {
+	case <-client.TurnDone():
+		t.Fatal("the end of the previous turn closed the turn the message had just opened")
+	default:
+	}
+
+	// And the consequence the operator would see: a cancellation now stops the
+	// turn instead of ending the conversation at its source.
+	if err := client.Interrupt(context.Background()); err != nil {
+		t.Fatalf("Interrupt failed: %v", err)
+	}
+	if !fake.alive() {
+		t.Fatal("the interrupt closed the input of a process whose turn was in progress")
+	}
+	frames := fake.framesReceived()
+	var request struct {
+		Type    string `json:"type"`
+		Request struct {
+			Subtype string `json:"subtype"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(frames[len(frames)-1], &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Type != "control_request" || request.Request.Subtype != "interrupt" {
+		t.Fatalf("the last frame is not an interrupt: %s", frames[len(frames)-1])
+	}
+}
+
+// Between two turns there really is no turn, and the conversational Interrupt
+// still ends the conversation at its source. The test above must not have
+// turned that branch off.
+func TestStreamSessionInterruptBetweenTwoTurnsClosesTheInput(t *testing.T) {
+	fake := newFakeClaude()
+	client, _ := openConversation(t, fake)
+	fake.emit(`{"type":"result","subtype":"success","is_error":false,"result":"una domanda"}`)
+	<-client.TurnDone()
+
+	if err := client.Interrupt(context.Background()); err != nil {
+		t.Fatalf("Interrupt failed: %v", err)
+	}
+	if fake.alive() {
+		t.Fatal("cancelling between two turns left the conversation open")
+	}
+}
+
+// The guard on a session that is over and the write of the message cannot be one
+// act: the process can leave in between. When it has, the caller must still be
+// told the run is no longer there — a decision it branches on — and not handed
+// the fault a failed write otherwise is.
+func TestStreamSessionRefusesAMessageWhenTheProcessLeavesWhileItIsWritten(t *testing.T) {
+	fake := newFakeClaude()
+	client, _ := openConversation(t, fake)
+
+	fake.onSend(func([]byte) error {
+		// The process leaves exactly between the guard and the write, and the end
+		// of its output is observed before the write reports its failure.
+		fake.end()
+		<-client.Gone()
+		return fmt.Errorf("write |1: broken pipe")
+	})
+
+	err := client.Send(context.Background(), "ci sei ancora?")
+	reason, refused := execution.RefusalOf(err)
+	if !refused || reason != execution.RunRefusedNotActive {
+		t.Fatalf("Send got %v; want a run_not_active refusal", err)
+	}
+}
+
+// A write that failed while the process is still there stays a fault: nothing
+// was decided, and a retry can still change the outcome.
+func TestStreamSessionReportsAFailedWriteAsAFaultWhileTheProcessIsAlive(t *testing.T) {
+	fake := newFakeClaude()
+	client, _ := openConversation(t, fake)
+
+	fake.onSend(func([]byte) error { return fmt.Errorf("write |1: no space left on device") })
+
+	err := client.Send(context.Background(), "ci sei ancora?")
+	if err == nil {
+		t.Fatal("a failed write was reported as a success")
+	}
+	if _, refused := execution.RefusalOf(err); refused {
+		t.Fatalf("a failed write on a live process was turned into a refusal: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no space left on device") {
+		t.Fatalf("the diagnostic lost the cause: %v", err)
 	}
 }

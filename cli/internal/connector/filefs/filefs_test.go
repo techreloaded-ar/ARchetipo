@@ -614,3 +614,41 @@ func TestAppendSpecsPreservesDeclaredEpics(t *testing.T) {
 		t.Errorf("EP-902 title = %q, want %q", title, "Undeclared From Spec")
 	}
 }
+
+// AC-4 on the filesystem: the rollback of an inception that ended badly really
+// removes the document, and calling it again on a workspace that already has no
+// PRD is a no-op rather than a failure.
+func TestDiscardPRDRemovesTheDocumentAndIsIdempotent(t *testing.T) {
+	c := newTestConnector(t)
+	ctx := context.Background()
+
+	if _, err := c.SavePRD(ctx, "# PRD\n\nVisione del prodotto.\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(c.cfg.Paths.PRD); err != nil {
+		t.Fatalf("SavePRD did not write the PRD: %v", err)
+	}
+
+	removed, err := c.DiscardPRD(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("DiscardPRD did not report the removal of an existing PRD")
+	}
+	if _, err := os.Stat(c.cfg.Paths.PRD); !os.IsNotExist(err) {
+		t.Fatalf("the PRD file is still there: %v", err)
+	}
+	body, err := c.ReadPRD(ctx)
+	if err != nil || body != "" {
+		t.Fatalf("the PRD is still readable: %q, %v", body, err)
+	}
+
+	removed, err = c.DiscardPRD(ctx)
+	if err != nil {
+		t.Fatalf("discarding a workspace without a PRD failed: %v", err)
+	}
+	if removed {
+		t.Fatal("DiscardPRD reported a removal with nothing to remove")
+	}
+}

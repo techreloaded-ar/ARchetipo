@@ -38,6 +38,22 @@ type PRDReader interface {
 	ReadPRD(ctx context.Context) (string, error)
 }
 
+// PRDDiscarder removes the PRD document from the workspace. It exists for a
+// single guarantee: a first inception either produces a whole PRD or leaves no
+// trace, so a run that fails after the agent has already written a partial
+// document must be able to take it back.
+//
+// The boolean reports whether a document was there and has been removed, so a
+// caller can tell an actual rollback from a no-op. A missing PRD is not an
+// error: nothing to discard is the expected outcome of most failures.
+//
+// Deleting the file from the web layer by resolving paths.prd directly would be
+// simpler and wrong — it would make someone other than the connector an owner
+// of the workspace's persistence.
+type PRDDiscarder interface {
+	DiscardPRD(ctx context.Context) (bool, error)
+}
+
 // PlanBodyReader exposes the strategic plan body of a spec (the prose attached
 // to the plan, separate from its tasks).
 type PlanBodyReader interface {

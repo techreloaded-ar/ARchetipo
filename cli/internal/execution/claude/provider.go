@@ -59,6 +59,11 @@ const (
 	// impossible rather than merely unlikely to work.
 	planSkillRelPath = ".claude/skills/archetipo-plan/SKILL.md"
 
+	// inceptionSkillRelPath is the same fact for the inception skill: it is
+	// what `/archetipo-inception` resolves to, and its absence is what makes
+	// the conversation impossible rather than merely unlikely to work.
+	inceptionSkillRelPath = ".claude/skills/archetipo-inception/SKILL.md"
+
 	// shutdownGrace bounds how long the session process is given to exit on its
 	// own after its input is closed, before it is signalled.
 	shutdownGrace = 5 * time.Second
@@ -145,7 +150,7 @@ func (p *Provider) ID() string { return ProviderID }
 // interfaces the provider implements, so declaring it by hand here would be
 // exactly the mismatch that derivation exists to make impossible.
 func (p *Provider) Capabilities(context.Context) ([]execution.Capability, error) {
-	return []execution.Capability{execution.CapabilitySpecPlan}, nil
+	return []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilityWorkspaceInception}, nil
 }
 
 // ValidateConfig checks the shape of the non-secret configuration only. It must
@@ -173,60 +178,41 @@ func (p *Provider) ValidateConfig(_ context.Context, raw map[string]any) error {
 // exited or been killed by the timeout, so there is nothing left for a caller
 // to follow.
 func (p *Provider) Execute(ctx context.Context, req execution.Request) (execution.Result, error) {
-	cfg, err := parseConfig(req.ProviderConfig)
+	cfg, dir, err := p.prepare(ctx, req)
 	if err != nil {
 		return execution.Result{}, err
 	}
-	dir, err := p.workingDir()
-	if err != nil {
-		return execution.Result{}, fmt.Errorf("resolving the working directory to run the claude command %q: %w", cfg.Command, err)
+	// The fork is on the action and nothing else. Planning keeps the flow it
+	// has always had — one turn, then a receipt — because the moment a turn
+	// ends without one it has failed, and that diagnostic must not become a
+	// wait. Inception is the other semantics, and it lives in its own function
+	// rather than as a set of conditions inside this one.
+	if req.Action == execution.ActionInception {
+		return p.executeInception(ctx, req, cfg, dir)
 	}
-	// The availability probe is already the explicit diagnostic for a runtime
-	// that is absent or broken, so it travels back unchanged rather than being
-	// wrapped into a vaguer sentence.
-	if err := p.Available(ctx, req.ProviderConfig); err != nil {
-		return execution.Result{}, err
-	}
-	if err := ensurePlanSkill(dir); err != nil {
+	if err := ensureSkill(dir, planSkillRelPath, "planning"); err != nil {
 		return execution.Result{}, err
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	// The session is registered before anything is started, so the run is
-	// followable from the instant it can produce history — including while this
-	// call is still inside the agent's work.
-	session := localrun.NewSession(req.ExecutionID, p.now)
-	p.Registry().Register(session)
-
-	startedAt := p.now()
-	process, err := p.starter.Start(runCtx, dir, cfg.Command, buildArgs(cfg))
+	// Single-turn: planning is one turn followed by a receipt, and a turn that
+	// ends without one must fail here and now rather than wait for an answer
+	// that is not coming.
+	live, err := p.openSession(runCtx, req, cfg, dir, buildPrompt(req), false)
 	if err != nil {
-		session.Close(execution.RunCrashed, err.Error())
-		return execution.Result{}, fmt.Errorf("the claude command %q could not be started: %w", cfg.Command, err)
-	}
-
-	client := newStreamSession(process, session)
-	go client.consume()
-
-	if err := client.start(runCtx, buildPrompt(req)); err != nil {
-		_, _, _ = p.shutdown(process)
-		session.Close(execution.RunCrashed, err.Error())
 		return execution.Result{}, err
 	}
-	// Only now can a command be delivered: before the turn exists there is
-	// nothing to steer, and a command that arrives earlier is refused as
-	// transient rather than delivered into nothing.
-	session.AttachDialogue(client)
+	session, client := live.session, live.client
 
 	select {
 	case <-client.TurnDone():
 	case <-runCtx.Done():
 	}
 
-	exitCode, stderr, waitErr := p.shutdown(process)
-	elapsed := p.now().Sub(startedAt)
+	exitCode, stderr, waitErr := p.shutdown(live.process)
+	elapsed := p.now().Sub(live.startedAt)
 
 	if runErr := runCtx.Err(); runErr != nil {
 		reason := fmt.Sprintf("the claude session was stopped after %s: %v", elapsed.Round(time.Millisecond), runErr)
@@ -269,6 +255,76 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 	return p.resultFor(cfg, exitCode, elapsed, receipt)
 }
 
+// prepare answers everything that can be known before a process exists: the
+// configuration, the directory the session will run in, and whether the runtime
+// can be used at all. It is shared by every action because none of the three
+// answers depends on which action was dispatched, and a second copy of them
+// would be free to diverge on the order in which they fail.
+func (p *Provider) prepare(ctx context.Context, req execution.Request) (settings, string, error) {
+	cfg, err := parseConfig(req.ProviderConfig)
+	if err != nil {
+		return settings{}, "", err
+	}
+	dir, err := p.workingDir()
+	if err != nil {
+		return settings{}, "", fmt.Errorf("resolving the working directory to run the claude command %q: %w", cfg.Command, err)
+	}
+	// The availability probe is already the explicit diagnostic for a runtime
+	// that is absent or broken, so it travels back unchanged rather than being
+	// wrapped into a vaguer sentence.
+	if err := p.Available(ctx, req.ProviderConfig); err != nil {
+		return settings{}, "", err
+	}
+	return cfg, dir, nil
+}
+
+// liveSession is a started process that has already announced itself and can
+// already be spoken to: the three things a caller has to hold on to, plus the
+// instant the work began.
+type liveSession struct {
+	process   localrun.Process
+	session   *localrun.Session
+	client    *streamSession
+	startedAt time.Time
+}
+
+// openSession starts the process, opens the protocol on it, gives it its
+// instruction and makes the run followable and commandable. Everything in it is
+// identical for both actions but the mode of the session and the prompt, which
+// are the two parameters.
+//
+// A failure here always leaves the session closed and the process gone: a
+// registered run that nothing will ever end would stay ACTIVE forever.
+func (p *Provider) openSession(runCtx context.Context, req execution.Request, cfg settings, dir, prompt string, conversational bool) (*liveSession, error) {
+	// The session is registered before anything is started, so the run is
+	// followable from the instant it can produce history — including while this
+	// call is still inside the agent's work.
+	session := localrun.NewSession(req.ExecutionID, p.now)
+	p.Registry().Register(session)
+
+	startedAt := p.now()
+	process, err := p.starter.Start(runCtx, dir, cfg.Command, buildArgs(cfg))
+	if err != nil {
+		session.Close(execution.RunCrashed, err.Error())
+		return nil, fmt.Errorf("the claude command %q could not be started: %w", cfg.Command, err)
+	}
+
+	client := newStreamSession(process, session, conversational)
+	go client.consume()
+
+	if err := client.start(runCtx, prompt); err != nil {
+		_, _, _ = p.shutdown(process)
+		session.Close(execution.RunCrashed, err.Error())
+		return nil, err
+	}
+	// Only now can a command be delivered: before the turn exists there is
+	// nothing to steer, and a command that arrives earlier is refused as
+	// transient rather than delivered into nothing.
+	session.AttachDialogue(client)
+
+	return &liveSession{process: process, session: session, client: client, startedAt: startedAt}, nil
+}
+
 // shutdown ends the session process and reports how it went.
 //
 // Closing the standard input is what a stream-json process takes as its cue to
@@ -297,15 +353,19 @@ func (p *Provider) shutdown(process localrun.Process) (int, string, error) {
 	}
 }
 
-// ensurePlanSkill refuses to spawn Claude when the planning skill it is asked
-// to invoke is not installed in the workspace. Without this check the run would
-// still start, spend a full timeout, and fail with whatever Claude says about
-// an unknown command — a diagnostic that points nowhere. The message names the
-// command that fixes it instead.
-func ensurePlanSkill(dir string) error {
-	path := filepath.Join(dir, planSkillRelPath)
+// ensureSkill refuses to spawn Claude when the skill it is asked to invoke is
+// not installed in the workspace. Without this check the run would still start,
+// spend a full timeout, and fail with whatever Claude says about an unknown
+// command — a diagnostic that points nowhere. The message names the command
+// that fixes it instead.
+//
+// It is one function over a name and a path rather than one function per skill:
+// the check and the diagnostic are the same fact for every skill this provider
+// invokes, and two copies of them would be free to say it differently.
+func ensureSkill(dir, relPath, skill string) error {
+	path := filepath.Join(dir, relPath)
 	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("the ARchetipo planning skill is not installed for claude in %s (expected %s): run `archetipo init --tool claude` in that directory", dir, planSkillRelPath)
+		return fmt.Errorf("the ARchetipo %s skill is not installed for claude in %s (expected %s): run `archetipo init --tool claude` in that directory", skill, dir, relPath)
 	}
 	return nil
 }

@@ -193,6 +193,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/config/test", s.handleTestConfig)
 	s.mux.HandleFunc("GET /api/workspace/options", s.handleGetWorkspaceOptions)
 	s.mux.HandleFunc("POST /api/workspace", s.handleCreateWorkspace)
+	s.mux.HandleFunc("GET /api/workspace/actions", s.handleGetWorkspaceActions)
+	s.mux.HandleFunc("POST /api/workspace/execution", s.handleRunWorkspaceAction)
 	s.mux.HandleFunc("GET /api/mockups", s.handleListMockups)
 
 	// Serve design mockups from the configured paths.mockups directory.

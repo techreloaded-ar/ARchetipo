@@ -18,7 +18,7 @@ const PlannedStatus = string(domain.StatusPlanned)
 
 // planReceiptFields are the keys an object must carry to be recognized as the
 // receipt rather than as some other JSON the agent happened to print.
-var planReceiptFields = [...]string{"spec_code", "status", "tasks"}
+var planReceiptFields = []string{"spec_code", "status", "tasks"}
 
 // PlanReceipt is the single JSON line a planning agent must emit as its closing
 // message. It is what makes a successful planning observable from the ARchetipo
@@ -34,15 +34,18 @@ type PlanReceipt struct {
 	Tasks    int    `json:"tasks"`
 }
 
-// ParsePlanReceipt extracts the receipt from an agent output by scanning
+// parseTrailingReceipt extracts a receipt from an agent output by scanning
 // backwards for the last line that decodes as a JSON object carrying all the
-// receipt keys. Taking the last decodable object instead would be wrong: an
+// required keys. Taking the last decodable object instead would be wrong: an
 // error dump or a fragment of tool output printed after the receipt is also a
 // JSON object, and it would shadow a receipt that was emitted correctly.
 //
-// It only extracts: the policy on what counts as an acceptable receipt lives in
-// AcceptPlanReceipt.
-func ParsePlanReceipt(output string) (PlanReceipt, error) {
+// It is shared by every receipt kind on purpose: the rule that decides which
+// line closes a run must not be free to drift between the plan receipt and the
+// PRD receipt. It only extracts — what counts as an acceptable receipt is the
+// policy of each Accept* function.
+func parseTrailingReceipt[T any](output string, required []string) (T, bool) {
+	var zero T
 	lines := strings.Split(output, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
@@ -53,16 +56,39 @@ func ParsePlanReceipt(output string) (PlanReceipt, error) {
 		if err := json.Unmarshal([]byte(line), &fields); err != nil {
 			continue
 		}
-		if !hasPlanReceiptFields(fields) {
+		if !hasReceiptFields(fields, required) {
 			continue
 		}
-		var got PlanReceipt
+		var got T
 		if err := json.Unmarshal([]byte(line), &got); err != nil {
 			continue
 		}
-		return got, nil
+		return got, true
 	}
-	return PlanReceipt{}, fmt.Errorf("the agent did not emit the expected JSON receipt line")
+	return zero, false
+}
+
+func hasReceiptFields(fields map[string]json.RawMessage, required []string) bool {
+	for _, field := range required {
+		if _, ok := fields[field]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// ParsePlanReceipt extracts the plan receipt from an agent output, taking the
+// last line that carries every plan receipt key (see parseTrailingReceipt for
+// why the scan runs backwards).
+//
+// It only extracts: the policy on what counts as an acceptable receipt lives in
+// AcceptPlanReceipt.
+func ParsePlanReceipt(output string) (PlanReceipt, error) {
+	got, ok := parseTrailingReceipt[PlanReceipt](output, planReceiptFields)
+	if !ok {
+		return PlanReceipt{}, fmt.Errorf("the agent did not emit the expected JSON receipt line")
+	}
+	return got, nil
 }
 
 // AcceptPlanReceipt parses the output and applies the acceptance rule: the
@@ -89,13 +115,4 @@ func AcceptPlanReceipt(output, specCode string) (PlanReceipt, error) {
 		return PlanReceipt{}, fmt.Errorf("the receipt does not declare a persisted plan for %s", specCode)
 	}
 	return got, nil
-}
-
-func hasPlanReceiptFields(fields map[string]json.RawMessage) bool {
-	for _, field := range planReceiptFields {
-		if _, ok := fields[field]; !ok {
-			return false
-		}
-	}
-	return true
 }

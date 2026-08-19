@@ -33,6 +33,10 @@
 	const prdModal = document.getElementById("prd-modal");
 	const prdModalClose = document.getElementById("prd-modal-close");
 	const prdView = document.getElementById("prd-view");
+	const prdInception = document.getElementById("prd-inception");
+	const inceptionActions = document.getElementById("inception-actions");
+	const inceptionExecution = document.getElementById("inception-execution");
+	const inceptionRun = document.getElementById("inception-run");
 	const prdBodyView = document.getElementById("prd-body-view");
 	const prdEditBtn = document.getElementById("prd-edit-btn");
 	const prdCancelBtn = document.getElementById("prd-cancel-btn");
@@ -214,6 +218,19 @@
 	let mockupsCache = []; // cached list of mockups (refreshed lazily)
 	let executionProviders = []; // providers offered by the server, in its order
 	let executionDefault = null; // persisted workspace default, or null
+	// The action/execution/run trio is one panel that can be mounted on more than
+	// one place: the spec detail, or the PRD modal for a workspace-scoped action.
+	// What it is following is a single context token — `spec:US-XXX` or
+	// `workspace:inception` — and every asynchronous continuation checks that
+	// token instead of the open spec code, so leaving one panel stops the timers
+	// of that panel and of no other.
+	const WORKSPACE_INCEPTION_CONTEXT = "workspace:inception";
+	let panelContext = null; // context the panel is mounted on, or null
+	let panelActions = null; // container the action chips are drawn in
+	let panelExecution = null; // container the execution panel is drawn in
+	let panelRun = null; // container the run panel is drawn in
+	let panelStartURL = ""; // route that starts an action in this context
+	let panelSettle = null; // what to do when the execution reaches a terminal state
 	let executionPollTimer = null; // interval following the open spec's execution
 	let lastExecutionRecord = null; // execution shown in the panel, for a failed poll
 	let runPollTimer = null; // interval following the run behind the open execution
@@ -267,58 +284,70 @@
 	reviewRequestBtn.addEventListener("click", onRequestChanges);
 	reviewIntegrateBtn.addEventListener("click", onIntegrate);
 	// The action chips are re-rendered on every open, so the handler lives on
-	// their container instead of on buttons that no longer exist.
-	storyActions.addEventListener("click", (e) => {
-		const btn = e.target.closest(".action-chip-run");
-		if (!btn) return;
-		startSpecAction(btn.dataset.actionId, btn);
-	});
+	// their container instead of on buttons that no longer exist. Every
+	// container the panel can be mounted on is bound once, here: which of them
+	// is live at any moment is decided by the mounted context, not by the
+	// listeners.
+	bindActionsPanel(storyActions);
+	bindActionsPanel(inceptionActions);
+	bindRunPanel(storyRun);
+	bindRunPanel(inceptionRun);
+
+	function bindActionsPanel(container) {
+		container.addEventListener("click", (e) => {
+			const btn = e.target.closest(".action-chip-run");
+			if (!btn) return;
+			startPanelAction(btn.dataset.actionId, btn);
+		});
+	}
 
 	// The run panel is redrawn on every poll, so its controls cannot own their
 	// handlers: the container does, and each control declares what it is through
 	// its class and data attributes.
-	storyRun.addEventListener("click", (e) => {
-		const option = e.target.closest("[data-option-id]");
-		if (option) {
-			respondRunApproval(option.dataset.approvalId, option.dataset.optionId);
-			return;
-		}
-		if (e.target.closest("[data-cancel-open]")) {
-			runCancelArmed = true;
-			renderRun();
-			return;
-		}
-		if (e.target.closest("[data-cancel-abort]")) {
-			runCancelArmed = false;
-			renderRun();
-			return;
-		}
-		if (e.target.closest("[data-cancel-confirm]")) {
-			cancelRun();
-			return;
-		}
-		const dismiss = e.target.closest("[data-notice-dismiss]");
-		if (dismiss) dismissRunNotice(dismiss.dataset.noticeDismiss);
-	});
-	storyRun.addEventListener("submit", (e) => {
-		const form = e.target.closest(".run-composer");
-		if (!form) return;
-		e.preventDefault();
-		sendRunMessage();
-	});
-	storyRun.addEventListener("input", (e) => {
-		const input = e.target.closest(".run-composer-input");
-		if (input) runDraft = input.value;
-	});
-	storyRun.addEventListener("keydown", (e) => {
-		const input = e.target.closest(".run-composer-input");
-		if (!input) return;
-		if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+	function bindRunPanel(container) {
+		container.addEventListener("click", (e) => {
+			const option = e.target.closest("[data-option-id]");
+			if (option) {
+				respondRunApproval(option.dataset.approvalId, option.dataset.optionId);
+				return;
+			}
+			if (e.target.closest("[data-cancel-open]")) {
+				runCancelArmed = true;
+				renderRun();
+				return;
+			}
+			if (e.target.closest("[data-cancel-abort]")) {
+				runCancelArmed = false;
+				renderRun();
+				return;
+			}
+			if (e.target.closest("[data-cancel-confirm]")) {
+				cancelRun();
+				return;
+			}
+			const dismiss = e.target.closest("[data-notice-dismiss]");
+			if (dismiss) dismissRunNotice(dismiss.dataset.noticeDismiss);
+		});
+		container.addEventListener("submit", (e) => {
+			const form = e.target.closest(".run-composer");
+			if (!form) return;
 			e.preventDefault();
-			runDraft = input.value;
 			sendRunMessage();
-		}
-	});
+		});
+		container.addEventListener("input", (e) => {
+			const input = e.target.closest(".run-composer-input");
+			if (input) runDraft = input.value;
+		});
+		container.addEventListener("keydown", (e) => {
+			const input = e.target.closest(".run-composer-input");
+			if (!input) return;
+			if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+				e.preventDefault();
+				runDraft = input.value;
+				sendRunMessage();
+			}
+		});
+	}
 
 	prdBtn.addEventListener("click", openPRD);
 	prdModalClose.addEventListener("click", closePRD);
@@ -635,16 +664,20 @@
 		// A timer from the previously open spec must not survive this call: it
 		// would keep polling an execution nobody is looking at, and would reload
 		// the detail of a spec the user has already left.
-		stopExecutionPolling();
 		currentSpecCode = code;
+		mountExecutionPanels({
+			context: specContext(code),
+			startURL: `/api/spec/${encodeURIComponent(code)}/execution`,
+			actions: storyActions,
+			execution: storyExecution,
+			run: storyRun,
+			settle: settleSpecExecution,
+		});
 		modalTitle.textContent = `Spec ${code}`;
 		modal.classList.remove("hidden");
 		activateTab("story");
 		specStatus.textContent = "Loading...";
 		planStatus.textContent = "";
-		storyActions.innerHTML = "";
-		renderExecution(null);
-		resetRunState();
 		showSpecView();
 		showPlanView();
 		reviewLoaded = false;
@@ -661,7 +694,7 @@
 			// The server hands back the last execution of the spec on every read,
 			// so a reload finds the run it left behind — and resumes following it
 			// without ever starting a second one.
-			resumeExecution(detail.execution, code);
+			resumeExecution(detail.execution, specContext(code));
 			fillSpecForm(currentSpecSnapshot);
 			fillPlanView(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
 			fillPlanForm(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
@@ -964,7 +997,7 @@
 
 	function closeModal() {
 		modal.classList.add("hidden");
-		stopExecutionPolling();
+		unmountExecutionPanels(specContext(currentSpecCode));
 		currentSpecCode = null;
 		currentSpecSnapshot = null;
 		currentPlanSnapshot = null;
@@ -1732,6 +1765,40 @@
 		}
 	}
 
+	// ---- Panel mounting ------------------------------------------------------
+
+	function specContext(code) {
+		return code ? `spec:${code}` : null;
+	}
+
+	// mountExecutionPanels points the action/execution/run trio at one set of
+	// containers and declares the context it is following. Mounting always stops
+	// the timers of whatever was mounted before: a timer from the previous
+	// context would keep polling something nobody is looking at.
+	function mountExecutionPanels(mount) {
+		stopExecutionPolling();
+		panelContext = mount.context;
+		panelActions = mount.actions;
+		panelExecution = mount.execution;
+		panelRun = mount.run;
+		panelStartURL = mount.startURL;
+		panelSettle = mount.settle;
+		if (panelActions) panelActions.innerHTML = "";
+		renderExecution(null);
+		resetRunState();
+	}
+
+	// unmountExecutionPanels releases the panel, but only when the caller is the
+	// one that still holds it: closing a modal whose context was already taken
+	// over by another panel must not stop that other panel's timers.
+	function unmountExecutionPanels(context) {
+		if (!context || panelContext !== context) return;
+		stopExecutionPolling();
+		panelContext = null;
+		panelSettle = null;
+		panelStartURL = "";
+	}
+
 	// ---- Spec actions --------------------------------------------------------
 
 	// renderSpecActions shows the actions the workspace process Template admits
@@ -1744,12 +1811,13 @@
 	// statuses, providers or capabilities.
 	function renderSpecActions(actions) {
 		const list = actions || [];
+		if (!panelActions) return;
 		if (!list.length) {
-			storyActions.innerHTML =
+			panelActions.innerHTML =
 				'<span class="story-actions-empty">No action is available in this status</span>';
 			return;
 		}
-		storyActions.innerHTML = list.map(renderSpecActionChip).join("");
+		panelActions.innerHTML = list.map(renderSpecActionChip).join("");
 	}
 
 	function renderSpecActionChip(action) {
@@ -1775,21 +1843,20 @@
 		);
 	}
 
-	// startSpecAction turns one press into exactly one execution: the button is
+	// startPanelAction turns one press into exactly one execution: the button is
 	// disabled before the request leaves and is only given back when the server
-	// refuses, so a double click cannot ask for a second run.
-	async function startSpecAction(actionID, button) {
-		if (!actionID || !currentSpecCode) return;
-		const code = currentSpecCode;
+	// refuses, so a double click cannot ask for a second run. Which route is
+	// asked is a property of the mounted panel, not of this code.
+	async function startPanelAction(actionID, button) {
+		if (!actionID || !panelContext || !panelStartURL) return;
+		const ctx = panelContext;
+		const url = panelStartURL;
 		if (button) button.disabled = true;
 		try {
-			const record = await apiPost(
-				`/api/spec/${encodeURIComponent(code)}/execution`,
-				{ action: actionID },
-			);
-			if (currentSpecCode !== code) return;
+			const record = await apiPost(url, { action: actionID });
+			if (panelContext !== ctx) return;
 			renderExecution(record);
-			await followExecution(record, code);
+			await followExecution(record, ctx);
 		} catch (err) {
 			showToast(err.message || String(err), "err");
 			if (button) button.disabled = false;
@@ -1799,34 +1866,44 @@
 	// resumeExecution renders the execution that came with the detail and picks
 	// its polling back up when it is still open. It never starts anything: a
 	// page load must show the run, not launch one.
-	function resumeExecution(record, code) {
+	function resumeExecution(record, ctx) {
 		renderExecution(record);
 		if (record && !isExecutionTerminal(record)) {
-			startExecutionPolling(record.id, code);
+			startExecutionPolling(record.id, ctx);
 		}
-		resumeRun(record, code);
+		resumeRun(record, ctx);
 	}
 
 	// followExecution either keeps watching a still open execution, or settles
 	// one that is already over.
-	async function followExecution(record, code) {
+	async function followExecution(record, ctx) {
 		if (!record) return;
 		if (!isExecutionTerminal(record)) {
-			startExecutionPolling(record.id, code);
-			resumeRun(record, code);
+			startExecutionPolling(record.id, ctx);
+			resumeRun(record, ctx);
 			return;
 		}
-		await settleExecution(record, code);
+		await settleExecution(record, ctx);
 	}
 
-	// settleExecution reloads the detail once the run is over: the plan, the spec
-	// status, the actions and the execution panel are all redrawn from the server
-	// rather than guessed here. The board follows only on success, because that
-	// is the only outcome that can have moved the card.
-	async function settleExecution(record, code) {
-		if (currentSpecCode !== code) return;
+	// settleExecution hands a terminal execution to whatever the mounted panel
+	// declared as its settlement: what a finished run means is a property of the
+	// context, not of the execution machinery.
+	async function settleExecution(record, ctx) {
+		if (panelContext !== ctx) return;
+		const settle = panelSettle;
+		if (!settle) return;
+		await settle(record, ctx);
+	}
+
+	// settleSpecExecution reloads the detail once the run is over: the plan, the
+	// spec status, the actions and the execution panel are all redrawn from the
+	// server rather than guessed here. The board follows only on success, because
+	// that is the only outcome that can have moved the card.
+	async function settleSpecExecution(record) {
+		if (!currentSpecCode) return;
 		const succeeded = record.status === "SUCCEEDED";
-		await openEditor(code);
+		await openEditor(currentSpecCode);
 		if (succeeded) await loadBoard();
 	}
 
@@ -1839,15 +1916,15 @@
 		executionPollTimer = null;
 	}
 
-	// startExecutionPolling follows one execution of one spec. Every tick checks
-	// that the spec it was started for is still the open one: the modal stays
-	// closable and the board navigable while the provider works, so the timer
-	// must be able to notice it has been left behind.
-	function startExecutionPolling(executionID, code) {
+	// startExecutionPolling follows one execution of one context. Every tick
+	// checks that the context it was started for is still the mounted one: the
+	// modal stays closable and the board navigable while the provider works, so
+	// the timer must be able to notice it has been left behind.
+	function startExecutionPolling(executionID, ctx) {
 		stopExecutionPolling();
-		if (!executionID || !code) return;
+		if (!executionID || !ctx) return;
 		executionPollTimer = setInterval(async () => {
-			if (currentSpecCode !== code) {
+			if (panelContext !== ctx) {
 				stopExecutionPolling();
 				return;
 			}
@@ -1860,18 +1937,18 @@
 				stopExecutionPolling();
 				renderExecution(
 					lastExecutionRecord,
-					`Status unavailable: ${err.message || err}. Reopen the spec to check again.`,
+					`Status unavailable: ${err.message || err}. Reopen to check again.`,
 				);
 				return;
 			}
-			if (currentSpecCode !== code) {
+			if (panelContext !== ctx) {
 				stopExecutionPolling();
 				return;
 			}
 			renderExecution(record);
 			if (!isExecutionTerminal(record)) return;
 			stopExecutionPolling();
-			await settleExecution(record, code);
+			await settleExecution(record, ctx);
 		}, EXECUTION_POLL_MS);
 	}
 
@@ -1879,8 +1956,9 @@
 	// means no panel: a spec that was never run shows nothing at all.
 	function renderExecution(record, note) {
 		lastExecutionRecord = record || null;
+		if (!panelExecution) return;
 		if (!record) {
-			storyExecution.innerHTML = "";
+			panelExecution.innerHTML = "";
 			return;
 		}
 		const state =
@@ -1939,7 +2017,7 @@
 		if (note) {
 			blocks.push(`<div class="execution-message">${escapeHtml(note)}</div>`);
 		}
-		storyExecution.innerHTML = `<div class="execution-panel execution-${state}">
+		panelExecution.innerHTML = `<div class="execution-panel execution-${state}">
 			<div class="execution-head">
 				<span class="execution-dot" aria-hidden="true"></span>
 				<span class="execution-headline">${headline}</span>
@@ -2037,9 +2115,9 @@
 		runPollTimer = null;
 	}
 
-	// resetRunState forgets the run of the spec being left. It is called before
-	// a detail is loaded, exactly like renderExecution(null), so nothing of the
-	// previous run can survive into the next one.
+	// resetRunState forgets the run of the context being left. It is called
+	// before a detail is loaded, exactly like renderExecution(null), so nothing
+	// of the previous run can survive into the next one.
 	function resetRunState() {
 		stopRunPolling();
 		runExecutionID = null;
@@ -2063,7 +2141,7 @@
 		runPollBusy = false;
 		runPollFailures = 0;
 		runPollAbandoned = false;
-		storyRun.innerHTML = "";
+		if (panelRun) panelRun.innerHTML = "";
 	}
 
 	// resumeRun asks once whether the execution has an interactive run, and
@@ -2071,8 +2149,8 @@
 	//
 	// A 409 is an answer, not a failure: this provider exposes no run, or the
 	// workspace has no provider that could. The panel simply does not appear.
-	async function resumeRun(record, code) {
-		if (!record || !record.id || !code) return;
+	async function resumeRun(record, ctx) {
+		if (!record || !record.id || !ctx) return;
 		const executionID = record.id;
 		let view;
 		try {
@@ -2080,13 +2158,13 @@
 				`/api/execution/${encodeURIComponent(executionID)}/run?after_id=0`,
 			);
 		} catch (err) {
-			if (currentSpecCode !== code) return;
+			if (panelContext !== ctx) return;
 			if (err.status === 409 || err.code === "E_CONFLICT") return;
 			runNotice = `The run of this execution cannot be read: ${err.message || err}`;
 			renderRun();
 			return;
 		}
-		if (currentSpecCode !== code) return;
+		if (panelContext !== ctx) return;
 		runExecutionID = executionID;
 		applyRunView(view);
 		renderRun();
@@ -2094,25 +2172,25 @@
 			// The remote work exists but has not been handed to a run yet. That is
 			// worth waiting for while the execution can still get one, and worth
 			// nothing once the execution is over.
-			if (!isExecutionTerminal(record)) startRunPolling(executionID, code);
+			if (!isExecutionTerminal(record)) startRunPolling(executionID, ctx);
 			return;
 		}
-		startRunPolling(executionID, code);
+		startRunPolling(executionID, ctx);
 	}
 
-	// startRunPolling follows one run of one spec, with the discipline of
-	// startExecutionPolling: every tick checks that the spec it was started for
-	// is still the open one, and stops itself when it is not.
+	// startRunPolling follows one run of one context, with the discipline of
+	// startExecutionPolling: every tick checks that the context it was started
+	// for is still the mounted one, and stops itself when it is not.
 	//
 	// The loop keeps going after the run has left ACTIVE, because a closed run
 	// can still have a final turn to deliver. It stops when the state is no
 	// longer ACTIVE *and* a read brought nothing new, so the last turn is never
 	// cut off.
-	function startRunPolling(executionID, code) {
+	function startRunPolling(executionID, ctx) {
 		stopRunPolling();
-		if (!executionID || !code) return;
+		if (!executionID || !ctx) return;
 		runPollTimer = setInterval(async () => {
-			if (currentSpecCode !== code) {
+			if (panelContext !== ctx) {
 				stopRunPolling();
 				return;
 			}
@@ -2125,7 +2203,7 @@
 				);
 			} catch (err) {
 				runPollBusy = false;
-				if (currentSpecCode !== code) {
+				if (panelContext !== ctx) {
 					stopRunPolling();
 					return;
 				}
@@ -2137,13 +2215,13 @@
 					// Nothing is reconnecting any more, so the panel must stop
 					// saying that it is.
 					runPollAbandoned = true;
-					runNotice = `Run unavailable: ${err.message || err}. Reopen the spec to follow it again.`;
+					runNotice = `Run unavailable: ${err.message || err}. Reopen to follow it again.`;
 				}
 				renderRun();
 				return;
 			}
 			runPollBusy = false;
-			if (currentSpecCode !== code) {
+			if (panelContext !== ctx) {
 				stopRunPolling();
 				return;
 			}
@@ -2226,7 +2304,7 @@
 		if (runBusy || !runExecutionID) return;
 		const message = runDraft.trim();
 		if (!message) return;
-		const code = currentSpecCode;
+		const ctx = panelContext;
 		runBusy = true;
 		renderRun();
 		try {
@@ -2234,7 +2312,7 @@
 				`/api/execution/${encodeURIComponent(runExecutionID)}/run/messages?after_id=${runAfterID}`,
 				{ message },
 			);
-			if (currentSpecCode !== code) return;
+			if (panelContext !== ctx) return;
 			// Accepted means delivered to the runner, not published: the text
 			// stays out of the timeline until a user_message event carries it
 			// back. Until then it is visible as pending, and only as pending.
@@ -2244,17 +2322,17 @@
 			runOutcome = "";
 			applyRunView(view);
 		} catch (err) {
-			if (currentSpecCode !== code) return;
+			if (panelContext !== ctx) return;
 			showRunRefusal(err);
 		} finally {
 			runBusy = false;
-			if (currentSpecCode === code) renderRun();
+			if (panelContext === ctx) renderRun();
 		}
 	}
 
 	async function respondRunApproval(approvalID, optionID) {
 		if (runBusy || !runExecutionID || !approvalID || !optionID) return;
-		const code = currentSpecCode;
+		const ctx = panelContext;
 		const answering = findRunApproval(approvalID);
 		const option = findRunApprovalOption(answering, optionID);
 		const label = (option && (option.label || option.id)) || optionID;
@@ -2265,7 +2343,7 @@
 				`/api/execution/${encodeURIComponent(runExecutionID)}/run/approvals/${encodeURIComponent(approvalID)}?after_id=${runAfterID}`,
 				{ option_id: optionID },
 			);
-			if (currentSpecCode !== code) return;
+			if (panelContext !== ctx) return;
 			runRefusal = "";
 			applyRunView(view);
 			// The outcome is read back from the projection the server returned,
@@ -2289,11 +2367,11 @@
 				};
 			}
 		} catch (err) {
-			if (currentSpecCode !== code) return;
+			if (panelContext !== ctx) return;
 			showRunRefusal(err);
 		} finally {
 			runBusy = false;
-			if (currentSpecCode === code) renderRun();
+			if (panelContext === ctx) renderRun();
 		}
 	}
 
@@ -2327,7 +2405,7 @@
 
 	async function cancelRun() {
 		if (runBusy || !runExecutionID) return;
-		const code = currentSpecCode;
+		const ctx = panelContext;
 		runCancelArmed = false;
 		runBusy = true;
 		renderRun();
@@ -2336,7 +2414,7 @@
 				`/api/execution/${encodeURIComponent(runExecutionID)}/run/cancel?after_id=${runAfterID}`,
 				{},
 			);
-			if (currentSpecCode !== code) return;
+			if (panelContext !== ctx) return;
 			runRefusal = "";
 			// runCancelSent records that the command was delivered — a fact about
 			// the command, never about the run. No terminal state is written
@@ -2344,13 +2422,13 @@
 			// by this view and by the reads that follow.
 			runCancelSent = true;
 			applyRunView(view);
-			startRunPolling(runExecutionID, code);
+			startRunPolling(runExecutionID, ctx);
 		} catch (err) {
-			if (currentSpecCode !== code) return;
+			if (panelContext !== ctx) return;
 			showRunRefusal(err);
 		} finally {
 			runBusy = false;
-			if (currentSpecCode === code) renderRun();
+			if (panelContext === ctx) renderRun();
 		}
 	}
 
@@ -2359,11 +2437,12 @@
 	// the two things a re-render would otherwise steal: the text being typed
 	// and the reading position in the timeline.
 	function renderRun() {
+		if (!panelRun) return;
 		if (!runSnapshot && !runNotice) {
-			storyRun.innerHTML = "";
+			panelRun.innerHTML = "";
 			return;
 		}
-		const timeline = storyRun.querySelector(".run-timeline");
+		const timeline = panelRun.querySelector(".run-timeline");
 		const previousTop = timeline ? timeline.scrollTop : 0;
 		const wasAtBottom = timeline
 			? timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 24
@@ -2377,7 +2456,7 @@
 		const caret = composerHadFocus ? focused.selectionStart : 0;
 
 		if (!runSnapshot) {
-			storyRun.innerHTML = `<section class="run-panel">
+			panelRun.innerHTML = `<section class="run-panel">
 				${runNotice ? renderRunNotice("info", "waiting", runNotice) : ""}
 			</section>`;
 			return;
@@ -2435,7 +2514,7 @@
 		}
 		blocks.push(renderRunComposer());
 
-		storyRun.innerHTML = `<section class="run-panel ${variant}" aria-label="Remote run">
+		panelRun.innerHTML = `<section class="run-panel ${variant}" aria-label="Remote run">
 			<div class="run-head">
 				<span class="run-badge">${escapeHtml(RUN_STATE_LABELS[runSnapshot.state] || "run")}</span>
 				<code class="run-id">${escapeHtml(runSnapshot.run_id || "")}</code>
@@ -2445,13 +2524,13 @@
 			${blocks.join("")}
 		</section>`;
 
-		const nextTimeline = storyRun.querySelector(".run-timeline");
+		const nextTimeline = panelRun.querySelector(".run-timeline");
 		if (nextTimeline) {
 			nextTimeline.scrollTop = wasAtBottom
 				? nextTimeline.scrollHeight
 				: previousTop;
 		}
-		const input = storyRun.querySelector(".run-composer-input");
+		const input = panelRun.querySelector(".run-composer-input");
 		if (input) {
 			// The draft is restored as a value and never as markup, so no amount
 			// of typing can reach the parser.
@@ -3280,20 +3359,87 @@
 		prdStatus.textContent = "Loading...";
 		prdStatus.className = "status-msg";
 		try {
-			const data = await apiGet("/api/prd");
-			currentPrdSnapshot = (data && data.body) || "";
-			fillPrdView(currentPrdSnapshot);
-			prdEditor.value(currentPrdSnapshot);
+			await reloadPrdBody();
 			prdStatus.textContent = "";
 		} catch (err) {
 			prdStatus.textContent = `Load failed: ${err.message || err}`;
 			prdStatus.className = "status-msg err";
 		}
+		await loadInception();
+	}
+
+	async function reloadPrdBody() {
+		const data = await apiGet("/api/prd");
+		currentPrdSnapshot = (data && data.body) || "";
+		fillPrdView(currentPrdSnapshot);
+		prdEditor.value(currentPrdSnapshot);
 	}
 
 	function closePRD() {
 		prdModal.classList.add("hidden");
 		showPrdView();
+		hideInception();
+	}
+
+	// ---- Workspace inception -------------------------------------------------
+	//
+	// A workspace-scoped action is offered by the same panel the spec detail
+	// uses, mounted on the PRD modal instead. Whether it is offered at all is a
+	// server verdict — `has_prd` plus the action's own `runnable` — so nothing
+	// here decides when a first inception is admissible.
+
+	async function loadInception() {
+		let view;
+		try {
+			view = await apiGet("/api/workspace/actions");
+		} catch (_) {
+			// The workspace actions are an addition to the PRD modal, not a
+			// precondition of it: a viewer that cannot answer simply offers none.
+			hideInception();
+			return;
+		}
+		if (prdModal.classList.contains("hidden")) return;
+		if (!view || view.has_prd) {
+			hideInception();
+			return;
+		}
+		prdInception.classList.remove("hidden");
+		mountExecutionPanels({
+			context: WORKSPACE_INCEPTION_CONTEXT,
+			startURL: "/api/workspace/execution",
+			actions: inceptionActions,
+			execution: inceptionExecution,
+			run: inceptionRun,
+			settle: settleInception,
+		});
+		renderSpecActions(view.actions);
+		// The server hands back the workspace's last execution on every read, so
+		// reopening the modal finds the conversation it left behind and resumes
+		// following it without ever starting a second one.
+		resumeExecution(view.execution, WORKSPACE_INCEPTION_CONTEXT);
+	}
+
+	function hideInception() {
+		unmountExecutionPanels(WORKSPACE_INCEPTION_CONTEXT);
+		prdInception.classList.add("hidden");
+		inceptionActions.innerHTML = "";
+		inceptionExecution.innerHTML = "";
+		inceptionRun.innerHTML = "";
+	}
+
+	// settleInception reads the outcome back from the server rather than
+	// asserting it: the PRD body is re-fetched, and whether the action is still
+	// offered is decided by the same route that offered it. A run that failed
+	// leaves the workspace without a PRD, so the panel comes back carrying the
+	// reason instead of disappearing.
+	async function settleInception() {
+		try {
+			await reloadPrdBody();
+		} catch (_) {
+			// The PRD is unreadable for now; the reload below still reports the
+			// state of the execution.
+		}
+		await loadInception();
 	}
 
 	function fillPrdView(body) {
@@ -3331,6 +3477,9 @@
 			prdStatus.textContent = "Saved";
 			prdStatus.className = "status-msg ok";
 			showToast("PRD updated", "ok");
+			// A PRD written by hand is a PRD: the first-inception action must stop
+			// being offered, and that verdict is re-read rather than assumed.
+			await loadInception();
 		} catch (err) {
 			prdStatus.textContent = `Save failed: ${err.message || err}`;
 			prdStatus.className = "status-msg err";

@@ -124,6 +124,10 @@ func (s *FileStore) Update(ctx context.Context, execution Execution) error {
 // spec. There is no index and no cache on purpose: the number of local records
 // is small, and a cache would add a state to invalidate for a gain nobody can
 // measure.
+//
+// An empty specCode is not a wildcard: it selects the executions whose object
+// is the workspace rather than a spec, which are stored with an empty
+// spec_code. That is the read the viewer uses to list workspace-scoped runs.
 func (s *FileStore) ListBySpec(ctx context.Context, specCode string) ([]Execution, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

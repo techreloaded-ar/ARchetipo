@@ -120,10 +120,17 @@ func installSkillIn(t *testing.T, dir string) string {
 
 // fixedElapsedClock reports a start instant and then an instant one step later,
 // so the recorded duration is asserted instead of measured.
+//
+// It is guarded by a mutex because the clock is read from more than one
+// goroutine: the run reads it to date its events while the caller reads it to
+// measure the work, and in a conversation the two really do overlap.
 func fixedElapsedClock(step time.Duration) func() time.Time {
 	base := time.Date(2026, 8, 19, 9, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
 	calls := 0
 	return func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
 		calls++
 		if calls == 1 {
 			return base
@@ -219,8 +226,8 @@ func TestProviderDeclaresIdentityAndPlanCapability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(capabilities, []execution.Capability{execution.CapabilitySpecPlan}) {
-		t.Fatalf("capabilities = %#v, want spec.plan alone", capabilities)
+	if !reflect.DeepEqual(capabilities, []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilityWorkspaceInception}) {
+		t.Fatalf("capabilities = %#v, want spec.plan and workspace.inception", capabilities)
 	}
 }
 
@@ -595,14 +602,14 @@ func TestProviderDeclaresTheDialogueThroughTheInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(declared, []execution.Capability{execution.CapabilitySpecPlan}) {
-		t.Fatalf("Capabilities = %#v, want spec.plan alone: run.dialog is derived, not declared", declared)
+	if !reflect.DeepEqual(declared, []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilityWorkspaceInception}) {
+		t.Fatalf("Capabilities = %#v, want the two dispatched actions: run.dialog is derived, not declared", declared)
 	}
 	got, err := execution.DeclaredCapabilities(context.Background(), provider)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := execution.NormalizeCapabilities([]execution.Capability{execution.CapabilitySpecPlan, execution.CapabilityRunDialog})
+	want := execution.NormalizeCapabilities([]execution.Capability{execution.CapabilitySpecPlan, execution.CapabilityWorkspaceInception, execution.CapabilityRunDialog})
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("DeclaredCapabilities = %#v, want %#v", got, want)
 	}

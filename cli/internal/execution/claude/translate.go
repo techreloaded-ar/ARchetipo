@@ -78,6 +78,18 @@ func (s *streamSession) project(f frame, raw json.RawMessage) {
 		s.completed = !f.IsError
 		s.finalMessage = f.Result
 		s.mu.Unlock()
+		// The end of the turn is claimed here, in the same breath as the result
+		// that ended it, and only closed once the outcome has been published and
+		// the event appended. Claiming first is what makes the whole sequence one
+		// decision: a message sent while it is still running opens the next turn
+		// on its own wait, and the close below can then only fall on the turn it
+		// belongs to. Publishing before closing is deliberate too — a caller woken
+		// by TurnDone already finds what the turn ended with instead of having to
+		// race for it.
+		done := s.claimTurnEnd()
+		// FinalMessage, not the raw result, because a turn that ends with an empty
+		// result still ended on the agent's last words.
+		s.publishTurn(TurnOutcome{Completed: !f.IsError, Final: s.FinalMessage()})
 		s.append(localrun.KindTurnEnd, "", "", raw)
 		s.mu.Lock()
 		// The next turn starts on a fresh seq, and the tools of the turn that
@@ -85,7 +97,9 @@ func (s *streamSession) project(f frame, raw json.RawMessage) {
 		s.seq++
 		s.tools = make(map[string]string)
 		s.mu.Unlock()
-		s.endTurn()
+		if done != nil {
+			close(done)
+		}
 	default:
 		s.append(kindOf(f), "", "", raw)
 	}

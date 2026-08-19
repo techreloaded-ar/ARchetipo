@@ -87,6 +87,17 @@ func (s *Service) Start(ctx context.Context, spec domain.Spec, action ActionID, 
 	return s.start(ctx, spec, action, providerID, providerConfig, "", s.newID, confirm)
 }
 
+// StartWorkspace is Start for an action whose object is the workspace itself
+// rather than a spec. It deliberately does not duplicate the pipeline: the
+// capability check, the config validation, the RUNNING record and the
+// continuation are exactly the ones spec-scoped executions go through, and the
+// only difference is the zero spec, which lands on the record as an empty
+// spec_code. The same contract on the continuation applies — it MUST be invoked
+// exactly once.
+func (s *Service) StartWorkspace(ctx context.Context, action ActionID, providerID string, providerConfig map[string]any, confirm Confirmation) (Execution, Continuation, error) {
+	return s.start(ctx, domain.Spec{}, action, providerID, providerConfig, "", s.newID, confirm)
+}
+
 // Run dispatches the action through the provider with a freshly generated
 // execution id. Every invocation creates a new record.
 func (s *Service) Run(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any) (Execution, error) {
@@ -139,9 +150,32 @@ func (s *Service) run(ctx context.Context, spec domain.Spec, action ActionID, pr
 	return continuation(ctx)
 }
 
+// validateActionObject keeps the two rules about the object of an action side
+// by side: a spec-scoped action needs a spec, and a workspace-scoped one must
+// not carry any — a workspace action with a spec on it is a caller mistake, not
+// a more permissive execution.
+func validateActionObject(action ActionID, specCode string) error {
+	scope, err := ActionScope(action)
+	if err != nil {
+		return err
+	}
+	code := strings.TrimSpace(specCode)
+	switch scope {
+	case ScopeSpec:
+		if code == "" {
+			return fmt.Errorf("spec code is required")
+		}
+	case ScopeWorkspace:
+		if code != "" {
+			return fmt.Errorf("action %q is workspace-scoped and takes no spec code", action)
+		}
+	}
+	return nil
+}
+
 func (s *Service) start(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any, requestID string, resolveID func() (string, error), confirm Confirmation) (Execution, Continuation, error) {
-	if strings.TrimSpace(spec.Code) == "" {
-		return Execution{}, nil, fmt.Errorf("spec code is required")
+	if err := validateActionObject(action, spec.Code); err != nil {
+		return Execution{}, nil, err
 	}
 	capability, err := RequiredCapability(action)
 	if err != nil {

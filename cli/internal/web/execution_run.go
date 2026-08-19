@@ -354,6 +354,22 @@ type specActionView struct {
 // The whole computation lives on the server on purpose: the browser must not
 // learn which provider exists, what a capability is, or when a spec is busy.
 type actionAvailability struct {
+	// providerAvailability is the half of the answer that does not depend on
+	// the object of the action: which default provider this workspace has, and
+	// whether it can be used at all. It is shared with the workspace-scoped
+	// route so the two never describe the same configuration differently.
+	providerAvailability
+	runningID      string
+	specHasRunning bool
+}
+
+// providerAvailability answers "which provider would this workspace run with,
+// and can it?" once per request, so a per-action loop does not re-read the
+// configuration or re-ask the provider for its capabilities.
+//
+// The whole computation lives on the server on purpose: the browser must not
+// learn which provider exists or what a capability is.
+type providerAvailability struct {
 	providerID   string
 	capabilities []execution.Capability
 	providerErr  error
@@ -364,15 +380,14 @@ type actionAvailability struct {
 	unavailableReason string
 	noDefault         bool
 	noRegistry        bool
-	runningID         string
-	specHasRunning    bool
+	// providerConfig is the config block saved next to the default provider id.
+	// It travels with the availability so a route that has just decided the
+	// provider is usable can dispatch with the very configuration it probed.
+	providerConfig map[string]any
 }
 
 func (s *Server) actionAvailabilityFor(ctx context.Context, code string) actionAvailability {
 	availability := actionAvailability{}
-	if s.service == nil {
-		availability.noRegistry = true
-	}
 	if id, busy := s.dispatch.current(code); busy {
 		availability.specHasRunning = true
 		availability.runningID = id
@@ -382,6 +397,18 @@ func (s *Server) actionAvailabilityFor(ctx context.Context, code string) actionA
 			availability.specHasRunning = true
 			availability.runningID = records[0].ID
 		}
+	}
+	availability.providerAvailability = s.providerAvailabilityFor(ctx)
+	return availability
+}
+
+// providerAvailabilityFor resolves the default provider of this workspace and
+// probes it. The default is read from disk, not from the config the server
+// booted with: the Execution panel can change it while the viewer runs.
+func (s *Server) providerAvailabilityFor(ctx context.Context) providerAvailability {
+	availability := providerAvailability{}
+	if s.service == nil {
+		availability.noRegistry = true
 	}
 	current, _, _, _, err := readConfigState(s.cfg.ProjectRoot)
 	if err != nil {
@@ -394,6 +421,7 @@ func (s *Server) actionAvailabilityFor(ctx context.Context, code string) actionA
 		return availability
 	}
 	availability.providerID = strings.TrimSpace(selection.ID)
+	availability.providerConfig = selection.Config
 	if s.registry == nil {
 		availability.providerErr = fmt.Errorf("no provider is registered")
 		return availability
@@ -432,6 +460,14 @@ func (a actionAvailability) reasonFor(actionID string) string {
 		}
 		return "an execution is already running for this spec"
 	}
+	return a.providerAvailability.reasonFor(capability)
+}
+
+// reasonFor returns the reason the default provider cannot run an action that
+// requires capability, or "" when it can. It is the half of the diagnosis that
+// is the same for a spec action and for a workspace one, so both routes say the
+// same sentence about the same configuration.
+func (a providerAvailability) reasonFor(capability execution.Capability) string {
 	if a.noRegistry {
 		return "no execution provider is registered in this viewer"
 	}
@@ -499,7 +535,7 @@ func actionNames(actions []template.Action) string {
 // supportedActions lists the actions the viewer can dispatch, derived from the
 // capability map rather than restated, so adding one there adds it here too.
 func supportedActions() string {
-	known := []execution.ActionID{execution.ActionPlan}
+	known := []execution.ActionID{execution.ActionPlan, execution.ActionInception}
 	out := make([]string, 0, len(known))
 	for _, action := range known {
 		out = append(out, string(action))

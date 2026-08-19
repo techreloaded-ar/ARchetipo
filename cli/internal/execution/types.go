@@ -12,9 +12,15 @@ type ActionID string
 type Capability string
 type ExecutionStatus string
 
+// An action is what the caller asks for; a capability is what a provider
+// declares it can do. The two are kept distinct on purpose: the caller never
+// names a capability, and a provider never names an action.
 const (
-	ActionPlan         ActionID   = "plan"
-	CapabilitySpecPlan Capability = "spec.plan"
+	ActionPlan      ActionID = "plan"
+	ActionInception ActionID = "inception"
+
+	CapabilitySpecPlan           Capability = "spec.plan"
+	CapabilityWorkspaceInception Capability = "workspace.inception"
 	// CapabilityRunDialog says that a provider exposes a run one can follow and
 	// command while it works: read its history, send it a message, cancel it. It
 	// is not a statement about the work the provider can do — a provider can
@@ -94,6 +100,32 @@ func RequiredCapability(action ActionID) (Capability, error) {
 	switch action {
 	case ActionPlan:
 		return CapabilitySpecPlan, nil
+	case ActionInception:
+		return CapabilityWorkspaceInception, nil
+	default:
+		return "", &ActionError{Action: action}
+	}
+}
+
+// Scope says what an action acts upon. It is derived from the action and never
+// stored on the execution record: the action determines the scope totally, and
+// a stored field that can be derived is a field that can contradict what it is
+// derived from.
+type Scope string
+
+const (
+	ScopeSpec      Scope = "spec"
+	ScopeWorkspace Scope = "workspace"
+)
+
+// ActionScope reports whether the object of an action is a single spec or the
+// whole workspace.
+func ActionScope(action ActionID) (Scope, error) {
+	switch action {
+	case ActionPlan:
+		return ScopeSpec, nil
+	case ActionInception:
+		return ScopeWorkspace, nil
 	default:
 		return "", &ActionError{Action: action}
 	}
