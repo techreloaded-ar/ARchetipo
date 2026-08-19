@@ -15,6 +15,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/codex"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
@@ -25,15 +26,16 @@ import (
 // absent by luck.
 const codexAuthSentinel = "codex-session-token-DO-NOT-PERSIST"
 
-// codexScript drives the fake Codex runtime for one scenario. It is the single
-// seam the provider offers, so every test here exercises the real command
-// building, the real availability probe and the real receipt gate without a
+// codexScript drives the fake Codex runtime for one scenario. It stands in for
+// both seams the provider offers — the one-shot runner behind the availability
+// probe and the live process behind the session — so every test here exercises
+// the real handshake, the real translation and the real receipt gate without a
 // `codex` binary existing anywhere on the machine.
 //
-// The two invocations the provider makes are kept apart on purpose: `--version`
-// is the availability probe, everything else is the agent run. Scripting them
-// separately is what lets a test say "the runtime is not usable" without also
-// saying anything about the run that would have followed.
+// The two are kept apart on purpose: `--version` is the availability probe, the
+// session is the agent run. Scripting them separately is what lets a test say
+// "the runtime is not usable" without also saying anything about the run that
+// would have followed.
 type codexScript struct {
 	mu sync.Mutex
 
@@ -44,17 +46,148 @@ type codexScript struct {
 	versionExit int
 	versionOut  string
 
-	// exec describes the agent run. It may reach back into the CLI to persist a
-	// plan, exactly as the local agent does.
-	exec func() (stdout string, stderr string, exitCode int, err error)
+	// exec describes the agent run: the last message the agent leaves — which is
+	// where the receipt is expected — the tail of the process's standard error,
+	// its exit code, and a failure to run it at all. It may reach back into the
+	// CLI to persist a plan, exactly as the local agent does.
+	//
+	// A non-zero exit code or a non-nil error describes a process that died
+	// without finishing its turn, which is how a real failed session ends.
+	exec func() (finalMessage string, stderr string, exitCode int, err error)
 
 	versionCalls int
 	execCalls    int
 	execArgs     []string
 	execDir      string
+	prompt       string
 }
 
-var _ codex.Runner = (*codexScript)(nil)
+var (
+	_ codex.Runner     = (*codexScript)(nil)
+	_ localrun.Starter = (*codexScript)(nil)
+)
+
+// Start opens the fake session. The provider drives it with the real protocol
+// client, so what is asserted downstream is the production handshake and not a
+// shortcut.
+func (s *codexScript) Start(_ context.Context, dir string, _ string, args []string) (localrun.Process, error) {
+	s.mu.Lock()
+	s.execCalls++
+	s.execArgs = append([]string(nil), args...)
+	s.execDir = dir
+	exec := s.exec
+	s.mu.Unlock()
+	return newCodexSessionProcess(s, exec), nil
+}
+
+// codexSessionProcess answers the app-server protocol and nothing else.
+type codexSessionProcess struct {
+	script *codexScript
+	exec   func() (string, string, int, error)
+
+	mu       sync.Mutex
+	ended    bool
+	lines    chan []byte
+	once     sync.Once
+	done     chan struct{}
+	stderr   string
+	exitCode int
+	failure  error
+}
+
+func newCodexSessionProcess(script *codexScript, exec func() (string, string, int, error)) *codexSessionProcess {
+	return &codexSessionProcess{
+		script: script,
+		exec:   exec,
+		lines:  make(chan []byte, 64),
+		done:   make(chan struct{}),
+	}
+}
+
+func (p *codexSessionProcess) Send(line []byte) error {
+	var message struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+	}
+	if err := json.Unmarshal(line, &message); err != nil {
+		return err
+	}
+	switch message.Method {
+	case "initialize":
+		p.reply(message.ID, `{"userAgent":"fake"}`)
+	case "thread/start":
+		p.reply(message.ID, `{"thread":{"id":"thread-1"}}`)
+	case "turn/start":
+		p.script.recordPrompt(line)
+		p.reply(message.ID, `{"turn":{"id":"turn-1"}}`)
+		go p.work()
+	}
+	return nil
+}
+
+// work is the agent's turn: it does whatever the scenario scripted, leaves its
+// last message, and either completes the turn or dies the way a failing process
+// dies.
+func (p *codexSessionProcess) work() {
+	finalMessage, stderr, exitCode, failure := "", "", 0, error(nil)
+	if p.exec != nil {
+		finalMessage, stderr, exitCode, failure = p.exec()
+	}
+	p.mu.Lock()
+	p.stderr, p.exitCode, p.failure = stderr, exitCode, failure
+	p.mu.Unlock()
+
+	if strings.TrimSpace(finalMessage) != "" {
+		payload, err := json.Marshal(map[string]any{"type": "agentMessage", "text": finalMessage})
+		if err == nil {
+			p.emit(`{"item":` + string(payload) + `}`)
+		}
+	}
+	if exitCode != 0 || failure != nil {
+		p.end()
+		return
+	}
+	p.push([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-1"}}}`))
+}
+
+func (p *codexSessionProcess) reply(id json.RawMessage, result string) {
+	p.push([]byte(`{"id":` + string(id) + `,"result":` + result + `}`))
+}
+
+func (p *codexSessionProcess) emit(params string) {
+	p.push([]byte(`{"method":"item/completed","params":` + params + `}`))
+}
+
+func (p *codexSessionProcess) push(payload []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ended {
+		return
+	}
+	p.lines <- payload
+}
+
+func (p *codexSessionProcess) end() {
+	p.once.Do(func() {
+		p.mu.Lock()
+		p.ended = true
+		p.mu.Unlock()
+		close(p.lines)
+		close(p.done)
+	})
+}
+
+func (p *codexSessionProcess) Lines() <-chan []byte { return p.lines }
+
+func (p *codexSessionProcess) Signal() error { p.end(); return nil }
+
+func (p *codexSessionProcess) Wait() (int, string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.exitCode, p.stderr, p.failure
+}
+
+func (p *codexSessionProcess) Close() error { p.end(); return nil }
 
 func (s *codexScript) Run(_ context.Context, dir string, _ string, args []string) (string, string, int, error) {
 	s.mu.Lock()
@@ -73,13 +206,33 @@ func (s *codexScript) Run(_ context.Context, dir string, _ string, args []string
 		}
 		return out, "", 0, nil
 	}
-	s.execCalls++
-	s.execArgs = append([]string(nil), args...)
-	s.execDir = dir
-	if s.exec == nil {
-		return "", "", 0, nil
+	// Everything that is not the probe would be a one-shot agent run, and there
+	// is no such thing any more: the agent runs inside a session.
+	return "", "", 0, fmt.Errorf("unexpected one-shot invocation: %v", args)
+}
+
+// recordPrompt keeps the text the provider really asked the agent to work on,
+// which now travels inside turn/start instead of on the command line.
+func (s *codexScript) recordPrompt(line []byte) {
+	var request struct {
+		Params struct {
+			Input []struct {
+				Text string `json:"text"`
+			} `json:"input"`
+		} `json:"params"`
 	}
-	return s.exec()
+	if json.Unmarshal(line, &request) != nil || len(request.Params.Input) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prompt = request.Params.Input[0].Text
+}
+
+func (s *codexScript) promptSent() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.prompt
 }
 
 func (s *codexScript) snapshot() (versionCalls, execCalls int, args []string, dir string) {
@@ -142,7 +295,7 @@ func newCodexScenario(t *testing.T, script *codexScript) executionDependencies {
 	t.Setenv("CODEX_TEST_AUTH", codexAuthSentinel)
 	t.Chdir(t.TempDir())
 	deps := executionTestDeps(t)
-	if err := deps.registry.Register(codex.New(codex.Options{Runner: script})); err != nil {
+	if err := deps.registry.Register(codex.New(codex.Options{Runner: script, Starter: script})); err != nil {
 		t.Fatal(err)
 	}
 	seedExecutionSpec(t, deps)
@@ -218,10 +371,13 @@ func TestCodexPlanLocalHappyPath(t *testing.T) {
 	if versionCalls != 1 || execCalls != 1 {
 		t.Fatalf("version calls = %d, exec calls = %d", versionCalls, execCalls)
 	}
-	if len(args) == 0 || args[0] != "exec" {
-		t.Fatalf("the codex invocation is not an exec run: %#v", args)
+	// The invocation is the session one; the prompt no longer travels on the
+	// command line but inside the protocol, so it is asserted on the turn the
+	// provider opened.
+	if len(args) == 0 || args[0] != "app-server" {
+		t.Fatalf("the codex invocation does not open a session: %#v", args)
 	}
-	if prompt := args[len(args)-1]; !strings.Contains(prompt, "US-001") || !strings.Contains(prompt, "/archetipo-plan") {
+	if prompt := script.promptSent(); !strings.Contains(prompt, "US-001") || !strings.Contains(prompt, "/archetipo-plan") {
 		t.Fatalf("the prompt does not ask to plan US-001: %q", prompt)
 	}
 	cwd, err := os.Getwd()
@@ -338,7 +494,7 @@ func TestCodexLocalFailuresPreserveTheSpec(t *testing.T) {
 					return codexNoisyOutput("All done, I planned everything."), "", 0, nil
 				}
 			},
-			wantText: []string{"exited 0 without having produced a plan for US-001"},
+			wantText: []string{"ended without having produced a plan for US-001"},
 			wantExec: 1,
 		},
 	} {

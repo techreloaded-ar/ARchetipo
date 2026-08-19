@@ -197,47 +197,14 @@ func TestValidateConfigAcceptsAnAbsentCommandAndRejectsAnUnknownKey(t *testing.T
 
 // --- buildArgs -------------------------------------------------------------
 
-func TestBuildArgsKeepsExecFirstAndThePromptLast(t *testing.T) {
-	const prompt = "PROMPT-BODY"
-	cases := []struct {
-		name string
-		cfg  settings
-		want []string
-	}{
-		{
-			name: "defaults",
-			cfg:  settings{Command: "codex"},
-			want: []string{"exec", "-s", "workspace-write", "--skip-git-repo-check", prompt},
-		},
-		{
-			name: "with model",
-			cfg:  settings{Command: "codex", Model: "gpt-5-codex"},
-			want: []string{"exec", "-s", "workspace-write", "--skip-git-repo-check", "--model", "gpt-5-codex", prompt},
-		},
-		{
-			name: "exec_args replaces the intermediate flags",
-			cfg:  settings{Command: "codex", ExecArgs: []string{"--yolo", "--sandbox", "none"}},
-			want: []string{"exec", "--yolo", "--sandbox", "none", prompt},
-		},
-		{
-			name: "exec_args and model",
-			cfg:  settings{Command: "codex", Model: "gpt-5-codex", ExecArgs: []string{"--yolo"}},
-			want: []string{"exec", "--yolo", "--model", "gpt-5-codex", prompt},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := buildArgs(tc.cfg, prompt)
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("args = %#v, want %#v", got, tc.want)
-			}
-			if got[0] != "exec" {
-				t.Fatalf("first argument = %q, want the exec subcommand", got[0])
-			}
-			if got[len(got)-1] != prompt {
-				t.Fatalf("last argument = %q, want the prompt", got[len(got)-1])
-			}
-		})
+// The invocation is the session one: `codex app-server --listen stdio://`. It
+// is asserted literally because it is the single line that decides whether the
+// process can hold a conversation at all — `codex exec` cannot.
+func TestBuildArgsStartsTheStdioAppServer(t *testing.T) {
+	got := buildArgs()
+	want := []string{"app-server", "--listen", "stdio://"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("args = %#v, want %#v", got, want)
 	}
 }
 
@@ -333,19 +300,45 @@ func TestAvailableRejectsAnInvalidConfiguration(t *testing.T) {
 	}
 }
 
-// --- Execute: success ------------------------------------------------------
+// --- Execute: the session ---------------------------------------------------
+
+// newSessionProvider builds a provider whose availability probe is scripted and
+// whose session process is the fake app server.
+func newSessionProvider(dir string, runner Runner, fake *fakeCodex, now func() time.Time) *Provider {
+	if now == nil {
+		now = fixedElapsedClock(1500 * time.Millisecond)
+	}
+	return New(Options{
+		Runner:     runner,
+		Starter:    fake,
+		WorkingDir: func() (string, error) { return dir, nil },
+		Now:        now,
+	})
+}
+
+// plannedSession drives the fake to the outcome of a successful planning: the
+// agent answers with the receipt and the turn completes.
+func plannedSession(fake *fakeCodex, specCode string, tasks int) {
+	go func() {
+		<-fake.turnStarted
+		fake.emit("item/agentMessage/delta", `{"delta":"pianifico"}`)
+		fake.emit("item/completed", fmt.Sprintf(`{"item":{"type":"agentMessage","text":%q}}`, receiptLine(specCode, tasks)))
+		fake.completeTurn()
+	}()
+}
 
 func TestExecuteReturnsAPayloadBuiltFromTheReceipt(t *testing.T) {
 	command := fakeCommand(t)
 	dir := workspaceWithSkill(t)
-	runner := &fakeRunner{outcomes: []runOutcome{
-		probeOK,
-		{stdout: "thinking...\ntool: read\n" + receiptLine(testSpec, 9) + "\n"},
-	}}
+	runner := &fakeRunner{outcomes: []runOutcome{probeOK}}
+	fake := newFakeCodex()
+	plannedSession(fake, testSpec, 9)
+
 	req := testRequest(command)
 	req.ProviderConfig["model"] = "gpt-5-codex"
 
-	got, err := newTestProvider(dir, runner, fixedElapsedClock(1500*time.Millisecond)).Execute(context.Background(), req)
+	provider := newSessionProvider(dir, runner, fake, fixedElapsedClock(1500*time.Millisecond))
+	got, err := provider.Execute(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,24 +388,78 @@ func TestExecuteReturnsAPayloadBuiltFromTheReceipt(t *testing.T) {
 		t.Fatalf("result_summary = %#v", summary)
 	}
 
+	// The probe is the only thing that still runs one-shot, and it runs where
+	// the session runs.
 	calls := runner.snapshot()
-	if len(calls) != 2 {
-		t.Fatalf("runner calls = %d, want the probe and the run", len(calls))
+	if len(calls) != 1 || !reflect.DeepEqual(calls[0].args, []string{"--version"}) {
+		t.Fatalf("runner calls = %#v, want only the availability probe", calls)
 	}
-	if !reflect.DeepEqual(calls[0].args, []string{"--version"}) {
-		t.Fatalf("probe args = %#v", calls[0].args)
+	if calls[0].dir != dir || calls[0].name != command {
+		t.Fatalf("the probe ran %q in %q", calls[0].name, calls[0].dir)
 	}
-	for i, call := range calls {
-		if call.dir != dir {
-			t.Fatalf("call %d ran in %q, want the seam working directory %q", i, call.dir, dir)
+}
+
+// AC-2 — the run is registered and readable while the agent is still working,
+// which is what makes it followable at all.
+func TestExecuteRegistersTheRunBeforeTheAgentWorks(t *testing.T) {
+	command := fakeCommand(t)
+	fake := newFakeCodex()
+	provider := newSessionProvider(workspaceWithSkill(t), &fakeRunner{outcomes: []runOutcome{probeOK}}, fake, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := provider.Execute(context.Background(), testRequest(command))
+		done <- err
+	}()
+
+	<-fake.turnStarted
+	fake.emit("item/agentMessage/delta", `{"delta":"sto lavorando"}`)
+
+	// Everything below happens while Execute is still inside the agent's work.
+	var snapshot execution.RunSnapshot
+	waitFor(t, func() bool {
+		runID, err := provider.ResolveRun(context.Background(), execution.Execution{ID: "exec-1"}, nil)
+		if err != nil || runID != "exec-1" {
+			return false
 		}
-		if call.name != command {
-			t.Fatalf("call %d ran %q, want the configured command %q", i, call.name, command)
+		snapshot, err = provider.ReadRun(context.Background(), execution.RunRequest{RunID: runID})
+		if err != nil {
+			return false
 		}
+		events, err := readAllEvents(provider, runID)
+		return err == nil && len(events) > 0 && events[0].Text == "sto lavorando"
+	})
+	if snapshot.State != execution.RunActive {
+		t.Fatalf("the run reported %q while the agent was still working", snapshot.State)
 	}
-	if !reflect.DeepEqual(calls[1].args, buildArgs(settings{Command: command, Model: "gpt-5-codex"}, buildPrompt(req))) {
-		t.Fatalf("run args = %#v", calls[1].args)
+
+	fake.emit("item/completed", fmt.Sprintf(`{"item":{"type":"agentMessage","text":%q}}`, receiptLine(testSpec, 2)))
+	fake.completeTurn()
+	if err := <-done; err != nil {
+		t.Fatalf("Execute failed: %v", err)
 	}
+	// Once it is over, the run is still readable and its state is the observed
+	// one.
+	snapshot, err := provider.ReadRun(context.Background(), execution.RunRequest{RunID: "exec-1"})
+	if err != nil {
+		t.Fatalf("ReadRun failed after the run: %v", err)
+	}
+	if snapshot.State != execution.RunClosed {
+		t.Fatalf("state = %q, want the observed closed state", snapshot.State)
+	}
+}
+
+func readAllEvents(provider *Provider, runID string) ([]execution.RunEvent, error) {
+	var events []execution.RunEvent
+	stop := errors.New("enough")
+	err := provider.StreamRunEvents(context.Background(), execution.RunRequest{RunID: runID}, 0, func(event execution.RunEvent) error {
+		events = append(events, event)
+		return stop
+	})
+	if err != nil && !errors.Is(err, stop) {
+		return nil, err
+	}
+	return events, nil
 }
 
 // --- Execute: failures -----------------------------------------------------
@@ -420,12 +467,13 @@ func TestExecuteReturnsAPayloadBuiltFromTheReceipt(t *testing.T) {
 func TestExecuteFailureModes(t *testing.T) {
 	command := fakeCommand(t)
 	cases := []struct {
-		name     string
-		command  string
-		skill    bool
-		outcomes []runOutcome
-		expired  bool
-		wantErr  []string
+		name    string
+		command string
+		skill   bool
+		probe   []runOutcome
+		drive   func(fake *fakeCodex)
+		expired bool
+		wantErr []string
 	}{
 		{
 			name:    "runtime unavailable",
@@ -434,47 +482,63 @@ func TestExecuteFailureModes(t *testing.T) {
 			wantErr: []string{missingCommand(), "was not found"},
 		},
 		{
-			name:     "planning skill not installed",
-			command:  command,
-			skill:    false,
-			outcomes: []runOutcome{probeOK},
-			wantErr:  []string{"planning skill is not installed", planSkillRelPath, "archetipo init --tool codex"},
+			name:    "planning skill not installed",
+			command: command,
+			skill:   false,
+			probe:   []runOutcome{probeOK},
+			wantErr: []string{"planning skill is not installed", planSkillRelPath, "archetipo init --tool codex"},
 		},
 		{
-			name:     "non-zero exit code",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {exitCode: 3, stderr: "codex: run aborted"}},
-			wantErr:  []string{"exited 3", testSpec, "codex: run aborted"},
+			name:    "the process dies before the turn ends",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{probeOK},
+			drive: func(fake *fakeCodex) {
+				go func() {
+					<-fake.turnStarted
+					fake.stderr = "codex: run aborted"
+					fake.end()
+				}()
+			},
+			wantErr: []string{"ended without having produced a plan for " + testSpec, "codex: run aborted"},
 		},
 		{
-			name:     "no receipt line at all",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {stdout: "done, I planned everything\n"}},
-			wantErr:  []string{"exited 0 without having produced a plan for " + testSpec, "did not emit the expected JSON receipt line"},
+			name:    "no receipt at all",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{probeOK},
+			drive: func(fake *fakeCodex) {
+				go func() {
+					<-fake.turnStarted
+					fake.emit("item/completed", `{"item":{"type":"agentMessage","text":"done, I planned everything"}}`)
+					fake.completeTurn()
+				}()
+			},
+			wantErr: []string{"ended without having produced a plan for " + testSpec, "did not emit the expected JSON receipt line"},
 		},
 		{
-			name:     "receipt for another spec",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {stdout: receiptLine("US-999", 4) + "\n"}},
-			wantErr:  []string{"exited 0 without having produced a plan for " + testSpec, "does not declare a persisted plan for " + testSpec},
+			name:    "receipt for another spec",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{probeOK},
+			drive:   func(fake *fakeCodex) { plannedSession(fake, "US-999", 4) },
+			wantErr: []string{"ended without having produced a plan for " + testSpec, "does not declare a persisted plan for " + testSpec},
 		},
 		{
-			name:     "receipt declaring zero tasks",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {stdout: receiptLine(testSpec, 0) + "\n"}},
-			wantErr:  []string{"does not declare a persisted plan for " + testSpec},
+			name:    "receipt declaring zero tasks",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{probeOK},
+			drive:   func(fake *fakeCodex) { plannedSession(fake, testSpec, 0) },
+			wantErr: []string{"does not declare a persisted plan for " + testSpec},
 		},
 		{
-			name:     "timeout",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {waitForContext: true}},
-			expired:  true,
-			wantErr:  []string{"could not be run to completion", context.DeadlineExceeded.Error()},
+			name:    "a turn that never ends",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{probeOK},
+			expired: true,
+			wantErr: []string{"did not finish planning " + testSpec},
 		},
 	}
 	for _, tc := range cases {
@@ -483,14 +547,18 @@ func TestExecuteFailureModes(t *testing.T) {
 			if tc.skill {
 				dir = workspaceWithSkill(t)
 			}
-			runner := &fakeRunner{outcomes: tc.outcomes}
-			ctx := context.Background()
-			if tc.expired {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, 20*time.Millisecond)
-				defer cancel()
+			fake := newFakeCodex()
+			t.Cleanup(fake.end)
+			if tc.drive != nil {
+				tc.drive(fake)
 			}
-			got, err := newTestProvider(dir, runner, nil).Execute(ctx, testRequest(tc.command))
+			runner := &fakeRunner{outcomes: tc.probe}
+			req := testRequest(tc.command)
+			if tc.expired {
+				req.ProviderConfig["timeout_seconds"] = 1
+			}
+			provider := newSessionProvider(dir, runner, fake, nil)
+			got, err := provider.Execute(context.Background(), req)
 			if err == nil {
 				t.Fatalf("expected an error, got payload %s", got.Payload)
 			}
@@ -510,10 +578,11 @@ func TestExecuteFailureModes(t *testing.T) {
 
 func TestExecuteRejectsAnInvalidConfigurationBeforeSpawning(t *testing.T) {
 	runner := &fakeRunner{}
+	fake := newFakeCodex()
 	req := testRequest("codex")
 	req.ProviderConfig["timeout_seconds"] = 0
 
-	_, err := newTestProvider(workspaceWithSkill(t), runner, nil).Execute(context.Background(), req)
+	_, err := newSessionProvider(workspaceWithSkill(t), runner, fake, nil).Execute(context.Background(), req)
 	var configErr *execution.ConfigurationError
 	if !errors.As(err, &configErr) || configErr.Field != "timeout_seconds" {
 		t.Fatalf("error = %v", err)
@@ -521,45 +590,57 @@ func TestExecuteRejectsAnInvalidConfigurationBeforeSpawning(t *testing.T) {
 	if calls := runner.snapshot(); len(calls) != 0 {
 		t.Fatalf("an invalid configuration spawned %d command(s)", len(calls))
 	}
+	if methods := fake.methodsCalled(); len(methods) != 0 {
+		t.Fatalf("an invalid configuration opened a session: %v", methods)
+	}
 }
 
 // --- no secret ever reaches the record -------------------------------------
 
-// The provider cannot recognize a secret, so the guarantee it offers is that no
-// captured stream is persisted at all. The sentinel stands in for whatever the
-// agent may have printed.
+// AC-6 — the provider cannot recognize a secret, so the guarantee it offers is
+// that no captured stream is persisted at all. The sentinel stands in for
+// whatever the agent may have printed.
 func TestSuccessfulExecutionNeverPersistsTheAgentOutput(t *testing.T) {
 	command := fakeCommand(t)
-	runner := &fakeRunner{outcomes: []runOutcome{
-		probeOK,
-		{
-			stdout: "reading ~/.codex/auth.json\ntoken=" + sentinel + "\n" + receiptLine(testSpec, 3) + "\n",
-			stderr: "warning: " + sentinel,
-		},
-	}}
-	got, err := newTestProvider(workspaceWithSkill(t), runner, nil).Execute(context.Background(), testRequest(command))
+	fake := newFakeCodex()
+	fake.stderr = "warning: " + sentinel
+	go func() {
+		<-fake.turnStarted
+		fake.emit("item/agentMessage/delta", `{"delta":"reading ~/.codex/auth.json, token=`+sentinel+`"}`)
+		fake.emit("item/completed", fmt.Sprintf(`{"item":{"type":"agentMessage","text":%q}}`, receiptLine(testSpec, 3)))
+		fake.completeTurn()
+	}()
+
+	got, err := newSessionProvider(workspaceWithSkill(t), &fakeRunner{outcomes: []runOutcome{probeOK}}, fake, nil).Execute(context.Background(), testRequest(command))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(got.Payload), sentinel) {
 		t.Fatalf("the payload carried the agent output: %s", got.Payload)
 	}
+	if strings.Contains(string(got.Payload), ".codex") {
+		t.Fatalf("the payload carried a path to the agent's own material: %s", got.Payload)
+	}
 }
 
 // A failure may quote the tail of stderr, which is what makes it diagnosable,
-// but stdout — the stream where the agent does its talking — never travels.
-func TestFailedExecutionDoesNotEchoTheAgentStdout(t *testing.T) {
+// but what the agent said never travels into the diagnostic.
+func TestFailedExecutionDoesNotEchoWhatTheAgentSaid(t *testing.T) {
 	command := fakeCommand(t)
-	runner := &fakeRunner{outcomes: []runOutcome{
-		probeOK,
-		{exitCode: 2, stdout: "token=" + sentinel + "\n", stderr: "codex: run aborted"},
-	}}
-	_, err := newTestProvider(workspaceWithSkill(t), runner, nil).Execute(context.Background(), testRequest(command))
+	fake := newFakeCodex()
+	fake.stderr = "codex: run aborted"
+	go func() {
+		<-fake.turnStarted
+		fake.emit("item/completed", `{"item":{"type":"agentMessage","text":"token=`+sentinel+`"}}`)
+		fake.completeTurn()
+	}()
+
+	_, err := newSessionProvider(workspaceWithSkill(t), &fakeRunner{outcomes: []runOutcome{probeOK}}, fake, nil).Execute(context.Background(), testRequest(command))
 	if err == nil {
 		t.Fatal("expected an error")
 	}
 	if strings.Contains(err.Error(), sentinel) {
-		t.Fatalf("the diagnostic carried the agent stdout: %v", err)
+		t.Fatalf("the diagnostic carried what the agent said: %v", err)
 	}
 	assertContains(t, err.Error(), "codex: run aborted", "execution error")
 }
@@ -568,12 +649,14 @@ func TestFailedExecutionDoesNotEchoTheAgentStdout(t *testing.T) {
 // carry a whole stream.
 func TestDiagnosticTruncatesAVeryLongStderr(t *testing.T) {
 	command := fakeCommand(t)
-	long := strings.Repeat("x", maxCapturedOutput*3) + sentinel
-	runner := &fakeRunner{outcomes: []runOutcome{
-		probeOK,
-		{exitCode: 4, stderr: long},
-	}}
-	_, err := newTestProvider(workspaceWithSkill(t), runner, nil).Execute(context.Background(), testRequest(command))
+	fake := newFakeCodex()
+	fake.stderr = strings.Repeat("x", maxCapturedOutput*3) + sentinel
+	go func() {
+		<-fake.turnStarted
+		fake.completeTurn()
+	}()
+
+	_, err := newSessionProvider(workspaceWithSkill(t), &fakeRunner{outcomes: []runOutcome{probeOK}}, fake, nil).Execute(context.Background(), testRequest(command))
 	if err == nil {
 		t.Fatal("expected an error")
 	}

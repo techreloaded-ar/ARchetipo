@@ -460,3 +460,63 @@ func TestListExecutionProvidersProbesOnlyTheDefaultWithThePersistedConfig(t *tes
 		t.Fatalf("a configuration saved for another provider reached %q: %#v", other.ID(), otherProbes[0])
 	}
 }
+
+// AC-1 — the dialogue capability is declared by a provider that really exposes
+// an interactive run, and shows as absent on one that does not. Both providers
+// here are real implementations of the two shapes, so what is asserted is the
+// discovery rule and not a hand-written list.
+func TestListExecutionProvidersDeclaresTheDialogueCapability(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.ProjectRoot = dir
+	conn := inmemory.New(cfg)
+	registry := execution.NewRegistry()
+	collaborating := &collaboratingProvider{
+		runTestProvider:  releasedProvider("collaborating", nil),
+		fakeCollaborator: newFakeCollaborator(),
+	}
+	if err := registry.Register(collaborating); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(releasedProvider("plain", nil)); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := NewServer(conn, cfg, registry, "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := doJSON(t, srv, http.MethodGet, "/api/execution/providers", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+	var view executionProvidersView
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	found := map[string][]execution.Capability{}
+	for _, provider := range view.Providers {
+		found[provider.ID] = provider.Capabilities
+	}
+	if !containsCapability(found["collaborating"], execution.CapabilityRunDialog) {
+		t.Fatalf("a provider that exposes an interactive run must declare %s, got %v", execution.CapabilityRunDialog, found["collaborating"])
+	}
+	if !containsCapability(found["collaborating"], execution.CapabilitySpecPlan) {
+		t.Fatalf("the dialogue capability must join the ones already declared, got %v", found["collaborating"])
+	}
+	if containsCapability(found["plain"], execution.CapabilityRunDialog) {
+		t.Fatalf("a provider without an interactive run must expose %s as absent, got %v", execution.CapabilityRunDialog, found["plain"])
+	}
+	if !containsCapability(found["plain"], execution.CapabilitySpecPlan) {
+		t.Fatalf("the plain provider lost its own capabilities: %v", found["plain"])
+	}
+}
+
+func containsCapability(capabilities []execution.Capability, want execution.Capability) bool {
+	for _, capability := range capabilities {
+		if capability == want {
+			return true
+		}
+	}
+	return false
+}

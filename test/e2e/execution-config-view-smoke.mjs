@@ -60,8 +60,14 @@ async function main() {
     if (!codex.label || !(codex.capabilities || []).includes("spec.plan")) {
       throw new Error(`The codex provider does not declare the spec.plan capability: ${JSON.stringify(codex)}`);
     }
+    // The dialogue capability is derived from the interface the provider really
+    // implements, so its presence here is a statement about codex holding a
+    // conversation and not about a list someone wrote by hand.
+    if (!(codex.capabilities || []).includes("run.dialog")) {
+      throw new Error(`The codex provider does not declare the run.dialog capability: ${JSON.stringify(codex)}`);
+    }
     const codexFields = (codex.config_fields || []).map((f) => f.name).sort();
-    const wantCodexFields = ["command", "exec_args", "model", "timeout_seconds"];
+    const wantCodexFields = ["command", "model", "sandbox", "timeout_seconds"];
     if (codexFields.join(",") !== wantCodexFields.join(",")) {
       throw new Error(`Unexpected configurable fields for codex: [${codexFields.join(", ")}]`);
     }

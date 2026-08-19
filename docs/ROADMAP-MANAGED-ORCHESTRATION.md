@@ -1,8 +1,8 @@
 # Roadmap ARchetipo — orchestrazione gestita
 
-Data di riferimento: 17 agosto 2026.
+Data di riferimento: 19 agosto 2026.
 
-Questo documento consente di riprendere il lavoro senza recuperare la conversazione che ha portato alle decisioni di prodotto.
+Questo documento serve a riprendere lo sviluppo in una sessione che non conosce le conversazioni precedenti. Contiene la direzione di prodotto, ciò che è già consegnato, l'ordine di lavoro e le regole operative. **Non è la fonte di verità sullo stato**: quella è il backlog, interrogato con `archetipo spec list`. Quando i due divergono, vince il backlog e questo documento va corretto.
 
 ## Direzione di prodotto
 
@@ -10,156 +10,83 @@ ARchetipo e ARcipelago sono due prodotti distinti e utilizzabili separatamente.
 
 - **ARchetipo** possiede il workspace percepito dall'utente, il processo, gli Archetipi, le skill, la board, la UI e la scelta del provider di esecuzione.
 - **ARcipelago** possiede dispatch, runner, esecuzioni remote, eventi, messaggi, approvazioni e cancellazione delle run.
-- Per ARchetipo, ARcipelago è un `ExecutionProvider` come potranno esserlo Codex e Claude in locale.
-- ARchetipo deve continuare a funzionare nella modalità diretta attuale: l'utente apre Codex, Claude o un altro coding agent compatibile e invoca le skill ARchetipo.
-- La UI di ARchetipo non deve essere spostata dentro ARcipelago.
-- Il processo resta dichiarativo e semplice: stati, azioni e skill. Non va introdotto un motore BPM/DAG generico finché una storia concreta non lo richiede.
+- Per ARchetipo, ARcipelago è un `ExecutionProvider` esattamente come lo sono Codex e Claude in locale.
+- ARchetipo deve continuare a funzionare nella modalità diretta: l'utente apre Codex, Claude o un altro coding agent compatibile e invoca le skill ARchetipo.
+- La UI di ARchetipo non va spostata dentro ARcipelago.
+- Il processo resta dichiarativo e semplice — stati, azioni, skill. Nessun motore BPM/DAG generico finché una storia concreta non lo richiede.
+
+### Terminologia
+
+**Workspace** è l'unità che l'utente crea, apre e sceglie: ha un Archetipo, un backlog, una configurazione e un provider predefinito. È il termine di dominio, già usato in configurazione, Template e CLI.
+
+**Project root** resta il termine tecnico per la directory che contiene `.archetipo/config.yaml`. **Project** senza qualificazione appartiene al connector GitHub (Projects v2) e non va usato per indicare un workspace. La UI ha ancora qualche etichetta `Project ...` ereditata: allinearla è cosmesi opportunistica, non una storia.
 
 ## Stato consegnato
 
 Entrambi i repository lavorano sul branch `sleli`.
 
-### ARchetipo
+### ARchetipo — `/Users/stefanoleli/Project/ARchetipo`
 
-Repository: `/Users/stefanoleli/Project/ARchetipo`
+`DONE`: US-023, US-024, US-025, US-026, US-027 (provider intercambiabile, provider predefinito del workspace, pianificazione via ARcipelago, Template incorporato `fabbrica-del-software`, azioni calcolate dallo stato della spec); US-028, US-029, US-030, US-031 (configurazione esecuzione e azioni nella UI, pianificazione dalla UI, interazione con una run remota, creazione manuale di una spec); US-032, US-033 (pianificazione con Codex e con Claude come provider locali).
 
-Completate:
+Il branch `sleli` è 14 commit sopra `main` e non è mai stato integrato.
 
-- US-023 — provider di esecuzione intercambiabile;
-- US-024 — provider predefinito del workspace;
-- US-025 — pianificazione tramite ARcipelago;
-- US-026 — Template incorporato `fabbrica-del-software`;
-- US-027 — azioni del Template calcolate dallo stato della spec.
+### ARcipelago — `/Users/stefanoleli/Project/ARcipelago`
 
-Il branch `sleli` contiene cinque commit sopra `main`. La suite Go era verde al termine della verifica.
+`DONE`: US-001–US-005 (credenziali applicative limitate al workspace, creazione idempotente dei task esterni, lettura di stato e risultato per identità esterna, stream riprendibile degli eventi, messaggi/approvazioni/cancellazione da client esterno).
 
-### ARcipelago
+Queste API sono generiche e non devono acquisire semantica specifica di ARchetipo. **La roadmap corrente non richiede nuove storie ARcipelago.**
 
-Repository: `/Users/stefanoleli/Project/ARcipelago`
+## Il problema che il prossimo blocco risolve
 
-Completate:
+Oggi la UI non ha un ingresso nel processo. Il viewer serve un solo workspace, quello della directory da cui è stato lanciato, e un workspace appena inizializzato non offre alcun percorso: il pulsante *New spec* è disabilitato finché non esiste un backlog con almeno un'epica, e nulla dice come arrivarci. Chi non conosce le skill non può cominciare.
 
-- US-001 — credenziali applicative limitate al workspace;
-- US-002 — creazione idempotente dei task esterni;
-- US-003 — recupero di stato e risultato tramite identità esterna;
-- US-004 — stream riprendibile degli eventi di una run;
-- US-005 — messaggi, approvazioni e cancellazione da client esterno.
+Il blocco che segue costruisce il percorso completo: creare il workspace, dialogare con un provider locale, fare l'inception, generare il backlog, ed essere accompagnati di passo in passo.
 
-Il branch `sleli` contiene cinque commit sopra `main`. Queste API sono generiche e non devono acquisire semantica specifica di ARchetipo.
+## Ordine di lavoro
 
-## Backlog da realizzare
+Una storia per volta, ciascuna attraverso pianificazione, implementazione e review prima di iniziare la successiva. L'ordine sotto è quello del backlog: verificalo sempre con `archetipo spec list --status TODO`, che lo restituisce già ordinato.
 
-Le nuove storie sono nel backlog ARchetipo. Il backlog ARcipelago non richiede nuove storie per questa roadmap: le capacità remote necessarie sono già presenti nelle US-001–US-005.
+| # | Spec | Perché in questa posizione |
+|---|---|---|
+| 1 | **US-044** — Creare e inizializzare un workspace dalla UI | Il punto di partenza che oggi manca. Senza, ogni passo successivo presuppone una CLI. |
+| 2 | **US-038** — Dialogare con una run locale di Codex | Prerequisito reale dell'inception guidata: senza dialogo, il percorso funziona solo con un hub remoto. |
+| 3 | **US-039** — Dialogare con una run locale di Claude | Stessa capacità sul secondo provider locale, senza riscrivere la semantica. |
+| 4 | **US-040** — Avviare l'inception dalla UI e ottenere il PRD | Primo passo del processo eseguibile interamente dalla UI. |
+| 5 | **US-041** — Generare il backlog iniziale dalla UI | Secondo passo: la board si popola e la creazione manuale di spec si sblocca da sé. |
+| 6 | **US-043** — Conoscere lo stato del workspace e il passo successivo | Cuce i passi in un percorso guidato. Deliberatamente **dopo** US-040 e US-041: prima di quelle, guiderebbe verso passi inesistenti e i suoi criteri sarebbero previsioni. |
+| 7 | **US-042** — Creare una spec con l'assistenza dell'agente | Raffinamento dell'ingresso, non più bloccante una volta che il backlog esiste. |
+| 8 | **US-045** — Ritrovare i workspace conosciuti | Serve solo quando i workspace diventano più di uno. |
+| 9 | **US-046** — Aprire un workspace dalla home senza riavviare il viewer | Completa la navigazione multi-workspace. |
+| 10 | **US-034** — Implementare una spec tramite un provider | Ciclo di delivery gestito, dopo che l'ingresso è risolto. |
+| 11 | **US-035** — Preparare e decidere la review con un gate umano | Chiude il ciclo mantenendo umano il verdetto. |
+| 12 | **US-036** — Installare un Archetipo da un pacchetto | Generalizzazione del processo. |
+| 13 | **US-037** — Inizializzare un workspace con un Archetipo installato | Aggiunge la scelta dell'Archetipo, anche all'inizializzazione dalla UI di US-044. |
 
-### EP-005 — Esperienza operativa ARchetipo
+### Relazione fra US-044 e US-037
 
-- US-028 — Configurare l'esecuzione e vedere le azioni nella UI.
-- US-029 — Pianificare una spec dalla UI.
-- US-030 — Interagire con una run remota dalla UI.
-- US-031 — Creare una spec dalla UI.
+Esiste un solo Archetipo, quello incorporato. **US-044 non chiede quindi alcuna scelta**: crea il workspace sul processo incorporato e ne persiste identità e versione. La scelta fra Archetipi arriva con US-037, che estende l'inizializzazione — CLI e UI — quando esiste davvero un catalogo. Non anticipare US-036/US-037 per "completare" US-044: una scelta con un elemento solo non è una funzionalità.
 
-### EP-006 — Esecuzione locale e ciclo di delivery
+## Vincoli di prodotto e architettura
 
-- US-032 — Pianificare con Codex come provider locale.
-- US-033 — Pianificare con Claude come provider locale.
-- US-034 — Implementare una spec tramite un provider.
-- US-035 — Preparare e decidere la review con un gate umano.
+- I confini fra ARchetipo e ARcipelago descritti sopra non si spostano per comodità implementativa.
+- Il processo resta stati + azioni + skill. Le regole del processo non vanno duplicate nel frontend: la UI consuma i contratti (`spec actions`, configurazione, capacità del provider) e non ne reimplementa la logica.
+- Credenziali e materiale di sessione dei provider non entrano mai nella configurazione del workspace né nelle risposte del viewer. La configurazione provider è versionabile e non segreta.
+- `RunCollaborator` (`cli/internal/execution/run.go`) è la capacità opzionale di osservare e comandare una run, scoperta a runtime con `RunCollaboratorFor` e oggi implementata dal solo ARcipelago. US-038 e US-039 la implementano per i provider locali: **estendere quell'interfaccia, non crearne una parallela.** Le capacità sono già esposte alla UI da `cli/internal/web/execution.go`.
+- Con US-038, Codex non gira più one-shot: la pianificazione apre una sessione viva su `codex app-server --listen stdio://` (JSON-RPC su stdio), l'unica superficie di codex-cli 0.147.0 che accetta un messaggio mentre lavora. Claude gira ancora one-shot (`claude --print --no-session-persistence --permission-mode auto`) e US-039 gli darà la stessa sessione: il dialogo richiede una sessione viva, non un flag in più. Le regole comuni del dialogo vivono in `cli/internal/execution/localrun` e non vanno duplicate per provider.
+- Il viewer è a uso locale singolo, ascolta su loopback e non autentica. US-046 introduce il cambio di workspace a runtime senza cambiare questa premessa.
+- Non introdurre astrazioni per casi futuri che i criteri di accettazione della storia corrente non richiedono.
 
-### EP-007 — Archetipi installabili
+## Come si lavora
 
-- US-036 — Installare un Archetipo da un pacchetto.
-- US-037 — Inizializzare un workspace con un Archetipo installato.
-
-## Sequenza delle slice
-
-### Slice 1 — UI consapevole del processo
-
-Storia: US-028.
-
-Risultato: dalla UI si configura il provider predefinito e, aprendo una spec, si vedono le azioni ammesse dal suo Archetipo e dal suo stato.
-
-Vincolo: la UI deve consumare i contratti esistenti di configurazione e `spec actions`; non deve duplicare le regole del processo nel frontend.
-
-### Slice 2 — Prima vertical slice di valore
-
-Storia: US-029.
-
-Risultato: da una spec `TODO` l'utente preme `Pianifica`; ARchetipo usa ARcipelago, mostra avanzamento ed esito e al successo presenta piano e stato `PLANNED`.
-
-Questa è la prima release utilizzabile della nuova direzione di prodotto.
-
-### Slice 3 — Collaborazione con la run remota
-
-Storia: US-030.
-
-Risultato: la UI segue eventi senza duplicazioni e permette messaggi, risposte alle approvazioni e cancellazione usando le API esterne già consegnate da ARcipelago.
-
-Vincolo: ARchetipo proietta la run, ARcipelago ne resta il proprietario.
-
-### Slice 4 — Ingresso del lavoro dalla UI
-
-Storia: US-031.
-
-Risultato: l'utente crea una spec `TODO` senza preparare payload CLI e può poi avviarne il processo dalla stessa UI.
-
-Con questa slice il primo MVP UI è completo: creazione, scelta dell'azione, esecuzione remota e interazione avvengono da ARchetipo.
-
-### Slice 5 — Provider locali
-
-Storie: US-032, poi US-033.
-
-Risultato: la stessa pianificazione gestita funziona senza ARcipelago usando prima Codex e poi Claude disponibili localmente.
-
-Vincoli:
-
-- la modalità diretta basata sulle skill deve restare invariata;
-- Codex e Claude sono provider distinti dietro lo stesso contratto;
-- credenziali e sessioni di autenticazione non vengono copiate nella configurazione ARchetipo.
-
-### Slice 6 — Ciclo di delivery completo
-
-Storie: US-034, poi US-035.
-
-Risultato: un provider può implementare una spec pianificata e preparare il dossier di review. Il verdetto finale resta umano e nessun successo dichiarato dal provider chiude implicitamente la spec.
-
-### Slice 7 — Generalizzazione tramite Archetipi
-
-Storie: US-036, poi US-037.
-
-Risultato: processi diversi da `fabbrica-del-software` possono essere installati come pacchetti e selezionati durante l'inizializzazione di un workspace.
-
-Vincoli:
-
-- nessun marketplace nella prima versione;
-- nessuna ereditarietà o composizione di Archetipi;
-- un pacchetto invalido non deve lasciare installazioni parziali;
-- `fabbrica-del-software` resta il default compatibile.
-
-## Ordine raccomandato
-
-1. US-028
-2. US-029
-3. US-030
-4. US-031
-5. US-032
-6. US-033
-7. US-034
-8. US-035
-9. US-036
-10. US-037
-
-Non lavorare su più storie contemporaneamente salvo test o preparazione strettamente necessari alla storia corrente. Ogni storia deve attraversare pianificazione, implementazione e review prima di iniziare la successiva.
-
-## Regole per la ripresa
-
-1. Operare soltanto sui branch `sleli`, salvo istruzione esplicita differente.
-2. Prima di modificare codice, leggere `AGENTS.md`, eseguire `archetipo config show` e leggere il backlog del repository interessato.
-3. Usare le skill ARchetipo appropriate: `archetipo-plan`, `archetipo-implement` e `archetipo-review`; usare `archetipo-autopilot` soltanto se richiesto esplicitamente.
-4. Verificare sempre lo stato reale con `archetipo spec list` o `archetipo spec show`; non dedurlo da questo documento.
-5. Non ricreare o consultare il vecchio branch `codex/autopilot-backlog-20260723`.
-6. Non spostare responsabilità di UI o processo in ARcipelago.
-7. Non introdurre astrazioni per casi futuri se non sono richieste dai criteri di accettazione della storia corrente.
-8. Preservare le modifiche esistenti non correlate e non integrare in `main` senza una richiesta esplicita.
+1. Opera solo sul branch `sleli` in entrambi i repository. Non integrare in `main` senza richiesta esplicita.
+2. Prima di toccare codice: leggi `AGENTS.md`, esegui `archetipo config show` e `archetipo spec list`, e considera autorevole ciò che rispondono.
+3. Usa le skill ARchetipo: `archetipo-plan`, `archetipo-implement`, `archetipo-review`. Usa `archetipo-autopilot` solo se richiesto esplicitamente.
+4. La Wiki automatica è disattivata in questo repository (`wiki.enabled: false`): le skill di workflow non svolgono lavoro Wiki. `archetipo-wiki` invocata esplicitamente funziona comunque.
+5. Prima di consegnare, da `cli/`: `gofmt -l .` (vuoto), `go vet ./...`, `go build ./...`, `go test ./...`, `golangci-lint run --timeout 5m ./...`.
+6. Per il lavoro sulla UI esistono smoke senza credenziali, da lanciare dal root: `npm run test:view-execution-smoke`, `test:view-plan-smoke`, `test:view-run-smoke`, `test:view-create-smoke`, `test:view-delete-smoke`, `test:wiki-smoke`. Sono il modello da seguire per le nuove storie di UI: hub finto su `127.0.0.1`, tutto il resto reale, nessuna attesa arbitraria.
+7. Preserva le modifiche non correlate presenti nel working tree.
+8. Non consultare né ricreare il vecchio branch `codex/autopilot-backlog-20260723`.
 
 ## Prompt per una nuova sessione
 
@@ -170,33 +97,29 @@ Repository:
 - ARchetipo: /Users/stefanoleli/Project/ARchetipo
 - ARcipelago: /Users/stefanoleli/Project/ARcipelago
 
-Lavora esclusivamente sui branch `sleli` e non integrare in `main` senza una mia richiesta esplicita. Non consultare né ricreare il vecchio branch `codex/autopilot-backlog-20260723`.
+Lavora esclusivamente sui branch `sleli` e non integrare in `main` senza una mia
+richiesta esplicita.
 
 Prima di agire:
 1. leggi /Users/stefanoleli/Project/ARchetipo/docs/ROADMAP-MANAGED-ORCHESTRATION.md;
 2. controlla branch e working tree di entrambi i repository;
 3. esegui `archetipo config show` e `archetipo spec list` in entrambi;
 4. leggi gli AGENTS.md applicabili;
-5. considera autorevole lo stato restituito dal backlog, non quello riassunto nel prompt.
+5. considera autorevole lo stato restituito dal backlog, non quello riassunto qui.
 
-Confini di prodotto da rispettare:
-- ARchetipo possiede UI, workspace, Archetipi, processo, skill e scelta dell'ExecutionProvider.
-- ARcipelago possiede dispatch, runner, run remote, eventi, messaggi, approvazioni e cancellazione.
-- ARcipelago è un provider di ARchetipo, non un modulo della sua UI.
-- ARchetipo deve continuare a funzionare direttamente dentro Codex, Claude e gli altri coding agent supportati.
-- Non introdurre un motore BPM/DAG generico: il processo resta definito da stati, azioni e skill.
-- Implementa solo ciò che serve alla storia corrente e lascia aperte le estensioni attraverso confini semplici.
-
-Il backlog precedente è completato:
-- ARchetipo US-023–US-027: DONE.
-- ARcipelago US-001–US-005: DONE.
-
-La prossima storia da lavorare è ARchetipo US-028, `Configurare l'esecuzione e vedere le azioni nella UI`. Usa il processo ARchetipo completo: pianifica US-028, implementala e portala in review. Non iniziare US-029 finché US-028 non è DONE o finché non ti chiedo esplicitamente di continuare. Durante il lavoro usa le skill ARchetipo appropriate e verifica i criteri di accettazione con test proporzionati al rischio.
+Lavora la prima storia TODO nell'ordine del backlog, salvo mia indicazione
+diversa. Una storia per volta: pianificazione, implementazione e review prima di
+iniziare la successiva. Verifica i criteri di accettazione con test proporzionati
+al rischio.
 
 Alla fine riportami:
 - stato della storia;
 - funzionalità visibile consegnata;
 - test eseguiti e risultato;
-- eventuali decisioni o limiti rimasti;
-- prossimo elemento raccomandato della roadmap.
+- decisioni o limiti rimasti aperti;
+- prossimo elemento raccomandato.
 ```
+
+## Manutenzione di questo documento
+
+Aggiornalo quando cambia la direzione, l'ordine o un vincolo — non a ogni storia chiusa: lo stato per spec si legge dal backlog. Se lo trovi in disaccordo con `archetipo spec list`, correggilo prima di procedere.

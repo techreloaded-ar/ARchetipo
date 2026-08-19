@@ -13,11 +13,21 @@ type Capability string
 type ExecutionStatus string
 
 const (
-	ActionPlan         ActionID        = "plan"
-	CapabilitySpecPlan Capability      = "spec.plan"
-	StatusRunning      ExecutionStatus = "RUNNING"
-	StatusSucceeded    ExecutionStatus = "SUCCEEDED"
-	StatusFailed       ExecutionStatus = "FAILED"
+	ActionPlan         ActionID   = "plan"
+	CapabilitySpecPlan Capability = "spec.plan"
+	// CapabilityRunDialog says that a provider exposes a run one can follow and
+	// command while it works: read its history, send it a message, cancel it. It
+	// is not a statement about the work the provider can do — a provider can
+	// plan a spec without offering any conversation, and the two capabilities
+	// are therefore independent.
+	//
+	// It is never declared by hand in a provider's Capabilities: see
+	// DeclaredCapabilities, which derives it from the interface the provider
+	// actually implements.
+	CapabilityRunDialog Capability      = "run.dialog"
+	StatusRunning       ExecutionStatus = "RUNNING"
+	StatusSucceeded     ExecutionStatus = "SUCCEEDED"
+	StatusFailed        ExecutionStatus = "FAILED"
 )
 
 type Request struct {

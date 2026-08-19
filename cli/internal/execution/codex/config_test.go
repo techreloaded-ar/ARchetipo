@@ -22,8 +22,8 @@ func TestConfigAppliesDocumentedDefaults(t *testing.T) {
 	if got.Model != "" {
 		t.Fatalf("model = %q, want empty so that no model flag is emitted", got.Model)
 	}
-	if len(got.ExecArgs) != 0 {
-		t.Fatalf("exec_args = %#v, want empty", got.ExecArgs)
+	if got.Sandbox != defaultSandbox {
+		t.Fatalf("sandbox = %q, want %q so that the agent can write the plan", got.Sandbox, defaultSandbox)
 	}
 	if got.Timeout != 3600*time.Second {
 		t.Fatalf("timeout = %s, want 3600s", got.Timeout)
@@ -34,7 +34,7 @@ func TestConfigAppliesFullOverride(t *testing.T) {
 	got, err := parseConfig(map[string]any{
 		"command":         "/opt/homebrew/bin/codex",
 		"model":           "gpt-5-codex",
-		"exec_args":       "-s read-only --skip-git-repo-check",
+		"sandbox":         "read-only",
 		"timeout_seconds": 120,
 	})
 	if err != nil {
@@ -46,8 +46,8 @@ func TestConfigAppliesFullOverride(t *testing.T) {
 	if got.Model != "gpt-5-codex" {
 		t.Fatalf("model = %q", got.Model)
 	}
-	if want := []string{"-s", "read-only", "--skip-git-repo-check"}; !reflect.DeepEqual(got.ExecArgs, want) {
-		t.Fatalf("exec_args = %#v, want %#v", got.ExecArgs, want)
+	if got.Sandbox != "read-only" {
+		t.Fatalf("sandbox = %q, want read-only", got.Sandbox)
 	}
 	if got.Timeout != 120*time.Second {
 		t.Fatalf("timeout = %s, want 120s", got.Timeout)
@@ -64,9 +64,10 @@ func TestConfigRejectsInvalidFields(t *testing.T) {
 		{"command empty", map[string]any{"command": "   "}, "command"},
 		{"command relative path", map[string]any{"command": "./bin/codex"}, "command"},
 		{"model not a string", map[string]any{"model": true}, "model"},
-		{"exec_args not a string", map[string]any{"exec_args": []string{"-s"}}, "exec_args"},
-		{"exec_args empty", map[string]any{"exec_args": ""}, "exec_args"},
-		{"exec_args blank", map[string]any{"exec_args": "   "}, "exec_args"},
+		{"sandbox not a string", map[string]any{"sandbox": []string{"read-only"}}, "sandbox"},
+		{"sandbox empty", map[string]any{"sandbox": ""}, "sandbox"},
+		{"sandbox blank", map[string]any{"sandbox": "   "}, "sandbox"},
+		{"sandbox outside the known policies", map[string]any{"sandbox": "full-auto"}, "sandbox"},
 		{"timeout_seconds not an integer", map[string]any{"timeout_seconds": "3600"}, "timeout_seconds"},
 		{"timeout_seconds fractional", map[string]any{"timeout_seconds": 10.5}, "timeout_seconds"},
 		{"timeout_seconds below range", map[string]any{"timeout_seconds": 0}, "timeout_seconds"},
@@ -138,7 +139,7 @@ func TestConfigFieldsDeclareNoSecretAndMatchAcceptedKeys(t *testing.T) {
 		names = append(names, field.Name)
 	}
 	sort.Strings(names)
-	want := []string{"command", "exec_args", "model", "timeout_seconds"}
+	want := []string{"command", "model", "sandbox", "timeout_seconds"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("declared fields = %v, want %v", names, want)
 	}

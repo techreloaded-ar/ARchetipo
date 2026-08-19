@@ -22,30 +22,30 @@ const (
 	maxTimeout = 86400
 )
 
-// defaultExecArgs are the intermediate flags buildArgs emits when exec_args is
-// not configured. They live here, in one place, because the exec_args help text
-// quotes them: a default described in prose next to a default written in code
-// is a pair that drifts, and this one drifted once already.
-//
-// Verified against codex-cli 0.147.0: `codex exec` has no --full-auto (that
-// flag belongs to the interactive CLI and makes exec exit on argument parsing).
-// The sandbox mode is what grants the write access planning needs.
-var defaultExecArgs = []string{"-s", "workspace-write", "--skip-git-repo-check"}
+// sandboxModes are the sandbox policies `thread/start` accepts, verified
+// against codex-cli 0.147.0. They live here, in one place, because the help
+// text of the `sandbox` field quotes them: a set described in prose next to a
+// set written in code is a pair that drifts.
+var sandboxModes = []string{"read-only", "workspace-write", "danger-full-access"}
+
+// defaultSandbox is what planning needs: the agent has to write the plan into
+// the workspace, so a read-only session would produce runs that always fail.
+const defaultSandbox = "workspace-write"
 
 // settings is the parsed, non-secret provider configuration. Codex
 // authenticates by itself, so no credential — and no path to its session
 // material — is ever part of this struct.
 type settings struct {
-	Command  string
-	Model    string
-	ExecArgs []string
-	Timeout  time.Duration
+	Command string
+	Model   string
+	Sandbox string
+	Timeout time.Duration
 }
 
 var knownConfigKeys = map[string]struct{}{
 	"command":         {},
 	"model":           {},
-	"exec_args":       {},
+	"sandbox":         {},
 	"timeout_seconds": {},
 }
 
@@ -71,17 +71,14 @@ func (p *Provider) ConfigFields() []execution.ConfigField {
 			Placeholder: "gpt-5-codex",
 		},
 		{
-			Name:  "exec_args",
-			Label: "Exec arguments",
+			Name:  "sandbox",
+			Label: "Sandbox",
 			Type:  "text",
-			// The wording says "replace" because buildArgs replaces: whatever is
-			// set here stands in for the default flags rather than joining them.
-			// Reading it as "append" is the expensive mistake — dropping the
-			// workspace-write sandbox leaves Codex unable to persist the plan,
-			// so every run fails — which is why the default is spelled out
-			// here.
-			Help:        "Space-separated arguments that replace the default Codex exec flags (" + strings.Join(defaultExecArgs, " ") + "). Left empty, those defaults are used.",
-			Placeholder: strings.Join(defaultExecArgs, " "),
+			// The consequence is spelled out because it is the expensive
+			// mistake: planning has to persist a plan, so a read-only session
+			// produces runs that always fail.
+			Help:        "Sandbox policy of the Codex session, one of " + strings.Join(sandboxModes, ", ") + ". Defaults to " + defaultSandbox + ", which is what lets the agent write the plan into the workspace.",
+			Placeholder: defaultSandbox,
 		},
 		{
 			Name:        "timeout_seconds",
@@ -118,7 +115,7 @@ func parseConfig(raw map[string]any) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
-	execArgs, err := parseExecArgs(raw["exec_args"])
+	sandbox, err := parseSandbox(raw["sandbox"])
 	if err != nil {
 		return settings{}, err
 	}
@@ -127,10 +124,10 @@ func parseConfig(raw map[string]any) (settings, error) {
 		return settings{}, err
 	}
 	return settings{
-		Command:  command,
-		Model:    model,
-		ExecArgs: execArgs,
-		Timeout:  time.Duration(timeoutSeconds) * time.Second,
+		Command: command,
+		Model:   model,
+		Sandbox: sandbox,
+		Timeout: time.Duration(timeoutSeconds) * time.Second,
 	}, nil
 }
 
@@ -184,23 +181,28 @@ func parseModel(value any) (string, error) {
 	return strings.TrimSpace(text), nil
 }
 
-// parseExecArgs takes the arguments as a single space-separated string, the
-// shape a configuration form can offer, and splits it into the slice the
-// invocation needs. A key that is present must carry something: an empty string
-// is a mistake, while omitting the key is the documented default.
-func parseExecArgs(value any) ([]string, error) {
+// parseSandbox accepts one of the policies the Codex session understands. A key
+// that is present must carry one of them: a value outside the set would be
+// passed straight to the process and refused there, with a diagnostic that
+// points at the protocol instead of at the configuration field.
+func parseSandbox(value any) (string, error) {
 	if value == nil {
-		return nil, nil
+		return defaultSandbox, nil
 	}
 	text, ok := value.(string)
 	if !ok {
-		return nil, configErr("exec_args", "must be a string")
+		return "", configErr("sandbox", "must be a string")
 	}
-	fields := strings.Fields(text)
-	if len(fields) == 0 {
-		return nil, configErr("exec_args", "must not be empty")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", configErr("sandbox", "must not be empty")
 	}
-	return fields, nil
+	for _, mode := range sandboxModes {
+		if text == mode {
+			return text, nil
+		}
+	}
+	return "", configErr("sandbox", "must be one of "+strings.Join(sandboxModes, ", "))
 }
 
 // parseSeconds accepts the numeric forms a provider config can arrive in: YAML

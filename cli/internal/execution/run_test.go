@@ -124,3 +124,90 @@ func TestRunCommandErrorMessageNamesReasonAndRun(t *testing.T) {
 		t.Fatalf("expected %q to name the run", message)
 	}
 }
+
+// failingCapabilitiesProvider is the provider whose capability discovery
+// breaks. It exists to prove that DeclaredCapabilities propagates that failure
+// instead of substituting an empty list for it.
+type failingCapabilitiesProvider struct {
+	testProvider
+	err error
+}
+
+func (p *failingCapabilitiesProvider) Capabilities(context.Context) ([]Capability, error) {
+	return nil, p.err
+}
+
+func TestDeclaredCapabilitiesDerivesTheDialogueFromTheInterface(t *testing.T) {
+	collaborating := &collaboratingProvider{
+		testProvider: testProvider{id: "collaborating", capabilities: []Capability{CapabilitySpecPlan}},
+		runID:        "run-9",
+	}
+	got, err := DeclaredCapabilities(context.Background(), collaborating)
+	if err != nil {
+		t.Fatalf("DeclaredCapabilities failed: %v", err)
+	}
+	if want := []Capability{CapabilityRunDialog, CapabilitySpecPlan}; !equalCapabilities(got, want) {
+		t.Fatalf("got %v; want %v", got, want)
+	}
+
+	plain := &plainProvider{testProvider{id: "plain", capabilities: []Capability{CapabilitySpecPlan}}}
+	got, err = DeclaredCapabilities(context.Background(), plain)
+	if err != nil {
+		t.Fatalf("DeclaredCapabilities failed: %v", err)
+	}
+	if want := []Capability{CapabilitySpecPlan}; !equalCapabilities(got, want) {
+		t.Fatalf("got %v; want %v", got, want)
+	}
+	for _, capability := range got {
+		if capability == CapabilityRunDialog {
+			t.Fatalf("a provider that does not collaborate must not declare %s", CapabilityRunDialog)
+		}
+	}
+}
+
+func TestDeclaredCapabilitiesNeverInventsAList(t *testing.T) {
+	sentinel := errors.New("capability discovery is down")
+	failing := &failingCapabilitiesProvider{testProvider: testProvider{id: "failing"}, err: sentinel}
+	got, err := DeclaredCapabilities(context.Background(), failing)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("got error %v; want the provider's own error", err)
+	}
+	if got != nil {
+		t.Fatalf("got %v; want no list when discovery failed", got)
+	}
+}
+
+func TestDeclaredCapabilitiesAlwaysReturnsAList(t *testing.T) {
+	// A collaborating provider that declares nothing still declares the
+	// dialogue, and a provider that declares nothing at all yields an empty
+	// list rather than a nil one, so a serialized answer is [] and never null.
+	collaborating := &collaboratingProvider{testProvider: testProvider{id: "silent"}}
+	got, err := DeclaredCapabilities(context.Background(), collaborating)
+	if err != nil {
+		t.Fatalf("DeclaredCapabilities failed: %v", err)
+	}
+	if want := []Capability{CapabilityRunDialog}; !equalCapabilities(got, want) {
+		t.Fatalf("got %v; want %v", got, want)
+	}
+
+	plain := &plainProvider{testProvider{id: "mute"}}
+	got, err = DeclaredCapabilities(context.Background(), plain)
+	if err != nil {
+		t.Fatalf("DeclaredCapabilities failed: %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Fatalf("got %#v; want an empty, non-nil list", got)
+	}
+}
+
+func equalCapabilities(got, want []Capability) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}

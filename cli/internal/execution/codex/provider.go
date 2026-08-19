@@ -35,6 +35,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
 const (
@@ -46,14 +47,20 @@ const (
 	// maxCapturedOutput bounds how much of a captured stream is ever echoed back
 	// into a diagnostic. It is the single limit for both stdout and stderr: the
 	// streams of an agent run can be arbitrarily large and can quote whatever
-	// the agent read, so no message composed here may carry one whole.
-	maxCapturedOutput = 512
+	// the agent read, so no message composed here may carry one whole. The value
+	// lives in localrun, which is where the local process is read, so the limit
+	// applied while capturing and the limit applied while quoting cannot drift.
+	maxCapturedOutput = localrun.MaxCapturedOutput
 
 	// planSkillRelPath is where `archetipo init --tool codex` installs the
 	// planning skill, relative to the workspace root. Codex resolves
 	// `/archetipo-plan` from there, so its absence is what makes the invocation
 	// impossible rather than merely unlikely to work.
 	planSkillRelPath = ".agents/skills/archetipo-plan/SKILL.md"
+
+	// shutdownGrace bounds how long the session process is given to exit on its
+	// own after its input is closed, before it is signalled.
+	shutdownGrace = 5 * time.Second
 )
 
 // Runner is the single seam between this package and the operating system. It
@@ -71,14 +78,28 @@ type Runner interface {
 // Options carries the injectable seams of the provider. Every field is
 // optional: New fills the zero values with the real implementations.
 type Options struct {
-	Runner     Runner
+	// Runner runs one command to completion. It serves the availability probe,
+	// which is a one-shot question and must stay one.
+	Runner Runner
+	// Starter starts the live session process. It is the seam the dialogue goes
+	// through, so a test can describe a whole conversation without a machine
+	// that has Codex on it.
+	Starter    localrun.Starter
 	WorkingDir func() (string, error)
 	Now        func() time.Time
 }
 
-// Provider dispatches spec.plan actions to a local Codex process.
+// Provider dispatches spec.plan actions to a local Codex session, and exposes
+// that session as a run one can follow and command.
+//
+// The embedded collaborator is what makes the provider collaborative: it brings
+// the seven methods of execution.RunCollaborator, implemented once over the
+// rules of a local run, so this package adds only what really is its own — how
+// the process is started and how it is spoken to.
 type Provider struct {
+	*localrun.Collaborator
 	runner     Runner
+	starter    localrun.Starter
 	workingDir func() (string, error)
 	now        func() time.Time
 }
@@ -86,6 +107,7 @@ type Provider struct {
 var (
 	_ execution.Provider             = (*Provider)(nil)
 	_ execution.AvailabilityReporter = (*Provider)(nil)
+	_ execution.RunCollaborator      = (*Provider)(nil)
 )
 
 // New builds a provider, defaulting every unset seam to its real
@@ -94,12 +116,17 @@ var (
 // effects.
 func New(options Options) *Provider {
 	p := &Provider{
-		runner:     options.Runner,
-		workingDir: options.WorkingDir,
-		now:        options.Now,
+		Collaborator: localrun.NewCollaborator(localrun.NewRegistry()),
+		runner:       options.Runner,
+		starter:      options.Starter,
+		workingDir:   options.WorkingDir,
+		now:          options.Now,
 	}
 	if p.runner == nil {
 		p.runner = execRunner{}
+	}
+	if p.starter == nil {
+		p.starter = localrun.ExecStarter{}
 	}
 	if p.workingDir == nil {
 		p.workingDir = os.Getwd
@@ -159,35 +186,107 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 		return execution.Result{}, err
 	}
 
-	prompt := buildPrompt(req)
-	args := buildArgs(cfg, prompt)
-
 	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
+	// The session is registered before anything is started, so the run is
+	// followable from the instant it can produce history — including while this
+	// call is still inside the agent's work.
+	session := localrun.NewSession(req.ExecutionID, p.now)
+	p.Registry().Register(session)
+
 	startedAt := p.now()
-	stdout, stderr, exitCode, err := p.runner.Run(runCtx, dir, cfg.Command, args)
+	process, err := p.starter.Start(runCtx, dir, cfg.Command, buildArgs())
+	if err != nil {
+		session.Close(execution.RunCrashed, err.Error())
+		return execution.Result{}, fmt.Errorf("the codex command %q could not be started: %w", cfg.Command, err)
+	}
+
+	client := newAppServer(process, session)
+	go client.consume()
+
+	if err := client.start(runCtx, cfg, dir, buildPrompt(req)); err != nil {
+		_, _, _ = p.shutdown(process)
+		session.Close(execution.RunCrashed, err.Error())
+		return execution.Result{}, err
+	}
+	// Only now can a command be delivered: before the turn exists there is
+	// nothing to steer, and a command that arrives earlier is refused as
+	// transient rather than delivered into nothing.
+	session.AttachDialogue(client)
+
+	select {
+	case <-client.TurnDone():
+	case <-runCtx.Done():
+	}
+
+	exitCode, stderr, waitErr := p.shutdown(process)
 	elapsed := p.now().Sub(startedAt)
 
-	if err != nil {
-		return execution.Result{}, fmt.Errorf("the codex command %q could not be run to completion after %s: %w", cfg.Command, elapsed.Round(time.Millisecond), err)
+	if runErr := runCtx.Err(); runErr != nil {
+		reason := fmt.Sprintf("the codex session was stopped after %s: %v", elapsed.Round(time.Millisecond), runErr)
+		session.Close(execution.RunCrashed, reason)
+		return execution.Result{}, fmt.Errorf("the codex command %q did not finish planning %s within %s", cfg.Command, req.SpecCode, cfg.Timeout)
 	}
-	if exitCode != 0 {
+	if waitErr != nil {
+		session.Close(execution.RunCrashed, waitErr.Error())
+		return execution.Result{}, fmt.Errorf("the codex command %q could not be run to completion after %s: %w", cfg.Command, elapsed.Round(time.Millisecond), waitErr)
+	}
+	// A turn that ended because the process died is a different outcome from a
+	// turn the process declared over, and only the second one can carry a plan.
+	// The exit code is reported when there is one, because that is the number
+	// the operator will look for.
+	if !client.Completed() && exitCode != 0 {
+		session.Close(execution.RunCrashed, fmt.Sprintf("the codex process exited %d", exitCode))
 		return execution.Result{}, fmt.Errorf(
 			"the codex command %q exited %d after %s without planning %s%s",
 			cfg.Command, exitCode, elapsed.Round(time.Millisecond), req.SpecCode, diagnosticSuffix(stderr),
 		)
 	}
+
 	// The acceptance rule is the shared one: a receipt this provider accepted
-	// and another rejected would be a contract that exists twice.
-	receipt, err := execution.AcceptPlanReceipt(stdout, req.SpecCode)
+	// and another rejected would be a contract that exists twice. The receipt is
+	// looked for in the agent's last message, which is where the prompt asks for
+	// it — never in the stream as a whole.
+	receipt, err := execution.AcceptPlanReceipt(client.FinalMessage(), req.SpecCode)
 	if err != nil {
+		session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a plan for %s", req.SpecCode))
 		return execution.Result{}, fmt.Errorf(
-			"the codex command %q exited 0 without having produced a plan for %s: %w",
-			cfg.Command, req.SpecCode, err,
+			"the codex command %q ended without having produced a plan for %s%s: %w",
+			cfg.Command, req.SpecCode, diagnosticSuffix(stderr), err,
 		)
 	}
+	session.Close(execution.RunClosed, "")
 	return p.resultFor(cfg, exitCode, elapsed, receipt)
+}
+
+// shutdown ends the session process and reports how it went.
+//
+// Closing the standard input is what a stdio app server takes as its cue to
+// exit — verified against codex-cli 0.147.0, which exits 0 within half a second
+// of it. The signal is the fallback for a build that does not: a Wait with no
+// bound would otherwise keep this call inside a process that has decided to
+// stay.
+func (p *Provider) shutdown(process localrun.Process) (int, string, error) {
+	_ = process.Close()
+	type outcome struct {
+		exitCode int
+		stderr   string
+		err      error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		exitCode, stderr, err := process.Wait()
+		done <- outcome{exitCode: exitCode, stderr: stderr, err: err}
+	}()
+	select {
+	case result := <-done:
+		return result.exitCode, result.stderr, result.err
+	case <-time.After(shutdownGrace):
+		_ = process.Signal()
+		result := <-done
+		return result.exitCode, result.stderr, result.err
+	}
 }
 
 // ensurePlanSkill refuses to spawn Codex when the planning skill it is asked to

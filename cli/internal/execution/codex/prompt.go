@@ -40,28 +40,16 @@ func buildPrompt(req execution.Request) string {
 }
 
 // buildArgs renders the full argument list of the Codex invocation. It is the
-// single place where the flags live, so changing how Codex is called never
-// means touching Execute.
+// single place where the invocation lives, so changing how Codex is started
+// never means touching Execute.
 //
-// The defaults are `exec -s workspace-write --skip-git-repo-check`: a
-// non-interactive run whose sandbox may write inside the workspace — planning
-// has to persist a plan — and that does not refuse to start when the workspace
-// is not a git checkout. They are verified against codex-cli 0.147.0, whose
-// `exec` rejects the interactive CLI's --full-auto outright. `exec_args` stays
-// the escape hatch for a Codex release that spells them differently.
-//
-// An `exec_args` value replaces the intermediate default flags only. The `exec`
-// subcommand stays first and the prompt stays last, because those two are not
-// tuning: they are what makes the invocation a Codex run of this prompt at all.
-func buildArgs(cfg settings, prompt string) []string {
-	args := []string{"exec"}
-	if len(cfg.ExecArgs) > 0 {
-		args = append(args, cfg.ExecArgs...)
-	} else {
-		args = append(args, defaultExecArgs...)
-	}
-	if cfg.Model != "" {
-		args = append(args, "--model", cfg.Model)
-	}
-	return append(args, prompt)
+// The session runs through `codex app-server --listen stdio://`: a JSON-RPC
+// server on standard input and output, which is the only surface of codex-cli
+// 0.147.0 that keeps a conversation alive — `codex exec` runs to completion and
+// reads nothing after its prompt, and `codex proto` no longer exists. Every
+// tunable of the session (working directory, sandbox, model, approvals) travels
+// inside the protocol rather than on the command line, which is why this
+// function takes no settings.
+func buildArgs() []string {
+	return []string{"app-server", "--listen", "stdio://"}
 }

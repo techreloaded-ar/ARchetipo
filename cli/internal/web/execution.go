@@ -59,14 +59,14 @@ func (s *Server) handleListExecutionProviders(w http.ResponseWriter, r *http.Req
 		defaultID = strings.TrimSpace(selection.ID)
 	}
 	for _, provider := range s.registry.List() {
-		capabilities, err := provider.Capabilities(r.Context())
+		// Derived, not asked for directly: DeclaredCapabilities adds the
+		// dialogue capability for a provider that really implements the
+		// interactive-run interface, so the panel cannot advertise a
+		// conversation the provider cannot hold.
+		normalized, err := execution.DeclaredCapabilities(r.Context(), provider)
 		if err != nil {
 			writeError(w, iox.NewInternal("reading capabilities of provider "+provider.ID(), err))
 			return
-		}
-		normalized := execution.NormalizeCapabilities(capabilities)
-		if normalized == nil {
-			normalized = []execution.Capability{}
 		}
 		// Only the current default is probed with the persisted configuration;
 		// every other provider is probed with nil and applies its own defaults,
