@@ -22,33 +22,33 @@ const (
 	maxTimeout = 86400
 )
 
-// defaultPrintArgs are the intermediate flags buildArgs emits when print_args
-// is not configured. They live here, in one place, because the print_args help
-// text quotes them: a default described in prose next to a default written in
-// code is a pair that drifts.
+// permissionModes are the local permission policies Claude Code accepts on
+// `--permission-mode`. The list is closed on purpose: a value outside it would
+// be handed straight to the process and refused there, with a diagnostic that
+// points at the CLI instead of at the configuration field.
 //
-// Verified against Claude Code 2.1.234: `--no-session-persistence` is accepted
-// only together with `--print`, which is exactly the mode this provider runs
-// in, and keeps a managed planning run from leaving a resumable session behind.
-// `--permission-mode auto` hands the local policy decision to Claude itself,
-// which is what lets the planning skill persist the plan without a prompt no
-// one is there to answer.
-var defaultPrintArgs = []string{"--no-session-persistence", "--permission-mode", "auto"}
+// Verified against Claude Code 2.1.235.
+var permissionModes = []string{"acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"}
+
+// defaultPermissionMode hands the local policy decision to Claude itself, which
+// is what lets the planning skill persist the plan without a prompt no one is
+// there to answer. It is the behaviour this provider has always had.
+const defaultPermissionMode = "auto"
 
 // settings is the parsed, non-secret provider configuration. Claude
 // authenticates by itself, so no credential — and no path to its session
 // material — is ever part of this struct.
 type settings struct {
-	Command   string
-	Model     string
-	PrintArgs []string
-	Timeout   time.Duration
+	Command        string
+	Model          string
+	PermissionMode string
+	Timeout        time.Duration
 }
 
 var knownConfigKeys = map[string]struct{}{
 	"command":         {},
 	"model":           {},
-	"print_args":      {},
+	"permission_mode": {},
 	"timeout_seconds": {},
 }
 
@@ -74,17 +74,15 @@ func (p *Provider) ConfigFields() []execution.ConfigField {
 			Placeholder: "opus",
 		},
 		{
-			Name:  "print_args",
-			Label: "Print arguments",
-			Type:  "text",
-			// The wording says "replace" because buildArgs replaces: whatever is
-			// set here stands in for the default flags rather than joining them.
-			// Reading it as "append" is the expensive mistake — dropping the
-			// permission mode leaves Claude waiting for an approval nobody can
-			// give, so the run burns its whole timeout — which is why the
-			// default is spelled out here.
-			Help:        "Space-separated arguments that replace the default Claude print-mode flags (" + strings.Join(defaultPrintArgs, " ") + "). Left empty, those defaults are used. Use it to apply a different local permission policy.",
-			Placeholder: strings.Join(defaultPrintArgs, " "),
+			Name:  "permission_mode",
+			Label: "Permission mode",
+			// The session flags themselves are deliberately not configurable:
+			// the dialogue rests on the streaming protocol, and an argument
+			// that can only break it is not a choice worth offering. The local
+			// permission policy is the one decision that stays meaningful.
+			Type:        "text",
+			Help:        "Local permission policy Claude runs the session with, one of " + strings.Join(permissionModes, ", ") + ". Defaults to " + defaultPermissionMode + ".",
+			Placeholder: defaultPermissionMode,
 		},
 		{
 			Name:        "timeout_seconds",
@@ -121,7 +119,7 @@ func parseConfig(raw map[string]any) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
-	printArgs, err := parsePrintArgs(raw["print_args"])
+	permissionMode, err := parsePermissionMode(raw["permission_mode"])
 	if err != nil {
 		return settings{}, err
 	}
@@ -130,10 +128,10 @@ func parseConfig(raw map[string]any) (settings, error) {
 		return settings{}, err
 	}
 	return settings{
-		Command:   command,
-		Model:     model,
-		PrintArgs: printArgs,
-		Timeout:   time.Duration(timeoutSeconds) * time.Second,
+		Command:        command,
+		Model:          model,
+		PermissionMode: permissionMode,
+		Timeout:        time.Duration(timeoutSeconds) * time.Second,
 	}, nil
 }
 
@@ -187,23 +185,28 @@ func parseModel(value any) (string, error) {
 	return strings.TrimSpace(text), nil
 }
 
-// parsePrintArgs takes the arguments as a single space-separated string, the
-// shape a configuration form can offer, and splits it into the slice the
-// invocation needs. A key that is present must carry something: an empty string
-// is a mistake, while omitting the key is the documented default.
-func parsePrintArgs(value any) ([]string, error) {
+// parsePermissionMode accepts one of the policies Claude Code understands. A
+// key that is present must carry one of them: a value outside the set would be
+// passed straight to the process and refused there, with a diagnostic that
+// points at the CLI instead of at the configuration field.
+func parsePermissionMode(value any) (string, error) {
 	if value == nil {
-		return nil, nil
+		return defaultPermissionMode, nil
 	}
 	text, ok := value.(string)
 	if !ok {
-		return nil, configErr("print_args", "must be a string")
+		return "", configErr("permission_mode", "must be a string")
 	}
-	fields := strings.Fields(text)
-	if len(fields) == 0 {
-		return nil, configErr("print_args", "must not be empty")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", configErr("permission_mode", "must not be empty")
 	}
-	return fields, nil
+	for _, mode := range permissionModes {
+		if text == mode {
+			return text, nil
+		}
+	}
+	return "", configErr("permission_mode", "must be one of "+strings.Join(permissionModes, ", "))
 }
 
 // parseSeconds accepts the numeric forms a provider config can arrive in: YAML

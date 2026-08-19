@@ -36,6 +36,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
 const (
@@ -47,14 +48,20 @@ const (
 	// maxCapturedOutput bounds how much of a captured stream is ever echoed back
 	// into a diagnostic. It is the single limit for both stdout and stderr: the
 	// streams of an agent run can be arbitrarily large and can quote whatever
-	// the agent read, so no message composed here may carry one whole.
-	maxCapturedOutput = 512
+	// the agent read, so no message composed here may carry one whole. The value
+	// lives in localrun, which is where the local process is read, so the limit
+	// applied while capturing and the limit applied while quoting cannot drift.
+	maxCapturedOutput = localrun.MaxCapturedOutput
 
 	// planSkillRelPath is where `archetipo init --tool claude` installs the
 	// planning skill, relative to the workspace root. Claude resolves
 	// `/archetipo-plan` from there, so its absence is what makes the invocation
 	// impossible rather than merely unlikely to work.
 	planSkillRelPath = ".claude/skills/archetipo-plan/SKILL.md"
+
+	// shutdownGrace bounds how long the session process is given to exit on its
+	// own after its input is closed, before it is signalled.
+	shutdownGrace = 5 * time.Second
 )
 
 // Runner is the single seam between this package and the operating system. It
@@ -72,14 +79,28 @@ type Runner interface {
 // Options carries the injectable seams of the provider. Every field is
 // optional: New fills the zero values with the real implementations.
 type Options struct {
-	Runner     Runner
+	// Runner runs one command to completion. It serves the availability probe,
+	// which is a one-shot question and must stay one.
+	Runner Runner
+	// Starter starts the live session process. It is the seam the dialogue goes
+	// through, so a test can describe a whole conversation without a machine
+	// that has Claude Code on it.
+	Starter    localrun.Starter
 	WorkingDir func() (string, error)
 	Now        func() time.Time
 }
 
-// Provider dispatches spec.plan actions to a local Claude Code process.
+// Provider dispatches spec.plan actions to a local Claude Code session, and
+// exposes that session as a run one can follow and command.
+//
+// The embedded collaborator is what makes the provider collaborative: it brings
+// the seven methods of execution.RunCollaborator, implemented once over the
+// rules of a local run, so this package adds only what really is its own — how
+// the process is started and how it is spoken to.
 type Provider struct {
+	*localrun.Collaborator
 	runner     Runner
+	starter    localrun.Starter
 	workingDir func() (string, error)
 	now        func() time.Time
 }
@@ -87,6 +108,7 @@ type Provider struct {
 var (
 	_ execution.Provider             = (*Provider)(nil)
 	_ execution.AvailabilityReporter = (*Provider)(nil)
+	_ execution.RunCollaborator      = (*Provider)(nil)
 )
 
 // New builds a provider, defaulting every unset seam to its real
@@ -95,12 +117,17 @@ var (
 // effects.
 func New(options Options) *Provider {
 	p := &Provider{
-		runner:     options.Runner,
-		workingDir: options.WorkingDir,
-		now:        options.Now,
+		Collaborator: localrun.NewCollaborator(localrun.NewRegistry()),
+		runner:       options.Runner,
+		starter:      options.Starter,
+		workingDir:   options.WorkingDir,
+		now:          options.Now,
 	}
 	if p.runner == nil {
 		p.runner = execRunner{}
+	}
+	if p.starter == nil {
+		p.starter = localrun.ExecStarter{}
 	}
 	if p.workingDir == nil {
 		p.workingDir = os.Getwd
@@ -113,6 +140,10 @@ func New(options Options) *Provider {
 
 func (p *Provider) ID() string { return ProviderID }
 
+// Capabilities declares the actions this provider can dispatch, and nothing
+// else. run.dialog is not among them on purpose: it is derived from the
+// interfaces the provider implements, so declaring it by hand here would be
+// exactly the mismatch that derivation exists to make impossible.
 func (p *Provider) Capabilities(context.Context) ([]execution.Capability, error) {
 	return []execution.Capability{execution.CapabilitySpecPlan}, nil
 }
@@ -134,8 +165,8 @@ func (p *Provider) ValidateConfig(_ context.Context, raw map[string]any) error {
 // checked before spawning. A missing runtime and a missing skill both produce a
 // process that would either fail obscurely or burn a full timeout doing
 // nothing, and both are fixed by a single command the diagnostic can name. Only
-// then is the process started, and only a receipt for the dispatched spec turns
-// its exit code 0 into a success.
+// then is the session started, and only a receipt for the dispatched spec turns
+// a finished turn into a success.
 //
 // It never returns an execution.RemoteError. There is no remote unit of work
 // that outlives this call: when Execute returns, the local process has either
@@ -160,52 +191,110 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 		return execution.Result{}, err
 	}
 
-	prompt := buildPrompt(req)
-	args := buildArgs(cfg, prompt)
-
 	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
+	// The session is registered before anything is started, so the run is
+	// followable from the instant it can produce history — including while this
+	// call is still inside the agent's work.
+	session := localrun.NewSession(req.ExecutionID, p.now)
+	p.Registry().Register(session)
+
 	startedAt := p.now()
-	stdout, stderr, exitCode, err := p.runner.Run(runCtx, dir, cfg.Command, args)
+	process, err := p.starter.Start(runCtx, dir, cfg.Command, buildArgs(cfg))
+	if err != nil {
+		session.Close(execution.RunCrashed, err.Error())
+		return execution.Result{}, fmt.Errorf("the claude command %q could not be started: %w", cfg.Command, err)
+	}
+
+	client := newStreamSession(process, session)
+	go client.consume()
+
+	if err := client.start(runCtx, buildPrompt(req)); err != nil {
+		_, _, _ = p.shutdown(process)
+		session.Close(execution.RunCrashed, err.Error())
+		return execution.Result{}, err
+	}
+	// Only now can a command be delivered: before the turn exists there is
+	// nothing to steer, and a command that arrives earlier is refused as
+	// transient rather than delivered into nothing.
+	session.AttachDialogue(client)
+
+	select {
+	case <-client.TurnDone():
+	case <-runCtx.Done():
+	}
+
+	exitCode, stderr, waitErr := p.shutdown(process)
 	elapsed := p.now().Sub(startedAt)
 
-	// A process killed because a context ended is reported by os/exec as an
-	// ordinary non-zero exit — `signal: killed`, exit code -1 and no error — not
-	// as an invocation failure. So the deadline has to be read from the context
-	// itself: inferred from the exit code, a run that burned its whole timeout
-	// would be diagnosed as "exited -1", which names no cause at all.
 	if runErr := runCtx.Err(); runErr != nil {
-		if callerErr := ctx.Err(); callerErr != nil {
-			return execution.Result{}, fmt.Errorf(
-				"the claude command %q was stopped after %s without planning %s because the request context ended: %w",
-				cfg.Command, elapsed.Round(time.Millisecond), req.SpecCode, callerErr,
-			)
-		}
-		return execution.Result{}, fmt.Errorf(
-			"the claude command %q did not plan %s within its %s timeout and was stopped after %s: %w",
-			cfg.Command, req.SpecCode, cfg.Timeout, elapsed.Round(time.Millisecond), runErr,
-		)
+		reason := fmt.Sprintf("the claude session was stopped after %s: %v", elapsed.Round(time.Millisecond), runErr)
+		session.Close(execution.RunCrashed, reason)
+		return execution.Result{}, fmt.Errorf("the claude command %q did not finish planning %s within %s", cfg.Command, req.SpecCode, cfg.Timeout)
 	}
-	if err != nil {
-		return execution.Result{}, fmt.Errorf("the claude command %q could not be run to completion after %s: %w", cfg.Command, elapsed.Round(time.Millisecond), err)
+	if waitErr != nil {
+		session.Close(execution.RunCrashed, waitErr.Error())
+		return execution.Result{}, fmt.Errorf("the claude command %q could not be run to completion after %s: %w", cfg.Command, elapsed.Round(time.Millisecond), waitErr)
 	}
-	if exitCode != 0 {
+	// Only a turn the process declared finished, and finished without error,
+	// can carry a plan. Two different outcomes fail this test and both must:
+	// a turn that ended because the process died, and an interrupted turn —
+	// which Claude also closes with a `result`, reporting `is_error`. The
+	// second one is the reason the exit code cannot be the whole condition:
+	// stopping the process after an interrupt is an ordinary shutdown and can
+	// exit 0, so a run cancelled by the operator would otherwise be accepted
+	// as a success on whatever the agent happened to have said last.
+	if !client.Completed() {
+		session.Close(execution.RunCrashed, fmt.Sprintf("the claude process exited %d without completing the turn", exitCode))
 		return execution.Result{}, fmt.Errorf(
-			"the claude command %q exited %d after %s without planning %s%s",
+			"the claude command %q exited %d after %s without planning %s: the turn never completed%s",
 			cfg.Command, exitCode, elapsed.Round(time.Millisecond), req.SpecCode, diagnosticSuffix(stderr),
 		)
 	}
+
 	// The acceptance rule is the shared one: a receipt this provider accepted
-	// and another rejected would be a contract that exists twice.
-	receipt, err := execution.AcceptPlanReceipt(stdout, req.SpecCode)
+	// and another rejected would be a contract that exists twice. The receipt is
+	// looked for in the message the run ends on, which is where the prompt asks
+	// for it — never in the stream as a whole.
+	receipt, err := execution.AcceptPlanReceipt(client.FinalMessage(), req.SpecCode)
 	if err != nil {
+		session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a plan for %s", req.SpecCode))
 		return execution.Result{}, fmt.Errorf(
-			"the claude command %q exited 0 without having produced a plan for %s: %w",
-			cfg.Command, req.SpecCode, err,
+			"the claude command %q ended without having produced a plan for %s%s: %w",
+			cfg.Command, req.SpecCode, diagnosticSuffix(stderr), err,
 		)
 	}
+	session.Close(execution.RunClosed, "")
 	return p.resultFor(cfg, exitCode, elapsed, receipt)
+}
+
+// shutdown ends the session process and reports how it went.
+//
+// Closing the standard input is what a stream-json process takes as its cue to
+// exit, and it is the ordinary way a finished session ends. The signal is the
+// fallback for a build that stays: a Wait with no bound would otherwise keep
+// this call inside a process that has decided not to leave.
+func (p *Provider) shutdown(process localrun.Process) (int, string, error) {
+	_ = process.Close()
+	type outcome struct {
+		exitCode int
+		stderr   string
+		err      error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		exitCode, stderr, err := process.Wait()
+		done <- outcome{exitCode: exitCode, stderr: stderr, err: err}
+	}()
+	select {
+	case result := <-done:
+		return result.exitCode, result.stderr, result.err
+	case <-time.After(shutdownGrace):
+		_ = process.Signal()
+		result := <-done
+		return result.exitCode, result.stderr, result.err
+	}
 }
 
 // ensurePlanSkill refuses to spawn Claude when the planning skill it is asked

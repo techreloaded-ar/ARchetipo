@@ -88,8 +88,14 @@ async function main() {
     if (!claude.label || !(claude.capabilities || []).includes("spec.plan")) {
       throw new Error(`The claude provider does not declare the spec.plan capability: ${JSON.stringify(claude)}`);
     }
+    // As for codex, the dialogue capability is derived from the interface the
+    // provider really implements, so asserting it here is a statement about
+    // claude holding a conversation and not about a list someone wrote by hand.
+    if (!(claude.capabilities || []).includes("run.dialog")) {
+      throw new Error(`The claude provider does not declare the run.dialog capability: ${JSON.stringify(claude)}`);
+    }
     const claudeFields = (claude.config_fields || []).map((f) => f.name).sort();
-    const wantClaudeFields = ["command", "model", "print_args", "timeout_seconds"];
+    const wantClaudeFields = ["command", "model", "permission_mode", "timeout_seconds"];
     if (claudeFields.join(",") !== wantClaudeFields.join(",")) {
       throw new Error(`Unexpected configurable fields for claude: [${claudeFields.join(", ")}]`);
     }

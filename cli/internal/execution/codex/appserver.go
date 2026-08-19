@@ -31,20 +31,6 @@ const (
 	methodTurnInterrupt = "turn/interrupt"
 )
 
-// Neutral event kinds, the same vocabulary the remote provider produces. A
-// caller must not be able to tell where a run happened by looking at the kinds
-// of its events.
-const (
-	kindUserMessage = "user_message"
-	kindText        = "text"
-	kindThinking    = "thinking"
-	kindToolStart   = "tool_start"
-	kindToolEnd     = "tool_end"
-	kindToolError   = "tool_error"
-	kindTurnEnd     = "turn_end"
-	kindError       = "error"
-)
-
 // noiseNotifications are the notifications this provider deliberately drops.
 //
 // They are enumerated one by one on purpose. The rule everywhere else is that

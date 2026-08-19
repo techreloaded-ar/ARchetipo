@@ -26,21 +26,14 @@ const sentinel = "sk-CLAUDE-SENTINEL-DO-NOT-STORE"
 
 const testSpec = "US-033"
 
-// runOutcome is one scripted answer of the fake Runner.
+// runOutcome is one scripted answer of the fake Runner. It describes the
+// availability probe and nothing else: the agent no longer runs one-shot, so
+// there is no other invocation for the Runner to answer.
 type runOutcome struct {
 	stdout   string
 	stderr   string
 	exitCode int
 	err      error
-	// waitForContext makes the call block until the context passed by the
-	// provider is done, which is how a run that exceeds its timeout behaves
-	// without any test having to sleep. It then answers with the shape the real
-	// runner produces for a process killed by a context — exit code -1 and no
-	// error, because os/exec reports `signal: killed` as an ExitError — and not
-	// with the context error, which the real runner never returns from a
-	// process that had actually started. TestRunnerReportsAProcessKilledByThe
-	// ContextAsAnOrdinaryExit pins that shape against os/exec itself.
-	waitForContext bool
 }
 
 // runCall records what the provider asked the operating system to do.
@@ -62,7 +55,7 @@ type fakeRunner struct {
 
 var _ Runner = (*fakeRunner)(nil)
 
-func (r *fakeRunner) Run(ctx context.Context, dir string, name string, args []string) (string, string, int, error) {
+func (r *fakeRunner) Run(_ context.Context, dir string, name string, args []string) (string, string, int, error) {
 	r.mu.Lock()
 	index := len(r.calls)
 	r.calls = append(r.calls, runCall{dir: dir, name: name, args: append([]string(nil), args...)})
@@ -76,10 +69,6 @@ func (r *fakeRunner) Run(ctx context.Context, dir string, name string, args []st
 	}
 	r.mu.Unlock()
 
-	if outcome.waitForContext {
-		<-ctx.Done()
-		return "", "", -1, nil
-	}
 	return outcome.stdout, outcome.stderr, outcome.exitCode, outcome.err
 }
 
@@ -154,6 +143,50 @@ func newTestProvider(dir string, runner Runner, now func() time.Time) *Provider 
 	})
 }
 
+// newSessionProvider builds a provider whose availability probe is scripted and
+// whose session process is the fake Claude. The Runner now serves only the
+// probe: the run itself goes through the Starter.
+func newSessionProvider(dir string, runner Runner, fake *fakeClaude, now func() time.Time) *Provider {
+	if now == nil {
+		now = fixedElapsedClock(1500 * time.Millisecond)
+	}
+	return New(Options{
+		Runner:     runner,
+		Starter:    fake,
+		WorkingDir: func() (string, error) { return dir, nil },
+		Now:        now,
+	})
+}
+
+// plannedSession drives the fake to the outcome of a successful planning: the
+// agent works, then closes the turn with the receipt as the message the run
+// ends on.
+func plannedSession(fake *fakeClaude, specCode string, tasks int) {
+	go func() {
+		<-fake.started
+		fake.emit(`{"type":"assistant","message":{"content":[{"type":"text","text":"pianifico"}]}}`)
+		fake.emit(resultFrame(receiptLine(specCode, tasks), false))
+	}()
+}
+
+// resultFrame renders the frame the process closes a turn with.
+func resultFrame(text string, failed bool) string {
+	subtype := "success"
+	if failed {
+		subtype = "error_during_execution"
+	}
+	payload, err := json.Marshal(map[string]any{
+		"type":     "result",
+		"subtype":  subtype,
+		"is_error": failed,
+		"result":   text,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(payload)
+}
+
 func testRequest(command string) execution.Request {
 	return execution.Request{
 		ExecutionID:    "exec-1",
@@ -207,45 +240,61 @@ func TestValidateConfigAcceptsAnAbsentCommandAndRejectsAnUnknownKey(t *testing.T
 
 // --- buildArgs -------------------------------------------------------------
 
-func TestBuildArgsKeepsPrintFirstAndThePromptLast(t *testing.T) {
-	const prompt = "PROMPT-BODY"
+// The invocation is the streaming one, and it is asserted literally because it
+// is the single line that decides whether the process can hold a conversation
+// at all: without `--input-format stream-json` no message can reach a live
+// turn, and without `--replay-user-messages` a message that did reach it would
+// never come back out to enter the history.
+//
+// The prompt is deliberately absent: a live session is opened before it is told
+// what to do, so the instruction travels inside the protocol as the first user
+// frame and not as an argument.
+func TestBuildArgsStartsTheStreamingSession(t *testing.T) {
 	cases := []struct {
 		name string
 		cfg  settings
 		want []string
 	}{
 		{
-			name: "defaults",
-			cfg:  settings{Command: "claude"},
-			want: []string{"--print", "--no-session-persistence", "--permission-mode", "auto", prompt},
+			name: "the configured permission mode",
+			cfg:  settings{Command: "claude", PermissionMode: "auto"},
+			want: []string{
+				"--print",
+				"--input-format", "stream-json",
+				"--output-format", "stream-json",
+				"--verbose",
+				"--replay-user-messages",
+				"--no-session-persistence",
+				"--permission-mode", "auto",
+			},
 		},
 		{
-			name: "with model",
-			cfg:  settings{Command: "claude", Model: "opus"},
-			want: []string{"--print", "--no-session-persistence", "--permission-mode", "auto", "--model", "opus", prompt},
-		},
-		{
-			name: "print_args replaces the intermediate flags",
-			cfg:  settings{Command: "claude", PrintArgs: []string{"--permission-mode", "bypassPermissions"}},
-			want: []string{"--print", "--permission-mode", "bypassPermissions", prompt},
-		},
-		{
-			name: "print_args and model",
-			cfg:  settings{Command: "claude", Model: "sonnet", PrintArgs: []string{"--permission-mode", "acceptEdits"}},
-			want: []string{"--print", "--permission-mode", "acceptEdits", "--model", "sonnet", prompt},
+			name: "with a model",
+			cfg:  settings{Command: "claude", Model: "opus", PermissionMode: "bypassPermissions"},
+			want: []string{
+				"--print",
+				"--input-format", "stream-json",
+				"--output-format", "stream-json",
+				"--verbose",
+				"--replay-user-messages",
+				"--no-session-persistence",
+				"--permission-mode", "bypassPermissions",
+				"--model", "opus",
+			},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildArgs(tc.cfg, prompt)
+			got := buildArgs(tc.cfg)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("args = %#v, want %#v", got, tc.want)
 			}
-			if got[0] != "--print" {
-				t.Fatalf("first argument = %q, want the non-interactive print flag", got[0])
-			}
-			if got[len(got)-1] != prompt {
-				t.Fatalf("last argument = %q, want the prompt", got[len(got)-1])
+			for _, forbidden := range []string{buildPrompt(testRequest("claude")), testSpec} {
+				for _, arg := range got {
+					if strings.Contains(arg, forbidden) {
+						t.Fatalf("the prompt travelled on the command line: %#v", got)
+					}
+				}
 			}
 		})
 	}
@@ -356,9 +405,12 @@ func TestWorkingDirectoryIsResolvedAtCallTime(t *testing.T) {
 	first := t.TempDir()
 	second := installSkillIn(t, t.TempDir())
 	current := first
-	runner := &fakeRunner{outcomes: []runOutcome{probeOK, {stdout: receiptLine(testSpec, 2) + "\n"}}}
+	runner := &fakeRunner{outcomes: []runOutcome{probeOK}}
+	fake := newFakeClaude()
+	plannedSession(fake, testSpec, 2)
 	p := New(Options{
 		Runner:     runner,
+		Starter:    fake,
 		WorkingDir: func() (string, error) { return current, nil },
 		Now:        fixedElapsedClock(time.Second),
 	})
@@ -369,8 +421,11 @@ func TestWorkingDirectoryIsResolvedAtCallTime(t *testing.T) {
 	}
 	for i, call := range runner.snapshot() {
 		if call.dir != second {
-			t.Fatalf("call %d ran in %q, want the directory resolved at call time %q", i, call.dir, second)
+			t.Fatalf("probe %d ran in %q, want the directory resolved at call time %q", i, call.dir, second)
 		}
+	}
+	if dir := fake.startedIn(); dir != second {
+		t.Fatalf("the session ran in %q, want the directory resolved at call time %q", dir, second)
 	}
 }
 
@@ -379,14 +434,14 @@ func TestWorkingDirectoryIsResolvedAtCallTime(t *testing.T) {
 func TestExecuteReturnsAPayloadBuiltFromTheReceipt(t *testing.T) {
 	command := fakeCommand(t)
 	dir := workspaceWithSkill(t)
-	runner := &fakeRunner{outcomes: []runOutcome{
-		probeOK,
-		{stdout: "thinking...\ntool: read\n" + receiptLine(testSpec, 9) + "\n"},
-	}}
+	runner := &fakeRunner{outcomes: []runOutcome{probeOK}}
+	fake := newFakeClaude()
+	plannedSession(fake, testSpec, 9)
 	req := testRequest(command)
 	req.ProviderConfig["model"] = "opus"
 
-	got, err := newTestProvider(dir, runner, fixedElapsedClock(1500*time.Millisecond)).Execute(context.Background(), req)
+	provider := newSessionProvider(dir, runner, fake, fixedElapsedClock(1500*time.Millisecond))
+	got, err := provider.Execute(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,23 +491,120 @@ func TestExecuteReturnsAPayloadBuiltFromTheReceipt(t *testing.T) {
 		t.Fatalf("result_summary = %#v", summary)
 	}
 
+	// The probe is the only thing that still runs one-shot, and it runs where
+	// the session runs.
 	calls := runner.snapshot()
-	if len(calls) != 2 {
-		t.Fatalf("runner calls = %d, want the probe and the run", len(calls))
+	if len(calls) != 1 || !reflect.DeepEqual(calls[0].args, []string{"--version"}) {
+		t.Fatalf("runner calls = %#v, want only the availability probe", calls)
 	}
-	if !reflect.DeepEqual(calls[0].args, []string{"--version"}) {
-		t.Fatalf("probe args = %#v", calls[0].args)
+	if calls[0].dir != dir || calls[0].name != command {
+		t.Fatalf("the probe ran %q in %q", calls[0].name, calls[0].dir)
 	}
-	for i, call := range calls {
-		if call.dir != dir {
-			t.Fatalf("call %d ran in %q, want the seam working directory %q", i, call.dir, dir)
+	starts, name, args := fake.spawned()
+	if starts != 1 || name != command {
+		t.Fatalf("the session was started %d time(s) as %q", starts, name)
+	}
+	if !reflect.DeepEqual(args, buildArgs(settings{Command: command, Model: "opus", PermissionMode: defaultPermissionMode})) {
+		t.Fatalf("session args = %#v", args)
+	}
+	if fake.startedIn() != dir {
+		t.Fatalf("the session ran in %q, want the seam working directory %q", fake.startedIn(), dir)
+	}
+	// The instruction reached the agent inside the protocol, as the first user
+	// frame of the session.
+	if got := fake.messagesReceived(); len(got) != 1 || got[0] != buildPrompt(req) {
+		t.Fatalf("the process received %v; want exactly the prompt", got)
+	}
+}
+
+// AC-1, AC-2 — the run is registered and readable while the agent is still
+// working, which is what makes it followable at all.
+func TestExecuteRegistersTheRunBeforeTheAgentWorks(t *testing.T) {
+	command := fakeCommand(t)
+	fake := newFakeClaude()
+	provider := newSessionProvider(workspaceWithSkill(t), &fakeRunner{outcomes: []runOutcome{probeOK}}, fake, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := provider.Execute(context.Background(), testRequest(command))
+		done <- err
+	}()
+
+	<-fake.started
+	fake.emit(`{"type":"assistant","message":{"content":[{"type":"text","text":"sto lavorando"}]}}`)
+
+	// Everything below happens while Execute is still inside the agent's work.
+	var snapshot execution.RunSnapshot
+	waitFor(t, func() bool {
+		runID, err := provider.ResolveRun(context.Background(), execution.Execution{ID: "exec-1"}, nil)
+		if err != nil || runID != "exec-1" {
+			return false
 		}
-		if call.name != command {
-			t.Fatalf("call %d ran %q, want the configured command %q", i, call.name, command)
+		snapshot, err = provider.ReadRun(context.Background(), execution.RunRequest{RunID: runID})
+		if err != nil {
+			return false
 		}
+		return historyCarries(provider, runID, "sto lavorando")
+	})
+	if snapshot.State != execution.RunActive {
+		t.Fatalf("the run reported %q while the agent was still working", snapshot.State)
 	}
-	if !reflect.DeepEqual(calls[1].args, buildArgs(settings{Command: command, Model: "opus"}, buildPrompt(req))) {
-		t.Fatalf("run args = %#v", calls[1].args)
+
+	fake.emit(resultFrame(receiptLine(testSpec, 2), false))
+	if err := <-done; err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	// Once it is over, the run is still readable and its state is the observed
+	// one.
+	snapshot, err := provider.ReadRun(context.Background(), execution.RunRequest{RunID: "exec-1"})
+	if err != nil {
+		t.Fatalf("ReadRun failed after the run: %v", err)
+	}
+	if snapshot.State != execution.RunClosed {
+		t.Fatalf("state = %q, want the observed closed state", snapshot.State)
+	}
+}
+
+// historyCarries replays the run's history and reports whether it already holds
+// an event carrying that text. The bounded context is what makes the replay
+// return once the history is exhausted, so the caller polls a condition instead
+// of waiting on a stream that stays open for the whole run.
+func historyCarries(provider *Provider, runID, text string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	found := errors.New("found")
+	err := provider.StreamRunEvents(ctx, execution.RunRequest{RunID: runID}, 0, func(event execution.RunEvent) error {
+		if event.Text == text {
+			return found
+		}
+		return nil
+	})
+	return errors.Is(err, found)
+}
+
+// AC-1 — the dialogue capability is derived from the interface the provider
+// implements and never declared by hand: a provider that advertised a
+// conversation it cannot hold is exactly what derivation makes impossible.
+func TestProviderDeclaresTheDialogueThroughTheInterface(t *testing.T) {
+	provider := New(Options{})
+	collaborator, ok := execution.RunCollaboratorFor(provider)
+	if !ok || collaborator == nil {
+		t.Fatal("the provider does not expose an interactive run")
+	}
+	declared, err := provider.Capabilities(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(declared, []execution.Capability{execution.CapabilitySpecPlan}) {
+		t.Fatalf("Capabilities = %#v, want spec.plan alone: run.dialog is derived, not declared", declared)
+	}
+	got, err := execution.DeclaredCapabilities(context.Background(), provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := execution.NormalizeCapabilities([]execution.Capability{execution.CapabilitySpecPlan, execution.CapabilityRunDialog})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DeclaredCapabilities = %#v, want %#v", got, want)
 	}
 }
 
@@ -461,109 +613,175 @@ func TestExecuteReturnsAPayloadBuiltFromTheReceipt(t *testing.T) {
 func TestExecuteFailureModes(t *testing.T) {
 	command := fakeCommand(t)
 	cases := []struct {
-		name     string
-		command  string
-		skill    bool
-		outcomes []runOutcome
-		expired  bool
-		wantErr  []string
-		wantRuns int
+		name      string
+		command   string
+		skill     bool
+		probe     []runOutcome
+		drive     func(fake *fakeClaude)
+		expired   bool
+		wantErr   []string
+		wantStart int
 	}{
 		{
-			name:     "runtime absent",
-			command:  missingCommand(),
-			skill:    true,
-			wantErr:  []string{missingCommand(), "was not found"},
-			wantRuns: 0,
+			name:    "runtime absent",
+			command: missingCommand(),
+			skill:   true,
+			wantErr: []string{missingCommand(), "was not found"},
 		},
 		{
-			name:     "runtime present but impossible to start",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{{exitCode: -1, err: errors.New("spawn claude ENOENT")}},
-			wantErr:  []string{"was found but could not be run", "spawn claude ENOENT"},
-			wantRuns: 1,
+			name:    "runtime present but impossible to start",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{{exitCode: -1, err: errors.New("spawn claude ENOENT")}},
+			wantErr: []string{"was found but could not be run", "spawn claude ENOENT"},
 		},
 		{
-			name:     "the version probe fails",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{{exitCode: 5, stderr: "claude: broken install"}},
-			wantErr:  []string{"exited 5 instead of reporting its version", "claude: broken install"},
-			wantRuns: 1,
+			name:    "the version probe fails",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{{exitCode: 5, stderr: "claude: broken install"}},
+			wantErr: []string{"exited 5 instead of reporting its version", "claude: broken install"},
 		},
 		{
-			name:     "planning skill not installed",
-			command:  command,
-			skill:    false,
-			outcomes: []runOutcome{probeOK},
-			wantErr:  []string{"planning skill is not installed", planSkillRelPath, "archetipo init --tool claude"},
-			wantRuns: 1,
+			name:    "planning skill not installed",
+			command: command,
+			skill:   false,
+			probe:   []runOutcome{probeOK},
+			wantErr: []string{"planning skill is not installed", planSkillRelPath, "archetipo init --tool claude"},
 		},
 		{
-			name:     "not authenticated",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {exitCode: 1, stderr: "Invalid API key · Please run /login"}},
-			wantErr:  []string{"exited 1", "without planning " + testSpec, "Please run /login"},
-			wantRuns: 2,
+			name:    "the process dies before announcing itself",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{probeOK},
+			drive: func(fake *fakeClaude) {
+				fake.silent = true
+				go func() {
+					waitForFrames(fake, 1)
+					fake.end()
+				}()
+			},
+			wantErr:   []string{"ended before announcing itself"},
+			wantStart: 1,
 		},
 		{
-			name:     "non-zero exit code with an empty stderr",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {exitCode: 3, stdout: "I gave up."}},
-			wantErr:  []string{"exited 3", "wrote nothing on standard error"},
-			wantRuns: 2,
+			name:    "the process dies before the turn ends",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{probeOK},
+			drive: func(fake *fakeClaude) {
+				go func() {
+					<-fake.started
+					fake.exitCode = 1
+					fake.stderr = "Invalid API key · Please run /login"
+					fake.end()
+				}()
+			},
+			wantErr:   []string{"exited 1", "without planning " + testSpec, "Please run /login"},
+			wantStart: 1,
 		},
 		{
-			name:     "no receipt line at all",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {stdout: "done, I planned everything\n"}},
-			wantErr:  []string{"exited 0 without having produced a plan for " + testSpec, "did not emit the expected JSON receipt line"},
-			wantRuns: 2,
+			name:    "a non-zero exit with an empty stderr",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{probeOK},
+			drive: func(fake *fakeClaude) {
+				go func() {
+					<-fake.started
+					fake.exitCode = 3
+					fake.end()
+				}()
+			},
+			wantErr:   []string{"exited 3", "wrote nothing on standard error"},
+			wantStart: 1,
 		},
 		{
-			name:     "receipt for another spec",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {stdout: receiptLine("US-999", 4) + "\n"}},
-			wantErr:  []string{"exited 0 without having produced a plan for " + testSpec, "does not declare a persisted plan for " + testSpec},
-			wantRuns: 2,
+			name:    "no receipt at all",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{probeOK},
+			drive: func(fake *fakeClaude) {
+				go func() {
+					<-fake.started
+					fake.emit(resultFrame("done, I planned everything", false))
+				}()
+			},
+			wantErr:   []string{"ended without having produced a plan for " + testSpec, "did not emit the expected JSON receipt line"},
+			wantStart: 1,
 		},
 		{
-			name:     "receipt declaring the wrong status",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {stdout: `{"spec_code":"` + testSpec + `","status":"TODO","tasks":4}` + "\n"}},
-			wantErr:  []string{"does not declare a persisted plan for " + testSpec},
-			wantRuns: 2,
+			name:      "receipt for another spec",
+			command:   command,
+			skill:     true,
+			probe:     []runOutcome{probeOK},
+			drive:     func(fake *fakeClaude) { plannedSession(fake, "US-999", 4) },
+			wantErr:   []string{"ended without having produced a plan for " + testSpec, "does not declare a persisted plan for " + testSpec},
+			wantStart: 1,
 		},
 		{
-			name:     "receipt declaring zero tasks",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {stdout: receiptLine(testSpec, 0) + "\n"}},
-			wantErr:  []string{"does not declare a persisted plan for " + testSpec},
-			wantRuns: 2,
+			// An interrupted turn is the one case where the process can close
+			// the turn with an error and still exit 0, because stopping it
+			// afterwards is an ordinary shutdown. Accepting it would take
+			// whatever the agent last said as a plan for work the operator had
+			// just cancelled, so the turn — not the exit code — is what decides.
+			name:    "an interrupted turn that exits 0 carries no plan",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{probeOK},
+			drive: func(fake *fakeClaude) {
+				go func() {
+					<-fake.started
+					fake.emit(resultFrame(receiptLine(testSpec, 4), true))
+				}()
+			},
+			wantErr:   []string{"exited 0", "without planning " + testSpec, "the turn never completed"},
+			wantStart: 1,
 		},
 		{
-			name:     "malformed receipt JSON",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {stdout: `{"spec_code":"` + testSpec + `","status":"PLANNED","tasks":` + "\n"}},
-			wantErr:  []string{"did not emit the expected JSON receipt line"},
-			wantRuns: 2,
+			name:    "receipt declaring the wrong status",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{probeOK},
+			drive: func(fake *fakeClaude) {
+				go func() {
+					<-fake.started
+					fake.emit(resultFrame(`{"spec_code":"`+testSpec+`","status":"TODO","tasks":4}`, false))
+				}()
+			},
+			wantErr:   []string{"does not declare a persisted plan for " + testSpec},
+			wantStart: 1,
 		},
 		{
-			name:     "the request context ends while the agent is running",
-			command:  command,
-			skill:    true,
-			outcomes: []runOutcome{probeOK, {waitForContext: true}},
-			expired:  true,
-			wantErr:  []string{"was stopped", "the request context ended", context.DeadlineExceeded.Error()},
-			wantRuns: 2,
+			name:      "receipt declaring zero tasks",
+			command:   command,
+			skill:     true,
+			probe:     []runOutcome{probeOK},
+			drive:     func(fake *fakeClaude) { plannedSession(fake, testSpec, 0) },
+			wantErr:   []string{"does not declare a persisted plan for " + testSpec},
+			wantStart: 1,
+		},
+		{
+			name:    "malformed receipt JSON",
+			command: command,
+			skill:   true,
+			probe:   []runOutcome{probeOK},
+			drive: func(fake *fakeClaude) {
+				go func() {
+					<-fake.started
+					fake.emit(resultFrame(`{"spec_code":"`+testSpec+`","status":"PLANNED","tasks":`, false))
+				}()
+			},
+			wantErr:   []string{"did not emit the expected JSON receipt line"},
+			wantStart: 1,
+		},
+		{
+			name:      "a turn that never ends",
+			command:   command,
+			skill:     true,
+			probe:     []runOutcome{probeOK},
+			expired:   true,
+			wantErr:   []string{"did not finish planning " + testSpec, "within 1s"},
+			wantStart: 1,
 		},
 	}
 	for _, tc := range cases {
@@ -572,14 +790,17 @@ func TestExecuteFailureModes(t *testing.T) {
 			if tc.skill {
 				dir = workspaceWithSkill(t)
 			}
-			runner := &fakeRunner{outcomes: tc.outcomes}
-			ctx := context.Background()
-			if tc.expired {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, 20*time.Millisecond)
-				defer cancel()
+			fake := newFakeClaude()
+			t.Cleanup(fake.end)
+			if tc.drive != nil {
+				tc.drive(fake)
 			}
-			got, err := newTestProvider(dir, runner, nil).Execute(ctx, testRequest(tc.command))
+			runner := &fakeRunner{outcomes: tc.probe}
+			req := testRequest(tc.command)
+			if tc.expired {
+				req.ProviderConfig["timeout_seconds"] = 1
+			}
+			got, err := newSessionProvider(dir, runner, fake, nil).Execute(context.Background(), req)
 			if err == nil {
 				t.Fatalf("expected an error, got payload %s", got.Payload)
 			}
@@ -593,19 +814,28 @@ func TestExecuteFailureModes(t *testing.T) {
 			for _, want := range tc.wantErr {
 				assertContains(t, err.Error(), want, "execution error")
 			}
-			if calls := runner.snapshot(); len(calls) != tc.wantRuns {
-				t.Fatalf("runner calls = %d, want %d: %#v", len(calls), tc.wantRuns, calls)
+			if starts, _, _ := fake.spawned(); starts != tc.wantStart {
+				t.Fatalf("the session was started %d time(s), want %d", starts, tc.wantStart)
 			}
 		})
 	}
 }
 
+// waitForFrames blocks until the process has been written n frames, so a test
+// can act on what the client really sent instead of on a delay.
+func waitForFrames(fake *fakeClaude, n int) {
+	for len(fake.framesReceived()) < n {
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestExecuteRejectsAnInvalidConfigurationBeforeSpawning(t *testing.T) {
 	runner := &fakeRunner{}
+	fake := newFakeClaude()
 	req := testRequest("claude")
 	req.ProviderConfig["timeout_seconds"] = 0
 
-	_, err := newTestProvider(workspaceWithSkill(t), runner, nil).Execute(context.Background(), req)
+	_, err := newSessionProvider(workspaceWithSkill(t), runner, fake, nil).Execute(context.Background(), req)
 	var configErr *execution.ConfigurationError
 	if !errors.As(err, &configErr) || configErr.Field != "timeout_seconds" {
 		t.Fatalf("error = %v", err)
@@ -613,30 +843,40 @@ func TestExecuteRejectsAnInvalidConfigurationBeforeSpawning(t *testing.T) {
 	if calls := runner.snapshot(); len(calls) != 0 {
 		t.Fatalf("an invalid configuration spawned %d command(s)", len(calls))
 	}
+	if starts, _, _ := fake.spawned(); starts != 0 {
+		t.Fatalf("an invalid configuration opened a session")
+	}
 }
 
 // The configured timeout is what bounds the run, so a short one must expire on
 // its own without the caller's context having a deadline at all — and the
-// diagnostic must name the timeout as the cause. The runner reports a killed
-// process as a plain exit code, so a provider that classified this from the
-// exit code alone would report "exited -1" and say nothing about why.
+// diagnostic must name the timeout as the cause rather than whatever the
+// process happened to exit with. The run is closed as observed, not as
+// succeeded.
 func TestExecuteReportsItsOwnTimeoutAsTheCause(t *testing.T) {
-	runner := &fakeRunner{outcomes: []runOutcome{probeOK, {waitForContext: true}}}
+	runner := &fakeRunner{outcomes: []runOutcome{probeOK}}
+	fake := newFakeClaude()
+	t.Cleanup(fake.end)
 	req := testRequest(fakeCommand(t))
 	req.ProviderConfig["timeout_seconds"] = 1
 
-	_, err := newTestProvider(workspaceWithSkill(t), runner, nil).Execute(context.Background(), req)
+	provider := newSessionProvider(workspaceWithSkill(t), runner, fake, nil)
+	_, err := provider.Execute(context.Background(), req)
 	if err == nil {
 		t.Fatal("expected the configured timeout to end the run")
 	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("the timeout is not reported as a deadline: %v", err)
-	}
-	for _, want := range []string{"did not plan " + testSpec, "within its 1s timeout", "was stopped"} {
+	for _, want := range []string{"did not finish planning " + testSpec, "within 1s"} {
 		assertContains(t, err.Error(), want, "execution error")
 	}
-	if strings.Contains(err.Error(), "exited -1") {
-		t.Fatalf("the timeout was classified from the exit code instead of the deadline: %v", err)
+	snapshot, readErr := provider.ReadRun(context.Background(), execution.RunRequest{RunID: "exec-1"})
+	if readErr != nil {
+		t.Fatalf("ReadRun failed after the timeout: %v", readErr)
+	}
+	if snapshot.State != execution.RunCrashed {
+		t.Fatalf("state = %q, want the run reported as crashed", snapshot.State)
+	}
+	if !strings.Contains(snapshot.Error, "was stopped") {
+		t.Fatalf("the run does not say why it ended: %q", snapshot.Error)
 	}
 }
 
@@ -647,14 +887,16 @@ func TestExecuteReportsItsOwnTimeoutAsTheCause(t *testing.T) {
 // agent may have printed.
 func TestSuccessfulExecutionNeverPersistsTheAgentOutput(t *testing.T) {
 	command := fakeCommand(t)
-	runner := &fakeRunner{outcomes: []runOutcome{
-		probeOK,
-		{
-			stdout: "reading ~/.claude/.credentials.json\ntoken=" + sentinel + "\n" + receiptLine(testSpec, 3) + "\n",
-			stderr: "warning: " + sentinel,
-		},
-	}}
-	got, err := newTestProvider(workspaceWithSkill(t), runner, nil).Execute(context.Background(), testRequest(command))
+	fake := newFakeClaude()
+	fake.stderr = "warning: " + sentinel
+	go func() {
+		<-fake.started
+		fake.emit(`{"type":"assistant","message":{"content":[{"type":"text","text":"reading ~/.claude/.credentials.json, token=` + sentinel + `"}]}}`)
+		fake.emit(resultFrame(receiptLine(testSpec, 3), false))
+	}()
+
+	runner := &fakeRunner{outcomes: []runOutcome{probeOK}}
+	got, err := newSessionProvider(workspaceWithSkill(t), runner, fake, nil).Execute(context.Background(), testRequest(command))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -673,14 +915,18 @@ func TestSuccessfulExecutionNeverPersistsTheAgentOutput(t *testing.T) {
 }
 
 // A failure may quote the tail of stderr, which is what makes it diagnosable,
-// but stdout — the stream where the agent does its talking — never travels.
-func TestFailedExecutionDoesNotEchoTheAgentStdout(t *testing.T) {
+// but what the agent said never travels into the diagnostic.
+func TestFailedExecutionDoesNotEchoWhatTheAgentSaid(t *testing.T) {
 	command := fakeCommand(t)
-	runner := &fakeRunner{outcomes: []runOutcome{
-		probeOK,
-		{exitCode: 2, stdout: "token=" + sentinel + "\n", stderr: "claude: run aborted"},
-	}}
-	_, err := newTestProvider(workspaceWithSkill(t), runner, nil).Execute(context.Background(), testRequest(command))
+	fake := newFakeClaude()
+	fake.stderr = "claude: run aborted"
+	go func() {
+		<-fake.started
+		fake.emit(resultFrame("token="+sentinel, false))
+	}()
+
+	runner := &fakeRunner{outcomes: []runOutcome{probeOK}}
+	_, err := newSessionProvider(workspaceWithSkill(t), runner, fake, nil).Execute(context.Background(), testRequest(command))
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -694,12 +940,15 @@ func TestFailedExecutionDoesNotEchoTheAgentStdout(t *testing.T) {
 // carry a whole stream.
 func TestDiagnosticTruncatesAVeryLongStderr(t *testing.T) {
 	command := fakeCommand(t)
-	long := strings.Repeat("x", maxCapturedOutput*3) + sentinel
-	runner := &fakeRunner{outcomes: []runOutcome{
-		probeOK,
-		{exitCode: 4, stderr: long},
-	}}
-	_, err := newTestProvider(workspaceWithSkill(t), runner, nil).Execute(context.Background(), testRequest(command))
+	fake := newFakeClaude()
+	fake.stderr = strings.Repeat("x", maxCapturedOutput*3) + sentinel
+	go func() {
+		<-fake.started
+		fake.emit(resultFrame("", false))
+	}()
+
+	runner := &fakeRunner{outcomes: []runOutcome{probeOK}}
+	_, err := newSessionProvider(workspaceWithSkill(t), runner, fake, nil).Execute(context.Background(), testRequest(command))
 	if err == nil {
 		t.Fatal("expected an error")
 	}

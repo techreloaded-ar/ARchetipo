@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/claude"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
@@ -23,15 +25,16 @@ import (
 // merely absent by luck.
 const claudeAuthSentinel = "claude-oauth-token-DO-NOT-PERSIST"
 
-// claudeScript drives the fake Claude runtime for one scenario. It is the
-// single seam the provider offers, so every test here exercises the real
-// command building, the real availability probe and the real receipt gate
-// without a `claude` binary existing anywhere on the machine.
+// claudeScript drives the fake Claude runtime for one scenario. It stands in
+// for both seams the provider offers — the one-shot runner behind the
+// availability probe and the live process behind the session — so every test
+// here exercises the real handshake, the real translation and the real receipt
+// gate without a `claude` binary existing anywhere on the machine.
 //
-// The two invocations the provider makes are kept apart on purpose: `--version`
-// is the availability probe, everything else is the agent run. Scripting them
-// separately is what lets a test say "the runtime is not usable" without also
-// saying anything about the run that would have followed.
+// The two are kept apart on purpose: `--version` is the availability probe, the
+// session is the agent run. Scripting them separately is what lets a test say
+// "the runtime is not usable" without also saying anything about the run that
+// would have followed.
 type claudeScript struct {
 	mu sync.Mutex
 
@@ -42,17 +45,158 @@ type claudeScript struct {
 	versionExit int
 	versionOut  string
 
-	// run describes the agent run. It may reach back into the CLI to persist a
-	// plan, exactly as the local agent does.
-	run func() (stdout string, stderr string, exitCode int, err error)
+	// exec describes the agent run: the message the run ends on — which is where
+	// the receipt is expected — the tail of the process's standard error, its
+	// exit code, and a failure to run it at all. It may reach back into the CLI
+	// to persist a plan, exactly as the local agent does.
+	//
+	// A non-zero exit code or a non-nil error describes a process that died
+	// without closing its turn, which is how a real failed session ends.
+	exec func() (finalMessage string, stderr string, exitCode int, err error)
 
 	versionCalls int
-	runCalls     int
-	runArgs      []string
-	runDir       string
+	execCalls    int
+	execArgs     []string
+	execDir      string
+	prompt       string
 }
 
-var _ claude.Runner = (*claudeScript)(nil)
+var (
+	_ claude.Runner    = (*claudeScript)(nil)
+	_ localrun.Starter = (*claudeScript)(nil)
+)
+
+// Start opens the fake session. The provider drives it with the real
+// stream-json client, so what is asserted downstream is the production
+// handshake and not a shortcut.
+func (s *claudeScript) Start(_ context.Context, dir string, _ string, args []string) (localrun.Process, error) {
+	s.mu.Lock()
+	s.execCalls++
+	s.execArgs = append([]string(nil), args...)
+	s.execDir = dir
+	exec := s.exec
+	s.mu.Unlock()
+	return newClaudeSessionProcess(s, exec), nil
+}
+
+// claudeSessionProcess speaks the stream-json protocol and nothing else: NDJSON
+// in, NDJSON out, one frame per line.
+type claudeSessionProcess struct {
+	script *claudeScript
+	exec   func() (string, string, int, error)
+
+	mu        sync.Mutex
+	ended     bool
+	announced bool
+	lines     chan []byte
+	once      sync.Once
+	done      chan struct{}
+	stderr    string
+	exitCode  int
+	failure   error
+}
+
+func newClaudeSessionProcess(script *claudeScript, exec func() (string, string, int, error)) *claudeSessionProcess {
+	return &claudeSessionProcess{
+		script: script,
+		exec:   exec,
+		lines:  make(chan []byte, 64),
+		done:   make(chan struct{}),
+	}
+}
+
+// Send reads one frame off the process's standard input. The first user frame
+// carries the instruction and opens the turn, exactly as the real build treats
+// it.
+func (p *claudeSessionProcess) Send(line []byte) error {
+	var frame struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(line, &frame); err != nil {
+		return err
+	}
+	if frame.Type != "user" {
+		return nil
+	}
+	p.mu.Lock()
+	first := !p.announced
+	p.announced = true
+	p.mu.Unlock()
+	if !first {
+		return nil
+	}
+	p.script.recordPrompt(line)
+	p.push([]byte(`{"type":"system","subtype":"init","model":"opus"}`))
+	go p.work()
+	return nil
+}
+
+// work is the agent's turn: it does whatever the scenario scripted, leaves the
+// message the run ends on, and either closes the turn with a result frame or
+// dies the way a failing process dies.
+func (p *claudeSessionProcess) work() {
+	finalMessage, stderr, exitCode, failure := "", "", 0, error(nil)
+	if p.exec != nil {
+		finalMessage, stderr, exitCode, failure = p.exec()
+	}
+	p.mu.Lock()
+	p.stderr, p.exitCode, p.failure = stderr, exitCode, failure
+	p.mu.Unlock()
+
+	if strings.TrimSpace(finalMessage) != "" {
+		payload, err := json.Marshal(map[string]any{
+			"type":    "assistant",
+			"message": map[string]any{"content": []any{map[string]any{"type": "text", "text": finalMessage}}},
+		})
+		if err == nil {
+			p.push(payload)
+		}
+	}
+	if exitCode != 0 || failure != nil {
+		p.end()
+		return
+	}
+	result, err := json.Marshal(map[string]any{
+		"type":     "result",
+		"subtype":  "success",
+		"is_error": false,
+		"result":   finalMessage,
+	})
+	if err == nil {
+		p.push(result)
+	}
+}
+
+func (p *claudeSessionProcess) push(payload []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ended {
+		return
+	}
+	p.lines <- payload
+}
+
+func (p *claudeSessionProcess) end() {
+	p.once.Do(func() {
+		p.mu.Lock()
+		p.ended = true
+		p.mu.Unlock()
+		close(p.lines)
+		close(p.done)
+	})
+}
+
+func (p *claudeSessionProcess) Lines() <-chan []byte { return p.lines }
+
+func (p *claudeSessionProcess) Signal() error { p.end(); return nil }
+
+func (p *claudeSessionProcess) Wait() (int, string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.exitCode, p.stderr, p.failure
+}
+
+func (p *claudeSessionProcess) Close() error { p.end(); return nil }
 
 func (s *claudeScript) Run(_ context.Context, dir string, _ string, args []string) (string, string, int, error) {
 	s.mu.Lock()
@@ -71,19 +215,39 @@ func (s *claudeScript) Run(_ context.Context, dir string, _ string, args []strin
 		}
 		return out, "", 0, nil
 	}
-	s.runCalls++
-	s.runArgs = append([]string(nil), args...)
-	s.runDir = dir
-	if s.run == nil {
-		return "", "", 0, nil
-	}
-	return s.run()
+	// Everything that is not the probe would be a one-shot agent run, and there
+	// is no such thing any more: the agent runs inside a session.
+	return "", "", 0, fmt.Errorf("unexpected one-shot invocation: %v", args)
 }
 
-func (s *claudeScript) snapshot() (versionCalls, runCalls int, args []string, dir string) {
+// recordPrompt keeps the text the provider really asked the agent to work on,
+// which now travels inside the first user frame instead of on the command line.
+func (s *claudeScript) recordPrompt(line []byte) {
+	var frame struct {
+		Message struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(line, &frame) != nil || len(frame.Message.Content) == 0 {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.versionCalls, s.runCalls, append([]string(nil), s.runArgs...), s.runDir
+	s.prompt = frame.Message.Content[0].Text
+}
+
+func (s *claudeScript) promptSent() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.prompt
+}
+
+func (s *claudeScript) snapshot() (versionCalls, execCalls int, args []string, dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.versionCalls, s.execCalls, append([]string(nil), s.execArgs...), s.execDir
 }
 
 // claudePlanReceipt renders the receipt line the agent is asked to close its
@@ -140,7 +304,7 @@ func newClaudeScenario(t *testing.T, script *claudeScript) executionDependencies
 	t.Setenv("CLAUDE_TEST_AUTH", claudeAuthSentinel)
 	t.Chdir(t.TempDir())
 	deps := executionTestDeps(t)
-	if err := deps.registry.Register(claude.New(claude.Options{Runner: script})); err != nil {
+	if err := deps.registry.Register(claude.New(claude.Options{Runner: script, Starter: script})); err != nil {
 		t.Fatal(err)
 	}
 	seedExecutionSpec(t, deps)
@@ -189,7 +353,7 @@ func assertClaudeSpecUntouched(t *testing.T, deps executionDependencies, before 
 func TestClaudePlanLocalHappyPath(t *testing.T) {
 	script := &claudeScript{}
 	deps := newClaudeScenario(t, script)
-	script.run = func() (string, string, int, error) {
+	script.exec = func() (string, string, int, error) {
 		// The local agent plans the spec through the configured connector,
 		// exactly as the prompt instructs it to.
 		planExecutionSpec(t, deps)
@@ -210,16 +374,23 @@ func TestClaudePlanLocalHappyPath(t *testing.T) {
 		t.Fatalf("a succeeded run carries no result: %#v", run)
 	}
 
-	// The invocation is the real one: probed once, then run once, in the
-	// workspace, with the prompt naming the spec.
-	versionCalls, runCalls, args, dir := script.snapshot()
-	if versionCalls != 1 || runCalls != 1 {
-		t.Fatalf("version calls = %d, run calls = %d", versionCalls, runCalls)
+	// The invocation is the real one: probed once, then a session opened once,
+	// in the workspace, with the prompt naming the spec.
+	versionCalls, execCalls, args, dir := script.snapshot()
+	if versionCalls != 1 || execCalls != 1 {
+		t.Fatalf("version calls = %d, exec calls = %d", versionCalls, execCalls)
 	}
-	if len(args) == 0 || args[0] != "--print" {
-		t.Fatalf("the claude invocation is not a non-interactive print run: %#v", args)
+	// The invocation is the streaming one, which is what makes the run a
+	// conversation instead of a one-shot command; the prompt no longer travels
+	// on the command line but inside the protocol, so it is asserted on the
+	// frame the provider wrote.
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--print", "--input-format stream-json", "--output-format stream-json", "--replay-user-messages"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("the claude invocation does not open a streaming session (%q missing): %#v", want, args)
+		}
 	}
-	if prompt := args[len(args)-1]; !strings.Contains(prompt, "US-001") || !strings.Contains(prompt, "/archetipo-plan") {
+	if prompt := script.promptSent(); !strings.Contains(prompt, "US-001") || !strings.Contains(prompt, "/archetipo-plan") {
 		t.Fatalf("the prompt does not ask to plan US-001: %q", prompt)
 	}
 	cwd, err := os.Getwd()
@@ -260,7 +431,7 @@ func TestClaudePlanLocalHappyPath(t *testing.T) {
 func TestClaudeSuccessfulRunPersistsNoAuthenticationMaterial(t *testing.T) {
 	script := &claudeScript{}
 	deps := newClaudeScenario(t, script)
-	script.run = func() (string, string, int, error) {
+	script.exec = func() (string, string, int, error) {
 		planExecutionSpec(t, deps)
 		return claudeNoisyOutput(claudePlanReceipt("US-001", 1)),
 			"[claude] refreshed credentials for " + claudeAuthSentinel, 0, nil
@@ -273,8 +444,8 @@ func TestClaudeSuccessfulRunPersistsNoAuthenticationMaterial(t *testing.T) {
 	}
 	// The sentinel really was printed by the runtime, otherwise the assertions
 	// below would pass on a scenario that never risked anything.
-	if _, runCalls, _, _ := script.snapshot(); runCalls != 1 {
-		t.Fatalf("run calls = %d", runCalls)
+	if _, execCalls, _, _ := script.snapshot(); execCalls != 1 {
+		t.Fatalf("exec calls = %d", execCalls)
 	}
 	if os.Getenv("CLAUDE_TEST_AUTH") != claudeAuthSentinel {
 		t.Fatal("the scenario did not export the sentinel")
@@ -311,33 +482,33 @@ func TestClaudeLocalFailuresPreserveTheSpec(t *testing.T) {
 		arrange func(*claudeScript)
 		// wantText is matched on the diagnostic the record carries.
 		wantText []string
-		wantRuns int
+		wantExec int
 	}{
 		{
 			name:     "the runtime is not usable",
 			arrange:  func(s *claudeScript) { s.versionExit = 127 },
 			wantText: []string{"instead of reporting its version", "spawn claude ENOENT"},
-			wantRuns: 0,
+			wantExec: 0,
 		},
 		{
 			name: "claude is not authenticated",
 			arrange: func(s *claudeScript) {
-				s.run = func() (string, string, int, error) {
+				s.exec = func() (string, string, int, error) {
 					return "", "Invalid API key · Please run /login", 1, nil
 				}
 			},
 			wantText: []string{"exited 1", "without planning US-001", "Please run /login"},
-			wantRuns: 1,
+			wantExec: 1,
 		},
 		{
 			name: "the run ends without a receipt",
 			arrange: func(s *claudeScript) {
-				s.run = func() (string, string, int, error) {
+				s.exec = func() (string, string, int, error) {
 					return claudeNoisyOutput("All done, I planned everything."), "", 0, nil
 				}
 			},
-			wantText: []string{"exited 0 without having produced a plan for US-001"},
-			wantRuns: 1,
+			wantText: []string{"ended without having produced a plan for US-001"},
+			wantExec: 1,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -359,8 +530,8 @@ func TestClaudeLocalFailuresPreserveTheSpec(t *testing.T) {
 					t.Fatalf("the diagnostic misses %q: %s", want, run.Error.Message)
 				}
 			}
-			if _, runCalls, _, _ := script.snapshot(); runCalls != tc.wantRuns {
-				t.Fatalf("run calls = %d, want %d", runCalls, tc.wantRuns)
+			if _, execCalls, _, _ := script.snapshot(); execCalls != tc.wantExec {
+				t.Fatalf("exec calls = %d, want %d", execCalls, tc.wantExec)
 			}
 			if strings.Contains(run.Error.Message, claudeAuthSentinel) {
 				t.Fatalf("the recorded diagnostic leaked the session material: %s", run.Error.Message)
@@ -382,7 +553,7 @@ func TestClaudeLocalFailuresPreserveTheSpec(t *testing.T) {
 // comes from the shared effect check, and this is the one failure that fails
 // the command.
 func TestClaudeValidReceiptWithoutAPlanIsNotASuccess(t *testing.T) {
-	script := &claudeScript{run: func() (string, string, int, error) {
+	script := &claudeScript{exec: func() (string, string, int, error) {
 		return claudeNoisyOutput(claudePlanReceipt("US-001", 3)), "", 0, nil
 	}}
 	deps := newClaudeScenario(t, script)

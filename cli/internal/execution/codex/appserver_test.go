@@ -298,28 +298,28 @@ func TestAppServerTranslatesEveryNotificationThatCarriesHistory(t *testing.T) {
 			name:     "the operator message the process re-emitted",
 			method:   "item/started",
 			params:   `{"item":{"type":"userMessage","content":[{"type":"text","text":"fermati al punto due"}]}}`,
-			wantKind: kindUserMessage,
+			wantKind: localrun.KindUserMessage,
 			wantText: "fermati al punto due",
 		},
 		{
 			name:     "a fragment of the agent's answer",
 			method:   "item/agentMessage/delta",
 			params:   `{"delta":"pianifico "}`,
-			wantKind: kindText,
+			wantKind: localrun.KindText,
 			wantText: "pianifico ",
 		},
 		{
 			name:     "a fragment of the agent's reasoning",
 			method:   "item/reasoning/summaryTextDelta",
 			params:   `{"delta":"valuto le opzioni"}`,
-			wantKind: kindThinking,
+			wantKind: localrun.KindThinking,
 			wantText: "valuto le opzioni",
 		},
 		{
 			name:     "a command starting",
 			method:   "item/started",
 			params:   `{"item":{"type":"commandExecution","command":["go","test","./..."],"status":"inProgress"}}`,
-			wantKind: kindToolStart,
+			wantKind: localrun.KindToolStart,
 			wantText: "go test ./...",
 			wantTool: "commandExecution",
 		},
@@ -327,7 +327,7 @@ func TestAppServerTranslatesEveryNotificationThatCarriesHistory(t *testing.T) {
 			name:     "a command that succeeded",
 			method:   "item/completed",
 			params:   `{"item":{"type":"commandExecution","command":"ls","status":"completed","exitCode":0}}`,
-			wantKind: kindToolEnd,
+			wantKind: localrun.KindToolEnd,
 			wantText: "ls",
 			wantTool: "commandExecution",
 		},
@@ -335,7 +335,7 @@ func TestAppServerTranslatesEveryNotificationThatCarriesHistory(t *testing.T) {
 			name:     "a command that failed",
 			method:   "item/completed",
 			params:   `{"item":{"type":"commandExecution","command":"ls","status":"failed","exitCode":2}}`,
-			wantKind: kindToolError,
+			wantKind: localrun.KindToolError,
 			wantText: "ls",
 			wantTool: "commandExecution",
 		},
@@ -343,20 +343,20 @@ func TestAppServerTranslatesEveryNotificationThatCarriesHistory(t *testing.T) {
 			name:     "an MCP tool call, named by its server",
 			method:   "item/started",
 			params:   `{"item":{"type":"mcpToolCall","tool":"search","server":"docs"}}`,
-			wantKind: kindToolStart,
+			wantKind: localrun.KindToolStart,
 			wantTool: "docs.search",
 		},
 		{
 			name:     "the end of the turn",
 			method:   "turn/completed",
 			params:   `{"turn":{"id":"turn-1"}}`,
-			wantKind: kindTurnEnd,
+			wantKind: localrun.KindTurnEnd,
 		},
 		{
 			name:     "an error the server reported",
 			method:   "error",
 			params:   `{"message":"model unavailable"}`,
-			wantKind: kindError,
+			wantKind: localrun.KindError,
 			wantText: "model unavailable",
 		},
 		{
@@ -470,7 +470,7 @@ func TestAppServerSteersTheTurnAndWaitsForTheReEmission(t *testing.T) {
 	fake.emit("item/started", fmt.Sprintf(`{"item":{"type":"userMessage","content":[{"type":"text","text":%q}]}}`, sentinel))
 	waitFor(t, func() bool {
 		events := session.Events(0)
-		return len(events) > before && events[len(events)-1].Kind == kindUserMessage
+		return len(events) > before && events[len(events)-1].Kind == localrun.KindUserMessage
 	})
 	events := session.Events(0)
 	if last := events[len(events)-1]; last.Text != sentinel {

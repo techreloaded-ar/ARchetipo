@@ -43,27 +43,32 @@ func buildPrompt(req execution.Request) string {
 // single place where the flags live, so changing how Claude is called never
 // means touching Execute.
 //
-// The defaults are `--print --no-session-persistence --permission-mode auto`: a
-// non-interactive run that leaves no resumable session on disk and that decides
-// its own permissions, because planning has to persist a plan and nobody is
-// there to approve a prompt. They are verified against Claude Code 2.1.234,
-// whose `--no-session-persistence` is accepted only alongside `--print`.
-// `print_args` stays the escape hatch for a Claude release that spells them
-// differently, or for a workspace that wants a stricter local policy.
+// Every flag here is load-bearing, which is why none of them is configurable.
+// The dialogue rests on the streaming protocol: `--input-format stream-json`
+// is what lets a message reach the agent while it works, `--output-format
+// stream-json` with `--verbose` is what makes its work observable frame by
+// frame, and `--replay-user-messages` is what sends an operator's message back
+// out so it can enter the history — the shared rule is that a message becomes
+// history when the process re-emits it, never when it is sent, and without this
+// flag Claude would simply never re-emit it. `--no-session-persistence` keeps a
+// managed run from leaving a resumable session on disk. Verified against Claude
+// Code 2.1.235.
 //
-// A `print_args` value replaces the intermediate default flags only. The
-// `--print` flag stays first and the prompt stays last, because those two are
-// not tuning: they are what makes the invocation a non-interactive Claude run
-// of this prompt at all.
-func buildArgs(cfg settings, prompt string) []string {
-	args := []string{"--print"}
-	if len(cfg.PrintArgs) > 0 {
-		args = append(args, cfg.PrintArgs...)
-	} else {
-		args = append(args, defaultPrintArgs...)
+// The prompt is deliberately absent: it travels inside the protocol as the
+// first user frame, not as an argument, because a live session is opened before
+// it is told what to do.
+func buildArgs(cfg settings) []string {
+	args := []string{
+		"--print",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--verbose",
+		"--replay-user-messages",
+		"--no-session-persistence",
+		"--permission-mode", cfg.PermissionMode,
 	}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
-	return append(args, prompt)
+	return args
 }

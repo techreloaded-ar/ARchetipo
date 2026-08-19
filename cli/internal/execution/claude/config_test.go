@@ -22,8 +22,8 @@ func TestConfigAppliesDocumentedDefaults(t *testing.T) {
 	if got.Model != "" {
 		t.Fatalf("model = %q, want empty so that no model flag is emitted", got.Model)
 	}
-	if len(got.PrintArgs) != 0 {
-		t.Fatalf("print_args = %#v, want empty", got.PrintArgs)
+	if got.PermissionMode != defaultPermissionMode {
+		t.Fatalf("permission_mode = %q, want %q", got.PermissionMode, defaultPermissionMode)
 	}
 	if got.Timeout != 3600*time.Second {
 		t.Fatalf("timeout = %s, want 3600s", got.Timeout)
@@ -34,7 +34,7 @@ func TestConfigAppliesFullOverride(t *testing.T) {
 	got, err := parseConfig(map[string]any{
 		"command":         "/opt/homebrew/bin/claude",
 		"model":           "opus",
-		"print_args":      "--permission-mode plan",
+		"permission_mode": "plan",
 		"timeout_seconds": 120,
 	})
 	if err != nil {
@@ -46,8 +46,8 @@ func TestConfigAppliesFullOverride(t *testing.T) {
 	if got.Model != "opus" {
 		t.Fatalf("model = %q", got.Model)
 	}
-	if want := []string{"--permission-mode", "plan"}; !reflect.DeepEqual(got.PrintArgs, want) {
-		t.Fatalf("print_args = %#v, want %#v", got.PrintArgs, want)
+	if got.PermissionMode != "plan" {
+		t.Fatalf("permission_mode = %q, want %q", got.PermissionMode, "plan")
 	}
 	if got.Timeout != 120*time.Second {
 		t.Fatalf("timeout = %s, want 120s", got.Timeout)
@@ -64,9 +64,15 @@ func TestConfigRejectsInvalidFields(t *testing.T) {
 		{"command empty", map[string]any{"command": "   "}, "command"},
 		{"command relative path", map[string]any{"command": "./bin/claude"}, "command"},
 		{"model not a string", map[string]any{"model": true}, "model"},
-		{"print_args not a string", map[string]any{"print_args": []string{"--print"}}, "print_args"},
-		{"print_args empty", map[string]any{"print_args": ""}, "print_args"},
-		{"print_args blank", map[string]any{"print_args": "   "}, "print_args"},
+		{"permission_mode not a string", map[string]any{"permission_mode": []string{"auto"}}, "permission_mode"},
+		{"permission_mode empty", map[string]any{"permission_mode": ""}, "permission_mode"},
+		{"permission_mode blank", map[string]any{"permission_mode": "   "}, "permission_mode"},
+		// A mode Claude does not accept must be refused here, where the field
+		// can be named, rather than by the process, which would blame the CLI.
+		{"permission_mode outside the set", map[string]any{"permission_mode": "yolo"}, "permission_mode"},
+		// print_args was removed with the streaming session: the session flags
+		// are what the dialogue rests on, so they are no longer negotiable.
+		{"the removed print_args key", map[string]any{"print_args": "--permission-mode plan"}, "print_args"},
 		{"timeout_seconds not an integer", map[string]any{"timeout_seconds": "3600"}, "timeout_seconds"},
 		{"timeout_seconds fractional", map[string]any{"timeout_seconds": 10.5}, "timeout_seconds"},
 		{"timeout_seconds below range", map[string]any{"timeout_seconds": 0}, "timeout_seconds"},
@@ -142,7 +148,7 @@ func TestConfigFieldsDeclareNoSecretAndMatchAcceptedKeys(t *testing.T) {
 		names = append(names, field.Name)
 	}
 	sort.Strings(names)
-	want := []string{"command", "model", "print_args", "timeout_seconds"}
+	want := []string{"command", "model", "permission_mode", "timeout_seconds"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("declared fields = %v, want %v", names, want)
 	}
@@ -160,22 +166,23 @@ func TestConfigFieldsDeclareNoSecretAndMatchAcceptedKeys(t *testing.T) {
 	}
 }
 
-// The print_args help quotes the defaults buildArgs actually emits. They drifted
-// apart once in the sibling provider, so the pair is pinned by a test rather
-// than by discipline.
-func TestPrintArgsHelpQuotesTheRealDefaults(t *testing.T) {
+// The permission_mode help quotes the modes the parser actually accepts and the
+// default buildArgs actually emits. Prose and code drifted apart once in the
+// sibling provider, so the pair is pinned by a test rather than by discipline.
+func TestPermissionModeHelpQuotesTheRealModes(t *testing.T) {
 	for _, field := range (&Provider{}).ConfigFields() {
-		if field.Name != "print_args" {
+		if field.Name != "permission_mode" {
 			continue
 		}
-		want := strings.Join(defaultPrintArgs, " ")
-		if !strings.Contains(field.Help, want) {
-			t.Fatalf("the print_args help does not quote the defaults %q: %s", want, field.Help)
+		for _, mode := range permissionModes {
+			if !strings.Contains(field.Help, mode) {
+				t.Fatalf("the permission_mode help does not quote the accepted mode %q: %s", mode, field.Help)
+			}
 		}
-		if !strings.Contains(strings.ToLower(field.Help), "replace") {
-			t.Fatalf("the print_args help does not say that the value replaces the defaults: %s", field.Help)
+		if !strings.Contains(field.Help, defaultPermissionMode) {
+			t.Fatalf("the permission_mode help does not quote the default %q: %s", defaultPermissionMode, field.Help)
 		}
 		return
 	}
-	t.Fatal("print_args is not a declared field")
+	t.Fatal("permission_mode is not a declared field")
 }

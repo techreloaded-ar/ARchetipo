@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
 const (
@@ -64,17 +65,6 @@ type agentEvent struct {
 	} `json:"message"`
 }
 
-// Neutral event kinds this provider produces.
-const (
-	kindUserMessage = "user_message"
-	kindText        = "text"
-	kindThinking    = "thinking"
-	kindToolStart   = "tool_start"
-	kindToolEnd     = "tool_end"
-	kindToolError   = "tool_error"
-	kindTurnEnd     = "turn_end"
-)
-
 // translateAgentEvent derives the rendered fields of a run event from the hub's
 // agent event.
 //
@@ -89,27 +79,27 @@ func translateAgentEvent(raw json.RawMessage) (kind, text, tool string) {
 	}
 	switch event.Type {
 	case "user_message":
-		return kindUserMessage, event.Text, ""
+		return localrun.KindUserMessage, event.Text, ""
 	case "message_update":
 		switch event.AssistantMessageEvent.Type {
 		case "text_delta":
-			return kindText, event.AssistantMessageEvent.Delta, ""
+			return localrun.KindText, event.AssistantMessageEvent.Delta, ""
 		case "thinking_delta":
-			return kindThinking, event.AssistantMessageEvent.Delta, ""
+			return localrun.KindThinking, event.AssistantMessageEvent.Delta, ""
 		}
 		return event.Type, "", ""
 	case "tool_execution_start":
-		return kindToolStart, "", event.ToolName
+		return localrun.KindToolStart, "", event.ToolName
 	case "tool_execution_end":
 		if event.IsError {
-			return kindToolError, "", event.ToolName
+			return localrun.KindToolError, "", event.ToolName
 		}
-		return kindToolEnd, "", event.ToolName
+		return localrun.KindToolEnd, "", event.ToolName
 	case "message_end":
 		if event.Message.StopReason == "error" || event.Message.StopReason == "aborted" {
-			return kindTurnEnd, event.Message.ErrorMessage, ""
+			return localrun.KindTurnEnd, event.Message.ErrorMessage, ""
 		}
-		return kindTurnEnd, "", ""
+		return localrun.KindTurnEnd, "", ""
 	default:
 		return event.Type, "", ""
 	}

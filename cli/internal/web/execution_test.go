@@ -18,6 +18,8 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/arcipelago"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/claude"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/codex"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
@@ -481,6 +483,16 @@ func TestListExecutionProvidersDeclaresTheDialogueCapability(t *testing.T) {
 	if err := registry.Register(releasedProvider("plain", nil)); err != nil {
 		t.Fatal(err)
 	}
+	// The two shipped local providers are registered as themselves, so the
+	// table below is a statement about `codex` and `claude` and not only about
+	// a test double that happens to implement the same interface.
+	probe := &unusableRuntime{}
+	if err := registry.Register(codex.New(codex.Options{Runner: probe})); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(claude.New(claude.Options{Runner: probe})); err != nil {
+		t.Fatal(err)
+	}
 	srv, err := NewServer(conn, cfg, registry, "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -498,11 +510,17 @@ func TestListExecutionProvidersDeclaresTheDialogueCapability(t *testing.T) {
 	for _, provider := range view.Providers {
 		found[provider.ID] = provider.Capabilities
 	}
-	if !containsCapability(found["collaborating"], execution.CapabilityRunDialog) {
-		t.Fatalf("a provider that exposes an interactive run must declare %s, got %v", execution.CapabilityRunDialog, found["collaborating"])
-	}
-	if !containsCapability(found["collaborating"], execution.CapabilitySpecPlan) {
-		t.Fatalf("the dialogue capability must join the ones already declared, got %v", found["collaborating"])
+	// Every provider that exposes an interactive run declares the dialogue, and
+	// the two local ones are named explicitly: a viewer decides whether to offer
+	// the conversation from this list, so a local provider missing from it is a
+	// run nobody can follow.
+	for _, id := range []string{"collaborating", codex.ProviderID, claude.ProviderID} {
+		if !containsCapability(found[id], execution.CapabilityRunDialog) {
+			t.Fatalf("a provider that exposes an interactive run must declare %s, got %v for %s", execution.CapabilityRunDialog, found[id], id)
+		}
+		if !containsCapability(found[id], execution.CapabilitySpecPlan) {
+			t.Fatalf("the dialogue capability must join the ones already declared, got %v for %s", found[id], id)
+		}
 	}
 	if containsCapability(found["plain"], execution.CapabilityRunDialog) {
 		t.Fatalf("a provider without an interactive run must expose %s as absent, got %v", execution.CapabilityRunDialog, found["plain"])
@@ -510,6 +528,16 @@ func TestListExecutionProvidersDeclaresTheDialogueCapability(t *testing.T) {
 	if !containsCapability(found["plain"], execution.CapabilitySpecPlan) {
 		t.Fatalf("the plain provider lost its own capabilities: %v", found["plain"])
 	}
+}
+
+// unusableRuntime answers the availability probe of a local provider without a
+// process. Listing the providers probes every one of them, and this test is
+// about what they declare, not about what is installed on the machine that runs
+// it.
+type unusableRuntime struct{}
+
+func (unusableRuntime) Run(context.Context, string, string, []string) (string, string, int, error) {
+	return "", "not installed", 127, nil
 }
 
 func containsCapability(capabilities []execution.Capability, want execution.Capability) bool {

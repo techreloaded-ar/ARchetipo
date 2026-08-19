@@ -62,7 +62,7 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		a.mu.Lock()
 		a.completed = true
 		a.mu.Unlock()
-		a.append(kindTurnEnd, "", "", params)
+		a.append(localrun.KindTurnEnd, "", "", params)
 		a.endTurn()
 		return
 	case "item/agentMessage/delta":
@@ -70,10 +70,10 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		a.mu.Lock()
 		a.agent.WriteString(delta)
 		a.mu.Unlock()
-		a.append(kindText, delta, "", params)
+		a.append(localrun.KindText, delta, "", params)
 		return
 	case "item/reasoning/summaryTextDelta", "item/reasoning/textDelta":
-		a.append(kindThinking, decodeDelta(params), "", params)
+		a.append(localrun.KindThinking, decodeDelta(params), "", params)
 		return
 	case "item/started":
 		kind, text, tool, carries := startedItem(params)
@@ -88,7 +88,7 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		}
 		return
 	case "error":
-		a.append(kindError, decodeErrorText(params), "", params)
+		a.append(localrun.KindError, decodeErrorText(params), "", params)
 		return
 	default:
 		a.append(method, "", "", params)
@@ -147,11 +147,11 @@ func startedItem(params json.RawMessage) (kind, text, tool string, carries bool)
 	item := notification.Item
 	switch item.Type {
 	case "userMessage":
-		return kindUserMessage, joinContent(item.Content, item.Text), "", true
+		return localrun.KindUserMessage, joinContent(item.Content, item.Text), "", true
 	case "agentMessage", "reasoning", "plan":
 		return "", "", "", false
 	default:
-		return kindToolStart, toolText(item), toolName(item), true
+		return localrun.KindToolStart, toolText(item), toolName(item), true
 	}
 }
 
@@ -174,9 +174,9 @@ func completedItem(a *appServer, params json.RawMessage) (kind, text, tool strin
 		return "", "", "", false
 	default:
 		if failed(item.Status, item.Error, item.ExitCode) {
-			return kindToolError, toolText(item), toolName(item), true
+			return localrun.KindToolError, toolText(item), toolName(item), true
 		}
-		return kindToolEnd, toolText(item), toolName(item), true
+		return localrun.KindToolEnd, toolText(item), toolName(item), true
 	}
 }
 

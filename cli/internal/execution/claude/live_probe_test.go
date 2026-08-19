@@ -1,6 +1,6 @@
 //go:build liveprobe
 
-package codex
+package claude
 
 import (
 	"context"
@@ -12,23 +12,23 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
-// TestLiveCodexPlansASpec dispatches one real spec.plan action to the real
-// Codex binary in a real workspace. It is the only check that exercises the
-// flags in defaultExecArgs against the CLI that has to accept them — every
-// other test goes through the Runner seam and would happily agree on a flag
-// Codex rejects, which is exactly how `--full-auto` survived a full review.
+// TestLiveClaudePlansASpec dispatches one real spec.plan action to the real
+// Claude Code binary in a real workspace. It is the only check that exercises
+// the flags in buildArgs against the CLI that has to accept them — every other
+// test in this package goes through the process seam and would happily agree on
+// a flag Claude rejects.
 //
 // It is behind a build tag because it costs an agent run and mutates the
-// backlog: the spec it names really is planned. Run it by hand after a Codex
-// upgrade, or when defaultExecArgs changes:
+// backlog: the spec it names really is planned. Run it by hand after a Claude
+// Code upgrade, or when buildArgs changes:
 //
 //	LIVE_WORKSPACE=/path/to/workspace LIVE_SPEC=US-0XX \
-//	  go test -tags liveprobe -run TestLiveCodexPlansASpec -timeout 40m ./internal/execution/codex/
-func TestLiveCodexPlansASpec(t *testing.T) {
+//	  go test -tags liveprobe -run TestLiveClaudePlansASpec -timeout 40m ./internal/execution/claude/
+func TestLiveClaudePlansASpec(t *testing.T) {
 	root := os.Getenv("LIVE_WORKSPACE")
 	spec := os.Getenv("LIVE_SPEC")
 	if root == "" || spec == "" {
-		t.Skip("set LIVE_WORKSPACE and LIVE_SPEC to run the live Codex probe")
+		t.Skip("set LIVE_WORKSPACE and LIVE_SPEC to run the live Claude probe")
 	}
 
 	p := New(Options{WorkingDir: func() (string, error) { return root, nil }})
@@ -45,64 +45,62 @@ func TestLiveCodexPlansASpec(t *testing.T) {
 	t.Logf("payload: %s", string(res.Payload))
 }
 
-// TestLiveCodexDialogue drives the real Codex binary through the real app
-// server protocol: handshake, thread, turn, and — while the turn is still
-// alive — a steer and an interrupt.
+// TestLiveClaudeDialogue drives the real Claude Code binary through the real
+// streaming protocol: the session, a message delivered while the turn is alive,
+// and an interrupt.
 //
-// It exists for the same reason as the probe above, and it is the only check
-// that can catch the mistake that matters here: every other test in this
-// package goes through the process seam and would happily agree on a method
-// name, a parameter or a refusal that Codex does not recognize. That is exactly
-// how `--full-auto` survived a full review.
+// It exists because the protocol this package speaks was established by
+// observing a real binary — Claude Code 2.1.235 — and every other test here
+// goes through the process seam, so it would happily agree on a frame shape
+// that Claude does not produce or a control request it does not answer. This is
+// the check that notices when a future release changes any of that.
 //
 // It costs a few seconds of agent time, touches no backlog and writes nothing:
-// the prompt asks for one word, in a temporary directory.
+// the prompt asks for counting, in a temporary directory.
 //
-//	LIVE_CODEX=1 go test -tags liveprobe -run TestLiveCodexDialogue -timeout 5m ./internal/execution/codex/
-func TestLiveCodexDialogue(t *testing.T) {
-	if os.Getenv("LIVE_CODEX") == "" {
-		t.Skip("set LIVE_CODEX=1 to run the live Codex dialogue probe")
+//	LIVE_CLAUDE=1 go test -tags liveprobe -run TestLiveClaudeDialogue -timeout 5m ./internal/execution/claude/
+func TestLiveClaudeDialogue(t *testing.T) {
+	if os.Getenv("LIVE_CLAUDE") == "" {
+		t.Skip("set LIVE_CLAUDE=1 to run the live Claude dialogue probe")
 	}
 	dir := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	process, err := localrun.ExecStarter{}.Start(ctx, dir, "codex", buildArgs())
+	cfg := settings{Command: defaultCommand, PermissionMode: defaultPermissionMode, Timeout: 3 * time.Minute}
+	process, err := localrun.ExecStarter{}.Start(ctx, dir, cfg.Command, buildArgs(cfg))
 	if err != nil {
-		t.Fatalf("starting the codex app server: %v", err)
+		t.Fatalf("starting the claude session: %v", err)
 	}
 	session := localrun.NewSession("live-probe", nil)
-	client := newAppServer(process, session)
+	client := newStreamSession(process, session)
 	go client.consume()
 
 	const prompt = "Conta lentamente da 1 a 40, un numero per riga, senza usare strumenti."
 	const steered = "Fermati e rispondi solo CIAO."
 
-	cfg := settings{Command: "codex", Sandbox: defaultSandbox, Timeout: 3 * time.Minute}
-	if err := client.start(ctx, cfg, dir, prompt); err != nil {
-		t.Fatalf("the handshake the production client speaks was refused: %v", err)
+	if err := client.start(ctx, prompt); err != nil {
+		t.Fatalf("the session the production client opens was refused: %v", err)
 	}
 	session.AttachDialogue(client)
 
-	// The first event is the prompt itself, re-emitted by Codex as a user
-	// message: this is the mechanism the whole dialogue rests on, and it is
-	// verified here against the real binary and not against a double.
+	// The first thing the history must show is the prompt itself, re-emitted by
+	// Claude as a user message. That re-emission is the mechanism the whole
+	// dialogue rests on — it is what `--replay-user-messages` buys — and it is
+	// verified here against the real binary rather than against a double.
 	waitForLiveEvent(t, ctx, session, func(event execution.RunEvent) bool {
 		return event.Kind == localrun.KindUserMessage && event.Text == prompt
 	}, "the prompt re-emitted as a user message")
 
-	// A steer issued in the instant between `turn/start` returning and the turn
-	// actually starting is refused with `no active turn to steer` — observed
-	// here — which is why the wait above comes first.
 	if err := client.Send(ctx, steered); err != nil {
-		assertDeliveredOrRefused(t, "turn/steer", err)
+		assertDeliveredOrRefused(t, "the operator message", err)
 	} else {
 		waitForLiveEvent(t, ctx, session, func(event execution.RunEvent) bool {
 			return event.Kind == localrun.KindUserMessage && event.Text == steered
-		}, "the steered message re-emitted by the process")
+		}, "the message re-emitted by the process")
 	}
 
-	assertDeliveredOrRefused(t, "turn/interrupt", client.Interrupt(ctx))
+	assertDeliveredOrRefused(t, "the interrupt", client.Interrupt(ctx))
 
 	select {
 	case <-client.TurnDone():
@@ -137,6 +135,8 @@ func waitForLiveEvent(t *testing.T, ctx context.Context, session *localrun.Sessi
 	}
 }
 
+// assertDeliveredOrRefused accepts the one refusal that is a legitimate outcome
+// against a live agent: a turn that ended before the command reached it.
 func assertDeliveredOrRefused(t *testing.T, what string, err error) {
 	t.Helper()
 	if err == nil {
