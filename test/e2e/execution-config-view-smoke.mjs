@@ -75,6 +75,28 @@ async function main() {
     if (codex.available === false && !(codex.unavailable_reason || "").trim()) {
       throw new Error(`An unavailable codex provider must state a reason; got ${JSON.stringify(codex)}`);
     }
+    const claude = (providers.providers || []).find((p) => p.id === "claude");
+    if (!claude) {
+      throw new Error(`Expected the claude provider to be listed; got ${JSON.stringify(providers.providers)}`);
+    }
+    if (!claude.label || !(claude.capabilities || []).includes("spec.plan")) {
+      throw new Error(`The claude provider does not declare the spec.plan capability: ${JSON.stringify(claude)}`);
+    }
+    const claudeFields = (claude.config_fields || []).map((f) => f.name).sort();
+    const wantClaudeFields = ["command", "model", "print_args", "timeout_seconds"];
+    if (claudeFields.join(",") !== wantClaudeFields.join(",")) {
+      throw new Error(`Unexpected configurable fields for claude: [${claudeFields.join(", ")}]`);
+    }
+    assertNoCredentialFields(claude);
+    // Availability is observed, not required, and says nothing about a login:
+    // the smoke must pass on a machine with Claude Code installed and logged
+    // in, on one installed and logged out, and on one without it at all.
+    if (typeof claude.available !== "boolean") {
+      throw new Error(`The claude provider must report a boolean 'available'; got ${JSON.stringify(claude.available)}`);
+    }
+    if (claude.available === false && !(claude.unavailable_reason || "").trim()) {
+      throw new Error(`An unavailable claude provider must state a reason; got ${JSON.stringify(claude)}`);
+    }
     if (typeof arcipelago.available !== "boolean") {
       throw new Error(`The arcipelago provider must report a boolean 'available'; got ${JSON.stringify(arcipelago.available)}`);
     }

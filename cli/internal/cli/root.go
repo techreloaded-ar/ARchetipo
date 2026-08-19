@@ -13,6 +13,7 @@ import (
 	_ "github.com/techreloaded-ar/ARchetipo/cli/internal/connector/builtin"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/arcipelago"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/claude"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/codex"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/version"
@@ -69,6 +70,7 @@ func defaultExecutionRegistry() *execution.Registry {
 	registry := execution.NewRegistry()
 	_ = registry.Register(arcipelago.New(arcipelago.Options{}))
 	_ = registry.Register(codex.New(codex.Options{}))
+	_ = registry.Register(claude.New(claude.Options{}))
 	return registry
 }
 
