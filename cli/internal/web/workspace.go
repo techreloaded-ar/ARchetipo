@@ -29,6 +29,10 @@ type createWorkspaceReq struct {
 type createWorkspaceView struct {
 	workspace.Result
 	Hint string `json:"hint"`
+	// RegistryWarning reports that the new workspace was created on disk but
+	// could not be added to the known list. The creation already happened, so an
+	// unwritable registry cannot fail it — but it must not be invisible either.
+	RegistryWarning string `json:"registryWarning,omitempty"`
 }
 
 // handleGetWorkspaceOptions serves GET /api/workspace/options: the choices an
@@ -70,9 +74,17 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	warning := ""
+	if s.workspaces == nil {
+		warning = "the workspace registry is unavailable: the new workspace was not added to the known list"
+	} else if _, terr := s.workspaces.Touch(result.Dir); terr != nil {
+		warning = "the new workspace could not be added to the known list: " + terr.Error()
+	}
+
 	writeJSON(w, http.StatusCreated, createWorkspaceView{
-		Result: result,
-		Hint:   "open the new workspace by running `archetipo view` in " + result.Dir,
+		Result:          result,
+		Hint:            "open the new workspace by running `archetipo view` in " + result.Dir,
+		RegistryWarning: warning,
 	})
 }
 

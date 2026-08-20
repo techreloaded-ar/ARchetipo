@@ -93,6 +93,12 @@ authentication is performed.`,
 				}); rerr != nil {
 					fmt.Fprintf(s.err, "(could not register viewer: %v)\n", rerr)
 				}
+				// The known-workspace list is a convenience, never a
+				// precondition: a registry that cannot be written costs a line
+				// on stderr and nothing else.
+				if rerr := srv.RegisterWorkspace(); rerr != nil {
+					fmt.Fprintf(s.err, "(could not record the workspace in the known list: %v)\n", rerr)
+				}
 				if !noOpen {
 					if err := web.OpenBrowser(url); err != nil {
 						fmt.Fprintf(s.err, "(could not open browser: %v)\n", err)

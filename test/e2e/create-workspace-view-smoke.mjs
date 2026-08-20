@@ -44,6 +44,11 @@ async function main() {
   const targetsDir = path.join(runDir, "targets");
   const verified = [];
 
+  // A successful creation now records the new workspace in the user-level
+  // registry, and starting the viewer records the sandbox: both must land
+  // inside this run directory, never in the real state of the machine.
+  cliEnv.ARCHETIPO_STATE_DIR = path.join(runDir, "state");
+
   console.log(`-> workspace: ${runDir}`);
   await fs.mkdir(sandboxDir, { recursive: true });
   await fs.mkdir(targetsDir, { recursive: true });

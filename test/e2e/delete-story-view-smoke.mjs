@@ -20,6 +20,11 @@ const cliEnv = { ...process.env, ARCHETIPO_DATA_DIR: repoRoot };
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const runDir = await createRunDir(options.workspaceRoot);
+  // Starting a viewer records its project root in the user-level registry of
+  // known workspaces. This run directory is a throwaway, so the entry must go
+  // with it instead of accumulating in the real registry of the machine.
+  process.env.ARCHETIPO_STATE_DIR = path.join(runDir, "state");
+  cliEnv.ARCHETIPO_STATE_DIR = process.env.ARCHETIPO_STATE_DIR;
   const sandboxDir = path.join(runDir, "sandbox");
   const specsFile = path.join(runDir, "specs.json");
 

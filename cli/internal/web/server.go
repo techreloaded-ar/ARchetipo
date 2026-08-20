@@ -19,6 +19,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
 // Server wires the connector backend to HTTP handlers and the embedded UI.
@@ -31,6 +32,13 @@ type Server struct {
 	mockupsDir string
 	broker     *Broker
 	watchRoot  string
+
+	// workspaces is the user-level registry of known workspaces. It is named
+	// apart from `registry` above, which is the execution provider registry of
+	// this viewer: two different registries, one field each. It may be nil — a
+	// machine whose state directory cannot be resolved must still get a working
+	// viewer, so the routes degrade instead of the constructor failing.
+	workspaces *workspace.Registry
 
 	// store and service dispatch spec actions. The store is always present (it
 	// only needs the project root); the service is nil when no provider registry
@@ -79,6 +87,11 @@ func NewServer(conn connector.Connector, cfg config.Config, registry *execution.
 			return nil, fmt.Errorf("creating the execution service: %w", serviceErr)
 		}
 		s.service = service
+	}
+	// A registry we cannot open is not a reason to refuse to serve the current
+	// workspace: the field stays nil and the workspace routes say so.
+	if reg, regErr := workspace.OpenRegistry(); regErr == nil {
+		s.workspaces = reg
 	}
 	s.registerRoutes()
 	s.httpSrv = &http.Server{
@@ -195,6 +208,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/workspace", s.handleCreateWorkspace)
 	s.mux.HandleFunc("GET /api/workspace/actions", s.handleGetWorkspaceActions)
 	s.mux.HandleFunc("POST /api/workspace/execution", s.handleRunWorkspaceAction)
+	s.mux.HandleFunc("GET /api/workspaces", s.handleListWorkspaces)
+	s.mux.HandleFunc("POST /api/workspaces", s.handleAddWorkspace)
+	s.mux.HandleFunc("DELETE /api/workspaces/{id}", s.handleRemoveWorkspace)
 	s.mux.HandleFunc("GET /api/mockups", s.handleListMockups)
 
 	// Serve design mockups from the configured paths.mockups directory.

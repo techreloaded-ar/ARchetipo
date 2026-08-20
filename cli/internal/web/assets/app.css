@@ -3676,3 +3676,72 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	opacity: 0.5;
 	cursor: not-allowed;
 }
+
+/* ---- Known workspaces (US-045) ----------------------------------------- */
+
+.workspace-row {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 14px;
+	padding: 11px 13px;
+	margin-bottom: 8px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+}
+
+.workspace-row-main {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	min-width: 0;
+}
+
+.workspace-row-head {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.workspace-name {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-strong);
+}
+
+.workspace-path {
+	font-family: var(--font-mono);
+	font-size: 11.5px;
+	color: var(--text-muted);
+	word-break: break-all;
+}
+
+.workspace-meta {
+	font-size: 11.5px;
+	color: var(--text-dim);
+}
+
+.workspace-badge {
+	flex: 0 0 auto;
+	padding: 2px 7px;
+	border-radius: var(--radius-sm);
+	background: var(--surface-3);
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+}
+
+.workspace-badge.warn {
+	background: color-mix(in srgb, var(--priority-high) 18%, transparent);
+	color: var(--priority-high);
+}
+
+/* A creation that succeeded on disk but could not be recorded is neither an
+   error nor a plain success: it gets its own colour. */
+.status-msg.warn {
+	color: var(--priority-medium);
+}

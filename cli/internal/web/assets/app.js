@@ -77,6 +77,16 @@
 	const newWorkspaceWorktreeEnabled = document.getElementById(
 		"new-workspace-worktree-enabled",
 	);
+	const workspacesBtn = document.getElementById("workspaces-btn");
+	const workspacesModal = document.getElementById("workspaces-modal");
+	const workspacesModalClose = document.getElementById(
+		"workspaces-modal-close",
+	);
+	const workspacesList = document.getElementById("workspaces-list");
+	const workspacesEmpty = document.getElementById("workspaces-empty");
+	const workspacesAddForm = document.getElementById("workspaces-add-form");
+	const workspacesAddSubmit = document.getElementById("workspaces-add-submit");
+	const workspacesStatus = document.getElementById("workspaces-status");
 	const configBtn = document.getElementById("config-btn");
 	const configModal = document.getElementById("config-modal");
 	const configModalClose = document.getElementById("config-modal-close");
@@ -398,6 +408,22 @@
 	});
 	newWorkspaceWorktreeEnabled.addEventListener("change", syncWorktreeFields);
 	newWorkspaceForm.addEventListener("submit", onCreateWorkspace);
+
+	workspacesBtn.addEventListener("click", openWorkspaces);
+	workspacesModalClose.addEventListener("click", closeWorkspaces);
+	workspacesModal.addEventListener("click", (e) => {
+		if (e.target === workspacesModal) closeWorkspaces();
+	});
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && !workspacesModal.classList.contains("hidden"))
+			closeWorkspaces();
+	});
+	workspacesAddForm.addEventListener("submit", onAddWorkspace);
+	workspacesList.addEventListener("click", (e) => {
+		const btn = e.target.closest("[data-remove]");
+		if (!btn) return;
+		removeWorkspace(btn.dataset.remove, btn.dataset.removeName || "");
+	});
 
 	configBtn.addEventListener("click", openConfig);
 	configModalClose.addEventListener("click", closeConfig);
@@ -3225,9 +3251,15 @@
 		try {
 			const res = await apiPost("/api/workspace", payload);
 			newWorkspaceBusy = false;
-			newWorkspaceStatus.textContent =
-				res.hint || `Workspace created in ${res.dir}`;
-			newWorkspaceStatus.className = "status-msg ok";
+			// The workspace is on disk either way, so a registry that could not
+			// record it is reported beside the outcome rather than swallowed.
+			const outcome = res.hint || `Workspace created in ${res.dir}`;
+			newWorkspaceStatus.textContent = res.registryWarning
+				? `${outcome} — ${res.registryWarning}`
+				: outcome;
+			newWorkspaceStatus.className = res.registryWarning
+				? "status-msg warn"
+				: "status-msg ok";
 			showToast(`Workspace created in ${res.dir}`, "ok");
 		} catch (err) {
 			if (Array.isArray(err.fields) && err.fields.length > 0) {
@@ -3239,6 +3271,174 @@
 		} finally {
 			newWorkspaceBusy = false;
 			newWorkspaceSubmit.disabled = false;
+		}
+	}
+
+	// ---- Known workspaces ---------------------------------------------------
+
+	// The server owns both the order of the list and the vocabulary of the
+	// statuses. The frontend only knows how to phrase a status it recognises and
+	// falls back to the raw value for anything it does not: a new server status
+	// must never disappear from the UI just because this map is older.
+	const WORKSPACE_STATUS_LABELS = {
+		missing: "not found",
+		not_a_directory: "not a directory",
+		not_readable: "not readable",
+		not_a_workspace: "not an ARchetipo workspace",
+	};
+
+	async function openWorkspaces() {
+		workspacesAddForm.reset();
+		clearWorkspacesErrors();
+		workspacesStatus.textContent = "";
+		workspacesStatus.className = "status-msg";
+		workspacesModal.classList.remove("hidden");
+		await loadWorkspaces();
+	}
+
+	function closeWorkspaces() {
+		workspacesModal.classList.add("hidden");
+	}
+
+	function clearWorkspacesErrors() {
+		workspacesAddForm.querySelectorAll(".field-error").forEach((el) => {
+			el.textContent = "";
+		});
+		workspacesAddForm.querySelectorAll(".field.has-error").forEach((el) => {
+			el.classList.remove("has-error");
+		});
+	}
+
+	// A failed load reports itself and leaves the list empty instead of throwing:
+	// the add form below stays usable even when the registry cannot be read.
+	async function loadWorkspaces() {
+		try {
+			const view = await apiGet("/api/workspaces");
+			renderWorkspaces((view && view.workspaces) || []);
+		} catch (err) {
+			workspacesList.textContent = "";
+			workspacesEmpty.classList.add("hidden");
+			workspacesStatus.textContent = `Load failed: ${err.message || err}`;
+			workspacesStatus.className = "status-msg err";
+		}
+	}
+
+	function renderWorkspaces(items) {
+		workspacesList.textContent = "";
+		if (items.length === 0) {
+			workspacesEmpty.classList.remove("hidden");
+			return;
+		}
+		workspacesEmpty.classList.add("hidden");
+		items.forEach((item) => {
+			workspacesList.appendChild(workspaceRow(item));
+		});
+	}
+
+	// Built with createElement/textContent: a workspace name and path come from
+	// the user's disk and must never be interpolated into markup.
+	function workspaceRow(item) {
+		const row = document.createElement("div");
+		row.className = "workspace-row";
+
+		const main = document.createElement("div");
+		main.className = "workspace-row-main";
+
+		const head = document.createElement("div");
+		head.className = "workspace-row-head";
+		const name = document.createElement("span");
+		name.className = "workspace-name";
+		name.textContent = item.name || "";
+		head.appendChild(name);
+		if (item.current) {
+			const badge = document.createElement("span");
+			badge.className = "workspace-badge";
+			badge.textContent = "current";
+			head.appendChild(badge);
+		}
+		head.appendChild(workspaceStatusBadge(item));
+		main.appendChild(head);
+
+		const path = document.createElement("code");
+		path.className = "workspace-path";
+		path.textContent = item.path || "";
+		main.appendChild(path);
+
+		const seen = document.createElement("span");
+		seen.className = "workspace-meta";
+		seen.textContent = `Last opened: ${formatExecutionTime(item.lastOpenedAt)}`;
+		main.appendChild(seen);
+
+		row.appendChild(main);
+
+		const remove = document.createElement("button");
+		remove.type = "button";
+		remove.className = "ghost-btn";
+		remove.dataset.remove = item.id || "";
+		remove.dataset.removeName = item.name || item.path || "";
+		remove.textContent = "Remove";
+		row.appendChild(remove);
+
+		return row;
+	}
+
+	// An unreachable entry keeps its place in the list and says why: hiding it
+	// would leave the user with a registry that silently disagrees with the disk.
+	function workspaceStatusBadge(item) {
+		const badge = document.createElement("span");
+		if (item.reachable) {
+			badge.className = "workspace-badge";
+			badge.textContent = "reachable";
+			return badge;
+		}
+		badge.className = "workspace-badge warn";
+		badge.textContent =
+			WORKSPACE_STATUS_LABELS[item.status] || item.status || "unreachable";
+		return badge;
+	}
+
+	async function removeWorkspace(id, name) {
+		const label = name || id;
+		const ok = window.confirm(
+			`Remove ${label} from the known workspaces? The workspace directory and its files on disk are not touched.`,
+		);
+		if (!ok) return;
+		try {
+			await apiDelete(`/api/workspaces/${encodeURIComponent(id)}`);
+			showToast("Removed from the known workspaces", "ok");
+			workspacesStatus.textContent = "";
+			workspacesStatus.className = "status-msg";
+			await loadWorkspaces();
+		} catch (err) {
+			workspacesStatus.textContent = `Remove failed: ${err.message || err}`;
+			workspacesStatus.className = "status-msg err";
+		}
+	}
+
+	async function onAddWorkspace(e) {
+		e.preventDefault();
+		clearWorkspacesErrors();
+		workspacesAddSubmit.disabled = true;
+		workspacesStatus.textContent = "Adding…";
+		workspacesStatus.className = "status-msg";
+		try {
+			const res = await apiPost("/api/workspaces", {
+				path: workspacesAddForm.path.value.trim(),
+			});
+			workspacesAddForm.reset();
+			workspacesStatus.textContent = "";
+			workspacesStatus.className = "status-msg";
+			showToast(`${(res && res.name) || "Workspace"} added`, "ok");
+			await loadWorkspaces();
+		} catch (err) {
+			if (Array.isArray(err.fields) && err.fields.length > 0) {
+				renderFieldErrors(workspacesAddForm, workspacesStatus, err.fields);
+			} else {
+				workspacesStatus.textContent = `Add failed: ${err.message || err}`;
+				workspacesStatus.className = "status-msg err";
+			}
+		} finally {
+			workspacesAddSubmit.disabled = false;
 		}
 	}
 

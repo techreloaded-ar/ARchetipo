@@ -252,6 +252,10 @@ async function main() {
   }
   const providers = selectProviders(options.provider);
   const runDir = await createRunDir(options.workspaceRoot);
+  // Starting a viewer records its project root in the user-level registry of
+  // known workspaces. This run directory is a throwaway, so the entry must go
+  // with it instead of accumulating in the real registry of the machine.
+  process.env.ARCHETIPO_STATE_DIR = path.join(runDir, "state");
   console.log(`-> workspace: ${runDir}`);
   await fs.mkdir(binDir, { recursive: true });
   await buildCLI();
