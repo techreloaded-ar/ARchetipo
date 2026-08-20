@@ -61,6 +61,11 @@ var processWorkspaceActions = []WorkspaceAction{
 		Label: "Genera backlog",
 		Skill: "archetipo-spec",
 	},
+	{
+		ID:    "spec-draft",
+		Label: "Proponi una spec",
+		Skill: "archetipo-spec",
+	},
 }
 
 // actionIDs collapses a result to the identifiers a caller keys on, so a table

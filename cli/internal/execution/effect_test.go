@@ -1020,3 +1020,252 @@ func TestVerifyActionEffectRefusesAReviewTheWorkspaceDoesNotBack(t *testing.T) {
 		})
 	}
 }
+
+// ---- spec drafting: the inverted confirmation and its rollback -------------
+
+// specDeleter records exactly which codes it was asked to remove, so a test can
+// prove both that the run's own specs were taken back and that nothing else was.
+type specDeleter struct {
+	deleted []string
+	err     error
+}
+
+func (d *specDeleter) DeleteSpec(_ context.Context, code string) (domain.WriteResult, error) {
+	if d.err != nil {
+		return domain.WriteResult{}, d.err
+	}
+	d.deleted = append(d.deleted, code)
+	return domain.WriteResult{OK: true}, nil
+}
+
+func specDraftRecord() Execution {
+	record := succeededRecord()
+	record.ID = "exec-draft-1"
+	record.SpecCode = ""
+	record.Action = ActionSpecDraft
+	record.Capability = CapabilityWorkspaceSpecDraft
+	return record
+}
+
+func failedSpecDraftRecord(message string) Execution {
+	record := specDraftRecord()
+	record.Status = StatusFailed
+	record.Result = nil
+	record.Error = &ExecutionError{Code: "PROVIDER_FAILED", Message: message}
+	return record
+}
+
+func backlogOf(codes ...string) *backlogReader {
+	return &backlogReader{summary: domain.BacklogSummary{
+		Codes: codes,
+		Epics: []domain.Epic{{Code: "EP-001", Title: "Epica"}},
+	}}
+}
+
+// The confirmation of a drafting run does not go through VerifyActionEffect,
+// and that must be visible: the record comes back untouched even though nothing
+// about the workspace was inspected.
+func TestVerifyActionEffectLeavesASpecDraftToItsOwnConfirmation(t *testing.T) {
+	reader := backlogOf("US-001")
+	record := specDraftRecord()
+
+	if err := VerifyActionEffect(context.Background(), reader, ActionSpecDraft, "", &record); err != nil {
+		t.Fatalf("VerifyActionEffect returned %v, want nil", err)
+	}
+	if record.Status != StatusSucceeded || record.Result == nil {
+		t.Fatalf("record = %+v, want it untouched", record)
+	}
+	if reader.backlogRe != 0 {
+		t.Fatalf("the backlog was read %d time(s), want none", reader.backlogRe)
+	}
+}
+
+// AC-4: a run that proposed without writing is confirmed as it is, and the
+// rollback never runs.
+func TestConfirmSpecDraftAcceptsARunThatWroteNothing(t *testing.T) {
+	deleter := &specDeleter{}
+	record := specDraftRecord()
+
+	ConfirmSpecDraft(context.Background(), backlogOf("US-001", "US-002"), deleter, []string{"US-001", "US-002"}, &record)
+
+	if record.Status != StatusSucceeded {
+		t.Fatalf("status = %q, want %q", record.Status, StatusSucceeded)
+	}
+	if record.Error != nil {
+		t.Fatalf("record carries an error: %+v", record.Error)
+	}
+	if len(deleter.deleted) != 0 {
+		t.Fatalf("deleted %v, want nothing", deleter.deleted)
+	}
+}
+
+// AC-5: a run that declared success after writing a spec is not a success. The
+// claim is refused and the spec it created is taken back, so the progressive
+// code it consumed is free again.
+func TestConfirmSpecDraftRefusesASuccessThatWroteASpec(t *testing.T) {
+	deleter := &specDeleter{}
+	record := specDraftRecord()
+
+	ConfirmSpecDraft(context.Background(), backlogOf("US-001", "US-002", "US-003"), deleter, []string{"US-001", "US-002"}, &record)
+
+	if record.Status != StatusFailed {
+		t.Fatalf("status = %q, want %q", record.Status, StatusFailed)
+	}
+	if record.Error == nil || record.Error.Code != "UNCONFIRMED_EFFECT" {
+		t.Fatalf("error = %+v, want UNCONFIRMED_EFFECT", record.Error)
+	}
+	if !strings.Contains(record.Error.Message, "US-003") {
+		t.Fatalf("the message does not name the spec that appeared: %q", record.Error.Message)
+	}
+	if record.Result != nil {
+		t.Fatal("a refused success still carries a result")
+	}
+	if record.Error.ExternalID != "task-remote-7" {
+		t.Fatalf("external id = %q, want it moved into the error", record.Error.ExternalID)
+	}
+	if strings.Join(deleter.deleted, ",") != "US-003" {
+		t.Fatalf("deleted %v, want only US-003", deleter.deleted)
+	}
+}
+
+// AC-5: the cancelled run. What it wrote is removed, the reason it failed
+// survives, and the note about the removal is appended after that reason and
+// never in its place.
+func TestConfirmSpecDraftRemovesTheSpecsOfAFailedRun(t *testing.T) {
+	deleter := &specDeleter{}
+	record := failedSpecDraftRecord("the run was cancelled by the operator")
+
+	ConfirmSpecDraft(context.Background(), backlogOf("US-001", "US-002", "US-003"), deleter, []string{"US-001", "US-002"}, &record)
+
+	if record.Status != StatusFailed {
+		t.Fatalf("status = %q, want %q", record.Status, StatusFailed)
+	}
+	if record.Error.Code != "PROVIDER_FAILED" {
+		t.Fatalf("code = %q, want the original one", record.Error.Code)
+	}
+	if !strings.Contains(record.Error.Message, "the run was cancelled by the operator") {
+		t.Fatalf("the original reason was lost: %q", record.Error.Message)
+	}
+	if !strings.Contains(record.Error.Message, "have been removed: US-003") {
+		t.Fatalf("the removal note is missing: %q", record.Error.Message)
+	}
+	if strings.Join(deleter.deleted, ",") != "US-003" {
+		t.Fatalf("deleted %v, want only US-003", deleter.deleted)
+	}
+}
+
+// AC-5: every spec the run created goes back, and none of the specs the
+// workspace already held is ever touched.
+func TestConfirmSpecDraftRemovesOnlyWhatTheRunCreated(t *testing.T) {
+	deleter := &specDeleter{}
+	record := failedSpecDraftRecord("the agent stopped")
+
+	ConfirmSpecDraft(
+		context.Background(),
+		backlogOf("US-001", "US-002", "US-003", "US-004"),
+		deleter,
+		[]string{"US-001", "US-002"},
+		&record,
+	)
+
+	if strings.Join(deleter.deleted, ",") != "US-003,US-004" {
+		t.Fatalf("deleted %v, want US-003 and US-004 only", deleter.deleted)
+	}
+}
+
+// A failed run that wrote nothing has nothing to give back, and must not be
+// told it was cleaned up.
+func TestConfirmSpecDraftLeavesAFailedRunThatWroteNothingAlone(t *testing.T) {
+	deleter := &specDeleter{}
+	record := failedSpecDraftRecord("the claude command timed out")
+
+	ConfirmSpecDraft(context.Background(), backlogOf("US-001"), deleter, []string{"US-001"}, &record)
+
+	if record.Error.Message != "the claude command timed out" {
+		t.Fatalf("message = %q, want it untouched", record.Error.Message)
+	}
+	if len(deleter.deleted) != 0 {
+		t.Fatalf("deleted %v, want nothing", deleter.deleted)
+	}
+}
+
+// A connector that cannot delete is a rollback that does not happen, which is a
+// valid answer rather than a failure: nothing panics and the record is not told
+// about a removal that never took place.
+func TestConfirmSpecDraftToleratesAConnectorThatCannotDelete(t *testing.T) {
+	record := failedSpecDraftRecord("the agent stopped")
+
+	ConfirmSpecDraft(context.Background(), backlogOf("US-001", "US-002"), nil, []string{"US-001"}, &record)
+
+	if strings.Contains(record.Error.Message, "have been removed") {
+		t.Fatalf("message = %q, want no removal note", record.Error.Message)
+	}
+}
+
+// A removal that fails is reported as such, still without losing the reason the
+// run failed in the first place.
+func TestConfirmSpecDraftReportsARemovalThatFailed(t *testing.T) {
+	deleter := &specDeleter{err: errors.New("the spec file is read-only")}
+	record := failedSpecDraftRecord("the agent stopped")
+
+	ConfirmSpecDraft(context.Background(), backlogOf("US-001", "US-002"), deleter, []string{"US-001"}, &record)
+
+	if !strings.Contains(record.Error.Message, "the agent stopped") {
+		t.Fatalf("the original reason was lost: %q", record.Error.Message)
+	}
+	if !strings.Contains(record.Error.Message, "could not be removed: US-002") {
+		t.Fatalf("the failure note is missing: %q", record.Error.Message)
+	}
+}
+
+// Not knowing whether anything was written is enough to refuse a claimed
+// success, and only a note on a run that had already failed for its own reason.
+func TestConfirmSpecDraftHandlesAnUnreadableBacklog(t *testing.T) {
+	t.Run("on a claimed success", func(t *testing.T) {
+		reader := &backlogReader{backlogErr: errors.New("the backlog file is corrupt")}
+		record := specDraftRecord()
+
+		ConfirmSpecDraft(context.Background(), reader, &specDeleter{}, []string{"US-001"}, &record)
+
+		if record.Status != StatusFailed || record.Error.Code != "UNCONFIRMED_EFFECT" {
+			t.Fatalf("record = %+v, want an unconfirmed failure", record)
+		}
+		if !strings.Contains(record.Error.Message, "the backlog file is corrupt") {
+			t.Fatalf("the message does not carry the cause: %q", record.Error.Message)
+		}
+	})
+
+	t.Run("on a run that already failed", func(t *testing.T) {
+		reader := &backlogReader{backlogErr: errors.New("the backlog file is corrupt")}
+		record := failedSpecDraftRecord("the agent stopped")
+
+		ConfirmSpecDraft(context.Background(), reader, &specDeleter{}, []string{"US-001"}, &record)
+
+		if record.Error.Code != "PROVIDER_FAILED" {
+			t.Fatalf("code = %q, want the original one", record.Error.Code)
+		}
+		if !strings.Contains(record.Error.Message, "the agent stopped") {
+			t.Fatalf("the original reason was lost: %q", record.Error.Message)
+		}
+		if !strings.Contains(record.Error.Message, "could not be checked") {
+			t.Fatalf("the note is missing: %q", record.Error.Message)
+		}
+	})
+}
+
+// A workspace with no backlog at all is a workspace nothing appeared in: the
+// connector reports it as a missing precondition, which is an answer.
+func TestConfirmSpecDraftReadsAMissingBacklogAsEmpty(t *testing.T) {
+	reader := &backlogReader{backlogErr: iox.NewPrecondition("no backlog yet", "", nil)}
+	deleter := &specDeleter{}
+	record := specDraftRecord()
+
+	ConfirmSpecDraft(context.Background(), reader, deleter, nil, &record)
+
+	if record.Status != StatusSucceeded {
+		t.Fatalf("status = %q, want %q", record.Status, StatusSucceeded)
+	}
+	if len(deleter.deleted) != 0 {
+		t.Fatalf("deleted %v, want nothing", deleter.deleted)
+	}
+}

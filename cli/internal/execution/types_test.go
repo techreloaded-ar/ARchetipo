@@ -16,6 +16,7 @@ func TestActionMapsToItsCapabilityAndScope(t *testing.T) {
 		{ActionReview, CapabilitySpecReview, ScopeSpec},
 		{ActionInception, CapabilityWorkspaceInception, ScopeWorkspace},
 		{ActionBacklog, CapabilityWorkspaceBacklog, ScopeWorkspace},
+		{ActionSpecDraft, CapabilityWorkspaceSpecDraft, ScopeWorkspace},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.action), func(t *testing.T) {

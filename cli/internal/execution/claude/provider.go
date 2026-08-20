@@ -171,6 +171,7 @@ func (p *Provider) Capabilities(context.Context) ([]execution.Capability, error)
 		execution.CapabilitySpecReview,
 		execution.CapabilityWorkspaceInception,
 		execution.CapabilityWorkspaceBacklog,
+		execution.CapabilityWorkspaceSpecDraft,
 	}, nil
 }
 
@@ -206,14 +207,17 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 	// The fork is on the action and nothing else. Planning keeps the flow it
 	// has always had — one turn, then a receipt — because the moment a turn
 	// ends without one it has failed, and that diagnostic must not become a
-	// wait. Inception and backlog generation are the other semantics, and each
-	// lives in its own function rather than as a set of conditions inside this
-	// one.
+	// wait. Inception, backlog generation and spec drafting are the other
+	// semantics, and each lives in its own function rather than as a set of
+	// conditions inside this one.
 	if req.Action == execution.ActionInception {
 		return p.executeInception(ctx, req, cfg, dir)
 	}
 	if req.Action == execution.ActionBacklog {
 		return p.executeBacklog(ctx, req, cfg, dir)
+	}
+	if req.Action == execution.ActionSpecDraft {
+		return p.executeSpecDraft(ctx, req, cfg, dir)
 	}
 	if req.Action == execution.ActionImplement {
 		return p.executeImplement(ctx, req, cfg, dir)

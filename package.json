@@ -16,7 +16,7 @@
     "test:view-create-smoke": "node ./test/e2e/create-spec-view-smoke.mjs",
     "test:view-workspace-smoke": "node ./test/e2e/create-workspace-view-smoke.mjs",
     "test:view-workspaces-smoke": "node ./test/e2e/known-workspaces-view-smoke.mjs",
-  "test:view-open-workspace-smoke": "node ./test/e2e/open-workspace-view-smoke.mjs",
+    "test:view-open-workspace-smoke": "node ./test/e2e/open-workspace-view-smoke.mjs",
     "test:view-delete-smoke": "node ./test/e2e/delete-story-view-smoke.mjs",
     "test:view-execution-smoke": "node ./test/e2e/execution-config-view-smoke.mjs",
     "test:view-plan-smoke": "node ./test/e2e/plan-from-view-smoke.mjs",
@@ -24,6 +24,7 @@
     "test:view-local-run-smoke": "node ./test/e2e/local-run-view-smoke.mjs",
     "test:view-inception-smoke": "node ./test/e2e/inception-from-view-smoke.mjs",
     "test:view-backlog-smoke": "node ./test/e2e/backlog-from-view-smoke.mjs",
+    "test:view-spec-draft-smoke": "node ./test/e2e/spec-draft-from-view-smoke.mjs",
     "test:wiki-smoke": "node ./test/e2e/wiki-smoke.mjs"
   },
   "dependencies": {

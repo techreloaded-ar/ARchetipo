@@ -302,6 +302,16 @@
                     <span class="form-notice-mark">no epics</span>
                     <span><strong>This workspace has no epics yet.</strong> A new spec must belong to an existing epic: generate the backlog first, then come back and create the story.</span>
                 </div>
+                <div class="mode-switch" id="new-spec-modes" role="group" aria-label="How to write the spec">
+                    <button type="button" id="spec-draft-mode-manual" class="mode-chip is-active" aria-pressed="true">Write it yourself</button>
+                    <button type="button" id="spec-draft-mode-assisted" class="mode-chip" aria-pressed="false">Ask the agent</button>
+                </div>
+                <div id="spec-draft-notice" class="form-notice hidden" aria-live="polite"></div>
+                <div id="spec-draft-panel" class="spec-draft-panel hidden">
+                    <div class="story-actions" id="spec-draft-actions"></div>
+                    <div class="story-execution" id="spec-draft-execution"></div>
+                    <div class="story-run" id="spec-draft-run"></div>
+                </div>
                 <form id="new-spec-form" class="form-grid" novalidate>
                     <label class="field full">
                         <span>Title</span>

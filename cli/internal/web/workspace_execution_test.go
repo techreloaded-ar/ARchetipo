@@ -839,3 +839,377 @@ func TestWorkspaceBacklogStartsExactlyOneExecution(t *testing.T) {
 	close(provider.release)
 	awaitTerminal(t, srv, id)
 }
+
+// --- spec drafting: proposing without writing --------------------------------
+//
+// The action under test is the mirror image of the backlog generation: it is
+// offered to a workspace that *has* a backlog, and it is confirmed by that
+// backlog having stayed exactly as it was. Only the provider is a double here
+// too — connector, record store, confirmation, rollback and Template are the
+// production ones — and where the point is that a run must not write, the
+// double writes for real, through the very connector the server serves.
+
+type specDraftProvider struct {
+	*runTestProvider
+}
+
+func (p *specDraftProvider) Capabilities(context.Context) ([]execution.Capability, error) {
+	return []execution.Capability{
+		execution.CapabilitySpecPlan,
+		execution.CapabilityWorkspaceInception,
+		execution.CapabilityWorkspaceBacklog,
+		execution.CapabilityWorkspaceSpecDraft,
+	}, nil
+}
+
+func releasedSpecDraftProvider(id string, execute func(context.Context, execution.Request) (execution.Result, error)) *specDraftProvider {
+	return &specDraftProvider{runTestProvider: releasedProvider(id, execute)}
+}
+
+func blockedSpecDraftProvider(id string) *specDraftProvider {
+	return &specDraftProvider{runTestProvider: blockedProvider(id)}
+}
+
+func specDraftActionOf(t *testing.T, view workspaceActionsResponse) workspaceActionRow {
+	t.Helper()
+	return workspaceActionOf(t, view, string(execution.ActionSpecDraft))
+}
+
+// draftedSpecPayload is what a real drafting run hands back: the proposal, and
+// nothing that claims the workspace changed.
+func draftedSpecPayload() json.RawMessage {
+	return json.RawMessage(`{"spec_draft":{"title":"Esportare il backlog in CSV","epic_code":"EP-009","priority":"MEDIUM","points":3,"scope":"MVP","blocked_by":[],"body":"proposta"}}`)
+}
+
+// writtenSpec is the spec a misbehaving run persists. It is written through the
+// connector the server reads, so the rollback under test operates on the real
+// backlog and not on a simulation of one.
+func writtenSpec(code string) []domain.Spec {
+	return []domain.Spec{{
+		Code:     code,
+		Title:    "Spec scritta dalla run",
+		Epic:     domain.Epic{Code: "EP-009", Title: "E"},
+		Priority: domain.PriorityMedium,
+		Points:   2,
+		Status:   domain.StatusTodo,
+	}}
+}
+
+// createSpecThroughTheForm is the confirmation half of the flow: the ordinary
+// creation route, the only place a spec is ever written, and the only place the
+// progressive code is ever assigned.
+func createSpecThroughTheForm(t *testing.T, srv *Server, title string) createSpecView {
+	t.Helper()
+	req := validCreateReq()
+	req["epic_code"] = "EP-009"
+	req["title"] = title
+	w := postSpec(t, srv, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("POST /api/spec: %d %s", w.Code, w.Body.String())
+	}
+	return decodeCreateView(t, w)
+}
+
+// AC-1: a workspace that already has a backlog is exactly the workspace an
+// assisted creation targets, and the payload offers it — beside, and not
+// instead of, everything else the process declares.
+func TestWorkspaceActionsOfferTheSpecDraftWithABacklog(t *testing.T) {
+	srv, _, _ := newRunServer(t, releasedSpecDraftProvider("fake", nil), true)
+
+	view, raw := readWorkspaceActions(t, srv)
+	if !view.HasBacklog {
+		t.Fatalf("a workspace with specs reports has_backlog:false: %s", raw)
+	}
+	action := specDraftActionOf(t, view)
+	if !action.Offered || !action.Runnable {
+		t.Fatalf("the spec draft is not offered on the workspace it targets: %#v", action)
+	}
+	if action.UnavailableReason != "" {
+		t.Fatalf("an offered and runnable action carries a reason: %q", action.UnavailableReason)
+	}
+	if action.Skill != "archetipo-spec" {
+		t.Fatalf("the action names skill %q", action.Skill)
+	}
+	if _, ok := rawWorkspaceAction(t, raw, string(execution.ActionSpecDraft))["unavailable_reason"]; ok {
+		t.Fatalf("a runnable action carries an unavailable_reason on the wire:\n%s", raw)
+	}
+}
+
+// AC-1: without a backlog there is no epic to file a spec under, so the action
+// is not offered, and pressing it anyway is refused with the very same sentence
+// without creating any record.
+func TestWorkspaceSpecDraftIsNotOfferedWithoutABacklog(t *testing.T) {
+	srv, cfg, _ := newEmptyRunServer(t, releasedSpecDraftProvider("fake", nil), true)
+	before := backlogFiles(t, cfg.ProjectRoot)
+
+	view, _ := readWorkspaceActions(t, srv)
+	action := specDraftActionOf(t, view)
+	if action.Offered || action.Runnable {
+		t.Fatalf("a spec draft is offered on a workspace with no backlog: %#v", action)
+	}
+	if !strings.Contains(strings.ToLower(action.UnavailableReason), "no backlog") {
+		t.Fatalf("the reason does not name the missing backlog: %q", action.UnavailableReason)
+	}
+
+	status, body := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft))
+	if status != http.StatusConflict {
+		t.Fatalf("POST: %d %v", status, body)
+	}
+	if message, _ := body["error"].(string); message != action.UnavailableReason {
+		t.Fatalf("the refusal and the payload disagree:\n%q\n%q", message, action.UnavailableReason)
+	}
+	if hint, _ := body["hint"].(string); !strings.Contains(hint, "generate the initial backlog") {
+		t.Fatalf("the refusal does not say what to do instead: %q", hint)
+	}
+	if got := recordFileCount(t, cfg.ProjectRoot, workspaceExecutionKey); got != 0 {
+		t.Fatalf("a refused proposal created %d records", got)
+	}
+	if got := backlogFiles(t, cfg.ProjectRoot); !reflect.DeepEqual(got, before) {
+		t.Fatal("a refused proposal touched the workspace")
+	}
+}
+
+// AC-4: a proposal is not a creation. The run succeeds, the backlog is
+// byte-identical, and the spec appears on the board only after the ordinary
+// creation route is called with the proposed content.
+func TestWorkspaceSpecDraftProposesWithoutWritingUntilConfirmed(t *testing.T) {
+	provider := releasedSpecDraftProvider("fake", func(_ context.Context, request execution.Request) (execution.Result, error) {
+		if request.Action != execution.ActionSpecDraft || request.SpecCode != "" {
+			return execution.Result{}, errors.New("the workspace action reached the provider as " + string(request.Action) + " on spec " + request.SpecCode)
+		}
+		return execution.Result{Payload: draftedSpecPayload()}, nil
+	})
+	srv, cfg, _ := newRunServer(t, provider, true)
+	before := backlogFiles(t, cfg.ProjectRoot)
+
+	status, started := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft))
+	if status != http.StatusCreated {
+		t.Fatalf("POST: %d %v", status, started)
+	}
+	if started["spec_code"] != "" {
+		t.Fatalf("a workspace execution carries a spec code: %v", started["spec_code"])
+	}
+	id, _ := started["id"].(string)
+
+	record := awaitTerminal(t, srv, id)
+	if record.Status != execution.StatusSucceeded || record.Result == nil {
+		t.Fatalf("terminal record: %#v", record)
+	}
+
+	// The proposal is readable from the record, which is the only place it
+	// exists: nothing was written anywhere else.
+	var payload struct {
+		SpecDraft struct {
+			Title    string `json:"title"`
+			EpicCode string `json:"epic_code"`
+			Body     string `json:"body"`
+		} `json:"spec_draft"`
+	}
+	if err := json.Unmarshal(record.Result.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.SpecDraft.Title == "" || payload.SpecDraft.EpicCode == "" || payload.SpecDraft.Body == "" {
+		t.Fatalf("the record does not carry a readable proposal: %s", record.Result.Payload)
+	}
+
+	if got := boardSpecCodes(t, srv); !reflect.DeepEqual(got, []string{"US-901", "US-902"}) {
+		t.Fatalf("a proposal changed the board: %v", got)
+	}
+	if got := backlogFiles(t, cfg.ProjectRoot); !reflect.DeepEqual(got, before) {
+		t.Fatal("a proposal rewrote the backlog")
+	}
+
+	// AC-4: only the explicit confirmation creates the spec.
+	created := createSpecThroughTheForm(t, srv, payload.SpecDraft.Title)
+	if !created.Created || created.Spec.Code != "US-903" {
+		t.Fatalf("the confirmation did not create the proposed spec: %#v", created)
+	}
+	if created.Spec.Status != domain.StatusTodo {
+		t.Fatalf("the confirmed spec is %q, want TODO", created.Spec.Status)
+	}
+	if got := boardSpecCodes(t, srv); !reflect.DeepEqual(got, []string{"US-901", "US-902", "US-903"}) {
+		t.Fatalf("the confirmed spec is not on the board: %v", got)
+	}
+}
+
+// AC-5: the run a person cancels. It wrote a spec before dying; the record
+// closes FAILED, the spec is taken back, the specs the workspace already had
+// are untouched, and the progressive code is the one it would have been before
+// the run — which is what "the code was not consumed" actually means, since
+// there is no counter anywhere, only the persisted backlog.
+func TestWorkspaceSpecDraftCancelledLeavesNoSpecAndNoConsumedCode(t *testing.T) {
+	var conn connector.Connector
+	provider := releasedSpecDraftProvider("fake", func(ctx context.Context, _ execution.Request) (execution.Result, error) {
+		if _, err := conn.AppendSpecs(ctx, writtenSpec("US-903")); err != nil {
+			return execution.Result{}, err
+		}
+		return execution.Result{}, errors.New("the run was cancelled by the operator")
+	})
+	srv, cfg, conn := newRunServer(t, provider, true)
+
+	status, started := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft))
+	if status != http.StatusCreated {
+		t.Fatalf("POST: %d %v", status, started)
+	}
+	id, _ := started["id"].(string)
+
+	record := awaitTerminal(t, srv, id)
+	if record.Status != execution.StatusFailed || record.Error == nil {
+		t.Fatalf("a cancelled proposal did not fail: %#v", record)
+	}
+	if !strings.Contains(record.Error.Message, "cancelled by the operator") {
+		t.Fatalf("the reason of the failure was lost: %q", record.Error.Message)
+	}
+	if !strings.Contains(record.Error.Message, "have been removed: US-903") {
+		t.Fatalf("the record does not declare the removal: %q", record.Error.Message)
+	}
+	if got := boardSpecCodes(t, srv); !reflect.DeepEqual(got, []string{"US-901", "US-902"}) {
+		t.Fatalf("the cancelled run left a spec behind: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.ProjectRoot, ".archetipo", "specs", "US-903.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("the spec file of the cancelled run is still there (err=%v)", err)
+	}
+
+	// The oracle of "the code was not consumed": the next real creation gets
+	// the code it would have received had the run never happened.
+	created := createSpecThroughTheForm(t, srv, "Una storia scritta a mano")
+	if created.Spec.Code != "US-903" {
+		t.Fatalf("the next spec received %q, want the code the cancelled run gave back", created.Spec.Code)
+	}
+}
+
+// AC-5: a run that wrote a spec and then declared success is not a success.
+// The claim is refused with UNCONFIRMED_EFFECT and the spec it created is taken
+// back, so an agent that "helpfully" finished the job cannot leave behind a
+// spec nobody confirmed.
+func TestWorkspaceSpecDraftUnconfirmedSuccessBecomesAFailure(t *testing.T) {
+	var conn connector.Connector
+	provider := releasedSpecDraftProvider("fake", func(ctx context.Context, _ execution.Request) (execution.Result, error) {
+		if _, err := conn.AppendSpecs(ctx, writtenSpec("US-903")); err != nil {
+			return execution.Result{}, err
+		}
+		return execution.Result{Payload: draftedSpecPayload(), ExternalID: "draft-1"}, nil
+	})
+	srv, cfg, conn := newRunServer(t, provider, true)
+
+	status, started := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft))
+	if status != http.StatusCreated {
+		t.Fatalf("POST: %d %v", status, started)
+	}
+	id, _ := started["id"].(string)
+
+	record := awaitTerminal(t, srv, id)
+	if record.Status != execution.StatusFailed || record.Error == nil {
+		t.Fatalf("an unbacked success stayed a success: %#v", record)
+	}
+	if record.Error.Code != "UNCONFIRMED_EFFECT" {
+		t.Fatalf("unexpected error code: %#v", record.Error)
+	}
+	if !strings.Contains(record.Error.Message, "US-903") {
+		t.Fatalf("the message does not name the spec that appeared: %q", record.Error.Message)
+	}
+	if record.Error.ExternalID != "draft-1" {
+		t.Fatalf("external id = %q, want it moved into the error", record.Error.ExternalID)
+	}
+	if got := boardSpecCodes(t, srv); !reflect.DeepEqual(got, []string{"US-901", "US-902"}) {
+		t.Fatalf("the refused run left a spec behind: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.ProjectRoot, ".archetipo", "specs", "US-903.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("the spec file of the refused run is still there (err=%v)", err)
+	}
+}
+
+// A proposal that fails without writing anything gives nothing back, and the
+// specs the workspace already had are never mentioned or touched.
+func TestWorkspaceSpecDraftFailureLeavesTheBacklogAlone(t *testing.T) {
+	provider := releasedSpecDraftProvider("fake", func(context.Context, execution.Request) (execution.Result, error) {
+		return execution.Result{}, errors.New("the claude command timed out")
+	})
+	srv, cfg, _ := newRunServer(t, provider, true)
+	before := backlogFiles(t, cfg.ProjectRoot)
+
+	status, started := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft))
+	if status != http.StatusCreated {
+		t.Fatalf("POST: %d %v", status, started)
+	}
+	id, _ := started["id"].(string)
+
+	record := awaitTerminal(t, srv, id)
+	if record.Status != execution.StatusFailed || record.Error == nil {
+		t.Fatalf("terminal record: %#v", record)
+	}
+	if record.Error.Message != "the claude command timed out" {
+		t.Fatalf("the message gained a note about a rollback that never happened: %q", record.Error.Message)
+	}
+	if got := backlogFiles(t, cfg.ProjectRoot); !reflect.DeepEqual(got, before) {
+		t.Fatal("a failed proposal touched the backlog")
+	}
+	// The failure does not lock the workspace out of a retry.
+	view, _ := readWorkspaceActions(t, srv)
+	if action := specDraftActionOf(t, view); !action.Offered || !action.Runnable {
+		t.Fatalf("a failed proposal cannot be retried: %#v", action)
+	}
+}
+
+// One press, one execution: the second request creates no record and names the
+// one already holding the workspace.
+func TestWorkspaceSpecDraftStartsExactlyOneExecution(t *testing.T) {
+	provider := blockedSpecDraftProvider("fake")
+	srv, cfg, _ := newRunServer(t, provider, true)
+
+	status, first := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft))
+	if status != http.StatusCreated {
+		t.Fatalf("first POST: %d %v", status, first)
+	}
+	id, _ := first["id"].(string)
+	<-provider.entered
+
+	status, second := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft))
+	if status != http.StatusConflict {
+		t.Fatalf("second POST: %d %v", status, second)
+	}
+	if message, _ := second["error"].(string); !strings.Contains(message, id) {
+		t.Fatalf("the refusal does not name the running execution: %q", message)
+	}
+	if got := recordFileCount(t, cfg.ProjectRoot, workspaceExecutionKey); got != 1 {
+		t.Fatalf("a second press created %d records", got)
+	}
+
+	close(provider.release)
+	awaitTerminal(t, srv, id)
+}
+
+// A provider that cannot draft is not asked to: the action stays offered — the
+// workspace is the right one — but is not runnable, and pressing it names the
+// missing capability without creating a record.
+func TestWorkspaceSpecDraftRefusedWhenTheProviderLacksTheCapability(t *testing.T) {
+	srv, cfg, _ := newRunServer(t, releasedBacklogProvider("fake", nil), true)
+	// The PRD is here so the refusal cannot pass by accident: a remedy chosen
+	// by falling through to another action's rules would talk about this
+	// document instead of about the provider.
+	writePRDFile(t, cfg.ProjectRoot, "# PRD\n\nVisione e MVP.\n")
+
+	view, _ := readWorkspaceActions(t, srv)
+	action := specDraftActionOf(t, view)
+	if !action.Offered {
+		t.Fatalf("the workspace stopped offering an action it is right for: %#v", action)
+	}
+	if action.Runnable || strings.TrimSpace(action.UnavailableReason) == "" {
+		t.Fatalf("an action no provider can run is runnable: %#v", action)
+	}
+
+	status, body := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft))
+	if status != http.StatusConflict {
+		t.Fatalf("POST: %d %v", status, body)
+	}
+	// The remedy must be about the provider, which is what stopped it. An
+	// action falling through to another one's remedy is how a workspace blocked
+	// by an unusable provider ends up being told to edit its PRD.
+	hint, _ := body["hint"].(string)
+	if !strings.Contains(hint, "default provider") {
+		t.Fatalf("the refusal points elsewhere than at the provider: %q", hint)
+	}
+	if got := recordFileCount(t, cfg.ProjectRoot, workspaceExecutionKey); got != 0 {
+		t.Fatalf("a refused proposal created %d records", got)
+	}
+}

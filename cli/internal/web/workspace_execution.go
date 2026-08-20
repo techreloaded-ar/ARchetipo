@@ -163,6 +163,11 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 	// rollback deciding on it could remove a backlog that belongs to the
 	// workspace rather than to this execution.
 	backlogExistedBefore := availability.hasBacklog
+	// specCodesBefore is captured here for the same reason and with the same
+	// force: a spec drafting run is confirmed by the backlog *not* having
+	// grown, and a list read after the run would already contain whatever that
+	// run wrote — the check would then confirm exactly what it exists to catch.
+	specCodesBefore := append([]string(nil), availability.specCodes...)
 	providerID := availability.providerID
 	providerConfig := execution.CloneConfig(availability.providerConfig)
 
@@ -187,6 +192,11 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 			execution.DiscardPartialPRD(confirmCtx, s.prdDiscarder(ws), existedBefore, outcome)
 		case execution.ActionBacklog:
 			execution.DiscardPartialBacklog(confirmCtx, s.backlogDiscarder(ws), backlogExistedBefore, outcome)
+		case execution.ActionSpecDraft:
+			// The only action whose confirmation is not VerifyActionEffect's:
+			// what has to be established is that the backlog did not grow, and
+			// that needs the snapshot taken above, which only this scope holds.
+			execution.ConfirmSpecDraft(confirmCtx, ws.conn, s.specDeleter(ws), specCodesBefore, outcome)
 		}
 	}
 	started, continuation, err := ws.service.StartWorkspace(ctx, action, providerID, providerConfig, confirm)
@@ -261,6 +271,12 @@ type workspaceAvailability struct {
 	// request, because not knowing is not the same as a broken viewer.
 	prdUnreadable string
 	hasBacklog    bool
+	// specCodes are the spec codes the backlog holds at the moment this
+	// availability was computed. They come from the very read that answered
+	// hasBacklog, so there is no second read and no window between the two, and
+	// they are what a spec drafting run is later confirmed against: the codes
+	// that existed before it started.
+	specCodes []string
 	// backlogUnreadable is why the workspace cannot say whether it has a
 	// backlog. "There is no backlog here" is *not* one of those reasons: the
 	// connector reports it as a missing precondition, which is an answer — the
@@ -303,6 +319,7 @@ func (s *Server) workspaceAvailability(ctx context.Context, ws *workspaceSession
 		}
 	} else {
 		availability.hasBacklog = len(summary.Codes) > 0
+		availability.specCodes = append([]string(nil), summary.Codes...)
 	}
 	availability.providerAvailability = s.providerAvailabilityFor(ctx, ws)
 	return availability
@@ -365,6 +382,21 @@ func (a workspaceAvailability) offers(actionID string) string {
 			return "this workspace already has a backlog: the initial generation would replace it"
 		}
 		return ""
+	case execution.ActionSpecDraft:
+		// The mirror image of the backlog generation: that action is offered
+		// only to a workspace without a backlog, this one only to a workspace
+		// with one, because a spec is filed under an epic the backlog declares.
+		//
+		// The PRD is deliberately not consulted. A backlog exists only after a
+		// PRD, so the condition below already implies it, and a second check
+		// would produce two different sentences about one and the same fact.
+		if a.backlogUnreadable != "" {
+			return a.backlogUnreadable
+		}
+		if !a.hasBacklog {
+			return "this workspace has no backlog yet: generate it before adding a spec"
+		}
+		return ""
 	default:
 		return "this action cannot be started from the viewer yet"
 	}
@@ -382,7 +414,19 @@ func workspaceRemedy(a workspaceAvailability, actionID string) string {
 	if a.prdUnreadable != "" {
 		return "use a connector that exposes the PRD"
 	}
-	if execution.ActionID(actionID) == execution.ActionBacklog {
+	// Each action answers only for the facts that can stop *it*. The switch is
+	// exhaustive on purpose: an action falling through to another one's remedy
+	// is how a workspace stopped by an unusable provider ends up being told to
+	// edit its PRD.
+	switch execution.ActionID(actionID) {
+	case execution.ActionSpecDraft:
+		switch {
+		case a.backlogUnreadable != "":
+			return "use a connector that exposes the backlog"
+		case !a.hasBacklog:
+			return "generate the initial backlog first, then come back to add a spec"
+		}
+	case execution.ActionBacklog:
 		switch {
 		case !a.hasPRD:
 			return "run a first inception to obtain the PRD before generating the backlog"
@@ -391,10 +435,13 @@ func workspaceRemedy(a workspaceAvailability, actionID string) string {
 		case a.hasBacklog:
 			return "add specs with archetipo spec add instead, or remove the existing backlog deliberately before generating it again"
 		}
+	case execution.ActionInception:
+		if a.hasPRD {
+			return "edit the existing PRD instead, or remove it deliberately before running a first inception"
+		}
 	}
-	if a.hasPRD {
-		return "edit the existing PRD instead, or remove it deliberately before running a first inception"
-	}
+	// Nothing about the state of the workspace stops this action, so what is
+	// left is the provider.
 	return "fix the default provider in the Execution panel of the configuration"
 }
 
@@ -419,6 +466,18 @@ func (s *Server) backlogDiscarder(ws *workspaceSession) execution.BacklogDiscard
 		return nil
 	}
 	return discarder
+}
+
+// specDeleter returns the connector as the undo of a spec drafting run, or nil
+// when it cannot take a spec back. It is the twin of backlogDiscarder, and nil
+// is a valid answer for the same reason: skipping the rollback is not a
+// failure, and ConfirmSpecDraft treats it as a no-op.
+func (s *Server) specDeleter(ws *workspaceSession) execution.SpecDeleter {
+	deleter, ok := ws.conn.(connector.SpecDeleter)
+	if !ok {
+		return nil
+	}
+	return deleter
 }
 
 func admitsWorkspaceAction(actions []template.WorkspaceAction, actionID string) bool {

@@ -144,6 +144,20 @@ type BacklogDiscarder interface {
 	DiscardBacklog(ctx context.Context) (bool, error)
 }
 
+// SpecDeleter removes one spec from the backlog. Like every other reader and
+// discarder here it is declared as an interface of the consumer, so this
+// package never imports connector; a connector exposing the SpecDeleter
+// capability satisfies it as is.
+//
+// It is the undo of a spec drafting run, and its granularity is the whole
+// point: a proposal runs against a workspace that already has a backlog, so
+// taking that backlog back wholesale — the way DiscardPartialBacklog does for a
+// first generation — would destroy work that belongs to the workspace. What a
+// drafting run may have to give back is only the specs it created itself.
+type SpecDeleter interface {
+	DeleteSpec(ctx context.Context, code string) (domain.WriteResult, error)
+}
+
 // UnconfirmedEffectError reports an execution that declared success while the
 // connector does not back the claim. It is a typed error rather than a rendered
 // envelope because each caller renders it with its own remedy: the CLI suggests
@@ -244,12 +258,33 @@ func VerifyActionEffect(ctx context.Context, reader SpecStateReader, action Acti
 		} else {
 			reason = backlogEffect(ctx, backlog)
 		}
+	case ActionSpecDraft:
+		// Deliberately nothing, and deliberately explicit rather than left to
+		// the default branch. What confirms a drafting run is that *nothing*
+		// appeared in the backlog, and establishing that needs the snapshot
+		// taken before the run — which this function, by its signature, does
+		// not have. It stays with the caller that holds the connector and took
+		// that snapshot: see ConfirmSpecDraft. Falling through the default
+		// would behave identically and say nothing about why.
+		return nil
 	default:
 		return nil
 	}
 	if reason == nil {
 		return nil
 	}
+	return demoteUnconfirmed(outcome, reason)
+}
+
+// demoteUnconfirmed rewrites a record that claimed a success the workspace does
+// not back, and reports the verdict.
+//
+// It holds the demotion once so that every caller produces the same record for
+// the same situation: the same sentence, the same "UNCONFIRMED_EFFECT" code and
+// the same treatment of the external identifier. A second copy would be free to
+// drop one of the three, and the one most easily dropped is the identifier of a
+// remote unit of work that may still be running.
+func demoteUnconfirmed(outcome *Execution, reason error) error {
 	message := fmt.Sprintf(
 		"the execution reported success but the connector does not confirm it: %v",
 		reason,
@@ -461,6 +496,133 @@ func DiscardPartialBacklog(ctx context.Context, discarder BacklogDiscarder, exis
 		"the partial backlog could not be removed",
 		existedBefore, outcome,
 	)
+}
+
+// ConfirmSpecDraft is the whole confirmation of a spec drafting run: it refuses
+// a success that wrote into the backlog, and takes back whatever the run wrote
+// whether it claimed success or not.
+//
+// The rule is the inverse of every other action's. Elsewhere a success is
+// confirmed by an artifact having *appeared*; here it is confirmed by the
+// backlog having *stayed* as it was. A proposal is handed to a person to review
+// and confirm, so a run that already created the spec has taken a decision that
+// was not its to take — and it has also consumed the progressive code, which is
+// derived from the persisted backlog at the moment of creation.
+//
+// codesBefore must be the snapshot taken *before* the run started. Read
+// afterwards it would already describe what the run itself did, and the check
+// would confirm exactly what it exists to catch. That is why this cannot live
+// inside VerifyActionEffect, which never sees a before.
+//
+// The rollback deletes only what is not in codesBefore. What the workspace held
+// before the run belongs to the workspace, not to the run — the same
+// load-bearing condition as discardPartial, applied per code instead of per
+// artifact, because here the artifact is a backlog that was already there.
+//
+// It returns nothing, for the reason documented on Confirmation: the caller is
+// about to write whatever outcome holds and has nobody to report to, so
+// mutating outcome is the only channel there is.
+//
+// A nil deleter is tolerated: skipping the rollback is not itself a failure.
+func ConfirmSpecDraft(ctx context.Context, reader BacklogStateReader, deleter SpecDeleter, codesBefore []string, outcome *Execution) {
+	if outcome == nil {
+		return
+	}
+	if outcome.Status != StatusSucceeded && outcome.Status != StatusFailed {
+		return
+	}
+	appeared, err := specsAppearedSince(ctx, reader, codesBefore)
+	if err != nil {
+		// Not knowing is not the same as knowing nothing was written. On a
+		// claimed success that is enough to refuse the claim; on a run that
+		// already failed it is only a note, because the diagnosis is elsewhere.
+		if outcome.Status == StatusSucceeded {
+			_ = demoteUnconfirmed(outcome, err)
+			return
+		}
+		appendErrorNote(outcome, fmt.Sprintf("the specs this run may have written could not be checked: %v", err))
+		return
+	}
+	if len(appeared) == 0 {
+		return
+	}
+	if outcome.Status == StatusSucceeded {
+		_ = demoteUnconfirmed(outcome, fmt.Errorf(
+			"proposing a spec must write nothing, but %s appeared in the backlog",
+			strings.Join(appeared, ", "),
+		))
+	}
+	discardDraftedSpecs(ctx, deleter, appeared, outcome)
+}
+
+// specsAppearedSince reports the spec codes the backlog holds now and did not
+// hold before, in the order the connector returns them.
+//
+// A connector answering "there is no backlog here" as a missing precondition is
+// an answer, not an infrastructure failure — the same reading backlogEffect
+// makes — so it becomes an empty backlog, which is a backlog nothing appeared
+// in.
+func specsAppearedSince(ctx context.Context, reader BacklogStateReader, codesBefore []string) ([]string, error) {
+	known := make(map[string]struct{}, len(codesBefore))
+	for _, code := range codesBefore {
+		if trimmed := strings.TrimSpace(code); trimmed != "" {
+			known[trimmed] = struct{}{}
+		}
+	}
+	summary, err := reader.ReadExistingBacklog(ctx)
+	if err != nil {
+		var coded *iox.CodedError
+		if errors.As(err, &coded) && coded.Code == iox.CodePreconditionMissing {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("re-reading the backlog failed: %w", err)
+	}
+	var appeared []string
+	for _, code := range summary.Codes {
+		trimmed := strings.TrimSpace(code)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := known[trimmed]; ok {
+			continue
+		}
+		appeared = append(appeared, trimmed)
+	}
+	return appeared, nil
+}
+
+// discardDraftedSpecs removes the specs a failed drafting run created, and says
+// in the record what happened to them.
+//
+// Only a FAILED outcome rolls back, exactly as in discardPartial: a confirmed
+// success is precisely the run whose effects must stay — and for this action a
+// confirmed success never has any. Every note is appended to the existing
+// message rather than replacing it, so the reason the run failed survives the
+// account of what was cleaned up after it.
+func discardDraftedSpecs(ctx context.Context, deleter SpecDeleter, codes []string, outcome *Execution) {
+	if deleter == nil || len(codes) == 0 || outcome == nil || outcome.Status != StatusFailed {
+		return
+	}
+	var removed, failed []string
+	for _, code := range codes {
+		if _, err := deleter.DeleteSpec(ctx, code); err != nil {
+			failed = append(failed, fmt.Sprintf("%s (%v)", code, err))
+			continue
+		}
+		removed = append(removed, code)
+	}
+	if len(removed) > 0 {
+		appendErrorNote(outcome, fmt.Sprintf(
+			"the spec(s) written by this run have been removed: %s",
+			strings.Join(removed, ", "),
+		))
+	}
+	if len(failed) > 0 {
+		appendErrorNote(outcome, fmt.Sprintf(
+			"the spec(s) written by this run could not be removed: %s",
+			strings.Join(failed, ", "),
+		))
+	}
 }
 
 // discardPartial holds the rollback rule once, so the PRD and the backlog can

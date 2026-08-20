@@ -21,6 +21,11 @@ const (
 	ActionReview    ActionID = "review"
 	ActionInception ActionID = "inception"
 	ActionBacklog   ActionID = "backlog"
+	// ActionSpecDraft is the assisted authoring of a single spec: the agent
+	// interviews the person and proposes a spec, which somebody else then
+	// confirms. It is deliberately not a variant of ActionBacklog — that action
+	// generates a whole backlog and persists it, this one persists nothing.
+	ActionSpecDraft ActionID = "spec-draft"
 
 	CapabilitySpecPlan Capability = "spec.plan"
 	// CapabilitySpecImplement says that a provider can execute the persisted
@@ -41,6 +46,16 @@ const (
 	CapabilitySpecReview         Capability = "spec.review"
 	CapabilityWorkspaceInception Capability = "workspace.inception"
 	CapabilityWorkspaceBacklog   Capability = "workspace.backlog"
+	// CapabilityWorkspaceSpecDraft says that a provider can interview a person
+	// about one story and propose a spec conforming to the workspace's backlog:
+	// title, epic, priority, points, scope, blockers and body.
+	//
+	// Writing that spec is not part of it, and the omission is the whole point.
+	// The proposal is handed back inside the execution record and a person
+	// confirms it through the ordinary spec creation route, so a provider that
+	// declares this capability is saying it can draft, never that it can add
+	// anything to the backlog.
+	CapabilityWorkspaceSpecDraft Capability = "workspace.spec_draft"
 	// CapabilityRunDialog says that a provider exposes a run one can follow and
 	// command while it works: read its history, send it a message, cancel it. It
 	// is not a statement about the work the provider can do — a provider can
@@ -128,6 +143,8 @@ func RequiredCapability(action ActionID) (Capability, error) {
 		return CapabilityWorkspaceInception, nil
 	case ActionBacklog:
 		return CapabilityWorkspaceBacklog, nil
+	case ActionSpecDraft:
+		return CapabilityWorkspaceSpecDraft, nil
 	default:
 		return "", &ActionError{Action: action}
 	}
@@ -150,7 +167,7 @@ func ActionScope(action ActionID) (Scope, error) {
 	switch action {
 	case ActionPlan, ActionImplement, ActionReview:
 		return ScopeSpec, nil
-	case ActionInception, ActionBacklog:
+	case ActionInception, ActionBacklog, ActionSpecDraft:
 		return ScopeWorkspace, nil
 	default:
 		return "", &ActionError{Action: action}

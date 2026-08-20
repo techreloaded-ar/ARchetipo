@@ -55,6 +55,13 @@
 	const newSpecSubmit = document.getElementById("new-spec-submit");
 	const newSpecCancel = document.getElementById("new-spec-cancel");
 	const newSpecNoEpics = document.getElementById("new-spec-no-epics");
+	const specDraftModeManual = document.getElementById("spec-draft-mode-manual");
+	const specDraftModeAssisted = document.getElementById("spec-draft-mode-assisted");
+	const specDraftPanel = document.getElementById("spec-draft-panel");
+	const specDraftNotice = document.getElementById("spec-draft-notice");
+	const specDraftActions = document.getElementById("spec-draft-actions");
+	const specDraftExecution = document.getElementById("spec-draft-execution");
+	const specDraftRun = document.getElementById("spec-draft-run");
 	const newWorkspaceBtn = document.getElementById("new-workspace-btn");
 	const newWorkspaceModal = document.getElementById("new-workspace-modal");
 	const newWorkspaceModalClose = document.getElementById(
@@ -239,6 +246,16 @@
 	// as a whole rather than one of its actions: only one workspace execution
 	// can be open at a time, so a single token is enough for all of them.
 	const WORKSPACE_CONTEXT = "workspace";
+	// The assisted creation is a workspace action like the other two, but it is
+	// drawn where it is used — inside the New spec modal, beside the manual
+	// form — so it gets its own mount and its own context token.
+	const SPEC_DRAFT_CONTEXT = "spec-draft";
+	// The single piece of process vocabulary this file holds, and it has exactly
+	// two uses: the PRD panel excludes this id, the New spec modal draws only
+	// this id. Everything else about the action — whether it is offered, whether
+	// it can run, and why not — stays a server verdict read from `offered`,
+	// `runnable` and `unavailable_reason`.
+	const SPEC_DRAFT_ACTION = "spec-draft";
 	let panelContext = null; // context the panel is mounted on, or null
 	let panelActions = null; // container the action chips are drawn in
 	let panelExecution = null; // container the execution panel is drawn in
@@ -305,8 +322,10 @@
 	// listeners.
 	bindActionsPanel(storyActions);
 	bindActionsPanel(inceptionActions);
+	bindActionsPanel(specDraftActions);
 	bindRunPanel(storyRun);
 	bindRunPanel(inceptionRun);
+	bindRunPanel(specDraftRun);
 
 	function bindActionsPanel(container) {
 		container.addEventListener("click", (e) => {
@@ -398,6 +417,8 @@
 			closeNewSpec();
 	});
 	newSpecForm.addEventListener("submit", onCreateSpec);
+	specDraftModeManual.addEventListener("click", () => showSpecDraftMode(false));
+	specDraftModeAssisted.addEventListener("click", enterAssistedMode);
 
 	newWorkspaceBtn.addEventListener("click", openNewWorkspace);
 	newWorkspaceModalClose.addEventListener("click", closeNewWorkspace);
@@ -3076,6 +3097,11 @@
 	function openNewSpec() {
 		newSpecForm.reset();
 		clearNewSpecErrors();
+		clearSpecDraftNotice();
+		// Every opening starts on the manual form: the assisted mode is an
+		// offer, never a default, and a modal that opened mid-conversation
+		// would be showing a run nobody asked for.
+		showSpecDraftMode(false);
 		newSpecBusy = false;
 		newSpecStatus.textContent = "";
 		newSpecStatus.className = "status-msg";
@@ -3123,10 +3149,167 @@
 		// closing it would let a late response reopen the editor on top of a
 		// draft the user has already started rewriting.
 		if (newSpecBusy) return;
+		// Closing the form is how a person cancels an assisted creation, so the
+		// run is asked to stop. What guarantees that nothing was created is the
+		// server, which refuses a proposal that wrote and takes back whatever it
+		// wrote; this only spares the operator the wait for a timeout.
+		cancelSpecDraftRun();
+		teardownSpecDraft();
 		newSpecModal.classList.add("hidden");
 		clearNewSpecErrors();
 		newSpecBusy = false;
 		newSpecSubmit.disabled = false;
+	}
+
+	// ---- Assisted spec creation ---------------------------------------------
+	//
+	// The agent proposes, a person confirms. The proposal is poured into the
+	// manual form that is already there, which is what makes it reviewable and
+	// editable without a second editor, and the only write is still the one the
+	// form has always performed on confirmation.
+
+	function showSpecDraftMode(assisted) {
+		specDraftModeAssisted.classList.toggle("is-active", assisted);
+		specDraftModeAssisted.setAttribute("aria-pressed", String(assisted));
+		specDraftModeManual.classList.toggle("is-active", !assisted);
+		specDraftModeManual.setAttribute("aria-pressed", String(!assisted));
+		specDraftPanel.classList.toggle("hidden", !assisted);
+		newSpecForm.classList.toggle("hidden", assisted);
+		if (!assisted) setTimeout(() => newSpecEditor.codemirror.refresh(), 0);
+	}
+
+	function setSpecDraftNotice(text, tone) {
+		specDraftNotice.textContent = text || "";
+		specDraftNotice.className = text
+			? `form-notice${tone ? ` ${tone}` : ""}`
+			: "form-notice hidden";
+	}
+
+	function clearSpecDraftNotice() {
+		setSpecDraftNotice("");
+	}
+
+	function teardownSpecDraft() {
+		unmountExecutionPanels(SPEC_DRAFT_CONTEXT);
+		specDraftActions.innerHTML = "";
+		specDraftExecution.innerHTML = "";
+		specDraftRun.innerHTML = "";
+	}
+
+	// The cancel is fire-and-forget on purpose: the modal must close now, and a
+	// run the server refuses to cancel is a run the server will close on its own
+	// terms anyway.
+	function cancelSpecDraftRun() {
+		if (panelContext !== SPEC_DRAFT_CONTEXT) return;
+		const record = lastExecutionRecord;
+		if (!record || isExecutionTerminal(record)) return;
+		apiPost(
+			`/api/execution/${encodeURIComponent(record.id)}/run/cancel`,
+			{},
+		).catch(() => {});
+	}
+
+	async function enterAssistedMode() {
+		showSpecDraftMode(true);
+		clearSpecDraftNotice();
+		let view;
+		try {
+			view = await apiGet("/api/workspace/actions");
+		} catch (err) {
+			setSpecDraftNotice(
+				`The assisted creation is unavailable: ${err.message || err}`,
+				"err",
+			);
+			return;
+		}
+		if (newSpecModal.classList.contains("hidden")) return;
+		const action = ((view && view.actions) || []).find(
+			(a) => a.id === SPEC_DRAFT_ACTION,
+		);
+		if (!action || !action.offered) {
+			setSpecDraftNotice(
+				(action && action.unavailable_reason) ||
+					"This workspace does not offer the assisted creation.",
+				"err",
+			);
+			return;
+		}
+		mountExecutionPanels({
+			context: SPEC_DRAFT_CONTEXT,
+			startURL: "/api/workspace/execution",
+			actions: specDraftActions,
+			execution: specDraftExecution,
+			run: specDraftRun,
+			settle: settleSpecDraft,
+		});
+		// Only this action is drawn here. An offered action that is not runnable
+		// stays a disabled chip carrying its own reason.
+		renderSpecActions([action]);
+		// The server hands back the workspace's last execution on every read, so
+		// reopening the modal finds the conversation it left behind instead of
+		// starting a second one.
+		resumeExecution(view.execution, SPEC_DRAFT_CONTEXT);
+	}
+
+	// settleSpecDraft is where the proposal becomes a form. It writes nothing:
+	// the spec is created only by the confirmation the person gives afterwards,
+	// which is the ordinary submit of this very form.
+	async function settleSpecDraft(record) {
+		if (!record || record.status !== "SUCCEEDED") return;
+		const draft =
+			record.result && record.result.payload && record.result.payload.spec_draft;
+		if (!draft || typeof draft !== "object") {
+			setSpecDraftNotice(
+				"The run finished without a readable proposal. Write the spec yourself, or try again.",
+				"err",
+			);
+			return;
+		}
+		applySpecDraft(draft);
+		showSpecDraftMode(false);
+		setSpecDraftNotice(
+			"Proposed by the agent — review it, edit anything, then confirm. Nothing has been written yet.",
+		);
+	}
+
+	function applySpecDraft(draft) {
+		clearNewSpecErrors();
+		if (typeof draft.title === "string") newSpecForm.title.value = draft.title;
+		if (typeof draft.priority === "string" && draft.priority)
+			newSpecForm.priority.value = draft.priority;
+		if (typeof draft.points === "number" && draft.points > 0)
+			newSpecForm.story_points.value = String(draft.points);
+		if (typeof draft.scope === "string") newSpecForm.scope.value = draft.scope;
+		newSpecForm.blocked_by.value = Array.isArray(draft.blocked_by)
+			? draft.blocked_by.join(", ")
+			: "";
+		if (typeof draft.body === "string") newSpecEditor.value(draft.body);
+		selectProposedEpic(draft.epic_code);
+	}
+
+	// The epic is the one field the agent can get wrong in a way the form must
+	// not absorb: the select offers the epics the backlog declares, and a value
+	// outside that list would either be silently dropped by the browser or,
+	// worse, added as an option the workspace has never heard of. So an unknown
+	// code leaves the placeholder selected and says so under the field.
+	function selectProposedEpic(code) {
+		const select = newSpecForm.epic_code;
+		const wanted = String(code || "").trim();
+		const match = Array.from(select.options).find(
+			(opt) => opt.value && opt.value.toLowerCase() === wanted.toLowerCase(),
+		);
+		if (match) {
+			select.value = match.value;
+			return;
+		}
+		select.value = "";
+		if (!wanted) return;
+		showNewSpecErrors([
+			{
+				field: "epic_code",
+				message: `The agent proposed the epic ${wanted}, which this workspace does not declare: pick one.`,
+			},
+		]);
 	}
 
 	function clearNewSpecErrors() {
@@ -3788,7 +3971,12 @@
 			return;
 		}
 		if (prdModal.classList.contains("hidden")) return;
-		const offered = ((view && view.actions) || []).filter((a) => a.offered);
+		// The assisted spec creation is offered beside the manual form, in the
+		// New spec modal, so it is deliberately not drawn here: see
+		// enterAssistedMode. Everything else the process declares is.
+		const offered = ((view && view.actions) || []).filter(
+			(a) => a.offered && a.id !== SPEC_DRAFT_ACTION,
+		);
 		// Nothing to offer and nothing left running is the only case where the
 		// panel has no reason to exist: an execution to resume keeps it up even
 		// when the action that started it is no longer offered.

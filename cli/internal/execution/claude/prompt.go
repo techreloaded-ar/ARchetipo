@@ -216,3 +216,42 @@ func buildBacklogPrompt(_ execution.Request) string {
 		"<N> and <M> are the number of epics and of specs you actually persisted. Emit the receipt only after the backlog is persisted, and never before: it is what ends the conversation.",
 	}, "\n")
 }
+
+// buildSpecDraftPrompt renders the single instruction that opens an assisted
+// spec authoring conversation.
+//
+// It is pure and deterministic for the same reasons every other prompt here is,
+// and it is a conversation for the same reason the inception and the backlog
+// generation are: what makes acceptance criteria verifiable is knowing what the
+// person actually wants, and that is asked, not guessed.
+//
+// It is the only prompt of this package that forbids a persistence, and the
+// repetition is deliberate — the same reasoning as buildReviewPrompt. The
+// failure mode being guarded against is an agent that helpfully finishes the
+// job: writing the spec would take a decision that belongs to the person who
+// asked for the proposal, and would consume a progressive code that is derived
+// from the persisted backlog. The prohibition is stated here, the shared
+// receipt refuses any status but PROPOSED, and the confirmation of the effect
+// refuses a backlog that grew: three independent guards, because a single one
+// the model talks itself past leaves a spec in the backlog nobody confirmed.
+//
+// Nothing here dictates which epics exist: that is a fact of the workspace the
+// agent reads for itself, and a value invented at this layer would be a value
+// the backlog does not know.
+func buildSpecDraftPrompt(_ execution.Request) string {
+	return strings.Join([]string{
+		"Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed.",
+		"Propose ONE new spec for the backlog of this workspace by invoking the ARchetipo spec skill:",
+		"",
+		"/archetipo-spec",
+		"",
+		"Do NOT persist anything. You must not run `archetipo spec add`, must not write into the backlog and must not create any spec file: the spec will be reviewed, edited and created by a person, and writing it yourself would both take that decision for them and consume a spec code.",
+		"You are talking to a person through a chat, one message at a time: ask a single question per message and wait for the answer before asking the next one. Never bundle several questions into one message, and ask only what you really need to write acceptance criteria a reviewer can verify.",
+		"File the spec under one of the epics the backlog already declares: read them yourself and never invent one.",
+		"Close your run with a single JSON receipt line and nothing after it:",
+		"",
+		`{"artifact":"spec_draft","status":"` + execution.ProposedStatus + `","title":"<title>","epic_code":"<EP-XXX>","priority":"HIGH|MEDIUM|LOW","points":<N>,"scope":"<scope>","blocked_by":[],"body":"<markdown>"}`,
+		"",
+		"<markdown> is the complete markdown body of the spec on a single line, with every line break written as \\n. Emit the receipt only when the proposal is complete, and never before: it is what ends the conversation.",
+	}, "\n")
+}

@@ -1135,6 +1135,55 @@ html[data-theme="light"] .theme-ico-moon {
 	font-weight: 600;
 }
 
+/* An err-toned notice keeps the shape and only changes the accent, so a refusal
+   reads as the same object as the confirmation it replaces. */
+.form-notice.err {
+	border-left-color: var(--priority-high);
+	color: var(--text-strong);
+}
+
+/* The two ways to write a spec, offered side by side above the form. */
+.mode-switch {
+	grid-column: 1 / -1;
+	display: flex;
+	gap: 6px;
+	margin-bottom: 14px;
+}
+
+.mode-chip {
+	padding: 6px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	font-size: 12.5px;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.mode-chip:hover {
+	border-color: var(--border-strong);
+	color: var(--text-strong);
+}
+
+.mode-chip.is-active {
+	border-color: var(--border-strong);
+	background: var(--surface-3);
+	color: var(--text-strong);
+	font-weight: 600;
+}
+
+/* The assisted half of the modal: the action chip, the execution panel and the
+   conversation, all of them the same components the other panels mount. */
+.spec-draft-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.spec-draft-panel.hidden {
+	display: none;
+}
+
 .form-notice-mark {
 	flex: 0 0 auto;
 	margin-top: 1px;
