@@ -35,6 +35,9 @@
 	const prdModalClose = document.getElementById("prd-modal-close");
 	const prdView = document.getElementById("prd-view");
 	const prdInception = document.getElementById("prd-inception");
+	const inceptionModelChoice = document.getElementById(
+		"inception-model-choice",
+	);
 	const inceptionActions = document.getElementById("inception-actions");
 	const inceptionExecution = document.getElementById("inception-execution");
 	const inceptionRun = document.getElementById("inception-run");
@@ -60,6 +63,9 @@
 	const specDraftModeAssisted = document.getElementById("spec-draft-mode-assisted");
 	const specDraftPanel = document.getElementById("spec-draft-panel");
 	const specDraftNotice = document.getElementById("spec-draft-notice");
+	const specDraftModelChoice = document.getElementById(
+		"spec-draft-model-choice",
+	);
 	const specDraftActions = document.getElementById("spec-draft-actions");
 	const specDraftExecution = document.getElementById("spec-draft-execution");
 	const specDraftRun = document.getElementById("spec-draft-run");
@@ -117,6 +123,7 @@
 	const executionFields = document.getElementById("execution-fields");
 	const executionSaveBtn = document.getElementById("execution-save-btn");
 	const executionStatus = document.getElementById("execution-status");
+	const storyModelChoice = document.getElementById("story-model-choice");
 	const storyActions = document.getElementById("story-actions");
 	const storyExecution = document.getElementById("story-execution");
 	const storyRun = document.getElementById("story-run");
@@ -261,6 +268,9 @@
 	let panelActions = null; // container the action chips are drawn in
 	let panelExecution = null; // container the execution panel is drawn in
 	let panelRun = null; // container the run panel is drawn in
+	let panelModelChoice = null; // container the single-run model choice is drawn in
+	let modelChoiceView = null; // last read of GET /api/execution/model-choice
+	let modelChoiceSelection = null; // what the reader chose here, or null when nobody touched it
 	let panelStartURL = ""; // route that starts an action in this context
 	let panelSettle = null; // what to do when the execution reaches a terminal state
 	let executionPollTimer = null; // interval following the open spec's execution
@@ -324,6 +334,9 @@
 	bindActionsPanel(storyActions);
 	bindActionsPanel(inceptionActions);
 	bindActionsPanel(specDraftActions);
+	bindModelChoicePanel(storyModelChoice);
+	bindModelChoicePanel(inceptionModelChoice);
+	bindModelChoicePanel(specDraftModelChoice);
 	bindRunPanel(storyRun);
 	bindRunPanel(inceptionRun);
 	bindRunPanel(specDraftRun);
@@ -333,6 +346,26 @@
 			const btn = e.target.closest(".action-chip-run");
 			if (!btn) return;
 			startPanelAction(btn.dataset.actionId, btn);
+		});
+	}
+
+	// The model choice is redrawn from scratch every time it changes — picking a
+	// model replaces the option controls below it — so the controls cannot own
+	// their handlers either. The container does, bound once here; which of the
+	// three containers is live is decided by the mounted panel, not by the
+	// listeners.
+	function bindModelChoicePanel(container) {
+		if (!container) return;
+		container.addEventListener("change", (e) => {
+			if (container !== panelModelChoice) return;
+			const target = e.target;
+			if (!target) return;
+			if (target.hasAttribute("data-run-model")) {
+				chooseRunModel(target.value);
+				return;
+			}
+			const option = target.getAttribute("data-run-option");
+			if (option !== null) chooseRunOption(option, target.value);
 		});
 	}
 
@@ -796,6 +829,7 @@
 			actions: storyActions,
 			execution: storyExecution,
 			run: storyRun,
+			modelChoice: storyModelChoice,
 			settle: settleSpecExecution,
 		});
 		modalTitle.textContent = `Spec ${code}`;
@@ -820,6 +854,7 @@
 			// so a reload finds the run it left behind — and resumes following it
 			// without ever starting a second one.
 			resumeExecution(detail.execution, specContext(code));
+			loadModelChoice(specContext(code));
 			fillSpecForm(currentSpecSnapshot);
 			fillPlanView(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
 			fillPlanForm(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
@@ -2035,9 +2070,15 @@
 		panelActions = mount.actions;
 		panelExecution = mount.execution;
 		panelRun = mount.run;
+		panelModelChoice = mount.modelChoice || null;
 		panelStartURL = mount.startURL;
 		panelSettle = mount.settle;
 		if (panelActions) panelActions.innerHTML = "";
+		// A choice belongs to the panel that was open when it was made: mounting
+		// another one starts again from what the workspace declares.
+		modelChoiceView = null;
+		modelChoiceSelection = null;
+		if (panelModelChoice) panelModelChoice.innerHTML = "";
 		renderExecution(null);
 		resetRunState();
 	}
@@ -2051,6 +2092,133 @@
 		panelContext = null;
 		panelSettle = null;
 		panelStartURL = "";
+	}
+
+	// ---- Model choice for a single run ---------------------------------------
+
+	// The panel says which model the next run would use and lets this one run
+	// depart from it. Everything shown comes from the route: which model is
+	// inherited, which ones can be chosen, which options each of them declares,
+	// and — when the list cannot be had — why. Nothing about any provider is
+	// decided here.
+	async function loadModelChoice(ctx) {
+		if (!ctx || !panelModelChoice) return;
+		let view;
+		try {
+			view = await apiGet("/api/execution/model-choice");
+		} catch {
+			// Not being able to read the choice is not being unable to start:
+			// the section stays empty and the action chips keep working.
+			return;
+		}
+		if (panelContext !== ctx) return;
+		modelChoiceView = view || null;
+		renderModelChoicePanel();
+	}
+
+	function renderModelChoicePanel() {
+		if (!panelModelChoice) return;
+		const render =
+			window.ProviderFields && window.ProviderFields.renderModelChoice;
+		if (!render) return;
+		panelModelChoice.innerHTML = render(modelChoiceView, modelChoiceSelection);
+	}
+
+	// The option names one catalog entry declares. Unknown entry, or an entry
+	// declaring nothing, both read as "no option survives".
+	function declaredOptionNames(modelID) {
+		const models =
+			modelChoiceView && Array.isArray(modelChoiceView.models)
+				? modelChoiceView.models
+				: [];
+		const model = models.find(
+			(m) => m && String(m.id || "") === String(modelID || ""),
+		);
+		const options =
+			model && Array.isArray(model.options) ? model.options : [];
+		return options.filter(Boolean).map((o) => String(o.name || ""));
+	}
+
+	// The values the controls are showing right now: the ones already chosen
+	// here, or — nobody having chosen yet — the ones the route reports.
+	function currentModelChoice() {
+		if (modelChoiceSelection) {
+			return {
+				model: String(modelChoiceSelection.model || ""),
+				options: Object.assign({}, modelChoiceSelection.options),
+			};
+		}
+		const view = modelChoiceView || {};
+		return {
+			model: view.model === undefined || view.model === null ? "" : String(view.model),
+			options: Object.assign({}, view.options || {}),
+		};
+	}
+
+	// Choosing a model drops the options the new one does not declare: an option
+	// of the model just left would otherwise travel to a model that never
+	// offered it.
+	function chooseRunModel(value) {
+		const current = currentModelChoice();
+		const model = value === undefined || value === null ? "" : String(value);
+		const declared = declaredOptionNames(model);
+		const options = {};
+		declared.forEach((name) => {
+			if (current.options[name] !== undefined && current.options[name] !== null)
+				options[name] = String(current.options[name]);
+		});
+		modelChoiceSelection = { model, options };
+		renderModelChoicePanel();
+	}
+
+	// Choosing an option touches that option alone: the controls around it keep
+	// what they are showing, so no redraw is needed.
+	function chooseRunOption(name, value) {
+		const current = currentModelChoice();
+		current.options[String(name)] =
+			value === undefined || value === null ? "" : String(value);
+		modelChoiceSelection = { model: current.model, options: current.options };
+	}
+
+	// What this run must carry beyond the action: the choice, and only when it
+	// really departs from what the workspace already declares. A run nobody
+	// touched sends nothing, so using the workspace values is a property of the
+	// request and not of what this client happens to remember.
+	function runModelOverride() {
+		if (!modelChoiceSelection || !modelChoiceView) return null;
+		const inheritedModel =
+			modelChoiceView.model === undefined || modelChoiceView.model === null
+				? ""
+				: String(modelChoiceView.model);
+		const chosen = {
+			model: String(modelChoiceSelection.model || ""),
+			options: normalizeOptionMap(modelChoiceSelection.options),
+		};
+		const inheritedOptions = normalizeOptionMap(modelChoiceView.options);
+		if (
+			chosen.model === inheritedModel &&
+			sameOptionMap(chosen.options, inheritedOptions)
+		)
+			return null;
+		return { model: chosen.model, model_options: chosen.options };
+	}
+
+	// An option left empty is an option not chosen: it must compare equal to an
+	// option that was never there at all.
+	function normalizeOptionMap(options) {
+		const out = {};
+		const bag = options && typeof options === "object" ? options : {};
+		Object.keys(bag).forEach((key) => {
+			const value = bag[key] === undefined || bag[key] === null ? "" : String(bag[key]);
+			if (value !== "") out[key] = value;
+		});
+		return out;
+	}
+
+	function sameOptionMap(a, b) {
+		const keys = Object.keys(a);
+		if (keys.length !== Object.keys(b).length) return false;
+		return keys.every((key) => b[key] === a[key]);
 	}
 
 	// ---- Spec actions --------------------------------------------------------
@@ -2113,8 +2281,20 @@
 		const url = panelStartURL;
 		if (button) button.disabled = true;
 		try {
-			const record = await apiPost(url, { action: actionID });
+			const body = { action: actionID };
+			const override = runModelOverride();
+			if (override) {
+				body.model = override.model;
+				body.model_options = override.model_options;
+			}
+			const record = await apiPost(url, body);
 			if (panelContext !== ctx) return;
+			// The departure was for this run only: the panel goes back to what
+			// the workspace declares, re-read from the server rather than
+			// assumed to have stayed what it was.
+			modelChoiceSelection = null;
+			renderModelChoicePanel();
+			loadModelChoice(ctx);
 			renderExecution(record);
 			await followExecution(record, ctx);
 		} catch (err) {
@@ -2238,6 +2418,8 @@
 		if (record.provider_id) {
 			lines.push(`provider ${escapeHtml(record.provider_id)}`);
 		}
+		const modelLine = formatExecutionModel(record.model_choice);
+		if (modelLine) lines.push(modelLine);
 		const stamp = formatExecutionTime(record.completed_at || record.created_at);
 		if (stamp) {
 			lines.push(
@@ -2285,6 +2467,23 @@
 			</div>
 			${blocks.join("")}
 		</div>`;
+	}
+
+	// The model — and the options of that model — the run actually used, exactly
+	// as the record reports them. Where they came from is stated only when the
+	// record says they were inherited, so a run started with a departure does
+	// not read as one that was not.
+	function formatExecutionModel(choice) {
+		if (!choice || typeof choice !== "object") return "";
+		const model = choice.model ? String(choice.model) : "";
+		if (!model) return "";
+		const options = choice.options && typeof choice.options === "object" ? choice.options : {};
+		const parts = Object.keys(options)
+			.sort()
+			.map((key) => `${escapeHtml(key)}=${escapeHtml(String(options[key]))}`);
+		const suffix = choice.source === "workspace" ? " (from the workspace)" : "";
+		const rendered = parts.length ? ` ${parts.join(", ")}` : "";
+		return `model ${escapeHtml(model)}${rendered}${suffix}`;
 	}
 
 	function formatExecutionTime(value) {
@@ -3286,6 +3485,7 @@
 		specDraftActions.innerHTML = "";
 		specDraftExecution.innerHTML = "";
 		specDraftRun.innerHTML = "";
+		specDraftModelChoice.innerHTML = "";
 	}
 
 	// The cancel is fire-and-forget on purpose: the modal must close now, and a
@@ -3332,6 +3532,7 @@
 			actions: specDraftActions,
 			execution: specDraftExecution,
 			run: specDraftRun,
+			modelChoice: specDraftModelChoice,
 			settle: settleSpecDraft,
 		});
 		// Only this action is drawn here. An offered action that is not runnable
@@ -3341,6 +3542,7 @@
 		// reopening the modal finds the conversation it left behind instead of
 		// starting a second one.
 		resumeExecution(view.execution, SPEC_DRAFT_CONTEXT);
+		loadModelChoice(SPEC_DRAFT_CONTEXT);
 	}
 
 	// settleSpecDraft is where the proposal becomes a form. It writes nothing:
@@ -4084,6 +4286,7 @@
 			actions: inceptionActions,
 			execution: inceptionExecution,
 			run: inceptionRun,
+			modelChoice: inceptionModelChoice,
 			settle: settleWorkspaceAction,
 		});
 		// Only the offered actions are drawn: an offered action that is not
@@ -4093,11 +4296,13 @@
 		// reopening the modal finds the conversation it left behind and resumes
 		// following it without ever starting a second one.
 		resumeExecution(view.execution, WORKSPACE_CONTEXT);
+		loadModelChoice(WORKSPACE_CONTEXT);
 	}
 
 	function hideWorkspaceActions() {
 		unmountExecutionPanels(WORKSPACE_CONTEXT);
 		prdInception.classList.add("hidden");
+		inceptionModelChoice.innerHTML = "";
 		inceptionActions.innerHTML = "";
 		inceptionExecution.innerHTML = "";
 		inceptionRun.innerHTML = "";

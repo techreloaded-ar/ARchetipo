@@ -177,6 +177,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("PUT /api/prd", s.handleSavePRD)
 	s.mux.HandleFunc("GET /api/execution/providers", s.handleListExecutionProviders)
 	s.mux.HandleFunc("PUT /api/execution/provider/default", s.handleSaveDefaultExecutionProvider)
+	s.mux.HandleFunc("GET /api/execution/model-choice", s.handleGetExecutionModelChoice)
 	s.mux.HandleFunc("POST /api/spec/{code}/execution", s.handleRunSpecAction)
 	s.mux.HandleFunc("GET /api/execution/{id}", s.handleGetExecution)
 	s.mux.HandleFunc("GET /api/execution/{id}/run", s.handleGetExecutionRun)

@@ -125,6 +125,13 @@ type Execution struct {
 	Error            *ExecutionError `json:"error,omitempty"`
 	CreatedAt        time.Time       `json:"created_at"`
 	CompletedAt      *time.Time      `json:"completed_at,omitempty"`
+	// ModelChoice is the model and options the run was *actually started with*,
+	// not an override somebody typed. It is therefore populated even when
+	// nobody chose anything, because "the one the workspace configures" is an
+	// answer to which model ran and not an absence of one; Source is what tells
+	// the two apart. It stays a pointer with omitempty so records written
+	// before this field existed deserialize unchanged.
+	ModelChoice *ModelChoice `json:"model_choice,omitempty"`
 }
 
 type ActionError struct{ Action ActionID }

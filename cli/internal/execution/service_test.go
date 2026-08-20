@@ -977,3 +977,164 @@ func TestPreflightAcceptsAProviderDeclaringTheCapability(t *testing.T) {
 		t.Fatalf("validated config = %#v, want the caller's map to be untouched", provider.validated)
 	}
 }
+
+// AC-3: the model a run uses has to be readable while that run is still open.
+// The assertion is made *before* the continuation on purpose: it is exactly the
+// moment somebody opens the detail of a run in progress, and a choice written
+// only on the terminal write would be invisible right then.
+func TestStartRecordsModelChoiceBeforeDispatch(t *testing.T) {
+	p := newBlockingProvider("fake")
+	store := &spyStore{records: map[string]Execution{}}
+	choice := ModelChoice{Model: "m1", Options: map[string]string{"opt": "b"}, Source: ModelChoiceSourceRun}
+	started, continuation, err := newBlockingService(t, p, store).Start(context.Background(), domain.Spec{Code: "US-001", Status: domain.StatusTodo}, ActionPlan, "fake", nil, nil, WithModelChoice(choice))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.calls.Load() != 0 {
+		t.Fatalf("the provider was contacted before Start returned: calls=%d", p.calls.Load())
+	}
+	running, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatalf("the record was not persisted by Start: %v", err)
+	}
+	if running.Status != StatusRunning {
+		t.Fatalf("record status = %q, want %q", running.Status, StatusRunning)
+	}
+	if running.ModelChoice == nil {
+		t.Fatal("a RUNNING record carries no model choice, want the one the run started with")
+	}
+	if !reflect.DeepEqual(*running.ModelChoice, choice) {
+		t.Fatalf("model choice on the RUNNING record = %#v, want %#v", *running.ModelChoice, choice)
+	}
+
+	close(p.release)
+	outcome, err := continuation(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Status != StatusSucceeded {
+		t.Fatalf("outcome status = %q, want %q", outcome.Status, StatusSucceeded)
+	}
+	closed, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.Status != StatusSucceeded || closed.CompletedAt == nil {
+		t.Fatalf("closed record: %#v", closed)
+	}
+	if closed.ModelChoice == nil || !reflect.DeepEqual(*closed.ModelChoice, choice) {
+		t.Fatalf("model choice after the terminal write = %#v, want %#v", closed.ModelChoice, choice)
+	}
+}
+
+// A run started without any choice must be byte-for-byte the record it was
+// before this field existed: not an empty model_choice, no model_choice at all.
+func TestStartWithoutModelChoiceLeavesRecordUnchanged(t *testing.T) {
+	p := newBlockingProvider("fake")
+	store := &spyStore{records: map[string]Execution{}}
+	started, continuation, err := newBlockingService(t, p, store).Start(context.Background(), domain.Spec{Code: "US-001", Status: domain.StatusTodo}, ActionPlan, "fake", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(p.release)
+	if _, err := continuation(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ModelChoice != nil {
+		t.Fatalf("model choice = %#v, want nil for a run started without one", persisted.ModelChoice)
+	}
+	encoded, err := json.Marshal(persisted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := fields["model_choice"]; present {
+		t.Fatalf("serialized record carries a model_choice key: %s", encoded)
+	}
+}
+
+// The caller keeps its own map; the record must not be a window onto it. A
+// caller that mutates after Start cannot rewrite the history of a run that has
+// already started.
+func TestWithModelChoiceCopiesOptions(t *testing.T) {
+	p := newBlockingProvider("fake")
+	store := &spyStore{records: map[string]Execution{}}
+	options := map[string]string{"opt": "b"}
+	started, continuation, err := newBlockingService(t, p, store).Start(context.Background(), domain.Spec{Code: "US-001", Status: domain.StatusTodo}, ActionPlan, "fake", nil, nil, WithModelChoice(ModelChoice{Model: "m1", Options: options, Source: ModelChoiceSourceRun}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options["opt"] = "mutated"
+	options["added"] = "later"
+
+	running, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"opt": "b"}
+	if running.ModelChoice == nil || !reflect.DeepEqual(running.ModelChoice.Options, want) {
+		t.Fatalf("options on the RUNNING record = %#v, want %#v", running.ModelChoice, want)
+	}
+
+	close(p.release)
+	if _, err := continuation(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.ModelChoice == nil || !reflect.DeepEqual(closed.ModelChoice.Options, want) {
+		t.Fatalf("options after the terminal write = %#v, want %#v", closed.ModelChoice, want)
+	}
+}
+
+// The workspace-scoped variant records the choice through the same path: an
+// inception run started with a model of its own is as readable as a spec one.
+func TestStartWorkspaceRecordsModelChoice(t *testing.T) {
+	p := newInceptionProvider()
+	store := &spyStore{records: map[string]Execution{}}
+	choice := ModelChoice{Model: "m1", Options: map[string]string{"opt": "b"}, Source: ModelChoiceSourceRun}
+	started, continuation, err := newBlockingService(t, p, store).StartWorkspace(context.Background(), ActionInception, "fake", nil, nil, WithModelChoice(choice))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.calls.Load() != 0 {
+		t.Fatalf("the provider was contacted before StartWorkspace returned: calls=%d", p.calls.Load())
+	}
+	running, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatalf("the record was not persisted by StartWorkspace: %v", err)
+	}
+	if running.SpecCode != "" {
+		t.Fatalf("spec code = %q, want empty for a workspace-scoped run", running.SpecCode)
+	}
+	if running.Status != StatusRunning {
+		t.Fatalf("record status = %q, want %q", running.Status, StatusRunning)
+	}
+	if running.ModelChoice == nil || !reflect.DeepEqual(*running.ModelChoice, choice) {
+		t.Fatalf("model choice on the RUNNING record = %#v, want %#v", running.ModelChoice, choice)
+	}
+
+	close(p.release)
+	if _, err := continuation(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.Status != StatusSucceeded {
+		t.Fatalf("closed record status = %q, want %q", closed.Status, StatusSucceeded)
+	}
+	if closed.ModelChoice == nil || !reflect.DeepEqual(*closed.ModelChoice, choice) {
+		t.Fatalf("model choice after the terminal write = %#v, want %#v", closed.ModelChoice, choice)
+	}
+}

@@ -524,3 +524,231 @@ describe("renderProviderFields — opzioni del modello selezionato", () => {
 		assert.ok(html.includes("&lt;img"), "l'etichetta non è stata neutralizzata");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// renderModelChoice — la scelta di modello per la singola run.
+//
+// Stessa disciplina delle suite precedenti: gli oracoli stanno sul testo
+// visibile e, dove il criterio è la selezione stessa, sull'attributo
+// `selected`. Il modulo resta ignaro di ogni provider: i modelli qui sotto
+// sono inventati apposta.
+//
+// Verifica:
+//   - AC-1 il modello ereditato dal workspace è la voce selezionata, e
+//     l'ereditarietà è dichiarata a parole
+//   - AC-2 le opzioni mostrate sono quelle del modello selezionato
+//   - AC-6 senza catalogo il motivo è visibile e nessun selettore compare
+// ---------------------------------------------------------------------------
+
+const { renderModelChoice } = loadProviderFields();
+
+// Le voci del selettore del modello della run, isolate dal resto del markup.
+function runModelControl(html) {
+	const m = /<select name="run_model"[^>]*>([\s\S]*?)<\/select>/.exec(html);
+	return m ? options(m[1]) : null;
+}
+
+// Le voci del controllo di una opzione della run, per nome.
+function runOptionControl(html, name) {
+	const re = new RegExp(
+		`<select name="run_option_${name}"[^>]*>([\\s\\S]*?)</select>`,
+	);
+	const m = re.exec(html);
+	return m ? options(m[1]) : null;
+}
+
+const CHOICE_VIEW = {
+	available: true,
+	model: "modello-uno",
+	model_source: "workspace",
+	options: {},
+	models: [
+		{
+			id: "modello-uno",
+			label: "Modello Uno",
+			options: [
+				{
+					name: "sforzo",
+					label: "Sforzo",
+					choices: [
+						{ value: "a", label: "Scelta A" },
+						{ value: "b", label: "Scelta B" },
+					],
+				},
+			],
+		},
+		{ id: "modello-due", label: "Modello Due", options: [] },
+	],
+};
+
+describe("renderModelChoice — scelta per la singola run", () => {
+	it("mostra il modello ereditato dal workspace come voce selezionata", () => {
+		const html = renderModelChoice(CHOICE_VIEW, null);
+		const entries = runModelControl(html);
+
+		assert.ok(entries, "il selettore del modello della run non è stato disegnato");
+		const selected = entries.filter((o) => o.selected);
+		assert.equal(selected.length, 1, "esattamente una voce deve essere selezionata");
+		assert.equal(
+			selected[0].value,
+			"modello-uno",
+			"la voce selezionata non è il modello ereditato dal workspace",
+		);
+		const text = visibleText(html);
+		assert.ok(
+			/inherited from the workspace/i.test(text),
+			"l'ereditarietà dal workspace non è dichiarata a parole",
+		);
+		assert.ok(text.includes("Modello Uno"), "il modello ereditato non è leggibile");
+	});
+
+	it("offre le opzioni del modello selezionato e non quelle degli altri", () => {
+		const withOptions = renderModelChoice(CHOICE_VIEW, { model: "modello-uno" });
+		const entries = runOptionControl(withOptions, "sforzo");
+		assert.ok(entries, "l'opzione del modello scelto non è stata disegnata");
+		assert.deepEqual(
+			entries.map((o) => o.value),
+			["", "a", "b"],
+			"la voce vuota più le due scelte dichiarate, in quell'ordine",
+		);
+		assert.ok(
+			withOptions.includes('data-run-option="sforzo"'),
+			"il controllo dell'opzione non porta il proprio nome in un attributo dedicato",
+		);
+
+		const other = renderModelChoice(CHOICE_VIEW, { model: "modello-due" });
+		assert.equal(
+			runOptionControl(other, "sforzo"),
+			null,
+			"l'opzione di un altro modello resta disegnata dopo il cambio di modello",
+		);
+		assert.ok(
+			!other.includes('data-run-option="'),
+			"un modello senza opzioni disegna comunque un controllo di opzione",
+		);
+		assert.ok(
+			visibleText(other).includes("This model declares no option."),
+			"il modello senza opzioni non lo dichiara a parole",
+		);
+	});
+
+	it("riporta il valore di opzione già scelto", () => {
+		const entries = runOptionControl(
+			renderModelChoice(CHOICE_VIEW, {
+				model: "modello-uno",
+				options: { sforzo: "b" },
+			}),
+			"sforzo",
+		);
+		const selected = entries.filter((o) => o.selected);
+		assert.equal(selected.length, 1, "esattamente una voce deve essere selezionata");
+		assert.equal(selected[0].value, "b", "la scelta già fatta non è riproposta selezionata");
+	});
+
+	it("dichiara la scelta non disponibile con il motivo", () => {
+		const html = renderModelChoice(
+			{
+				available: false,
+				model: "modello-uno",
+				model_source: "workspace",
+				unavailable_reason: "il catalogo non è ottenibile",
+			},
+			null,
+		);
+		const text = visibleText(html);
+
+		assert.ok(
+			text.includes("il catalogo non è ottenibile"),
+			"il motivo dell'indisponibilità non è visibile",
+		);
+		assert.ok(text.includes("modello-uno"), "il modello effettivo non è dichiarato");
+		assert.ok(
+			!html.includes("<select"),
+			"la scelta non disponibile disegna comunque un selettore",
+		);
+	});
+
+	it("neutralizza l'HTML che arriva dal payload", () => {
+		const unavailable = renderModelChoice(
+			{
+				available: false,
+				model: '<script>alert(1)</script>',
+				unavailable_reason: '<img src=x onerror="1">',
+			},
+			null,
+		);
+		assert.ok(!unavailable.includes("<script"), "il modello ha prodotto un tag reale");
+		assert.ok(!unavailable.includes("<img"), "il motivo ha prodotto un tag reale");
+		assert.ok(unavailable.includes("&lt;img"), "il motivo non è stato neutralizzato");
+
+		const available = renderModelChoice(
+			{
+				available: true,
+				model: "m",
+				models: [
+					{
+						id: "m",
+						label: '<script>alert(1)</script>',
+						options: [
+							{
+								name: "x",
+								label: '<img src=x onerror="1">',
+								choices: [{ value: '<script>alert(2)</script>' }],
+							},
+						],
+					},
+				],
+			},
+			null,
+		);
+		assert.ok(!available.includes("<script"), "un'etichetta ha prodotto un tag reale");
+		assert.ok(!available.includes("<img"), "l'etichetta dell'opzione ha prodotto un tag reale");
+	});
+
+	it("non lancia su payload parziali", () => {
+		const partials = [
+			null,
+			undefined,
+			{},
+			{ available: true },
+			{ available: true, model: "sconosciuto" },
+			{ available: true, models: "non-una-lista" },
+			{ available: true, models: [null] },
+			{ available: true, model: "m", models: [{ id: "m", options: null }] },
+			{ available: false },
+		];
+		for (const view of partials) {
+			const html = renderModelChoice(view, null);
+			assert.equal(typeof html, "string", "il renderer non ha restituito una stringa");
+		}
+	});
+
+	// Una voce vuota offerta sopra un modello ereditato sarebbe una scelta che
+	// il server non può distinguere da «nessuna scelta»: il pannello mostrerebbe
+	// «il provider sceglie» e la run partirebbe con il modello configurato.
+	// L'unico caso in cui la voce vuota dice il vero è quando è già lei quella
+	// in vigore.
+	it("non offre la voce vuota sopra un modello ereditato", () => {
+		const entries = runModelControl(renderModelChoice(CHOICE_VIEW, null));
+
+		assert.ok(entries, "il selettore del modello della run non è stato disegnato");
+		assert.ok(
+			!entries.some((o) => o.value === ""),
+			"la voce vuota è offerta anche se un modello è già in vigore",
+		);
+	});
+
+	it("offre la voce vuota quando è il modello ereditato a essere vuoto", () => {
+		const entries = runModelControl(
+			renderModelChoice({ ...CHOICE_VIEW, model: "" }, null),
+		);
+
+		assert.ok(entries, "il selettore del modello della run non è stato disegnato");
+		const empty = entries.filter((o) => o.value === "");
+		assert.equal(empty.length, 1, "la voce vuota deve essere offerta una sola volta");
+		assert.ok(
+			empty[0].selected,
+			"la voce vuota in vigore non è quella selezionata",
+		);
+	});
+});

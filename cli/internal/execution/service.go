@@ -83,8 +83,37 @@ type Confirmation func(ctx context.Context, outcome *Execution)
 // Start deliberately starts no goroutine. Whether the dispatch runs inline (the
 // CLI) or on a background context (the viewer) is the caller's choice, not this
 // package's.
-func (s *Service) Start(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any, confirm Confirmation) (Execution, Continuation, error) {
-	return s.start(ctx, spec, action, providerID, providerConfig, "", s.newID, confirm)
+func (s *Service) Start(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any, confirm Confirmation, opts ...StartOption) (Execution, Continuation, error) {
+	return s.start(ctx, spec, action, providerID, providerConfig, "", s.newID, confirm, opts...)
+}
+
+// StartOption decorates the record a start is about to create, before it
+// reaches the store. It is a variadic tail on purpose: every existing caller
+// passes none and keeps compiling untouched.
+type StartOption func(*Execution)
+
+// WithModelChoice records on the execution the model and options the run uses.
+// The Options map is copied in depth, so the caller and the stored record never
+// share it: a caller that keeps mutating the map it passed cannot rewrite the
+// history of a run that already started.
+func WithModelChoice(choice ModelChoice) StartOption {
+	stored := ModelChoice{Model: choice.Model, Source: choice.Source}
+	if len(choice.Options) > 0 {
+		stored.Options = make(map[string]string, len(choice.Options))
+		for name, value := range choice.Options {
+			stored.Options[name] = value
+		}
+	}
+	return func(execution *Execution) {
+		copied := stored
+		if len(stored.Options) > 0 {
+			copied.Options = make(map[string]string, len(stored.Options))
+			for name, value := range stored.Options {
+				copied.Options[name] = value
+			}
+		}
+		execution.ModelChoice = &copied
+	}
 }
 
 // StartWorkspace is Start for an action whose object is the workspace itself
@@ -94,8 +123,8 @@ func (s *Service) Start(ctx context.Context, spec domain.Spec, action ActionID, 
 // only difference is the zero spec, which lands on the record as an empty
 // spec_code. The same contract on the continuation applies — it MUST be invoked
 // exactly once.
-func (s *Service) StartWorkspace(ctx context.Context, action ActionID, providerID string, providerConfig map[string]any, confirm Confirmation) (Execution, Continuation, error) {
-	return s.start(ctx, domain.Spec{}, action, providerID, providerConfig, "", s.newID, confirm)
+func (s *Service) StartWorkspace(ctx context.Context, action ActionID, providerID string, providerConfig map[string]any, confirm Confirmation, opts ...StartOption) (Execution, Continuation, error) {
+	return s.start(ctx, domain.Spec{}, action, providerID, providerConfig, "", s.newID, confirm, opts...)
 }
 
 // Run dispatches the action through the provider with a freshly generated
@@ -214,7 +243,7 @@ func (s *Service) preflight(ctx context.Context, action ActionID, providerID str
 	return provider, capability, nil
 }
 
-func (s *Service) start(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any, requestID string, resolveID func() (string, error), confirm Confirmation) (Execution, Continuation, error) {
+func (s *Service) start(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any, requestID string, resolveID func() (string, error), confirm Confirmation, opts ...StartOption) (Execution, Continuation, error) {
 	if err := validateActionObject(action, spec.Code); err != nil {
 		return Execution{}, nil, err
 	}
@@ -232,6 +261,15 @@ func (s *Service) start(ctx context.Context, spec domain.Spec, action ActionID, 
 	}
 	created := s.now().UTC()
 	started := Execution{ID: id, SpecCode: spec.Code, Action: action, Capability: capability, ProviderID: providerID, RequestID: requestID, SpecStatusBefore: spec.Status, Status: StatusRunning, CreatedAt: created}
+	// The options are applied *before* the create, never after: the model a run
+	// uses has to be readable while that run is RUNNING, and decorating the
+	// record only on the terminal write would hide it until the run is over —
+	// the exact opposite of what it is for.
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&started)
+		}
+	}
 	if err := s.store.Create(ctx, started); err != nil {
 		return Execution{}, nil, err
 	}

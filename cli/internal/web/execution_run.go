@@ -130,6 +130,11 @@ func (g *dispatchGroup) wait(timeout time.Duration) {
 
 type runSpecActionReq struct {
 	Action string `json:"action"`
+	// Model and ModelOptions are the choice made for this single run. Both are
+	// optional: a request that carries neither runs exactly the workspace
+	// configuration, and neither of them is ever saved back to it.
+	Model        string            `json:"model,omitempty"`
+	ModelOptions map[string]string `json:"model_options,omitempty"`
 }
 
 // handleRunSpecAction starts one action on one spec through the workspace
@@ -222,8 +227,10 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 	// failed execution to read instead of an action they can still press once
 	// the runtime is fixed. A provider that does not report availability is
 	// unaffected: CheckAvailability returns nil for it.
+	var provider execution.Provider
 	if s.registry != nil {
-		if provider, resolveErr := s.registry.Resolve(providerID); resolveErr == nil {
+		if resolved, resolveErr := s.registry.Resolve(providerID); resolveErr == nil {
+			provider = resolved
 			if err := execution.CheckAvailability(ctx, provider, selection.Config); err != nil {
 				writeError(w, iox.NewConflict(
 					"the default execution provider "+quoted(providerID)+" is not usable: "+err.Error(),
@@ -235,6 +242,18 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The per-run choice is merged here: after the provider is known usable —
+	// there is no point asking an unusable runtime for its catalog — and before
+	// the Preflight, the reservation and BeginActionEffect. That position is
+	// what makes a wrong override leave no trace at all: the spec is not moved,
+	// no record is written, and the saved configuration is untouched, because
+	// only the clone this call returns is ever passed on.
+	effectiveConfig, modelChoice, err := resolveRunModelChoice(ctx, provider, selection.Config, req.Model, req.ModelOptions)
+	if err != nil {
+		writeRunModelChoiceError(w, err)
+		return
+	}
+
 	// Preflight is applied here, before the reservation, before any transition
 	// and before a record exists: resolving the provider, checking it declares
 	// the capability the action requires and validating its configuration are
@@ -243,7 +262,7 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 	// status nor under .archetipo/executions/. Service.Start applies the very
 	// same phase again; running it twice is cheap and keeps the rule in one
 	// place instead of restating it here.
-	if err := ws.service.Preflight(ctx, action, providerID, execution.CloneConfig(selection.Config)); err != nil {
+	if err := ws.service.Preflight(ctx, action, providerID, execution.CloneConfig(effectiveConfig)); err != nil {
 		var configErr *execution.ConfigurationError
 		if errors.As(err, &configErr) {
 			writeProviderConfigError(w, err)
@@ -295,7 +314,11 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 	confirm := func(confirmCtx context.Context, outcome *execution.Execution) {
 		_ = execution.VerifyActionEffect(confirmCtx, ws.conn, outcome.Action, code, outcome)
 	}
-	started, continuation, err := ws.service.Start(ctx, spec, action, providerID, execution.CloneConfig(selection.Config), confirm)
+	startOpts := []execution.StartOption(nil)
+	if modelChoice != nil {
+		startOpts = append(startOpts, execution.WithModelChoice(*modelChoice))
+	}
+	started, continuation, err := ws.service.Start(ctx, spec, action, providerID, execution.CloneConfig(effectiveConfig), confirm, startOpts...)
 	if err != nil {
 		ws.dispatch.release(code)
 		// A rejected configuration is answered by the same renderer the Execution

@@ -14,7 +14,7 @@
 // caller.
 //
 // Consumable in both browser (defines window.ProviderFields) and Node
-// (exports renderProviderFields / escapeHtml).
+// (exports renderProviderFields / renderModelChoice / escapeHtml).
 (function () {
 	// ---- visible wording ------------------------------------------------
 	// The three phrases the acceptance criteria are about, in the English of
@@ -31,6 +31,34 @@
 	// broken or the model simply has nothing to offer.
 	const EMPTY_MODEL_OPTION_LABEL = "No value — the provider chooses";
 	const NO_MODEL_OPTIONS_COPY = "This model declares no option.";
+	// The section that lets a single run depart from the configuration, and
+	// the sentence that says where the model on display comes from when
+	// nobody has departed from it yet.
+	const MODEL_CHOICE_TITLE = "Model for this run";
+	const INHERITED_COPY = "inherited from the workspace";
+	const WORKSPACE_SOURCE = "workspace";
+
+	// The two naming scopes the same controls are drawn under. The prefix is
+	// what the submitted name and the marker attribute are built from, so the
+	// configuration form and the single-run panel can never collide even when
+	// they draw the very same catalog: `provider_model` is the configured
+	// value, `run_model` is the value of one run and nothing else.
+	const PROVIDER_SCOPE = {
+		prefix: "provider",
+		selectAttrs: "",
+		alwaysOfferEmpty: true,
+	};
+	// The run scope offers the empty entry only when the inherited model is
+	// itself empty. Offering it over an inherited model would let the reader
+	// pick "the provider chooses" and still watch the run start on the
+	// configured model, because an empty choice is indistinguishable from no
+	// choice at all on the wire: the panel would be showing one model and the
+	// run using another.
+	const RUN_SCOPE = {
+		prefix: "run",
+		selectAttrs: " data-run-model",
+		alwaysOfferEmpty: false,
+	};
 
 	// ---- internal helpers ----
 
@@ -71,16 +99,23 @@
 	/**
 	 * The catalog rendered as a list of entries.
 	 *
-	 * The empty entry is always first and is what an unconfigured field
-	 * selects, so leaving the model unset stays possible and still submits an
-	 * empty value. A current value the catalog does not carry is kept as its
-	 * own entry, selected and marked, so saving cannot silently drop it.
+	 * The empty entry is first whenever it is offered, and is what an
+	 * unconfigured field selects, so leaving the model unset stays possible and
+	 * still submits an empty value. A scope that does not always offer it still
+	 * gets it when the current value is empty, because that entry is then the
+	 * only truthful way to show what is in force. A current value the catalog
+	 * does not carry is kept as its own entry, selected and marked, so saving
+	 * cannot silently drop it.
 	 */
-	function renderModelSelect(field, value, models) {
+	function renderModelSelect(field, value, models, scope) {
+		const naming = scope || PROVIDER_SCOPE;
 		const known = models.some((m) => String(m.id || "") === value);
-		const options = [
-			`<option value=""${value === "" ? " selected" : ""}>${escapeHtml(EMPTY_OPTION_LABEL)}</option>`,
-		];
+		const options = [];
+		if (naming.alwaysOfferEmpty !== false || value === "") {
+			options.push(
+				`<option value=""${value === "" ? " selected" : ""}>${escapeHtml(EMPTY_OPTION_LABEL)}</option>`,
+			);
+		}
 		if (value !== "" && !known) {
 			options.push(
 				`<option value="${escapeHtml(value)}" selected>${escapeHtml(value + UNLISTED_SUFFIX)}</option>`,
@@ -93,7 +128,7 @@
 				`<option value="${escapeHtml(id)}"${id === value && value !== "" ? " selected" : ""}>${escapeHtml(text)}</option>`,
 			);
 		});
-		return `<select name="provider_${escapeHtml(field.name)}">${options.join("")}</select>`;
+		return `<select name="${naming.prefix}_${escapeHtml(field.name)}"${naming.selectAttrs}>${options.join("")}</select>`;
 	}
 
 	/** One configuration field, catalog or not. */
@@ -134,11 +169,20 @@
 	 */
 	function selectedModelOptions(provider, values) {
 		if (!provider || !provider.model_field) return null;
-		const selected = currentValue(values, provider.model_field);
-		if (selected === "") return null;
-		const model = catalogOf(provider).find(
-			(m) => String(m.id || "") === selected,
-		);
+		return optionsOfModel(provider, currentValue(values, provider.model_field));
+	}
+
+	/**
+	 * The options declared by one catalog entry, by identifier.
+	 *
+	 * Same contract as selectedModelOptions and the single place that reads
+	 * `options` off a catalog entry: null when there is nothing to say (no
+	 * model, or a model the catalog does not carry), an array — possibly
+	 * empty — when a catalog model really is named.
+	 */
+	function optionsOfModel(view, modelID) {
+		if (modelID === "") return null;
+		const model = catalogOf(view).find((m) => String(m.id || "") === modelID);
 		if (!model) return null;
 		return Array.isArray(model.options) ? model.options.filter(Boolean) : [];
 	}
@@ -151,7 +195,8 @@
 	 * the same wrapper the configuration fields use, so the existing error
 	 * highlighting reaches it without any change.
 	 */
-	function renderModelOption(option, value) {
+	function renderModelOption(option, value, scope) {
+		const naming = scope || PROVIDER_SCOPE;
 		const name = String(option.name || "");
 		const choices = Array.isArray(option.choices)
 			? option.choices.filter(Boolean)
@@ -174,7 +219,7 @@
 		// not only inside the submitted name: reading it back from the prefix
 		// of that name would make a configuration field called `option_x`
 		// indistinguishable from the option `x`.
-		return `<label class="field full" data-provider-field="${escapeHtml(name)}"><span>${escapeHtml(option.label || name)}</span><select name="provider_option_${escapeHtml(name)}" data-provider-option="${escapeHtml(name)}">${entries.join("")}</select>${help}</label>`;
+		return `<label class="field full" data-${naming.prefix}-field="${escapeHtml(name)}"><span>${escapeHtml(option.label || name)}</span><select name="${naming.prefix}_option_${escapeHtml(name)}" data-${naming.prefix}-option="${escapeHtml(name)}">${entries.join("")}</select>${help}</label>`;
 	}
 
 	/**
@@ -221,11 +266,86 @@
 		);
 	}
 
+	/**
+	 * Render the model — and the options of that model — a single run would
+	 * use, given the view served by GET /api/execution/model-choice and the
+	 * choice made in the panel so far.
+	 *
+	 * The view is the whole truth about what would be used and why: this
+	 * function never derives inheritance from a configuration, it reads
+	 * `model` and `model_source`. `selection` is what the reader has touched
+	 * since the panel was opened; absent — the state a freshly opened panel is
+	 * in — every control shows the inherited value.
+	 *
+	 * When the view is not available no `<select>` is produced at all: the
+	 * effective model is stated as text and the reason is shown beside it, so
+	 * the panel says the start is still possible and the choice is not.
+	 *
+	 * @param {object|null} view       GET /api/execution/model-choice.
+	 * @param {object|null} selection  {model, options} chosen for this run.
+	 * @returns {string}               HTML, or "" when there is no view.
+	 */
+	function renderModelChoice(view, selection) {
+		if (!view || typeof view !== "object") return "";
+		const chosen = selection && typeof selection === "object" ? selection : null;
+		const model =
+			chosen && chosen.model !== undefined && chosen.model !== null
+				? String(chosen.model)
+				: currentValue(view, "model");
+		const optionValues =
+			chosen && chosen.options && typeof chosen.options === "object"
+				? chosen.options
+				: view.options;
+		const inherited =
+			view.model_source === WORKSPACE_SOURCE
+				? `<small class="field-help">${escapeHtml(INHERITED_COPY)}</small>`
+				: "";
+		const title = `<span>${escapeHtml(MODEL_CHOICE_TITLE)}</span>`;
+
+		if (!view.available) {
+			// The model is stated, not offered: an empty one is the provider's
+			// own decision and reads with the same words the catalog entry
+			// would have used.
+			const effective = model === "" ? EMPTY_OPTION_LABEL : model;
+			const reason = view.unavailable_reason
+				? `<small class="field-help field-warning">${escapeHtml(view.unavailable_reason)}</small>`
+				: "";
+			return `<div class="field full" data-run-field="model">${title}<p class="config-copy">${escapeHtml(effective)}</p>${inherited}${reason}</div>`;
+		}
+
+		const control = renderModelSelect(
+			{ name: "model" },
+			model,
+			catalogOf(view),
+			RUN_SCOPE,
+		);
+		const field = `<label class="field full" data-run-field="model">${title}${control}${inherited}</label>`;
+		// The options belong to the model currently selected, so they are
+		// drawn after it and are redrawn from scratch whenever it changes.
+		const options = optionsOfModel(view, model);
+		if (options === null) return field;
+		if (!options.length) {
+			return `${field}<p class="config-copy">${escapeHtml(NO_MODEL_OPTIONS_COPY)}</p>`;
+		}
+		return (
+			field +
+			options
+				.map((option) =>
+					renderModelOption(
+						option,
+						currentValue(optionValues, String(option.name || "")),
+						RUN_SCOPE,
+					),
+				)
+				.join("")
+		);
+	}
+
 	// ---- exports ----
 
 	if (typeof module !== "undefined" && module.exports) {
-		module.exports = { renderProviderFields, escapeHtml };
+		module.exports = { renderProviderFields, renderModelChoice, escapeHtml };
 	} else {
-		window.ProviderFields = { renderProviderFields };
+		window.ProviderFields = { renderProviderFields, renderModelChoice };
 	}
 })();

@@ -66,6 +66,10 @@ type workspaceActionsView struct {
 
 type runWorkspaceActionReq struct {
 	Action string `json:"action"`
+	// Model and ModelOptions are the choice made for this single run, with the
+	// same meaning and the same optionality they have on the spec-scoped start.
+	Model        string            `json:"model,omitempty"`
+	ModelOptions map[string]string `json:"model_options,omitempty"`
 }
 
 // handleGetWorkspaceActions serves GET /api/workspace/actions.
@@ -192,6 +196,23 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 	providerID := availability.providerID
 	providerConfig := execution.CloneConfig(availability.providerConfig)
 
+	// The per-run choice is merged before the reservation and before the start,
+	// for the same reason it is on the spec route: a wrong override must leave
+	// nothing behind — no reservation, no record — and must never touch the
+	// saved configuration, which is only read and cloned here.
+	var provider execution.Provider
+	if s.registry != nil {
+		if resolved, resolveErr := s.registry.Resolve(providerID); resolveErr == nil {
+			provider = resolved
+		}
+	}
+	effectiveConfig, modelChoice, err := resolveRunModelChoice(ctx, provider, providerConfig, req.Model, req.ModelOptions)
+	if err != nil {
+		writeRunModelChoiceError(w, err)
+		return
+	}
+	providerConfig = effectiveConfig
+
 	if err := s.guardSingleWorkspaceExecution(ctx, ws); err != nil {
 		writeError(w, err)
 		return
@@ -220,7 +241,11 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 			execution.ConfirmSpecDraft(confirmCtx, ws.conn, s.specDeleter(ws), specCodesBefore, outcome)
 		}
 	}
-	started, continuation, err := ws.service.StartWorkspace(ctx, action, providerID, providerConfig, confirm)
+	startOpts := []execution.StartOption(nil)
+	if modelChoice != nil {
+		startOpts = append(startOpts, execution.WithModelChoice(*modelChoice))
+	}
+	started, continuation, err := ws.service.StartWorkspace(ctx, action, providerID, providerConfig, confirm, startOpts...)
 	if err != nil {
 		ws.dispatch.release(workspaceExecutionKey)
 		// A rejected configuration is answered by the same renderer the Execution

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -9,6 +10,12 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
+
+// emptyModelCatalogReason is what a reader is told when a provider declares a
+// catalog and then hands back no entries at all. It lives in one place because
+// both the provider list and the model-choice route report the very same fact,
+// and a reader comparing the two panels must not be told it in two wordings.
+const emptyModelCatalogReason = "the provider declared an empty model catalog"
 
 // executionProviderView describes one registered provider to the viewer.
 // Capabilities and ConfigFields are what let the browser render a form for a
@@ -124,7 +131,7 @@ func (s *Server) handleListExecutionProviders(w http.ResponseWriter, r *http.Req
 				}
 			}
 			if len(providerView.Models) == 0 && providerView.ModelsUnavailableReason == "" {
-				providerView.ModelsUnavailableReason = "the provider declared an empty model catalog"
+				providerView.ModelsUnavailableReason = emptyModelCatalogReason
 			}
 		}
 		view.Providers = append(view.Providers, providerView)
@@ -134,6 +141,98 @@ func (s *Server) handleListExecutionProviders(w http.ResponseWriter, r *http.Req
 			ID:     defaultID,
 			Config: execution.CloneConfig(selection.Config),
 		}
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// executionModelChoiceView answers, before anything is started, "which model
+// will this run use, where does that model come from, and what else could I
+// pick for this one run?".
+//
+// Available says only whether *choosing* is possible now; it never says whether
+// a run can start. Model, ModelSource and Options are therefore filled in every
+// case, including the three unavailable ones, because a run started without a
+// choice still uses the configured model and the reader has to see it.
+type executionModelChoiceView struct {
+	// ProviderID is the workspace default provider, empty when none is set.
+	ProviderID string `json:"provider_id"`
+	// ModelField is the configuration field a catalog fills in; empty when the
+	// provider declares no catalog.
+	ModelField string `json:"model_field,omitempty"`
+	// Model is the model the run would use, and ModelSource says where it comes
+	// from — a workspace configuration or a per-run choice.
+	Model       string            `json:"model"`
+	ModelSource string            `json:"model_source"`
+	Options     map[string]string `json:"options,omitempty"`
+	// Models are the alternatives, exactly as the provider declared them.
+	Models []execution.ModelOption `json:"models,omitempty"`
+	// Available is true only when the catalog is declared, obtainable and not
+	// empty; otherwise UnavailableReason says which of the three it is.
+	Available         bool   `json:"available"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
+}
+
+// handleGetExecutionModelChoice reports the model the workspace default
+// provider would use and the catalog a single run may choose from.
+//
+// It never fails on state: a missing default provider, an unregistered
+// provider, an unusable runtime and a missing catalog are all facts to report,
+// so each of them answers 200 with available:false and a reason, and none of
+// them is an HTTP error.
+func (s *Server) handleGetExecutionModelChoice(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
+	// Read from disk, not from the config the server booted with: the Execution
+	// panel can change the default while the viewer runs.
+	current, _, _, _, err := readConfigState(ws.cfg.ProjectRoot)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	view := executionModelChoiceView{ModelSource: execution.ModelChoiceSourceWorkspace}
+	selection := current.Execution.DefaultProvider
+	if selection == nil || strings.TrimSpace(selection.ID) == "" {
+		view.UnavailableReason = "execution.default_provider is not configured"
+		writeJSON(w, http.StatusOK, view)
+		return
+	}
+	view.ProviderID = strings.TrimSpace(selection.ID)
+	if s.registry == nil {
+		view.UnavailableReason = "no execution provider is registered in this viewer"
+		writeJSON(w, http.StatusOK, view)
+		return
+	}
+	provider, err := s.registry.Resolve(view.ProviderID)
+	if err != nil {
+		view.UnavailableReason = err.Error()
+		writeJSON(w, http.StatusOK, view)
+		return
+	}
+	// A runtime that cannot answer the availability probe is already the
+	// answer; asking it for a catalog would only spawn a second process, the
+	// same economy handleListExecutionProviders already applies.
+	if err := execution.CheckAvailability(r.Context(), provider, selection.Config); err != nil {
+		view.UnavailableReason = err.Error()
+		writeJSON(w, http.StatusOK, view)
+		return
+	}
+
+	resolution := execution.ResolveModelChoice(r.Context(), provider, selection.Config)
+	view.Model = resolution.Choice.Model
+	view.ModelSource = resolution.Choice.Source
+	view.Options = resolution.Choice.Options
+	switch {
+	case !resolution.Declared:
+		view.UnavailableReason = "provider " + provider.ID() + " declares no model catalog"
+	case resolution.Reason != "":
+		view.ModelField = execution.ModelFieldName
+		view.UnavailableReason = resolution.Reason
+	case len(resolution.Models) == 0:
+		view.ModelField = execution.ModelFieldName
+		view.UnavailableReason = emptyModelCatalogReason
+	default:
+		view.ModelField = execution.ModelFieldName
+		view.Models = resolution.Models
+		view.Available = true
 	}
 	writeJSON(w, http.StatusOK, view)
 }
@@ -179,6 +278,72 @@ func (s *Server) handleSaveDefaultExecutionProvider(w http.ResponseWriter, r *ht
 		ID:     selection.ID,
 		Config: execution.CloneConfig(selection.Config),
 	})
+}
+
+// resolveRunModelChoice merges the per-run model choice carried by a start
+// request onto the configuration saved for the workspace default provider, and
+// returns the configuration the run must use together with the choice it
+// represents.
+//
+// It is shared by the two start routes on purpose: the spec-scoped and the
+// workspace-scoped start must accept the very same two fields, refuse the very
+// same mistakes and leave the saved configuration untouched in exactly the same
+// way, and a second copy of this logic is the only way that could stop being
+// true. Nothing here writes .archetipo/config.yaml: persisted is read, cloned
+// and merged, never saved.
+//
+// The returned choice is non-nil whenever the provider declares a catalog —
+// including the no-override case, where it is the workspace choice, so the
+// record of a run started without choosing still says which model it used. It
+// is nil only when the provider declares no catalog and no override was asked
+// for: there is nothing to report and nothing to refuse.
+func resolveRunModelChoice(ctx context.Context, provider execution.Provider, persisted map[string]any, model string, options map[string]string) (map[string]any, *execution.ModelChoice, error) {
+	if strings.TrimSpace(model) == "" && len(options) == 0 {
+		// No override: the configuration travels verbatim, so a start without
+		// the two fields is byte-for-byte the start of before this spec.
+		if provider == nil {
+			return execution.CloneConfig(persisted), nil, nil
+		}
+		resolution := execution.ResolveModelChoice(ctx, provider, persisted)
+		if !resolution.Declared {
+			return execution.CloneConfig(persisted), nil, nil
+		}
+		choice := resolution.Choice
+		return execution.CloneConfig(persisted), &choice, nil
+	}
+	if provider == nil {
+		return nil, nil, &execution.ModelChoiceUnavailableError{
+			Reason: "no execution provider is registered in this viewer",
+		}
+	}
+	effective, choice, err := execution.ApplyModelChoice(ctx, provider, persisted, model, options)
+	if err != nil {
+		return nil, nil, err
+	}
+	return effective, &choice, nil
+}
+
+// writeRunModelChoiceError keeps apart the two ways a per-run choice can fail,
+// because they are two different mistakes: a model or an option value the
+// catalog does not admit is invalid input (400, naming the offending field),
+// while a catalog that cannot be consulted at all is a state conflict (409) the
+// user gets past by starting without a choice.
+func writeRunModelChoiceError(w http.ResponseWriter, err error) {
+	var unavailable *execution.ModelChoiceUnavailableError
+	if errors.As(err, &unavailable) {
+		writeError(w, iox.NewConflict(
+			unavailable.Reason,
+			"start without a model choice to use the configured model",
+			err,
+		))
+		return
+	}
+	var configErr *execution.ConfigurationError
+	if errors.As(err, &configErr) {
+		writeProviderConfigError(w, err)
+		return
+	}
+	writeError(w, iox.NewInternal("resolving the model choice of this run", err))
 }
 
 // writeProviderConfigError renders a rejected provider configuration with the

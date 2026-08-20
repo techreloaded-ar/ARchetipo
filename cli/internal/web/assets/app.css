@@ -2840,6 +2840,16 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	color: var(--priority-high);
 }
 
+/* The model a single run would use, drawn above the actions it applies to.
+   Empty until the choice has been read, and empty forever where it cannot be. */
+.story-model-choice {
+	margin: 0 0 14px;
+}
+
+.story-model-choice:empty {
+	margin: 0;
+}
+
 /* Actions the process Template admits for a spec in its current status.
    Informational: running them is not part of this surface. */
 .story-actions {
