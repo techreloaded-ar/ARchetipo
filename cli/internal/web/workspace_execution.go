@@ -25,6 +25,15 @@ const workspaceExecutionKey = ""
 // and the browser can render both with the same chip.
 type workspaceActionView struct {
 	template.WorkspaceAction
+	// Offered is the precondition the *state of the workspace* puts on the
+	// action: whether this workspace, as it is now, is a workspace the action
+	// makes sense on at all. Runnable is Offered plus a usable provider and no
+	// execution in flight. The client draws only what is Offered, so an action
+	// the workspace has outgrown — a first inception over an existing PRD, a
+	// first generation over an existing backlog — disappears instead of showing
+	// up disabled, while an offered action that merely lacks a provider stays
+	// visible with its reason.
+	Offered  bool `json:"offered"`
 	Runnable bool `json:"runnable"`
 	// UnavailableReason is omitted when the action is runnable, so a client can
 	// never render a reason next to an action that has none.
@@ -36,9 +45,13 @@ type workspaceActionView struct {
 // whether a first inception is offered at all (AC-1/AC-5), and the browser must
 // not have to derive it from a separate call to the PRD route.
 type workspaceActionsView struct {
-	Template templateView          `json:"template"`
-	HasPRD   bool                  `json:"has_prd"`
-	Actions  []workspaceActionView `json:"actions"`
+	Template templateView `json:"template"`
+	HasPRD   bool         `json:"has_prd"`
+	// HasBacklog is here for the same reason HasPRD is: it is the single fact
+	// that decides whether a *first* backlog generation is offered at all, and
+	// the browser must not have to derive it from a second call to the board.
+	HasBacklog bool                  `json:"has_backlog"`
+	Actions    []workspaceActionView `json:"actions"`
 	// Execution is the most recent workspace execution, or null when there is
 	// none. It travels with the actions for the same reason it travels with a
 	// spec detail: a reloaded browser finds the run it started without having
@@ -71,6 +84,7 @@ func (s *Server) handleGetWorkspaceActions(w http.ResponseWriter, r *http.Reques
 		reason := availability.reasonFor(action.ID)
 		actions = append(actions, workspaceActionView{
 			WorkspaceAction:   action,
+			Offered:           availability.offers(action.ID) == "",
 			Runnable:          reason == "",
 			UnavailableReason: reason,
 		})
@@ -81,10 +95,11 @@ func (s *Server) handleGetWorkspaceActions(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, workspaceActionsView{
-		Template:  templateView{ID: tpl.ID, Version: tpl.Version},
-		HasPRD:    availability.hasPRD,
-		Actions:   actions,
-		Execution: latest,
+		Template:   templateView{ID: tpl.ID, Version: tpl.Version},
+		HasPRD:     availability.hasPRD,
+		HasBacklog: availability.hasBacklog,
+		Actions:    actions,
+		Execution:  latest,
 	})
 }
 
@@ -134,13 +149,18 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 	// refusal here, so pressing an action the payload declared unavailable never
 	// creates a record only to close it a moment later with this very sentence.
 	if reason := availability.reasonFor(string(action)); reason != "" {
-		writeError(w, iox.NewConflict(reason, workspaceRemedy(availability), nil))
+		writeError(w, iox.NewConflict(reason, workspaceRemedy(availability, string(action)), nil))
 		return
 	}
 	// existedBefore is captured before the run starts, and only here: it is what
 	// separates a document this run wrote from one the workspace already had, so
 	// the rollback of a failed inception can never touch a pre-existing PRD.
 	existedBefore := availability.hasPRD
+	// backlogExistedBefore is captured here for exactly the same reason: read
+	// after the run it would already describe what the run itself wrote, and a
+	// rollback deciding on it could remove a backlog that belongs to the
+	// workspace rather than to this execution.
+	backlogExistedBefore := availability.hasBacklog
 	providerID := availability.providerID
 	providerConfig := execution.CloneConfig(availability.providerConfig)
 
@@ -157,7 +177,15 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 	// document.
 	confirm := func(confirmCtx context.Context, outcome *execution.Execution) {
 		_ = execution.VerifyActionEffect(confirmCtx, s.conn, outcome.Action, workspaceExecutionKey, outcome)
-		execution.DiscardPartialPRD(confirmCtx, s.prdDiscarder(), existedBefore, outcome)
+		// Each action takes back only its own artifact, with its own flag: the
+		// rollback follows what the run was about, never what the workspace
+		// happens to hold.
+		switch outcome.Action {
+		case execution.ActionInception:
+			execution.DiscardPartialPRD(confirmCtx, s.prdDiscarder(), existedBefore, outcome)
+		case execution.ActionBacklog:
+			execution.DiscardPartialBacklog(confirmCtx, s.backlogDiscarder(), backlogExistedBefore, outcome)
+		}
 	}
 	started, continuation, err := s.service.StartWorkspace(ctx, action, providerID, providerConfig, confirm)
 	if err != nil {
@@ -230,6 +258,13 @@ type workspaceAvailability struct {
 	// makes the action unavailable with a reason rather than failing the whole
 	// request, because not knowing is not the same as a broken viewer.
 	prdUnreadable string
+	hasBacklog    bool
+	// backlogUnreadable is why the workspace cannot say whether it has a
+	// backlog. "There is no backlog here" is *not* one of those reasons: the
+	// connector reports it as a missing precondition, which is an answer — the
+	// very answer the backlog action exists for — and reading it as a failure
+	// would hide the action from exactly the workspace it targets.
+	backlogUnreadable string
 }
 
 func (s *Server) workspaceAvailability(ctx context.Context) workspaceAvailability {
@@ -252,6 +287,21 @@ func (s *Server) workspaceAvailability(ctx context.Context) workspaceAvailabilit
 	} else {
 		availability.hasPRD = strings.TrimSpace(body) != ""
 	}
+	// ReadExistingBacklog belongs to the base connector interface, so there is
+	// no capability to assert here. A missing backlog comes back as a missing
+	// precondition and is read as "no backlog yet", exactly as backlogEffect
+	// reads it in execution/effect.go; only anything else is a workspace that
+	// cannot answer.
+	if summary, err := s.conn.ReadExistingBacklog(ctx); err != nil {
+		var coded *iox.CodedError
+		if errors.As(err, &coded) && coded.Code == iox.CodePreconditionMissing {
+			availability.hasBacklog = false
+		} else {
+			availability.backlogUnreadable = "the backlog could not be read: " + err.Error()
+		}
+	} else {
+		availability.hasBacklog = len(summary.Codes) > 0
+	}
 	availability.providerAvailability = s.providerAvailabilityFor(ctx)
 	return availability
 }
@@ -259,9 +309,10 @@ func (s *Server) workspaceAvailability(ctx context.Context) workspaceAvailabilit
 // reasonFor returns the reason the workspace action cannot be started, or ""
 // when it can. The order is the order in which the facts matter: an execution
 // already running names itself before anything else, because it is the one
-// refusal a second press must be able to read; only then does a PRD that is
-// already there rule out a *first* inception (AC-5); the provider half is the
-// same the spec route renders.
+// refusal a second press must be able to read; only then does the state of the
+// workspace speak, through offers, ruling out a *first* inception over an
+// existing PRD (AC-5) or a *first* backlog over an existing one; the provider
+// half is the same the spec route renders.
 func (a workspaceAvailability) reasonFor(actionID string) string {
 	capability, err := execution.RequiredCapability(execution.ActionID(actionID))
 	if err != nil {
@@ -273,28 +324,76 @@ func (a workspaceAvailability) reasonFor(actionID string) string {
 		}
 		return "an execution is already running for this workspace"
 	}
-	if a.prdUnreadable != "" {
-		return a.prdUnreadable
-	}
-	if a.hasPRD {
-		return "this workspace already has a PRD: a first inception would overwrite it"
+	if reason := a.offers(actionID); reason != "" {
+		return reason
 	}
 	return a.providerAvailability.reasonFor(capability)
 }
 
-// workspaceRemedy picks the remedy that matches the refusal, so a 409 tells the
-// caller what to do rather than only what stopped it.
-func workspaceRemedy(a workspaceAvailability) string {
-	switch {
-	case a.workspaceHasRunning:
-		return "wait for it to finish before starting another one"
-	case a.prdUnreadable != "":
-		return "use a connector that exposes the PRD"
-	case a.hasPRD:
-		return "edit the existing PRD instead, or remove it deliberately before running a first inception"
+// offers isolates the half of the decision that depends on the *state of the
+// workspace* alone, with no provider in it: it returns why this workspace does
+// not admit the action, or "" when it does. It is what the payload publishes as
+// offered, and it is deliberately separate from reasonFor so that "this
+// workspace is past this action" and "this workspace could run it but the
+// provider cannot" stay two different answers for the client.
+func (a workspaceAvailability) offers(actionID string) string {
+	switch execution.ActionID(actionID) {
+	case execution.ActionInception:
+		if a.prdUnreadable != "" {
+			return a.prdUnreadable
+		}
+		if a.hasPRD {
+			return "this workspace already has a PRD: a first inception would overwrite it"
+		}
+		return ""
+	case execution.ActionBacklog:
+		// The PRD comes first because it is the input of the generation: a
+		// workspace that has none cannot produce a backlog at all, and saying
+		// so is more useful than any answer about the backlog itself.
+		if a.prdUnreadable != "" {
+			return a.prdUnreadable
+		}
+		if !a.hasPRD {
+			return "this workspace has no PRD yet: generate it with a first inception before the backlog"
+		}
+		if a.backlogUnreadable != "" {
+			return a.backlogUnreadable
+		}
+		if a.hasBacklog {
+			return "this workspace already has a backlog: the initial generation would replace it"
+		}
+		return ""
 	default:
-		return "fix the default provider in the Execution panel of the configuration"
+		return "this action cannot be started from the viewer yet"
 	}
+}
+
+// workspaceRemedy picks the remedy that matches the refusal, so a 409 tells the
+// caller what to do rather than only what stopped it. It takes the action
+// because the same fact means two different things depending on it: an existing
+// PRD is what stops an inception, while a *missing* PRD is what stops a backlog
+// generation, and each deserves its own next step.
+func workspaceRemedy(a workspaceAvailability, actionID string) string {
+	if a.workspaceHasRunning {
+		return "wait for it to finish before starting another one"
+	}
+	if a.prdUnreadable != "" {
+		return "use a connector that exposes the PRD"
+	}
+	if execution.ActionID(actionID) == execution.ActionBacklog {
+		switch {
+		case !a.hasPRD:
+			return "run a first inception to obtain the PRD before generating the backlog"
+		case a.backlogUnreadable != "":
+			return "use a connector that exposes the backlog"
+		case a.hasBacklog:
+			return "add specs with archetipo spec add instead, or remove the existing backlog deliberately before generating it again"
+		}
+	}
+	if a.hasPRD {
+		return "edit the existing PRD instead, or remove it deliberately before running a first inception"
+	}
+	return "fix the default provider in the Execution panel of the configuration"
 }
 
 // prdDiscarder returns the connector as the workspace's own undo, or nil when
@@ -302,6 +401,18 @@ func workspaceRemedy(a workspaceAvailability) string {
 // not a failure, and DiscardPartialPRD treats it as a no-op.
 func (s *Server) prdDiscarder() execution.PRDDiscarder {
 	discarder, ok := s.conn.(connector.PRDDiscarder)
+	if !ok {
+		return nil
+	}
+	return discarder
+}
+
+// backlogDiscarder is prdDiscarder's twin: it returns the connector as the
+// workspace's own undo for the backlog, or nil when it cannot take one back.
+// nil is a valid answer — skipping the rollback is not a failure, and
+// DiscardPartialBacklog treats it as a no-op.
+func (s *Server) backlogDiscarder() execution.BacklogDiscarder {
+	discarder, ok := s.conn.(connector.BacklogDiscarder)
 	if !ok {
 		return nil
 	}

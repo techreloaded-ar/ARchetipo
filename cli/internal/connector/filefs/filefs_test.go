@@ -2,6 +2,7 @@ package filefs
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -650,5 +651,98 @@ func TestDiscardPRDRemovesTheDocumentAndIsIdempotent(t *testing.T) {
 	}
 	if removed {
 		t.Fatal("DiscardPRD reported a removal with nothing to remove")
+	}
+}
+
+// AC-4 on the filesystem: the rollback of a backlog generation that ended badly
+// removes the spec files and the index, so a later read answers with an empty
+// board, and calling it again on a workspace without a backlog is a no-op.
+func TestDiscardBacklogOnAWorkspaceWithoutOneIsANoOp(t *testing.T) {
+	c := newTestConnector(t)
+	ctx := context.Background()
+
+	removed, err := c.DiscardBacklog(ctx)
+	if err != nil {
+		t.Fatalf("discarding a workspace without a backlog failed: %v", err)
+	}
+	if removed {
+		t.Fatal("DiscardBacklog reported a removal with nothing to remove")
+	}
+	if _, err := os.Stat(c.backlogPath()); !os.IsNotExist(err) {
+		t.Fatalf("DiscardBacklog created the backlog index as a side effect: %v", err)
+	}
+	if _, err := os.Stat(c.specsDir()); !os.IsNotExist(err) {
+		t.Fatalf("DiscardBacklog created the specs directory as a side effect: %v", err)
+	}
+}
+
+func TestDiscardBacklogRemovesSpecFilesAndIndex(t *testing.T) {
+	c := newTestConnector(t)
+	ctx := context.Background()
+
+	specs := []domain.Spec{
+		{
+			Code:     "US-001",
+			Title:    "Registrazione utente",
+			Epic:     domain.Epic{Code: "EP-001", Title: "Onboarding"},
+			Priority: domain.PriorityHigh,
+			Points:   3,
+			Status:   domain.StatusTodo,
+		},
+		{
+			Code:     "US-002",
+			Title:    "Ricerca catalogo",
+			Epic:     domain.Epic{Code: "EP-002", Title: "Catalogo"},
+			Priority: domain.PriorityMedium,
+			Points:   5,
+			Status:   domain.StatusTodo,
+		},
+	}
+	if _, err := c.SaveInitialBacklog(ctx, specs); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range specs {
+		if _, err := os.Stat(c.specPath(s.Code)); err != nil {
+			t.Fatalf("SaveInitialBacklog did not write %s: %v", c.specPath(s.Code), err)
+		}
+	}
+	if _, err := os.Stat(c.backlogPath()); err != nil {
+		t.Fatalf("SaveInitialBacklog did not write the backlog index: %v", err)
+	}
+
+	removed, err := c.DiscardBacklog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("DiscardBacklog did not report the removal of an existing backlog")
+	}
+
+	for _, s := range specs {
+		if _, err := os.Stat(c.specPath(s.Code)); !os.IsNotExist(err) {
+			t.Fatalf("the spec file %s is still there: %v", c.specPath(s.Code), err)
+		}
+	}
+	if _, err := os.Stat(c.backlogPath()); !os.IsNotExist(err) {
+		t.Fatalf("the backlog index is still there: %v", err)
+	}
+
+	// A reread answers exactly as it did before the backlog existed: the
+	// workspace is back to the state the run started from.
+	summary, err := c.ReadExistingBacklog(ctx)
+	if err == nil {
+		if len(summary.Codes) != 0 || len(summary.Titles) != 0 || len(summary.Epics) != 0 {
+			t.Fatalf("the board is not empty after the rollback: %+v", summary)
+		}
+	} else if !errors.Is(err, errBacklogMissing) {
+		t.Fatalf("reading the backlog after the rollback failed: %v", err)
+	}
+
+	removed, err = c.DiscardBacklog(ctx)
+	if err != nil {
+		t.Fatalf("discarding an already discarded backlog failed: %v", err)
+	}
+	if removed {
+		t.Fatal("DiscardBacklog reported a second removal with nothing to remove")
 	}
 }

@@ -18,9 +18,11 @@ type ExecutionStatus string
 const (
 	ActionPlan      ActionID = "plan"
 	ActionInception ActionID = "inception"
+	ActionBacklog   ActionID = "backlog"
 
 	CapabilitySpecPlan           Capability = "spec.plan"
 	CapabilityWorkspaceInception Capability = "workspace.inception"
+	CapabilityWorkspaceBacklog   Capability = "workspace.backlog"
 	// CapabilityRunDialog says that a provider exposes a run one can follow and
 	// command while it works: read its history, send it a message, cancel it. It
 	// is not a statement about the work the provider can do — a provider can
@@ -102,6 +104,8 @@ func RequiredCapability(action ActionID) (Capability, error) {
 		return CapabilitySpecPlan, nil
 	case ActionInception:
 		return CapabilityWorkspaceInception, nil
+	case ActionBacklog:
+		return CapabilityWorkspaceBacklog, nil
 	default:
 		return "", &ActionError{Action: action}
 	}
@@ -124,7 +128,7 @@ func ActionScope(action ActionID) (Scope, error) {
 	switch action {
 	case ActionPlan:
 		return ScopeSpec, nil
-	case ActionInception:
+	case ActionInception, ActionBacklog:
 		return ScopeWorkspace, nil
 	default:
 		return "", &ActionError{Action: action}

@@ -96,11 +96,28 @@ func newRunServer(t *testing.T, provider execution.Provider, withDefault bool) (
 // needs to observe are intercepted.
 func newRunServerWithConnector(t *testing.T, provider execution.Provider, withDefault bool, wrap func(connector.Connector) connector.Connector) (*Server, config.Config, connector.Connector) {
 	t.Helper()
+	return newRunServerWith(t, provider, withDefault, wrap, true)
+}
+
+// newEmptyRunServer is newRunServer over a workspace that has never had a
+// backlog: no index, no spec file. It is a distinct starting state, not a
+// variation of the seeded one — it is exactly the workspace a first backlog
+// generation targets, and the one where the connector answers "there is no
+// backlog here" as a missing precondition.
+func newEmptyRunServer(t *testing.T, provider execution.Provider, withDefault bool) (*Server, config.Config, connector.Connector) {
+	t.Helper()
+	return newRunServerWith(t, provider, withDefault, nil, false)
+}
+
+func newRunServerWith(t *testing.T, provider execution.Provider, withDefault bool, wrap func(connector.Connector) connector.Connector, seed bool) (*Server, config.Config, connector.Connector) {
+	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.ProjectRoot = dir
 	conn := filefs.New(cfg)
-	seedRunSpecs(t, conn)
+	if seed {
+		seedRunSpecs(t, conn)
+	}
 	served := connector.Connector(conn)
 	if wrap != nil {
 		served = wrap(conn)

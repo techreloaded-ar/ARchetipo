@@ -104,3 +104,37 @@ func buildInceptionPrompt(_ execution.Request) string {
 		"<path> is the configured PRD path you actually wrote, as reported by `archetipo config show`. Emit the receipt only after the PRD is persisted, and never before: it is what ends the conversation.",
 	}, "\n")
 }
+
+// buildBacklogPrompt renders the single instruction that opens a backlog
+// generation conversation.
+//
+// It is pure and deterministic for the same reasons buildPrompt and
+// buildInceptionPrompt are, and it is a conversation for the same reason the
+// inception is: generating a backlog from a PRD raises questions only the
+// person who owns the product can answer, so a turn that ends on a question is
+// not a failure. It asks for one question per message because the person
+// answering reads them in a chat, and it asks for them only when they are
+// really needed, because a backlog the skill can derive from the PRD on its own
+// is not worth interrupting anyone for.
+//
+// Nothing here dictates where the backlog is persisted: that is a fact of the
+// workspace configuration, which this package deliberately cannot read, and the
+// skill already knows to go through `archetipo spec add`. The counts asked for
+// in the receipt are informative — confirming that the epics and the specs
+// really exist happens one layer up, against the connector.
+func buildBacklogPrompt(_ execution.Request) string {
+	return strings.Join([]string{
+		"Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed.",
+		"Generate the initial product backlog for this workspace from its PRD by invoking the ARchetipo spec skill:",
+		"",
+		"/archetipo-spec",
+		"",
+		"You are talking to a person through a chat, one message at a time: ask a single question per message and wait for the answer before asking the next one. Never bundle several questions into one message, and ask only when the answer is really necessary to write the backlog.",
+		"Persist every epic and every spec with `archetipo spec add`, exactly as the skill prescribes. Do not paste the backlog into your final message.",
+		"Close your run with a single JSON receipt line and nothing after it:",
+		"",
+		`{"artifact":"backlog","status":"` + execution.WrittenStatus + `","epics":<N>,"specs":<M>}`,
+		"",
+		"<N> and <M> are the number of epics and of specs you actually persisted. Emit the receipt only after the backlog is persisted, and never before: it is what ends the conversation.",
+	}, "\n")
+}

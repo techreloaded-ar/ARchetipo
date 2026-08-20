@@ -279,6 +279,14 @@ func TestInceptionKeepsTheConversationOpenUntilTheReceipt(t *testing.T) {
 
 // quoted renders a Go string as a JSON string, so a frame written by hand in a
 // test cannot be broken by an apostrophe or an accent in the agent's words.
+// acceptsPRD is the acceptor executeInception hands to converse: the loop is
+// shared by every conversational action, so the tests that exercise it directly
+// have to say which closing message ends the conversation they are describing.
+func acceptsPRD(message string) bool {
+	_, err := execution.AcceptPRDReceipt(message)
+	return err == nil
+}
+
 func quoted(text string) string {
 	payload, err := json.Marshal(text)
 	if err != nil {
@@ -580,12 +588,13 @@ func TestConverseKeepsAReceiptPublishedAsTheDeadlineFires(t *testing.T) {
 		runCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		receipt, turns, err := converse(runCtx, client)
+		final, turns, err := converse(runCtx, client, acceptsPRD)
 		if err != nil {
 			t.Fatalf("attempt %d: the receipt was lost to the deadline: %v", attempt, err)
 		}
-		if receipt.Path != prdPath || turns != 1 {
-			t.Fatalf("attempt %d: receipt = %#v after %d turns", attempt, receipt, turns)
+		receipt, err := execution.AcceptPRDReceipt(final)
+		if err != nil || receipt.Path != prdPath || turns != 1 {
+			t.Fatalf("attempt %d: final = %q (err=%v) after %d turns", attempt, final, err, turns)
 		}
 	}
 }
@@ -599,7 +608,7 @@ func TestConverseStopsOnTheDeadlineWhenNoTurnWasPublished(t *testing.T) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, turns, err := converse(runCtx, client)
+	_, turns, err := converse(runCtx, client, acceptsPRD)
 	if !errors.Is(err, errRunTerminated) {
 		t.Fatalf("converse returned %v; want the run to be reported as stopped", err)
 	}
@@ -619,7 +628,7 @@ func TestConverseCountsATurnWithoutAReceiptFoundOnTheDeadline(t *testing.T) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, turns, err := converse(runCtx, client)
+	_, turns, err := converse(runCtx, client, acceptsPRD)
 	if err == nil {
 		t.Fatal("a conversation stopped without a receipt reported a success")
 	}

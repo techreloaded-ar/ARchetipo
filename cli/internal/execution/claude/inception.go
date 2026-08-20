@@ -48,7 +48,10 @@ func (p *Provider) executeInception(ctx context.Context, req execution.Request, 
 		return execution.Result{}, err
 	}
 
-	receipt, turns, convErr := converse(runCtx, live.client)
+	final, turns, convErr := converse(runCtx, live.client, func(message string) bool {
+		_, err := execution.AcceptPRDReceipt(message)
+		return err == nil
+	})
 
 	exitCode, stderr, waitErr := p.shutdown(live.process)
 	elapsed := p.now().Sub(live.startedAt)
@@ -60,18 +63,38 @@ func (p *Provider) executeInception(ctx context.Context, req execution.Request, 
 		live.session.Close(execution.RunCrashed, waitErr.Error())
 		return execution.Result{}, fmt.Errorf("the claude command %q could not be run to completion after %s: %w", cfg.Command, elapsed.Round(time.Millisecond), waitErr)
 	}
+	// The final message is re-parsed here rather than carried out of converse
+	// as a typed value: converse is shared by every conversational action and
+	// only knows how to recognize an acceptable closing message, while the
+	// receipt this action needs is a PRD receipt and nothing else. The parse
+	// cannot fail — converse returns only a message the acceptor above already
+	// approved — but it is checked rather than assumed, because an ignored
+	// error here would be a silent zero receipt if the two ever drifted.
+	receipt, err := execution.AcceptPRDReceipt(final)
+	if err != nil {
+		live.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a PRD: %v", err))
+		return execution.Result{}, fmt.Errorf("the claude command %q ended without having produced a PRD%s: %w", cfg.Command, diagnosticSuffix(stderr), err)
+	}
 	live.session.Close(execution.RunClosed, "")
 	return p.resultForInception(cfg, exitCode, elapsed, turns, receipt)
 }
 
 // converse follows the conversation turn by turn until it can be decided, and
-// reports the receipt it ended on together with how many turns it took.
+// reports the message it ended on together with how many turns it took.
+//
+// It is parameterized on the acceptor rather than on the artifact, because what
+// separates one conversational action from another is only which closing
+// message ends it: everything else — a turn without a receipt being a question,
+// the three ways the conversation can die, the draining rule — is the same
+// fact for all of them, and a second copy of this loop would be free to say it
+// differently. The typed receipt is parsed back by the caller, which is the one
+// layer that knows which artifact it asked for.
 //
 // The three channels are the three ways the conversation can end, and they are
 // read in one select because they are genuinely concurrent: the process can
 // die in the middle of a turn and the timeout can fire while the operator is
 // typing.
-func converse(runCtx context.Context, client *streamSession) (execution.PRDReceipt, int, error) {
+func converse(runCtx context.Context, client *streamSession, accept func(string) bool) (string, int, error) {
 	turns := 0
 	for {
 		select {
@@ -80,11 +103,11 @@ func converse(runCtx context.Context, client *streamSession) (execution.PRDRecei
 			// The receipt is looked for before the outcome of the turn is
 			// judged, because an agent that emitted it has done the work
 			// whatever the process did next.
-			if receipt, err := execution.AcceptPRDReceipt(outcome.Final); err == nil {
-				return receipt, turns, nil
+			if accept(outcome.Final) {
+				return outcome.Final, turns, nil
 			}
 			if !outcome.Completed {
-				return execution.PRDReceipt{}, turns, errTurnFailed
+				return "", turns, errTurnFailed
 			}
 			// A completed turn with no receipt is the agent's question. The
 			// conversation stays open: the answer will arrive through the run's
@@ -94,12 +117,12 @@ func converse(runCtx context.Context, client *streamSession) (execution.PRDRecei
 			// before it left is still worth reading: the buffered outcomes are
 			// drained first, so a run that ended on its receipt is a success no
 			// matter how quickly the process exited afterwards.
-			receipt, drained, found := drainTurns(client)
+			final, drained, found := drainTurns(client, accept)
 			turns += drained
 			if found {
-				return receipt, turns, nil
+				return final, turns, nil
 			}
-			return execution.PRDReceipt{}, turns, errProcessGone
+			return "", turns, errProcessGone
 		case <-runCtx.Done():
 			// The deadline is drained exactly like the death of the process, and
 			// for the same reason. A select picks at random among the cases that
@@ -108,33 +131,34 @@ func converse(runCtx context.Context, client *streamSession) (execution.PRDRecei
 			// FAILED, with the partial-PRD cleanup then deleting a document that
 			// was complete. A receipt that was published was earned, whatever
 			// happened to the clock immediately afterwards.
-			receipt, drained, found := drainTurns(client)
+			final, drained, found := drainTurns(client, accept)
 			turns += drained
 			if found {
-				return receipt, turns, nil
+				return final, turns, nil
 			}
-			return execution.PRDReceipt{}, turns, errRunTerminated
+			return "", turns, errRunTerminated
 		}
 	}
 }
 
 // drainTurns reads every outcome already published and reports the first
-// receipt among them, together with how many turns it counted.
+// acceptable closing message among them, together with how many turns it
+// counted.
 //
 // It never waits: what is drained is what the process has already said, and a
 // conversation that is ending — because the process left or because the
 // deadline fired — has nothing more to say.
-func drainTurns(client *streamSession) (execution.PRDReceipt, int, bool) {
+func drainTurns(client *streamSession, accept func(string) bool) (string, int, bool) {
 	turns := 0
 	for {
 		select {
 		case outcome := <-client.Turns():
 			turns++
-			if receipt, err := execution.AcceptPRDReceipt(outcome.Final); err == nil {
-				return receipt, turns, true
+			if accept(outcome.Final) {
+				return outcome.Final, turns, true
 			}
 		default:
-			return execution.PRDReceipt{}, turns, false
+			return "", turns, false
 		}
 	}
 }

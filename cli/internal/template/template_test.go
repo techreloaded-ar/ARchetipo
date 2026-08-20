@@ -56,6 +56,11 @@ var processWorkspaceActions = []WorkspaceAction{
 		Label: "Avvia inception",
 		Skill: "archetipo-inception",
 	},
+	{
+		ID:    "backlog",
+		Label: "Genera backlog",
+		Skill: "archetipo-spec",
+	},
 }
 
 // actionIDs collapses a result to the identifiers a caller keys on, so a table
@@ -243,6 +248,22 @@ func TestDefaultTemplateDeclaresItsWorkspaceActions(t *testing.T) {
 		}
 		if action.Skill == "" {
 			t.Fatalf("workspace action %q has an empty skill", action.ID)
+		}
+	}
+}
+
+// A workspace action names the skill the provider will invoke, so that skill
+// must also be one the Template installs: a declared action whose skill never
+// reaches the workspace is an action that cannot run.
+func TestDefaultWorkspaceActionSkillsAreInstalled(t *testing.T) {
+	template := Default()
+	installed := make(map[string]bool, len(template.Skills))
+	for _, skill := range template.Skills {
+		installed[skill] = true
+	}
+	for _, action := range template.WorkspaceActions {
+		if !installed[action.Skill] {
+			t.Fatalf("workspace action %q needs skill %q, which the template does not install", action.ID, action.Skill)
 		}
 	}
 }

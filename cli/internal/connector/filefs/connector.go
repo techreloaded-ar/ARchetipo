@@ -41,6 +41,7 @@ func Register() {
 var (
 	_ connector.PRDReader        = (*Connector)(nil)
 	_ connector.PRDDiscarder     = (*Connector)(nil)
+	_ connector.BacklogDiscarder = (*Connector)(nil)
 	_ connector.PlanBodyReader   = (*Connector)(nil)
 	_ connector.MockupLister     = (*Connector)(nil)
 	_ connector.BoardOrderReader = (*Connector)(nil)
@@ -220,6 +221,35 @@ func (c *Connector) DiscardPRD(ctx context.Context) (bool, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
+		return false, iox.NewInternal(fmt.Sprintf("removing %s", path), err)
+	}
+	return true, nil
+}
+
+// DiscardBacklog removes the generated backlog — every spec file plus the
+// index — and reports whether there was one to remove. A workspace without a
+// backlog, or one whose index carries no spec, answers (false, nil): the
+// rollback of a run that never wrote a spec is a no-op, not a failure.
+func (c *Connector) DiscardBacklog(ctx context.Context) (bool, error) {
+	store, err := c.loadStore()
+	if err != nil {
+		var ce *iox.CodedError
+		if errors.As(err, &ce) && ce.Code == iox.CodePreconditionMissing {
+			return false, nil
+		}
+		return false, err
+	}
+	if len(store.Specs) == 0 {
+		return false, nil
+	}
+	for code := range store.Specs {
+		path := c.specPath(code)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, iox.NewInternal(fmt.Sprintf("removing %s", path), err)
+		}
+	}
+	path := c.backlogPath()
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, iox.NewInternal(fmt.Sprintf("removing %s", path), err)
 	}
 	return true, nil

@@ -54,6 +54,24 @@ type PRDDiscarder interface {
 	DiscardPRD(ctx context.Context) (bool, error)
 }
 
+// BacklogDiscarder removes the backlog from the workspace. It is the twin of
+// PRDDiscarder and exists for the same single guarantee: a first backlog
+// generation either lands whole or leaves no trace, so a run that fails after
+// the agent has already written part of it must be able to take it back.
+//
+// The boolean reports whether there was something to remove, so a caller can
+// tell an actual rollback from a no-op. A missing backlog is not an error: it
+// answers (false, nil).
+//
+// Discarding is keyed on the specs the backlog holds: a backlog with no spec at
+// all is left untouched and answers (false, nil), because there is nothing the
+// run can have written. When specs are there, the index goes with them, so any
+// hand-declared epic it carried is removed too — a state the supported flows
+// cannot reach, since specs are what a generation writes.
+type BacklogDiscarder interface {
+	DiscardBacklog(ctx context.Context) (bool, error)
+}
+
 // PlanBodyReader exposes the strategic plan body of a spec (the prose attached
 // to the plan, separate from its tasks).
 type PlanBodyReader interface {

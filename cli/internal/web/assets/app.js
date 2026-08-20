@@ -221,10 +221,12 @@
 	// The action/execution/run trio is one panel that can be mounted on more than
 	// one place: the spec detail, or the PRD modal for a workspace-scoped action.
 	// What it is following is a single context token — `spec:US-XXX` or
-	// `workspace:inception` — and every asynchronous continuation checks that
-	// token instead of the open spec code, so leaving one panel stops the timers
-	// of that panel and of no other.
-	const WORKSPACE_INCEPTION_CONTEXT = "workspace:inception";
+	// `workspace` — and every asynchronous continuation checks that token
+	// instead of the open spec code, so leaving one panel stops the timers of
+	// that panel and of no other. The workspace token names the workspace panel
+	// as a whole rather than one of its actions: only one workspace execution
+	// can be open at a time, so a single token is enough for all of them.
+	const WORKSPACE_CONTEXT = "workspace";
 	let panelContext = null; // context the panel is mounted on, or null
 	let panelActions = null; // container the action chips are drawn in
 	let panelExecution = null; // container the execution panel is drawn in
@@ -3365,7 +3367,7 @@
 			prdStatus.textContent = `Load failed: ${err.message || err}`;
 			prdStatus.className = "status-msg err";
 		}
-		await loadInception();
+		await loadWorkspaceActions();
 	}
 
 	async function reloadPrdBody() {
@@ -3378,68 +3380,78 @@
 	function closePRD() {
 		prdModal.classList.add("hidden");
 		showPrdView();
-		hideInception();
+		hideWorkspaceActions();
 	}
 
-	// ---- Workspace inception -------------------------------------------------
+	// ---- Workspace actions ---------------------------------------------------
 	//
 	// A workspace-scoped action is offered by the same panel the spec detail
-	// uses, mounted on the PRD modal instead. Whether it is offered at all is a
-	// server verdict — `has_prd` plus the action's own `runnable` — so nothing
-	// here decides when a first inception is admissible.
+	// uses, mounted on the PRD modal instead. Which actions exist at all is a
+	// server verdict — `offered` is the workspace-state precondition and
+	// `runnable` adds provider and concurrency — so nothing here decides when an
+	// action is admissible.
 
-	async function loadInception() {
+	async function loadWorkspaceActions() {
 		let view;
 		try {
 			view = await apiGet("/api/workspace/actions");
 		} catch (_) {
 			// The workspace actions are an addition to the PRD modal, not a
 			// precondition of it: a viewer that cannot answer simply offers none.
-			hideInception();
+			hideWorkspaceActions();
 			return;
 		}
 		if (prdModal.classList.contains("hidden")) return;
-		if (!view || view.has_prd) {
-			hideInception();
+		const offered = ((view && view.actions) || []).filter((a) => a.offered);
+		// Nothing to offer and nothing left running is the only case where the
+		// panel has no reason to exist: an execution to resume keeps it up even
+		// when the action that started it is no longer offered.
+		if (!offered.length && !(view && view.execution)) {
+			hideWorkspaceActions();
 			return;
 		}
 		prdInception.classList.remove("hidden");
 		mountExecutionPanels({
-			context: WORKSPACE_INCEPTION_CONTEXT,
+			context: WORKSPACE_CONTEXT,
 			startURL: "/api/workspace/execution",
 			actions: inceptionActions,
 			execution: inceptionExecution,
 			run: inceptionRun,
-			settle: settleInception,
+			settle: settleWorkspaceAction,
 		});
-		renderSpecActions(view.actions);
+		// Only the offered actions are drawn: an offered action that is not
+		// runnable stays a disabled chip carrying its `unavailable_reason`.
+		renderSpecActions(offered);
 		// The server hands back the workspace's last execution on every read, so
 		// reopening the modal finds the conversation it left behind and resumes
 		// following it without ever starting a second one.
-		resumeExecution(view.execution, WORKSPACE_INCEPTION_CONTEXT);
+		resumeExecution(view.execution, WORKSPACE_CONTEXT);
 	}
 
-	function hideInception() {
-		unmountExecutionPanels(WORKSPACE_INCEPTION_CONTEXT);
+	function hideWorkspaceActions() {
+		unmountExecutionPanels(WORKSPACE_CONTEXT);
 		prdInception.classList.add("hidden");
 		inceptionActions.innerHTML = "";
 		inceptionExecution.innerHTML = "";
 		inceptionRun.innerHTML = "";
 	}
 
-	// settleInception reads the outcome back from the server rather than
-	// asserting it: the PRD body is re-fetched, and whether the action is still
-	// offered is decided by the same route that offered it. A run that failed
-	// leaves the workspace without a PRD, so the panel comes back carrying the
+	// settleWorkspaceAction reads the outcome back from the server rather than
+	// asserting it: the PRD body is re-fetched, and which actions are still
+	// offered is decided by the same route that offered them. A run that failed
+	// leaves the workspace as it was, so the panel comes back carrying the
 	// reason instead of disappearing.
-	async function settleInception() {
+	async function settleWorkspaceAction(record) {
 		try {
 			await reloadPrdBody();
 		} catch (_) {
 			// The PRD is unreadable for now; the reload below still reports the
 			// state of the execution.
 		}
-		await loadInception();
+		// The board follows only on success, because that is the only outcome
+		// that can have created the specs it draws.
+		if (record && record.status === "SUCCEEDED") await loadBoard();
+		await loadWorkspaceActions();
 	}
 
 	function fillPrdView(body) {
@@ -3477,9 +3489,10 @@
 			prdStatus.textContent = "Saved";
 			prdStatus.className = "status-msg ok";
 			showToast("PRD updated", "ok");
-			// A PRD written by hand is a PRD: the first-inception action must stop
-			// being offered, and that verdict is re-read rather than assumed.
-			await loadInception();
+			// A PRD written by hand is a PRD: the inception must stop being
+			// offered and the backlog generation must start being offered, and
+			// that verdict is re-read rather than assumed.
+			await loadWorkspaceActions();
 		} catch (err) {
 			prdStatus.textContent = `Save failed: ${err.message || err}`;
 			prdStatus.className = "status-msg err";

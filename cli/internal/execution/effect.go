@@ -2,10 +2,12 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
 // SpecStateReader is the minimal view of the backlog that effect confirmation
@@ -32,6 +34,24 @@ type PRDStateReader interface {
 // exposing the PRDDiscarder capability satisfies it as is.
 type PRDDiscarder interface {
 	DiscardPRD(ctx context.Context) (bool, error)
+}
+
+// BacklogStateReader is the minimal view of the workspace that confirming a
+// backlog generation needs: re-read the backlog. It is declared here, as an
+// interface of the consumer and for the same reason as SpecStateReader, so this
+// package never imports connector. ReadExistingBacklog belongs to the base
+// connector interface, so every real connector satisfies this shape without any
+// adapter and without an optional capability.
+type BacklogStateReader interface {
+	ReadExistingBacklog(ctx context.Context) (domain.BacklogSummary, error)
+}
+
+// BacklogDiscarder is the workspace's own undo for the backlog, twin of
+// PRDDiscarder: it removes the generated specs and their index and reports
+// whether there was anything to remove. A connector exposing the
+// BacklogDiscarder capability satisfies it as is.
+type BacklogDiscarder interface {
+	DiscardBacklog(ctx context.Context) (bool, error)
 }
 
 // UnconfirmedEffectError reports an execution that declared success while the
@@ -111,6 +131,17 @@ func VerifyActionEffect(ctx context.Context, reader SpecStateReader, action Acti
 		} else {
 			reason = inceptionEffect(ctx, prd)
 		}
+	case ActionBacklog:
+		// Same narrowing as the inception above, for the same reason: the
+		// static type stays SpecStateReader so both callers keep passing one
+		// connector for every action, and what a backlog generation needs from
+		// it is asked for at the only point that knows the action.
+		backlog, ok := reader.(BacklogStateReader)
+		if !ok {
+			reason = fmt.Errorf("the connector cannot read the backlog back")
+		} else {
+			reason = backlogEffect(ctx, backlog)
+		}
 	default:
 		return nil
 	}
@@ -171,6 +202,35 @@ func inceptionEffect(ctx context.Context, reader PRDStateReader) error {
 	return nil
 }
 
+// backlogEffect reports why the connector does not back a claimed backlog
+// generation, or nil when it does. The whole condition is "a backlog with at
+// least one spec and at least one epic can be read back": the receipt is the
+// agent's word, this is the workspace's. Structural validation of the generated
+// specs is deliberately out of scope here — the skill and `archetipo validate`
+// own that — because this boundary only answers whether the run produced a
+// backlog at all.
+//
+// A connector that answers "there is no backlog here" does so as a missing
+// precondition rather than as an empty summary, and that is an answer, not an
+// infrastructure failure: it is exactly the "nothing was persisted" verdict.
+func backlogEffect(ctx context.Context, reader BacklogStateReader) error {
+	summary, err := reader.ReadExistingBacklog(ctx)
+	if err != nil {
+		var coded *iox.CodedError
+		if errors.As(err, &coded) && coded.Code == iox.CodePreconditionMissing {
+			return fmt.Errorf("no backlog was persisted")
+		}
+		return fmt.Errorf("re-reading the backlog failed: %w", err)
+	}
+	if len(summary.Codes) == 0 {
+		return fmt.Errorf("no backlog was persisted")
+	}
+	if len(summary.Epics) == 0 {
+		return fmt.Errorf("the backlog holds %d spec(s) but no epic", len(summary.Codes))
+	}
+	return nil
+}
+
 // DiscardPartialPRD takes back a PRD that was born inside a run that ended
 // badly, so a first inception either lands whole or leaves no trace (AC-4).
 //
@@ -188,16 +248,61 @@ func inceptionEffect(ctx context.Context, reader PRDStateReader) error {
 // pass nil when the connector exposes no discarder — skipping the rollback is
 // not itself a failure.
 func DiscardPartialPRD(ctx context.Context, discarder PRDDiscarder, existedBefore bool, outcome *Execution) {
-	if discarder == nil || existedBefore || outcome == nil || outcome.Status != StatusFailed {
+	var discard func(context.Context) (bool, error)
+	if discarder != nil {
+		discard = discarder.DiscardPRD
+	}
+	discardPartial(
+		ctx, discard,
+		"the partial PRD written by this run has been removed",
+		"the partial PRD could not be removed",
+		existedBefore, outcome,
+	)
+}
+
+// DiscardPartialBacklog is DiscardPartialPRD's twin for the backlog: a backlog
+// born inside a run that ended badly is taken back, so a first generation
+// either lands whole or leaves no trace (AC-4). It applies the very same two
+// load-bearing conditions — the workspace had no backlog before the run, and
+// the outcome is FAILED — because they are enforced by the same helper and
+// therefore cannot drift apart from the PRD rule.
+//
+// The caller is expected to pass nil when the connector exposes no backlog
+// discarder: skipping the rollback is a valid answer, not a failure.
+func DiscardPartialBacklog(ctx context.Context, discarder BacklogDiscarder, existedBefore bool, outcome *Execution) {
+	var discard func(context.Context) (bool, error)
+	if discarder != nil {
+		discard = discarder.DiscardBacklog
+	}
+	discardPartial(
+		ctx, discard,
+		"the partial backlog written by this run has been removed",
+		"the partial backlog could not be removed",
+		existedBefore, outcome,
+	)
+}
+
+// discardPartial holds the rollback rule once, so the PRD and the backlog can
+// never enforce it differently: an artifact that predates the run is never
+// touched, only a FAILED outcome rolls back, a missing discarder is tolerated,
+// and every note is appended to the failure message instead of replacing it.
+func discardPartial(
+	ctx context.Context,
+	discard func(context.Context) (bool, error),
+	removedNote, failedNote string,
+	existedBefore bool,
+	outcome *Execution,
+) {
+	if discard == nil || existedBefore || outcome == nil || outcome.Status != StatusFailed {
 		return
 	}
-	removed, err := discarder.DiscardPRD(ctx)
+	removed, err := discard(ctx)
 	if err != nil {
-		appendErrorNote(outcome, fmt.Sprintf("the partial PRD could not be removed: %v", err))
+		appendErrorNote(outcome, fmt.Sprintf("%s: %v", failedNote, err))
 		return
 	}
 	if removed {
-		appendErrorNote(outcome, "the partial PRD written by this run has been removed")
+		appendErrorNote(outcome, removedNote)
 	}
 }
 

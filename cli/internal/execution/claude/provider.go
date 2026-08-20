@@ -64,6 +64,11 @@ const (
 	// the conversation impossible rather than merely unlikely to work.
 	inceptionSkillRelPath = ".claude/skills/archetipo-inception/SKILL.md"
 
+	// backlogSkillRelPath is the same fact for the backlog skill: it is what
+	// `/archetipo-spec` resolves to, and its absence is what makes the
+	// conversation impossible rather than merely unlikely to work.
+	backlogSkillRelPath = ".claude/skills/archetipo-spec/SKILL.md"
+
 	// shutdownGrace bounds how long the session process is given to exit on its
 	// own after its input is closed, before it is signalled.
 	shutdownGrace = 5 * time.Second
@@ -150,7 +155,11 @@ func (p *Provider) ID() string { return ProviderID }
 // interfaces the provider implements, so declaring it by hand here would be
 // exactly the mismatch that derivation exists to make impossible.
 func (p *Provider) Capabilities(context.Context) ([]execution.Capability, error) {
-	return []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilityWorkspaceInception}, nil
+	return []execution.Capability{
+		execution.CapabilitySpecPlan,
+		execution.CapabilityWorkspaceInception,
+		execution.CapabilityWorkspaceBacklog,
+	}, nil
 }
 
 // ValidateConfig checks the shape of the non-secret configuration only. It must
@@ -185,10 +194,14 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 	// The fork is on the action and nothing else. Planning keeps the flow it
 	// has always had — one turn, then a receipt — because the moment a turn
 	// ends without one it has failed, and that diagnostic must not become a
-	// wait. Inception is the other semantics, and it lives in its own function
-	// rather than as a set of conditions inside this one.
+	// wait. Inception and backlog generation are the other semantics, and each
+	// lives in its own function rather than as a set of conditions inside this
+	// one.
 	if req.Action == execution.ActionInception {
 		return p.executeInception(ctx, req, cfg, dir)
+	}
+	if req.Action == execution.ActionBacklog {
+		return p.executeBacklog(ctx, req, cfg, dir)
 	}
 	if err := ensureSkill(dir, planSkillRelPath, "planning"); err != nil {
 		return execution.Result{}, err

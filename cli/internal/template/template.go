@@ -229,6 +229,11 @@ func Builtin() *Registry {
 				Label: "Avvia inception",
 				Skill: "archetipo-inception",
 			},
+			{
+				ID:    "backlog",
+				Label: "Genera backlog",
+				Skill: "archetipo-spec",
+			},
 		},
 		Statuses: domain.StatusLabels{
 			Todo:       string(domain.StatusTodo),

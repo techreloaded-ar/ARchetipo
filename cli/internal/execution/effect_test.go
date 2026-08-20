@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
 // stateReader is the configurable backlog double: it decides what a re-read of
@@ -451,4 +452,239 @@ func TestDiscardPartialPRDToleratesAConnectorWithoutADiscarder(t *testing.T) {
 		t.Fatalf("the message was touched: %q", record.Error.Message)
 	}
 	DiscardPartialPRD(context.Background(), &prdDiscarder{removed: true}, false, nil)
+}
+
+// backlogReader is the workspace double for a backlog generation: it decides
+// what a re-read of the backlog finds. It embeds stateReader for the same
+// reason prdReader does — VerifyActionEffect takes one reader for every action
+// and narrows it at the only point that knows which action is being verified.
+type backlogReader struct {
+	stateReader
+	summary    domain.BacklogSummary
+	backlogErr error
+	backlogRe  int
+}
+
+func (r *backlogReader) ReadExistingBacklog(context.Context) (domain.BacklogSummary, error) {
+	r.backlogRe++
+	if r.backlogErr != nil {
+		return domain.BacklogSummary{}, r.backlogErr
+	}
+	return r.summary, nil
+}
+
+func backlogRecord() Execution {
+	record := succeededRecord()
+	record.ID = "exec-backlog-1"
+	record.SpecCode = ""
+	record.Action = ActionBacklog
+	record.Capability = CapabilityWorkspaceBacklog
+	return record
+}
+
+func generatedBacklog() domain.BacklogSummary {
+	return domain.BacklogSummary{
+		Codes:    []string{"US-001", "US-002"},
+		Titles:   []string{"Prima storia", "Seconda storia"},
+		Epics:    []domain.Epic{{Code: "EP-001", Title: "Prima epica"}},
+		LastCode: "US-002",
+	}
+}
+
+// AC-2, positive side: a backlog the connector really holds is confirmed, and
+// the confirmation does not touch the record at all.
+func TestVerifyActionEffectConfirmsABacklogTheConnectorHolds(t *testing.T) {
+	record := backlogRecord()
+	reader := &backlogReader{summary: generatedBacklog()}
+
+	if err := VerifyActionEffect(context.Background(), reader, ActionBacklog, "", &record); err != nil {
+		t.Fatalf("a confirmed backlog was rejected: %v", err)
+	}
+	if record.Status != StatusSucceeded || record.Result == nil || record.Error != nil {
+		t.Fatalf("a confirmed record was rewritten: %#v", record)
+	}
+	if record.Result.ExternalID != "task-remote-7" {
+		t.Fatalf("the confirmed record lost its remote identifier: %#v", record.Result)
+	}
+	if reader.backlogRe != 1 {
+		t.Fatalf("the backlog was read %d times", reader.backlogRe)
+	}
+}
+
+// AC-2, negative side: a success the workspace does not back is not a success.
+// The record becomes FAILED with UNCONFIRMED_EFFECT, a readable reason, and the
+// remote identifier moved into the error rather than lost with the result.
+func TestVerifyActionEffectDemotesABacklogTheConnectorDoesNotBack(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		reader      SpecStateReader
+		wantMessage string
+	}{
+		{
+			name:        "no spec was persisted",
+			reader:      &backlogReader{summary: domain.BacklogSummary{}},
+			wantMessage: "no backlog was persisted",
+		},
+		{
+			name: "the connector reports there is no backlog at all",
+			reader: &backlogReader{backlogErr: iox.NewPrecondition(
+				"backlog not found at .archetipo/backlog.yaml",
+				"run `archetipo spec add` or `archetipo-spec` first",
+				errors.New("backlog missing"),
+			)},
+			wantMessage: "no backlog was persisted",
+		},
+		{
+			name: "specs without any epic",
+			reader: &backlogReader{summary: domain.BacklogSummary{
+				Codes:  []string{"US-001", "US-002"},
+				Titles: []string{"Prima storia", "Seconda storia"},
+			}},
+			wantMessage: "the backlog holds 2 spec(s) but no epic",
+		},
+		{
+			name:        "the backlog cannot be re-read",
+			reader:      &backlogReader{backlogErr: errors.New("workspace unavailable")},
+			wantMessage: "re-reading the backlog failed: workspace unavailable",
+		},
+		{
+			name:        "the connector cannot read a backlog at all",
+			reader:      &stateReader{},
+			wantMessage: "the connector cannot read the backlog back",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := backlogRecord()
+			err := VerifyActionEffect(context.Background(), tc.reader, ActionBacklog, "", &record)
+			var unconfirmed *UnconfirmedEffectError
+			if !errors.As(err, &unconfirmed) {
+				t.Fatalf("an unconfirmed backlog passed: %v", err)
+			}
+			if unconfirmed.ExecutionID != record.ID {
+				t.Fatalf("the error does not name the execution: %v", err)
+			}
+			if !strings.Contains(unconfirmed.Message, tc.wantMessage) {
+				t.Fatalf("the reason is unreadable: %q", unconfirmed.Message)
+			}
+			if record.Status != StatusFailed || record.Result != nil || record.Error == nil {
+				t.Fatalf("the demoted record: %#v", record)
+			}
+			if record.Error.Code != "UNCONFIRMED_EFFECT" || record.Error.ExternalID != "task-remote-7" {
+				t.Fatalf("the demoted record lost code or remote identifier: %#v", record.Error)
+			}
+			if !strings.Contains(record.Error.Message, tc.wantMessage) {
+				t.Fatalf("the record does not carry the reason: %q", record.Error.Message)
+			}
+		})
+	}
+}
+
+// backlogDiscarder counts what it was asked to do, so a test can prove the
+// rollback did not run at all.
+type backlogDiscarder struct {
+	removed bool
+	err     error
+	calls   int
+}
+
+func (d *backlogDiscarder) DiscardBacklog(context.Context) (bool, error) {
+	d.calls++
+	return d.removed, d.err
+}
+
+func failedBacklogRecord(message string) Execution {
+	record := backlogRecord()
+	record.Status = StatusFailed
+	record.Result = nil
+	record.Error = &ExecutionError{Code: "PROVIDER_FAILED", Message: message}
+	return record
+}
+
+// AC-4: a backlog born inside a run that ended badly is taken back, and the
+// note about the removal is appended after the reason the run failed, never in
+// its place.
+func TestDiscardPartialBacklogRemovesABacklogBornInsideAFailedRun(t *testing.T) {
+	discarder := &backlogDiscarder{removed: true}
+	record := failedBacklogRecord("the agent was interrupted")
+
+	DiscardPartialBacklog(context.Background(), discarder, false, &record)
+
+	if discarder.calls != 1 {
+		t.Fatalf("the discarder was called %d times", discarder.calls)
+	}
+	if record.Error.Message != "the agent was interrupted; the partial backlog written by this run has been removed" {
+		t.Fatalf("the note did not land after the original reason: %q", record.Error.Message)
+	}
+}
+
+// A discarder that finds nothing to remove has nothing to report either.
+func TestDiscardPartialBacklogStaysSilentWhenThereWasNothingToRemove(t *testing.T) {
+	discarder := &backlogDiscarder{removed: false}
+	record := failedBacklogRecord("the agent was interrupted")
+
+	DiscardPartialBacklog(context.Background(), discarder, false, &record)
+
+	if discarder.calls != 1 {
+		t.Fatalf("the discarder was called %d times", discarder.calls)
+	}
+	if record.Error.Message != "the agent was interrupted" {
+		t.Fatalf("the message was touched: %q", record.Error.Message)
+	}
+}
+
+// A rollback that cannot be performed is worth recording, but it never hides
+// why the run failed in the first place.
+func TestDiscardPartialBacklogReportsAFailedRemovalWithoutHidingTheCause(t *testing.T) {
+	discarder := &backlogDiscarder{err: errors.New("permission denied")}
+	record := failedBacklogRecord("the agent was interrupted")
+
+	DiscardPartialBacklog(context.Background(), discarder, false, &record)
+
+	if !strings.Contains(record.Error.Message, "the agent was interrupted") ||
+		!strings.Contains(record.Error.Message, "the partial backlog could not be removed: permission denied") {
+		t.Fatalf("the message lost one of its two halves: %q", record.Error.Message)
+	}
+}
+
+// AC-4, the other three combinations of existedBefore x terminal status: a
+// backlog the workspace already had belongs to the workspace, and a run that
+// succeeded is precisely the one whose backlog must stay. Neither may reach the
+// discarder at all.
+func TestDiscardPartialBacklogNeverRemovesABacklogItDoesNotOwn(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		existedBefore bool
+		status        ExecutionStatus
+	}{
+		{"a backlog that predates the run", true, StatusFailed},
+		{"a run that succeeded", false, StatusSucceeded},
+		{"a run that succeeded over a pre-existing backlog", true, StatusSucceeded},
+		{"a run still going", false, StatusRunning},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			discarder := &backlogDiscarder{removed: true}
+			record := failedBacklogRecord("the agent was interrupted")
+			record.Status = tc.status
+
+			DiscardPartialBacklog(context.Background(), discarder, tc.existedBefore, &record)
+
+			if discarder.calls != 0 {
+				t.Fatalf("the discarder was called %d times", discarder.calls)
+			}
+			if record.Error.Message != "the agent was interrupted" {
+				t.Fatalf("the message was touched: %q", record.Error.Message)
+			}
+		})
+	}
+}
+
+// A connector without the rollback capability is not itself a failure: skipping
+// the rollback must leave the record exactly as it was, and must not panic.
+func TestDiscardPartialBacklogToleratesAConnectorWithoutADiscarder(t *testing.T) {
+	record := failedBacklogRecord("the agent was interrupted")
+	DiscardPartialBacklog(context.Background(), nil, false, &record)
+	if record.Error.Message != "the agent was interrupted" {
+		t.Fatalf("the message was touched: %q", record.Error.Message)
+	}
+	DiscardPartialBacklog(context.Background(), &backlogDiscarder{removed: true}, false, nil)
 }

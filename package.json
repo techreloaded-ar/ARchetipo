@@ -21,6 +21,7 @@
     "test:view-run-smoke": "node ./test/e2e/run-from-view-smoke.mjs",
     "test:view-local-run-smoke": "node ./test/e2e/local-run-view-smoke.mjs",
     "test:view-inception-smoke": "node ./test/e2e/inception-from-view-smoke.mjs",
+    "test:view-backlog-smoke": "node ./test/e2e/backlog-from-view-smoke.mjs",
     "test:wiki-smoke": "node ./test/e2e/wiki-smoke.mjs"
   },
   "dependencies": {
