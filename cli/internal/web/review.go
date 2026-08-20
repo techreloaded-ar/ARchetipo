@@ -26,35 +26,36 @@ type diffView struct {
 // <base>` against the working tree, where base comes from ?base= or the
 // configured worktree base.
 func (s *Server) handleGetDiff(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	code := r.PathValue("code")
 	if code == "" {
 		writeError(w, iox.NewInvalidInput("missing spec code", "use /api/spec/US-XXX/diff", nil))
 		return
 	}
 	ctx := r.Context()
-	spec, err := s.conn.ReadSpecDetail(ctx, code)
+	spec, err := ws.conn.ReadSpecDetail(ctx, code)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	root := s.cfg.ProjectRoot
+	root := ws.cfg.ProjectRoot
 	if spec.Branch != "" {
 		forkBase := spec.ForkBase
 		if forkBase == "" {
-			forkBase = s.cfg.Worktree.Base
+			forkBase = ws.cfg.Worktree.Base
 		}
 		files, err := gitwt.Diff(ctx, root, forkBase, spec.Branch)
 		if err != nil {
 			writeError(w, err)
 			return
 		}
-		ahead, behind, _ := gitwt.AheadBehind(ctx, root, s.cfg.Worktree.Base, spec.Branch)
+		ahead, behind, _ := gitwt.AheadBehind(ctx, root, ws.cfg.Worktree.Base, spec.Branch)
 		writeJSON(w, http.StatusOK, diffView{Base: forkBase, Branch: spec.Branch, Ahead: ahead, Behind: behind, Files: files})
 		return
 	}
 	base := strings.TrimSpace(r.URL.Query().Get("base"))
 	if base == "" {
-		base = s.cfg.Worktree.Base
+		base = ws.cfg.Worktree.Base
 	}
 	files, err := gitwt.DiffWorkingTree(ctx, root, base)
 	if err != nil {
@@ -65,12 +66,13 @@ func (s *Server) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetReview(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	code := r.PathValue("code")
 	if code == "" {
 		writeError(w, iox.NewInvalidInput("missing spec code", "", nil))
 		return
 	}
-	rs, ok := s.conn.(connector.ReviewStore)
+	rs, ok := ws.conn.(connector.ReviewStore)
 	if !ok {
 		writeJSON(w, http.StatusOK, domain.Review{Comments: []domain.ReviewComment{}})
 		return
@@ -87,12 +89,13 @@ func (s *Server) handleGetReview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSaveReview(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	code := r.PathValue("code")
 	if code == "" {
 		writeError(w, iox.NewInvalidInput("missing spec code", "", nil))
 		return
 	}
-	rs, ok := s.conn.(connector.ReviewStore)
+	rs, ok := ws.conn.(connector.ReviewStore)
 	if !ok {
 		writeError(w, iox.NewConnector(iox.CodePreconditionMissing, "this connector does not persist review comments", "use the file connector", nil))
 		return
@@ -115,13 +118,14 @@ func (s *Server) handleSaveReview(w http.ResponseWriter, r *http.Request) {
 // next archetipo-plan run reads it (inside the spec's worktree) and turns each
 // item into a Fix task before re-planning.
 func (s *Server) handleRequestChanges(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	code := r.PathValue("code")
 	if code == "" {
 		writeError(w, iox.NewInvalidInput("missing spec code", "", nil))
 		return
 	}
 	ctx := r.Context()
-	rs, ok := s.conn.(connector.ReviewStore)
+	rs, ok := ws.conn.(connector.ReviewStore)
 	if !ok {
 		writeError(w, iox.NewConnector(iox.CodePreconditionMissing, "this connector does not persist review comments", "use the file connector", nil))
 		return
@@ -135,18 +139,18 @@ func (s *Server) handleRequestChanges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, iox.NewInvalidInput("no review comments to convert", "add inline comments before requesting changes", nil))
 		return
 	}
-	spec, err := s.conn.ReadSpecDetail(ctx, code)
+	spec, err := ws.conn.ReadSpecDetail(ctx, code)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	body := domain.AppendReworkFeedback(spec.Body, review.Comments)
 	rework := true
-	if _, err := s.conn.UpdateSpec(ctx, code, domain.SpecUpdate{Body: &body, Rework: &rework}); err != nil {
+	if _, err := ws.conn.UpdateSpec(ctx, code, domain.SpecUpdate{Body: &body, Rework: &rework}); err != nil {
 		writeError(w, err)
 		return
 	}
-	if _, err := s.conn.TransitionStatus(ctx, code, domain.StatusTodo); err != nil {
+	if _, err := ws.conn.TransitionStatus(ctx, code, domain.StatusTodo); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -161,21 +165,22 @@ func (s *Server) handleRequestChanges(w http.ResponseWriter, r *http.Request) {
 // handleIntegrate merges the spec's branch into base, removes the worktree and
 // branch, and transitions the spec to DONE. Mirrors `archetipo spec integrate`.
 func (s *Server) handleIntegrate(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	code := r.PathValue("code")
 	if code == "" {
 		writeError(w, iox.NewInvalidInput("missing spec code", "", nil))
 		return
 	}
 	ctx := r.Context()
-	if !s.cfg.Worktree.Enabled {
+	if !ws.cfg.Worktree.Enabled {
 		writeError(w, iox.NewConflict("worktree workflow is disabled", "enable worktree.enabled in config.yaml", nil))
 		return
 	}
-	if err := gitwt.EnsureRepo(ctx, s.cfg.ProjectRoot, s.cfg.Worktree.Base); err != nil {
+	if err := gitwt.EnsureRepo(ctx, ws.cfg.ProjectRoot, ws.cfg.Worktree.Base); err != nil {
 		writeError(w, err)
 		return
 	}
-	spec, err := s.conn.ReadSpecDetail(ctx, code)
+	spec, err := ws.conn.ReadSpecDetail(ctx, code)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -184,12 +189,12 @@ func (s *Server) handleIntegrate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, iox.NewPrecondition(fmt.Sprintf("spec %s has no worktree branch", code), "", nil))
 		return
 	}
-	allSpecs, err := s.conn.FetchBacklogItems(ctx, "")
+	allSpecs, err := ws.conn.FetchBacklogItems(ctx, "")
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	blockers, err := gitwt.UnintegratedBlockers(ctx, s.cfg.ProjectRoot, s.cfg.Worktree, spec, allSpecs)
+	blockers, err := gitwt.UnintegratedBlockers(ctx, ws.cfg.ProjectRoot, ws.cfg.Worktree, spec, allSpecs)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -198,18 +203,18 @@ func (s *Server) handleIntegrate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, iox.NewConflict(fmt.Sprintf("unintegrated blockers: %s", strings.Join(blockers, ", ")), "integrate the blockers first", nil))
 		return
 	}
-	if err := gitwt.Integrate(ctx, s.cfg.ProjectRoot, s.cfg.Worktree, spec.Branch, spec.Worktree); err != nil {
+	if err := gitwt.Integrate(ctx, ws.cfg.ProjectRoot, ws.cfg.Worktree, spec.Branch, spec.Worktree); err != nil {
 		writeError(w, err)
 		return
 	}
 	// Clear persisted worktree metadata after a successful integrate.
 	emptyStr := ""
-	_, _ = s.conn.UpdateSpec(ctx, code, domain.SpecUpdate{
+	_, _ = ws.conn.UpdateSpec(ctx, code, domain.SpecUpdate{
 		Branch:   &emptyStr,
 		Worktree: &emptyStr,
 		ForkBase: &emptyStr,
 	}) // best-effort: ignore error, merge succeeded.
-	if _, err := s.conn.TransitionStatus(ctx, code, domain.StatusDone); err != nil {
+	if _, err := ws.conn.TransitionStatus(ctx, code, domain.StatusDone); err != nil {
 		writeError(w, err)
 		return
 	}

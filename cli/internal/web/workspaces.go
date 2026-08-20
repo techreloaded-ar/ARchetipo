@@ -32,8 +32,8 @@ type workspaceListView struct {
 
 // workspaceViews probes each entry and renders it. The slice is never nil: the
 // frontend iterates without checking, so the JSON must be [] and not null.
-func (s *Server) workspaceViews(entries []workspace.Entry) []workspaceEntryView {
-	current := filepath.Clean(s.cfg.ProjectRoot)
+func (s *Server) workspaceViews(ws *workspaceSession, entries []workspace.Entry) []workspaceEntryView {
+	current := filepath.Clean(ws.cfg.ProjectRoot)
 	views := make([]workspaceEntryView, 0, len(entries))
 	for _, e := range entries {
 		status := workspace.Probe(e)
@@ -44,7 +44,7 @@ func (s *Server) workspaceViews(entries []workspace.Entry) []workspaceEntryView 
 			LastOpenedAt: e.LastOpenedAt,
 			Status:       string(status),
 			Reachable:    status.Reachable(),
-			Current:      s.cfg.ProjectRoot != "" && filepath.Clean(e.Path) == current,
+			Current:      ws.cfg.ProjectRoot != "" && filepath.Clean(e.Path) == current,
 		})
 	}
 	return views
@@ -64,7 +64,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, workspaceListView{Workspaces: []workspaceEntryView{}})
 		return
 	}
-	writeJSON(w, http.StatusOK, workspaceListView{Workspaces: s.workspaceViews(entries)})
+	writeJSON(w, http.StatusOK, workspaceListView{Workspaces: s.workspaceViews(s.session(), entries)})
 }
 
 // handleAddWorkspace serves POST /api/workspaces: it records a workspace that
@@ -98,7 +98,7 @@ func (s *Server) handleAddWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, s.workspaceViews([]workspace.Entry{entry})[0])
+	writeJSON(w, http.StatusCreated, s.workspaceViews(s.session(), []workspace.Entry{entry})[0])
 }
 
 // handleRemoveWorkspace serves DELETE /api/workspaces/{id}: it forgets one
@@ -125,19 +125,76 @@ func (s *Server) handleRemoveWorkspace(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// openWorkspaceView is the answer to a successful open: the entry exactly as
+// GET /api/workspaces renders it — so the browser needs no second request to
+// learn which workspace is now current — plus the warning that the registry
+// could not record the access. The warning is a field and not an error because
+// the workspace is already open: an unwritable registry must not undo it.
+type openWorkspaceView struct {
+	workspaceEntryView
+	RegistryWarning string `json:"registryWarning,omitempty"`
+}
+
+// handleOpenWorkspace serves POST /api/workspaces/{id}/open: it makes the
+// viewer serve another known workspace, without restarting the process.
+//
+// The order is what the acceptance criteria are made of. The switch happens
+// first and the registry is touched only after it succeeded, so a refused open
+// leaves both the served workspace and the recorded access exactly as they
+// were.
+func (s *Server) handleOpenWorkspace(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, iox.NewInvalidInput("the workspace id is required", "name the entry to open", nil))
+		return
+	}
+	if s.workspaces == nil {
+		writeError(w, registryUnavailable())
+		return
+	}
+	entry, err := s.workspaces.Get(id)
+	if err != nil {
+		if errors.Is(err, workspace.ErrEntryNotFound) {
+			writeError(w, iox.NewNotFound("no known workspace with that id", "reload the list", err))
+			return
+		}
+		writeError(w, err)
+		return
+	}
+
+	if err := s.SwitchWorkspace(entry.Path); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	var warning string
+	touched, touchErr := s.workspaces.Touch(entry.Path)
+	if touchErr != nil {
+		warning = "the workspace is open, but the known-workspaces list could not be updated: " + touchErr.Error()
+	} else {
+		entry = touched
+	}
+
+	writeJSON(w, http.StatusOK, openWorkspaceView{
+		workspaceEntryView: s.workspaceViews(s.session(), []workspace.Entry{entry})[0],
+		RegistryWarning:    warning,
+	})
+}
+
 // RegisterWorkspace records the workspace this viewer serves as opened now.
 // It lives here rather than in NewServer because the constructor is used by
 // dozens of tests, and turning it into a user-level disk write would be a side
 // effect where nobody looks for one. The caller treats a failure as a printed
 // line, never as a reason not to start.
 func (s *Server) RegisterWorkspace() error {
-	if s.cfg.ProjectRoot == "" {
+	ws := s.session()
+	if ws.cfg.ProjectRoot == "" {
 		return nil
 	}
 	if s.workspaces == nil {
 		return registryUnavailable()
 	}
-	if _, err := s.workspaces.Touch(s.cfg.ProjectRoot); err != nil {
+	if _, err := s.workspaces.Touch(ws.cfg.ProjectRoot); err != nil {
 		return err
 	}
 	return nil

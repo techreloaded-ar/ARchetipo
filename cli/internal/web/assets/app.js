@@ -420,6 +420,15 @@
 	});
 	workspacesAddForm.addEventListener("submit", onAddWorkspace);
 	workspacesList.addEventListener("click", (e) => {
+		const opener = e.target.closest("[data-open]");
+		if (opener) {
+			// An entry with no id cannot be opened: posting an empty segment would
+			// answer with a 404 that says nothing about why.
+			if (opener.dataset.open) {
+				openWorkspace(opener.dataset.open, opener.dataset.openName || "");
+			}
+			return;
+		}
 		const btn = e.target.closest("[data-remove]");
 		if (!btn) return;
 		removeWorkspace(btn.dataset.remove, btn.dataset.removeName || "");
@@ -1036,7 +1045,7 @@
 
 	function showToast(msg, kind) {
 		toast.textContent = msg;
-		toast.classList.remove("hidden", "ok", "err");
+		toast.classList.remove("hidden", "ok", "err", "warn");
 		if (kind) toast.classList.add(kind);
 		clearTimeout(showToast._t);
 		showToast._t = setTimeout(() => toast.classList.add("hidden"), 2200);
@@ -3371,13 +3380,41 @@
 
 		row.appendChild(main);
 
+		const actions = document.createElement("div");
+		actions.className = "workspace-row-actions";
+
+		// Open is offered but disabled where it would be a lie: on the workspace
+		// already served, and on one the server has just probed as unreachable.
+		// The title carries the reason, so a greyed button is never a mystery.
+		const open = document.createElement("button");
+		open.type = "button";
+		open.className = "primary-btn";
+		open.dataset.open = item.id || "";
+		open.dataset.openName = item.name || item.path || "";
+		open.textContent = "Open";
+		if (!item.id) {
+			open.disabled = true;
+			open.title = "This entry has no identity in the registry";
+		} else if (item.current) {
+			open.disabled = true;
+			open.title = "This is the workspace already open";
+		} else if (!item.reachable) {
+			open.disabled = true;
+			open.title = `Cannot be opened: ${
+				WORKSPACE_STATUS_LABELS[item.status] || item.status || "unreachable"
+			}`;
+		}
+		actions.appendChild(open);
+
 		const remove = document.createElement("button");
 		remove.type = "button";
 		remove.className = "ghost-btn";
 		remove.dataset.remove = item.id || "";
 		remove.dataset.removeName = item.name || item.path || "";
 		remove.textContent = "Remove";
-		row.appendChild(remove);
+		actions.appendChild(remove);
+
+		row.appendChild(actions);
 
 		return row;
 	}
@@ -3395,6 +3432,45 @@
 		badge.textContent =
 			WORKSPACE_STATUS_LABELS[item.status] || item.status || "unreachable";
 		return badge;
+	}
+
+	// openWorkspace hands the switch to the server and then rebuilds the
+	// document.
+	//
+	// Reloading is deliberate rather than lazy: this module keeps board, drawer,
+	// execution panels, config and mockup caches at module level, and clearing
+	// them one by one would be a list that ages badly — a cache forgotten there
+	// is data from the previous workspace still on screen. Rebuilding the
+	// document leaves nothing to forget. The viewer process, its HTTP server and
+	// its execution store are untouched: only this page is rebuilt.
+	async function openWorkspace(id, name) {
+		const buttons = workspacesList.querySelectorAll("button");
+		buttons.forEach((b) => {
+			b.disabled = true;
+		});
+		workspacesStatus.textContent = `Opening ${name || id}…`;
+		workspacesStatus.className = "status-msg";
+		try {
+			const res = await apiPost(
+				`/api/workspaces/${encodeURIComponent(id)}/open`,
+				{},
+			);
+			if (res && res.registryWarning) {
+				showToast(res.registryWarning, "warn");
+				await new Promise((resolve) => setTimeout(resolve, 1200));
+			}
+			window.location.reload();
+		} catch (err) {
+			// The switch was refused, so nothing changed on the server: the board
+			// on screen is still the one this page was built for, and it stays
+			// usable. Only the reason is new.
+			buttons.forEach((b) => {
+				b.disabled = false;
+			});
+			await loadWorkspaces();
+			workspacesStatus.textContent = `Open failed: ${err.message || err}`;
+			workspacesStatus.className = "status-msg err";
+		}
 	}
 
 	async function removeWorkspace(id, name) {

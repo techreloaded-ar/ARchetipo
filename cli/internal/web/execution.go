@@ -42,13 +42,14 @@ type executionProvidersView struct {
 // handleListExecutionProviders answers "which providers can this workspace
 // choose from, and which one is chosen now?".
 func (s *Server) handleListExecutionProviders(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	view := executionProvidersView{Providers: []executionProviderView{}}
 	// The default is read from disk rather than from the config the server
 	// started with: it changes while the viewer runs, and the panel must show
 	// what is persisted, not what was loaded at boot. It is read before the
 	// provider loop because only the current default has a persisted
 	// configuration to probe with.
-	current, _, _, _, err := readConfigState(s.cfg.ProjectRoot)
+	current, _, _, _, err := readConfigState(ws.cfg.ProjectRoot)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -110,6 +111,7 @@ type saveDefaultProviderReq struct {
 // config file. Nothing is written when validation fails, which is what keeps
 // the previously valid selection intact after a rejection.
 func (s *Server) handleSaveDefaultExecutionProvider(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	var req saveDefaultProviderReq
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)
@@ -131,7 +133,7 @@ func (s *Server) handleSaveDefaultExecutionProvider(w http.ResponseWriter, r *ht
 		return
 	}
 	selection := config.DefaultProviderConfig{ID: id, Config: providerConfig}
-	if _, err := config.UpdateDefaultProvider(s.cfg.ProjectRoot, selection); err != nil {
+	if _, err := config.UpdateDefaultProvider(ws.cfg.ProjectRoot, selection); err != nil {
 		writeError(w, iox.NewInternal("saving execution.default_provider", err))
 		return
 	}

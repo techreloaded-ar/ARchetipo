@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -432,5 +433,234 @@ func TestRegisterWorkspaceRecordsTheServedRoot(t *testing.T) {
 	}
 	if entries, err := emptyReg.List(); err != nil || len(entries) != 0 {
 		t.Fatalf("registry = %+v (err %v), want nothing written", entries, err)
+	}
+}
+
+// openWorkspaceFixture builds the situation the story describes: a viewer
+// serving A, and B known but not open. The connector is the real file one and
+// both workspaces are real directories, because the oracle of every assertion
+// below is the backlog that gets served.
+type openWorkspaceFixture struct {
+	srv  *Server
+	reg  *workspace.Registry
+	a, b string
+	idA  string
+	idB  string
+}
+
+func newOpenWorkspaceFixture(t *testing.T) openWorkspaceFixture {
+	t.Helper()
+	a := realWorkspace(t, "alpha", "US-A01", true)
+	b := realWorkspace(t, "beta", "US-B01", false)
+	srv := serverOn(t, a)
+	reg := &workspace.Registry{Dir: t.TempDir()}
+	srv.workspaces = reg
+	// B is recorded first so that A is the most recently opened one: the test on
+	// the last access has then something to observe when B moves to the head.
+	for _, root := range []string{b, a} {
+		if _, err := reg.Touch(root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return openWorkspaceFixture{srv: srv, reg: reg, a: a, b: b, idA: workspace.EntryID(a), idB: workspace.EntryID(b)}
+}
+
+func openWorkspace(t *testing.T, srv *Server, id string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workspaces/"+id+"/open", nil))
+	return rec
+}
+
+func workspaceActions(t *testing.T, srv *Server) workspaceActionsView {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/workspace/actions", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/workspace/actions = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var view workspaceActionsView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decoding the actions: %v", err)
+	}
+	return view
+}
+
+// lastOpenedOf reads one entry's last access from the list route.
+func lastOpenedOf(t *testing.T, srv *Server, id string) (time.Time, int) {
+	t.Helper()
+	_, entries := listWorkspaces(t, srv)
+	for i, e := range entries {
+		if e["id"] == id {
+			at, err := time.Parse(time.RFC3339Nano, e["lastOpenedAt"].(string))
+			if err != nil {
+				t.Fatalf("parsing lastOpenedAt: %v", err)
+			}
+			return at, i
+		}
+	}
+	t.Fatalf("no entry %s in the list", id)
+	return time.Time{}, -1
+}
+
+// TestOpenWorkspaceSwitchesBoardConfigAndActions is AC-1, AC-2 and AC-3 stated
+// on the HTTP contract, in one process that was never restarted.
+func TestOpenWorkspaceSwitchesBoardConfigAndActions(t *testing.T) {
+	f := newOpenWorkspaceFixture(t)
+
+	if !workspaceActions(t, f.srv).HasPRD {
+		t.Fatal("the fixture is wrong: A must have a PRD before the switch")
+	}
+
+	rec := openWorkspace(t, f.srv, f.idB)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST open = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var opened map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &opened); err != nil {
+		t.Fatalf("decoding the response: %v", err)
+	}
+	if opened["current"] != true {
+		t.Errorf("current = %v, want true", opened["current"])
+	}
+	if opened["path"] != f.b {
+		t.Errorf("path = %v, want %s", opened["path"], f.b)
+	}
+
+	codes := boardCodes(t, f.srv)
+	if !codes["US-B01"] || codes["US-A01"] {
+		t.Errorf("board after the switch = %v, want only the codes of B", codes)
+	}
+	if got := specStatus(t, f.srv, "US-A01"); got != http.StatusNotFound {
+		t.Errorf("GET /api/spec/US-A01 = %d, want 404", got)
+	}
+	if got := configPath(t, f.srv); !strings.HasPrefix(got, f.b) {
+		t.Errorf("config path = %q, want it under %q", got, f.b)
+	}
+	if workspaceActions(t, f.srv).HasPRD {
+		t.Error("the actions still report a PRD: they were computed on the workspace that was left")
+	}
+}
+
+// TestOpenWorkspaceUpdatesLastOpened is AC-5, asserted both through the API and
+// on the registry file, because the value must survive the process.
+func TestOpenWorkspaceUpdatesLastOpened(t *testing.T) {
+	f := newOpenWorkspaceFixture(t)
+	before, position := lastOpenedOf(t, f.srv, f.idB)
+	if position == 0 {
+		t.Fatal("the fixture is wrong: B must not already be the most recent entry")
+	}
+
+	if rec := openWorkspace(t, f.srv, f.idB); rec.Code != http.StatusOK {
+		t.Fatalf("POST open = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	after, position := lastOpenedOf(t, f.srv, f.idB)
+	if !after.After(before) {
+		t.Errorf("lastOpenedAt = %s, want it after %s", after, before)
+	}
+	if position != 0 {
+		t.Errorf("B is at position %d in the list, want it first", position)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(f.reg.Dir, "workspaces.json"))
+	if err != nil {
+		t.Fatalf("reading the registry file: %v", err)
+	}
+	var onDisk struct {
+		Workspaces []struct {
+			ID           string    `json:"id"`
+			LastOpenedAt time.Time `json:"lastOpenedAt"`
+		} `json:"workspaces"`
+	}
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatalf("decoding the registry file: %v", err)
+	}
+	found := false
+	for _, e := range onDisk.Workspaces {
+		if e.ID == f.idB {
+			found = true
+			if !e.LastOpenedAt.After(before) {
+				t.Errorf("on disk lastOpenedAt = %s, want it after %s", e.LastOpenedAt, before)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no entry %s in %s", f.idB, filepath.Join(f.reg.Dir, "workspaces.json"))
+	}
+}
+
+func TestOpenWorkspaceUnknownID(t *testing.T) {
+	f := newOpenWorkspaceFixture(t)
+	rec := openWorkspace(t, f.srv, "0123456789abcdef")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("POST open on an unknown id = %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+	if codes := boardCodes(t, f.srv); !codes["US-A01"] {
+		t.Errorf("board = %v, want A still served", codes)
+	}
+}
+
+// TestOpenWorkspaceUnreachableKeepsPreviousActive is AC-4: the refusal names its
+// reason, and the workspace that was already open stays not merely readable but
+// writable.
+func TestOpenWorkspaceUnreachableKeepsPreviousActive(t *testing.T) {
+	f := newOpenWorkspaceFixture(t)
+	if err := os.RemoveAll(filepath.Join(f.b, ".archetipo")); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := openWorkspace(t, f.srv, f.idB)
+	if rec.Code < 400 || rec.Code >= 500 {
+		t.Fatalf("POST open on an unreachable workspace = %d, want 4xx: %s", rec.Code, rec.Body.String())
+	}
+	var errBody struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &errBody); err != nil {
+		t.Fatalf("decoding the error: %v", err)
+	}
+	if !strings.Contains(errBody.Error, "not a workspace") {
+		t.Errorf("error = %q, want it to name the probed reason", errBody.Error)
+	}
+
+	if codes := boardCodes(t, f.srv); !codes["US-A01"] {
+		t.Errorf("board = %v, want A still served", codes)
+	}
+	if got := configPath(t, f.srv); !strings.HasPrefix(got, f.a) {
+		t.Errorf("config path = %q, want it still under %q", got, f.a)
+	}
+
+	// Readable is not enough: the workspace that was left open must still accept
+	// a write.
+	payload, err := json.Marshal(validCreateReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/spec", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	f.srv.mux.ServeHTTP(write, req)
+	if write.Code != http.StatusCreated && write.Code != http.StatusOK {
+		t.Fatalf("POST /api/spec on the workspace still open = %d, want a success: %s", write.Code, write.Body.String())
+	}
+}
+
+// TestOpenWorkspaceDoesNotTouchRegistryOnFailure keeps the registry honest: a
+// workspace that was not opened was not accessed.
+func TestOpenWorkspaceDoesNotTouchRegistryOnFailure(t *testing.T) {
+	f := newOpenWorkspaceFixture(t)
+	before, _ := lastOpenedOf(t, f.srv, f.idB)
+	if err := os.RemoveAll(filepath.Join(f.b, ".archetipo")); err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := openWorkspace(t, f.srv, f.idB); rec.Code < 400 {
+		t.Fatalf("POST open = %d, want a refusal: %s", rec.Code, rec.Body.String())
+	}
+
+	after, _ := lastOpenedOf(t, f.srv, f.idB)
+	if !after.Equal(before) {
+		t.Errorf("lastOpenedAt = %s after a failed open, want it unchanged at %s", after, before)
 	}
 }

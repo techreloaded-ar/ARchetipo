@@ -140,7 +140,7 @@ func newRunServerWith(t *testing.T, provider execution.Provider, withDefault boo
 	// A dispatch outlives the request that started it, so a test that returns
 	// while one is still running would let a goroutine write into a TempDir the
 	// framework is deleting. Draining is the same wait shutdown performs.
-	t.Cleanup(func() { srv.dispatch.wait(5 * time.Second) })
+	t.Cleanup(func() { srv.session().dispatch.wait(5 * time.Second) })
 	return srv, cfg, conn
 }
 

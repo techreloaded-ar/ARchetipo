@@ -86,8 +86,8 @@ func projectionView(projection runProjection) runView {
 // with no default provider, a provider that does not expose an interactive run.
 // A remote task that has no run yet is not one of them — it is an answer, and
 // the caller renders it as a 200 with no run.
-func (s *Server) resolveRunTarget(ctx context.Context, executionID string) (runTarget, string, error) {
-	record, err := s.store.Get(ctx, executionID)
+func (s *Server) resolveRunTarget(ctx context.Context, ws *workspaceSession, executionID string) (runTarget, string, error) {
+	record, err := ws.store.Get(ctx, executionID)
 	if err != nil {
 		var storeErr *execution.StoreError
 		if errors.As(err, &storeErr) {
@@ -103,7 +103,7 @@ func (s *Server) resolveRunTarget(ctx context.Context, executionID string) (runT
 	// The default is read from disk and not from the config the server booted
 	// with, for the same reason the dispatch route does it: the Execution panel
 	// can change it while the viewer runs.
-	current, _, _, _, err := readConfigState(s.cfg.ProjectRoot)
+	current, _, _, _, err := readConfigState(ws.cfg.ProjectRoot)
 	if err != nil {
 		return runTarget{}, "", err
 	}
@@ -137,7 +137,13 @@ func (s *Server) resolveRunTarget(ctx context.Context, executionID string) (runT
 		// a run yet.
 		return runTarget{}, "the remote work has not been assigned a run yet", nil
 	}
-	follower := s.followers.ensure(ctx, executionID, runID, providerConfig, collaborator)
+	follower := ws.followers.ensure(ctx, executionID, runID, providerConfig, collaborator)
+	if follower == nil {
+		// The workspace this run belongs to has been left: its followers were
+		// closed with it, and starting a new one would open a stream towards the
+		// hub that nothing in this process could ever close.
+		return runTarget{}, "this run belongs to a workspace that is no longer open", nil
+	}
 	return runTarget{
 		follower:     follower,
 		collaborator: collaborator,
@@ -224,7 +230,8 @@ func (s *Server) handleGetExecutionRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	target, notice, err := s.resolveRunTarget(r.Context(), id)
+	ws := s.session()
+	target, notice, err := s.resolveRunTarget(r.Context(), ws, id)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -268,7 +275,8 @@ func (s *Server) handleSendRunMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, iox.NewInvalidInput("message is required", "send a non-empty message", nil))
 		return
 	}
-	target, notice, err := s.resolveRunTarget(r.Context(), id)
+	ws := s.session()
+	target, notice, err := s.resolveRunTarget(r.Context(), ws, id)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -315,7 +323,8 @@ func (s *Server) handleRespondRunApproval(w http.ResponseWriter, r *http.Request
 		writeError(w, iox.NewInvalidInput("option_id is required", "pick one of the options the approval declares", nil))
 		return
 	}
-	target, notice, err := s.resolveRunTarget(r.Context(), id)
+	ws := s.session()
+	target, notice, err := s.resolveRunTarget(r.Context(), ws, id)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -351,7 +360,8 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	target, notice, err := s.resolveRunTarget(r.Context(), id)
+	ws := s.session()
+	target, notice, err := s.resolveRunTarget(r.Context(), ws, id)
 	if err != nil {
 		writeError(w, err)
 		return

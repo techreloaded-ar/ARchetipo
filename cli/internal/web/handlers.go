@@ -42,7 +42,8 @@ var boardLayout = []struct {
 
 // handleGetMetrics returns the same aggregation as `archetipo metrics`.
 func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
-	specs, err := s.conn.FetchBacklogItems(r.Context(), "")
+	ws := s.session()
+	specs, err := ws.conn.FetchBacklogItems(r.Context(), "")
 	if err != nil {
 		writeError(w, err)
 		return
@@ -51,19 +52,20 @@ func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	ctx := r.Context()
-	info, err := s.conn.InitializeConnector(ctx)
+	info, err := ws.conn.InitializeConnector(ctx)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	labels := info.Workflow.Statuses
-	specs, err := s.conn.FetchBacklogItems(ctx, "")
+	specs, err := ws.conn.FetchBacklogItems(ctx, "")
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	summary, err := s.conn.ReadExistingBacklog(ctx)
+	summary, err := ws.conn.ReadExistingBacklog(ctx)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -85,7 +87,7 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 		return id
 	}
 	var boardOrder []string
-	if r, ok := s.conn.(connector.BoardOrderReader); ok {
+	if r, ok := ws.conn.(connector.BoardOrderReader); ok {
 		if order, oerr := r.ReadBoardOrder(ctx); oerr == nil {
 			boardOrder = order
 		}
@@ -199,18 +201,19 @@ type specDetailView struct {
 }
 
 func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	code := r.PathValue("code")
 	if code == "" {
 		writeError(w, iox.NewInvalidInput("missing spec code", "use /api/spec/US-XXX", nil))
 		return
 	}
 	ctx := r.Context()
-	spec, err := s.conn.ReadSpecDetail(ctx, code)
+	spec, err := ws.conn.ReadSpecDetail(ctx, code)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	tasks, planBody, err := s.readPlanForSpec(ctx, code)
+	tasks, planBody, err := s.readPlanForSpec(ctx, ws, code)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -218,14 +221,14 @@ func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
 	if tasks == nil {
 		tasks = []domain.Task{}
 	}
-	tpl, err := s.resolveTemplate()
+	tpl, err := s.resolveTemplate(ws)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	// A record that cannot be read is a failed request, not an absent execution:
 	// answering "no execution" would tell the browser it may start a second one.
-	latest, err := s.latestExecution(ctx, code)
+	latest, err := s.latestExecution(ctx, ws, code)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -235,7 +238,7 @@ func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
 		PlanBody:  planBody,
 		Tasks:     tasks,
 		Template:  templateView{ID: tpl.ID, Version: tpl.Version},
-		Actions:   s.decorateActions(ctx, code, tpl.ActionsFor(spec.Status)),
+		Actions:   s.decorateActions(ctx, ws, code, tpl.ActionsFor(spec.Status)),
 		Execution: latest,
 	})
 }
@@ -245,8 +248,8 @@ func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
 // that also store a plan body (filefs) we look it up via the optional
 // planBodyReader. A missing plan is not an error: the viewer should still be
 // able to display the spec with an empty plan.
-func (s *Server) readPlanForSpec(ctx context.Context, code string) ([]domain.Task, string, error) {
-	tasks, err := s.conn.ReadSpecTasks(ctx, code)
+func (s *Server) readPlanForSpec(ctx context.Context, ws *workspaceSession, code string) ([]domain.Task, string, error) {
+	tasks, err := ws.conn.ReadSpecTasks(ctx, code)
 	if err != nil {
 		var ce *iox.CodedError
 		if errors.As(err, &ce) && ce.Code == iox.CodePreconditionMissing {
@@ -256,7 +259,7 @@ func (s *Server) readPlanForSpec(ctx context.Context, code string) ([]domain.Tas
 	}
 	domain.NormalizeTaskBodies(tasks)
 	body := ""
-	if pr, ok := s.conn.(connector.PlanBodyReader); ok {
+	if pr, ok := ws.conn.(connector.PlanBodyReader); ok {
 		if b, err := pr.ReadPlanBody(ctx, code); err == nil {
 			body = b
 		}
@@ -269,7 +272,8 @@ type prdView struct {
 }
 
 func (s *Server) handleGetPRD(w http.ResponseWriter, r *http.Request) {
-	pr, ok := s.conn.(connector.PRDReader)
+	ws := s.session()
+	pr, ok := ws.conn.(connector.PRDReader)
 	if !ok {
 		writeError(w, iox.NewConnector(iox.CodePreconditionMissing, "this connector does not expose a PRD", "use the file connector to read the PRD", nil))
 		return
@@ -283,12 +287,13 @@ func (s *Server) handleGetPRD(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSavePRD(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	var req prdView
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)
 		return
 	}
-	if _, err := s.conn.SavePRD(r.Context(), req.Body); err != nil {
+	if _, err := ws.conn.SavePRD(r.Context(), req.Body); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -300,7 +305,8 @@ type mockupsView struct {
 }
 
 func (s *Server) handleListMockups(w http.ResponseWriter, r *http.Request) {
-	ml, ok := s.conn.(connector.MockupLister)
+	ws := s.session()
+	ml, ok := ws.conn.(connector.MockupLister)
 	if !ok {
 		writeJSON(w, http.StatusOK, mockupsView{Mockups: []domain.MockupEntry{}})
 		return
@@ -317,6 +323,7 @@ func (s *Server) handleListMockups(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateSpec(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	code := r.PathValue("code")
 	if code == "" {
 		writeError(w, iox.NewInvalidInput("missing spec code", "", nil))
@@ -327,11 +334,11 @@ func (s *Server) handleUpdateSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if _, err := s.conn.UpdateSpec(r.Context(), code, patch); err != nil {
+	if _, err := ws.conn.UpdateSpec(r.Context(), code, patch); err != nil {
 		writeError(w, err)
 		return
 	}
-	spec, err := s.conn.ReadSpecDetail(r.Context(), code)
+	spec, err := ws.conn.ReadSpecDetail(r.Context(), code)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -340,12 +347,13 @@ func (s *Server) handleUpdateSpec(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteSpec(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	code := r.PathValue("code")
 	if code == "" {
 		writeError(w, iox.NewInvalidInput("missing spec code", "", nil))
 		return
 	}
-	deleter, ok := s.conn.(connector.SpecDeleter)
+	deleter, ok := ws.conn.(connector.SpecDeleter)
 	if !ok {
 		writeError(w, iox.NewConnector(
 			iox.CodePreconditionMissing,
@@ -369,6 +377,7 @@ type savePlanReq struct {
 }
 
 func (s *Server) handleSavePlan(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	code := r.PathValue("code")
 	if code == "" {
 		writeError(w, iox.NewInvalidInput("missing spec code", "", nil))
@@ -381,7 +390,7 @@ func (s *Server) handleSavePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	input := domain.PlanInput{PlanBody: req.PlanBody, Tasks: req.Tasks}
 	domain.NormalizePlanInput(&input)
-	res, err := s.conn.SavePlan(r.Context(), code, input)
+	res, err := ws.conn.SavePlan(r.Context(), code, input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -397,6 +406,7 @@ type moveReq struct {
 }
 
 func (s *Server) handleMoveCard(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	var req moveReq
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)
@@ -413,7 +423,7 @@ func (s *Server) handleMoveCard(w http.ResponseWriter, r *http.Request) {
 	if req.After != nil {
 		anchor.After = *req.After
 	}
-	res, err := s.conn.MoveBoardCard(r.Context(), req.Code, req.To, anchor)
+	res, err := ws.conn.MoveBoardCard(r.Context(), req.Code, req.To, anchor)
 	if err != nil {
 		writeError(w, err)
 		return

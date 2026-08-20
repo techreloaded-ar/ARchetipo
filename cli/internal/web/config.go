@@ -37,7 +37,8 @@ type configTestResult struct {
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	cfg, raw, exists, path, err := readConfigState(s.cfg.ProjectRoot)
+	ws := s.session()
+	cfg, raw, exists, path, err := readConfigState(ws.cfg.ProjectRoot)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -51,7 +52,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
-	current, _, _, path, err := readConfigState(s.cfg.ProjectRoot)
+	ws := s.session()
+	current, _, _, path, err := readConfigState(ws.cfg.ProjectRoot)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -61,12 +63,12 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	raw, next, err := decodeConfigPayload(s.cfg.ProjectRoot, req)
+	raw, next, err := decodeConfigPayload(ws.cfg.ProjectRoot, req)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	backupPath, err := config.SaveRaw(s.cfg.ProjectRoot, raw)
+	backupPath, err := config.SaveRaw(ws.cfg.ProjectRoot, raw)
 	if err != nil {
 		writeError(w, iox.NewInvalidInput("invalid config", "fix the config and retry", err))
 		return
@@ -82,12 +84,13 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	var req saveConfigReq
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)
 		return
 	}
-	_, next, err := decodeConfigPayload(s.cfg.ProjectRoot, req)
+	_, next, err := decodeConfigPayload(ws.cfg.ProjectRoot, req)
 	if err != nil {
 		writeError(w, err)
 		return

@@ -130,6 +130,7 @@ func createSpecFieldErrors(findings []domain.ValidationFinding) []fieldError {
 // the new spec through the configured connector. The backlog is touched only
 // after validation succeeds, so an invalid payload never consumes a code.
 func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	ctx := r.Context()
 	var req createSpecReq
 	if err := decodeJSON(r, &req); err != nil {
@@ -137,7 +138,7 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := s.conn.FetchBacklogItems(ctx, "")
+	existing, err := ws.conn.FetchBacklogItems(ctx, "")
 	if err != nil {
 		var ce *iox.CodedError
 		if !errors.As(err, &ce) || ce.Code != iox.CodePreconditionMissing {
@@ -154,7 +155,7 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 	// The epics come from the same call that feeds GET /api/board, so the
 	// values the form offers and the ones the route accepts are the same list
 	// by construction — including an epic declared without any spec yet.
-	summary, err := s.conn.ReadExistingBacklog(ctx)
+	summary, err := ws.conn.ReadExistingBacklog(ctx)
 	if err != nil {
 		var ce *iox.CodedError
 		if !errors.As(err, &ce) || ce.Code != iox.CodePreconditionMissing {
@@ -198,9 +199,9 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(existing) == 0 {
-		_, err = s.conn.SaveInitialBacklog(ctx, []domain.Spec{spec})
+		_, err = ws.conn.SaveInitialBacklog(ctx, []domain.Spec{spec})
 	} else {
-		_, err = s.conn.AppendSpecs(ctx, []domain.Spec{spec})
+		_, err = ws.conn.AppendSpecs(ctx, []domain.Spec{spec})
 	}
 	if err != nil {
 		writeError(w, err)
@@ -209,7 +210,7 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 
 	// Read the spec back through the connector: this is what makes the new
 	// content "readable from the connector" rather than merely accepted.
-	saved, err := s.conn.ReadSpecDetail(ctx, spec.Code)
+	saved, err := ws.conn.ReadSpecDetail(ctx, spec.Code)
 	if err != nil {
 		writeError(w, err)
 		return

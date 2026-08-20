@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -81,18 +82,38 @@ authentication is performed.`,
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			defer func() { _ = viewreg.Remove(port) }()
-			onReady := func(url string) {
-				fmt.Fprintf(s.err, "ARchetipo view ready at %s\n", url)
-				fmt.Fprintln(s.err, "Press Ctrl+C to stop.")
+			// registerViewer records this viewer under the root it is serving
+			// right now. It is one function and not two call sites because the
+			// entry is written twice — at start-up and after every workspace
+			// switch — and two copies would be free to drift.
+			startedAt := time.Now()
+			// The hook below runs on an HTTP handler goroutine, so this closure is
+			// reached concurrently with the main one. The mutex covers both the
+			// registry write and the line it may print on stderr.
+			var registerMu sync.Mutex
+			registerViewer := func(root string) {
+				registerMu.Lock()
+				defer registerMu.Unlock()
 				if _, rerr := viewreg.Register(viewreg.Entry{
 					PID:         os.Getpid(),
 					Host:        host,
 					Port:        port,
-					ProjectRoot: cfg.ProjectRoot,
-					StartedAt:   time.Now(),
+					ProjectRoot: root,
+					StartedAt:   startedAt,
 				}); rerr != nil {
 					fmt.Fprintf(s.err, "(could not register viewer: %v)\n", rerr)
 				}
+			}
+			// After a switch the recorded root would otherwise still name the
+			// project the viewer started on, so `archetipo view list` would
+			// point at a workspace this process no longer serves. A failed
+			// re-registration stays a printed line: it must never undo an open
+			// that already succeeded.
+			srv.OnWorkspaceSwitch = registerViewer
+			onReady := func(url string) {
+				fmt.Fprintf(s.err, "ARchetipo view ready at %s\n", url)
+				fmt.Fprintln(s.err, "Press Ctrl+C to stop.")
+				registerViewer(cfg.ProjectRoot)
 				// The known-workspace list is a convenience, never a
 				// precondition: a registry that cannot be written costs a line
 				// on stderr and nothing else.

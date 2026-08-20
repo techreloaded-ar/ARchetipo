@@ -61,8 +61,8 @@ func newRunRoutesServer(t *testing.T, collaborator *fakeCollaborator) *runRoutes
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		srv.followers.closeAll()
-		srv.dispatch.wait(5 * time.Second)
+		srv.session().followers.closeAll()
+		srv.session().dispatch.wait(5 * time.Second)
 	})
 
 	id, err := execution.RandomID()
@@ -79,7 +79,7 @@ func newRunRoutesServer(t *testing.T, collaborator *fakeCollaborator) *runRoutes
 		Result:     &execution.Result{ExternalID: "task-1"},
 		CreatedAt:  time.Now().UTC(),
 	}
-	if err := srv.store.Create(context.Background(), record); err != nil {
+	if err := srv.session().store.Create(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
 	return &runRoutesFixture{srv: srv, collaborator: collaborator, executionID: id}

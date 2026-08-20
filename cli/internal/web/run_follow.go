@@ -341,6 +341,13 @@ type runFollowers struct {
 	// field rather than a package variable so a test can shorten it without
 	// writing to state that the followers of another test are already reading.
 	approvalInterval time.Duration
+
+	// stopped is raised by closeAll. Without it a request that entered the run
+	// route before a workspace switch could insert a follower into a set that
+	// has already been drained: nothing would ever hold a reference to it again,
+	// so its stream towards the hub and its approvals ticker would run for the
+	// rest of the process, on a workspace the viewer no longer serves.
+	stopped bool
 }
 
 func newRunFollowers() *runFollowers {
@@ -367,6 +374,12 @@ func (r *runFollowers) ensure(ctx context.Context, executionID, runID string, pr
 	// map, so closeAll could not stop it and its SSE connection to the hub would
 	// outlive the viewer's shutdown.
 	r.mu.Lock()
+	if r.stopped {
+		// This set belongs to a workspace that has been left. Starting a stream
+		// here would be starting one nobody can stop.
+		r.mu.Unlock()
+		return nil
+	}
 	existing, ok := r.byExecution[executionID]
 	if ok && existing.runID == runID {
 		r.mu.Unlock()
@@ -418,6 +431,7 @@ func (r *runFollowers) closeAll() {
 		return
 	}
 	r.mu.Lock()
+	r.stopped = true
 	followers := make([]*runFollower, 0, len(r.byExecution))
 	for id, follower := range r.byExecution {
 		followers = append(followers, follower)

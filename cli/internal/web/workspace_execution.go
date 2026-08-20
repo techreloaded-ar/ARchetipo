@@ -72,13 +72,14 @@ type runWorkspaceActionReq struct {
 // workspace execution is already running, whether a PRD is already there —
 // stays on the server.
 func (s *Server) handleGetWorkspaceActions(w http.ResponseWriter, r *http.Request) {
-	tpl, err := s.resolveTemplate()
+	ws := s.session()
+	tpl, err := s.resolveTemplate(ws)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	ctx := r.Context()
-	availability := s.workspaceAvailability(ctx)
+	availability := s.workspaceAvailability(ctx, ws)
 	actions := make([]workspaceActionView, 0, len(tpl.WorkspaceActions))
 	for _, action := range tpl.WorkspaceActions {
 		reason := availability.reasonFor(action.ID)
@@ -89,7 +90,7 @@ func (s *Server) handleGetWorkspaceActions(w http.ResponseWriter, r *http.Reques
 			UnavailableReason: reason,
 		})
 	}
-	latest, err := s.latestExecution(ctx, workspaceExecutionKey)
+	latest, err := s.latestExecution(ctx, ws, workspaceExecutionKey)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -109,6 +110,7 @@ func (s *Server) handleGetWorkspaceActions(w http.ResponseWriter, r *http.Reques
 // inception is a conversation, and a response that waited for it would hang for
 // as long as the person keeps talking.
 func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	var req runWorkspaceActionReq
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)
@@ -119,7 +121,7 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 		writeError(w, iox.NewInvalidInput("action is required", "supported actions: "+supportedActions(), nil))
 		return
 	}
-	tpl, err := s.resolveTemplate()
+	tpl, err := s.resolveTemplate(ws)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -144,7 +146,7 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 		return
 	}
 	ctx := r.Context()
-	availability := s.workspaceAvailability(ctx)
+	availability := s.workspaceAvailability(ctx, ws)
 	// Every refusal the GET route renders next to a disabled action is the same
 	// refusal here, so pressing an action the payload declared unavailable never
 	// creates a record only to close it a moment later with this very sentence.
@@ -164,7 +166,7 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 	providerID := availability.providerID
 	providerConfig := execution.CloneConfig(availability.providerConfig)
 
-	if err := s.guardSingleWorkspaceExecution(ctx); err != nil {
+	if err := s.guardSingleWorkspaceExecution(ctx, ws); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -176,20 +178,20 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 	// so a failed run is persisted already knowing what happened to the partial
 	// document.
 	confirm := func(confirmCtx context.Context, outcome *execution.Execution) {
-		_ = execution.VerifyActionEffect(confirmCtx, s.conn, outcome.Action, workspaceExecutionKey, outcome)
+		_ = execution.VerifyActionEffect(confirmCtx, ws.conn, outcome.Action, workspaceExecutionKey, outcome)
 		// Each action takes back only its own artifact, with its own flag: the
 		// rollback follows what the run was about, never what the workspace
 		// happens to hold.
 		switch outcome.Action {
 		case execution.ActionInception:
-			execution.DiscardPartialPRD(confirmCtx, s.prdDiscarder(), existedBefore, outcome)
+			execution.DiscardPartialPRD(confirmCtx, s.prdDiscarder(ws), existedBefore, outcome)
 		case execution.ActionBacklog:
-			execution.DiscardPartialBacklog(confirmCtx, s.backlogDiscarder(), backlogExistedBefore, outcome)
+			execution.DiscardPartialBacklog(confirmCtx, s.backlogDiscarder(ws), backlogExistedBefore, outcome)
 		}
 	}
-	started, continuation, err := s.service.StartWorkspace(ctx, action, providerID, providerConfig, confirm)
+	started, continuation, err := ws.service.StartWorkspace(ctx, action, providerID, providerConfig, confirm)
 	if err != nil {
-		s.dispatch.release(workspaceExecutionKey)
+		ws.dispatch.release(workspaceExecutionKey)
 		// A rejected configuration is answered by the same renderer the Execution
 		// panel already understands, so the form can point at the offending field.
 		var configErr *execution.ConfigurationError
@@ -200,16 +202,16 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 		writeError(w, mapExecutionStartError(err, providerID))
 		return
 	}
-	s.dispatch.claim(workspaceExecutionKey, started.ID)
+	ws.dispatch.claim(workspaceExecutionKey, started.ID)
 	writeJSON(w, http.StatusCreated, started)
 
-	s.dispatch.run(func(dispatchCtx context.Context) {
+	ws.dispatch.run(func(dispatchCtx context.Context) {
 		// Deferred in this order so they unwind in the other one: the workspace
 		// stops being busy first, and only then is every connected client told to
 		// re-read. Publishing while the reservation still stands would send them
 		// back an action still marked unavailable.
 		defer s.broker.Publish()
-		defer s.dispatch.release(workspaceExecutionKey)
+		defer ws.dispatch.release(workspaceExecutionKey)
 		_, _ = continuation(dispatchCtx)
 	})
 }
@@ -219,8 +221,8 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 // reasons: the in-memory reservation catches a double click or two tabs racing
 // on this process, the persisted record catches a viewer restarted while an
 // execution was still open.
-func (s *Server) guardSingleWorkspaceExecution(ctx context.Context) error {
-	existingID, reserved := s.dispatch.reserve(workspaceExecutionKey)
+func (s *Server) guardSingleWorkspaceExecution(ctx context.Context, ws *workspaceSession) error {
+	existingID, reserved := ws.dispatch.reserve(workspaceExecutionKey)
 	if !reserved {
 		message := "an execution is already running for this workspace"
 		if existingID != "" {
@@ -228,13 +230,13 @@ func (s *Server) guardSingleWorkspaceExecution(ctx context.Context) error {
 		}
 		return iox.NewConflict(message, "wait for it to finish before starting another one", nil)
 	}
-	records, err := s.store.ListBySpec(ctx, workspaceExecutionKey)
+	records, err := ws.store.ListBySpec(ctx, workspaceExecutionKey)
 	if err != nil {
-		s.dispatch.release(workspaceExecutionKey)
+		ws.dispatch.release(workspaceExecutionKey)
 		return iox.NewInternal("reading the executions of this workspace", err)
 	}
 	if len(records) > 0 && records[0].Status == execution.StatusRunning {
-		s.dispatch.release(workspaceExecutionKey)
+		ws.dispatch.release(workspaceExecutionKey)
 		return iox.NewConflict(
 			"execution "+records[0].ID+" is already running for this workspace",
 			"wait for it to finish, or remove its record under .archetipo/executions/ if it was left behind by an interrupted run",
@@ -267,19 +269,19 @@ type workspaceAvailability struct {
 	backlogUnreadable string
 }
 
-func (s *Server) workspaceAvailability(ctx context.Context) workspaceAvailability {
+func (s *Server) workspaceAvailability(ctx context.Context, ws *workspaceSession) workspaceAvailability {
 	availability := workspaceAvailability{}
-	if id, busy := s.dispatch.current(workspaceExecutionKey); busy {
+	if id, busy := ws.dispatch.current(workspaceExecutionKey); busy {
 		availability.workspaceHasRunning = true
 		availability.runningID = id
 	}
 	if !availability.workspaceHasRunning {
-		if records, err := s.store.ListBySpec(ctx, workspaceExecutionKey); err == nil && len(records) > 0 && records[0].Status == execution.StatusRunning {
+		if records, err := ws.store.ListBySpec(ctx, workspaceExecutionKey); err == nil && len(records) > 0 && records[0].Status == execution.StatusRunning {
 			availability.workspaceHasRunning = true
 			availability.runningID = records[0].ID
 		}
 	}
-	reader, ok := s.conn.(connector.PRDReader)
+	reader, ok := ws.conn.(connector.PRDReader)
 	if !ok {
 		availability.prdUnreadable = "this connector does not expose a PRD"
 	} else if body, err := reader.ReadPRD(ctx); err != nil {
@@ -292,7 +294,7 @@ func (s *Server) workspaceAvailability(ctx context.Context) workspaceAvailabilit
 	// precondition and is read as "no backlog yet", exactly as backlogEffect
 	// reads it in execution/effect.go; only anything else is a workspace that
 	// cannot answer.
-	if summary, err := s.conn.ReadExistingBacklog(ctx); err != nil {
+	if summary, err := ws.conn.ReadExistingBacklog(ctx); err != nil {
 		var coded *iox.CodedError
 		if errors.As(err, &coded) && coded.Code == iox.CodePreconditionMissing {
 			availability.hasBacklog = false
@@ -302,7 +304,7 @@ func (s *Server) workspaceAvailability(ctx context.Context) workspaceAvailabilit
 	} else {
 		availability.hasBacklog = len(summary.Codes) > 0
 	}
-	availability.providerAvailability = s.providerAvailabilityFor(ctx)
+	availability.providerAvailability = s.providerAvailabilityFor(ctx, ws)
 	return availability
 }
 
@@ -399,8 +401,8 @@ func workspaceRemedy(a workspaceAvailability, actionID string) string {
 // prdDiscarder returns the connector as the workspace's own undo, or nil when
 // it cannot take a PRD back. nil is a valid answer: skipping the rollback is
 // not a failure, and DiscardPartialPRD treats it as a no-op.
-func (s *Server) prdDiscarder() execution.PRDDiscarder {
-	discarder, ok := s.conn.(connector.PRDDiscarder)
+func (s *Server) prdDiscarder(ws *workspaceSession) execution.PRDDiscarder {
+	discarder, ok := ws.conn.(connector.PRDDiscarder)
 	if !ok {
 		return nil
 	}
@@ -411,8 +413,8 @@ func (s *Server) prdDiscarder() execution.PRDDiscarder {
 // workspace's own undo for the backlog, or nil when it cannot take one back.
 // nil is a valid answer — skipping the rollback is not a failure, and
 // DiscardPartialBacklog treats it as a no-op.
-func (s *Server) backlogDiscarder() execution.BacklogDiscarder {
-	discarder, ok := s.conn.(connector.BacklogDiscarder)
+func (s *Server) backlogDiscarder(ws *workspaceSession) execution.BacklogDiscarder {
+	discarder, ok := ws.conn.(connector.BacklogDiscarder)
 	if !ok {
 		return nil
 	}

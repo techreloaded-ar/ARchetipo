@@ -27,6 +27,12 @@ type dispatchGroup struct {
 	ctx      context.Context
 	inFlight map[string]string
 	wg       sync.WaitGroup
+	// stopped is raised by wait, under the same mutex run takes before touching
+	// the wait group. Without it a request that reached run while the drain had
+	// already started would call Add concurrently with Wait — a WaitGroup misuse
+	// that panics the whole process. It became reachable when stopping a session
+	// stopped being something only shutdown did.
+	stopped bool
 }
 
 func newDispatchGroup() *dispatchGroup {
@@ -84,8 +90,18 @@ func (g *dispatchGroup) current(specCode string) (string, bool) {
 func (g *dispatchGroup) run(fn func(context.Context)) {
 	g.mu.Lock()
 	ctx := g.ctx
-	g.mu.Unlock()
+	if g.stopped {
+		g.mu.Unlock()
+		// The drain has already begun, so this dispatch cannot join it. It still
+		// runs — on the context the group has just had cancelled, which is what
+		// makes the continuation close its record as FAILED with a reason instead
+		// of leaving it RUNNING for ever — but it is not registered, because
+		// registering it now would be an Add racing a Wait.
+		go fn(ctx)
+		return
+	}
 	g.wg.Add(1)
+	g.mu.Unlock()
 	go func() {
 		defer g.wg.Done()
 		fn(ctx)
@@ -96,6 +112,9 @@ func (g *dispatchGroup) run(fn func(context.Context)) {
 // purpose: a provider that ignores cancellation must delay shutdown, not
 // prevent it.
 func (g *dispatchGroup) wait(timeout time.Duration) {
+	g.mu.Lock()
+	g.stopped = true
+	g.mu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		g.wg.Wait()
@@ -122,6 +141,7 @@ type runSpecActionReq struct {
 // before the response is written, which is what lets the browser follow it, and
 // what lets a reload find it.
 func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	code := strings.TrimSpace(r.PathValue("code"))
 	if code == "" {
 		writeError(w, iox.NewInvalidInput("missing spec code", "use /api/spec/US-XXX/execution", nil))
@@ -138,12 +158,12 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	spec, err := s.conn.ReadSpecDetail(ctx, code)
+	spec, err := ws.conn.ReadSpecDetail(ctx, code)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	tpl, err := s.resolveTemplate()
+	tpl, err := s.resolveTemplate(ws)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -177,14 +197,14 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		))
 		return
 	}
-	if s.service == nil {
+	if ws.service == nil {
 		writeError(w, iox.NewConflict("no execution provider is registered in this viewer", "start the viewer from a build that registers execution providers", nil))
 		return
 	}
 	// The default is read from disk, not from the config the server booted with:
 	// the Execution panel can change it while the viewer runs, and starting an
 	// execution on a stale selection would ignore what the user just saved.
-	current, _, _, _, err := readConfigState(s.cfg.ProjectRoot)
+	current, _, _, _, err := readConfigState(ws.cfg.ProjectRoot)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -215,7 +235,7 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.guardSingleExecution(ctx, code); err != nil {
+	if err := s.guardSingleExecution(ctx, ws, code); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -226,11 +246,11 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 	// The verdict travels in outcome, which the continuation is about to write:
 	// the returned error only renders the same fact for a caller that has one.
 	confirm := func(confirmCtx context.Context, outcome *execution.Execution) {
-		_ = execution.VerifyActionEffect(confirmCtx, s.conn, outcome.Action, code, outcome)
+		_ = execution.VerifyActionEffect(confirmCtx, ws.conn, outcome.Action, code, outcome)
 	}
-	started, continuation, err := s.service.Start(ctx, spec, action, providerID, execution.CloneConfig(selection.Config), confirm)
+	started, continuation, err := ws.service.Start(ctx, spec, action, providerID, execution.CloneConfig(selection.Config), confirm)
 	if err != nil {
-		s.dispatch.release(code)
+		ws.dispatch.release(code)
 		// A rejected configuration is answered by the same renderer the Execution
 		// panel already understands, so the form can point at the offending field
 		// instead of showing a message about an input it cannot locate.
@@ -242,10 +262,10 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, mapExecutionStartError(err, providerID))
 		return
 	}
-	s.dispatch.claim(code, started.ID)
+	ws.dispatch.claim(code, started.ID)
 	writeJSON(w, http.StatusCreated, started)
 
-	s.dispatch.run(func(dispatchCtx context.Context) {
+	ws.dispatch.run(func(dispatchCtx context.Context) {
 		// Deferred in this order so they unwind in the other one: the spec stops
 		// being busy first, and only then is the board of every connected client
 		// refreshed. Publishing while the reservation still stands would send
@@ -254,7 +274,7 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		defer s.broker.Publish()
 		// The reservation spans the whole dispatch, verdict included, so no client
 		// can start a second execution against a record this one has not closed.
-		defer s.dispatch.release(code)
+		defer ws.dispatch.release(code)
 		// The outcome is already verified: the continuation applied the
 		// confirmation before writing the terminal record, so there is nothing
 		// left to reconcile here.
@@ -267,8 +287,8 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 // in-memory map catches a double click or two tabs racing on this process; the
 // persisted record catches a viewer restarted while an execution was still
 // open, which the map alone would have forgotten.
-func (s *Server) guardSingleExecution(ctx context.Context, code string) error {
-	existingID, reserved := s.dispatch.reserve(code)
+func (s *Server) guardSingleExecution(ctx context.Context, ws *workspaceSession, code string) error {
+	existingID, reserved := ws.dispatch.reserve(code)
 	if !reserved {
 		message := "an execution is already running for " + code
 		if existingID != "" {
@@ -276,13 +296,13 @@ func (s *Server) guardSingleExecution(ctx context.Context, code string) error {
 		}
 		return iox.NewConflict(message, "wait for it to finish before starting another one", nil)
 	}
-	records, err := s.store.ListBySpec(ctx, code)
+	records, err := ws.store.ListBySpec(ctx, code)
 	if err != nil {
-		s.dispatch.release(code)
+		ws.dispatch.release(code)
 		return iox.NewInternal("reading the executions of "+code, err)
 	}
 	if len(records) > 0 && records[0].Status == execution.StatusRunning {
-		s.dispatch.release(code)
+		ws.dispatch.release(code)
 		return iox.NewConflict(
 			"execution "+records[0].ID+" is already running for "+code,
 			"wait for it to finish, or remove its record under .archetipo/executions/ if it was left behind by an interrupted run",
@@ -296,12 +316,13 @@ func (s *Server) guardSingleExecution(ctx context.Context, code string) error {
 // nothing else: contacting the provider here would turn a two-second poll into a
 // remote call, and the record already holds everything the UI shows.
 func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
 	id := strings.TrimSpace(r.PathValue("id"))
 	if id == "" {
 		writeError(w, iox.NewInvalidInput("missing execution id", "use /api/execution/<id>", nil))
 		return
 	}
-	record, err := s.store.Get(r.Context(), id)
+	record, err := ws.store.Get(r.Context(), id)
 	if err != nil {
 		var storeErr *execution.StoreError
 		if errors.As(err, &storeErr) {
@@ -323,8 +344,8 @@ func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
 // latestExecution returns the most recent execution of a spec, or nil when the
 // spec has none. It is what makes a reload equivalent to the session before it:
 // the client keeps no identifier, the server hands it back every time.
-func (s *Server) latestExecution(ctx context.Context, code string) (*execution.Execution, error) {
-	records, err := s.store.ListBySpec(ctx, code)
+func (s *Server) latestExecution(ctx context.Context, ws *workspaceSession, code string) (*execution.Execution, error) {
+	records, err := ws.store.ListBySpec(ctx, code)
 	if err != nil {
 		return nil, iox.NewInternal("reading the executions of "+code, err)
 	}
@@ -386,31 +407,31 @@ type providerAvailability struct {
 	providerConfig map[string]any
 }
 
-func (s *Server) actionAvailabilityFor(ctx context.Context, code string) actionAvailability {
+func (s *Server) actionAvailabilityFor(ctx context.Context, ws *workspaceSession, code string) actionAvailability {
 	availability := actionAvailability{}
-	if id, busy := s.dispatch.current(code); busy {
+	if id, busy := ws.dispatch.current(code); busy {
 		availability.specHasRunning = true
 		availability.runningID = id
 	}
 	if !availability.specHasRunning {
-		if records, err := s.store.ListBySpec(ctx, code); err == nil && len(records) > 0 && records[0].Status == execution.StatusRunning {
+		if records, err := ws.store.ListBySpec(ctx, code); err == nil && len(records) > 0 && records[0].Status == execution.StatusRunning {
 			availability.specHasRunning = true
 			availability.runningID = records[0].ID
 		}
 	}
-	availability.providerAvailability = s.providerAvailabilityFor(ctx)
+	availability.providerAvailability = s.providerAvailabilityFor(ctx, ws)
 	return availability
 }
 
 // providerAvailabilityFor resolves the default provider of this workspace and
 // probes it. The default is read from disk, not from the config the server
 // booted with: the Execution panel can change it while the viewer runs.
-func (s *Server) providerAvailabilityFor(ctx context.Context) providerAvailability {
+func (s *Server) providerAvailabilityFor(ctx context.Context, ws *workspaceSession) providerAvailability {
 	availability := providerAvailability{}
-	if s.service == nil {
+	if ws.service == nil {
 		availability.noRegistry = true
 	}
-	current, _, _, _, err := readConfigState(s.cfg.ProjectRoot)
+	current, _, _, _, err := readConfigState(ws.cfg.ProjectRoot)
 	if err != nil {
 		availability.noDefault = true
 		return availability
@@ -491,8 +512,8 @@ func (a providerAvailability) reasonFor(capability execution.Capability) string 
 func quoted(value string) string { return "\"" + value + "\"" }
 
 // decorateActions turns the process actions into the viewer's action views.
-func (s *Server) decorateActions(ctx context.Context, code string, actions []template.Action) []specActionView {
-	availability := s.actionAvailabilityFor(ctx, code)
+func (s *Server) decorateActions(ctx context.Context, ws *workspaceSession, code string, actions []template.Action) []specActionView {
+	availability := s.actionAvailabilityFor(ctx, ws, code)
 	out := make([]specActionView, 0, len(actions))
 	for _, action := range actions {
 		reason := availability.reasonFor(action.ID)
@@ -501,11 +522,11 @@ func (s *Server) decorateActions(ctx context.Context, code string, actions []tem
 	return out
 }
 
-func (s *Server) resolveTemplate() (template.Template, error) {
-	tpl, err := template.Resolve(s.cfg.Template.ID)
+func (s *Server) resolveTemplate(ws *workspaceSession) (template.Template, error) {
+	tpl, err := template.Resolve(ws.cfg.Template.ID)
 	if err != nil {
 		return template.Template{}, iox.NewInvalidInput(
-			"unknown template: "+s.cfg.Template.ID,
+			"unknown template: "+ws.cfg.Template.ID,
 			"valid: "+strings.Join(template.Builtin().IDs(), ", "),
 			err,
 		)

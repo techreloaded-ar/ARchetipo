@@ -2047,6 +2047,12 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 .toast.err::before {
 	background: var(--priority-high);
 }
+.toast.warn {
+	border-color: color-mix(in srgb, var(--priority-medium) 50%, var(--border));
+}
+.toast.warn::before {
+	background: var(--priority-medium);
+}
 
 @keyframes toastIn {
 	from {
@@ -3689,6 +3695,13 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
 	background: var(--surface-2);
+}
+
+.workspace-row-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
 }
 
 .workspace-row-main {

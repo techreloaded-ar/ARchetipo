@@ -13,7 +13,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
-	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
@@ -23,15 +23,17 @@ import (
 )
 
 // Server wires the connector backend to HTTP handlers and the embedded UI.
+//
+// Everything that depends on which project root is being served lives in the
+// current workspaceSession, reachable only through session(). The fields kept
+// here are the ones that must survive a workspace switch: the execution
+// provider registry, the SSE broker whose clients stay connected, the registry
+// of known workspaces, and the HTTP plumbing itself.
 type Server struct {
-	conn       connector.Connector
-	cfg        config.Config
-	registry   *execution.Registry
-	mux        *http.ServeMux
-	httpSrv    *http.Server
-	mockupsDir string
-	broker     *Broker
-	watchRoot  string
+	registry *execution.Registry
+	mux      *http.ServeMux
+	httpSrv  *http.Server
+	broker   *Broker
 
 	// workspaces is the user-level registry of known workspaces. It is named
 	// apart from `registry` above, which is the execution provider registry of
@@ -40,18 +42,35 @@ type Server struct {
 	// viewer, so the routes degrade instead of the constructor failing.
 	workspaces *workspace.Registry
 
-	// store and service dispatch spec actions. The store is always present (it
-	// only needs the project root); the service is nil when no provider registry
-	// was supplied, which makes the run route answer "no provider" instead of
-	// panicking.
-	store    execution.Store
-	service  *execution.Service
-	dispatch *dispatchGroup
+	// mu guards cur. Handlers take it for the length of one pointer read, so a
+	// switch never observes a half-migrated server and a request never observes
+	// half of each workspace.
+	mu  sync.RWMutex
+	cur *workspaceSession
 
-	// followers holds the server-side projection of the remote run behind an
-	// execution, one per execution and only for the executions someone is
-	// actually looking at.
-	followers *runFollowers
+	// switchMu serialises SwitchWorkspace. It is separate from mu because a
+	// switch spans building and starting a session, which must not hold the lock
+	// every handler takes.
+	switchMu sync.Mutex
+
+	// baseCtx is the context Run is serving on, kept so that a session created
+	// after start-up is anchored to the same tree. Before Run it is nil, which
+	// start reads as Background.
+	baseCtx context.Context
+
+	// OnWorkspaceSwitch is called with the new project root after a successful
+	// switch. It exists so the process that owns the viewer entry — `archetipo
+	// view` — can keep that entry truthful; nil is the normal case.
+	OnWorkspaceSwitch func(root string)
+}
+
+// session returns the workspace the server is serving right now. Handlers call
+// it once, at the top, and use the returned value for the whole request: that
+// single read is what makes a request see one workspace and not a mixture.
+func (s *Server) session() *workspaceSession {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cur
 }
 
 // NewServer constructs a Server bound to addr (e.g. "127.0.0.1:8080").
@@ -62,31 +81,15 @@ type Server struct {
 // provider, which is not an error.
 func NewServer(conn connector.Connector, cfg config.Config, registry *execution.Registry, addr string) (*Server, error) {
 	mux := http.NewServeMux()
-	store, err := execution.NewFileStore(cfg.ProjectRoot)
+	session, err := newWorkspaceSession(cfg, conn, registry)
 	if err != nil {
-		return nil, fmt.Errorf("creating the execution store: %w", err)
+		return nil, err
 	}
 	s := &Server{
-		conn:       conn,
-		cfg:        cfg,
-		registry:   registry,
-		mux:        mux,
-		mockupsDir: cfg.AbsPath(cfg.Paths.Mockups),
-		broker:     NewBroker(),
-		watchRoot:  resolveWatchRoot(cfg),
-		store:      store,
-		dispatch:   newDispatchGroup(),
-		followers:  newRunFollowers(),
-	}
-	// A nil registry is not an error: the viewer simply has no provider to run
-	// with, and the run route says so. Building a service over it would be the
-	// only way to turn that into a panic.
-	if registry != nil {
-		service, serviceErr := execution.NewService(registry, store, execution.RandomID, time.Now)
-		if serviceErr != nil {
-			return nil, fmt.Errorf("creating the execution service: %w", serviceErr)
-		}
-		s.service = service
+		registry: registry,
+		mux:      mux,
+		broker:   NewBroker(),
+		cur:      session,
 	}
 	// A registry we cannot open is not a reason to refuse to serve the current
 	// workspace: the field stays nil and the workspace routes say so.
@@ -102,17 +105,6 @@ func NewServer(conn connector.Connector, cfg config.Config, registry *execution.
 	return s, nil
 }
 
-// resolveWatchRoot picks the directory the filesystem watcher should observe.
-// The viewer cares about anything that affects the rendered board, so we watch
-// the parent of the backlog file (typically .archetipo/), which also contains
-// stories/ and plans/.
-func resolveWatchRoot(cfg config.Config) string {
-	if cfg.File.Backlog == "" {
-		return ""
-	}
-	return cfg.AbsPath(filepath.Dir(cfg.File.Backlog))
-}
-
 // Addr returns the address the server listens on.
 func (s *Server) Addr() string { return s.httpSrv.Addr }
 
@@ -125,16 +117,16 @@ const dispatchDrainTimeout = 5 * time.Second
 // Run starts listening and blocks until ctx is done or the server errors.
 // When ctx is cancelled the server is shut down with a 5s grace period.
 func (s *Server) Run(ctx context.Context, onReady func(url string)) error {
-	// Dispatches outlive the request that started them, so they run on a context
-	// owned by the server rather than by any client. Cancelling it on the way out
-	// is what turns an interrupted execution into a FAILED record with a reason
-	// instead of one left RUNNING for ever.
-	dispatchCtx, cancelDispatch := context.WithCancel(context.WithoutCancel(ctx))
-	s.dispatch.bind(dispatchCtx)
-	defer func() {
-		cancelDispatch()
-		s.dispatch.wait(dispatchDrainTimeout)
-	}()
+	s.mu.Lock()
+	s.baseCtx = ctx
+	s.mu.Unlock()
+
+	// The session owns the context its dispatches and its watcher run on, so
+	// stopping it is what turns an interrupted execution into a FAILED record
+	// with a reason instead of one left RUNNING for ever.
+	s.session().start(ctx, s.broker)
+	defer func() { s.session().stop(dispatchDrainTimeout) }()
+
 	ln, err := net.Listen("tcp", s.httpSrv.Addr)
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", s.httpSrv.Addr, err)
@@ -143,15 +135,6 @@ func (s *Server) Run(ctx context.Context, onReady func(url string)) error {
 	s.httpSrv.Addr = ln.Addr().String()
 	if onReady != nil {
 		onReady("http://" + s.httpSrv.Addr)
-	}
-
-	// Real-time refresh: start the filesystem watcher if a watch root is set.
-	// A watcher failure is non-fatal — the viewer keeps working, just without
-	// live updates (clients fall back to the manual refresh button).
-	if s.watchRoot != "" {
-		if w, werr := NewWatcher(s.watchRoot, s.broker); werr == nil {
-			go func() { _ = w.Run(ctx) }()
-		}
 	}
 
 	errCh := make(chan error, 1)
@@ -165,13 +148,11 @@ func (s *Server) Run(ctx context.Context, onReady func(url string)) error {
 	select {
 	case <-ctx.Done():
 		s.broker.Close()
-		s.followers.closeAll()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return s.httpSrv.Shutdown(shutdownCtx)
 	case err := <-errCh:
 		s.broker.Close()
-		s.followers.closeAll()
 		return err
 	}
 }
@@ -211,14 +192,21 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/workspaces", s.handleListWorkspaces)
 	s.mux.HandleFunc("POST /api/workspaces", s.handleAddWorkspace)
 	s.mux.HandleFunc("DELETE /api/workspaces/{id}", s.handleRemoveWorkspace)
+	s.mux.HandleFunc("POST /api/workspaces/{id}/open", s.handleOpenWorkspace)
 	s.mux.HandleFunc("GET /api/mockups", s.handleListMockups)
 
 	// Serve design mockups from the configured paths.mockups directory.
-	// The handler is registered unconditionally; a missing directory just
-	// produces 404s, which the frontend already tolerates.
-	if s.mockupsDir != "" {
-		s.mux.Handle("/mockups/", http.StripPrefix("/mockups/", http.FileServer(http.Dir(s.mockupsDir))))
-	}
+	// The directory is resolved per request rather than frozen at registration,
+	// because after a workspace switch a frozen one would keep serving the
+	// mockups of the workspace that was left.
+	s.mux.HandleFunc("/mockups/", func(w http.ResponseWriter, r *http.Request) {
+		dir := s.session().mockupsDir
+		if dir == "" {
+			http.NotFound(w, r)
+			return
+		}
+		http.StripPrefix("/mockups/", http.FileServer(http.Dir(dir))).ServeHTTP(w, r)
+	})
 
 	// Static assets (HTML/CSS/JS + vendor). Served from the embedded FS.
 	assets, err := fs.Sub(assetsFS, "assets")

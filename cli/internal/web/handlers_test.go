@@ -135,16 +135,16 @@ func TestUpdateSpecNotFound(t *testing.T) {
 func TestDeleteSpecEndpointFileConnector(t *testing.T) {
 	srv, _ := newFileServer(t)
 	ctx := context.Background()
-	if _, err := srv.conn.SaveInitialBacklog(ctx, []domain.Spec{
+	if _, err := srv.session().conn.SaveInitialBacklog(ctx, []domain.Spec{
 		{Code: "US-001", Title: "Setup", Epic: domain.Epic{Code: "EP-001", Title: "F"}, Priority: domain.PriorityHigh, Points: 3, Status: domain.StatusTodo},
 		{Code: "US-002", Title: "Auth", Epic: domain.Epic{Code: "EP-001", Title: "F"}, Priority: domain.PriorityMedium, Points: 5, Status: domain.StatusPlanned},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := srv.conn.SavePlan(ctx, "US-001", domain.PlanInput{PlanBody: "## Plan", Tasks: []domain.Task{{ID: "TASK-01", Title: "Ship", Type: domain.TaskImpl, Status: domain.StatusTodo}}}); err != nil {
+	if _, err := srv.session().conn.SavePlan(ctx, "US-001", domain.PlanInput{PlanBody: "## Plan", Tasks: []domain.Task{{ID: "TASK-01", Title: "Ship", Type: domain.TaskImpl, Status: domain.StatusTodo}}}); err != nil {
 		t.Fatal(err)
 	}
-	rs := srv.conn.(connector.ReviewStore)
+	rs := srv.session().conn.(connector.ReviewStore)
 	if err := rs.SaveReview(ctx, "US-001", domain.Review{Comments: []domain.ReviewComment{{File: "x.go", Line: 4, Side: "new", Body: "remove"}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestDeleteSpecEndpointFileConnector(t *testing.T) {
 	if !codes["US-002"] {
 		t.Fatal("remaining spec missing from board view")
 	}
-	if _, err := srv.conn.ReadSpecDetail(ctx, "US-001"); err == nil {
+	if _, err := srv.session().conn.ReadSpecDetail(ctx, "US-001"); err == nil {
 		t.Fatal("expected deleted spec to be unreadable")
 	}
 }
@@ -487,12 +487,12 @@ func TestGetSpec(t *testing.T) {
 func TestRequestChangesMovesCommentsIntoSpec(t *testing.T) {
 	srv, _ := newFileServer(t)
 	ctx := context.Background()
-	if _, err := srv.conn.SaveInitialBacklog(ctx, []domain.Spec{
+	if _, err := srv.session().conn.SaveInitialBacklog(ctx, []domain.Spec{
 		{Code: "US-001", Title: "Greeting", Epic: domain.Epic{Code: "EP-001", Title: "F"}, Status: domain.StatusReview, Body: "## User Story\nas a user"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	rs := srv.conn.(connector.ReviewStore)
+	rs := srv.session().conn.(connector.ReviewStore)
 	if err := rs.SaveReview(ctx, "US-001", domain.Review{Comments: []domain.ReviewComment{
 		{File: "hello.txt", Line: 3, Side: "new", Body: "localize this greeting"},
 	}}); err != nil {
@@ -506,7 +506,7 @@ func TestRequestChangesMovesCommentsIntoSpec(t *testing.T) {
 		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
 	}
 
-	spec, err := srv.conn.ReadSpecDetail(ctx, "US-001")
+	spec, err := srv.session().conn.ReadSpecDetail(ctx, "US-001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +538,7 @@ func TestRequestChangesMovesCommentsIntoSpec(t *testing.T) {
 func TestRequestChangesNoCommentsErrors(t *testing.T) {
 	srv, _ := newFileServer(t)
 	ctx := context.Background()
-	if _, err := srv.conn.SaveInitialBacklog(ctx, []domain.Spec{
+	if _, err := srv.session().conn.SaveInitialBacklog(ctx, []domain.Spec{
 		{Code: "US-001", Title: "Greeting", Status: domain.StatusReview},
 	}); err != nil {
 		t.Fatal(err)
