@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -30,6 +31,7 @@ import (
 //	spec start  -> transition PLANNED → IN PROGRESS (idempotent)
 //	spec review -> transition IN PROGRESS → REVIEW; --file (optional) is a closing comment
 //	spec request-changes -> REVIEW → TODO with rework feedback appended to the body (stdin: {"comments":[...]})
+//	spec review-dossier -> attach the evidence a provider prepared for a spec in REVIEW (--file, a domain.ReviewDossier); never transitions
 //	spec integrate -> merge the spec's worktree branch into base, clean up and transition to DONE
 //	spec move   -> reposition a spec within the board or across workflow columns
 //	spec update -> apply a partial patch to an existing spec (--file, a domain.SpecUpdate)
@@ -45,6 +47,7 @@ func newSpecCmd(s streams) *cobra.Command {
 		newSpecStartCmd(s),
 		newSpecReviewCmd(s),
 		newSpecRequestChangesCmd(s),
+		newSpecReviewDossierCmd(s),
 		newSpecIntegrateCmd(s),
 		newSpecMoveCmd(s),
 		newSpecUpdateCmd(s),
@@ -681,6 +684,95 @@ func newSpecRequestChangesCmd(s streams) *cobra.Command {
 					return nil, err
 				}
 				return c.TransitionStatus(ctx, ref, domain.StatusTodo)
+			})
+		},
+	}
+	cmd.Flags().StringVar(&filePath, "file", "", "path to a YAML or JSON payload file, or - for stdin")
+	return cmd
+}
+
+// newSpecReviewDossierCmd attaches to a spec under review the evidence a
+// provider prepared for it. It is the only write a reviewing agent performs,
+// and it is deliberately powerless: it touches the review artifact and nothing
+// else, so no path through this command can move the spec towards DONE. The
+// verdict stays with a person, and the entry points a person reaches are the
+// ones that transition the spec.
+func newSpecReviewDossierCmd(s streams) *cobra.Command {
+	var filePath string
+	cmd := &cobra.Command{
+		Use:   "review-dossier US-XXX",
+		Short: "Attach the review evidence a provider prepared for a spec under REVIEW",
+		Long: "Reads a YAML or JSON payload from --file (a review dossier: {\"execution_id\",\"summary\"," +
+			"\"criteria\":[{\"id\",\"verdict\",\"note\"}],\"blockers\":[...]}) and stores it in the spec's " +
+			"review artifact, preserving any inline comment already saved. It does NOT change the status " +
+			"of the spec: preparing evidence is not deciding, and the verdict remains a human gesture. " +
+			"Errors with E_CONFLICT when the spec is not in REVIEW.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ref := strings.TrimSpace(args[0])
+			if ref == "" {
+				return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
+			}
+			if filePath == "" {
+				return errInvalidUsage("missing input file", "pass --file path/to/dossier.yaml or --file -")
+			}
+			var dossier domain.ReviewDossier
+			if err := readStructuredInput(s.in, filePath, &dossier); err != nil {
+				return err
+			}
+			if strings.TrimSpace(dossier.Summary) == "" {
+				return errInvalidUsage("missing dossier summary", "pass a non-empty \"summary\" describing the increment under review")
+			}
+			criteria := make([]domain.ReviewCriterion, 0, len(dossier.Criteria))
+			for _, c := range dossier.Criteria {
+				if strings.TrimSpace(c.ID) == "" {
+					continue
+				}
+				criteria = append(criteria, c)
+			}
+			if len(criteria) == 0 {
+				// A dossier without criteria is not a dossier: it would let an
+				// agent report "evidence prepared" having examined nothing.
+				return errInvalidUsage("no acceptance criteria in dossier", "pass at least one criterion with an id, e.g. AC-1")
+			}
+			dossier.Criteria = criteria
+			if strings.TrimSpace(dossier.PreparedAt) == "" {
+				dossier.PreparedAt = time.Now().UTC().Format(time.RFC3339)
+			}
+			return withConnector(cmd, s, "write_result", func(ctx context.Context, c connector.Connector) (any, error) {
+				spec, err := c.ReadSpecDetail(ctx, ref)
+				if err != nil {
+					return nil, err
+				}
+				if spec.Status != domain.StatusReview {
+					return nil, iox.NewConflict(
+						fmt.Sprintf("cannot prepare a review dossier for %s: status is %s, expected %s", ref, spec.Status, domain.StatusReview),
+						"only a spec waiting under review has evidence to prepare", nil)
+				}
+				store, ok := c.(connector.ReviewStore)
+				if !ok {
+					return nil, iox.NewPrecondition(
+						"the configured connector cannot store review artifacts",
+						"use the file connector, which persists them under .archetipo/reviews/", nil)
+				}
+				existing, err := store.ReadReview(ctx, ref)
+				if err != nil {
+					return nil, err
+				}
+				// Comments survive: they are the reviewer's own notes and this
+				// command is not the reviewer. The verdict is cleared because a
+				// fresh preparation opens a new round of decision, and carrying
+				// the previous one over would attribute it to evidence it never
+				// saw.
+				existing.Dossier = &dossier
+				existing.Verdict = nil
+				if err := store.SaveReview(ctx, ref, existing); err != nil {
+					return nil, err
+				}
+				return domain.WriteResult{
+					OK:   true,
+					Refs: []domain.Ref{{Code: ref}},
+				}, nil
 			})
 		},
 	}

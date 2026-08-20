@@ -125,6 +125,8 @@
 	const reviewStatus = document.getElementById("review-status");
 	const reviewRequestBtn = document.getElementById("review-request-btn");
 	const reviewIntegrateBtn = document.getElementById("review-integrate-btn");
+	const reviewApproveBtn = document.getElementById("review-approve-btn");
+	const reviewDossier = document.getElementById("review-dossier");
 
 	const THEME_KEY = "archetipo.theme";
 
@@ -295,6 +297,7 @@
 	addTaskBtn.addEventListener("click", () => addTaskRow());
 	reviewRequestBtn.addEventListener("click", onRequestChanges);
 	reviewIntegrateBtn.addEventListener("click", onIntegrate);
+	reviewApproveBtn.addEventListener("click", onApprove);
 	// The action chips are re-rendered on every open, so the handler lives on
 	// their container instead of on buttons that no longer exist. Every
 	// container the panel can be mounted on is bound once, here: which of them
@@ -1073,6 +1076,7 @@
 			]);
 			reviewComments = (review && review.comments) || [];
 			renderReviewBranch(diff);
+			renderDossier(review || {});
 			renderDiff(diff);
 		} catch (err) {
 			reviewLoaded = false;
@@ -1094,6 +1098,83 @@
 				`<span class="review-chip">+${diff.ahead || 0} / −${diff.behind || 0}</span>`,
 			);
 		reviewBranch.innerHTML = parts.join("");
+	}
+
+	// renderDossier shows the evidence a provider prepared for this spec, and the
+	// verdict already taken on it. Its three states are rendered explicitly, and
+	// the empty one says what to do about it: an absent panel would read as a
+	// broken page rather than as work not yet done.
+	function renderDossier(review) {
+		const dossier = review && review.dossier;
+		const verdict = review && review.verdict;
+		const parts = [];
+		if (verdict) {
+			const decided =
+				verdict.decision === "approved" ? "Approved" : "Changes requested";
+			const when = verdict.decided_at
+				? ` on ${escapeHtml(verdict.decided_at)}`
+				: "";
+			const from = verdict.execution_id
+				? ` — evidence prepared by execution ${escapeHtml(verdict.execution_id)}`
+				: "";
+			parts.push(
+				`<div class="review-verdict">${decided}${when}${from}</div>`,
+			);
+		}
+		if (!dossier) {
+			parts.push(
+				'<div class="review-empty">No review dossier yet — run <em>Rivedi</em> to have the provider prepare the evidence</div>',
+			);
+			reviewDossier.innerHTML = parts.join("");
+			reviewApproveBtn.disabled = false;
+			reviewApproveBtn.title = "Accept the increment and close the spec";
+			return;
+		}
+		const head = [];
+		if (dossier.execution_id)
+			head.push(
+				`<span class="review-chip">execution ${escapeHtml(dossier.execution_id)}</span>`,
+			);
+		if (dossier.prepared_at)
+			head.push(
+				`<span class="review-chip">${escapeHtml(dossier.prepared_at)}</span>`,
+			);
+		parts.push(`<div class="review-dossier-head">${head.join("")}</div>`);
+		if (dossier.summary)
+			parts.push(
+				`<p class="review-dossier-summary">${escapeHtml(dossier.summary)}</p>`,
+			);
+		const criteria = dossier.criteria || [];
+		if (criteria.length > 0) {
+			const rows = criteria
+				.map((c) => {
+					const verdictClass = `criterion-${escapeHtml(c.verdict || "unclear")}`;
+					const note = c.note
+						? `<span class="criterion-note">${escapeHtml(c.note)}</span>`
+						: "";
+					return `<li><span class="criterion-badge ${verdictClass}">${escapeHtml(c.verdict || "")}</span><span class="criterion-id">${escapeHtml(c.id || "")}</span>${note}</li>`;
+				})
+				.join("");
+			parts.push(`<ul class="review-criteria">${rows}</ul>`);
+		}
+		const blockers = dossier.blockers || [];
+		if (blockers.length > 0) {
+			const items = blockers
+				.map((b) => `<li>${escapeHtml(b)}</li>`)
+				.join("");
+			parts.push(
+				`<div class="review-blockers"><strong>Blockers</strong><ul>${items}</ul></div>`,
+			);
+		}
+		reviewDossier.innerHTML = parts.join("");
+		// The verdict stays the person's, so the button is never removed — but the
+		// interface does not invite closing an increment the dossier itself
+		// declares blocked. Requesting changes stays available in every case.
+		reviewApproveBtn.disabled = blockers.length > 0;
+		reviewApproveBtn.title =
+			blockers.length > 0
+				? `The dossier reports ${blockers.length} blocker(s): request changes, or clear them first`
+				: "Accept the increment and close the spec";
 	}
 
 	function renderDiff(diff) {
@@ -1309,7 +1390,36 @@
 				{},
 			);
 			showToast(
-				`${currentSpecCode}: ${res.tasks_added} fix task(s) added`,
+				`${currentSpecCode}: ${res.comments_moved} comment(s) converted into fix tasks`,
+				"ok",
+			);
+			closeModal();
+			await loadBoard();
+		} catch (err) {
+			reviewStatus.textContent = `Failed: ${err.message || err}`;
+			reviewStatus.className = "status-msg err";
+		}
+	}
+
+	async function onApprove() {
+		if (!currentSpecCode) return;
+		if (
+			!window.confirm(
+				`Approve ${currentSpecCode}? This accepts the increment and closes the spec.`,
+			)
+		)
+			return;
+		reviewStatus.textContent = "Approving…";
+		reviewStatus.className = "status-msg";
+		try {
+			const res = await apiPost(
+				`/api/spec/${encodeURIComponent(currentSpecCode)}/approve`,
+				{},
+			);
+			showToast(
+				res.integrated
+					? `${currentSpecCode} approved and integrated`
+					: `${currentSpecCode} approved`,
 				"ok",
 			);
 			closeModal();

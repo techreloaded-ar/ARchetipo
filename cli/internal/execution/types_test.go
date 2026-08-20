@@ -13,6 +13,7 @@ func TestActionMapsToItsCapabilityAndScope(t *testing.T) {
 	}{
 		{ActionPlan, CapabilitySpecPlan, ScopeSpec},
 		{ActionImplement, CapabilitySpecImplement, ScopeSpec},
+		{ActionReview, CapabilitySpecReview, ScopeSpec},
 		{ActionInception, CapabilityWorkspaceInception, ScopeWorkspace},
 		{ActionBacklog, CapabilityWorkspaceBacklog, ScopeWorkspace},
 	}

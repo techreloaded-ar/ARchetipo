@@ -63,6 +63,11 @@ const (
 	// the invocation impossible rather than merely unlikely to work.
 	implementSkillRelPath = ".agents/skills/archetipo-implement/SKILL.md"
 
+	// reviewSkillRelPath is the same fact for the review skill: it is what
+	// makes `/archetipo-review` invocable at all, so its absence is the one
+	// thing worth checking before a process is spawned to run it.
+	reviewSkillRelPath = ".agents/skills/archetipo-review/SKILL.md"
+
 	// shutdownGrace bounds how long the session process is given to exit on its
 	// own after its input is closed, before it is signalled.
 	shutdownGrace = 5 * time.Second
@@ -152,6 +157,7 @@ func (p *Provider) Capabilities(context.Context) ([]execution.Capability, error)
 	return []execution.Capability{
 		execution.CapabilitySpecPlan,
 		execution.CapabilitySpecImplement,
+		execution.CapabilitySpecReview,
 	}, nil
 }
 
@@ -191,6 +197,9 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 	// set of conditions inside this one.
 	if req.Action == execution.ActionImplement {
 		return p.executeImplement(ctx, req, cfg, dir)
+	}
+	if req.Action == execution.ActionReview {
+		return p.executeReview(ctx, req, cfg, dir)
 	}
 	if err := ensureSkill(dir, planSkillRelPath, "planning"); err != nil {
 		return execution.Result{}, err

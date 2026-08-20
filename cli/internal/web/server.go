@@ -171,6 +171,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/spec/{code}/review", s.handleGetReview)
 	s.mux.HandleFunc("PUT /api/spec/{code}/review", s.handleSaveReview)
 	s.mux.HandleFunc("POST /api/spec/{code}/request-changes", s.handleRequestChanges)
+	s.mux.HandleFunc("POST /api/spec/{code}/approve", s.handleApprove)
 	s.mux.HandleFunc("POST /api/spec/{code}/integrate", s.handleIntegrate)
 	s.mux.HandleFunc("GET /api/prd", s.handleGetPRD)
 	s.mux.HandleFunc("PUT /api/prd", s.handleSavePRD)

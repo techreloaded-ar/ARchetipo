@@ -746,3 +746,99 @@ func TestDiscardBacklogRemovesSpecFilesAndIndex(t *testing.T) {
 		t.Fatal("DiscardBacklog reported a second removal with nothing to remove")
 	}
 }
+
+// A review artifact carrying comments, a prepared dossier and a human verdict
+// must survive a save and a re-read field by field: the dossier is what the
+// viewer shows and the verdict is the only trace of who decided.
+func TestReviewRoundTripKeepsDossierAndVerdict(t *testing.T) {
+	c := newTestConnector(t)
+	ctx := context.Background()
+	want := domain.Review{
+		Comments: []domain.ReviewComment{{File: "cli/main.go", Side: "new", Line: 12, Body: "naming", CreatedAt: "2026-08-20T10:00:00Z"}},
+		Dossier: &domain.ReviewDossier{
+			ExecutionID: "exec-42",
+			PreparedAt:  "2026-08-20T10:05:00Z",
+			Summary:     "The increment satisfies the acceptance criteria.",
+			Criteria: []domain.ReviewCriterion{
+				{ID: "AC-1", Verdict: domain.ReviewCriterionMet, Note: "covered by the HTTP acceptance test"},
+				{ID: "AC-2", Verdict: domain.ReviewCriterionUnclear},
+			},
+			Blockers: []string{"the demo video is missing"},
+		},
+		Verdict: &domain.ReviewVerdict{
+			Decision:    domain.ReviewDecisionApproved,
+			DecidedAt:   "2026-08-20T10:30:00Z",
+			ExecutionID: "exec-42",
+		},
+	}
+
+	if err := c.SaveReview(ctx, "US-901", want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.ReadReview(ctx, "US-901")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(got.Comments) != 1 || got.Comments[0] != want.Comments[0] {
+		t.Fatalf("comments = %+v, want %+v", got.Comments, want.Comments)
+	}
+	if got.Dossier == nil {
+		t.Fatal("dossier lost on round trip")
+	}
+	if got.Dossier.ExecutionID != want.Dossier.ExecutionID ||
+		got.Dossier.PreparedAt != want.Dossier.PreparedAt ||
+		got.Dossier.Summary != want.Dossier.Summary {
+		t.Fatalf("dossier header = %+v, want %+v", got.Dossier, want.Dossier)
+	}
+	if len(got.Dossier.Criteria) != 2 || got.Dossier.Criteria[0] != want.Dossier.Criteria[0] || got.Dossier.Criteria[1] != want.Dossier.Criteria[1] {
+		t.Fatalf("dossier criteria = %+v, want %+v", got.Dossier.Criteria, want.Dossier.Criteria)
+	}
+	if len(got.Dossier.Blockers) != 1 || got.Dossier.Blockers[0] != want.Dossier.Blockers[0] {
+		t.Fatalf("dossier blockers = %+v, want %+v", got.Dossier.Blockers, want.Dossier.Blockers)
+	}
+	if got.Verdict == nil || *got.Verdict != *want.Verdict {
+		t.Fatalf("verdict = %+v, want %+v", got.Verdict, want.Verdict)
+	}
+}
+
+// A review file written before the dossier and the verdict existed stays
+// readable, and reports both as absent rather than as empty.
+func TestReviewFileWithOnlyCommentsStaysReadable(t *testing.T) {
+	c := newTestConnector(t)
+	ctx := context.Background()
+	if err := os.MkdirAll(c.reviewsDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := "schema: archetipo/review/v1\nspec_code: US-902\ncomments:\n  - file: a.go\n    side: new\n    line: 3\n    body: rename this\n"
+	if err := os.WriteFile(c.reviewPath("US-902"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := c.ReadReview(ctx, "US-902")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Comments) != 1 || got.Comments[0].Body != "rename this" {
+		t.Fatalf("comments = %+v, want the single legacy comment", got.Comments)
+	}
+	if got.Dossier != nil {
+		t.Fatalf("dossier = %+v, want nil for a file that has none", got.Dossier)
+	}
+	if got.Verdict != nil {
+		t.Fatalf("verdict = %+v, want nil for a file that has none", got.Verdict)
+	}
+}
+
+// A spec that has never been reviewed reads as an empty artifact, not as an
+// error, and both optional parts are absent.
+func TestReadReviewOfMissingFileHasNoDossierOrVerdict(t *testing.T) {
+	c := newTestConnector(t)
+	got, err := c.ReadReview(context.Background(), "US-903")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Comments) != 0 || got.Dossier != nil || got.Verdict != nil {
+		t.Fatalf("review of a spec with no file = %+v, want empty comments and nil dossier/verdict", got)
+	}
+}

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -154,12 +155,123 @@ func (s *Server) handleRequestChanges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	// Clear the review: the feedback now lives in the spec body.
-	if err := rs.SaveReview(ctx, code, domain.Review{Comments: []domain.ReviewComment{}}); err != nil {
+	// Clear the review, but keep the verdict: the feedback now lives in the spec
+	// body, and the dossier goes with the comments because evidence that has
+	// just been rejected no longer describes the increment. What survives is the
+	// decision itself, named together with the execution that had prepared the
+	// evidence it was taken on — the same trace an approval leaves, so a spec
+	// that came back and one that was accepted are equally accountable.
+	verdict := domain.ReviewVerdict{
+		Decision:    domain.ReviewDecisionChangesRequested,
+		DecidedAt:   time.Now().UTC().Format(time.RFC3339),
+		ExecutionID: s.decidedExecutionID(ctx, ws, code, review),
+	}
+	if err := rs.SaveReview(ctx, code, domain.Review{Comments: []domain.ReviewComment{}, Verdict: &verdict}); err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "comments_moved": len(review.Comments)})
+}
+
+// decidedExecutionID names the execution whose evidence a verdict was taken on.
+//
+// The dossier is the first source because it is the only one that is certainly
+// right: it was written by the run that prepared it. The latest execution of the
+// spec is the fallback for a spec decided without a prepared dossier, and an
+// empty string is the honest answer when there is no run to name at all — a
+// verdict pointing at the wrong execution would be worse than one pointing at
+// none.
+func (s *Server) decidedExecutionID(ctx context.Context, ws *workspaceSession, code string, review domain.Review) string {
+	if review.Dossier != nil && strings.TrimSpace(review.Dossier.ExecutionID) != "" {
+		return review.Dossier.ExecutionID
+	}
+	latest, err := s.latestExecution(ctx, ws, code)
+	if err != nil || latest == nil {
+		return ""
+	}
+	return latest.ID
+}
+
+// handleApprove is the human acceptance gate: the one entry point that closes a
+// spec waiting under review, and the one no provider can reach.
+//
+// It exists as a route of its own rather than as a branch of handleIntegrate
+// because integration is only half the story. handleIntegrate refuses outright
+// when the worktree workflow is off, and in that configuration the only way to
+// close a spec from the viewer was dragging its card onto DONE — which records
+// no verdict at all. Approving must mean the same thing in both configurations,
+// so the route decides internally whether closing the spec means integrating a
+// branch or transitioning it.
+//
+// The order of the two writes is deliberate. The verdict is persisted *before*
+// the transition: if the transition then fails, what is left is a spec still in
+// review carrying a recorded decision, which a person can see and retry. The
+// reverse order would leave a spec closed with no trace of who closed it, which
+// is precisely the state AC-3 exists to make impossible.
+func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
+	code := r.PathValue("code")
+	if code == "" {
+		writeError(w, iox.NewInvalidInput("missing spec code", "use /api/spec/US-XXX/approve", nil))
+		return
+	}
+	ctx := r.Context()
+	spec, err := ws.conn.ReadSpecDetail(ctx, code)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	// Nothing that is not waiting for a decision can be decided, and nothing can
+	// be decided twice: a spec already closed answers the same way as one that
+	// never reached review.
+	if spec.Status != domain.StatusReview {
+		writeError(w, iox.NewConflict(
+			fmt.Sprintf("cannot approve %s: status is %s, expected %s", code, spec.Status, domain.StatusReview),
+			"only a spec waiting under review can be approved", nil))
+		return
+	}
+	rs, ok := ws.conn.(connector.ReviewStore)
+	if !ok {
+		// Approving without being able to record the verdict is refused rather
+		// than performed silently: a decision nobody can trace back is not the
+		// acceptance this gate is for.
+		writeError(w, iox.NewConnector(iox.CodePreconditionMissing,
+			"this connector does not persist review verdicts",
+			"use the file connector, which stores them under .archetipo/reviews/", nil))
+		return
+	}
+	review, err := rs.ReadReview(ctx, code)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	executionID := s.decidedExecutionID(ctx, ws, code, review)
+	review.Verdict = &domain.ReviewVerdict{
+		Decision:    domain.ReviewDecisionApproved,
+		DecidedAt:   time.Now().UTC().Format(time.RFC3339),
+		ExecutionID: executionID,
+	}
+	if err := rs.SaveReview(ctx, code, review); err != nil {
+		writeError(w, err)
+		return
+	}
+	integrated := ws.cfg.Worktree.Enabled && spec.Branch != ""
+	if integrated {
+		if err := s.integrateSpec(ctx, ws, code, spec); err != nil {
+			writeError(w, err)
+			return
+		}
+	} else if _, err := ws.conn.TransitionStatus(ctx, code, domain.StatusDone); err != nil {
+		writeError(w, err)
+		return
+	}
+	s.broker.Publish()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":           true,
+		"status":       string(domain.StatusDone),
+		"execution_id": executionID,
+		"integrated":   integrated,
+	})
 }
 
 // handleIntegrate merges the spec's branch into base, removes the worktree and
@@ -176,36 +288,45 @@ func (s *Server) handleIntegrate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, iox.NewConflict("worktree workflow is disabled", "enable worktree.enabled in config.yaml", nil))
 		return
 	}
-	if err := gitwt.EnsureRepo(ctx, ws.cfg.ProjectRoot, ws.cfg.Worktree.Base); err != nil {
-		writeError(w, err)
-		return
-	}
 	spec, err := ws.conn.ReadSpecDetail(ctx, code)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	if spec.Branch == "" {
-		writeError(w, iox.NewPrecondition(fmt.Sprintf("spec %s has no worktree branch", code), "", nil))
+	if err := s.integrateSpec(ctx, ws, code, spec); err != nil {
+		writeError(w, err)
 		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "merged_at": time.Now().UTC().Format(time.RFC3339)})
+}
+
+// integrateSpec merges the spec's branch into base, removes the worktree and
+// the branch, clears the persisted worktree metadata and transitions the spec
+// to DONE. It returns errors already rendered with iox and writes nothing to
+// the response, so both the integration route and the approval gate can perform
+// the very same sequence: a spec closed through one path and one closed through
+// the other must end in the identical state, and a second copy of this sequence
+// would be free to drift.
+func (s *Server) integrateSpec(ctx context.Context, ws *workspaceSession, code string, spec domain.Spec) error {
+	if err := gitwt.EnsureRepo(ctx, ws.cfg.ProjectRoot, ws.cfg.Worktree.Base); err != nil {
+		return err
+	}
+	if spec.Branch == "" {
+		return iox.NewPrecondition(fmt.Sprintf("spec %s has no worktree branch", code), "", nil)
 	}
 	allSpecs, err := ws.conn.FetchBacklogItems(ctx, "")
 	if err != nil {
-		writeError(w, err)
-		return
+		return err
 	}
 	blockers, err := gitwt.UnintegratedBlockers(ctx, ws.cfg.ProjectRoot, ws.cfg.Worktree, spec, allSpecs)
 	if err != nil {
-		writeError(w, err)
-		return
+		return err
 	}
 	if len(blockers) > 0 {
-		writeError(w, iox.NewConflict(fmt.Sprintf("unintegrated blockers: %s", strings.Join(blockers, ", ")), "integrate the blockers first", nil))
-		return
+		return iox.NewConflict(fmt.Sprintf("unintegrated blockers: %s", strings.Join(blockers, ", ")), "integrate the blockers first", nil)
 	}
 	if err := gitwt.Integrate(ctx, ws.cfg.ProjectRoot, ws.cfg.Worktree, spec.Branch, spec.Worktree); err != nil {
-		writeError(w, err)
-		return
+		return err
 	}
 	// Clear persisted worktree metadata after a successful integrate.
 	emptyStr := ""
@@ -215,8 +336,7 @@ func (s *Server) handleIntegrate(w http.ResponseWriter, r *http.Request) {
 		ForkBase: &emptyStr,
 	}) // best-effort: ignore error, merge succeeded.
 	if _, err := ws.conn.TransitionStatus(ctx, code, domain.StatusDone); err != nil {
-		writeError(w, err)
-		return
+		return err
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "merged_at": time.Now().UTC().Format(time.RFC3339)})
+	return nil
 }

@@ -18,6 +18,7 @@ type ExecutionStatus string
 const (
 	ActionPlan      ActionID = "plan"
 	ActionImplement ActionID = "implement"
+	ActionReview    ActionID = "review"
 	ActionInception ActionID = "inception"
 	ActionBacklog   ActionID = "backlog"
 
@@ -27,7 +28,17 @@ const (
 	// deliberately distinct from CapabilitySpecPlan: writing a plan and carrying
 	// it out are different pieces of work, and a provider that can do one is not
 	// thereby able to do the other.
-	CapabilitySpecImplement      Capability = "spec.implement"
+	CapabilitySpecImplement Capability = "spec.implement"
+	// CapabilitySpecReview says that a provider can prepare the review evidence
+	// of a spec that is already in review: read the acceptance criteria, the
+	// diff, the tests and the documentation state, and leave a dossier behind.
+	//
+	// It contains no power to decide. Approving an increment or sending it back
+	// is not an execution action at all: it is a human verdict, reached through
+	// an entry point no provider can reach. A provider that declares this
+	// capability is saying it can do the instruction, never that it can close
+	// the spec.
+	CapabilitySpecReview         Capability = "spec.review"
 	CapabilityWorkspaceInception Capability = "workspace.inception"
 	CapabilityWorkspaceBacklog   Capability = "workspace.backlog"
 	// CapabilityRunDialog says that a provider exposes a run one can follow and
@@ -111,6 +122,8 @@ func RequiredCapability(action ActionID) (Capability, error) {
 		return CapabilitySpecPlan, nil
 	case ActionImplement:
 		return CapabilitySpecImplement, nil
+	case ActionReview:
+		return CapabilitySpecReview, nil
 	case ActionInception:
 		return CapabilityWorkspaceInception, nil
 	case ActionBacklog:
@@ -135,7 +148,7 @@ const (
 // whole workspace.
 func ActionScope(action ActionID) (Scope, error) {
 	switch action {
-	case ActionPlan, ActionImplement:
+	case ActionPlan, ActionImplement, ActionReview:
 		return ScopeSpec, nil
 	case ActionInception, ActionBacklog:
 		return ScopeWorkspace, nil

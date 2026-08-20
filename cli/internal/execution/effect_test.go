@@ -777,6 +777,21 @@ func TestBeginActionEffectMovesAnImplementationToInProgress(t *testing.T) {
 			}
 		}
 	})
+	// US-035 AC-2: asking a provider to prepare a review must not move the spec
+	// even by a column, or the request itself would already be a step towards
+	// closing it.
+	t.Run("preparing a review moves nothing", func(t *testing.T) {
+		mover := &specMover{}
+		for _, status := range []domain.Status{domain.StatusReview, domain.StatusPlanned, domain.StatusInProgress} {
+			spec := domain.Spec{Code: "US-001", Status: status}
+			if err := BeginActionEffect(context.Background(), mover, ActionReview, spec); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if mover.calls != 0 {
+			t.Fatalf("starting a review wrote %d time(s)", mover.calls)
+		}
+	})
 	t.Run("another action owes the backlog nothing", func(t *testing.T) {
 		mover := &specMover{}
 		spec := domain.Spec{Code: "US-001", Status: domain.StatusTodo}
@@ -853,6 +868,145 @@ func TestVerifyActionEffectConfirmsAnImplementationOnlyWhenThePlanIsCarriedOut(t
 			record := succeededRecord()
 			record.Action = ActionImplement
 			err := VerifyActionEffect(context.Background(), tc.reader, ActionImplement, "US-001", &record)
+			var unconfirmed *UnconfirmedEffectError
+			if !errors.As(err, &unconfirmed) {
+				t.Fatalf("error = %v, want *UnconfirmedEffectError", err)
+			}
+			if record.Status != StatusFailed || record.Error == nil || record.Error.Code != "UNCONFIRMED_EFFECT" {
+				t.Fatalf("the record was not demoted: %#v", record)
+			}
+			if !strings.Contains(record.Error.Message, tc.want) {
+				t.Fatalf("message = %q, want it to mention %q", record.Error.Message, tc.want)
+			}
+		})
+	}
+}
+
+// reviewStateReader is a stateReader that can also answer with a review
+// artifact: the shape reviewEffect narrows the reader to at the only point that
+// knows the action.
+type reviewStateReader struct {
+	stateReader
+	review    domain.Review
+	reviewErr error
+}
+
+func (r *reviewStateReader) ReadReview(context.Context, string) (domain.Review, error) {
+	if r.reviewErr != nil {
+		return domain.Review{}, r.reviewErr
+	}
+	return r.review, nil
+}
+
+func preparedDossier(executionID string) domain.Review {
+	return domain.Review{
+		Dossier: &domain.ReviewDossier{
+			ExecutionID: executionID,
+			Summary:     "the increment adds the greeting endpoint",
+			Criteria:    []domain.ReviewCriterion{{ID: "AC-1", Verdict: domain.ReviewCriterionMet}},
+		},
+	}
+}
+
+// US-035 AC-1: a review that really left evidence behind, with the spec exactly
+// where it was, is the one shape that counts as a success.
+func TestVerifyActionEffectConfirmsAReviewThatPreparedEvidenceAndMovedNothing(t *testing.T) {
+	reader := &reviewStateReader{
+		stateReader: stateReader{spec: domain.Spec{Code: "US-001", Status: domain.StatusReview}},
+		review:      preparedDossier("exec-effect-1"),
+	}
+	record := succeededRecord()
+	record.Action = ActionReview
+	if err := VerifyActionEffect(context.Background(), reader, ActionReview, "US-001", &record); err != nil {
+		t.Fatalf("a prepared review was rejected: %v", err)
+	}
+	if record.Status != StatusSucceeded {
+		t.Fatalf("the record was demoted: %#v", record)
+	}
+}
+
+// A dossier whose ExecutionID is empty was legitimately prepared by hand, and
+// tolerating it is what keeps the CLI command usable outside a run.
+func TestVerifyActionEffectAcceptsADossierWithoutAnExecutionID(t *testing.T) {
+	reader := &reviewStateReader{
+		stateReader: stateReader{spec: domain.Spec{Code: "US-001", Status: domain.StatusReview}},
+		review:      preparedDossier(""),
+	}
+	record := succeededRecord()
+	record.Action = ActionReview
+	if err := VerifyActionEffect(context.Background(), reader, ActionReview, "US-001", &record); err != nil {
+		t.Fatalf("a hand-prepared dossier was rejected: %v", err)
+	}
+}
+
+// US-035 AC-2 and AC-5: every way a review run can fail to back its own claim
+// demotes the record and says why. The first case is the one the story exists
+// for — an agent that closed the spec itself.
+func TestVerifyActionEffectRefusesAReviewTheWorkspaceDoesNotBack(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reader SpecStateReader
+		want   string
+	}{
+		{
+			name: "the agent decided in the person's place and closed the spec",
+			reader: &reviewStateReader{
+				stateReader: stateReader{spec: domain.Spec{Code: "US-001", Status: domain.StatusDone}},
+				review:      preparedDossier("exec-effect-1"),
+			},
+			want: "DONE",
+		},
+		{
+			name: "the agent sent the spec back itself",
+			reader: &reviewStateReader{
+				stateReader: stateReader{spec: domain.Spec{Code: "US-001", Status: domain.StatusTodo}},
+				review:      preparedDossier("exec-effect-1"),
+			},
+			want: "TODO",
+		},
+		{
+			name: "no evidence was persisted",
+			reader: &reviewStateReader{
+				stateReader: stateReader{spec: domain.Spec{Code: "US-001", Status: domain.StatusReview}},
+			},
+			want: "no review dossier",
+		},
+		{
+			name: "the dossier examined no criterion",
+			reader: &reviewStateReader{
+				stateReader: stateReader{spec: domain.Spec{Code: "US-001", Status: domain.StatusReview}},
+				review: domain.Review{Dossier: &domain.ReviewDossier{
+					Summary: "looks fine",
+				}},
+			},
+			want: "no review dossier",
+		},
+		{
+			name: "the dossier belongs to another execution",
+			reader: &reviewStateReader{
+				stateReader: stateReader{spec: domain.Spec{Code: "US-001", Status: domain.StatusReview}},
+				review:      preparedDossier("exec-effect-9"),
+			},
+			want: "exec-effect-9",
+		},
+		{
+			name: "the review artifact cannot be read",
+			reader: &reviewStateReader{
+				stateReader: stateReader{spec: domain.Spec{Code: "US-001", Status: domain.StatusReview}},
+				reviewErr:   errors.New("disk on fire"),
+			},
+			want: "disk on fire",
+		},
+		{
+			name:   "the connector cannot read review artifacts at all",
+			reader: &stateReader{spec: domain.Spec{Code: "US-001", Status: domain.StatusReview}},
+			want:   "cannot read the review dossier back",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := succeededRecord()
+			record.Action = ActionReview
+			err := VerifyActionEffect(context.Background(), tc.reader, ActionReview, "US-001", &record)
 			var unconfirmed *UnconfirmedEffectError
 			if !errors.As(err, &unconfirmed) {
 				t.Fatalf("error = %v, want *UnconfirmedEffectError", err)

@@ -94,3 +94,44 @@ func buildImplementPrompt(req execution.Request) string {
 func buildArgs() []string {
 	return []string{"app-server", "--listen", "stdio://"}
 }
+
+// buildReviewPrompt renders the single instruction that prepares the review
+// evidence of a spec already waiting under review.
+//
+// It is pure and deterministic for the same reasons buildPrompt is, and it is a
+// single turn for the same reason: the work ends on a receipt.
+//
+// Unlike every other prompt, this one states what must *not* happen, and names
+// the three commands by hand. That repetition is deliberate. Elsewhere the
+// prompt stays silent about transitions because the skill owns them; here the
+// whole point of the action is that no transition may occur, and the failure
+// mode being guarded against is an agent that helpfully finishes the job. The
+// skill's prepared-dossier mode says the same thing, the shared receipt refuses
+// any status but REVIEW, and the confirmation of the effect refuses a spec that
+// moved: three independent guards, because a single one that the model talks
+// itself past leaves a spec closed without anybody deciding.
+//
+// The execution id travels in the prompt because this is the only point where
+// the provider knows the identity of the run. Carried into the dossier, it is
+// what later lets a human verdict name the execution that prepared the evidence
+// it was decided on.
+func buildReviewPrompt(req execution.Request) string {
+	return strings.Join([]string{
+		"Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed.",
+		"Prepare the review evidence of the spec " + req.SpecCode + " by invoking the ARchetipo review skill in its prepared dossier mode:",
+		"",
+		"/archetipo-review " + req.SpecCode,
+		"",
+		"Prepared dossier mode: you gather the evidence, a person decides. You must NOT run `archetipo spec move`, `archetipo spec integrate` or `archetipo spec request-changes`, and you must leave the spec in " + reviewStatus + ".",
+		"Persist the evidence with:",
+		"",
+		"archetipo spec review-dossier " + req.SpecCode + " --file <payload>",
+		"",
+		`The payload must carry "execution_id": "` + req.ExecutionID + `", a "summary" of the increment, one entry in "criteria" per acceptance criterion with a verdict of "met", "unclear" or "not_verifiable", and one entry in "blockers" per impediment found. Do not paste the dossier into your final message.`,
+		"Close your run with a single JSON receipt line and nothing after it:",
+		"",
+		`{"spec_code":"` + req.SpecCode + `","status":"` + reviewStatus + `","criteria":<N>,"blockers":<M>}`,
+		"",
+		"<N> is the number of acceptance criteria you examined and <M> the number of blockers you found. Emit the receipt only after the dossier is persisted and the spec is still " + reviewStatus + ".",
+	}, "\n")
+}

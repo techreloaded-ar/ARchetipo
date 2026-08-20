@@ -483,12 +483,75 @@ type ReviewComment struct {
 	CreatedAt string `json:"created_at,omitempty" yaml:"created_at,omitempty"`
 }
 
-// Review is the set of inline comments saved for a spec under review. It is
-// persisted by the file connector at .archetipo/reviews/{code}.yaml and is
-// ephemeral: once the comments are converted into Fix tasks ("request changes")
-// the review is cleared.
+// ReviewCriterion is one acceptance criterion as the review dossier reports it.
+// Verdict is a closed vocabulary of three values — ReviewCriterionMet,
+// ReviewCriterionUnclear and ReviewCriterionNotVerifiable — and it is
+// deliberately not validated here: the domain names the vocabulary, and the
+// entry point that accepts a dossier is where a value outside it is rejected.
+type ReviewCriterion struct {
+	ID      string `json:"id" yaml:"id"`
+	Verdict string `json:"verdict" yaml:"verdict"`
+	Note    string `json:"note,omitempty" yaml:"note,omitempty"`
+}
+
+// The three verdicts a single criterion can carry. "unclear" and
+// "not_verifiable" are kept apart on purpose: the first says the evidence was
+// found and does not settle the question, the second that no evidence of that
+// kind exists at all, and a reviewer acts differently on the two.
+const (
+	ReviewCriterionMet           = "met"
+	ReviewCriterionUnclear       = "unclear"
+	ReviewCriterionNotVerifiable = "not_verifiable"
+)
+
+// ReviewDossier is the evidence a provider prepared for a spec sitting in
+// review: what the increment claims to satisfy, criterion by criterion, and
+// what stands in the way. It carries no decision.
+//
+// ExecutionID names the execution that prepared it. It is what later lets a
+// human verdict name the run that produced the evidence it was decided on;
+// without it the verdict would be a decision with no traceable instruction.
+type ReviewDossier struct {
+	ExecutionID string            `json:"execution_id,omitempty" yaml:"execution_id,omitempty"`
+	PreparedAt  string            `json:"prepared_at,omitempty" yaml:"prepared_at,omitempty"`
+	Summary     string            `json:"summary" yaml:"summary"`
+	Criteria    []ReviewCriterion `json:"criteria" yaml:"criteria"`
+	Blockers    []string          `json:"blockers,omitempty" yaml:"blockers,omitempty"`
+}
+
+// The two decisions a human verdict can carry.
+const (
+	ReviewDecisionApproved         = "approved"
+	ReviewDecisionChangesRequested = "changes_requested"
+)
+
+// ReviewVerdict is the record of the human decision taken on a spec in review:
+// which way it went, when, and which execution had prepared the evidence.
+// It is only ever written by an entry point a person reaches — never by a
+// provider, which is the whole point of keeping it separate from the dossier.
+type ReviewVerdict struct {
+	Decision    string `json:"decision" yaml:"decision"`
+	DecidedAt   string `json:"decided_at,omitempty" yaml:"decided_at,omitempty"`
+	ExecutionID string `json:"execution_id,omitempty" yaml:"execution_id,omitempty"`
+}
+
+// Review is what a spec under review carries: the inline comments left on its
+// diff, the dossier a provider prepared, and the verdict a person reached. It
+// is persisted by the file connector at .archetipo/reviews/{code}.yaml.
+//
+// The three parts have different lifetimes. Comments are ephemeral: once they
+// are converted into Fix tasks ("request changes") they are cleared, and the
+// dossier goes with them because evidence that has just been rejected no longer
+// describes the increment. The verdict survives, because it is the trace of the
+// decision itself.
+//
+// Dossier and Verdict are pointers because "absent" and "empty" are two
+// different facts: a spec without a dossier has not had a preparation yet, and
+// one without a verdict has not been decided yet.
 type Review struct {
 	Comments []ReviewComment `json:"comments" yaml:"comments"`
+	Dossier  *ReviewDossier  `json:"dossier,omitempty" yaml:"dossier,omitempty"`
+	Verdict  *ReviewVerdict  `json:"verdict,omitempty" yaml:"verdict,omitempty"`
 }
 
 // ReworkFeedbackHeading is the markdown heading under which request-changes

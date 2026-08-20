@@ -82,6 +82,12 @@ func HasPersistedPlan(ctx context.Context, reader SpecStateReader, specCode stri
 // It is therefore idempotent: a spec already IN PROGRESS is left alone, so
 // pressing the action again — or the skill running `archetipo spec start`
 // itself — is a no-op rather than a second write.
+//
+// ActionReview has no start effect either, and that is a decision rather than
+// an omission: preparing evidence must not move the spec even by a column, or
+// the very act of asking for a review would already be a step towards closing
+// it. The `action != ActionImplement` guard below is what guarantees it, so the
+// review needs no branch of its own.
 func BeginActionEffect(ctx context.Context, mover SpecTransitioner, action ActionID, spec domain.Spec) error {
 	if action != ActionImplement {
 		return nil
@@ -102,6 +108,15 @@ func BeginActionEffect(ctx context.Context, mover SpecTransitioner, action Actio
 // without any adapter.
 type PRDStateReader interface {
 	ReadPRD(ctx context.Context) (string, error)
+}
+
+// ReviewStateReader is the minimal view of the workspace that confirming a
+// prepared review needs: re-read the review artifact of a spec. Like every
+// other reader here it is declared as an interface of the consumer, so this
+// package never imports connector; a connector exposing the ReviewStore
+// capability satisfies it without any adapter.
+type ReviewStateReader interface {
+	ReadReview(ctx context.Context, code string) (domain.Review, error)
 }
 
 // PRDDiscarder is the workspace's own undo, mirrored here as a consumer
@@ -197,6 +212,16 @@ func VerifyActionEffect(ctx context.Context, reader SpecStateReader, action Acti
 		reason = planEffect(ctx, reader, specCode)
 	case ActionImplement:
 		reason = implementEffect(ctx, reader, specCode)
+	case ActionReview:
+		// Same narrowing as the inception below, for the same reason: what a
+		// prepared review needs from the connector is the review artifact, and
+		// it is asked for at the only point that knows the action.
+		review, ok := reader.(ReviewStateReader)
+		if !ok {
+			reason = fmt.Errorf("the connector cannot read the review dossier back")
+		} else {
+			reason = reviewEffect(ctx, reader, review, specCode, outcome.ID)
+		}
 	case ActionInception:
 		// The parameter keeps SpecStateReader as its static type so the two
 		// callers pass the same connector for every action; what an inception
@@ -298,6 +323,45 @@ func implementEffect(ctx context.Context, reader SpecStateReader, specCode strin
 	}
 	if len(open) > 0 {
 		return fmt.Errorf("%s is %s but %s of its plan is still %s", specCode, domain.StatusReview, strings.Join(open, ", "), domain.StatusTodo)
+	}
+	return nil
+}
+
+// reviewEffect reports why the connector does not back a claimed review
+// preparation, or nil when it does.
+//
+// The state condition is the inverse of every other action's, and deliberately
+// so. Elsewhere a success is confirmed by the spec having *moved*; here it is
+// confirmed by the spec having *stayed* in REVIEW. The only party that could
+// have moved it during this run is the agent, and moving it would have been a
+// verdict — the one thing this action exists not to take. So a spec found
+// anywhere else demotes the record, whatever the receipt said.
+//
+// The second condition is that evidence was actually left behind: a run that
+// declares it prepared a dossier and persisted none has produced nothing a
+// person can decide on.
+//
+// A dossier belonging to a different execution is refused as well. The verdict
+// will later name the execution that prepared the evidence it was decided on,
+// and naming the wrong one is worse than naming none. An empty ExecutionID is
+// tolerated on purpose: a dossier can legitimately have been prepared by hand.
+func reviewEffect(ctx context.Context, reader SpecStateReader, review ReviewStateReader, specCode, executionID string) error {
+	spec, err := reader.ReadSpecDetail(ctx, specCode)
+	if err != nil {
+		return fmt.Errorf("re-reading %s failed: %w", specCode, err)
+	}
+	if spec.Status != domain.StatusReview {
+		return fmt.Errorf("%s is %s: preparing a review must leave the spec in %s", specCode, spec.Status, domain.StatusReview)
+	}
+	artifact, err := review.ReadReview(ctx, specCode)
+	if err != nil {
+		return fmt.Errorf("reading the review dossier of %s failed: %w", specCode, err)
+	}
+	if artifact.Dossier == nil || strings.TrimSpace(artifact.Dossier.Summary) == "" || len(artifact.Dossier.Criteria) == 0 {
+		return fmt.Errorf("no review dossier was persisted for %s", specCode)
+	}
+	if got := strings.TrimSpace(artifact.Dossier.ExecutionID); got != "" && got != executionID {
+		return fmt.Errorf("the review dossier of %s was prepared by execution %s, not by %s", specCode, got, executionID)
 	}
 	return nil
 }

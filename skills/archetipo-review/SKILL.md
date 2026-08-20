@@ -16,8 +16,10 @@ Read `.archetipo/shared-runtime.md` for the CLI Runtime Contract, Language Polic
 ## Execution Contract
 
 1. **The verdict is the user's.** This skill is the one place in the workflow where stopping to ask is the point, not a failure. Never approve, reject, or postpone a spec on your own initiative — unless **Autonomous acceptance mode** is explicitly activated by the invoking prompt, in which case the verdict is decided by the policy defined in that section and nothing else changes.
+
+   Two modes alter this rule, and neither ever activates on its own: only an invoking prompt can ask for one. **Autonomous acceptance mode** replaces the human verdict with a policy verdict; **Prepared dossier mode** takes no verdict at all and stops before PHASE 2, leaving the decision to a person. Both are defined in their own sections at the end of this skill.
 2. **Everything else is autonomous.** Gathering evidence, presenting the increment, and executing the chosen verdict need no confirmation beyond the verdict itself.
-3. **Connector operations are exposed by the CLI.** This skill uses `config show`, `spec show`, `spec next`, `spec integrate`, `spec move`, and `spec request-changes`. It also uses `e2e demo` plus connector-independent `wiki status`, `wiki validate --profile bootstrap`, `wiki approve`, and `wiki reconfirm`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code` per `archetipo-wiki/references/wiki-contract.md`, never on connector type. An absent Wiki is valid only when the plan, diff, and implementation declare no Wiki impact.
+3. **Connector operations are exposed by the CLI.** This skill uses `config show`, `spec show`, `spec next`, `spec integrate`, `spec move`, `spec request-changes`, and `spec review-dossier`. It also uses `e2e demo` plus connector-independent `wiki status`, `wiki validate --profile bootstrap`, `wiki approve`, and `wiki reconfirm`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code` per `archetipo-wiki/references/wiki-contract.md`, never on connector type. An absent Wiki is valid only when the plan, diff, and implementation declare no Wiki impact.
 
    **Wiki gate.** When `data.wiki.enabled` is `false` (see **Wiki gate** in `.archetipo/shared-runtime.md`), this skill performs no Wiki work at all: no `wiki` command in any phase, no Wiki section in the dossier, no Wiki blocker, no Wiki acceptance commit. The verdict then covers the increment alone. Every other rule below — including the readiness table and the required-page definition — applies only with the gate on.
 4. **The verdict covers code and required knowledge together.** Never ask the user to approve a spec without first showing the Wiki acceptance dossier. A required Wiki blocker makes **Approve** unavailable.
@@ -129,6 +131,68 @@ If the user adds conditions to an approval ("approve, but rename that flag"), tr
 - **Wiki changed after the dossier:** the second status/validation pass is authoritative. Stop and present the changed readiness instead of partially approving.
 - **Wiki approval or reconfirmation fails after another Wiki acceptance operation succeeded:** do not integrate or attempt hand-written rollback. Leave the spec in REVIEW, report the exact successful and failed ID sets, and preserve the worktree so the idempotent CLI operations can be retried safely.
 - **Wiki acceptance commit fails in a worktree:** do not integrate. Leave the spec in REVIEW, report the exact Git failure, and preserve the worktree for recovery.
+
+## Prepared dossier mode
+
+This mode exists so a provider running under the viewer can prepare the evidence of a spec waiting in review **without deciding anything**. It is the exact opposite trade of Autonomous acceptance mode: there, a machine takes the verdict in a person's place; here, a machine does all the work *except* the verdict, and a person decides from the dossier it leaves behind.
+
+### Activation guard
+
+Activate this mode only when the invoking prompt asks for it explicitly — the prompt of the local `claude` and `codex` providers does, with the words "prepared dossier mode". Never infer, request, or self-activate it. Without that explicit request, run the ordinary human gate.
+
+### What you run
+
+**PHASE 0 and PHASE 1 run in full**, exactly as written, Wiki gate included. The dossier is the whole deliverable of this mode, so nothing about how it is built changes.
+
+### What you must not run
+
+**PHASE 2 and PHASE 3 do not run.** These commands are forbidden in this mode:
+
+- `archetipo spec move`
+- `archetipo spec integrate`
+- `archetipo spec request-changes`
+- `archetipo wiki approve`
+- `archetipo wiki reconfirm`
+
+The reason is one and the same for all five: each of them either takes the verdict or executes it, and this mode exists precisely not to take it. Approving Wiki knowledge is part of the verdict too — the spec's knowledge is accepted with the spec, never before it.
+
+The spec must be in `{config.workflow.statuses.review}` when you start and must still be there when you finish. If you find it in any other status, stop and say so; do not attempt to correct it.
+
+### What you persist
+
+Compose the dossier payload from the evidence of PHASE 1:
+
+```json
+{
+  "execution_id": "<the id the invoking prompt gave you, omitted when it gave none>",
+  "summary": "<one paragraph on what the increment delivers>",
+  "criteria": [
+    {"id": "AC-1", "verdict": "met", "note": "<what proves it>"},
+    {"id": "AC-2", "verdict": "unclear", "note": "<what is missing>"}
+  ],
+  "blockers": ["<one entry per impediment found>"]
+}
+```
+
+`verdict` is one of `met`, `unclear` or `not_verifiable`: `unclear` means the evidence was found and does not settle the question, `not_verifiable` that no evidence of that kind exists at all. `blockers` is empty when nothing stands in the way — that is an ordinary outcome, not a weaker one.
+
+Write the payload to `.archetipo/tmp/payload-{US-CODE}-dossier.json` **with your file-writing tool, never through a shell pipe** — the same cross-platform rule already in force for the rework feedback — then, from `data.project_root`:
+
+```bash
+archetipo spec review-dossier {US-CODE} --file .archetipo/tmp/payload-{US-CODE}-dossier.json
+```
+
+Delete the temporary file afterwards. The command refuses with `E_CONFLICT` a spec that is not in `{config.workflow.statuses.review}`, and it changes no status: preparing evidence is not deciding.
+
+### How you close
+
+Once — and only once — the dossier is persisted, emit as your **last line, with nothing after it**:
+
+```text
+{"spec_code":"{US-CODE}","status":"REVIEW","criteria":<N>,"blockers":<M>}
+```
+
+`<N>` is the number of acceptance criteria you examined and `<M>` the number of blockers you found. The status is `REVIEW` because that is where the spec **stayed**: a receipt declaring anything else is rejected by the provider before the run is even recorded.
 
 ## Autonomous acceptance mode
 

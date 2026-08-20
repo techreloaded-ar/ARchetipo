@@ -13,7 +13,10 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/cli"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
@@ -1638,6 +1641,130 @@ func TestSpecRequestChanges_EmptyPayloadRejected(t *testing.T) {
 	seedReviewedSpec(t)
 	feedbackFile := writeInputFile(t, "feedback.json", `{"comments":[{"body":"   "}]}`)
 	res := runCLI(t, "", "spec", "request-changes", "US-001", "--file", feedbackFile)
+	_, code := decodeError(t, res)
+	if code != iox.CodeInvalidInput {
+		t.Fatalf("expected E_INVALID_INPUT, got %s", code)
+	}
+}
+
+// dossierJSON is a well-formed review dossier payload: the shape a reviewing
+// provider hands to `spec review-dossier`.
+const dossierJSON = `{
+	"execution_id": "exec-1",
+	"summary": "The increment adds the greeting endpoint and its tests.",
+	"criteria": [
+		{"id":"AC-1","verdict":"met","note":"covered by handler_test.go"},
+		{"id":"AC-2","verdict":"unclear","note":"no evidence found for the empty case"}
+	],
+	"blockers": ["the README still documents the old route"]
+}`
+
+func TestSpecReviewDossier_PersistsEvidenceWithoutTransitioning(t *testing.T) {
+	newProject(t)
+	seedReviewedSpec(t)
+	dossierFile := writeInputFile(t, "dossier.json", dossierJSON)
+	res := runCLI(t, "", "spec", "review-dossier", "US-001", "--file", dossierFile)
+	if res.exit != 0 {
+		t.Fatalf("review-dossier failed: %s", res.stderr.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(".archetipo", "reviews", "US-001.yaml"))
+	if err != nil {
+		t.Fatalf("read review artifact: %v", err)
+	}
+	var doc struct {
+		Dossier *domain.ReviewDossier `yaml:"dossier"`
+		Verdict *domain.ReviewVerdict `yaml:"verdict"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("decode review artifact: %v", err)
+	}
+	if doc.Dossier == nil {
+		t.Fatalf("expected a persisted dossier, got none in:\n%s", raw)
+	}
+	if doc.Dossier.ExecutionID != "exec-1" {
+		t.Fatalf("expected execution_id exec-1, got %q", doc.Dossier.ExecutionID)
+	}
+	if len(doc.Dossier.Criteria) != 2 || doc.Dossier.Criteria[0].ID != "AC-1" {
+		t.Fatalf("expected the two criteria of the payload, got %+v", doc.Dossier.Criteria)
+	}
+	if doc.Dossier.PreparedAt == "" {
+		t.Fatal("expected prepared_at to be filled in by the CLI")
+	}
+	if doc.Verdict != nil {
+		t.Fatalf("preparing evidence must not produce a verdict, got %+v", doc.Verdict)
+	}
+	// The point of the whole command: the spec has not moved.
+	show := runCLI(t, "", "spec", "show", "US-001")
+	_, data := decodeOK(t, show)
+	spec, _ := data["spec"].(map[string]any)
+	if spec["status"] != "REVIEW" {
+		t.Fatalf("expected the spec to stay in REVIEW, got %v", spec["status"])
+	}
+}
+
+func TestSpecReviewDossier_PreservesExistingComments(t *testing.T) {
+	newProject(t)
+	seedReviewedSpec(t)
+	reviewsDir := filepath.Join(".archetipo", "reviews")
+	if err := os.MkdirAll(reviewsDir, 0o755); err != nil {
+		t.Fatalf("mkdir reviews: %v", err)
+	}
+	existing := "schema: archetipo/review/v1\ncomments:\n  - file: src/app.js\n    side: new\n    line: 12\n    body: keep me\n"
+	if err := os.WriteFile(filepath.Join(reviewsDir, "US-001.yaml"), []byte(existing), 0o644); err != nil {
+		t.Fatalf("seed review artifact: %v", err)
+	}
+	dossierFile := writeInputFile(t, "dossier.json", dossierJSON)
+	if res := runCLI(t, "", "spec", "review-dossier", "US-001", "--file", dossierFile); res.exit != 0 {
+		t.Fatalf("review-dossier failed: %s", res.stderr.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(reviewsDir, "US-001.yaml"))
+	if err != nil {
+		t.Fatalf("read review artifact: %v", err)
+	}
+	if !strings.Contains(string(raw), "keep me") {
+		t.Fatalf("expected the pre-existing comment to survive, got:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "dossier:") {
+		t.Fatalf("expected the dossier to be written, got:\n%s", raw)
+	}
+}
+
+func TestSpecReviewDossier_ConflictWhenNotInReview(t *testing.T) {
+	newProject(t)
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	dossierFile := writeInputFile(t, "dossier.json", dossierJSON)
+	res := runCLI(t, "", "spec", "review-dossier", "US-001", "--file", dossierFile)
+	_, code := decodeError(t, res)
+	if code != iox.CodeConflict {
+		t.Fatalf("expected E_CONFLICT, got %s", code)
+	}
+	show := runCLI(t, "", "spec", "show", "US-001")
+	_, data := decodeOK(t, show)
+	spec, _ := data["spec"].(map[string]any)
+	if spec["status"] != "TODO" {
+		t.Fatalf("expected the refused command to leave the spec in TODO, got %v", spec["status"])
+	}
+}
+
+func TestSpecReviewDossier_RejectsDossierWithoutCriteria(t *testing.T) {
+	newProject(t)
+	seedReviewedSpec(t)
+	dossierFile := writeInputFile(t, "dossier.json", `{"summary":"looks fine","criteria":[]}`)
+	res := runCLI(t, "", "spec", "review-dossier", "US-001", "--file", dossierFile)
+	_, code := decodeError(t, res)
+	if code != iox.CodeInvalidInput {
+		t.Fatalf("expected E_INVALID_INPUT, got %s", code)
+	}
+}
+
+func TestSpecReviewDossier_RejectsDossierWithoutSummary(t *testing.T) {
+	newProject(t)
+	seedReviewedSpec(t)
+	dossierFile := writeInputFile(t, "dossier.json", `{"summary":"  ","criteria":[{"id":"AC-1","verdict":"met"}]}`)
+	res := runCLI(t, "", "spec", "review-dossier", "US-001", "--file", dossierFile)
 	_, code := decodeError(t, res)
 	if code != iox.CodeInvalidInput {
 		t.Fatalf("expected E_INVALID_INPUT, got %s", code)

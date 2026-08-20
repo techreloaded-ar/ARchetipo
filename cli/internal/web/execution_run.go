@@ -621,7 +621,7 @@ func actionNames(actions []template.Action) string {
 // supportedActions lists the actions the viewer can dispatch, derived from the
 // capability map rather than restated, so adding one there adds it here too.
 func supportedActions() string {
-	known := []execution.ActionID{execution.ActionPlan, execution.ActionImplement, execution.ActionInception}
+	known := []execution.ActionID{execution.ActionPlan, execution.ActionImplement, execution.ActionReview, execution.ActionInception}
 	out := make([]string, 0, len(known))
 	for _, action := range known {
 		out = append(out, string(action))

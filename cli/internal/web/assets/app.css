@@ -2147,6 +2147,102 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	gap: 0.5rem;
 }
 
+/* The review dossier: the evidence a provider prepared, above the diff a person
+   reads. It reuses the surface, border and status colours already in the sheet —
+   a panel with its own palette would read as a different application. */
+.review-dossier {
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+	padding: 0.75rem 0.9rem;
+	margin-bottom: 0.75rem;
+}
+
+.review-dossier:empty {
+	display: none;
+}
+
+.review-dossier-head {
+	display: flex;
+	gap: 0.4rem;
+	flex-wrap: wrap;
+	margin-bottom: 0.5rem;
+}
+
+.review-dossier-summary {
+	margin: 0 0 0.6rem;
+	color: var(--text);
+}
+
+.review-verdict {
+	font-size: 0.8rem;
+	color: var(--text-strong);
+	border-left: 3px solid var(--status-done);
+	padding-left: 0.55rem;
+	margin-bottom: 0.6rem;
+}
+
+.review-criteria {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+}
+
+.review-criteria li {
+	display: flex;
+	align-items: baseline;
+	gap: 0.45rem;
+	flex-wrap: wrap;
+}
+
+.criterion-badge {
+	font-family: var(--font-mono);
+	font-size: 0.68rem;
+	text-transform: uppercase;
+	padding: 0.1rem 0.4rem;
+	border-radius: var(--radius-sm);
+	color: var(--accent-ink);
+	background: var(--text-muted);
+}
+
+.criterion-met {
+	background: var(--status-done);
+}
+
+.criterion-unclear {
+	background: var(--status-progress);
+}
+
+.criterion-not_verifiable {
+	background: var(--priority-high);
+}
+
+.criterion-id {
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	color: var(--text-strong);
+}
+
+.criterion-note {
+	color: var(--text-muted);
+	font-size: 0.8rem;
+}
+
+.review-blockers {
+	margin-top: 0.7rem;
+	font-size: 0.82rem;
+	color: var(--text);
+}
+
+.review-blockers ul {
+	margin: 0.3rem 0 0;
+	padding-left: 1.1rem;
+	color: var(--text-muted);
+}
+
 .review-empty {
 	color: var(--text-muted);
 	padding: 1.5rem;

@@ -16,11 +16,17 @@ import (
 
 const reviewSchema = "archetipo/review/v1"
 
-// reviewDoc is the on-disk representation of a spec's inline review comments.
+// reviewDoc is the on-disk representation of a spec's review artifact: the
+// inline comments, the dossier a provider prepared and the verdict a person
+// reached. Dossier and verdict are additive and optional, so a file written
+// before they existed stays readable and simply yields nil for both — the
+// schema version is unchanged for exactly that reason.
 type reviewDoc struct {
 	Schema   string                 `yaml:"schema"`
 	SpecCode string                 `yaml:"spec_code"`
 	Comments []domain.ReviewComment `yaml:"comments"`
+	Dossier  *domain.ReviewDossier  `yaml:"dossier,omitempty"`
+	Verdict  *domain.ReviewVerdict  `yaml:"verdict,omitempty"`
 }
 
 // reviewsDir is the directory holding per-spec review files, a sibling of the
@@ -51,16 +57,19 @@ func (c *Connector) ReadReview(ctx context.Context, code string) (domain.Review,
 	if doc.Comments == nil {
 		doc.Comments = []domain.ReviewComment{}
 	}
-	return domain.Review{Comments: doc.Comments}, nil
+	return domain.Review{Comments: doc.Comments, Dossier: doc.Dossier, Verdict: doc.Verdict}, nil
 }
 
-// SaveReview persists the inline comments for a spec. Saving an empty Review
-// clears the review (used after "request changes" converts comments to tasks).
+// SaveReview persists the review artifact for a spec. Saving a Review with no
+// comments clears them (used after "request changes" converts comments to
+// tasks); a nil dossier or verdict is written as absent, not as empty.
 func (c *Connector) SaveReview(ctx context.Context, code string, r domain.Review) error {
 	doc := reviewDoc{
 		Schema:   reviewSchema,
 		SpecCode: code,
 		Comments: r.Comments,
+		Dossier:  r.Dossier,
+		Verdict:  r.Verdict,
 	}
 	if doc.Comments == nil {
 		doc.Comments = []domain.ReviewComment{}

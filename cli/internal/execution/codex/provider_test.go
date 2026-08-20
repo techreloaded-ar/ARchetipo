@@ -176,7 +176,7 @@ func TestProviderDeclaresIdentityAndItsCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement}
+	want := []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilitySpecReview}
 	if !reflect.DeepEqual(capabilities, want) {
 		t.Fatalf("capabilities = %#v, want %#v", capabilities, want)
 	}
