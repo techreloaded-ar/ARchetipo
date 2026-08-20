@@ -167,6 +167,34 @@ func newExecutionRunCmd(s streams, deps executionDependencies) *cobra.Command {
 				if err != nil {
 					return nil, iox.NewInternal("creating execution service", err)
 				}
+				// The acceptance rule runs before anything is written, so an
+				// action that produces an effect of its own — implement moves the
+				// spec — never produces it for a provider that was never going to
+				// be able to run. It is the same phase Run applies itself, only
+				// pulled forward: running it twice costs nothing and writes
+				// nothing.
+				if err := service.Preflight(ctx, action, resolvedProviderID, providerConfig); err != nil {
+					return nil, mapExecutionRunError(err, fromDefault)
+				}
+				if action == execution.ActionImplement {
+					planned, err := execution.HasPersistedPlan(ctx, conn, specCode)
+					if err != nil {
+						return nil, err
+					}
+					if !planned {
+						return nil, iox.NewPrecondition(
+							specCode+" has no persisted plan to implement",
+							"plan it first with execution run "+specCode+" plan, then retry",
+							nil,
+						)
+					}
+				}
+				// The start effect belongs to the accepted start, not to the agent:
+				// a run that dies in its first seconds must still leave the spec IN
+				// PROGRESS, because its start was accepted.
+				if err := execution.BeginActionEffect(ctx, conn, action, spec); err != nil {
+					return nil, iox.NewInternal("starting "+string(action)+" on "+specCode, err)
+				}
 				var outcome execution.Execution
 				reused := false
 				if key := strings.TrimSpace(requestID); key != "" {

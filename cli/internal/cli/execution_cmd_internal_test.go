@@ -441,3 +441,148 @@ func TestExecutionRunRejectsManuallyInvalidDefaultBeforeRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// implementExecutionSpec carries the persisted plan out through the CLI exactly
+// as an honest remote agent does: every task is closed and the spec reaches
+// REVIEW. A provider that only returns a payload cannot stand in for a
+// successful implementation, because the run command verifies the effect
+// against the connector before reporting success.
+func implementExecutionSpec(t *testing.T, deps executionDependencies) {
+	t.Helper()
+	if done := runExecutionRoot(t, deps, "task", "done", "US-001", "TASK-01"); done.exit != 0 {
+		t.Fatalf("closing the task failed: exit=%d stderr=%s", done.exit, done.stderr.String())
+	}
+	if review := runExecutionRoot(t, deps, "spec", "review", "US-001"); review.exit != 0 {
+		t.Fatalf("moving the spec to review failed: exit=%d stderr=%s", review.exit, review.stderr.String())
+	}
+}
+
+func TestExecutionRunImplementRejectsProviderWithoutCapability(t *testing.T) {
+	t.Chdir(t.TempDir())
+	planner := &executionFakeProvider{id: "fake-planner", capabilities: []execution.Capability{execution.CapabilitySpecPlan}}
+	deps := executionTestDeps(t, planner)
+	seedExecutionSpec(t, deps)
+	planner.effect = func() { planExecutionSpec(t, deps) }
+	if run := runExecutionRoot(t, deps, "execution", "run", "US-001", "plan", "--provider", "fake-planner"); run.exit != 0 {
+		t.Fatalf("seeding the plan through the provider failed: %s", run.stderr.String())
+	}
+	planner.effect = nil
+	before := decodeExecutionSpecState(t, runExecutionRoot(t, deps, "spec", "show", "US-001"))
+	records, err := os.ReadDir(filepath.Join(".archetipo", "executions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := runExecutionRoot(t, deps, "execution", "run", "US-001", "implement", "--provider", "fake-planner")
+	exit, code, text := decodeExecutionError(t, result)
+	if exit != iox.ExitPreconditionMissing || code != iox.CodePreconditionMissing || !strings.Contains(text, string(execution.CapabilitySpecImplement)) || planner.calls != 1 {
+		t.Fatalf("exit=%d code=%s text=%q calls=%d", exit, code, text, planner.calls)
+	}
+	after := decodeExecutionSpecState(t, runExecutionRoot(t, deps, "spec", "show", "US-001"))
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("spec changed across a refused start: before=%#v after=%#v", before, after)
+	}
+	nowRecords, err := os.ReadDir(filepath.Join(".archetipo", "executions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nowRecords) != len(records) {
+		t.Fatalf("records=%d before=%d", len(nowRecords), len(records))
+	}
+}
+
+func TestExecutionRunImplementRequiresPersistedPlan(t *testing.T) {
+	t.Chdir(t.TempDir())
+	implementer := &executionFakeProvider{id: "fake-implementer", capabilities: []execution.Capability{execution.CapabilitySpecImplement}, result: execution.Result{Payload: json.RawMessage(`{"ok":true}`)}}
+	deps := executionTestDeps(t, implementer)
+	seedExecutionSpec(t, deps)
+	if moved := runExecutionRoot(t, deps, "spec", "move", "US-001", "--to", "planned"); moved.exit != 0 {
+		t.Fatalf("moving the spec to planned failed: %s", moved.stderr.String())
+	}
+	result := runExecutionRoot(t, deps, "execution", "run", "US-001", "implement", "--provider", "fake-implementer")
+	exit, code, text := decodeExecutionError(t, result)
+	if exit != iox.ExitPreconditionMissing || code != iox.CodePreconditionMissing || !strings.Contains(text, "US-001") || implementer.calls != 0 {
+		t.Fatalf("exit=%d code=%s text=%q calls=%d", exit, code, text, implementer.calls)
+	}
+	if state := decodeExecutionSpecState(t, runExecutionRoot(t, deps, "spec", "show", "US-001")); state.Status != domain.StatusPlanned {
+		t.Fatalf("spec moved without a plan: %#v", state)
+	}
+	entries, err := os.ReadDir(filepath.Join(".archetipo", "executions"))
+	if err == nil && len(entries) != 0 {
+		t.Fatalf("unexpected records: %v", entries)
+	}
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutionRunImplementStartsAndConfirmsTheEffect(t *testing.T) {
+	t.Chdir(t.TempDir())
+	implementer := &executionFakeProvider{id: "fake-implementer", capabilities: []execution.Capability{execution.CapabilitySpecImplement}, result: execution.Result{Payload: json.RawMessage(`{"tasks_done":1}`)}}
+	deps := executionTestDeps(t, implementer)
+	seedExecutionSpec(t, deps)
+	planExecutionSpec(t, deps)
+	var duringDispatch domain.Status
+	implementer.effect = func() {
+		duringDispatch = decodeExecutionSpecState(t, runExecutionRoot(t, deps, "spec", "show", "US-001")).Status
+		implementExecutionSpec(t, deps)
+	}
+	run := decodeExecution(t, runExecutionRoot(t, deps, "execution", "run", "US-001", "implement", "--provider", "fake-implementer"))
+	if run.Status != execution.StatusSucceeded || run.Error != nil || run.Result == nil || run.Capability != execution.CapabilitySpecImplement || implementer.calls != 1 {
+		t.Fatalf("run=%#v calls=%d", run, implementer.calls)
+	}
+	// The spec is IN PROGRESS while the agent works, so an accepted start is
+	// visible before the run ends rather than only once it succeeds.
+	if duringDispatch != domain.StatusInProgress {
+		t.Fatalf("spec during dispatch=%s", duringDispatch)
+	}
+	if state := decodeExecutionSpecState(t, runExecutionRoot(t, deps, "spec", "show", "US-001")); state.Status != domain.StatusReview {
+		t.Fatalf("spec after success=%#v", state)
+	}
+	show := decodeExecution(t, runExecutionRoot(t, deps, "execution", "show", run.ID))
+	if show.Status != execution.StatusSucceeded || show.SpecCode != "US-001" || show.Action != execution.ActionImplement {
+		t.Fatalf("show=%#v", show)
+	}
+}
+
+// Replaying the same --request-id returns the record already created, and it
+// must not move the spec on the way there: a spec that already reached REVIEW
+// stays there, because the start effect only ever moves a spec forward.
+func TestExecutionRunImplementReplayKeepsTheReviewedSpecInReview(t *testing.T) {
+	t.Chdir(t.TempDir())
+	implementer := &executionFakeProvider{id: "fake-implementer", capabilities: []execution.Capability{execution.CapabilitySpecImplement}, result: execution.Result{Payload: json.RawMessage(`{"tasks_done":1}`)}}
+	deps := executionTestDeps(t, implementer)
+	seedExecutionSpec(t, deps)
+	planExecutionSpec(t, deps)
+	implementer.effect = func() { implementExecutionSpec(t, deps) }
+	first := decodeExecution(t, runExecutionRoot(t, deps, "execution", "run", "US-001", "implement", "--provider", "fake-implementer", "--request-id", "k"))
+	if first.Status != execution.StatusSucceeded {
+		t.Fatalf("first run=%#v", first)
+	}
+	replay := decodeExecution(t, runExecutionRoot(t, deps, "execution", "run", "US-001", "implement", "--provider", "fake-implementer", "--request-id", "k"))
+	if replay.ID != first.ID || replay.Status != execution.StatusSucceeded || implementer.calls != 1 {
+		t.Fatalf("replay=%#v calls=%d, want the record already created and no second dispatch", replay, implementer.calls)
+	}
+	if state := decodeExecutionSpecState(t, runExecutionRoot(t, deps, "spec", "show", "US-001")); state.Status != domain.StatusReview {
+		t.Fatalf("spec after the replay=%s, want it left in %s", state.Status, domain.StatusReview)
+	}
+}
+
+func TestExecutionRunImplementFailureKeepsSpecOutOfReview(t *testing.T) {
+	t.Chdir(t.TempDir())
+	failing := &executionFakeProvider{id: "fake-implementer", capabilities: []execution.Capability{execution.CapabilitySpecImplement}, err: errors.New("remote implementation failed")}
+	deps := executionTestDeps(t, failing)
+	seedExecutionSpec(t, deps)
+	planExecutionSpec(t, deps)
+	run := decodeExecution(t, runExecutionRoot(t, deps, "execution", "run", "US-001", "implement", "--provider", "fake-implementer"))
+	if run.Status != execution.StatusFailed || run.Error == nil || strings.TrimSpace(run.Error.Message) == "" || failing.calls != 1 {
+		t.Fatalf("run=%#v calls=%d", run, failing.calls)
+	}
+	state := decodeExecutionSpecState(t, runExecutionRoot(t, deps, "spec", "show", "US-001"))
+	if state.Status == domain.StatusReview || state.Status != domain.StatusInProgress {
+		t.Fatalf("spec after failure=%#v", state)
+	}
+	show := decodeExecution(t, runExecutionRoot(t, deps, "execution", "show", run.ID))
+	if show.Status != execution.StatusFailed || show.Error == nil || show.Error.Message != run.Error.Message {
+		t.Fatalf("show=%#v", show)
+	}
+}

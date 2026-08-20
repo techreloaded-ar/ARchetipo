@@ -167,7 +167,7 @@ func assertContains(t *testing.T, got, want, what string) {
 
 // --- identity and contract -------------------------------------------------
 
-func TestProviderDeclaresIdentityAndPlanCapability(t *testing.T) {
+func TestProviderDeclaresIdentityAndItsCapabilities(t *testing.T) {
 	p := New(Options{})
 	if p.ID() != ProviderID || p.ID() != "codex" {
 		t.Fatalf("id = %q", p.ID())
@@ -176,8 +176,9 @@ func TestProviderDeclaresIdentityAndPlanCapability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(capabilities, []execution.Capability{execution.CapabilitySpecPlan}) {
-		t.Fatalf("capabilities = %#v", capabilities)
+	want := []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement}
+	if !reflect.DeepEqual(capabilities, want) {
+		t.Fatalf("capabilities = %#v, want %#v", capabilities, want)
 	}
 }
 

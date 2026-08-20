@@ -226,8 +226,8 @@ func TestProviderDeclaresIdentityAndPlanCapability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(capabilities, []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog}) {
-		t.Fatalf("capabilities = %#v, want spec.plan, workspace.inception and workspace.backlog", capabilities)
+	if !reflect.DeepEqual(capabilities, []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog}) {
+		t.Fatalf("capabilities = %#v, want spec.plan, spec.implement, workspace.inception and workspace.backlog", capabilities)
 	}
 }
 
@@ -602,14 +602,14 @@ func TestProviderDeclaresTheDialogueThroughTheInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(declared, []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog}) {
-		t.Fatalf("Capabilities = %#v, want the three dispatched actions: run.dialog is derived, not declared", declared)
+	if !reflect.DeepEqual(declared, []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog}) {
+		t.Fatalf("Capabilities = %#v, want the four dispatched actions: run.dialog is derived, not declared", declared)
 	}
 	got, err := execution.DeclaredCapabilities(context.Background(), provider)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := execution.NormalizeCapabilities([]execution.Capability{execution.CapabilitySpecPlan, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog, execution.CapabilityRunDialog})
+	want := execution.NormalizeCapabilities([]execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog, execution.CapabilityRunDialog})
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("DeclaredCapabilities = %#v, want %#v", got, want)
 	}

@@ -235,8 +235,55 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Preflight is applied here, before the reservation, before any transition
+	// and before a record exists: resolving the provider, checking it declares
+	// the capability the action requires and validating its configuration are
+	// the whole of what an incompatible provider fails on, and failing them now
+	// is what makes a refused start leave no trace at all — neither on the spec
+	// status nor under .archetipo/executions/. Service.Start applies the very
+	// same phase again; running it twice is cheap and keeps the rule in one
+	// place instead of restating it here.
+	if err := ws.service.Preflight(ctx, action, providerID, execution.CloneConfig(selection.Config)); err != nil {
+		var configErr *execution.ConfigurationError
+		if errors.As(err, &configErr) {
+			writeProviderConfigError(w, err)
+			return
+		}
+		writeError(w, mapExecutionStartError(err, providerID))
+		return
+	}
+	// An implementation carries out a plan, so a spec that has none has nothing
+	// to execute. Refusing here costs nothing; refusing later would already have
+	// moved the spec and burned a run.
+	if action == execution.ActionImplement {
+		hasPlan, err := execution.HasPersistedPlan(ctx, ws.conn, code)
+		if err != nil {
+			writeError(w, iox.NewInternal("reading the plan tasks of "+code, err))
+			return
+		}
+		if !hasPlan {
+			writeError(w, iox.NewConflict(
+				"the spec "+code+" has no persisted plan to implement",
+				"plan it before implementing it, then run the action again",
+				nil,
+			))
+			return
+		}
+	}
+
 	if err := s.guardSingleExecution(ctx, ws, code); err != nil {
 		writeError(w, err)
+		return
+	}
+	// The state change an accepted start owes the backlog is the caller's,
+	// because the caller is the only one holding a connector — the execution
+	// package deliberately never does. It runs after the preflight, so a
+	// provider that cannot run the action never moves the spec, and before the
+	// dispatch, so the spec is IN PROGRESS by the time the response is written
+	// instead of depending on the agent surviving its first seconds.
+	if err := execution.BeginActionEffect(ctx, ws.conn, action, spec); err != nil {
+		ws.dispatch.release(code)
+		writeError(w, iox.NewInternal("starting the "+string(action)+" action on "+code, err))
 		return
 	}
 	// The claimed effect is verified inside the terminal write, not after it. The
@@ -382,6 +429,11 @@ type actionAvailability struct {
 	providerAvailability
 	runningID      string
 	specHasRunning bool
+	// specHasPlan says whether the spec has at least one persisted plan task.
+	// Only the implement action depends on it, but it travels here rather than
+	// being re-read per action because the detail has already read the plan and
+	// hands the count over.
+	specHasPlan bool
 }
 
 // providerAvailability answers "which provider would this workspace run with,
@@ -407,8 +459,8 @@ type providerAvailability struct {
 	providerConfig map[string]any
 }
 
-func (s *Server) actionAvailabilityFor(ctx context.Context, ws *workspaceSession, code string) actionAvailability {
-	availability := actionAvailability{}
+func (s *Server) actionAvailabilityFor(ctx context.Context, ws *workspaceSession, code string, planTaskCount int) actionAvailability {
+	availability := actionAvailability{specHasPlan: planTaskCount > 0}
 	if id, busy := ws.dispatch.current(code); busy {
 		availability.specHasRunning = true
 		availability.runningID = id
@@ -481,7 +533,17 @@ func (a actionAvailability) reasonFor(actionID string) string {
 		}
 		return "an execution is already running for this spec"
 	}
-	return a.providerAvailability.reasonFor(capability)
+	if reason := a.providerAvailability.reasonFor(capability); reason != "" {
+		return reason
+	}
+	// Last, and only for the implementation: the provider is fine, the spec is
+	// free, but there is no plan to carry out. It is checked after the provider
+	// for the same reason the route refuses in that order — an incompatible
+	// provider is the more fundamental obstacle.
+	if execution.ActionID(actionID) == execution.ActionImplement && !a.specHasPlan {
+		return "this spec has no persisted plan: plan it before implementing it"
+	}
+	return ""
 }
 
 // reasonFor returns the reason the default provider cannot run an action that
@@ -512,8 +574,11 @@ func (a providerAvailability) reasonFor(capability execution.Capability) string 
 func quoted(value string) string { return "\"" + value + "\"" }
 
 // decorateActions turns the process actions into the viewer's action views.
-func (s *Server) decorateActions(ctx context.Context, ws *workspaceSession, code string, actions []template.Action) []specActionView {
-	availability := s.actionAvailabilityFor(ctx, ws, code)
+// planTaskCount is the number of plan tasks the caller has already read for the
+// spec, so an action whose precondition is a persisted plan can be reported as
+// unavailable without a second read of the same plan.
+func (s *Server) decorateActions(ctx context.Context, ws *workspaceSession, code string, actions []template.Action, planTaskCount int) []specActionView {
+	availability := s.actionAvailabilityFor(ctx, ws, code, planTaskCount)
 	out := make([]specActionView, 0, len(actions))
 	for _, action := range actions {
 		reason := availability.reasonFor(action.ID)
@@ -556,7 +621,7 @@ func actionNames(actions []template.Action) string {
 // supportedActions lists the actions the viewer can dispatch, derived from the
 // capability map rather than restated, so adding one there adds it here too.
 func supportedActions() string {
-	known := []execution.ActionID{execution.ActionPlan, execution.ActionInception}
+	known := []execution.ActionID{execution.ActionPlan, execution.ActionImplement, execution.ActionInception}
 	out := make([]string, 0, len(known))
 	for _, action := range known {
 		out = append(out, string(action))

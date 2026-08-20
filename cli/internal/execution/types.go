@@ -17,10 +17,17 @@ type ExecutionStatus string
 // names a capability, and a provider never names an action.
 const (
 	ActionPlan      ActionID = "plan"
+	ActionImplement ActionID = "implement"
 	ActionInception ActionID = "inception"
 	ActionBacklog   ActionID = "backlog"
 
-	CapabilitySpecPlan           Capability = "spec.plan"
+	CapabilitySpecPlan Capability = "spec.plan"
+	// CapabilitySpecImplement says that a provider can execute the persisted
+	// plan of a spec up to the point where that spec is ready for review. It is
+	// deliberately distinct from CapabilitySpecPlan: writing a plan and carrying
+	// it out are different pieces of work, and a provider that can do one is not
+	// thereby able to do the other.
+	CapabilitySpecImplement      Capability = "spec.implement"
 	CapabilityWorkspaceInception Capability = "workspace.inception"
 	CapabilityWorkspaceBacklog   Capability = "workspace.backlog"
 	// CapabilityRunDialog says that a provider exposes a run one can follow and
@@ -102,6 +109,8 @@ func RequiredCapability(action ActionID) (Capability, error) {
 	switch action {
 	case ActionPlan:
 		return CapabilitySpecPlan, nil
+	case ActionImplement:
+		return CapabilitySpecImplement, nil
 	case ActionInception:
 		return CapabilityWorkspaceInception, nil
 	case ActionBacklog:
@@ -126,7 +135,7 @@ const (
 // whole workspace.
 func ActionScope(action ActionID) (Scope, error) {
 	switch action {
-	case ActionPlan:
+	case ActionPlan, ActionImplement:
 		return ScopeSpec, nil
 	case ActionInception, ActionBacklog:
 		return ScopeWorkspace, nil

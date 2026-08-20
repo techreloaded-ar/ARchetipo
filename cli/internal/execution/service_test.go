@@ -876,3 +876,104 @@ func TestStartAndStartWorkspaceRejectTheWrongActionObject(t *testing.T) {
 		}
 	})
 }
+
+// Preflight is the phase a caller runs before producing any effect of its own,
+// so its central promise is that a refusal costs nothing: no record is created,
+// and the caller is free to leave the spec exactly where it was.
+func TestPreflightRefusesWithoutCreatingAnyRecord(t *testing.T) {
+	cases := []struct {
+		name       string
+		action     ActionID
+		providerID string
+		provider   *testProvider
+		assertErr  func(*testing.T, error)
+	}{
+		{
+			name:       "a provider that cannot implement",
+			action:     ActionImplement,
+			providerID: "fake",
+			provider:   &testProvider{id: "fake", capabilities: []Capability{CapabilitySpecPlan}},
+			assertErr: func(t *testing.T, err error) {
+				var capErr *CapabilityError
+				if !errors.As(err, &capErr) {
+					t.Fatalf("error = %T (%v), want *CapabilityError", err, err)
+				}
+				if capErr.Capability != CapabilitySpecImplement {
+					t.Fatalf("capability = %q, want %q", capErr.Capability, CapabilitySpecImplement)
+				}
+			},
+		},
+		{
+			name:       "an unknown provider",
+			action:     ActionImplement,
+			providerID: "ghost",
+			provider:   &testProvider{id: "fake", capabilities: []Capability{CapabilitySpecImplement}},
+			assertErr: func(t *testing.T, err error) {
+				var regErr *RegistryError
+				if !errors.As(err, &regErr) {
+					t.Fatalf("error = %T (%v), want *RegistryError", err, err)
+				}
+			},
+		},
+		{
+			name:       "a configuration the provider refuses",
+			action:     ActionImplement,
+			providerID: "fake",
+			provider: &testProvider{
+				id:           "fake",
+				capabilities: []Capability{CapabilitySpecImplement},
+				validate: func(context.Context, map[string]any) error {
+					return &ConfigurationError{Field: "model", Reason: "missing"}
+				},
+			},
+			assertErr: func(t *testing.T, err error) {
+				var cfgErr *ConfigurationError
+				if !errors.As(err, &cfgErr) {
+					t.Fatalf("error = %T (%v), want *ConfigurationError", err, err)
+				}
+			},
+		},
+		{
+			name:       "an unknown action",
+			action:     ActionID("deploy"),
+			providerID: "fake",
+			provider:   &testProvider{id: "fake", capabilities: []Capability{CapabilitySpecImplement}},
+			assertErr: func(t *testing.T, err error) {
+				var actionErr *ActionError
+				if !errors.As(err, &actionErr) {
+					t.Fatalf("error = %T (%v), want *ActionError", err, err)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &spyStore{records: map[string]Execution{}}
+			err := newTestService(t, tc.provider, store).Preflight(context.Background(), tc.action, tc.providerID, map[string]any{"model": "m"})
+			if err == nil {
+				t.Fatal("Preflight accepted the dispatch, want a refusal")
+			}
+			tc.assertErr(t, err)
+			if store.creates != 0 || store.updates != 0 {
+				t.Fatalf("store writes create=%d update=%d, want none", store.creates, store.updates)
+			}
+		})
+	}
+}
+
+func TestPreflightAcceptsAProviderDeclaringTheCapability(t *testing.T) {
+	provider := &testProvider{id: "fake", capabilities: []Capability{CapabilitySpecPlan, CapabilitySpecImplement}}
+	store := &spyStore{records: map[string]Execution{}}
+	config := map[string]any{"model": "m"}
+	if err := newTestService(t, provider, store).Preflight(context.Background(), ActionImplement, "fake", config); err != nil {
+		t.Fatal(err)
+	}
+	if store.creates != 0 {
+		t.Fatalf("Preflight created %d record(s), want none", store.creates)
+	}
+	// The configuration is validated on a copy, exactly as a dispatch does.
+	config["model"] = "mutated"
+	if provider.validated["model"] != "m" {
+		t.Fatalf("validated config = %#v, want the caller's map to be untouched", provider.validated)
+	}
+}

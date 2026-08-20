@@ -182,7 +182,7 @@ func TestConfirmActionEffectLeavesUnrelatedRecordsAlone(t *testing.T) {
 	}{
 		{"already failed", ActionPlan, StatusFailed},
 		{"still running", ActionPlan, StatusRunning},
-		{"another action", "implement", StatusSucceeded},
+		{"another action", "deploy", StatusSucceeded},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			record := succeededRecord()
@@ -687,4 +687,182 @@ func TestDiscardPartialBacklogToleratesAConnectorWithoutADiscarder(t *testing.T)
 		t.Fatalf("the message was touched: %q", record.Error.Message)
 	}
 	DiscardPartialBacklog(context.Background(), &backlogDiscarder{removed: true}, false, nil)
+}
+
+// specMover is the configurable transition double: it records what it was asked
+// to write, so a test can prove both that a transition happened and that it did
+// not.
+type specMover struct {
+	calls  int
+	code   string
+	status domain.Status
+	err    error
+}
+
+func (m *specMover) TransitionStatus(_ context.Context, specRef string, newStatus domain.Status) (domain.WriteResult, error) {
+	m.calls++
+	m.code = specRef
+	m.status = newStatus
+	if m.err != nil {
+		return domain.WriteResult{}, m.err
+	}
+	return domain.WriteResult{OK: true}, nil
+}
+
+func TestHasPersistedPlanReportsWhetherThereIsAPlanToCarryOut(t *testing.T) {
+	t.Run("a spec with tasks has a plan", func(t *testing.T) {
+		reader := &stateReader{tasks: []domain.Task{{ID: "TASK-01", Status: domain.StatusTodo}}}
+		got, err := HasPersistedPlan(context.Background(), reader, "US-001")
+		if err != nil || !got {
+			t.Fatalf("HasPersistedPlan = %v, %v; want true, nil", got, err)
+		}
+	})
+	t.Run("a spec without tasks has none", func(t *testing.T) {
+		reader := &stateReader{}
+		got, err := HasPersistedPlan(context.Background(), reader, "US-001")
+		if err != nil || got {
+			t.Fatalf("HasPersistedPlan = %v, %v; want false, nil", got, err)
+		}
+	})
+	// "There is nothing here" is an answer, not an infrastructure failure.
+	t.Run("a missing precondition means no plan", func(t *testing.T) {
+		reader := &stateReader{tasksErr: iox.NewPrecondition("no plan yet", "", nil)}
+		got, err := HasPersistedPlan(context.Background(), reader, "US-001")
+		if err != nil || got {
+			t.Fatalf("HasPersistedPlan = %v, %v; want false, nil", got, err)
+		}
+	})
+	t.Run("a real read failure is reported", func(t *testing.T) {
+		reader := &stateReader{tasksErr: errors.New("disk on fire")}
+		if _, err := HasPersistedPlan(context.Background(), reader, "US-001"); err == nil {
+			t.Fatal("a failed read was reported as an answer")
+		}
+	})
+}
+
+// AC-3: an accepted start of an implementation moves the spec to IN PROGRESS
+// before anything is dispatched, and pressing the action again changes nothing.
+func TestBeginActionEffectMovesAnImplementationToInProgress(t *testing.T) {
+	t.Run("a planned spec is moved", func(t *testing.T) {
+		mover := &specMover{}
+		spec := domain.Spec{Code: "US-001", Status: domain.StatusPlanned}
+		if err := BeginActionEffect(context.Background(), mover, ActionImplement, spec); err != nil {
+			t.Fatal(err)
+		}
+		if mover.calls != 1 || mover.code != "US-001" || mover.status != domain.StatusInProgress {
+			t.Fatalf("transition calls=%d code=%q status=%q", mover.calls, mover.code, mover.status)
+		}
+	})
+	t.Run("a spec already in progress is left alone", func(t *testing.T) {
+		mover := &specMover{}
+		spec := domain.Spec{Code: "US-001", Status: domain.StatusInProgress}
+		if err := BeginActionEffect(context.Background(), mover, ActionImplement, spec); err != nil {
+			t.Fatal(err)
+		}
+		if mover.calls != 0 {
+			t.Fatalf("an idempotent start wrote %d time(s)", mover.calls)
+		}
+	})
+	// The start effect only moves a spec forward. A replayed low-level start on
+	// a spec that already reached review must never drag it back.
+	t.Run("no other status is moved", func(t *testing.T) {
+		for _, status := range []domain.Status{domain.StatusTodo, domain.StatusReview, domain.StatusDone} {
+			mover := &specMover{}
+			spec := domain.Spec{Code: "US-001", Status: status}
+			if err := BeginActionEffect(context.Background(), mover, ActionImplement, spec); err != nil {
+				t.Fatal(err)
+			}
+			if mover.calls != 0 {
+				t.Fatalf("a spec in %s was moved %d time(s)", status, mover.calls)
+			}
+		}
+	})
+	t.Run("another action owes the backlog nothing", func(t *testing.T) {
+		mover := &specMover{}
+		spec := domain.Spec{Code: "US-001", Status: domain.StatusTodo}
+		for _, action := range []ActionID{ActionPlan, ActionInception, ActionBacklog} {
+			if err := BeginActionEffect(context.Background(), mover, action, spec); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if mover.calls != 0 {
+			t.Fatalf("action without a start effect wrote %d time(s)", mover.calls)
+		}
+	})
+	t.Run("a failed transition is reported and names the spec", func(t *testing.T) {
+		mover := &specMover{err: errors.New("backlog locked")}
+		spec := domain.Spec{Code: "US-001", Status: domain.StatusPlanned}
+		err := BeginActionEffect(context.Background(), mover, ActionImplement, spec)
+		if err == nil || !strings.Contains(err.Error(), "US-001") || !strings.Contains(err.Error(), "backlog locked") {
+			t.Fatalf("error = %v, want one naming the spec and the cause", err)
+		}
+	})
+}
+
+// AC-4: a success is confirmed only by a spec that really reached REVIEW with
+// its plan carried out.
+func TestVerifyActionEffectConfirmsAnImplementationOnlyWhenThePlanIsCarriedOut(t *testing.T) {
+	t.Run("a reviewed spec with a completed plan is a success", func(t *testing.T) {
+		reader := &stateReader{
+			spec: domain.Spec{Code: "US-001", Status: domain.StatusReview},
+			tasks: []domain.Task{
+				{ID: "TASK-01", Status: domain.StatusDone},
+				{ID: "TASK-02", Status: domain.StatusDone},
+			},
+		}
+		record := succeededRecord()
+		record.Action = ActionImplement
+		if err := VerifyActionEffect(context.Background(), reader, ActionImplement, "US-001", &record); err != nil {
+			t.Fatalf("a carried-out plan was refused: %v", err)
+		}
+		if record.Status != StatusSucceeded {
+			t.Fatalf("the record was demoted: %#v", record)
+		}
+	})
+
+	// AC-5: every way of claiming a success the connector denies ends as a
+	// FAILED record carrying the reason.
+	for _, tc := range []struct {
+		name   string
+		reader *stateReader
+		want   string
+	}{
+		{
+			name:   "the spec never reached review",
+			reader: &stateReader{spec: domain.Spec{Code: "US-001", Status: domain.StatusInProgress}, tasks: []domain.Task{{ID: "TASK-01", Status: domain.StatusDone}}},
+			want:   "US-001 is IN PROGRESS, not REVIEW",
+		},
+		{
+			name:   "there is no plan at all",
+			reader: &stateReader{spec: domain.Spec{Code: "US-001", Status: domain.StatusReview}},
+			want:   "holds no plan task",
+		},
+		{
+			name: "a task of the plan is still open",
+			reader: &stateReader{
+				spec: domain.Spec{Code: "US-001", Status: domain.StatusReview},
+				tasks: []domain.Task{
+					{ID: "TASK-01", Status: domain.StatusDone},
+					{ID: "TASK-07", Status: domain.StatusTodo},
+				},
+			},
+			want: "TASK-07",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := succeededRecord()
+			record.Action = ActionImplement
+			err := VerifyActionEffect(context.Background(), tc.reader, ActionImplement, "US-001", &record)
+			var unconfirmed *UnconfirmedEffectError
+			if !errors.As(err, &unconfirmed) {
+				t.Fatalf("error = %v, want *UnconfirmedEffectError", err)
+			}
+			if record.Status != StatusFailed || record.Error == nil || record.Error.Code != "UNCONFIRMED_EFFECT" {
+				t.Fatalf("the record was not demoted: %#v", record)
+			}
+			if !strings.Contains(record.Error.Message, tc.want) {
+				t.Fatalf("message = %q, want it to mention %q", record.Error.Message, tc.want)
+			}
+		})
+	}
 }

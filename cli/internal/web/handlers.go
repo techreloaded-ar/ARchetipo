@@ -238,7 +238,7 @@ func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
 		PlanBody:  planBody,
 		Tasks:     tasks,
 		Template:  templateView{ID: tpl.ID, Version: tpl.Version},
-		Actions:   s.decorateActions(ctx, ws, code, tpl.ActionsFor(spec.Status)),
+		Actions:   s.decorateActions(ctx, ws, code, tpl.ActionsFor(spec.Status), len(tasks)),
 		Execution: latest,
 	})
 }

@@ -173,29 +173,56 @@ func validateActionObject(action ActionID, specCode string) error {
 	return nil
 }
 
+// Preflight applies the acceptance rule for a dispatch — the action has a
+// required capability, the provider exists, declares that capability and
+// accepts the configuration — and writes nothing at all.
+//
+// It is exactly the phase start() runs before it creates any record, exposed as
+// a method because a caller that holds the connector needs to refuse an
+// incompatible provider *before* producing any effect of its own: an action
+// that moves the spec before dispatching must not move it for a provider that
+// was never going to be able to run. Exposing the phase instead of copying it
+// keeps that rule in one place, so the viewer, the CLI and start() can never
+// disagree about which dispatch is acceptable.
+func (s *Service) Preflight(ctx context.Context, action ActionID, providerID string, providerConfig map[string]any) error {
+	_, _, err := s.preflight(ctx, action, providerID, providerConfig)
+	return err
+}
+
+// preflight is Preflight with its intermediate results kept, so start() can
+// reuse the resolved provider and the required capability instead of resolving
+// them a second time.
+func (s *Service) preflight(ctx context.Context, action ActionID, providerID string, providerConfig map[string]any) (Provider, Capability, error) {
+	capability, err := RequiredCapability(action)
+	if err != nil {
+		return nil, "", err
+	}
+	provider, err := s.registry.Resolve(providerID)
+	if err != nil {
+		return nil, "", err
+	}
+	capabilities, err := provider.Capabilities(ctx)
+	if err != nil {
+		return nil, "", &CapabilityError{ProviderID: providerID, Capability: capability, Err: err}
+	}
+	if !Supports(capabilities, capability) {
+		return nil, "", &CapabilityError{ProviderID: providerID, Capability: capability}
+	}
+	if err := provider.ValidateConfig(ctx, CloneConfig(providerConfig)); err != nil {
+		return nil, "", err
+	}
+	return provider, capability, nil
+}
+
 func (s *Service) start(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any, requestID string, resolveID func() (string, error), confirm Confirmation) (Execution, Continuation, error) {
 	if err := validateActionObject(action, spec.Code); err != nil {
 		return Execution{}, nil, err
 	}
-	capability, err := RequiredCapability(action)
+	provider, capability, err := s.preflight(ctx, action, providerID, providerConfig)
 	if err != nil {
 		return Execution{}, nil, err
-	}
-	provider, err := s.registry.Resolve(providerID)
-	if err != nil {
-		return Execution{}, nil, err
-	}
-	capabilities, err := provider.Capabilities(ctx)
-	if err != nil {
-		return Execution{}, nil, &CapabilityError{ProviderID: providerID, Capability: capability, Err: err}
-	}
-	if !Supports(capabilities, capability) {
-		return Execution{}, nil, &CapabilityError{ProviderID: providerID, Capability: capability}
 	}
 	validatedConfig := CloneConfig(providerConfig)
-	if err := provider.ValidateConfig(ctx, CloneConfig(validatedConfig)); err != nil {
-		return Execution{}, nil, err
-	}
 	id, err := resolveID()
 	if err != nil {
 		return Execution{}, nil, fmt.Errorf("generate execution id: %w", err)

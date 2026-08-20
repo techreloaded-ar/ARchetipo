@@ -20,6 +20,81 @@ type SpecStateReader interface {
 	ReadSpecTasks(context.Context, string) ([]domain.Task, error)
 }
 
+// SpecTransitioner is the minimal view of the backlog that starting an action
+// needs: move one spec to a new status. Like SpecStateReader it is declared
+// here, as an interface of the consumer, so this package never imports
+// connector — a real connector satisfies this shape without any adapter.
+type SpecTransitioner interface {
+	TransitionStatus(ctx context.Context, specRef string, newStatus domain.Status) (domain.WriteResult, error)
+}
+
+// HasPersistedPlan reports whether the spec has a plan to carry out at all.
+//
+// It is the precondition of an implementation: an agent asked to execute a plan
+// that was never persisted has nothing to do, and refusing before the dispatch
+// costs nothing while refusing after it has already moved the spec and burned a
+// run.
+//
+// A connector answering "there is nothing here" as a missing precondition is an
+// answer, not an infrastructure failure — the same reading backlogEffect makes —
+// so it becomes "no plan", not an error.
+func HasPersistedPlan(ctx context.Context, reader SpecStateReader, specCode string) (bool, error) {
+	tasks, err := reader.ReadSpecTasks(ctx, specCode)
+	if err != nil {
+		var coded *iox.CodedError
+		if errors.As(err, &coded) && coded.Code == iox.CodePreconditionMissing {
+			return false, nil
+		}
+		return false, err
+	}
+	return len(tasks) > 0, nil
+}
+
+// BeginActionEffect performs the state change an accepted start owes the
+// backlog, before anything is dispatched. Today only ActionImplement has one:
+// an accepted implementation moves the spec to IN PROGRESS.
+//
+// The transition is the caller's because the caller is the only one holding a
+// connector — this package deliberately never does. Leaving it to the agent
+// instead would make the criterion "the spec moves when the start is accepted"
+// depend on the agent surviving its first seconds, and a run that died at once
+// would leave the spec PLANNED although its start had been accepted.
+//
+// It must run *after* Service.Preflight: a provider that cannot implement is
+// refused before the spec is touched, so a refused start leaves no trace.
+//
+// There is deliberately no rollback when the dispatch later fails. The spec
+// staying IN PROGRESS is the truthful record of work that may already have
+// reached the repository, and the requirement on a failure is only that the
+// spec stays out of REVIEW.
+//
+// It only ever moves a spec forward, from PLANNED. Every other status is left
+// exactly where it is, and that guard belongs here rather than in the callers:
+// the viewer already refuses the action outside the statuses the Template
+// admits, but the CLI is a low-level entry point with no such check, so without
+// it a replayed `execution run <code> implement --request-id k` would drag a
+// finished spec back out of REVIEW before the idempotent reuse branch had a
+// chance to return the record it already holds. Leaving the spec alone is also
+// the right answer for a spec the caller starts from some other status: the
+// skill runs `archetipo spec start` itself, and the success of the run is
+// confirmed from the state it ends in, never from the one it began in.
+//
+// It is therefore idempotent: a spec already IN PROGRESS is left alone, so
+// pressing the action again — or the skill running `archetipo spec start`
+// itself — is a no-op rather than a second write.
+func BeginActionEffect(ctx context.Context, mover SpecTransitioner, action ActionID, spec domain.Spec) error {
+	if action != ActionImplement {
+		return nil
+	}
+	if spec.Status != domain.StatusPlanned {
+		return nil
+	}
+	if _, err := mover.TransitionStatus(ctx, spec.Code, domain.StatusInProgress); err != nil {
+		return fmt.Errorf("moving %s to %s failed: %w", spec.Code, domain.StatusInProgress, err)
+	}
+	return nil
+}
+
 // PRDStateReader is the minimal view of the workspace that confirming an
 // inception needs: re-read the PRD. It is declared here, as an interface of the
 // consumer and for the same reason as SpecStateReader, so this package never
@@ -120,6 +195,8 @@ func VerifyActionEffect(ctx context.Context, reader SpecStateReader, action Acti
 	switch action {
 	case ActionPlan:
 		reason = planEffect(ctx, reader, specCode)
+	case ActionImplement:
+		reason = implementEffect(ctx, reader, specCode)
 	case ActionInception:
 		// The parameter keeps SpecStateReader as its static type so the two
 		// callers pass the same connector for every action; what an inception
@@ -181,6 +258,46 @@ func planEffect(ctx context.Context, reader SpecStateReader, specCode string) er
 	}
 	if len(tasks) == 0 {
 		return fmt.Errorf("%s is %s but holds no plan task", specCode, domain.StatusPlanned)
+	}
+	return nil
+}
+
+// implementEffect reports why the connector does not back a claimed
+// implementation, or nil when it does.
+//
+// The rule is one of state, not of counting: the spec must be in REVIEW, it
+// must have a plan, and no task of that plan may still be TODO. It is exactly
+// the completion gate the archetipo-implement skill imposes on itself, so a
+// conforming run always clears it, while a run that "closed" without carrying
+// the plan out is demoted.
+//
+// Comparing the receipt's own tasks_done against the connector is deliberately
+// not the rule: it would make the agent's declaration authoritative over a
+// count it is not the source of, and a plan edited during the run would produce
+// false failures.
+func implementEffect(ctx context.Context, reader SpecStateReader, specCode string) error {
+	spec, err := reader.ReadSpecDetail(ctx, specCode)
+	if err != nil {
+		return fmt.Errorf("re-reading %s failed: %w", specCode, err)
+	}
+	if spec.Status != domain.StatusReview {
+		return fmt.Errorf("%s is %s, not %s", specCode, spec.Status, domain.StatusReview)
+	}
+	tasks, err := reader.ReadSpecTasks(ctx, specCode)
+	if err != nil {
+		return fmt.Errorf("reading the plan tasks of %s failed: %w", specCode, err)
+	}
+	if len(tasks) == 0 {
+		return fmt.Errorf("%s is %s but holds no plan task", specCode, domain.StatusReview)
+	}
+	var open []string
+	for _, task := range tasks {
+		if task.Status == domain.StatusTodo {
+			open = append(open, task.ID)
+		}
+	}
+	if len(open) > 0 {
+		return fmt.Errorf("%s is %s but %s of its plan is still %s", specCode, domain.StatusReview, strings.Join(open, ", "), domain.StatusTodo)
 	}
 	return nil
 }

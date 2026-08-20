@@ -58,6 +58,11 @@ const (
 	// impossible rather than merely unlikely to work.
 	planSkillRelPath = ".agents/skills/archetipo-plan/SKILL.md"
 
+	// implementSkillRelPath is the same fact for the implementation skill: it
+	// is what `/archetipo-implement` resolves to, and its absence is what makes
+	// the invocation impossible rather than merely unlikely to work.
+	implementSkillRelPath = ".agents/skills/archetipo-implement/SKILL.md"
+
 	// shutdownGrace bounds how long the session process is given to exit on its
 	// own after its input is closed, before it is signalled.
 	shutdownGrace = 5 * time.Second
@@ -139,8 +144,15 @@ func New(options Options) *Provider {
 
 func (p *Provider) ID() string { return ProviderID }
 
+// Capabilities declares the actions this provider can dispatch, and nothing
+// else. run.dialog is not among them on purpose: it is derived from the
+// interfaces the provider implements, so declaring it by hand here would be
+// exactly the mismatch that derivation exists to make impossible.
 func (p *Provider) Capabilities(context.Context) ([]execution.Capability, error) {
-	return []execution.Capability{execution.CapabilitySpecPlan}, nil
+	return []execution.Capability{
+		execution.CapabilitySpecPlan,
+		execution.CapabilitySpecImplement,
+	}, nil
 }
 
 // ValidateConfig checks the shape of the non-secret configuration only. It must
@@ -153,8 +165,8 @@ func (p *Provider) ValidateConfig(_ context.Context, raw map[string]any) error {
 	return err
 }
 
-// Execute dispatches one spec.plan action to a local Codex process and reports
-// its outcome.
+// Execute dispatches one action to a local Codex process and reports its
+// outcome.
 //
 // The order is deliberate: everything that can be known before spawning is
 // checked before spawning. A missing runtime and a missing skill both produce a
@@ -168,27 +180,160 @@ func (p *Provider) ValidateConfig(_ context.Context, raw map[string]any) error {
 // exited or been killed by the timeout, so there is nothing left for a caller
 // to follow.
 func (p *Provider) Execute(ctx context.Context, req execution.Request) (execution.Result, error) {
-	cfg, err := parseConfig(req.ProviderConfig)
+	cfg, dir, err := p.prepare(ctx, req)
 	if err != nil {
 		return execution.Result{}, err
 	}
-	dir, err := p.workingDir()
-	if err != nil {
-		return execution.Result{}, fmt.Errorf("resolving the working directory to run the codex command %q: %w", cfg.Command, err)
+	// The fork is on the action and nothing else. Both actions this provider
+	// dispatches are single-turn work that ends on a receipt, so they differ
+	// only in the skill they invoke, the instruction they carry and the receipt
+	// they accept — and each of them lives in its own function rather than as a
+	// set of conditions inside this one.
+	if req.Action == execution.ActionImplement {
+		return p.executeImplement(ctx, req, cfg, dir)
 	}
-	// The availability probe is already the explicit diagnostic for a runtime
-	// that is absent or broken, so it travels back unchanged rather than being
-	// wrapped into a vaguer sentence.
-	if err := p.Available(ctx, req.ProviderConfig); err != nil {
-		return execution.Result{}, err
-	}
-	if err := ensurePlanSkill(dir); err != nil {
+	if err := ensureSkill(dir, planSkillRelPath, "planning"); err != nil {
 		return execution.Result{}, err
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
+	turn, err := p.runSingleTurn(runCtx, req, cfg, dir, buildPrompt(req), "planning")
+	if err != nil {
+		return execution.Result{}, err
+	}
+
+	// The acceptance rule is the shared one: a receipt this provider accepted
+	// and another rejected would be a contract that exists twice. The receipt is
+	// looked for in the agent's last message, which is where the prompt asks for
+	// it — never in the stream as a whole.
+	receipt, err := execution.AcceptPlanReceipt(turn.final, req.SpecCode)
+	if err != nil {
+		turn.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a plan for %s", req.SpecCode))
+		return execution.Result{}, fmt.Errorf(
+			"the codex command %q ended without having produced a plan for %s%s: %w",
+			cfg.Command, req.SpecCode, diagnosticSuffix(turn.stderr), err,
+		)
+	}
+	turn.session.Close(execution.RunClosed, "")
+	return p.resultFor(cfg, turn.exitCode, turn.elapsed, receipt)
+}
+
+// prepare answers everything that can be known before a process exists: the
+// configuration, the directory the session will run in, and whether the runtime
+// can be used at all. It is shared by every action because none of the three
+// answers depends on which action was dispatched, and a second copy of them
+// would be free to diverge on the order in which they fail.
+func (p *Provider) prepare(ctx context.Context, req execution.Request) (settings, string, error) {
+	cfg, err := parseConfig(req.ProviderConfig)
+	if err != nil {
+		return settings{}, "", err
+	}
+	dir, err := p.workingDir()
+	if err != nil {
+		return settings{}, "", fmt.Errorf("resolving the working directory to run the codex command %q: %w", cfg.Command, err)
+	}
+	// The availability probe is already the explicit diagnostic for a runtime
+	// that is absent or broken, so it travels back unchanged rather than being
+	// wrapped into a vaguer sentence.
+	if err := p.Available(ctx, req.ProviderConfig); err != nil {
+		return settings{}, "", err
+	}
+	return cfg, dir, nil
+}
+
+// singleTurn is what a completed one-turn run leaves behind: the message the
+// agent ended on, the facts a payload or a diagnostic is built from, and the
+// still-open session, which only the caller can close — because only the caller
+// knows whether the message it was given is the receipt it asked for.
+type singleTurn struct {
+	session  *localrun.Session
+	final    string
+	exitCode int
+	stderr   string
+	elapsed  time.Duration
+}
+
+// runSingleTurn runs one prompt as one turn and reports the message it ended
+// on, or the reason there is none.
+//
+// It is the shape of every action this provider dispatches: planning and
+// implementation both ask for work that ends on a receipt, so a turn that ends
+// without one has failed here and now rather than asked a question. Keeping it
+// in one function is what keeps the four failures — the deadline, a process
+// that could not be run to completion, a turn that died with the process, and a
+// session that could not be opened at all — identical for both, instead of two
+// copies free to classify them differently.
+//
+// gerund is the only thing that varies between the callers, and it varies on
+// purpose: "did not finish planning US-1" and "did not finish implementing
+// US-1" are two different diagnoses of two different runs, and a shared phrase
+// would make them indistinguishable in a record.
+//
+// Every failure closes the session before returning; a success deliberately
+// leaves it open.
+func (p *Provider) runSingleTurn(runCtx context.Context, req execution.Request, cfg settings, dir, prompt, gerund string) (*singleTurn, error) {
+	live, err := p.openSession(runCtx, req, cfg, dir, prompt)
+	if err != nil {
+		return nil, err
+	}
+	session, client := live.session, live.client
+
+	select {
+	case <-client.TurnDone():
+	case <-runCtx.Done():
+	}
+
+	exitCode, stderr, waitErr := p.shutdown(live.process)
+	elapsed := p.now().Sub(live.startedAt)
+
+	if runErr := runCtx.Err(); runErr != nil {
+		reason := fmt.Sprintf("the codex session was stopped after %s: %v", elapsed.Round(time.Millisecond), runErr)
+		session.Close(execution.RunCrashed, reason)
+		return nil, fmt.Errorf("the codex command %q did not finish %s %s within %s", cfg.Command, gerund, req.SpecCode, cfg.Timeout)
+	}
+	if waitErr != nil {
+		session.Close(execution.RunCrashed, waitErr.Error())
+		return nil, fmt.Errorf("the codex command %q could not be run to completion after %s: %w", cfg.Command, elapsed.Round(time.Millisecond), waitErr)
+	}
+	// A turn that ended because the process died is a different outcome from a
+	// turn the process declared over, and only the second one can carry a
+	// result. The exit code is reported when there is one, because that is the
+	// number the operator will look for.
+	if !client.Completed() && exitCode != 0 {
+		session.Close(execution.RunCrashed, fmt.Sprintf("the codex process exited %d", exitCode))
+		return nil, fmt.Errorf(
+			"the codex command %q exited %d after %s without %s %s%s",
+			cfg.Command, exitCode, elapsed.Round(time.Millisecond), gerund, req.SpecCode, diagnosticSuffix(stderr),
+		)
+	}
+	return &singleTurn{
+		session:  session,
+		final:    client.FinalMessage(),
+		exitCode: exitCode,
+		stderr:   stderr,
+		elapsed:  elapsed,
+	}, nil
+}
+
+// liveSession is a started process that has already announced itself and can
+// already be spoken to: the three things a caller has to hold on to, plus the
+// instant the work began.
+type liveSession struct {
+	process   localrun.Process
+	session   *localrun.Session
+	client    *appServer
+	startedAt time.Time
+}
+
+// openSession starts the process, opens the protocol on it, gives it its
+// instruction and makes the run followable and commandable. Everything in it is
+// identical for both actions but the prompt, which is the one parameter.
+//
+// A failure here always leaves the session closed and the process gone: a
+// registered run that nothing will ever end would stay ACTIVE forever.
+func (p *Provider) openSession(runCtx context.Context, req execution.Request, cfg settings, dir, prompt string) (*liveSession, error) {
 	// The session is registered before anything is started, so the run is
 	// followable from the instant it can produce history — including while this
 	// call is still inside the agent's work.
@@ -199,65 +344,23 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 	process, err := p.starter.Start(runCtx, dir, cfg.Command, buildArgs())
 	if err != nil {
 		session.Close(execution.RunCrashed, err.Error())
-		return execution.Result{}, fmt.Errorf("the codex command %q could not be started: %w", cfg.Command, err)
+		return nil, fmt.Errorf("the codex command %q could not be started: %w", cfg.Command, err)
 	}
 
 	client := newAppServer(process, session)
 	go client.consume()
 
-	if err := client.start(runCtx, cfg, dir, buildPrompt(req)); err != nil {
+	if err := client.start(runCtx, cfg, dir, prompt); err != nil {
 		_, _, _ = p.shutdown(process)
 		session.Close(execution.RunCrashed, err.Error())
-		return execution.Result{}, err
+		return nil, err
 	}
 	// Only now can a command be delivered: before the turn exists there is
 	// nothing to steer, and a command that arrives earlier is refused as
 	// transient rather than delivered into nothing.
 	session.AttachDialogue(client)
 
-	select {
-	case <-client.TurnDone():
-	case <-runCtx.Done():
-	}
-
-	exitCode, stderr, waitErr := p.shutdown(process)
-	elapsed := p.now().Sub(startedAt)
-
-	if runErr := runCtx.Err(); runErr != nil {
-		reason := fmt.Sprintf("the codex session was stopped after %s: %v", elapsed.Round(time.Millisecond), runErr)
-		session.Close(execution.RunCrashed, reason)
-		return execution.Result{}, fmt.Errorf("the codex command %q did not finish planning %s within %s", cfg.Command, req.SpecCode, cfg.Timeout)
-	}
-	if waitErr != nil {
-		session.Close(execution.RunCrashed, waitErr.Error())
-		return execution.Result{}, fmt.Errorf("the codex command %q could not be run to completion after %s: %w", cfg.Command, elapsed.Round(time.Millisecond), waitErr)
-	}
-	// A turn that ended because the process died is a different outcome from a
-	// turn the process declared over, and only the second one can carry a plan.
-	// The exit code is reported when there is one, because that is the number
-	// the operator will look for.
-	if !client.Completed() && exitCode != 0 {
-		session.Close(execution.RunCrashed, fmt.Sprintf("the codex process exited %d", exitCode))
-		return execution.Result{}, fmt.Errorf(
-			"the codex command %q exited %d after %s without planning %s%s",
-			cfg.Command, exitCode, elapsed.Round(time.Millisecond), req.SpecCode, diagnosticSuffix(stderr),
-		)
-	}
-
-	// The acceptance rule is the shared one: a receipt this provider accepted
-	// and another rejected would be a contract that exists twice. The receipt is
-	// looked for in the agent's last message, which is where the prompt asks for
-	// it — never in the stream as a whole.
-	receipt, err := execution.AcceptPlanReceipt(client.FinalMessage(), req.SpecCode)
-	if err != nil {
-		session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a plan for %s", req.SpecCode))
-		return execution.Result{}, fmt.Errorf(
-			"the codex command %q ended without having produced a plan for %s%s: %w",
-			cfg.Command, req.SpecCode, diagnosticSuffix(stderr), err,
-		)
-	}
-	session.Close(execution.RunClosed, "")
-	return p.resultFor(cfg, exitCode, elapsed, receipt)
+	return &liveSession{process: process, session: session, client: client, startedAt: startedAt}, nil
 }
 
 // shutdown ends the session process and reports how it went.
@@ -289,15 +392,19 @@ func (p *Provider) shutdown(process localrun.Process) (int, string, error) {
 	}
 }
 
-// ensurePlanSkill refuses to spawn Codex when the planning skill it is asked to
-// invoke is not installed in the workspace. Without this check the run would
-// still start, spend a full timeout, and fail with whatever Codex says about an
-// unknown command — a diagnostic that points nowhere. The message names the
-// command that fixes it instead.
-func ensurePlanSkill(dir string) error {
-	path := filepath.Join(dir, planSkillRelPath)
+// ensureSkill refuses to spawn Codex when the skill it is asked to invoke is
+// not installed in the workspace. Without this check the run would still start,
+// spend a full timeout, and fail with whatever Codex says about an unknown
+// command — a diagnostic that points nowhere. The message names the command
+// that fixes it instead.
+//
+// It is one function over a name and a path rather than one function per skill:
+// the check and the diagnostic are the same fact for every skill this provider
+// invokes, and two copies of them would be free to say it differently.
+func ensureSkill(dir, relPath, skill string) error {
+	path := filepath.Join(dir, relPath)
 	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("the ARchetipo planning skill is not installed for codex in %s (expected %s): run `archetipo init --tool codex` in that directory", dir, planSkillRelPath)
+		return fmt.Errorf("the ARchetipo %s skill is not installed for codex in %s (expected %s): run `archetipo init --tool codex` in that directory", skill, dir, relPath)
 	}
 	return nil
 }

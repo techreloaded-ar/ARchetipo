@@ -69,6 +69,11 @@ const (
 	// conversation impossible rather than merely unlikely to work.
 	backlogSkillRelPath = ".claude/skills/archetipo-spec/SKILL.md"
 
+	// implementSkillRelPath is the same fact for the implementation skill: it
+	// is what `/archetipo-implement` resolves to, and its absence is what makes
+	// the invocation impossible rather than merely unlikely to work.
+	implementSkillRelPath = ".claude/skills/archetipo-implement/SKILL.md"
+
 	// shutdownGrace bounds how long the session process is given to exit on its
 	// own after its input is closed, before it is signalled.
 	shutdownGrace = 5 * time.Second
@@ -157,6 +162,7 @@ func (p *Provider) ID() string { return ProviderID }
 func (p *Provider) Capabilities(context.Context) ([]execution.Capability, error) {
 	return []execution.Capability{
 		execution.CapabilitySpecPlan,
+		execution.CapabilitySpecImplement,
 		execution.CapabilityWorkspaceInception,
 		execution.CapabilityWorkspaceBacklog,
 	}, nil
@@ -203,6 +209,9 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 	if req.Action == execution.ActionBacklog {
 		return p.executeBacklog(ctx, req, cfg, dir)
 	}
+	if req.Action == execution.ActionImplement {
+		return p.executeImplement(ctx, req, cfg, dir)
+	}
 	if err := ensureSkill(dir, planSkillRelPath, "planning"); err != nil {
 		return execution.Result{}, err
 	}
@@ -210,12 +219,61 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	// Single-turn: planning is one turn followed by a receipt, and a turn that
-	// ends without one must fail here and now rather than wait for an answer
-	// that is not coming.
-	live, err := p.openSession(runCtx, req, cfg, dir, buildPrompt(req), false)
+	turn, err := p.runSingleTurn(runCtx, req, cfg, dir, buildPrompt(req), "planning")
 	if err != nil {
 		return execution.Result{}, err
+	}
+
+	// The acceptance rule is the shared one: a receipt this provider accepted
+	// and another rejected would be a contract that exists twice. The receipt is
+	// looked for in the message the run ends on, which is where the prompt asks
+	// for it — never in the stream as a whole.
+	receipt, err := execution.AcceptPlanReceipt(turn.final, req.SpecCode)
+	if err != nil {
+		turn.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a plan for %s", req.SpecCode))
+		return execution.Result{}, fmt.Errorf(
+			"the claude command %q ended without having produced a plan for %s%s: %w",
+			cfg.Command, req.SpecCode, diagnosticSuffix(turn.stderr), err,
+		)
+	}
+	turn.session.Close(execution.RunClosed, "")
+	return p.resultFor(cfg, turn.exitCode, turn.elapsed, receipt)
+}
+
+// singleTurn is what a completed one-turn run leaves behind: the message the
+// agent ended on, the facts a payload or a diagnostic is built from, and the
+// still-open session, which only the caller can close — because only the caller
+// knows whether the message it was given is the receipt it asked for.
+type singleTurn struct {
+	session  *localrun.Session
+	final    string
+	exitCode int
+	stderr   string
+	elapsed  time.Duration
+}
+
+// runSingleTurn runs one prompt as one turn and reports the message it ended
+// on, or the reason there is none.
+//
+// It is the shape of every non-conversational action: planning and
+// implementation both ask for work that ends on a receipt, so a turn that ends
+// without one has failed here and now rather than asked a question. Keeping it
+// in one function is what keeps the four failures — the deadline, a process
+// that could not be run to completion, a turn that never completed, and a
+// session that could not be opened at all — identical for both, instead of two
+// copies free to classify them differently.
+//
+// gerund is the only thing that varies between the callers, and it varies on
+// purpose: "did not finish planning US-1" and "did not finish implementing
+// US-1" are two different diagnoses of two different runs, and a shared phrase
+// would make them indistinguishable in a record.
+//
+// Every failure closes the session before returning; a success deliberately
+// leaves it open.
+func (p *Provider) runSingleTurn(runCtx context.Context, req execution.Request, cfg settings, dir, prompt, gerund string) (*singleTurn, error) {
+	live, err := p.openSession(runCtx, req, cfg, dir, prompt, false)
+	if err != nil {
+		return nil, err
 	}
 	session, client := live.session, live.client
 
@@ -230,14 +288,14 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 	if runErr := runCtx.Err(); runErr != nil {
 		reason := fmt.Sprintf("the claude session was stopped after %s: %v", elapsed.Round(time.Millisecond), runErr)
 		session.Close(execution.RunCrashed, reason)
-		return execution.Result{}, fmt.Errorf("the claude command %q did not finish planning %s within %s", cfg.Command, req.SpecCode, cfg.Timeout)
+		return nil, fmt.Errorf("the claude command %q did not finish %s %s within %s", cfg.Command, gerund, req.SpecCode, cfg.Timeout)
 	}
 	if waitErr != nil {
 		session.Close(execution.RunCrashed, waitErr.Error())
-		return execution.Result{}, fmt.Errorf("the claude command %q could not be run to completion after %s: %w", cfg.Command, elapsed.Round(time.Millisecond), waitErr)
+		return nil, fmt.Errorf("the claude command %q could not be run to completion after %s: %w", cfg.Command, elapsed.Round(time.Millisecond), waitErr)
 	}
 	// Only a turn the process declared finished, and finished without error,
-	// can carry a plan. Two different outcomes fail this test and both must:
+	// can carry a result. Two different outcomes fail this test and both must:
 	// a turn that ended because the process died, and an interrupted turn —
 	// which Claude also closes with a `result`, reporting `is_error`. The
 	// second one is the reason the exit code cannot be the whole condition:
@@ -246,26 +304,18 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 	// as a success on whatever the agent happened to have said last.
 	if !client.Completed() {
 		session.Close(execution.RunCrashed, fmt.Sprintf("the claude process exited %d without completing the turn", exitCode))
-		return execution.Result{}, fmt.Errorf(
-			"the claude command %q exited %d after %s without planning %s: the turn never completed%s",
-			cfg.Command, exitCode, elapsed.Round(time.Millisecond), req.SpecCode, diagnosticSuffix(stderr),
+		return nil, fmt.Errorf(
+			"the claude command %q exited %d after %s without %s %s: the turn never completed%s",
+			cfg.Command, exitCode, elapsed.Round(time.Millisecond), gerund, req.SpecCode, diagnosticSuffix(stderr),
 		)
 	}
-
-	// The acceptance rule is the shared one: a receipt this provider accepted
-	// and another rejected would be a contract that exists twice. The receipt is
-	// looked for in the message the run ends on, which is where the prompt asks
-	// for it — never in the stream as a whole.
-	receipt, err := execution.AcceptPlanReceipt(client.FinalMessage(), req.SpecCode)
-	if err != nil {
-		session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a plan for %s", req.SpecCode))
-		return execution.Result{}, fmt.Errorf(
-			"the claude command %q ended without having produced a plan for %s%s: %w",
-			cfg.Command, req.SpecCode, diagnosticSuffix(stderr), err,
-		)
-	}
-	session.Close(execution.RunClosed, "")
-	return p.resultFor(cfg, exitCode, elapsed, receipt)
+	return &singleTurn{
+		session:  session,
+		final:    client.FinalMessage(),
+		exitCode: exitCode,
+		stderr:   stderr,
+		elapsed:  elapsed,
+	}, nil
 }
 
 // prepare answers everything that can be known before a process exists: the
