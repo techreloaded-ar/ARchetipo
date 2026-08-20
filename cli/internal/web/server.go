@@ -189,6 +189,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/workspace/options", s.handleGetWorkspaceOptions)
 	s.mux.HandleFunc("POST /api/workspace", s.handleCreateWorkspace)
 	s.mux.HandleFunc("GET /api/workspace/actions", s.handleGetWorkspaceActions)
+	s.mux.HandleFunc("GET /api/workspace/status", s.handleGetWorkspaceStatus)
 	s.mux.HandleFunc("POST /api/workspace/execution", s.handleRunWorkspaceAction)
 	s.mux.HandleFunc("GET /api/workspaces", s.handleListWorkspaces)
 	s.mux.HandleFunc("POST /api/workspaces", s.handleAddWorkspace)

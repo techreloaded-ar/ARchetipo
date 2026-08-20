@@ -495,6 +495,141 @@ html[data-theme="light"] .theme-ico-moon {
 	display: none !important;
 }
 
+/* ---- Workspace status strip -------------------------------------------
+   Sits between the topbar and the board and shares the board's horizontal
+   padding, so stage, summary and recommended step line up with the columns
+   below. Every word it shows comes from /api/workspace/status; the styling
+   only decides emphasis. */
+.workspace-status {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px 20px;
+	padding: 14px 28px;
+	border-bottom: 1px solid var(--rule);
+	background: color-mix(in srgb, var(--surface) 55%, transparent);
+}
+
+.ws-status-header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 4px 12px;
+	min-width: 0;
+}
+
+.ws-status-stage {
+	font-family: var(--font-display);
+	font-size: 19px;
+	line-height: 1.2;
+	color: var(--text-strong);
+}
+
+.ws-status-summary {
+	font-size: 13px;
+	color: var(--text-muted);
+}
+
+.ws-status-template {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+}
+
+.ws-status-next-wrap {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 10px;
+	margin-left: auto;
+}
+
+/* The recommended step is the one emphatic control of the strip. */
+.ws-status-next {
+	border: 1px solid var(--accent);
+	background: var(--accent);
+	color: var(--accent-ink);
+	padding: 7px 14px;
+	border-radius: var(--radius);
+	font-family: var(--font-sans);
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	transition:
+		background var(--transition),
+		border-color var(--transition),
+		transform 0.1s var(--ease);
+}
+
+.ws-status-next:hover:not(:disabled) {
+	background: var(--accent-strong);
+	border-color: var(--accent-strong);
+}
+
+.ws-status-next:active:not(:disabled) {
+	transform: translateY(1px);
+}
+
+/* Visibly inert, never silently inert: the unlock text below says what it
+   would take, so the disabled state is never the whole answer. */
+.ws-status-next:disabled {
+	cursor: default;
+	background: transparent;
+	border-color: var(--border-strong);
+	color: var(--text-muted);
+}
+
+.ws-status-next-spec {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	opacity: 0.85;
+}
+
+.ws-status-next-none {
+	font-size: 13px;
+	color: var(--text-muted);
+}
+
+/* The unlock condition must stay readable in both themes: it carries the
+   reason an action cannot run, so it is dimmer than body text but never
+   faint. */
+.ws-status-next-unlock,
+.action-chip-unlock {
+	font-size: 11px;
+	line-height: 1.4;
+	color: var(--text);
+	opacity: 0.8;
+}
+
+.ws-status-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	flex-basis: 100%;
+}
+
+/* The chips in the strip are informative: they state what the process offers
+   here, while running an action stays the execution panel's job. */
+.ws-status-action {
+	flex-wrap: wrap;
+	font-family: var(--font-sans);
+	background: transparent;
+	cursor: default;
+}
+
+.ws-status-action .action-chip-label {
+	font-size: 11px;
+	color: var(--text-muted);
+}
+
 /* ---- Board / Columns -------------------------------------------------- */
 .board {
 	display: flex;
@@ -2735,6 +2870,24 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	font-size: 10px;
 	letter-spacing: 0.04em;
 	color: var(--text-muted);
+}
+
+/* A chip carrying its unlock condition is two lines, not one: the label stays
+   on top and the sentence sits under it, left aligned and free to wrap, so the
+   condition is readable instead of truncated. The pill radius softens because
+   a two-line pill reads as a box, not as a tag. */
+.action-chip:has(.action-chip-unlock) {
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	border-radius: 12px;
+	padding: 6px 10px;
+	max-width: 340px;
+}
+
+.action-chip .action-chip-unlock {
+	white-space: normal;
+	text-align: left;
 }
 
 /* A runnable action is a button; a non-runnable one keeps the plain chip and

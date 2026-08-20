@@ -4,6 +4,7 @@
 	// and CSS stability. The data model exposed by the API is "spec", which
 	// is reflected in variable names, payloads and envelope keys.
 	const boardEl = document.getElementById("board");
+	const workspaceStatusEl = document.getElementById("workspace-status");
 	const refreshBtn = document.getElementById("refresh-btn");
 	const modal = document.getElementById("modal-root");
 	const modalClose = document.getElementById("modal-close");
@@ -287,7 +288,7 @@
 	let runSeams = new Set(); // event ids the timeline resumed at after a dropped channel
 	let runSeamPending = false; // the channel dropped: the next appended event opens a seam
 
-	refreshBtn.addEventListener("click", loadBoard);
+	refreshBtn.addEventListener("click", refreshBoardAndStatus);
 	modalClose.addEventListener("click", closeModal);
 	modal.addEventListener("click", (e) => {
 		if (e.target === modal) closeModal();
@@ -495,11 +496,19 @@
 			toggleTheme();
 		} else if (k === "r") {
 			e.preventDefault();
-			loadBoard();
+			refreshBoardAndStatus();
 		}
 	});
 
+	// The board and the status strip answer two different questions about the
+	// same workspace, so every explicit refresh asks both.
+	function refreshBoardAndStatus() {
+		loadBoard();
+		loadWorkspaceStatus();
+	}
+
 	loadBoard();
+	loadWorkspaceStatus();
 	loadMockups();
 	connectBoardStream();
 
@@ -516,6 +525,7 @@
 			if (!newSpecModal.classList.contains("hidden")) return;
 			if (!newWorkspaceModal.classList.contains("hidden")) return;
 			loadBoard();
+			loadWorkspaceStatus();
 		}, 150);
 	}
 
@@ -548,6 +558,59 @@
 			boardEl.innerHTML = `<div class="empty-board">Error: ${escapeHtml(err.message || err)}</div>`;
 		}
 	}
+
+	// ---- Workspace status strip --------------------------------------------
+	//
+	// Where the workspace is in the process, and which step comes next, are a
+	// server verdict: /api/workspace/status derives both from the installed
+	// Archetipo and from the real state of the workspace. Nothing here decides
+	// which stage exists, which step follows it, or what unlocks a refused one —
+	// every word drawn comes from the payload, through the pure renderer in
+	// workspace-status.js.
+
+	// The last payload, kept because the navigation must read the step from the
+	// payload and not from the DOM it produced.
+	let workspaceStatusSnapshot = null;
+
+	async function loadWorkspaceStatus() {
+		let view;
+		try {
+			view = await apiGet("/api/workspace/status");
+		} catch (_) {
+			// The strip is an addition to the board, not a precondition of it: a
+			// viewer that cannot answer must not stop anyone from working, so the
+			// strip simply disappears and no toast is raised.
+			workspaceStatusSnapshot = null;
+			workspaceStatusEl.innerHTML = "";
+			workspaceStatusEl.classList.add("hidden");
+			return;
+		}
+		workspaceStatusSnapshot = view;
+		workspaceStatusEl.innerHTML =
+			window.WorkspaceStatus.renderWorkspaceStatus(view);
+		workspaceStatusEl.classList.remove("hidden");
+	}
+
+	// One delegated listener for a strip that is redrawn on every refresh.
+	// The strip never starts an execution itself: there is a single dispatch
+	// path, the execution panel, and duplicating it would duplicate the "one
+	// press, one execution" guarantee with it. So the recommended step only
+	// navigates — to the target spec, or to the panel where the workspace
+	// actions are already mounted. The `actions` chips are informative and are
+	// deliberately ignored here.
+	workspaceStatusEl.addEventListener("click", (e) => {
+		const btn = e.target.closest(".ws-status-next");
+		if (!btn || !workspaceStatusEl.contains(btn)) return;
+		const target = window.WorkspaceStatus.nextStepTarget(
+			workspaceStatusSnapshot,
+		);
+		if (!target) return;
+		if (target.scope === "spec" && target.code) {
+			openEditor(target.code);
+		} else if (target.scope === "workspace") {
+			openPRD();
+		}
+	});
 
 	function updateStats(view) {
 		const cols = view.columns || [];
@@ -709,6 +772,7 @@
 			await apiPost("/api/board/move", { code, to: targetColumn, ...anchor });
 			showToast(`${code} approved and moved to ${targetColumn}`, "ok");
 			await loadBoard();
+			await loadWorkspaceStatus();
 		} catch (err) {
 			showToast(`Move failed: ${err.message || err}`, "err");
 			// revert the optimistic DOM change by reloading the last known good board.
@@ -1384,6 +1448,7 @@
 				closeModal();
 			}
 			await loadBoard();
+			await loadWorkspaceStatus();
 			return true;
 		} catch (err) {
 			showToast(`Delete failed: ${err.message || err}`, "err");
@@ -1988,6 +2053,10 @@
 		panelActions.innerHTML = list.map(renderSpecActionChip).join("");
 	}
 
+	// A chip that cannot run must say what unlocks it, as visible text and not
+	// only as a tooltip: a chip that is off and mute is exactly the inert action
+	// the spec forbids. The title stays, but it is no longer the only place the
+	// sentence exists.
 	function renderSpecActionChip(action) {
 		const label = escapeHtml(action.label || action.id);
 		const id = escapeHtml(action.id);
@@ -1995,10 +2064,12 @@
 		if (action.runnable) {
 			return `<button type="button" class="action-chip action-chip-run" data-action-id="${id}" title="Run ${label}">${body}</button>`;
 		}
-		const reason = action.unavailable_reason
-			? ` title="${escapeHtml(action.unavailable_reason)}"`
-			: "";
-		return `<span class="action-chip"${reason}>${body}</span>`;
+		const unlock = action.unlocked_by || action.unavailable_reason || "";
+		if (!unlock) {
+			return `<span class="action-chip">${body}</span>`;
+		}
+		const escaped = escapeHtml(unlock);
+		return `<span class="action-chip" title="${escaped}">${body}<span class="action-chip-unlock">${escaped}</span></span>`;
 	}
 
 	// ---- Spec execution ------------------------------------------------------
@@ -3389,6 +3460,7 @@
 			newSpecBusy = false;
 			closeNewSpec();
 			await loadBoard();
+			await loadWorkspaceStatus();
 			if (res && res.created === false) {
 				showToast(`${code} already existed — nothing created`, "ok");
 			} else {
@@ -4026,6 +4098,7 @@
 		// that can have created the specs it draws.
 		if (record && record.status === "SUCCEEDED") await loadBoard();
 		await loadWorkspaceActions();
+		await loadWorkspaceStatus();
 	}
 
 	function fillPrdView(body) {

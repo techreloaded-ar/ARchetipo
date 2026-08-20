@@ -38,6 +38,11 @@ type workspaceActionView struct {
 	// UnavailableReason is omitted when the action is runnable, so a client can
 	// never render a reason next to an action that has none.
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
+	// UnlockedBy is the other half of the same sentence: UnavailableReason says
+	// *why* the action does not start, UnlockedBy says *what unlocks it*. It is
+	// omitted exactly when the action is runnable, so an action a person can
+	// press never carries a condition to satisfy first.
+	UnlockedBy string `json:"unlocked_by,omitempty"`
 }
 
 // workspaceActionsView is the answer to "what can I do with this workspace
@@ -80,28 +85,44 @@ func (s *Server) handleGetWorkspaceActions(w http.ResponseWriter, r *http.Reques
 	}
 	ctx := r.Context()
 	availability := s.workspaceAvailability(ctx, ws)
-	actions := make([]workspaceActionView, 0, len(tpl.WorkspaceActions))
-	for _, action := range tpl.WorkspaceActions {
-		reason := availability.reasonFor(action.ID)
-		actions = append(actions, workspaceActionView{
-			WorkspaceAction:   action,
-			Offered:           availability.offers(action.ID) == "",
-			Runnable:          reason == "",
-			UnavailableReason: reason,
-		})
-	}
+	actions := workspaceActionViews(tpl.WorkspaceActions, availability)
 	latest, err := s.latestExecution(ctx, ws, workspaceExecutionKey)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, workspaceActionsView{
-		Template:   templateView{ID: tpl.ID, Version: tpl.Version},
+		Template:   newTemplateView(tpl),
 		HasPRD:     availability.hasPRD,
 		HasBacklog: availability.hasBacklog,
 		Actions:    actions,
 		Execution:  latest,
 	})
+}
+
+// workspaceActionViews decorates the process's workspace actions with the one
+// availability the caller has already computed. Both read-only workspace routes
+// go through it so they can never disagree about whether the same action can be
+// started, or about the words in which they refuse it.
+//
+// The result is always a list, never nil: a process that declares no workspace
+// action answers with an empty one.
+func workspaceActionViews(actions []template.WorkspaceAction, availability workspaceAvailability) []workspaceActionView {
+	out := make([]workspaceActionView, 0, len(actions))
+	for _, action := range actions {
+		reason := availability.reasonFor(action.ID)
+		view := workspaceActionView{
+			WorkspaceAction:   action,
+			Offered:           availability.offers(action.ID) == "",
+			Runnable:          reason == "",
+			UnavailableReason: reason,
+		}
+		if reason != "" {
+			view.UnlockedBy = workspaceRemedy(availability, action.ID)
+		}
+		out = append(out, view)
+	}
+	return out
 }
 
 // handleRunWorkspaceAction serves POST /api/workspace/execution: it starts one

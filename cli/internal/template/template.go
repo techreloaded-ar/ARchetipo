@@ -65,11 +65,44 @@ type WorkspaceAction struct {
 	Skill string `json:"skill"`
 }
 
+const (
+	// ScopeWorkspace marks a Stage advanced by a WorkspaceAction, that is by a
+	// step the process offers on the workspace as a whole.
+	ScopeWorkspace = "workspace"
+
+	// ScopeSpec marks a Stage advanced by an Action, that is by a step the
+	// process offers on a single spec.
+	ScopeSpec = "spec"
+)
+
+// Stage is one point of the process a workspace can be at. ID is stable and is
+// what a program keys on; Label is what a person reads; Summary explains the
+// stage in the words of the process; Scope says whether the step that advances
+// it acts on the workspace (ScopeWorkspace) or on a spec (ScopeSpec); Action is
+// the id of that step, an Action id when Scope is ScopeSpec and a
+// WorkspaceAction id when it is ScopeWorkspace.
+//
+// A Stage with both Scope and Action empty is the terminal stage — no step is
+// pending — and must be the last of the list.
+//
+// A Stage declares *which* step advances it, never *when* it holds: the
+// condition of each stage belongs to the caller, because this package knows
+// nothing about the state of a workspace and reads no filesystem.
+type Stage struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Summary string `json:"summary"`
+	Scope   string `json:"scope"`
+	Action  string `json:"action"`
+}
+
 // Template is a declared development process. Skills are the skill directories
 // a workspace receives at initialization; Actions are the steps the process
 // offers on a spec and the statuses that admit them; WorkspaceActions are the
-// steps it offers on the workspace itself; Statuses are the workflow labels
-// that process works with.
+// steps it offers on the workspace itself; Stages are the ordered sequence of
+// the process, where the first stage whose condition holds is the current one —
+// the condition being evaluated by the caller, never here; Statuses are the
+// workflow labels that process works with.
 type Template struct {
 	ID               string              `json:"id"`
 	Version          string              `json:"version"`
@@ -77,6 +110,7 @@ type Template struct {
 	Skills           []string            `json:"skills"`
 	Actions          []Action            `json:"actions"`
 	WorkspaceActions []WorkspaceAction   `json:"workspace_actions"`
+	Stages           []Stage             `json:"stages"`
 	Statuses         domain.StatusLabels `json:"statuses"`
 }
 
@@ -180,6 +214,9 @@ func (t Template) clone() Template {
 	workspaceActions := make([]WorkspaceAction, len(t.WorkspaceActions))
 	copy(workspaceActions, t.WorkspaceActions)
 	t.WorkspaceActions = workspaceActions
+	stages := make([]Stage, len(t.Stages))
+	copy(stages, t.Stages)
+	t.Stages = stages
 	return t
 }
 
@@ -238,6 +275,48 @@ func Builtin() *Registry {
 				ID:    "spec-draft",
 				Label: "Proponi una spec",
 				Skill: "archetipo-spec",
+			},
+		},
+		Stages: []Stage{
+			{
+				ID:      "senza-prd",
+				Label:   "Senza PRD",
+				Summary: "Il workspace non ha ancora un PRD: il processo comincia dall'inception.",
+				Scope:   ScopeWorkspace,
+				Action:  "inception",
+			},
+			{
+				ID:      "senza-backlog",
+				Label:   "Senza backlog",
+				Summary: "Il PRD c'è: il passo successivo è generare il backlog iniziale.",
+				Scope:   ScopeWorkspace,
+				Action:  "backlog",
+			},
+			{
+				ID:      "da-pianificare",
+				Label:   "Da pianificare",
+				Summary: "Ci sono spec in TODO: il passo successivo è pianificarne una.",
+				Scope:   ScopeSpec,
+				Action:  "plan",
+			},
+			{
+				ID:      "da-implementare",
+				Label:   "Da implementare",
+				Summary: "Ci sono spec pianificate o in corso: il passo successivo è implementarne una.",
+				Scope:   ScopeSpec,
+				Action:  "implement",
+			},
+			{
+				ID:      "da-rivedere",
+				Label:   "Da rivedere",
+				Summary: "Ci sono spec in review: il passo successivo è rivederne una.",
+				Scope:   ScopeSpec,
+				Action:  "review",
+			},
+			{
+				ID:      "completo",
+				Label:   "Nessun passo in sospeso",
+				Summary: "Nessuna spec attende un passo del processo: aggiungi una spec quando serve.",
 			},
 		},
 		Statuses: domain.StatusLabels{

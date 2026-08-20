@@ -68,6 +68,54 @@ var processWorkspaceActions = []WorkspaceAction{
 	},
 }
 
+// processStages is written out in full for the same reason as processActions:
+// the stages are the sequence the process declares about itself, and the answer
+// a workspace gets to "where am I and what comes next" is read from here, so
+// adding, removing, reordering or re-scoping one must break this test
+// explicitly rather than silently change what a person is told to do next.
+var processStages = []Stage{
+	{
+		ID:      "senza-prd",
+		Label:   "Senza PRD",
+		Summary: "Il workspace non ha ancora un PRD: il processo comincia dall'inception.",
+		Scope:   ScopeWorkspace,
+		Action:  "inception",
+	},
+	{
+		ID:      "senza-backlog",
+		Label:   "Senza backlog",
+		Summary: "Il PRD c'è: il passo successivo è generare il backlog iniziale.",
+		Scope:   ScopeWorkspace,
+		Action:  "backlog",
+	},
+	{
+		ID:      "da-pianificare",
+		Label:   "Da pianificare",
+		Summary: "Ci sono spec in TODO: il passo successivo è pianificarne una.",
+		Scope:   ScopeSpec,
+		Action:  "plan",
+	},
+	{
+		ID:      "da-implementare",
+		Label:   "Da implementare",
+		Summary: "Ci sono spec pianificate o in corso: il passo successivo è implementarne una.",
+		Scope:   ScopeSpec,
+		Action:  "implement",
+	},
+	{
+		ID:      "da-rivedere",
+		Label:   "Da rivedere",
+		Summary: "Ci sono spec in review: il passo successivo è rivederne una.",
+		Scope:   ScopeSpec,
+		Action:  "review",
+	},
+	{
+		ID:      "completo",
+		Label:   "Nessun passo in sospeso",
+		Summary: "Nessuna spec attende un passo del processo: aggiungi una spec quando serve.",
+	},
+}
+
 // actionIDs collapses a result to the identifiers a caller keys on, so a table
 // can name the expected content instead of asserting the absence of an error.
 func actionIDs(actions []Action) []string {
@@ -289,5 +337,100 @@ func TestDefaultWorkspaceActionsAreNotAliased(t *testing.T) {
 	}
 	if got := second.WorkspaceActions[0].ID; got != processWorkspaceActions[0].ID {
 		t.Fatalf("registry workspace actions were mutated through the returned slice: id = %q", got)
+	}
+}
+
+func TestDefaultTemplateDeclaresItsStages(t *testing.T) {
+	got := Default().Stages
+	if !reflect.DeepEqual(got, processStages) {
+		t.Fatalf("stages = %+v, want %+v", got, processStages)
+	}
+	for _, stage := range got {
+		if stage.ID == "" {
+			t.Fatalf("stage %+v has an empty id", stage)
+		}
+		if stage.Label == "" {
+			t.Fatalf("stage %q has an empty label", stage.ID)
+		}
+		if stage.Summary == "" {
+			t.Fatalf("stage %q has an empty summary", stage.ID)
+		}
+	}
+}
+
+// A stage names the step that advances it, so that step must be one the process
+// actually declares: a stage pointing at an action nobody offers would tell a
+// person to take a step the workspace cannot run. The terminal stage names no
+// step at all, and must say so by leaving Action empty.
+func TestStagesReferenceDeclaredActions(t *testing.T) {
+	template := Default()
+	specActions := make(map[string]bool, len(template.Actions))
+	for _, action := range template.Actions {
+		specActions[action.ID] = true
+	}
+	workspaceActions := make(map[string]bool, len(template.WorkspaceActions))
+	for _, action := range template.WorkspaceActions {
+		workspaceActions[action.ID] = true
+	}
+	for _, stage := range template.Stages {
+		switch stage.Scope {
+		case ScopeWorkspace:
+			if !workspaceActions[stage.Action] {
+				t.Fatalf("stage %q names workspace action %q, which the template does not declare", stage.ID, stage.Action)
+			}
+		case ScopeSpec:
+			if !specActions[stage.Action] {
+				t.Fatalf("stage %q names spec action %q, which the template does not declare", stage.ID, stage.Action)
+			}
+		case "":
+			if stage.Action != "" {
+				t.Fatalf("terminal stage %q names action %q, want no action", stage.ID, stage.Action)
+			}
+		default:
+			t.Fatalf("stage %q has unknown scope %q", stage.ID, stage.Scope)
+		}
+	}
+}
+
+// The terminal stage is the answer given when no step is pending, so it must be
+// reachable only after every other stage has been ruled out: exactly one stage
+// carries no scope, and it is the last of the list.
+func TestTerminalStageIsLastAndUnique(t *testing.T) {
+	stages := Default().Stages
+	if len(stages) == 0 {
+		t.Fatalf("the template declares no stage")
+	}
+	terminals := 0
+	for _, stage := range stages {
+		if stage.Scope == "" {
+			terminals++
+		}
+	}
+	if terminals != 1 {
+		t.Fatalf("stages declare %d terminal stages, want exactly 1", terminals)
+	}
+	if last := stages[len(stages)-1]; last.Scope != "" {
+		t.Fatalf("last stage %q has scope %q, want the terminal stage last", last.ID, last.Scope)
+	}
+}
+
+// TestDefaultStagesAreNotAliased resolves twice from the SAME registry, for the
+// same reason as TestDefaultActionsAreNotAliased: two calls to Default() each
+// build a fresh registry, so they can never alias each other and the test would
+// pass even with no copy at all. Only a second resolution of the same instance
+// can observe a write that reached the registry.
+func TestDefaultStagesAreNotAliased(t *testing.T) {
+	registry := Builtin()
+	first, err := registry.Resolve(DefaultID)
+	if err != nil {
+		t.Fatalf("resolving the default template failed: %v", err)
+	}
+	first.Stages[0].ID = "tampered"
+	second, err := registry.Resolve(DefaultID)
+	if err != nil {
+		t.Fatalf("resolving the default template again failed: %v", err)
+	}
+	if got := second.Stages[0].ID; got != processStages[0].ID {
+		t.Fatalf("registry stages were mutated through the returned slice: id = %q", got)
 	}
 }

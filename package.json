@@ -9,6 +9,7 @@
     "build:npm": "node ./scripts/build-npm.mjs",
     "publish:npm": "node ./scripts/publish-npm.mjs",
     "test:cli": "cd cli && go test ./...",
+    "test:web": "node --test \"test/web/**/*.test.mjs\"",
     "test:e2e": "node ./test/e2e/run.mjs",
     "test:e2e:unit": "node --test ./test/e2e/config.test.mjs ./test/e2e/baseline.test.mjs",
     "test:wiki-benchmark": "node ./test/benchmark/wiki/run.mjs",
@@ -24,6 +25,7 @@
     "test:view-local-run-smoke": "node ./test/e2e/local-run-view-smoke.mjs",
     "test:view-inception-smoke": "node ./test/e2e/inception-from-view-smoke.mjs",
     "test:view-backlog-smoke": "node ./test/e2e/backlog-from-view-smoke.mjs",
+    "test:view-workspace-status-smoke": "node ./test/e2e/workspace-status-view-smoke.mjs",
     "test:view-spec-draft-smoke": "node ./test/e2e/spec-draft-from-view-smoke.mjs",
     "test:wiki-smoke": "node ./test/e2e/wiki-smoke.mjs"
   },

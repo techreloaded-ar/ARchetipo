@@ -13,6 +13,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/metrics"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
 // boardColumnView is the JSON shape of one Kanban column in GET /api/board.
@@ -86,40 +87,8 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 		}
 		return id
 	}
-	var boardOrder []string
-	if r, ok := ws.conn.(connector.BoardOrderReader); ok {
-		if order, oerr := r.ReadBoardOrder(ctx); oerr == nil {
-			boardOrder = order
-		}
-	}
-	specByCode := make(map[string]domain.Spec, len(specs))
-	for _, sp := range specs {
-		specByCode[sp.Code] = sp
-	}
 	columnSpecs := make(map[string][]domain.Spec, len(boardLayout))
-	seen := map[string]bool{}
-	for _, code := range boardOrder {
-		sp, ok := specByCode[code]
-		if !ok {
-			continue
-		}
-		colID := ""
-		for _, col := range boardLayout {
-			if col.Status == sp.Status {
-				colID = col.ID
-				break
-			}
-		}
-		if colID == "" {
-			continue
-		}
-		columnSpecs[colID] = append(columnSpecs[colID], sp)
-		seen[sp.Code] = true
-	}
-	for _, sp := range specs {
-		if seen[sp.Code] {
-			continue
-		}
+	for _, sp := range s.specsInBoardOrder(ctx, ws, specs) {
 		for _, col := range boardLayout {
 			if col.Status == sp.Status {
 				columnSpecs[col.ID] = append(columnSpecs[col.ID], sp)
@@ -132,6 +101,48 @@ func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
 		view.Columns = append(view.Columns, c)
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// specsInBoardOrder returns specs in the order the workspace reads them: first
+// the ones the persisted board order names — the order a person produced by
+// dragging cards — and then everything the order does not mention, in the order
+// the connector listed it.
+//
+// It is shared rather than private to the board because "which spec comes
+// first" is a single question with a single answer: the recommended next step
+// must point at the same spec the board shows at the top of its column, or the
+// two would disagree about what to do next. An unreadable board order is not a
+// failure here for the same reason it is not one in handleGetBoard: the
+// connector's own order is a complete answer, just not a personalized one.
+func (s *Server) specsInBoardOrder(ctx context.Context, ws *workspaceSession, specs []domain.Spec) []domain.Spec {
+	var boardOrder []string
+	if reader, ok := ws.conn.(connector.BoardOrderReader); ok {
+		if order, err := reader.ReadBoardOrder(ctx); err == nil {
+			boardOrder = order
+		}
+	}
+	specByCode := make(map[string]domain.Spec, len(specs))
+	for _, sp := range specs {
+		specByCode[sp.Code] = sp
+	}
+	out := make([]domain.Spec, 0, len(specs))
+	seen := make(map[string]bool, len(specs))
+	for _, code := range boardOrder {
+		sp, ok := specByCode[code]
+		if !ok || seen[code] {
+			continue
+		}
+		out = append(out, sp)
+		seen[code] = true
+	}
+	for _, sp := range specs {
+		if seen[sp.Code] {
+			continue
+		}
+		out = append(out, sp)
+		seen[sp.Code] = true
+	}
+	return out
 }
 
 // handleStreamBoard streams Server-Sent Events to the browser. The handler
@@ -182,6 +193,16 @@ func (s *Server) handleStreamBoard(w http.ResponseWriter, r *http.Request) {
 type templateView struct {
 	ID      string `json:"id"`
 	Version string `json:"version"`
+	// Label is the name the process gives itself, so a client can say which
+	// Archetipo a workspace is running in that process's own words instead of
+	// rendering its id.
+	Label string `json:"label"`
+}
+
+// newTemplateView is the single place a templateView is built, so no route can
+// publish a process identified by only half of what identifies it.
+func newTemplateView(tpl template.Template) templateView {
+	return templateView{ID: tpl.ID, Version: tpl.Version, Label: tpl.Label}
 }
 
 type specDetailView struct {
@@ -237,7 +258,7 @@ func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
 		Spec:      spec,
 		PlanBody:  planBody,
 		Tasks:     tasks,
-		Template:  templateView{ID: tpl.ID, Version: tpl.Version},
+		Template:  newTemplateView(tpl),
 		Actions:   s.decorateActions(ctx, ws, code, tpl.ActionsFor(spec.Status), len(tasks)),
 		Execution: latest,
 	})
