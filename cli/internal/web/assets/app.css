@@ -3909,7 +3909,16 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	margin-top: 4px;
 }
 
-.field.field-error input {
+/* A field whose catalog could not be obtained states the reason under the
+   input: same family as the help line, but in the warning colour, because it
+   reports a problem rather than explaining a setting. */
+.field-help.field-warning {
+	color: var(--priority-high);
+	overflow-wrap: anywhere;
+}
+
+.field.field-error input,
+.field.field-error select {
 	border-color: var(--priority-high);
 }
 

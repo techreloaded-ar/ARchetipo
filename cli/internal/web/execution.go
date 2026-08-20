@@ -26,6 +26,19 @@ type executionProviderView struct {
 	// own diagnostic about a missing or unauthenticated runtime.
 	Available         bool   `json:"available"`
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
+	// ModelField is the name of the configuration field a model catalog fills
+	// in. It is empty when the provider declares no catalog, which is what
+	// tells the browser to keep rendering that field as free text.
+	ModelField string `json:"model_field,omitempty"`
+	// Models are the catalog entries, exactly as the provider declared them.
+	Models []execution.ModelOption `json:"models,omitempty"`
+	// ModelsUnavailableReason says, in the provider's own words, why the
+	// catalog could not be obtained. A provider that declares a catalog always
+	// carries either Models or this reason, never both and never neither, so
+	// an empty list can never reach the reader unexplained. Neither field can
+	// carry a secret: they are model identifiers and the provider's own
+	// diagnostic.
+	ModelsUnavailableReason string `json:"models_unavailable_reason,omitempty"`
 }
 
 // executionProviderSelectionView is the persisted workspace default.
@@ -82,14 +95,39 @@ func (s *Server) handleListExecutionProviders(w http.ResponseWriter, r *http.Req
 		if err := execution.CheckAvailability(r.Context(), provider, providerConfig); err != nil {
 			reason = err.Error()
 		}
-		view.Providers = append(view.Providers, executionProviderView{
+		providerView := executionProviderView{
 			ID:                provider.ID(),
 			Label:             provider.ID(),
 			Capabilities:      normalized,
 			ConfigFields:      execution.DescribeConfig(provider),
 			Available:         reason == "",
 			UnavailableReason: reason,
-		})
+		}
+		// Only a provider that declares a catalog gets the three model fields;
+		// for every other provider they stay zero and never reach the wire.
+		if _, declaresModels := provider.(execution.ModelLister); declaresModels {
+			providerView.ModelField = execution.ModelFieldName
+			switch {
+			case reason != "":
+				// A runtime that cannot answer the availability probe is
+				// already the answer; asking it for a catalog would only spawn
+				// a second process every time the panel is opened.
+				providerView.ModelsUnavailableReason = reason
+			default:
+				// Listed with the very configuration the probe used, so the
+				// catalog describes the runtime that was just checked.
+				models, _, err := execution.ListModels(r.Context(), provider, providerConfig)
+				if err != nil {
+					providerView.ModelsUnavailableReason = err.Error()
+				} else {
+					providerView.Models = models
+				}
+			}
+			if len(providerView.Models) == 0 && providerView.ModelsUnavailableReason == "" {
+				providerView.ModelsUnavailableReason = "the provider declared an empty model catalog"
+			}
+		}
+		view.Providers = append(view.Providers, providerView)
 	}
 	if defaultID != "" {
 		view.Default = &executionProviderSelectionView{

@@ -77,6 +77,7 @@ async function main() {
       throw new Error(`Unexpected configurable fields for codex: [${codexFields.join(", ")}]`);
     }
     assertNoCredentialFields(codex);
+    assertModelCatalog(codex);
     // Availability is observed, not required: the smoke must pass on a machine
     // with Codex installed and on one without it. What must always hold is that
     // the field exists and that an unavailable provider says why.
@@ -105,6 +106,7 @@ async function main() {
       throw new Error(`Unexpected configurable fields for claude: [${claudeFields.join(", ")}]`);
     }
     assertNoCredentialFields(claude);
+    assertModelCatalog(claude);
     // Availability is observed, not required, and says nothing about a login:
     // the smoke must pass on a machine with Claude Code installed and logged
     // in, on one installed and logged out, and on one without it at all.
@@ -117,13 +119,25 @@ async function main() {
     if (typeof arcipelago.available !== "boolean") {
       throw new Error(`The arcipelago provider must report a boolean 'available'; got ${JSON.stringify(arcipelago.available)}`);
     }
+    // A provider that declares no catalog is the complementary case: the
+    // browser must keep drawing its model field as free text, and the only
+    // thing that says so on the wire is the absence of all three fields.
+    if (arcipelago.model_field) {
+      throw new Error(`The arcipelago provider declares no model catalog, yet reported model_field=${JSON.stringify(arcipelago.model_field)}`);
+    }
+    if (arcipelago.models !== undefined || arcipelago.models_unavailable_reason !== undefined) {
+      throw new Error(`A provider without a catalog carries neither models nor a reason; got ${JSON.stringify(arcipelago)}`);
+    }
+    // The global sentinel check below already covers the new catalog fields:
+    // they travel inside this very response, so a leak through a model
+    // identifier or a catalog diagnostic would fail it. No second check.
     if (JSON.stringify(providers).includes(TOKEN_SENTINEL)) {
       throw new Error("The provider list leaked the credential held in the environment");
     }
     if (providers.default !== null && providers.default !== undefined) {
       throw new Error(`A fresh workspace must report no default provider; got ${JSON.stringify(providers.default)}`);
     }
-    console.log("-> AC-1 ok: providers listed with availability and without secrets");
+    console.log("-> AC-1 ok: providers listed with availability, model catalog and without secrets");
 
     // AC-2 — a valid configuration is saved and survives a reload.
     await apiJSON(`${view.url}/api/execution/provider/default`, {
@@ -131,7 +145,7 @@ async function main() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: "arcipelago", config: { base_url: "https://hub.test", workspace_id: "ws-smoke" } }),
     });
-    const savedConfig = await fs.readFile(configPath, "utf8");
+    let savedConfig = await fs.readFile(configPath, "utf8");
     if (!savedConfig.includes("default_provider") || !savedConfig.includes("arcipelago")) {
       throw new Error(`The selection did not reach the config file:\n${savedConfig}`);
     }
@@ -140,6 +154,37 @@ async function main() {
       throw new Error(`The default was not reported after reload: ${JSON.stringify(reloaded.default)}`);
     }
     console.log("-> AC-2 ok: default provider persisted and reported after reload");
+
+    // A model the catalog does not list is still a legitimate configuration:
+    // saving it through the real route must not silently drop it, and reading
+    // it back must return it verbatim. This is the AC-5 of the spec observed
+    // end to end on the real viewer rather than on a stubbed handler.
+    const offCatalogModel = "smoke-model-not-in-any-catalog";
+    await apiJSON(`${view.url}/api/execution/provider/default`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "codex", config: { model: offCatalogModel } }),
+    });
+    const withOffCatalog = await apiJSON(`${view.url}/api/execution/providers`);
+    if (!withOffCatalog.default || withOffCatalog.default.id !== "codex") {
+      throw new Error(`Expected codex to be the saved default; got ${JSON.stringify(withOffCatalog.default)}`);
+    }
+    if (withOffCatalog.default.config.model !== offCatalogModel) {
+      throw new Error(`A model outside the catalog was not preserved: ${JSON.stringify(withOffCatalog.default.config)}`);
+    }
+    // The excursion ends here: the blocks that follow assert on the arcipelago
+    // default, so it is put back exactly as it was before this paragraph.
+    await apiJSON(`${view.url}/api/execution/provider/default`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "arcipelago", config: { base_url: "https://hub.test", workspace_id: "ws-smoke" } }),
+    });
+    const restored = await apiJSON(`${view.url}/api/execution/providers`);
+    if (!restored.default || restored.default.id !== "arcipelago" || restored.default.config.workspace_id !== "ws-smoke") {
+      throw new Error(`The arcipelago default was not restored: ${JSON.stringify(restored.default)}`);
+    }
+    savedConfig = await fs.readFile(configPath, "utf8");
+    console.log("-> AC-2 ok: a model outside the catalog is saved and read back unchanged");
 
     // AC-3 — an invalid configuration names the offending field and changes nothing.
     const rejection = await expectStatus(`${view.url}/api/execution/provider/default`, 400, {
@@ -207,6 +252,42 @@ function assertNoCredentialFields(provider) {
     if (hint) {
       throw new Error(`Provider ${provider.id} exposes a credential-shaped configurable field: ${field.name}`);
     }
+  }
+}
+
+// A provider that declares a model catalog says which of its own configurable
+// fields the catalog fills in, and then always answers with either the list or
+// the reason there is none — never both, never neither. The catalog itself is
+// observed, not required: the smoke passes on a machine where the runtime
+// answers and on one where it is missing, because both ends of that alternative
+// are legitimate answers of the contract.
+function assertModelCatalog(provider) {
+  const fieldName = String(provider.model_field || "");
+  if (!fieldName) {
+    throw new Error(`Provider ${provider.id} must declare the configuration field its model catalog fills in`);
+  }
+  const declared = (provider.config_fields || []).map((f) => f.name);
+  if (!declared.includes(fieldName)) {
+    throw new Error(`Provider ${provider.id} names model_field=${fieldName}, which is not one of its configurable fields [${declared.join(", ")}]`);
+  }
+  const models = provider.models;
+  const reason = String(provider.models_unavailable_reason || "").trim();
+  const hasModels = Array.isArray(models) && models.length > 0;
+  if (hasModels && reason) {
+    throw new Error(`Provider ${provider.id} reports both a catalog and a reason there is none: ${JSON.stringify(provider)}`);
+  }
+  if (!hasModels && !reason) {
+    throw new Error(`Provider ${provider.id} reports neither a catalog nor a reason there is none: ${JSON.stringify(provider)}`);
+  }
+  if (!hasModels) return;
+  for (const model of models) {
+    if (!String(model.id || "").trim()) {
+      throw new Error(`Provider ${provider.id} lists a model without an identifier: ${JSON.stringify(model)}`);
+    }
+  }
+  const defaults = models.filter((m) => m.default === true);
+  if (defaults.length !== 1) {
+    throw new Error(`Provider ${provider.id} must mark exactly one model as its own default; got ${defaults.length} in ${JSON.stringify(models)}`);
   }
 }
 

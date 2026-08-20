@@ -723,3 +723,120 @@ func TestRunSpecActionRefusesAnUnusableProviderWithoutCreatingARecord(t *testing
 		t.Fatalf("a second refused action created %d records", got)
 	}
 }
+
+// runModelReceipt is what the stub provider reports about the configuration the
+// run handed it. `present` is carried separately from the value because the
+// difference this test is about — a configured model versus none at all — is
+// the presence of the key, and an absent key and an empty one would otherwise
+// arrive as the same empty string.
+type runModelReceipt struct {
+	Present bool   `json:"model_present"`
+	Model   string `json:"model"`
+}
+
+// AC-3 and AC-6: the model saved in the workspace configuration is the one the
+// run really uses, and no model configured means no model key travels at all.
+//
+// The oracle is the run record, not the saved configuration. The criterion
+// speaks about the model *used* by the run, so a test that stopped at the
+// configuration read back would prove something weaker: that the value was
+// persisted, while the chain from persistence to Request.ProviderConfig — the
+// step that actually decides which model the runtime is asked for — would stay
+// unproved. Both halves are asserted here, in order, on the real routes.
+//
+// Only the provider is a double, and only to stand in for the external CLI:
+// the server, the registry, the on-disk workspace configuration and the
+// execution service are the production ones.
+func TestRunSpecActionUsesTheModelSavedInTheWorkspaceConfiguration(t *testing.T) {
+	const chosen = "modello-scelto"
+
+	cases := []struct {
+		name    string
+		config  map[string]any
+		present bool
+		model   string
+	}{
+		// The browser saves the identifier picked from the catalog.
+		{name: "a model chosen from the catalog", config: map[string]any{execution.ModelFieldName: chosen}, present: true, model: chosen},
+		// AC-6: leaving the model empty omits the key entirely, so "empty" never
+		// travels as a model identifier the runtime would be asked to honour.
+		{name: "no model configured", config: map[string]any{}, present: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var conn connector.Connector
+			provider := releasedProvider("stub", func(ctx context.Context, request execution.Request) (execution.Result, error) {
+				// Read as-is: no fallback, no default, so whatever the payload
+				// reports is exactly what the run carried in.
+				value, present := request.ProviderConfig[execution.ModelFieldName]
+				model, _ := value.(string)
+				// The plan is really written, because a success the connector
+				// cannot confirm is demoted to FAILED and would leave no result
+				// payload to read.
+				if _, err := planningExecute(conn)(ctx, request); err != nil {
+					return execution.Result{}, err
+				}
+				payload, err := json.Marshal(map[string]any{
+					"spec_code":     request.SpecCode,
+					"status":        string(domain.StatusPlanned),
+					"tasks":         1,
+					"model_present": present,
+					"model":         model,
+				})
+				if err != nil {
+					return execution.Result{}, err
+				}
+				return execution.Result{Payload: payload}, nil
+			})
+			// withDefault is false because the default is written below through
+			// the very route the panel uses, instead of being seeded by hand.
+			srv, _, conn := newRunServer(t, provider, false)
+
+			w := doJSON(t, srv, http.MethodPut, "/api/execution/provider/default", map[string]any{
+				"id":     provider.ID(),
+				"config": tc.config,
+			})
+			if w.Code != http.StatusOK {
+				t.Fatalf("saving the default provider: %d %s", w.Code, w.Body.String())
+			}
+
+			// First half of AC-3: the model appears in the workspace
+			// configuration the panel reads back.
+			view := readProviders(t, srv)
+			if view.Default == nil || view.Default.ID != provider.ID() {
+				t.Fatalf("the saved default is not reported: %#v", view.Default)
+			}
+			saved, savedPresent := view.Default.Config[execution.ModelFieldName]
+			if savedPresent != tc.present {
+				t.Fatalf("model key present=%v in the saved configuration, want %v: %#v", savedPresent, tc.present, view.Default.Config)
+			}
+			if tc.present && saved != tc.model {
+				t.Fatalf("the saved configuration carries %#v as model, want %q", saved, tc.model)
+			}
+
+			status, started := startAction(t, srv, "US-901", "plan")
+			if status != http.StatusCreated {
+				t.Fatalf("POST: %d %v", status, started)
+			}
+			id, _ := started["id"].(string)
+			record := awaitTerminal(t, srv, id)
+			if record.Status != execution.StatusSucceeded || record.Result == nil {
+				t.Fatalf("terminal record: %#v", record)
+			}
+
+			// Second half of AC-3: the record of the run reports that very model
+			// as the one the run was given.
+			var receipt runModelReceipt
+			if err := json.Unmarshal(record.Result.Payload, &receipt); err != nil {
+				t.Fatalf("undecodable result payload %s: %v", record.Result.Payload, err)
+			}
+			if receipt.Present != tc.present {
+				t.Fatalf("the run received model_present=%v, want %v: %s", receipt.Present, tc.present, record.Result.Payload)
+			}
+			if receipt.Model != tc.model {
+				t.Fatalf("the run used %q as model, want %q", receipt.Model, tc.model)
+			}
+		})
+	}
+}

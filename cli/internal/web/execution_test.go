@@ -548,3 +548,250 @@ func containsCapability(capabilities []execution.Capability, want execution.Capa
 	}
 	return false
 }
+
+// catalogProvider is a probeProvider that also declares a model catalog. Both
+// halves are configurable by the test, because what is under test here is how
+// the viewer serves *any* catalog-declaring provider — its shape on the wire,
+// not the models of one particular runtime.
+//
+// It counts the calls to Models, which is how a test can tell "the catalog was
+// not served" from "the catalog was never asked for".
+type catalogProvider struct {
+	*probeProvider
+	models []execution.ModelOption
+	err    error
+
+	modelMu    sync.Mutex
+	modelCalls int
+	modelConfs []map[string]any
+}
+
+func newCatalogProvider(id, reason string, models []execution.ModelOption, err error) *catalogProvider {
+	return &catalogProvider{probeProvider: newProbeProvider(id, reason), models: models, err: err}
+}
+
+func (p *catalogProvider) Models(_ context.Context, providerConfig map[string]any) ([]execution.ModelOption, error) {
+	p.modelMu.Lock()
+	p.modelCalls++
+	p.modelConfs = append(p.modelConfs, providerConfig)
+	p.modelMu.Unlock()
+	if p.err != nil {
+		return nil, p.err
+	}
+	return p.models, nil
+}
+
+// modelCallCount reports how many times the catalog was asked for.
+func (p *catalogProvider) modelCallCount() int {
+	p.modelMu.Lock()
+	defer p.modelMu.Unlock()
+	return p.modelCalls
+}
+
+// AC-1, AC-2: a provider that declares a catalog offers it to the panel with
+// the identifiers it declared, in the order it declared them, and with the one
+// model it uses by default marked as such.
+func TestListExecutionProvidersOffersTheDeclaredModelCatalog(t *testing.T) {
+	declared := []execution.ModelOption{
+		{ID: "opus-test", Label: "Opus (test)"},
+		{ID: "sonnet-test", Default: true},
+		{ID: "haiku-test"},
+	}
+	srv := newProviderListServer(t, nil, newCatalogProvider("cataloged", "", declared, nil))
+
+	provider := providerViewByID(t, readProviders(t, srv), "cataloged")
+	if provider.ModelField != execution.ModelFieldName {
+		t.Fatalf("the catalog must name the configuration field it fills in: %q", provider.ModelField)
+	}
+	if len(provider.Models) != len(declared) {
+		t.Fatalf("the catalog did not reach the client whole: %#v", provider.Models)
+	}
+	defaults := 0
+	for i, model := range provider.Models {
+		if model.ID != declared[i].ID {
+			t.Fatalf("the declared order was not preserved: got %#v, want %#v", provider.Models, declared)
+		}
+		if model.Default {
+			defaults++
+		}
+	}
+	// AC-2: the flag survives serialization and stays on exactly one entry, so
+	// the panel can point at one predefined model and never at two or none.
+	if defaults != 1 {
+		t.Fatalf("exactly one model must be marked as the provider default, got %d: %#v", defaults, provider.Models)
+	}
+	if provider.Models[1].ID != "sonnet-test" || !provider.Models[1].Default {
+		t.Fatalf("the default flag landed on the wrong model: %#v", provider.Models)
+	}
+	if provider.ModelsUnavailableReason != "" {
+		t.Fatalf("a catalog that was obtained carries a reason: %q", provider.ModelsUnavailableReason)
+	}
+	// The reason is omitted from the wire too, so no client can render an empty
+	// explanation next to a usable catalog.
+	raw := doJSON(t, srv, http.MethodGet, "/api/execution/providers", nil).Body.String()
+	if strings.Contains(raw, "models_unavailable_reason") {
+		t.Fatalf("a provider with a catalog carries a models_unavailable_reason:\n%s", raw)
+	}
+}
+
+// AC-4: a runtime that cannot answer the availability probe explains, in its
+// own words, why the list is not there — and is not asked for a catalog it
+// cannot produce, so opening the panel never spawns a second probe.
+func TestListExecutionProvidersExplainsAMissingCatalogWithTheProbeReason(t *testing.T) {
+	const reason = "claude is not installed: install it and run `claude login`"
+	provider := newCatalogProvider("unreachable", reason, []execution.ModelOption{{ID: "never-listed"}}, nil)
+	srv := newProviderListServer(t, nil, provider)
+
+	w := doJSON(t, srv, http.MethodGet, "/api/execution/providers", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("an unobtainable catalog is a fact of the list, not an HTTP failure: %d %s", w.Code, w.Body.String())
+	}
+	var view executionProvidersView
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	got := providerViewByID(t, view, "unreachable")
+	if len(got.Models) != 0 {
+		t.Fatalf("a provider that cannot be reached served a catalog: %#v", got.Models)
+	}
+	if got.ModelsUnavailableReason != reason {
+		t.Fatalf("the provider's own diagnostic was rewritten: %q", got.ModelsUnavailableReason)
+	}
+	if got.ModelField != execution.ModelFieldName {
+		t.Fatalf("the field the catalog fills in must stay known even without the catalog: %q", got.ModelField)
+	}
+	if calls := provider.modelCallCount(); calls != 0 {
+		t.Fatalf("an unreachable runtime was asked for its catalog %d times", calls)
+	}
+}
+
+// AC-4, second branch: the runtime is there but listing fails. The failure is
+// the reason the reader sees, textually and unrewritten.
+func TestListExecutionProvidersTurnsAFailedCatalogIntoItsReason(t *testing.T) {
+	const failure = "claude models: unexpected output from the runtime"
+	srv := newProviderListServer(t, nil, newCatalogProvider("failing", "", nil, errors.New(failure)))
+
+	w := doJSON(t, srv, http.MethodGet, "/api/execution/providers", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("a failed listing is a fact of the list, not an HTTP failure: %d %s", w.Code, w.Body.String())
+	}
+	var view executionProvidersView
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	got := providerViewByID(t, view, "failing")
+	if got.Available != true {
+		t.Fatalf("a reachable provider was marked unavailable because its catalog failed: %#v", got)
+	}
+	if len(got.Models) != 0 {
+		t.Fatalf("a failed listing served a catalog: %#v", got.Models)
+	}
+	if got.ModelsUnavailableReason != failure {
+		t.Fatalf("the listing error was rewritten: %q", got.ModelsUnavailableReason)
+	}
+}
+
+// A provider that declares no catalog must not grow any of the new fields:
+// their absence on the wire is what tells the browser to keep the plain text
+// input it has always rendered.
+func TestListExecutionProvidersOmitsTheModelFieldsForAProviderWithoutACatalog(t *testing.T) {
+	srv := newProviderListServer(t, nil, releasedProvider("silent", nil))
+
+	raw := doJSON(t, srv, http.MethodGet, "/api/execution/providers", nil).Body.String()
+	for _, key := range []string{"model_field", `"models"`, "models_unavailable_reason"} {
+		if strings.Contains(raw, key) {
+			t.Fatalf("a provider without a catalog carries %s:\n%s", key, raw)
+		}
+	}
+}
+
+// The invariant of the view: a provider that declares a catalog always carries
+// either models or a reason. An empty list with nothing to read would leave the
+// reader with a mute field and no way to interpret it.
+func TestListExecutionProvidersNeverServesAMuteEmptyCatalog(t *testing.T) {
+	srv := newProviderListServer(t, nil, newCatalogProvider("empty", "", nil, nil))
+
+	got := providerViewByID(t, readProviders(t, srv), "empty")
+	if len(got.Models) != 0 {
+		t.Fatalf("the provider declared no model: %#v", got.Models)
+	}
+	if strings.TrimSpace(got.ModelsUnavailableReason) == "" {
+		t.Fatalf("an empty catalog reached the reader with no explanation: %#v", got)
+	}
+}
+
+// AC-5: a model that is not in the current catalog is saved and read back
+// unchanged. The catalog is a suggestion, never a filter that silently drops
+// what the workspace already chose.
+func TestSaveDefaultExecutionProviderKeepsAModelOutsideTheCatalog(t *testing.T) {
+	const chosen = "modello-fuori-catalogo"
+	srv := newProviderListServer(t, nil, newCatalogProvider("cataloged", "", []execution.ModelOption{
+		{ID: "opus-test", Default: true},
+		{ID: "sonnet-test"},
+	}, nil))
+
+	w := doJSON(t, srv, http.MethodPut, "/api/execution/provider/default", map[string]any{
+		"id":     "cataloged",
+		"config": map[string]any{execution.ModelFieldName: chosen},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("saving a model outside the catalog was rejected: %d %s", w.Code, w.Body.String())
+	}
+
+	view := readProviders(t, srv)
+	if view.Default == nil || view.Default.ID != "cataloged" {
+		t.Fatalf("the saved default is not reported: %#v", view.Default)
+	}
+	if view.Default.Config[execution.ModelFieldName] != chosen {
+		t.Fatalf("the chosen model did not survive the round trip: %#v", view.Default.Config)
+	}
+	// It really is outside the catalog, so the assertion above is about a model
+	// the list does not contain and not about one it happens to hold.
+	provider := providerViewByID(t, view, "cataloged")
+	for _, model := range provider.Models {
+		if model.ID == chosen {
+			t.Fatalf("the model under test is in the catalog, so the test proves nothing: %#v", provider.Models)
+		}
+	}
+	// And it is on disk: what the panel reads back comes from the persisted
+	// workspace configuration, not from a value held in memory.
+	raw, err := os.ReadFile(filepath.Join(srv.session().cfg.ProjectRoot, ".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatalf("the workspace configuration was not written: %v", err)
+	}
+	if !strings.Contains(string(raw), chosen) {
+		t.Fatalf("the chosen model is missing from the persisted configuration:\n%s", raw)
+	}
+}
+
+// AC-6: leaving the model empty stays possible, and the saved configuration
+// carries no model key at all — an empty string would be a model identifier the
+// runtime would then be asked to honour.
+func TestSaveDefaultExecutionProviderWritesNoModelKeyWhenTheFieldIsLeftEmpty(t *testing.T) {
+	srv := newProviderListServer(t, nil, newCatalogProvider("cataloged", "", []execution.ModelOption{
+		{ID: "opus-test", Default: true},
+	}, nil))
+
+	w := doJSON(t, srv, http.MethodPut, "/api/execution/provider/default", map[string]any{
+		"id":     "cataloged",
+		"config": map[string]any{"profile": "workspace"},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("saving without a model was rejected: %d %s", w.Code, w.Body.String())
+	}
+
+	view := readProviders(t, srv)
+	if view.Default == nil {
+		t.Fatalf("the saved default is not reported: %#v", view)
+	}
+	if _, present := view.Default.Config[execution.ModelFieldName]; present {
+		t.Fatalf("an empty model field produced a model key: %#v", view.Default.Config)
+	}
+	raw, err := os.ReadFile(filepath.Join(srv.session().cfg.ProjectRoot, ".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatalf("the workspace configuration was not written: %v", err)
+	}
+	if strings.Contains(string(raw), execution.ModelFieldName+":") {
+		t.Fatalf("an empty model field wrote a model key to the configuration:\n%s", raw)
+	}
+}

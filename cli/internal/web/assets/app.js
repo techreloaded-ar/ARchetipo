@@ -1900,30 +1900,17 @@
 		selectProvider(selectedProviderID());
 	}
 
+	// The fields themselves are drawn by the pure provider-fields module: what
+	// belongs here is only putting the produced markup on the page.
 	function renderProviderFields(provider, values) {
 		if (!provider) {
 			executionFields.innerHTML = "";
 			return;
 		}
-		const fields = provider.config_fields || [];
-		if (!fields.length) {
-			executionFields.innerHTML =
-				'<p class="config-copy">This provider declares no configurable setting.</p>';
-			return;
-		}
-		executionFields.innerHTML = fields
-			.map((f) => {
-				const value = values[f.name];
-				const inputType = f.type === "integer" ? "number" : "text";
-				const required = f.required
-					? ' <span class="field-required">required</span>'
-					: "";
-				const help = f.help
-					? `<small class="field-help">${escapeHtml(f.help)}</small>`
-					: "";
-				return `<label class="field full" data-provider-field="${escapeHtml(f.name)}"><span>${escapeHtml(f.label || f.name)}${required}</span><input type="${inputType}" name="provider_${escapeHtml(f.name)}" placeholder="${escapeHtml(f.placeholder || "")}" value="${value === undefined || value === null ? "" : escapeHtml(String(value))}" />${help}</label>`;
-			})
-			.join("");
+		executionFields.innerHTML = ProviderFields.renderProviderFields(
+			provider,
+			values,
+		);
 	}
 
 	function collectProviderConfig(provider) {
@@ -1953,7 +1940,7 @@
 		);
 		if (!label) return;
 		label.classList.add("field-error");
-		const input = label.querySelector("input");
+		const input = label.querySelector("input, select");
 		if (input) input.focus();
 	}
 

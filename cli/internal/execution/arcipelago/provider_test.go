@@ -588,3 +588,21 @@ func TestExecuteRejectsInvalidConfigBeforeAnyCall(t *testing.T) {
 		t.Fatalf("the hub was contacted with an invalid configuration: %d/%d", creates, gets)
 	}
 }
+
+// arcipelago runs its work on a remote hub that publishes no enumeration of the
+// models it accepts, so this provider deliberately declares no catalog. The
+// absence is pinned here so it reads as a decision rather than an oversight: the
+// caller must see "no catalog declared" and keep the plain text field, not "the
+// catalog could not be obtained".
+func TestArcipelagoDeclaresNoModelCatalog(t *testing.T) {
+	models, declared, err := execution.ListModels(context.Background(), New(Options{}), map[string]any{})
+	if err != nil {
+		t.Fatalf("listing models on a provider without a catalog failed: %v", err)
+	}
+	if declared {
+		t.Fatal("arcipelago reports a declared catalog: the UI would show a list it cannot fill")
+	}
+	if len(models) != 0 {
+		t.Fatalf("a provider without a catalog returned %d models", len(models))
+	}
+}
