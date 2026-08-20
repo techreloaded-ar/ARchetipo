@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -105,8 +106,85 @@ func TestModelCatalogIsDetachedFromTheCaller(t *testing.T) {
 		t.Fatalf("the catalog now holds %d entries, want %d", len(second), len(original))
 	}
 	for i, model := range second {
-		if model != original[i] {
+		if !reflect.DeepEqual(model, original[i]) {
 			t.Fatalf("entry %d is now %+v, want %+v", i, model, original[i])
+		}
+	}
+}
+
+// --- model options ---------------------------------------------------------
+
+// The option is what the panel draws under the model, so the catalog must
+// declare it on the models that expose it — and only on those. The levels are
+// asserted literally because they are the set `claude --help` documents: the
+// list a person picks from is what this package claims the CLI accepts.
+func TestCatalogDeclaresTheEffortOptionOnTheModelsThatExposeIt(t *testing.T) {
+	models, err := (&Provider{}).Models(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("listing models failed: %v", err)
+	}
+	byID := map[string]execution.ModelOption{}
+	for _, model := range models {
+		byID[model.ID] = model
+	}
+	wantLevels := []string{"low", "medium", "high", "xhigh", "max"}
+	for _, id := range []string{"opus", "sonnet"} {
+		model, ok := byID[id]
+		if !ok {
+			t.Fatalf("the catalog no longer offers %q", id)
+		}
+		if len(model.Options) != 1 {
+			t.Fatalf("model %q declares %d options, want 1: %#v", id, len(model.Options), model.Options)
+		}
+		option := model.Options[0]
+		if option.Name != "effort" {
+			t.Fatalf("model %q declares option %q, want %q", id, option.Name, "effort")
+		}
+		if strings.TrimSpace(option.Label) == "" {
+			t.Fatalf("the option of model %q has no label to read", id)
+		}
+		if strings.TrimSpace(option.Help) == "" {
+			t.Fatalf("the option of model %q does not say what leaving it unset does", id)
+		}
+		if len(option.Choices) != len(wantLevels) {
+			t.Fatalf("option %q offers %d choices, want %d: %#v", option.Name, len(option.Choices), len(wantLevels), option.Choices)
+		}
+		defaults := 0
+		for i, level := range wantLevels {
+			if option.Choices[i].Value != level {
+				t.Fatalf("choice %d of %q is %q, want %q (declaration order must be preserved)", i, option.Name, option.Choices[i].Value, level)
+			}
+			if strings.TrimSpace(option.Choices[i].Label) == "" {
+				t.Fatalf("choice %q has no label to read", level)
+			}
+			if option.Choices[i].Default {
+				defaults++
+			}
+		}
+		if defaults != 1 {
+			t.Fatalf("option %q marks %d choices as the provider default, want exactly 1", option.Name, defaults)
+		}
+	}
+	haiku, ok := byID["haiku"]
+	if !ok {
+		t.Fatal("the catalog no longer offers \"haiku\"")
+	}
+	if len(haiku.Options) != 0 {
+		t.Fatalf("model %q declares %#v, want no option at all", haiku.ID, haiku.Options)
+	}
+}
+
+// Every level the catalog offers has to be a level the parser accepts:
+// offering a value the configuration then rejects would make the panel produce
+// an error out of its own list.
+func TestEveryOfferedEffortLevelIsAccepted(t *testing.T) {
+	for _, choice := range effortOption.Choices {
+		cfg, err := parseConfig(map[string]any{"effort": choice.Value})
+		if err != nil {
+			t.Fatalf("the catalog offers %q but the configuration rejects it: %v", choice.Value, err)
+		}
+		if cfg.Effort != choice.Value {
+			t.Fatalf("effort = %q, want %q", cfg.Effort, choice.Value)
 		}
 	}
 }

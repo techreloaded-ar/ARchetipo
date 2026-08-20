@@ -230,6 +230,13 @@ func (a *appServer) start(ctx context.Context, cfg settings, dir, prompt string)
 	if cfg.Model != "" {
 		threadParams["model"] = cfg.Model
 	}
+	// The reasoning budget travels as a thread-scoped override of the very key
+	// that lives in ~/.codex/config.toml. The `config` key is set only when the
+	// option is configured, so a thread opened without it is byte for byte the
+	// one this provider has always opened.
+	if cfg.ReasoningEffort != "" {
+		threadParams["config"] = map[string]any{"model_reasoning_effort": cfg.ReasoningEffort}
+	}
 	result, err := a.call(ctx, methodThreadStart, threadParams)
 	if err != nil {
 		return fmt.Errorf("the codex app server could not open a thread: %w", err)

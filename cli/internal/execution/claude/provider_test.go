@@ -988,3 +988,29 @@ func TestDiagnosticSuffixNamesAnEmptyStream(t *testing.T) {
 		t.Fatalf("suffix = %q", got)
 	}
 }
+
+// The effort option is a model option, but it reaches the process the same way
+// a configuration field does: as a flag. Unset, the flag must not appear at
+// all — passing an empty one would make Claude refuse the invocation.
+func TestBuildArgsCarriesTheEffortOptionOnlyWhenSet(t *testing.T) {
+	got := buildArgs(settings{Command: "claude", Model: "sonnet", PermissionMode: "auto", Effort: "high"})
+	found := -1
+	for i, arg := range got {
+		if arg == "--effort" {
+			found = i
+		}
+	}
+	if found < 0 {
+		t.Fatalf("the configured effort never reached the command line: %#v", got)
+	}
+	if found+1 >= len(got) || got[found+1] != "high" {
+		t.Fatalf("--effort is not followed by its value: %#v", got)
+	}
+
+	without := buildArgs(settings{Command: "claude", Model: "sonnet", PermissionMode: "auto"})
+	for _, arg := range without {
+		if arg == "--effort" {
+			t.Fatalf("an unset effort still passed a flag: %#v", without)
+		}
+	}
+}

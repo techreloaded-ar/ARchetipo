@@ -25,6 +25,12 @@
 	const EMPTY_OPTION_LABEL = "No model — the provider chooses";
 	const DEFAULT_SUFFIX = " — provider default";
 	const UNLISTED_SUFFIX = " — not listed";
+	// The empty entry of a model option, and the sentence that takes the place
+	// of the section when the selected model declares no option at all: an
+	// empty container would leave the reader wondering whether the panel is
+	// broken or the model simply has nothing to offer.
+	const EMPTY_MODEL_OPTION_LABEL = "No value — the provider chooses";
+	const NO_MODEL_OPTIONS_COPY = "This model declares no option.";
 
 	// ---- internal helpers ----
 
@@ -117,6 +123,77 @@
 		return `<label class="field full" data-provider-field="${escapeHtml(field.name)}"><span>${escapeHtml(field.label || field.name)}${required}</span>${control}${notice}${help}</label>`;
 	}
 
+	/**
+	 * The options declared by the model the catalog field currently holds.
+	 *
+	 * Returns null — meaning "there is nothing to say here" — when the provider
+	 * declares no catalog field, when no model is selected, or when the
+	 * selected value is not an entry of the catalog. Returns an array,
+	 * possibly empty, when a catalog model really is selected: an empty array
+	 * is the case the explicit sentence is about.
+	 */
+	function selectedModelOptions(provider, values) {
+		if (!provider || !provider.model_field) return null;
+		const selected = currentValue(values, provider.model_field);
+		if (selected === "") return null;
+		const model = catalogOf(provider).find(
+			(m) => String(m.id || "") === selected,
+		);
+		if (!model) return null;
+		return Array.isArray(model.options) ? model.options.filter(Boolean) : [];
+	}
+
+	/**
+	 * One model option as a list of its declared choices.
+	 *
+	 * The empty entry is always first and is what an unset option selects, so
+	 * leaving the decision to the provider stays possible. The label carries
+	 * the same wrapper the configuration fields use, so the existing error
+	 * highlighting reaches it without any change.
+	 */
+	function renderModelOption(option, value) {
+		const name = String(option.name || "");
+		const choices = Array.isArray(option.choices)
+			? option.choices.filter(Boolean)
+			: [];
+		const entries = [
+			`<option value=""${value === "" ? " selected" : ""}>${escapeHtml(EMPTY_MODEL_OPTION_LABEL)}</option>`,
+		];
+		choices.forEach((choice) => {
+			const choiceValue = String(choice.value || "");
+			const text =
+				(choice.label || choiceValue) + (choice.default ? DEFAULT_SUFFIX : "");
+			entries.push(
+				`<option value="${escapeHtml(choiceValue)}"${choiceValue === value && value !== "" ? " selected" : ""}>${escapeHtml(text)}</option>`,
+			);
+		});
+		const help = option.help
+			? `<small class="field-help">${escapeHtml(option.help)}</small>`
+			: "";
+		// The control carries the option name in an attribute of its own, and
+		// not only inside the submitted name: reading it back from the prefix
+		// of that name would make a configuration field called `option_x`
+		// indistinguishable from the option `x`.
+		return `<label class="field full" data-provider-field="${escapeHtml(name)}"><span>${escapeHtml(option.label || name)}</span><select name="provider_option_${escapeHtml(name)}" data-provider-option="${escapeHtml(name)}">${entries.join("")}</select>${help}</label>`;
+	}
+
+	/**
+	 * The section drawn under the configuration fields for the model currently
+	 * selected. Empty string when there is no model to speak about.
+	 */
+	function renderModelOptions(provider, values) {
+		const options = selectedModelOptions(provider, values);
+		if (options === null) return "";
+		if (!options.length) {
+			return `<p class="config-copy">${escapeHtml(NO_MODEL_OPTIONS_COPY)}</p>`;
+		}
+		return options
+			.map((option) =>
+				renderModelOption(option, currentValue(values, option.name)),
+			)
+			.join("");
+	}
+
 	// ---- exported API ----
 
 	/**
@@ -134,7 +211,14 @@
 		if (!fields.length) {
 			return '<p class="config-copy">This provider declares no configurable setting.</p>';
 		}
-		return fields.map((f) => renderField(provider, f, values)).join("");
+		// The options of the selected model come after the configuration
+		// fields, because they are a property of the value chosen in one of
+		// them and reading them before it would be reading an answer before
+		// the question.
+		return (
+			fields.map((f) => renderField(provider, f, values)).join("") +
+			renderModelOptions(provider, values)
+		);
 	}
 
 	// ---- exports ----

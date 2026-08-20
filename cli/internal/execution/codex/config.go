@@ -36,17 +36,19 @@ const defaultSandbox = "workspace-write"
 // authenticates by itself, so no credential — and no path to its session
 // material — is ever part of this struct.
 type settings struct {
-	Command string
-	Model   string
-	Sandbox string
-	Timeout time.Duration
+	Command         string
+	Model           string
+	ReasoningEffort string
+	Sandbox         string
+	Timeout         time.Duration
 }
 
 var knownConfigKeys = map[string]struct{}{
-	"command":         {},
-	"model":           {},
-	"sandbox":         {},
-	"timeout_seconds": {},
+	"command":          {},
+	"model":            {},
+	"reasoning_effort": {},
+	"sandbox":          {},
+	"timeout_seconds":  {},
 }
 
 // ConfigFields declares the non-secret settings this provider accepts, so a
@@ -115,6 +117,10 @@ func parseConfig(raw map[string]any) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
+	reasoningEffort, err := parseReasoningEffort(raw["reasoning_effort"])
+	if err != nil {
+		return settings{}, err
+	}
 	sandbox, err := parseSandbox(raw["sandbox"])
 	if err != nil {
 		return settings{}, err
@@ -124,10 +130,11 @@ func parseConfig(raw map[string]any) (settings, error) {
 		return settings{}, err
 	}
 	return settings{
-		Command: command,
-		Model:   model,
-		Sandbox: sandbox,
-		Timeout: time.Duration(timeoutSeconds) * time.Second,
+		Command:         command,
+		Model:           model,
+		ReasoningEffort: reasoningEffort,
+		Sandbox:         sandbox,
+		Timeout:         time.Duration(timeoutSeconds) * time.Second,
 	}, nil
 }
 
@@ -179,6 +186,32 @@ func parseModel(value any) (string, error) {
 		return "", configErr("model", "must be a string")
 	}
 	return strings.TrimSpace(text), nil
+}
+
+// parseReasoningEffort accepts one of the levels this package offers for the
+// reasoning budget. Unlike sandbox it has no default: an absent key means "not
+// set", and then no override is sent at all, so Codex applies its own setting.
+// A key that is present must carry one of the declared levels — a value outside
+// the set would travel to the thread and be refused there, with a diagnostic
+// that points at the protocol instead of at the option.
+func parseReasoningEffort(value any) (string, error) {
+	if value == nil {
+		return "", nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", configErr("reasoning_effort", "must be a string")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", configErr("reasoning_effort", "must not be empty")
+	}
+	for _, effort := range reasoningEfforts {
+		if text == effort {
+			return text, nil
+		}
+	}
+	return "", configErr("reasoning_effort", "must be one of "+strings.Join(reasoningEfforts, ", "))
 }
 
 // parseSandbox accepts one of the policies the Codex session understands. A key

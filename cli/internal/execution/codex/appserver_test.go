@@ -599,3 +599,32 @@ func waitFor(t *testing.T, condition func() bool) {
 	}
 	t.Fatal("the expected state never arrived")
 }
+
+// The reasoning budget travels as a thread-scoped override of the key that
+// lives in ~/.codex/config.toml, so it has to arrive inside the `config` field
+// of thread/start under its own name.
+func TestAppServerSendsTheConfiguredReasoningEffort(t *testing.T) {
+	fake := newFakeCodex()
+	cfg := defaultSettings()
+	cfg.ReasoningEffort = "high"
+	openSession(t, fake, cfg)
+
+	thread := fake.paramsOf(methodThreadStart)
+	overrides, ok := thread["config"].(map[string]any)
+	if !ok {
+		t.Fatalf("thread/start config = %#v, want a map of overrides", thread["config"])
+	}
+	if overrides["model_reasoning_effort"] != "high" {
+		t.Fatalf("thread/start config.model_reasoning_effort = %#v, want %q", overrides["model_reasoning_effort"], "high")
+	}
+}
+
+// Without the option the `config` key is absent, not empty: a thread opened
+// without a reasoning budget must be the very one this provider always opened.
+func TestAppServerOmitsAnUnconfiguredReasoningEffort(t *testing.T) {
+	fake := newFakeCodex()
+	openSession(t, fake, defaultSettings())
+	if thread := fake.paramsOf(methodThreadStart); thread["config"] != nil {
+		t.Fatalf("thread/start carried config = %#v", thread["config"])
+	}
+}

@@ -41,6 +41,7 @@ const defaultPermissionMode = "auto"
 type settings struct {
 	Command        string
 	Model          string
+	Effort         string
 	PermissionMode string
 	Timeout        time.Duration
 }
@@ -48,6 +49,7 @@ type settings struct {
 var knownConfigKeys = map[string]struct{}{
 	"command":         {},
 	"model":           {},
+	"effort":          {},
 	"permission_mode": {},
 	"timeout_seconds": {},
 }
@@ -119,6 +121,10 @@ func parseConfig(raw map[string]any) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
+	effort, err := parseEffort(raw["effort"])
+	if err != nil {
+		return settings{}, err
+	}
 	permissionMode, err := parsePermissionMode(raw["permission_mode"])
 	if err != nil {
 		return settings{}, err
@@ -130,6 +136,7 @@ func parseConfig(raw map[string]any) (settings, error) {
 	return settings{
 		Command:        command,
 		Model:          model,
+		Effort:         effort,
 		PermissionMode: permissionMode,
 		Timeout:        time.Duration(timeoutSeconds) * time.Second,
 	}, nil
@@ -183,6 +190,32 @@ func parseModel(value any) (string, error) {
 		return "", configErr("model", "must be a string")
 	}
 	return strings.TrimSpace(text), nil
+}
+
+// parseEffort accepts one of the levels Claude Code understands on `--effort`.
+// Unlike permission_mode it has no default: an absent key means "not set", and
+// then no flag is passed at all, so Claude applies its own level. A key that is
+// present must carry one of the declared levels — a value outside the set would
+// be handed straight to the process and refused there, with a diagnostic that
+// points at the CLI instead of at the option.
+func parseEffort(value any) (string, error) {
+	if value == nil {
+		return "", nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", configErr("effort", "must be a string")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", configErr("effort", "must not be empty")
+	}
+	for _, level := range effortLevels {
+		if text == level {
+			return text, nil
+		}
+	}
+	return "", configErr("effort", "must be one of "+strings.Join(effortLevels, ", "))
 }
 
 // parsePermissionMode accepts one of the policies Claude Code understands. A

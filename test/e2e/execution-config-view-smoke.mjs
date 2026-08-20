@@ -107,6 +107,22 @@ async function main() {
     }
     assertNoCredentialFields(claude);
     assertModelCatalog(claude);
+    // AC-1, AC-5 of US-048 on the panel really served: when the runtime
+    // answers, the claude catalog is the one that holds both cases the panel
+    // has to tell apart — a model that declares an option, and a model that
+    // declares none and is therefore rendered with an explicit sentence.
+    if (Array.isArray(claude.models) && claude.models.length > 0) {
+      const { declaredBy, silent } = assertModelOptions(claude, claude.models);
+      if (declaredBy.length === 0) {
+        throw new Error(`No model of the claude catalog declares an option: ${JSON.stringify(claude.models)}`);
+      }
+      if (silent.length === 0) {
+        throw new Error(`Every model of the claude catalog declares an option, so the explicit-sentence case is never exercised: ${JSON.stringify(claude.models)}`);
+      }
+      console.log(`-> AC-1 ok: model options declared by [${declaredBy.join(", ")}], none for [${silent.join(", ")}]`);
+    } else {
+      console.log("-> AC-1 skipped: the claude catalog is not obtainable on this machine, so its model options cannot be observed");
+    }
     // Availability is observed, not required, and says nothing about a login:
     // the smoke must pass on a machine with Claude Code installed and logged
     // in, on one installed and logged out, and on one without it at all.
@@ -289,6 +305,62 @@ function assertModelCatalog(provider) {
   if (defaults.length !== 1) {
     throw new Error(`Provider ${provider.id} must mark exactly one model as its own default; got ${defaults.length} in ${JSON.stringify(models)}`);
   }
+  assertModelOptions(provider, models);
+}
+
+// The options a model declares travel inside its own catalog entry, so they are
+// observed here on the very payload the browser receives. Like the catalog
+// itself they are observed and not required — a model that declares none is a
+// legitimate answer, and it is the one the panel renders with an explicit
+// sentence instead of an empty section. What must hold is the shape: an option
+// a person can read and pick from, with exactly one choice marked as the value
+// the runtime applies on its own.
+function assertModelOptions(provider, models) {
+  const declaredBy = [];
+  const silent = [];
+  for (const model of models) {
+    const options = model.options;
+    if (options === undefined) {
+      silent.push(model.id);
+      continue;
+    }
+    if (!Array.isArray(options)) {
+      throw new Error(`Provider ${provider.id} declares non-list options for model ${model.id}: ${JSON.stringify(options)}`);
+    }
+    if (options.length === 0) {
+      throw new Error(`Provider ${provider.id} carries an empty options list for model ${model.id}: a model with nothing to offer must carry no options key at all`);
+    }
+    declaredBy.push(model.id);
+    for (const option of options) {
+      if (!String(option.name || "").trim()) {
+        throw new Error(`Provider ${provider.id} declares an option without a name for model ${model.id}: ${JSON.stringify(option)}`);
+      }
+      if (!String(option.label || "").trim()) {
+        throw new Error(`Provider ${provider.id} declares the option ${option.name} with no label to read: ${JSON.stringify(option)}`);
+      }
+      // An option is a plain key of the provider configuration, so a name that
+      // collides with a configurable field would make one shadow the other and
+      // draw the same key twice in the form.
+      const fields = (provider.config_fields || []).map((f) => f.name);
+      if (fields.includes(option.name)) {
+        throw new Error(`Provider ${provider.id} declares ${option.name} both as a model option and as a configurable field`);
+      }
+      const choices = option.choices;
+      if (!Array.isArray(choices) || choices.length === 0) {
+        throw new Error(`Provider ${provider.id} declares the option ${option.name} with no choice to pick: ${JSON.stringify(option)}`);
+      }
+      for (const choice of choices) {
+        if (!String(choice.value || "").trim()) {
+          throw new Error(`Provider ${provider.id} lists a choice without a value for option ${option.name}: ${JSON.stringify(choice)}`);
+        }
+      }
+      const marked = choices.filter((c) => c.default === true);
+      if (marked.length !== 1) {
+        throw new Error(`Provider ${provider.id} must mark exactly one choice of ${option.name} as the provider default; got ${marked.length} in ${JSON.stringify(choices)}`);
+      }
+    }
+  }
+  return { declaredBy, silent };
 }
 
 function assertActions(detail, expected, label) {

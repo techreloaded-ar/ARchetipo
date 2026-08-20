@@ -124,3 +124,111 @@ func TestListModelsNeverReturnsANilSliceOnSuccess(t *testing.T) {
 		t.Fatalf("got %d models, want 0", len(models))
 	}
 }
+
+// optionCatalog is the shape US-048 is about: one model that declares an option
+// with a closed set of choices, and one that declares none. Both cases exist in
+// the real providers, and the panel renders them differently.
+func optionCatalog() []ModelOption {
+	return []ModelOption{
+		{
+			ID:    "sonnet",
+			Label: "Sonnet",
+			Options: []ModelOptionField{
+				{
+					Name:  "effort",
+					Label: "Effort",
+					Help:  "Left empty, no flag is passed.",
+					Choices: []ModelOptionChoice{
+						{Value: "low"},
+						{Value: "medium", Default: true},
+						{Value: "high"},
+					},
+				},
+			},
+		},
+		{ID: "haiku", Label: "Haiku"},
+	}
+}
+
+func TestListModelsCarriesTheOptionsDeclaredForEachModel(t *testing.T) {
+	provider := &modelListerProvider{testProvider: testProvider{id: "claude"}, models: optionCatalog()}
+	models, _, err := ListModels(context.Background(), provider, nil)
+	if err != nil {
+		t.Fatalf("declared catalog reported %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("got %d models, want 2", len(models))
+	}
+	if len(models[0].Options) != 1 {
+		t.Fatalf("model %q declares %d options, want 1", models[0].ID, len(models[0].Options))
+	}
+	option := models[0].Options[0]
+	if option.Name != "effort" || option.Label != "Effort" {
+		t.Fatalf("option identity lost: %#v", option)
+	}
+	if option.Help == "" {
+		t.Fatal("the help text of the option was dropped")
+	}
+	wantChoices := []string{"low", "medium", "high"}
+	if len(option.Choices) != len(wantChoices) {
+		t.Fatalf("got %d choices, want %d: %#v", len(option.Choices), len(wantChoices), option.Choices)
+	}
+	for i, value := range wantChoices {
+		if option.Choices[i].Value != value {
+			t.Fatalf("choice %d is %q, want %q (declaration order must be preserved)", i, option.Choices[i].Value, value)
+		}
+	}
+	defaults := 0
+	for _, choice := range option.Choices {
+		if choice.Default {
+			defaults++
+			if choice.Value != "medium" {
+				t.Fatalf("the default marker moved to %q", choice.Value)
+			}
+		}
+	}
+	if defaults != 1 {
+		t.Fatalf("%d choices are marked as default, want exactly 1", defaults)
+	}
+	if len(models[1].Options) != 0 {
+		t.Fatalf("model %q must declare no option, got %#v", models[1].ID, models[1].Options)
+	}
+}
+
+func TestListModelsDetachesTheOptionsItReturns(t *testing.T) {
+	provider := &modelListerProvider{testProvider: testProvider{id: "claude"}, models: optionCatalog()}
+	first, _, err := ListModels(context.Background(), provider, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first[0].Options[0].Name = "mutated"
+	first[0].Options[0].Choices[0].Value = "mutated"
+	first[0].Options = nil
+
+	second, _, err := ListModels(context.Background(), provider, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second[0].Options) != 1 {
+		t.Fatalf("mutating the result emptied the catalog: %#v", second[0])
+	}
+	if second[0].Options[0].Name != "effort" {
+		t.Fatalf("option name is now %q, want %q", second[0].Options[0].Name, "effort")
+	}
+	if second[0].Options[0].Choices[0].Value != "low" {
+		t.Fatalf("choice value is now %q, want %q", second[0].Options[0].Choices[0].Value, "low")
+	}
+}
+
+func TestListModelsStillReportsACataloglessProviderWithOptionsInPlay(t *testing.T) {
+	models, declared, err := ListModels(context.Background(), &testProvider{id: "plain"}, nil)
+	if err != nil {
+		t.Fatalf("a provider that declares no catalog must not fail, got %v", err)
+	}
+	if declared {
+		t.Fatal("a provider that does not implement ModelLister must not be reported as declaring a catalog")
+	}
+	if len(models) != 0 {
+		t.Fatalf("got %d models from a provider without a catalog, want 0", len(models))
+	}
+}

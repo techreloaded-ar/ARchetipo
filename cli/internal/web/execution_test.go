@@ -795,3 +795,305 @@ func TestSaveDefaultExecutionProviderWritesNoModelKeyWhenTheFieldIsLeftEmpty(t *
 		t.Fatalf("an empty model field wrote a model key to the configuration:\n%s", raw)
 	}
 }
+
+// --- US-048: model options -------------------------------------------------
+
+// usableRuntime answers the availability probe of a local provider without
+// starting a process, so the tests below are about what the provider declares
+// and persists and never about what is installed on the machine that runs them.
+type usableRuntime struct{}
+
+func (usableRuntime) Run(context.Context, string, string, []string) (string, string, int, error) {
+	return "2.1.236", "", 0, nil
+}
+
+// fakeExecutable writes an executable file and returns its absolute path. The
+// availability probe of a local provider looks its command up on the
+// filesystem, so a real path is what lets the probe succeed deterministically.
+func fakeExecutable(t *testing.T, name string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// newLocalProviderServer serves the two shipped local providers as themselves,
+// with the given persisted configuration as the workspace default. Only the
+// operating-system seam is doubled.
+func newLocalProviderServer(t *testing.T, id string, providerConfig map[string]any) *Server {
+	t.Helper()
+	cfg := config.Default()
+	cfg.ProjectRoot = t.TempDir()
+	conn := inmemory.New(cfg)
+	registry := execution.NewRegistry()
+	probe := usableRuntime{}
+	if err := registry.Register(claude.New(claude.Options{Runner: probe})); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(codex.New(codex.Options{Runner: probe})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.UpdateDefaultProvider(cfg.ProjectRoot, config.DefaultProviderConfig{ID: id, Config: providerConfig}); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := NewServer(conn, cfg, registry, "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv
+}
+
+// claudeConfig is a persisted claude configuration whose command really exists,
+// so the availability probe passes and the catalog is served.
+func claudeConfig(t *testing.T, extra map[string]any) map[string]any {
+	t.Helper()
+	out := map[string]any{"command": fakeExecutable(t, "claude")}
+	for key, value := range extra {
+		out[key] = value
+	}
+	return out
+}
+
+func codexConfig(t *testing.T, extra map[string]any) map[string]any {
+	t.Helper()
+	out := map[string]any{"command": fakeExecutable(t, "codex")}
+	for key, value := range extra {
+		out[key] = value
+	}
+	return out
+}
+
+func modelViewByID(t *testing.T, provider executionProviderView, id string) execution.ModelOption {
+	t.Helper()
+	for _, model := range provider.Models {
+		if model.ID == id {
+			return model
+		}
+	}
+	t.Fatalf("the catalog of %q does not offer the model %q: %#v", provider.ID, id, provider.Models)
+	return execution.ModelOption{}
+}
+
+// AC-1: the catalog the browser receives carries, inside each model, exactly
+// the options that model declares — and the model that declares none carries
+// none.
+func TestListExecutionProvidersCarriesTheOptionsDeclaredForEachModel(t *testing.T) {
+	srv := newLocalProviderServer(t, claude.ProviderID, claudeConfig(t, map[string]any{"model": "sonnet"}))
+
+	provider := providerViewByID(t, readProviders(t, srv), claude.ProviderID)
+	if provider.ModelsUnavailableReason != "" {
+		t.Fatalf("the catalog was not obtainable: %q", provider.ModelsUnavailableReason)
+	}
+	sonnet := modelViewByID(t, provider, "sonnet")
+	if len(sonnet.Options) != 1 {
+		t.Fatalf("sonnet carries %d options, want 1: %#v", len(sonnet.Options), sonnet.Options)
+	}
+	option := sonnet.Options[0]
+	if option.Name != "effort" {
+		t.Fatalf("sonnet carries the option %q, want %q", option.Name, "effort")
+	}
+	if strings.TrimSpace(option.Label) == "" {
+		t.Fatal("the option reached the browser with no label to read")
+	}
+	if len(option.Choices) == 0 {
+		t.Fatalf("the option reached the browser with no choice to pick: %#v", option)
+	}
+	defaults := 0
+	for _, choice := range option.Choices {
+		if strings.TrimSpace(choice.Value) == "" {
+			t.Fatalf("a choice reached the browser with no value: %#v", option.Choices)
+		}
+		if choice.Default {
+			defaults++
+		}
+	}
+	if defaults != 1 {
+		t.Fatalf("%d choices are marked as the provider default, want exactly 1: %#v", defaults, option.Choices)
+	}
+
+	// AC-5: the model that declares no option carries none, so the panel can
+	// tell the two situations apart instead of drawing an empty section.
+	haiku := modelViewByID(t, provider, "haiku")
+	if len(haiku.Options) != 0 {
+		t.Fatalf("haiku carries options it does not declare: %#v", haiku.Options)
+	}
+	raw := doJSON(t, srv, http.MethodGet, "/api/execution/providers", nil).Body.String()
+	if strings.Contains(raw, `"haiku","options"`) {
+		t.Fatalf("the model without options carries an empty options key:\n%s", raw)
+	}
+}
+
+// An option of a model is not a setting of the provider: declaring it in both
+// places would draw it twice in the form, once under the model and once among
+// the configuration fields.
+func TestListExecutionProvidersKeepsModelOptionsOutOfTheConfigFields(t *testing.T) {
+	for _, tc := range []struct {
+		id     string
+		config map[string]any
+		option string
+	}{
+		{claude.ProviderID, claudeConfig(t, nil), "effort"},
+		{codex.ProviderID, codexConfig(t, nil), "reasoning_effort"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			srv := newLocalProviderServer(t, tc.id, tc.config)
+			provider := providerViewByID(t, readProviders(t, srv), tc.id)
+			for _, field := range provider.ConfigFields {
+				if field.Name == tc.option {
+					t.Fatalf("the model option %q is also declared as a configuration field: %#v", tc.option, provider.ConfigFields)
+				}
+			}
+			declared := false
+			for _, model := range provider.Models {
+				for _, option := range model.Options {
+					if option.Name == tc.option {
+						declared = true
+					}
+				}
+			}
+			if !declared {
+				t.Fatalf("no model of %q declares the option %q, so the test proves nothing: %#v", tc.id, tc.option, provider.Models)
+			}
+		})
+	}
+}
+
+// The invariant US-047 established still holds: when the catalog cannot be
+// obtained, neither models nor options reach the browser, and the reason does.
+func TestListExecutionProvidersServesNoOptionWithoutACatalog(t *testing.T) {
+	cfg := config.Default()
+	cfg.ProjectRoot = t.TempDir()
+	conn := inmemory.New(cfg)
+	registry := execution.NewRegistry()
+	if err := registry.Register(claude.New(claude.Options{Runner: unusableRuntime{}})); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := NewServer(conn, cfg, registry, "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider := providerViewByID(t, readProviders(t, srv), claude.ProviderID)
+	if len(provider.Models) != 0 {
+		t.Fatalf("an unobtainable catalog still served models: %#v", provider.Models)
+	}
+	if strings.TrimSpace(provider.ModelsUnavailableReason) == "" {
+		t.Fatalf("an unobtainable catalog reached the reader with no explanation: %#v", provider)
+	}
+	if provider.ModelField != execution.ModelFieldName {
+		t.Fatalf("the field the catalog fills in must stay known even without the catalog: %q", provider.ModelField)
+	}
+}
+
+// AC-2, AC-3: an option that was saved comes back unchanged, and the option of
+// a model that is no longer selected is gone from the persisted configuration —
+// the oracle is the configuration read back from disk, not the response of the
+// save.
+func TestSaveDefaultExecutionProviderPersistsAndReplacesAModelOption(t *testing.T) {
+	command := fakeExecutable(t, "claude")
+	srv := newLocalProviderServer(t, claude.ProviderID, map[string]any{"command": command, "model": "sonnet"})
+
+	if w := doJSON(t, srv, http.MethodPut, "/api/execution/provider/default", map[string]any{
+		"id":     claude.ProviderID,
+		"config": map[string]any{"command": command, "model": "sonnet", "effort": "high"},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("saving a model option was rejected: %d %s", w.Code, w.Body.String())
+	}
+
+	view := readProviders(t, srv)
+	if view.Default == nil || view.Default.Config["effort"] != "high" {
+		t.Fatalf("the saved option did not survive the round trip: %#v", view.Default)
+	}
+	raw, err := os.ReadFile(filepath.Join(srv.session().cfg.ProjectRoot, ".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatalf("the workspace configuration was not written: %v", err)
+	}
+	if !strings.Contains(string(raw), "effort: high") {
+		t.Fatalf("the option is missing from the persisted configuration:\n%s", raw)
+	}
+
+	// AC-3: the panel now draws a model that declares no effort, so the save
+	// carries no effort key — and the superseded option must not linger.
+	if w := doJSON(t, srv, http.MethodPut, "/api/execution/provider/default", map[string]any{
+		"id":     claude.ProviderID,
+		"config": map[string]any{"command": command, "model": "haiku"},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("saving the second model was rejected: %d %s", w.Code, w.Body.String())
+	}
+	view = readProviders(t, srv)
+	if view.Default == nil {
+		t.Fatal("the saved default is not reported")
+	}
+	if _, present := view.Default.Config["effort"]; present {
+		t.Fatalf("the option of the previous model is still in the configuration: %#v", view.Default.Config)
+	}
+	if view.Default.Config["model"] != "haiku" {
+		t.Fatalf("the newly chosen model was not persisted: %#v", view.Default.Config)
+	}
+	raw, err = os.ReadFile(filepath.Join(srv.session().cfg.ProjectRoot, ".archetipo", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "effort:") {
+		t.Fatalf("the superseded option is still on disk:\n%s", raw)
+	}
+}
+
+// AC-4: a value the provider refuses names the option and leaves the previously
+// saved configuration exactly as it was, field by field.
+func TestSaveDefaultExecutionProviderRejectsAnUnknownOptionValue(t *testing.T) {
+	cases := []struct {
+		provider string
+		option   string
+		valid    string
+		model    string
+	}{
+		{claude.ProviderID, "effort", "high", "sonnet"},
+		{codex.ProviderID, "reasoning_effort", "high", "gpt-5-codex"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider, func(t *testing.T) {
+			command := fakeExecutable(t, tc.provider)
+			srv := newLocalProviderServer(t, tc.provider, map[string]any{"command": command})
+			valid := map[string]any{"command": command, "model": tc.model, tc.option: tc.valid}
+			if w := doJSON(t, srv, http.MethodPut, "/api/execution/provider/default", map[string]any{
+				"id": tc.provider, "config": valid,
+			}); w.Code != http.StatusOK {
+				t.Fatalf("seeding a valid configuration failed: %d %s", w.Code, w.Body.String())
+			}
+			before := configFileContent(t, srv.session().cfg.ProjectRoot)
+
+			w := doJSON(t, srv, http.MethodPut, "/api/execution/provider/default", map[string]any{
+				"id":     tc.provider,
+				"config": map[string]any{"command": command, "model": tc.model, tc.option: "turbo"},
+			})
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("a value outside the declared set was accepted: %d %s", w.Code, w.Body.String())
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["field"] != tc.option {
+				t.Fatalf("the rejection names field %#v, want %q", payload["field"], tc.option)
+			}
+			if message, _ := payload["error"].(string); !strings.Contains(message, tc.option) {
+				t.Fatalf("the message does not name the option: %q", message)
+			}
+			if after := configFileContent(t, srv.session().cfg.ProjectRoot); after != before {
+				t.Fatalf("a rejected value rewrote the configuration:\n%s", after)
+			}
+			view := readProviders(t, srv)
+			if view.Default == nil || view.Default.ID != tc.provider {
+				t.Fatalf("the previously valid default was lost: %#v", view.Default)
+			}
+			for key, want := range valid {
+				if view.Default.Config[key] != want {
+					t.Fatalf("field %q is now %#v, want %#v", key, view.Default.Config[key], want)
+				}
+			}
+		})
+	}
+}

@@ -19,9 +19,53 @@ import (
 // A declared list can fall behind the vendor. An identifier this list has not
 // caught up with is never rejected: a value already configured outside the
 // catalog stays selected and is saved unchanged.
+// effortLevels are the values Claude Code accepts on `--effort`. The set is
+// closed on purpose and declared here for the same reason the model aliases
+// are: this package states what it knows instead of interrogating the installed
+// CLI.
+//
+// Verified against Claude Code 2.1.236, whose `claude --help` documents
+// `--effort <level>` with exactly these levels. The Default marker is a
+// best-effort hint about the level Claude Code applies when no flag is passed,
+// which a person's own settings or plan can override, so it is a hint and not a
+// verified fact about their machine.
+var effortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
+// defaultEffortLevel is the level the marker points at. It is only what the
+// list reads as the provider's own default; leaving the option unset passes no
+// flag at all.
+const defaultEffortLevel = "medium"
+
+// effortOption is the option the models that expose a reasoning budget declare.
+// Its Name is a plain key of the provider configuration, so it must not collide
+// with the keys of ConfigFields — and it deliberately is not one of them: an
+// option of a model is not a setting of the provider, and declaring it in both
+// places would draw it twice in the form.
+var effortOption = execution.ModelOptionField{
+	Name:    "effort",
+	Label:   "Effort",
+	Help:    "How much reasoning Claude spends on the run. Left empty, no effort flag is passed and Claude applies its own level.",
+	Choices: effortChoices(),
+}
+
+func effortChoices() []execution.ModelOptionChoice {
+	choices := make([]execution.ModelOptionChoice, 0, len(effortLevels))
+	for _, level := range effortLevels {
+		choices = append(choices, execution.ModelOptionChoice{
+			Value:   level,
+			Label:   level,
+			Default: level == defaultEffortLevel,
+		})
+	}
+	return choices
+}
+
 var models = []execution.ModelOption{
-	{ID: "opus", Label: "opus"},
-	{ID: "sonnet", Label: "sonnet", Default: true},
+	{ID: "opus", Label: "opus", Options: []execution.ModelOptionField{effortOption}},
+	{ID: "sonnet", Label: "sonnet", Default: true, Options: []execution.ModelOptionField{effortOption}},
+	// haiku exposes no effort control, so it declares no option at all: it is
+	// the case the panel renders with an explicit sentence instead of an empty
+	// section.
 	{ID: "haiku", Label: "haiku"},
 }
 
@@ -36,9 +80,7 @@ func (p *Provider) Models(_ context.Context, raw map[string]any) ([]execution.Mo
 	if _, err := parseConfig(raw); err != nil {
 		return nil, err
 	}
-	out := make([]execution.ModelOption, len(models))
-	copy(out, models)
-	return out, nil
+	return execution.CloneModels(models), nil
 }
 
 var _ execution.ModelLister = (*Provider)(nil)

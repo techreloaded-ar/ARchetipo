@@ -320,3 +320,207 @@ describe("renderProviderFields — robustezza", () => {
 		}
 	});
 });
+
+// --- US-048: opzioni del modello selezionato --------------------------------
+//
+// Verifica:
+//   - AC-1 solo le opzioni del modello scelto, con il predefinito indicato
+//   - AC-2 un'opzione già salvata è riproposta selezionata
+//   - AC-3 cambiando modello i controlli dell'opzione superata spariscono
+//   - AC-5 un modello senza opzioni produce una frase esplicita, non una
+//     sezione vuota
+
+const OPTION_VIEW = {
+	id: "provider-inventato",
+	model_field: "model",
+	config_fields: [{ name: "model", label: "Modello" }],
+	models: [
+		{
+			id: "modello-alfa",
+			label: "Modello Alfa",
+			options: [
+				{
+					name: "sforzo",
+					label: "Sforzo",
+					help: "Lasciata vuota, decide il provider.",
+					choices: [
+						{ value: "basso", label: "basso" },
+						{ value: "medio", label: "medio", default: true },
+						{ value: "alto", label: "alto" },
+					],
+				},
+			],
+		},
+		{ id: "modello-beta", label: "Modello Beta" },
+	],
+};
+
+// The controls of one named option, as {value, text, selected}.
+function optionControl(html, name) {
+	const re = new RegExp(
+		`<select name="provider_option_${name}"[^>]*>([\\s\\S]*?)</select>`,
+	);
+	const m = re.exec(html);
+	return m ? options(m[1]) : null;
+}
+
+describe("renderProviderFields — opzioni del modello selezionato", () => {
+	it("mostra soltanto le opzioni dichiarate dal modello scelto", () => {
+		const html = renderProviderFields(OPTION_VIEW, { model: "modello-alfa" });
+		const entries = optionControl(html, "sforzo");
+
+		assert.ok(entries, "il controllo dell'opzione dichiarata non è stato disegnato");
+		assert.deepEqual(
+			entries.map((o) => o.value),
+			["", "basso", "medio", "alto"],
+			"la voce vuota più le tre scelte dichiarate, in quell'ordine",
+		);
+		const text = visibleText(html);
+		assert.ok(text.includes("Sforzo"), "l'etichetta dell'opzione non è visibile");
+		assert.ok(
+			text.includes("Lasciata vuota, decide il provider."),
+			"l'aiuto dell'opzione non è visibile",
+		);
+		// Exactly one entry reads as the provider default, and it is the one
+		// the provider marked.
+		const marked = entries.filter((o) => /provider default/i.test(o.text));
+		assert.equal(marked.length, 1, "una sola scelta deve leggersi come predefinita");
+		assert.equal(marked[0].value, "medio", "il marcatore è finito sulla scelta sbagliata");
+	});
+
+	it("lascia la voce vuota selezionata quando l'opzione non è impostata", () => {
+		const entries = optionControl(
+			renderProviderFields(OPTION_VIEW, { model: "modello-alfa" }),
+			"sforzo",
+		);
+		const selected = entries.filter((o) => o.selected);
+		assert.equal(selected.length, 1, "esattamente una voce deve essere selezionata");
+		assert.equal(selected[0].value, "", "un'opzione non impostata deve inviare la stringa vuota");
+	});
+
+	it("ripropone selezionata l'opzione già salvata", () => {
+		const entries = optionControl(
+			renderProviderFields(OPTION_VIEW, { model: "modello-alfa", sforzo: "alto" }),
+			"sforzo",
+		);
+		const selected = entries.filter((o) => o.selected);
+		assert.equal(selected.length, 1, "esattamente una voce deve essere selezionata");
+		assert.equal(selected[0].value, "alto", "il valore salvato non è stato riproposto");
+	});
+
+	it("non disegna l'opzione di un modello che non è più quello scelto", () => {
+		const html = renderProviderFields(OPTION_VIEW, {
+			model: "modello-beta",
+			sforzo: "alto",
+		});
+		assert.equal(
+			optionControl(html, "sforzo"),
+			null,
+			"l'opzione del modello precedente è ancora disegnata",
+		);
+		assert.ok(
+			!html.includes("provider_option_"),
+			"il markup contiene ancora un controllo di opzione",
+		);
+	});
+
+	it("mostra una frase esplicita per un modello che non dichiara opzioni", () => {
+		const html = renderProviderFields(OPTION_VIEW, { model: "modello-beta" });
+		const text = visibleText(html);
+		assert.ok(
+			text.includes("This model declares no option."),
+			"la frase esplicita non è visibile",
+		);
+		assert.ok(
+			!html.includes("provider_option_"),
+			"un contenitore di opzioni vuoto è stato disegnato",
+		);
+	});
+
+	it("non dice nulla quando nessun modello è scelto o il catalogo non c'è", () => {
+		const silent = [
+			[OPTION_VIEW, {}],
+			[OPTION_VIEW, { model: "modello-fuori-catalogo" }],
+			[
+				{ id: "p", config_fields: [{ name: "model", label: "Modello" }] },
+				{ model: "qualunque" },
+			],
+			[
+				{
+					id: "p",
+					model_field: "model",
+					config_fields: [{ name: "model", label: "Modello" }],
+					models: null,
+				},
+				{ model: "qualunque" },
+			],
+		];
+		for (const [view, values] of silent) {
+			const html = renderProviderFields(view, values);
+			assert.ok(
+				!html.includes("provider_option_"),
+				"è stato disegnato un controllo di opzione senza modello di catalogo scelto",
+			);
+			assert.ok(
+				!html.includes("This model declares no option."),
+				"è stata mostrata la frase del modello senza opzioni fuori dal suo caso",
+			);
+		}
+	});
+
+	it("marca ogni controllo di opzione con il proprio nome", () => {
+		// Il nome non si legge dal prefisso del campo inviato: un campo di
+		// configurazione chiamato `option_x` sarebbe indistinguibile
+		// dall'opzione `x`.
+		const html = renderProviderFields(OPTION_VIEW, { model: "modello-alfa" });
+		assert.ok(
+			html.includes('data-provider-option="sforzo"'),
+			"il controllo dell'opzione non porta il proprio nome in un attributo dedicato",
+		);
+	});
+
+	it("non lancia su opzioni malformate", () => {
+		const broken = [
+			{ options: null },
+			{ options: "non-una-lista" },
+			{ options: [null] },
+			{ options: [{}] },
+			{ options: [{ name: "x", choices: null }] },
+			{ options: [{ name: "x", choices: [null] }] },
+		];
+		for (const extra of broken) {
+			const view = {
+				id: "p",
+				model_field: "model",
+				config_fields: [{ name: "model", label: "Modello" }],
+				models: [{ id: "m", ...extra }],
+			};
+			const html = renderProviderFields(view, { model: "m" });
+			assert.equal(typeof html, "string");
+		}
+	});
+
+	it("neutralizza il testo dichiarato per un'opzione", () => {
+		const view = {
+			id: "p",
+			model_field: "model",
+			config_fields: [{ name: "model", label: "Modello" }],
+			models: [
+				{
+					id: "m",
+					options: [
+						{
+							name: "x",
+							label: '<img src=x onerror="1">',
+							choices: [{ value: '<script>alert(1)</script>' }],
+						},
+					],
+				},
+			],
+		};
+		const html = renderProviderFields(view, { model: "m" });
+		assert.ok(!html.includes("<img"), "l'etichetta ha prodotto un tag reale");
+		assert.ok(!html.includes("<script>"), "la scelta ha prodotto un tag reale");
+		assert.ok(html.includes("&lt;img"), "l'etichetta non è stata neutralizzata");
+	});
+});

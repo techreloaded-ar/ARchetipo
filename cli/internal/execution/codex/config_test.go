@@ -143,6 +143,11 @@ func TestConfigFieldsDeclareNoSecretAndMatchAcceptedKeys(t *testing.T) {
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("declared fields = %v, want %v", names, want)
 	}
+	// Every accepted key must be declared somewhere a person can see it —
+	// either as a configuration field of the provider, or as an option of a
+	// model. A model option lives in the same flat namespace as the fields but
+	// is deliberately not one of them: it belongs to the model that declares
+	// it, and declaring it in both places would draw it twice in the form.
 	for name := range knownConfigKeys {
 		found := false
 		for _, declared := range names {
@@ -151,8 +156,107 @@ func TestConfigFieldsDeclareNoSecretAndMatchAcceptedKeys(t *testing.T) {
 				break
 			}
 		}
+		for _, option := range declaredModelOptionNames() {
+			if option == name {
+				found = true
+			}
+		}
 		if !found {
-			t.Fatalf("accepted key %q is not declared as a configurable field", name)
+			t.Fatalf("accepted key %q is declared neither as a configurable field nor as a model option", name)
+		}
+	}
+	// The two namespaces are flat and shared, so a collision would make one
+	// declaration shadow the other.
+	for _, option := range declaredModelOptionNames() {
+		for _, declared := range names {
+			if option == declared {
+				t.Fatalf("model option %q collides with the configuration field of the same name", option)
+			}
+		}
+	}
+}
+
+// declaredModelOptionNames is every option name the catalog declares, without
+// duplicates.
+func declaredModelOptionNames() []string {
+	seen := map[string]struct{}{}
+	names := []string{}
+	for _, model := range models {
+		for _, option := range model.Options {
+			if _, ok := seen[option.Name]; ok {
+				continue
+			}
+			seen[option.Name] = struct{}{}
+			names = append(names, option.Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// --- reasoning_effort ------------------------------------------------------
+
+// An absent reasoning_effort is "not set", not a default: no override is sent
+// at all and Codex applies its own setting.
+func TestReasoningEffortIsUnsetWhenAbsent(t *testing.T) {
+	cfg, err := parseConfig(map[string]any{})
+	if err != nil {
+		t.Fatalf("an empty configuration failed: %v", err)
+	}
+	if cfg.ReasoningEffort != "" {
+		t.Fatalf("reasoning_effort = %q, want the empty string when the key is absent", cfg.ReasoningEffort)
+	}
+}
+
+func TestReasoningEffortAcceptsEveryDeclaredLevel(t *testing.T) {
+	for _, effort := range reasoningEfforts {
+		cfg, err := parseConfig(map[string]any{"reasoning_effort": effort})
+		if err != nil {
+			t.Fatalf("level %q was rejected: %v", effort, err)
+		}
+		if cfg.ReasoningEffort != effort {
+			t.Fatalf("reasoning_effort = %q, want %q", cfg.ReasoningEffort, effort)
+		}
+	}
+}
+
+// The rejection has to name the option, because that name is what the panel
+// highlights and what the CLI renders as the offending field.
+func TestReasoningEffortRejectionNamesTheOption(t *testing.T) {
+	cases := []struct {
+		name  string
+		value any
+	}{
+		{"a level outside the declared set", "turbo"},
+		{"an empty string", ""},
+		{"blanks only", "   "},
+		{"a value that is not a string", 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseConfig(map[string]any{"reasoning_effort": tc.value})
+			if err == nil {
+				t.Fatalf("value %#v was accepted", tc.value)
+			}
+			var configErr *execution.ConfigurationError
+			if !errors.As(err, &configErr) {
+				t.Fatalf("error is %T, want *execution.ConfigurationError: %v", err, err)
+			}
+			if configErr.Field != "reasoning_effort" {
+				t.Fatalf("the rejection names field %q, want %q", configErr.Field, "reasoning_effort")
+			}
+		})
+	}
+}
+
+func TestReasoningEffortRejectionListsTheAcceptedLevels(t *testing.T) {
+	_, err := parseConfig(map[string]any{"reasoning_effort": "turbo"})
+	if err == nil {
+		t.Fatal("an unknown level was accepted")
+	}
+	for _, effort := range reasoningEfforts {
+		if !strings.Contains(err.Error(), effort) {
+			t.Fatalf("the rejection does not quote the accepted level %q: %s", effort, err.Error())
 		}
 	}
 }

@@ -148,6 +148,9 @@ func buildArgs(cfg settings) []string {
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
+	if cfg.Effort != "" {
+		args = append(args, "--effort", cfg.Effort)
+	}
 	return args
 }
 

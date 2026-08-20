@@ -1911,6 +1911,24 @@
 			provider,
 			values,
 		);
+		bindModelFieldRedraw(provider);
+	}
+
+	// Choosing another model changes which options that model declares, so the
+	// section has to be drawn again. The values already typed into the other
+	// fields are collected first and carried over, so switching model never
+	// costs the reader what they had entered.
+	function bindModelFieldRedraw(provider) {
+		if (!provider || !provider.model_field) return;
+		const control = executionFields.querySelector(
+			`[name="provider_${cssEscape(provider.model_field)}"]`,
+		);
+		if (!control) return;
+		control.addEventListener("change", () => {
+			const values = collectProviderConfig(provider);
+			values[provider.model_field] = control.value;
+			renderProviderFields(provider, values);
+		});
 	}
 
 	function collectProviderConfig(provider) {
@@ -1927,6 +1945,22 @@
 			if (raw === "") return;
 			config[f.name] = f.type === "integer" ? Number(raw) : raw;
 		});
+		// The options are read from the controls that are actually in the page,
+		// never from the union of what the catalog declares. That is what makes
+		// an option disappear from the saved configuration as soon as another
+		// model is chosen: after the redraw its control no longer exists, so
+		// there is nothing to send.
+		executionFields
+			.querySelectorAll("[data-provider-option]")
+			.forEach((control) => {
+				const name = control.getAttribute("data-provider-option");
+				if (!name) return;
+				const raw = control.value.trim();
+				// Same rule as the fields: empty means "use the provider
+				// default", and sending it as an empty string would be a value.
+				if (raw === "") return;
+				config[name] = raw;
+			});
 		return config;
 	}
 
