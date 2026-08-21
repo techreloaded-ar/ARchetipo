@@ -30,6 +30,16 @@
                 <span class="brand-name">ARchetipo</span>
                 <span class="brand-sub">by Tech Reloaded</span>
             </div>
+            <!-- Who is looking at what (US-052). It lives inside the brand cell,
+                 which is a flex container, so the three-column grid of the
+                 topbar does not change. Deliberately without
+                 data-workspace-scoped: it is the one control that must stay
+                 visible with no workspace open, because its job is to declare
+                 the absence too. -->
+            <button id="workspace-indicator" type="button" class="workspace-indicator" aria-live="polite">
+                <span class="workspace-indicator-eyebrow">workspace</span>
+                <span class="workspace-indicator-name" id="workspace-indicator-name">&mdash;</span>
+            </button>
         </div>
 
         <div class="topbar-stats" id="topbar-stats" aria-live="polite">
@@ -743,6 +753,7 @@
     <script src="/provider-fields.js"></script>
 <script src="/workspace-layout.js"></script>
     <script src="/workspace-runs.js"></script>
+    <script src="/workspace-identity.js"></script>
     <script src="/app.js"></script>
 </body>
 </html>

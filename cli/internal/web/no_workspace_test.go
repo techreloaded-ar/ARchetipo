@@ -174,6 +174,11 @@ func TestHomeServerServesHomeRoutes(t *testing.T) {
 	if list.CurrentPath != "" {
 		t.Errorf("currentPath = %q, want empty with no workspace open", list.CurrentPath)
 	}
+	// AC-5: with no workspace open there is no name to show, and the server
+	// says so instead of leaving the page to guess one.
+	if list.CurrentName != "" {
+		t.Errorf("currentName = %q, want empty with no workspace open (AC-5)", list.CurrentName)
+	}
 
 	rec = httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/workspace/options", nil))

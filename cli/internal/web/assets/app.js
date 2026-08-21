@@ -103,6 +103,10 @@
 	const newWorkspaceWorktreeEnabled = document.getElementById(
 		"new-workspace-worktree-enabled",
 	);
+	const workspaceIndicator = document.getElementById("workspace-indicator");
+	const workspaceIndicatorName = document.getElementById(
+		"workspace-indicator-name",
+	);
 	const workspacesBtn = document.getElementById("workspaces-btn");
 	const workspacesModal = document.getElementById("workspaces-modal");
 	const workspacesModalClose = document.getElementById(
@@ -488,6 +492,11 @@
 	newWorkspaceForm.addEventListener("submit", onCreateWorkspace);
 
 	workspacesBtn.addEventListener("click", openWorkspaces);
+	// The indicator is the shortcut that names; #workspaces-btn stays the
+	// explicit menu entry. With no workspace open the button is disabled and the
+	// click never fires, which is exactly right: in home mode the modal is
+	// missing its own form, moved into the home by enterNoWorkspaceMode.
+	workspaceIndicator.addEventListener("click", openWorkspaces);
 	workspacesModalClose.addEventListener("click", closeWorkspaces);
 	workspacesModal.addEventListener("click", (e) => {
 		if (e.target === workspacesModal) closeWorkspaces();
@@ -573,6 +582,8 @@
 		// The rail is read once now instead of waiting for the next tick: an
 		// explicit refresh asks every question the page answers.
 		loadWorkspaceRuns();
+		// Including which workspace is being looked at.
+		refreshWorkspaceIdentity();
 	}
 
 	// Boot is a fork, not a sequence. The page asks which workspace it serves
@@ -583,11 +594,15 @@
 		try {
 			view = await apiGet("/api/workspaces");
 		} catch (err) {
+			applyWorkspaceIdentity(null);
 			enterNoWorkspaceMode();
 			resetConversationState();
 			renderWorkspaceHomeView(null, `Load failed: ${err.message || err}`);
 			return;
 		}
+		// Written once, before the fork, so the two branches cannot diverge on
+		// what the page says it is looking at (AC-1, AC-2, AC-5).
+		applyWorkspaceIdentity(view);
 		if (view && view.open) {
 			loadBoard();
 			loadWorkspaceStatus();
@@ -632,6 +647,30 @@
 			formatTime: formatExecutionTime,
 			message,
 		});
+	}
+
+	// Who is looking at what. This is the one place that writes the identity
+	// onto the page: label, full path and tab title all come out of the same
+	// answer, so they cannot contradict each other. The text is written with
+	// textContent and with the title attribute: the name comes from the user's
+	// disk and never ends up inside markup.
+	function applyWorkspaceIdentity(view) {
+		const id = WorkspaceIdentity.resolveWorkspaceIdentity(view);
+		workspaceIndicatorName.textContent = id.label;
+		workspaceIndicator.title = id.tooltip;
+		workspaceIndicator.disabled = !id.actionable;
+		workspaceIndicator.classList.toggle("is-empty", !id.open);
+		document.title = id.documentTitle;
+	}
+
+	// A failure does not change what is read: the identity on screen stays the
+	// last known one, which is better than a label that empties itself.
+	async function refreshWorkspaceIdentity() {
+		try {
+			applyWorkspaceIdentity(await apiGet("/api/workspaces"));
+		} catch (_) {
+			/* keep the last known identity */
+		}
 	}
 
 	// ---- Workspace shell layout (US-055) -------------------------------------
@@ -940,6 +979,12 @@
 	function scheduleBoardReload() {
 		clearTimeout(boardReloadTimer);
 		boardReloadTimer = setTimeout(() => {
+			// The tick also arrives from a workspace switch: SwitchWorkspace
+			// publishes on the broker, which lives on the server and not on the
+			// session, so the connection survives the change. Knowing which
+			// workspace is being looked at destroys no edit in progress, which
+			// is why it sits before the guards (AC-3).
+			refreshWorkspaceIdentity();
 			// Skip while something is being edited: reloading would discard the
 			// user's in-progress edits. The next event after the edit ends will
 			// bring the board back in sync.
@@ -4749,6 +4794,9 @@
 			formatTime: formatExecutionTime,
 		});
 		workspacesEmpty.classList.toggle("hidden", items.length > 0);
+		// The modal payload is the same answer the indicator reads: no extra
+		// question is asked where it is already in hand.
+		applyWorkspaceIdentity(view);
 		if (noWorkspaceMode()) renderWorkspaceHomeView(view, "");
 	}
 
@@ -4775,6 +4823,14 @@
 				`/api/workspaces/${encodeURIComponent(id)}/open`,
 				{},
 			);
+			// AC-3: name and title become those of the new workspace here, at
+			// the answer of the open — not at a page load. The answer already
+			// carries name and path, so no second question is needed.
+			applyWorkspaceIdentity({
+				open: true,
+				currentName: res && res.name,
+				currentPath: res && res.path,
+			});
 			if (res && res.registryWarning) {
 				showToast(res.registryWarning, "warn");
 				await new Promise((resolve) => setTimeout(resolve, 1200));

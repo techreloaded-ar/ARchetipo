@@ -664,3 +664,125 @@ func TestOpenWorkspaceDoesNotTouchRegistryOnFailure(t *testing.T) {
 		t.Errorf("lastOpenedAt = %s after a failed open, want it unchanged at %s", after, before)
 	}
 }
+
+// listWorkspacesView reads the whole answer of GET /api/workspaces, not just
+// the entries: the identity of the open workspace lives on the envelope, and
+// listWorkspaces above deliberately decodes only "workspaces".
+func listWorkspacesView(t *testing.T, srv *Server) workspaceListView {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/workspaces", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/workspaces = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var view workspaceListView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decoding the list view: %v", err)
+	}
+	return view
+}
+
+// TestListWorkspacesNamesTheOpenWorkspace is AC-1: the server names the
+// workspace it is serving, and gives its full path, without the page having to
+// find the entry marked current in the list.
+func TestListWorkspacesNamesTheOpenWorkspace(t *testing.T) {
+	root := t.TempDir()
+	current := seedWorkspace(t, root, "corrente")
+	srv, reg := newWorkspacesTestServer(t, current)
+	if _, err := reg.Touch(current); err != nil {
+		t.Fatal(err)
+	}
+
+	view := listWorkspacesView(t, srv)
+	if !view.Open {
+		t.Fatalf("open = false, want true: a workspace is being served")
+	}
+	if view.CurrentName != "corrente" {
+		t.Errorf("currentName = %q, want %q", view.CurrentName, "corrente")
+	}
+	if want := filepath.Clean(current); view.CurrentPath != want {
+		t.Errorf("currentPath = %q, want %q", view.CurrentPath, want)
+	}
+	if !filepath.IsAbs(view.CurrentPath) {
+		t.Errorf("currentPath = %q, want an absolute path", view.CurrentPath)
+	}
+}
+
+// TestListWorkspacesNamesTheOpenWorkspaceWithoutARegistryEntry is AC-1 on the
+// degraded case: the name of the workspace being served cannot depend on the
+// readability of a list that is about the *other* workspaces. With no entry,
+// and with no registry at all, the name falls back to the base of the path —
+// which is exactly what Touch would have recorded.
+func TestListWorkspacesNamesTheOpenWorkspaceWithoutARegistryEntry(t *testing.T) {
+	root := t.TempDir()
+	current := seedWorkspace(t, root, "corrente")
+	srv, _ := newWorkspacesTestServer(t, current)
+
+	want := filepath.Base(filepath.Clean(current))
+	if want == "" {
+		t.Fatal("the fixture is wrong: the base name must not be empty")
+	}
+
+	view := listWorkspacesView(t, srv)
+	if view.CurrentName != want {
+		t.Errorf("currentName with an empty registry = %q, want %q", view.CurrentName, want)
+	}
+
+	srv.workspaces = nil
+	view = listWorkspacesView(t, srv)
+	if view.CurrentName != want {
+		t.Errorf("currentName with no registry at all = %q, want %q", view.CurrentName, want)
+	}
+	if !view.Open {
+		t.Errorf("open = false with no registry, want true: a workspace is still being served")
+	}
+}
+
+// TestOpenWorkspaceChangesTheDeclaredIdentity is AC-3, and AC-4 with it: the
+// declared identity changes on the process that is already running, not at a
+// restart, and it is the list of known workspaces that opened the other one.
+func TestOpenWorkspaceChangesTheDeclaredIdentity(t *testing.T) {
+	f := newOpenWorkspaceFixture(t)
+
+	before := listWorkspacesView(t, f.srv)
+	if want := filepath.Base(filepath.Clean(f.a)); before.CurrentName != want {
+		t.Fatalf("the fixture is wrong: currentName = %q, want %q", before.CurrentName, want)
+	}
+
+	rec := openWorkspace(t, f.srv, f.idB)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST open = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var opened map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &opened); err != nil {
+		t.Fatalf("decoding the response: %v", err)
+	}
+	wantName := filepath.Base(filepath.Clean(f.b))
+	// The open response already carries name and path: that is what lets the
+	// indicator update without asking a second question.
+	if opened["name"] != wantName {
+		t.Errorf("open response name = %v, want %q", opened["name"], wantName)
+	}
+	if opened["path"] != f.b {
+		t.Errorf("open response path = %v, want %q", opened["path"], f.b)
+	}
+
+	after := listWorkspacesView(t, f.srv)
+	if after.CurrentName != wantName {
+		t.Errorf("currentName after the switch = %q, want %q", after.CurrentName, wantName)
+	}
+	if want := filepath.Clean(f.b); after.CurrentPath != want {
+		t.Errorf("currentPath after the switch = %q, want %q", after.CurrentPath, want)
+	}
+
+	current := map[string]bool{}
+	for _, entry := range after.Workspaces {
+		current[entry.Name] = entry.Current
+	}
+	if !current[wantName] {
+		t.Errorf("the entry of %q is not current after the switch", wantName)
+	}
+	if leftName := filepath.Base(filepath.Clean(f.a)); current[leftName] {
+		t.Errorf("the entry of %q is still current after the switch", leftName)
+	}
+}

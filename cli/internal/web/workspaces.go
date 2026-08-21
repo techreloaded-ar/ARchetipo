@@ -31,10 +31,14 @@ type workspaceEntryView struct {
 // asks a single question — "what do I show?" — and must get a single answer:
 // with two routes the page would have to infer "no workspace is open" from the
 // failure of the other one, which is exactly the inference this spec removes.
+// CurrentName is here for the same reason: the page that must *name* the open
+// workspace asks one question and gets one answer, instead of hunting for the
+// entry marked current in a list that may not have been readable at all.
 type workspaceListView struct {
 	Workspaces  []workspaceEntryView `json:"workspaces"`
 	Open        bool                 `json:"open"`
 	CurrentPath string               `json:"currentPath"`
+	CurrentName string               `json:"currentName"`
 }
 
 // workspaceViews probes each entry and renders it. The slice is never nil: the
@@ -71,12 +75,13 @@ func (s *Server) workspaceViews(ws *workspaceSession, entries []workspace.Entry)
 // It also declares whether a workspace is open, in every branch: a registry
 // that cannot be read must not make the page believe no workspace is open.
 func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
-	path := s.openWorkspacePath()
+	name, path := s.openWorkspaceIdentity()
 	if s.workspaces == nil {
 		writeJSON(w, http.StatusOK, workspaceListView{
 			Workspaces:  []workspaceEntryView{},
 			Open:        path != "",
 			CurrentPath: path,
+			CurrentName: name,
 		})
 		return
 	}
@@ -86,6 +91,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 			Workspaces:  []workspaceEntryView{},
 			Open:        path != "",
 			CurrentPath: path,
+			CurrentName: name,
 		})
 		return
 	}
@@ -93,6 +99,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 		Workspaces:  s.workspaceViews(s.session(), entries),
 		Open:        path != "",
 		CurrentPath: path,
+		CurrentName: name,
 	})
 }
 
@@ -105,6 +112,35 @@ func (s *Server) openWorkspacePath() string {
 		return ""
 	}
 	return filepath.Clean(ws.cfg.ProjectRoot)
+}
+
+// openWorkspaceIdentity is name and path of the open workspace, or two empty
+// strings when none is. The name comes from the registry entry when there is
+// one, because a directory renamed away must stay recognisable as "the one
+// that was called this"; it falls back to the base name of the path, which is
+// exactly what Touch would have recorded, so an unreadable registry costs the
+// stored name and never the name itself.
+func (s *Server) openWorkspaceIdentity() (name, path string) {
+	path = s.openWorkspacePath()
+	if path == "" {
+		return "", ""
+	}
+	if s.workspaces != nil {
+		// The error is deliberately ignored: a registry that cannot be listed
+		// is a reason to lose the *stored* name, never the name itself.
+		if entries, err := s.workspaces.List(); err == nil {
+			for _, e := range entries {
+				// An entry whose name is empty is no name at all: falling
+				// through to the base of the path is better than telling the
+				// page that the workspace it is serving has no name, which the
+				// page can only read as "no workspace is open".
+				if filepath.Clean(e.Path) == path && e.Name != "" {
+					return e.Name, path
+				}
+			}
+		}
+	}
+	return filepath.Base(path), path
 }
 
 // handleAddWorkspace serves POST /api/workspaces: it records a workspace that

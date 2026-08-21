@@ -214,6 +214,56 @@ body {
 	margin-top: 2px;
 }
 
+/* Which workspace this tab is serving (US-052). A discreet pill next to the
+   brand, never a fourth topbar cell: the grid stays auto 1fr auto. */
+.workspace-indicator {
+	display: inline-flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 1px;
+	border: 1px solid var(--rule);
+	border-radius: var(--radius);
+	padding: 4px 10px;
+	background: transparent;
+	max-width: 220px;
+	cursor: pointer;
+	transition:
+		border-color var(--transition),
+		background var(--transition);
+}
+
+.workspace-indicator-eyebrow {
+	font-family: var(--font-mono);
+	font-size: 9px;
+	letter-spacing: 0.15em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+}
+
+/* A directory name can be long: it is clipped, never allowed to widen the topbar. */
+.workspace-indicator-name {
+	font-family: var(--font-mono);
+	font-size: 12px;
+	color: var(--text-strong);
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.workspace-indicator:hover:not([disabled]) {
+	border-color: var(--accent);
+	background: var(--surface-3);
+}
+
+.workspace-indicator[disabled] {
+	cursor: default;
+	opacity: 0.7;
+}
+.workspace-indicator[disabled] .workspace-indicator-name {
+	color: var(--text-muted);
+}
+
 /* Centered topbar stats — editorial summary of the board. */
 .topbar-stats {
 	display: flex;
