@@ -101,6 +101,12 @@
 	const workspacesAddForm = document.getElementById("workspaces-add-form");
 	const workspacesAddSubmit = document.getElementById("workspaces-add-submit");
 	const workspacesStatus = document.getElementById("workspaces-status");
+	const workspaceHomeEl = document.getElementById("workspace-home");
+	const workspaceHomeList = document.getElementById("workspace-home-list");
+	const workspaceHomeActions = document.getElementById(
+		"workspace-home-actions",
+	);
+	const workspaceHomeCreate = document.getElementById("workspace-home-create");
 	const configBtn = document.getElementById("config-btn");
 	const configModal = document.getElementById("config-modal");
 	const configModalClose = document.getElementById("config-modal-close");
@@ -477,7 +483,9 @@
 			closeWorkspaces();
 	});
 	workspacesAddForm.addEventListener("submit", onAddWorkspace);
-	workspacesList.addEventListener("click", (e) => {
+	// The modal and the home draw the same rows, so they are acted on by the
+	// same handler: one list rendering, one set of actions.
+	function onWorkspaceListClick(e) {
 		const opener = e.target.closest("[data-open]");
 		if (opener) {
 			// An entry with no id cannot be opened: posting an empty segment would
@@ -490,7 +498,10 @@
 		const btn = e.target.closest("[data-remove]");
 		if (!btn) return;
 		removeWorkspace(btn.dataset.remove, btn.dataset.removeName || "");
-	});
+	}
+	workspacesList.addEventListener("click", onWorkspaceListClick);
+	workspaceHomeEl.addEventListener("click", onWorkspaceListClick);
+	workspaceHomeCreate.addEventListener("click", openNewWorkspace);
 
 	configBtn.addEventListener("click", openConfig);
 	configModalClose.addEventListener("click", closeConfig);
@@ -536,14 +547,61 @@
 	// The board and the status strip answer two different questions about the
 	// same workspace, so every explicit refresh asks both.
 	function refreshBoardAndStatus() {
+		// Nothing to refresh while no workspace is open: both routes would be
+		// refused, and the refusal is not news the home has to report.
+		if (noWorkspaceMode()) return;
 		loadBoard();
 		loadWorkspaceStatus();
 	}
 
-	loadBoard();
-	loadWorkspaceStatus();
-	loadMockups();
-	connectBoardStream();
+	// Boot is a fork, not a sequence. The page asks which workspace it serves
+	// before drawing anything, because a page that does not know must not draw a
+	// board: the board it would draw would belong to no workspace.
+	async function boot() {
+		let view = null;
+		try {
+			view = await apiGet("/api/workspaces");
+		} catch (err) {
+			enterNoWorkspaceMode();
+			renderWorkspaceHomeView(null, `Load failed: ${err.message || err}`);
+			return;
+		}
+		if (view && view.open) {
+			loadBoard();
+			loadWorkspaceStatus();
+			loadMockups();
+			connectBoardStream();
+			return;
+		}
+		enterNoWorkspaceMode();
+		renderWorkspaceHomeView(view, "");
+	}
+
+	// No workspace open: the board, the status strip and every control that
+	// presupposes a workspace disappear, and the add form moves out of the now
+	// unreachable modal into the home — so "add an existing workspace" stays a
+	// single implementation instead of becoming two.
+	function enterNoWorkspaceMode() {
+		document.body.classList.add("no-workspace");
+		workspaceHomeActions.insertBefore(
+			workspacesAddForm,
+			workspaceHomeActions.firstChild,
+		);
+		workspaceHomeEl.classList.remove("hidden");
+	}
+
+	function noWorkspaceMode() {
+		return document.body.classList.contains("no-workspace");
+	}
+
+	function renderWorkspaceHomeView(view, message) {
+		workspaceHomeList.innerHTML = WorkspaceHome.renderWorkspaceHome(view, {
+			formatTime: formatExecutionTime,
+			message,
+		});
+	}
+
+	boot();
 
 	let boardReloadTimer = null;
 	function scheduleBoardReload() {
@@ -3865,6 +3923,11 @@
 				? "status-msg warn"
 				: "status-msg ok";
 			showToast(`Workspace created in ${res.dir}`, "ok");
+			// The server records the new workspace in the registry, so the list
+			// the user is looking at is already stale. From the modal that was
+			// invisible; from the home it is the very list the new workspace
+			// should have joined.
+			await loadWorkspaces();
 		} catch (err) {
 			if (Array.isArray(err.fields) && err.fields.length > 0) {
 				renderFieldErrors(newWorkspaceForm, newWorkspaceStatus, err.fields);
@@ -3880,16 +3943,9 @@
 
 	// ---- Known workspaces ---------------------------------------------------
 
-	// The server owns both the order of the list and the vocabulary of the
-	// statuses. The frontend only knows how to phrase a status it recognises and
-	// falls back to the raw value for anything it does not: a new server status
-	// must never disappear from the UI just because this map is older.
-	const WORKSPACE_STATUS_LABELS = {
-		missing: "not found",
-		not_a_directory: "not a directory",
-		not_readable: "not readable",
-		not_a_workspace: "not an ARchetipo workspace",
-	};
+	// The rows themselves are drawn by workspace-home.js, which also owns the
+	// vocabulary of the statuses: the modal and the home must never disagree on
+	// what an entry says.
 
 	async function openWorkspaces() {
 		workspacesAddForm.reset();
@@ -3918,115 +3974,28 @@
 	async function loadWorkspaces() {
 		try {
 			const view = await apiGet("/api/workspaces");
-			renderWorkspaces((view && view.workspaces) || []);
+			renderWorkspaces(view);
 		} catch (err) {
+			const message = `Load failed: ${err.message || err}`;
 			workspacesList.textContent = "";
 			workspacesEmpty.classList.add("hidden");
-			workspacesStatus.textContent = `Load failed: ${err.message || err}`;
+			workspacesStatus.textContent = message;
 			workspacesStatus.className = "status-msg err";
+			if (noWorkspaceMode()) renderWorkspaceHomeView(null, message);
 		}
 	}
 
-	function renderWorkspaces(items) {
-		workspacesList.textContent = "";
-		if (items.length === 0) {
-			workspacesEmpty.classList.remove("hidden");
-			return;
-		}
-		workspacesEmpty.classList.add("hidden");
-		items.forEach((item) => {
-			workspacesList.appendChild(workspaceRow(item));
+	// One rendering of the list for both places that show it. The rows come from
+	// workspace-home.js, escaped there: a workspace name and path come from the
+	// user's disk and are never interpolated raw. The delegated handlers keep
+	// working because the data-attributes are the same ones they always read.
+	function renderWorkspaces(view) {
+		const items = (view && view.workspaces) || [];
+		workspacesList.innerHTML = WorkspaceHome.renderWorkspaceRows(view, {
+			formatTime: formatExecutionTime,
 		});
-	}
-
-	// Built with createElement/textContent: a workspace name and path come from
-	// the user's disk and must never be interpolated into markup.
-	function workspaceRow(item) {
-		const row = document.createElement("div");
-		row.className = "workspace-row";
-
-		const main = document.createElement("div");
-		main.className = "workspace-row-main";
-
-		const head = document.createElement("div");
-		head.className = "workspace-row-head";
-		const name = document.createElement("span");
-		name.className = "workspace-name";
-		name.textContent = item.name || "";
-		head.appendChild(name);
-		if (item.current) {
-			const badge = document.createElement("span");
-			badge.className = "workspace-badge";
-			badge.textContent = "current";
-			head.appendChild(badge);
-		}
-		head.appendChild(workspaceStatusBadge(item));
-		main.appendChild(head);
-
-		const path = document.createElement("code");
-		path.className = "workspace-path";
-		path.textContent = item.path || "";
-		main.appendChild(path);
-
-		const seen = document.createElement("span");
-		seen.className = "workspace-meta";
-		seen.textContent = `Last opened: ${formatExecutionTime(item.lastOpenedAt)}`;
-		main.appendChild(seen);
-
-		row.appendChild(main);
-
-		const actions = document.createElement("div");
-		actions.className = "workspace-row-actions";
-
-		// Open is offered but disabled where it would be a lie: on the workspace
-		// already served, and on one the server has just probed as unreachable.
-		// The title carries the reason, so a greyed button is never a mystery.
-		const open = document.createElement("button");
-		open.type = "button";
-		open.className = "primary-btn";
-		open.dataset.open = item.id || "";
-		open.dataset.openName = item.name || item.path || "";
-		open.textContent = "Open";
-		if (!item.id) {
-			open.disabled = true;
-			open.title = "This entry has no identity in the registry";
-		} else if (item.current) {
-			open.disabled = true;
-			open.title = "This is the workspace already open";
-		} else if (!item.reachable) {
-			open.disabled = true;
-			open.title = `Cannot be opened: ${
-				WORKSPACE_STATUS_LABELS[item.status] || item.status || "unreachable"
-			}`;
-		}
-		actions.appendChild(open);
-
-		const remove = document.createElement("button");
-		remove.type = "button";
-		remove.className = "ghost-btn";
-		remove.dataset.remove = item.id || "";
-		remove.dataset.removeName = item.name || item.path || "";
-		remove.textContent = "Remove";
-		actions.appendChild(remove);
-
-		row.appendChild(actions);
-
-		return row;
-	}
-
-	// An unreachable entry keeps its place in the list and says why: hiding it
-	// would leave the user with a registry that silently disagrees with the disk.
-	function workspaceStatusBadge(item) {
-		const badge = document.createElement("span");
-		if (item.reachable) {
-			badge.className = "workspace-badge";
-			badge.textContent = "reachable";
-			return badge;
-		}
-		badge.className = "workspace-badge warn";
-		badge.textContent =
-			WORKSPACE_STATUS_LABELS[item.status] || item.status || "unreachable";
-		return badge;
+		workspacesEmpty.classList.toggle("hidden", items.length > 0);
+		if (noWorkspaceMode()) renderWorkspaceHomeView(view, "");
 	}
 
 	// openWorkspace hands the switch to the server and then rebuilds the
@@ -4039,7 +4008,9 @@
 	// document leaves nothing to forget. The viewer process, its HTTP server and
 	// its execution store are untouched: only this page is rebuilt.
 	async function openWorkspace(id, name) {
-		const buttons = workspacesList.querySelectorAll("button");
+		const buttons = document.querySelectorAll(
+			"#workspaces-list button, #workspace-home-list button",
+		);
 		buttons.forEach((b) => {
 			b.disabled = true;
 		});

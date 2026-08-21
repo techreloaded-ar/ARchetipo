@@ -26,14 +26,28 @@ type workspaceEntryView struct {
 	Current      bool      `json:"current"`
 }
 
+// workspaceListView is the whole answer the home needs. Open and CurrentPath
+// live here, on the list, rather than on a route of their own because the home
+// asks a single question — "what do I show?" — and must get a single answer:
+// with two routes the page would have to infer "no workspace is open" from the
+// failure of the other one, which is exactly the inference this spec removes.
 type workspaceListView struct {
-	Workspaces []workspaceEntryView `json:"workspaces"`
+	Workspaces  []workspaceEntryView `json:"workspaces"`
+	Open        bool                 `json:"open"`
+	CurrentPath string               `json:"currentPath"`
 }
 
 // workspaceViews probes each entry and renders it. The slice is never nil: the
 // frontend iterates without checking, so the JSON must be [] and not null.
+//
+// ws may be nil — no workspace open. Then no entry is Current: the home must
+// not point at a workspace nobody is serving.
 func (s *Server) workspaceViews(ws *workspaceSession, entries []workspace.Entry) []workspaceEntryView {
-	current := filepath.Clean(ws.cfg.ProjectRoot)
+	var root string
+	if ws != nil {
+		root = ws.cfg.ProjectRoot
+	}
+	current := filepath.Clean(root)
 	views := make([]workspaceEntryView, 0, len(entries))
 	for _, e := range entries {
 		status := workspace.Probe(e)
@@ -44,7 +58,7 @@ func (s *Server) workspaceViews(ws *workspaceSession, entries []workspace.Entry)
 			LastOpenedAt: e.LastOpenedAt,
 			Status:       string(status),
 			Reachable:    status.Reachable(),
-			Current:      ws.cfg.ProjectRoot != "" && filepath.Clean(e.Path) == current,
+			Current:      root != "" && filepath.Clean(e.Path) == current,
 		})
 	}
 	return views
@@ -54,17 +68,43 @@ func (s *Server) workspaceViews(ws *workspaceSession, entries []workspace.Entry)
 // recently opened first, unreachable ones included. It degrades to an empty
 // list instead of failing, because the list of other workspaces must never be
 // a reason the current one cannot be used.
+// It also declares whether a workspace is open, in every branch: a registry
+// that cannot be read must not make the page believe no workspace is open.
 func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
+	path := s.openWorkspacePath()
 	if s.workspaces == nil {
-		writeJSON(w, http.StatusOK, workspaceListView{Workspaces: []workspaceEntryView{}})
+		writeJSON(w, http.StatusOK, workspaceListView{
+			Workspaces:  []workspaceEntryView{},
+			Open:        path != "",
+			CurrentPath: path,
+		})
 		return
 	}
 	entries, err := s.workspaces.List()
 	if err != nil {
-		writeJSON(w, http.StatusOK, workspaceListView{Workspaces: []workspaceEntryView{}})
+		writeJSON(w, http.StatusOK, workspaceListView{
+			Workspaces:  []workspaceEntryView{},
+			Open:        path != "",
+			CurrentPath: path,
+		})
 		return
 	}
-	writeJSON(w, http.StatusOK, workspaceListView{Workspaces: s.workspaceViews(s.session(), entries)})
+	writeJSON(w, http.StatusOK, workspaceListView{
+		Workspaces:  s.workspaceViews(s.session(), entries),
+		Open:        path != "",
+		CurrentPath: path,
+	})
+}
+
+// openWorkspacePath is the project root of the open workspace, or "" when none
+// is. It exists so the three branches of handleListWorkspaces do not each
+// restate the nil-session condition.
+func (s *Server) openWorkspacePath() string {
+	ws := s.session()
+	if ws == nil || ws.cfg.ProjectRoot == "" {
+		return ""
+	}
+	return filepath.Clean(ws.cfg.ProjectRoot)
 }
 
 // handleAddWorkspace serves POST /api/workspaces: it records a workspace that
@@ -188,6 +228,10 @@ func (s *Server) handleOpenWorkspace(w http.ResponseWriter, r *http.Request) {
 // line, never as a reason not to start.
 func (s *Server) RegisterWorkspace() error {
 	ws := s.session()
+	// No workspace open means there is nothing to record — never an error.
+	if ws == nil {
+		return nil
+	}
 	if ws.cfg.ProjectRoot == "" {
 		return nil
 	}

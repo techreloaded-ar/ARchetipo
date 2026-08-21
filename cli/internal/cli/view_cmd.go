@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
@@ -45,6 +46,12 @@ If --port is not given, a free port is selected automatically starting from
 8080, so repeated invocations never fail on a busy port. Use "archetipo view
 list" to see the running viewers and "archetipo view stop" to close them.
 
+"archetipo view" can be started from any directory. Inside a workspace it
+opens that workspace; outside of one it opens the home of the known
+workspaces, from where a workspace can be chosen, added, created or
+forgotten. Starting outside a workspace never records the launch directory
+in the known-workspaces list.
+
 The view reads and writes the same local artifacts used by ARchetipo
 (backlog, plans, PRD, mockups and .archetipo/config.yaml), so edits made in
 the browser persist immediately. Config changes are saved locally but do not
@@ -53,13 +60,31 @@ path changes. The server binds to the loopback interface only; no
 authentication is performed.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfigFor(cmd)
+			// The launch directory decides which of the two servers is built.
+			// -C has already been applied by the root command, so the cwd is
+			// always the point the user meant to start from.
+			cwd, err := os.Getwd()
 			if err != nil {
-				return err
+				return iox.NewInternal("resolving the current directory", err)
 			}
-			conn, err := connector.New(cfg)
+			// The workspace root itself is deliberately unused: loadConfigFor
+			// remains the single loading path, so there is no second way of
+			// building a configuration that could drift from it.
+			_, home, err := resolveViewTarget(cwd)
 			if err != nil {
-				return iox.NewInvalidInput("connector unavailable", "check `connector:` in .archetipo/config.yaml", err)
+				return iox.NewInternal("looking for a workspace", err)
+			}
+			var cfg config.Config
+			var conn connector.Connector
+			if !home {
+				cfg, err = loadConfigFor(cmd)
+				if err != nil {
+					return err
+				}
+				conn, err = connector.New(cfg)
+				if err != nil {
+					return iox.NewInvalidInput("connector unavailable", "check `connector:` in .archetipo/config.yaml", err)
+				}
 			}
 			// Auto-select a free port unless the user asked for a specific one.
 			// With an explicit --port we stay strict: a conflict surfaces as a
@@ -75,7 +100,12 @@ authentication is performed.`,
 				port = free
 			}
 			addr := net.JoinHostPort(host, strconv.Itoa(port))
-			srv, err := web.NewServer(conn, cfg, registry, addr)
+			var srv *web.Server
+			if home {
+				srv, err = web.NewHomeServer(registry, addr)
+			} else {
+				srv, err = web.NewServer(conn, cfg, registry, addr)
+			}
 			if err != nil {
 				return iox.NewInternal("creating server", err)
 			}
@@ -112,13 +142,29 @@ authentication is performed.`,
 			srv.OnWorkspaceSwitch = registerViewer
 			onReady := func(url string) {
 				fmt.Fprintf(s.err, "ARchetipo view ready at %s\n", url)
+				if home {
+					// Starting outside a workspace is a choice, not a failure,
+					// so it is stated instead of silently changing the page.
+					fmt.Fprintln(s.err, "No workspace here: opening the known-workspaces home.")
+				}
 				fmt.Fprintln(s.err, "Press Ctrl+C to stop.")
-				registerViewer(cfg.ProjectRoot)
-				// The known-workspace list is a convenience, never a
-				// precondition: a registry that cannot be written costs a line
-				// on stderr and nothing else.
-				if rerr := srv.RegisterWorkspace(); rerr != nil {
-					fmt.Fprintf(s.err, "(could not record the workspace in the known list: %v)\n", rerr)
+				if home {
+					// No workspace is open yet, so the viewer entry carries no
+					// root; OnWorkspaceSwitch makes it truthful as soon as one
+					// is opened from the home.
+					registerViewer("")
+					// Deliberately no srv.RegisterWorkspace() here: it is the
+					// only write the start-up path could make to the
+					// known-workspaces list, and omitting it is what keeps a
+					// directory that is not a workspace out of that list.
+				} else {
+					registerViewer(cfg.ProjectRoot)
+					// The known-workspace list is a convenience, never a
+					// precondition: a registry that cannot be written costs a
+					// line on stderr and nothing else.
+					if rerr := srv.RegisterWorkspace(); rerr != nil {
+						fmt.Fprintf(s.err, "(could not record the workspace in the known list: %v)\n", rerr)
+					}
 				}
 				if !noOpen {
 					if err := web.OpenBrowser(url); err != nil {
@@ -137,6 +183,19 @@ authentication is performed.`,
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "do not open the browser automatically")
 	cmd.AddCommand(newViewListCmd(s), newViewStopCmd(s))
 	return cmd
+}
+
+// resolveViewTarget decides, from the directory `archetipo view` was started
+// in, whether the command opens a workspace or the known-workspaces home. It is
+// a pure lookup on the filesystem so the decision can be exercised without
+// starting a server: home is true exactly when no .archetipo/config.yaml is
+// found walking up from cwd, and root then names the workspace found.
+func resolveViewTarget(cwd string) (root string, home bool, err error) {
+	root, found, err := config.FindRoot(cwd)
+	if err != nil {
+		return "", false, err
+	}
+	return root, !found, nil
 }
 
 // findFreePort returns the first free port on host starting at start, trying up
@@ -175,7 +234,14 @@ func newViewListCmd(s streams) *cobra.Command {
 			tw := tabwriter.NewWriter(s.out, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "PORT\tPID\tPROJECT\tSTARTED")
 			for _, e := range entries {
-				fmt.Fprintf(tw, "%d\t%d\t%s\t%s\n", e.Port, e.PID, e.ProjectRoot, viewreg.Since(e.StartedAt, now))
+				// A viewer started outside a workspace has no root yet; an
+				// empty column would read as missing data rather than as the
+				// deliberate state it is.
+				project := e.ProjectRoot
+				if project == "" {
+					project = "(no workspace)"
+				}
+				fmt.Fprintf(tw, "%d\t%d\t%s\t%s\n", e.Port, e.PID, project, viewreg.Since(e.StartedAt, now))
 			}
 			return tw.Flush()
 		},

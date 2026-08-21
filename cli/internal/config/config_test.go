@@ -984,3 +984,78 @@ func TestLoadFillsMissingTemplateVersionOnly(t *testing.T) {
 		t.Fatalf("template version = %q, want the default %q", c.Template.Version, template.Default().Version)
 	}
 }
+
+func TestFindRoot(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, RelativePath), []byte("connector: file\n"), 0o644))
+
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("inside a workspace", func(t *testing.T) {
+		got, found, err := FindRoot(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			t.Fatalf("expected the workspace root to be found from %q", root)
+		}
+		assertSameDir(t, got, realRoot)
+	})
+
+	t.Run("deep subdirectory", func(t *testing.T) {
+		nested := filepath.Join(root, "sub", "nested")
+		must(t, os.MkdirAll(nested, 0o755))
+		got, found, err := FindRoot(nested)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			t.Fatalf("expected the workspace root to be found walking up from %q", nested)
+		}
+		assertSameDir(t, got, realRoot)
+	})
+
+	t.Run("neutral directory", func(t *testing.T) {
+		neutral := filepath.Join(t.TempDir(), "neutral")
+		must(t, os.MkdirAll(neutral, 0o755))
+		got, found, err := FindRoot(neutral)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// find walks up to the filesystem root, so an ancestor of the temp dir
+		// could in principle carry a .archetipo/config.yaml on the machine that
+		// runs this test. The invariant that must hold either way is that the
+		// neutral directory is never reported as a workspace root of its own.
+		if found {
+			if sameDir(t, got, neutral) {
+				t.Fatalf("neutral directory %q must never be reported as a workspace root", neutral)
+			}
+			t.Skipf("an ancestor of %q is a workspace (%q); the neutral case is not observable here", neutral, got)
+		}
+		if got != "" {
+			t.Fatalf("expected an empty root when no workspace is found, got %q", got)
+		}
+	})
+}
+
+func sameDir(t *testing.T, a, b string) bool {
+	t.Helper()
+	resolve := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return p
+	}
+	return resolve(a) == resolve(b)
+}
+
+func assertSameDir(t *testing.T, got, want string) {
+	t.Helper()
+	if !sameDir(t, got, want) {
+		t.Fatalf("root = %q, want %q", got, want)
+	}
+}

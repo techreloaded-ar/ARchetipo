@@ -490,3 +490,133 @@ func TestRunFollowersEnsureAfterCloseStartsNothing(t *testing.T) {
 		t.Error("a closed follower set recorded a new follower")
 	}
 }
+
+// listOpenState answers the one question the home asks: is a workspace open,
+// and which one. It goes through the route rather than the field because that
+// is what the page reads.
+func listOpenState(t *testing.T, srv *Server) workspaceListView {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/workspaces", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/workspaces = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var view workspaceListView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decoding the list: %v", err)
+	}
+	return view
+}
+
+// TestSwitchFromNoWorkspaceOpens covers swapSession in the case the switch
+// tests above never reach: cur == nil. It is AC-2 on the server, and the oracle
+// is the code of the spec that exists only in the opened workspace — not the
+// absence of an error, which a server still serving nothing would also produce.
+func TestSwitchFromNoWorkspaceOpens(t *testing.T) {
+	srv, _ := homeServer(t)
+	if srv.session() != nil {
+		t.Fatal("the home server is already serving a workspace")
+	}
+
+	a := realWorkspace(t, "alpha", "US-A01", true)
+	if err := srv.SwitchWorkspace(a); err != nil {
+		t.Fatalf("SwitchWorkspace(A) from the home = %v, want nil", err)
+	}
+
+	ws := srv.session()
+	if ws == nil {
+		t.Fatal("SwitchWorkspace returned nil but the server serves no session")
+	}
+	if got := filepath.Clean(ws.cfg.ProjectRoot); got != filepath.Clean(a) {
+		t.Errorf("ProjectRoot = %q, want %q", got, a)
+	}
+	if codes := boardCodes(t, srv); !codes["US-A01"] {
+		t.Errorf("the board does not contain US-A01 after opening A from the home: %v", codes)
+	}
+	view := listOpenState(t, srv)
+	if !view.Open || filepath.Clean(view.CurrentPath) != filepath.Clean(a) {
+		t.Errorf("open=%v currentPath=%q, want the opened workspace", view.Open, view.CurrentPath)
+	}
+}
+
+// TestSwitchFromNoWorkspaceRefusedStaysHome is the counterpart: from the home
+// there is no previous workspace to fall back to, so a refusal must leave the
+// server in the home state rather than half-opened on the wrong directory.
+func TestSwitchFromNoWorkspaceRefusedStaysHome(t *testing.T) {
+	plainDir := filepath.Join(t.TempDir(), "plain")
+	if err := os.MkdirAll(plainDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name   string
+		path   string
+		reason string
+	}{
+		{"missing directory", filepath.Join(t.TempDir(), "gone"), "no longer exists"},
+		{"directory without a configuration", plainDir, "not a workspace"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := homeServer(t)
+			err := srv.SwitchWorkspace(tc.path)
+			if err == nil {
+				t.Fatal("SwitchWorkspace = nil, want an error")
+			}
+			if !strings.Contains(err.Error(), tc.reason) {
+				t.Errorf("error = %q, want it to name %q", err.Error(), tc.reason)
+			}
+			if srv.session() != nil {
+				t.Errorf("a refused open left a session behind: the viewer would serve %q", srv.session().cfg.ProjectRoot)
+			}
+			if view := listOpenState(t, srv); view.Open || view.CurrentPath != "" {
+				t.Errorf("open=%v currentPath=%q, want the home state after a refusal", view.Open, view.CurrentPath)
+			}
+		})
+	}
+}
+
+// TestOpenWorkspaceRouteFromHomeTouchesRegistry is the contrast AC-4 rests on:
+// the workspace a person *chooses* from the home is recorded as opened, while
+// starting in a neutral directory writes nothing at all. This test owns the
+// first half; the second is verified on the command in TASK-09.
+func TestOpenWorkspaceRouteFromHomeTouchesRegistry(t *testing.T) {
+	srv, reg := homeServer(t)
+	a := realWorkspace(t, "alpha", "US-A01", true)
+
+	entry, err := reg.Add(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := entry.LastOpenedAt
+	// The registry stores an instant, so the two touches must be separable by
+	// the clock: without this the assertion would depend on its resolution.
+	time.Sleep(5 * time.Millisecond)
+
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workspaces/"+entry.ID+"/open", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/workspaces/%s/open = %d, want 200: %s", entry.ID, rec.Code, rec.Body.String())
+	}
+	var opened struct {
+		workspaceEntryView
+		RegistryWarning string `json:"registryWarning"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &opened); err != nil {
+		t.Fatalf("decoding the open response: %v", err)
+	}
+	if !opened.Current {
+		t.Errorf("current = false in the open response: %s", rec.Body.String())
+	}
+	if opened.RegistryWarning != "" {
+		t.Errorf("registryWarning = %q, want none on a writable registry", opened.RegistryWarning)
+	}
+
+	after, err := reg.Get(entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.LastOpenedAt.After(before) {
+		t.Errorf("lastOpenedAt = %v, want it after the previous access (%v): choosing a workspace must record it", after.LastOpenedAt, before)
+	}
+}

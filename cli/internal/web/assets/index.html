@@ -41,15 +41,15 @@
         </div>
 
         <div class="topbar-actions">
-            <button id="metrics-btn" type="button" class="ghost-btn">
+            <button id="metrics-btn" type="button" class="ghost-btn" data-workspace-scoped>
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 13.5h12" stroke="currentColor" stroke-width="1.2"/><path d="M3.5 13.5V9M7 13.5V5.5M10.5 13.5V7.5M14 13.5V3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
                 <span>Metrics</span>
             </button>
-            <button id="prd-btn" type="button" class="ghost-btn">
+            <button id="prd-btn" type="button" class="ghost-btn" data-workspace-scoped>
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.5h7.5L13 4v10.5H3z" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M10.5 1.5V4H13" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 7h5M5.5 9.5h5M5.5 12h3" stroke="currentColor" stroke-width="1.2"/></svg>
                 <span>PRD</span>
             </button>
-            <div class="dropdown" id="mockups-dropdown">
+            <div class="dropdown" id="mockups-dropdown" data-workspace-scoped>
                 <button id="mockups-btn" type="button" class="ghost-btn" aria-haspopup="true" aria-expanded="false">
                     <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="9.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 5.5h13M5 13.5h6M8 12v1.5" stroke="currentColor" stroke-width="1.2"/></svg>
                     <span>Mockups</span>
@@ -57,7 +57,7 @@
                 </button>
                 <div class="dropdown-menu hidden" id="mockups-menu" role="menu"></div>
             </div>
-            <button id="new-spec-btn" type="button" class="ghost-btn new-spec-btn">
+            <button id="new-spec-btn" type="button" class="ghost-btn new-spec-btn" data-workspace-scoped>
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
                 <span>New spec</span>
             </button>
@@ -65,15 +65,15 @@
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4.5h5l1.2 1.5h6.8v7.5h-13z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M8 8v4M6 10h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
                 <span>New workspace</span>
             </button>
-            <button id="workspaces-btn" type="button" class="ghost-btn">
+            <button id="workspaces-btn" type="button" class="ghost-btn" data-workspace-scoped>
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="1.5" y="9.5" width="13" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M4 4.5h.01M4 11.5h.01" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
                 <span>Workspaces</span>
             </button>
-            <button id="config-btn" type="button" class="ghost-btn">
+            <button id="config-btn" type="button" class="ghost-btn" data-workspace-scoped>
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l1 .35.5 1.24 1.3.36 1.04-.72.88.88-.72 1.04.36 1.3 1.24.5.35 1-.35 1-1.24.5-.36 1.3.72 1.04-.88.88-1.04-.72-1.3.36-.5 1.24-1 .35-1-.35-.5-1.24-1.3-.36-1.04.72-.88-.88.72-1.04-.36-1.3-1.24-.5-.35-1 .35-1 1.24-.5.36-1.3-.72-1.04.88-.88 1.04.72 1.3-.36.5-1.24z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>
                 <span>Config</span>
             </button>
-            <button id="refresh-btn" type="button" class="ghost-btn" aria-label="Refresh board" title="Refresh (R)">
+            <button id="refresh-btn" type="button" class="ghost-btn" aria-label="Refresh board" title="Refresh (R)" data-workspace-scoped>
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.88" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
             </button>
             <span class="action-sep" aria-hidden="true"></span>
@@ -85,6 +85,19 @@
     </header>
 
     <section id="workspace-status" class="workspace-status hidden" aria-live="polite"></section>
+
+    <!-- The home shown when no workspace is open (US-051). Its list is drawn by
+         the same renderer as the known-workspaces modal; the "add an existing
+         workspace" form is moved in here at boot, so there stays exactly one
+         implementation of adding. -->
+    <section id="workspace-home" class="workspace-home hidden" aria-live="polite">
+        <div class="workspace-home-inner">
+            <div id="workspace-home-list"></div>
+            <div id="workspace-home-actions" class="workspace-home-actions">
+                <button id="workspace-home-create" type="button" class="primary-btn">New workspace</button>
+            </div>
+        </div>
+    </section>
 
     <main id="board" class="board" aria-live="polite"></main>
 
@@ -682,6 +695,7 @@
     <script src="/vendor/easymde.min.js"></script>
     <script src="/task-markdown.js"></script>
     <script src="/workspace-status.js"></script>
+    <script src="/workspace-home.js"></script>
     <script src="/provider-fields.js"></script>
     <script src="/app.js"></script>
 </body>

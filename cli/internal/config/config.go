@@ -967,6 +967,23 @@ func setStringMapChild(m *yaml.Node, key string, values map[string]string) {
 // find walks up from start looking for .archetipo/config.yaml. Returns the
 // project root (the directory that contains .archetipo/) and the absolute
 // path of the config file. If neither is found, returns ("", "", nil).
+// FindRoot reports whether startDir belongs to a workspace: it walks up the
+// directory tree exactly as LoadExact does and returns the directory that
+// contains .archetipo/config.yaml. It deliberately loads nothing and applies
+// no defaults, because the caller needs to tell "no workspace here" apart
+// from "a workspace with an empty configuration" - a distinction LoadExact
+// erases by returning the defaults rooted at startDir.
+func FindRoot(startDir string) (root string, found bool, err error) {
+	dir, cfgPath, err := find(startDir)
+	if err != nil {
+		return "", false, err
+	}
+	if cfgPath == "" {
+		return "", false, nil
+	}
+	return dir, true, nil
+}
+
 func find(start string) (root, cfg string, err error) {
 	abs, err := filepath.Abs(start)
 	if err != nil {

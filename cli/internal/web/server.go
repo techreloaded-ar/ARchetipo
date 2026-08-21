@@ -19,6 +19,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
@@ -67,6 +68,11 @@ type Server struct {
 // session returns the workspace the server is serving right now. Handlers call
 // it once, at the top, and use the returned value for the whole request: that
 // single read is what makes a request see one workspace and not a mixture.
+//
+// It returns nil when no workspace is open at all — the state a viewer started
+// outside any workspace is in. Handlers registered with handleWorkspace never
+// observe that, because the gate refuses before them; every other caller must
+// handle nil explicitly.
 func (s *Server) session() *workspaceSession {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -80,11 +86,30 @@ func (s *Server) session() *workspaceSession {
 // registry the viewer offers for selection; a nil registry simply offers no
 // provider, which is not an error.
 func NewServer(conn connector.Connector, cfg config.Config, registry *execution.Registry, addr string) (*Server, error) {
-	mux := http.NewServeMux()
 	session, err := newWorkspaceSession(cfg, conn, registry)
 	if err != nil {
 		return nil, err
 	}
+	return newServer(session, registry, addr), nil
+}
+
+// NewHomeServer constructs a Server that is serving no workspace at all.
+//
+// It exists because "the process was started outside any workspace" is a
+// legitimate state and not a degraded one: the alternative — a session
+// rooted at the launch directory — is exactly what made the viewer serve
+// the board of a project that does not exist. cur stays nil, and the routes
+// that presuppose a workspace refuse instead of answering emptily.
+func NewHomeServer(registry *execution.Registry, addr string) (*Server, error) {
+	return newServer(nil, registry, addr), nil
+}
+
+// newServer is the construction both entry points share. session may be nil,
+// which is the home case: everything built here — mux, broker, workspace
+// registry, routes, HTTP plumbing — is workspace-independent on purpose, so
+// the two constructors differ by exactly one argument.
+func newServer(session *workspaceSession, registry *execution.Registry, addr string) *Server {
+	mux := http.NewServeMux()
 	s := &Server{
 		registry: registry,
 		mux:      mux,
@@ -102,7 +127,7 @@ func NewServer(conn connector.Connector, cfg config.Config, registry *execution.
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	return s, nil
+	return s
 }
 
 // Addr returns the address the server listens on.
@@ -124,8 +149,19 @@ func (s *Server) Run(ctx context.Context, onReady func(url string)) error {
 	// The session owns the context its dispatches and its watcher run on, so
 	// stopping it is what turns an interrupted execution into a FAILED record
 	// with a reason instead of one left RUNNING for ever.
-	s.session().start(ctx, s.broker)
-	defer func() { s.session().stop(dispatchDrainTimeout) }()
+	//
+	// With no workspace open there is nothing to start, and nothing to stop:
+	// the home is served by routes that need no session at all.
+	if ws := s.session(); ws != nil {
+		ws.start(ctx, s.broker)
+	}
+	// The session is re-read at defer time on purpose: after a switch the
+	// session to stop is the current one, not the one Run started with.
+	defer func() {
+		if ws := s.session(); ws != nil {
+			ws.stop(dispatchDrainTimeout)
+		}
+	}()
 
 	ln, err := net.Listen("tcp", s.httpSrv.Addr)
 	if err != nil {
@@ -157,58 +193,87 @@ func (s *Server) Run(ctx context.Context, onReady func(url string)) error {
 	}
 }
 
+// handleWorkspace registers a route that presupposes an open workspace, and
+// handleAlways one that does not. Every route goes through one of the two on
+// purpose: with a plain mux.HandleFunc still available, a route added later
+// would default to "unguarded" silently, and answering emptily instead of
+// refusing is precisely the failure this gate exists to prevent.
+func (s *Server) handleWorkspace(pattern string, h http.HandlerFunc) {
+	s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+		if s.session() == nil {
+			// Refused before the body is decoded and before the connector is
+			// touched. workspaceOpen is explicit because E_CONFLICT already
+			// covers other refusals — an unreachable workspace, an inactive
+			// run — and the caller must not have to read the prose to tell
+			// them apart.
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":         "no workspace is open",
+				"code":          iox.CodeConflict,
+				"hint":          "open a workspace from the home, or start ARchetipo inside one",
+				"workspaceOpen": false,
+			})
+			return
+		}
+		h(w, r)
+	})
+}
+
+func (s *Server) handleAlways(pattern string, h http.HandlerFunc) {
+	s.mux.HandleFunc(pattern, h)
+}
+
 func (s *Server) registerRoutes() {
-	s.mux.HandleFunc("GET /api/board", s.handleGetBoard)
-	s.mux.HandleFunc("GET /api/board/stream", s.handleStreamBoard)
-	s.mux.HandleFunc("GET /api/metrics", s.handleGetMetrics)
-	s.mux.HandleFunc("GET /api/spec/{code}", s.handleGetSpec)
-	s.mux.HandleFunc("POST /api/spec", s.handleCreateSpec)
-	s.mux.HandleFunc("PUT /api/spec/{code}", s.handleUpdateSpec)
-	s.mux.HandleFunc("DELETE /api/spec/{code}", s.handleDeleteSpec)
-	s.mux.HandleFunc("PUT /api/spec/{code}/plan", s.handleSavePlan)
-	s.mux.HandleFunc("POST /api/board/move", s.handleMoveCard)
-	s.mux.HandleFunc("GET /api/spec/{code}/diff", s.handleGetDiff)
-	s.mux.HandleFunc("GET /api/spec/{code}/review", s.handleGetReview)
-	s.mux.HandleFunc("PUT /api/spec/{code}/review", s.handleSaveReview)
-	s.mux.HandleFunc("POST /api/spec/{code}/request-changes", s.handleRequestChanges)
-	s.mux.HandleFunc("POST /api/spec/{code}/approve", s.handleApprove)
-	s.mux.HandleFunc("POST /api/spec/{code}/integrate", s.handleIntegrate)
-	s.mux.HandleFunc("GET /api/prd", s.handleGetPRD)
-	s.mux.HandleFunc("PUT /api/prd", s.handleSavePRD)
-	s.mux.HandleFunc("GET /api/execution/providers", s.handleListExecutionProviders)
-	s.mux.HandleFunc("PUT /api/execution/provider/default", s.handleSaveDefaultExecutionProvider)
-	s.mux.HandleFunc("GET /api/execution/model-choice", s.handleGetExecutionModelChoice)
-	s.mux.HandleFunc("POST /api/spec/{code}/execution", s.handleRunSpecAction)
-	s.mux.HandleFunc("GET /api/execution/{id}", s.handleGetExecution)
-	s.mux.HandleFunc("GET /api/execution/{id}/run", s.handleGetExecutionRun)
-	s.mux.HandleFunc("POST /api/execution/{id}/run/messages", s.handleSendRunMessage)
-	s.mux.HandleFunc("POST /api/execution/{id}/run/approvals/{approvalId}", s.handleRespondRunApproval)
-	s.mux.HandleFunc("POST /api/execution/{id}/run/cancel", s.handleCancelRun)
-	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
-	s.mux.HandleFunc("PUT /api/config", s.handleSaveConfig)
-	s.mux.HandleFunc("POST /api/config/test", s.handleTestConfig)
-	s.mux.HandleFunc("GET /api/workspace/options", s.handleGetWorkspaceOptions)
-	s.mux.HandleFunc("POST /api/workspace", s.handleCreateWorkspace)
-	s.mux.HandleFunc("GET /api/workspace/actions", s.handleGetWorkspaceActions)
-	s.mux.HandleFunc("GET /api/workspace/status", s.handleGetWorkspaceStatus)
-	s.mux.HandleFunc("POST /api/workspace/execution", s.handleRunWorkspaceAction)
-	s.mux.HandleFunc("GET /api/workspaces", s.handleListWorkspaces)
-	s.mux.HandleFunc("POST /api/workspaces", s.handleAddWorkspace)
-	s.mux.HandleFunc("DELETE /api/workspaces/{id}", s.handleRemoveWorkspace)
-	s.mux.HandleFunc("POST /api/workspaces/{id}/open", s.handleOpenWorkspace)
-	s.mux.HandleFunc("GET /api/mockups", s.handleListMockups)
+	s.handleWorkspace("GET /api/board", s.handleGetBoard)
+	s.handleWorkspace("GET /api/board/stream", s.handleStreamBoard)
+	s.handleWorkspace("GET /api/metrics", s.handleGetMetrics)
+	s.handleWorkspace("GET /api/spec/{code}", s.handleGetSpec)
+	s.handleWorkspace("POST /api/spec", s.handleCreateSpec)
+	s.handleWorkspace("PUT /api/spec/{code}", s.handleUpdateSpec)
+	s.handleWorkspace("DELETE /api/spec/{code}", s.handleDeleteSpec)
+	s.handleWorkspace("PUT /api/spec/{code}/plan", s.handleSavePlan)
+	s.handleWorkspace("POST /api/board/move", s.handleMoveCard)
+	s.handleWorkspace("GET /api/spec/{code}/diff", s.handleGetDiff)
+	s.handleWorkspace("GET /api/spec/{code}/review", s.handleGetReview)
+	s.handleWorkspace("PUT /api/spec/{code}/review", s.handleSaveReview)
+	s.handleWorkspace("POST /api/spec/{code}/request-changes", s.handleRequestChanges)
+	s.handleWorkspace("POST /api/spec/{code}/approve", s.handleApprove)
+	s.handleWorkspace("POST /api/spec/{code}/integrate", s.handleIntegrate)
+	s.handleWorkspace("GET /api/prd", s.handleGetPRD)
+	s.handleWorkspace("PUT /api/prd", s.handleSavePRD)
+	s.handleWorkspace("GET /api/execution/providers", s.handleListExecutionProviders)
+	s.handleWorkspace("PUT /api/execution/provider/default", s.handleSaveDefaultExecutionProvider)
+	s.handleWorkspace("GET /api/execution/model-choice", s.handleGetExecutionModelChoice)
+	s.handleWorkspace("POST /api/spec/{code}/execution", s.handleRunSpecAction)
+	s.handleWorkspace("GET /api/execution/{id}", s.handleGetExecution)
+	s.handleWorkspace("GET /api/execution/{id}/run", s.handleGetExecutionRun)
+	s.handleWorkspace("POST /api/execution/{id}/run/messages", s.handleSendRunMessage)
+	s.handleWorkspace("POST /api/execution/{id}/run/approvals/{approvalId}", s.handleRespondRunApproval)
+	s.handleWorkspace("POST /api/execution/{id}/run/cancel", s.handleCancelRun)
+	s.handleWorkspace("GET /api/config", s.handleGetConfig)
+	s.handleWorkspace("PUT /api/config", s.handleSaveConfig)
+	s.handleWorkspace("POST /api/config/test", s.handleTestConfig)
+	s.handleAlways("GET /api/workspace/options", s.handleGetWorkspaceOptions)
+	s.handleAlways("POST /api/workspace", s.handleCreateWorkspace)
+	s.handleWorkspace("GET /api/workspace/actions", s.handleGetWorkspaceActions)
+	s.handleWorkspace("GET /api/workspace/status", s.handleGetWorkspaceStatus)
+	s.handleWorkspace("POST /api/workspace/execution", s.handleRunWorkspaceAction)
+	s.handleAlways("GET /api/workspaces", s.handleListWorkspaces)
+	s.handleAlways("POST /api/workspaces", s.handleAddWorkspace)
+	s.handleAlways("DELETE /api/workspaces/{id}", s.handleRemoveWorkspace)
+	s.handleAlways("POST /api/workspaces/{id}/open", s.handleOpenWorkspace)
+	s.handleWorkspace("GET /api/mockups", s.handleListMockups)
 
 	// Serve design mockups from the configured paths.mockups directory.
 	// The directory is resolved per request rather than frozen at registration,
 	// because after a workspace switch a frozen one would keep serving the
 	// mockups of the workspace that was left.
 	s.mux.HandleFunc("/mockups/", func(w http.ResponseWriter, r *http.Request) {
-		dir := s.session().mockupsDir
-		if dir == "" {
+		ws := s.session()
+		if ws == nil || ws.mockupsDir == "" {
 			http.NotFound(w, r)
 			return
 		}
-		http.StripPrefix("/mockups/", http.FileServer(http.Dir(dir))).ServeHTTP(w, r)
+		http.StripPrefix("/mockups/", http.FileServer(http.Dir(ws.mockupsDir))).ServeHTTP(w, r)
 	})
 
 	// Static assets (HTML/CSS/JS + vendor). Served from the embedded FS.
