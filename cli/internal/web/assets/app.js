@@ -631,6 +631,10 @@
 		// reading and forgets what it last knew, so no leftover run survives the
 		// workspace it belonged to.
 		resetWorkspaceRunsState();
+		// And nothing is recommended for a workspace that is not open: the strip
+		// forgets its last step too, so no step of the workspace just left can be
+		// put back on screen by the next redraw (AC-5).
+		resetWorkspaceStatusState();
 		workspaceHomeActions.insertBefore(
 			workspacesAddForm,
 			workspaceHomeActions.firstChild,
@@ -985,6 +989,13 @@
 			// workspace is being looked at destroys no edit in progress, which
 			// is why it sits before the guards (AC-3).
 			refreshWorkspaceIdentity();
+			// The recommended step sits before the guards for the same reason:
+			// the strip is read-only and holds nothing to save, so redrawing it
+			// destroys no edit in progress. Behind the guards it froze for as
+			// long as a window stayed open — exactly what starting a
+			// workspace-scoped step produces, since that opens the PRD modal
+			// (AC-3).
+			loadWorkspaceStatus();
 			// Skip while something is being edited: reloading would discard the
 			// user's in-progress edits. The next event after the edit ends will
 			// bring the board back in sync.
@@ -1000,7 +1011,6 @@
 			if (!newSpecModal.classList.contains("hidden")) return;
 			if (!newWorkspaceModal.classList.contains("hidden")) return;
 			loadBoard();
-			loadWorkspaceStatus();
 		}, 150);
 	}
 
@@ -1055,9 +1065,7 @@
 			// The strip is an addition to the board, not a precondition of it: a
 			// viewer that cannot answer must not stop anyone from working, so the
 			// strip simply disappears and no toast is raised.
-			workspaceStatusSnapshot = null;
-			workspaceStatusEl.innerHTML = "";
-			workspaceStatusEl.classList.add("hidden");
+			resetWorkspaceStatusState();
 			return;
 		}
 		workspaceStatusSnapshot = view;
@@ -1066,25 +1074,76 @@
 		workspaceStatusEl.classList.remove("hidden");
 	}
 
+	// The recommended step belongs to the workspace that produced it: leaving
+	// the last snapshot in memory would mean being able to offer, and to start,
+	// the step of a workspace that is no longer open. Forgetting it is one
+	// implementation, shared by the unreadable answer and by the closed
+	// workspace, so the two can never drift apart.
+	function resetWorkspaceStatusState() {
+		workspaceStatusSnapshot = null;
+		workspaceStatusEl.innerHTML = "";
+		workspaceStatusEl.classList.add("hidden");
+	}
+
+	// startNextStep runs the recommended step, and runs it through the single
+	// dispatch path of this application.
+	//
+	// It takes the user to the target's panel first — the spec detail, or the
+	// workspace actions of the PRD modal — and only then delegates to
+	// startPanelAction, the very function the board presses. So "the same action
+	// the board would start" is not a resemblance to be checked case by case: it
+	// is the same line of code, the same route, the same "one press, one
+	// execution" guarantee, and the same panel where the run is then watched.
+	//
+	// The gesture is therefore "go to the target and start", not "start where
+	// you stand": the run must be started somewhere it can be followed.
+	// The "one press, one execution" guarantee is the server's here, not the
+	// disabled attribute's: startPanelAction disables the button it was handed,
+	// but that button lives inside the strip's markup, which the very
+	// board_changed the start produces redraws. What refuses a second press is
+	// the reservation on the server.
+	async function startNextStep(target, button) {
+		let expected;
+		if (target.scope === "spec" && target.code) {
+			expected = specContext(target.code);
+			await openEditor(target.code);
+		} else if (target.scope === "workspace") {
+			expected = WORKSPACE_CONTEXT;
+			await openPRD();
+		} else {
+			// A scope this viewer has never seen does not get an invented path.
+			// nextStepDispatch already refuses a spec-scoped step with no spec,
+			// so this is defence in depth for any other caller.
+			return;
+		}
+		// The panel that answered must be the target's own. Checking only that
+		// *some* panel is mounted is not enough: a workspace with no action to
+		// offer unmounts nothing when a spec detail is the mounted context, and
+		// the workspace action would then be posted to the spec's own route.
+		if (panelContext !== expected || !panelStartURL) {
+			showToast("This step cannot be started right now", "err");
+			return;
+		}
+		await startPanelAction(target.action, button);
+	}
+
 	// One delegated listener for a strip that is redrawn on every refresh.
-	// The strip never starts an execution itself: there is a single dispatch
-	// path, the execution panel, and duplicating it would duplicate the "one
-	// press, one execution" guarantee with it. So the recommended step only
-	// navigates — to the target spec, or to the panel where the workspace
-	// actions are already mounted. The `actions` chips are informative and are
-	// deliberately ignored here.
+	// The recommended step is the one control of the strip: pressing it starts
+	// the step, through startNextStep. The `actions` chips are informative and
+	// are deliberately ignored here.
 	workspaceStatusEl.addEventListener("click", (e) => {
 		const btn = e.target.closest(".ws-status-next");
 		if (!btn || !workspaceStatusEl.contains(btn)) return;
-		const target = window.WorkspaceStatus.nextStepTarget(
+		// A blocked step is refused here as well, not only by the disabled
+		// attribute the renderer emits: the refusal is a decision, and it is
+		// taken by the pure module.
+		const target = window.WorkspaceStatus.nextStepDispatch(
 			workspaceStatusSnapshot,
 		);
 		if (!target) return;
-		if (target.scope === "spec" && target.code) {
-			openEditor(target.code);
-		} else if (target.scope === "workspace") {
-			openPRD();
-		}
+		startNextStep(target, btn).catch((err) => {
+			showToast(err.message || String(err), "err");
+		});
 	});
 
 	function updateStats(view) {
@@ -2797,6 +2856,9 @@
 		const succeeded = record.status === "SUCCEEDED";
 		await openEditor(currentSpecCode);
 		if (succeeded) await loadBoard();
+		// A finished run may have moved the spec, and with it the step the
+		// workspace recommends next: the strip follows without a reload (AC-3).
+		await loadWorkspaceStatus();
 	}
 
 	function stopExecutionPolling() {

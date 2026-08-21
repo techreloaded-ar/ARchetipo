@@ -8,11 +8,13 @@
 // this module draws without a line changing here.
 //
 // It is pure: no DOM, no fetch, no document. It takes a view object and
-// returns an HTML string. Wiring that string into the page, and acting on the
-// recommended step, belong to the caller.
+// returns an HTML string, and it decides whether and what the recommended step
+// starts — never starting it. Wiring that string into the page, and performing
+// the start it names, belong to the caller.
 //
 // Consumable in both browser (defines window.WorkspaceStatus) and Node
-// (exports renderWorkspaceStatus / nextStepTarget / escapeHtml).
+// (exports renderWorkspaceStatus / nextStepTarget / nextStepDispatch /
+// escapeHtml).
 (function () {
 	// ---- internal helpers ----
 
@@ -149,7 +151,7 @@
 	 * which action, on which spec — kept here so it can be tested without a DOM.
 	 *
 	 * @param {object|null} view  The /api/workspace/status payload.
-	 * @returns {{scope: string, action: string, code: string}|null}
+	 * @returns {{scope: string, action: string, code: string, runnable: boolean}|null}
 	 */
 	function nextStepTarget(view) {
 		const value = view && typeof view === "object" ? view : {};
@@ -160,14 +162,50 @@
 			scope: step.scope || "",
 			action: step.action,
 			code: spec && spec.code ? spec.code : "",
+			runnable: step.runnable === true,
 		};
+	}
+
+	/**
+	 * What pressing the recommended step starts, or null when pressing it must
+	 * start nothing.
+	 *
+	 * The decision lives here, and not in the caller, for the reason the rest of
+	 * this module lives here: it is the one layer of the frontend this project
+	 * can test without a DOM. And the refusal to start a blocked step has to be
+	 * a decision, not only a disabled attribute on the markup: an attribute is
+	 * a hint to the pointer, while this is the answer given to anyone who
+	 * reaches the handler by any route.
+	 *
+	 * Still no process rule: the action it returns is the payload's own string,
+	 * whatever it is.
+	 *
+	 * @param {object|null} view  The /api/workspace/status payload.
+	 * @returns {{scope: string, action: string, code: string}|null}
+	 */
+	function nextStepDispatch(view) {
+		const target = nextStepTarget(view);
+		if (!target) return null;
+		if (!target.runnable) return null;
+		// A spec-scoped step with no spec names nothing to act on.
+		if (target.scope === "spec" && !target.code) return null;
+		return { scope: target.scope, action: target.action, code: target.code };
 	}
 
 	// ---- exports ----
 
 	if (typeof module !== "undefined" && module.exports) {
-		module.exports = { renderWorkspaceStatus, nextStepTarget, escapeHtml };
+		module.exports = {
+			renderWorkspaceStatus,
+			nextStepTarget,
+			nextStepDispatch,
+			escapeHtml,
+		};
 	} else {
-		window.WorkspaceStatus = { renderWorkspaceStatus, nextStepTarget };
+		window.WorkspaceStatus = {
+			renderWorkspaceStatus,
+			nextStepTarget,
+			nextStepDispatch,
+		};
 	}
 })();
