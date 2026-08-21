@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-055 · D — Finestra stretta, un contenuto alla volta</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-055</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-board.html">A · board</a>
+        <a href="stato-b-spec.html">B · spec</a>
+        <a href="stato-c-attesa.html">C · attesa</a>
+        <a href="stato-d-stretto.html" class="current">D · stretto</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<div class="mk-doc">
+<div class="mk-page mk-page-wide">
+    <p class="mk-eyebrow">Stato D</p>
+    <h1 class="mk-title">Stretta, la shell non<br />comprime: sceglie</h1>
+    <p class="mk-lede">
+        Sotto i 1080 px le due colonne non stanno più affiancate senza diventare
+        illeggibili. Invece di stringerle entrambe fino a rovinarle, se ne mostra
+        <strong>una alla volta</strong>, alla sua larghezza piena, e un commutatore in
+        cima rende l'altra raggiungibile in un tocco. Niente viene tolto: cambia solo
+        quanto ne sta sullo schermo insieme.
+    </p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-6</span>
+        Il commutatore è la sola aggiunta della forma stretta, e porta con sé il
+        contrassegno di attesa: se una decisione è ferma dall'altra parte, la scheda
+        chiusa lo dice — così nessuna risposta resta nascosta dietro una scheda non
+        aperta. La topbar continua a mostrare il suo indicatore in ogni caso.
+    </p>
+    <p class="mk-note">
+        <strong>Le tre cornici qui sotto sono la stessa finestra</strong> in tre momenti:
+        i commutatori sono vivi, provali. Il contrassegno di attesa è quello dello stato C.
+    </p>
+</div>
+
+<div class="mk-narrow-stage">
+
+    <!-- ────────────────────── 1. La board ────────────────────── -->
+    <div class="mk-narrow-col">
+        <div class="mk-narrow">
+            <header class="topbar">
+                <div class="brand">
+                    <span class="brand-mark"><em>A</em></span>
+                    <div class="brand-stack">
+                        <span class="brand-name">ARchetipo</span>
+                        <span class="brand-sub">atlante</span>
+                    </div>
+                </div>
+                <div class="topbar-actions">
+                    <button type="button" class="await-beacon" title="US-058 · vai alla decisione">
+                        <span class="await-beacon-count">1</span>
+                    </button>
+                    <button type="button" class="theme-toggle" aria-label="Cambia tema">
+                        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></g></svg>
+                    </button>
+                </div>
+            </header>
+            <section class="workspace-status">
+                <div class="ws-status-header">
+                    <span class="ws-status-stage">Costruzione</span>
+                    <span class="ws-status-summary">1 in lavorazione, 2 da accettare.</span>
+                </div>
+            </section>
+
+            <div class="app-shell is-narrow">
+                <div class="lane-switch">
+                    <button type="button" class="lane-btn is-current" data-lane-target="main" aria-pressed="true">Board</button>
+                    <button type="button" class="lane-btn" data-lane-target="rail" aria-pressed="false">
+                        Contesto <span class="lane-mark" aria-hidden="true"></span>
+                    </button>
+                    <span class="lane-switch-spacer"></span>
+                    <span class="lane-note">2 run</span>
+                </div>
+
+                <div class="shell-main is-current-lane" data-lane="main">
+                    <main class="board">
+                        <section class="column" data-id="in_progress">
+                            <header class="column-header">
+                                <span class="column-title"><span class="column-dot"></span>In lavorazione</span>
+                                <span class="column-count">1</span>
+                            </header>
+                            <div class="column-body">
+                                <article class="card prio-HIGH">
+                                    <div class="card-top"><span class="card-code">US-061</span><span class="priority-badge priority-HIGH">high</span></div>
+                                    <div class="card-title">Riconoscere i tracciati compressi</div>
+                                    <div class="card-meta"><span class="card-epic">EP-004</span><span class="card-points">5</span></div>
+                                </article>
+                            </div>
+                        </section>
+                        <section class="column" data-id="review">
+                            <header class="column-header">
+                                <span class="column-title"><span class="column-dot"></span>Da accettare</span>
+                                <span class="column-count">2</span>
+                            </header>
+                            <div class="column-body">
+                                <article class="card prio-HIGH">
+                                    <div class="card-top"><span class="card-code">US-058</span><span class="priority-badge priority-HIGH">high</span></div>
+                                    <div class="card-title">Importare i tracciati da una sorgente compressa</div>
+                                    <div class="card-meta"><span class="card-epic">EP-004</span><span class="card-points">5</span></div>
+                                </article>
+                                <article class="card prio-MEDIUM">
+                                    <div class="card-top"><span class="card-code">US-057</span><span class="priority-badge priority-MEDIUM">medium</span></div>
+                                    <div class="card-title">Mostrare l'esito dell'importazione</div>
+                                    <div class="card-meta"><span class="card-epic">EP-004</span><span class="card-points">3</span></div>
+                                </article>
+                            </div>
+                        </section>
+                    </main>
+                </div>
+
+                <aside class="shell-rail" data-lane="rail" aria-label="Contesto del workspace">
+                    <section class="rail-section">
+                        <div class="rail-head">
+                            <span class="rail-title">Run in corso</span>
+                            <span class="rail-count">2</span>
+                        </div>
+                        <ul class="rail-runs">
+                            <li>
+                                <button type="button" class="runline state-awaiting is-awaiting">
+                                    <span class="runline-top"><span class="runline-code">US-058</span><span class="runline-action">Review</span></span>
+                                    <span class="runline-meta"><span class="runline-state">ferma</span><span class="runline-meta-spacer"></span><span class="runline-go">vai alla decisione →</span></span>
+                                    <span class="runline-await">attende una risposta</span>
+                                </button>
+                            </li>
+                            <li>
+                                <button type="button" class="runline state-running">
+                                    <span class="runline-top"><span class="runline-code">US-061</span><span class="runline-action">Implementazione</span></span>
+                                    <span class="runline-meta"><span class="runline-state">in esecuzione</span><span class="runline-meta-spacer"></span><span class="runline-go">apri →</span></span>
+                                </button>
+                            </li>
+                        </ul>
+                    </section>
+                    <section class="rail-section rail-conversation">
+                        <div class="rail-head"><span class="rail-title">Conversazione</span></div>
+                        <div class="workspace-conversation">
+                            <div class="conv-panel conv-live">
+                                <div class="conv-head">
+                                    <span class="conv-badge conv-live">conversazione</span>
+                                    <span class="conv-head-spacer"></span>
+                                    <span class="conv-provider">claude</span>
+                                </div>
+                                <ol class="conv-timeline">
+                                    <li class="conv-event cev-you">
+                                        <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#18</div>
+                                        <div class="conv-event-body">
+                                            <div class="conv-event-head"><span class="conv-event-kind">tu</span><span class="conv-event-time">14:05:11</span></div>
+                                            <p class="conv-event-text">Ok, passo alla 061 intanto.</p>
+                                        </div>
+                                    </li>
+                                </ol>
+                                <form class="conv-composer">
+                                    <textarea class="conv-composer-input" rows="2" placeholder="Scrivi all'agente…"></textarea>
+                                    <div class="conv-composer-row">
+                                        <span class="conv-composer-spacer"></span>
+                                        <button type="submit" class="primary-btn">Invia</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </section>
+                </aside>
+            </div>
+        </div>
+        <p class="mk-narrow-label">1 · la board, con il contesto a un tocco</p>
+    </div>
+
+    <!-- ────────────────── 2. Il contesto (la rail) ────────────────── -->
+    <div class="mk-narrow-col">
+        <div class="mk-narrow">
+            <header class="topbar">
+                <div class="brand">
+                    <span class="brand-mark"><em>A</em></span>
+                    <div class="brand-stack">
+                        <span class="brand-name">ARchetipo</span>
+                        <span class="brand-sub">atlante</span>
+                    </div>
+                </div>
+                <div class="topbar-actions">
+                    <button type="button" class="await-beacon"><span class="await-beacon-count">1</span></button>
+                    <button type="button" class="theme-toggle" aria-label="Cambia tema">
+                        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></g></svg>
+                    </button>
+                </div>
+            </header>
+
+            <div class="app-shell is-narrow">
+                <div class="lane-switch">
+                    <button type="button" class="lane-btn" data-lane-target="main" aria-pressed="false">Board</button>
+                    <button type="button" class="lane-btn is-current" data-lane-target="rail" aria-pressed="true">
+                        Contesto <span class="lane-mark" aria-hidden="true"></span>
+                    </button>
+                    <span class="lane-switch-spacer"></span>
+                    <span class="lane-note">2 run</span>
+                </div>
+
+                <div class="shell-main" data-lane="main">
+                    <main class="board">
+                        <section class="column" data-id="todo">
+                            <header class="column-header">
+                                <span class="column-title"><span class="column-dot"></span>Da fare</span>
+                                <span class="column-count">5</span>
+                            </header>
+                            <div class="column-body">
+                                <div class="empty-column">la board è dall'altra parte</div>
+                            </div>
+                        </section>
+                    </main>
+                </div>
+
+                <aside class="shell-rail is-current-lane" data-lane="rail" aria-label="Contesto del workspace">
+                    <section class="rail-section">
+                        <div class="rail-head">
+                            <span class="rail-title">Run in corso</span>
+                            <span class="rail-count">2</span>
+                            <span class="rail-head-spacer"></span>
+                            <span class="rail-hint">nel workspace</span>
+                        </div>
+                        <ul class="rail-runs">
+                            <li>
+                                <button type="button" class="runline state-awaiting is-awaiting">
+                                    <span class="runline-top"><span class="runline-code">US-058</span><span class="runline-action">Review</span></span>
+                                    <span class="runline-meta"><span class="runline-state">ferma</span><span class="runline-since">da 4 min</span><span class="runline-meta-spacer"></span><span class="runline-go">vai alla decisione →</span></span>
+                                    <span class="runline-await">attende una risposta</span>
+                                </button>
+                            </li>
+                            <li>
+                                <button type="button" class="runline state-running">
+                                    <span class="runline-top"><span class="runline-code">US-061</span><span class="runline-action">Implementazione</span></span>
+                                    <span class="runline-meta"><span class="runline-state">in esecuzione</span><span class="runline-since">da 15 min</span><span class="runline-meta-spacer"></span><span class="runline-go">apri →</span></span>
+                                </button>
+                            </li>
+                        </ul>
+                    </section>
+                    <section class="rail-section rail-conversation">
+                        <div class="rail-head">
+                            <span class="rail-title">Conversazione</span>
+                            <span class="rail-head-spacer"></span>
+                            <span class="rail-hint">stessa storia</span>
+                        </div>
+                        <div class="workspace-conversation">
+                            <div class="conv-panel conv-live">
+                                <div class="conv-head">
+                                    <span class="conv-badge conv-live">conversazione</span>
+                                    <code class="conv-dir">…/lavoro/atlante</code>
+                                    <span class="conv-head-spacer"></span>
+                                    <span class="conv-provider">claude</span>
+                                </div>
+                                <ol class="conv-timeline">
+                                    <li class="conv-event cev-agent">
+                                        <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#17</div>
+                                        <div class="conv-event-body">
+                                            <div class="conv-event-head"><span class="conv-event-kind">agente</span><span class="conv-event-time">14:03:52</span></div>
+                                            <p class="conv-event-text">Sì: gli archivi corrotti hanno tre test, uno per troncatura, uno per intestazione errata, uno per file vuoto.</p>
+                                        </div>
+                                    </li>
+                                    <li class="conv-event cev-you">
+                                        <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#18</div>
+                                        <div class="conv-event-body">
+                                            <div class="conv-event-head"><span class="conv-event-kind">tu</span><span class="conv-event-time">14:05:11</span></div>
+                                            <p class="conv-event-text">Ok, passo alla 061 intanto.</p>
+                                        </div>
+                                    </li>
+                                </ol>
+                                <form class="conv-composer">
+                                    <textarea class="conv-composer-input" rows="2" placeholder="Scrivi all'agente…"></textarea>
+                                    <div class="conv-composer-row">
+                                        <span class="conv-close">
+                                            <button type="button" class="ghost-btn danger-ghost-btn">Chiudi</button>
+                                        </span>
+                                        <span class="conv-composer-spacer"></span>
+                                        <button type="submit" class="primary-btn">Invia</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </section>
+                </aside>
+            </div>
+        </div>
+        <p class="mk-narrow-label">2 · il contesto, alla sua larghezza piena</p>
+    </div>
+
+    <!-- ───────────────── 3. La spec agganciata ───────────────── -->
+    <div class="mk-narrow-col">
+        <div class="mk-narrow">
+            <header class="topbar">
+                <div class="brand">
+                    <span class="brand-mark"><em>A</em></span>
+                    <div class="brand-stack">
+                        <span class="brand-name">ARchetipo</span>
+                        <span class="brand-sub">atlante</span>
+                    </div>
+                </div>
+                <div class="topbar-actions">
+                    <button type="button" class="await-beacon is-idle"><span class="await-beacon-count">0</span></button>
+                    <button type="button" class="theme-toggle" aria-label="Cambia tema">
+                        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></g></svg>
+                    </button>
+                </div>
+            </header>
+
+            <div class="app-shell is-narrow">
+                <div class="lane-switch">
+                    <button type="button" class="lane-btn is-current" data-lane-target="main" aria-pressed="true">US-058</button>
+                    <button type="button" class="lane-btn" data-lane-target="rail" aria-pressed="false">Contesto</button>
+                    <span class="lane-switch-spacer"></span>
+                    <span class="lane-note">2 run</span>
+                </div>
+
+                <div class="shell-main is-current-lane" data-lane="main">
+                    <section class="spec-dock" aria-label="Dettaglio della spec US-058">
+                        <div class="dock-bar">
+                            <button type="button" class="ghost-btn dock-back">
+                                <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5L5 8l4.5 4.5M5 8h8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                <span>Board</span>
+                            </button>
+                            <span class="dock-sep" aria-hidden="true"></span>
+                            <span class="dock-code">US-058</span>
+                        </div>
+                        <nav class="modal-tabs" role="tablist">
+                            <button type="button" class="tab active" data-tab="story" role="tab" aria-selected="true">Story</button>
+                            <button type="button" class="tab" data-tab="plan" role="tab" aria-selected="false">Plan</button>
+                            <button type="button" class="tab" data-tab="review" role="tab" aria-selected="false">Review</button>
+                        </nav>
+                        <section class="tab-panel active" data-panel="story">
+                            <div class="story-view">
+                                <div class="story-view-topbar">
+                                    <div class="story-view-meta">
+                                        <span class="meta-chip">EP-004</span>
+                                        <span class="meta-chip">HIGH</span>
+                                        <span class="meta-chip">REVIEW</span>
+                                    </div>
+                                </div>
+                                <h3 class="story-view-title">Importare i tracciati da una sorgente compressa</h3>
+                                <div class="story-actions">
+                                    <button type="button" class="action-chip action-chip-run"><span class="action-chip-label">Rivedi</span><span class="action-chip-id">review</span></button>
+                                    <button type="button" class="action-chip action-chip-run"><span class="action-chip-label">Rilavora</span><span class="action-chip-id">implement</span></button>
+                                </div>
+                                <div class="story-execution">
+                                    <div class="execution-panel execution-ok">
+                                        <div class="execution-head">
+                                            <span class="execution-dot" aria-hidden="true"></span>
+                                            <span class="execution-headline">Implementazione completata</span>
+                                        </div>
+                                        <div class="execution-meta">conclusa 14:00:52 · 19 min</div>
+                                    </div>
+                                </div>
+                                <div class="markdown-rendered">
+                                    <p><strong>Come</strong> analista, <strong>voglio</strong> importare i tracciati anche compressi, <strong>così da</strong> non scompattarli a mano.</p>
+                                    <h3>Criteri di accettazione</h3>
+                                    <ul>
+                                        <li><strong>AC-1</strong> — riconoscimento dal contenuto.</li>
+                                        <li><strong>AC-2</strong> — i file non compressi non cambiano comportamento.</li>
+                                    </ul>
+                                </div>
+                                <div class="form-actions">
+                                    <button type="button" class="primary-btn">Edit</button>
+                                    <button type="button" class="ghost-btn danger-ghost-btn">Elimina</button>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="tab-panel is-hidden" data-panel="plan"><div class="story-view"><div class="markdown-rendered"><p>Tre task, tutti in <code>internal/tracce</code>.</p></div></div></section>
+                        <section class="tab-panel is-hidden" data-panel="review"><div class="story-view"><div class="run-notice info"><span class="run-notice-mark">invariato</span><span class="run-notice-body"><strong>Diff e decisione come sempre.</strong></span></div></div></section>
+                    </section>
+                </div>
+
+                <aside class="shell-rail" data-lane="rail" aria-label="Contesto del workspace">
+                    <section class="rail-section">
+                        <div class="rail-head"><span class="rail-title">Run in corso</span><span class="rail-count">2</span></div>
+                        <ul class="rail-runs">
+                            <li>
+                                <button type="button" class="runline state-running">
+                                    <span class="runline-top"><span class="runline-code">US-061</span><span class="runline-action">Implementazione</span></span>
+                                    <span class="runline-meta"><span class="runline-state">in esecuzione</span><span class="runline-meta-spacer"></span><span class="runline-go">apri →</span></span>
+                                </button>
+                            </li>
+                        </ul>
+                    </section>
+                    <section class="rail-section rail-conversation">
+                        <div class="rail-head"><span class="rail-title">Conversazione</span></div>
+                        <div class="workspace-conversation">
+                            <div class="conv-panel conv-live">
+                                <div class="conv-head">
+                                    <span class="conv-badge conv-live">conversazione</span>
+                                    <span class="conv-head-spacer"></span>
+                                    <span class="conv-provider">claude</span>
+                                </div>
+                                <ol class="conv-timeline">
+                                    <li class="conv-event cev-you">
+                                        <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#18</div>
+                                        <div class="conv-event-body">
+                                            <div class="conv-event-head"><span class="conv-event-kind">tu</span><span class="conv-event-time">14:05:11</span></div>
+                                            <p class="conv-event-text">Ok, passo alla 061 intanto.</p>
+                                        </div>
+                                    </li>
+                                </ol>
+                            </div>
+                        </div>
+                    </section>
+                </aside>
+            </div>
+        </div>
+        <p class="mk-narrow-label">3 · la spec, con gli stessi tab e le stesse azioni</p>
+    </div>
+</div>
+
+<div class="mk-page mk-page-wide">
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Che cosa non si perde restringendo</p>
+    <ul class="mk-legend">
+        <li>La conversazione, con la sua storia <code>AC-2</code></li>
+        <li>L'elenco delle run e i loro stati <code>AC-3</code></li>
+        <li>Il contrassegno di attesa, in topbar e sul commutatore <code>AC-4</code></li>
+        <li>Tab, Edit, Save, Delete, azioni e review <code>AC-5</code></li>
+    </ul>
+    <p class="mk-note">
+        <strong>La soglia è una sola.</strong> La forma stretta è scritta una volta e
+        agganciata a due selettori: la media query a <code>1080px</code>, che è quella
+        che varrà nell'app, e una classe <code>.is-narrow</code>, che serve solo a questo
+        mockup per mostrare la finestra stretta dentro una pagina larga.
+    </p>
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-055</p>
+</div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

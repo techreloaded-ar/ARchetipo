@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-055 · B — La spec agganciata, la conversazione accanto</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-055</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-board.html">A · board</a>
+        <a href="stato-b-spec.html" class="current">B · spec</a>
+        <a href="stato-c-attesa.html">C · attesa</a>
+        <a href="stato-d-stretto.html">D · stretto</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<div class="mk-doc">
+<div class="mk-page mk-page-wide">
+    <p class="mk-eyebrow">Stato B</p>
+    <h1 class="mk-title">La spec smette di essere<br />una finestra sopra le altre</h1>
+    <p class="mk-lede">
+        Il dettaglio della spec non è più una modale che copre la board e spegne tutto il
+        resto: prende il posto della board nella colonna principale, agganciato in-place,
+        con un controllo <em>Torna alla board</em> dove prima c'era la X. La rail resta
+        dov'era, e con lei la conversazione — <strong>stessi turni, stessa storia</strong>
+        dello stato A, perché non è mai stata smontata.
+    </p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-1</span> contenuti della spec e conversazione si leggono
+        insieme, senza aprire e chiudere finestre sovrapposte.
+        <span class="mk-ac">AC-5</span> nulla è stato tolto: gli stessi tab
+        <code>Story</code> / <code>Plan</code> / <code>Review</code>, gli stessi
+        <code>Edit</code> / <code>Save</code> / <code>Delete</code>, gli stessi pannelli
+        azioni, esecuzione e run. Prova i tab: sono quelli della modale, riusati senza
+        modifiche.
+    </p>
+</div>
+
+<div class="mk-app">
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark"><em>A</em></span>
+            <div class="brand-stack">
+                <span class="brand-name">ARchetipo</span>
+                <span class="brand-sub">by Tech Reloaded</span>
+            </div>
+        </div>
+        <div class="topbar-stats">
+            <span class="stat"><span class="stat-num">18</span><span class="stat-label">spec</span></span>
+            <span class="stat-sep">/</span>
+            <span class="stat"><span class="stat-num">3</span><span class="stat-label">in volo</span></span>
+            <span class="stat-sep">/</span>
+            <span class="stat"><span class="stat-num">9</span><span class="stat-label">fatte</span></span>
+        </div>
+        <div class="topbar-actions">
+            <button type="button" class="await-beacon is-idle">attende una risposta <span class="await-beacon-count">0</span></button>
+            <button type="button" class="ghost-btn">Metriche</button>
+            <button type="button" class="ghost-btn">PRD</button>
+            <button type="button" class="ghost-btn new-spec-btn">Nuova spec</button>
+            <span class="action-sep" aria-hidden="true"></span>
+            <button type="button" class="theme-toggle" aria-label="Cambia tema">
+                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></g></svg>
+            </button>
+        </div>
+    </header>
+
+    <section class="workspace-status">
+        <div class="ws-status-header">
+            <span class="ws-status-stage">Costruzione</span>
+            <span class="ws-status-summary">3 spec pianificate, 1 in lavorazione, 2 da accettare.</span>
+            <span class="ws-status-template">atlante · fabbrica-del-software</span>
+        </div>
+        <div class="ws-status-next-wrap">
+            <button type="button" class="ws-status-next">Implementa <span class="ws-status-next-spec">US-059</span></button>
+        </div>
+    </section>
+
+    <div class="app-shell">
+        <div class="lane-switch">
+            <button type="button" class="lane-btn is-current" data-lane-target="main" aria-pressed="true">US-058</button>
+            <button type="button" class="lane-btn" data-lane-target="rail" aria-pressed="false">Contesto</button>
+        </div>
+
+        <div class="shell-main is-current-lane" data-lane="main">
+
+            <!-- ▼ Il dettaglio spec agganciato: stesso contenuto della modale,
+                 senza la modale. -->
+            <section class="spec-dock" aria-label="Dettaglio della spec US-058">
+                <div class="dock-bar">
+                    <button type="button" class="ghost-btn dock-back">
+                        <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5L5 8l4.5 4.5M5 8h8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        <span>Torna alla board</span>
+                    </button>
+                    <span class="dock-sep" aria-hidden="true"></span>
+                    <span class="dock-code">US-058</span>
+                    <span class="dock-name">Importare i tracciati da una sorgente compressa</span>
+                    <span class="dock-bar-spacer"></span>
+                    <span class="dock-anchor">agganciata al posto della board</span>
+                </div>
+
+                <nav class="modal-tabs" role="tablist">
+                    <button type="button" class="tab active" data-tab="story" role="tab" aria-selected="true">Story</button>
+                    <button type="button" class="tab" data-tab="plan" role="tab" aria-selected="false">Plan</button>
+                    <button type="button" class="tab" data-tab="review" role="tab" aria-selected="false">Review</button>
+                </nav>
+
+                <section class="tab-panel active" data-panel="story">
+                    <div class="story-view">
+                        <div class="story-view-topbar">
+                            <div class="story-view-meta">
+                                <span class="meta-chip">EP-004</span>
+                                <span class="meta-chip">HIGH</span>
+                                <span class="meta-chip">5 punti</span>
+                                <span class="meta-chip">REVIEW</span>
+                                <span class="meta-chip">rilavorata ×1</span>
+                            </div>
+                            <div class="story-view-actions">
+                                <button type="button" class="ghost-btn danger-ghost-btn">Elimina spec</button>
+                            </div>
+                        </div>
+                        <h3 class="story-view-title">Importare i tracciati da una sorgente compressa</h3>
+
+                        <div class="story-actions">
+                            <span class="action-chip"><span class="action-chip-label">azioni offerte qui</span></span>
+                            <button type="button" class="action-chip action-chip-run"><span class="action-chip-label">Rivedi</span><span class="action-chip-id">review</span></button>
+                            <button type="button" class="action-chip action-chip-run"><span class="action-chip-label">Rilavora</span><span class="action-chip-id">implement</span></button>
+                            <button type="button" class="action-chip action-chip-run" disabled><span class="action-chip-label">Pianifica</span><span class="action-chip-id">plan</span></button>
+                            <span class="action-chip-unlock">Pianifica si sblocca quando la spec torna in Da fare.</span>
+                        </div>
+
+                        <div class="story-execution">
+                            <div class="execution-panel execution-ok">
+                                <div class="execution-head">
+                                    <span class="execution-dot" aria-hidden="true"></span>
+                                    <span class="execution-headline">Implementazione completata</span>
+                                    <span class="execution-code">US-058</span>
+                                    <span class="execution-id">exec 7c1a…9f</span>
+                                </div>
+                                <div class="execution-meta">avviata 13:41:08 · conclusa 14:00:52 · 19 min</div>
+                                <div class="execution-message">La spec è passata in REVIEW: 4 file toccati, 11 test aggiunti.</div>
+                            </div>
+                        </div>
+
+                        <div class="story-run">
+                            <section class="run-panel run-closed">
+                                <div class="run-head">
+                                    <span class="run-badge">conclusa</span>
+                                    <span class="run-id">run 41d2…7b</span>
+                                    <span class="run-head-spacer"></span>
+                                    <span class="run-link offline"><span class="run-link-mark" aria-hidden="true"></span>canale chiuso</span>
+                                </div>
+                                <ol class="run-timeline is-frozen">
+                                    <li class="run-event ev-tool-end">
+                                        <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#88</div>
+                                        <div class="run-event-body">
+                                            <div class="run-event-head"><span class="run-event-kind">strumento · fatto</span><span class="run-event-time">14:00:44</span></div>
+                                            <p class="run-event-text"><code class="run-event-tool">go test ./...</code></p>
+                                            <p class="run-event-detail">ok · 11 nuovi test, 0 falliti</p>
+                                        </div>
+                                    </li>
+                                    <li class="run-event ev-assistant">
+                                        <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#89</div>
+                                        <div class="run-event-body">
+                                            <div class="run-event-head"><span class="run-event-kind">agente</span><span class="run-event-time">14:00:51</span></div>
+                                            <p class="run-event-text">Il riconoscimento della compressione è dentro <code>Importa</code>, dietro un lettore avvolto. La firma pubblica non cambia.</p>
+                                        </div>
+                                    </li>
+                                </ol>
+                                <div class="run-composer">
+                                    <div class="run-composer-row">
+                                        <span class="run-composer-hint">la run è conclusa: non accetta altri messaggi</span>
+                                        <span class="run-composer-spacer"></span>
+                                        <button type="button" class="primary-btn" disabled>Invia</button>
+                                    </div>
+                                </div>
+                            </section>
+                        </div>
+
+                        <div class="markdown-rendered">
+                            <p><strong>Come</strong> analista che riceve i tracciati dal partner, <strong>voglio</strong> importarli anche quando arrivano compressi, <strong>così da</strong> non doverli scompattare a mano prima di ogni caricamento.</p>
+                            <h3>Criteri di accettazione</h3>
+                            <ul>
+                                <li><strong>AC-1</strong> — un file compresso viene riconosciuto dal contenuto, non dall'estensione.</li>
+                                <li><strong>AC-2</strong> — un file non compresso continua a essere importato come prima.</li>
+                                <li><strong>AC-3</strong> — un archivio corrotto viene rifiutato con una ragione leggibile, senza righe importate a metà.</li>
+                            </ul>
+                            <h3>Fuori ambito</h3>
+                            <p>Gli archivi con più file dentro, e ogni cambiamento al formato delle righe.</p>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" class="primary-btn">Edit</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="tab-panel is-hidden" data-panel="plan">
+                    <div class="story-view">
+                        <div class="markdown-rendered">
+                            <p>Il piano tocca un solo pacchetto: il riconoscimento entra in <code>internal/tracce</code>, dietro il lettore già usato da <code>Importa</code>.</p>
+                        </div>
+                        <div class="tasks-header"><span>Task</span></div>
+                        <table class="tasks-table">
+                            <thead><tr><th>ID</th><th>Titolo</th><th>Tipo</th><th>Stato</th><th>Dipende da</th></tr></thead>
+                            <tbody>
+                                <tr><td>T-1</td><td>Riconoscere la compressione dal contenuto</td><td>code</td><td>fatto</td><td>—</td></tr>
+                                <tr><td>T-2</td><td>Avvolgere il lettore in Importa</td><td>code</td><td>fatto</td><td>T-1</td></tr>
+                                <tr><td>T-3</td><td>Test sugli archivi corrotti</td><td>test</td><td>fatto</td><td>T-2</td></tr>
+                            </tbody>
+                        </table>
+                        <div class="form-actions">
+                            <button type="button" class="primary-btn">Edit</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="tab-panel is-hidden" data-panel="review">
+                    <div class="story-view">
+                        <div class="run-notice info">
+                            <span class="run-notice-mark">invariato</span>
+                            <span class="run-notice-body">
+                                <strong>Il tab Review non cambia.</strong>
+                                Diff, commenti in linea e decisione sono quelli di sempre: US-055 sposta il contenitore, non il contenuto.
+                            </span>
+                        </div>
+                        <div class="run-approval">
+                            <div class="run-approval-head">
+                                <span class="run-approval-eyebrow">decisione della review</span>
+                                <span class="run-approval-tool">US-058</span>
+                            </div>
+                            <p class="run-approval-title">Accetti l'incremento consegnato, o lo rimandi con delle indicazioni?</p>
+                            <pre class="run-approval-args">4 file toccati · +212 / −38 · 11 test aggiunti
+internal/tracce/import.go
+internal/tracce/compressione.go
+internal/tracce/import_test.go
+docs/wiki/domini/tracce.md</pre>
+                            <div class="run-approval-options">
+                                <button type="button" class="approval-btn allow">Accetta</button>
+                                <button type="button" class="approval-btn deny">Rimanda con indicazioni</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </section>
+        </div>
+
+        <!-- ▼ La rail: identica allo stato A. La conversazione porta gli stessi
+             turni #12–#15, più quello scritto stando qui: la storia non si è
+             interrotta passando dalla board alla spec (AC-2). -->
+        <aside class="shell-rail is-current-lane" data-lane="rail" aria-label="Contesto del workspace">
+            <section class="rail-section">
+                <div class="rail-head">
+                    <span class="rail-title">Run in corso</span>
+                    <span class="rail-count">2</span>
+                    <span class="rail-head-spacer"></span>
+                    <span class="rail-hint">nel workspace aperto</span>
+                </div>
+                <ul class="rail-runs">
+                    <li>
+                        <button type="button" class="runline state-running">
+                            <span class="runline-top">
+                                <span class="runline-code">US-061</span>
+                                <span class="runline-action">Implementazione</span>
+                            </span>
+                            <span class="runline-meta">
+                                <span class="runline-state">in esecuzione</span>
+                                <span class="runline-since">da 14 min</span>
+                                <span class="runline-meta-spacer"></span>
+                                <span class="runline-go">apri la conversazione →</span>
+                            </span>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="runline state-queued">
+                            <span class="runline-top">
+                                <span class="runline-code is-workspace">workspace</span>
+                                <span class="runline-action">Aggiornamento della wiki</span>
+                            </span>
+                            <span class="runline-meta">
+                                <span class="runline-state">in coda</span>
+                                <span class="runline-since">accodata alle 14:01</span>
+                                <span class="runline-meta-spacer"></span>
+                                <span class="runline-go">apri la conversazione →</span>
+                            </span>
+                        </button>
+                    </li>
+                </ul>
+            </section>
+
+            <section class="rail-section rail-conversation">
+                <div class="rail-head">
+                    <span class="rail-title">Conversazione</span>
+                    <span class="rail-head-spacer"></span>
+                    <span class="rail-hint">del workspace</span>
+                </div>
+                <div class="workspace-conversation">
+                    <div class="conv-panel conv-live">
+                        <div class="conv-head">
+                            <span class="conv-badge conv-live">conversazione</span>
+                            <code class="conv-dir" title="/Users/marta/lavoro/atlante">…/lavoro/atlante</code>
+                            <span class="conv-head-spacer"></span>
+                            <span class="conv-provider">claude</span>
+                        </div>
+                        <ol class="conv-timeline">
+                            <li class="conv-event cev-you">
+                                <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#12</div>
+                                <div class="conv-event-body">
+                                    <div class="conv-event-head"><span class="conv-event-kind">tu</span><span class="conv-event-time">14:02:34</span></div>
+                                    <p class="conv-event-text">Prima di decidere: dove sta la logica di importazione dei tracciati?</p>
+                                </div>
+                            </li>
+                            <li class="conv-event cev-tool-end">
+                                <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#13</div>
+                                <div class="conv-event-body">
+                                    <div class="conv-event-head"><span class="conv-event-kind">strumento · fatto</span><span class="conv-event-time">14:02:36</span></div>
+                                    <p class="conv-event-text"><code class="conv-event-tool">read_file</code></p>
+                                    <p class="conv-event-detail">internal/tracce/import.go · 3 file letti, 0 scritture</p>
+                                </div>
+                            </li>
+                            <li class="conv-event cev-agent">
+                                <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#14</div>
+                                <div class="conv-event-body">
+                                    <div class="conv-event-head"><span class="conv-event-kind">agente</span><span class="conv-event-time">14:02:41</span></div>
+                                    <p class="conv-event-text">Vive tutta in internal/tracce: import.go legge e valida, store.go persiste. Il punto d'ingresso è uno solo.</p>
+                                </div>
+                            </li>
+                            <li class="conv-event cev-you">
+                                <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#15</div>
+                                <div class="conv-event-body">
+                                    <div class="conv-event-head"><span class="conv-event-kind">tu</span><span class="conv-event-time">14:03:02</span></div>
+                                    <p class="conv-event-text">Bene. Guardo la US-058 mentre continuiamo, non chiudere nulla.</p>
+                                </div>
+                            </li>
+                            <li class="conv-event cev-you">
+                                <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#16</div>
+                                <div class="conv-event-body">
+                                    <div class="conv-event-head"><span class="conv-event-kind">tu</span><span class="conv-event-time">14:03:40</span></div>
+                                    <p class="conv-event-text">Sto leggendo il criterio AC-3 della 058: gli archivi corrotti sono coperti dai test?</p>
+                                </div>
+                            </li>
+                        </ol>
+                        <div class="run-tail">
+                            <span class="run-tail-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+                            l'agente sta scrivendo
+                        </div>
+                        <form class="conv-composer">
+                            <textarea class="conv-composer-input" rows="2" placeholder="Scrivi all'agente…"></textarea>
+                            <div class="conv-composer-row">
+                                <span class="conv-close">
+                                    <button type="button" class="ghost-btn danger-ghost-btn">Chiudi conversazione</button>
+                                </span>
+                                <span class="conv-composer-spacer"></span>
+                                <span class="conv-composer-hint">⌘ + invio per inviare</span>
+                                <button type="submit" class="primary-btn">Invia</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </section>
+        </aside>
+    </div>
+</div>
+<p class="mk-app-caption">Colonna principale: la spec agganciata · Colonna laterale: la stessa rail dello stato A</p>
+
+<div class="mk-page mk-page-wide">
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Che cosa cambia rispetto alla modale</p>
+    <ul class="mk-legend">
+        <li>Il contenitore: una superficie nel flusso, non una finestra <code>.spec-dock</code></li>
+        <li>La barra di aggancio, con il ritorno alla board <code>.dock-bar</code></li>
+        <li>Il fondo scurito e il blocco dello sfondo: spariti <code>.modal-root</code></li>
+        <li>Tab, campi, bottoni e pannelli: identici <code>.tab · .story-view</code></li>
+    </ul>
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-055</p>
+</div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

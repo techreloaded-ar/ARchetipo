@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -52,12 +51,15 @@ func (s *spyStore) ListBySpec(_ context.Context, specCode string) ([]Execution, 
 			out = append(out, e)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].CreatedAt.After(out[j].CreatedAt)
-		}
-		return out[i].ID > out[j].ID
-	})
+	sortByRecency(out)
+	return out, nil
+}
+func (s *spyStore) List(_ context.Context) ([]Execution, error) {
+	out := []Execution{}
+	for _, e := range s.records {
+		out = append(out, e)
+	}
+	sortByRecency(out)
 	return out, nil
 }
 

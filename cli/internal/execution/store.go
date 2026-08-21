@@ -17,6 +17,17 @@ type Store interface {
 	// It exists because a client that keeps no identifier — a browser that was
 	// just reloaded — must still be able to find the execution it started.
 	ListBySpec(ctx context.Context, specCode string) ([]Execution, error)
+	// List returns every execution record of the workspace, whatever its object,
+	// most recent first by CreatedAt with the ID breaking ties so the order is
+	// deterministic when two records share an instant. A workspace with no record
+	// at all yields an empty slice — never nil, never an error: absence is an
+	// answer, not a failure. A record that cannot be read or decoded fails the
+	// whole call with an error that names the offending file, because a silently
+	// truncated history would be indistinguishable from a complete one.
+	//
+	// It exists because the viewer must answer "what is running here" without
+	// knowing in advance which specs to ask about.
+	List(ctx context.Context) ([]Execution, error)
 }
 
 type StoreErrorKind string

@@ -129,11 +129,42 @@ func (s *FileStore) Update(ctx context.Context, execution Execution) error {
 // is the workspace rather than a spec, which are stored with an empty
 // spec_code. That is the read the viewer uses to list workspace-scoped runs.
 func (s *FileStore) ListBySpec(ctx context.Context, specCode string) ([]Execution, error) {
+	records, err := s.readAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	code := strings.TrimSpace(specCode)
+	out := []Execution{}
+	for _, record := range records {
+		if record.SpecCode != code {
+			continue
+		}
+		out = append(out, record)
+	}
+	sortByRecency(out)
+	return out, nil
+}
+
+// List reads the same record directory as ListBySpec and keeps everything: the
+// caller, not the store, decides which of those records counts as "in progress".
+func (s *FileStore) List(ctx context.Context) ([]Execution, error) {
+	out, err := s.readAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sortByRecency(out)
+	return out, nil
+}
+
+// readAll is the single place that scans the record directory. Files that are
+// not records — nested directories and non-.json entries — are ignored, an
+// absent directory reads as no records at all, and a record that cannot be read
+// or decoded fails the whole scan naming the file.
+func (s *FileStore) readAll(ctx context.Context) ([]Execution, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	out := []Execution{}
-	code := strings.TrimSpace(specCode)
 	entries, err := os.ReadDir(s.dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return out, nil
@@ -157,18 +188,20 @@ func (s *FileStore) ListBySpec(ctx context.Context, specCode string) ([]Executio
 		if err := json.Unmarshal(body, &record); err != nil {
 			return nil, fmt.Errorf("decode execution record %q: %w", entry.Name(), err)
 		}
-		if record.SpecCode != code {
-			continue
-		}
 		out = append(out, record)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].CreatedAt.After(out[j].CreatedAt)
-		}
-		return out[i].ID > out[j].ID
-	})
 	return out, nil
+}
+
+// sortByRecency orders records most recent first, with the ID breaking ties so
+// two records written in the same instant still come out in a stable order.
+func sortByRecency(records []Execution) {
+	sort.Slice(records, func(i, j int) bool {
+		if !records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].CreatedAt.After(records[j].CreatedAt)
+		}
+		return records[i].ID > records[j].ID
+	})
 }
 
 func (s *FileStore) Get(ctx context.Context, id string) (Execution, error) {

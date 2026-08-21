@@ -250,3 +250,116 @@ func TestFileStoreListBySpecKeepsWorkspaceAndSpecExecutionsApart(t *testing.T) {
 		t.Fatalf("an unrelated spec inherited records: %#v", other)
 	}
 }
+
+func recordIDs(records []Execution) []string {
+	var ids []string
+	for _, record := range records {
+		ids = append(ids, record.ID)
+	}
+	return ids
+}
+
+// AC-3: the workspace run list is built on an enumeration that hides nothing —
+// every record, whatever its scope, newest first.
+func TestFileStoreListReturnsEveryRecordNewestFirst(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)
+	writeRecord(t, store, Execution{ID: "exec-spec-one", SpecCode: "US-001", Status: StatusSucceeded, CreatedAt: base})
+	writeRecord(t, store, Execution{ID: "exec-workspace", SpecCode: "", Action: ActionInception, Status: StatusRunning, CreatedAt: base.Add(time.Minute)})
+	writeRecord(t, store, Execution{ID: "exec-spec-two", SpecCode: "US-002", Status: StatusRunning, CreatedAt: base.Add(2 * time.Minute)})
+
+	got, err := store.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"exec-spec-two", "exec-workspace", "exec-spec-one"}
+	if !reflect.DeepEqual(recordIDs(got), want) {
+		t.Fatalf("order: got %v, want %v", recordIDs(got), want)
+	}
+	if got[1].SpecCode != "" || got[1].Action != ActionInception {
+		t.Fatalf("the workspace record lost its scope: %#v", got[1])
+	}
+}
+
+func TestFileStoreListBreaksTiesById(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	same := time.Date(2026, 8, 21, 9, 0, 0, 0, time.UTC)
+	writeRecord(t, store, Execution{ID: "exec-aaa", SpecCode: "US-001", Status: StatusRunning, CreatedAt: same})
+	writeRecord(t, store, Execution{ID: "exec-bbb", SpecCode: "US-001", Status: StatusRunning, CreatedAt: same})
+
+	got, err := store.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"exec-bbb", "exec-aaa"}
+	if !reflect.DeepEqual(recordIDs(got), want) {
+		t.Fatalf("two records written in the same instant came out unordered: got %v, want %v", recordIDs(got), want)
+	}
+}
+
+func TestFileStoreListTreatsAbsenceAsAnEmptyList(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("a workspace that never ran anything is not a failure: %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Fatalf("absence must be an empty non-nil slice: %#v", got)
+	}
+}
+
+func TestFileStoreListFailsNamingTheUnreadableRecord(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRecord(t, store, Execution{ID: "exec-good", SpecCode: "US-001", Status: StatusSucceeded, CreatedAt: time.Now().UTC()})
+	if err := os.WriteFile(filepath.Join(root, ".archetipo", "executions", "exec-broken.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.List(context.Background())
+	if err == nil {
+		t.Fatalf("a corrupt record produced a partial list: %#v", got)
+	}
+	if !strings.Contains(err.Error(), "exec-broken.json") {
+		t.Fatalf("the error does not name the file: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("a failed read still returned records: %#v", got)
+	}
+}
+
+func TestFileStoreListIgnoresNonRecordFiles(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRecord(t, store, Execution{ID: "exec-one", SpecCode: "US-001", Status: StatusSucceeded, CreatedAt: time.Now().UTC()})
+	dir := filepath.Join(root, ".archetipo", "executions")
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not a record"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "archive.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(recordIDs(got), []string{"exec-one"}) {
+		t.Fatalf("foreign entries leaked into the result: %#v", got)
+	}
+}

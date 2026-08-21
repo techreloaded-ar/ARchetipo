@@ -6,6 +6,18 @@
 	const boardEl = document.getElementById("board");
 	const workspaceStatusEl = document.getElementById("workspace-status");
 	const refreshBtn = document.getElementById("refresh-btn");
+	// The shell: one primary column, one permanent rail, and the switchers that
+	// reach whichever pane is off screen. Which of them is on screen is not
+	// decided here (see the workspace shell layout section below).
+	const shellEl = document.getElementById("workspace-shell");
+	const shellPrimaryEl = document.getElementById("workspace-primary");
+	const shellSwitchersEl = document.getElementById("workspace-switchers");
+	const workspaceRailEl = document.getElementById("workspace-rail");
+	const workspaceRunsEl = document.getElementById("workspace-runs");
+	const runsAttentionEl = document.getElementById("runs-attention");
+	// The spec detail. It is a pane of the primary column, not a window: the
+	// name stays `modal` because every id, tab and panel under it is unchanged
+	// and renaming it would touch the whole file for nothing.
 	const modal = document.getElementById("modal-root");
 	const modalClose = document.getElementById("modal-close");
 	const modalTitle = document.getElementById("story-editor-title");
@@ -306,11 +318,13 @@
 
 	refreshBtn.addEventListener("click", refreshBoardAndStatus);
 	modalClose.addEventListener("click", closeModal);
-	modal.addEventListener("click", (e) => {
-		if (e.target === modal) closeModal();
-	});
+	// No backdrop click any more: the spec detail is a pane of the primary
+	// column, so a click on its own padding is a click inside the work, not a
+	// dismissal of a window laid over the page.
 	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && !modal.classList.contains("hidden")) closeModal();
+		// Escape leaves the spec and puts the board back in the primary column.
+		// The handlers below still close real modals, and are untouched.
+		if (e.key === "Escape" && specOpen) closeModal();
 	});
 	tabs.forEach((t) =>
 		t.addEventListener("click", () => activateTab(t.dataset.tab)),
@@ -556,6 +570,9 @@
 		// workspace change the one to show is the one of the workspace now open,
 		// and the cursor of the previous one means nothing here (AC-5).
 		loadConversation();
+		// The rail is read once now instead of waiting for the next tick: an
+		// explicit refresh asks every question the page answers.
+		loadWorkspaceRuns();
 	}
 
 	// Boot is a fork, not a sequence. The page asks which workspace it serves
@@ -575,6 +592,11 @@
 			loadBoard();
 			loadWorkspaceStatus();
 			loadConversation();
+			// The rail follows what the workspace is running. It is started only
+			// here, where a workspace is known to be open: without one the route
+			// would be refused, and the refusal is not news the home has to
+			// report.
+			loadWorkspaceRuns();
 			loadMockups();
 			connectBoardStream();
 			return;
@@ -590,6 +612,10 @@
 	// single implementation instead of becoming two.
 	function enterNoWorkspaceMode() {
 		document.body.classList.add("no-workspace");
+		// Nothing is running in a workspace that is not open: the rail stops
+		// reading and forgets what it last knew, so no leftover run survives the
+		// workspace it belonged to.
+		resetWorkspaceRunsState();
 		workspaceHomeActions.insertBefore(
 			workspacesAddForm,
 			workspaceHomeActions.firstChild,
@@ -608,16 +634,322 @@
 		});
 	}
 
+	// ---- Workspace shell layout (US-055) -------------------------------------
+	//
+	// Which panes are on screen is not decided here. workspace-layout.js
+	// resolves it from three facts — is a spec open, is the viewport narrow,
+	// does the rail have the focus — and this section does nothing but hold
+	// those three facts and write onto the elements the classes the module
+	// hands back. Not one visibility rule is written twice.
+	//
+	// This is what makes AC-1 true by construction: opening a spec is a change
+	// of state in the primary column, never a window laid over the page, so the
+	// rail — and the conversation inside it — is never covered and never
+	// unmounted.
+
+	let specOpen = false; // the spec detail owns the primary column
+	let railFocus = false; // narrow mode only: the rail is the pane on screen
+	let shellNarrow = false; // the viewport is below the module's breakpoint
+
+	// The breakpoint is read from the module and never written here: app.css
+	// declares the same number in its media query, so the two cannot answer
+	// differently about the same viewport.
+	const shellNarrowQuery =
+		typeof window.matchMedia === "function"
+			? window.matchMedia(`(max-width: ${WorkspaceLayout.NARROW_MAX_WIDTH}px)`)
+			: null;
+
+	function onShellWidthChange(e) {
+		shellNarrow = !!(e && e.matches);
+		applyShellLayout();
+	}
+
+	if (shellNarrowQuery) {
+		shellNarrow = shellNarrowQuery.matches;
+		if (typeof shellNarrowQuery.addEventListener === "function") {
+			shellNarrowQuery.addEventListener("change", onShellWidthChange);
+		} else if (typeof shellNarrowQuery.addListener === "function") {
+			// Safari before 14 exposes only the deprecated form.
+			shellNarrowQuery.addListener(onShellWidthChange);
+		}
+	}
+
+	// applyPaneState writes one pane's answer. `hidden` says the pane has
+	// nothing to show at all — the class every existing guard in this file
+	// already reads on the spec detail — while is-visible / is-hidden say
+	// whether a pane that does have something to show is the one on screen.
+	function applyPaneState(el, pane) {
+		if (!el || !pane) return;
+		el.classList.toggle(WorkspaceLayout.PANE_VISIBLE_CLASS, pane.visible);
+		el.classList.toggle(WorkspaceLayout.PANE_HIDDEN_CLASS, !pane.visible);
+		el.classList.toggle("hidden", !pane.present);
+	}
+
+	function renderShellSwitchers(switchers) {
+		const list = switchers || [];
+		if (!list.length) {
+			shellSwitchersEl.innerHTML = "";
+			shellSwitchersEl.classList.add("hidden");
+			return;
+		}
+		shellSwitchersEl.innerHTML = list
+			.map(
+				(s) =>
+					`<button type="button" class="${escapeHtml(s.className)}" data-shell-target="${escapeHtml(s.target)}">${escapeHtml(s.label)}</button>`,
+			)
+			.join("");
+		shellSwitchersEl.classList.remove("hidden");
+	}
+
+	function applyShellLayout() {
+		const layout = WorkspaceLayout.resolveLayout({
+			specOpen,
+			narrow: shellNarrow,
+			railFocus,
+		});
+		// The module also normalises the focus: in wide mode the rail is on
+		// screen anyway, so focusing it means nothing and it comes back false.
+		railFocus = layout.railFocus;
+		shellEl.classList.remove(
+			WorkspaceLayout.SHELL_CLASS_WIDE,
+			WorkspaceLayout.SHELL_CLASS_NARROW,
+		);
+		shellEl.classList.add(layout.shellClass);
+		applyPaneState(boardEl, layout.panes.board);
+		applyPaneState(modal, layout.panes.spec);
+		applyPaneState(workspaceRailEl, layout.panes.rail);
+		// The primary column shares its grid cell with the rail in narrow mode,
+		// so a column holding nothing visible must not merely be empty — it must
+		// be gone, or it would sit over the one pane that is on screen. This is
+		// still not a decision: it is exactly what the module already said about
+		// the two panes the column can hold.
+		if (shellPrimaryEl) {
+			const primaryShows =
+				layout.panes.board.visible || layout.panes.spec.visible;
+			shellPrimaryEl.classList.toggle(
+				WorkspaceLayout.PANE_HIDDEN_CLASS,
+				!primaryShows,
+			);
+			shellPrimaryEl.classList.toggle(
+				WorkspaceLayout.PANE_VISIBLE_CLASS,
+				primaryShows,
+			);
+		}
+		renderShellSwitchers(layout.switchers);
+		// The return control is the close button the spec pane has always had:
+		// it leaves the detail and puts the board back. It is named after what
+		// it reaches, in the module's own words.
+		if (layout.back) {
+			const label = `Back to ${layout.back.label}`;
+			modalClose.setAttribute("aria-label", label);
+			modalClose.setAttribute("title", label);
+		}
+	}
+
+	// Reaching a pane implies a state, and the module already said which one:
+	// the board is reached by leaving the spec, and leaving the spec is what
+	// closeModal does — panels, snapshots and review included.
+	function showShellPane(target) {
+		if (target === "board") {
+			if (specOpen) {
+				closeModal();
+				return;
+			}
+			railFocus = false;
+		} else if (target === "rail") {
+			railFocus = true;
+		} else if (target === "spec") {
+			railFocus = false;
+		} else {
+			return;
+		}
+		applyShellLayout();
+	}
+
+	// The switchers are redrawn on every layout change, so the handler lives on
+	// their container and each button declares its target.
+	shellSwitchersEl.addEventListener("click", (e) => {
+		const btn = e.target.closest("[data-shell-target]");
+		if (!btn) return;
+		showShellPane(btn.dataset.shellTarget);
+	});
+
+	applyShellLayout();
+
+	// ---- Workspace runs rail (US-055) ----------------------------------------
+	//
+	// What the workspace is running right now, read on a loop with the same
+	// discipline as the conversation panel further down: ticks never overlap, a
+	// failed read leaves the last known list on screen instead of claiming that
+	// nothing is running, and the loop gives up after the same number of
+	// consecutive failures rather than polling forever.
+	//
+	// Nothing about a run is decided here. The rows, the words in them and the
+	// waiting mark all come from /api/workspace/runs through the pure renderer
+	// in workspace-runs.js; this section reads the payload only to answer where
+	// a press should lead, which is the one thing the renderer refuses to do.
+
+	const WORKSPACE_RUNS_POLL_MS = 2000;
+	const WORKSPACE_RUNS_POLL_FAILURE_LIMIT = 3;
+
+	let workspaceRunsView = null; // last read of GET /api/workspace/runs
+	let workspaceRunsTimer = null; // interval following the workspace's runs
+	let workspaceRunsBusy = false; // a poll is in flight: ticks never overlap
+	let workspaceRunsFailures = 0; // consecutive failed reads, for the give-up threshold
+
+	function stopWorkspaceRunsPolling() {
+		if (workspaceRunsTimer === null) return;
+		clearInterval(workspaceRunsTimer);
+		workspaceRunsTimer = null;
+	}
+
+	// The runs on screen belong to the workspace that was open: leaving it
+	// forgets them rather than leaving them to be read as the new one's.
+	function resetWorkspaceRunsState() {
+		stopWorkspaceRunsPolling();
+		workspaceRunsView = null;
+		workspaceRunsBusy = false;
+		workspaceRunsFailures = 0;
+		if (workspaceRunsEl) workspaceRunsEl.innerHTML = "";
+		renderRunsAttention();
+	}
+
+	// The indicator lives in the topbar so it stays visible whatever pane is on
+	// screen, and it counts from the very payload the rail draws — one read,
+	// one truth about what is waiting.
+	function renderRunsAttention() {
+		if (!runsAttentionEl) return;
+		const waiting = WorkspaceRuns.awaitingCount(workspaceRunsView);
+		runsAttentionEl.classList.toggle("hidden", waiting === 0);
+		runsAttentionEl.textContent = waiting ? `${waiting} waiting` : "";
+		runsAttentionEl.setAttribute(
+			"title",
+			waiting ? "Go to the run waiting for an answer" : "",
+		);
+	}
+
+	function renderWorkspaceRunsPanel() {
+		if (!workspaceRunsEl) return;
+		workspaceRunsEl.innerHTML = WorkspaceRuns.renderWorkspaceRuns(
+			workspaceRunsView,
+		);
+		renderRunsAttention();
+	}
+
+	// loadWorkspaceRuns is the entry point of every fresh read — boot and every
+	// explicit refresh — and it is what (re)starts the loop.
+	async function loadWorkspaceRuns() {
+		if (!workspaceRunsEl) return;
+		if (noWorkspaceMode()) {
+			resetWorkspaceRunsState();
+			return;
+		}
+		let view;
+		try {
+			view = await apiGet("/api/workspace/runs");
+		} catch (_) {
+			// The rail is an addition to the board, not a precondition of it: a
+			// viewer that cannot answer must not stop anyone from working, so
+			// what was last known stays on screen and no toast is raised.
+			return;
+		}
+		workspaceRunsView = view || null;
+		workspaceRunsFailures = 0;
+		renderWorkspaceRunsPanel();
+		startWorkspaceRunsPolling();
+	}
+
+	function startWorkspaceRunsPolling() {
+		stopWorkspaceRunsPolling();
+		workspaceRunsTimer = setInterval(async () => {
+			if (noWorkspaceMode()) {
+				stopWorkspaceRunsPolling();
+				return;
+			}
+			if (workspaceRunsBusy) return;
+			workspaceRunsBusy = true;
+			let view;
+			try {
+				view = await apiGet("/api/workspace/runs");
+			} catch (_) {
+				workspaceRunsBusy = false;
+				workspaceRunsFailures += 1;
+				// The list survives the failed read: a run that could not be
+				// asked about is not a run that has ended.
+				if (workspaceRunsFailures >= WORKSPACE_RUNS_POLL_FAILURE_LIMIT) {
+					stopWorkspaceRunsPolling();
+				}
+				return;
+			}
+			workspaceRunsBusy = false;
+			workspaceRunsFailures = 0;
+			workspaceRunsView = view || null;
+			renderWorkspaceRunsPanel();
+		}, WORKSPACE_RUNS_POLL_MS);
+	}
+
+	function workspaceRunByID(id) {
+		const runs = (workspaceRunsView && workspaceRunsView.runs) || [];
+		return runs.find((run) => run && run.id === id) || null;
+	}
+
+	// Where a row leads is judged here, from what the row declares: the renderer
+	// navigates nowhere. Only one execution panel is mounted at a time, so
+	// reaching a decision means opening the panel that mounts that very run —
+	// the spec detail for a spec run, and for a workspace run the panel it was
+	// started from, which is the New spec modal for the assisted creation and
+	// the PRD modal for every other workspace action.
+	function openRunTarget(scope, code, id) {
+		if (scope === "spec" && code) {
+			openEditor(code);
+			return;
+		}
+		const run = workspaceRunByID(id);
+		if (run && run.action === SPEC_DRAFT_ACTION) {
+			openNewSpec();
+			enterAssistedMode();
+			return;
+		}
+		openPRD();
+	}
+
+	if (workspaceRunsEl) {
+		// The rail is redrawn on every poll, so the handler lives on the section
+		// and each row carries its own identity in its data attributes.
+		workspaceRunsEl.addEventListener("click", (e) => {
+			const row = e.target.closest("[data-run-id]");
+			if (!row) return;
+			openRunTarget(row.dataset.runScope, row.dataset.runSpec, row.dataset.runId);
+		});
+	}
+
+	if (runsAttentionEl) {
+		// The indicator leads to the first entry that is waiting: seeing that
+		// something needs an answer and reaching the answer are one gesture.
+		runsAttentionEl.addEventListener("click", () => {
+			const runs = (workspaceRunsView && workspaceRunsView.runs) || [];
+			const waiting = runs.find((run) => run && run.awaiting_response);
+			if (!waiting) return;
+			openRunTarget(waiting.scope, waiting.spec_code, waiting.id);
+		});
+	}
+
 	boot();
 
 	let boardReloadTimer = null;
 	function scheduleBoardReload() {
 		clearTimeout(boardReloadTimer);
 		boardReloadTimer = setTimeout(() => {
-			// Skip while a modal is open: reloading would discard the user's
-			// in-progress edits. The next event after the modal closes will
+			// Skip while something is being edited: reloading would discard the
+			// user's in-progress edits. The next event after the edit ends will
 			// bring the board back in sync.
-			if (!modal.classList.contains("hidden")) return;
+			//
+			// What is guarded is the edit, not the reading. The spec detail is a
+			// pane beside the board now, so an open spec is no longer a reason to
+			// skip — guarding on it would freeze the board for as long as anyone
+			// keeps a spec open. Its two edit forms are guarded instead.
+			if (!specForm.classList.contains("hidden")) return;
+			if (!planForm.classList.contains("hidden")) return;
 			if (!prdModal.classList.contains("hidden")) return;
 			if (!configModal.classList.contains("hidden")) return;
 			if (!newSpecModal.classList.contains("hidden")) return;
@@ -898,7 +1230,13 @@
 			settle: settleSpecExecution,
 		});
 		modalTitle.textContent = `Spec ${code}`;
-		modal.classList.remove("hidden");
+		// The detail takes the primary column; nothing is covered and nothing is
+		// unmounted, so the rail and its conversation stay exactly as they were.
+		// In narrow mode the spec is what was just asked for, so it is what comes
+		// on screen.
+		specOpen = true;
+		railFocus = false;
+		applyShellLayout();
 		activateTab("story");
 		specStatus.textContent = "Loading...";
 		planStatus.textContent = "";
@@ -1221,7 +1559,11 @@
 	}
 
 	function closeModal() {
-		modal.classList.add("hidden");
+		// Leaving the spec gives the primary column back to the board. The name
+		// stays: it has several call sites, and renaming it would widen the
+		// change for nothing.
+		specOpen = false;
+		applyShellLayout();
 		unmountExecutionPanels(specContext(currentSpecCode));
 		currentSpecCode = null;
 		currentSpecSnapshot = null;

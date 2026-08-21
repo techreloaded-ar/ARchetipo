@@ -4076,6 +4076,7 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
    a different place for the same list. */
 
 body.no-workspace #board,
+body.no-workspace #workspace-shell,
 body.no-workspace #workspace-status,
 body.no-workspace [data-workspace-scoped] {
 	display: none !important;
@@ -4746,4 +4747,397 @@ body.no-workspace [data-workspace-scoped] {
 .conv-close-question {
 	font-size: 11.5px;
 	color: var(--text-muted);
+}
+
+/* ---- Workspace shell (US-055) ------------------------------------------
+   Two areas that do not compete for the same space: a primary column, which
+   shows the board or — while a spec is open — the spec detail in its place,
+   and a permanent lateral rail holding what is in flight and the conversation.
+
+   The shell only *applies* a layout decision, it never takes one: which panes
+   are on screen is resolved by workspace-layout.js and arrives here as the
+   classes below (.workspace-shell--wide / --narrow, .is-visible / .is-hidden).
+   The one number shared with that module is the breakpoint, 900px, declared
+   there as NARROW_MAX_WIDTH and repeated in the media query at the bottom of
+   this section. Everything else resolves against the viewer's own tokens, so
+   both themes follow without a second rule. */
+.workspace-shell {
+	flex: 1 1 auto;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 360px;
+	grid-template-rows: auto minmax(0, 1fr);
+	min-height: 0;
+}
+
+.workspace-shell.hidden {
+	display: none !important;
+}
+
+/* ---- Primary column ----------------------------------------------------- */
+/* Scrolls on its own, so reading a long spec never moves the rail. */
+.workspace-primary {
+	/* Row 2 explicitly, never by auto-placement. The switchers row above is
+	   display:none in wide mode, so an implicitly placed column would land in
+	   the `auto` track and leave the `1fr` one empty: the columns would size to
+	   their content, the free space would pool below them, and overflow-y would
+	   never engage — the whole page would scroll instead of each column. */
+	grid-row: 2;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	overflow-y: auto;
+}
+
+/* ---- Pane visibility ---------------------------------------------------- */
+/* Scoped to the shell's own children: the narrow-mode switchers carry the same
+   pane class names as labels, and must not be laid out as panes. */
+.workspace-primary > .is-hidden,
+.workspace-shell > .is-hidden {
+	display: none !important;
+}
+
+.workspace-primary > .shell-pane-board.is-visible {
+	display: flex;
+}
+
+.workspace-primary > .shell-pane-spec.is-visible {
+	display: flex;
+}
+
+.workspace-shell > .shell-pane-rail.is-visible {
+	display: flex;
+}
+
+/* ---- Narrow-mode switchers ---------------------------------------------- */
+/* Below the breakpoint a single pane is on screen; every other pane that
+   exists must stay one tap away. Filled by the caller from the switcher list
+   workspace-layout.js returns — empty, and out of the way, in wide mode. */
+.shell-switchers {
+	grid-column: 1 / -1;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	padding: 10px 18px;
+	border-bottom: 1px solid var(--rule);
+	background: color-mix(in srgb, var(--surface) 55%, transparent);
+}
+
+.shell-switchers.hidden,
+.shell-switchers:empty,
+.workspace-shell--wide .shell-switchers {
+	display: none;
+}
+
+.shell-switchers > button {
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	color: var(--text-muted);
+	padding: 5px 14px;
+	cursor: pointer;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+	transition:
+		color var(--transition),
+		border-color var(--transition),
+		background var(--transition);
+}
+
+.shell-switchers > button:hover {
+	color: var(--text-strong);
+	border-color: var(--border-strong);
+	background: var(--surface-hover);
+}
+
+/* ---- Spec pane ---------------------------------------------------------- */
+/* The spec detail, anchored in the primary column. It is not a window any
+   more: no fixed position, no backdrop, no stacking above the page, no
+   entrance animation. .modal-root / .modal are untouched and still serve the
+   PRD, metrics, config, new spec, new workspace and known workspaces. */
+.spec-pane {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	padding: 18px 28px 22px;
+}
+
+.spec-pane.hidden {
+	display: none !important;
+}
+
+.spec-pane-body {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+	overflow: hidden;
+}
+
+/* The pane is bounded by the column, so the tab content is what scrolls. */
+.spec-pane-body > .tab-panel.active {
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+/* ---- Lateral rail ------------------------------------------------------- */
+/* Permanent: whatever the primary column shows, what is running and what the
+   agent is saying stay on screen. It scrolls independently, and it leaves room
+   below the conversation for a further section without reserving one. */
+.workspace-rail {
+	/* Same row as the primary column, for the same reason: in narrow mode the
+	   grid is a single column, and an implicitly placed rail would fall into an
+	   implicit third row *below* a primary column that still fills the whole
+	   `1fr` track — pushing the one pane that is meant to be on screen off it. */
+	grid-row: 2;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	min-width: 0;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 18px 20px 22px;
+	border-left: 1px solid var(--rule);
+	background: color-mix(in srgb, var(--surface) 45%, transparent);
+}
+
+/* In the rail the conversation is already inside the rail's own gutter. */
+.workspace-rail .workspace-conversation {
+	padding: 0;
+}
+
+.workspace-rail .workspace-conversation:empty {
+	display: none;
+}
+
+/* ---- Runs section (US-055) ---------------------------------------------- */
+/* The visual language of the conversation panel above: same card, same rail,
+   same badge — because it is the same kind of thing to a reader, an agent at
+   work. Every word comes from the payload through workspace-runs.js. */
+.workspace-runs:empty {
+	display: none;
+}
+
+.ws-runs-panel {
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--status-progress);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.ws-runs-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 12px;
+	border-bottom: 1px solid var(--rule);
+	background: color-mix(in srgb, var(--surface-3) 45%, transparent);
+}
+
+.ws-runs-title {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+	color: var(--text-muted);
+}
+
+.ws-runs-head-spacer {
+	flex: 1 1 auto;
+}
+
+.ws-runs-badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 20px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 1px 8px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	color: var(--text-muted);
+	background: var(--surface-2);
+}
+
+.ws-runs-badge.is-awaiting {
+	color: var(--priority-high);
+	border-color: color-mix(in srgb, var(--priority-high) 45%, var(--border));
+	background: color-mix(in srgb, var(--priority-high) 12%, transparent);
+}
+
+.ws-runs-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.ws-runs-empty {
+	padding: 12px;
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+.ws-run {
+	padding: 10px 12px;
+	border-top: 1px solid var(--rule);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	cursor: pointer;
+	transition: background var(--transition);
+}
+
+.ws-run:first-child {
+	border-top: none;
+}
+
+.ws-run:hover {
+	background: var(--surface-hover);
+}
+
+.ws-run.is-awaiting {
+	box-shadow: inset 2px 0 0 var(--priority-high);
+}
+
+.ws-run-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	min-width: 0;
+}
+
+.ws-run-code {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--accent);
+	background: var(--accent-soft);
+	border-radius: var(--radius-sm);
+	padding: 1px 6px;
+}
+
+.ws-run-scope {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--text-muted);
+}
+
+.ws-run-action {
+	font-size: 12px;
+	color: var(--text);
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.ws-run-status {
+	margin-left: auto;
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--text-muted);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 1px 7px;
+}
+
+.ws-run-await {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	flex-wrap: wrap;
+	font-size: 11.5px;
+	color: var(--text-muted);
+}
+
+.ws-run-await-mark {
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--priority-high);
+	border: 1px solid color-mix(in srgb, var(--priority-high) 45%, var(--border));
+	background: color-mix(in srgb, var(--priority-high) 12%, transparent);
+	border-radius: 999px;
+	padding: 1px 7px;
+}
+
+.ws-run-await-body {
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+
+.ws-run-notice {
+	font-size: 11.5px;
+	color: var(--text-dim);
+	overflow-wrap: anywhere;
+}
+
+/* ---- Attention indicator in the topbar ---------------------------------- */
+/* It stays visible whatever pane is on screen, so a run waiting for an answer
+   is never something you have to go and look for. */
+.runs-attention {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid color-mix(in srgb, var(--priority-high) 45%, var(--border));
+	background: color-mix(in srgb, var(--priority-high) 12%, transparent);
+	color: var(--priority-high);
+	border-radius: 999px;
+	padding: 3px 10px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	cursor: pointer;
+}
+
+.runs-attention.hidden,
+.runs-attention:empty {
+	display: none;
+}
+
+.runs-attention::before {
+	content: "";
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: currentColor;
+	flex-shrink: 0;
+	animation: execution-pulse 1.4s var(--ease) infinite;
+}
+
+/* ---- Narrow mode -------------------------------------------------------
+   900px is NARROW_MAX_WIDTH in workspace-layout.js: the same number, and the
+   only number the two files share. Below it there is no room for two columns,
+   so the shell becomes one column and the caller shows one pane at a time. */
+@media (max-width: 900px) {
+	.workspace-shell {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.workspace-rail {
+		border-left: none;
+		border-top: 1px solid var(--rule);
+		padding: 14px 16px 18px;
+	}
+
+	.spec-pane {
+		padding: 12px 16px 16px;
+	}
 }

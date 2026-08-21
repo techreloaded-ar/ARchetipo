@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-055 · C — Una run attende una risposta</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-055</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-board.html">A · board</a>
+        <a href="stato-b-spec.html">B · spec</a>
+        <a href="stato-c-attesa.html" class="current">C · attesa</a>
+        <a href="stato-d-stretto.html">D · stretto</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<div class="mk-doc">
+<div class="mk-page mk-page-wide">
+    <p class="mk-eyebrow">Stato C</p>
+    <h1 class="mk-title">Una decisione ferma<br />non aspetta in silenzio</h1>
+    <p class="mk-lede">
+        Marta sta leggendo la US-061, che è tutt'altra cosa. Nel frattempo la run della
+        US-058 si è fermata su una domanda: senza una risposta non va avanti. Il fatto è
+        detto <strong>due volte</strong> — nell'elenco delle run, dove la riga cambia
+        superficie, e nella topbar, che è l'unica parte dello schermo sempre visibile
+        qualunque cosa si stia guardando. Entrambi i contrassegni portano alla stessa
+        decisione.
+    </p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-4</span>
+        <strong>Perché due contrassegni e non uno.</strong> La rail può essere fuori dallo
+        sguardo: in finestra stretta è dietro il commutatore, e anche larga sta in fondo a
+        destra mentre si legge a sinistra. La topbar no. Il contrassegno di topbar esiste
+        solo quando c'è davvero qualcosa in attesa: un pallino spento che resta acceso a
+        vuoto insegna a non guardarlo più.
+    </p>
+</div>
+
+<div class="mk-app">
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark"><em>A</em></span>
+            <div class="brand-stack">
+                <span class="brand-name">ARchetipo</span>
+                <span class="brand-sub">by Tech Reloaded</span>
+            </div>
+        </div>
+        <div class="topbar-stats">
+            <span class="stat"><span class="stat-num">18</span><span class="stat-label">spec</span></span>
+            <span class="stat-sep">/</span>
+            <span class="stat"><span class="stat-num">3</span><span class="stat-label">in volo</span></span>
+            <span class="stat-sep">/</span>
+            <span class="stat"><span class="stat-num">9</span><span class="stat-label">fatte</span></span>
+        </div>
+        <div class="topbar-actions">
+            <!-- ▼ L'indicatore sempre visibile. Porta alla decisione, non a un
+                 elenco: se l'attesa è una sola, apre quella. -->
+            <button type="button" class="await-beacon" title="US-058 · vai alla decisione">
+                attende una risposta <span class="await-beacon-count">1</span>
+            </button>
+            <button type="button" class="ghost-btn">Metriche</button>
+            <button type="button" class="ghost-btn">PRD</button>
+            <span class="action-sep" aria-hidden="true"></span>
+            <button type="button" class="theme-toggle" aria-label="Cambia tema">
+                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></g></svg>
+            </button>
+        </div>
+    </header>
+
+    <section class="workspace-status">
+        <div class="ws-status-header">
+            <span class="ws-status-stage">Costruzione</span>
+            <span class="ws-status-summary">3 spec pianificate, 1 in lavorazione, 2 da accettare.</span>
+            <span class="ws-status-template">atlante · fabbrica-del-software</span>
+        </div>
+        <div class="ws-status-next-wrap">
+            <button type="button" class="ws-status-next" disabled>Implementa <span class="ws-status-next-spec">US-059</span></button>
+            <span class="ws-status-next-unlock">Una run del workspace attende una risposta: rispondi prima di avviarne un'altra.</span>
+        </div>
+    </section>
+
+    <div class="app-shell">
+        <div class="lane-switch">
+            <button type="button" class="lane-btn is-current" data-lane-target="main" aria-pressed="true">US-061</button>
+            <button type="button" class="lane-btn" data-lane-target="rail" aria-pressed="false">
+                Contesto <span class="lane-mark" aria-hidden="true"></span>
+            </button>
+        </div>
+
+        <!-- L'operatore sta guardando un'altra spec: la 061, non quella ferma. -->
+        <div class="shell-main is-current-lane" data-lane="main">
+            <section class="spec-dock" aria-label="Dettaglio della spec US-061">
+                <div class="dock-bar">
+                    <button type="button" class="ghost-btn dock-back">
+                        <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5L5 8l4.5 4.5M5 8h8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        <span>Torna alla board</span>
+                    </button>
+                    <span class="dock-sep" aria-hidden="true"></span>
+                    <span class="dock-code">US-061</span>
+                    <span class="dock-name">Riconoscere i tracciati compressi</span>
+                    <span class="dock-bar-spacer"></span>
+                    <span class="dock-anchor">agganciata al posto della board</span>
+                </div>
+                <nav class="modal-tabs" role="tablist">
+                    <button type="button" class="tab active" data-tab="story" role="tab" aria-selected="true">Story</button>
+                    <button type="button" class="tab" data-tab="plan" role="tab" aria-selected="false">Plan</button>
+                </nav>
+                <section class="tab-panel active" data-panel="story">
+                    <div class="story-view">
+                        <div class="story-view-topbar">
+                            <div class="story-view-meta">
+                                <span class="meta-chip">EP-004</span>
+                                <span class="meta-chip">HIGH</span>
+                                <span class="meta-chip">5 punti</span>
+                                <span class="meta-chip">IN PROGRESS</span>
+                            </div>
+                            <div class="story-view-actions">
+                                <button type="button" class="ghost-btn danger-ghost-btn">Elimina spec</button>
+                            </div>
+                        </div>
+                        <h3 class="story-view-title">Riconoscere i tracciati compressi</h3>
+                        <div class="story-actions">
+                            <span class="action-chip"><span class="action-chip-label">azioni offerte qui</span></span>
+                            <button type="button" class="action-chip action-chip-run" disabled><span class="action-chip-label">Implementa</span><span class="action-chip-id">implement</span></button>
+                            <span class="action-chip-unlock">Una run di questa spec è già in esecuzione.</span>
+                        </div>
+                        <div class="story-execution">
+                            <div class="execution-panel execution-running">
+                                <div class="execution-head">
+                                    <span class="execution-dot" aria-hidden="true"></span>
+                                    <span class="execution-headline">Implementazione in corso</span>
+                                    <span class="execution-code">US-061</span>
+                                    <span class="execution-id">exec 9be4…12</span>
+                                </div>
+                                <div class="execution-meta">avviata 13:52:10 · da 14 min</div>
+                                <div class="execution-message">Sta scrivendo i test sul riconoscimento dal contenuto.</div>
+                            </div>
+                        </div>
+                        <div class="markdown-rendered">
+                            <p><strong>Come</strong> analista, <strong>voglio</strong> che il sistema capisca da solo se un tracciato è compresso, <strong>così da</strong> non dover dichiarare il formato a ogni caricamento.</p>
+                            <h3>Criteri di accettazione</h3>
+                            <ul>
+                                <li><strong>AC-1</strong> — il riconoscimento avviene sui primi byte, non sul nome del file.</li>
+                                <li><strong>AC-2</strong> — un formato non riconosciuto viene rifiutato dicendo che cosa ci si aspettava.</li>
+                            </ul>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="primary-btn">Edit</button>
+                        </div>
+                    </div>
+                </section>
+                <section class="tab-panel is-hidden" data-panel="plan">
+                    <div class="story-view">
+                        <div class="markdown-rendered"><p>Piano in tre task, tutti dentro <code>internal/tracce</code>.</p></div>
+                    </div>
+                </section>
+            </section>
+        </div>
+
+        <aside class="shell-rail is-current-lane" data-lane="rail" aria-label="Contesto del workspace">
+            <section class="rail-section">
+                <div class="rail-head">
+                    <span class="rail-title">Run in corso</span>
+                    <span class="rail-count">3</span>
+                    <span class="rail-head-spacer"></span>
+                    <span class="rail-hint">nel workspace aperto</span>
+                </div>
+                <ul class="rail-runs">
+                    <!-- ▼ La riga che attende. Non è un colore in più su una riga
+                         uguale alle altre: cambia superficie e porta la ragione
+                         dell'attesa, così si trova senza leggere l'elenco. -->
+                    <li>
+                        <button type="button" class="runline state-awaiting is-awaiting">
+                            <span class="runline-top">
+                                <span class="runline-code">US-058</span>
+                                <span class="runline-action">Review</span>
+                            </span>
+                            <span class="runline-meta">
+                                <span class="runline-state">ferma</span>
+                                <span class="runline-since">dalle 14:06 · 4 min</span>
+                                <span class="runline-meta-spacer"></span>
+                                <span class="runline-go">vai alla decisione →</span>
+                            </span>
+                            <span class="runline-await">attende una risposta</span>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="runline state-running">
+                            <span class="runline-top">
+                                <span class="runline-code">US-061</span>
+                                <span class="runline-action">Implementazione</span>
+                            </span>
+                            <span class="runline-meta">
+                                <span class="runline-state">in esecuzione</span>
+                                <span class="runline-since">da 14 min</span>
+                                <span class="runline-meta-spacer"></span>
+                                <span class="runline-go">apri la conversazione →</span>
+                            </span>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="runline state-queued">
+                            <span class="runline-top">
+                                <span class="runline-code is-workspace">workspace</span>
+                                <span class="runline-action">Aggiornamento della wiki</span>
+                            </span>
+                            <span class="runline-meta">
+                                <span class="runline-state">in coda</span>
+                                <span class="runline-since">accodata alle 14:01</span>
+                                <span class="runline-meta-spacer"></span>
+                                <span class="runline-go">apri la conversazione →</span>
+                            </span>
+                        </button>
+                    </li>
+                </ul>
+            </section>
+
+            <section class="rail-section rail-conversation">
+                <div class="rail-head">
+                    <span class="rail-title">Conversazione</span>
+                    <span class="rail-head-spacer"></span>
+                    <span class="rail-hint">del workspace</span>
+                </div>
+                <div class="workspace-conversation">
+                    <div class="conv-panel conv-live">
+                        <div class="conv-head">
+                            <span class="conv-badge conv-live">conversazione</span>
+                            <code class="conv-dir" title="/Users/marta/lavoro/atlante">…/lavoro/atlante</code>
+                            <span class="conv-head-spacer"></span>
+                            <span class="conv-provider">claude</span>
+                        </div>
+                        <ol class="conv-timeline">
+                            <li class="conv-event cev-agent">
+                                <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#17</div>
+                                <div class="conv-event-body">
+                                    <div class="conv-event-head"><span class="conv-event-kind">agente</span><span class="conv-event-time">14:03:52</span></div>
+                                    <p class="conv-event-text">Sì: gli archivi corrotti hanno tre test, uno per troncatura, uno per intestazione errata, uno per file vuoto.</p>
+                                </div>
+                            </li>
+                            <li class="conv-event cev-you">
+                                <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#18</div>
+                                <div class="conv-event-body">
+                                    <div class="conv-event-head"><span class="conv-event-kind">tu</span><span class="conv-event-time">14:05:11</span></div>
+                                    <p class="conv-event-text">Ok, passo alla 061 intanto.</p>
+                                </div>
+                            </li>
+                        </ol>
+                        <form class="conv-composer">
+                            <textarea class="conv-composer-input" rows="2" placeholder="Scrivi all'agente…"></textarea>
+                            <div class="conv-composer-row">
+                                <span class="conv-close">
+                                    <button type="button" class="ghost-btn danger-ghost-btn">Chiudi conversazione</button>
+                                </span>
+                                <span class="conv-composer-spacer"></span>
+                                <span class="conv-composer-hint">⌘ + invio per inviare</span>
+                                <button type="submit" class="primary-btn">Invia</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </section>
+        </aside>
+    </div>
+</div>
+<p class="mk-app-caption">Sta guardando la US-061 · L'attesa è della US-058 · Segnalata in topbar e nella rail</p>
+
+<div class="mk-page mk-page-wide">
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Dove porta il contrassegno</p>
+    <p class="mk-note">
+        Un clic sull'indicatore di topbar — o sulla riga contrassegnata nella rail — fa una
+        cosa sola: <strong>aggancia nella colonna principale la spec ferma, sul punto in cui
+        è ferma</strong>. Non apre una finestra, non porta a un elenco intermedio, non
+        chiede di ritrovare la run. La rail, di nuovo, non si muove: la conversazione che
+        si stava leggendo resta dov'era.
+    </p>
+</div>
+
+<div class="mk-app">
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark"><em>A</em></span>
+            <div class="brand-stack">
+                <span class="brand-name">ARchetipo</span>
+                <span class="brand-sub">by Tech Reloaded</span>
+            </div>
+        </div>
+        <div class="topbar-stats">
+            <span class="stat"><span class="stat-num">18</span><span class="stat-label">spec</span></span>
+            <span class="stat-sep">/</span>
+            <span class="stat"><span class="stat-num">3</span><span class="stat-label">in volo</span></span>
+        </div>
+        <div class="topbar-actions">
+            <button type="button" class="await-beacon">attende una risposta <span class="await-beacon-count">1</span></button>
+            <span class="action-sep" aria-hidden="true"></span>
+            <button type="button" class="theme-toggle" aria-label="Cambia tema">
+                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></g></svg>
+            </button>
+        </div>
+    </header>
+
+    <div class="app-shell">
+        <div class="lane-switch">
+            <button type="button" class="lane-btn is-current" data-lane-target="main" aria-pressed="true">US-058</button>
+            <button type="button" class="lane-btn" data-lane-target="rail" aria-pressed="false">Contesto</button>
+        </div>
+        <div class="shell-main is-current-lane" data-lane="main">
+            <section class="spec-dock" aria-label="Dettaglio della spec US-058, ferma sulla decisione">
+                <div class="dock-bar">
+                    <button type="button" class="ghost-btn dock-back">
+                        <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.5L5 8l4.5 4.5M5 8h8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        <span>Torna alla board</span>
+                    </button>
+                    <span class="dock-sep" aria-hidden="true"></span>
+                    <span class="dock-code">US-058</span>
+                    <span class="dock-name">Importare i tracciati da una sorgente compressa</span>
+                    <span class="dock-bar-spacer"></span>
+                    <span class="dock-anchor">portata qui dal contrassegno</span>
+                </div>
+                <nav class="modal-tabs" role="tablist">
+                    <button type="button" class="tab active" data-tab="story" role="tab" aria-selected="true">Story</button>
+                    <button type="button" class="tab" data-tab="plan" role="tab" aria-selected="false">Plan</button>
+                    <button type="button" class="tab" data-tab="review" role="tab" aria-selected="false">Review</button>
+                </nav>
+                <section class="tab-panel active" data-panel="story">
+                    <div class="story-view">
+                        <div class="story-view-topbar">
+                            <div class="story-view-meta">
+                                <span class="meta-chip">EP-004</span>
+                                <span class="meta-chip">HIGH</span>
+                                <span class="meta-chip">REVIEW</span>
+                            </div>
+                        </div>
+                        <h3 class="story-view-title">Importare i tracciati da una sorgente compressa</h3>
+                        <div class="story-run">
+                            <section class="run-panel run-live">
+                                <div class="run-head">
+                                    <span class="run-badge">in esecuzione</span>
+                                    <span class="run-id">run 41d2…7b</span>
+                                    <span class="run-head-spacer"></span>
+                                    <span class="run-link listening"><span class="run-link-mark" aria-hidden="true"></span>in ascolto</span>
+                                </div>
+                                <!-- ▼ La decisione da prendere: la stessa scheda che il
+                                     pannello run già disegna. Il contrassegno non
+                                     inventa una superficie nuova, porta a questa. -->
+                                <div class="run-approval">
+                                    <div class="run-approval-head">
+                                        <span class="run-approval-eyebrow">attende una risposta</span>
+                                        <span class="run-approval-tool">write_file</span>
+                                    </div>
+                                    <p class="run-approval-title">L'agente vuole riscrivere <code>docs/wiki/domini/tracce.md</code>. Glielo permetto?</p>
+                                    <pre class="run-approval-args">path: docs/wiki/domini/tracce.md
+righe: 41 sostituite, 6 aggiunte
+motivo: allineare la pagina del dominio al formato compresso</pre>
+                                    <div class="run-approval-options">
+                                        <button type="button" class="approval-btn allow">Permetti</button>
+                                        <button type="button" class="approval-btn allow">Permetti sempre qui</button>
+                                        <button type="button" class="approval-btn deny">Rifiuta</button>
+                                    </div>
+                                </div>
+                                <ol class="run-timeline">
+                                    <li class="run-event ev-assistant">
+                                        <div class="run-event-rail"><span class="run-event-glyph" aria-hidden="true"></span>#92</div>
+                                        <div class="run-event-body">
+                                            <div class="run-event-head"><span class="run-event-kind">agente</span><span class="run-event-time">14:06:02</span></div>
+                                            <p class="run-event-text">La pagina del dominio non nomina ancora la sorgente compressa. Prima di chiudere la review la allineerei.</p>
+                                        </div>
+                                    </li>
+                                </ol>
+                            </section>
+                        </div>
+                    </div>
+                </section>
+                <section class="tab-panel is-hidden" data-panel="plan"><div class="story-view"></div></section>
+                <section class="tab-panel is-hidden" data-panel="review"><div class="story-view"></div></section>
+            </section>
+        </div>
+
+        <aside class="shell-rail is-current-lane" data-lane="rail" aria-label="Contesto del workspace">
+            <section class="rail-section">
+                <div class="rail-head">
+                    <span class="rail-title">Run in corso</span>
+                    <span class="rail-count">3</span>
+                    <span class="rail-head-spacer"></span>
+                    <span class="rail-hint">nel workspace aperto</span>
+                </div>
+                <ul class="rail-runs">
+                    <li>
+                        <button type="button" class="runline state-awaiting is-awaiting">
+                            <span class="runline-top">
+                                <span class="runline-code">US-058</span>
+                                <span class="runline-action">Review</span>
+                            </span>
+                            <span class="runline-meta">
+                                <span class="runline-state">ferma</span>
+                                <span class="runline-since">dalle 14:06</span>
+                                <span class="runline-meta-spacer"></span>
+                                <span class="runline-go">sei qui</span>
+                            </span>
+                            <span class="runline-await">attende una risposta</span>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="runline state-running">
+                            <span class="runline-top">
+                                <span class="runline-code">US-061</span>
+                                <span class="runline-action">Implementazione</span>
+                            </span>
+                            <span class="runline-meta">
+                                <span class="runline-state">in esecuzione</span>
+                                <span class="runline-since">da 15 min</span>
+                                <span class="runline-meta-spacer"></span>
+                                <span class="runline-go">apri la conversazione →</span>
+                            </span>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="runline state-queued">
+                            <span class="runline-top">
+                                <span class="runline-code is-workspace">workspace</span>
+                                <span class="runline-action">Aggiornamento della wiki</span>
+                            </span>
+                            <span class="runline-meta">
+                                <span class="runline-state">in coda</span>
+                                <span class="runline-since">accodata alle 14:01</span>
+                                <span class="runline-meta-spacer"></span>
+                                <span class="runline-go">apri la conversazione →</span>
+                            </span>
+                        </button>
+                    </li>
+                </ul>
+            </section>
+            <section class="rail-section rail-conversation">
+                <div class="rail-head">
+                    <span class="rail-title">Conversazione</span>
+                    <span class="rail-head-spacer"></span>
+                    <span class="rail-hint">non si è mossa</span>
+                </div>
+                <div class="workspace-conversation">
+                    <div class="conv-panel conv-live">
+                        <div class="conv-head">
+                            <span class="conv-badge conv-live">conversazione</span>
+                            <code class="conv-dir">…/lavoro/atlante</code>
+                            <span class="conv-head-spacer"></span>
+                            <span class="conv-provider">claude</span>
+                        </div>
+                        <ol class="conv-timeline">
+                            <li class="conv-event cev-you">
+                                <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#18</div>
+                                <div class="conv-event-body">
+                                    <div class="conv-event-head"><span class="conv-event-kind">tu</span><span class="conv-event-time">14:05:11</span></div>
+                                    <p class="conv-event-text">Ok, passo alla 061 intanto.</p>
+                                </div>
+                            </li>
+                        </ol>
+                        <form class="conv-composer">
+                            <textarea class="conv-composer-input" rows="2" placeholder="Scrivi all'agente…"></textarea>
+                            <div class="conv-composer-row">
+                                <span class="conv-composer-spacer"></span>
+                                <span class="conv-composer-hint">⌘ + invio per inviare</span>
+                                <button type="submit" class="primary-btn">Invia</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </section>
+        </aside>
+    </div>
+</div>
+<p class="mk-app-caption">Dopo il clic: la spec ferma è agganciata sul punto della decisione · La rail è la stessa di prima</p>
+
+<div class="mk-page mk-page-wide">
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-055</p>
+</div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

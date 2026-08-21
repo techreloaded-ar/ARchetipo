@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-055 · A — Board e rail affiancate</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-055</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-board.html" class="current">A · board</a>
+        <a href="stato-b-spec.html">B · spec</a>
+        <a href="stato-c-attesa.html">C · attesa</a>
+        <a href="stato-d-stretto.html">D · stretto</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<div class="mk-doc">
+<div class="mk-page mk-page-wide">
+    <p class="mk-eyebrow">Stato A</p>
+    <h1 class="mk-title">La board, con il contesto<br />che le sta accanto</h1>
+    <p class="mk-lede">
+        La shell del viewer diventa due colonne. A sinistra la board kanban, identica a
+        sé stessa. A destra una rail permanente: in alto le run in corso del workspace,
+        sotto il pannello della conversazione, che è quello che esiste già e non cambia
+        di una riga. Nessuna finestra sovrapposta, nessun pannello che si apre.
+    </p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-3</span>
+        L'elenco delle run dice, per ciascuna, <strong>di che cosa si tratta</strong> —
+        il codice della spec, oppure la parola <code>workspace</code> quando l'azione non
+        riguarda una spec — <strong>quale azione</strong> è in esecuzione e
+        <strong>a che punto sta</strong>. Ogni riga porta alla conversazione di quella run.
+        <span class="mk-ac ghost">AC-2</span> la rail non viene mai smontata: è per questo
+        che, passando alla spec e tornando qui, la conversazione conserva la sua storia.
+    </p>
+</div>
+
+<div class="mk-app">
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark"><em>A</em></span>
+            <div class="brand-stack">
+                <span class="brand-name">ARchetipo</span>
+                <span class="brand-sub">by Tech Reloaded</span>
+            </div>
+        </div>
+        <div class="topbar-stats">
+            <span class="stat"><span class="stat-num">18</span><span class="stat-label">spec</span></span>
+            <span class="stat-sep">/</span>
+            <span class="stat"><span class="stat-num">3</span><span class="stat-label">in volo</span></span>
+            <span class="stat-sep">/</span>
+            <span class="stat"><span class="stat-num">9</span><span class="stat-label">fatte</span></span>
+        </div>
+        <div class="topbar-actions">
+            <!-- Nessuna run attende una risposta: l'indicatore non esiste.
+                 Un contrassegno spento che resta sullo schermo insegna a non
+                 guardarlo più. -->
+            <button type="button" class="await-beacon is-idle">attende una risposta <span class="await-beacon-count">0</span></button>
+            <button type="button" class="ghost-btn">Metriche</button>
+            <button type="button" class="ghost-btn">PRD</button>
+            <button type="button" class="ghost-btn new-spec-btn">Nuova spec</button>
+            <span class="action-sep" aria-hidden="true"></span>
+            <button type="button" class="theme-toggle" aria-label="Cambia tema" data-theme-toggle-ico>
+                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></g></svg>
+            </button>
+        </div>
+    </header>
+
+    <section class="workspace-status">
+        <div class="ws-status-header">
+            <span class="ws-status-stage">Costruzione</span>
+            <span class="ws-status-summary">3 spec pianificate, 1 in lavorazione, 2 da accettare.</span>
+            <span class="ws-status-template">atlante · fabbrica-del-software</span>
+        </div>
+        <div class="ws-status-next-wrap">
+            <button type="button" class="ws-status-next">Implementa <span class="ws-status-next-spec">US-059</span></button>
+        </div>
+    </section>
+
+    <!-- ▼ LA PARTE NUOVA: la shell a due colonne. ------------------------- -->
+    <div class="app-shell">
+
+        <!-- Il commutatore esiste sempre nel markup; si vede solo quando la
+             finestra è stretta (stato D). -->
+        <div class="lane-switch">
+            <button type="button" class="lane-btn is-current" data-lane-target="main" aria-pressed="true">Board</button>
+            <button type="button" class="lane-btn" data-lane-target="rail" aria-pressed="false">Contesto</button>
+        </div>
+
+        <div class="shell-main is-current-lane" data-lane="main">
+            <main class="board">
+                <section class="column" data-id="todo">
+                    <header class="column-header">
+                        <span class="column-title"><span class="column-dot"></span>Da fare</span>
+                        <span class="column-count">5</span>
+                    </header>
+                    <div class="column-body">
+                        <article class="card prio-MEDIUM">
+                            <div class="card-top"><span class="card-code">US-062</span><span class="priority-badge priority-MEDIUM">medium</span></div>
+                            <div class="card-title">Esportare i tracciati filtrati in CSV</div>
+                            <div class="card-meta"><span class="card-epic">EP-004</span><span class="card-points">3</span></div>
+                        </article>
+                        <article class="card prio-LOW">
+                            <div class="card-top"><span class="card-code">US-064</span><span class="priority-badge priority-LOW">low</span></div>
+                            <div class="card-title">Ricordare l'ultimo filtro applicato</div>
+                            <div class="card-meta"><span class="card-epic">EP-004</span><span class="card-points">2</span></div>
+                        </article>
+                        <article class="card prio-MEDIUM">
+                            <div class="card-top"><span class="card-code">US-065</span><span class="priority-badge priority-MEDIUM">medium</span></div>
+                            <div class="card-title">Segnalare i tracciati scartati e il perché</div>
+                            <div class="card-meta"><span class="card-epic">EP-005</span><span class="card-points">5</span></div>
+                        </article>
+                    </div>
+                </section>
+
+                <section class="column" data-id="planned">
+                    <header class="column-header">
+                        <span class="column-title"><span class="column-dot"></span>Pianificate</span>
+                        <span class="column-count">3</span>
+                    </header>
+                    <div class="column-body">
+                        <article class="card prio-HIGH">
+                            <div class="card-top"><span class="card-code">US-059</span><span class="priority-badge priority-HIGH">high</span></div>
+                            <div class="card-title">Validare le righe prima di persisterle</div>
+                            <div class="card-meta"><span class="card-epic">EP-004</span><span class="card-points">5</span></div>
+                        </article>
+                        <article class="card prio-MEDIUM">
+                            <div class="card-top"><span class="card-code">US-060</span><span class="priority-badge priority-MEDIUM">medium</span></div>
+                            <div class="card-title">Riprendere un'importazione interrotta</div>
+                            <div class="card-meta"><span class="card-epic">EP-004</span><span class="card-points">8</span></div>
+                        </article>
+                    </div>
+                </section>
+
+                <section class="column" data-id="in_progress">
+                    <header class="column-header">
+                        <span class="column-title"><span class="column-dot"></span>In lavorazione</span>
+                        <span class="column-count">1</span>
+                    </header>
+                    <div class="column-body">
+                        <article class="card prio-HIGH">
+                            <div class="card-top"><span class="card-code">US-061</span><span class="priority-badge priority-HIGH">high</span></div>
+                            <div class="card-title">Riconoscere i tracciati compressi</div>
+                            <div class="card-meta"><span class="card-epic">EP-004</span><span class="card-points">5</span></div>
+                        </article>
+                    </div>
+                </section>
+
+                <section class="column" data-id="review">
+                    <header class="column-header">
+                        <span class="column-title"><span class="column-dot"></span>Da accettare</span>
+                        <span class="column-count">2</span>
+                    </header>
+                    <div class="column-body">
+                        <article class="card prio-HIGH">
+                            <div class="card-top"><span class="card-code">US-058</span><span class="priority-badge priority-HIGH">high</span><span class="rework-badge">rilavorata</span></div>
+                            <div class="card-title">Importare i tracciati da una sorgente compressa</div>
+                            <div class="card-meta"><span class="card-epic">EP-004</span><span class="card-points">5</span></div>
+                        </article>
+                        <article class="card prio-MEDIUM">
+                            <div class="card-top"><span class="card-code">US-057</span><span class="priority-badge priority-MEDIUM">medium</span></div>
+                            <div class="card-title">Mostrare l'esito dell'importazione</div>
+                            <div class="card-meta"><span class="card-epic">EP-004</span><span class="card-points">3</span></div>
+                        </article>
+                    </div>
+                </section>
+
+                <section class="column" data-id="done">
+                    <header class="column-header">
+                        <span class="column-title"><span class="column-dot"></span>Fatte</span>
+                        <span class="column-count">9</span>
+                    </header>
+                    <div class="column-body">
+                        <article class="card prio-HIGH">
+                            <div class="card-top"><span class="card-code">US-056</span><span class="priority-badge priority-HIGH">high</span></div>
+                            <div class="card-title">Leggere un tracciato dal disco</div>
+                            <div class="card-meta"><span class="card-epic">EP-004</span><span class="card-points">3</span></div>
+                        </article>
+                        <article class="card prio-LOW">
+                            <div class="card-top"><span class="card-code">US-055</span><span class="priority-badge priority-LOW">low</span></div>
+                            <div class="card-title">Aprire un workspace già conosciuto</div>
+                            <div class="card-meta"><span class="card-epic">EP-003</span><span class="card-points">2</span></div>
+                        </article>
+                    </div>
+                </section>
+            </main>
+        </div>
+
+        <!-- ▼ La rail permanente: run in corso + conversazione. Non viene mai
+             smontata, né passando alla spec né tornando alla board. -->
+        <aside class="shell-rail" data-lane="rail" aria-label="Contesto del workspace">
+
+            <section class="rail-section">
+                <div class="rail-head">
+                    <span class="rail-title">Run in corso</span>
+                    <span class="rail-count">2</span>
+                    <span class="rail-head-spacer"></span>
+                    <span class="rail-hint">nel workspace aperto</span>
+                </div>
+                <ul class="rail-runs">
+                    <li>
+                        <button type="button" class="runline state-running">
+                            <span class="runline-top">
+                                <span class="runline-code">US-061</span>
+                                <span class="runline-action">Implementazione</span>
+                            </span>
+                            <span class="runline-meta">
+                                <span class="runline-state">in esecuzione</span>
+                                <span class="runline-since">da 12 min</span>
+                                <span class="runline-meta-spacer"></span>
+                                <span class="runline-go">apri la conversazione →</span>
+                            </span>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="runline state-queued">
+                            <span class="runline-top">
+                                <span class="runline-code is-workspace">workspace</span>
+                                <span class="runline-action">Aggiornamento della wiki</span>
+                            </span>
+                            <span class="runline-meta">
+                                <span class="runline-state">in coda</span>
+                                <span class="runline-since">accodata alle 14:01</span>
+                                <span class="runline-meta-spacer"></span>
+                                <span class="runline-go">apri la conversazione →</span>
+                            </span>
+                        </button>
+                    </li>
+                </ul>
+            </section>
+
+            <section class="rail-section rail-conversation">
+                <div class="rail-head">
+                    <span class="rail-title">Conversazione</span>
+                    <span class="rail-head-spacer"></span>
+                    <span class="rail-hint">del workspace</span>
+                </div>
+
+                <!-- Il pannello è quello di US-053, invariato nei contenuti:
+                     cambia soltanto dove è montato. -->
+                <div class="workspace-conversation">
+                    <div class="conv-panel conv-live">
+                        <div class="conv-head">
+                            <span class="conv-badge conv-live">conversazione</span>
+                            <code class="conv-dir" title="/Users/marta/lavoro/atlante">…/lavoro/atlante</code>
+                            <span class="conv-head-spacer"></span>
+                            <span class="conv-provider">claude</span>
+                        </div>
+                        <ol class="conv-timeline">
+                            <li class="conv-event cev-you">
+                                <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#12</div>
+                                <div class="conv-event-body">
+                                    <div class="conv-event-head"><span class="conv-event-kind">tu</span><span class="conv-event-time">14:02:34</span></div>
+                                    <p class="conv-event-text">Prima di decidere: dove sta la logica di importazione dei tracciati?</p>
+                                </div>
+                            </li>
+                            <li class="conv-event cev-tool-end">
+                                <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#13</div>
+                                <div class="conv-event-body">
+                                    <div class="conv-event-head"><span class="conv-event-kind">strumento · fatto</span><span class="conv-event-time">14:02:36</span></div>
+                                    <p class="conv-event-text"><code class="conv-event-tool">read_file</code></p>
+                                    <p class="conv-event-detail">internal/tracce/import.go · 3 file letti, 0 scritture</p>
+                                </div>
+                            </li>
+                            <li class="conv-event cev-agent">
+                                <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#14</div>
+                                <div class="conv-event-body">
+                                    <div class="conv-event-head"><span class="conv-event-kind">agente</span><span class="conv-event-time">14:02:41</span></div>
+                                    <p class="conv-event-text">Vive tutta in internal/tracce: import.go legge e valida, store.go persiste. Il punto d'ingresso è uno solo.</p>
+                                </div>
+                            </li>
+                            <li class="conv-event cev-you">
+                                <div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#15</div>
+                                <div class="conv-event-body">
+                                    <div class="conv-event-head"><span class="conv-event-kind">tu</span><span class="conv-event-time">14:03:02</span></div>
+                                    <p class="conv-event-text">Bene. Guardo la US-058 mentre continuiamo, non chiudere nulla.</p>
+                                </div>
+                            </li>
+                        </ol>
+                        <form class="conv-composer">
+                            <textarea class="conv-composer-input" rows="2" placeholder="Scrivi all'agente…"></textarea>
+                            <div class="conv-composer-row">
+                                <span class="conv-close">
+                                    <button type="button" class="ghost-btn danger-ghost-btn">Chiudi conversazione</button>
+                                </span>
+                                <span class="conv-composer-spacer"></span>
+                                <span class="conv-composer-hint">⌘ + invio per inviare</span>
+                                <button type="submit" class="primary-btn">Invia</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </section>
+        </aside>
+    </div>
+</div>
+<p class="mk-app-caption">Colonna principale: la board · Colonna laterale: la rail permanente</p>
+
+<div class="mk-page mk-page-wide">
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Che cosa è nuovo, qui</p>
+    <ul class="mk-legend">
+        <li>La griglia a due colonne che ospita tutto <code>.app-shell</code></li>
+        <li>La colonna laterale che non viene mai smontata <code>.shell-rail</code></li>
+        <li>L'elenco delle run in corso del workspace <code>.rail-runs</code></li>
+        <li>La riga di una run: soggetto, azione, stato <code>.runline</code></li>
+    </ul>
+    <p class="mk-note">
+        <strong>Che cosa non è nuovo.</strong> La topbar, la fascia di stato del workspace,
+        le colonne, le card e l'intero pannello della conversazione sono presi da
+        <code>app.css</code> e non toccati. La board non sa di essere dentro una colonna:
+        continua a scorrere in orizzontale come prima.
+    </p>
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-055</p>
+</div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

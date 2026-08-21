@@ -76,6 +76,11 @@
             <button id="refresh-btn" type="button" class="ghost-btn" aria-label="Refresh board" title="Refresh (R)" data-workspace-scoped>
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.88" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
             </button>
+            <!-- How many runs are waiting for an answer (US-055). It lives in
+                 the topbar so it stays visible whatever pane is on screen, and
+                 it is filled from the same /api/workspace/runs payload the rail
+                 draws. Empty until there is something to wait for. -->
+            <div id="runs-attention" class="runs-attention hidden" aria-live="polite" data-workspace-scoped></div>
             <span class="action-sep" aria-hidden="true"></span>
             <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Toggle theme" title="Toggle theme (T)">
                 <svg class="theme-ico theme-ico-sun" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></g></svg>
@@ -85,14 +90,6 @@
     </header>
 
     <section id="workspace-status" class="workspace-status hidden" aria-live="polite"></section>
-
-    <!-- The conversation of the open workspace (US-053). It is mounted here,
-         once and in one place only: a workspace holds a single conversation,
-         so a panel repeated next to the board and next to a spec would be two
-         views of the same thing. Everything it draws comes from
-         /api/workspace/conversation, through the pure renderer in
-         conversation.js. -->
-    <section id="workspace-conversation" class="workspace-conversation hidden" aria-live="polite" data-workspace-scoped></section>
 
     <!-- The home shown when no workspace is open (US-051). Its list is drawn by
          the same renderer as the known-workspaces modal; the "add an existing
@@ -107,18 +104,28 @@
         </div>
     </section>
 
-    <main id="board" class="board" aria-live="polite"></main>
+    <!-- The workspace shell (US-055): one primary column and one permanent
+         lateral rail. The primary column shows the board or, when a spec is
+         open, the spec detail in its place; the rail stays on screen beside
+         both. Which panes are on screen is decided by workspace-layout.js and
+         only applied here as classes: this markup takes no decision. The shell
+         is not drawn at all when no workspace is open — #workspace-home stays
+         outside it, and body.no-workspace hides the shell. -->
+    <div id="workspace-shell" class="workspace-shell workspace-shell--wide">
+        <!-- Narrow-mode switchers: below the breakpoint a single pane is on
+             screen, and every other pane that exists must stay one tap away.
+             Empty and hidden in wide mode, where nothing needs switching. -->
+        <div id="workspace-switchers" class="shell-switchers hidden" role="group" aria-label="Panes"></div>
 
-    <footer class="hint-bar" aria-hidden="true">
-        <span><kbd>R</kbd> refresh</span>
-        <span><kbd>T</kbd> theme</span>
-        <span><kbd>Esc</kbd> close</span>
-        <span class="hint-spacer"></span>
-        <span class="hint-version">ARchetipo by Tech Reloaded</span>
-    </footer>
+        <div id="workspace-primary" class="workspace-primary">
+            <main id="board" class="board shell-pane-board is-visible" aria-live="polite"></main>
 
-    <div id="modal-root" class="modal-root hidden" role="dialog" aria-modal="true" aria-labelledby="story-editor-title">
-        <div class="modal">
+            <!-- The spec detail. It is no longer an overlaid window: it is a
+                 pane anchored in the primary column, taking the board's place
+                 while it is open. All its ids, tabs and panels are unchanged —
+                 only the two outer classes and the role differ. -->
+            <div id="modal-root" class="spec-pane shell-pane-spec hidden" role="region" aria-labelledby="story-editor-title">
+                <div class="spec-pane-body">
             <header class="modal-header">
                 <h2 id="story-editor-title" class="modal-title">Story</h2>
                 <button id="modal-close" type="button" class="icon-btn" aria-label="Close">
@@ -250,8 +257,36 @@
                 <div class="review-diff" id="review-diff"></div>
                 <span class="status-msg" id="review-status"></span>
             </section>
+                </div>
+            </div>
         </div>
+
+        <!-- The lateral rail. It is permanent: whatever the primary column is
+             showing, what is in flight and the conversation stay reachable
+             without leaving the work. -->
+        <aside id="workspace-rail" class="workspace-rail shell-pane-rail is-visible" aria-label="Workspace rail" data-workspace-scoped>
+            <!-- What the workspace is running right now (US-055). Drawn by the
+                 pure renderer in workspace-runs.js from /api/workspace/runs. -->
+            <section id="workspace-runs" class="workspace-runs" aria-live="polite"></section>
+
+            <!-- The conversation of the open workspace (US-053). It is mounted
+                 here, once and in one place only: a workspace holds a single
+                 conversation, so a panel repeated next to the board and next to
+                 a spec would be two views of the same thing. It now lives in
+                 the rail, so opening a spec no longer hides it. Everything it
+                 draws comes from /api/workspace/conversation, through the pure
+                 renderer in conversation.js. -->
+            <section id="workspace-conversation" class="workspace-conversation hidden" aria-live="polite" data-workspace-scoped></section>
+        </aside>
     </div>
+
+    <footer class="hint-bar" aria-hidden="true">
+        <span><kbd>R</kbd> refresh</span>
+        <span><kbd>T</kbd> theme</span>
+        <span><kbd>Esc</kbd> close</span>
+        <span class="hint-spacer"></span>
+        <span class="hint-version">ARchetipo by Tech Reloaded</span>
+    </footer>
 
     <div id="prd-modal" class="modal-root hidden" role="dialog" aria-modal="true" aria-labelledby="prd-editor-title">
         <div class="modal">
@@ -706,6 +741,8 @@
     <script src="/conversation.js"></script>
     <script src="/workspace-home.js"></script>
     <script src="/provider-fields.js"></script>
+<script src="/workspace-layout.js"></script>
+    <script src="/workspace-runs.js"></script>
     <script src="/app.js"></script>
 </body>
 </html>

@@ -32,6 +32,7 @@
     "test:view-backlog-smoke": "node ./test/e2e/backlog-from-view-smoke.mjs",
     "test:view-workspace-status-smoke": "node ./test/e2e/workspace-status-view-smoke.mjs",
     "test:view-spec-draft-smoke": "node ./test/e2e/spec-draft-from-view-smoke.mjs",
+    "test:view-workspace-runs-smoke": "node ./test/e2e/workspace-runs-view-smoke.mjs",
     "test:wiki-smoke": "node ./test/e2e/wiki-smoke.mjs"
   },
   "dependencies": {

@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-055 · Lavorare su una spec senza perdere di vista conversazione e board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-055</span>
+    <nav class="mk-nav">
+        <a href="index.html" class="current">Indice</a>
+        <a href="stato-a-board.html">A · board</a>
+        <a href="stato-b-spec.html">B · spec</a>
+        <a href="stato-c-attesa.html">C · attesa</a>
+        <a href="stato-d-stretto.html">D · stretto</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">EP-008 · HIGH · 5 punti</p>
+    <h1 class="mk-title">Lavorare su una spec<br />senza perdere di vista<br />conversazione e board</h1>
+    <p class="mk-lede">
+        Oggi il dettaglio di una spec è una finestra che si apre sopra tutto il resto:
+        per dire una cosa all'agente bisogna chiuderla, e per riaprirla bisogna ritrovare
+        la card. Questo mockup toglie la sovrapposizione. La shell del viewer diventa
+        <strong>due colonne</strong>: una che cambia contenuto — la board oppure la spec —
+        e una che non cambia mai.
+    </p>
+
+    <p class="mk-note">
+        <strong>Il principio del disegno.</strong> La conversazione e lo stato del lavoro
+        non sono contenuti <em>della spec</em>: sono contesto <em>del workspace</em>.
+        Perciò non stanno dentro la finestra che si apre e si chiude, ma in una colonna
+        laterale che non viene mai smontata. È questa scelta — e non un salvataggio della
+        storia da qualche parte — a far sì che la conversazione sopravviva al passaggio
+        board ⇄ spec: non le è mai successo nulla.
+    </p>
+
+    <p class="mk-note">
+        <strong>Fuori dal disegno, per scelta.</strong> La conversazione libera sul
+        workspace e l'avvio di azioni dalla conversazione esistono già e qui non cambiano
+        di una riga. Non ci sono suggerimenti sul passo successivo, e nessuna spec cambia
+        contenuto: US-055 sposta i contenitori, non ciò che sta dentro.
+    </p>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">La forma, in due rettangoli</p>
+
+    <div class="mk-grid">
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">1</span>
+                <h3 class="mk-card-title">Prima — la modale</h3>
+            </div>
+            <p class="mk-card-sub">
+                La spec copre la board. Il fondo si scurisce, tutto il resto è inerte: per
+                parlare con l'agente si chiude, per tornare alla spec si riapre.
+            </p>
+            <div class="mk-schema is-narrow">
+                <div class="mk-schema-box is-filled" style="min-height:88px">finestra spec · sopra tutto</div>
+            </div>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">2</span>
+                <h3 class="mk-card-title">Dopo — due colonne</h3>
+            </div>
+            <p class="mk-card-sub">
+                A sinistra board <em>oppure</em> spec, agganciata in-place. A destra la rail
+                permanente: run in corso in alto, conversazione sotto. Mai sovrapposte.
+            </p>
+            <div class="mk-schema">
+                <div class="mk-schema-box is-filled">board / spec</div>
+                <div class="mk-schema-stack">
+                    <div class="mk-schema-box">run</div>
+                    <div class="mk-schema-box">conversazione</div>
+                </div>
+            </div>
+        </article>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">I quattro stati</p>
+
+    <div class="mk-grid">
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">A</span>
+                <h3 class="mk-card-title">Board e rail affiancate</h3>
+                <span class="mk-ac">AC-3</span>
+                <span class="mk-ac ghost">AC-2</span>
+            </div>
+            <p class="mk-card-sub">
+                La board resta la board. Accanto, l'elenco delle run in corso del workspace
+                — codice spec o ambito workspace, azione, stato — e sotto la conversazione.
+            </p>
+            <div class="mk-schema">
+                <div class="mk-schema-box is-filled">board kanban</div>
+                <div class="mk-schema-stack">
+                    <div class="mk-schema-box">2 run</div>
+                    <div class="mk-schema-box">conversazione</div>
+                </div>
+            </div>
+            <a class="mk-card-link" href="stato-a-board.html">apri lo stato A →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">B</span>
+                <h3 class="mk-card-title">La spec agganciata</h3>
+                <span class="mk-ac">AC-1</span>
+                <span class="mk-ac">AC-5</span>
+                <span class="mk-ac ghost">AC-2</span>
+            </div>
+            <p class="mk-card-sub">
+                Il dettaglio prende il posto della board, con "Torna alla board" dove prima
+                c'era la X. Stessi tab, stessi Edit / Save / Delete, stessi pannelli
+                azioni, esecuzione e run. La conversazione è ancora lì, con la sua storia.
+            </p>
+            <div class="mk-schema">
+                <div class="mk-schema-box is-filled">spec · story / plan / review</div>
+                <div class="mk-schema-stack">
+                    <div class="mk-schema-box">2 run</div>
+                    <div class="mk-schema-box">conversazione</div>
+                </div>
+            </div>
+            <a class="mk-card-link" href="stato-b-spec.html">apri lo stato B →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">C</span>
+                <h3 class="mk-card-title">Una run attende una risposta</h3>
+                <span class="mk-ac">AC-4</span>
+            </div>
+            <p class="mk-card-sub">
+                Il revisore sta guardando un'altra spec. L'attesa è dichiarata due volte —
+                nella riga della rail e nell'indicatore sempre visibile in topbar — ed
+                entrambe portano alla stessa decisione, agganciata sul punto in cui è ferma.
+            </p>
+            <div class="mk-schema">
+                <div class="mk-schema-box is-filled">altra spec, aperta</div>
+                <div class="mk-schema-stack">
+                    <div class="mk-schema-box is-await">attende una risposta</div>
+                    <div class="mk-schema-box">conversazione</div>
+                </div>
+            </div>
+            <a class="mk-card-link" href="stato-c-attesa.html">apri lo stato C →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">D</span>
+                <h3 class="mk-card-title">Finestra stretta</h3>
+                <span class="mk-ac">AC-6</span>
+            </div>
+            <p class="mk-card-sub">
+                Sotto la soglia le colonne non si comprimono: se ne mostra una alla volta,
+                alla larghezza piena, con un commutatore che rende l'altra raggiungibile —
+                e che porta con sé il contrassegno di attesa.
+            </p>
+            <div class="mk-schema is-narrow">
+                <div class="mk-schema-box is-await" style="flex-direction:row;align-items:center;gap:8px">board · contesto ●</div>
+                <div class="mk-schema-box is-filled" style="min-height:52px">un contenuto alla volta</div>
+            </div>
+            <a class="mk-card-link" href="stato-d-stretto.html">apri lo stato D →</a>
+        </article>
+
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Come si traduce in app.css</p>
+    <p class="mk-note">
+        Il foglio <code>shared.css</code> tiene separate le regole copiate dalla shell
+        (<strong>parte 1</strong>: token, topbar, fascia di stato, board, card, modale e
+        tab, form, markdown, tabella dei task, pannelli esecuzione e run, e l'intero
+        pannello della conversazione — tutto già presente in <code>app.css</code>) dalle
+        regole nuove proposte per US-055 (<strong>parte 2</strong>), così la traduzione è
+        un taglia e incolla della sola parte 2. Nessun colore, nessun font, nessun raggio
+        e nessuna animazione nuovi: <code>.runline</code> riusa la grammatica del pannello
+        run, il contrassegno di attesa riusa <code>--status-review</code>, il battito
+        riusa <code>execution-pulse</code>.
+    </p>
+
+    <p class="mk-section-title">Le classi nuove, per intero</p>
+    <ul class="mk-legend">
+        <li>La griglia a due colonne <code>.app-shell</code></li>
+        <li>Colonna principale, che cambia contenuto <code>.shell-main</code></li>
+        <li>Colonna laterale, mai smontata <code>.shell-rail</code></li>
+        <li>Sezioni della rail <code>.rail-section</code></li>
+        <li>Elenco delle run in corso <code>.rail-runs</code></li>
+        <li>Riga di una run <code>.runline</code></li>
+        <li>Contrassegno di attesa nella riga <code>.runline-await</code></li>
+        <li>Indicatore di attesa in topbar <code>.await-beacon</code></li>
+        <li>Dettaglio spec agganciato <code>.spec-dock</code></li>
+        <li>Barra di aggancio e ritorno alla board <code>.dock-bar</code></li>
+        <li>Commutatore della finestra stretta <code>.lane-switch</code></li>
+    </ul>
+
+    <p class="mk-section-title">Criteri di accettazione coperti</p>
+    <ul class="mk-legend">
+        <li><span class="mk-ac">AC-1</span> spec e conversazione insieme, senza sovrapposizioni <code>B</code></li>
+        <li><span class="mk-ac">AC-2</span> la rail non viene smontata: la storia resta <code>A · B · C</code></li>
+        <li><span class="mk-ac">AC-3</span> run del workspace elencate, con stato e accesso <code>A · B · C · D</code></li>
+        <li><span class="mk-ac">AC-4</span> attesa segnalata in rail e in topbar, e porta alla decisione <code>C</code></li>
+        <li><span class="mk-ac">AC-5</span> tab, Edit/Save/Delete, azioni, esecuzione, run e review <code>B · D</code></li>
+        <li><span class="mk-ac">AC-6</span> un contenuto alla volta, con il commutatore <code>D</code></li>
+    </ul>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-055</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
