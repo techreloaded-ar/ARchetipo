@@ -3438,6 +3438,34 @@
 			}
 			if (e.target.closest("[data-conversation-close-confirm]")) {
 				closeConversation();
+				return;
+			}
+			// A decision is the only thing these two controls do: they name the
+			// proposal and say yes or no. Whether that yes starts anything, and
+			// what, is the server's business — the panel never dispatches an
+			// execution itself.
+			const accept = e.target.closest("[data-conversation-proposal-accept]");
+			if (accept) {
+				decideProposal(accept.getAttribute("data-proposal-id"), "accept");
+				return;
+			}
+			const decline = e.target.closest("[data-conversation-proposal-decline]");
+			if (decline) {
+				decideProposal(decline.getAttribute("data-proposal-id"), "decline");
+				return;
+			}
+			// Same rule as the status strip: reaching a run only navigates to the
+			// panel where the run already lives, so there is a single place that
+			// mounts execution panels and resumes a record.
+			const reach = e.target.closest("[data-conversation-reach-run]");
+			if (reach) {
+				const scope = reach.getAttribute("data-scope");
+				const code = reach.getAttribute("data-code");
+				if (scope === "spec" && code) {
+					openEditor(code);
+				} else if (scope === "workspace") {
+					openPRD();
+				}
 			}
 		});
 		container.addEventListener("submit", (e) => {
@@ -3643,6 +3671,42 @@
 		} finally {
 			conversationBusy = false;
 			renderConversationPanel();
+		}
+	}
+
+	// decideProposal answers the pending proposal: it says which one and what was
+	// decided, and nothing else. The decision route is the only one this panel
+	// ever calls about an action — a confirmation goes through the very same
+	// start path the board uses, on the server side, and a refusal starts
+	// nothing at all.
+	//
+	// A refusal from the server is shown with the server's own words, like every
+	// other refused command of this panel.
+	async function decideProposal(proposalID, decision) {
+		if (conversationBusy) return;
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			const view = await apiPost(
+				`/api/workspace/conversation/proposal?after_id=${conversationAfterID}`,
+				{ proposal_id: Number(proposalID), decision },
+			);
+			conversationRefusal = "";
+			applyConversationView(view);
+			// A confirmation may have just started something: the board and the
+			// status strip describe the process, not the conversation, so they are
+			// re-read here rather than waiting for the next event — the same
+			// gesture a move on the board makes.
+			if (decision === "accept") {
+				await loadBoard();
+				await loadWorkspaceStatus();
+			}
+		} catch (err) {
+			showConversationRefusal(err);
+		} finally {
+			conversationBusy = false;
+			renderConversationPanel();
+			if (conversationIsActive()) startConversationPolling();
 		}
 	}
 

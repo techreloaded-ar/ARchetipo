@@ -11,6 +11,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
 // conversationIDPrefix is what makes a conversation id impossible to mistake
@@ -63,6 +64,15 @@ type conversationView struct {
 	LastID            int64                     `json:"last_id"`
 	Truncated         bool                      `json:"truncated"`
 	Notice            string                    `json:"notice,omitempty"`
+	// Proposal is the action the agent has proposed and nobody has decided yet,
+	// or null when there is none. It is always present, never omitted, because
+	// "there is nothing to decide" is the answer a poll most often needs, and a
+	// client should read it rather than infer it from a missing key.
+	Proposal *conversationProposalView `json:"proposal"`
+	// Outcome is what became of the last decision. Unlike Proposal it is
+	// omitted while nothing has been decided: a conversation that has never
+	// answered a proposal has no outcome to speak of.
+	Outcome *conversationOutcomeView `json:"outcome,omitempty"`
 }
 
 // conversationTarget is everything the routes need once the configuration has
@@ -182,7 +192,7 @@ func conversationSessionOf(snapshot conversationSnapshot) (*localrun.Session, bo
 // the conversation it has just closed: after close() the holder is empty, and a
 // view read from the holder would answer "there is none" to a caller who has
 // every right to keep reading the history of what it just ended.
-func (s *Server) conversationViewOf(ctx context.Context, target conversationTarget, snapshot conversationSnapshot, open bool, afterID int64) conversationView {
+func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, target conversationTarget, snapshot conversationSnapshot, open bool, afterID int64) conversationView {
 	view := conversationView{
 		Available:         target.reason == "",
 		UnavailableReason: target.reason,
@@ -210,6 +220,10 @@ func (s *Server) conversationViewOf(ctx context.Context, target conversationTarg
 		}
 	}
 	view.Conversation = rendered
+	// The outcome comes from the holder and not from the history, so it is
+	// rendered even by a viewer that cannot read the events: what was decided
+	// and what it started are facts of the workspace, not lines of a timeline.
+	view.Outcome = newConversationOutcomeView(snapshot.outcome)
 
 	session, found := conversationSessionOf(snapshot)
 	if !found {
@@ -217,6 +231,14 @@ func (s *Server) conversationViewOf(ctx context.Context, target conversationTarg
 			view.Notice = "the history of this conversation is not readable from this viewer"
 		}
 		return view
+	}
+	// The resolution runs only when the history actually carries a proposal
+	// nobody has answered: it reads the connector and probes the provider, and
+	// this route is polled every couple of seconds for as long as the
+	// conversation lives. A poll with nothing to decide must cost exactly what
+	// it cost before this existed.
+	if proposal, proposalID, pending := pendingProposal(session, snapshot.decidedProposalID); pending {
+		view.Proposal = s.resolveProposal(ctx, ws, proposal, proposalID)
 	}
 	events := session.Events(afterID)
 	view.Events = events
@@ -259,7 +281,7 @@ func (s *Server) handleGetWorkspaceConversation(w http.ResponseWriter, r *http.R
 	if !open {
 		target = s.conversationAvailabilityFor(ctx, ws)
 	}
-	writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, target, snapshot, open, afterID))
+	writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, ws, target, snapshot, open, afterID))
 }
 
 // handleOpenWorkspaceConversation opens the single conversation of the open
@@ -295,6 +317,16 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		writeError(w, iox.NewConflict(target.reason, conversationRemedy, nil))
 		return
 	}
+	// The process vocabulary is resolved here and travels on the request,
+	// because the provider does not know the process and must not learn it: the
+	// agent may propose an action, and it can only name one that exists if the
+	// list reaches it. An unresolvable template is already an error of every
+	// other route that needs one, and it is answered the same way here.
+	tpl, err := s.resolveTemplate(ws)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	id, err := conversationID()
 	if err != nil {
 		writeError(w, iox.NewInternal("generating the conversation id", err))
@@ -303,6 +335,7 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 	providerConfig := execution.CloneConfig(target.availability.providerConfig)
 	openErr := target.provider.OpenConversation(ctx, execution.ConversationRequest{
 		ConversationID: id,
+		ProcessActions: conversationActionsOf(tpl),
 		// The project root of *this* workspace: the provider is shared by every
 		// workspace this process serves, and where the conversation has to run is
 		// a fact of the workspace that opened it.
@@ -331,7 +364,26 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		return
 	}
 	snapshot, open := ws.conversation.current()
-	writeJSON(w, http.StatusCreated, s.conversationViewOf(ctx, target, snapshot, open, 0))
+	writeJSON(w, http.StatusCreated, s.conversationViewOf(ctx, ws, target, snapshot, open, 0))
+}
+
+// conversationActionsOf turns the steps a process declares into the vocabulary
+// a conversation agent receives: the spec actions first, then the workspace
+// ones, each with the scope that says what it would be run on.
+//
+// It carries the id, the label and the scope and nothing else. The skill that
+// realizes a step and the statuses that admit it are knowledge of the process
+// and are decided here, in the viewer, when a proposal is resolved — a provider
+// handed them could only misuse them.
+func conversationActionsOf(tpl template.Template) []execution.ConversationAction {
+	actions := make([]execution.ConversationAction, 0, len(tpl.Actions)+len(tpl.WorkspaceActions))
+	for _, action := range tpl.Actions {
+		actions = append(actions, execution.ConversationAction{ID: action.ID, Label: action.Label, Scope: template.ScopeSpec})
+	}
+	for _, action := range tpl.WorkspaceActions {
+		actions = append(actions, execution.ConversationAction{ID: action.ID, Label: action.Label, Scope: template.ScopeWorkspace})
+	}
+	return actions
 }
 
 // conversationID mints an id from the very generator the executions use, under
@@ -393,7 +445,7 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 		return
 	}
 	target := s.conversationAvailabilityFor(ctx, ws)
-	writeJSON(w, http.StatusAccepted, s.conversationViewOf(ctx, target, snapshot, true, afterID))
+	writeJSON(w, http.StatusAccepted, s.conversationViewOf(ctx, ws, target, snapshot, true, afterID))
 }
 
 // handleCloseWorkspaceConversation closes the conversation and releases the
@@ -422,5 +474,5 @@ func (s *Server) handleCloseWorkspaceConversation(w http.ResponseWriter, r *http
 		return
 	}
 	target := s.conversationAvailabilityFor(ctx, ws)
-	writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, target, snapshot, true, afterID))
+	writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, ws, target, snapshot, true, afterID))
 }

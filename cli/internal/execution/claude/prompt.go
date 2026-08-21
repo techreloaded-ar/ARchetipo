@@ -262,24 +262,62 @@ func buildSpecDraftPrompt(_ execution.Request) string {
 // buildConversationPrompt renders the single instruction that opens a free
 // conversation about the workspace.
 //
-// It is pure and deterministic like every other prompt here, and it is the only
-// one that takes no request at all: a conversation has no spec, no artifact and
-// no receipt, so there is nothing about it that could vary. It ends on nobody
-// closing it rather than on a closing message, which is why it asks for no
-// receipt line — a receipt would end a conversation that is meant to stay open.
+// It is pure and deterministic like every other prompt here, and it takes only
+// the vocabulary of the process — no spec, no artifact and no receipt, because
+// a conversation has none. It ends on nobody closing it rather than on a
+// closing message, which is why it asks for no receipt line — a receipt would
+// end a conversation that is meant to stay open.
 //
-// It authorizes reading and forbids acting. The prohibition is a courtesy
-// towards the agent and **not** the guarantee that a conversation never becomes
-// an action of the process: that guarantee lives one layer up and is structural
-// — no execution record is ever written for a conversation, so there is nothing
-// for it to appear as. A prompt the model talks itself past would leave the
-// guarantee intact.
-func buildConversationPrompt() string {
-	return strings.Join([]string{
+// It authorizes reading, authorizes *proposing* an action, and keeps forbidding
+// acting. The two coexist because proposing is not acting: naming what would be
+// started starts nothing, and the guarantee that a conversation never becomes
+// an action of the process is unchanged and still the one relied upon — it
+// lives one layer up and is structural, since no execution record is ever
+// written for a conversation, so there is nothing for it to appear as. The
+// prohibition here is a courtesy towards the agent; a prompt the model talked
+// itself past would leave the guarantee intact.
+//
+// The action ids come from the caller and are never written here: the process
+// is not knowledge of a provider, and a literal id in this package would be a
+// second declaration of a vocabulary that has exactly one. With no actions
+// declared the whole proposal block is omitted — a list the agent cannot read
+// is a list it would invent.
+func buildConversationPrompt(actions []execution.ConversationAction) string {
+	lines := []string{
 		"Work in the current working directory: it is the ARchetipo workspace a person has open in front of them, with the archetipo CLI and the ARchetipo skills installed.",
 		"You are having a free conversation about that workspace: answer questions about its product, its backlog, its code and its documents.",
 		"Read whatever you need to answer: the source code, the documents, the backlog and the read-only `archetipo` commands that report state are all yours to consult.",
 		"Do NOT act on the workspace. You must not start any action of the process, must not invoke any `archetipo-*` skill, must not run any `archetipo` command that writes, and must not change the status of any spec: this is a conversation, not a piece of work.",
-		"You are talking to a person through a chat, one message at a time: answer the message you were given and wait for the next one. Emit no receipt line and no JSON envelope — nothing you say ends this conversation, only the person who closes it does.",
-	}, "\n")
+	}
+	if len(actions) > 0 {
+		lines = append(lines,
+			"When the person asks for an action of the process, PROPOSE it: never start it. Write first one readable sentence naming the action and what it would be run on, then, as the very last line of that message and with nothing after it, exactly:",
+			"",
+			`{"artifact":"`+execution.ActionProposalArtifact+`","action":"<id>","spec":"<US-XXX>"}`,
+			"",
+			"Omit the \"spec\" key when the action is about the workspace as a whole. <id> must be one of the ids below and nothing else — never invent one:",
+			"",
+		)
+		lines = append(lines, formatConversationActions(actions)...)
+		lines = append(lines,
+			"",
+			"That line proposes and starts nothing: confirming the proposal and starting the action belong to the person in the viewer, and no JSON line you write starts anything.",
+		)
+	}
+	lines = append(lines,
+		"You are talking to a person through a chat, one message at a time: answer the message you were given and wait for the next one. Emit no closing receipt line and no other JSON envelope — nothing you say ends this conversation, only the person who closes it does.",
+	)
+	return strings.Join(lines, "\n")
+}
+
+// formatConversationActions renders the process vocabulary as one line per
+// action, in the order the caller declared it: that order is the process's own
+// and re-sorting it here would tell the agent a story the process does not
+// tell.
+func formatConversationActions(actions []execution.ConversationAction) []string {
+	lines := make([]string, 0, len(actions))
+	for _, action := range actions {
+		lines = append(lines, "- "+action.ID+" ("+action.Scope+"): "+action.Label)
+	}
+	return lines
 }

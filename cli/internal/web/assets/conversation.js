@@ -7,6 +7,12 @@
 // has never seen is rendered as it is, unchanged. Changing what a workspace can
 // hold therefore changes what this module draws without a line changing here.
 //
+// The same holds for a proposed step: its name, its target, the reason it
+// cannot be taken and the remedy that would unlock it all arrive in the
+// payload, already resolved by the server against the workspace. This module
+// still does not know what a step of anybody's method is — it draws a label, a
+// code and a sentence — and it never decides whether one can be taken.
+//
 // It is pure: no DOM, no fetch, no document, no timers. It takes the view of
 // the route plus the text being typed and returns an HTML string. Wiring that
 // string into the page, reading the route and sending commands belong to the
@@ -230,6 +236,94 @@
 		return `<button type="button" class="primary-btn conv-open" data-conversation-open${disabled}>${escapeHtml(label)}</button>`;
 	}
 
+	// The pending proposal: what the agent says it *would* run, never what it
+	// has run. The card names the thing and its target, and — when the server
+	// says it can be taken here and now — offers the two answers a person can
+	// give. Both carry the id of the proposal, because the caller answers about
+	// the exact line it is looking at and not about whatever is pending by the
+	// time the answer lands.
+	//
+	// When it cannot be taken, the server's reason is shown as it is and no
+	// confirmation exists at all: an inert button next to a refusal would invite
+	// a press that the server has already said it would refuse.
+	function renderProposal(proposal, ui) {
+		if (!proposal || typeof proposal !== "object") return "";
+		const label = textAt(proposal, "label") || textAt(proposal, "action");
+		const code = textAt(proposal, "spec_code");
+		const title = textAt(proposal, "spec_title");
+		const target = [];
+		if (code) {
+			target.push(`<code class="conv-proposal-code">${escapeHtml(code)}</code>`);
+		}
+		if (title) {
+			target.push(`<span class="conv-proposal-title">${escapeHtml(title)}</span>`);
+		}
+		const head = `<div class="conv-proposal-head">
+			<span class="conv-proposal-mark">proposed</span>
+			<span class="conv-proposal-label">${escapeHtml(label)}</span>
+			${target.join("")}
+		</div>`;
+
+		if (!proposal.runnable) {
+			const rows = [];
+			const reason = textAt(proposal, "unavailable_reason");
+			if (reason) rows.push(renderNotice("refused", "not possible", reason));
+			const unlocked = textAt(proposal, "unlocked_by");
+			if (unlocked) rows.push(renderNotice("info", "unlocked by", unlocked));
+			return `<div class="conv-proposal is-refused">${head}${rows.join("")}</div>`;
+		}
+
+		const disabled = ui && ui.busy ? " disabled" : "";
+		const id =
+			proposal.event_id === null || proposal.event_id === undefined
+				? ""
+				: String(proposal.event_id);
+		return `<div class="conv-proposal">
+			${head}
+			<p class="conv-proposal-promise">Nothing has started yet: this is only what the agent would do, and it happens if you confirm it.</p>
+			<div class="conv-proposal-controls">
+				<button type="button" class="approval-btn allow" data-conversation-proposal-accept data-proposal-id="${escapeHtml(id)}"${disabled}>Confirm</button>
+				<button type="button" class="approval-btn deny" data-conversation-proposal-decline data-proposal-id="${escapeHtml(id)}"${disabled}>Refuse</button>
+			</div>
+		</div>`;
+	}
+
+	// What became of the last proposal: the decision in the server's own word,
+	// and the thing it was about — carried by the payload because the line that
+	// proposed it may well have left the retained history by now.
+	//
+	// The way to reach what was started exists exactly when the payload carries
+	// one: a refused proposal started nothing, so there is nothing to reach, and
+	// a control offering to go there would be pointing at a record that does not
+	// exist.
+	function renderOutcome(outcome, ui) {
+		if (!outcome || typeof outcome !== "object") return "";
+		const decision = textAt(outcome, "decision");
+		const label = textAt(outcome, "label") || textAt(outcome, "action");
+		const code = textAt(outcome, "spec_code");
+		const parts = [];
+		if (decision) {
+			parts.push(
+				`<span class="conv-outcome-decision">${escapeHtml(decision)}</span>`,
+			);
+		}
+		if (label) {
+			parts.push(`<span class="conv-outcome-label">${escapeHtml(label)}</span>`);
+		}
+		if (code) {
+			parts.push(`<code class="conv-outcome-code">${escapeHtml(code)}</code>`);
+		}
+		let reach = "";
+		if (textAt(outcome, "execution_id")) {
+			const disabled = ui && ui.busy ? " disabled" : "";
+			reach = `<button type="button" class="ghost-btn conv-outcome-reach" data-conversation-reach-run data-scope="${escapeHtml(textAt(outcome, "scope"))}" data-code="${escapeHtml(code)}"${disabled}>Go to the run</button>`;
+		}
+		return `<div class="conv-outcome">
+			<div class="conv-outcome-body">${parts.join("")}</div>
+			${reach}
+		</div>`;
+	}
+
 	// ---- public API ----
 
 	/**
@@ -319,6 +413,15 @@
 				),
 			);
 		}
+		// The proposal and its outcome sit between the notices and the timeline:
+		// both are about now, and now must be readable without scrolling a
+		// history that grows under it. Each is drawn only when the payload
+		// carries it — nothing pending and nothing decided are answers, and
+		// neither has a card.
+		const proposal = objectAt(value, "proposal");
+		if (proposal) blocks.push(renderProposal(proposal, local));
+		const outcome = objectAt(value, "outcome");
+		if (outcome) blocks.push(renderOutcome(outcome, local));
 		blocks.push(renderTimeline(value, active));
 		blocks.push(renderComposer(active, typed, local, offered));
 		if (!active && offered) {

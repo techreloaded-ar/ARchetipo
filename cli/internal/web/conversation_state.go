@@ -57,6 +57,43 @@ type conversationState struct {
 	// no conversation right now": a stopped session must never accept a new
 	// one, because nothing would be left to close it.
 	closed bool
+
+	// decidedProposalID is the id of the last event whose action proposal has
+	// been decided. It is a watermark and not a flag: a proposal is pending
+	// exactly while the last one the history carries is *newer* than this id,
+	// which is what makes a decision survive the agent going on talking, and a
+	// new proposal become pending again without anything being cleared.
+	decidedProposalID int64
+	// outcome is what became of that decision, kept so a reader that arrives
+	// after it — a reload, a second tab — still learns what was started and
+	// under which id. It is a pointer because "nothing has been decided yet" is
+	// an answer of its own, not a zero outcome.
+	outcome *conversationOutcome
+}
+
+// conversationOutcome is the record of the last decision taken on a proposal:
+// what was decided, about which proposed action, and — when the decision was to
+// confirm — the execution that was born from it.
+//
+// It carries the label, the scope and the spec of the proposal because the
+// event that proposed them may well have been dropped from the retention window
+// by the time somebody reads the outcome, and an outcome that could only say
+// "confirmed" would then name nothing.
+type conversationOutcome struct {
+	// ProposalID is the id of the event that carried the decided proposal, so
+	// the outcome can be tied back to the exact line of the history.
+	ProposalID int64
+	// Decision is what a person answered. The vocabulary is the routes' own,
+	// never invented here.
+	Decision string
+	Action   string
+	Label    string
+	Scope    string
+	SpecCode string
+	// ExecutionID is the execution the confirmation started, empty when the
+	// proposal was refused: a refusal starts nothing, and an id next to one
+	// would be a record that does not exist.
+	ExecutionID string
 }
 
 // conversationSnapshot is the read-only view of the holder at one instant. It
@@ -70,6 +107,12 @@ type conversationSnapshot struct {
 	providerConfig map[string]any
 	workingDir     string
 	openedAt       time.Time
+	// decidedProposalID and outcome travel in the copy because every reader of
+	// the conversation needs them together with its history: what is pending is
+	// decided against the watermark, and what was decided is read from the
+	// outcome.
+	decidedProposalID int64
+	outcome           *conversationOutcome
 }
 
 func newConversationState() *conversationState {
@@ -108,6 +151,38 @@ func (c *conversationState) open(id, providerID string, provider execution.Conve
 	c.providerConfig = providerConfig
 	c.workingDir = workingDir
 	c.openedAt = openedAt
+	// A new conversation is a new story, and it starts with nothing decided. An
+	// inherited watermark would silently mark as already decided a proposal this
+	// conversation has never made — the first one it makes would arrive with an
+	// id below the watermark and would simply never be pending — and an
+	// inherited outcome would show, next to a fresh history, the result of a
+	// decision taken about a conversation that no longer exists.
+	c.decidedProposalID = 0
+	c.outcome = nil
+	return nil
+}
+
+// decide records that the proposal carried by proposalID has been answered.
+//
+// It refuses on an empty or closed holder rather than recording anyway: a
+// decision belongs to one conversation, and there is no conversation to attach
+// it to in either state. Both fields are written under the same lock, so no
+// reader can ever observe a watermark that has moved without the outcome that
+// explains it.
+func (c *conversationState) decide(proposalID int64, outcome conversationOutcome) error {
+	if c == nil {
+		return fmt.Errorf("this workspace cannot hold a conversation")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return fmt.Errorf("this workspace is no longer open")
+	}
+	if c.id == "" {
+		return fmt.Errorf("no conversation is open for this workspace")
+	}
+	c.decidedProposalID = proposalID
+	c.outcome = &outcome
 	return nil
 }
 
@@ -124,13 +199,15 @@ func (c *conversationState) current() (conversationSnapshot, bool) {
 		return conversationSnapshot{}, false
 	}
 	return conversationSnapshot{
-		id:             c.id,
-		providerID:     c.providerID,
-		provider:       c.provider,
-		collaborator:   c.collaborator,
-		providerConfig: c.providerConfig,
-		workingDir:     c.workingDir,
-		openedAt:       c.openedAt,
+		id:                c.id,
+		providerID:        c.providerID,
+		provider:          c.provider,
+		collaborator:      c.collaborator,
+		providerConfig:    c.providerConfig,
+		workingDir:        c.workingDir,
+		openedAt:          c.openedAt,
+		decidedProposalID: c.decidedProposalID,
+		outcome:           c.outcome,
 	}, true
 }
 
@@ -169,6 +246,12 @@ func (c *conversationState) releaseCurrent(ctx context.Context, markClosed bool)
 	c.providerConfig = nil
 	c.workingDir = ""
 	c.openedAt = time.Time{}
+	// Same reason open clears them: the decision belonged to the conversation
+	// being released. Left behind, the watermark would make the first proposal
+	// of the next conversation look already decided, and the outcome would
+	// describe a run started from a history nobody can read here any more.
+	c.decidedProposalID = 0
+	c.outcome = nil
 	if markClosed {
 		c.closed = true
 	}

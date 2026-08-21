@@ -346,6 +346,44 @@ func writeRunModelChoiceError(w http.ResponseWriter, err error) {
 	writeError(w, iox.NewInternal("resolving the model choice of this run", err))
 }
 
+// wrapRunModelChoiceError is the error-returning half of
+// writeRunModelChoiceError: it keeps the two typed failures a per-run choice can
+// produce exactly as they are — so the single response renderer can still tell
+// them apart — and gives the same generic wrapping writeRunModelChoiceError
+// applies to everything else. It exists because the start sequence resolves the
+// choice far from the ResponseWriter, and the diagnostic must not degrade on the
+// way back.
+func wrapRunModelChoiceError(err error) error {
+	var unavailable *execution.ModelChoiceUnavailableError
+	if errors.As(err, &unavailable) {
+		return err
+	}
+	var configErr *execution.ConfigurationError
+	if errors.As(err, &configErr) {
+		return err
+	}
+	return iox.NewInternal("resolving the model choice of this run", err)
+}
+
+// writeStartError is the only place an error raised while starting an execution
+// becomes an HTTP response. Both start doors — the board and, once it exists,
+// the confirmation of an action proposed in a conversation — go through it, so
+// the same refusal can never come back worded or coded differently depending on
+// which door was pressed.
+func writeStartError(w http.ResponseWriter, err error) {
+	var unavailable *execution.ModelChoiceUnavailableError
+	if errors.As(err, &unavailable) {
+		writeRunModelChoiceError(w, err)
+		return
+	}
+	var configErr *execution.ConfigurationError
+	if errors.As(err, &configErr) {
+		writeProviderConfigError(w, err)
+		return
+	}
+	writeError(w, err)
+}
+
 // writeProviderConfigError renders a rejected provider configuration with the
 // exact offending key in `field`, so the form can point at the input the user
 // has to fix instead of showing a message about a form it cannot locate.

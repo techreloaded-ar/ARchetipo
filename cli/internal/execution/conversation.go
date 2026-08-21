@@ -21,6 +21,30 @@ type ConversationRequest struct {
 	// ProviderConfig is the non-secret configuration of the provider for this
 	// workspace, exactly as it travels on an execution request.
 	ProviderConfig map[string]any `json:"provider_config,omitempty"`
+	// ProcessActions is the vocabulary of the process of this workspace: the
+	// steps it offers, in the words of the process itself.
+	//
+	// It travels on the request because the provider does not know the process
+	// and must never learn it. An agent that may propose an action has to name
+	// one that exists, and the only way to keep invented ids out of a proposal
+	// without teaching the provider the process is to hand it the list. An
+	// empty list is a legitimate state and means the agent has nothing to
+	// propose.
+	ProcessActions []ConversationAction `json:"process_actions,omitempty"`
+}
+
+// ConversationAction is one step of the process as a conversation agent sees
+// it: the id a proposal has to name, the label a person reads, and the scope
+// that says whether the step is about a spec or about the workspace as a whole.
+//
+// It is deliberately a type of this package and not of the process one: what
+// travels to a provider is the vocabulary, not the model behind it — no skill,
+// no admissible statuses, nothing a provider could act on. Naming an action is
+// all a proposal ever does.
+type ConversationAction struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Scope string `json:"scope"`
 }
 
 // Conversationalist is implemented by providers that can hold a free

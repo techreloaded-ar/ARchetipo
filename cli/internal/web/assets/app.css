@@ -4313,6 +4313,123 @@ body.no-workspace [data-workspace-scoped] {
 	margin-bottom: 12px;
 }
 
+/* ---- Proposal and outcome ----------------------------------------------- */
+/* The card of something proposed and not yet started. It borrows the tone of
+   a notice on purpose: it is additive to the conversation, above the timeline,
+   and it must not read as a panel of its own. */
+.conv-proposal {
+	margin: 10px 12px 0;
+	padding: 10px;
+	border: 1px solid color-mix(in srgb, var(--status-planned) 45%, var(--border));
+	border-radius: var(--radius);
+	background: color-mix(in srgb, var(--status-planned) 7%, transparent);
+}
+
+/* A refused proposal carries its reason as a notice, which brings its own
+   frame: the card around it drops to a plain container so the reason is the
+   only thing framed. */
+.conv-proposal.is-refused {
+	border-style: dashed;
+	border-color: var(--border);
+	background: transparent;
+	padding: 0 0 2px;
+}
+
+.conv-proposal.is-refused .conv-proposal-head {
+	padding: 8px 10px 0;
+}
+
+.conv-proposal-head {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.conv-proposal-mark {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+	flex-shrink: 0;
+}
+
+.conv-proposal-label {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.conv-proposal-code {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--text-muted);
+}
+
+.conv-proposal-title {
+	font-size: 12px;
+	color: var(--text-muted);
+	min-width: 0;
+	word-break: break-word;
+}
+
+.conv-proposal-promise {
+	margin: 6px 0 0;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--text-muted);
+}
+
+.conv-proposal-controls {
+	display: flex;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+/* The outcome is a quieter row: it states a decision already taken, and its
+   single control only leads to what that decision started. */
+.conv-outcome {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 10px 12px 0;
+	padding: 8px 10px;
+	border: 1px dashed var(--border-strong);
+	border-radius: var(--radius);
+	background: var(--surface);
+}
+
+.conv-outcome-body {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 8px;
+	min-width: 0;
+	flex: 1;
+}
+
+.conv-outcome-decision {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+	flex-shrink: 0;
+}
+
+.conv-outcome-label {
+	font-size: 12.5px;
+	color: var(--text);
+}
+
+.conv-outcome-code {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--text-muted);
+}
+
 /* ---- Empty state -------------------------------------------------------- */
 .conv-empty {
 	display: flex;

@@ -17,6 +17,12 @@
 //     is offered
 //   - AC-6 a closed conversation is read only, and a live one has a close
 //     control
+//   - US-054 AC-1 a proposed action is named with its target and nothing has
+//     started yet
+//   - US-054 AC-3 an action the process does not admit carries the server's
+//     reason and offers no confirmation
+//   - US-054 AC-4 without a proposal there is no control left to press
+//   - US-054 AC-5 from an accepted outcome the run can be reached
 //   - the module carries no process rules: no capability, no provider, no
 //     action identifier
 
@@ -139,6 +145,14 @@ describe("renderConversation", () => {
 			'"plan"',
 			'"implement"',
 			'"review"',
+			// US-054: the proposal card resolves nothing by itself — it draws a
+			// label, a code and a sentence the server has already decided.
+			"workspace.execute",
+			"autopilot",
+			"worktree",
+			"epic",
+			"planned",
+			"wiki",
 		];
 		for (const token of forbidden) {
 			assert.ok(
@@ -377,5 +391,200 @@ describe("renderConversation", () => {
 			"la bozza non è stata neutralizzata",
 		);
 		assert.ok(!html.includes("<b>"), "la bozza ha prodotto un tag reale");
+	});
+});
+
+// US-054 — the proposal channel. The agent declares what it *would* start; the
+// server resolves that declaration against the workspace; a person decides. The
+// oracles stay on the visible text, with the single exception of the two
+// `data-*` attributes that are the contract with app.js: they are the handles
+// the wiring binds to, so their presence — and their absence — is behaviour.
+describe("renderConversation — proposta", () => {
+	it("propone l'azione nominando bersaglio e azione", () => {
+		const html = renderConversation(
+			withConversation({
+				proposal: {
+					event_id: 7,
+					runnable: true,
+					label: "AZIONE-PROPOSTA",
+					spec_code: "XX-999",
+					spec_title: "TITOLO-DELLA-SPEC",
+				},
+			}),
+			"",
+		);
+		const text = visibleText(html);
+
+		assert.ok(
+			text.includes("AZIONE-PROPOSTA"),
+			"la label della proposta non è testo visibile",
+		);
+		assert.ok(
+			text.includes("XX-999"),
+			"il codice della spec proposta non è testo visibile",
+		);
+		assert.ok(
+			text.includes("TITOLO-DELLA-SPEC"),
+			"il titolo della spec proposta non è testo visibile",
+		);
+		assert.ok(
+			html.includes("data-conversation-proposal-accept"),
+			"manca il comando di conferma della proposta",
+		);
+		assert.ok(
+			html.includes("data-conversation-proposal-decline"),
+			"manca il comando di rifiuto della proposta",
+		);
+		assert.ok(
+			/nothing has started yet/i.test(text),
+			"il pannello non dichiara che nulla è ancora partito",
+		);
+	});
+
+	it("non offre conferma per un'azione che il processo non ammette", () => {
+		const html = renderConversation(
+			withConversation({
+				proposal: {
+					event_id: 7,
+					runnable: false,
+					label: "AZIONE-PROPOSTA",
+					spec_code: "XX-999",
+					unavailable_reason: "RAGIONE-DEL-RIFIUTO dal processo",
+					unlocked_by: "SBLOCCATA-DA un passo precedente",
+				},
+			}),
+			"",
+		);
+		const text = visibleText(html);
+
+		assert.ok(
+			text.includes("RAGIONE-DEL-RIFIUTO dal processo"),
+			"la ragione del rifiuto non è testo visibile",
+		);
+		assert.ok(
+			text.includes("SBLOCCATA-DA un passo precedente"),
+			"il rimedio che sbloccherebbe l'azione non è testo visibile",
+		);
+		assert.ok(
+			!html.includes("data-conversation-proposal-accept"),
+			"un'azione che il processo non ammette non deve offrire conferma",
+		);
+	});
+
+	it("non disegna nulla senza proposta", () => {
+		const html = renderConversation(LIVE, "");
+
+		assert.ok(
+			!html.includes("data-conversation-proposal-accept"),
+			"senza proposta non deve restare un comando di conferma",
+		);
+		assert.ok(
+			!html.includes("data-conversation-proposal-decline"),
+			"senza proposta non deve restare un comando di rifiuto",
+		);
+	});
+
+	it("neutralizza l'HTML che arriva dal payload della proposta", () => {
+		const injected = '<script>alert(1)</script>';
+		const html = renderConversation(
+			withConversation({
+				proposal: {
+					event_id: 7,
+					runnable: false,
+					label: "AZIONE-PROPOSTA",
+					spec_title: injected,
+					unavailable_reason: injected,
+				},
+			}),
+			"",
+		);
+
+		assert.ok(
+			html.includes("&lt;script&gt;"),
+			"il testo della proposta non è neutralizzato",
+		);
+		assert.ok(
+			!html.includes("<script"),
+			"il payload della proposta ha prodotto un tag reale",
+		);
+	});
+});
+
+describe("renderConversation — esito", () => {
+	it("dall'esito accettato si raggiunge la run", () => {
+		const html = renderConversation(
+			withConversation({
+				outcome: {
+					decision: "DECISIONE-ACCETTATA",
+					label: "AZIONE-PROPOSTA",
+					execution_id: "exec-123",
+					scope: "AMBITO-X",
+					spec_code: "XX-999",
+				},
+			}),
+			"",
+		);
+		const text = visibleText(html);
+
+		assert.ok(
+			text.includes("DECISIONE-ACCETTATA"),
+			"la decisione non è testo visibile",
+		);
+		assert.ok(
+			html.includes("data-conversation-reach-run"),
+			"manca il comando per raggiungere la run avviata",
+		);
+		assert.ok(
+			html.includes('data-scope="AMBITO-X"'),
+			"il comando non porta lo scope del payload",
+		);
+		assert.ok(
+			html.includes('data-code="XX-999"'),
+			"il comando non porta il codice del payload",
+		);
+	});
+
+	it("un esito rifiutato non offre nulla da raggiungere", () => {
+		const html = renderConversation(
+			withConversation({
+				outcome: {
+					decision: "DECISIONE-RIFIUTATA",
+					label: "AZIONE-PROPOSTA",
+					spec_code: "XX-999",
+				},
+			}),
+			"",
+		);
+
+		assert.ok(
+			visibleText(html).includes("DECISIONE-RIFIUTATA"),
+			"la decisione di rifiuto non è testo visibile",
+		);
+		assert.ok(
+			!html.includes("data-conversation-reach-run"),
+			"un rifiuto non ha avviato nulla: non deve esserci nulla da raggiungere",
+		);
+	});
+
+	it("neutralizza l'HTML che arriva dal payload dell'esito", () => {
+		const html = renderConversation(
+			withConversation({
+				outcome: {
+					decision: '<script>alert(1)</script>',
+					label: '<img src=x onerror="alert(1)">',
+					execution_id: "exec-123",
+					scope: '"><script>alert(1)</script>',
+					spec_code: "XX-999",
+				},
+			}),
+			"",
+		);
+
+		assert.ok(
+			html.includes("&lt;script&gt;"),
+			"il testo dell'esito non è neutralizzato",
+		);
+		assert.ok(!html.includes("<script"), "l'esito ha prodotto un tag reale");
+		assert.ok(!html.includes("<img"), "l'esito ha prodotto un tag reale");
 	});
 });

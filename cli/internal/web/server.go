@@ -257,7 +257,7 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("GET /api/workspace/actions", s.handleGetWorkspaceActions)
 	s.handleWorkspace("GET /api/workspace/status", s.handleGetWorkspaceStatus)
 	s.handleWorkspace("POST /api/workspace/execution", s.handleRunWorkspaceAction)
-	// The conversation of the open workspace. There is no id in any of the four
+	// The conversation of the open workspace. There is no id in any of the five
 	// patterns because a workspace holds exactly one conversation: naming it
 	// would suggest a collection that does not exist, and it is deliberately
 	// absent from /api/workspace/actions because it is not an action of the
@@ -265,6 +265,7 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("GET /api/workspace/conversation", s.handleGetWorkspaceConversation)
 	s.handleWorkspace("POST /api/workspace/conversation", s.handleOpenWorkspaceConversation)
 	s.handleWorkspace("POST /api/workspace/conversation/messages", s.handleSendWorkspaceConversationMessage)
+	s.handleWorkspace("POST /api/workspace/conversation/proposal", s.handleDecideWorkspaceConversationProposal)
 	s.handleWorkspace("DELETE /api/workspace/conversation", s.handleCloseWorkspaceConversation)
 	s.handleAlways("GET /api/workspaces", s.handleListWorkspaces)
 	s.handleAlways("POST /api/workspaces", s.handleAddWorkspace)

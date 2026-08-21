@@ -169,16 +169,41 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, iox.NewInvalidInput("action is required", "supported actions: "+supportedActions(), nil))
 		return
 	}
-	ctx := r.Context()
+	started, err := s.startSpecAction(r.Context(), ws, code, action, req.Model, req.ModelOptions)
+	if err != nil {
+		writeStartError(w, err)
+		return
+	}
+	// The response is written after the dispatch has been launched, which is
+	// indifferent: the dispatch is asynchronous and never touches this
+	// ResponseWriter — it only runs the continuation on the server's own
+	// context. What the browser needs before it can follow the run is the
+	// persisted RUNNING record, and that already exists by the time startSpecAction
+	// returns.
+	writeJSON(w, http.StatusCreated, started)
+}
+
+// startSpecAction is the one and only place a spec-scoped execution is started.
+//
+// It exists as a function rather than as the body of an HTTP handler because a
+// second door leads here: confirming an action proposed inside a workspace
+// conversation. Both doors must produce, by construction, the same execution
+// record and the same backlog transition the board produces — which can only be
+// guaranteed if there is a single sequence, not two that happen to agree today.
+//
+// Everything an accepted start owes the system happens here: the availability
+// checks in their exact order, the per-run model choice, the preflight, the
+// reservation, the status transition and the dispatch. Nothing here writes an
+// HTTP response: every refusal is returned as an error, and writeStartError is
+// the single place that turns one into a response.
+func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code string, action execution.ActionID, model string, modelOptions map[string]string) (*execution.Execution, error) {
 	spec, err := ws.conn.ReadSpecDetail(ctx, code)
 	if err != nil {
-		writeError(w, err)
-		return
+		return nil, err
 	}
 	tpl, err := s.resolveTemplate(ws)
 	if err != nil {
-		writeError(w, err)
-		return
+		return nil, err
 	}
 	// The three refusals below are deliberately distinct, because they are three
 	// different mistakes: a name the process does not know is a malformed request
@@ -186,45 +211,39 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 	// and a legitimate step this viewer cannot yet dispatch is a capability gap
 	// (409) rather than the user's fault.
 	if !admitsAction(tpl.Actions, string(action)) {
-		writeError(w, iox.NewInvalidInput(
+		return nil, iox.NewInvalidInput(
 			"unsupported execution action: "+string(action),
 			"actions of the "+tpl.ID+" process: "+actionNames(tpl.Actions),
 			nil,
-		))
-		return
+		)
 	}
 	if !admitsAction(tpl.ActionsFor(spec.Status), string(action)) {
-		writeError(w, iox.NewConflict(
+		return nil, iox.NewConflict(
 			fmt.Sprintf("the %s process does not admit the %q action while %s is %s", tpl.ID, action, code, spec.Status),
 			"move the spec to a status that admits it, then run the action again",
 			nil,
-		))
-		return
+		)
 	}
 	if _, err := execution.RequiredCapability(action); err != nil {
-		writeError(w, iox.NewConflict(
+		return nil, iox.NewConflict(
 			"the "+string(action)+" action cannot be started from the viewer yet",
 			"run it from a coding agent; the viewer can start: "+supportedActions(),
 			err,
-		))
-		return
+		)
 	}
 	if ws.service == nil {
-		writeError(w, iox.NewConflict("no execution provider is registered in this viewer", "start the viewer from a build that registers execution providers", nil))
-		return
+		return nil, iox.NewConflict("no execution provider is registered in this viewer", "start the viewer from a build that registers execution providers", nil)
 	}
 	// The default is read from disk, not from the config the server booted with:
 	// the Execution panel can change it while the viewer runs, and starting an
 	// execution on a stale selection would ignore what the user just saved.
 	current, _, _, _, err := readConfigState(ws.cfg.ProjectRoot)
 	if err != nil {
-		writeError(w, err)
-		return
+		return nil, err
 	}
 	selection := current.Execution.DefaultProvider
 	if selection == nil || strings.TrimSpace(selection.ID) == "" {
-		writeError(w, iox.NewConflict("execution.default_provider is not configured", "pick a default provider in the Execution panel of the configuration", nil))
-		return
+		return nil, iox.NewConflict("execution.default_provider is not configured", "pick a default provider in the Execution panel of the configuration", nil)
 	}
 	providerID := strings.TrimSpace(selection.ID)
 	// A runtime that cannot be used is refused before any record exists, with
@@ -239,12 +258,11 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		if resolved, resolveErr := s.registry.Resolve(providerID); resolveErr == nil {
 			provider = resolved
 			if err := execution.CheckAvailability(ctx, provider, selection.Config); err != nil {
-				writeError(w, iox.NewConflict(
+				return nil, iox.NewConflict(
 					"the default execution provider "+quoted(providerID)+" is not usable: "+err.Error(),
 					"make its runtime usable, or pick another provider in the Execution panel of the configuration",
 					err,
-				))
-				return
+				)
 			}
 		}
 	}
@@ -255,10 +273,9 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 	// what makes a wrong override leave no trace at all: the spec is not moved,
 	// no record is written, and the saved configuration is untouched, because
 	// only the clone this call returns is ever passed on.
-	effectiveConfig, modelChoice, err := resolveRunModelChoice(ctx, provider, selection.Config, req.Model, req.ModelOptions)
+	effectiveConfig, modelChoice, err := resolveRunModelChoice(ctx, provider, selection.Config, model, modelOptions)
 	if err != nil {
-		writeRunModelChoiceError(w, err)
-		return
+		return nil, wrapRunModelChoiceError(err)
 	}
 
 	// Preflight is applied here, before the reservation, before any transition
@@ -272,11 +289,9 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 	if err := ws.service.Preflight(ctx, action, providerID, execution.CloneConfig(effectiveConfig)); err != nil {
 		var configErr *execution.ConfigurationError
 		if errors.As(err, &configErr) {
-			writeProviderConfigError(w, err)
-			return
+			return nil, err
 		}
-		writeError(w, mapExecutionStartError(err, providerID))
-		return
+		return nil, mapExecutionStartError(err, providerID)
 	}
 	// An implementation carries out a plan, so a spec that has none has nothing
 	// to execute. Refusing here costs nothing; refusing later would already have
@@ -284,22 +299,19 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 	if action == execution.ActionImplement {
 		hasPlan, err := execution.HasPersistedPlan(ctx, ws.conn, code)
 		if err != nil {
-			writeError(w, iox.NewInternal("reading the plan tasks of "+code, err))
-			return
+			return nil, iox.NewInternal("reading the plan tasks of "+code, err)
 		}
 		if !hasPlan {
-			writeError(w, iox.NewConflict(
+			return nil, iox.NewConflict(
 				"the spec "+code+" has no persisted plan to implement",
 				"plan it before implementing it, then run the action again",
 				nil,
-			))
-			return
+			)
 		}
 	}
 
 	if err := s.guardSingleExecution(ctx, ws, code); err != nil {
-		writeError(w, err)
-		return
+		return nil, err
 	}
 	// The state change an accepted start owes the backlog is the caller's,
 	// because the caller is the only one holding a connector — the execution
@@ -309,8 +321,7 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 	// instead of depending on the agent surviving its first seconds.
 	if err := execution.BeginActionEffect(ctx, ws.conn, action, spec); err != nil {
 		ws.dispatch.release(code)
-		writeError(w, iox.NewInternal("starting the "+string(action)+" action on "+code, err))
-		return
+		return nil, iox.NewInternal("starting the "+string(action)+" action on "+code, err)
 	}
 	// The claimed effect is verified inside the terminal write, not after it. The
 	// browser polls every two seconds and settles on the first terminal status it
@@ -328,19 +339,17 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 	started, continuation, err := ws.service.Start(ctx, spec, action, providerID, execution.CloneConfig(effectiveConfig), confirm, startOpts...)
 	if err != nil {
 		ws.dispatch.release(code)
-		// A rejected configuration is answered by the same renderer the Execution
-		// panel already understands, so the form can point at the offending field
-		// instead of showing a message about an input it cannot locate.
+		// A rejected configuration travels back typed, so the single error
+		// renderer can answer it with the form the Execution panel already
+		// understands, pointing at the offending field instead of showing a
+		// message about an input it cannot locate.
 		var configErr *execution.ConfigurationError
 		if errors.As(err, &configErr) {
-			writeProviderConfigError(w, err)
-			return
+			return nil, err
 		}
-		writeError(w, mapExecutionStartError(err, providerID))
-		return
+		return nil, mapExecutionStartError(err, providerID)
 	}
 	ws.dispatch.claim(code, started.ID)
-	writeJSON(w, http.StatusCreated, started)
 
 	ws.dispatch.run(func(dispatchCtx context.Context) {
 		// Deferred in this order so they unwind in the other one: the spec stops
@@ -357,6 +366,7 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		// left to reconcile here.
 		_, _ = continuation(dispatchCtx)
 	})
+	return &started, nil
 }
 
 // guardSingleExecution enforces AC-1 on the server: one press, one execution.

@@ -152,38 +152,55 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 		writeError(w, iox.NewInvalidInput("action is required", "supported actions: "+supportedActions(), nil))
 		return
 	}
+	started, err := s.startWorkspaceAction(r.Context(), ws, action, req.Model, req.ModelOptions)
+	if err != nil {
+		writeStartError(w, err)
+		return
+	}
+	// As on the spec route, the response is written after the dispatch has been
+	// launched, and for the same reason it is indifferent: the dispatch is
+	// asynchronous and never touches this ResponseWriter, while the record the
+	// browser needs in order to follow the run already exists.
+	writeJSON(w, http.StatusCreated, started)
+}
+
+// startWorkspaceAction is the one and only place a workspace-scoped execution is
+// started, and the twin of startSpecAction.
+//
+// It exists as a function for the same reason: a second door — confirming an
+// action proposed inside a workspace conversation — has to produce by
+// construction the same execution and the same effects the workspace panel
+// produces, which is only guaranteed by there being a single sequence. Every
+// refusal is returned as an error; writeStartError is the single place that
+// turns one into an HTTP response.
+func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession, action execution.ActionID, model string, modelOptions map[string]string) (*execution.Execution, error) {
 	tpl, err := s.resolveTemplate(ws)
 	if err != nil {
-		writeError(w, err)
-		return
+		return nil, err
 	}
 	// A name the process does not declare is a malformed request (400); a
 	// declared name this viewer cannot dispatch, or a workspace that cannot host
 	// the action right now, is a state conflict (409).
 	if !admitsWorkspaceAction(tpl.WorkspaceActions, string(action)) {
-		writeError(w, iox.NewInvalidInput(
+		return nil, iox.NewInvalidInput(
 			"unsupported workspace action: "+string(action),
 			"workspace actions of the "+tpl.ID+" process: "+workspaceActionNames(tpl.WorkspaceActions),
 			nil,
-		))
-		return
+		)
 	}
 	if _, err := execution.RequiredCapability(action); err != nil {
-		writeError(w, iox.NewConflict(
+		return nil, iox.NewConflict(
 			"the "+string(action)+" action cannot be started from the viewer yet",
 			"run it from a coding agent; the viewer can start: "+supportedActions(),
 			err,
-		))
-		return
+		)
 	}
-	ctx := r.Context()
 	availability := s.workspaceAvailability(ctx, ws)
 	// Every refusal the GET route renders next to a disabled action is the same
 	// refusal here, so pressing an action the payload declared unavailable never
 	// creates a record only to close it a moment later with this very sentence.
 	if reason := availability.reasonFor(string(action)); reason != "" {
-		writeError(w, iox.NewConflict(reason, workspaceRemedy(availability, string(action)), nil))
-		return
+		return nil, iox.NewConflict(reason, workspaceRemedy(availability, string(action)), nil)
 	}
 	// existedBefore is captured before the run starts, and only here: it is what
 	// separates a document this run wrote from one the workspace already had, so
@@ -212,16 +229,14 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 			provider = resolved
 		}
 	}
-	effectiveConfig, modelChoice, err := resolveRunModelChoice(ctx, provider, providerConfig, req.Model, req.ModelOptions)
+	effectiveConfig, modelChoice, err := resolveRunModelChoice(ctx, provider, providerConfig, model, modelOptions)
 	if err != nil {
-		writeRunModelChoiceError(w, err)
-		return
+		return nil, wrapRunModelChoiceError(err)
 	}
 	providerConfig = effectiveConfig
 
 	if err := s.guardSingleWorkspaceExecution(ctx, ws); err != nil {
-		writeError(w, err)
-		return
+		return nil, err
 	}
 	// The claimed effect is verified inside the terminal write, not after it: a
 	// browser polling every two seconds settles on the first terminal status it
@@ -254,18 +269,16 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 	started, continuation, err := ws.service.StartWorkspace(ctx, action, providerID, providerConfig, confirm, startOpts...)
 	if err != nil {
 		ws.dispatch.release(workspaceExecutionKey)
-		// A rejected configuration is answered by the same renderer the Execution
-		// panel already understands, so the form can point at the offending field.
+		// A rejected configuration travels back typed, so the single error
+		// renderer can answer it with the form the Execution panel already
+		// understands and point at the offending field.
 		var configErr *execution.ConfigurationError
 		if errors.As(err, &configErr) {
-			writeProviderConfigError(w, err)
-			return
+			return nil, err
 		}
-		writeError(w, mapExecutionStartError(err, providerID))
-		return
+		return nil, mapExecutionStartError(err, providerID)
 	}
 	ws.dispatch.claim(workspaceExecutionKey, started.ID)
-	writeJSON(w, http.StatusCreated, started)
 
 	ws.dispatch.run(func(dispatchCtx context.Context) {
 		// Deferred in this order so they unwind in the other one: the workspace
@@ -276,6 +289,7 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 		defer ws.dispatch.release(workspaceExecutionKey)
 		_, _ = continuation(dispatchCtx)
 	})
+	return &started, nil
 }
 
 // guardSingleWorkspaceExecution enforces "one press, one execution" on the
