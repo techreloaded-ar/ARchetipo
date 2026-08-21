@@ -10,6 +10,8 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
 // workspaceSession is everything the viewer holds that depends on which project
@@ -79,7 +81,7 @@ func newWorkspaceSession(cfg config.Config, conn connector.Connector, providers 
 		followers:  newRunFollowers(),
 	}
 	if providers != nil {
-		service, serviceErr := execution.NewService(providers, store, execution.RandomID, time.Now)
+		service, serviceErr := execution.NewService(providers, store, execution.RandomID, time.Now, cfg.ProjectRoot)
 		if serviceErr != nil {
 			return nil, fmt.Errorf("creating the execution service: %w", serviceErr)
 		}
@@ -145,4 +147,30 @@ func (ws *workspaceSession) stop(drain time.Duration) {
 		ws.dispatch.wait(drain)
 		ws.followers.closeAll()
 	})
+}
+
+// requireReachable refuses to start anything when the project root this session
+// serves is no longer reachable.
+//
+// It must be the *first* check of a start route, before the request body is
+// decoded and before the connector is read: a connector read against a
+// directory that is gone fails first with an internal error that says nothing
+// about which directory disappeared, and the person is left with a stack of
+// words instead of the path they have to restore. Probing here names the
+// directory and refuses before any record, any reservation and any effect on
+// the spec exists.
+//
+// It deliberately reuses workspace.Probe and switchReason, the very functions
+// SwitchWorkspace already refuses an unreachable workspace with, so the two
+// refusals cannot drift into two vocabularies for the same three causes.
+func (ws *workspaceSession) requireReachable() error {
+	root := ws.cfg.ProjectRoot
+	if status := workspace.Probe(workspace.Entry{Path: root}); !status.Reachable() {
+		return iox.NewConflict(
+			"the workspace directory "+root+" is not reachable: "+switchReason(status),
+			"restore that directory, or open another workspace, and start the action again",
+			nil,
+		)
+	}
+	return nil
 }

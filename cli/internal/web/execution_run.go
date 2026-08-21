@@ -147,6 +147,13 @@ type runSpecActionReq struct {
 // what lets a reload find it.
 func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 	ws := s.session()
+	// First of all, and before anything is read or reserved: a run executes in
+	// the project root of the workspace that is open, so a root that is gone is
+	// a refusal that names the directory, not an obscure connector failure.
+	if err := ws.requireReachable(); err != nil {
+		writeError(w, err)
+		return
+	}
 	code := strings.TrimSpace(r.PathValue("code"))
 	if code == "" {
 		writeError(w, iox.NewInvalidInput("missing spec code", "use /api/spec/US-XXX/execution", nil))

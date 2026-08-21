@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,6 +28,13 @@ type runTestProvider struct {
 	entered chan struct{}
 	release chan struct{}
 	execute func(context.Context, execution.Request) (execution.Result, error)
+
+	// mu guards seen, the requests the provider was dispatched, recorded on
+	// entry and before any blocking: what a test asks of them is where the run
+	// was told to execute, which is decided at dispatch and must stay readable
+	// even for a run that is still inside Execute.
+	mu   sync.Mutex
+	seen []execution.Request
 }
 
 func newRunTestProvider(id string, execute func(context.Context, execution.Request) (execution.Result, error)) *runTestProvider {
@@ -44,6 +52,9 @@ func (p *runTestProvider) Capabilities(context.Context) ([]execution.Capability,
 }
 func (p *runTestProvider) ValidateConfig(context.Context, map[string]any) error { return nil }
 func (p *runTestProvider) Execute(ctx context.Context, request execution.Request) (execution.Result, error) {
+	p.mu.Lock()
+	p.seen = append(p.seen, request)
+	p.mu.Unlock()
 	select {
 	case p.entered <- struct{}{}:
 	default:
@@ -71,6 +82,13 @@ func releasedProvider(id string, execute func(context.Context, execution.Request
 	return p
 }
 
+// requests returns the dispatches the provider has received so far, in order.
+func (p *runTestProvider) requests() []execution.Request {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]execution.Request(nil), p.seen...)
+}
+
 func seedRunSpecs(t *testing.T, conn connector.Connector) {
 	t.Helper()
 	specs := []domain.Spec{
@@ -85,6 +103,24 @@ func seedRunSpecs(t *testing.T, conn connector.Connector) {
 // newRunServer builds a viewer over a real filefs workspace. withDefault
 // decides whether the workspace has a persisted default provider, which is the
 // difference between "can start an action" and "must be configured first".
+// newWorkspaceDir is a temporary directory that really is a workspace: it holds
+// the configuration file that makes it one. The start routes refuse a project
+// root that is not reachable as a workspace, so a fixture that skipped the file
+// would be testing a state the viewer can never be in — a viewer is opened on a
+// workspace, and it is that directory the run has to execute in.
+func newWorkspaceDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, config.RelativePath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("connector: file\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func newRunServer(t *testing.T, provider execution.Provider, withDefault bool) (*Server, config.Config, connector.Connector) {
 	t.Helper()
 	return newRunServerWithConnector(t, provider, withDefault, nil)
@@ -111,7 +147,7 @@ func newEmptyRunServer(t *testing.T, provider execution.Provider, withDefault bo
 
 func newRunServerWith(t *testing.T, provider execution.Provider, withDefault bool, wrap func(connector.Connector) connector.Connector, seed bool) (*Server, config.Config, connector.Connector) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := newWorkspaceDir(t)
 	cfg := config.Default()
 	cfg.ProjectRoot = dir
 	conn := filefs.New(cfg)

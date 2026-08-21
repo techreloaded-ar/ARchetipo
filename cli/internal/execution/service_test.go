@@ -68,7 +68,7 @@ func newTestService(t *testing.T, provider *testProvider, store *spyStore) *Serv
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
-	service, err := NewService(registry, store, func() (string, error) { return "exec-001", nil }, func() time.Time { now = now.Add(time.Second); return now })
+	service, err := NewService(registry, store, func() (string, error) { return "exec-001", nil }, func() time.Time { now = now.Add(time.Second); return now }, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestServiceRejectsInvalidConfigBeforeEffects(t *testing.T) {
 	if err := registry.Register(p); err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewService(registry, store, func() (string, error) { newIDCalls++; return "exec-001", nil }, time.Now)
+	service, err := NewService(registry, store, func() (string, error) { newIDCalls++; return "exec-001", nil }, time.Now, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +366,7 @@ func TestRunIdempotentTreatsAlreadyExistsAsReuse(t *testing.T) {
 	}
 	id := DeriveID("US-001", ActionPlan, "fake", "r1")
 	store := &raceStore{spyStore: &spyStore{records: map[string]Execution{}}, winner: Execution{ID: id, SpecCode: "US-001", RequestID: "r1", Status: StatusSucceeded}}
-	service, err := NewService(registry, store, func() (string, error) { return "exec-001", nil }, time.Now)
+	service, err := NewService(registry, store, func() (string, error) { return "exec-001", nil }, time.Now, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +438,7 @@ func newBlockingService(t *testing.T, provider *blockingProvider, store Store) *
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 17, 9, 0, 0, 0, time.UTC)
-	service, err := NewService(registry, store, func() (string, error) { return "exec-start-001", nil }, func() time.Time { now = now.Add(time.Second); return now })
+	service, err := NewService(registry, store, func() (string, error) { return "exec-start-001", nil }, func() time.Time { now = now.Add(time.Second); return now }, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1136,5 +1136,119 @@ func TestStartWorkspaceRecordsModelChoice(t *testing.T) {
 	}
 	if closed.ModelChoice == nil || !reflect.DeepEqual(*closed.ModelChoice, choice) {
 		t.Fatalf("model choice after the terminal write = %#v, want %#v", closed.ModelChoice, choice)
+	}
+}
+
+// newRootedTestService builds a service on an explicit working root, so a test
+// can name the directory it expects the run to be started in instead of
+// discovering it after the fact.
+func newRootedTestService(t *testing.T, provider *testProvider, store *spyStore, workingRoot string) *Service {
+	t.Helper()
+	registry := NewRegistry()
+	if err := registry.Register(provider); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(registry, store, func() (string, error) { return "exec-root-001", nil }, time.Now, workingRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+// AC-1: the run executes in the project root of the workspace the service
+// serves, not in the working directory of the process that happens to host it.
+func TestStartStampsTheWorkspaceRootOnRequestAndRecord(t *testing.T) {
+	root := t.TempDir()
+	p := &testProvider{id: "fake", capabilities: []Capability{CapabilitySpecPlan}, result: Result{Payload: json.RawMessage(`{"ok":true}`)}}
+	store := &spyStore{records: map[string]Execution{}}
+	service := newRootedTestService(t, p, store, root)
+
+	started, continuation, err := service.Start(context.Background(), domain.Spec{Code: "US-001", Status: domain.StatusTodo}, ActionPlan, "fake", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.WorkingDir != root {
+		t.Fatalf("the RUNNING record does not carry the workspace root: got %q want %q", started.WorkingDir, root)
+	}
+	closed, err := continuation(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.request.WorkingDir != root {
+		t.Fatalf("the provider was asked to run in %q, want %q", p.request.WorkingDir, root)
+	}
+	if closed.WorkingDir != root {
+		t.Fatalf("the closed record lost the working directory: %#v", closed)
+	}
+	// AC-3 (contract): the value the closed record carries is the one stamped at
+	// start, read back from the store after the continuation ran.
+	persisted, err := store.Get(context.Background(), started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.WorkingDir != root {
+		t.Fatalf("the persisted record does not carry the working directory: %#v", persisted)
+	}
+}
+
+// The synchronous path the CLI uses stamps exactly the same root as the
+// viewer's Start path, because both go through the one code path.
+func TestRunAndRunIdempotentStampTheSameWorkspaceRoot(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*Service, domain.Spec) (Execution, error)
+	}{
+		{"Run", func(s *Service, spec domain.Spec) (Execution, error) {
+			return s.Run(context.Background(), spec, ActionPlan, "fake", nil)
+		}},
+		{"RunIdempotent", func(s *Service, spec domain.Spec) (Execution, error) {
+			out, _, err := s.RunIdempotent(context.Background(), spec, ActionPlan, "fake", nil, "r1")
+			return out, err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			p := &testProvider{id: "fake", capabilities: []Capability{CapabilitySpecPlan}, result: Result{Payload: json.RawMessage(`{"ok":true}`)}}
+			store := &spyStore{records: map[string]Execution{}}
+			outcome, err := tc.run(newRootedTestService(t, p, store, root), domain.Spec{Code: "US-001"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.request.WorkingDir != root || outcome.WorkingDir != root {
+				t.Fatalf("%s did not stamp the workspace root: request=%q record=%q want %q", tc.name, p.request.WorkingDir, outcome.WorkingDir, root)
+			}
+		})
+	}
+}
+
+// A service that does not know where it executes must not be constructible:
+// that is the defect this spec closes, expressed as a compile-time-adjacent
+// guarantee rather than a convention.
+func TestNewServiceRejectsAnEmptyWorkingRoot(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(&testProvider{id: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{"", "   "} {
+		service, err := NewService(registry, &spyStore{records: map[string]Execution{}}, RandomID, time.Now, root)
+		if err == nil || service != nil {
+			t.Fatalf("working root %q: err=%v service=%v", root, err, service)
+		}
+	}
+}
+
+// The root reaches the provider absolute and clean, whatever shape the caller
+// wrote it in.
+func TestStartNormalisesTheWorkspaceRoot(t *testing.T) {
+	root := t.TempDir()
+	p := &testProvider{id: "fake", capabilities: []Capability{CapabilitySpecPlan}, result: Result{Payload: json.RawMessage(`{"ok":true}`)}}
+	store := &spyStore{records: map[string]Execution{}}
+	service := newRootedTestService(t, p, store, filepath.Join(root, "sub", ".."))
+
+	if _, err := service.Run(context.Background(), domain.Spec{Code: "US-001"}, ActionPlan, "fake", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(p.request.WorkingDir) || p.request.WorkingDir != root {
+		t.Fatalf("the working root was not normalised: got %q want %q", p.request.WorkingDir, root)
 	}
 }

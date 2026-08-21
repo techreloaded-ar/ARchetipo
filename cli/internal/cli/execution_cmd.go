@@ -163,7 +163,7 @@ func newExecutionRunCmd(s streams, deps executionDependencies) *cobra.Command {
 				if err != nil {
 					return nil, iox.NewInternal("creating execution store", err)
 				}
-				service, err := execution.NewService(deps.registry, store, deps.newID, deps.now)
+				service, err := execution.NewService(deps.registry, store, deps.newID, deps.now, cfg.ProjectRoot)
 				if err != nil {
 					return nil, iox.NewInternal("creating execution service", err)
 				}

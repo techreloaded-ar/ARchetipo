@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,6 +20,12 @@ type Service struct {
 	store    Store
 	newID    IDGenerator
 	now      Clock
+	// workingRoot is the project root of the workspace this service serves.
+	// The service is already per-workspace (it is built with that workspace's
+	// store), so the root belongs to exactly the same object. It is required:
+	// a service that does not know where it executes is the defect this field
+	// exists to make unrepresentable.
+	workingRoot string
 }
 
 type CapabilityError struct {
@@ -35,11 +42,20 @@ func (e *CapabilityError) Error() string {
 }
 func (e *CapabilityError) Unwrap() error { return e.Err }
 
-func NewService(registry *Registry, store Store, newID IDGenerator, now Clock) (*Service, error) {
+func NewService(registry *Registry, store Store, newID IDGenerator, now Clock, workingRoot string) (*Service, error) {
 	if registry == nil || store == nil || newID == nil || now == nil {
 		return nil, fmt.Errorf("execution service dependencies are required")
 	}
-	return &Service{registry: registry, store: store, newID: newID, now: now}, nil
+	if strings.TrimSpace(workingRoot) == "" {
+		return nil, fmt.Errorf("execution service working root is required")
+	}
+	// Abs already cleans the result, so the root a run is stamped with is
+	// absolute and normalised whatever shape the caller wrote it in.
+	root, err := filepath.Abs(strings.TrimSpace(workingRoot))
+	if err != nil {
+		return nil, fmt.Errorf("resolve execution working root: %w", err)
+	}
+	return &Service{registry: registry, store: store, newID: newID, now: now, workingRoot: root}, nil
 }
 
 // Continuation dispatches an already persisted execution to its provider and
@@ -260,7 +276,7 @@ func (s *Service) start(ctx context.Context, spec domain.Spec, action ActionID, 
 		return Execution{}, nil, fmt.Errorf("generated invalid execution id %q", id)
 	}
 	created := s.now().UTC()
-	started := Execution{ID: id, SpecCode: spec.Code, Action: action, Capability: capability, ProviderID: providerID, RequestID: requestID, SpecStatusBefore: spec.Status, Status: StatusRunning, CreatedAt: created}
+	started := Execution{ID: id, SpecCode: spec.Code, Action: action, Capability: capability, ProviderID: providerID, RequestID: requestID, SpecStatusBefore: spec.Status, Status: StatusRunning, CreatedAt: created, WorkingDir: s.workingRoot}
 	// The options are applied *before* the create, never after: the model a run
 	// uses has to be readable while that run is RUNNING, and decorating the
 	// record only on the terminal write would hide it until the run is over —
@@ -273,7 +289,12 @@ func (s *Service) start(ctx context.Context, spec domain.Spec, action ActionID, 
 	if err := s.store.Create(ctx, started); err != nil {
 		return Execution{}, nil, err
 	}
-	request := Request{ExecutionID: id, SpecCode: spec.Code, Action: action, Capability: capability, ProviderConfig: CloneConfig(validatedConfig)}
+	// The request derives its root from the record, not from the service, so
+	// there is a single source of truth and the value the provider receives is
+	// literally the one the record says the run started with. The request is
+	// built here and captured by the continuation's closure: a run already in
+	// flight carries its own root and no later workspace switch can rewrite it.
+	request := Request{ExecutionID: id, SpecCode: spec.Code, Action: action, Capability: capability, WorkingDir: started.WorkingDir, ProviderConfig: CloneConfig(validatedConfig)}
 	continuation := func(ctx context.Context) (Execution, error) {
 		execution := started
 		result, dispatchErr := provider.Execute(ctx, request)

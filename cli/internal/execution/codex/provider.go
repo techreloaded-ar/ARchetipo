@@ -239,9 +239,18 @@ func (p *Provider) prepare(ctx context.Context, req execution.Request) (settings
 	if err != nil {
 		return settings{}, "", err
 	}
-	dir, err := p.workingDir()
-	if err != nil {
-		return settings{}, "", fmt.Errorf("resolving the working directory to run the codex command %q: %w", cfg.Command, err)
+	// The request wins over the provider's own default: the directory a run has
+	// to execute in is a fact of the workspace that started the run, while the
+	// provider is shared by every workspace the process serves and only knows
+	// where that process happens to have been launched. A request that names no
+	// directory falls back, so every caller that never sets it is unchanged.
+	dir := strings.TrimSpace(req.WorkingDir)
+	if dir == "" {
+		resolved, err := p.workingDir()
+		if err != nil {
+			return settings{}, "", fmt.Errorf("resolving the working directory to run the codex command %q: %w", cfg.Command, err)
+		}
+		dir = resolved
 	}
 	// The availability probe is already the explicit diagnostic for a runtime
 	// that is absent or broken, so it travels back unchanged rather than being

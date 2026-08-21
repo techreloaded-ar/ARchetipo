@@ -18,6 +18,8 @@
 // it reads is reported to that server too, so the smoke can assert what the
 // process was really told and not only what it answered.
 
+import fs from "node:fs/promises";
+import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
 
@@ -52,8 +54,11 @@ async function report(kind, body) {
 
 // The invocation itself is reported, because how the session is opened is part
 // of the protocol: the streaming flags are what make a live dialogue possible
-// at all, and the smoke asserts them the way it asserts a frame.
-report("argv", { argv: process.argv.slice(2) });
+// at all, and the smoke asserts them the way it asserts a frame. The working
+// directory belongs to the same report and for the same reason: where the agent
+// was started is part of how the session was opened, and it is the one fact no
+// viewer field can stand in for.
+report("argv", { argv: process.argv.slice(2), cwd: process.cwd() });
 
 const rl = readline.createInterface({ input: process.stdin });
 
@@ -94,6 +99,18 @@ async function pump() {
     }
     if (command && command.kind === "emit") {
       write(command.frame);
+    } else if (command && command.kind === "write") {
+      // An artifact the agent produces, written *relative to its own working
+      // directory*: it is what makes "the run acted on this workspace" a fact on
+      // the filesystem instead of a claim about a configuration value.
+      const target = path.resolve(process.cwd(), command.name);
+      try {
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, command.text ?? "", "utf8");
+        await report("wrote", { name: command.name, path: target });
+      } catch (error) {
+        await report("wrote", { name: command.name, error: String(error) });
+      }
     } else if (command && command.kind === "exit") {
       process.exit(command.code ?? 0);
     }

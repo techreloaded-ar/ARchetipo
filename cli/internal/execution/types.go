@@ -72,10 +72,18 @@ const (
 )
 
 type Request struct {
-	ExecutionID    string         `json:"execution_id"`
-	SpecCode       string         `json:"spec_code"`
-	Action         ActionID       `json:"action"`
-	Capability     Capability     `json:"capability"`
+	ExecutionID string     `json:"execution_id"`
+	SpecCode    string     `json:"spec_code"`
+	Action      ActionID   `json:"action"`
+	Capability  Capability `json:"capability"`
+	// WorkingDir is the directory the run was started in: the project root of
+	// the workspace that asked for it, frozen at start. It travels on the
+	// request and not on the provider because the provider is shared by every
+	// workspace a long-lived process serves, while where a run has to execute
+	// is a fact of the workspace that started it. Empty means the provider
+	// falls back to its own default, so a caller that never sets it behaves
+	// exactly as before.
+	WorkingDir     string         `json:"working_dir,omitempty"`
 	ProviderConfig map[string]any `json:"provider_config,omitempty"`
 }
 
@@ -132,6 +140,12 @@ type Execution struct {
 	// the two apart. It stays a pointer with omitempty so records written
 	// before this field existed deserialize unchanged.
 	ModelChoice *ModelChoice `json:"model_choice,omitempty"`
+	// WorkingDir is the directory this run was *actually started in*, frozen at
+	// start and never rewritten afterwards: opening another workspace while the
+	// run is in flight cannot change where that run is executing, so the record
+	// keeps saying where it really ran. omitempty keeps records written before
+	// this field existed deserializable unchanged.
+	WorkingDir string `json:"working_dir,omitempty"`
 }
 
 type ActionError struct{ Action ActionID }

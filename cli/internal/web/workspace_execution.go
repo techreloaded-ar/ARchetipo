@@ -136,6 +136,12 @@ func workspaceActionViews(actions []template.WorkspaceAction, availability works
 // as long as the person keeps talking.
 func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request) {
 	ws := s.session()
+	// Same first check as the spec route, for the same reason: the refusal has
+	// to name the directory, and it has to happen before any effect exists.
+	if err := ws.requireReachable(); err != nil {
+		writeError(w, err)
+		return
+	}
 	var req runWorkspaceActionReq
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)

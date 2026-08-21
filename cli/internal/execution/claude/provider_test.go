@@ -1014,3 +1014,43 @@ func TestBuildArgsCarriesTheEffortOptionOnlyWhenSet(t *testing.T) {
 		}
 	}
 }
+
+// AC-1: the directory carried by the request is where the agent process is
+// really started — the oracle is cmd.Dir, seen through the Starter, not a
+// configuration value that stands for it.
+func TestRequestWorkingDirectoryWinsOverTheProviderFallback(t *testing.T) {
+	fallback := installSkillIn(t, t.TempDir())
+	requested := installSkillIn(t, t.TempDir())
+	runner := &fakeRunner{outcomes: []runOutcome{probeOK}}
+	fake := newFakeClaude()
+	plannedSession(fake, testSpec, 2)
+	p := newSessionProvider(fallback, runner, fake, fixedElapsedClock(time.Second))
+
+	req := testRequest(fakeCommand(t))
+	req.WorkingDir = requested
+	if _, err := p.Execute(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if dir := fake.startedIn(); dir != requested {
+		t.Fatalf("the session ran in %q, want the directory carried by the request %q", dir, requested)
+	}
+}
+
+// A request that names no directory leaves the behaviour exactly as it was, so
+// no existing caller can regress in silence.
+func TestRequestWithoutWorkingDirectoryFallsBackToTheProvider(t *testing.T) {
+	fallback := installSkillIn(t, t.TempDir())
+	runner := &fakeRunner{outcomes: []runOutcome{probeOK}}
+	fake := newFakeClaude()
+	plannedSession(fake, testSpec, 2)
+	p := newSessionProvider(fallback, runner, fake, fixedElapsedClock(time.Second))
+
+	req := testRequest(fakeCommand(t))
+	req.WorkingDir = ""
+	if _, err := p.Execute(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if dir := fake.startedIn(); dir != fallback {
+		t.Fatalf("the session ran in %q, want the provider fallback %q", dir, fallback)
+	}
+}

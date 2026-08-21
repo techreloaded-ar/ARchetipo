@@ -39,6 +39,11 @@ type fakeCodex struct {
 
 	turnStarted chan struct{}
 	done        chan struct{}
+
+	// startDir is the directory the process was really started in — the
+	// cmd.Dir the Starter receives — so a test can assert where the run
+	// executes instead of asserting a configuration value that stands for it.
+	startDir string
 }
 
 var _ localrun.Process = (*fakeCodex)(nil)
@@ -51,8 +56,17 @@ func newFakeCodex() *fakeCodex {
 	}
 }
 
-func (f *fakeCodex) Start(_ context.Context, _, _ string, _ []string) (localrun.Process, error) {
+func (f *fakeCodex) Start(_ context.Context, dir, _ string, _ []string) (localrun.Process, error) {
+	f.mu.Lock()
+	f.startDir = dir
+	f.mu.Unlock()
 	return f, nil
+}
+
+func (f *fakeCodex) startedIn() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.startDir
 }
 
 func (f *fakeCodex) Send(line []byte) error {

@@ -2418,6 +2418,13 @@
 		if (record.provider_id) {
 			lines.push(`provider ${escapeHtml(record.provider_id)}`);
 		}
+		// The directory this run is executing in, read from the record and from
+		// nothing else: an old run has to keep naming the directory it really ran
+		// in, not the workspace that happens to be open while it is being read.
+		// A record written before the field existed leaves the line as it was.
+		if (typeof record.working_dir === "string" && record.working_dir) {
+			lines.push(`directory ${escapeHtml(record.working_dir)}`);
+		}
 		const modelLine = formatExecutionModel(record.model_choice);
 		if (modelLine) lines.push(modelLine);
 		const stamp = formatExecutionTime(record.completed_at || record.created_at);
