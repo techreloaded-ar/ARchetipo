@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-053 · E — Conversazione chiusa</title>
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-053</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-vuoto.html">A · vuoto</a>
+        <a href="stato-b-conversazione.html">B · conversazione</a>
+        <a href="stato-c-storia-parziale.html">C · storia parziale</a>
+        <a href="stato-d-non-offerta.html">D · non offerta</a>
+        <a href="stato-e-chiusa.html" class="current">E · chiusa</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">Stato E</p>
+    <h1 class="mk-title">Chiusa: il provider<br />non è più impegnato</h1>
+    <p class="mk-lede">
+        Dopo la chiusura la storia resta leggibile ma spenta, il composer è disabilitato e
+        la fascia in fondo dichiara che il provider è stato liberato. Da lì si apre una
+        conversazione nuova, che parte vuota.
+    </p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-6</span>
+        <strong>La chiusura è un fatto dichiarato, non un pannello che sparisce.</strong>
+        La timeline resta consultabile — è la stessa <code>.is-frozen</code> del pannello
+        run — e la fascia dice quando la conversazione è stata chiusa e che il provider da
+        quel momento non è più impegnato per essa.
+    </p>
+
+    <div class="mk-stage">
+      <div class="mk-stage-inner">
+        <div class="workspace-chat">
+            <section class="chat-panel chat-ended" aria-label="Conversazione chiusa">
+                <div class="chat-head">
+                    <span class="chat-badge">chiusa</span>
+                    <span class="chat-root" title="/Users/marta/lavoro/atlante">
+                        <span>/Users/marta/lavoro/<strong>atlante</strong></span>
+                    </span>
+                    <span class="chat-head-spacer"></span>
+                    <span class="chat-provider">provider <strong>claude</strong></span>
+                </div>
+
+                <div class="chat-scope">fuori dal processo · nessuna spec transita</div>
+
+                <ol class="chat-timeline is-frozen">
+                    <li class="chat-turn turn-operator">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>tu</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:03:02</span></div>
+                            <p class="chat-turn-text">E se volessi accettare anche un formato compresso, quanto costa? Ragioniamoci, non implementare nulla.</p>
+                        </div>
+                    </li>
+                    <li class="chat-turn turn-agent">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>agente</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:03:12</span></div>
+                            <p class="chat-turn-text">Due strade. Riconoscere la compressione dentro <code class="chat-turn-file">Importa</code> costa poche righe ma lascia la firma muta sul formato; accettare un lettore già scompattato dal chiamante costa una firma in più e nessuna magia. La seconda invecchia meglio.</p>
+                        </div>
+                    </li>
+                    <li class="chat-turn turn-operator">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>tu</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:05:47</span></div>
+                            <p class="chat-turn-text">Chiaro, mi basta. Ne faccio una spec più tardi.</p>
+                        </div>
+                    </li>
+                </ol>
+
+                <div class="chat-ended-band">
+                    <span class="chat-ended-note">
+                        <span><strong>Conversazione chiusa.</strong> Il provider <code class="chat-turn-file">claude</code> non è più impegnato per questa conversazione; la storia resta leggibile qui.</span>
+                    </span>
+                    <span class="chat-ended-spacer"></span>
+                    <span class="chat-ended-when">chiusa alle 14:06:03</span>
+                    <button type="button" class="primary-btn">Nuova conversazione</button>
+                </div>
+
+                <div class="run-composer">
+                    <label class="is-hidden" for="msg-e">Messaggio per l'agente</label>
+                    <textarea id="msg-e" class="run-composer-input" rows="2" placeholder="Conversazione chiusa" disabled></textarea>
+                    <div class="run-composer-row">
+                        <span class="run-composer-hint">composer disattivato · sola lettura</span>
+                        <span class="run-composer-spacer"></span>
+                        <button type="button" class="primary-btn" disabled>Invia</button>
+                    </div>
+                </div>
+            </section>
+        </div>
+      </div>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Cosa cambia rispetto allo stato B</p>
+    <ul class="mk-legend">
+        <li><span class="chat-badge">chiusa</span> stato del pannello <code>.chat-ended</code></li>
+        <li>timeline consultabile ma spenta <code>.is-frozen</code></li>
+        <li>composer e invio disabilitati <code>disabled</code></li>
+        <li>nessun controllo di chiusura: non c'è più nulla da chiudere <code>—</code></li>
+    </ul>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-053</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

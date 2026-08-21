@@ -42,6 +42,14 @@ type workspaceSession struct {
 	dispatch  *dispatchGroup
 	followers *runFollowers
 
+	// conversation is the single free conversation of *this workspace*, and it
+	// lives here for the same reason dispatch and followers do: it was opened
+	// about this project root and about no other. Letting it survive a
+	// workspace switch would mean keeping an agent process alive rooted in a
+	// directory the viewer no longer serves — and nobody would be holding the
+	// handle that closes it.
+	conversation *conversationState
+
 	// startOnce, stopOnce and cancel govern the lifecycle. cancel is nil until
 	// start runs, so a session built and never started can still be stopped.
 	// Both guards are Once because the two callers can legitimately race: a
@@ -79,6 +87,8 @@ func newWorkspaceSession(cfg config.Config, conn connector.Connector, providers 
 		watchRoot:  resolveWatchRoot(cfg),
 		dispatch:   newDispatchGroup(),
 		followers:  newRunFollowers(),
+
+		conversation: newConversationState(),
 	}
 	if providers != nil {
 		service, serviceErr := execution.NewService(providers, store, execution.RandomID, time.Now, cfg.ProjectRoot)
@@ -133,7 +143,8 @@ func (ws *workspaceSession) start(parent context.Context, broker *Broker) {
 }
 
 // stop ends the session: it cancels the watcher and the dispatches, waits for
-// the drain within the given window, and closes the followers. It is
+// the drain within the given window, closes the followers and closes the
+// conversation this workspace was holding, if any. It is
 // idempotent, because a session can be stopped both by a workspace switch and
 // by the shutdown that follows it.
 func (ws *workspaceSession) stop(drain time.Duration) {
@@ -146,6 +157,15 @@ func (ws *workspaceSession) stop(drain time.Duration) {
 		}
 		ws.dispatch.wait(drain)
 		ws.followers.closeAll()
+		// This is what frees the provider when the viewer changes workspace: the
+		// agent process behind a conversation stays alive until somebody closes
+		// it, and after this stop nobody else could. The context is a fresh,
+		// bounded one and deliberately not the session's, which has just been
+		// cancelled above — a close on a cancelled context would release
+		// nothing.
+		closeCtx, cancelClose := context.WithTimeout(context.Background(), conversationCloseTimeout)
+		defer cancelClose()
+		_ = ws.conversation.shutdown(closeCtx)
 	})
 }
 

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-053 · A — Conversazione vuota</title>
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-053</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-vuoto.html" class="current">A · vuoto</a>
+        <a href="stato-b-conversazione.html">B · conversazione</a>
+        <a href="stato-c-storia-parziale.html">C · storia parziale</a>
+        <a href="stato-d-non-offerta.html">D · non offerta</a>
+        <a href="stato-e-chiusa.html">E · chiusa</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">Stato A</p>
+    <h1 class="mk-title">Conversazione aperta,<br />nessun messaggio</h1>
+    <p class="mk-lede">
+        Lo stato di riposo del pannello: il workspace aperto è dichiarato nell'intestazione
+        insieme al provider che sostiene la conversazione, il composer è pronto e la chiusura
+        è già a portata di mano. Nessuna spec è coinvolta, nessuna azione del processo è
+        in corso.
+    </p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-1</span>
+        <strong>La project root è l'identità della conversazione.</strong>
+        Sta nell'intestazione, in monospazio, accanto al provider: chi guarda il pannello
+        sa sempre su quale cartella l'agente sta lavorando, senza doverlo dedurre.
+        <span class="mk-ac ghost">AC-2</span> la fascia sotto l'intestazione dichiara, una
+        volta sola e in modo stabile, che questa superficie non è un'esecuzione del processo.
+    </p>
+
+    <div class="mk-stage">
+      <div class="mk-stage-inner">
+        <div class="workspace-chat">
+            <section class="chat-panel chat-live" aria-label="Conversazione sul workspace aperto">
+                <div class="chat-head">
+                    <span class="chat-badge">conversazione</span>
+                    <span class="chat-root" title="/Users/marta/lavoro/atlante">
+                        <span>/Users/marta/lavoro/<strong>atlante</strong></span>
+                    </span>
+                    <span class="chat-head-spacer"></span>
+                    <span class="chat-provider">provider <strong>claude</strong></span>
+                    <span class="chat-close">
+                        <button type="button" class="ghost-btn danger-ghost-btn" data-close-open>Chiudi conversazione</button>
+                        <span class="chat-close-confirm is-hidden">
+                            <span class="chat-close-question">Confermi?</span>
+                            <button type="button" class="approval-btn deny">Sì, chiudi</button>
+                            <button type="button" class="approval-btn" data-close-abort>No</button>
+                        </span>
+                    </span>
+                </div>
+
+                <div class="chat-scope">fuori dal processo · nessuna spec transita</div>
+
+                <ol class="chat-timeline" aria-live="polite">
+                    <li class="chat-turn turn-agent">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>agente</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:02:11</span></div>
+                            <p class="chat-turn-text">Sono sulla project root di <code class="chat-turn-file">atlante</code>. Chiedimi del codice, ragioniamo su un'idea, oppure fammi dire dove siamo: non muovo nulla finché non me lo chiedi.</p>
+                        </div>
+                    </li>
+                </ol>
+
+                <div class="run-composer">
+                    <label class="is-hidden" for="msg-a">Messaggio per l'agente</label>
+                    <textarea id="msg-a" class="run-composer-input" rows="2" placeholder="Scrivi all'agente…"></textarea>
+                    <div class="run-composer-row">
+                        <span class="run-composer-hint">⌘ + invio per inviare</span>
+                        <span class="run-composer-spacer"></span>
+                        <button type="button" class="primary-btn">Invia</button>
+                    </div>
+                </div>
+            </section>
+        </div>
+      </div>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Cosa dice l'intestazione</p>
+    <ul class="mk-legend">
+        <li><span class="chat-badge">conversazione</span> stato del pannello <code>.chat-badge</code></li>
+        <li><span class="chat-root"><span>…/lavoro/<strong>atlante</strong></span></span> project root del workspace aperto <code>.chat-root</code></li>
+        <li><span class="chat-provider">provider <strong>claude</strong></span> provider impegnato <code>.chat-provider</code></li>
+    </ul>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-053</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-053 · Conversare con l'agente sul workspace aperto</title>
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-053</span>
+    <nav class="mk-nav">
+        <a href="index.html" class="current">Indice</a>
+        <a href="stato-a-vuoto.html">A · vuoto</a>
+        <a href="stato-b-conversazione.html">B · conversazione</a>
+        <a href="stato-c-storia-parziale.html">C · storia parziale</a>
+        <a href="stato-d-non-offerta.html">D · non offerta</a>
+        <a href="stato-e-chiusa.html">E · chiusa</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">EP-006 · HIGH · 5 punti</p>
+    <h1 class="mk-title">Conversare con l'agente<br />sul workspace aperto</h1>
+    <p class="mk-lede">
+        Una sola superficie autonoma: il pannello della conversazione. Parla la lingua del
+        pannello della run già in <code>app.css</code> — stessa superficie, stesso bordo
+        sinistro che porta lo stato, stessi metadati in monospazio, stesso composer, stessi
+        avvisi — e aggiunge quel poco che un dialogo richiede.
+        Cinque stati, nessun colore, nessun font e nessun raggio nuovi.
+    </p>
+
+    <p class="mk-note">
+        <strong>Il principio del disegno.</strong> Una conversazione non è un'esecuzione.
+        Non fa transitare specifiche, non compare fra le azioni del processo, non produce
+        una run. Perciò il pannello dichiara due cose e le tiene sempre visibili:
+        <em>su quale project root</em> l'agente sta lavorando e <em>che quella superficie
+        sta fuori dal processo</em>. Tutto il resto — chi parla, che cosa manca della
+        storia, perché la conversazione non è offerta, quando è stata chiusa — è detto a
+        parole, mai lasciato intuire.
+    </p>
+
+    <p class="mk-note">
+        <strong>Fuori dal disegno, per scelta.</strong> Questo mockup non propone dove il
+        pannello viva rispetto alla board e al dettaglio della spec, non avvia azioni del
+        processo dalla conversazione e non suggerisce passi successivi. Mostra il pannello
+        da solo, alla sua larghezza reale.
+    </p>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Anatomia del pannello</p>
+    <div class="mk-stage">
+      <div class="mk-stage-inner">
+        <section class="chat-panel chat-live" aria-label="Anatomia del pannello">
+            <div class="chat-head">
+                <span class="chat-badge">conversazione</span>
+                <span class="chat-root"><span>/Users/marta/lavoro/<strong>atlante</strong></span></span>
+                <span class="chat-head-spacer"></span>
+                <span class="chat-provider">provider <strong>claude</strong></span>
+                <span class="chat-close">
+                    <button type="button" class="ghost-btn danger-ghost-btn" data-close-open>Chiudi conversazione</button>
+                    <span class="chat-close-confirm is-hidden">
+                        <span class="chat-close-question">Confermi?</span>
+                        <button type="button" class="approval-btn deny">Sì, chiudi</button>
+                        <button type="button" class="approval-btn" data-close-abort>No</button>
+                    </span>
+                </span>
+            </div>
+            <div class="chat-scope">fuori dal processo · nessuna spec transita</div>
+            <div class="chat-truncated" role="note">
+                <span class="chat-truncated-mark">storia parziale</span>
+                <span class="chat-truncated-body">
+                    <strong>Compare solo quando il provider dichiara la storia troncata.</strong>
+                    Il bordo strappato marca il punto in cui la conversazione è tagliata.
+                </span>
+            </div>
+            <ol class="chat-timeline" style="max-height:none">
+                <li class="chat-turn turn-operator">
+                    <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>tu</div>
+                    <div class="chat-turn-body">
+                        <div class="chat-turn-head"><span class="chat-turn-time">14:02:34</span></div>
+                        <p class="chat-turn-text">Il messaggio dell'operatore: la guida di sinistra porta chi parla, non un id.</p>
+                    </div>
+                </li>
+                <li class="chat-turn turn-tool">
+                    <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>lettura</div>
+                    <div class="chat-turn-body">
+                        <div class="chat-turn-head"><span class="chat-turn-time">14:02:36</span></div>
+                        <p class="chat-turn-text">L'uso di uno strumento, con il file in <code class="chat-turn-file">monospazio</code>.</p>
+                        <p class="chat-turn-detail">la riga di dettaglio dice sempre su quale project root si è operato</p>
+                    </div>
+                </li>
+                <li class="chat-turn turn-agent">
+                    <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>agente</div>
+                    <div class="chat-turn-body">
+                        <div class="chat-turn-head"><span class="chat-turn-time">14:02:41</span></div>
+                        <p class="chat-turn-text">La risposta dell'agente, il turno più leggibile della lista, con il codice citato dentro un blocco:</p>
+                        <pre class="chat-quote">func Importa(ctx context.Context, sorgente io.Reader) (Esito, error)</pre>
+                    </div>
+                </li>
+            </ol>
+            <div class="run-tail">
+                <span class="run-tail-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+                l'agente sta scrivendo
+            </div>
+            <div class="run-composer">
+                <textarea class="run-composer-input" rows="2" placeholder="Scrivi all'agente…"></textarea>
+                <div class="run-composer-row">
+                    <span class="run-composer-hint">prova il controllo di chiusura, in alto a destra</span>
+                    <span class="run-composer-spacer"></span>
+                    <button type="button" class="primary-btn">Invia</button>
+                </div>
+            </div>
+        </section>
+      </div>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">I cinque stati</p>
+
+    <div class="mk-grid">
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">A</span>
+                <h3 class="mk-card-title">Conversazione vuota</h3>
+                <span class="mk-ac">AC-1</span>
+            </div>
+            <p class="mk-card-sub">Workspace e provider dichiarati, composer pronto, chiusura già disponibile.</p>
+            <section class="chat-panel chat-live">
+                <div class="chat-head">
+                    <span class="chat-badge">conversazione</span>
+                    <span class="chat-root"><span>…/lavoro/<strong>atlante</strong></span></span>
+                    <span class="chat-head-spacer"></span>
+                    <span class="chat-provider">provider <strong>claude</strong></span>
+                </div>
+                <div class="chat-scope">fuori dal processo · nessuna spec transita</div>
+                <ol class="chat-timeline" style="max-height:none">
+                    <li class="chat-turn turn-agent">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph"></span>agente</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:02:11</span></div>
+                            <p class="chat-turn-text">Sono sulla project root di atlante. Non muovo nulla finché non me lo chiedi.</p>
+                        </div>
+                    </li>
+                </ol>
+                <div class="run-composer">
+                    <div class="run-composer-row">
+                        <span class="run-composer-hint">composer attivo</span>
+                        <span class="run-composer-spacer"></span>
+                        <button type="button" class="primary-btn">Invia</button>
+                    </div>
+                </div>
+            </section>
+            <a class="mk-card-link" href="stato-a-vuoto.html">apri lo stato A →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">B</span>
+                <h3 class="mk-card-title">Conversazione in corso</h3>
+                <span class="mk-ac">AC-1</span>
+                <span class="mk-ac ghost">AC-2</span>
+            </div>
+            <p class="mk-card-sub">Turni alternati, un uso di strumento e l'agente che sta ancora scrivendo.</p>
+            <section class="chat-panel chat-live">
+                <div class="chat-head">
+                    <span class="chat-badge">conversazione</span>
+                    <span class="chat-root"><span>…/lavoro/<strong>atlante</strong></span></span>
+                    <span class="chat-head-spacer"></span>
+                    <span class="chat-provider">provider <strong>claude</strong></span>
+                </div>
+                <ol class="chat-timeline" style="max-height:none">
+                    <li class="chat-turn turn-operator">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph"></span>tu</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:02:34</span></div>
+                            <p class="chat-turn-text">Dove sta la logica di importazione dei tracciati?</p>
+                        </div>
+                    </li>
+                    <li class="chat-turn turn-tool">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph"></span>lettura</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:02:36</span></div>
+                            <p class="chat-turn-text">Ho letto <code class="chat-turn-file">internal/tracce/import.go</code>.</p>
+                        </div>
+                    </li>
+                </ol>
+                <div class="run-tail"><span class="run-tail-dots"><span></span><span></span><span></span></span> l'agente sta scrivendo</div>
+            </section>
+            <a class="mk-card-link" href="stato-b-conversazione.html">apri lo stato B →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">C</span>
+                <h3 class="mk-card-title">Storia parziale</h3>
+                <span class="mk-ac">AC-3</span>
+            </div>
+            <p class="mk-card-sub">Ricaricata la pagina la conversazione continua; il taglio della storia è dichiarato.</p>
+            <section class="chat-panel chat-live">
+                <div class="chat-head">
+                    <span class="chat-badge">conversazione</span>
+                    <span class="chat-root"><span>…/lavoro/<strong>atlante</strong></span></span>
+                    <span class="chat-head-spacer"></span>
+                    <span class="chat-provider">provider <strong>claude</strong></span>
+                </div>
+                <div class="chat-truncated">
+                    <span class="chat-truncated-mark">storia parziale</span>
+                    <span class="chat-truncated-body">
+                        <strong>La parte più vecchia non è più mostrata.</strong>
+                        La storia visibile comincia dalle <code>14:02:34</code>; i 18 turni precedenti non sono più disponibili.
+                    </span>
+                </div>
+                <ol class="chat-timeline" style="max-height:none">
+                    <li class="chat-turn turn-operator">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph"></span>tu</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:02:34</span></div>
+                            <p class="chat-turn-text">Il primo turno ancora conservato.</p>
+                        </div>
+                    </li>
+                </ol>
+            </section>
+            <a class="mk-card-link" href="stato-c-storia-parziale.html">apri lo stato C →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">D</span>
+                <h3 class="mk-card-title">Non offerta</h3>
+                <span class="mk-ac">AC-4</span>
+            </div>
+            <p class="mk-card-sub">Capacità mancante: la ragione del server è riportata alla lettera, con il suo nome.</p>
+            <section class="chat-panel chat-blocked">
+                <div class="chat-head">
+                    <span class="chat-badge">non offerta</span>
+                    <span class="chat-root"><span>…/lavoro/<strong>atlante</strong></span></span>
+                    <span class="chat-head-spacer"></span>
+                    <span class="chat-provider">provider <strong>codex</strong></span>
+                </div>
+                <div class="chat-unavailable">
+                    <p class="chat-unavailable-title">La conversazione non è disponibile su questo workspace.</p>
+                    <p class="chat-reason">il provider di esecuzione predefinito "codex" non dichiara la capacità "workspace.converse"</p>
+                </div>
+            </section>
+            <a class="mk-card-link" href="stato-d-non-offerta.html">apri lo stato D →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">E</span>
+                <h3 class="mk-card-title">Conversazione chiusa</h3>
+                <span class="mk-ac">AC-6</span>
+            </div>
+            <p class="mk-card-sub">Storia in sola lettura, composer disabilitato, provider liberato, nuova conversazione a un clic.</p>
+            <section class="chat-panel chat-ended">
+                <div class="chat-head">
+                    <span class="chat-badge">chiusa</span>
+                    <span class="chat-root"><span>…/lavoro/<strong>atlante</strong></span></span>
+                    <span class="chat-head-spacer"></span>
+                    <span class="chat-provider">provider <strong>claude</strong></span>
+                </div>
+                <ol class="chat-timeline is-frozen" style="max-height:none">
+                    <li class="chat-turn turn-operator">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph"></span>tu</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:05:47</span></div>
+                            <p class="chat-turn-text">Chiaro, mi basta. Ne faccio una spec più tardi.</p>
+                        </div>
+                    </li>
+                </ol>
+                <div class="chat-ended-band">
+                    <span class="chat-ended-note"><span><strong>Conversazione chiusa.</strong> Il provider non è più impegnato per essa.</span></span>
+                    <span class="chat-ended-spacer"></span>
+                    <button type="button" class="primary-btn">Nuova conversazione</button>
+                </div>
+            </section>
+            <a class="mk-card-link" href="stato-e-chiusa.html">apri lo stato E →</a>
+        </article>
+
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Come si traduce in app.css</p>
+    <p class="mk-note">
+        Il foglio <code>shared.css</code> tiene separate le regole copiate dalla shell
+        (<strong>parte 1</strong>: token, primitive e l'intero pannello run già presente in
+        <code>app.css</code>) dalle regole nuove proposte per US-053
+        (<strong>parte 2</strong>: <code>.chat-panel</code> e discendenti), così la
+        traduzione è un taglia e incolla della sola parte 2. Il pannello riusa senza
+        modifiche <code>.run-composer</code>, <code>.run-tail</code>,
+        <code>.approval-btn</code>, <code>.primary-btn</code>,
+        <code>.danger-ghost-btn</code> e <code>.is-frozen</code>: quello che esiste già non
+        viene riscritto.
+    </p>
+
+    <p class="mk-section-title">Criteri di accettazione coperti</p>
+    <ul class="mk-legend">
+        <li><span class="mk-ac">AC-1</span> project root e provider nell'intestazione <code>A · B</code></li>
+        <li><span class="mk-ac">AC-2</span> fascia «fuori dal processo», nessuna run <code>A · B · E</code></li>
+        <li><span class="mk-ac">AC-3</span> storia ripresa e taglio dichiarato <code>C</code></li>
+        <li><span class="mk-ac">AC-4</span> ragione verbatim con <code>workspace.converse</code> <code>D</code></li>
+        <li><span class="mk-ac">AC-5</span> la project root nell'intestazione è sempre quella del workspace ora aperto <code>A—E</code></li>
+        <li><span class="mk-ac">AC-6</span> chiusura in due tempi e provider liberato <code>E</code></li>
+    </ul>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-053</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

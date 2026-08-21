@@ -49,8 +49,19 @@ type Session struct {
 	runID string
 	now   func() time.Time
 
-	mu          sync.Mutex
-	events      []execution.RunEvent
+	mu     sync.Mutex
+	events []execution.RunEvent
+	// nextID is the authority on identifiers: it counts every event the session
+	// ever accepted, so an id stays monotonic and is never reused even after the
+	// retention window has dropped the event that carried it. Deriving the id
+	// from len(events) would reuse it the moment the window drops something.
+	nextID int64
+	// retain bounds how many of the most recent events the history keeps.
+	// Zero — the value NewSession leaves — means unlimited.
+	retain int
+	// dropped counts the events the window discarded, which is how a caller can
+	// tell a partial history from a whole one.
+	dropped     int64
 	state       execution.RunState
 	reason      string
 	closedAt    *time.Time
@@ -71,6 +82,22 @@ func NewSession(runID string, now func() time.Time) *Session {
 		state:       execution.RunActive,
 		subscribers: make(map[int]chan execution.RunEvent),
 	}
+}
+
+// NewBoundedSession opens a session that keeps only the last retain events of
+// its history. retain <= 0 means unlimited, which is exactly NewSession.
+//
+// The window exists for one reason: to let a caller declare a history as
+// partial instead of showing it as if it were whole. It does not make the
+// history cheaper to read and it is not a performance knob — it is what allows
+// FirstID to answer "where does this story really begin", so a conversation
+// held only in memory can say so rather than pretend.
+func NewBoundedSession(runID string, now func() time.Time, retain int) *Session {
+	session := NewSession(runID, now)
+	if retain > 0 {
+		session.retain = retain
+	}
+	return session
 }
 
 func (s *Session) RunID() string { return s.runID }
@@ -106,7 +133,8 @@ func (s *Session) Append(event execution.RunEvent) execution.RunEvent {
 	// A closed session still records what arrives late: the process can emit its
 	// last lines after its end was observed, and dropping them would leave a
 	// history that stops before the run did.
-	event.ID = int64(len(s.events)) + 1
+	s.nextID++
+	event.ID = s.nextID
 	if event.At.IsZero() {
 		event.At = s.now().UTC()
 	}
@@ -117,10 +145,43 @@ func (s *Session) Append(event execution.RunEvent) execution.RunEvent {
 		default:
 			// A follower that does not read must not be able to stop the run. It
 			// loses this event on its live channel and finds it again on its next
-			// replay, because the history itself is never lossy.
+			// replay, because the history itself is never lossy — unless a
+			// retention window has since dropped it, and then FirstID says so.
 		}
 	}
+	// The window discards only after the id has been assigned and after the
+	// event has been published: a connected follower therefore never misses an
+	// event just because the history no longer keeps it, and the identifiers of
+	// what survives stay exactly the ones the followers saw.
+	if s.retain > 0 && len(s.events) > s.retain {
+		excess := len(s.events) - s.retain
+		s.events = append(s.events[:0], s.events[excess:]...)
+		s.dropped += int64(excess)
+	}
 	return event
+}
+
+// FirstID returns the ID of the oldest event still in the history, and 0 when
+// the history is empty.
+//
+// It is the fact a caller compares against its own cursor to decide whether
+// what it is about to show is the whole story or only its tail: when FirstID is
+// greater than afterID+1, the events between the two are gone for good.
+func (s *Session) FirstID() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.events) == 0 {
+		return 0
+	}
+	return s.events[0].ID
+}
+
+// Dropped returns how many events the retention window has discarded. It is 0
+// for an unlimited session, always.
+func (s *Session) Dropped() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dropped
 }
 
 // Close records the terminal state, once. A second call changes nothing: the

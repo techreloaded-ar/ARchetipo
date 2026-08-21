@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-053 · C — Storia parziale dopo il ricaricamento</title>
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-053</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-vuoto.html">A · vuoto</a>
+        <a href="stato-b-conversazione.html">B · conversazione</a>
+        <a href="stato-c-storia-parziale.html" class="current">C · storia parziale</a>
+        <a href="stato-d-non-offerta.html">D · non offerta</a>
+        <a href="stato-e-chiusa.html">E · chiusa</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">Stato C</p>
+    <h1 class="mk-title">Ricaricata la pagina,<br />la storia è dichiarata</h1>
+    <p class="mk-lede">
+        Dopo un ricaricamento la conversazione è ancora quella di prima e continua da dove
+        era rimasta. Quando la parte più vecchia non è più mostrata, il taglio è dichiarato
+        in cima alla timeline: non lasciato intuire dall'assenza.
+    </p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-3</span>
+        <strong>Una storia parziale è un fatto, non un difetto da nascondere.</strong>
+        Il blocco in cima dice che cosa manca, da quando la storia mostrata comincia e
+        quanti turni non sono più disponibili. È l'unico segno decorativo nuovo del
+        pannello: il bordo superiore strappato marca il punto in cui la storia è tagliata.
+    </p>
+
+    <div class="mk-stage">
+      <div class="mk-stage-inner">
+        <div class="workspace-chat">
+            <section class="chat-panel chat-live" aria-label="Conversazione sul workspace aperto">
+                <div class="chat-head">
+                    <span class="chat-badge">conversazione</span>
+                    <span class="chat-root" title="/Users/marta/lavoro/atlante">
+                        <span>/Users/marta/lavoro/<strong>atlante</strong></span>
+                    </span>
+                    <span class="chat-head-spacer"></span>
+                    <span class="chat-provider">provider <strong>claude</strong></span>
+                    <span class="chat-close">
+                        <button type="button" class="ghost-btn danger-ghost-btn" data-close-open>Chiudi conversazione</button>
+                        <span class="chat-close-confirm is-hidden">
+                            <span class="chat-close-question">Confermi?</span>
+                            <button type="button" class="approval-btn deny">Sì, chiudi</button>
+                            <button type="button" class="approval-btn" data-close-abort>No</button>
+                        </span>
+                    </span>
+                </div>
+
+                <div class="chat-scope">fuori dal processo · nessuna spec transita</div>
+
+                <div class="chat-truncated" role="note">
+                    <span class="chat-truncated-mark">storia parziale</span>
+                    <span class="chat-truncated-body">
+                        <strong>La parte più vecchia di questa conversazione non è più mostrata.</strong>
+                        Il provider restituisce gli ultimi turni conservati: la storia visibile
+                        comincia dalle <code>14:02:34</code> e i turni precedenti — <code>18</code>
+                        secondo il provider — non sono più disponibili qui.
+                    </span>
+                </div>
+
+                <ol class="chat-timeline" aria-live="polite">
+                    <li class="chat-turn turn-operator">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>tu</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:02:34</span></div>
+                            <p class="chat-turn-text">Prima di decidere cosa fare: dove sta la logica di importazione dei tracciati in questo workspace?</p>
+                        </div>
+                    </li>
+                    <li class="chat-turn turn-tool">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>lettura</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:02:36</span></div>
+                            <p class="chat-turn-text">Ho letto <code class="chat-turn-file">internal/tracce/import.go</code> e i due file accanto.</p>
+                            <p class="chat-turn-detail">solo lettura · project root /Users/marta/lavoro/atlante · 3 file, 0 scritture</p>
+                        </div>
+                    </li>
+                    <li class="chat-turn turn-agent">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>agente</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:02:41</span></div>
+                            <p class="chat-turn-text">L'importazione vive tutta in <code class="chat-turn-file">internal/tracce</code>: <code class="chat-turn-file">import.go</code> legge il file e valida le righe, <code class="chat-turn-file">store.go</code> le persiste. Il punto di ingresso è uno solo:</p>
+                            <pre class="chat-quote">func Importa(ctx context.Context, sorgente io.Reader) (Esito, error)</pre>
+                        </div>
+                    </li>
+                    <li class="chat-turn turn-operator">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>tu</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:03:02</span></div>
+                            <p class="chat-turn-text">E se volessi accettare anche un formato compresso, quanto costa? Ragioniamoci, non implementare nulla.</p>
+                        </div>
+                    </li>
+                    <li class="chat-turn turn-agent">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>agente</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:03:12</span></div>
+                            <p class="chat-turn-text">Due strade. Riconoscere la compressione dentro <code class="chat-turn-file">Importa</code> costa poche righe ma lascia la firma muta sul formato; accettare un lettore già scompattato dal chiamante costa una firma in più e nessuna magia. La seconda invecchia meglio.</p>
+                        </div>
+                    </li>
+                </ol>
+
+                <div class="run-composer">
+                    <label class="is-hidden" for="msg-c">Messaggio per l'agente</label>
+                    <textarea id="msg-c" class="run-composer-input" rows="2" placeholder="Scrivi all'agente…"></textarea>
+                    <div class="run-composer-row">
+                        <span class="run-composer-hint">conversazione ripresa dopo il ricaricamento</span>
+                        <span class="run-composer-spacer"></span>
+                        <button type="button" class="primary-btn">Invia</button>
+                    </div>
+                </div>
+            </section>
+        </div>
+      </div>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Quando la storia è completa</p>
+    <p class="mk-note">
+        Il blocco <code>.chat-truncated</code> compare <strong>solo</strong> quando il
+        provider dichiara di aver troncato la storia. Se la storia restituita è integra il
+        pannello non dice nulla: nessun avviso rassicurante, nessun rumore. Lo stato B
+        mostra proprio quel caso.
+    </p>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-053</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

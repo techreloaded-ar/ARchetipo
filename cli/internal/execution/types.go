@@ -65,10 +65,23 @@ const (
 	// It is never declared by hand in a provider's Capabilities: see
 	// DeclaredCapabilities, which derives it from the interface the provider
 	// actually implements.
-	CapabilityRunDialog Capability      = "run.dialog"
-	StatusRunning       ExecutionStatus = "RUNNING"
-	StatusSucceeded     ExecutionStatus = "SUCCEEDED"
-	StatusFailed        ExecutionStatus = "FAILED"
+	CapabilityRunDialog Capability = "run.dialog"
+	// CapabilityWorkspaceConverse says that a provider can hold a free
+	// conversation about the directory it is pointed at: read the code and the
+	// documents to answer, without running any action of the process and
+	// without producing any artifact. It is not a statement about the work the
+	// provider can carry out — a provider can plan a spec without being able to
+	// converse, and a provider can converse without being able to plan
+	// anything.
+	//
+	// It is never declared by hand in a provider's Capabilities: see
+	// DeclaredCapabilities, which derives it from the interface the provider
+	// actually implements.
+	CapabilityWorkspaceConverse Capability = "workspace.converse"
+
+	StatusRunning   ExecutionStatus = "RUNNING"
+	StatusSucceeded ExecutionStatus = "SUCCEEDED"
+	StatusFailed    ExecutionStatus = "FAILED"
 )
 
 type Request struct {

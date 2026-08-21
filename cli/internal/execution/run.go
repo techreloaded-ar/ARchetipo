@@ -175,13 +175,17 @@ func RunCollaboratorFor(provider Provider) (RunCollaborator, bool) {
 
 // DeclaredCapabilities is what a caller shows when it lists a provider: the
 // capabilities the provider declares, plus CapabilityRunDialog when — and only
-// when — the provider really implements RunCollaborator.
+// when — the provider really implements RunCollaborator, and plus
+// CapabilityWorkspaceConverse when — and only when — it really implements
+// Conversationalist.
 //
-// The dialogue capability is derived and never declared by hand. A constant
-// repeated inside every provider's Capabilities is a constant that eventually
-// disagrees with the interface the provider implements, and the direction of
-// that disagreement is the expensive one: a provider that advertises a
-// conversation it cannot hold.
+// Both are derived and never declared by hand. A constant repeated inside every
+// provider's Capabilities is a constant that eventually disagrees with the
+// interface the provider implements, and the direction of that disagreement is
+// the expensive one: a provider that advertises a conversation it cannot hold.
+//
+// The two are independent: a provider can follow and command a run without
+// being able to hold a free conversation, and the reverse.
 //
 // It never returns nil, so a caller that serializes the result always produces
 // an empty list rather than a null, and it propagates the provider's own error
@@ -196,6 +200,9 @@ func DeclaredCapabilities(ctx context.Context, provider Provider) ([]Capability,
 	}
 	if _, collaborates := RunCollaboratorFor(provider); collaborates {
 		declared = append(declared, CapabilityRunDialog)
+	}
+	if _, converses := ConversationalistFor(provider); converses {
+		declared = append(declared, CapabilityWorkspaceConverse)
 	}
 	normalized := NormalizeCapabilities(declared)
 	if normalized == nil {

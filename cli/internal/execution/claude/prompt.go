@@ -258,3 +258,28 @@ func buildSpecDraftPrompt(_ execution.Request) string {
 		"<markdown> is the complete markdown body of the spec on a single line, with every line break written as \\n. Emit the receipt only when the proposal is complete, and never before: it is what ends the conversation.",
 	}, "\n")
 }
+
+// buildConversationPrompt renders the single instruction that opens a free
+// conversation about the workspace.
+//
+// It is pure and deterministic like every other prompt here, and it is the only
+// one that takes no request at all: a conversation has no spec, no artifact and
+// no receipt, so there is nothing about it that could vary. It ends on nobody
+// closing it rather than on a closing message, which is why it asks for no
+// receipt line — a receipt would end a conversation that is meant to stay open.
+//
+// It authorizes reading and forbids acting. The prohibition is a courtesy
+// towards the agent and **not** the guarantee that a conversation never becomes
+// an action of the process: that guarantee lives one layer up and is structural
+// — no execution record is ever written for a conversation, so there is nothing
+// for it to appear as. A prompt the model talks itself past would leave the
+// guarantee intact.
+func buildConversationPrompt() string {
+	return strings.Join([]string{
+		"Work in the current working directory: it is the ARchetipo workspace a person has open in front of them, with the archetipo CLI and the ARchetipo skills installed.",
+		"You are having a free conversation about that workspace: answer questions about its product, its backlog, its code and its documents.",
+		"Read whatever you need to answer: the source code, the documents, the backlog and the read-only `archetipo` commands that report state are all yours to consult.",
+		"Do NOT act on the workspace. You must not start any action of the process, must not invoke any `archetipo-*` skill, must not run any `archetipo` command that writes, and must not change the status of any spec: this is a conversation, not a piece of work.",
+		"You are talking to a person through a chat, one message at a time: answer the message you were given and wait for the next one. Emit no receipt line and no JSON envelope — nothing you say ends this conversation, only the person who closes it does.",
+	}, "\n")
+}

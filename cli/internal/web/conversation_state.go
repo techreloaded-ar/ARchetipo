@@ -1,0 +1,190 @@
+package web
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+)
+
+// conversationCloseTimeout bounds how long stopping a workspace waits for the
+// provider to release the agent process behind its conversation.
+//
+// It exists because the close happens on a context of its own: the session's
+// context is already cancelled by the time stop() gets there, and a close on a
+// cancelled context would ask the provider to release nothing.
+const conversationCloseTimeout = 5 * time.Second
+
+// conversationState holds the *one* conversation of a workspace.
+//
+// One, not a map: a workspace admits a single conversation, and the identity of
+// the conversation is therefore the identity of the workspace that opened it.
+// Keeping a second one alive would mean keeping a second agent process rooted
+// in a directory somebody has to close later, and nothing in the viewer would
+// be holding the handle for it.
+//
+// Every field is read and written under mu, and readers never receive the
+// struct itself: current() hands back a copy, so nobody can observe a state
+// half-way through an open or a close.
+type conversationState struct {
+	mu sync.Mutex
+
+	// id is the conversation id the provider registered the session under, and
+	// therefore the run id the conversation is read and commanded with.
+	id string
+	// providerID is the default provider the conversation was opened with. It
+	// travels with the conversation because the default can be changed in the
+	// Execution panel while the conversation is alive, and the conversation
+	// still belongs to the provider that is actually holding the process.
+	providerID string
+	// provider is what closes the agent process, and collaborator is what reads
+	// and commands the session behind it. They are two interfaces rather than
+	// one because a conversation borrows the run vocabulary without borrowing
+	// the record: only the closing half is conversation-specific.
+	provider     execution.Conversationalist
+	collaborator execution.RunCollaborator
+	// providerConfig is the configuration the conversation was opened with, kept
+	// so a later command dispatches with the very configuration that was probed.
+	providerConfig map[string]any
+	// workingDir is the project root the conversation was opened about. It is a
+	// fact of the workspace, not of the provider, which is shared.
+	workingDir string
+	openedAt   time.Time
+	// closed says the holder has been shut down for good. It is not "there is
+	// no conversation right now": a stopped session must never accept a new
+	// one, because nothing would be left to close it.
+	closed bool
+}
+
+// conversationSnapshot is the read-only view of the holder at one instant. It
+// is a copy on purpose: a caller that held the live struct would be reading
+// fields the next open or close is free to rewrite underneath it.
+type conversationSnapshot struct {
+	id             string
+	providerID     string
+	provider       execution.Conversationalist
+	collaborator   execution.RunCollaborator
+	providerConfig map[string]any
+	workingDir     string
+	openedAt       time.Time
+}
+
+func newConversationState() *conversationState {
+	return &conversationState{}
+}
+
+// open records the conversation the provider has just started.
+//
+// It refuses when one is already open rather than replacing it: replacing would
+// silently drop the handle of a live agent process, and the process would then
+// outlive everything that could stop it. It also refuses on a holder that has
+// been closed, for the same reason runFollowers refuses after closeAll — the
+// workspace it belonged to is gone.
+func (c *conversationState) open(id, providerID string, provider execution.Conversationalist, collaborator execution.RunCollaborator, providerConfig map[string]any, workingDir string, openedAt time.Time) error {
+	if c == nil {
+		return fmt.Errorf("this workspace cannot hold a conversation")
+	}
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("a conversation needs an id")
+	}
+	if provider == nil {
+		return fmt.Errorf("a conversation needs a provider that can close it")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return fmt.Errorf("this workspace is no longer open")
+	}
+	if c.id != "" {
+		return fmt.Errorf("conversation %s is already open for this workspace", c.id)
+	}
+	c.id = id
+	c.providerID = providerID
+	c.provider = provider
+	c.collaborator = collaborator
+	c.providerConfig = providerConfig
+	c.workingDir = workingDir
+	c.openedAt = openedAt
+	return nil
+}
+
+// current returns a copy of the open conversation, and false when there is
+// none. Absence is an answer here, not a failure: a workspace that has never
+// opened a conversation is the ordinary case.
+func (c *conversationState) current() (conversationSnapshot, bool) {
+	if c == nil {
+		return conversationSnapshot{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.id == "" {
+		return conversationSnapshot{}, false
+	}
+	return conversationSnapshot{
+		id:             c.id,
+		providerID:     c.providerID,
+		provider:       c.provider,
+		collaborator:   c.collaborator,
+		providerConfig: c.providerConfig,
+		workingDir:     c.workingDir,
+		openedAt:       c.openedAt,
+	}, true
+}
+
+// close releases the agent process behind the conversation and empties the
+// holder. It is idempotent: closing when there is nothing open succeeds and
+// releases nothing, exactly like CloseConversation itself.
+//
+// The state is emptied whatever the provider answers. A conversation the viewer
+// kept after a failed close would be a handle on a process the viewer can no
+// longer command, and the error is reported to the caller rather than hidden.
+func (c *conversationState) close(ctx context.Context) error {
+	return c.releaseCurrent(ctx, false)
+}
+
+// releaseCurrent empties the holder and releases what was in it, marking the
+// holder closed for good when markClosed is set.
+//
+// Emptying and marking happen under the *same* lock, and that is the whole
+// reason this is one function and not two: releasing the process is slow — for
+// a real agent it is a cancel plus a process wait — and a shutdown that marked
+// `closed` only afterwards would leave a window in which the holder reads as
+// "not closed, nothing open", which is precisely the state an open request
+// accepts. A conversation installed in that window would belong to a session
+// that is already gone, with nothing left to close it.
+func (c *conversationState) releaseCurrent(ctx context.Context, markClosed bool) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	id := c.id
+	provider := c.provider
+	c.id = ""
+	c.providerID = ""
+	c.provider = nil
+	c.collaborator = nil
+	c.providerConfig = nil
+	c.workingDir = ""
+	c.openedAt = time.Time{}
+	if markClosed {
+		c.closed = true
+	}
+	c.mu.Unlock()
+	if id == "" || provider == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return provider.CloseConversation(ctx, id)
+}
+
+// shutdown closes the conversation for good: after it, open refuses. It is what
+// a session that is ending calls, so a request still in flight cannot install a
+// conversation nobody is left to close.
+func (c *conversationState) shutdown(ctx context.Context) error {
+	return c.releaseCurrent(ctx, true)
+}

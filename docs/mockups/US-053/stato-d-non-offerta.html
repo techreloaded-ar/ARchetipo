@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-053 · D — Conversazione non offerta</title>
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-053</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-vuoto.html">A · vuoto</a>
+        <a href="stato-b-conversazione.html">B · conversazione</a>
+        <a href="stato-c-storia-parziale.html">C · storia parziale</a>
+        <a href="stato-d-non-offerta.html" class="current">D · non offerta</a>
+        <a href="stato-e-chiusa.html">E · chiusa</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">Stato D</p>
+    <h1 class="mk-title">Non offerta, e detto<br />con la ragione esatta</h1>
+    <p class="mk-lede">
+        Il provider configurato non dichiara la capacità di conversare. Il pannello non
+        sparisce e non finge: resta al suo posto, disattivato, e riporta alla lettera la
+        ragione del server — che nomina il provider e la capacità mancante.
+    </p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-4</span>
+        <strong>La ragione non viene riscritta dalla UI.</strong>
+        È la stessa frase che il server produce per ogni azione bloccata da una capacità
+        mancante, mostrata in monospazio dentro <code>.chat-reason</code>. Nessun composer,
+        nessun pulsante di invio: non c'è nulla da tentare finché la configurazione non
+        cambia.
+    </p>
+
+    <div class="mk-stage">
+      <div class="mk-stage-inner">
+        <div class="workspace-chat">
+            <section class="chat-panel chat-blocked" aria-label="Conversazione non disponibile">
+                <div class="chat-head">
+                    <span class="chat-badge">non offerta</span>
+                    <span class="chat-root" title="/Users/marta/lavoro/atlante">
+                        <span>/Users/marta/lavoro/<strong>atlante</strong></span>
+                    </span>
+                    <span class="chat-head-spacer"></span>
+                    <span class="chat-provider">provider <strong>codex</strong></span>
+                </div>
+
+                <div class="chat-unavailable">
+                    <p class="chat-unavailable-title">La conversazione non è disponibile su questo workspace.</p>
+                    <p class="chat-reason">il provider di esecuzione predefinito "codex" non dichiara la capacità "workspace.converse"</p>
+                    <p class="chat-unavailable-hint">
+                        Per conversare serve un provider che dichiari
+                        <span class="chat-capability">workspace.converse</span>.
+                        Le azioni del processo restano disponibili: la capacità mancante
+                        riguarda soltanto questa superficie.
+                    </p>
+                    <div class="chat-unavailable-actions">
+                        <button type="button" class="ghost-btn">Apri il pannello Esecuzione</button>
+                        <span class="run-composer-hint">configurazione · provider predefinito</span>
+                    </div>
+                </div>
+            </section>
+        </div>
+      </div>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Le capacità dichiarate dal provider</p>
+    <ul class="mk-legend">
+        <li><span class="chat-capability">spec.plan</span> dichiarata da <code>codex</code></li>
+        <li><span class="chat-capability">spec.implement</span> dichiarata da <code>codex</code></li>
+        <li><span class="chat-capability">spec.review</span> dichiarata da <code>codex</code></li>
+        <li><span class="chat-capability" style="opacity:.55;text-decoration:line-through">workspace.converse</span> mancante <code>US-053</code></li>
+    </ul>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-053</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

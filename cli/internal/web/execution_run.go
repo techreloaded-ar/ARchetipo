@@ -508,6 +508,15 @@ func (s *Server) actionAvailabilityFor(ctx context.Context, ws *workspaceSession
 // providerAvailabilityFor resolves the default provider of this workspace and
 // probes it. The default is read from disk, not from the config the server
 // booted with: the Execution panel can change it while the viewer runs.
+//
+// The capabilities it records are the *declared* ones — the provider's own list
+// plus the ones derived from the optional interfaces it implements — exactly
+// the reading the provider panel does. The two must not diverge: a viewer that
+// listed a capability in one place and denied it in another would be describing
+// the same provider in two ways. The derivation is purely additive here, since
+// RequiredCapability only ever maps an action onto a self-declared capability,
+// so no existing refusal can change: it can only stop refusing what the
+// provider actually implements.
 func (s *Server) providerAvailabilityFor(ctx context.Context, ws *workspaceSession) providerAvailability {
 	availability := providerAvailability{}
 	if ws.service == nil {
@@ -534,7 +543,7 @@ func (s *Server) providerAvailabilityFor(ctx context.Context, ws *workspaceSessi
 		availability.providerErr = err
 		return availability
 	}
-	capabilities, err := provider.Capabilities(ctx)
+	capabilities, err := execution.DeclaredCapabilities(ctx, provider)
 	if err != nil {
 		availability.providerErr = err
 		return availability

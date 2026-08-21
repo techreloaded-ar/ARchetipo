@@ -609,7 +609,7 @@ func TestProviderDeclaresTheDialogueThroughTheInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := execution.NormalizeCapabilities([]execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilitySpecReview, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog, execution.CapabilityWorkspaceSpecDraft, execution.CapabilityRunDialog})
+	want := execution.NormalizeCapabilities([]execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilitySpecReview, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog, execution.CapabilityWorkspaceSpecDraft, execution.CapabilityRunDialog, execution.CapabilityWorkspaceConverse})
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("DeclaredCapabilities = %#v, want %#v", got, want)
 	}

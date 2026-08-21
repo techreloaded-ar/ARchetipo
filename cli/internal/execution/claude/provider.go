@@ -32,6 +32,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -123,12 +124,24 @@ type Provider struct {
 	starter    localrun.Starter
 	workingDir func() (string, error)
 	now        func() time.Time
+
+	// conversations holds the free conversations this provider is currently
+	// keeping alive, keyed by conversation id. It is deliberately separate from
+	// the session registry the Collaborator brings: the registry keeps every
+	// session forever, because the history of a finished run stays readable,
+	// while this map holds only what is still running and therefore still has a
+	// process to release. A conversation that has ended leaves this map and
+	// stays in the registry, which is exactly the difference between "still
+	// commandable" and "still readable".
+	conversationsMu sync.Mutex
+	conversations   map[string]*liveConversation
 }
 
 var (
 	_ execution.Provider             = (*Provider)(nil)
 	_ execution.AvailabilityReporter = (*Provider)(nil)
 	_ execution.RunCollaborator      = (*Provider)(nil)
+	_ execution.Conversationalist    = (*Provider)(nil)
 )
 
 // New builds a provider, defaulting every unset seam to its real
@@ -142,6 +155,8 @@ func New(options Options) *Provider {
 		starter:      options.Starter,
 		workingDir:   options.WorkingDir,
 		now:          options.Now,
+
+		conversations: make(map[string]*liveConversation),
 	}
 	if p.runner == nil {
 		p.runner = execRunner{}
@@ -284,7 +299,7 @@ type singleTurn struct {
 // Every failure closes the session before returning; a success deliberately
 // leaves it open.
 func (p *Provider) runSingleTurn(runCtx context.Context, req execution.Request, cfg settings, dir, prompt, gerund string) (*singleTurn, error) {
-	live, err := p.openSession(runCtx, req, cfg, dir, prompt, false)
+	live, err := p.openSession(runCtx, req, cfg, dir, prompt, false, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -375,16 +390,22 @@ type liveSession struct {
 
 // openSession starts the process, opens the protocol on it, gives it its
 // instruction and makes the run followable and commandable. Everything in it is
-// identical for both actions but the mode of the session and the prompt, which
-// are the two parameters.
+// identical for every action but the mode of the session, the prompt and how
+// much history the session keeps, which are the three parameters.
+//
+// retain bounds that history: 0 — what every execution passes — is the
+// unlimited session of always, so no dispatched action changes behaviour, and a
+// positive value is the retention window a conversation asks for, because a
+// conversation has no end to be read back from and would otherwise grow with
+// the time it stays open.
 //
 // A failure here always leaves the session closed and the process gone: a
 // registered run that nothing will ever end would stay ACTIVE forever.
-func (p *Provider) openSession(runCtx context.Context, req execution.Request, cfg settings, dir, prompt string, conversational bool) (*liveSession, error) {
+func (p *Provider) openSession(runCtx context.Context, req execution.Request, cfg settings, dir, prompt string, conversational bool, retain int) (*liveSession, error) {
 	// The session is registered before anything is started, so the run is
 	// followable from the instant it can produce history — including while this
 	// call is still inside the agent's work.
-	session := localrun.NewSession(req.ExecutionID, p.now)
+	session := localrun.NewBoundedSession(req.ExecutionID, p.now, retain)
 	p.Registry().Register(session)
 
 	startedAt := p.now()

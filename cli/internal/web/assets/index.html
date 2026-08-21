@@ -86,6 +86,14 @@
 
     <section id="workspace-status" class="workspace-status hidden" aria-live="polite"></section>
 
+    <!-- The conversation of the open workspace (US-053). It is mounted here,
+         once and in one place only: a workspace holds a single conversation,
+         so a panel repeated next to the board and next to a spec would be two
+         views of the same thing. Everything it draws comes from
+         /api/workspace/conversation, through the pure renderer in
+         conversation.js. -->
+    <section id="workspace-conversation" class="workspace-conversation hidden" aria-live="polite" data-workspace-scoped></section>
+
     <!-- The home shown when no workspace is open (US-051). Its list is drawn by
          the same renderer as the known-workspaces modal; the "add an existing
          workspace" form is moved in here at boot, so there stays exactly one
@@ -695,6 +703,7 @@
     <script src="/vendor/easymde.min.js"></script>
     <script src="/task-markdown.js"></script>
     <script src="/workspace-status.js"></script>
+    <script src="/conversation.js"></script>
     <script src="/workspace-home.js"></script>
     <script src="/provider-fields.js"></script>
     <script src="/app.js"></script>

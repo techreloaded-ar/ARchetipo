@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>US-053 · B — Conversazione in corso</title>
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">US-053</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-vuoto.html">A · vuoto</a>
+        <a href="stato-b-conversazione.html" class="current">B · conversazione</a>
+        <a href="stato-c-storia-parziale.html">C · storia parziale</a>
+        <a href="stato-d-non-offerta.html">D · non offerta</a>
+        <a href="stato-e-chiusa.html">E · chiusa</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">Stato B</p>
+    <h1 class="mk-title">Il dialogo, con<br />l'agente al lavoro</h1>
+    <p class="mk-lede">
+        Botta e risposta sulla project root aperta: domande dell'operatore, risposte
+        dell'agente e una lettura di file dichiarata come tale. In coda alla timeline
+        l'agente sta ancora scrivendo, con lo stesso indicatore già usato dal pannello
+        della run.
+    </p>
+    <p class="mk-note">
+        <span class="mk-ac">AC-1</span>
+        Ogni turno porta sulla guida di sinistra <strong>chi parla</strong> — è l'unica
+        differenza voluta rispetto alla guida numerata del pannello run, dove al suo posto
+        c'è l'id dell'evento. <span class="mk-ac ghost">AC-2</span> nessun turno crea
+        un'esecuzione: la fascia <code>fuori dal processo</code> resta vera per tutta la
+        conversazione, anche quando l'agente legge il codice.
+    </p>
+
+    <div class="mk-stage">
+      <div class="mk-stage-inner">
+        <div class="workspace-chat">
+            <section class="chat-panel chat-live" aria-label="Conversazione sul workspace aperto">
+                <div class="chat-head">
+                    <span class="chat-badge">conversazione</span>
+                    <span class="chat-root" title="/Users/marta/lavoro/atlante">
+                        <span>/Users/marta/lavoro/<strong>atlante</strong></span>
+                    </span>
+                    <span class="chat-head-spacer"></span>
+                    <span class="chat-provider">provider <strong>claude</strong></span>
+                    <span class="chat-close">
+                        <button type="button" class="ghost-btn danger-ghost-btn" data-close-open>Chiudi conversazione</button>
+                        <span class="chat-close-confirm is-hidden">
+                            <span class="chat-close-question">Confermi?</span>
+                            <button type="button" class="approval-btn deny">Sì, chiudi</button>
+                            <button type="button" class="approval-btn" data-close-abort>No</button>
+                        </span>
+                    </span>
+                </div>
+
+                <div class="chat-scope">fuori dal processo · nessuna spec transita</div>
+
+                <ol class="chat-timeline" aria-live="polite">
+                    <li class="chat-turn turn-operator">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>tu</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:02:34</span></div>
+                            <p class="chat-turn-text">Prima di decidere cosa fare: dove sta la logica di importazione dei tracciati in questo workspace?</p>
+                        </div>
+                    </li>
+                    <li class="chat-turn turn-tool">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>lettura</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:02:36</span></div>
+                            <p class="chat-turn-text">Ho letto <code class="chat-turn-file">internal/tracce/import.go</code> e i due file accanto.</p>
+                            <p class="chat-turn-detail">solo lettura · project root /Users/marta/lavoro/atlante · 3 file, 0 scritture</p>
+                        </div>
+                    </li>
+                    <li class="chat-turn turn-agent">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>agente</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:02:41</span></div>
+                            <p class="chat-turn-text">L'importazione vive tutta in <code class="chat-turn-file">internal/tracce</code>: <code class="chat-turn-file">import.go</code> legge il file e valida le righe, <code class="chat-turn-file">store.go</code> le persiste. Il punto di ingresso è uno solo:</p>
+                            <pre class="chat-quote">func Importa(ctx context.Context, sorgente io.Reader) (Esito, error)</pre>
+                            <p class="chat-turn-text">Il resto del pacchetto è privato, quindi cambiare il formato di ingresso tocca un file e mezzo, non l'intero dominio.</p>
+                        </div>
+                    </li>
+                    <li class="chat-turn turn-operator">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>tu</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:03:02</span></div>
+                            <p class="chat-turn-text">E se volessi accettare anche un formato compresso, quanto costa? Ragioniamoci, non implementare nulla.</p>
+                        </div>
+                    </li>
+                    <li class="chat-turn turn-agent">
+                        <div class="chat-turn-rail"><span class="chat-turn-glyph" aria-hidden="true"></span>agente</div>
+                        <div class="chat-turn-body">
+                            <div class="chat-turn-head"><span class="chat-turn-time">14:03:05</span></div>
+                            <p class="chat-turn-text">Due strade. La prima: riconoscere la compressione dentro <code class="chat-turn-file">Importa</code>, avvolgendo il lettore — poche righe, ma la firma resta muta sul formato…</p>
+                        </div>
+                    </li>
+                </ol>
+
+                <div class="run-tail">
+                    <span class="run-tail-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+                    l'agente sta scrivendo
+                </div>
+
+                <div class="run-composer">
+                    <label class="is-hidden" for="msg-b">Messaggio per l'agente</label>
+                    <textarea id="msg-b" class="run-composer-input" rows="2" placeholder="Scrivi all'agente…"></textarea>
+                    <div class="run-composer-row">
+                        <span class="run-composer-hint">⌘ + invio per inviare</span>
+                        <span class="run-composer-spacer"></span>
+                        <button type="button" class="primary-btn">Invia</button>
+                    </div>
+                </div>
+            </section>
+        </div>
+      </div>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Generi di turno</p>
+    <ul class="mk-legend">
+        <li><span class="chat-turn-glyph" style="background:var(--accent);border-radius:50%"></span> messaggio dell'operatore <code>turn-operator</code></li>
+        <li><span class="chat-turn-glyph" style="background:var(--text)"></span> risposta dell'agente <code>turn-agent</code></li>
+        <li><span class="chat-turn-glyph" style="background:var(--status-planned)"></span> uso di uno strumento <code>turn-tool</code></li>
+    </ul>
+
+    <p class="mk-foot">Mockup statico · nessuna chiamata di rete · docs/mockups/US-053</p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

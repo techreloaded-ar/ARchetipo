@@ -58,7 +58,13 @@ async function report(kind, body) {
 // directory belongs to the same report and for the same reason: where the agent
 // was started is part of how the session was opened, and it is the one fact no
 // viewer field can stand in for.
-report("argv", { argv: process.argv.slice(2), cwd: process.cwd() });
+//
+// The process identifier travels with them, and for a third reason of the same
+// kind: "the provider released the agent process" is a statement about the
+// process, and the only thing that can settle it is the operating system being
+// asked whether that process is still there. A route answering 200 says what
+// the viewer decided, not what became of the process.
+report("argv", { argv: process.argv.slice(2), cwd: process.cwd(), pid: process.pid });
 
 const rl = readline.createInterface({ input: process.stdin });
 
@@ -98,7 +104,14 @@ async function pump() {
       return;
     }
     if (command && command.kind === "emit") {
-      write(command.frame);
+      // `frames` is the same command for a burst: a history long enough to
+      // overflow a retention window has to be produced in one go, because one
+      // command per frame would turn the poll interval into a wait of minutes.
+      if (Array.isArray(command.frames)) {
+        for (const frame of command.frames) write(frame);
+      } else {
+        write(command.frame);
+      }
     } else if (command && command.kind === "write") {
       // An artifact the agent produces, written *relative to its own working
       // directory*: it is what makes "the run acted on this workspace" a fact on

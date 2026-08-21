@@ -1,0 +1,2171 @@
+/* =========================================================================
+   ARchetipo · Mockup US-053 — "Conversare con l'agente sul workspace aperto"
+   -------------------------------------------------------------------------
+   Questo file è un MOCKUP isolato. Non è la fonte dell'applicazione.
+   PARTE 1 — token, primitive e pannello run copiati (in sola lettura) da
+             cli/internal/web/assets/app.css: servono solo a riprodurre la
+             shell reale del viewer.
+   PARTE 2 — il SOLO codice nuovo proposto per US-053 (pannello conversazione):
+             è la parte pensata per essere traslata in app.css così com'è.
+   PARTE 3 — impalcatura del mockup, da non portare mai in app.css.
+   ========================================================================= */
+
+/* =========================================================================
+   PARTE 1 — Shell esistente (copia di riferimento, non modificare)
+   ========================================================================= */
+:root {
+	--font-display:
+		"Instrument Serif", "Iowan Old Style", "Palatino Linotype", Palatino,
+		Georgia, serif;
+	--font-sans:
+		"Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+		sans-serif;
+	--font-mono:
+		"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+	--radius-sm: 4px;
+	--radius: 6px;
+	--radius-lg: 10px;
+
+	--ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+	--transition: 0.18s var(--ease);
+}
+
+html[data-theme="dark"] {
+	--bg: #0d0e10;
+	--bg-grid: rgba(232, 213, 183, 0.025);
+	--surface: #15171a;
+	--surface-2: #1c1f24;
+	--surface-3: #262932;
+	--surface-hover: #20232a;
+	--border: #262931;
+	--border-strong: #3a3f4c;
+	--rule: #1f2229;
+
+	--text: #ece6d8;
+	--text-strong: #faf6ec;
+	--text-muted: #8b8779;
+	--text-dim: #5a574d;
+
+	--accent: #e89548;
+	--accent-strong: #f4a559;
+	--accent-soft: rgba(232, 149, 72, 0.14);
+	--accent-ink: #1a1815;
+
+	--priority-high: #e8634a;
+	--priority-medium: #d9a13a;
+	--priority-low: #6aa6c4;
+
+	--status-todo: #6e6a60;
+	--status-planned: #7196b5;
+	--status-progress: #d9a13a;
+	--status-review: #b078d4;
+	--status-done: #7fb069;
+
+	--shadow:
+		0 24px 60px -16px rgba(0, 0, 0, 0.6), 0 8px 24px -8px rgba(0, 0, 0, 0.4);
+	--shadow-sm: 0 4px 12px -4px rgba(0, 0, 0, 0.4);
+	--backdrop: rgba(5, 6, 8, 0.78);
+}
+
+html[data-theme="light"] {
+	--bg: #f5f0e4;
+	--bg-grid: rgba(50, 40, 25, 0.04);
+	--surface: #fcf8ed;
+	--surface-2: #ffffff;
+	--surface-3: #ece6d4;
+	--surface-hover: #f7f1e0;
+	--border: #d9d2bd;
+	--border-strong: #b8b09a;
+	--rule: #e4dcc6;
+
+	--text: #1f1c17;
+	--text-strong: #0d0b08;
+	--text-muted: #6c6457;
+	--text-dim: #a09783;
+
+	--accent: #b85a1f;
+	--accent-strong: #993f0e;
+	--accent-soft: rgba(184, 90, 31, 0.1);
+	--accent-ink: #fcf8ed;
+
+	--priority-high: #b83f1f;
+	--priority-medium: #9c6f0e;
+	--priority-low: #2f6a8a;
+
+	--status-todo: #8a8475;
+	--status-planned: #3d6c8c;
+	--status-progress: #9c6f0e;
+	--status-review: #6e3d99;
+	--status-done: #4d7a3a;
+
+	--shadow:
+		0 24px 50px -18px rgba(60, 45, 20, 0.18),
+		0 6px 16px -8px rgba(60, 45, 20, 0.1);
+	--shadow-sm: 0 3px 10px -4px rgba(60, 45, 20, 0.12);
+	--backdrop: rgba(80, 65, 40, 0.32);
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--font-sans);
+	font-size: 14px;
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+.blueprint-grid {
+	position: fixed;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	background-image:
+		linear-gradient(var(--bg-grid) 1px, transparent 1px),
+		linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+	background-size: 32px 32px;
+}
+
+/* ---- Bottoni ----------------------------------------------------------- */
+.ghost-btn,
+.primary-btn,
+.icon-btn,
+.theme-toggle {
+	border: 1px solid var(--border);
+	background: transparent;
+	color: var(--text);
+	padding: 7px 12px;
+	border-radius: var(--radius);
+	font-family: var(--font-sans);
+	font-size: 12px;
+	font-weight: 500;
+	letter-spacing: 0.01em;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	transition:
+		background var(--transition),
+		border-color var(--transition),
+		color var(--transition),
+		transform 0.1s var(--ease);
+}
+
+.ghost-btn:hover {
+	background: var(--surface-hover);
+	border-color: var(--border-strong);
+	color: var(--text-strong);
+}
+
+.ghost-btn:active {
+	transform: translateY(1px);
+}
+
+.danger-ghost-btn {
+	color: var(--priority-high);
+	border-color: color-mix(in srgb, var(--priority-high) 36%, var(--border));
+	background: color-mix(in srgb, var(--priority-high) 9%, transparent);
+}
+
+.danger-ghost-btn:hover {
+	color: #fff;
+	border-color: var(--priority-high);
+	background: var(--priority-high);
+}
+
+.primary-btn {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-ink);
+	font-weight: 600;
+}
+
+.primary-btn:hover {
+	background: var(--accent-strong);
+	border-color: var(--accent-strong);
+}
+
+.primary-btn:disabled,
+.ghost-btn:disabled,
+.danger-ghost-btn:disabled {
+	cursor: default;
+	opacity: 0.5;
+}
+
+.icon-btn {
+	border: 1px solid var(--border);
+	padding: 6px 8px;
+	color: var(--text-muted);
+	background: transparent;
+}
+
+.icon-btn:hover {
+	color: var(--text-strong);
+	background: var(--surface-hover);
+	border-color: var(--border-strong);
+}
+
+/* ---- Modal ------------------------------------------------------------- */
+.modal-root {
+	background: var(--backdrop);
+	display: flex;
+	align-items: flex-start;
+	justify-content: center;
+	padding: 24px;
+}
+
+.modal {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+	width: min(920px, 100%);
+	display: flex;
+	flex-direction: column;
+	box-shadow: var(--shadow);
+	overflow: hidden;
+}
+
+.modal-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 18px 22px 14px;
+	border-bottom: 1px solid var(--rule);
+}
+
+.modal-title {
+	margin: 0;
+	font-family: var(--font-display);
+	font-size: 22px;
+	font-weight: 400;
+	letter-spacing: -0.01em;
+	color: var(--text-strong);
+}
+
+.modal-tabs {
+	display: flex;
+	gap: 0;
+	padding: 0 22px;
+	border-bottom: 1px solid var(--rule);
+	background: var(--surface);
+}
+
+.tab {
+	background: transparent;
+	border: none;
+	color: var(--text-muted);
+	padding: 12px 18px;
+	cursor: pointer;
+	font-family: var(--font-mono);
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.16em;
+	position: relative;
+}
+
+.tab::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: -1px;
+	height: 2px;
+	background: var(--accent);
+	transform: scaleX(0);
+	transition: transform 0.2s var(--ease);
+}
+
+.tab.active {
+	color: var(--text-strong);
+}
+
+.tab.active::after {
+	transform: scaleX(1);
+}
+
+.tab-panel {
+	padding: 22px 24px 26px;
+}
+
+/* ---- Story view -------------------------------------------------------- */
+.story-view {
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+}
+
+.story-view-topbar {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.story-view-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+}
+
+.meta-chip {
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 3px 10px;
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+
+.story-view-title {
+	margin: 0;
+	font-family: var(--font-display);
+	font-size: 32px;
+	font-weight: 400;
+	letter-spacing: -0.015em;
+	line-height: 1.15;
+	color: var(--text-strong);
+}
+
+.story-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+	margin: 0 0 14px;
+}
+
+.action-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 4px 10px;
+	background: var(--accent-soft);
+}
+
+.action-chip-label {
+	font-size: 12px;
+	color: var(--text-strong);
+}
+
+.action-chip-id {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+
+.action-chip-run {
+	font-family: var(--font-sans);
+	cursor: pointer;
+	border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.action-chip-run:disabled {
+	cursor: default;
+	opacity: 0.55;
+}
+
+/* ---- Pannello esecuzione (esistente) ----------------------------------- */
+.story-execution {
+	margin: 0 0 14px;
+}
+
+.execution-panel {
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--status-todo);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.execution-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.execution-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--status-todo);
+	flex-shrink: 0;
+}
+
+.execution-headline {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--text-strong);
+}
+
+.execution-id,
+.execution-code {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+
+.execution-meta {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.03em;
+	color: var(--text-muted);
+}
+
+.execution-message {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	flex-wrap: wrap;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--text);
+}
+
+.execution-panel.execution-running {
+	border-left-color: var(--status-progress);
+}
+
+.execution-running .execution-dot {
+	background: var(--status-progress);
+	animation: execution-pulse 1.4s var(--ease) infinite;
+}
+
+.execution-panel.execution-ok {
+	border-left-color: var(--status-done);
+}
+
+.execution-ok .execution-dot {
+	background: var(--status-done);
+}
+
+.execution-panel.execution-err {
+	border-left-color: var(--priority-high);
+}
+
+.execution-err .execution-dot {
+	background: var(--priority-high);
+}
+
+.execution-err .execution-message {
+	color: var(--priority-high);
+}
+
+@keyframes execution-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.3;
+	}
+}
+
+/* =========================================================================
+
+/* ---- Pannello run remota (US-030, già in app.css) -------------------- */
+/* ---- Remote run panel --------------------------------------------------
+   The collaborative half of an execution, drawn from docs/mockups/US-030.
+   It speaks the vocabulary the execution panel established — same surface,
+   same left rule carrying the state, same monospace metadata — and adds what
+   a conversation needs: a timeline that is the provider's projection and
+   nothing else, and a control band under it that carries everything the UI
+   knows but the provider has not confirmed yet.
+
+   The mockup declares its own :root; none of it is imported here. Every value
+   below resolves against the viewer's own tokens. */
+.story-run {
+	margin: 0 0 14px;
+}
+
+.story-run:empty {
+	margin: 0;
+}
+
+.run-panel {
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--status-todo);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.run-panel.run-live {
+	border-left-color: var(--status-progress);
+}
+
+.run-panel.run-closed {
+	border-left-color: var(--status-done);
+}
+
+.run-panel.run-failed {
+	border-left-color: var(--priority-high);
+}
+
+.run-panel.run-cancelled {
+	border-left-color: var(--status-todo);
+}
+
+/* ---- Run header -------------------------------------------------------- */
+.run-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 10px 12px;
+	border-bottom: 1px solid var(--rule);
+	background: color-mix(in srgb, var(--surface-3) 45%, transparent);
+}
+
+.run-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 2px 10px 2px 8px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--text-muted);
+	background: var(--surface-2);
+}
+
+.run-badge::before {
+	content: "";
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: currentColor;
+	flex-shrink: 0;
+}
+
+.run-live .run-badge {
+	color: var(--status-progress);
+	border-color: color-mix(in srgb, var(--status-progress) 40%, var(--border));
+}
+
+.run-live .run-badge::before {
+	animation: execution-pulse 1.4s var(--ease) infinite;
+}
+
+.run-closed .run-badge {
+	color: var(--status-done);
+	border-color: color-mix(in srgb, var(--status-done) 40%, var(--border));
+}
+
+.run-failed .run-badge {
+	color: var(--priority-high);
+	border-color: color-mix(in srgb, var(--priority-high) 40%, var(--border));
+}
+
+.run-cancelled .run-badge {
+	color: var(--text-muted);
+	border-color: var(--border-strong);
+}
+
+.run-id {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+
+.run-head-spacer {
+	flex: 1 1 auto;
+}
+
+/* The transport is a visible state, not a silent retry: three spellings, and
+   only the server's `connected` decides between the first two. */
+.run-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+}
+
+.run-link-mark {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: currentColor;
+	flex-shrink: 0;
+}
+
+.run-link.listening {
+	color: var(--status-done);
+}
+
+.run-link.reconnecting {
+	color: var(--status-progress);
+}
+
+.run-link.reconnecting .run-link-mark {
+	border-radius: 50%;
+	background: none;
+	border: 1.5px solid currentColor;
+	border-top-color: transparent;
+	width: 9px;
+	height: 9px;
+	animation: run-spin 0.9s linear infinite;
+}
+
+.run-link.offline {
+	color: var(--text-dim);
+}
+
+@keyframes run-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* ---- Timeline ---------------------------------------------------------- */
+.run-timeline {
+	list-style: none;
+	margin: 0;
+	padding: 10px 12px 12px;
+	max-height: 320px;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	/* Deliberately not `scroll-behavior: smooth`: the panel is redrawn on every
+	   poll and the reading position is restored by assigning scrollTop, which
+	   smooth scrolling would turn into a visible crawl on every tick. */
+}
+
+.run-timeline.is-frozen {
+	opacity: 0.62;
+	filter: saturate(0.7);
+}
+
+.run-timeline-empty {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.03em;
+	color: var(--text-dim);
+}
+
+/* Every event is two columns: the rail carrying the monotonic id, and the
+   body. The rail is what makes the ordering — and the absence of duplicates —
+   readable at a glance. */
+.run-event {
+	display: grid;
+	grid-template-columns: 46px 1fr;
+	gap: 10px;
+	padding: 6px 0;
+	position: relative;
+}
+
+.run-event + .run-event {
+	border-top: 1px solid color-mix(in srgb, var(--rule) 70%, transparent);
+}
+
+.run-event-rail {
+	display: flex;
+	align-items: baseline;
+	justify-content: flex-end;
+	gap: 5px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.02em;
+	color: var(--text-dim);
+	padding-top: 1px;
+	position: relative;
+}
+
+.run-event-rail::after {
+	content: "";
+	position: absolute;
+	right: -5px;
+	top: 4px;
+	bottom: -11px;
+	width: 1px;
+	background: var(--rule);
+}
+
+.run-event:last-child .run-event-rail::after {
+	bottom: 0;
+}
+
+.run-event-glyph {
+	width: 7px;
+	height: 7px;
+	border-radius: 2px;
+	background: var(--text-dim);
+	flex-shrink: 0;
+	transform: translateY(-1px);
+}
+
+.run-event-body {
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.run-event-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.run-event-kind {
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+	color: var(--text-muted);
+}
+
+.run-event-time {
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	letter-spacing: 0.03em;
+	color: var(--text-dim);
+}
+
+.run-event-text {
+	margin: 0;
+	font-size: 12.5px;
+	line-height: 1.55;
+	color: var(--text);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.run-event-tool {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--accent);
+	background: var(--surface-3);
+	border-radius: 3px;
+	padding: 1px 6px;
+}
+
+.run-event-detail {
+	margin: 0;
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.02em;
+	color: var(--text-muted);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* Per-kind variants. The class is chosen from a closed table in app.js, never
+   built from the remote kind string. */
+.ev-assistant .run-event-glyph {
+	background: var(--text);
+}
+
+.ev-thinking .run-event-glyph {
+	background: none;
+	border: 1px solid var(--text-dim);
+}
+
+.ev-thinking .run-event-text {
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.ev-tool-start .run-event-glyph {
+	background: var(--status-planned);
+}
+
+.ev-tool-start .run-event-kind {
+	color: var(--status-planned);
+}
+
+.ev-tool-end .run-event-glyph {
+	background: var(--status-done);
+}
+
+.ev-tool-end .run-event-kind {
+	color: var(--status-done);
+}
+
+.ev-tool-error .run-event-glyph {
+	background: var(--priority-high);
+}
+
+.ev-tool-error .run-event-kind,
+.ev-tool-error .run-event-detail {
+	color: var(--priority-high);
+}
+
+.ev-user .run-event-glyph {
+	background: var(--accent);
+	border-radius: 50%;
+}
+
+.ev-user .run-event-kind {
+	color: var(--accent-strong);
+}
+
+.ev-user .run-event-text {
+	color: var(--text-strong);
+	font-weight: 500;
+}
+
+/* The end of a turn is a beat in the conversation, not a contribution to it:
+   it is marked but deliberately quieter than the events around it. */
+.ev-turn-end .run-event-glyph {
+	background: none;
+	border: 1px solid var(--rule);
+}
+
+.ev-turn-end .run-event-kind {
+	color: var(--text-dim);
+}
+
+.ev-unknown .run-event-glyph {
+	background: none;
+	border: 1px dashed var(--border-strong);
+}
+
+.ev-unknown .run-event-text {
+	color: var(--text-muted);
+}
+
+/* The seam marks where the timeline resumed after a dropped channel, so the
+   operator can see that nothing was lost and nothing was repeated. */
+.run-seam {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 4px 0 2px;
+	padding-left: 56px;
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--status-progress);
+}
+
+.run-seam::after {
+	content: "";
+	flex: 1 1 auto;
+	height: 0;
+	border-top: 1px dashed color-mix(in srgb, var(--status-progress) 55%, transparent);
+}
+
+.run-tail {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 12px 10px 68px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.06em;
+	color: var(--text-muted);
+}
+
+.run-tail-dots span {
+	display: inline-block;
+	width: 4px;
+	height: 4px;
+	margin-right: 3px;
+	border-radius: 50%;
+	background: currentColor;
+	animation: execution-pulse 1.2s var(--ease) infinite;
+}
+
+.run-tail-dots span:nth-child(2) {
+	animation-delay: 0.2s;
+}
+
+.run-tail-dots span:nth-child(3) {
+	animation-delay: 0.4s;
+}
+
+/* ---- Pending approval card --------------------------------------------- */
+.run-head + .run-notice,
+.run-head + .run-approval {
+	margin-top: 10px;
+}
+
+.run-approval {
+	margin: 0 12px 10px;
+	border: 1px solid color-mix(in srgb, var(--status-review) 42%, var(--border));
+	border-left: 3px solid var(--status-review);
+	border-radius: var(--radius);
+	background: color-mix(in srgb, var(--status-review) 7%, var(--surface));
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.run-approval-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.run-approval-eyebrow {
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+	color: var(--status-review);
+}
+
+.run-approval-tool {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--text-strong);
+	background: var(--surface-3);
+	border-radius: 3px;
+	padding: 1px 6px;
+}
+
+.run-approval-title {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-strong);
+	margin: 0;
+	line-height: 1.4;
+}
+
+.run-approval-args {
+	margin: 0;
+	padding: 8px 10px;
+	max-height: 120px;
+	overflow: auto;
+	border-radius: var(--radius-sm);
+	background: var(--surface-3);
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	line-height: 1.55;
+	color: var(--text);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.run-approval-options {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.approval-btn {
+	font-family: var(--font-sans);
+	font-size: 12px;
+	font-weight: 500;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	color: var(--text);
+	padding: 6px 11px;
+	cursor: pointer;
+	transition:
+		background var(--transition),
+		border-color var(--transition),
+		color var(--transition);
+}
+
+.approval-btn:hover:not(:disabled) {
+	border-color: var(--border-strong);
+	background: var(--surface-hover);
+}
+
+.approval-btn.allow {
+	border-color: color-mix(in srgb, var(--status-done) 45%, var(--border));
+	color: var(--status-done);
+}
+
+.approval-btn.allow:hover:not(:disabled) {
+	background: var(--status-done);
+	border-color: var(--status-done);
+	color: var(--surface);
+}
+
+.approval-btn.deny {
+	border-color: color-mix(in srgb, var(--priority-high) 45%, var(--border));
+	color: var(--priority-high);
+}
+
+.approval-btn.deny:hover:not(:disabled) {
+	background: var(--priority-high);
+	border-color: var(--priority-high);
+	color: var(--accent-ink);
+}
+
+.approval-btn:disabled {
+	cursor: default;
+	opacity: 0.45;
+}
+
+.approval-btn.is-chosen:disabled {
+	opacity: 1;
+	border-color: var(--status-done);
+	background: color-mix(in srgb, var(--status-done) 16%, transparent);
+	color: var(--status-done);
+}
+
+.approval-btn.deny.is-chosen:disabled {
+	border-color: var(--priority-high);
+	background: color-mix(in srgb, var(--priority-high) 14%, transparent);
+	color: var(--priority-high);
+}
+
+/* What the provider answered, read back from its projection. */
+.run-approval-outcome {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	flex-wrap: wrap;
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.03em;
+	color: var(--status-done);
+	border-top: 1px solid var(--rule);
+	padding-top: 8px;
+}
+
+.run-approval-outcome.denied {
+	color: var(--priority-high);
+}
+
+.run-approval.is-answered {
+	border-left-color: var(--status-done);
+	background: color-mix(in srgb, var(--status-done) 6%, var(--surface));
+	border-color: color-mix(in srgb, var(--status-done) 30%, var(--border));
+}
+
+.run-approval.is-answered .run-approval-eyebrow {
+	color: var(--status-done);
+}
+
+.run-approval.is-answered.is-denied {
+	border-left-color: var(--priority-high);
+	background: color-mix(in srgb, var(--priority-high) 6%, var(--surface));
+	border-color: color-mix(in srgb, var(--priority-high) 30%, var(--border));
+}
+
+.run-approval.is-answered.is-denied .run-approval-eyebrow {
+	color: var(--priority-high);
+}
+
+/* ---- Notices ------------------------------------------------------------
+   Non-destructive by construction: a notice lives outside the timeline, which
+   a refused command never touches. */
+.run-notice {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 0 12px 10px;
+	padding: 8px 10px;
+	border: 1px dashed var(--border-strong);
+	border-radius: var(--radius);
+	background: var(--surface);
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--text-muted);
+}
+
+.run-notice-mark {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	flex-shrink: 0;
+	padding-top: 1px;
+}
+
+.run-notice-body {
+	min-width: 0;
+	word-break: break-word;
+}
+
+.run-notice-body strong {
+	display: block;
+	color: var(--text-strong);
+	font-weight: 600;
+	margin-bottom: 2px;
+}
+
+.run-notice.refused {
+	border-color: color-mix(in srgb, var(--priority-high) 45%, var(--border));
+	background: color-mix(in srgb, var(--priority-high) 7%, transparent);
+	color: var(--priority-high);
+}
+
+.run-notice.refused .run-notice-body strong {
+	color: var(--priority-high);
+}
+
+.run-notice.info {
+	border-color: color-mix(in srgb, var(--status-planned) 40%, var(--border));
+	background: color-mix(in srgb, var(--status-planned) 7%, transparent);
+}
+
+.run-notice.ok {
+	border-style: solid;
+	border-color: color-mix(in srgb, var(--status-done) 40%, var(--border));
+	background: color-mix(in srgb, var(--status-done) 7%, transparent);
+	color: var(--status-done);
+}
+
+.run-notice.ok .run-notice-body strong {
+	color: var(--status-done);
+}
+
+.run-notice-dismiss {
+	margin-left: auto;
+	background: none;
+	border: none;
+	color: inherit;
+	opacity: 0.6;
+	cursor: pointer;
+	font-family: var(--font-mono);
+	font-size: 11px;
+	padding: 0 2px;
+}
+
+.run-notice-dismiss:hover {
+	opacity: 1;
+}
+
+/* ---- Composer and cancel control --------------------------------------- */
+.run-composer {
+	border-top: 1px solid var(--rule);
+	background: color-mix(in srgb, var(--surface-3) 35%, transparent);
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.run-composer-input {
+	width: 100%;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--text);
+	font-family: var(--font-sans);
+	font-size: 12.5px;
+	line-height: 1.55;
+	padding: 9px 11px;
+	resize: vertical;
+	min-height: 62px;
+	transition:
+		border-color var(--transition),
+		box-shadow var(--transition);
+}
+
+.run-composer-input::placeholder {
+	color: var(--text-dim);
+}
+
+.run-composer-input:focus {
+	outline: none;
+	border-color: var(--accent);
+	box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.run-composer-input:disabled {
+	background: var(--surface-3);
+	color: var(--text-muted);
+	cursor: not-allowed;
+}
+
+.run-composer-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.run-composer-hint {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	color: var(--text-dim);
+}
+
+.run-composer-spacer {
+	flex: 1 1 auto;
+}
+
+/* A message accepted by the provider is not history until the run publishes
+   it back. This pill is the only place it lives in the meantime. */
+.run-pending {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border));
+	border-radius: 999px;
+	background: var(--accent-soft);
+	padding: 4px 11px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--accent-strong);
+	max-width: 100%;
+}
+
+.run-pending-mark {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	border: 1.5px solid currentColor;
+	border-top-color: transparent;
+	flex-shrink: 0;
+	animation: run-spin 0.9s linear infinite;
+}
+
+.run-pending-text {
+	font-family: var(--font-sans);
+	font-size: 11.5px;
+	letter-spacing: 0;
+	text-transform: none;
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 34ch;
+}
+
+.run-cancel {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.run-cancel-confirm {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 11.5px;
+	color: var(--priority-high);
+}
+
+.run-cancel-question {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+}
+
+.run-cancel-state {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.03em;
+	color: var(--text-muted);
+}
+
+.run-cancel-state.confirmed {
+	color: var(--status-done);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.run-live .run-badge::before,
+	.run-link.reconnecting .run-link-mark,
+	.run-pending-mark,
+	.run-tail-dots span {
+		animation: none;
+	}
+
+	.run-timeline {
+		scroll-behavior: auto;
+	}
+}
+
+/* =========================================================================
+   PARTE 2 — NUOVO: pannello conversazione di workspace (US-053)
+   Contenitore #workspace-chat: superficie autonoma, fratello di .run-panel.
+   Stessa grammatica (bordo sinistro di 3 px con il colore di stato, superficie
+   surface-2, metadati in monospazio, composer e avvisi già esistenti) con una
+   sola differenza deliberata: la guida di sinistra porta CHI parla, non l'id
+   di un evento — perché qui non c'è una run, c'è un dialogo.
+   ========================================================================= */
+
+.workspace-chat {
+	margin: 0;
+}
+
+.chat-panel {
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--status-planned);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+/* Conversazione aperta e provider impegnato. */
+.chat-panel.chat-live {
+	border-left-color: var(--status-planned);
+}
+
+/* Conversazione chiusa: il provider non è più impegnato (AC-6). */
+.chat-panel.chat-ended {
+	border-left-color: var(--status-todo);
+}
+
+/* Conversazione non offerta: capacità mancante (AC-4). */
+.chat-panel.chat-blocked {
+	border-left-color: var(--text-dim);
+	border-left-style: dashed;
+	background: var(--surface);
+}
+
+/* ---- 1. Intestazione: workspace aperto e provider ---------------------- */
+.chat-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 10px 12px;
+	border-bottom: 1px solid var(--rule);
+	background: color-mix(in srgb, var(--surface-3) 45%, transparent);
+}
+
+.chat-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid color-mix(in srgb, var(--status-planned) 40%, var(--border));
+	border-radius: 999px;
+	padding: 2px 10px 2px 8px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--status-planned);
+	background: var(--surface-2);
+}
+
+.chat-badge::before {
+	content: "";
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: currentColor;
+	flex-shrink: 0;
+}
+
+.chat-live .chat-badge::before {
+	animation: execution-pulse 1.4s var(--ease) infinite;
+}
+
+.chat-ended .chat-badge {
+	color: var(--text-muted);
+	border-color: var(--border-strong);
+}
+
+.chat-blocked .chat-badge {
+	color: var(--text-dim);
+	border-color: var(--border);
+	border-style: dashed;
+}
+
+.chat-head-spacer {
+	flex: 1 1 auto;
+}
+
+/* AC-1/AC-5: la project root è l'identità della conversazione, non un
+   dettaglio. Sta nell'intestazione, in monospazio, troncata a sinistra così
+   la cartella del workspace resta sempre leggibile. */
+.chat-root {
+	display: inline-block;
+	min-width: 0;
+	max-width: 46ch;
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.03em;
+	color: var(--text-muted);
+	direction: rtl;
+	text-align: left;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.chat-root > * {
+	direction: ltr;
+}
+
+.chat-root strong {
+	color: var(--text-strong);
+	font-weight: 600;
+}
+
+.chat-provider {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 2px 9px;
+	background: var(--surface-2);
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+.chat-provider strong {
+	color: var(--text);
+	font-weight: 600;
+}
+
+/* AC-2: la riga che dichiara, una volta sola e in modo stabile, che questa
+   superficie non è un'esecuzione del processo. */
+.chat-scope {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 12px;
+	border-bottom: 1px solid var(--rule);
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--text-dim);
+	background: var(--surface-2);
+}
+
+.chat-scope::before {
+	content: "";
+	width: 14px;
+	height: 0;
+	border-top: 1px dashed var(--border-strong);
+	flex-shrink: 0;
+}
+
+/* ---- 2. Timeline del dialogo ------------------------------------------- */
+.chat-timeline {
+	list-style: none;
+	margin: 0;
+	padding: 10px 12px 12px;
+	max-height: 380px;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	scroll-behavior: smooth;
+}
+
+.chat-timeline.is-frozen {
+	opacity: 0.62;
+	filter: saturate(0.7);
+}
+
+.chat-turn {
+	display: grid;
+	grid-template-columns: 62px 1fr;
+	gap: 10px;
+	padding: 7px 0;
+	position: relative;
+}
+
+.chat-turn + .chat-turn {
+	border-top: 1px solid color-mix(in srgb, var(--rule) 70%, transparent);
+}
+
+/* La guida porta il nome di chi parla: è l'unica differenza voluta rispetto
+   alla guida numerata del pannello run. */
+.chat-turn-rail {
+	display: flex;
+	align-items: baseline;
+	justify-content: flex-end;
+	gap: 5px;
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--text-dim);
+	padding-top: 2px;
+	position: relative;
+}
+
+.chat-turn-rail::after {
+	content: "";
+	position: absolute;
+	right: -5px;
+	top: 5px;
+	bottom: -12px;
+	width: 1px;
+	background: var(--rule);
+}
+
+.chat-turn:last-child .chat-turn-rail::after {
+	bottom: 0;
+}
+
+.chat-turn-glyph {
+	width: 7px;
+	height: 7px;
+	border-radius: 2px;
+	background: var(--text-dim);
+	flex-shrink: 0;
+	transform: translateY(-1px);
+}
+
+.chat-turn-body {
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.chat-turn-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.chat-turn-time {
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	letter-spacing: 0.03em;
+	color: var(--text-dim);
+}
+
+.chat-turn-text {
+	font-size: 12.5px;
+	line-height: 1.6;
+	color: var(--text);
+	word-break: break-word;
+	margin: 0;
+}
+
+.chat-turn-text + .chat-turn-text {
+	margin-top: 6px;
+}
+
+.chat-turn-detail {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.02em;
+	color: var(--text-muted);
+	word-break: break-word;
+	margin: 0;
+}
+
+.turn-operator .chat-turn-glyph {
+	background: var(--accent);
+	border-radius: 50%;
+}
+
+.turn-operator .chat-turn-rail {
+	color: var(--accent);
+}
+
+.turn-operator .chat-turn-text {
+	color: var(--text-strong);
+	font-weight: 500;
+}
+
+.turn-agent .chat-turn-glyph {
+	background: var(--text);
+}
+
+.turn-agent .chat-turn-rail {
+	color: var(--text-muted);
+}
+
+/* Uso di uno strumento: stessa lettura del pannello run, colore planned. */
+.turn-tool .chat-turn-glyph {
+	background: var(--status-planned);
+}
+
+.turn-tool .chat-turn-rail {
+	color: var(--status-planned);
+}
+
+.chat-turn-file {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--accent);
+	background: var(--surface-3);
+	border-radius: 3px;
+	padding: 1px 6px;
+}
+
+.chat-quote {
+	margin: 4px 0 0;
+	padding: 8px 10px;
+	border-radius: var(--radius-sm);
+	background: var(--surface-3);
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	line-height: 1.6;
+	color: var(--text);
+	white-space: pre-wrap;
+	word-break: break-word;
+	overflow-x: auto;
+}
+
+/* La coda di attesa è quella del pannello run, riusata senza modifiche: qui
+   si allinea soltanto alla guida più larga della conversazione. */
+.chat-panel .run-tail {
+	padding-left: 72px;
+}
+
+/* ---- 3. Storia parziale (AC-3) ----------------------------------------- */
+/* La conversazione sopravvive al ricaricamento; quando la parte più vecchia
+   non è più mostrata, il taglio è dichiarato in cima alla timeline e non
+   lasciato intuire dall'assenza. Il bordo strappato è l'unico segno
+   decorativo nuovo del pannello. */
+.chat-truncated {
+	display: flex;
+	align-items: flex-start;
+	gap: 9px;
+	margin: 10px 12px 0;
+	padding: 9px 11px 10px;
+	border: 1px dashed color-mix(in srgb, var(--status-progress) 50%, var(--border));
+	border-top-width: 0;
+	border-radius: 0 0 var(--radius) var(--radius);
+	background: color-mix(in srgb, var(--status-progress) 7%, transparent);
+	position: relative;
+}
+
+.chat-truncated::before {
+	content: "";
+	position: absolute;
+	left: -1px;
+	right: -1px;
+	top: 0;
+	height: 5px;
+	background:
+		repeating-linear-gradient(
+			-45deg,
+			color-mix(in srgb, var(--status-progress) 55%, transparent) 0 3px,
+			transparent 3px 7px
+		);
+}
+
+.chat-truncated-mark {
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: var(--status-progress);
+	flex-shrink: 0;
+	padding-top: 2px;
+}
+
+.chat-truncated-body {
+	font-size: 12px;
+	line-height: 1.55;
+	color: var(--text-muted);
+}
+
+.chat-truncated-body strong {
+	display: block;
+	color: var(--text-strong);
+	font-weight: 600;
+	margin-bottom: 2px;
+}
+
+.chat-truncated-body code {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	color: var(--text);
+	background: var(--surface-3);
+	border-radius: 3px;
+	padding: 1px 5px;
+}
+
+/* ---- 4. Conversazione non offerta (AC-4) ------------------------------- */
+.chat-unavailable {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 16px 14px 18px;
+}
+
+.chat-unavailable-title {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-strong);
+}
+
+/* La ragione è quella del server, riportata alla lettera: nomina il provider
+   e la capacità mancante, e non viene riscritta dalla UI. */
+.chat-reason {
+	margin: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--text-dim);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	font-family: var(--font-mono);
+	font-size: 11px;
+	line-height: 1.6;
+	color: var(--text);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.chat-capability {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--accent);
+	background: var(--surface-3);
+	border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+	border-radius: 3px;
+	padding: 1px 6px;
+	white-space: nowrap;
+}
+
+.chat-unavailable-hint {
+	margin: 0;
+	font-size: 12px;
+	line-height: 1.55;
+	color: var(--text-muted);
+}
+
+.chat-unavailable-actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	align-items: center;
+}
+
+/* ---- 5. Chiusura della conversazione (AC-6) ---------------------------- */
+.chat-ended-band {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	border-top: 1px solid var(--rule);
+	background: color-mix(in srgb, var(--surface-3) 35%, transparent);
+	padding: 10px 12px;
+}
+
+.chat-ended-note {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	min-width: 0;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--text-muted);
+}
+
+.chat-ended-note strong {
+	color: var(--text-strong);
+	font-weight: 600;
+}
+
+.chat-ended-when {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	color: var(--text-dim);
+	white-space: nowrap;
+}
+
+.chat-ended-spacer {
+	flex: 1 1 auto;
+}
+
+/* Conferma in due tempi per la chiusura: il primo clic non chiude nulla. */
+.chat-close {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.chat-close-confirm {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 11.5px;
+	color: var(--priority-high);
+}
+
+.chat-close-question {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-live .chat-badge::before {
+		animation: none;
+	}
+
+	.chat-timeline {
+		scroll-behavior: auto;
+	}
+}
+
+/* =========================================================================
+   PARTE 3 — Impalcatura del solo mockup (non va portata in app.css)
+   ========================================================================= */
+
+.mk-page {
+	max-width: 1180px;
+	margin: 0 auto;
+	padding: 32px 24px 80px;
+}
+
+.mk-topbar {
+	position: sticky;
+	top: 0;
+	z-index: 20;
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	flex-wrap: wrap;
+	padding: 12px 24px;
+	background: color-mix(in srgb, var(--bg) 88%, transparent);
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
+	border-bottom: 1px solid var(--rule);
+}
+
+.mk-brand {
+	font-family: var(--font-display);
+	font-size: 19px;
+	color: var(--text-strong);
+	letter-spacing: -0.01em;
+}
+
+.mk-brand em {
+	font-style: italic;
+	color: var(--accent);
+}
+
+.mk-code {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 3px 9px;
+}
+
+.mk-nav {
+	display: flex;
+	gap: 4px;
+	flex-wrap: wrap;
+	margin-left: auto;
+}
+
+.mk-nav a {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	text-decoration: none;
+	color: var(--text-muted);
+	border: 1px solid transparent;
+	border-radius: 999px;
+	padding: 4px 10px;
+	transition:
+		color var(--transition),
+		border-color var(--transition),
+		background var(--transition);
+}
+
+.mk-nav a:hover {
+	color: var(--text-strong);
+	border-color: var(--border);
+	background: var(--surface-hover);
+}
+
+.mk-nav a.current {
+	color: var(--accent-ink);
+	background: var(--accent);
+	border-color: var(--accent);
+}
+
+.mk-eyebrow {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+	color: var(--accent);
+	margin: 0 0 10px;
+}
+
+.mk-title {
+	font-family: var(--font-display);
+	font-size: clamp(34px, 5vw, 54px);
+	font-weight: 400;
+	line-height: 1.05;
+	letter-spacing: -0.02em;
+	color: var(--text-strong);
+	margin: 0 0 12px;
+}
+
+.mk-lede {
+	font-size: 15px;
+	line-height: 1.65;
+	color: var(--text-muted);
+	max-width: 68ch;
+	margin: 0 0 28px;
+}
+
+.mk-rule {
+	border: none;
+	border-top: 1px solid var(--rule);
+	margin: 32px 0;
+}
+
+.mk-section-title {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+	margin: 0 0 14px;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.mk-section-title::after {
+	content: "";
+	flex: 1 1 auto;
+	border-top: 1px solid var(--rule);
+}
+
+.mk-note {
+	border-left: 2px solid var(--accent);
+	padding: 2px 0 2px 14px;
+	margin: 0 0 22px;
+	font-size: 13px;
+	line-height: 1.6;
+	color: var(--text-muted);
+	max-width: 76ch;
+}
+
+.mk-note strong {
+	color: var(--text-strong);
+	font-weight: 600;
+}
+
+.mk-ac {
+	display: inline-block;
+	font-family: var(--font-mono);
+	font-size: 9.5px;
+	letter-spacing: 0.1em;
+	color: var(--accent-ink);
+	background: var(--accent);
+	border-radius: 3px;
+	padding: 1px 6px;
+	margin-right: 6px;
+	vertical-align: 1px;
+}
+
+.mk-ac.ghost {
+	background: transparent;
+	color: var(--accent);
+	border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.mk-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+	gap: 22px;
+}
+
+.mk-card {
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+	background: var(--surface);
+	padding: 18px;
+	box-shadow: var(--shadow-sm);
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.mk-card-head {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+.mk-card-index {
+	font-family: var(--font-display);
+	font-size: 26px;
+	color: var(--accent);
+	line-height: 1;
+}
+
+.mk-card-title {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--text-strong);
+	margin: 0;
+}
+
+.mk-card-sub {
+	font-size: 12.5px;
+	line-height: 1.55;
+	color: var(--text-muted);
+	margin: 0;
+}
+
+.mk-card-link {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--accent);
+	text-decoration: none;
+	border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+	align-self: flex-start;
+	padding-bottom: 1px;
+}
+
+.mk-card-link:hover {
+	color: var(--accent-strong);
+	border-bottom-color: var(--accent-strong);
+}
+
+.mk-modal-stage {
+	background:
+		radial-gradient(
+			ellipse at 50% 0%,
+			color-mix(in srgb, var(--accent) 8%, transparent),
+			transparent 60%
+		),
+		var(--bg);
+	border: 1px solid var(--rule);
+	border-radius: var(--radius-lg);
+	padding: 26px 18px;
+}
+
+.mk-modal-stage .modal-root {
+	background: transparent;
+	padding: 0;
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
+}
+
+.mk-legend {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+	gap: 10px 20px;
+	margin: 0 0 24px;
+	padding: 0;
+	list-style: none;
+}
+
+.mk-legend li {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	font-size: 12.5px;
+	color: var(--text-muted);
+}
+
+.mk-legend code {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	color: var(--text-dim);
+	margin-left: auto;
+}
+
+.mk-foot {
+	margin-top: 46px;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+}
+
+@media (max-width: 720px) {
+	.mk-page {
+		padding: 22px 14px 60px;
+	}
+	.modal-root {
+		padding: 0;
+	}
+	.tab-panel {
+		padding: 16px 14px 20px;
+	}
+	.run-seam,
+	.run-tail {
+		padding-left: 0;
+	}
+}
+
+/* Palco del mockup: il pannello è una superficie autonoma, quindi non viene
+   mostrato dentro una modale ma su un fondo neutro, alla sua larghezza reale. */
+.mk-stage {
+	background:
+		radial-gradient(
+			ellipse at 50% 0%,
+			color-mix(in srgb, var(--status-planned) 9%, transparent),
+			transparent 62%
+		),
+		var(--bg);
+	border: 1px solid var(--rule);
+	border-radius: var(--radius-lg);
+	padding: 26px 18px;
+}
+
+.mk-stage-inner {
+	max-width: 780px;
+	margin: 0 auto;
+}
+
+@media (max-width: 720px) {
+	.chat-turn {
+		grid-template-columns: 1fr;
+		gap: 4px;
+	}
+	.chat-turn-rail {
+		justify-content: flex-start;
+	}
+	.chat-turn-rail::after {
+		display: none;
+	}
+	.chat-panel .run-tail {
+		padding-left: 0;
+	}
+	.chat-root {
+		max-width: 100%;
+	}
+}

@@ -234,3 +234,174 @@ func TestSessionAppendIsNotBlockedByASlowFollower(t *testing.T) {
 		t.Fatalf("the history lost events to a slow follower: %d", len(got))
 	}
 }
+
+// AC-3 — a session without a retention window keeps everything, exactly as it
+// did before the window existed.
+func TestSessionWithoutRetentionKeepsTheWholeHistory(t *testing.T) {
+	session := NewSession("run-1", fixedClock())
+	for i := 1; i <= 50; i++ {
+		appendText(session, "text", fmt.Sprintf("line-%d", i))
+	}
+	events := session.Events(0)
+	if len(events) != 50 {
+		t.Fatalf("got %d events; want the whole history of 50", len(events))
+	}
+	for i, event := range events {
+		if event.ID != int64(i+1) {
+			t.Fatalf("event %d has id %d; want %d", i, event.ID, i+1)
+		}
+	}
+	if got := session.FirstID(); got != 1 {
+		t.Fatalf("FirstID() is %d; an unlimited history begins at 1", got)
+	}
+	if got := session.Dropped(); got != 0 {
+		t.Fatalf("Dropped() is %d; an unlimited history discards nothing", got)
+	}
+}
+
+// AC-3 — a bounded session keeps the tail of the history and says how much of
+// the past it no longer holds.
+func TestBoundedSessionKeepsOnlyTheTail(t *testing.T) {
+	session := NewBoundedSession("run-1", fixedClock(), 10)
+	for i := 1; i <= 25; i++ {
+		appendText(session, "text", fmt.Sprintf("line-%d", i))
+	}
+	events := session.Events(0)
+	if len(events) != 10 {
+		t.Fatalf("got %d events; want the last 10", len(events))
+	}
+	for i, event := range events {
+		want := int64(16 + i)
+		if event.ID != want {
+			t.Fatalf("event %d has id %d; want %d", i, event.ID, want)
+		}
+		if event.Text != fmt.Sprintf("line-%d", want) {
+			t.Fatalf("event %d is %q; the window dropped the wrong end", i, event.Text)
+		}
+	}
+	if got := session.FirstID(); got != 16 {
+		t.Fatalf("FirstID() is %d; the surviving history begins at 16", got)
+	}
+	if got := session.Dropped(); got != 15 {
+		t.Fatalf("Dropped() is %d; 15 events were discarded", got)
+	}
+}
+
+// AC-3 — the window discards identifiers, it does not recycle them: a reused id
+// would make the cursor point at two different events.
+func TestBoundedSessionNeverReusesAnIdentifier(t *testing.T) {
+	session := NewBoundedSession("run-1", fixedClock(), 10)
+	for i := 1; i <= 25; i++ {
+		appendText(session, "text", fmt.Sprintf("line-%d", i))
+	}
+	next := appendText(session, "text", "line-26")
+	if next.ID != 26 {
+		t.Fatalf("the event after the window has id %d; want 26, never an id already spent", next.ID)
+	}
+	events := session.Events(0)
+	if len(events) != 10 || events[0].ID != 17 || events[9].ID != 26 {
+		t.Fatalf("the history after the window is %v", idsOf(events))
+	}
+}
+
+// AC-3 — a cursor that is still inside the window keeps working exactly as it
+// does on an unlimited history.
+func TestBoundedSessionCursorStillReturnsTheComplement(t *testing.T) {
+	session := NewBoundedSession("run-1", fixedClock(), 10)
+	for i := 1; i <= 25; i++ {
+		appendText(session, "text", fmt.Sprintf("line-%d", i))
+	}
+	got := session.Events(20)
+	if len(got) != 5 {
+		t.Fatalf("Events(20) returned %d events; want 21..25", len(got))
+	}
+	for i, event := range got {
+		if event.ID != int64(21+i) {
+			t.Fatalf("Events(20) returned %v; want 21..25 with no gaps and no duplicates", idsOf(got))
+		}
+	}
+}
+
+// AC-3 — a cursor older than the window is recognisable, which is how a caller
+// declares the story it is showing as partial instead of showing it as whole.
+func TestBoundedSessionMakesAnOutdatedCursorRecognisable(t *testing.T) {
+	session := NewBoundedSession("run-1", fixedClock(), 10)
+	for i := 1; i <= 25; i++ {
+		appendText(session, "text", fmt.Sprintf("line-%d", i))
+	}
+	const afterID = int64(5)
+	if first := session.FirstID(); first <= afterID+1 {
+		t.Fatalf("FirstID() is %d; a cursor at %d must be detectable as outdated", first, afterID)
+	}
+	if got := session.Events(afterID); len(got) != 10 || got[0].ID != 16 {
+		t.Fatalf("Events(%d) returned %v; the gap between 6 and 15 is real and must not be hidden", afterID, idsOf(got))
+	}
+}
+
+// AC-3 — the window discards only the past: a follower already connected
+// receives every event appended after it subscribed, including those the
+// history drops immediately afterwards.
+func TestBoundedSessionFollowerNeverMissesADroppedEvent(t *testing.T) {
+	session := NewBoundedSession("run-1", fixedClock(), 3)
+	const total = 12
+
+	seen := make(chan int64, total)
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		done <- session.Stream(ctx, 0, func(event execution.RunEvent) error {
+			select {
+			case <-started:
+			default:
+				close(started)
+			}
+			seen <- event.ID
+			return nil
+		})
+	}()
+
+	// The first event both proves the subscription is live and opens the gate.
+	appendText(session, "text", "line-1")
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream never started following")
+	}
+	for i := 2; i <= total; i++ {
+		appendText(session, "text", fmt.Sprintf("line-%d", i))
+	}
+
+	var received []int64
+	for len(received) < total {
+		select {
+		case id := <-seen:
+			received = append(received, id)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the follower received %v; the window dropped events from under it", received)
+		}
+	}
+	cancel()
+	<-done
+
+	for i, id := range received {
+		if id != int64(i+1) {
+			t.Fatalf("the follower saw %v; want 1..%d in order", received, total)
+		}
+	}
+	if got := session.Events(0); len(got) != 3 || got[0].ID != 10 {
+		t.Fatalf("the history kept %v; want only the last three events", idsOf(got))
+	}
+	if got := session.Dropped(); got != total-3 {
+		t.Fatalf("Dropped() is %d; want %d", got, total-3)
+	}
+}
+
+func idsOf(events []execution.RunEvent) []int64 {
+	ids := make([]int64, 0, len(events))
+	for _, event := range events {
+		ids = append(ids, event.ID)
+	}
+	return ids
+}

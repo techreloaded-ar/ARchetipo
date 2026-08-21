@@ -552,6 +552,10 @@
 		if (noWorkspaceMode()) return;
 		loadBoard();
 		loadWorkspaceStatus();
+		// The conversation is re-read from the beginning, not resumed: after a
+		// workspace change the one to show is the one of the workspace now open,
+		// and the cursor of the previous one means nothing here (AC-5).
+		loadConversation();
 	}
 
 	// Boot is a fork, not a sequence. The page asks which workspace it serves
@@ -563,17 +567,20 @@
 			view = await apiGet("/api/workspaces");
 		} catch (err) {
 			enterNoWorkspaceMode();
+			resetConversationState();
 			renderWorkspaceHomeView(null, `Load failed: ${err.message || err}`);
 			return;
 		}
 		if (view && view.open) {
 			loadBoard();
 			loadWorkspaceStatus();
+			loadConversation();
 			loadMockups();
 			connectBoardStream();
 			return;
 		}
 		enterNoWorkspaceMode();
+		resetConversationState();
 		renderWorkspaceHomeView(view, "");
 	}
 
@@ -3375,6 +3382,347 @@
 			showToast("Config saved", "ok");
 		} catch (err) {
 			setConfigStatus(`Save failed: ${err.message || err}`, "err");
+		}
+	}
+
+	// ---- Workspace conversation (US-053) ------------------------------------
+	//
+	// A conversation is not an execution: it has no record, no action, no
+	// receipt. So it keeps its own state, its own cursor and its own polling
+	// loop, and shares nothing with the run panel — the `run*` variables above
+	// belong to the run behind an execution and staying out of them is what
+	// keeps the two panels from describing each other's agent.
+	//
+	// Whether one can be opened at all, and why not, is a server verdict read
+	// from `available` and `unavailable_reason`. Nothing here decides it.
+
+	const conversationEl = document.getElementById("workspace-conversation");
+
+	// Same discipline as the run panel: the read may fail transiently, so the
+	// cursor survives and the loop keeps trying, and it gives up only after this
+	// many consecutive failures rather than polling forever.
+	const CONVERSATION_POLL_MS = 2000;
+	const CONVERSATION_POLL_FAILURE_LIMIT = 3;
+
+	let conversationView = null; // last read of GET /api/workspace/conversation
+	let conversationAfterID = 0; // highest event id already rendered — the only cursor
+	let conversationEvents = []; // timeline, appended to and never rebuilt
+	let conversationDraft = ""; // composer text, preserved across re-renders
+	let conversationBusy = false; // a command is in flight: the controls stay disabled
+	let conversationCloseArmed = false; // the inline close confirmation is showing
+	let conversationRefusal = ""; // last refused command, shown inline until the next one
+	let conversationLink = ""; // note about the reading loop itself
+	let conversationPollTimer = null; // interval following the open conversation
+	let conversationPollBusy = false; // a poll is in flight: ticks never overlap
+	let conversationPollFailures = 0; // consecutive failed reads, for the give-up threshold
+
+	// The panel is redrawn on every poll, so its controls cannot own their
+	// handlers: the container does, bound once, and each control declares what
+	// it is through its data attributes.
+	function bindConversationPanel(container) {
+		if (!container) return;
+		container.addEventListener("click", (e) => {
+			if (e.target.closest("[data-conversation-open]")) {
+				openConversation();
+				return;
+			}
+			if (e.target.closest("[data-conversation-close-open]")) {
+				conversationCloseArmed = true;
+				renderConversationPanel();
+				return;
+			}
+			if (e.target.closest("[data-conversation-close-abort]")) {
+				conversationCloseArmed = false;
+				renderConversationPanel();
+				return;
+			}
+			if (e.target.closest("[data-conversation-close-confirm]")) {
+				closeConversation();
+			}
+		});
+		container.addEventListener("submit", (e) => {
+			const form = e.target.closest(".conv-composer");
+			if (!form) return;
+			e.preventDefault();
+			sendConversationMessage();
+		});
+		container.addEventListener("input", (e) => {
+			const input = e.target.closest(".conv-composer-input");
+			if (input) conversationDraft = input.value;
+		});
+		container.addEventListener("keydown", (e) => {
+			const input = e.target.closest(".conv-composer-input");
+			if (!input) return;
+			if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+				e.preventDefault();
+				conversationDraft = input.value;
+				sendConversationMessage();
+			}
+		});
+	}
+
+	bindConversationPanel(conversationEl);
+
+	function stopConversationPolling() {
+		if (conversationPollTimer === null) return;
+		clearInterval(conversationPollTimer);
+		conversationPollTimer = null;
+	}
+
+	// resetConversationState forgets the conversation of the workspace being
+	// left. The panel that comes back must be the one of the workspace now open,
+	// never a leftover of the previous one.
+	function resetConversationState() {
+		stopConversationPolling();
+		conversationView = null;
+		conversationAfterID = 0;
+		conversationEvents = [];
+		conversationDraft = "";
+		conversationBusy = false;
+		conversationCloseArmed = false;
+		conversationRefusal = "";
+		conversationLink = "";
+		conversationPollBusy = false;
+		conversationPollFailures = 0;
+		if (conversationEl) {
+			conversationEl.innerHTML = "";
+			conversationEl.classList.add("hidden");
+		}
+	}
+
+	// applyConversationView folds one server view into the local projection and
+	// returns how many events it appended. Events are only ever appended, and
+	// only beyond the cursor: the list is never rebuilt, so a re-read after a
+	// failed poll cannot draw the same line twice.
+	function applyConversationView(view) {
+		if (!view) return 0;
+		const events = Array.isArray(view.events) ? view.events : [];
+		let appended = 0;
+		for (const event of events) {
+			if (!event || typeof event.id !== "number") continue;
+			if (event.id <= conversationAfterID) continue;
+			conversationEvents.push(event);
+			conversationAfterID = event.id;
+			appended += 1;
+		}
+		if (
+			typeof view.last_id === "number" &&
+			view.last_id > conversationAfterID
+		) {
+			conversationAfterID = view.last_id;
+		}
+		conversationView = view;
+		return appended;
+	}
+
+	function conversationIsActive() {
+		return !!(
+			conversationView &&
+			conversationView.conversation &&
+			conversationView.conversation.state === "ACTIVE"
+		);
+	}
+
+	// loadConversation reads the conversation of the open workspace from the
+	// beginning. It is the entry point of every fresh read — boot, refresh, and
+	// every workspace change — so the cursor is reset with the projection.
+	async function loadConversation() {
+		if (!conversationEl) return;
+		if (noWorkspaceMode()) {
+			resetConversationState();
+			return;
+		}
+		resetConversationState();
+		let view;
+		try {
+			view = await apiGet("/api/workspace/conversation?after_id=0");
+		} catch (_) {
+			// The panel is an addition to the board, not a precondition of it: a
+			// viewer that cannot answer must not stop anyone from working, so the
+			// panel simply disappears and no toast is raised.
+			conversationEl.innerHTML = "";
+			conversationEl.classList.add("hidden");
+			return;
+		}
+		applyConversationView(view);
+		renderConversationPanel();
+		if (conversationIsActive()) startConversationPolling();
+	}
+
+	// startConversationPolling follows the open conversation with the discipline
+	// of startRunPolling: ticks never overlap, the loop gives up after a number
+	// of consecutive failures and says so, and it stops on its own once the
+	// conversation is no longer live and a read brought nothing new — so the
+	// last turn is never cut off.
+	function startConversationPolling() {
+		stopConversationPolling();
+		conversationPollTimer = setInterval(async () => {
+			if (noWorkspaceMode()) {
+				stopConversationPolling();
+				return;
+			}
+			if (conversationPollBusy) return;
+			conversationPollBusy = true;
+			let view;
+			try {
+				view = await apiGet(
+					`/api/workspace/conversation?after_id=${conversationAfterID}`,
+				);
+			} catch (err) {
+				conversationPollBusy = false;
+				conversationPollFailures += 1;
+				if (conversationPollFailures >= CONVERSATION_POLL_FAILURE_LIMIT) {
+					stopConversationPolling();
+					// Nothing is reconnecting any more, so the panel must stop
+					// implying that it is.
+					conversationLink = `This conversation can no longer be read: ${err.message || err}. Refresh to follow it again.`;
+				}
+				renderConversationPanel();
+				return;
+			}
+			conversationPollBusy = false;
+			conversationPollFailures = 0;
+			conversationLink = "";
+			const appended = applyConversationView(view);
+			renderConversationPanel();
+			if (!conversationIsActive() && appended === 0) {
+				stopConversationPolling();
+			}
+		}, CONVERSATION_POLL_MS);
+	}
+
+	function showConversationRefusal(err) {
+		const message = (err && err.message) || String(err);
+		const hint = err && err.hint ? ` — ${err.hint}` : "";
+		conversationRefusal = `${message}${hint}`;
+		showToast(message, "err");
+	}
+
+	async function openConversation() {
+		if (conversationBusy) return;
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			const view = await apiPost("/api/workspace/conversation", {});
+			// A new conversation is a new history: the cursor and the timeline of
+			// the previous one must not survive into it.
+			conversationAfterID = 0;
+			conversationEvents = [];
+			conversationRefusal = "";
+			conversationLink = "";
+			conversationPollFailures = 0;
+			applyConversationView(view);
+		} catch (err) {
+			showConversationRefusal(err);
+		} finally {
+			conversationBusy = false;
+			renderConversationPanel();
+			if (conversationIsActive()) startConversationPolling();
+		}
+	}
+
+	async function sendConversationMessage() {
+		if (conversationBusy || !conversationIsActive()) return;
+		const message = conversationDraft.trim();
+		if (!message) return;
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			const view = await apiPost(
+				`/api/workspace/conversation/messages?after_id=${conversationAfterID}`,
+				{ message },
+			);
+			// Accepted means delivered, not published: the text stays out of the
+			// timeline until the agent carries it back.
+			conversationDraft = "";
+			conversationRefusal = "";
+			applyConversationView(view);
+			startConversationPolling();
+		} catch (err) {
+			showConversationRefusal(err);
+		} finally {
+			conversationBusy = false;
+			renderConversationPanel();
+		}
+	}
+
+	async function closeConversation() {
+		if (conversationBusy) return;
+		conversationCloseArmed = false;
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			const view = await apiDelete(
+				`/api/workspace/conversation?after_id=${conversationAfterID}`,
+			);
+			conversationRefusal = "";
+			applyConversationView(view);
+			stopConversationPolling();
+		} catch (err) {
+			showConversationRefusal(err);
+		} finally {
+			conversationBusy = false;
+			renderConversationPanel();
+		}
+	}
+
+	// renderConversationPanel draws the panel from the local projection alone.
+	// It never fetches and never derives a state the server did not report, and
+	// it preserves the two things a re-render would otherwise steal: the text
+	// being typed and the reading position in the timeline.
+	function renderConversationPanel() {
+		if (!conversationEl) return;
+		if (!conversationView) {
+			conversationEl.innerHTML = "";
+			conversationEl.classList.add("hidden");
+			return;
+		}
+		const timeline = conversationEl.querySelector(".conv-timeline");
+		const previousTop = timeline ? timeline.scrollTop : 0;
+		const wasAtBottom = timeline
+			? timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 24
+			: true;
+		const focused = document.activeElement;
+		const composerHadFocus = !!(
+			focused &&
+			focused.classList &&
+			focused.classList.contains("conv-composer-input")
+		);
+		const caret = composerHadFocus ? focused.selectionStart : 0;
+
+		// The renderer reads the accumulated timeline, not the last page of it:
+		// the cursor means the server only ever sends what is new.
+		const view = Object.assign({}, conversationView, {
+			events: conversationEvents,
+		});
+		conversationEl.innerHTML = window.Conversation.renderConversation(
+			view,
+			conversationDraft,
+			{
+				busy: conversationBusy,
+				closeArmed: conversationCloseArmed,
+				refusal: conversationRefusal,
+				link: conversationLink,
+			},
+		);
+		conversationEl.classList.remove("hidden");
+
+		const nextTimeline = conversationEl.querySelector(".conv-timeline");
+		if (nextTimeline) {
+			nextTimeline.scrollTop = wasAtBottom
+				? nextTimeline.scrollHeight
+				: previousTop;
+		}
+		const input = conversationEl.querySelector(".conv-composer-input");
+		if (input) {
+			// The draft is restored as a value and never as markup, so no amount
+			// of typing can reach the parser.
+			input.value = conversationDraft;
+			if (composerHadFocus && !input.disabled) {
+				input.focus();
+				const at = Math.min(caret, input.value.length);
+				input.setSelectionRange(at, at);
+			}
 		}
 	}
 
