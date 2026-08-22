@@ -4,17 +4,20 @@
 // Run: node --test test/web/workspace-layout.test.mjs
 //
 // The oracles here are *invariants over every state*, not examples: the module
-// takes three booleans, so the whole input space is eight states and the tests
-// enumerate it rather than sampling it. What the person sees on screen is
-// decided entirely by this function, so a rule that holds on a chosen example
-// but breaks on a forgotten combination is a bug nobody would notice.
+// takes a view plus two booleans, so the whole input space is twelve states and
+// the tests enumerate it rather than sampling it. What the person sees on
+// screen is decided entirely by this function, so a rule that holds on a chosen
+// example but breaks on a forgotten combination is a bug nobody would notice.
 //
 // Verifies:
-//   - AC-1 in a wide window the conversation stays beside the work: the rail
-//     and the primary column are visible together, spec open or not
-//   - AC-2 the rail does not depend on the state of the primary column
-//   - AC-6 in a narrow window exactly one pane is on screen, nothing that
-//     exists is unreachable, and no state is empty
+//   - AC-1 the conversation is the home: an empty state, and every view that is
+//     not admissible, resolve to the conversation, in both widths
+//   - AC-2 every view that exists and is not the current one is reachable with
+//     exactly one switcher — one command, one button
+//   - AC-4 in a wide window the primary column shows exactly one view and
+//     nothing is laid over anything
+//   - AC-6 in a narrow window the conversation is always on screen and the
+//     called view is an overlay; and a choice made inside an overlay closes it
 //   - the breakpoint is declared once: app.css and the module share one number
 
 import { describe, it } from "node:test";
@@ -51,16 +54,22 @@ function loadWorkspaceLayout() {
 	return mod.exports;
 }
 
-const { resolveLayout, NARROW_MAX_WIDTH, PANES, RAIL_FOCUS_VALUES } =
-	loadWorkspaceLayout();
+const {
+	resolveLayout,
+	nextViewAfterSelection,
+	NARROW_MAX_WIDTH,
+	PANES,
+	VIEWS,
+	DEFAULT_VIEW,
+} = loadWorkspaceLayout();
 
-// The whole input space: two booleans plus every railFocus value the module
-// declares as admissible. Nothing is chosen, everything is enumerated.
+// The whole input space: every view the module declares, times the two
+// booleans. Nothing is chosen, everything is enumerated.
 const STATES = [];
-for (const specOpen of [false, true]) {
-	for (const narrow of [false, true]) {
-		for (const railFocus of RAIL_FOCUS_VALUES) {
-			STATES.push({ specOpen, narrow, railFocus });
+for (const view of VIEWS) {
+	for (const specOpen of [false, true]) {
+		for (const narrow of [false, true]) {
+			STATES.push({ view, specOpen, narrow });
 		}
 	}
 }
@@ -69,7 +78,7 @@ const WIDE_STATES = STATES.filter((s) => s.narrow === false);
 const NARROW_STATES = STATES.filter((s) => s.narrow === true);
 
 function describeState(state) {
-	return `specOpen=${state.specOpen} narrow=${state.narrow} railFocus=${state.railFocus}`;
+	return `view=${state.view} specOpen=${state.specOpen} narrow=${state.narrow}`;
 }
 
 // The panes the layout reports as visible, whichever way the module chooses to
@@ -90,10 +99,14 @@ function visiblePanes(layout) {
 	return fromFlags;
 }
 
+function overlaidPanes(layout) {
+	return Array.from(PANES).filter((pane) => layout.panes[pane].overlay === true);
+}
+
 describe("resolveLayout — enumerazione di tutti gli stati", () => {
 	it("copre lo spazio degli stati per intero", () => {
-		// Eight states: the tests below are exhaustive only if this is.
-		assert.equal(STATES.length, 2 * 2 * RAIL_FOCUS_VALUES.length);
+		// Twelve states: the tests below are exhaustive only if this is.
+		assert.equal(STATES.length, VIEWS.length * 2 * 2);
 		assert.ok(WIDE_STATES.length > 0);
 		assert.ok(NARROW_STATES.length > 0);
 	});
@@ -121,62 +134,114 @@ describe("resolveLayout — enumerazione di tutti gli stati", () => {
 	});
 });
 
-describe("finestra larga — la conversazione resta accanto al lavoro", () => {
-	it("mostra sempre la rail insieme alla colonna primaria", () => {
+describe("la casa del workspace", () => {
+	it("apre sulla conversazione quando nessuna vista è stata chiesta", () => {
+		// AC-1: lo stato vuoto è quello della pagina appena caricata.
+		for (const narrow of [false, true]) {
+			for (const state of [
+				{ narrow },
+				{ view: undefined, narrow },
+				{ view: "sconosciuta", narrow },
+				{ view: "spec", specOpen: false, narrow },
+			]) {
+				const layout = resolveLayout(state);
+				assert.equal(
+					layout.view,
+					DEFAULT_VIEW,
+					`la vista di casa deve essere ${DEFAULT_VIEW} con ${JSON.stringify(state)}`,
+				);
+				assert.equal(DEFAULT_VIEW, "conversation");
+				assert.ok(
+					visiblePanes(layout).includes("conversation"),
+					`la conversazione non è visibile con ${JSON.stringify(state)}`,
+				);
+			}
+		}
+	});
+
+	it("risponde alla casa anche quando resolveLayout è chiamata senza stato", () => {
+		const layout = resolveLayout();
+		assert.equal(layout.view, DEFAULT_VIEW);
+		assert.deepEqual(Array.from(layout.visible), ["conversation"]);
+	});
+});
+
+describe("finestra larga — una vista alla volta, a piena larghezza", () => {
+	it("mostra esattamente la vista corrente e nient'altro", () => {
 		for (const state of WIDE_STATES) {
 			const layout = resolveLayout(state);
 			const visible = visiblePanes(layout);
-			assert.ok(
-				visible.includes("rail"),
-				`la rail non è visibile con ${describeState(state)}`,
-			);
-			// AC-1: aprire una spec non nasconde la conversazione.
-			// AC-2: la rail non dipende dallo stato della colonna primaria.
-			const primary = state.specOpen ? "spec" : "board";
-			assert.ok(
-				visible.includes(primary),
-				`la colonna primaria (${primary}) non è visibile con ${describeState(state)}`,
+			assert.equal(
+				visible.length,
+				1,
+				`in finestra larga deve essere visibile un solo riquadro — ${describeState(state)}, trovati ${visible.join(", ")}`,
 			);
 			assert.deepEqual(
 				visible,
-				[primary, "rail"].sort(),
-				`in finestra larga devono essere visibili esattamente la rail e ${primary} — ${describeState(state)}`,
+				[layout.view],
+				`la colonna primaria deve mostrare la vista corrente (${layout.view}) — ${describeState(state)}`,
 			);
 		}
 	});
 
-	it("tiene la rail visibile qualunque sia il valore di railFocus", () => {
-		// La rail non è un riquadro che si conquista il posto: in finestra
-		// larga c'è, e railFocus non ha voce in capitolo.
-		for (const specOpen of [false, true]) {
-			const withFocus = visiblePanes(
-				resolveLayout({ specOpen, narrow: false, railFocus: true }),
+	it("non sovrappone nulla a nulla", () => {
+		// AC-4: il dettaglio spec occupa la colonna, non ci si sovrappone.
+		for (const state of WIDE_STATES) {
+			const layout = resolveLayout(state);
+			assert.deepEqual(
+				overlaidPanes(layout),
+				[],
+				`in finestra larga nessun riquadro deve essere una sovrapposizione — ${describeState(state)}`,
 			);
-			const withoutFocus = visiblePanes(
-				resolveLayout({ specOpen, narrow: false, railFocus: false }),
-			);
-			assert.deepEqual(withFocus, withoutFocus);
 		}
 	});
 });
 
-describe("finestra stretta — un contenuto alla volta, e nulla di irraggiungibile", () => {
-	it("mostra esattamente un riquadro", () => {
+describe("finestra stretta — la conversazione resta, le altre viste si sovrappongono", () => {
+	it("tiene la conversazione visibile in ogni stato stretto", () => {
 		for (const state of NARROW_STATES) {
 			const layout = resolveLayout(state);
+			assert.ok(
+				layout.panes.conversation.visible,
+				`la conversazione non è visibile con ${describeState(state)}`,
+			);
 			assert.equal(
-				visiblePanes(layout).length,
-				1,
-				`in finestra stretta deve esserci un solo riquadro visibile — ${describeState(state)}`,
+				layout.panes.conversation.overlay,
+				false,
+				`la conversazione non deve mai essere una sovrapposizione — ${describeState(state)}`,
 			);
 		}
 	});
 
-	it("raggiunge con i commutatori ogni riquadro esistente e non visibile", () => {
+	it("disegna la vista chiamata come sovrapposizione, mai al posto della conversazione", () => {
 		for (const state of NARROW_STATES) {
 			const layout = resolveLayout(state);
-			const visible = visiblePanes(layout);
-			const reachable = new Set(visible);
+			if (layout.view === "conversation") {
+				assert.deepEqual(
+					overlaidPanes(layout),
+					[],
+					`sulla casa non deve esserci alcuna sovrapposizione — ${describeState(state)}`,
+				);
+				continue;
+			}
+			assert.ok(
+				layout.panes[layout.view].visible,
+				`la vista chiamata (${layout.view}) non è visibile con ${describeState(state)}`,
+			);
+			assert.deepEqual(
+				overlaidPanes(layout),
+				[layout.view],
+				`in finestra stretta la sola sovrapposizione deve essere la vista corrente — ${describeState(state)}`,
+			);
+		}
+	});
+});
+
+describe("nulla di irraggiungibile", () => {
+	it("raggiunge con un commutatore ogni vista esistente e non corrente", () => {
+		for (const state of STATES) {
+			const layout = resolveLayout(state);
+			const reachable = new Set([layout.view]);
 			for (const switcher of layout.switchers) {
 				assert.ok(
 					PANES.includes(switcher.target),
@@ -187,22 +252,50 @@ describe("finestra stretta — un contenuto alla volta, e nulla di irraggiungibi
 			for (const pane of layout.present) {
 				assert.ok(
 					reachable.has(pane),
-					`il riquadro ${pane} esiste ma non è né visibile né raggiungibile con ${describeState(state)}`,
+					`il riquadro ${pane} esiste ma non è né la vista corrente né raggiungibile con ${describeState(state)}`,
 				);
 			}
 		}
 	});
 
-	it("non offre commutatori verso il riquadro già in vista", () => {
-		for (const state of NARROW_STATES) {
+	it("non offre commutatori verso la vista già corrente", () => {
+		for (const state of STATES) {
 			const layout = resolveLayout(state);
-			const visible = visiblePanes(layout);
 			for (const switcher of layout.switchers) {
-				assert.ok(
-					!visible.includes(switcher.target),
-					`commutatore ridondante verso ${switcher.target} con ${describeState(state)}`,
+				assert.notEqual(
+					switcher.target,
+					layout.view,
+					`commutatore ridondante verso la vista corrente ${layout.view} — ${describeState(state)}`,
 				);
 			}
+		}
+	});
+
+	it("offre un solo bottone per bersaglio: un solo comando è anche un solo bottone", () => {
+		// AC-2.
+		for (const state of STATES) {
+			const layout = resolveLayout(state);
+			const targets = layout.switchers.map((s) => s.target);
+			assert.equal(
+				new Set(targets).size,
+				targets.length,
+				`bersagli duplicati fra i commutatori (${targets.join(", ")}) con ${describeState(state)}`,
+			);
+		}
+	});
+
+	it("raggiunge la board con esattamente un comando quando non è la vista corrente", () => {
+		// AC-2, alla lettera.
+		for (const state of STATES) {
+			const layout = resolveLayout(state);
+			if (layout.view === "board") continue;
+			const toBoard = layout.switchers.filter((s) => s.target === "board");
+			assert.equal(
+				toBoard.length,
+				1,
+				`la board deve essere a un solo comando — ${describeState(state)}, trovati ${toBoard.length}`,
+			);
+			assert.equal(toBoard[0].view, "board");
 		}
 	});
 });
@@ -223,6 +316,77 @@ describe("ritorno al lavoro", () => {
 					layout.back,
 					null,
 					`controllo di ritorno offerto senza spec aperta — ${describeState(state)}`,
+				);
+			}
+		}
+	});
+});
+
+describe("la scelta richiude la sovrapposizione", () => {
+	it("scegliere una card dentro la board porta al dettaglio spec", () => {
+		const from = { view: "board", specOpen: false, narrow: true };
+		const next = nextViewAfterSelection(from, "spec");
+		assert.equal(next.view, "spec");
+		assert.equal(next.specOpen, true);
+		const layout = resolveLayout(next);
+		assert.equal(
+			layout.panes.board.visible,
+			false,
+			"dopo la scelta la board non deve più essere sullo schermo",
+		);
+		assert.equal(layout.panes.spec.overlay, true);
+	});
+
+	it("lasciare il dettaglio riporta alla board e lo chiude", () => {
+		const next = nextViewAfterSelection(
+			{ view: "spec", specOpen: true, narrow: true },
+			"board",
+		);
+		assert.equal(next.view, "board");
+		assert.equal(next.specOpen, false);
+		assert.equal(resolveLayout(next).panes.spec.present, false);
+	});
+
+	it("tornare alla casa non chiude una spec aperta", () => {
+		for (const specOpen of [false, true]) {
+			const next = nextViewAfterSelection(
+				{ view: "board", specOpen, narrow: true },
+				"conversation",
+			);
+			assert.equal(next.view, "conversation");
+			assert.equal(
+				next.specOpen,
+				specOpen,
+				"andare alla conversazione non deve cambiare lo stato di apertura della spec",
+			);
+		}
+	});
+
+	it("una selezione sconosciuta lascia lo stato com'era", () => {
+		for (const state of STATES) {
+			const next = nextViewAfterSelection(state, "qualcos-altro");
+			assert.deepEqual(
+				{
+					view: resolveLayout(next).view,
+					visible: Array.from(resolveLayout(next).visible).sort(),
+				},
+				{
+					view: resolveLayout(state).view,
+					visible: Array.from(resolveLayout(state).visible).sort(),
+				},
+				`una selezione sconosciuta ha cambiato il layout — ${describeState(state)}`,
+			);
+		}
+	});
+
+	it("nessuna selezione ammessa lascia due sovrapposizioni contemporanee", () => {
+		// AC-6.
+		for (const state of STATES) {
+			for (const selection of ["conversation", "board", "spec"]) {
+				const layout = resolveLayout(nextViewAfterSelection(state, selection));
+				assert.ok(
+					overlaidPanes(layout).length <= 1,
+					`due sovrapposizioni dopo la selezione ${selection} da ${describeState(state)}`,
 				);
 			}
 		}

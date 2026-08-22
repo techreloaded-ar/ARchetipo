@@ -6,15 +6,20 @@
 	const boardEl = document.getElementById("board");
 	const workspaceStatusEl = document.getElementById("workspace-status");
 	const refreshBtn = document.getElementById("refresh-btn");
-	// The shell: one primary column, one permanent rail, and the switchers that
-	// reach whichever pane is off screen. Which of them is on screen is not
-	// decided here (see the workspace shell layout section below).
+	// The shell: one primary column holding one view at a time — the
+	// conversation, the board or the spec detail — plus the permanent view
+	// switcher that reaches whichever view is off screen. Which of them is on
+	// screen is not decided here (see the workspace shell layout section below).
 	const shellEl = document.getElementById("workspace-shell");
-	const shellPrimaryEl = document.getElementById("workspace-primary");
-	const shellSwitchersEl = document.getElementById("workspace-switchers");
-	const workspaceRailEl = document.getElementById("workspace-rail");
+	const shellViewsEl = document.getElementById("workspace-views");
 	const workspaceRunsEl = document.getElementById("workspace-runs");
 	const runsAttentionEl = document.getElementById("runs-attention");
+	// The conversation panel. It is declared here, with the other elements of
+	// the shell, because it is now the home view of the primary column and the
+	// layout section below writes its classes at boot — before the conversation
+	// section further down would have had a chance to declare it. One element,
+	// one constant: the panel's own section reads this very binding.
+	const conversationEl = document.getElementById("workspace-conversation");
 	// The spec detail. It is a pane of the primary column, not a window: the
 	// name stays `modal` because every id, tab and panel under it is unchanged
 	// and renaming it would touch the whole file for nothing.
@@ -326,9 +331,13 @@
 	// column, so a click on its own padding is a click inside the work, not a
 	// dismissal of a window laid over the page.
 	document.addEventListener("keydown", (e) => {
-		// Escape leaves the spec and puts the board back in the primary column.
+		// Escape leaves the spec and puts the board back in the primary column —
+		// but only while the detail is the view on screen. Since US-057 a spec
+		// can stay open behind the conversation, and there Escape is an ordinary
+		// keystroke in a text field: acting on it would throw the reader onto
+		// the board and unmount the panels of a spec they never asked to leave.
 		// The handlers below still close real modals, and are untouched.
-		if (e.key === "Escape" && specOpen) closeModal();
+		if (e.key === "Escape" && specOpen && shellView === "spec") closeModal();
 	});
 	tabs.forEach((t) =>
 		t.addEventListener("click", () => activateTab(t.dataset.tab)),
@@ -579,8 +588,8 @@
 		// workspace change the one to show is the one of the workspace now open,
 		// and the cursor of the previous one means nothing here (AC-5).
 		loadConversation();
-		// The rail is read once now instead of waiting for the next tick: an
-		// explicit refresh asks every question the page answers.
+		// The runs strip is read once now instead of waiting for the next tick:
+		// an explicit refresh asks every question the page answers.
 		loadWorkspaceRuns();
 		// Including which workspace is being looked at.
 		refreshWorkspaceIdentity();
@@ -607,9 +616,9 @@
 			loadBoard();
 			loadWorkspaceStatus();
 			loadConversation();
-			// The rail follows what the workspace is running. It is started only
-			// here, where a workspace is known to be open: without one the route
-			// would be refused, and the refusal is not news the home has to
+			// The runs strip follows what the workspace is running. It is started
+			// only here, where a workspace is known to be open: without one the
+			// route would be refused, and the refusal is not news the home has to
 			// report.
 			loadWorkspaceRuns();
 			loadMockups();
@@ -627,9 +636,9 @@
 	// single implementation instead of becoming two.
 	function enterNoWorkspaceMode() {
 		document.body.classList.add("no-workspace");
-		// Nothing is running in a workspace that is not open: the rail stops
-		// reading and forgets what it last knew, so no leftover run survives the
-		// workspace it belonged to.
+		// Nothing is running in a workspace that is not open: the runs strip
+		// stops reading and forgets what it last knew, so no leftover run
+		// survives the workspace it belonged to.
 		resetWorkspaceRunsState();
 		// And nothing is recommended for a workspace that is not open: the strip
 		// forgets its last step too, so no step of the workspace just left can be
@@ -677,21 +686,22 @@
 		}
 	}
 
-	// ---- Workspace shell layout (US-055) -------------------------------------
+	// ---- Workspace shell layout (US-057) -------------------------------------
 	//
-	// Which panes are on screen is not decided here. workspace-layout.js
-	// resolves it from three facts — is a spec open, is the viewport narrow,
-	// does the rail have the focus — and this section does nothing but hold
-	// those three facts and write onto the elements the classes the module
-	// hands back. Not one visibility rule is written twice.
+	// Which view is on screen is not decided here. workspace-layout.js resolves
+	// it from three facts — which view was asked for, is a spec open, is the
+	// viewport narrow — and this section does nothing but hold those three facts
+	// and write onto the elements the classes the module hands back. Not one
+	// visibility rule is written twice.
 	//
-	// This is what makes AC-1 true by construction: opening a spec is a change
-	// of state in the primary column, never a window laid over the page, so the
-	// rail — and the conversation inside it — is never covered and never
-	// unmounted.
+	// This is what makes AC-1 true by construction: the view starts at the
+	// module's own DEFAULT_VIEW, so a workspace opens on the conversation
+	// whatever order the rest of this file happens to run in. And it is what
+	// makes AC-3 free: changing view hides a pane, it never unmounts it, so the
+	// conversation's history and the text being typed survive untouched.
 
-	let specOpen = false; // the spec detail owns the primary column
-	let railFocus = false; // narrow mode only: the rail is the pane on screen
+	let shellView = WorkspaceLayout.DEFAULT_VIEW; // which view owns the primary column
+	let specOpen = false; // a spec is open in the detail pane
 	let shellNarrow = false; // the viewport is below the module's breakpoint
 
 	// The breakpoint is read from the module and never written here: app.css
@@ -717,68 +727,73 @@
 		}
 	}
 
-	// applyPaneState writes one pane's answer. `hidden` says the pane has
-	// nothing to show at all — the class every existing guard in this file
-	// already reads on the spec detail — while is-visible / is-hidden say
-	// whether a pane that does have something to show is the one on screen.
+	// applyPaneState writes one pane's answer, and writes nothing but classes:
+	// no pane is ever emptied or rebuilt by a change of view, which is exactly
+	// why the conversation's history and draft survive one. `hidden` says the
+	// pane has nothing to show at all — the class every existing guard in this
+	// file already reads on the spec detail — is-visible / is-hidden say whether
+	// a pane that does have something to show is the one on screen, and
+	// is-overlay says it is drawn over the conversation rather than in its
+	// place.
 	function applyPaneState(el, pane) {
 		if (!el || !pane) return;
 		el.classList.toggle(WorkspaceLayout.PANE_VISIBLE_CLASS, pane.visible);
 		el.classList.toggle(WorkspaceLayout.PANE_HIDDEN_CLASS, !pane.visible);
+		el.classList.toggle(WorkspaceLayout.PANE_OVERLAY_CLASS, pane.overlay === true);
 		el.classList.toggle("hidden", !pane.present);
 	}
 
-	function renderShellSwitchers(switchers) {
-		const list = switchers || [];
-		if (!list.length) {
-			shellSwitchersEl.innerHTML = "";
-			shellSwitchersEl.classList.add("hidden");
-			return;
-		}
-		shellSwitchersEl.innerHTML = list
+	// The switcher is permanent, in both widths: the three tabs of the design —
+	// Conversazione · Spec · Board — with the current one marked. The tabs that
+	// are not current come from the module's switcher list; the current one is
+	// drawn from the view the module normalised, so the two cannot disagree.
+	function renderShellViews(switchers, current) {
+		if (!shellViewsEl) return;
+		const buttons = (switchers || []).map((s) => ({
+			view: s.view,
+			label: s.label,
+			current: false,
+		}));
+		buttons.push({
+			view: current.view,
+			label: current.label,
+			current: true,
+		});
+		// The order of the three tabs in the design (docs/mockups/redesign-chat,
+		// states A and D): Conversazione · Spec · Board. It is presentation, not
+		// a decision about what is on screen — that stays with the module.
+		const order = ["conversation", "spec", "board"];
+		buttons.sort((a, b) => order.indexOf(a.view) - order.indexOf(b.view));
+		shellViewsEl.innerHTML = buttons
 			.map(
-				(s) =>
-					`<button type="button" class="${escapeHtml(s.className)}" data-shell-target="${escapeHtml(s.target)}">${escapeHtml(s.label)}</button>`,
+				(b) =>
+					`<button type="button" class="view-tab${b.current ? " is-current" : ""}" role="tab" aria-selected="${b.current}" data-shell-view="${escapeHtml(b.view)}">${escapeHtml(b.label)}</button>`,
 			)
 			.join("");
-		shellSwitchersEl.classList.remove("hidden");
 	}
 
 	function applyShellLayout() {
 		const layout = WorkspaceLayout.resolveLayout({
+			view: shellView,
 			specOpen,
 			narrow: shellNarrow,
-			railFocus,
 		});
-		// The module also normalises the focus: in wide mode the rail is on
-		// screen anyway, so focusing it means nothing and it comes back false.
-		railFocus = layout.railFocus;
+		// The module normalises the view — an unknown one, or the spec detail
+		// with no spec open, falls back to the home — and that normalisation is
+		// the only authority on what the view is.
+		shellView = layout.view;
 		shellEl.classList.remove(
 			WorkspaceLayout.SHELL_CLASS_WIDE,
 			WorkspaceLayout.SHELL_CLASS_NARROW,
 		);
 		shellEl.classList.add(layout.shellClass);
+		applyPaneState(conversationEl, layout.panes.conversation);
 		applyPaneState(boardEl, layout.panes.board);
 		applyPaneState(modal, layout.panes.spec);
-		applyPaneState(workspaceRailEl, layout.panes.rail);
-		// The primary column shares its grid cell with the rail in narrow mode,
-		// so a column holding nothing visible must not merely be empty — it must
-		// be gone, or it would sit over the one pane that is on screen. This is
-		// still not a decision: it is exactly what the module already said about
-		// the two panes the column can hold.
-		if (shellPrimaryEl) {
-			const primaryShows =
-				layout.panes.board.visible || layout.panes.spec.visible;
-			shellPrimaryEl.classList.toggle(
-				WorkspaceLayout.PANE_HIDDEN_CLASS,
-				!primaryShows,
-			);
-			shellPrimaryEl.classList.toggle(
-				WorkspaceLayout.PANE_VISIBLE_CLASS,
-				primaryShows,
-			);
-		}
-		renderShellSwitchers(layout.switchers);
+		renderShellViews(layout.switchers, {
+			view: layout.view,
+			label: layout.panes[layout.view].label || layout.view,
+		});
 		// The return control is the close button the spec pane has always had:
 		// it leaves the detail and puts the board back. It is named after what
 		// it reaches, in the module's own words.
@@ -789,39 +804,41 @@
 		}
 	}
 
-	// Reaching a pane implies a state, and the module already said which one:
+	// Reaching a view implies a state, and the module already said which one:
 	// the board is reached by leaving the spec, and leaving the spec is what
-	// closeModal does — panels, snapshots and review included.
-	function showShellPane(target) {
-		if (target === "board") {
-			if (specOpen) {
-				closeModal();
-				return;
-			}
-			railFocus = false;
-		} else if (target === "rail") {
-			railFocus = true;
-		} else if (target === "spec") {
-			railFocus = false;
-		} else {
+	// closeModal does — panels, snapshots and review included. Nothing else
+	// happens here: no pane is unmounted and no panel is redrawn.
+	function setShellView(view) {
+		if (WorkspaceLayout.VIEWS.indexOf(view) === -1) return;
+		shellView = view;
+		if (view === "board" && specOpen) {
+			// closeModal applies the layout itself, through the same reducer.
+			closeModal();
 			return;
 		}
 		applyShellLayout();
 	}
 
-	// The switchers are redrawn on every layout change, so the handler lives on
-	// their container and each button declares its target.
-	shellSwitchersEl.addEventListener("click", (e) => {
-		const btn = e.target.closest("[data-shell-target]");
-		if (!btn) return;
-		showShellPane(btn.dataset.shellTarget);
-	});
+	// The switcher is redrawn on every layout change, so the handler lives on
+	// its container and each button declares the view it produces.
+	if (shellViewsEl) {
+		shellViewsEl.addEventListener("click", (e) => {
+			const btn = e.target.closest("[data-shell-view]");
+			if (!btn) return;
+			setShellView(btn.dataset.shellView);
+		});
+	}
 
 	applyShellLayout();
 
-	// ---- Workspace runs rail (US-055) ----------------------------------------
+	// ---- Workspace runs strip (US-055) ---------------------------------------
 	//
-	// What the workspace is running right now, read on a loop with the same
+	// What the workspace is running right now, as a full-width strip above the
+	// primary column: it is on screen in every view, so knowing what is in
+	// flight never costs a change of view, and it takes no width away from the
+	// conversation.
+	//
+	// It is read on a loop with the same
 	// discipline as the conversation panel further down: ticks never overlap, a
 	// failed read leaves the last known list on screen instead of claiming that
 	// nothing is running, and the loop gives up after the same number of
@@ -857,8 +874,8 @@
 		renderRunsAttention();
 	}
 
-	// The indicator lives in the topbar so it stays visible whatever pane is on
-	// screen, and it counts from the very payload the rail draws — one read,
+	// The indicator lives in the topbar so it stays visible whatever view is on
+	// screen, and it counts from the very payload the strip draws — one read,
 	// one truth about what is waiting.
 	function renderRunsAttention() {
 		if (!runsAttentionEl) return;
@@ -891,7 +908,7 @@
 		try {
 			view = await apiGet("/api/workspace/runs");
 		} catch (_) {
-			// The rail is an addition to the board, not a precondition of it: a
+			// The strip is an addition to the work, not a precondition of it: a
 			// viewer that cannot answer must not stop anyone from working, so
 			// what was last known stays on screen and no toast is raised.
 			return;
@@ -957,7 +974,7 @@
 	}
 
 	if (workspaceRunsEl) {
-		// The rail is redrawn on every poll, so the handler lives on the section
+		// The strip is redrawn on every poll, so the handler lives on the section
 		// and each row carries its own identity in its data attributes.
 		workspaceRunsEl.addEventListener("click", (e) => {
 			const row = e.target.closest("[data-run-id]");
@@ -1334,12 +1351,17 @@
 			settle: settleSpecExecution,
 		});
 		modalTitle.textContent = `Spec ${code}`;
-		// The detail takes the primary column; nothing is covered and nothing is
-		// unmounted, so the rail and its conversation stay exactly as they were.
-		// In narrow mode the spec is what was just asked for, so it is what comes
-		// on screen.
-		specOpen = true;
-		railFocus = false;
+		// Choosing a spec is a selection made inside the view that is on screen,
+		// so the module's reducer says what comes next: the detail becomes the
+		// view of the primary column, and in a narrow window the overlay the
+		// choice was made in closes because the view changed. Nothing is
+		// unmounted, so the conversation behind it is exactly as it was.
+		const nextSpec = WorkspaceLayout.nextViewAfterSelection(
+			{ view: shellView, specOpen, narrow: shellNarrow },
+			"spec",
+		);
+		shellView = nextSpec.view;
+		specOpen = nextSpec.specOpen;
 		applyShellLayout();
 		activateTab("story");
 		specStatus.textContent = "Loading...";
@@ -1663,10 +1685,15 @@
 	}
 
 	function closeModal() {
-		// Leaving the spec gives the primary column back to the board. The name
-		// stays: it has several call sites, and renaming it would widen the
-		// change for nothing.
-		specOpen = false;
+		// Leaving the spec gives the primary column back to the board, and the
+		// module's reducer is what says so. The name stays: it has several call
+		// sites, and renaming it would widen the change for nothing.
+		const nextBoard = WorkspaceLayout.nextViewAfterSelection(
+			{ view: shellView, specOpen, narrow: shellNarrow },
+			"board",
+		);
+		shellView = nextBoard.view;
+		specOpen = nextBoard.specOpen;
 		applyShellLayout();
 		unmountExecutionPanels(specContext(currentSpecCode));
 		currentSpecCode = null;
@@ -3845,8 +3872,6 @@
 	// Whether one can be opened at all, and why not, is a server verdict read
 	// from `available` and `unavailable_reason`. Nothing here decides it.
 
-	const conversationEl = document.getElementById("workspace-conversation");
-
 	// Same discipline as the run panel: the read may fail transiently, so the
 	// cursor survives and the loop keeps trying, and it gives up only after this
 	// many consecutive failures rather than polling forever.
@@ -3940,6 +3965,11 @@
 
 	bindConversationPanel(conversationEl);
 
+	// Drawn once, before the first read: the home of the workspace is on screen
+	// from the very first paint, and what it shows until the server answers is
+	// the renderer's own empty state.
+	renderConversationPanel();
+
 	function stopConversationPolling() {
 		if (conversationPollTimer === null) return;
 		clearInterval(conversationPollTimer);
@@ -3961,10 +3991,15 @@
 		conversationLink = "";
 		conversationPollBusy = false;
 		conversationPollFailures = 0;
-		if (conversationEl) {
-			conversationEl.innerHTML = "";
-			conversationEl.classList.add("hidden");
-		}
+		// The panel is the home of the workspace: it never goes blank and it
+		// never hides itself — its visibility belongs to the layout alone. What
+		// it draws once the state is cleared is the home of a workspace with no
+		// conversation, which the renderer already has a branch for.
+		//
+		// This is the only place authorised to clear conversationDraft, and it is
+		// reached only by a change or a close of the workspace — never by a
+		// change of view.
+		renderConversationPanel();
 	}
 
 	// applyConversationView folds one server view into the local projection and
@@ -4014,11 +4049,11 @@
 		try {
 			view = await apiGet("/api/workspace/conversation?after_id=0");
 		} catch (_) {
-			// The panel is an addition to the board, not a precondition of it: a
-			// viewer that cannot answer must not stop anyone from working, so the
-			// panel simply disappears and no toast is raised.
-			conversationEl.innerHTML = "";
-			conversationEl.classList.add("hidden");
+			// A viewer that cannot answer must not stop anyone from working, so
+			// no toast is raised. The panel stays where it is and draws the state
+			// it has — which, after the reset above, is the invitation to open a
+			// conversation. It is the home of the workspace: it does not vanish.
+			renderConversationPanel();
 			return;
 		}
 		applyConversationView(view);
@@ -4185,11 +4220,6 @@
 	// being typed and the reading position in the timeline.
 	function renderConversationPanel() {
 		if (!conversationEl) return;
-		if (!conversationView) {
-			conversationEl.innerHTML = "";
-			conversationEl.classList.add("hidden");
-			return;
-		}
 		const timeline = conversationEl.querySelector(".conv-timeline");
 		const previousTop = timeline ? timeline.scrollTop : 0;
 		const wasAtBottom = timeline
@@ -4204,10 +4234,13 @@
 		const caret = composerHadFocus ? focused.selectionStart : 0;
 
 		// The renderer reads the accumulated timeline, not the last page of it:
-		// the cursor means the server only ever sends what is new.
-		const view = Object.assign({}, conversationView, {
-			events: conversationEvents,
-		});
+		// the cursor means the server only ever sends what is new. Before the
+		// first read there is no view at all, and the renderer answers that with
+		// its own empty state — the invitation to open a conversation — so the
+		// home of the workspace is never a blank panel.
+		const view = conversationView
+			? Object.assign({}, conversationView, { events: conversationEvents })
+			: null;
 		conversationEl.innerHTML = window.Conversation.renderConversation(
 			view,
 			conversationDraft,
@@ -4218,7 +4251,6 @@
 				link: conversationLink,
 			},
 		);
-		conversationEl.classList.remove("hidden");
 
 		const nextTimeline = conversationEl.querySelector(".conv-timeline");
 		if (nextTimeline) {

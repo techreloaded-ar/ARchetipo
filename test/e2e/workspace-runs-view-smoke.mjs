@@ -365,14 +365,14 @@ async function scenario(runDir) {
 			`after five reads of the spec detail routes the conversation ${conversationID} answers with the same id, the same ${conversationAfter.events.length}-event history and the same cursor ${conversationAfter.last_id}, on the same viewer process (pid ${pid}), never restarted`,
 		);
 
-		// --- AC-1 and AC-5 ----------------------------------------------------
+		// --- AC-1, AC-2, AC-4 and AC-5 ----------------------------------------
 		// Asserted on the document the browser is really served, not on the file
 		// in the repository: what ships is what the viewer embeds.
 		const html = await rawGet(`${view.url}/index.html`);
 		assertShellStructure(html);
 		ok(
-			"AC-1, AC-5",
-			`the served index.html nests #workspace-conversation and #workspace-runs inside <aside id="workspace-rail">, keeps #modal-root out of the rail and inside the primary column of #workspace-shell, and still carries all ${SPEC_OPERATION_IDS.length} identifiers of the spec operations plus the ${SPEC_TABS.length} tabs ${SPEC_TABS.join("/")}`,
+			"AC-1, AC-2, AC-4, AC-5",
+			`the served index.html holds #workspace-conversation, #board and #modal-root in the one primary column of #workspace-shell — the conversation first — keeps #workspace-runs and #workspace-views outside that column, carries no <aside id="workspace-rail"> any more, still shows the counters #stat-total and #stat-progress in the topbar, and still carries all ${SPEC_OPERATION_IDS.length} identifiers of the spec operations plus the ${SPEC_TABS.length} tabs ${SPEC_TABS.join("/")}`,
 		);
 
 		// --- AC-6 -------------------------------------------------------------
@@ -380,7 +380,7 @@ async function scenario(runDir) {
 		const narrowClasses = assertNarrowMode(css);
 		ok(
 			"AC-6",
-			`the served app.css carries the media query at the breakpoint ${narrowClasses.breakpoint}px declared by workspace-layout.js, and styles every class that module returns for a narrow state: ${narrowClasses.classes.join(", ")}`,
+			`the served app.css carries the media query at the breakpoint ${narrowClasses.breakpoint}px declared by workspace-layout.js, styles every class that module returns for a narrow state — overlay included: ${narrowClasses.classes.join(", ")} — and hides the counters at no width`,
 		);
 
 		// --- the credential ---------------------------------------------------
@@ -423,8 +423,10 @@ function assertNoRunPanelCalls(executionID, label) {
 }
 
 // assertShellStructure states who is inside whom in the document the viewer
-// really serves, and that nothing of the spec detail was lost when it stopped
-// being an overlaid window.
+// really serves: the conversation, the board and the spec detail are three
+// views of one primary column (US-057), the runs strip is outside that column,
+// the lateral rail is gone, and nothing of the spec detail was lost when the
+// column changed tenant.
 function assertShellStructure(html) {
 	const at = (needle, label) => {
 		const index = html.indexOf(needle);
@@ -434,39 +436,62 @@ function assertShellStructure(html) {
 		return index;
 	};
 
-	const shellAt = at('id="workspace-shell"', "the shell");
-	const primaryAt = at('id="workspace-primary"', "the primary column");
-	const modalAt = at('id="modal-root"', "the spec detail");
-	const railAt = at('<aside id="workspace-rail"', "the lateral rail");
-
-	if (!(shellAt < primaryAt && primaryAt < modalAt && modalAt < railAt)) {
+	if (html.includes('<aside id="workspace-rail"')) {
 		throw new Error(
-			`AC-1: the spec detail must sit inside the primary column of the shell; got offsets shell=${shellAt}, primary=${primaryAt}, modal-root=${modalAt}, rail=${railAt}`,
+			'AC-1: the served index.html still carries <aside id="workspace-rail">. US-057 removed the lateral rail: finding it again means the conversation is back in a side column instead of being the home view of the primary column.',
 		);
 	}
 
-	const railEnd = html.indexOf("</aside>", railAt);
-	if (railEnd === -1) {
-		throw new Error("AC-1: the lateral rail is never closed in the served index.html");
-	}
-	const rail = html.slice(railAt, railEnd);
-	for (const id of ["workspace-conversation", "workspace-runs"]) {
-		if (!rail.includes(`id="${id}"`)) {
-			throw new Error(`AC-1: #${id} must live inside the lateral rail; the rail holds ${JSON.stringify(truncate(rail, 400))}`);
-		}
-	}
-	if (rail.includes("modal-root")) {
-		throw new Error("AC-1: the spec detail must not be nested in the rail: opening a spec would then move the conversation");
+	const shellAt = at('id="workspace-shell"', "the shell");
+	const viewsAt = at('id="workspace-views"', "the view switcher");
+	const runsAt = at('id="workspace-runs"', "the runs strip");
+	const primaryAt = at('id="workspace-primary"', "the primary column");
+	const conversationAt = at('id="workspace-conversation"', "the conversation");
+	const boardAt = at('id="board"', "the board");
+	const modalAt = at('id="modal-root"', "the spec detail");
+
+	// The primary column ends where the shell's own wrapper closes; everything
+	// asserted below is located against its opening offset, which is enough to
+	// separate what precedes it from what it contains.
+	if (!(shellAt < viewsAt && viewsAt < runsAt && runsAt < primaryAt)) {
+		throw new Error(
+			`AC-1, AC-2: the view switcher and the runs strip must sit inside the shell and above the primary column; got offsets shell=${shellAt}, views=${viewsAt}, runs=${runsAt}, primary=${primaryAt}`,
+		);
 	}
 
-	// AC-5 — nothing of what could be done on a spec was lost by the move.
+	// AC-1, AC-2, AC-4 — the three views share the primary column.
+	for (const [id, offset, label] of [
+		["workspace-conversation", conversationAt, "the conversation"],
+		["board", boardAt, "the board"],
+		["modal-root", modalAt, "the spec detail"],
+	]) {
+		if (offset < primaryAt) {
+			throw new Error(
+				`AC-1, AC-2, AC-4: ${label} (#${id}) must live inside the primary column of the shell; got offsets primary=${primaryAt}, ${id}=${offset}`,
+			);
+		}
+	}
+	if (!(conversationAt < boardAt)) {
+		throw new Error(
+			`AC-1: the conversation must be the first view of the primary column; got offsets conversation=${conversationAt}, board=${boardAt}`,
+		);
+	}
+	// AC-5 — the counters are readable from the home screen, without opening the
+	// board.
+	for (const id of ["topbar-stats", "stat-total", "stat-progress"]) {
+		if (!html.includes(`id="${id}"`)) {
+			throw new Error(`AC-5: the served index.html lost #${id}: the spec totals would no longer be readable from the home screen`);
+		}
+	}
+
+	// AC-4 — nothing of what could be done on a spec was lost by the move.
 	const missingIDs = SPEC_OPERATION_IDS.filter((id) => !html.includes(`id="${id}"`));
 	if (missingIDs.length) {
-		throw new Error(`AC-5: the served index.html lost the spec operations ${JSON.stringify(missingIDs)}`);
+		throw new Error(`AC-4: the served index.html lost the spec operations ${JSON.stringify(missingIDs)}`);
 	}
 	const missingTabs = SPEC_TABS.filter((tab) => !html.includes(`data-tab="${tab}"`));
 	if (missingTabs.length) {
-		throw new Error(`AC-5: the served index.html lost the spec tabs ${JSON.stringify(missingTabs)}`);
+		throw new Error(`AC-4: the served index.html lost the spec tabs ${JSON.stringify(missingTabs)}`);
 	}
 }
 
@@ -474,7 +499,7 @@ function assertShellStructure(html) {
 // the layout, so the breakpoint is never a number this test invented: it is
 // read from workspace-layout.js, exactly as the caller in the browser reads it.
 function assertNarrowMode(css) {
-	const { resolveLayout, NARROW_MAX_WIDTH } = loadWorkspaceLayout();
+	const { resolveLayout, NARROW_MAX_WIDTH, PANE_OVERLAY_CLASS } = loadWorkspaceLayout();
 	const query = `@media (max-width: ${NARROW_MAX_WIDTH}px)`;
 	if (!css.includes(query)) {
 		throw new Error(`AC-6: the served app.css carries no media query at the declared breakpoint ${JSON.stringify(query)}`);
@@ -483,17 +508,26 @@ function assertNarrowMode(css) {
 	// The classes the module really returns for a narrow shell, plus the shell
 	// class of the wide one: whatever it returns has to mean something in the
 	// stylesheet the browser is served, or the decision would apply to nothing.
-	const narrow = resolveLayout({ specOpen: true, narrow: true, railFocus: false });
-	const wide = resolveLayout({ specOpen: true, narrow: false });
+	const narrow = resolveLayout({ view: "spec", specOpen: true, narrow: true });
+	const wide = resolveLayout({ view: "spec", specOpen: true, narrow: false });
 	const required = new Set([wide.shellClass]);
+	required.add(narrow.shellClass);
 	for (const pane of Object.values(narrow.panes)) {
 		required.add(pane.className);
 		required.add(pane.stateClass);
+		if (pane.overlay) required.add(PANE_OVERLAY_CLASS);
 	}
 	const classes = [...required].sort();
 	const missing = classes.filter((name) => !css.includes(`.${name}`));
 	if (missing.length) {
 		throw new Error(`AC-6: the served app.css styles none of ${JSON.stringify(missing)}, which the layout module returns`);
+	}
+
+	// AC-5 — no width may hide the counters, because they are what the home
+	// screen says about the board without opening it.
+	const hidesStats = /\.topbar-stats\s*\{[^}]*display\s*:\s*none/.test(css);
+	if (hidesStats) {
+		throw new Error("AC-5: the served app.css applies display:none to .topbar-stats: the counters would disappear at some width");
 	}
 	return { breakpoint: NARROW_MAX_WIDTH, classes };
 }

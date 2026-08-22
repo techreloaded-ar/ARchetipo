@@ -87,9 +87,9 @@
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.88" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
             </button>
             <!-- How many runs are waiting for an answer (US-055). It lives in
-                 the topbar so it stays visible whatever pane is on screen, and
-                 it is filled from the same /api/workspace/runs payload the rail
-                 draws. Empty until there is something to wait for. -->
+                 the topbar so it stays visible whatever view is on screen, and
+                 it is filled from the same /api/workspace/runs payload the runs
+                 strip draws. Empty until there is something to wait for. -->
             <div id="runs-attention" class="runs-attention hidden" aria-live="polite" data-workspace-scoped></div>
             <span class="action-sep" aria-hidden="true"></span>
             <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Toggle theme" title="Toggle theme (T)">
@@ -114,26 +114,46 @@
         </div>
     </section>
 
-    <!-- The workspace shell (US-055): one primary column and one permanent
-         lateral rail. The primary column shows the board or, when a spec is
-         open, the spec detail in its place; the rail stays on screen beside
-         both. Which panes are on screen is decided by workspace-layout.js and
-         only applied here as classes: this markup takes no decision. The shell
-         is not drawn at all when no workspace is open — #workspace-home stays
-         outside it, and body.no-workspace hides the shell. -->
+    <!-- The workspace shell (US-057): one primary column that holds one view at
+         a time — the conversation, the board, or the spec detail — plus the
+         full-width strip of what the workspace is running. The conversation is
+         the home of the workspace: it is what the column shows when a workspace
+         is opened, and the board and the spec detail are views called into that
+         very same space. In a narrow window the conversation stays at full
+         width and the called view is laid over it. Which panes are on screen is
+         decided by workspace-layout.js and only applied here as classes: this
+         markup takes no decision. The shell is not drawn at all when no
+         workspace is open — #workspace-home stays outside it, and
+         body.no-workspace hides the shell. -->
     <div id="workspace-shell" class="workspace-shell workspace-shell--wide">
-        <!-- Narrow-mode switchers: below the breakpoint a single pane is on
-             screen, and every other pane that exists must stay one tap away.
-             Empty and hidden in wide mode, where nothing needs switching. -->
-        <div id="workspace-switchers" class="shell-switchers hidden" role="group" aria-label="Panes"></div>
+        <!-- The permanent view switcher: Conversazione · Spec · Board. It is
+             filled by app.js from the switcher list the layout module returns,
+             so the board is always one press away from the home screen. The Spec
+             tab is offered only while a spec is open. -->
+        <nav id="workspace-views" class="workspace-views" role="tablist" aria-label="Viste del workspace"></nav>
+
+        <!-- What the workspace is running right now (US-055), as a full-width
+             strip above the primary column: it is visible in every view, so it
+             never takes width away from the conversation. Drawn by the pure
+             renderer in workspace-runs.js from /api/workspace/runs. -->
+        <section id="workspace-runs" class="workspace-runs" aria-live="polite" data-workspace-scoped></section>
 
         <div id="workspace-primary" class="workspace-primary">
-            <main id="board" class="board shell-pane-board is-visible" aria-live="polite"></main>
+            <!-- The conversation of the open workspace (US-053), mounted once
+                 and in one place only: a workspace holds a single conversation.
+                 It is the home view of the primary column (US-057), so it is
+                 born visible and never carries the `hidden` class — its
+                 visibility belongs to the layout module alone. Everything it
+                 draws comes from /api/workspace/conversation, through the pure
+                 renderer in conversation.js. -->
+            <section id="workspace-conversation" class="workspace-conversation shell-pane-conversation is-visible" aria-live="polite" data-workspace-scoped></section>
 
-            <!-- The spec detail. It is no longer an overlaid window: it is a
-                 pane anchored in the primary column, taking the board's place
-                 while it is open. All its ids, tabs and panels are unchanged —
-                 only the two outer classes and the role differ. -->
+            <main id="board" class="board shell-pane-board is-hidden" aria-live="polite"></main>
+
+            <!-- The spec detail. It is not an overlaid window: it is a view of
+                 the primary column, called into the same space the conversation
+                 and the board share. All its ids, tabs and panels are unchanged
+                 — only the two outer classes and the role differ. -->
             <div id="modal-root" class="spec-pane shell-pane-spec hidden" role="region" aria-labelledby="story-editor-title">
                 <div class="spec-pane-body">
             <header class="modal-header">
@@ -270,24 +290,6 @@
                 </div>
             </div>
         </div>
-
-        <!-- The lateral rail. It is permanent: whatever the primary column is
-             showing, what is in flight and the conversation stay reachable
-             without leaving the work. -->
-        <aside id="workspace-rail" class="workspace-rail shell-pane-rail is-visible" aria-label="Workspace rail" data-workspace-scoped>
-            <!-- What the workspace is running right now (US-055). Drawn by the
-                 pure renderer in workspace-runs.js from /api/workspace/runs. -->
-            <section id="workspace-runs" class="workspace-runs" aria-live="polite"></section>
-
-            <!-- The conversation of the open workspace (US-053). It is mounted
-                 here, once and in one place only: a workspace holds a single
-                 conversation, so a panel repeated next to the board and next to
-                 a spec would be two views of the same thing. It now lives in
-                 the rail, so opening a spec no longer hides it. Everything it
-                 draws comes from /api/workspace/conversation, through the pure
-                 renderer in conversation.js. -->
-            <section id="workspace-conversation" class="workspace-conversation hidden" aria-live="polite" data-workspace-scoped></section>
-        </aside>
     </div>
 
     <footer class="hint-bar" aria-hidden="true">

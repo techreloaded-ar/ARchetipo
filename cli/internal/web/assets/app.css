@@ -2302,12 +2302,34 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 /* ---- Responsive tweaks ------------------------------------------------- */
 @media (max-width: 900px) {
 	.topbar {
-		grid-template-columns: auto auto;
-		gap: 16px;
+		/* Three cells still, because the counters stay: the middle one is what
+		   gives way when the row tightens. */
+		grid-template-columns: auto minmax(0, auto) auto;
+		gap: 12px;
 		padding: 14px 18px;
 	}
+	/* The counters stay readable in a narrow window (US-057 AC-5): the two the
+	   criterion names keep their word beside the number, as state E of the
+	   design shows. Only the separators and the third counter give way, which
+	   is what buys the room — never a number, and never a label without one. */
 	.topbar-stats {
+		gap: 10px;
+	}
+	.topbar-stats .stat-sep {
 		display: none;
+	}
+	.topbar-stats .stat:last-of-type {
+		display: none;
+	}
+	.topbar-stats .stat {
+		gap: 4px;
+	}
+	.stat-num {
+		font-size: 18px;
+	}
+	.stat-label {
+		font-size: 9px;
+		letter-spacing: 0.08em;
 	}
 	.board {
 		padding: 16px;
@@ -4199,12 +4221,30 @@ body.no-workspace [data-workspace-scoped] {
    timeline. Nothing here is a new identity, only a second place where the
    established one is used. Every value resolves against the viewer's own
    tokens. */
+/* The home view of the primary column (US-057): full width and full height of
+   the cell it shares with the other views, so the dialogue is never squeezed
+   into a lateral column. No max-width — the conversation never compresses. */
 .workspace-conversation {
-	padding: 0 28px 14px;
+	padding: 14px 28px 18px;
 }
 
 .workspace-conversation:empty {
 	padding: 0;
+}
+
+.workspace-primary > .shell-pane-conversation > .conv-panel {
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+/* As the home view the timeline takes the height the column gives it, instead
+   of the 320px box it needed while it was one card among others in a lateral
+   rail. The composer stays at the bottom because the timeline is what grows.
+   The base rule is left alone: the panel is still drawn elsewhere. */
+.workspace-primary > .shell-pane-conversation .conv-timeline {
+	max-height: none;
+	flex: 1 1 auto;
+	min-height: 0;
 }
 
 .conv-panel {
@@ -4799,23 +4839,27 @@ body.no-workspace [data-workspace-scoped] {
 	color: var(--text-muted);
 }
 
-/* ---- Workspace shell (US-055) ------------------------------------------
-   Two areas that do not compete for the same space: a primary column, which
-   shows the board or — while a spec is open — the spec detail in its place,
-   and a permanent lateral rail holding what is in flight and the conversation.
+/* ---- Workspace shell (US-057) ------------------------------------------
+   One column, not two. The shell is a stack of three rows — the permanent view
+   switcher, the full-width strip of what is running, and the primary column —
+   and the primary column holds one view at a time: the conversation, which is
+   the home of the workspace, the board, or the spec detail. The three views
+   share one grid cell, so the view that comes on screen occupies exactly the
+   space the previous one occupied, and the one that leaves is hidden, never
+   unmounted.
 
    The shell only *applies* a layout decision, it never takes one: which panes
    are on screen is resolved by workspace-layout.js and arrives here as the
-   classes below (.workspace-shell--wide / --narrow, .is-visible / .is-hidden).
-   The one number shared with that module is the breakpoint, 900px, declared
-   there as NARROW_MAX_WIDTH and repeated in the media query at the bottom of
-   this section. Everything else resolves against the viewer's own tokens, so
-   both themes follow without a second rule. */
+   classes below (.workspace-shell--wide / --narrow, .is-visible / .is-hidden /
+   .is-overlay). The one number shared with that module is the breakpoint,
+   900px, declared there as NARROW_MAX_WIDTH and repeated in the media query at
+   the bottom of this section. Everything else resolves against the viewer's own
+   tokens, so both themes follow without a second rule. */
 .workspace-shell {
 	flex: 1 1 auto;
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) 360px;
-	grid-template-rows: auto minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr);
+	grid-template-rows: auto auto minmax(0, 1fr);
 	min-height: 0;
 }
 
@@ -4824,83 +4868,116 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 /* ---- Primary column ----------------------------------------------------- */
-/* Scrolls on its own, so reading a long spec never moves the rail. */
+/* Full width, and the single cell every view shares. Each view scrolls on its
+   own, so reading a long spec never moves the switcher or the runs strip. */
 .workspace-primary {
-	/* Row 2 explicitly, never by auto-placement. The switchers row above is
-	   display:none in wide mode, so an implicitly placed column would land in
-	   the `auto` track and leave the `1fr` one empty: the columns would size to
-	   their content, the free space would pool below them, and overflow-y would
-	   never engage — the whole page would scroll instead of each column. */
-	grid-row: 2;
-	display: flex;
-	flex-direction: column;
+	/* Row 3 explicitly, never by auto-placement: the two rows above are `auto`
+	   tracks and an implicitly placed column would land in one of them, leaving
+	   the `1fr` track empty — the free space would pool below the content and
+	   overflow-y would never engage. */
+	grid-row: 3;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	grid-template-rows: minmax(0, 1fr);
+	width: 100%;
 	min-width: 0;
 	min-height: 0;
-	overflow-y: auto;
+}
+
+/* Every view of the column occupies the same single cell. */
+.workspace-primary > .shell-pane-conversation,
+.workspace-primary > .shell-pane-board,
+.workspace-primary > .shell-pane-spec {
+	grid-area: 1 / 1;
+	min-width: 0;
+	min-height: 0;
+}
+
+/* The wide shell, named by the module so the class it returns means something
+   here too: one column, and the views laid out side by side never. */
+.workspace-shell--wide {
+	grid-template-columns: minmax(0, 1fr);
 }
 
 /* ---- Pane visibility ---------------------------------------------------- */
-/* Scoped to the shell's own children: the narrow-mode switchers carry the same
-   pane class names as labels, and must not be laid out as panes. */
+/* Scoped to the shell's own children, so a pane class used as a label
+   elsewhere is never laid out as a pane. */
 .workspace-primary > .is-hidden,
 .workspace-shell > .is-hidden {
 	display: none !important;
 }
 
+.workspace-primary > .shell-pane-conversation.is-visible {
+	display: flex;
+	flex-direction: column;
+	overflow-y: auto;
+}
+
 .workspace-primary > .shell-pane-board.is-visible {
 	display: flex;
+	overflow-y: auto;
 }
 
 .workspace-primary > .shell-pane-spec.is-visible {
 	display: flex;
+	flex-direction: column;
+	overflow-y: auto;
 }
 
-.workspace-shell > .shell-pane-rail.is-visible {
-	display: flex;
-}
-
-/* ---- Narrow-mode switchers ---------------------------------------------- */
-/* Below the breakpoint a single pane is on screen; every other pane that
-   exists must stay one tap away. Filled by the caller from the switcher list
-   workspace-layout.js returns — empty, and out of the way, in wide mode. */
-.shell-switchers {
-	grid-column: 1 / -1;
+/* ---- View switcher ------------------------------------------------------ */
+/* Permanent, in both widths: Conversazione · Spec · Board. The board is one
+   press away from the home screen, and the current view is the one marked
+   is-current. Filled by the caller from the switcher list workspace-layout.js
+   returns; the markup here takes no decision. */
+.workspace-views {
+	grid-row: 1;
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	justify-content: flex-end;
+	gap: 2px;
 	flex-wrap: wrap;
-	padding: 10px 18px;
+	padding: 8px 20px;
 	border-bottom: 1px solid var(--rule);
 	background: color-mix(in srgb, var(--surface) 55%, transparent);
 }
 
-.shell-switchers.hidden,
-.shell-switchers:empty,
-.workspace-shell--wide .shell-switchers {
+.workspace-views:empty {
 	display: none;
 }
 
-.shell-switchers > button {
-	background: var(--surface-2);
-	border: 1px solid var(--border);
-	border-radius: 999px;
+.view-tab {
+	border: 1px solid transparent;
+	border-radius: var(--radius);
+	background: transparent;
 	color: var(--text-muted);
-	padding: 5px 14px;
+	padding: 4px 12px;
 	cursor: pointer;
-	font-family: var(--font-mono);
-	font-size: 10px;
-	text-transform: uppercase;
-	letter-spacing: 0.14em;
+	font-size: 12px;
 	transition:
 		color var(--transition),
 		border-color var(--transition),
 		background var(--transition);
 }
 
-.shell-switchers > button:hover {
-	color: var(--text-strong);
-	border-color: var(--border-strong);
+.view-tab:hover {
 	background: var(--surface-hover);
+	color: var(--text);
+}
+
+.view-tab.is-current {
+	background: var(--surface-2);
+	border-color: var(--border);
+	color: var(--text-strong);
+}
+
+/* ---- Runs strip --------------------------------------------------------- */
+/* Full width, above the primary column, so what is in flight stays readable in
+   every view without taking width away from the conversation. It collapses
+   entirely when nothing is running (see .workspace-runs:empty below). */
+.workspace-shell > .workspace-runs {
+	grid-row: 2;
+	padding: 10px 20px 0;
+	min-width: 0;
 }
 
 /* ---- Spec pane ---------------------------------------------------------- */
@@ -4935,36 +5012,6 @@ body.no-workspace [data-workspace-scoped] {
 .spec-pane-body > .tab-panel.active {
 	flex: 1 1 auto;
 	min-height: 0;
-}
-
-/* ---- Lateral rail ------------------------------------------------------- */
-/* Permanent: whatever the primary column shows, what is running and what the
-   agent is saying stay on screen. It scrolls independently, and it leaves room
-   below the conversation for a further section without reserving one. */
-.workspace-rail {
-	/* Same row as the primary column, for the same reason: in narrow mode the
-	   grid is a single column, and an implicitly placed rail would fall into an
-	   implicit third row *below* a primary column that still fills the whole
-	   `1fr` track — pushing the one pane that is meant to be on screen off it. */
-	grid-row: 2;
-	display: flex;
-	flex-direction: column;
-	gap: 14px;
-	min-width: 0;
-	min-height: 0;
-	overflow-y: auto;
-	padding: 18px 20px 22px;
-	border-left: 1px solid var(--rule);
-	background: color-mix(in srgb, var(--surface) 45%, transparent);
-}
-
-/* In the rail the conversation is already inside the rail's own gutter. */
-.workspace-rail .workspace-conversation {
-	padding: 0;
-}
-
-.workspace-rail .workspace-conversation:empty {
-	display: none;
 }
 
 /* ---- Runs section (US-055) ---------------------------------------------- */
@@ -5174,17 +5221,35 @@ body.no-workspace [data-workspace-scoped] {
 
 /* ---- Narrow mode -------------------------------------------------------
    900px is NARROW_MAX_WIDTH in workspace-layout.js: the same number, and the
-   only number the two files share. Below it there is no room for two columns,
-   so the shell becomes one column and the caller shows one pane at a time. */
+   only number the two files share. Below it the conversation stays on screen at
+   full width and the view that is called is drawn *over* it as an overlay, so
+   what is underneath stays mounted and intact — and the choice made inside the
+   overlay closes it, because it changes the view. */
 @media (max-width: 900px) {
-	.workspace-shell {
+	.workspace-shell--narrow {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
-	.workspace-rail {
-		border-left: none;
-		border-top: 1px solid var(--rule);
-		padding: 14px 16px 18px;
+	.workspace-shell--narrow .workspace-views {
+		padding: 8px 14px;
+	}
+
+	.workspace-shell--narrow > .workspace-runs {
+		padding: 8px 14px 0;
+	}
+
+	.workspace-conversation {
+		padding: 12px 14px 16px;
+	}
+
+	/* The overlay: same cell, higher layer, its own opaque ground. The
+	   conversation below keeps its size and its scroll position, and comes
+	   back untouched when the overlay is dismissed. */
+	.workspace-primary > .shell-pane-board.is-overlay,
+	.workspace-primary > .shell-pane-spec.is-overlay {
+		z-index: 2;
+		background: var(--bg);
+		height: 100%;
 	}
 
 	.spec-pane {
