@@ -49,7 +49,7 @@ func journalTestDecodeBound(t *testing.T, body string) journalTestBoundView {
 // the request a viewer makes when it wants a free conversation.
 func journalTestOpenWith(t *testing.T, srv *Server, payload any) (int, string) {
 	t.Helper()
-	w := doJSON(t, srv, http.MethodPost, "/api/workspace/conversation", payload)
+	w := doJSON(t, srv, http.MethodPost, "/api/workspace/conversations", payload)
 	return w.Code, w.Body.String()
 }
 
@@ -166,7 +166,7 @@ func TestJournalTitlesAThreadWithTheFirstHumanMessage(t *testing.T) {
 	provider.emit(t, id, localrun.KindUserMessage, spoken)
 	provider.emit(t, id, localrun.KindText, "la risposta dell'agente, che non dà il titolo a nulla")
 
-	if status, _, body := readConversation(t, srv, 0); status != http.StatusOK {
+	if status, _, body := readConversation(t, srv, id, 0); status != http.StatusOK {
 		t.Fatalf("GET conversation = %d, want 200: %s", status, body)
 	}
 
@@ -213,7 +213,7 @@ func TestJournalRecordsWhatWasSaidAndWhen(t *testing.T) {
 	provider.emit(t, id, localrun.KindText, "ciao a te")
 	last := provider.emit(t, id, localrun.KindToolStart, "Read")
 
-	if status, _, body := readConversation(t, srv, 0); status != http.StatusOK {
+	if status, _, body := readConversation(t, srv, id, 0); status != http.StatusOK {
 		t.Fatalf("GET conversation = %d, want 200: %s", status, body)
 	}
 
@@ -238,13 +238,13 @@ func TestJournalDoesNotRewriteAThreadWithNothingNewToSay(t *testing.T) {
 	id := journalTestOpenedID(t, srv)
 
 	provider.emit(t, id, localrun.KindUserMessage, "una cosa sola")
-	if status, _, body := readConversation(t, srv, 0); status != http.StatusOK {
+	if status, _, body := readConversation(t, srv, id, 0); status != http.StatusOK {
 		t.Fatalf("GET conversation = %d, want 200: %s", status, body)
 	}
 	before, beforeInfo := journalTestReadFile(t, srv, id)
 
 	for range 2 {
-		if status, _, body := readConversation(t, srv, 0); status != http.StatusOK {
+		if status, _, body := readConversation(t, srv, id, 0); status != http.StatusOK {
 			t.Fatalf("GET conversation = %d, want 200: %s", status, body)
 		}
 	}
@@ -278,12 +278,8 @@ func TestOpeningAConversationOnAnUnknownSpecWritesNothing(t *testing.T) {
 		t.Errorf("the provider was asked to open %d conversations for a spec that does not exist", len(openings))
 	}
 
-	readStatus, view, readBody := readConversation(t, srv, 0)
-	if readStatus != http.StatusOK {
-		t.Fatalf("GET conversation = %d, want 200: %s", readStatus, readBody)
-	}
-	if view.Conversation != nil {
-		t.Errorf("a conversation is open after a refused binding: %s", readBody)
+	if live := liveConversationIDs(srv); len(live) != 0 {
+		t.Errorf("a conversation is open after a refused binding: %v", live)
 	}
 }
 
@@ -354,7 +350,7 @@ func TestClosingAConversationSealsItsRecord(t *testing.T) {
 	provider.emit(t, id, localrun.KindUserMessage, "l'ultima domanda")
 	provider.emit(t, id, localrun.KindText, "l'ultima risposta")
 
-	status, _, body := closeConversation(t, srv)
+	status, _, body := closeConversation(t, srv, id)
 	if status != http.StatusOK {
 		t.Fatalf("DELETE conversation = %d, want 200: %s", status, body)
 	}
@@ -377,13 +373,13 @@ func TestClosingAConversationSealsItsRecord(t *testing.T) {
 // TestJournalRefusesEventsOfAnotherConversation pins the identity check on
 // record().
 //
-// The race it stands for is real: a reader takes a snapshot of the live
+// The race it stands for is real: a reader takes a snapshot of one live
 // conversation, then reads its session outside the journal's lock, and in
-// between a resume can seal that conversation and begin another. Without the
-// check those stale events would be written into the *new* record — its
-// history, its title and its instant overwritten by somebody else's — and the
-// watermark would be pushed past events the new conversation has not emitted
-// yet, so its own history could never be written at all.
+// between another one can be begun. Without the lookup those stale events would
+// be written into the *other* record — its history, its title and its instant
+// overwritten by somebody else's — and the watermark would be pushed past
+// events that conversation has not emitted yet, so its own history could never
+// be written at all.
 func TestJournalRefusesEventsOfAnotherConversation(t *testing.T) {
 	root := t.TempDir()
 	journal, err := newConversationJournal(root)
@@ -460,4 +456,219 @@ func journalTestInstant(t *testing.T, value string) time.Time {
 		t.Fatalf("parsing %q: %v", value, err)
 	}
 	return parsed.UTC()
+}
+
+// TestJournalKeepsTwoConversationsInTwoRecords is AC-1 and AC-2 at the level of
+// the journal: two conversations journalled together produce two files, and
+// nothing said in one reaches the other.
+func TestJournalKeepsTwoConversationsInTwoRecords(t *testing.T) {
+	root := t.TempDir()
+	journal, err := newConversationJournal(root)
+	if err != nil {
+		t.Fatalf("newConversationJournal: %v", err)
+	}
+	ctx := context.Background()
+	openedAt := journalTestInstant(t, "2026-08-22T10:00:00Z")
+
+	a := conversationSnapshot{id: "conv-a", workingDir: root, openedAt: openedAt}
+	b := conversationSnapshot{id: "conv-b", workingDir: root, openedAt: openedAt.Add(time.Minute)}
+	if err := journal.begin(ctx, a, "US-001", ""); err != nil {
+		t.Fatalf("begin(conv-a): %v", err)
+	}
+	if err := journal.begin(ctx, b, "US-002", ""); err != nil {
+		t.Fatalf("begin(conv-b): %v", err)
+	}
+
+	eventsA := []execution.RunEvent{{ID: 1, Kind: localrun.KindUserMessage, Text: "detto in A", At: openedAt.Add(time.Minute)}}
+	eventsB := []execution.RunEvent{{ID: 1, Kind: localrun.KindUserMessage, Text: "detto in B", At: openedAt.Add(2 * time.Minute)}}
+	if err := journal.record(ctx, "conv-a", eventsA, true); err != nil {
+		t.Fatalf("record(conv-a): %v", err)
+	}
+	if err := journal.record(ctx, "conv-b", eventsB, true); err != nil {
+		t.Fatalf("record(conv-b): %v", err)
+	}
+
+	recordA, err := journal.store.Get(ctx, "conv-a")
+	if err != nil {
+		t.Fatalf("Get(conv-a): %v", err)
+	}
+	recordB, err := journal.store.Get(ctx, "conv-b")
+	if err != nil {
+		t.Fatalf("Get(conv-b): %v", err)
+	}
+	if len(recordA.Events) != 1 || recordA.Events[0].Text != "detto in A" {
+		t.Fatalf("conv-a holds %#v, want only what was said in it", recordA.Events)
+	}
+	if len(recordB.Events) != 1 || recordB.Events[0].Text != "detto in B" {
+		t.Fatalf("conv-b holds %#v, want only what was said in it", recordB.Events)
+	}
+	if recordA.SpecCode != "US-001" || recordB.SpecCode != "US-002" {
+		t.Fatalf("spec codes = (%q, %q), want (US-001, US-002)", recordA.SpecCode, recordB.SpecCode)
+	}
+}
+
+// TestJournalDoesNotLetOneTitleContaminateTheOther is AC-2 on the name of a
+// thread: each conversation is named by how *it* started, and a second message
+// in one renames neither.
+func TestJournalDoesNotLetOneTitleContaminateTheOther(t *testing.T) {
+	root := t.TempDir()
+	journal, err := newConversationJournal(root)
+	if err != nil {
+		t.Fatalf("newConversationJournal: %v", err)
+	}
+	ctx := context.Background()
+	openedAt := journalTestInstant(t, "2026-08-22T10:00:00Z")
+	if err := journal.begin(ctx, conversationSnapshot{id: "conv-a", workingDir: root, openedAt: openedAt}, "", ""); err != nil {
+		t.Fatalf("begin(conv-a): %v", err)
+	}
+	if err := journal.begin(ctx, conversationSnapshot{id: "conv-b", workingDir: root, openedAt: openedAt}, "", ""); err != nil {
+		t.Fatalf("begin(conv-b): %v", err)
+	}
+
+	if err := journal.record(ctx, "conv-a", []execution.RunEvent{
+		{ID: 1, Kind: localrun.KindUserMessage, Text: "titolo di A", At: openedAt.Add(time.Minute)},
+	}, true); err != nil {
+		t.Fatalf("record(conv-a): %v", err)
+	}
+	if err := journal.record(ctx, "conv-b", []execution.RunEvent{
+		{ID: 1, Kind: localrun.KindUserMessage, Text: "titolo di B", At: openedAt.Add(time.Minute)},
+	}, true); err != nil {
+		t.Fatalf("record(conv-b): %v", err)
+	}
+	if err := journal.record(ctx, "conv-a", []execution.RunEvent{
+		{ID: 1, Kind: localrun.KindUserMessage, Text: "titolo di A", At: openedAt.Add(time.Minute)},
+		{ID: 2, Kind: localrun.KindUserMessage, Text: "seconda cosa detta in A", At: openedAt.Add(2 * time.Minute)},
+	}, true); err != nil {
+		t.Fatalf("record(conv-a) again: %v", err)
+	}
+
+	recordA, err := journal.store.Get(ctx, "conv-a")
+	if err != nil {
+		t.Fatalf("Get(conv-a): %v", err)
+	}
+	recordB, err := journal.store.Get(ctx, "conv-b")
+	if err != nil {
+		t.Fatalf("Get(conv-b): %v", err)
+	}
+	if recordA.Title != "titolo di A" {
+		t.Fatalf("conv-a title = %q, want the first thing said in it", recordA.Title)
+	}
+	if recordB.Title != "titolo di B" {
+		t.Fatalf("conv-b title = %q, want the first thing said in it", recordB.Title)
+	}
+}
+
+// TestJournalWatermarkOfOneConversationDoesNotBlockTheOther is the regression a
+// single shared lastWrittenID would cause: a conversation whose events carry
+// high ids would silently stop a sibling with lower ones from ever being
+// written.
+func TestJournalWatermarkOfOneConversationDoesNotBlockTheOther(t *testing.T) {
+	root := t.TempDir()
+	journal, err := newConversationJournal(root)
+	if err != nil {
+		t.Fatalf("newConversationJournal: %v", err)
+	}
+	ctx := context.Background()
+	openedAt := journalTestInstant(t, "2026-08-22T10:00:00Z")
+	if err := journal.begin(ctx, conversationSnapshot{id: "conv-high", workingDir: root, openedAt: openedAt}, "", ""); err != nil {
+		t.Fatalf("begin(conv-high): %v", err)
+	}
+	if err := journal.begin(ctx, conversationSnapshot{id: "conv-low", workingDir: root, openedAt: openedAt}, "", ""); err != nil {
+		t.Fatalf("begin(conv-low): %v", err)
+	}
+
+	if err := journal.record(ctx, "conv-high", []execution.RunEvent{
+		{ID: 900, Kind: localrun.KindUserMessage, Text: "detto molto avanti", At: openedAt.Add(time.Minute)},
+	}, true); err != nil {
+		t.Fatalf("record(conv-high): %v", err)
+	}
+	if err := journal.record(ctx, "conv-low", []execution.RunEvent{
+		{ID: 1, Kind: localrun.KindUserMessage, Text: "detto all'inizio", At: openedAt.Add(2 * time.Minute)},
+	}, true); err != nil {
+		t.Fatalf("record(conv-low): %v", err)
+	}
+
+	low, err := journal.store.Get(ctx, "conv-low")
+	if err != nil {
+		t.Fatalf("Get(conv-low): %v", err)
+	}
+	if len(low.Events) != 1 || low.Events[0].Text != "detto all'inizio" {
+		t.Fatalf("conv-low holds %#v, want its own event: a watermark of another conversation must not block it", low.Events)
+	}
+}
+
+// TestJournalFinishSealsOnlyTheConversationItNames is AC-4 on disk: sealing one
+// conversation stops later writes into *it* and leaves every other one being
+// journalled exactly as it was.
+func TestJournalFinishSealsOnlyTheConversationItNames(t *testing.T) {
+	root := t.TempDir()
+	journal, err := newConversationJournal(root)
+	if err != nil {
+		t.Fatalf("newConversationJournal: %v", err)
+	}
+	ctx := context.Background()
+	openedAt := journalTestInstant(t, "2026-08-22T10:00:00Z")
+	if err := journal.begin(ctx, conversationSnapshot{id: "conv-a", workingDir: root, openedAt: openedAt}, "", ""); err != nil {
+		t.Fatalf("begin(conv-a): %v", err)
+	}
+	if err := journal.begin(ctx, conversationSnapshot{id: "conv-b", workingDir: root, openedAt: openedAt}, "", ""); err != nil {
+		t.Fatalf("begin(conv-b): %v", err)
+	}
+	if err := journal.record(ctx, "conv-a", []execution.RunEvent{
+		{ID: 1, Kind: localrun.KindUserMessage, Text: "detto in A", At: openedAt.Add(time.Minute)},
+	}, true); err != nil {
+		t.Fatalf("record(conv-a): %v", err)
+	}
+
+	if err := journal.finish(ctx, "conv-a", execution.RunClosed); err != nil {
+		t.Fatalf("finish(conv-a): %v", err)
+	}
+	// Idempotent on an id it is no longer keeping, which is what lets a route
+	// and the ending session both seal the same conversation.
+	if err := journal.finish(ctx, "conv-a", execution.RunClosed); err != nil {
+		t.Fatalf("finish(conv-a) twice: %v", err)
+	}
+	if err := journal.finish(ctx, "conv-unknown", execution.RunClosed); err != nil {
+		t.Fatalf("finish on an unknown id should be innocuous, got %v", err)
+	}
+
+	sealed, err := journal.store.Get(ctx, "conv-a")
+	if err != nil {
+		t.Fatalf("Get(conv-a): %v", err)
+	}
+	if sealed.FinalState != string(execution.RunClosed) {
+		t.Fatalf("conv-a final_state = %q, want %q", sealed.FinalState, execution.RunClosed)
+	}
+
+	// A late read of the sealed conversation rewrites nothing: what is sealed is
+	// history.
+	if err := journal.record(ctx, "conv-a", []execution.RunEvent{
+		{ID: 2, Kind: localrun.KindUserMessage, Text: "arrivato dopo la chiusura", At: openedAt.Add(time.Hour)},
+	}, true); err != nil {
+		t.Fatalf("record(conv-a) after finish: %v", err)
+	}
+	again, err := journal.store.Get(ctx, "conv-a")
+	if err != nil {
+		t.Fatalf("Get(conv-a) after the late write: %v", err)
+	}
+	if len(again.Events) != 1 || again.Events[0].Text != "detto in A" {
+		t.Fatalf("conv-a holds %#v after being sealed, want only what was said before", again.Events)
+	}
+
+	// And the conversation still being journalled goes on being written.
+	if err := journal.record(ctx, "conv-b", []execution.RunEvent{
+		{ID: 1, Kind: localrun.KindUserMessage, Text: "detto in B", At: openedAt.Add(2 * time.Hour)},
+	}, true); err != nil {
+		t.Fatalf("record(conv-b) after conv-a was sealed: %v", err)
+	}
+	recordB, err := journal.store.Get(ctx, "conv-b")
+	if err != nil {
+		t.Fatalf("Get(conv-b): %v", err)
+	}
+	if len(recordB.Events) != 1 || recordB.Events[0].Text != "detto in B" {
+		t.Fatalf("conv-b holds %#v, want its own event: sealing a sibling must not stop it", recordB.Events)
+	}
+	if recordB.FinalState != "" {
+		t.Fatalf("conv-b final_state = %q, want none: it was never sealed", recordB.FinalState)
+	}
 }

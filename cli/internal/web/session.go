@@ -42,13 +42,13 @@ type workspaceSession struct {
 	dispatch  *dispatchGroup
 	followers *runFollowers
 
-	// conversation is the single free conversation of *this workspace*, and it
+	// conversation is the set of live conversations of *this workspace*, and it
 	// lives here for the same reason dispatch and followers do: it was opened
 	// about this project root and about no other. Letting it survive a
 	// workspace switch would mean keeping an agent process alive rooted in a
 	// directory the viewer no longer serves — and nobody would be holding the
 	// handle that closes it.
-	conversation *conversationState
+	conversation *conversationSet
 
 	// journal is where the conversations of *this* workspace are written down.
 	// It is per session for the same reason the store is: the records live under
@@ -98,7 +98,7 @@ func newWorkspaceSession(cfg config.Config, conn connector.Connector, providers 
 		dispatch:   newDispatchGroup(),
 		followers:  newRunFollowers(),
 
-		conversation: newConversationState(),
+		conversation: newConversationSet(),
 		journal:      journal,
 	}
 	if providers != nil {
@@ -154,8 +154,8 @@ func (ws *workspaceSession) start(parent context.Context, broker *Broker) {
 }
 
 // stop ends the session: it cancels the watcher and the dispatches, waits for
-// the drain within the given window, closes the followers and closes the
-// conversation this workspace was holding, if any. It is
+// the drain within the given window, closes the followers and closes every
+// conversation this workspace was holding. It is
 // idempotent, because a session can be stopped both by a workspace switch and
 // by the shutdown that follows it.
 func (ws *workspaceSession) stop(drain time.Duration) {
@@ -169,17 +169,31 @@ func (ws *workspaceSession) stop(drain time.Duration) {
 		ws.dispatch.wait(drain)
 		ws.followers.closeAll()
 		// This is what frees the provider when the viewer changes workspace: the
-		// agent process behind a conversation stays alive until somebody closes
-		// it, and after this stop nobody else could. The context is a fresh,
+		// agent process behind each conversation stays alive until somebody
+		// closes it, and after this stop nobody else could. The context is a fresh,
 		// bounded one and deliberately not the session's, which has just been
 		// cancelled above — a close on a cancelled context would release
 		// nothing.
-		closeCtx, cancelClose := context.WithTimeout(context.Background(), conversationCloseTimeout)
+		// The budget is per conversation and not per workspace: sealing and
+		// releasing are sequential, so a workspace holding three of them has
+		// three times as much to do, and one window sized for a single
+		// conversation would be spent by a slow provider before the last one had
+		// been asked at all — leaving an agent process alive, which is exactly
+		// what AC-6 forbids.
+		held := ws.conversation.list()
+		budget := conversationCloseTimeout
+		if len(held) > 1 {
+			budget = time.Duration(len(held)) * conversationCloseTimeout
+		}
+		closeCtx, cancelClose := context.WithTimeout(context.Background(), budget)
 		defer cancelClose()
-		// Sealed before it is released, and on the same bounded context: after
-		// the shutdown the holder is empty, and a journal sealed from an empty
-		// holder would have nothing left to say what was open or how it ended.
-		if snapshot, held := ws.conversation.current(); held {
+		// Every live conversation of this workspace is sealed, and only then are
+		// they all released: after the shutdown the set is empty, and a journal
+		// sealed from an empty set would have nothing left to say what was open
+		// or how it ended. shutdown goes on past a provider that answers badly,
+		// because a process left alive because the previous one failed to close
+		// is exactly what leaving a workspace must not leave behind.
+		for _, snapshot := range held {
 			ws.sealConversation(closeCtx, snapshot)
 		}
 		_ = ws.conversation.shutdown(closeCtx)

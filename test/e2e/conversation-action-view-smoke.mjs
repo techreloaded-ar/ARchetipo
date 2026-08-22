@@ -5,8 +5,9 @@
 // Everything on the ARchetipo side is real: the CLI built from source,
 // `archetipo view`, the filefs connector on disk, the local `claude` provider,
 // its stream-json client, the conversation of US-053 and the five viewer routes
-// it now exposes — `GET`, `POST`, `POST .../messages`,
-// `POST .../proposal` and `DELETE` on `/api/workspace/conversation` — plus the
+// it now exposes — `POST` on `/api/workspace/conversations` and `GET`,
+// `POST .../messages`, `POST .../proposal` and `DELETE` on
+// `/api/workspace/conversations/{id}` — plus the
 // board's own `POST /api/spec/{code}/execution`. Only the agent binary is
 // replaced, by a Node script that speaks the same protocol on stdio, so nothing
 // here needs a credential or a network.
@@ -137,10 +138,11 @@ async function scenarioRefusedThenConfirmed(dir, env) {
     }));
 
     control.push(emit({ type: "system", subtype: "init", session_id: "conversation-conferma" }));
-    const opened = await apiJSON(`${view.url}/api/workspace/conversation`, postJSON({}), 201);
+    const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
     if (opened.available !== true || !opened.conversation?.id) {
       throw new Error(`the conversation did not open: ${JSON.stringify(opened)}`);
     }
+    const conversationID = opened.conversation.id;
     if (opened.proposal !== null) {
       throw new Error(`a freshly opened conversation has nothing to decide; got ${JSON.stringify(opened.proposal)}`);
     }
@@ -156,7 +158,7 @@ async function scenarioRefusedThenConfirmed(dir, env) {
       PROPOSED_ACTION,
       CODE_BLOCKED,
     )));
-    const blocked = await waitForProposal(view.url, (data) => data.proposal?.spec_code === CODE_BLOCKED, `the proposal on ${CODE_BLOCKED}`);
+    const blocked = await waitForProposal(view.url, conversationID, (data) => data.proposal?.spec_code === CODE_BLOCKED, `the proposal on ${CODE_BLOCKED}`);
     const blockedProposal = blocked.proposal;
     if (blockedProposal.runnable !== false) {
       throw new Error(`AC-3: the proposal must not be runnable; got ${JSON.stringify(blockedProposal)}`);
@@ -169,7 +171,7 @@ async function scenarioRefusedThenConfirmed(dir, env) {
       throw new Error(`AC-3: the reason must name the action, the spec and the status it is in; got ${JSON.stringify(blockedReason)}`);
     }
     const refused = await expectStatus(
-      `${view.url}/api/workspace/conversation/proposal`,
+      `${view.url}/api/workspace/conversations/${conversationID}/proposal`,
       409,
       postJSON({ proposal_id: blockedProposal.event_id, decision: "accept" }),
     );
@@ -199,7 +201,7 @@ async function scenarioRefusedThenConfirmed(dir, env) {
       PROPOSED_ACTION,
       CODE_RUNNABLE,
     )));
-    const pending = await waitForProposal(view.url, (data) => data.proposal?.spec_code === CODE_RUNNABLE, `the proposal on ${CODE_RUNNABLE}`);
+    const pending = await waitForProposal(view.url, conversationID, (data) => data.proposal?.spec_code === CODE_RUNNABLE, `the proposal on ${CODE_RUNNABLE}`);
     const proposal = pending.proposal;
     if (proposal.runnable !== true) {
       throw new Error(`AC-1: the proposal must be runnable; got ${JSON.stringify(proposal)}`);
@@ -226,7 +228,7 @@ async function scenarioRefusedThenConfirmed(dir, env) {
 
     // --- AC-2, AC-5 ---------------------------------------------------------
     const confirmed = await apiJSON(
-      `${view.url}/api/workspace/conversation/proposal`,
+      `${view.url}/api/workspace/conversations/${conversationID}/proposal`,
       postJSON({ proposal_id: proposal.event_id, decision: "accept" }),
       201,
     );
@@ -271,11 +273,11 @@ async function scenarioRefusedThenConfirmed(dir, env) {
     }
     ok(
       "AC-2 / AC-5",
-      `POST /api/workspace/conversation/proposal with "accept" answered 201 carrying outcome.execution_id ${outcome.execution_id}, that very id is the single record under .archetipo/executions/ — action ${record.action} on ${record.spec_code}, provider ${record.provider_id}, status ${record.status} — and ${CODE_RUNNABLE} moved from ${statusBefore} to ${statusAfter} on disk`,
+      `POST /api/workspace/conversations/${conversationID}/proposal with "accept" answered 201 carrying outcome.execution_id ${outcome.execution_id}, that very id is the single record under .archetipo/executions/ — action ${record.action} on ${record.spec_code}, provider ${record.provider_id}, status ${record.status} — and ${CODE_RUNNABLE} moved from ${statusBefore} to ${statusAfter} on disk`,
     );
 
     // The conversation carries on after a confirmation: it did not become a run.
-    const stillOpen = await readConversation(view.url);
+    const stillOpen = await readConversation(view.url, conversationID);
     if (stillOpen.conversation?.state !== "ACTIVE") {
       throw new Error(`AC-2: the conversation must survive its own proposal; got ${JSON.stringify(stillOpen.conversation)}`);
     }
@@ -314,10 +316,11 @@ async function scenarioDeclinedAndBoardParity(dir, env, confirmed) {
     }));
 
     control.push(emit({ type: "system", subtype: "init", session_id: "conversation-rifiuto" }));
-    const opened = await apiJSON(`${view.url}/api/workspace/conversation`, postJSON({}), 201);
+    const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
     if (opened.available !== true || !opened.conversation?.id) {
       throw new Error(`AC-4: the conversation did not open: ${JSON.stringify(opened)}`);
     }
+    const conversationID = opened.conversation.id;
     await control.waitFor("argv", 1);
 
     const listingBefore = await listRecursively(dir);
@@ -326,11 +329,11 @@ async function scenarioDeclinedAndBoardParity(dir, env, confirmed) {
       PROPOSED_ACTION,
       CODE_RUNNABLE,
     )));
-    const pending = await waitForProposal(view.url, (data) => data.proposal?.runnable === true, `the runnable proposal on ${CODE_RUNNABLE}`);
+    const pending = await waitForProposal(view.url, conversationID, (data) => data.proposal?.runnable === true, `the runnable proposal on ${CODE_RUNNABLE}`);
     const proposal = pending.proposal;
 
     const declined = await apiJSON(
-      `${view.url}/api/workspace/conversation/proposal`,
+      `${view.url}/api/workspace/conversations/${conversationID}/proposal`,
       postJSON({ proposal_id: proposal.event_id, decision: "decline" }),
       200,
     );
@@ -357,7 +360,7 @@ async function scenarioDeclinedAndBoardParity(dir, env, confirmed) {
 
     // The conversation really carries on: the oracle is the agent process
     // saying it was given the message, never the 202 of the route.
-    await apiJSON(`${view.url}/api/workspace/conversation/messages`, postJSON({ message: MESSAGE_SENTINEL }), 202);
+    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/messages`, postJSON({ message: MESSAGE_SENTINEL }), 202);
     // The first user frame carried the opening instruction; this is the second.
     const delivered = await control.waitFor(userFrame, 2);
     if (userFrameText(delivered) !== MESSAGE_SENTINEL) {
@@ -365,7 +368,7 @@ async function scenarioDeclinedAndBoardParity(dir, env, confirmed) {
     }
     ok(
       "AC-4",
-      `POST /api/workspace/conversation/proposal with "decline" answered 200 recording decision "declined" with no execution, .archetipo/executions/ stayed empty, ${CODE_RUNNABLE} stayed PLANNED, the ${listingBefore.length} paths of the workspace are unchanged, and the message sent afterwards was reported as received by the agent process itself`,
+      `POST /api/workspace/conversations/${conversationID}/proposal with "decline" answered 200 recording decision "declined" with no execution, .archetipo/executions/ stayed empty, ${CODE_RUNNABLE} stayed PLANNED, the ${listingBefore.length} paths of the workspace are unchanged, and the message sent afterwards was reported as received by the agent process itself`,
     );
 
     // --- AC-2, the parity ---------------------------------------------------
@@ -402,7 +405,7 @@ async function scenarioDeclinedAndBoardParity(dir, env, confirmed) {
     );
 
     // --- the closing discipline of the existing smoke ------------------------
-    const closed = await apiJSON(`${view.url}/api/workspace/conversation`, { method: "DELETE" }, 200);
+    const closed = await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}`, { method: "DELETE" }, 200);
     if (closed.conversation?.state !== "CLOSED") {
       throw new Error(`the close must report the state the session observed; got ${JSON.stringify(closed.conversation)}`);
     }
@@ -622,19 +625,19 @@ async function createWorkspace(runDir, targetsDir, name, env) {
 
 // --- reading the conversation -----------------------------------------------------
 
-async function readConversation(viewURL, afterID = 0) {
-  return apiJSON(`${viewURL}/api/workspace/conversation?after_id=${afterID}`);
+async function readConversation(viewURL, conversationID, afterID = 0) {
+  return apiJSON(`${viewURL}/api/workspace/conversations/${encodeURIComponent(conversationID)}?after_id=${afterID}`);
 }
 
 // waitForProposal polls the read route until the viewer reports the proposal the
 // fake was just told to make. `what` is not decoration: a timeout has to say
 // what it was waiting for and what arrived instead, or the failure names
 // nothing.
-async function waitForProposal(viewURL, predicate, what, timeoutMs = 60000) {
+async function waitForProposal(viewURL, conversationID, predicate, what, timeoutMs = 60000) {
   const started = Date.now();
   let last = null;
   while (Date.now() - started < timeoutMs) {
-    last = await readConversation(viewURL);
+    last = await readConversation(viewURL, conversationID);
     if (predicate(last)) return last;
     await delay(100);
   }

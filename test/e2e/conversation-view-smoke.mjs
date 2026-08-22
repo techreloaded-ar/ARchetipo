@@ -5,8 +5,9 @@
 // Everything on the ARchetipo side is real: the CLI built from source,
 // `archetipo view`, the filefs connector, the local `claude` provider, its
 // stream-json client, the bounded local session behind a conversation and the
-// four viewer routes (`GET`, `POST`, `POST .../messages` and `DELETE` on
-// `/api/workspace/conversation`). Only the agent binary is replaced, by a Node
+// viewer routes addressed by id (`POST` and `GET` on
+// `/api/workspace/conversations`, `GET`, `POST .../messages` and `DELETE` on
+// `/api/workspace/conversations/{id}`). Only the agent binary is replaced, by a Node
 // script that speaks the same protocol on stdio, so the conversation needs no
 // credential and no network.
 //
@@ -161,12 +162,12 @@ async function scenarioNotOfferedWithoutTheCapability(dirC, env) {
 
     const listingBefore = await listRecursively(dirC);
 
-    const offered = await apiJSON(`${view.url}/api/workspace/conversation`, {}, 200);
+    const offered = await apiJSON(`${view.url}/api/workspace/conversations`, {}, 200);
     if (offered.available !== false) {
       throw new Error(`AC-4: the conversation must not be offered; got ${JSON.stringify(offered)}`);
     }
-    if (offered.conversation !== null || (offered.events || []).length !== 0) {
-      throw new Error(`AC-4: an unoffered conversation carries no conversation and no history; got ${JSON.stringify(offered)}`);
+    if ((offered.conversations || []).length !== 0) {
+      throw new Error(`AC-4: a workspace that is not offered a conversation holds none; got ${JSON.stringify(offered)}`);
     }
     if (offered.provider_id !== "codex") {
       throw new Error(`AC-4: the refusal must name the provider it is about; got ${JSON.stringify(offered.provider_id)}`);
@@ -175,7 +176,7 @@ async function scenarioNotOfferedWithoutTheCapability(dirC, env) {
       throw new Error(`AC-4: the reason must name workspace.converse; got ${JSON.stringify(offered.unavailable_reason)}`);
     }
 
-    const refused = await expectStatus(`${view.url}/api/workspace/conversation`, 409, postJSON({}));
+    const refused = await expectStatus(`${view.url}/api/workspace/conversations`, 409, postJSON({}));
     if (String(refused.error || "") !== String(offered.unavailable_reason || "")) {
       throw new Error(
         `AC-4: pressing the button must be refused with the very sentence the payload declared\n  read:    ${JSON.stringify(offered.unavailable_reason)}\n  refusal: ${JSON.stringify(refused.error)}`,
@@ -190,7 +191,7 @@ async function scenarioNotOfferedWithoutTheCapability(dirC, env) {
     await assertSameListing("AC-4", listingBefore, await listRecursively(dirC), dirC);
     ok(
       "AC-4",
-      `with the available codex provider as default, GET answers 200 available:false stating ${JSON.stringify(truncate(offered.unavailable_reason))}, POST answers 409 with the identical sentence, no agent process was ever started and the ${listingBefore.length} paths of the sandbox are unchanged`,
+      `with the available codex provider as default, GET /api/workspace/conversations answers 200 available:false stating ${JSON.stringify(truncate(offered.unavailable_reason))}, POST answers 409 with the identical sentence, no agent process was ever started and the ${listingBefore.length} paths of the sandbox are unchanged`,
     );
   } finally {
     if (view) await stopProcess(view.child);
@@ -242,7 +243,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     // The process announces itself before the open call can return, so the
     // frame is queued before the request that starts the process.
     control.push(emit({ type: "system", subtype: "init", session_id: "conversation-a" }));
-    const opened = await apiJSON(`${view.url}/api/workspace/conversation`, postJSON({}), 201);
+    const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
     if (opened.available !== true || !opened.conversation?.id) {
       throw new Error(`AC-1: unexpected payload on open: ${JSON.stringify(opened)}`);
     }
@@ -265,6 +266,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     control.push(emit(assistantText("Ciao: leggo il workspace e rispondo.")));
     const first = await waitForConversation(
       view.url,
+      conversationA,
       0,
       (data) => (data.events || []).length === 1,
       "the assistant frame to become one text event",
@@ -273,7 +275,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
       throw new Error(`AC-1: the frame was not translated into a text event; got ${JSON.stringify(first.events[0])}`);
     }
 
-    const accepted = await apiJSON(`${view.url}/api/workspace/conversation/messages`, postJSON({ message: MESSAGE_SENTINEL }), 202);
+    const accepted = await apiJSON(`${view.url}/api/workspace/conversations/${conversationA}/messages`, postJSON({ message: MESSAGE_SENTINEL }), 202);
     if (JSON.stringify(accepted).includes(MESSAGE_SENTINEL)) {
       throw new Error("AC-1: the accepted message must not be echoed into the history before the process re-emits it");
     }
@@ -283,13 +285,14 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     if (userFrameText(steered) !== MESSAGE_SENTINEL) {
       throw new Error(`AC-1: the process received ${JSON.stringify(userFrameText(steered))} instead of the sentinel`);
     }
-    const stillOne = await readConversation(view.url, 0);
+    const stillOne = await readConversation(view.url, conversationA, 0);
     if ((stillOne.events || []).length !== 1) {
       throw new Error(`AC-1: the history grew while the process merely held the message; got ${JSON.stringify(stillOne.events)}`);
     }
     control.push(emit({ type: "user", message: { content: [{ type: "text", text: MESSAGE_SENTINEL }] }, isReplay: true }));
     const two = await waitForConversation(
       view.url,
+      conversationA,
       0,
       (data) => (data.events || []).length === 2,
       "the re-emitted message to enter the history",
@@ -324,7 +327,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     // --- AC-3, the reload ---------------------------------------------------
     assertEqual(view.child.pid, pid, "the viewer PID at the reload");
     assertAlive(view.child, "the viewer process at the reload");
-    const reloaded = await readConversation(view.url, 0);
+    const reloaded = await readConversation(view.url, conversationA, 0);
     if (reloaded.conversation?.id !== conversationA) {
       throw new Error(`AC-3: the reload lost the conversation; got ${JSON.stringify(reloaded.conversation)}`);
     }
@@ -336,12 +339,48 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
       throw new Error(`AC-3: the cursor of the reloaded history is ${reloaded.last_id}, want 2`);
     }
 
-    // --- the refusals that must change nothing ------------------------------
-    const beforeRefusals = await rawGet(`${view.url}/api/workspace/conversation?after_id=0`);
-    const secondOpen = await expectStatus(`${view.url}/api/workspace/conversation`, 409, postJSON({}));
-    if (!String(secondOpen.error || "").includes(conversationA)) {
-      throw new Error(`AC-3: a second open must name the conversation already held; got ${JSON.stringify(secondOpen)}`);
+    // --- a second conversation, and the refusal that must change nothing -----
+    const beforeRefusals = await rawGet(`${view.url}/api/workspace/conversations/${conversationA}?after_id=0`);
+    // A workspace holds several conversations at once, so a second open is
+    // granted beside the first instead of being refused because one is already
+    // there. What happens beyond the limit is not this smoke's subject.
+    // The open answers only once the new agent process has announced itself,
+    // and two processes now share this control server, so the announcement is
+    // pushed on a timer until the open has answered instead of once: whichever
+    // of the two takes a given frame, the new one gets the next. An extra
+    // `system`/`init` frame produces no event in any conversation, and the
+    // leftovers are drained rather than left for whoever polls next.
+    const announcing = setInterval(
+      () => control.push(emit({ type: "system", subtype: "init", session_id: "conversation-a-second" })),
+      25,
+    );
+    let secondOpen;
+    try {
+      secondOpen = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
+    } finally {
+      clearInterval(announcing);
+      control.drain();
     }
+    const conversationA2 = secondOpen.conversation?.id;
+    if (!conversationA2 || conversationA2 === conversationA) {
+      throw new Error(`AC-3: a second open must answer with a conversation of its own; got ${JSON.stringify(secondOpen.conversation)}`);
+    }
+    // It is closed again straight away, so the rest of the scenario keeps
+    // talking to a single agent process: the control server is shared by every
+    // fake, and two live ones would race for the frames pushed to it.
+    const secondInvocation = await control.waitFor("argv", 2);
+    const secondClosed = await apiJSON(
+      `${view.url}/api/workspace/conversations/${conversationA2}?after_id=0`,
+      { method: "DELETE" },
+      200,
+    );
+    if (secondClosed.conversation?.id !== conversationA2) {
+      throw new Error(`AC-3: the close must answer about the conversation it closed; got ${JSON.stringify(secondClosed.conversation)}`);
+    }
+    await waitForProcessGone(
+      secondInvocation.pid,
+      `the agent process of the second conversation (pid ${secondInvocation.pid}) to be released by its close`,
+    );
     const unknownWorkspace = await expectStatus(
       `${view.url}/api/workspaces/${encodeURIComponent("does-not-exist")}/open`,
       404,
@@ -350,9 +389,9 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     if (!String(unknownWorkspace.error || "").trim()) {
       throw new Error(`AC-3: the refusal on an unknown workspace must state a reason; got ${JSON.stringify(unknownWorkspace)}`);
     }
-    const afterRefusals = await rawGet(`${view.url}/api/workspace/conversation?after_id=0`);
+    const afterRefusals = await rawGet(`${view.url}/api/workspace/conversations/${conversationA}?after_id=0`);
     if (afterRefusals !== beforeRefusals) {
-      throw new Error(`AC-3: two refused commands changed the projection\n  before: ${truncate(beforeRefusals, 400)}\n  after:  ${truncate(afterRefusals, 400)}`);
+      throw new Error(`AC-3: a second conversation and a refused command changed the projection of the first\n  before: ${truncate(beforeRefusals, 400)}\n  after:  ${truncate(afterRefusals, 400)}`);
     }
 
     // --- AC-3, the partial history ------------------------------------------
@@ -364,11 +403,12 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     const total = 2 + FLOOD_FRAMES;
     await waitForConversation(
       view.url,
+      conversationA,
       total - 1,
       (data) => (data.events || []).length === 1 && data.events[0].id === total,
       `the last of ${FLOOD_FRAMES} flooded frames (event ${total})`,
     );
-    const partial = await readConversation(view.url, 0);
+    const partial = await readConversation(view.url, conversationA, 0);
     if (partial.truncated !== true) {
       throw new Error(`AC-3: a cursor now outside the window must be answered truncated; got ${JSON.stringify({ truncated: partial.truncated, first: partial.events?.[0]?.id, count: partial.events?.length })}`);
     }
@@ -388,7 +428,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     }
     ok(
       "AC-3",
-      `the same viewer process (pid ${pid}) re-read the whole history with truncated:false, two refused commands left the projection byte-identical, and once ${total} events had been produced the read from a cursor now outside the ${RETAINED_EVENTS}-event window answered truncated:true beginning at event ${partial.events[0].id} with the notice ${JSON.stringify(truncate(partial.notice, 120))}`,
+      `the same viewer process (pid ${pid}) re-read the whole history with truncated:false, a second conversation ${conversationA2} opened beside it with 201 and was closed again while a refused command answered 404, all three leaving the projection of ${conversationA} byte-identical, and once ${total} events had been produced the read from a cursor now outside the ${RETAINED_EVENTS}-event window answered truncated:true beginning at event ${partial.events[0].id} with the notice ${JSON.stringify(truncate(partial.notice, 120))}`,
     );
 
     // --- AC-5 ---------------------------------------------------------------
@@ -396,16 +436,18 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     assertEqual(view.child.pid, pid, "the viewer PID after opening B");
     assertAlive(view.child, "the viewer process after opening B");
 
-    const inB = await rawGet(`${view.url}/api/workspace/conversation?after_id=0`);
-    const inBView = JSON.parse(inB);
-    if (inBView.conversation !== null) {
-      throw new Error(`AC-5: the conversation of A followed the switch; got ${JSON.stringify(inBView.conversation)}`);
+    // The conversation of A is asked for by its own id, from B: the workspace
+    // that never held it does not know it, so the read answers 404 rather than
+    // serving a conversation — and a history — that belongs to somewhere else.
+    const inB = await expectStatus(
+      `${view.url}/api/workspace/conversations/${encodeURIComponent(conversationA)}?after_id=0`,
+      404,
+    );
+    if (!String(inB.error || "").trim()) {
+      throw new Error(`AC-5: the refusal on the conversation of A must state a reason; got ${JSON.stringify(inB)}`);
     }
-    if (inB.includes(conversationA)) {
-      throw new Error(`AC-5: the id of the conversation of A appears in the payload served for B: ${truncate(inB, 400)}`);
-    }
-    if ((inBView.events || []).length !== 0) {
-      throw new Error(`AC-5: B was served the history of A; got ${JSON.stringify(inBView.events)}`);
+    if (inB.events || inB.conversation) {
+      throw new Error(`AC-5: B was served the conversation of A; got ${JSON.stringify(inB)}`);
     }
     // The switch is also what released the process of A: the oracle is the
     // operating system, asked whether that process is still there.
@@ -416,27 +458,27 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
       config: { command: fakeClaudePath, timeout_seconds: 600 },
     }));
     control.push(emit({ type: "system", subtype: "init", session_id: "conversation-b" }));
-    const openedInB = await apiJSON(`${view.url}/api/workspace/conversation`, postJSON({}), 201);
+    const openedInB = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
     const conversationB = openedInB.conversation?.id;
     if (!conversationB || conversationB === conversationA) {
       throw new Error(`AC-5: B must open a conversation of its own; got ${JSON.stringify(openedInB.conversation)}`);
     }
     await assertSamePath(openedInB.conversation.working_dir, dirB, "AC-5: the directory the conversation of B reports");
-    const invocationB = await control.waitFor("argv", 2);
+    const invocationB = await control.waitFor("argv", 3);
     const startedInB = await fs.realpath(invocationB.cwd);
     if (startedInB !== realB) {
       throw new Error(`AC-5: the second agent process was started in ${invocationB.cwd}, want ${dirB}`);
     }
     ok(
       "AC-5",
-      `after POST /api/workspaces/{B}/open on the same pid ${pid} the read answers conversation:null with the id ${conversationA} nowhere in the payload, the agent process of A was released, and the conversation opened in B starts its own process in ${dirB}`,
+      `after POST /api/workspaces/{B}/open on the same pid ${pid} the read of ${conversationA} from B answers 404 with a reason and no conversation and no history, the agent process of A was released, and the conversation opened in B starts its own process in ${dirB}`,
     );
 
     // --- AC-6 ---------------------------------------------------------------
     control.push(emit(assistantText("Sono la conversazione di beta.")));
-    await waitForConversation(view.url, 0, (data) => (data.events || []).length === 1, "the history of the conversation of B");
+    await waitForConversation(view.url, conversationB, 0, (data) => (data.events || []).length === 1, "the history of the conversation of B");
 
-    const closed = await apiJSON(`${view.url}/api/workspace/conversation?after_id=0`, { method: "DELETE" }, 200);
+    const closed = await apiJSON(`${view.url}/api/workspace/conversations/${conversationB}?after_id=0`, { method: "DELETE" }, 200);
     if (closed.conversation?.id !== conversationB) {
       throw new Error(`AC-6: the close must answer about the conversation it closed; got ${JSON.stringify(closed.conversation)}`);
     }
@@ -448,20 +490,20 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     }
     await waitForProcessGone(invocationB.pid, `the agent process of B (pid ${invocationB.pid}) to be released by the close`);
 
-    const beforeClosedRefusals = await rawGet(`${view.url}/api/workspace/conversation?after_id=0`);
+    const beforeClosedRefusals = await rawGet(`${view.url}/api/workspace/conversations/${conversationB}?after_id=0`);
     const afterClose = await expectStatus(
-      `${view.url}/api/workspace/conversation/messages`,
+      `${view.url}/api/workspace/conversations/${conversationB}/messages`,
       409,
       postJSON({ message: "sei ancora lì?" }),
     );
     if (!String(afterClose.error || "").trim()) {
       throw new Error(`AC-6: a message on a closed conversation must be refused with a reason; got ${JSON.stringify(afterClose)}`);
     }
-    const secondClose = await expectStatus(`${view.url}/api/workspace/conversation`, 409, { method: "DELETE" });
+    const secondClose = await expectStatus(`${view.url}/api/workspace/conversations/${conversationB}`, 409, { method: "DELETE" });
     if (!String(secondClose.error || "").trim()) {
       throw new Error(`AC-6: a second close must be refused with a reason; got ${JSON.stringify(secondClose)}`);
     }
-    const afterClosedRefusals = await rawGet(`${view.url}/api/workspace/conversation?after_id=0`);
+    const afterClosedRefusals = await rawGet(`${view.url}/api/workspace/conversations/${conversationB}?after_id=0`);
     if (afterClosedRefusals !== beforeClosedRefusals) {
       throw new Error(`AC-6: two refused commands changed the projection\n  before: ${truncate(beforeClosedRefusals, 400)}\n  after:  ${truncate(afterClosedRefusals, 400)}`);
     }
@@ -679,6 +721,14 @@ async function startControlServer() {
     reports() {
       return received;
     },
+    // drain throws away the commands nobody consumed. It exists for the one
+    // moment two agent processes are alive at once: the announcement the new one
+    // has to make cannot be pushed a single time, because the process already
+    // live would take it, so it is pushed until the open has answered and what
+    // is left over is dropped here rather than delivered to whoever polls next.
+    drain() {
+      commands.length = 0;
+    },
     // waitFor polls until the fake has reported at least `count` matching
     // requests, and returns the count-th of them. The count is explicit rather
     // than relative to a snapshot taken here, because a request can perfectly
@@ -756,18 +806,18 @@ async function findByRealPath(entries, target) {
 
 // --- reading the conversation -------------------------------------------------
 
-async function readConversation(viewURL, afterID) {
-  return apiJSON(`${viewURL}/api/workspace/conversation?after_id=${afterID}`);
+async function readConversation(viewURL, conversationID, afterID) {
+  return apiJSON(`${viewURL}/api/workspace/conversations/${encodeURIComponent(conversationID)}?after_id=${afterID}`);
 }
 
 // waitForConversation polls one viewer route until it reports what the fake was
 // just told. `what` is not decoration: a timeout has to say what it was waiting
 // for and what arrived instead, or the failure names nothing.
-async function waitForConversation(viewURL, afterID, predicate, what, timeoutMs = 60000) {
+async function waitForConversation(viewURL, conversationID, afterID, predicate, what, timeoutMs = 60000) {
   const started = Date.now();
   let last = null;
   while (Date.now() - started < timeoutMs) {
-    last = await readConversation(viewURL, afterID);
+    last = await readConversation(viewURL, conversationID, afterID);
     if (predicate(last)) return last;
     await delay(100);
   }

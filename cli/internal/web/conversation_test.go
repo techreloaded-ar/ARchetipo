@@ -174,11 +174,13 @@ type conversationResponse struct {
 	UnavailableReason string `json:"unavailable_reason"`
 	ProviderID        string `json:"provider_id"`
 	Conversation      *struct {
-		ID         string `json:"id"`
-		State      string `json:"state"`
-		Error      string `json:"error"`
-		WorkingDir string `json:"working_dir"`
-		OpenedAt   string `json:"opened_at"`
+		ID          string `json:"id"`
+		State       string `json:"state"`
+		Error       string `json:"error"`
+		WorkingDir  string `json:"working_dir"`
+		OpenedAt    string `json:"opened_at"`
+		SpecCode    string `json:"spec_code"`
+		ResumedFrom string `json:"resumed_from"`
 	} `json:"conversation"`
 	Events []struct {
 		ID   int64  `json:"id"`
@@ -234,16 +236,25 @@ func decodeConversation(t *testing.T, body string) conversationResponse {
 	return view
 }
 
-func conversationPath(afterID int64) string {
+// conversationsRoute is the one family every conversation of the workspace is
+// reached through. The singular family is gone: a workspace holds several
+// conversations, so every command names the one it is about.
+const conversationsRoute = "/api/workspace/conversations"
+
+func conversationPath(id string, afterID int64) string {
+	path := conversationsRoute + "/" + id
 	if afterID <= 0 {
-		return "/api/workspace/conversation"
+		return path
 	}
-	return "/api/workspace/conversation?after_id=" + strconv.FormatInt(afterID, 10)
+	return path + "?after_id=" + strconv.FormatInt(afterID, 10)
 }
 
-func readConversation(t *testing.T, srv *Server, afterID int64) (int, conversationResponse, string) {
+// readConversation reads one conversation by its id. It is the unified read:
+// the same call, and the same payload, whether the workspace is still holding
+// the conversation or it only lives on disk.
+func readConversation(t *testing.T, srv *Server, id string, afterID int64) (int, conversationResponse, string) {
 	t.Helper()
-	w := doJSON(t, srv, http.MethodGet, conversationPath(afterID), nil)
+	w := doJSON(t, srv, http.MethodGet, conversationPath(id, afterID), nil)
 	if w.Code != http.StatusOK {
 		return w.Code, conversationResponse{}, w.Body.String()
 	}
@@ -252,29 +263,44 @@ func readConversation(t *testing.T, srv *Server, afterID int64) (int, conversati
 
 func openConversation(t *testing.T, srv *Server) (int, conversationResponse, string) {
 	t.Helper()
-	w := doJSON(t, srv, http.MethodPost, "/api/workspace/conversation", map[string]any{})
+	w := doJSON(t, srv, http.MethodPost, conversationsRoute, map[string]any{})
 	if w.Code != http.StatusCreated {
 		return w.Code, conversationResponse{}, w.Body.String()
 	}
 	return w.Code, decodeConversation(t, w.Body.String()), w.Body.String()
 }
 
-func sendConversationMessage(t *testing.T, srv *Server, message string) (int, conversationResponse, string) {
+func sendConversationMessage(t *testing.T, srv *Server, id, message string) (int, conversationResponse, string) {
 	t.Helper()
-	w := doJSON(t, srv, http.MethodPost, "/api/workspace/conversation/messages", map[string]any{"message": message})
+	w := doJSON(t, srv, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"message": message})
 	if w.Code != http.StatusAccepted {
 		return w.Code, conversationResponse{}, w.Body.String()
 	}
 	return w.Code, decodeConversation(t, w.Body.String()), w.Body.String()
 }
 
-func closeConversation(t *testing.T, srv *Server) (int, conversationResponse, string) {
+func closeConversation(t *testing.T, srv *Server, id string) (int, conversationResponse, string) {
 	t.Helper()
-	w := doJSON(t, srv, http.MethodDelete, "/api/workspace/conversation", nil)
+	w := doJSON(t, srv, http.MethodDelete, conversationPath(id, 0), nil)
 	if w.Code != http.StatusOK {
 		return w.Code, conversationResponse{}, w.Body.String()
 	}
 	return w.Code, decodeConversation(t, w.Body.String()), w.Body.String()
+}
+
+// liveConversationIDs is what the workspace is actually holding, read from the
+// set itself. It is the oracle of "this refusal left nothing behind", which no
+// payload can answer on its own.
+func liveConversationIDs(srv *Server) []string {
+	ws := srv.session()
+	if ws == nil {
+		return nil
+	}
+	ids := make([]string, 0)
+	for _, snapshot := range ws.conversation.list() {
+		ids = append(ids, snapshot.id)
+	}
+	return ids
 }
 
 // newConversationServer is a viewer on a real workspace whose default provider
@@ -334,10 +360,10 @@ func TestConversationRoutesRefuseWithoutAnOpenWorkspace(t *testing.T) {
 	srv, _ := homeServer(t)
 
 	routes := []scopedRoute{
-		{"GET /api/workspace/conversation", http.MethodGet, "/api/workspace/conversation", ""},
-		{"POST /api/workspace/conversation", http.MethodPost, "/api/workspace/conversation", "{}"},
-		{"POST /api/workspace/conversation/messages", http.MethodPost, "/api/workspace/conversation/messages", `{"message":"hi"}`},
-		{"DELETE /api/workspace/conversation", http.MethodDelete, "/api/workspace/conversation", ""},
+		{"GET /api/workspace/conversations/{id}", http.MethodGet, conversationsRoute + "/conv-1", ""},
+		{"POST /api/workspace/conversations", http.MethodPost, conversationsRoute, "{}"},
+		{"POST /api/workspace/conversations/{id}/messages", http.MethodPost, conversationsRoute + "/conv-1/messages", `{"message":"hi"}`},
+		{"DELETE /api/workspace/conversations/{id}", http.MethodDelete, conversationsRoute + "/conv-1", ""},
 	}
 	for _, route := range routes {
 		t.Run(route.pattern, func(t *testing.T) {
@@ -360,22 +386,24 @@ func TestConversationRoutesRefuseWithoutAnOpenWorkspace(t *testing.T) {
 // provider is available — its runtime is usable, it executes actions — and it
 // simply cannot hold a conversation. The reason names the capability, and the
 // same sentence refuses the open.
+//
+// The verdict is read from the index, which is where it lives now: with the
+// singular route retired, the list of the conversations is the only read a
+// workspace holding nothing alive still makes, so it is the one that has to say
+// whether another can be opened.
 func TestConversationIsNotOfferedByAProviderThatCannotConverse(t *testing.T) {
 	provider := releasedProvider("mute", nil)
 	srv := newConversationServer(t, provider)
 
-	status, view, body := readConversation(t, srv, 0)
-	if status != http.StatusOK {
-		t.Fatalf("GET conversation = %d, want 200: %s", status, body)
-	}
+	view, body := conversationsRouteTestReadIndex(t, srv)
 	if view.Available {
 		t.Errorf("available = true for a provider that cannot converse: %s", body)
 	}
 	if !strings.Contains(view.UnavailableReason, string(execution.CapabilityWorkspaceConverse)) {
 		t.Errorf("unavailable_reason = %q, want it to name %q", view.UnavailableReason, execution.CapabilityWorkspaceConverse)
 	}
-	if view.Conversation != nil {
-		t.Errorf("conversation is not null with no conversation open: %s", body)
+	if len(view.Conversations) != 0 {
+		t.Errorf("the index carries conversations on a workspace that has held none: %s", body)
 	}
 
 	openStatus, _, openBody := openConversation(t, srv)
@@ -383,12 +411,12 @@ func TestConversationIsNotOfferedByAProviderThatCannotConverse(t *testing.T) {
 		t.Fatalf("POST conversation = %d, want 409: %s", openStatus, openBody)
 	}
 	if refused := refusalMessage(t, openBody); refused != view.UnavailableReason {
-		t.Errorf("the refusal says %q, want the very reason the GET declares: %q", refused, view.UnavailableReason)
+		t.Errorf("the refusal says %q, want the very reason the index declares: %q", refused, view.UnavailableReason)
 	}
 	// The provider received no opening — it has no way to receive one, and the
 	// workspace is holding nothing that would have to be closed later.
-	if _, open := srv.session().conversation.current(); open {
-		t.Error("a conversation was opened with a provider that cannot converse")
+	if live := liveConversationIDs(srv); len(live) != 0 {
+		t.Errorf("a conversation was opened with a provider that cannot converse: %v", live)
 	}
 	// And the derivation itself: nothing declares the capability.
 	capabilities, err := execution.DeclaredCapabilities(context.Background(), provider)
@@ -473,30 +501,237 @@ func TestOpeningAConversationPassesTheWorkspaceProjectRoot(t *testing.T) {
 
 	// The reading of a live conversation reports the history the session holds.
 	provider.emit(t, view.Conversation.ID, "text", "hello")
-	_, read, body := readConversation(t, srv, 0)
+	_, read, body := readConversation(t, srv, view.Conversation.ID, 0)
 	if got := conversationEventTexts(read); len(got) != 1 || got[0] != "hello" {
 		t.Errorf("events = %v, want the one the process emitted: %s", got, body)
 	}
 }
 
-// TestASecondConversationIsRefused: a workspace holds one conversation, and the
-// refusal names the one it already has instead of starting a second process
-// nobody holds the handle for.
-func TestASecondConversationIsRefused(t *testing.T) {
+// TestTwoLiveConversationsAreReadSeparately is AC-1 and AC-2 on the routes: a
+// second conversation opened while the first is alive leaves the first exactly
+// as it was, and each id answers with its own history — nothing said in one
+// appears in the other.
+func TestTwoLiveConversationsAreReadSeparately(t *testing.T) {
 	provider := newConversingProvider("chatty", 0)
 	srv := newConversationServer(t, provider)
 
 	first := openConversationOK(t, srv)
+	a := first.Conversation.ID
+	provider.emit(t, a, "text", "parliamo di US-058")
+
+	status, second, body := openConversation(t, srv)
+	if status != http.StatusCreated {
+		t.Fatalf("second POST conversation = %d, want 201: %s", status, body)
+	}
+	b := second.Conversation.ID
+	if b == a {
+		t.Fatalf("the second conversation reused the id of the first (%q)", a)
+	}
+	provider.emit(t, b, "text", "e intanto di US-059")
+
+	_, readA, bodyA := readConversation(t, srv, a, 0)
+	if readA.Conversation == nil || readA.Conversation.ID != a {
+		t.Fatalf("GET %s answered with another conversation: %s", a, bodyA)
+	}
+	if got := conversationEventTexts(readA); len(got) != 1 || got[0] != "parliamo di US-058" {
+		t.Errorf("the first conversation reads %v, want only what was said in it: %s", got, bodyA)
+	}
+	if readA.Conversation.State != string(execution.RunActive) {
+		t.Errorf("the first conversation is %q after a second was opened, want %q", readA.Conversation.State, execution.RunActive)
+	}
+
+	_, readB, bodyB := readConversation(t, srv, b, 0)
+	if readB.Conversation == nil || readB.Conversation.ID != b {
+		t.Fatalf("GET %s answered with another conversation: %s", b, bodyB)
+	}
+	if got := conversationEventTexts(readB); len(got) != 1 || got[0] != "e intanto di US-059" {
+		t.Errorf("the second conversation reads %v, want only what was said in it: %s", got, bodyB)
+	}
+
+	if openings := provider.openings(); len(openings) != 2 {
+		t.Errorf("the provider received %d openings, want one per conversation", len(openings))
+	}
+	if closings := provider.closings(); len(closings) != 0 {
+		t.Errorf("opening a second conversation closed %v", closings)
+	}
+}
+
+// TestAMessageGoesToTheConversationNamedInThePath is AC-2 on the command route:
+// the delivery is addressed by the id of the path, and the oracle is the
+// dialogue of the agent process — the only place that can say which of the two
+// received it.
+func TestAMessageGoesToTheConversationNamedInThePath(t *testing.T) {
+	provider := newConversingProvider("chatty", 0)
+	srv := newConversationServer(t, provider)
+
+	a := openConversationOK(t, srv).Conversation.ID
+	b := openConversationOK(t, srv).Conversation.ID
+
+	const sentinel = "questo va detto solo nella seconda"
+	status, _, body := sendConversationMessage(t, srv, b, sentinel)
+	if status != http.StatusAccepted {
+		t.Fatalf("POST message to %s = %d, want 202: %s", b, status, body)
+	}
+
+	if sent := provider.dialogueOf(t, b).messages(); len(sent) != 1 || sent[0] != sentinel {
+		t.Errorf("the conversation named in the path received %v, want exactly one %q", sent, sentinel)
+	}
+	if sent := provider.dialogueOf(t, a).messages(); len(sent) != 0 {
+		t.Errorf("the message reached the other conversation too: %v", sent)
+	}
+}
+
+// TestOpeningPastTheLimitIsRefusedBeforeAProcessExists is AC-5. The count of
+// openings on the provider is what proves the order of the two checks: the
+// refusal has to come before the agent is started, or a request that answered
+// 409 would leave a process behind that nobody holds the handle for.
+func TestOpeningPastTheLimitIsRefusedBeforeAProcessExists(t *testing.T) {
+	provider := newConversingProvider("chatty", 0)
+	srv := newConversationServer(t, provider)
+
+	live := make([]string, 0, maxLiveConversations)
+	for i := 0; i < maxLiveConversations; i++ {
+		live = append(live, openConversationOK(t, srv).Conversation.ID)
+	}
 
 	status, _, body := openConversation(t, srv)
 	if status != http.StatusConflict {
-		t.Fatalf("second POST conversation = %d, want 409: %s", status, body)
+		t.Fatalf("POST conversation past the limit = %d, want 409: %s", status, body)
 	}
-	if !strings.Contains(body, first.Conversation.ID) {
-		t.Errorf("the refusal %s does not name the conversation %q already open", body, first.Conversation.ID)
+	refused := refusalMessage(t, body)
+	if !strings.Contains(refused, strconv.Itoa(maxLiveConversations)) {
+		t.Errorf("the refusal %q does not declare the limit of %d", refused, maxLiveConversations)
 	}
-	if openings := provider.openings(); len(openings) != 1 {
-		t.Errorf("the provider received %d openings, want exactly 1", len(openings))
+	for _, id := range live {
+		if !strings.Contains(refused, id) {
+			t.Errorf("the refusal %q does not name the live conversation %q the person would have to close", refused, id)
+		}
+	}
+	if openings := provider.openings(); len(openings) != maxLiveConversations {
+		t.Errorf("the provider opened %d conversations, want exactly %d: the limit was checked after the process was started", len(openings), maxLiveConversations)
+	}
+	if closings := provider.closings(); len(closings) != 0 {
+		t.Errorf("the refused open started a process it then had to release: %v", closings)
+	}
+	if got := liveConversationIDs(srv); len(got) != maxLiveConversations {
+		t.Errorf("the workspace holds %d conversations after a refused open, want %d", len(got), maxLiveConversations)
+	}
+}
+
+// TestClosingOneConversationLeavesTheOtherAlive is AC-4 and AC-3 on one
+// gesture: only the named conversation is released, the other goes on being
+// read as active, and the index marks exactly one of the two live.
+func TestClosingOneConversationLeavesTheOtherAlive(t *testing.T) {
+	provider := newConversingProvider("chatty", 0)
+	srv := newConversationServer(t, provider)
+
+	a := openConversationOK(t, srv).Conversation.ID
+	b := openConversationOK(t, srv).Conversation.ID
+	provider.emit(t, a, "text", "resto viva")
+
+	status, closed, body := closeConversation(t, srv, b)
+	if status != http.StatusOK {
+		t.Fatalf("DELETE %s = %d, want 200: %s", b, status, body)
+	}
+	if closed.Conversation == nil || closed.Conversation.ID != b {
+		t.Fatalf("the close answered with another conversation: %s", body)
+	}
+	if closings := provider.closings(); len(closings) != 1 || closings[0] != b {
+		t.Fatalf("the provider was closed with %v, want exactly one %q", closings, b)
+	}
+
+	_, readA, bodyA := readConversation(t, srv, a, 0)
+	if readA.Conversation == nil || readA.Conversation.State != string(execution.RunActive) {
+		t.Fatalf("closing %s changed the state of %s: %s", b, a, bodyA)
+	}
+	if got := conversationEventTexts(readA); len(got) != 1 || got[0] != "resto viva" {
+		t.Errorf("closing one conversation took the history of the other: %v", got)
+	}
+
+	index, indexBody := conversationsRouteTestReadIndex(t, srv)
+	if entry := conversationsRouteTestEntryOf(t, index, a); !entry.Live {
+		t.Errorf("the index does not mark %q live while its agent is still held: %s", a, indexBody)
+	}
+	if entry := conversationsRouteTestEntryOf(t, index, b); entry.Live {
+		t.Errorf("the index still marks the released conversation %q live: %s", b, indexBody)
+	}
+}
+
+// TestConversationCommandsOnAnUnknownIDAreRefused: an id no conversation of this
+// workspace ever had is a 404 that names it — on the read, on the message and on
+// the close alike — and none of the three leaves a trace on the index.
+func TestConversationCommandsOnAnUnknownIDAreRefused(t *testing.T) {
+	provider := newConversingProvider("chatty", 0)
+	srv := newConversationServer(t, provider)
+	openConversationOK(t, srv)
+
+	_, before := conversationsRouteTestReadIndex(t, srv)
+
+	const unknown = "conv-inesistente"
+	refusals := []struct {
+		name string
+		do   func() (int, string)
+	}{
+		{"reading it", func() (int, string) {
+			w := doJSON(t, srv, http.MethodGet, conversationPath(unknown, 0), nil)
+			return w.Code, w.Body.String()
+		}},
+		{"writing in it", func() (int, string) {
+			w := doJSON(t, srv, http.MethodPost, conversationsRoute+"/"+unknown+"/messages", map[string]any{"message": "ci sei?"})
+			return w.Code, w.Body.String()
+		}},
+		{"closing it", func() (int, string) {
+			w := doJSON(t, srv, http.MethodDelete, conversationPath(unknown, 0), nil)
+			return w.Code, w.Body.String()
+		}},
+	}
+	for _, refusal := range refusals {
+		status, body := refusal.do()
+		if status != http.StatusNotFound {
+			t.Fatalf("%s = %d, want 404: %s", refusal.name, status, body)
+		}
+		if message := refusalMessage(t, body); !strings.Contains(message, unknown) {
+			t.Errorf("%s refuses with %q, want it to name the conversation asked for", refusal.name, message)
+		}
+	}
+
+	if _, after := conversationsRouteTestReadIndex(t, srv); after != before {
+		t.Errorf("the refusals changed the index:\nbefore: %s\nafter:  %s", before, after)
+	}
+	if closings := provider.closings(); len(closings) != 0 {
+		t.Errorf("a refusal on an unknown id released %v", closings)
+	}
+}
+
+// TestAnEndedConversationIsReadByTheSameRoute is the unified read: the client
+// asks for a conversation by id and must not have to know, before asking,
+// whether this process happens to be holding it. What tells the two apart is the
+// state inside the payload.
+func TestAnEndedConversationIsReadByTheSameRoute(t *testing.T) {
+	provider := newConversingProvider("chatty", 0)
+	srv := newConversationServer(t, provider)
+
+	id := openConversationOK(t, srv).Conversation.ID
+	provider.emit(t, id, "text", "detto prima di chiudere")
+	if status, _, body := closeConversation(t, srv, id); status != http.StatusOK {
+		t.Fatalf("DELETE %s = %d, want 200: %s", id, status, body)
+	}
+
+	status, view, body := readConversation(t, srv, id, 0)
+	if status != http.StatusOK {
+		t.Fatalf("GET an ended conversation = %d, want 200: %s", status, body)
+	}
+	if view.Conversation == nil || view.Conversation.ID != id {
+		t.Fatalf("the read lost the conversation it was asked for: %s", body)
+	}
+	if view.Conversation.State == string(execution.RunActive) {
+		t.Errorf("a conversation that has ended reads as %q: %s", view.Conversation.State, body)
+	}
+	if got := conversationEventTexts(view); len(got) != 1 || got[0] != "detto prima di chiudere" {
+		t.Errorf("the record does not carry what was said: %v (%s)", got, body)
+	}
+	if live := liveConversationIDs(srv); len(live) != 0 {
+		t.Errorf("reading an ended conversation put it back among the live ones: %v", live)
 	}
 }
 
@@ -513,7 +748,7 @@ func TestConversationHistoryIsReadTwiceIdentically(t *testing.T) {
 	provider.emit(t, id, "text", "two")
 	last := provider.emit(t, id, "text", "three")
 
-	_, first, firstBody := readConversation(t, srv, 0)
+	_, first, firstBody := readConversation(t, srv, id, 0)
 	if got := conversationEventTexts(first); len(got) != 3 {
 		t.Fatalf("events = %v, want the three the process emitted: %s", got, firstBody)
 	}
@@ -527,7 +762,7 @@ func TestConversationHistoryIsReadTwiceIdentically(t *testing.T) {
 		t.Errorf("notice = %q on a whole history", first.Notice)
 	}
 
-	_, second, secondBody := readConversation(t, srv, 0)
+	_, second, secondBody := readConversation(t, srv, id, 0)
 	if firstBody != secondBody {
 		t.Errorf("re-reading the same cursor answered differently:\nfirst:  %s\nsecond: %s", firstBody, secondBody)
 	}
@@ -536,7 +771,7 @@ func TestConversationHistoryIsReadTwiceIdentically(t *testing.T) {
 	}
 
 	// And a cursor in the middle returns only what follows it.
-	_, tail, tailBody := readConversation(t, srv, first.Events[0].ID)
+	_, tail, tailBody := readConversation(t, srv, id, first.Events[0].ID)
 	if got := conversationEventTexts(tail); len(got) != 2 || got[0] != "two" {
 		t.Errorf("events after the first = %v: %s", got, tailBody)
 	}
@@ -556,7 +791,7 @@ func TestPartialConversationHistoryIsDeclared(t *testing.T) {
 	provider.emit(t, id, "text", "three")
 	provider.emit(t, id, "text", "four")
 
-	_, partial, body := readConversation(t, srv, dropped.ID)
+	_, partial, body := readConversation(t, srv, id, dropped.ID)
 	if !partial.Truncated {
 		t.Errorf("truncated = false while the window dropped events: %s", body)
 	}
@@ -568,7 +803,7 @@ func TestPartialConversationHistoryIsDeclared(t *testing.T) {
 	}
 
 	// A cursor the window has not overtaken is not partial.
-	_, whole, wholeBody := readConversation(t, srv, partial.Events[0].ID)
+	_, whole, wholeBody := readConversation(t, srv, id, partial.Events[0].ID)
 	if whole.Truncated {
 		t.Errorf("truncated = true for a cursor the window has not overtaken: %s", wholeBody)
 	}
@@ -584,7 +819,7 @@ func TestAConversationMessageEntersHistoryOnlyWhenTheProcessEchoesIt(t *testing.
 	view := openConversationOK(t, srv)
 	id := view.Conversation.ID
 
-	status, accepted, body := sendConversationMessage(t, srv, "ciao")
+	status, accepted, body := sendConversationMessage(t, srv, id, "ciao")
 	if status != http.StatusAccepted {
 		t.Fatalf("POST message = %d, want 202: %s", status, body)
 	}
@@ -595,13 +830,13 @@ func TestAConversationMessageEntersHistoryOnlyWhenTheProcessEchoesIt(t *testing.
 		t.Errorf("the process received %v, want exactly one \"ciao\"", sent)
 	}
 
-	_, before, _ := readConversation(t, srv, 0)
+	_, before, _ := readConversation(t, srv, id, 0)
 	if len(before.Events) != 0 {
 		t.Errorf("the message entered the history before the process re-emitted it: %v", conversationEventTexts(before))
 	}
 
 	provider.emit(t, id, "user", "ciao")
-	_, after, afterBody := readConversation(t, srv, 0)
+	_, after, afterBody := readConversation(t, srv, id, 0)
 	if got := conversationEventTexts(after); len(got) != 1 || got[0] != "ciao" {
 		t.Errorf("events = %v, want the message exactly once: %s", got, afterBody)
 	}
@@ -614,7 +849,7 @@ func TestAnEmptyConversationMessageIsRefused(t *testing.T) {
 	srv := newConversationServer(t, provider)
 	view := openConversationOK(t, srv)
 
-	w := doJSON(t, srv, http.MethodPost, "/api/workspace/conversation/messages", map[string]any{"message": "   "})
+	w := doJSON(t, srv, http.MethodPost, conversationsRoute+"/"+view.Conversation.ID+"/messages", map[string]any{"message": "   "})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("POST empty message = %d, want 400: %s", w.Code, w.Body.String())
 	}
@@ -634,7 +869,7 @@ func TestClosingAConversationReleasesTheProviderOnce(t *testing.T) {
 	id := view.Conversation.ID
 	provider.emit(t, id, "text", "hello")
 
-	status, closed, body := closeConversation(t, srv)
+	status, closed, body := closeConversation(t, srv, id)
 	if status != http.StatusOK {
 		t.Fatalf("DELETE conversation = %d, want 200: %s", status, body)
 	}
@@ -651,22 +886,33 @@ func TestClosingAConversationReleasesTheProviderOnce(t *testing.T) {
 		t.Fatalf("the provider was closed with %v, want exactly one %q", closings, id)
 	}
 
-	secondStatus, _, secondBody := closeConversation(t, srv)
+	// A conversation the journal knows and the workspace no longer holds is not
+	// an absence: the command refuses with 409 and says it is no longer live,
+	// which is a state a person can act on by resuming it.
+	secondStatus, _, secondBody := closeConversation(t, srv, id)
 	if secondStatus != http.StatusConflict {
 		t.Fatalf("second DELETE = %d, want 409: %s", secondStatus, secondBody)
+	}
+	if message := refusalMessage(t, secondBody); !strings.Contains(message, "no longer live") {
+		t.Errorf("the refusal says %q, want it to say the conversation is no longer live", message)
 	}
 	if closings := provider.closings(); len(closings) != 1 {
 		t.Errorf("the second DELETE reached the provider: %v", closings)
 	}
 
-	messageStatus, _, messageBody := sendConversationMessage(t, srv, "still there?")
+	messageStatus, _, messageBody := sendConversationMessage(t, srv, id, "still there?")
 	if messageStatus != http.StatusConflict {
 		t.Fatalf("POST message after the close = %d, want 409: %s", messageStatus, messageBody)
 	}
 
-	_, view, readBody := readConversation(t, srv, 0)
-	if view.Conversation != nil {
-		t.Errorf("the workspace still holds a conversation after the close: %s", readBody)
+	// The read, unlike the commands, goes on answering: the conversation ended,
+	// and its record is what it is now read from.
+	_, view, readBody := readConversation(t, srv, id, 0)
+	if view.Conversation == nil || view.Conversation.ID != id {
+		t.Fatalf("the ended conversation is no longer readable: %s", readBody)
+	}
+	if live := liveConversationIDs(srv); len(live) != 0 {
+		t.Errorf("the workspace still holds a conversation after the close: %v", live)
 	}
 }
 
@@ -686,9 +932,14 @@ func TestLeavingTheWorkspaceClosesItsConversation(t *testing.T) {
 	if closings := provider.closings(); len(closings) != 1 || closings[0] != id {
 		t.Fatalf("leaving the workspace closed %v, want exactly one %q", closings, id)
 	}
-	_, after, body := readConversation(t, srv, 0)
-	if after.Conversation != nil {
-		t.Errorf("the conversation survived the workspace it belonged to: %s", body)
+	if live := liveConversationIDs(srv); len(live) != 0 {
+		t.Errorf("the conversation survived the workspace it belonged to: %v", live)
+	}
+	// It is still readable — a sealed record is history and stays so — but it is
+	// history and no longer an active conversation.
+	_, after, body := readConversation(t, srv, id, 0)
+	if after.Conversation != nil && after.Conversation.State == string(execution.RunActive) {
+		t.Errorf("the conversation reads as active after the workspace was left: %s", body)
 	}
 	// And the workspace that has been left admits no new one: nothing would be
 	// left to close it. What the provider may not keep is a process nobody
@@ -702,8 +953,8 @@ func TestLeavingTheWorkspaceClosesItsConversation(t *testing.T) {
 	if len(closings) != len(openings) {
 		t.Errorf("the provider was opened %d times and closed %d: a refused open left a process nobody holds", len(openings), len(closings))
 	}
-	if _, open := srv.session().conversation.current(); open {
-		t.Error("a stopped session installed a conversation nothing could close")
+	if live := liveConversationIDs(srv); len(live) != 0 {
+		t.Errorf("a stopped session installed a conversation nothing could close: %v", live)
 	}
 }
 
@@ -714,28 +965,31 @@ func TestRefusedConversationCommandsLeaveTheViewUnchanged(t *testing.T) {
 	srv := newConversationServer(t, provider)
 
 	view := openConversationOK(t, srv)
-	provider.emit(t, view.Conversation.ID, "text", "hello")
+	id := view.Conversation.ID
+	provider.emit(t, id, "text", "hello")
 
-	_, _, before := readConversation(t, srv, 0)
+	_, _, before := readConversation(t, srv, id, 0)
 
 	refusals := []struct {
 		name   string
 		do     func() int
 		expect int
 	}{
-		{"a second open", func() int { status, _, _ := openConversation(t, srv); return status }, http.StatusConflict},
+		{"a message to a conversation that does not exist", func() int {
+			return doJSON(t, srv, http.MethodPost, conversationsRoute+"/conv-inesistente/messages", map[string]any{"message": "ciao"}).Code
+		}, http.StatusNotFound},
 		{"an empty message", func() int {
-			return doJSON(t, srv, http.MethodPost, "/api/workspace/conversation/messages", map[string]any{"message": ""}).Code
+			return doJSON(t, srv, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"message": ""}).Code
 		}, http.StatusBadRequest},
 		{"an invalid cursor", func() int {
-			return doJSON(t, srv, http.MethodGet, "/api/workspace/conversation?after_id=-3", nil).Code
+			return doJSON(t, srv, http.MethodGet, conversationPath(id, 0)+"?after_id=-3", nil).Code
 		}, http.StatusBadRequest},
 	}
 	for _, refusal := range refusals {
 		if got := refusal.do(); got != refusal.expect {
 			t.Fatalf("%s = %d, want %d", refusal.name, got, refusal.expect)
 		}
-		_, _, after := readConversation(t, srv, 0)
+		_, _, after := readConversation(t, srv, id, 0)
 		if after != before {
 			t.Errorf("%s changed the projection:\nbefore: %s\nafter:  %s", refusal.name, before, after)
 		}
@@ -780,13 +1034,14 @@ func TestReadingAnOpenConversationProbesNothing(t *testing.T) {
 	srv := newConversationServer(t, provider)
 
 	// Nothing open: the verdict decides whether the button is offered, so it is
-	// honestly probed.
-	if _, _, body := readConversation(t, srv, 0); provider.probeCount() == 0 {
+	// honestly probed — on the index, which is the read that carries it.
+	if _, body := conversationsRouteTestReadIndex(t, srv); provider.probeCount() == 0 {
 		t.Fatalf("reading with no conversation open probed nothing: the verdict was not computed: %s", body)
 	}
 
 	view := openConversationOK(t, srv)
-	provider.emit(t, view.Conversation.ID, "text", "hello")
+	id := view.Conversation.ID
+	provider.emit(t, id, "text", "hello")
 	// The open is a user gesture and stays honest.
 	if provider.probeCount() < 2 {
 		t.Fatalf("opening a conversation probed %d times, want the open to probe", provider.probeCount())
@@ -794,7 +1049,7 @@ func TestReadingAnOpenConversationProbesNothing(t *testing.T) {
 	before := provider.probeCount()
 
 	for tick := 0; tick < 5; tick++ {
-		status, polled, body := readConversation(t, srv, 0)
+		status, polled, body := readConversation(t, srv, id, 0)
 		if status != http.StatusOK {
 			t.Fatalf("GET conversation = %d, want 200: %s", status, body)
 		}
@@ -977,17 +1232,19 @@ func seedConversationRun(t *testing.T, srv *Server, specCode string, action exec
 	return id
 }
 
-// confirmProposal records in the holder the decision a person took on the
-// proposal carried by proposalID. It is the register the routes write when a
-// proposal is confirmed, seeded here directly so the test owns the execution id
-// and its status instead of inheriting them from a scheduler.
-func confirmProposal(t *testing.T, srv *Server, proposalID int64, executionID string, action execution.ActionID, specCode string) {
+// confirmProposal records in the holder the decision a person took, in the
+// conversation it was taken in, on the proposal carried by proposalID. The
+// conversation is named because a decision belongs to one of them and to no
+// other: it is the register the routes write when a proposal is confirmed,
+// seeded here directly so the test owns the execution id and its status instead
+// of inheriting them from a scheduler.
+func confirmProposal(t *testing.T, srv *Server, conversationID string, proposalID int64, executionID string, action execution.ActionID, specCode string) {
 	t.Helper()
 	scope := string(execution.ScopeWorkspace)
 	if specCode != "" {
 		scope = string(execution.ScopeSpec)
 	}
-	if err := srv.session().conversation.decide(proposalID, conversationOutcome{
+	if err := srv.session().conversation.decide(conversationID, proposalID, conversationOutcome{
 		ProposalID:  proposalID,
 		Decision:    "confirmed",
 		Action:      string(action),
@@ -1008,17 +1265,18 @@ func TestConversationViewCarriesTheRunsItAsked(t *testing.T) {
 	srv, provider := newConversationRunsServer(t)
 
 	view := openConversationOK(t, srv)
-	proposal := provider.emit(t, view.Conversation.ID, "text", "posso pianificare US-901?")
+	id := view.Conversation.ID
+	proposal := provider.emit(t, id, "text", "posso pianificare US-901?")
 	executionID := seedConversationRun(t, srv, "US-901", execution.ActionPlan, execution.StatusRunning)
 	provider.setRun(executionID, "run-plan")
 	provider.setRunEvents("run-plan", event(1, "planning"), event(2, "still planning"))
-	confirmProposal(t, srv, proposal.ID, executionID, execution.ActionPlan, "US-901")
+	confirmProposal(t, srv, id, proposal.ID, executionID, execution.ActionPlan, "US-901")
 
 	var read conversationResponse
 	var body string
 	waitFor(t, "the run block to carry the events of its run", func() bool {
 		var status int
-		status, read, body = readConversation(t, srv, 0)
+		status, read, body = readConversation(t, srv, id, 0)
 		return status == http.StatusOK && len(read.Runs) == 1 && len(read.Runs[0].Events) == 2
 	})
 
@@ -1056,14 +1314,14 @@ func TestConversationViewCarriesOneBlockPerDecision(t *testing.T) {
 	id := view.Conversation.ID
 	firstProposal := provider.emit(t, id, "text", "posso pianificare US-901?")
 	firstExecution := seedConversationRun(t, srv, "US-901", execution.ActionPlan, execution.StatusSucceeded)
-	confirmProposal(t, srv, firstProposal.ID, firstExecution, execution.ActionPlan, "US-901")
+	confirmProposal(t, srv, id, firstProposal.ID, firstExecution, execution.ActionPlan, "US-901")
 
 	provider.emit(t, id, "text", "fatto")
 	secondProposal := provider.emit(t, id, "text", "posso pianificare US-902?")
 	secondExecution := seedConversationRun(t, srv, "US-902", execution.ActionPlan, execution.StatusSucceeded)
-	confirmProposal(t, srv, secondProposal.ID, secondExecution, execution.ActionPlan, "US-902")
+	confirmProposal(t, srv, id, secondProposal.ID, secondExecution, execution.ActionPlan, "US-902")
 
-	_, read, body := readConversation(t, srv, 0)
+	_, read, body := readConversation(t, srv, id, 0)
 	if len(read.Runs) != 2 {
 		t.Fatalf("runs = %d, want one block per decision: %s", len(read.Runs), body)
 	}
@@ -1088,10 +1346,11 @@ func TestConversationViewReportsAnUnreachableRunAsANotice(t *testing.T) {
 	srv, provider := newConversationRunsServer(t)
 
 	view := openConversationOK(t, srv)
-	proposal := provider.emit(t, view.Conversation.ID, "text", "posso pianificare US-901?")
-	confirmProposal(t, srv, proposal.ID, "exec-does-not-exist", execution.ActionPlan, "US-901")
+	id := view.Conversation.ID
+	proposal := provider.emit(t, id, "text", "posso pianificare US-901?")
+	confirmProposal(t, srv, id, proposal.ID, "exec-does-not-exist", execution.ActionPlan, "US-901")
 
-	status, read, body := readConversation(t, srv, 0)
+	status, read, body := readConversation(t, srv, id, 0)
 	if status != http.StatusOK {
 		t.Fatalf("GET conversation = %d, want 200 despite the unreachable run: %s", status, body)
 	}
@@ -1121,14 +1380,15 @@ func TestConversationViewOpensNoFollowerForATerminalRun(t *testing.T) {
 	srv, provider := newConversationRunsServer(t)
 
 	view := openConversationOK(t, srv)
-	proposal := provider.emit(t, view.Conversation.ID, "text", "posso pianificare US-901?")
+	id := view.Conversation.ID
+	proposal := provider.emit(t, id, "text", "posso pianificare US-901?")
 	executionID := seedConversationRun(t, srv, "US-901", execution.ActionPlan, execution.StatusSucceeded)
 	provider.setRun(executionID, "run-done")
 	provider.setRunEvents("run-done", event(1, "planning"))
-	confirmProposal(t, srv, proposal.ID, executionID, execution.ActionPlan, "US-901")
+	confirmProposal(t, srv, id, proposal.ID, executionID, execution.ActionPlan, "US-901")
 
 	for tick := 0; tick < 3; tick++ {
-		_, read, body := readConversation(t, srv, 0)
+		_, read, body := readConversation(t, srv, id, 0)
 		if len(read.Runs) != 1 {
 			t.Fatalf("runs = %d, want the block of the step that ran: %s", len(read.Runs), body)
 		}
@@ -1155,17 +1415,18 @@ func TestConversationViewMarksTheRunAwaitingAnAnswer(t *testing.T) {
 	srv, provider := newConversationRunsServer(t)
 
 	view := openConversationOK(t, srv)
-	proposal := provider.emit(t, view.Conversation.ID, "text", "posso pianificare US-901?")
+	id := view.Conversation.ID
+	proposal := provider.emit(t, id, "text", "posso pianificare US-901?")
 	executionID := seedConversationRun(t, srv, "US-901", execution.ActionPlan, execution.StatusRunning)
 	provider.setRun(executionID, "run-waiting")
 	provider.setRunApprovals("run-waiting", workspaceApproval("appr-7", "Eseguire il comando"))
-	confirmProposal(t, srv, proposal.ID, executionID, execution.ActionPlan, "US-901")
+	confirmProposal(t, srv, id, proposal.ID, executionID, execution.ActionPlan, "US-901")
 
 	var read conversationResponse
 	var body string
 	waitFor(t, "the conversation to report the run waiting for an answer", func() bool {
 		var status int
-		status, read, body = readConversation(t, srv, 0)
+		status, read, body = readConversation(t, srv, id, 0)
 		return status == http.StatusOK && len(read.Runs) == 1 && read.Runs[0].AwaitingResponse
 	})
 
@@ -1207,7 +1468,7 @@ func TestSendConversationMessageKeepsTheConversationAvailable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, accepted, body := sendConversationMessage(t, srv, "ci sei?")
+	status, accepted, body := sendConversationMessage(t, srv, id, "ci sei?")
 	if status != http.StatusAccepted {
 		t.Fatalf("POST message = %d, want 202: %s", status, body)
 	}
@@ -1221,7 +1482,7 @@ func TestSendConversationMessageKeepsTheConversationAvailable(t *testing.T) {
 		t.Errorf("the process received %v, want exactly one \"ci sei?\"", sent)
 	}
 
-	_, read, readBody := readConversation(t, srv, 0)
+	_, read, readBody := readConversation(t, srv, id, 0)
 	if !read.Available {
 		t.Errorf("the reading route disagrees with the command route about availability: %s", readBody)
 	}
@@ -1234,9 +1495,10 @@ func TestConversationViewAlwaysCarriesARunsArray(t *testing.T) {
 	srv, provider := newConversationRunsServer(t)
 
 	view := openConversationOK(t, srv)
-	provider.emit(t, view.Conversation.ID, "text", "buongiorno")
+	id := view.Conversation.ID
+	provider.emit(t, id, "text", "buongiorno")
 
-	_, read, body := readConversation(t, srv, 0)
+	_, read, body := readConversation(t, srv, id, 0)
 	if len(read.Runs) != 0 {
 		t.Fatalf("runs = %#v, want empty on a conversation that decided nothing", read.Runs)
 	}

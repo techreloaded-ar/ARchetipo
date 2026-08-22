@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
@@ -411,8 +413,114 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 	return view
 }
 
-// handleGetWorkspaceConversation serves the conversation of the open workspace,
-// or the absence of one.
+// conversationNotFound is the one refusal for an id this workspace neither
+// holds alive nor keeps on disk.
+//
+// It exists as a function so every route that can be handed an unknown id — the
+// read, the message, the close, the proposal and the resume — refuses with the
+// same sentence: five wordings for one absence would make the same mistake look
+// like five different problems.
+func conversationNotFound(id string, err error) error {
+	return iox.NewNotFound(
+		"the conversation "+id+" does not exist in this workspace",
+		"open the list of the conversations of the workspace to see the ones it holds",
+		err,
+	)
+}
+
+// conversationOpenability is the answer to "is there a provider here that could
+// hold a conversation", as the reads render it next to whatever they were asked
+// for.
+//
+// It is deliberately *not* "is there room for another one". Room is a fact of
+// this instant that two requests can disagree about, and the refusal that
+// declares the limit is built by the open route from the live set at the moment
+// it refuses — naming which conversations to close, which no boolean can do. A
+// page that hid the offer while the workspace was full would also have to hide
+// the only sentence that says why.
+type conversationOpenability struct {
+	available  bool
+	reason     string
+	providerID string
+}
+
+// conversationOpenabilityOf answers that question at the cost the caller can
+// afford, and never says a provider is missing while one is demonstrably
+// holding a conversation.
+//
+// The runtime is probed only when the workspace holds *nothing* alive. With a
+// live conversation the answer is already settled by the fact that one is
+// running — which is exactly what heldConversationTarget says, and for the same
+// reason: these reads are polled every couple of seconds for as long as a
+// conversation lives, and CheckAvailability costs a `--version` subprocess. A
+// probe on that loop would fork a process per tick to answer a question nobody
+// is asking while an agent is already talking.
+func (s *Server) conversationOpenabilityOf(ctx context.Context, ws *workspaceSession) conversationOpenability {
+	if live := ws.conversation.list(); len(live) > 0 {
+		return conversationOpenability{available: true, providerID: live[len(live)-1].providerID}
+	}
+	target := s.conversationAvailabilityFor(ctx, ws)
+	return conversationOpenability{
+		available:  target.reason == "",
+		reason:     target.reason,
+		providerID: target.availability.providerID,
+	}
+}
+
+// pastConversationViewOf renders a conversation that has ended, with the very
+// payload the live one travels in.
+//
+// One payload and not two: the client asks for a conversation by id and must not
+// have to know, before asking, whether this process happens to be holding it.
+// What tells the two apart is the state inside the payload, which is the
+// record's own and is never interpreted here.
+func pastConversationViewOf(record conversationlog.Record, openability conversationOpenability, afterID int64) conversationView {
+	events := make([]execution.RunEvent, 0, len(record.Events))
+	for _, event := range record.Events {
+		// The cursor is honoured here exactly as the live read honours it, so a
+		// client polling a conversation across its own ending never has to change
+		// how it reads.
+		if event.ID > afterID {
+			events = append(events, event)
+		}
+	}
+	view := conversationView{
+		Available:         openability.available,
+		UnavailableReason: openability.reason,
+		ProviderID:        openability.providerID,
+		Conversation: &conversationSnapshotView{
+			ID: record.ID,
+			// The state travels as the record left it, with no interpretation:
+			// a conversation sealed as crashed is not turned into a closed one
+			// by being read.
+			State:       execution.RunState(record.FinalState),
+			WorkingDir:  record.WorkingDir,
+			OpenedAt:    record.OpenedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
+			SpecCode:    record.SpecCode,
+			ResumedFrom: record.ResumedFrom,
+		},
+		Events: events,
+		LastID: afterID,
+		// A conversation that has ended proposes nothing and commands nothing:
+		// there is no pending proposal to decide and no run block to compose,
+		// because both are read from a holder that no longer holds it.
+		Proposal: nil,
+		Runs:     []conversationRunView{},
+	}
+	if len(events) > 0 {
+		view.LastID = events[len(events)-1].ID
+	}
+	return view
+}
+
+// handleGetWorkspaceConversation serves one conversation of the open workspace,
+// live or ended, by its id.
+//
+// When the workspace is holding it, the history comes from the session in
+// memory rather than from the file: the record is rewritten as the live
+// conversation is read, so the file is at most one read behind, and the two must
+// not be allowed to disagree under the eyes of whoever is reading them. When it
+// is not, the record on disk *is* the conversation.
 //
 // It touches no execution record and no dispatch, and it opens no follower: a
 // conversation is not an action of the process, and the whole of its history
@@ -425,19 +533,41 @@ func (s *Server) handleGetWorkspaceConversation(w http.ResponseWriter, r *http.R
 	}
 	ws := s.session()
 	ctx := r.Context()
-	snapshot, open := ws.conversation.current()
-	// The verdict is computed only when there is none open: that is the single
-	// state in which it decides anything, and it is the only one worth a probe of
-	// the runtime. See heldConversationTarget.
-	target := heldConversationTarget(snapshot)
-	if !open {
-		target = s.conversationAvailabilityFor(ctx, ws)
+	id := strings.TrimSpace(r.PathValue("id"))
+	if snapshot, live := ws.conversation.get(id); live {
+		// The verdict costs no probe for a conversation that is being held. See
+		// heldConversationTarget.
+		writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, ws, heldConversationTarget(snapshot), snapshot, true, afterID))
+		return
 	}
-	writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, ws, target, snapshot, open, afterID))
+	record, err := s.readPastConversation(ctx, ws, id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pastConversationViewOf(record, s.conversationOpenabilityOf(ctx, ws), afterID))
 }
 
-// handleOpenWorkspaceConversation opens the single conversation of the open
-// workspace.
+// readPastConversation reads one conversation from the journal of the open
+// workspace, refusing with conversationNotFound for an id it does not keep.
+func (s *Server) readPastConversation(ctx context.Context, ws *workspaceSession, id string) (conversationlog.Record, error) {
+	store := ws.conversationStore()
+	if store == nil {
+		return conversationlog.Record{}, iox.NewInternal("reading the conversation "+id, errors.New("this workspace keeps no conversation journal"))
+	}
+	record, err := store.Get(ctx, id)
+	if err != nil {
+		var storeErr *conversationlog.StoreError
+		if errors.As(err, &storeErr) && (storeErr.Kind == conversationlog.StoreNotFound || storeErr.Kind == conversationlog.StoreInvalidID) {
+			return conversationlog.Record{}, conversationNotFound(id, err)
+		}
+		return conversationlog.Record{}, iox.NewInternal("reading the conversation "+id, err)
+	}
+	return record, nil
+}
+
+// handleOpenWorkspaceConversation opens a conversation on the open workspace,
+// beside the ones it is already holding.
 //
 // Nothing is recorded: no execution, no reservation, no file under
 // .archetipo/executions. A conversation that left a record behind would appear
@@ -461,15 +591,17 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		return
 	}
 	specCode := strings.TrimSpace(body.SpecCode)
-	if current, open := ws.conversation.current(); open {
-		writeError(w, iox.NewConflict(
-			"conversation "+current.id+" is already open for this workspace",
-			"close it before opening another one: a workspace holds one conversation at a time",
-			nil,
-		))
+	ctx := r.Context()
+	// The limit is checked here, before the provider is asked for anything: an
+	// open refused only by the holder would already have started an agent
+	// process, and the refusal would leave it running behind a request that has
+	// no reason to hold it. It is not a guarantee — two concurrent opens can
+	// both pass it — which is why the holder checks again below and this handler
+	// keeps its recovery branch.
+	if err := s.refuseConversationLimit(ctx, ws); err != nil {
+		writeError(w, err)
 		return
 	}
-	ctx := r.Context()
 	// The spec is verified before the provider is even resolved, so a
 	// conversation asked about a spec that is not in this backlog refuses
 	// without any agent process ever existing to be released.
@@ -528,16 +660,17 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		return
 	}
 	if err := ws.conversation.open(id, target.availability.providerID, target.provider, target.collaborator, providerConfig, ws.cfg.ProjectRoot, time.Now().UTC(), specCode, ""); err != nil {
-		// The holder refused it — another request won the race, or the workspace
-		// has been left. Either way this process is the only one holding the
-		// handle, so it closes what it just started instead of leaking it.
+		// The holder refused it — another request won the race to the last free
+		// slot, or the workspace has been left. Either way this process is the
+		// only one holding the handle, so it closes what it just started instead
+		// of leaking it.
 		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), conversationCloseTimeout)
 		defer cancel()
 		_ = target.provider.CloseConversation(closeCtx, id)
-		writeError(w, iox.NewConflict(err.Error(), "read the conversation of this workspace before opening one", nil))
+		writeError(w, conversationOpenRefusal(ctx, ws, err))
 		return
 	}
-	snapshot, open := ws.conversation.current()
+	snapshot, open := ws.conversation.get(id)
 	// Written down before the view is rendered, and a failure to write is
 	// reported rather than raised: the conversation is open either way, and the
 	// caller has to learn it will not be found again rather than be told the
@@ -616,9 +749,14 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 		return
 	}
 	ws := s.session()
-	snapshot, open := ws.conversation.current()
-	if !open {
-		writeError(w, iox.NewConflict("no conversation is open for this workspace", "open one before sending a message", nil))
+	id := strings.TrimSpace(r.PathValue("id"))
+	snapshot, live := ws.conversation.get(id)
+	if !live {
+		// Not being held is not the same as not existing: an id the journal
+		// knows is a conversation that has ended, and one it does not know is a
+		// conversation of no workspace. The refusal says which of the two it is,
+		// with the sentence every other route uses for the second.
+		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "send a message"))
 		return
 	}
 	if snapshot.collaborator == nil {
@@ -657,20 +795,95 @@ func (s *Server) handleCloseWorkspaceConversation(w http.ResponseWriter, r *http
 		return
 	}
 	ws := s.session()
-	snapshot, open := ws.conversation.current()
-	if !open {
-		writeError(w, iox.NewConflict("no conversation is open for this workspace", "there is nothing to close", nil))
+	ctx := r.Context()
+	id := strings.TrimSpace(r.PathValue("id"))
+	snapshot, live := ws.conversation.get(id)
+	if !live {
+		writeError(w, s.conversationGoneRefusal(ctx, ws, id, "close it"))
 		return
 	}
-	ctx := r.Context()
 	// Sealed while the holder still holds it: the final state is read from the
 	// conversation that is about to be released, and everything said since the
 	// last read is written down before the process behind it goes away.
 	ws.sealConversation(ctx, snapshot)
-	if err := ws.conversation.close(ctx); err != nil {
+	// Only this one is released: closeOne drops the entry it names and leaves
+	// every sibling of the workspace exactly as it was, which is the whole of
+	// what "close this conversation" has to mean once a workspace can hold
+	// several.
+	if err := ws.conversation.closeOne(ctx, id); err != nil {
 		writeError(w, iox.NewInternal("closing the conversation "+snapshot.id, err))
 		return
 	}
-	target := s.conversationAvailabilityFor(ctx, ws)
-	writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, ws, target, snapshot, true, afterID))
+	// Rendered from the conversation just closed and from the provider that was
+	// holding it — heldConversationTarget carries no reason, so the payload says
+	// available, which is true: closing one has just made room for another.
+	writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, ws, heldConversationTarget(snapshot), snapshot, true, afterID))
+}
+
+// conversationGoneRefusal explains why a command cannot reach the conversation
+// it named: because that conversation has ended, or because no conversation of
+// this workspace ever had that id.
+//
+// The two are told apart on purpose. "It ended" is a state a person can act on —
+// resume it — while "it does not exist" is a mistake, and answering both with
+// one sentence would hide the difference behind a single 404.
+func (s *Server) conversationGoneRefusal(ctx context.Context, ws *workspaceSession, id, intent string) error {
+	if _, err := s.readPastConversation(ctx, ws, id); err != nil {
+		return err
+	}
+	return iox.NewConflict(
+		"the conversation "+id+" is no longer live on this workspace",
+		"resume it to go on from where it ended, or "+intent+" on a conversation that is still live",
+		nil,
+	)
+}
+
+// refuseConversationLimit is the one place an open — ordinary or resumed — is
+// refused for having no room left.
+//
+// It lives here and is shared with the resume route so the sentence a person
+// reads exists once: two routes composing the same refusal would sooner or later
+// declare the same limit in two ways.
+func (s *Server) refuseConversationLimit(ctx context.Context, ws *workspaceSession) error {
+	if err := ws.conversation.canOpen(); err != nil {
+		return conversationOpenRefusal(ctx, ws, err)
+	}
+	return nil
+}
+
+// conversationOpenRefusal turns a holder refusal into the HTTP one, naming the
+// live conversations when the reason is the limit.
+//
+// The ids come from the holder and the titles from the journal, because "which
+// ones do I close?" is not answered by a number: a person picks the thread they
+// are done with by its name. A title that cannot be read falls back to the id
+// alone rather than failing the refusal — the refusal is the message that
+// matters, and losing it to a failed read would leave the caller with nothing.
+func conversationOpenRefusal(ctx context.Context, ws *workspaceSession, err error) error {
+	var limitErr *conversationLimitError
+	if !errors.As(err, &limitErr) {
+		return iox.NewConflict(err.Error(), "read the conversations of this workspace before opening one", err)
+	}
+	named := make([]string, 0, len(limitErr.LiveIDs))
+	store := ws.conversationStore()
+	for _, id := range limitErr.LiveIDs {
+		title := ""
+		if store != nil {
+			if record, readErr := store.Get(ctx, id); readErr == nil {
+				title = strings.TrimSpace(record.Title)
+			}
+		}
+		if title == "" {
+			named = append(named, id)
+			continue
+		}
+		named = append(named, id+" ("+title+")")
+	}
+	return iox.NewConflict(
+		"this workspace already holds "+strconv.Itoa(limitErr.Limit)+
+			" live conversations: "+strings.Join(named, ", ")+
+			". Close one of them before opening another.",
+		"close one of the conversations listed above, then open this one again",
+		err,
+	)
 }

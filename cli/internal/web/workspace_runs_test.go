@@ -473,12 +473,14 @@ func (f *workspaceRunsFixture) openConversation(t *testing.T, id string) {
 	}
 }
 
-// confirmRun records, in the open conversation, that the proposal carried by
-// proposalID was confirmed and started executionID.
-func (f *workspaceRunsFixture) confirmRun(t *testing.T, proposalID int64, executionID string) {
+// confirmRun records, in the conversation named by conversationID, that the
+// proposal carried by proposalID was confirmed and started executionID. The
+// conversation is named because a decision belongs to one of them: the anchor
+// the run rail navigates to is a point of that history and of no other.
+func (f *workspaceRunsFixture) confirmRun(t *testing.T, conversationID string, proposalID int64, executionID string) {
 	t.Helper()
 	outcome := confirmedOutcome(proposalID, "Implementa US-901", executionID)
-	if err := f.srv.session().conversation.decide(proposalID, outcome); err != nil {
+	if err := f.srv.session().conversation.decide(conversationID, proposalID, outcome); err != nil {
 		t.Fatalf("recording the decision: %v", err)
 	}
 }
@@ -520,7 +522,7 @@ func TestWorkspaceRunsCarryTheConversationThatAskedThem(t *testing.T) {
 	started := fixture.seedRun(t, "US-901", execution.ActionPlan, execution.StatusRunning)
 	fixture.collaborator.setRun(started, "run-started")
 	fixture.openConversation(t, "conv-60")
-	fixture.confirmRun(t, 42, started)
+	fixture.confirmRun(t, "conv-60", 42, started)
 
 	status, _, body := fixture.readRuns(t)
 	if status != http.StatusOK {
@@ -547,7 +549,7 @@ func TestWorkspaceRunsOmitTheAnchorForABoardRun(t *testing.T) {
 	fixture.collaborator.setRun(asked, "run-asked")
 	fixture.collaborator.setRun(fromBoard, "run-board")
 	fixture.openConversation(t, "conv-60")
-	fixture.confirmRun(t, 42, asked)
+	fixture.confirmRun(t, "conv-60", 42, asked)
 
 	status, _, body := fixture.readRuns(t)
 	if status != http.StatusOK {

@@ -3941,16 +3941,24 @@
 	let conversationPollBusy = false; // a poll is in flight: ticks never overlap
 	let conversationPollFailures = 0; // consecutive failed reads, for the give-up threshold
 
-	// ---- Thread index (US-058) ---
-	// Three variables, and none of them a second copy of the conversation: the
+	// ---- Thread index (US-058, US-059) ---
+	// Three variables, and none of them a second copy of a conversation: the
 	// index is what the workspace has had, the current id is which of those the
-	// page is showing, and the transcript is the past conversation being read.
-	// A transcript is present only while a *past* thread is on screen — the live
-	// conversation is drawn from conversationEvents as it always was, so there
-	// is never a second place claiming to hold the open conversation.
+	// page is showing, and the refusal is the last reason an open was denied.
+	//
+	// There is no transcript variable any more (US-059): one route serves a
+	// conversation by id whether it is still live or already ended, so the panel
+	// draws both from the same projection and tells them apart by the state
+	// inside the payload. A second holder for the past ones would be a second
+	// place claiming to hold a conversation.
 	let conversationsIndex = null; // last read of GET /api/workspace/conversations
 	let conversationsCurrentId = ""; // which thread the panel is showing
-	let conversationTranscript = null; // the past thread being read, or null
+	// The server's own sentence when an open was refused — the limit of live
+	// conversations and which ones to close (AC-5). It is kept here, beside the
+	// rail, because the rail is where the offer to open one stands: it is shown
+	// verbatim and never composed, and it is cleared by the first open or close
+	// that succeeds.
+	let conversationsRefusal = "";
 
 	// ---- Answers given inside the conversation (US-060) ---
 	// Two pieces of local state, and neither of them a second copy of anything
@@ -4093,7 +4101,16 @@
 			conversationsRailEl.innerHTML = "";
 			return;
 		}
+		// The refusal rides above the list, where the offer that was refused
+		// stands. Its words are the server's, rendered by the module and never
+		// assembled here: the limit and the conversations to close are facts of
+		// the workspace, and a second sentence about them written in the browser
+		// would be a second truth.
+		const notice = window.ConversationIndex.renderLimitNotice
+			? window.ConversationIndex.renderLimitNotice(conversationsRefusal)
+			: "";
 		conversationsRailEl.innerHTML =
+			notice +
 			window.ConversationIndex.renderConversationIndex(conversationsIndex, {
 				currentId: conversationsCurrentId,
 			});
@@ -4125,77 +4142,93 @@
 		renderConversationsRail();
 	}
 
-	// The entry the index says is live, if it says so at all. The flag is the
-	// server's, never derived here.
-	function liveConversationEntry() {
+	// The entries the index says are live — all of them, because a workspace
+	// holds more than one (AC-1). The flag is the server's, never derived here,
+	// and the order is the index's own: the most recently spoken to comes first.
+	function liveConversationEntries() {
 		const entries =
 			conversationsIndex && Array.isArray(conversationsIndex.conversations)
 				? conversationsIndex.conversations
 				: [];
-		return entries.find((entry) => entry && entry.live) || null;
+		return entries.filter((entry) => entry && entry.live);
+	}
+
+	// emptyConversationView is what the panel draws while it is showing no
+	// conversation at all. Whether one could be opened, and why not, is the
+	// index's answer — the same `available` / `unavailable_reason` pair the
+	// conversation payload carries, so the invitation and its refusal are drawn
+	// from a server verdict here too and never from a guess made in the page.
+	function emptyConversationView() {
+		const index =
+			conversationsIndex && typeof conversationsIndex === "object"
+				? conversationsIndex
+				: null;
+		if (!index) return null;
+		return {
+			available: index.available !== false,
+			unavailable_reason: index.unavailable_reason || "",
+			provider_id: index.provider_id || "",
+			conversation: null,
+			events: [],
+		};
+	}
+
+	// switchToConversation is the only place that changes which conversation the
+	// panel is showing, and it is what makes AC-2 true on the page: the local
+	// projection is a projection *of one conversation*, so it is emptied with the
+	// change of id — a timeline left standing would show, in the one, what was
+	// said in the other. The draft is deliberately not touched: what a person was
+	// typing belongs to them and survives until the workspace changes.
+	//
+	// `preloaded` is the view a command has just been answered with (an open, a
+	// resume): applying it avoids a second read of a conversation the server has
+	// already described, without letting a second place assign the current id.
+	async function switchToConversation(id, preloaded) {
+		if (!id) return;
+		stopConversationPolling();
+		conversationsCurrentId = id;
+		conversationView = null;
+		conversationEvents = [];
+		conversationAfterID = 0;
+		conversationAnsweredApprovals = {};
+		conversationHighlightAnchor = "";
+		conversationRefusal = "";
+		conversationLink = "";
+		conversationCloseArmed = false;
+		conversationPollBusy = false;
+		conversationPollFailures = 0;
+		renderConversationsRail();
+		renderConversationPanel();
+		let view = preloaded;
+		if (!view) {
+			try {
+				view = await apiGet(
+					`/api/workspace/conversations/${encodeURIComponent(id)}?after_id=0`,
+				);
+			} catch (err) {
+				showConversationRefusal(err);
+				renderConversationPanel();
+				return;
+			}
+			// A later switch won while this read was in flight: applying it now
+			// would draw one conversation under the name of another.
+			if (conversationsCurrentId !== id) return;
+		}
+		applyConversationView(view);
+		renderConversationPanel();
+		renderConversationsRail();
+		if (conversationIsActive()) startConversationPolling();
 	}
 
 	// openConversationThread shows one thread of the rail. Where one looks does
-	// not change: the panel stays mounted and only its contents differ.
+	// not change: the panel stays mounted and only its contents differ. Live or
+	// ended is not asked here — one route answers for both, and the state inside
+	// the payload is what tells them apart.
 	async function openConversationThread(id) {
+		// Pressing the thread already on screen re-reads it from the beginning,
+		// which is what makes the rail a way out of a read that failed.
 		if (!id || conversationBusy) return;
-		const live = liveConversationEntry();
-		if (live && live.id === id) {
-			// The live one is not read from a transcript: it is the conversation
-			// this page already follows, so going back to it is an ordinary fresh
-			// read, cursor and polling included.
-			conversationTranscript = null;
-			await loadConversation();
-			return;
-		}
-		conversationBusy = true;
-		renderConversationPanel();
-		let transcript;
-		try {
-			transcript = await apiGet(
-				`/api/workspace/conversations/${encodeURIComponent(id)}`,
-			);
-		} catch (err) {
-			conversationBusy = false;
-			showConversationRefusal(err);
-			renderConversationPanel();
-			return;
-		}
-		// Reading a past thread means the loop that follows the live one has
-		// nothing to follow here: it is stopped rather than left running under a
-		// panel that is showing something else.
-		stopConversationPolling();
-		conversationBusy = false;
-		conversationTranscript = transcript;
-		conversationsCurrentId = id;
-		conversationRefusal = "";
-		conversationLink = "";
-		renderConversationPanel();
-		renderConversationsRail();
-	}
-
-	// transcriptConversationView shapes a transcript into the payload the
-	// conversation renderer already knows, so a past thread is drawn by the very
-	// same renderer as the live one — one renderer, one look, and no second
-	// definition of what a conversation looks like.
-	//
-	// The state is deliberately never ACTIVE: a thread reached from the rail is
-	// by construction not the live one, and a record that ended without being
-	// sealed must not be given the close control of a conversation that no
-	// longer holds an agent.
-	function transcriptConversationView() {
-		const t = conversationTranscript;
-		if (!t) return null;
-		const state = t.state && t.state !== "ACTIVE" ? t.state : "ENDED";
-		return {
-			conversation: {
-				id: t.id || "",
-				state,
-				spec_code: t.spec_code || "",
-				resumed_from: t.resumed_from || "",
-			},
-			events: Array.isArray(t.events) ? t.events : [],
-		};
+		await switchToConversation(id);
 	}
 
 	// resumeConversationThread is what writing in a past thread does (AC-4).
@@ -4203,10 +4236,10 @@
 	// conversation and hands it the old one as context, and the banner says so
 	// in as many words.
 	async function resumeConversationThread() {
-		if (conversationBusy || !conversationTranscript) return;
-		const id = conversationTranscript.id || "";
+		const id = conversationsCurrentId;
+		if (conversationBusy || !id) return;
 		const message = conversationDraft.trim();
-		if (!id || !message) return;
+		if (!message) return;
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
@@ -4214,26 +4247,27 @@
 				`/api/workspace/conversations/${encodeURIComponent(id)}/resume`,
 				{ message },
 			);
-			// A new conversation is a new history: the cursor, the timeline and
-			// the transcript being read must not survive into it.
-			conversationTranscript = null;
-			conversationAfterID = 0;
-			conversationEvents = [];
+			// A new conversation is a new history, and switching to it is what
+			// empties the previous one's projection — the draft included here,
+			// because this one has just been sent.
 			conversationDraft = "";
-			conversationRefusal = "";
-			conversationLink = "";
-			conversationPollFailures = 0;
-			applyConversationView(view);
-			conversationsCurrentId =
-				(view && view.conversation && view.conversation.id) || "";
+			conversationsRefusal = "";
+			await switchToConversation(conversationIdOf(view), view);
 		} catch (err) {
 			showConversationRefusal(err);
+			renderConversationPanel();
 		} finally {
 			conversationBusy = false;
 			renderConversationPanel();
-			if (conversationIsActive()) startConversationPolling();
 			loadConversationsIndex();
 		}
+	}
+
+	// The id of the conversation a command answered with, or the empty string:
+	// every open, resume and read gets its id from the payload and never from
+	// anything remembered before the call.
+	function conversationIdOf(view) {
+		return (view && view.conversation && view.conversation.id) || "";
 	}
 
 	// openSpecConversation opens a conversation about the spec on screen: the
@@ -4244,28 +4278,22 @@
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
-			await releaseLiveConversation();
-			const view = await apiPost("/api/workspace/conversation", {
+			// Nothing is closed to make room: the conversations already alive stay
+			// alive, and the workspace either holds another one or refuses to
+			// (AC-1, AC-5).
+			const view = await apiPost("/api/workspace/conversations", {
 				spec_code: code,
 			});
-			conversationTranscript = null;
-			conversationAfterID = 0;
-			conversationEvents = [];
-			conversationRefusal = "";
-			conversationLink = "";
-			conversationPollFailures = 0;
-			applyConversationView(view);
-			conversationsCurrentId =
-				(view && view.conversation && view.conversation.id) || "";
+			conversationsRefusal = "";
+			await switchToConversation(conversationIdOf(view), view);
 			// The conversation is the home of the workspace, and a conversation
 			// that was just started is the thing to look at.
 			setShellView("conversation");
 		} catch (err) {
-			showConversationRefusal(err);
+			refuseConversationOpen(err);
 		} finally {
 			conversationBusy = false;
 			renderConversationPanel();
-			if (conversationIsActive()) startConversationPolling();
 			loadConversationsIndex();
 		}
 	}
@@ -4301,7 +4329,7 @@
 		// first, then re-read.
 		conversationsIndex = null;
 		conversationsCurrentId = "";
-		conversationTranscript = null;
+		conversationsRefusal = "";
 		renderConversationsRail();
 		loadConversationsIndex();
 		// The panel is the home of the workspace: it never goes blank and it
@@ -4348,9 +4376,15 @@
 		);
 	}
 
-	// loadConversation reads the conversation of the open workspace from the
+	// loadConversation reads the conversations of the open workspace from the
 	// beginning. It is the entry point of every fresh read — boot, refresh, and
 	// every workspace change — so the cursor is reset with the projection.
+	//
+	// There is no "the" conversation to ask for any more (US-059): the index is
+	// what says which ones the workspace holds, and the page shows one of the
+	// live ones — the most recently spoken to, which is the one the index puts
+	// first. With none alive the panel is the invitation to open one, and whether
+	// that offer can be taken is the index's verdict too.
 	async function loadConversation() {
 		if (!conversationEl) return;
 		if (noWorkspaceMode()) {
@@ -4358,26 +4392,18 @@
 			return;
 		}
 		resetConversationState();
-		let view;
-		try {
-			view = await apiGet("/api/workspace/conversation?after_id=0");
-		} catch (_) {
-			// A viewer that cannot answer must not stop anyone from working, so
-			// no toast is raised. The panel stays where it is and draws the state
-			// it has — which, after the reset above, is the invitation to open a
-			// conversation. It is the home of the workspace: it does not vanish.
+		await loadConversationsIndex();
+		const live = liveConversationEntries();
+		const first = live.length ? live[0].id || "" : "";
+		if (!first) {
+			// A viewer that cannot answer, or a workspace holding nothing alive:
+			// either way the panel draws the home of a workspace with no
+			// conversation open. No toast — it is the home of the workspace, and
+			// it does not vanish.
 			renderConversationPanel();
 			return;
 		}
-		applyConversationView(view);
-		// The rail marks the thread the panel is showing, and after a fresh read
-		// that is the live one — by its own id, so the mark survives a change of
-		// view and a reload alike.
-		conversationsCurrentId =
-			(view && view.conversation && view.conversation.id) || "";
-		renderConversationsRail();
-		renderConversationPanel();
-		if (conversationIsActive()) startConversationPolling();
+		await switchToConversation(first);
 	}
 
 	// startConversationPolling follows the open conversation with the discipline
@@ -4387,8 +4413,20 @@
 	// last turn is never cut off.
 	function startConversationPolling() {
 		stopConversationPolling();
+		// The loop follows one conversation by name, and the name is taken once,
+		// here: everything it does afterwards is checked against it, so a tick
+		// that comes back for a conversation the page has since left is dropped
+		// instead of being drawn over the one now on screen (AC-2).
+		const followed = conversationsCurrentId;
+		if (!followed) return;
 		conversationPollTimer = setInterval(async () => {
 			if (noWorkspaceMode()) {
+				stopConversationPolling();
+				return;
+			}
+			if (conversationsCurrentId !== followed) {
+				// The panel has moved on and this timer is not the one following
+				// what it shows: it stops rather than reading in the background.
 				stopConversationPolling();
 				return;
 			}
@@ -4397,10 +4435,11 @@
 			let view;
 			try {
 				view = await apiGet(
-					`/api/workspace/conversation?after_id=${conversationAfterID}`,
+					`/api/workspace/conversations/${encodeURIComponent(followed)}?after_id=${conversationAfterID}`,
 				);
 			} catch (err) {
 				conversationPollBusy = false;
+				if (conversationsCurrentId !== followed) return;
 				conversationPollFailures += 1;
 				if (conversationPollFailures >= CONVERSATION_POLL_FAILURE_LIMIT) {
 					stopConversationPolling();
@@ -4412,6 +4451,10 @@
 				return;
 			}
 			conversationPollBusy = false;
+			// The read left for one conversation and came back for another: what
+			// it carries belongs to the conversation that was on screen when it
+			// started, and nothing of it may reach the one that is on screen now.
+			if (conversationsCurrentId !== followed) return;
 			conversationPollFailures = 0;
 			conversationLink = "";
 			const appended = applyConversationView(view);
@@ -4434,28 +4477,15 @@
 		showToast(message, "err");
 	}
 
-	// releaseLiveConversation frees the single conversation of the workspace
-	// before another is opened in its place.
-	//
-	// It exists because the rail and the spec panel offer to start a
-	// conversation at any moment, while the open route refuses whenever the
-	// workspace already holds one — an offer standing on screen that refuses
-	// most of the times it is taken is not an offer. Closing first is the very
-	// order the resume route already follows on the server, and closing is what
-	// seals the record, so the thread being left behind stays in the rail with
-	// everything that was said in it.
-	async function releaseLiveConversation() {
-		if (!liveConversationEntry()) return;
-		try {
-			await apiDelete(
-				`/api/workspace/conversation?after_id=${conversationAfterID}`,
-			);
-		} catch (_) {
-			// It was already gone, or it refuses to go: either way the open that
-			// follows decides, and it refuses with the reason of the moment
-			// instead of one guessed here.
-		}
-		stopConversationPolling();
+	// refuseConversationOpen is what a refused open leaves on the page: the
+	// server's own sentence, kept beside the offer that was refused. Past the
+	// limit that sentence declares the limit and names the conversations to
+	// close (AC-5), and it is shown exactly as it arrived — the page neither
+	// writes a second one nor knows the number.
+	function refuseConversationOpen(err) {
+		showConversationRefusal(err);
+		conversationsRefusal = conversationRefusal;
+		renderConversationsRail();
 	}
 
 	async function openConversation() {
@@ -4463,48 +4493,41 @@
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
-			await releaseLiveConversation();
-			const view = await apiPost("/api/workspace/conversation", {});
-			// A new conversation is a new history: the cursor, the timeline, the
-			// past thread being read and the answers given in the previous one
-			// must not survive into it.
-			conversationTranscript = null;
-			conversationAfterID = 0;
-			conversationEvents = [];
-			conversationAnsweredApprovals = {};
-			conversationHighlightAnchor = "";
-			conversationRefusal = "";
-			conversationLink = "";
-			conversationPollFailures = 0;
-			applyConversationView(view);
-			conversationsCurrentId =
-				(view && view.conversation && view.conversation.id) || "";
+			// No conversation is released to make room for this one: whatever the
+			// workspace already holds keeps its history and its work in progress
+			// (AC-1). Past the limit the server refuses, and the refusal is its
+			// own words.
+			const view = await apiPost("/api/workspace/conversations", {});
+			conversationsRefusal = "";
+			await switchToConversation(conversationIdOf(view), view);
 		} catch (err) {
-			showConversationRefusal(err);
+			refuseConversationOpen(err);
 		} finally {
 			conversationBusy = false;
 			renderConversationPanel();
-			if (conversationIsActive()) startConversationPolling();
 			loadConversationsIndex();
 		}
 	}
 
 	async function sendConversationMessage() {
-		// Writing in a past thread is not writing in the open conversation: it
-		// resumes that thread in a new conversation. One composer, two routes,
-		// and the one taken is decided by what the panel is showing (AC-4).
-		if (conversationTranscript) {
+		if (conversationBusy) return;
+		const id = conversationsCurrentId;
+		if (!id || !conversationView) return;
+		// Writing in a conversation that has ended is not writing in a live one:
+		// it takes that one up again in a new conversation. One composer, two
+		// routes, and the one taken is decided by the state the payload declares
+		// — the page no longer keeps a separate holder to tell the two apart.
+		if (!conversationIsActive()) {
 			resumeConversationThread();
 			return;
 		}
-		if (conversationBusy || !conversationIsActive()) return;
 		const message = conversationDraft.trim();
 		if (!message) return;
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
 			const view = await apiPost(
-				`/api/workspace/conversation/messages?after_id=${conversationAfterID}`,
+				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
 				{ message },
 			);
 			// Accepted means delivered, not published: the text stays out of the
@@ -4531,11 +4554,13 @@
 	// other refused command of this panel.
 	async function decideProposal(proposalID, decision) {
 		if (conversationBusy) return;
+		const id = conversationsCurrentId;
+		if (!id) return;
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
 			const view = await apiPost(
-				`/api/workspace/conversation/proposal?after_id=${conversationAfterID}`,
+				`/api/workspace/conversations/${encodeURIComponent(id)}/proposal?after_id=${conversationAfterID}`,
 				{ proposal_id: Number(proposalID), decision },
 			);
 			conversationRefusal = "";
@@ -4598,10 +4623,13 @@
 				approval: answering,
 			};
 			try {
+				const showing = conversationsCurrentId;
 				const view = await apiGet(
-					`/api/workspace/conversation?after_id=${conversationAfterID}`,
+					`/api/workspace/conversations/${encodeURIComponent(showing)}?after_id=${conversationAfterID}`,
 				);
-				applyConversationView(view);
+				// Same rule as the poll: what came back describes the conversation
+				// that was on screen when it was asked for, and nothing else.
+				if (conversationsCurrentId === showing) applyConversationView(view);
 			} catch (_) {
 				// The answer was accepted; only the read that would have shown its
 				// effect failed. The next poll says the same thing, so nothing is
@@ -4651,16 +4679,12 @@
 		shellView = next.view;
 		specOpen = next.specOpen;
 		applyShellLayout();
-		// A past thread on screen is not where the run is waiting, and neither is
-		// a thread other than the one the entry names: the wait belongs to the
-		// live conversation, so the panel goes back to it before looking for the
-		// block.
+		// The wait belongs to one conversation, the one the entry names: a panel
+		// showing any other is brought to that one before the block is looked
+		// for. Named by id, because more than one may be alive (AC-1).
 		const wanted = conversationID ? String(conversationID) : "";
-		if (
-			conversationTranscript ||
-			(wanted && conversationsCurrentId && wanted !== conversationsCurrentId)
-		) {
-			await loadConversation();
+		if (wanted && wanted !== conversationsCurrentId) {
+			await switchToConversation(wanted);
 		}
 		if (!conversationEl) return;
 		const anchor =
@@ -4691,15 +4715,22 @@
 
 	async function closeConversation() {
 		if (conversationBusy) return;
+		const id = conversationsCurrentId;
+		if (!id) return;
 		conversationCloseArmed = false;
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
+			// Closing names the conversation being closed (AC-4): the others stay
+			// exactly as they were, and none of their state is touched here.
 			const view = await apiDelete(
-				`/api/workspace/conversation?after_id=${conversationAfterID}`,
+				`/api/workspace/conversations/${encodeURIComponent(id)}?after_id=${conversationAfterID}`,
 			);
 			conversationRefusal = "";
-			applyConversationView(view);
+			// A slot has just been freed, so the reason an open was refused is no
+			// longer the truth of this workspace.
+			conversationsRefusal = "";
+			if (conversationsCurrentId === id) applyConversationView(view);
 			stopConversationPolling();
 		} catch (err) {
 			showConversationRefusal(err);
@@ -4737,15 +4768,14 @@
 		// its own empty state — the invitation to open a conversation — so the
 		// home of the workspace is never a blank panel.
 		//
-		// A past thread read from the rail is drawn from its transcript instead,
-		// shaped into the very same payload — one renderer for both, so the
+		// A conversation that has ended travels in the very same payload as a live
+		// one and is drawn by the same branch — one renderer for both, so the
 		// history of a conversation looks the same whether it is happening or
-		// already happened (AC-3).
-		const view = conversationTranscript
-			? transcriptConversationView()
-			: conversationView
-				? Object.assign({}, conversationView, { events: conversationEvents })
-				: null;
+		// already happened (AC-3). With nothing on screen the panel draws the
+		// invitation, and whether it can be taken comes from the index.
+		const view = conversationView
+			? Object.assign({}, conversationView, { events: conversationEvents })
+			: emptyConversationView();
 		conversationEl.innerHTML = window.Conversation.renderConversation(
 			view,
 			conversationDraft,
@@ -4776,13 +4806,14 @@
 			else if (panel) panel.insertAdjacentHTML("afterbegin", banner);
 		}
 
-		// A past thread takes no more messages *in itself*, and the renderer is
-		// right to say so — but it can be taken up, and the composer is where
-		// that is done. So the controls the renderer froze are handed back here,
-		// with words that name what pressing Send actually does: a new
-		// conversation, given this one as context. This is the panel's local
-		// state, which is exactly what the caller owns and the renderer does not.
-		if (conversationTranscript) {
+		// A conversation that has ended takes no more messages *in itself*, and
+		// the renderer is right to say so — but it can be taken up, and the
+		// composer is where that is done. So the controls the renderer froze are
+		// handed back here, with words that name what pressing Send actually
+		// does: a new conversation, given this one as context. This is the
+		// panel's local state, which is exactly what the caller owns and the
+		// renderer does not.
+		if (view && view.conversation && !conversationIsActive()) {
 			const resumeInput = conversationEl.querySelector(".conv-composer-input");
 			const resumeSend = conversationEl.querySelector(
 				".conv-composer button[type='submit']",

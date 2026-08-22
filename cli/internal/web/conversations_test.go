@@ -29,17 +29,15 @@ type conversationsRouteTestEntry struct {
 	Live          bool   `json:"live"`
 }
 
+// conversationsRouteTestIndex carries the availability triplet as well as the
+// list, because with the singular route retired the index is the only read a
+// workspace holding nothing alive still makes: it is where "can another
+// conversation be opened here, and with which provider" is now answered.
 type conversationsRouteTestIndex struct {
-	Conversations []conversationsRouteTestEntry `json:"conversations"`
-}
-
-type conversationsRouteTestTranscript struct {
-	conversationsRouteTestEntry
-	Events []struct {
-		ID   int64  `json:"id"`
-		Kind string `json:"kind"`
-		Text string `json:"text"`
-	} `json:"events"`
+	Conversations     []conversationsRouteTestEntry `json:"conversations"`
+	Available         bool                          `json:"available"`
+	UnavailableReason string                        `json:"unavailable_reason"`
+	ProviderID        string                        `json:"provider_id"`
 }
 
 // conversationsRouteTestStore is a second store opened on the very directory of
@@ -83,18 +81,13 @@ func conversationsRouteTestReadIndex(t *testing.T, srv *Server) (conversationsRo
 	return view, body
 }
 
-func conversationsRouteTestReadTranscript(t *testing.T, srv *Server, id string) (int, conversationsRouteTestTranscript, string) {
+// conversationsRouteTestReadTranscript reads one conversation through the
+// unified route. It is readConversation under another name on purpose: there is
+// one read, and a transcript is what it answers with when the conversation it
+// names has ended.
+func conversationsRouteTestReadTranscript(t *testing.T, srv *Server, id string) (int, conversationResponse, string) {
 	t.Helper()
-	w := doJSON(t, srv, http.MethodGet, "/api/workspace/conversations/"+id, nil)
-	body := w.Body.String()
-	if w.Code != http.StatusOK {
-		return w.Code, conversationsRouteTestTranscript{}, body
-	}
-	var view conversationsRouteTestTranscript
-	if err := json.Unmarshal([]byte(body), &view); err != nil {
-		t.Fatalf("undecodable transcript: %v (%s)", err, body)
-	}
-	return w.Code, view, body
+	return readConversation(t, srv, id, 0)
 }
 
 func conversationsRouteTestEntryOf(t *testing.T, view conversationsRouteTestIndex, id string) conversationsRouteTestEntry {
@@ -226,7 +219,7 @@ func TestConversationsIndexMarksOnlyTheHeldConversationLive(t *testing.T) {
 		}
 	}
 
-	if status, _, closeBody := closeConversation(t, srv); status != http.StatusOK {
+	if status, _, closeBody := closeConversation(t, srv, id); status != http.StatusOK {
 		t.Fatalf("DELETE conversation = %d, want 200: %s", status, closeBody)
 	}
 
@@ -270,16 +263,16 @@ func TestConversationsIndexDoesNotResurrectAnActiveRecord(t *testing.T) {
 	if entry.State != "" {
 		t.Errorf("state = %q, want the record's own empty final state travelling uninterpreted", entry.State)
 	}
-	if _, open := srv.session().conversation.current(); open {
-		t.Error("reading the index installed a conversation on the workspace")
+	if live := liveConversationIDs(srv); len(live) != 0 {
+		t.Errorf("reading the index installed a conversation on the workspace: %v", live)
 	}
 }
 
-// TestConversationTranscriptReturnsEveryEventInOrder is AC-3: the whole of what
+// TestEndedConversationReturnsEveryEventInOrder is AC-3: the whole of what
 // was said, in the order it was said, with nothing dropped for being of the
 // wrong kind — a transcript read out of order, or short of a few lines, is a
 // different conversation from the one that happened.
-func TestConversationTranscriptReturnsEveryEventInOrder(t *testing.T) {
+func TestEndedConversationReturnsEveryEventInOrder(t *testing.T) {
 	srv := newConversationServer(t, newConversingProvider("chatty", 0))
 	store := conversationsRouteTestStore(t, srv)
 
@@ -322,19 +315,21 @@ func TestConversationTranscriptReturnsEveryEventInOrder(t *testing.T) {
 	}
 	// The header travels with the transcript, so a deep link that lands here
 	// without having read the index still knows what it is showing.
-	if view.ID != "conv-trascritta" || view.SpecCode != "US-058" || strings.TrimSpace(view.Title) == "" {
+	if view.Conversation == nil || view.Conversation.ID != "conv-trascritta" || view.Conversation.SpecCode != "US-058" {
 		t.Errorf("the transcript header lost the conversation it belongs to: %s", body)
 	}
-	if view.Live {
-		t.Errorf("a past conversation is declared live: %s", body)
+	// What tells a past conversation from a live one is the state inside the
+	// payload, which is the record's own and is never interpreted by the read.
+	if view.Conversation != nil && view.Conversation.State != string(execution.RunClosed) {
+		t.Errorf("state = %q, want the record's own %q: %s", view.Conversation.State, execution.RunClosed, body)
 	}
 }
 
-// TestLiveConversationTranscriptComesFromTheSession: for the conversation the
+// TestLiveConversationHistoryComesFromTheSession: for the conversation the
 // workspace is holding, the session in memory is the more recent of the two
 // histories, and the two must not be allowed to disagree under the eyes of
 // whoever is reading them.
-func TestLiveConversationTranscriptComesFromTheSession(t *testing.T) {
+func TestLiveConversationHistoryComesFromTheSession(t *testing.T) {
 	provider := newConversingProvider("chatty", 0)
 	srv := newConversationServer(t, provider)
 
@@ -365,15 +360,15 @@ func TestLiveConversationTranscriptComesFromTheSession(t *testing.T) {
 	if got := view.Events[len(view.Events)-1]; got.ID != last.ID || got.Text != "l'ultima parola" {
 		t.Errorf("the transcript ends on {%d %q}, want the last event emitted {%d %q}", got.ID, got.Text, last.ID, "l'ultima parola")
 	}
-	if !view.Live {
-		t.Errorf("the conversation the workspace is holding is not declared live: %s", body)
+	if view.Conversation == nil || view.Conversation.State != string(execution.RunActive) {
+		t.Errorf("the conversation the workspace is holding does not read as active: %s", body)
 	}
 }
 
-// TestConversationTranscriptOfAnUnknownIDIsNotFound: a thread that does not
+// TestConversationReadOfAnUnknownIDIsNotFound: a thread that does not
 // exist here is a 404 that names it, not an empty transcript that would look
 // like a conversation in which nobody ever said anything.
-func TestConversationTranscriptOfAnUnknownIDIsNotFound(t *testing.T) {
+func TestConversationReadOfAnUnknownIDIsNotFound(t *testing.T) {
 	srv := newConversationServer(t, newConversingProvider("chatty", 0))
 
 	status, _, body := conversationsRouteTestReadTranscript(t, srv, "conv-inesistente")

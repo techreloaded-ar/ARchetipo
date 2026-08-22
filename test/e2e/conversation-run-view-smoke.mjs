@@ -7,8 +7,9 @@
 // `archetipo view`, the filefs connector on disk, the `claude` provider with
 // its stream-json client and its local session, the `arcipelago` provider with
 // its SSE consumer and the server-side run follower, the conversation routes
-// (`GET`, `POST`, `POST .../messages`, `POST .../proposal`, `DELETE` on
-// `/api/workspace/conversation`), the rail route `GET /api/workspace/runs`, the
+// (`POST` on `/api/workspace/conversations` and `GET`, `POST .../messages`,
+// `POST .../proposal`, `DELETE` on `/api/workspace/conversations/{id}`), the
+// rail route `GET /api/workspace/runs`, the
 // approval route `POST /api/execution/{id}/run/approvals/{id}` and the document
 // the browser is really served on `GET /index.html`. Two things are replaced,
 // and only two: the ARcipelago hub, by a local Node server bound to 127.0.0.1,
@@ -184,7 +185,7 @@ async function scenario(runDir) {
     }));
 
     conversationControl.push(emit({ type: "system", subtype: "init", session_id: "conversation-1" }));
-    const opened = await apiJSON(`${view.url}/api/workspace/conversation`, postJSON({}), 201);
+    const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
     const conversationID = opened.conversation?.id;
     if (opened.available !== true || !conversationID) {
       throw new Error(`the conversation did not open: ${JSON.stringify(opened)}`);
@@ -201,6 +202,7 @@ async function scenario(runDir) {
     )));
     const pending = await waitForConversation(
       view.url,
+      conversationID,
       (data) => data.proposal?.runnable === true,
       `the runnable proposal of ${PROPOSED_ACTION} on ${SPEC}`,
     );
@@ -219,7 +221,7 @@ async function scenario(runDir) {
 
     // --- AC-1 ---------------------------------------------------------------
     const confirmed = await apiJSON(
-      `${view.url}/api/workspace/conversation/proposal`,
+      `${view.url}/api/workspace/conversations/${conversationID}/proposal`,
       postJSON({ proposal_id: proposalEventID, decision: "accept" }),
       201,
     );
@@ -228,7 +230,7 @@ async function scenario(runDir) {
       throw new Error(`the confirmation must name the execution it started; got ${JSON.stringify(confirmed.outcome)}`);
     }
 
-    const born = await readConversation(view.url);
+    const born = await readConversation(view.url, conversationID);
     if (!Array.isArray(born.runs) || born.runs.length !== 1) {
       throw new Error(`AC-1: the conversation must carry exactly the run it asked for; got ${JSON.stringify(born.runs)}`);
     }
@@ -257,6 +259,7 @@ async function scenario(runDir) {
     runControl.push(emit(assistantText(" e apro i file")));
     const growing = await waitForConversation(
       view.url,
+      conversationID,
       (data) => (data.runs?.[0]?.events || []).filter((event) => event.kind === "text").length >= 2,
       `the two frames of the run process to appear inside the run block of ${executionID}`,
     );
@@ -268,10 +271,10 @@ async function scenario(runDir) {
       throw new Error(`AC-2: the frames the run emitted are not the ones the block shows; got ${JSON.stringify(growingBlock.events)}`);
     }
     assertNoRunPanelCalls(executionID, "AC-2: while the growth of the run was being observed");
-    const conversationReads = viewerRequests.filter((entry) => entry.path.startsWith("/api/workspace/conversation")).length;
+    const conversationReads = viewerRequests.filter((entry) => entry.path.startsWith("/api/workspace/conversations/")).length;
     ok(
       "AC-2",
-      `the two frames the run process emitted appear inside the run block and its state became ACTIVE, observed through ${conversationReads} read(s) of /api/workspace/conversation and exactly 0 calls to GET /api/execution/${executionID}/run — counted over the ${viewerRequests.length} requests this smoke had made`,
+      `the two frames the run process emitted appear inside the run block and its state became ACTIVE, observed through ${conversationReads} read(s) of /api/workspace/conversations/${conversationID} and exactly 0 calls to GET /api/execution/${executionID}/run — counted over the ${viewerRequests.length} requests this smoke had made`,
     );
 
     // --- the remote provider ------------------------------------------------
@@ -294,6 +297,7 @@ async function scenario(runDir) {
     hub.assignRun(remote.id);
     const bound = await waitForConversation(
       view.url,
+      conversationID,
       (data) => data.runs?.[0]?.run?.run_id === RUN_ID,
       `the run block of ${executionID} to be bound to the remote run ${RUN_ID}`,
     );
@@ -304,6 +308,7 @@ async function scenario(runDir) {
     hub.setApprovals([approval(APPROVAL_ALLOWED)]);
     const waiting = await waitForConversation(
       view.url,
+      conversationID,
       (data) => (data.runs?.[0]?.approvals || []).length === 1,
       `the consent ${APPROVAL_ALLOWED} to appear inside the run block of ${executionID}`,
     );
@@ -330,7 +335,7 @@ async function scenario(runDir) {
     // The oracle is the agent process saying it was given the message, never
     // the 202 of the route.
     const accepted = await apiJSON(
-      `${view.url}/api/workspace/conversation/messages`,
+      `${view.url}/api/workspace/conversations/${conversationID}/messages`,
       postJSON({ message: MESSAGE_SENTINEL }),
       202,
     );
@@ -343,6 +348,7 @@ async function scenario(runDir) {
     conversationControl.push(emit(assistantText(REPLY_SENTINEL)));
     const answered = await waitForConversation(
       view.url,
+      conversationID,
       (data) => (data.events || []).some((event) => (event.text || "").includes(REPLY_SENTINEL)),
       "the agent's answer to appear in the timeline of the conversation",
     );
@@ -350,7 +356,7 @@ async function scenario(runDir) {
     assertEqual(answered.runs?.[0]?.awaiting_response, true, "AC-5: whether the run is still waiting after the exchange");
     ok(
       "AC-5",
-      `while the run was stopped on ${APPROVAL_ALLOWED}, POST /api/workspace/conversation/messages answered 202 with available:true, the agent process itself reported having been given ${JSON.stringify(MESSAGE_SENTINEL)}, its answer came back into the timeline of ${conversationID}, and the run block was still awaiting its consent`,
+      `while the run was stopped on ${APPROVAL_ALLOWED}, POST /api/workspace/conversations/${conversationID}/messages answered 202 with available:true, the agent process itself reported having been given ${JSON.stringify(MESSAGE_SENTINEL)}, its answer came back into the timeline of ${conversationID}, and the run block was still awaiting its consent`,
     );
 
     // --- AC-6 ---------------------------------------------------------------
@@ -389,6 +395,7 @@ async function scenario(runDir) {
     hub.emitRunEvent(" e ho finito di ripulire");
     const resumed = await waitForConversation(
       view.url,
+      conversationID,
       (data) => (data.runs?.[0]?.events || []).some((event) => (event.text || "").includes("comando consentito"))
         && (data.runs?.[0]?.approvals || []).length === 0,
       `the run of ${executionID} to carry on inside the conversation after the consent was granted`,
@@ -400,6 +407,7 @@ async function scenario(runDir) {
     hub.setApprovals([approval(APPROVAL_DENIED)]);
     await waitForConversation(
       view.url,
+      conversationID,
       (data) => (data.runs?.[0]?.approvals || [])[0]?.id === APPROVAL_DENIED,
       `the second consent ${APPROVAL_DENIED} to appear inside the run block`,
     );
@@ -418,6 +426,7 @@ async function scenario(runDir) {
     hub.closeRun();
     const stopped = await waitForConversation(
       view.url,
+      conversationID,
       (data) => data.runs?.[0]?.run?.state === "CLOSED",
       `the run of ${executionID} to be reported as closed inside the conversation`,
     );
@@ -442,7 +451,7 @@ async function scenario(runDir) {
     }
 
     // --- the closing discipline of the sibling smokes ------------------------
-    const closed = await apiJSON(`${view.url}/api/workspace/conversation`, { method: "DELETE" }, 200);
+    const closed = await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}`, { method: "DELETE" }, 200);
     if (closed.conversation?.state !== "CLOSED") {
       throw new Error(`the close must report the state the session observed; got ${JSON.stringify(closed.conversation)}`);
     }
@@ -480,21 +489,21 @@ async function listExecutionRecords(root) {
 
 // --- reading the conversation ---------------------------------------------------
 
-async function readConversation(viewURL, afterID = 0) {
-  return apiJSON(`${viewURL}/api/workspace/conversation?after_id=${afterID}`);
+async function readConversation(viewURL, conversationID, afterID = 0) {
+  return apiJSON(`${viewURL}/api/workspace/conversations/${encodeURIComponent(conversationID)}?after_id=${afterID}`);
 }
 
 // waitForConversation polls the read route until the conversation reports what
 // the test has just caused. `what` is not decoration: a timeout has to say what
 // it was waiting for and what the last reading held, or the failure names
 // nothing.
-async function waitForConversation(viewURL, predicate, what, timeoutMs = 60000) {
+async function waitForConversation(viewURL, conversationID, predicate, what, timeoutMs = 60000) {
   const started = Date.now();
   let last = null;
   let lastError = null;
   while (Date.now() - started < timeoutMs) {
     try {
-      last = await readConversation(viewURL);
+      last = await readConversation(viewURL, conversationID);
       lastError = null;
       if (predicate(last)) return last;
     } catch (error) {
@@ -1175,7 +1184,7 @@ function renderReport(summary) {
     <h2>Scenario</h2>
     <p>One real workspace served by the real <code>archetipo view</code>. The agent proposes an action, the
     proposal is confirmed, and the run it starts is followed from then on through
-    <code>GET /api/workspace/conversation</code> alone — this smoke records every request it makes and asserts
+    <code>GET /api/workspace/conversations/{id}</code> alone — this smoke records every request it makes and asserts
     that it never called <code>GET /api/execution/{id}/run</code> to learn that the run was growing. The
     workspace default is then moved to the <code>arcipelago</code> provider pointed at a fake local hub, which
     opens two consents on that same run: the first is granted and the run carries on, the second is refused and

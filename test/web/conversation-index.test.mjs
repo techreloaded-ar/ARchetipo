@@ -21,6 +21,12 @@
 //     earlier one as context, and names it
 //   - a group with no members leaves no orphan heading
 //   - the live conversation is listed as such even when it has a spec code
+//   - US-059 AC-3 several live conversations stand together under "In corso"
+//     while a closed one stays out of that group
+//   - US-059 AC-3 only the conversation on screen is marked current, even when
+//     more than one is live
+//   - US-059 AC-5 the limit notice renders the server's refusal verbatim, knows
+//     no number of its own, and escapes what it is given
 //   - the conversation on screen is the only one marked as current
 //   - payload text is escaped, never interpreted as markup
 //   - the module is pure: no DOM, no network, no timers
@@ -61,8 +67,12 @@ function loadConversationIndex() {
 	return mod.exports;
 }
 
-const { renderConversationIndex, relativeTime, renderResumeBanner } =
-	loadConversationIndex();
+const {
+	renderConversationIndex,
+	relativeTime,
+	renderResumeBanner,
+	renderLimitNotice,
+} = loadConversationIndex();
 
 // Strip every attribute from the markup, leaving only what a reader sees.
 // A sentence that survives this is visible text; one that does not was only
@@ -285,6 +295,160 @@ describe("renderResumeBanner", () => {
 	it("resta muto su una conversazione ordinaria", () => {
 		assert.equal(renderResumeBanner({ conversation: { id: "conv-1" } }), "");
 		assert.equal(renderResumeBanner(null), "");
+	});
+});
+
+describe("renderConversationIndex con più conversazioni vive", () => {
+	// The payload of a workspace holding two live conversations — one tied to a
+	// spec, one free — beside a third that has ended. It is the state US-059
+	// introduces, and the one the singular rail could not describe.
+	const twoLiveAndOneClosed = {
+		conversations: [
+			{
+				id: "conv-viva-spec",
+				title: "Implementiamo US-059",
+				last_message_at: ago(2 * 60 * 1000),
+				spec_code: "US-059",
+				live: true,
+			},
+			{
+				id: "conv-viva-libera",
+				title: "Che ne pensi della rail",
+				last_message_at: ago(10 * 60 * 1000),
+				spec_code: "",
+				live: true,
+			},
+			{
+				id: "conv-chiusa",
+				title: "Conversazione finita ieri",
+				last_message_at: ago(30 * HOUR),
+				spec_code: "US-058",
+				state: "CLOSED",
+				live: false,
+			},
+		],
+	};
+
+	// The markup of one group, from its heading to the next heading or the end.
+	// It lets an assertion speak about "what stands under In corso" instead of
+	// about the whole rail, where an entry of another group would satisfy it by
+	// accident.
+	function groupBody(html, label) {
+		const opening = `<p class="rail-group">${label}</p>`;
+		const start = html.indexOf(opening);
+		assert.notEqual(start, -1, `the group ${label} is not rendered`);
+		const after = html.slice(start + opening.length);
+		const next = after.indexOf(`<p class="rail-group">`);
+		return next === -1 ? after : after.slice(0, next);
+	}
+
+	it("tiene due conversazioni vive insieme sotto «In corso» e la chiusa fuori (AC-3)", () => {
+		const html = renderConversationIndex(twoLiveAndOneClosed, { now: NOW });
+
+		const live = groupBody(html, "In corso");
+		assert.ok(
+			live.includes("conv-viva-spec"),
+			"the live conversation tied to a spec is missing from the live group",
+		);
+		assert.ok(
+			live.includes("conv-viva-libera"),
+			"the free live conversation is missing from the live group",
+		);
+		assert.ok(
+			!live.includes("conv-chiusa"),
+			"a conversation that has ended must not stand under In corso",
+		);
+		// Both of them carry the live flag, and only them.
+		assert.equal(
+			(live.match(/thread-flag is-live/g) || []).length,
+			2,
+			"both live conversations must carry the is-live flag",
+		);
+		assert.equal(
+			(html.match(/thread-flag is-live/g) || []).length,
+			2,
+			"no entry outside the live group may carry the is-live flag",
+		);
+		// And the one that ended is still listed, under the group its spec code
+		// puts it in: closed is not hidden, it is elsewhere.
+		assert.ok(
+			groupBody(html, "Spec").includes("conv-chiusa"),
+			"the closed conversation must still be listed under its own group",
+		);
+	});
+
+	it("marca come corrente solo la conversazione mostrata, anche fra due vive (AC-3)", () => {
+		const html = renderConversationIndex(twoLiveAndOneClosed, {
+			now: NOW,
+			currentId: "conv-viva-libera",
+		});
+
+		const current = threadWithTitle(html, "Che ne pensi della rail");
+		assert.match(current, /is-current/);
+		assert.match(current, /aria-current="true"/);
+
+		const other = threadWithTitle(html, "Implementiamo US-059");
+		assert.ok(
+			!other.includes("is-current"),
+			"a live conversation that is not the one on screen must not be marked current",
+		);
+		assert.ok(
+			!other.includes("aria-current"),
+			"only the conversation on screen carries aria-current",
+		);
+		assert.equal(
+			(html.match(/aria-current="true"/g) || []).length,
+			1,
+			"exactly one entry is the current one",
+		);
+	});
+});
+
+describe("renderLimitNotice", () => {
+	// The very shape of sentence the server sends: it declares the limit and
+	// names the conversations holding the places.
+	const serverRefusal =
+		"this workspace already holds 3 live conversations: conv-a (Implementiamo US-059), conv-b (Che ne pensi della rail), conv-c (Rivediamo il piano). Close one of them before opening another.";
+
+	it("rende il rifiuto del server alla lettera (AC-5)", () => {
+		const html = renderLimitNotice(serverRefusal);
+		assert.match(html, /class="rail-notice"/);
+		assert.match(html, /role="status"/);
+		// Verbatim: every word of it, including the number and all three ids.
+		assert.ok(
+			visibleText(html).includes(serverRefusal),
+			`the notice must carry the server sentence unchanged, got ${html}`,
+		);
+	});
+
+	it("tace quando non c'è nulla da dire", () => {
+		assert.equal(renderLimitNotice(""), "");
+		assert.equal(renderLimitNotice("   "), "");
+		assert.equal(renderLimitNotice(null), "");
+		assert.equal(renderLimitNotice(undefined), "");
+	});
+
+	it("non inventa il numero: il limite non è scritto nel modulo (AC-5)", () => {
+		// The module composes nothing about the limit, so it can hold no digit
+		// of its own: a number written here would be a second truth about how
+		// many conversations may live at once, and the two would drift.
+		const withoutDigits = renderLimitNotice(
+			"this workspace is already holding every conversation it can hold",
+		);
+		assert.ok(
+			!/\d/.test(visibleText(withoutDigits)),
+			`a refusal with no number must produce a notice with no number, got ${withoutDigits}`,
+		);
+	});
+
+	it("sfugge il motivo invece di interpretarlo", () => {
+		const html = renderLimitNotice('<script>alert("x")</script> troppe vive');
+		assert.ok(
+			!html.includes("<script>"),
+			`the notice must escape markup, got ${html}`,
+		);
+		assert.match(html, /&lt;script&gt;/);
+		assert.match(html, /troppe vive/);
 	});
 });
 

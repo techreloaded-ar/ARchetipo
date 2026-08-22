@@ -111,18 +111,21 @@ func emitProposal(t *testing.T, provider *conversingProvider, conversationID, se
 	return event.ID
 }
 
-func readProposalConversation(t *testing.T, srv *Server) proposalConversationResponse {
+// readProposalConversation reads the conversation the proposal was made in.
+// Every read names it, because with several live conversations "the"
+// conversation of a workspace is no longer a thing that exists.
+func readProposalConversation(t *testing.T, srv *Server, conversationID string) proposalConversationResponse {
 	t.Helper()
-	w := doJSON(t, srv, http.MethodGet, "/api/workspace/conversation", nil)
+	w := doJSON(t, srv, http.MethodGet, conversationPath(conversationID, 0), nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET conversation = %d, want 200: %s", w.Code, w.Body.String())
 	}
 	return decodeProposalConversation(t, w.Body.String())
 }
 
-func decideProposal(t *testing.T, srv *Server, proposalID int64, decision string) (int, proposalConversationResponse, string) {
+func decideProposal(t *testing.T, srv *Server, conversationID string, proposalID int64, decision string) (int, proposalConversationResponse, string) {
 	t.Helper()
-	w := doJSON(t, srv, http.MethodPost, "/api/workspace/conversation/proposal", map[string]any{
+	w := doJSON(t, srv, http.MethodPost, conversationsRoute+"/"+conversationID+"/proposal", map[string]any{
 		"proposal_id": proposalID,
 		"decision":    decision,
 	})
@@ -179,7 +182,7 @@ func TestConversationCarriesThePendingProposalWithoutStartingAnything(t *testing
 
 	eventID := emitProposal(t, provider, conversationID, "Posso pianificare US-901.", "plan", "US-901")
 
-	view := readProposalConversation(t, srv)
+	view := readProposalConversation(t, srv, conversationID)
 	if view.Proposal == nil {
 		t.Fatalf("the conversation carries no proposal after the agent made one")
 	}
@@ -243,7 +246,7 @@ func TestAcceptingAProposalStartsTheSameExecutionAsTheBoard(t *testing.T) {
 		conversationID := openProposalConversation(t, srv)
 		eventID := emitProposal(t, provider, conversationID, "Posso pianificare US-901.", "plan", "US-901")
 
-		status, view, body := decideProposal(t, srv, eventID, "accept")
+		status, view, body := decideProposal(t, srv, conversationID, eventID, "accept")
 		if status != http.StatusCreated {
 			t.Fatalf("POST proposal accept = %d, want 201: %s", status, body)
 		}
@@ -290,7 +293,7 @@ func TestAProposalTheProcessDoesNotAdmitIsRefusedWithItsOwnReason(t *testing.T) 
 	// US-901 is TODO, and the process admits "review" only on a spec in REVIEW.
 	eventID := emitProposal(t, provider, conversationID, "Posso rivedere US-901.", "review", "US-901")
 
-	view := readProposalConversation(t, srv)
+	view := readProposalConversation(t, srv, conversationID)
 	if view.Proposal == nil {
 		t.Fatalf("a proposal the process does not admit is not carried at all")
 	}
@@ -319,7 +322,7 @@ func TestAProposalTheProcessDoesNotAdmitIsRefusedWithItsOwnReason(t *testing.T) 
 	}
 
 	// And accepting it refuses too, with nothing started.
-	status, _, body := decideProposal(t, srv, eventID, "accept")
+	status, _, body := decideProposal(t, srv, conversationID, eventID, "accept")
 	if status != http.StatusConflict {
 		t.Fatalf("POST proposal accept = %d, want 409: %s", status, body)
 	}
@@ -340,7 +343,7 @@ func TestDecliningAProposalLeavesTheWorkspaceUntouched(t *testing.T) {
 	conversationID := openProposalConversation(t, srv)
 	eventID := emitProposal(t, provider, conversationID, "Posso pianificare US-901.", "plan", "US-901")
 
-	status, view, body := decideProposal(t, srv, eventID, "decline")
+	status, view, body := decideProposal(t, srv, conversationID, eventID, "decline")
 	if status != http.StatusOK {
 		t.Fatalf("POST proposal decline = %d, want 200: %s", status, body)
 	}
@@ -354,7 +357,7 @@ func TestDecliningAProposalLeavesTheWorkspaceUntouched(t *testing.T) {
 		t.Errorf("a refusal names an execution: %#v", view.Outcome)
 	}
 
-	polled := readProposalConversation(t, srv)
+	polled := readProposalConversation(t, srv, conversationID)
 	if polled.Proposal != nil {
 		t.Errorf("the declined proposal comes back pending on the next poll: %#v", polled.Proposal)
 	}
@@ -368,7 +371,7 @@ func TestDecliningAProposalLeavesTheWorkspaceUntouched(t *testing.T) {
 
 	// The conversation goes on: the next message is accepted and reaches the
 	// agent process.
-	sendStatus, _, sendBody := sendConversationMessage(t, srv, "Allora parliamone.")
+	sendStatus, _, sendBody := sendConversationMessage(t, srv, conversationID, "Allora parliamone.")
 	if sendStatus != http.StatusAccepted {
 		t.Fatalf("POST message after a refusal = %d, want 202: %s", sendStatus, sendBody)
 	}
@@ -385,7 +388,7 @@ func TestAnAcceptedProposalNamesTheRunItStarted(t *testing.T) {
 	conversationID := openProposalConversation(t, srv)
 	eventID := emitProposal(t, provider, conversationID, "Posso pianificare US-901.", "plan", "US-901")
 
-	status, view, body := decideProposal(t, srv, eventID, "accept")
+	status, view, body := decideProposal(t, srv, conversationID, eventID, "accept")
 	if status != http.StatusCreated {
 		t.Fatalf("POST proposal accept = %d, want 201: %s", status, body)
 	}
@@ -415,7 +418,7 @@ func TestAnAcceptedProposalNamesTheRunItStarted(t *testing.T) {
 		t.Fatalf("the run named by the outcome is not reachable: %d %#v", code, record)
 	}
 	// The outcome survives the poll that follows, so a reload still finds the run.
-	polled := readProposalConversation(t, srv)
+	polled := readProposalConversation(t, srv, conversationID)
 	if polled.Outcome == nil || polled.Outcome.ExecutionID != view.Outcome.ExecutionID {
 		t.Errorf("the outcome does not survive the next poll: %#v", polled.Outcome)
 	}
@@ -436,14 +439,14 @@ func TestOnlyTheCurrentProposalCanBeDecided(t *testing.T) {
 		t.Fatalf("the two proposals share the event id %d", stale)
 	}
 
-	status, _, body := decideProposal(t, srv, stale, "accept")
+	status, _, body := decideProposal(t, srv, conversationID, stale, "accept")
 	if status != http.StatusConflict {
 		t.Fatalf("accepting a superseded proposal = %d, want 409: %s", status, body)
 	}
 	requireNoExecution(t, srv, "US-901")
 	requireNoExecution(t, srv, "US-902")
 
-	view := readProposalConversation(t, srv)
+	view := readProposalConversation(t, srv, conversationID)
 	if view.Proposal == nil || view.Proposal.EventID != current {
 		t.Fatalf("the pending proposal is not the last one: %#v", view.Proposal)
 	}
@@ -461,18 +464,18 @@ func TestASecondProposalSupersedesTheDecidedOne(t *testing.T) {
 	conversationID := openProposalConversation(t, srv)
 
 	first := emitProposal(t, provider, conversationID, "Posso pianificare US-901.", "plan", "US-901")
-	status, _, body := decideProposal(t, srv, first, "decline")
+	status, _, body := decideProposal(t, srv, conversationID, first, "decline")
 	if status != http.StatusOK {
 		t.Fatalf("POST proposal decline = %d, want 200: %s", status, body)
 	}
 	// The agent keeps talking: plain text does not resurrect the decided one.
 	provider.emit(t, conversationID, localrun.KindText, "Va bene, non la pianifico.")
-	if view := readProposalConversation(t, srv); view.Proposal != nil {
+	if view := readProposalConversation(t, srv, conversationID); view.Proposal != nil {
 		t.Fatalf("the decided proposal came back pending after more talk: %#v", view.Proposal)
 	}
 
 	second := emitProposal(t, provider, conversationID, "E US-902 invece?", "plan", "US-902")
-	view := readProposalConversation(t, srv)
+	view := readProposalConversation(t, srv, conversationID)
 	if view.Proposal == nil || view.Proposal.EventID != second {
 		t.Fatalf("the new proposal is not pending: %#v", view.Proposal)
 	}
@@ -487,4 +490,47 @@ func TestASecondProposalSupersedesTheDecidedOne(t *testing.T) {
 	}
 	requireNoExecution(t, srv, "US-901")
 	requireNoExecution(t, srv, "US-902")
+}
+
+// TestADecisionStaysInTheConversationItWasTakenIn is AC-2 on the decision
+// register: a proposal answered in one conversation is a fact of that
+// conversation alone. The watermark used to belong to the workspace, and a
+// decision taken in one thread marked the next proposal of another as already
+// answered — which is exactly the mixing a workspace holding several
+// conversations must not do.
+func TestADecisionStaysInTheConversationItWasTakenIn(t *testing.T) {
+	provider := newConversingProvider("chatty", 0)
+	srv, _ := newProposalServer(t, provider)
+
+	a := openProposalConversation(t, srv)
+	b := openProposalConversation(t, srv)
+
+	decided := emitProposal(t, provider, a, "Posso pianificare US-901.", "plan", "US-901")
+	status, view, body := decideProposal(t, srv, a, decided, "decline")
+	if status != http.StatusOK {
+		t.Fatalf("POST proposal decline in %s = %d, want 200: %s", a, status, body)
+	}
+	if view.Outcome == nil || view.Outcome.ProposalID != decided {
+		t.Fatalf("the decision was not recorded in the conversation it was taken in: %#v", view.Outcome)
+	}
+
+	other := readProposalConversation(t, srv, b)
+	if other.Outcome != nil {
+		t.Errorf("a decision taken in %s appears as the outcome of %s: %#v", a, b, other.Outcome)
+	}
+	if other.Proposal != nil {
+		t.Errorf("the conversation %s carries a proposal nobody made in it: %#v", b, other.Proposal)
+	}
+
+	// And the watermark of the other conversation is untouched: a proposal made
+	// in it afterwards is pending, and not already answered by the decision taken
+	// next door.
+	own := emitProposal(t, provider, b, "E qui, posso pianificare US-902?", "plan", "US-902")
+	pending := readProposalConversation(t, srv, b)
+	if pending.Proposal == nil || pending.Proposal.EventID != own {
+		t.Fatalf("the proposal of %s is not pending: a decision taken in %s answered it: %#v", b, a, pending.Proposal)
+	}
+	if pending.Outcome != nil {
+		t.Errorf("the conversation %s inherited an outcome it never decided: %#v", b, pending.Outcome)
+	}
 }

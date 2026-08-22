@@ -2,7 +2,10 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -11,27 +14,34 @@ import (
 )
 
 // conversationCloseTimeout bounds how long stopping a workspace waits for the
-// provider to release the agent process behind its conversation.
+// provider to release the agent processes behind its conversations.
 //
 // It exists because the close happens on a context of its own: the session's
 // context is already cancelled by the time stop() gets there, and a close on a
 // cancelled context would ask the provider to release nothing.
 const conversationCloseTimeout = 5 * time.Second
 
-// conversationState holds the *one* conversation of a workspace.
+// maxLiveConversations is how many conversations a workspace may hold alive at
+// the same time.
 //
-// One, not a map: a workspace admits a single conversation, and the identity of
-// the conversation is therefore the identity of the workspace that opened it.
-// Keeping a second one alive would mean keeping a second agent process rooted
-// in a directory somebody has to close later, and nothing in the viewer would
-// be holding the handle for it.
-//
-// Every field is read and written under mu, and readers never receive the
-// struct itself: current() hands back a copy, so nobody can observe a state
-// half-way through an open or a close.
-type conversationState struct {
-	mu sync.Mutex
+// It is a number and not "as many as you like" because every live conversation
+// is an agent process rooted in the *same* working directory: isolating those
+// directories from one another is out of scope here, so two agents editing the
+// same tree is a cost a person takes on knowingly, and a limit nobody declares
+// is a limit discovered when the machine stops. It is a package constant and
+// not a configuration key because the number is the rule, not a preference:
+// this is the single place it is written, and the refusal, the unit tests and
+// the smoke all read it from here.
+const maxLiveConversations = 3
 
+// liveConversation is one conversation the workspace is holding right now.
+//
+// Everything that used to be a flat field of the holder lives here instead, and
+// the decision watermark most of all: while decidedProposalID belonged to the
+// holder, a proposal decided in one conversation marked as already decided the
+// next proposal of another one, which is exactly the mixing a workspace with
+// several live conversations must not do.
+type liveConversation struct {
 	// id is the conversation id the provider registered the session under, and
 	// therefore the run id the conversation is read and commanded with.
 	id string
@@ -54,23 +64,19 @@ type conversationState struct {
 	workingDir string
 	openedAt   time.Time
 	// specCode is the spec the conversation was opened about, empty for a free
-	// conversation — which is the default. It lives in the holder because it is
-	// a fact of *this* conversation and not of the workspace: the next one may
-	// well be about nothing.
+	// conversation — which is the default. It is a fact of *this* conversation
+	// and not of the workspace: the one next to it may well be about nothing.
 	specCode string
 	// resumedFrom is the id of the past conversation this one was resumed from,
 	// empty for a conversation that started on its own.
 	resumedFrom string
-	// closed says the holder has been shut down for good. It is not "there is
-	// no conversation right now": a stopped session must never accept a new
-	// one, because nothing would be left to close it.
-	closed bool
 
-	// decidedProposalID is the id of the last event whose action proposal has
-	// been decided. It is a watermark and not a flag: a proposal is pending
-	// exactly while the last one the history carries is *newer* than this id,
-	// which is what makes a decision survive the agent going on talking, and a
-	// new proposal become pending again without anything being cleared.
+	// decidedProposalID is the id of the last event of *this* conversation whose
+	// action proposal has been decided. It is a watermark and not a flag: a
+	// proposal is pending exactly while the last one the history carries is
+	// *newer* than this id, which is what makes a decision survive the agent
+	// going on talking, and a new proposal become pending again without anything
+	// being cleared.
 	decidedProposalID int64
 	// outcome is what became of that decision, kept so a reader that arrives
 	// after it — a reload, a second tab — still learns what was started and
@@ -87,9 +93,388 @@ type conversationState struct {
 	outcomes []conversationOutcome
 }
 
-// conversationOutcome is the record of the last decision taken on a proposal:
-// what was decided, about which proposed action, and — when the decision was to
-// confirm — the execution that was born from it.
+// conversationSet holds the conversations a workspace has alive, up to
+// maxLiveConversations of them.
+//
+// A map and no longer a single value: a person carrying two specs forward talks
+// about one while an agent is still working on the other, and closing the first
+// to open the second — which is what the singular holder forced the browser to
+// do — threw away both the history and the work in flight. It is *bounded*
+// rather than unbounded for the reason written on maxLiveConversations.
+//
+// Every field is read and written under mu, and readers never receive the
+// entries themselves: get() and list() hand back copies, so nobody can observe
+// a conversation half-way through an open or a close.
+type conversationSet struct {
+	mu sync.Mutex
+
+	// live is the conversations being held, keyed by conversation id.
+	live map[string]*liveConversation
+	// closed says the holder has been shut down for good. It is not "there are
+	// no conversations right now": a stopped session must never accept a new
+	// one, because nothing would be left to close it.
+	closed bool
+}
+
+// conversationLimitError is the refusal of an open that would take the
+// workspace past maxLiveConversations.
+//
+// It carries the limit and the ids of the conversations currently alive rather
+// than a finished sentence, because the person is told which ones to close and
+// the ids are only half of that: the HTTP layer, which can read the titles from
+// the journal, names them properly. The default sentence is still a complete
+// refusal on its own, so a caller that does not enrich it says something true.
+type conversationLimitError struct {
+	Limit   int
+	LiveIDs []string
+}
+
+func (e *conversationLimitError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return "this workspace already holds " + strconv.Itoa(e.Limit) +
+		" live conversations (" + strings.Join(e.LiveIDs, ", ") +
+		"): close one of them before opening another"
+}
+
+func newConversationSet() *conversationSet {
+	return &conversationSet{live: map[string]*liveConversation{}}
+}
+
+// canOpen answers whether another conversation could be opened right now, and
+// with which refusal when it could not.
+//
+// It exists so the routes can check the limit *before* asking the provider to
+// start an agent process: a limit discovered only by open() would leave a
+// process running that the refused request no longer has any reason to hold.
+// It is not a guarantee — two concurrent requests can both pass it — which is
+// why open() checks again and the routes keep their recovery branch.
+func (c *conversationSet) canOpen() error {
+	if c == nil {
+		return fmt.Errorf("this workspace cannot hold a conversation")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return fmt.Errorf("this workspace is no longer open")
+	}
+	if len(c.live) >= maxLiveConversations {
+		return c.limitErrorLocked()
+	}
+	return nil
+}
+
+// open records a conversation the provider has just started.
+//
+// It refuses an id it is already holding rather than replacing it: replacing
+// would silently drop the handle of a live agent process, and the process would
+// then outlive everything that could stop it. It refuses past the limit for the
+// reason written on maxLiveConversations, and on a holder that has been closed
+// for the same reason runFollowers refuses after closeAll — the workspace it
+// belonged to is gone.
+func (c *conversationSet) open(id, providerID string, provider execution.Conversationalist, collaborator execution.RunCollaborator, providerConfig map[string]any, workingDir string, openedAt time.Time, specCode, resumedFrom string) error {
+	if c == nil {
+		return fmt.Errorf("this workspace cannot hold a conversation")
+	}
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("a conversation needs an id")
+	}
+	if provider == nil {
+		return fmt.Errorf("a conversation needs a provider that can close it")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return fmt.Errorf("this workspace is no longer open")
+	}
+	if c.live == nil {
+		c.live = map[string]*liveConversation{}
+	}
+	if _, held := c.live[id]; held {
+		return fmt.Errorf("conversation %s is already open for this workspace", id)
+	}
+	if len(c.live) >= maxLiveConversations {
+		return c.limitErrorLocked()
+	}
+	// A new conversation is a new story, and it starts with nothing decided: the
+	// watermark, the outcome and the register are zero here and are never
+	// inherited from a sibling, which is what keeps a decision taken in one
+	// conversation out of every other one.
+	c.live[id] = &liveConversation{
+		id:                id,
+		providerID:        providerID,
+		provider:          provider,
+		collaborator:      collaborator,
+		providerConfig:    providerConfig,
+		workingDir:        workingDir,
+		openedAt:          openedAt,
+		specCode:          specCode,
+		resumedFrom:       resumedFrom,
+		decidedProposalID: 0,
+		outcome:           nil,
+		outcomes:          nil,
+	}
+	return nil
+}
+
+// limitErrorLocked builds the refusal of AC-5 from the state itself, with mu
+// already held.
+//
+// It is built and not written out as a phrase because "which ones do I close?"
+// is answered by the conversations that are actually alive at this instant, and
+// a fixed sentence would answer it with a number.
+func (c *conversationSet) limitErrorLocked() *conversationLimitError {
+	return &conversationLimitError{Limit: maxLiveConversations, LiveIDs: c.liveIDsLocked()}
+}
+
+// liveIDsLocked is the ids of the live conversations in the order list() uses,
+// so the refusal and the index never name them in two different orders.
+func (c *conversationSet) liveIDsLocked() []string {
+	entries := make([]*liveConversation, 0, len(c.live))
+	for _, entry := range c.live {
+		entries = append(entries, entry)
+	}
+	sortLiveConversations(entries)
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		ids = append(ids, entry.id)
+	}
+	return ids
+}
+
+// sortLiveConversations orders by the moment of opening and, for two opened in
+// the same instant, by id. The tie-break is not decoration: without it two
+// successive reads of the same set could contradict each other, and the rail
+// would reorder under the person reading it.
+func sortLiveConversations(entries []*liveConversation) {
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].openedAt.Equal(entries[j].openedAt) {
+			return entries[i].id < entries[j].id
+		}
+		return entries[i].openedAt.Before(entries[j].openedAt)
+	})
+}
+
+// decide records that the proposal carried by proposalID has been answered in
+// the conversation named by id.
+//
+// It refuses on a closed holder and on an id that is not alive rather than
+// recording anyway: a decision belongs to one conversation, and there is no
+// conversation to attach it to in either state. Both fields are written under
+// the same lock, so no reader can ever observe a watermark that has moved
+// without the outcome that explains it.
+func (c *conversationSet) decide(id string, proposalID int64, outcome conversationOutcome) error {
+	if c == nil {
+		return fmt.Errorf("this workspace cannot hold a conversation")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return fmt.Errorf("this workspace is no longer open")
+	}
+	entry, held := c.live[id]
+	if !held {
+		return fmt.Errorf("the conversation %s is not open for this workspace", id)
+	}
+	entry.decidedProposalID = proposalID
+	// The register keeps one entry per proposal. A decision on a proposal that
+	// already has one replaces it — the watermark makes that happen only for a
+	// refusal answered again by a confirmation of the same proposal, and two
+	// entries for one proposal would be two blocks for a single gesture.
+	replaced := false
+	for i := range entry.outcomes {
+		if entry.outcomes[i].ProposalID == outcome.ProposalID {
+			entry.outcomes[i] = outcome
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		entry.outcomes = append(entry.outcomes, outcome)
+	}
+	// outcome keeps pointing at the last decision taken, exactly as before. It
+	// is a copy and not the address of the entry in the register: a reader that
+	// received the pointer would otherwise be dereferencing a value a later
+	// decision on the same proposal is free to rewrite underneath it.
+	last := outcome
+	entry.outcome = &last
+	return nil
+}
+
+// anchorOf answers with the conversation that started executionID and the id of
+// the event that carried the proposal whose confirmation started it — the point
+// of that conversation's history where the step was asked for.
+//
+// It names the conversation and not only the anchor because with several live
+// conversations "which conversation is that anchor in" has a different answer
+// for each of them, and a run rail that navigated to "the" conversation would
+// be navigating to whichever one it happened to read.
+//
+// It answers false for an empty id, for a closed holder, and for an execution no
+// live conversation started: none of those has a point in any discourse here,
+// and a zero anchor would claim the top of a history.
+func (c *conversationSet) anchorOf(executionID string) (string, int64, bool) {
+	if c == nil || strings.TrimSpace(executionID) == "" {
+		return "", 0, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return "", 0, false
+	}
+	for _, id := range c.liveIDsLocked() {
+		entry := c.live[id]
+		for i := range entry.outcomes {
+			if entry.outcomes[i].ExecutionID == executionID {
+				return entry.id, entry.outcomes[i].ProposalID, true
+			}
+		}
+	}
+	return "", 0, false
+}
+
+// get returns a copy of one live conversation, and false when the workspace is
+// not holding it. Absence is an answer here, not a failure: an id that is not
+// alive may perfectly well be a conversation that ended and lives on disk, and
+// deciding that is the caller's business.
+func (c *conversationSet) get(id string) (conversationSnapshot, bool) {
+	if c == nil {
+		return conversationSnapshot{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, held := c.live[id]
+	if !held {
+		return conversationSnapshot{}, false
+	}
+	return snapshotOf(entry), true
+}
+
+// list returns every live conversation, oldest first.
+//
+// The order is fixed rather than the map's own so two successive reads cannot
+// contradict each other: an index whose order changed between polls would move
+// the threads under the hand of whoever is clicking one.
+func (c *conversationSet) list() []conversationSnapshot {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entries := make([]*liveConversation, 0, len(c.live))
+	for _, entry := range c.live {
+		entries = append(entries, entry)
+	}
+	sortLiveConversations(entries)
+	snapshots := make([]conversationSnapshot, 0, len(entries))
+	for _, entry := range entries {
+		snapshots = append(snapshots, snapshotOf(entry))
+	}
+	return snapshots
+}
+
+// snapshotOf copies one entry out of the set, with mu held.
+//
+// The register travels as a copy for the same reason the snapshot itself is
+// one: the caller must not be holding the slice the next decision appends to or
+// rewrites.
+func snapshotOf(entry *liveConversation) conversationSnapshot {
+	var outcomes []conversationOutcome
+	if len(entry.outcomes) > 0 {
+		outcomes = make([]conversationOutcome, len(entry.outcomes))
+		copy(outcomes, entry.outcomes)
+	}
+	return conversationSnapshot{
+		id:                entry.id,
+		providerID:        entry.providerID,
+		provider:          entry.provider,
+		collaborator:      entry.collaborator,
+		providerConfig:    entry.providerConfig,
+		workingDir:        entry.workingDir,
+		openedAt:          entry.openedAt,
+		specCode:          entry.specCode,
+		resumedFrom:       entry.resumedFrom,
+		decidedProposalID: entry.decidedProposalID,
+		outcome:           entry.outcome,
+		outcomes:          outcomes,
+	}
+}
+
+// closeOne releases the agent process behind one conversation and drops it from
+// the set, leaving every other one exactly as it was.
+//
+// It is idempotent: closing an id the workspace is not holding succeeds and
+// releases nothing, exactly like CloseConversation itself.
+//
+// The entry is dropped whatever the provider answers. A conversation the viewer
+// kept after a failed close would be a handle on a process the viewer can no
+// longer command, and the error is reported to the caller rather than hidden.
+// The provider is asked *outside* the lock, because releasing a real agent is a
+// cancel plus a process wait and holding mu across it would stop every other
+// conversation of the workspace from being read.
+func (c *conversationSet) closeOne(ctx context.Context, id string) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	entry, held := c.live[id]
+	if held {
+		delete(c.live, id)
+	}
+	c.mu.Unlock()
+	if !held || entry.provider == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return entry.provider.CloseConversation(ctx, entry.id)
+}
+
+// shutdown closes every conversation for good: after it, open refuses. It is
+// what a session that is ending calls, so a request still in flight cannot
+// install a conversation nobody is left to close.
+//
+// Emptying the map and marking the holder closed happen under the *same* lock,
+// and that is the whole reason they are one step: releasing the processes is
+// slow, and a shutdown that marked `closed` only afterwards would leave a window
+// in which the holder reads as "not closed, room for another", which is exactly
+// the state an open request accepts.
+//
+// It goes on after a provider that answers badly and joins the errors, because
+// a process left alive because the previous one failed to close is precisely
+// what closing a workspace must never leave behind.
+func (c *conversationSet) shutdown(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	entries := make([]*liveConversation, 0, len(c.live))
+	for _, id := range c.liveIDsLocked() {
+		entries = append(entries, c.live[id])
+	}
+	c.live = map[string]*liveConversation{}
+	c.closed = true
+	c.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var errs []error
+	for _, entry := range entries {
+		if entry.provider == nil {
+			continue
+		}
+		if err := entry.provider.CloseConversation(ctx, entry.id); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// conversationOutcome is the record of a decision taken on a proposal: what was
+// decided, about which proposed action, and — when the decision was to confirm
+// — the execution that was born from it.
 //
 // It carries the label, the scope and the spec of the proposal because the
 // event that proposed them may well have been dropped from the retention window
@@ -112,9 +497,9 @@ type conversationOutcome struct {
 	ExecutionID string
 }
 
-// conversationSnapshot is the read-only view of the holder at one instant. It
-// is a copy on purpose: a caller that held the live struct would be reading
-// fields the next open or close is free to rewrite underneath it.
+// conversationSnapshot is the read-only view of one live conversation at one
+// instant. It is a copy on purpose: a caller that held the live struct would be
+// reading fields the next open or close is free to rewrite underneath it.
 type conversationSnapshot struct {
 	id             string
 	providerID     string
@@ -135,225 +520,4 @@ type conversationSnapshot struct {
 	// providerConfig is, so a reader can place every started step at the point
 	// of the history that asked for it.
 	outcomes []conversationOutcome
-}
-
-func newConversationState() *conversationState {
-	return &conversationState{}
-}
-
-// open records the conversation the provider has just started.
-//
-// It refuses when one is already open rather than replacing it: replacing would
-// silently drop the handle of a live agent process, and the process would then
-// outlive everything that could stop it. It also refuses on a holder that has
-// been closed, for the same reason runFollowers refuses after closeAll — the
-// workspace it belonged to is gone.
-func (c *conversationState) open(id, providerID string, provider execution.Conversationalist, collaborator execution.RunCollaborator, providerConfig map[string]any, workingDir string, openedAt time.Time, specCode, resumedFrom string) error {
-	if c == nil {
-		return fmt.Errorf("this workspace cannot hold a conversation")
-	}
-	if strings.TrimSpace(id) == "" {
-		return fmt.Errorf("a conversation needs an id")
-	}
-	if provider == nil {
-		return fmt.Errorf("a conversation needs a provider that can close it")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return fmt.Errorf("this workspace is no longer open")
-	}
-	if c.id != "" {
-		return fmt.Errorf("conversation %s is already open for this workspace", c.id)
-	}
-	c.id = id
-	c.providerID = providerID
-	c.provider = provider
-	c.collaborator = collaborator
-	c.providerConfig = providerConfig
-	c.workingDir = workingDir
-	c.openedAt = openedAt
-	c.specCode = specCode
-	c.resumedFrom = resumedFrom
-	// A new conversation is a new story, and it starts with nothing decided. An
-	// inherited watermark would silently mark as already decided a proposal this
-	// conversation has never made — the first one it makes would arrive with an
-	// id below the watermark and would simply never be pending — and an
-	// inherited outcome would show, next to a fresh history, the result of a
-	// decision taken about a conversation that no longer exists.
-	c.decidedProposalID = 0
-	c.outcome = nil
-	c.outcomes = nil
-	return nil
-}
-
-// decide records that the proposal carried by proposalID has been answered.
-//
-// It refuses on an empty or closed holder rather than recording anyway: a
-// decision belongs to one conversation, and there is no conversation to attach
-// it to in either state. Both fields are written under the same lock, so no
-// reader can ever observe a watermark that has moved without the outcome that
-// explains it.
-func (c *conversationState) decide(proposalID int64, outcome conversationOutcome) error {
-	if c == nil {
-		return fmt.Errorf("this workspace cannot hold a conversation")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return fmt.Errorf("this workspace is no longer open")
-	}
-	if c.id == "" {
-		return fmt.Errorf("no conversation is open for this workspace")
-	}
-	c.decidedProposalID = proposalID
-	// The register keeps one entry per proposal. A decision on a proposal that
-	// already has one replaces it — the watermark makes that happen only for a
-	// refusal answered again by a confirmation of the same proposal, and two
-	// entries for one proposal would be two blocks for a single gesture.
-	replaced := false
-	for i := range c.outcomes {
-		if c.outcomes[i].ProposalID == outcome.ProposalID {
-			c.outcomes[i] = outcome
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		c.outcomes = append(c.outcomes, outcome)
-	}
-	// outcome keeps pointing at the last decision taken, exactly as before. It
-	// is a copy and not the address of the entry in the register: a reader that
-	// received the pointer would otherwise be dereferencing a value a later
-	// decision on the same proposal is free to rewrite underneath it.
-	last := outcome
-	c.outcome = &last
-	return nil
-}
-
-// anchorOf answers with the id of the event that carried the proposal whose
-// confirmation started executionID — the point of the history where that step
-// was asked for.
-//
-// It answers false for an empty id, for a closed or empty holder, and for an
-// execution this conversation never started: none of those has a point in this
-// discourse, and a zero anchor would claim the top of the history.
-func (c *conversationState) anchorOf(executionID string) (int64, bool) {
-	if c == nil || strings.TrimSpace(executionID) == "" {
-		return 0, false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed || c.id == "" {
-		return 0, false
-	}
-	for i := range c.outcomes {
-		if c.outcomes[i].ExecutionID == executionID {
-			return c.outcomes[i].ProposalID, true
-		}
-	}
-	return 0, false
-}
-
-// current returns a copy of the open conversation, and false when there is
-// none. Absence is an answer here, not a failure: a workspace that has never
-// opened a conversation is the ordinary case.
-func (c *conversationState) current() (conversationSnapshot, bool) {
-	if c == nil {
-		return conversationSnapshot{}, false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.id == "" {
-		return conversationSnapshot{}, false
-	}
-	// The register travels as a copy for the same reason the snapshot itself is
-	// one: the caller must not be holding the slice the next decision appends
-	// to or rewrites.
-	var outcomes []conversationOutcome
-	if len(c.outcomes) > 0 {
-		outcomes = make([]conversationOutcome, len(c.outcomes))
-		copy(outcomes, c.outcomes)
-	}
-	return conversationSnapshot{
-		id:                c.id,
-		providerID:        c.providerID,
-		provider:          c.provider,
-		collaborator:      c.collaborator,
-		providerConfig:    c.providerConfig,
-		workingDir:        c.workingDir,
-		openedAt:          c.openedAt,
-		specCode:          c.specCode,
-		resumedFrom:       c.resumedFrom,
-		decidedProposalID: c.decidedProposalID,
-		outcome:           c.outcome,
-		outcomes:          outcomes,
-	}, true
-}
-
-// close releases the agent process behind the conversation and empties the
-// holder. It is idempotent: closing when there is nothing open succeeds and
-// releases nothing, exactly like CloseConversation itself.
-//
-// The state is emptied whatever the provider answers. A conversation the viewer
-// kept after a failed close would be a handle on a process the viewer can no
-// longer command, and the error is reported to the caller rather than hidden.
-func (c *conversationState) close(ctx context.Context) error {
-	return c.releaseCurrent(ctx, false)
-}
-
-// releaseCurrent empties the holder and releases what was in it, marking the
-// holder closed for good when markClosed is set.
-//
-// Emptying and marking happen under the *same* lock, and that is the whole
-// reason this is one function and not two: releasing the process is slow — for
-// a real agent it is a cancel plus a process wait — and a shutdown that marked
-// `closed` only afterwards would leave a window in which the holder reads as
-// "not closed, nothing open", which is precisely the state an open request
-// accepts. A conversation installed in that window would belong to a session
-// that is already gone, with nothing left to close it.
-func (c *conversationState) releaseCurrent(ctx context.Context, markClosed bool) error {
-	if c == nil {
-		return nil
-	}
-	c.mu.Lock()
-	id := c.id
-	provider := c.provider
-	c.id = ""
-	c.providerID = ""
-	c.provider = nil
-	c.collaborator = nil
-	c.providerConfig = nil
-	c.workingDir = ""
-	c.openedAt = time.Time{}
-	// Same reason the fields above are cleared: they described the conversation
-	// being released, and a spec code left behind would bind the next one to a
-	// spec nobody named.
-	c.specCode = ""
-	c.resumedFrom = ""
-	// Same reason open clears them: the decision belonged to the conversation
-	// being released. Left behind, the watermark would make the first proposal
-	// of the next conversation look already decided, and the outcome would
-	// describe a run started from a history nobody can read here any more.
-	c.decidedProposalID = 0
-	c.outcome = nil
-	c.outcomes = nil
-	if markClosed {
-		c.closed = true
-	}
-	c.mu.Unlock()
-	if id == "" || provider == nil {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return provider.CloseConversation(ctx, id)
-}
-
-// shutdown closes the conversation for good: after it, open refuses. It is what
-// a session that is ending calls, so a request still in flight cannot install a
-// conversation nobody is left to close.
-func (c *conversationState) shutdown(ctx context.Context) error {
-	return c.releaseCurrent(ctx, true)
 }

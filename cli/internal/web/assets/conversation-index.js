@@ -24,7 +24,7 @@
 //
 // Consumable in both browser (defines ConversationIndex on the global object)
 // and Node (exports renderConversationIndex / relativeTime /
-// renderResumeBanner).
+// renderResumeBanner / renderLimitNotice).
 (function () {
 	// ---- internal helpers ----
 
@@ -72,6 +72,12 @@
 		empty: "Su questo workspace non c'è ancora nessuna conversazione.",
 		freeCode: "···",
 	};
+
+	// There is deliberately no entry here for the limit of live conversations.
+	// The sentence that declares it — how many may live at once, and which ones
+	// to close — is the server's, and renderLimitNotice draws it as it arrives.
+	// A word about the limit written here would be a second truth about it, and
+	// the number would be the worse half of the two.
 
 	const MINUTE = 60 * 1000;
 	const HOUR = 60 * MINUTE;
@@ -225,6 +231,11 @@
 		</div>`;
 		}
 
+		// Every entry the payload marks as live, and not "the" live one: a
+		// workspace holds more than one at a time (US-059, AC-3). The filter is
+		// what makes that true — a `find` here would draw one and silently hide
+		// the others, which is precisely the assumption of uniqueness this rail
+		// must not make.
 		const live = entries.filter(isLive);
 		const spec = entries.filter(
 			(entry) => !isLive(entry) && !!textAt(entry, "spec_code"),
@@ -243,6 +254,27 @@
 
 		return `${top}
 		<div class="rail-list">${groups}</div>`;
+	}
+
+	/**
+	 * The notice a person reads when opening another conversation was refused.
+	 *
+	 * The words are the caller's — which is to say the server's: the refusal
+	 * declares how many conversations may live at once and names the ones that
+	 * are holding the places, and neither fact is knowable here. This function
+	 * escapes that sentence and gives it a place to stand; it composes nothing,
+	 * and it does not know the number.
+	 *
+	 * Returns the empty string when there is no reason: no refusal is the
+	 * ordinary state of the rail, and its rendering is silence.
+	 *
+	 * @param {string|null} reason  The server's refusal, verbatim.
+	 * @returns {string} HTML string.
+	 */
+	function renderLimitNotice(reason) {
+		const text = typeof reason === "string" ? reason.trim() : "";
+		if (!text) return "";
+		return `<p class="rail-notice" role="status">${escapeHtml(text)}</p>`;
 	}
 
 	/**
@@ -277,6 +309,7 @@
 			renderConversationIndex,
 			relativeTime,
 			renderResumeBanner,
+			renderLimitNotice,
 			escapeHtml,
 		};
 	} else {
@@ -284,6 +317,7 @@
 			renderConversationIndex,
 			relativeTime,
 			renderResumeBanner,
+			renderLimitNotice,
 		};
 	}
 })();

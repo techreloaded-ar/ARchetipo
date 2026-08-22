@@ -5530,6 +5530,17 @@ body.no-workspace [data-workspace-scoped] {
 	color: var(--text-muted);
 }
 
+/* The refusal of an open, standing where the offer that was refused stands. It
+   is a remark and not an alarm: the same size and rhythm as the empty state
+   next to it, only louder in colour, because it names what to close before
+   another conversation can be opened. */
+.rail-notice {
+	margin: 10px 4px;
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--text);
+}
+
 /* A group heading is a typographic rule, not a bar: the index has to read like
    the table of contents of a notebook. */
 .rail-group {

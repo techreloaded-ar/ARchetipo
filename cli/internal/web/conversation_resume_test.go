@@ -66,7 +66,7 @@ func resumeTestResume(t *testing.T, srv *Server, id, message string) resumeTestR
 // binding is the exception a caller has to state.
 func resumeTestOpenWithSpec(t *testing.T, srv *Server, specCode string) string {
 	t.Helper()
-	w := doJSON(t, srv, http.MethodPost, "/api/workspace/conversation", map[string]any{"spec_code": specCode})
+	w := doJSON(t, srv, http.MethodPost, conversationsRoute, map[string]any{"spec_code": specCode})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("POST conversation (spec %s) = %d, want 201: %s", specCode, w.Code, w.Body.String())
 	}
@@ -100,7 +100,7 @@ func resumeTestPastConversation(t *testing.T, srv *Server, provider *conversingP
 		}
 		provider.emit(t, id, kind, text)
 	}
-	if status, _, body := closeConversation(t, srv); status != http.StatusOK {
+	if status, _, body := closeConversation(t, srv, id); status != http.StatusOK {
 		t.Fatalf("DELETE conversation = %d, want 200: %s", status, body)
 	}
 	return id
@@ -243,34 +243,41 @@ func TestResumeOpensANewConversationCarryingThePastOneAsContext(t *testing.T) {
 	}
 }
 
-// A workspace holds one conversation at a time, so resuming a past one closes
-// the one that is live — and the one being left behind is sealed with the state
-// it ended in rather than dropped.
-func TestResumeClosesTheLiveConversationFirst(t *testing.T) {
+// A resume no longer ends the conversation that is happening: a workspace holds
+// several, and closing a live thread to take up a past one would throw away
+// exactly the history and the work in flight that AC-1 exists to keep. The
+// oracle is what the provider was asked to release — nothing.
+func TestResumeDoesNotCloseTheLiveConversation(t *testing.T) {
 	provider := newConversingProvider("resumable", 0)
 	srv := newConversationServer(t, provider)
 
 	past := resumeTestPastConversation(t, srv, provider, "una vecchia conversazione")
+	closedByThePast := len(provider.closings())
 	live := openConversationOK(t, srv).Conversation.ID
 	provider.emit(t, live, localrun.KindUserMessage, "qualcosa detto in quella viva")
 
 	view := resumeTestResume(t, srv, past, "riprendiamo la vecchia")
 
-	closed := provider.closings()
-	if len(closed) == 0 || closed[len(closed)-1] != live {
-		t.Fatalf("the provider closed %q, want the live conversation %q released", closed, live)
-	}
-	record := resumeTestRecord(t, srv, live)
-	if record.FinalState == "" {
-		t.Error("the conversation left behind was not sealed with a final state")
-	}
-	// Sealed with everything said in it, not with the history the last read had
-	// happened to see.
-	if record.MessageCount != 1 {
-		t.Errorf("the sealed record counts %d messages, want the one that was said", record.MessageCount)
+	if closings := provider.closings(); len(closings) != closedByThePast {
+		t.Fatalf("the resume released %v, want the live conversation %q left alone", closings[closedByThePast:], live)
 	}
 	if view.Conversation.ID == live {
-		t.Fatalf("the resume answered with the conversation it had just closed")
+		t.Fatalf("the resume answered with the conversation that was already live")
+	}
+	// And the live one is still there, still active, with its history intact.
+	_, read, body := readConversation(t, srv, live, 0)
+	if read.Conversation == nil || read.Conversation.State != string(execution.RunActive) {
+		t.Fatalf("the live conversation did not survive the resume: %s", body)
+	}
+	if got := conversationEventTexts(read); len(got) != 1 || got[0] != "qualcosa detto in quella viva" {
+		t.Errorf("the live conversation lost its history to the resume: %v (%s)", got, body)
+	}
+	held := map[string]bool{}
+	for _, id := range liveConversationIDs(srv) {
+		held[id] = true
+	}
+	if !held[live] || !held[view.Conversation.ID] {
+		t.Errorf("the workspace holds %v, want both the conversation that was live and the resumed one", liveConversationIDs(srv))
 	}
 }
 
@@ -283,7 +290,7 @@ func TestResumeInheritsTheSpecOfTheConversationItTakesUp(t *testing.T) {
 
 	past := resumeTestOpenWithSpec(t, srv, "US-901")
 	provider.emit(t, past, localrun.KindUserMessage, "parliamo di US-901")
-	if status, _, body := closeConversation(t, srv); status != http.StatusOK {
+	if status, _, body := closeConversation(t, srv, past); status != http.StatusOK {
 		t.Fatalf("DELETE conversation = %d, want 200: %s", status, body)
 	}
 
@@ -351,7 +358,7 @@ func TestResumeRefusesWhatCannotBeResumed(t *testing.T) {
 		if !strings.Contains(message, live) {
 			t.Errorf("the refusal does not name the conversation: %q", message)
 		}
-		if !strings.Contains(strings.ToLower(message), "currently open") {
+		if !strings.Contains(strings.ToLower(message), "is live on this workspace") {
 			t.Errorf("the refusal does not say why it refused: %q", message)
 		}
 		// And it is still open: a refused resume releases nothing.

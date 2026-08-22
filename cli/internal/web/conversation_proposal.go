@@ -303,11 +303,12 @@ func (s *Server) handleDecideWorkspaceConversationProposal(w http.ResponseWriter
 		return
 	}
 	ws := s.session()
-	snapshot, open := ws.conversation.current()
-	if !open {
+	id := strings.TrimSpace(r.PathValue("id"))
+	snapshot, live := ws.conversation.get(id)
+	if !live {
 		// The very sentence of the twin routes: there is one absence here, and it
 		// is said in one way.
-		writeError(w, iox.NewConflict("no conversation is open for this workspace", "open one before deciding a proposal", nil))
+		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "decide a proposal"))
 		return
 	}
 	session, found := conversationSessionOf(snapshot)
@@ -346,11 +347,11 @@ func (s *Server) handleDecideWorkspaceConversationProposal(w http.ResponseWriter
 		if outcome.SpecCode != "" {
 			outcome.Scope = template.ScopeSpec
 		}
-		if err := ws.conversation.decide(proposalID, outcome); err != nil {
+		if err := ws.conversation.decide(id, proposalID, outcome); err != nil {
 			writeError(w, iox.NewConflict(err.Error(), "read the conversation of this workspace before deciding a proposal", nil))
 			return
 		}
-		decided, stillOpen := ws.conversation.current()
+		decided, stillOpen := ws.conversation.get(id)
 		writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, ws, heldConversationTarget(decided), decided, stillOpen, afterID))
 		return
 	}
@@ -384,7 +385,7 @@ func (s *Server) handleDecideWorkspaceConversationProposal(w http.ResponseWriter
 		SpecCode:    view.SpecCode,
 		ExecutionID: started.ID,
 	}
-	if err := ws.conversation.decide(proposalID, outcome); err != nil {
+	if err := ws.conversation.decide(id, proposalID, outcome); err != nil {
 		// The execution exists: it was started a moment ago and it is running.
 		// The holder refusing the outcome — the workspace was left mid-request —
 		// cannot unstart it, so the response says what happened rather than
@@ -396,6 +397,6 @@ func (s *Server) handleDecideWorkspaceConversationProposal(w http.ResponseWriter
 		))
 		return
 	}
-	decided, stillOpen := ws.conversation.current()
+	decided, stillOpen := ws.conversation.get(id)
 	writeJSON(w, http.StatusCreated, s.conversationViewOf(ctx, ws, heldConversationTarget(decided), decided, stillOpen, afterID))
 }

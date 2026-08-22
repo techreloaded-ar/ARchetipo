@@ -140,7 +140,7 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     await useFakeProvider(viewOne.url);
 
     control.push(emit(initFrame("conversation-yesterday")));
-    const opened = await apiJSON(`${viewOne.url}/api/workspace/conversation`, postJSON({ spec_code: CODE_A }), 201);
+    const opened = await apiJSON(`${viewOne.url}/api/workspace/conversations`, postJSON({ spec_code: CODE_A }), 201);
     const yesterdayID = opened.conversation?.id;
     if (!yesterdayID) {
       throw new Error(`AC-1: unexpected payload on open: ${JSON.stringify(opened)}`);
@@ -150,17 +150,19 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     control.push(emit(assistantText(AGENT_SENTINEL)));
     await waitForConversation(
       viewOne.url,
+      yesterdayID,
       0,
       (data) => (data.events || []).length === 1,
       "the assistant frame of the conversation of yesterday to become a text event",
     );
-    await apiJSON(`${viewOne.url}/api/workspace/conversation/messages`, postJSON({ message: HUMAN_SENTINEL }), 202);
+    await apiJSON(`${viewOne.url}/api/workspace/conversations/${yesterdayID}/messages`, postJSON({ message: HUMAN_SENTINEL }), 202);
     // The first user frame carried the opening instruction; the operator's
     // message is the second one the process is given.
     await control.waitFor(userFrame, 2);
     control.push(emit(userReplay(HUMAN_SENTINEL)));
     const beforeRestart = await waitForConversation(
       viewOne.url,
+      yesterdayID,
       0,
       (data) => (data.events || []).length === 2,
       "the message of the person to enter the history of the conversation of yesterday",
@@ -168,7 +170,7 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     const eventsBefore = beforeRestart.events;
     assertEventIDs(eventsBefore, [1, 2], "AC-1 the history held before the restart");
 
-    const closed = await apiJSON(`${viewOne.url}/api/workspace/conversation?after_id=0`, { method: "DELETE" }, 200);
+    const closed = await apiJSON(`${viewOne.url}/api/workspace/conversations/${yesterdayID}?after_id=0`, { method: "DELETE" }, 200);
     if (closed.conversation?.id !== yesterdayID) {
       throw new Error(`AC-1: the close must answer about the conversation it closed; got ${JSON.stringify(closed.conversation)}`);
     }
@@ -233,11 +235,14 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
 
     // --- AC-3 ---------------------------------------------------------------
     const transcript = await apiJSON(`${viewTwo.url}/api/workspace/conversations/${encodeURIComponent(yesterdayID)}`);
-    if (transcript.id !== yesterdayID) {
-      throw new Error(`AC-3: the transcript is about ${JSON.stringify(transcript.id)}, want ${yesterdayID}`);
+    if (transcript.conversation?.id !== yesterdayID) {
+      throw new Error(`AC-3: the transcript is about ${JSON.stringify(transcript.conversation?.id)}, want ${yesterdayID}`);
     }
-    if (transcript.live !== false) {
-      throw new Error("AC-3: a past transcript must not declare itself live");
+    // The read is the same route for a live conversation and for one that has
+    // ended, so what tells the two apart is the state inside the payload: a
+    // conversation nobody is holding any more reads as the record left it.
+    if (transcript.conversation.state !== "CLOSED") {
+      throw new Error(`AC-3: a conversation that has ended must not read as a live one; got ${JSON.stringify(transcript.conversation.state)}`);
     }
     assertSameEvents(eventsBefore, transcript.events, "AC-3 the transcript read after the restart");
     assertStrictlyIncreasing(transcript.events, "AC-3 the transcript read after the restart");
@@ -254,12 +259,12 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     );
 
     // --- AC-4 ---------------------------------------------------------------
-    // A live conversation first, because taking up a past one has to close
-    // whatever is open: the claim is about two processes and not only about a
-    // payload.
+    // A live conversation first, because taking up a past one now happens
+    // *beside* whatever is open: the claim is about two processes and not only
+    // about a payload.
     await useFakeProvider(viewTwo.url);
     control.push(emit(initFrame("conversation-live")));
-    const live = await apiJSON(`${viewTwo.url}/api/workspace/conversation`, postJSON({}), 201);
+    const live = await apiJSON(`${viewTwo.url}/api/workspace/conversations`, postJSON({}), 201);
     const liveID = live.conversation?.id;
     if (!liveID || liveID === yesterdayID) {
       throw new Error(`AC-4: the live conversation must be one of its own; got ${JSON.stringify(live.conversation)}`);
@@ -269,19 +274,27 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
       throw new Error("AC-4: no agent process may have been given the transcript of yesterday before the resume was asked for");
     }
 
-    // The resume is answered only once the new process has announced itself, so
-    // the call is started and awaited around the two things that must happen in
-    // between: the old process ending, and the new one being told what to emit.
-    // Pushing the init frame any earlier would let the process being closed
-    // consume it.
-    const resumeCall = settled(apiJSON(
-      `${viewTwo.url}/api/workspace/conversations/${encodeURIComponent(yesterdayID)}/resume`,
-      postJSON({ message: RESUME_SENTINEL }),
-      201,
-    ));
-    await waitForProcessGone(agentLive.pid, `the agent process of the live conversation (pid ${agentLive.pid}) to be released by the resume`);
-    control.push(emit(initFrame("conversation-resumed")));
-    const resumed = await resumeCall();
+    // A resume no longer seals and closes the live conversation: it opens one
+    // beside it, so two agent processes are alive across this call and they
+    // share this control server. The route answers only once the new process has
+    // announced itself, and a single push could be taken by the process already
+    // live, so the announcement is pushed on a timer until the resume has
+    // answered — whichever of the two takes a given frame, the new one gets the
+    // next. An extra `system`/`init` frame produces no event in any
+    // conversation, and the leftovers are drained rather than left for whoever
+    // polls next.
+    const announcing = setInterval(() => control.push(emit(initFrame("conversation-resumed"))), 25);
+    let resumed;
+    try {
+      resumed = await apiJSON(
+        `${viewTwo.url}/api/workspace/conversations/${encodeURIComponent(yesterdayID)}/resume`,
+        postJSON({ message: RESUME_SENTINEL }),
+        201,
+      );
+    } finally {
+      clearInterval(announcing);
+      control.drain();
+    }
 
     const resumedID = resumed.conversation?.id;
     if (!resumedID || resumedID === yesterdayID || resumedID === liveID) {
@@ -295,8 +308,24 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     }
     const agentResumed = await control.waitFor("argv", 3);
     if (agentResumed.pid === agentLive.pid) {
-      throw new Error("AC-4: the resume reused the process of the conversation it just closed");
+      throw new Error("AC-4: the resume reused the process of the conversation that was already live");
     }
+    // The live conversation survived the resume: its own process is still there
+    // — asked of the operating system — and the index lists both threads as
+    // live, which is what "beside" means.
+    assertProcessAlive(agentLive.pid, `the agent process of the live conversation (pid ${agentLive.pid}) after the resume`);
+    const bothLive = await apiJSON(`${viewTwo.url}/api/workspace/conversations`);
+    for (const [label, id] of [["the conversation that was already live", liveID], ["the conversation that resumed the one of yesterday", resumedID]]) {
+      const entry = (bothLive.conversations || []).find((row) => row.id === id);
+      if (!entry || entry.live !== true) {
+        throw new Error(`AC-4: ${label} (${id}) must be listed as live after the resume; got ${JSON.stringify(bothLive.conversations)}`);
+      }
+    }
+    // It is closed here, and only here, so the rest of the scenario speaks to a
+    // single agent process: every frame below is pushed to a control server the
+    // two of them would otherwise be racing for.
+    await apiJSON(`${viewTwo.url}/api/workspace/conversations/${encodeURIComponent(liveID)}?after_id=0`, { method: "DELETE" }, 200);
+    await waitForProcessGone(agentLive.pid, `the agent process of the live conversation (pid ${agentLive.pid}) to be released by its own close`);
     const prompt = await control.waitFor(framesOf(agentResumed.pid, userFrame), 1);
     const promptText = userFrameText(prompt);
     for (const sentinel of [AGENT_SENTINEL, HUMAN_SENTINEL]) {
@@ -308,6 +337,7 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     control.push(emit(userReplay(RESUME_SENTINEL)));
     const resumedHistory = await waitForConversation(
       viewTwo.url,
+      resumedID,
       0,
       (data) => (data.events || []).some((event) => event.kind === "user_message" && event.text === RESUME_SENTINEL),
       "the message that asked for the resume to enter the history of the new conversation",
@@ -320,7 +350,7 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     }
     ok(
       "AC-4",
-      `POST /api/workspace/conversations/${yesterdayID}/resume answered 201 with the new conversation ${resumedID} declaring resumed_from ${resumed.conversation.resumed_from}, the operating system reports the process of the live conversation (pid ${agentLive.pid}) gone, the new agent process (pid ${agentResumed.pid}) was really given both sentences of yesterday in its prompt, and the message that asked for the resume entered the history of the new conversation`,
+      `POST /api/workspace/conversations/${yesterdayID}/resume answered 201 with the new conversation ${resumedID} declaring resumed_from ${resumed.conversation.resumed_from}, the conversation ${liveID} that was already live stayed live — its process (pid ${agentLive.pid}) still there and both threads listed live:true — the new agent process (pid ${agentResumed.pid}) was really given both sentences of yesterday in its prompt, and the message that asked for the resume entered the history of the new conversation`,
     );
 
     // --- AC-6 ---------------------------------------------------------------
@@ -336,14 +366,14 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
 
     await useFakeProvider(viewTwo.url);
     control.push(emit(initFrame("conversation-beta")));
-    const openedInB = await apiJSON(`${viewTwo.url}/api/workspace/conversation`, postJSON({}), 201);
+    const openedInB = await apiJSON(`${viewTwo.url}/api/workspace/conversations`, postJSON({}), 201);
     const conversationB = openedInB.conversation?.id;
     if (!conversationB) {
       throw new Error(`AC-6: B must open a conversation of its own; got ${JSON.stringify(openedInB.conversation)}`);
     }
     const agentB = await control.waitFor("argv", 4);
     control.push(emit(assistantText(BETA_SENTINEL)));
-    await waitForConversation(viewTwo.url, 0, (data) => (data.events || []).length === 1, "the history of the conversation of B");
+    await waitForConversation(viewTwo.url, conversationB, 0, (data) => (data.events || []).length === 1, "the history of the conversation of B");
 
     const rawIndexB = await rawGet(`${viewTwo.url}/api/workspace/conversations`);
     for (const [label, id] of [["of yesterday", yesterdayID], ["that was live", liveID], ["that resumed it", resumedID]]) {
@@ -384,13 +414,13 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     // "There are none" is only half of it: the empty state has to offer the
     // conversation it says does not exist yet.
     await useFakeProvider(viewTwo.url);
-    const offer = await apiJSON(`${viewTwo.url}/api/workspace/conversation?after_id=0`, {}, 200);
-    if (offer.available !== true || offer.conversation !== null) {
-      throw new Error(`AC-7: the empty state must offer to start a conversation; got ${JSON.stringify({ available: offer.available, conversation: offer.conversation, reason: offer.unavailable_reason })}`);
+    const offer = await apiJSON(`${viewTwo.url}/api/workspace/conversations`, {}, 200);
+    if (offer.available !== true || (offer.conversations || []).length !== 0) {
+      throw new Error(`AC-7: the empty state must offer to start a conversation; got ${JSON.stringify({ available: offer.available, conversations: offer.conversations, reason: offer.unavailable_reason })}`);
     }
     ok(
       "AC-7",
-      `on a workspace nobody has ever talked to GET /api/workspace/conversations answers 200 with the raw body ${JSON.stringify(rawIndexC.trim())}, no record exists under .archetipo/conversations, and GET /api/workspace/conversation answers available:true with conversation:null — there are none, and one can be started`,
+      `on a workspace nobody has ever talked to GET /api/workspace/conversations answers 200 with the raw body ${JSON.stringify(rawIndexC.trim())}, no record exists under .archetipo/conversations, and the same read answers available:true with an empty list — there are none, and one can be started`,
     );
 
     assertAlive(viewTwo.child, "the viewer process at the end of the scenario");
@@ -447,6 +477,20 @@ function assertEqual(actual, expected, label) {
 function assertAlive(child, label) {
   if (child.exitCode !== null || child.signalCode !== null) {
     throw new Error(`${label}: the process is gone (exit ${child.exitCode}, signal ${child.signalCode})`);
+  }
+}
+
+// assertProcessAlive is the other half of the same oracle: it asks the
+// operating system whether a process is still there, which is what "the live
+// conversation survived" means when a route says nothing about it.
+function assertProcessAlive(pid, what) {
+  if (!Number.isInteger(pid)) {
+    throw new Error(`no pid was reported for ${what}; got ${JSON.stringify(pid)}`);
+  }
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    throw new Error(`${what} is gone (${error.code})`);
   }
 }
 
@@ -559,6 +603,14 @@ async function startControlServer() {
     reports() {
       return received;
     },
+    // drain throws away the commands nobody consumed. It exists for the one
+    // moment two agent processes are alive at once: the announcement the new one
+    // has to make cannot be pushed a single time, because the process already
+    // live would take it, so it is pushed until the route has answered and what
+    // is left over is dropped here rather than delivered to whoever polls next.
+    drain() {
+      commands.length = 0;
+    },
     // waitFor polls until the fake has reported at least `count` matching
     // requests, and returns the count-th of them. The count is explicit rather
     // than relative to a snapshot taken here, because a request can perfectly
@@ -648,38 +700,24 @@ async function findByRealPath(entries, target) {
 
 // --- reading the conversation ---------------------------------------------------
 
-async function readConversation(viewURL, afterID) {
-  return apiJSON(`${viewURL}/api/workspace/conversation?after_id=${afterID}`);
+async function readConversation(viewURL, conversationID, afterID) {
+  return apiJSON(`${viewURL}/api/workspace/conversations/${encodeURIComponent(conversationID)}?after_id=${afterID}`);
 }
 
 // waitForConversation polls one viewer route until it reports what the fake was
 // just told. `what` is not decoration: a timeout has to say what it was waiting
 // for and what arrived instead, or the failure names nothing.
-async function waitForConversation(viewURL, afterID, predicate, what, timeoutMs = 60000) {
+async function waitForConversation(viewURL, conversationID, afterID, predicate, what, timeoutMs = 60000) {
   const started = Date.now();
   let last = null;
   while (Date.now() - started < timeoutMs) {
-    last = await readConversation(viewURL, afterID);
+    last = await readConversation(viewURL, conversationID, afterID);
     if (predicate(last)) return last;
     await delay(100);
   }
   throw new Error(
     `Timed out after ${timeoutMs}ms waiting for ${what}; the last read at after_id=${afterID} was ${truncate(JSON.stringify(last), 600)}`,
   );
-}
-
-// settled starts a request now and lets it be awaited later, without a rejection
-// going unhandled in between. The resume needs it: the route answers only once
-// the new agent process has announced itself, and what makes it announce itself
-// has to happen while the request is already in flight.
-function settled(promise) {
-  const outcome = promise.then(
-    (value) => () => value,
-    (error) => () => {
-      throw error;
-    },
-  );
-  return async () => (await outcome)();
 }
 
 // --- harness ---------------------------------------------------------------------

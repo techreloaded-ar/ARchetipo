@@ -3,10 +3,8 @@ package web
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
@@ -34,19 +32,15 @@ type conversationEntryView struct {
 // rail reads "there are none" from the list itself and never from a missing key.
 type conversationsView struct {
 	Conversations []conversationEntryView `json:"conversations"`
-}
-
-// conversationTranscriptView is one conversation with the whole of what was
-// said in it. It carries the same header fields as the entry so a client that
-// opened a transcript directly — a reload on a deep link — does not have to
-// have read the index first.
-//
-// Events is never nil and travels in the order it was recorded, which is the
-// ascending order of event ids: a transcript read out of order would be a
-// different conversation from the one that happened.
-type conversationTranscriptView struct {
-	conversationEntryView
-	Events []execution.RunEvent `json:"events"`
+	// Available, UnavailableReason and ProviderID say whether *another*
+	// conversation could be opened here, and with which provider. They travel
+	// with the index because the index is the only read a workspace holding
+	// nothing alive still makes: with the singular route retired there is no
+	// other place left to ask "can I open one", and a rail offering a button it
+	// cannot honour would be promising what the workspace cannot do.
+	Available         bool   `json:"available"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
+	ProviderID        string `json:"provider_id,omitempty"`
 }
 
 // conversationEntryOf renders one record. live is decided by the caller, which
@@ -68,9 +62,10 @@ func conversationEntryOf(record conversationlog.Record, live bool) conversationE
 // handleListWorkspaceConversations lists the conversations held on the open
 // workspace, most recent first.
 //
-// It probes no runtime and starts no process, for the reason already written on
-// heldConversationTarget: this is a read, and a read of an index must not cost a
-// subprocess. The order is the store's own — last_message_at descending — and is
+// It starts no process, and it probes the runtime only when the workspace holds
+// nothing alive — see conversationOpenabilityOf: this route is re-read on every
+// turn of the conversation poll, and a probe on that loop would fork a
+// subprocess per tick. The order is the store's own — last_message_at descending — and is
 // deliberately not recomputed here, so the index a person sees cannot disagree
 // with the order the records are kept in.
 func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http.Request) {
@@ -90,60 +85,26 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 		writeError(w, iox.NewInternal("listing the conversations of the workspace", err))
 		return
 	}
-	snapshot, open := ws.conversation.current()
+	// The live set is read once and turned into a lookup, not consulted per
+	// row: which conversations are alive does not change inside a single
+	// response, and asking the holder for every record would cost a lock per
+	// row for a fact that is already settled. This is AC-3 at the level of the
+	// route — *all* the live ones are marked, and no record is marked because
+	// it happens to be the one this process is holding.
+	alive := map[string]bool{}
+	for _, snapshot := range ws.conversation.list() {
+		alive[snapshot.id] = true
+	}
 	views := make([]conversationEntryView, 0, len(records))
 	for _, record := range records {
-		views = append(views, conversationEntryOf(record, open && snapshot.id == record.ID))
+		views = append(views, conversationEntryOf(record, alive[record.ID]))
 	}
-	writeJSON(w, http.StatusOK, conversationsView{Conversations: views})
-}
-
-// handleGetWorkspaceConversationTranscript serves everything that was said in
-// one conversation of the open workspace.
-//
-// When the id is the conversation currently held, the history comes from the
-// session in memory rather than from the file: the record is rewritten as the
-// live conversation is read, so the file is at most one read behind, and the two
-// must not be allowed to disagree under the eyes of whoever is reading them.
-func (s *Server) handleGetWorkspaceConversationTranscript(w http.ResponseWriter, r *http.Request) {
-	ws := s.session()
-	ctx := r.Context()
-	id := strings.TrimSpace(r.PathValue("id"))
-	store := ws.conversationStore()
-	if store == nil {
-		writeError(w, iox.NewInternal("reading the conversation "+id, errors.New("this workspace keeps no conversation journal")))
-		return
-	}
-	record, err := store.Get(ctx, id)
-	if err != nil {
-		var storeErr *conversationlog.StoreError
-		if errors.As(err, &storeErr) && (storeErr.Kind == conversationlog.StoreNotFound || storeErr.Kind == conversationlog.StoreInvalidID) {
-			writeError(w, iox.NewNotFound(
-				"the conversation "+id+" does not exist in this workspace",
-				"open the list of the conversations of the workspace to see the ones it holds",
-				err,
-			))
-			return
-		}
-		writeError(w, iox.NewInternal("reading the conversation "+id, err))
-		return
-	}
-	snapshot, open := ws.conversation.current()
-	live := open && snapshot.id == record.ID
-	events := record.Events
-	if live {
-		if session, found := conversationSessionOf(snapshot); found {
-			// Cursor 0 on purpose: a transcript is the whole conversation, and
-			// this route has no cursor of its own to advance.
-			events = session.Events(0)
-		}
-	}
-	if events == nil {
-		events = []execution.RunEvent{}
-	}
-	writeJSON(w, http.StatusOK, conversationTranscriptView{
-		conversationEntryView: conversationEntryOf(record, live),
-		Events:                events,
+	openability := s.conversationOpenabilityOf(ctx, ws)
+	writeJSON(w, http.StatusOK, conversationsView{
+		Conversations:     views,
+		Available:         openability.available,
+		UnavailableReason: openability.reason,
+		ProviderID:        openability.providerID,
 	})
 }
 

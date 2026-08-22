@@ -136,27 +136,27 @@ func (s *Server) handleResumeWorkspaceConversation(w http.ResponseWriter, r *htt
 		writeError(w, iox.NewInternal("reading the conversation "+id, err))
 		return
 	}
-	live, hasLive := ws.conversation.current()
 	// Resuming the conversation that is happening right now is refused rather
 	// than served: that one is written to with the message route, and taking it
 	// up would close it only to hand it its own history back as context.
-	if hasLive && live.id == record.ID {
+	if _, isLive := ws.conversation.get(record.ID); isLive {
 		writeError(w, iox.NewConflict(
-			"the conversation "+record.ID+" is the one currently open for this workspace",
-			"write in it directly: a conversation that is still open is continued, not resumed",
+			"the conversation "+record.ID+" is live on this workspace",
+			"write in it directly: a conversation that is still live is continued, not resumed",
 			nil,
 		))
 		return
 	}
-	if hasLive {
-		// Sealed and closed before anything new is started, so the workspace is
-		// never holding two live conversations, and the one being left behind is
-		// written down with everything said in it and the state it ended in.
-		ws.sealConversation(ctx, live)
-		if err := ws.conversation.close(ctx); err != nil {
-			writeError(w, iox.NewInternal("closing the conversation "+live.id, err))
-			return
-		}
+	// Nothing is sealed and nothing is closed here any more. A resume used to
+	// end the live conversation first, so the workspace would never hold two —
+	// which is precisely what this workspace now does, and closing a live thread
+	// to take up a past one would throw away the history and the work in flight
+	// that AC-1 exists to keep. A resume is an open like any other, and it is
+	// refused by the same limit, with the same sentence, produced in the one
+	// place that produces it.
+	if err := s.refuseConversationLimit(ctx, ws); err != nil {
+		writeError(w, err)
+		return
 	}
 	target := s.conversationAvailabilityFor(ctx, ws)
 	if target.reason != "" {
@@ -197,10 +197,10 @@ func (s *Server) handleResumeWorkspaceConversation(w http.ResponseWriter, r *htt
 		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), conversationCloseTimeout)
 		defer cancel()
 		_ = target.provider.CloseConversation(closeCtx, newID)
-		writeError(w, iox.NewConflict(err.Error(), "read the conversation of this workspace before opening one", nil))
+		writeError(w, conversationOpenRefusal(ctx, ws, err))
 		return
 	}
-	snapshot, open := ws.conversation.current()
+	snapshot, open := ws.conversation.get(newID)
 	journalErr := ws.journal.begin(ctx, snapshot, record.SpecCode, record.ID)
 	// The message that asked for the resume is delivered to the conversation it
 	// asked for, and a provider that refuses it is reported with the very same

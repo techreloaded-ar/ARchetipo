@@ -21,30 +21,40 @@ const conversationTitleLimit = 80
 const conversationTitleEllipsis = "…"
 
 // conversationJournal is what makes a conversation survive the process that
-// held it: it keeps one conversationlog.Record for the conversation currently
-// open on this workspace and rewrites it on disk while people talk.
+// held it: it keeps one conversationlog.Record per conversation the workspace
+// is holding alive and rewrites it on disk while people talk.
 //
-// It holds *one* record because a workspace holds one conversation — the same
-// reason conversationState holds one — and it holds it rather than re-reading
-// it because the record is written far more often than it is read.
+// One record *per live conversation* and no longer a single one: a workspace
+// can hold several at once, and a journal with one slot would let the polling of
+// one conversation overwrite the file of another — its history, its title and
+// its instant — which is the coarsest way there is to mix two threads.
 //
 // lastWrittenID is a watermark and not a flag: the reading route is polled
-// every couple of seconds for as long as the conversation lives, and a journal
+// every couple of seconds for as long as a conversation lives, and a journal
 // that rewrote the file on every poll would rewrite an unchanged history
 // hundreds of times per conversation. Only an event newer than the watermark is
-// a reason to write.
+// a reason to write. It lives *inside* the entry for the same reason the record
+// does: a single shared watermark, pushed up by a conversation with high event
+// ids, would silently stop a sibling with lower ones from ever being written.
 type conversationJournal struct {
 	store *conversationlog.FileStore
 
 	mu sync.Mutex
-	// current is the record of the open conversation, nil when no conversation
-	// has been begun on this journal. It is a pointer because "there is nothing
-	// being journalled" is an answer of its own, not an empty record.
-	current *conversationlog.Record
-	// titleFromMessage says the title was derived from a human message. Once it
-	// is set the title is never recomputed: a conversation is named by how it
-	// started, and a title that kept following the history would rename a thread
-	// under the reader who is looking at it.
+	// entries is the record being kept for each live conversation, keyed by
+	// conversation id. An id that is not in the map is a conversation this
+	// journal is not keeping — one never begun, or one already sealed — and
+	// writing for it is not an error, it is simply nothing to do.
+	entries map[string]*journalEntry
+}
+
+// journalEntry is everything the journal keeps about one conversation.
+//
+// titleFromMessage says the title was derived from a human message. Once it is
+// set the title is never recomputed: a conversation is named by how it started,
+// and a title that kept following the history would rename a thread under the
+// reader who is looking at it.
+type journalEntry struct {
+	record           conversationlog.Record
 	titleFromMessage bool
 	lastWrittenID    int64
 }
@@ -58,7 +68,7 @@ func newConversationJournal(projectRoot string) (*conversationJournal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &conversationJournal{store: store}, nil
+	return &conversationJournal{store: store, entries: map[string]*journalEntry{}}, nil
 }
 
 // begin starts journalling the conversation described by snapshot and writes it
@@ -89,9 +99,13 @@ func (j *conversationJournal) begin(ctx context.Context, snapshot conversationSn
 		Events:        []execution.RunEvent{},
 	}
 	j.mu.Lock()
-	j.current = &record
-	j.titleFromMessage = false
-	j.lastWrittenID = 0
+	if j.entries == nil {
+		j.entries = map[string]*journalEntry{}
+	}
+	// An id that is somehow already being kept is replaced and never merged: a
+	// conversation id is unique by construction, so a second begin under the
+	// same one is a restart of that conversation and not a continuation of it.
+	j.entries[record.ID] = &journalEntry{record: record}
 	saved := record
 	j.mu.Unlock()
 	return j.store.Save(ctx, saved)
@@ -110,54 +124,61 @@ func (j *conversationJournal) begin(ctx context.Context, snapshot conversationSn
 // conversation. A read of a past transcript passes false and writes nothing: a
 // finished conversation is history, and reading it must not rewrite it.
 //
-// id is the conversation the events were read from, and it is checked against
-// the record the journal is currently keeping. The check is what makes the
-// write safe under a race that really happens: a caller takes a snapshot, then
-// reads the session outside this lock, and in between a resume can have sealed
-// that conversation and begun another. Without the check those stale events
-// would be written into the *new* record — overwriting its history, its title
-// and its instant, and pushing the watermark past events the new conversation
-// has not emitted yet, so its own history could never be written at all.
+// id names the conversation the events were read from, and it is what the entry
+// is looked up by. The lookup is what makes the write safe under a race that
+// really happens: a caller takes a snapshot, then reads the session outside this
+// lock, and in between that conversation can have been sealed and dropped.
+// Without the lookup those stale events would be written into whatever record
+// the journal held — overwriting its history, its title and its instant, and
+// pushing its watermark past events it has not emitted yet, so its own history
+// could never be written at all. With one entry per conversation the write can
+// only ever land in the record it belongs to.
 func (j *conversationJournal) record(ctx context.Context, id string, events []execution.RunEvent, live bool) error {
 	if j == nil || j.store == nil || !live || len(events) == 0 {
 		return nil
 	}
 	j.mu.Lock()
-	if j.current == nil || j.current.ID != id || events[len(events)-1].ID <= j.lastWrittenID {
+	entry, kept := j.entries[id]
+	if !kept || events[len(events)-1].ID <= entry.lastWrittenID {
 		j.mu.Unlock()
 		return nil
 	}
-	j.current.Events = append([]execution.RunEvent(nil), events...)
-	j.current.LastMessageAt = events[len(events)-1].At
-	j.current.MessageCount = conversationMessageCount(events)
-	if !j.titleFromMessage {
+	entry.record.Events = append([]execution.RunEvent(nil), events...)
+	entry.record.LastMessageAt = events[len(events)-1].At
+	entry.record.MessageCount = conversationMessageCount(events)
+	if !entry.titleFromMessage {
 		if _, spoken := firstHumanMessage(events); spoken {
-			j.titleFromMessage = true
+			entry.titleFromMessage = true
 		}
-		j.current.Title = conversationTitleOf(events, j.current.OpenedAt)
+		entry.record.Title = conversationTitleOf(events, entry.record.OpenedAt)
 	}
-	j.lastWrittenID = events[len(events)-1].ID
-	saved := *j.current
+	entry.lastWrittenID = events[len(events)-1].ID
+	saved := entry.record
 	j.mu.Unlock()
 	return j.store.Save(ctx, saved)
 }
 
 // finish seals the record with the state the conversation was left in.
 //
-// It is idempotent, and calling it on a journal that has nothing open is not an
-// error: a workspace can be stopped twice, and a conversation can be closed by
-// the route and then again by the session that is ending.
-func (j *conversationJournal) finish(ctx context.Context, state execution.RunState) error {
+// It is idempotent, and calling it for an id this journal is not keeping is not
+// an error: a workspace can be stopped twice, and a conversation can be closed
+// by the route and then again by the session that is ending.
+func (j *conversationJournal) finish(ctx context.Context, id string, state execution.RunState) error {
 	if j == nil || j.store == nil {
 		return nil
 	}
 	j.mu.Lock()
-	if j.current == nil {
+	entry, kept := j.entries[id]
+	if !kept {
 		j.mu.Unlock()
 		return nil
 	}
-	j.current.FinalState = string(state)
-	saved := *j.current
+	entry.record.FinalState = string(state)
+	saved := entry.record
+	// Dropped once it is sealed: what is sealed is history, no later read may
+	// rewrite it, and a map that only ever grew would keep every conversation of
+	// the whole life of the viewer.
+	delete(j.entries, id)
 	j.mu.Unlock()
 	return j.store.Save(ctx, saved)
 }
@@ -247,5 +268,5 @@ func (ws *workspaceSession) sealConversation(ctx context.Context, snapshot conve
 	if session, found := conversationSessionOf(snapshot); found {
 		_ = ws.journal.record(ctx, snapshot.id, session.Events(0), true)
 	}
-	_ = ws.journal.finish(ctx, finalConversationState(ctx, snapshot))
+	_ = ws.journal.finish(ctx, snapshot.id, finalConversationState(ctx, snapshot))
 }

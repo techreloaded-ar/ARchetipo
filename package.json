@@ -28,6 +28,7 @@
     "test:view-workspace-root-smoke": "node ./test/e2e/workspace-run-root-view-smoke.mjs",
     "test:view-conversation-smoke": "node ./test/e2e/conversation-view-smoke.mjs",
     "test:view-conversation-history-smoke": "node ./test/e2e/conversation-history-view-smoke.mjs",
+    "test:view-conversation-multi-smoke": "node ./test/e2e/conversation-multi-view-smoke.mjs",
     "test:view-conversation-action-smoke": "node ./test/e2e/conversation-action-view-smoke.mjs",
     "test:view-conversation-run-smoke": "node ./test/e2e/conversation-run-view-smoke.mjs",
     "test:view-inception-smoke": "node ./test/e2e/inception-from-view-smoke.mjs",

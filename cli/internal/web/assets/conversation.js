@@ -1,5 +1,5 @@
 // conversation.js
-// Pure renderer for the GET /api/workspace/conversation payload.
+// Pure renderer for the GET /api/workspace/conversations/{id} payload.
 //
 // The module contains no process rules: not one capability name, not one
 // provider name, not one action identifier. Every word it draws about what is
@@ -650,7 +650,7 @@
 	 * Never throws on a partial payload: a null view, a missing conversation, a
 	 * missing events list are all answers, and each has a rendering.
 	 *
-	 * @param {object|null} view  The /api/workspace/conversation payload.
+	 * @param {object|null} view  The /api/workspace/conversations/{id} payload.
 	 * @param {string} draft      The text being typed, preserved across renders.
 	 * @param {object} [ui]       Local, non-payload state of the panel:
 	 *                            {busy, closeArmed, refusal, link,

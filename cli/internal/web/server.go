@@ -258,29 +258,28 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("GET /api/workspace/status", s.handleGetWorkspaceStatus)
 	s.handleWorkspace("POST /api/workspace/execution", s.handleRunWorkspaceAction)
 	s.handleWorkspace("GET /api/workspace/runs", s.handleGetWorkspaceRuns)
-	// The conversation of the open workspace. There is no id in any of the five
-	// patterns because a workspace holds exactly one conversation: naming it
-	// would suggest a collection that does not exist, and it is deliberately
-	// absent from /api/workspace/actions because it is not an action of the
+	// The conversations of the open workspace, every one of them named by its
+	// id. There is no singular route any more: a workspace holds up to
+	// maxLiveConversations conversations at once, so "the conversation of this
+	// workspace" identifies nothing a client could act on — and a route that
+	// picked "the most recent" would be a rule nobody chose, fixed by whichever
+	// test happened to assert it. The family is deliberately absent from
+	// /api/workspace/actions because a conversation is not an action of the
 	// process.
-	s.handleWorkspace("GET /api/workspace/conversation", s.handleGetWorkspaceConversation)
-	s.handleWorkspace("POST /api/workspace/conversation", s.handleOpenWorkspaceConversation)
-	s.handleWorkspace("POST /api/workspace/conversation/messages", s.handleSendWorkspaceConversationMessage)
-	s.handleWorkspace("POST /api/workspace/conversation/proposal", s.handleDecideWorkspaceConversationProposal)
-	s.handleWorkspace("DELETE /api/workspace/conversation", s.handleCloseWorkspaceConversation)
-	// The conversations the workspace has *held*. A collection exists next to
-	// the singular route above because the two answer different questions: the
-	// singular one is the conversation happening now, whose handle this process
-	// owns, while these two read the history on disk, which outlives every
-	// process that took part in it. Both are reads: neither opens a
-	// conversation, and neither probes the runtime.
+	//
+	// The read by id is *unified*: the same route answers for a conversation
+	// this process is holding and for one that ended and lives on disk, with the
+	// same payload. Two routes would leave the client to choose between them
+	// from an id alone, which is a choice an id does not carry.
 	s.handleWorkspace("GET /api/workspace/conversations", s.handleListWorkspaceConversations)
-	s.handleWorkspace("GET /api/workspace/conversations/{id}", s.handleGetWorkspaceConversationTranscript)
+	s.handleWorkspace("POST /api/workspace/conversations", s.handleOpenWorkspaceConversation)
+	s.handleWorkspace("GET /api/workspace/conversations/{id}", s.handleGetWorkspaceConversation)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/messages", s.handleSendWorkspaceConversationMessage)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/proposal", s.handleDecideWorkspaceConversationProposal)
+	s.handleWorkspace("DELETE /api/workspace/conversations/{id}", s.handleCloseWorkspaceConversation)
 	// Writing into a past conversation is the one thing this collection does
-	// that is not a read: it opens a new conversation with the old one as
-	// context. It lives here, under the id of the conversation being taken up,
-	// because what it needs is that id — the singular route above has none to
-	// give it.
+	// that is neither a read nor a plain open: it opens a new conversation with
+	// the old one as context, beside the ones already alive.
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/resume", s.handleResumeWorkspaceConversation)
 	s.handleAlways("GET /api/workspaces", s.handleListWorkspaces)
 	s.handleAlways("POST /api/workspaces", s.handleAddWorkspace)

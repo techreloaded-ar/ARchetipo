@@ -212,7 +212,7 @@ async function scenario(runDir) {
 		// The conversation of the workspace, opened and given a history. It is
 		// the subject of AC-2 and it must survive everything that follows.
 		control.push(emit({ type: "system", subtype: "init", session_id: "conversation-1" }));
-		const opened = await apiJSON(`${view.url}/api/workspace/conversation`, postJSON({}), 201);
+		const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
 		const conversationID = opened.conversation?.id;
 		if (!conversationID) {
 			throw new Error(`the conversation did not open: ${JSON.stringify(opened)}`);
@@ -221,6 +221,7 @@ async function scenario(runDir) {
 		control.push(emit(assistantText("Guardo il workspace mentre apri le spec.")));
 		const conversationBefore = await waitForConversation(
 			view.url,
+			conversationID,
 			(data) => (data.events || []).length === 1,
 			"the assistant frame to become the first event of the conversation",
 		);
@@ -350,7 +351,7 @@ async function scenario(runDir) {
 		await apiJSON(`${view.url}/api/board`);
 		await apiJSON(`${view.url}/api/spec/${SPEC_CLOSED}`);
 
-		const conversationAfter = await readConversation(view.url);
+		const conversationAfter = await readConversation(view.url, conversationID);
 		assertEqual(conversationAfter.conversation?.id, conversationID, "AC-2: the id of the conversation after the spec detail was exercised");
 		if (JSON.stringify(conversationAfter.events) !== JSON.stringify(conversationBefore.events)) {
 			throw new Error(
@@ -600,13 +601,13 @@ async function waitForExecution(viewURL, executionID, predicate, expectation, ti
 	);
 }
 
-async function readConversation(viewURL) {
-	return apiJSON(`${viewURL}/api/workspace/conversation?after_id=0`);
+async function readConversation(viewURL, conversationID) {
+	return apiJSON(`${viewURL}/api/workspace/conversations/${encodeURIComponent(conversationID)}?after_id=0`);
 }
 
-async function waitForConversation(viewURL, predicate, expectation, timeoutMs = 30000) {
+async function waitForConversation(viewURL, conversationID, predicate, expectation, timeoutMs = 30000) {
 	return waitFor(
-		() => readConversation(viewURL),
+		() => readConversation(viewURL, conversationID),
 		predicate,
 		expectation,
 		(last) => `last conversation: ${JSON.stringify(last?.conversation)}, ${JSON.stringify((last?.events || []).length)} event(s)`,
