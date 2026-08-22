@@ -39,12 +39,16 @@ function write(payload) {
   process.stdout.write(JSON.stringify(payload) + "\n");
 }
 
+// Every report carries the pid of the process that made it, and not only the
+// one about the invocation: a smoke that starts several agent processes in turn
+// has to be able to say *which* of them was given a frame, and a report without
+// its author would only let it say that somebody was.
 async function report(kind, body) {
   try {
     await fetch(`${control}/received`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind, ...body }),
+      body: JSON.stringify({ kind, pid: process.pid, ...body }),
     });
   } catch {
     // The control server going away is the end of the test, not an error the

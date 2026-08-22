@@ -268,6 +268,20 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("POST /api/workspace/conversation/messages", s.handleSendWorkspaceConversationMessage)
 	s.handleWorkspace("POST /api/workspace/conversation/proposal", s.handleDecideWorkspaceConversationProposal)
 	s.handleWorkspace("DELETE /api/workspace/conversation", s.handleCloseWorkspaceConversation)
+	// The conversations the workspace has *held*. A collection exists next to
+	// the singular route above because the two answer different questions: the
+	// singular one is the conversation happening now, whose handle this process
+	// owns, while these two read the history on disk, which outlives every
+	// process that took part in it. Both are reads: neither opens a
+	// conversation, and neither probes the runtime.
+	s.handleWorkspace("GET /api/workspace/conversations", s.handleListWorkspaceConversations)
+	s.handleWorkspace("GET /api/workspace/conversations/{id}", s.handleGetWorkspaceConversationTranscript)
+	// Writing into a past conversation is the one thing this collection does
+	// that is not a read: it opens a new conversation with the old one as
+	// context. It lives here, under the id of the conversation being taken up,
+	// because what it needs is that id — the singular route above has none to
+	// give it.
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/resume", s.handleResumeWorkspaceConversation)
 	s.handleAlways("GET /api/workspaces", s.handleListWorkspaces)
 	s.handleAlways("POST /api/workspaces", s.handleAddWorkspace)
 	s.handleAlways("DELETE /api/workspaces/{id}", s.handleRemoveWorkspace)

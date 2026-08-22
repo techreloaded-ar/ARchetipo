@@ -235,8 +235,10 @@ describe("AC-3 — la bozza e la storia non si perdono cambiando vista", () => {
 
 	it("conversationDraft è assegnata solo nei tre punti attesi", () => {
 		// I contesti ammessi: l'evento `input` del compositore (e la sua scorciatoia
-		// da tastiera), l'invio che la azzera dopo aver spedito, e il reset di
-		// workspace. Nessuno è un cambio di vista.
+		// da tastiera), l'invio che la azzera dopo aver spedito — nella
+		// conversazione aperta come nella ripresa di una passata, che è un invio
+		// anch'essa (US-058 AC-4) — e il reset di workspace. Nessuno è un cambio
+		// di vista.
 		const assignments = js
 			.split("\n")
 			.map((line, i) => ({ line: line.trim(), n: i + 1 }))
@@ -250,8 +252,9 @@ describe("AC-3 — la bozza e la storia non si perdono cambiando vista", () => {
 		const expected = [
 			"conversationDraft = input.value;", // input del compositore
 			"conversationDraft = input.value;", // scorciatoia cmd/ctrl+invio
-			'conversationDraft = "";', // invio riuscito
+			'conversationDraft = "";', // ripresa riuscita di una conversazione passata
 			'conversationDraft = "";', // reset di workspace
+			'conversationDraft = "";', // invio riuscito
 		];
 		assert.deepEqual(
 			assignments.map(({ line }) => line),

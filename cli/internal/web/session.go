@@ -50,6 +50,12 @@ type workspaceSession struct {
 	// handle that closes it.
 	conversation *conversationState
 
+	// journal is where the conversations of *this* workspace are written down.
+	// It is per session for the same reason the store is: the records live under
+	// this project root, and a journal that survived a workspace switch would
+	// write the threads of one project into the directory of another.
+	journal *conversationJournal
+
 	// startOnce, stopOnce and cancel govern the lifecycle. cancel is nil until
 	// start runs, so a session built and never started can still be stopped.
 	// Both guards are Once because the two callers can legitimately race: a
@@ -79,6 +85,10 @@ func newWorkspaceSession(cfg config.Config, conn connector.Connector, providers 
 	if err != nil {
 		return nil, fmt.Errorf("creating the execution store: %w", err)
 	}
+	journal, err := newConversationJournal(cfg.ProjectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("creating the conversation journal: %w", err)
+	}
 	ws := &workspaceSession{
 		cfg:        cfg,
 		conn:       conn,
@@ -89,6 +99,7 @@ func newWorkspaceSession(cfg config.Config, conn connector.Connector, providers 
 		followers:  newRunFollowers(),
 
 		conversation: newConversationState(),
+		journal:      journal,
 	}
 	if providers != nil {
 		service, serviceErr := execution.NewService(providers, store, execution.RandomID, time.Now, cfg.ProjectRoot)
@@ -165,6 +176,12 @@ func (ws *workspaceSession) stop(drain time.Duration) {
 		// nothing.
 		closeCtx, cancelClose := context.WithTimeout(context.Background(), conversationCloseTimeout)
 		defer cancelClose()
+		// Sealed before it is released, and on the same bounded context: after
+		// the shutdown the holder is empty, and a journal sealed from an empty
+		// holder would have nothing left to say what was open or how it ended.
+		if snapshot, held := ws.conversation.current(); held {
+			ws.sealConversation(closeCtx, snapshot)
+		}
 		_ = ws.conversation.shutdown(closeCtx)
 	})
 }

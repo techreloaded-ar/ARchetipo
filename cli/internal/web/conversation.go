@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -37,6 +38,12 @@ type conversationSnapshotView struct {
 	// answer from what it already has.
 	WorkingDir string `json:"working_dir"`
 	OpenedAt   string `json:"opened_at"`
+	// SpecCode is the spec this conversation was opened about, omitted for a
+	// free conversation. ResumedFrom is the past conversation it was resumed
+	// from, omitted for one that started on its own. Both are additive: a
+	// client that ignores them reads the payload exactly as before.
+	SpecCode    string `json:"spec_code,omitempty"`
+	ResumedFrom string `json:"resumed_from,omitempty"`
 }
 
 // conversationView is what the browser reads from the four conversation routes.
@@ -204,9 +211,11 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 		return view
 	}
 	rendered := &conversationSnapshotView{
-		ID:         snapshot.id,
-		WorkingDir: snapshot.workingDir,
-		OpenedAt:   snapshot.openedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
+		ID:          snapshot.id,
+		WorkingDir:  snapshot.workingDir,
+		OpenedAt:    snapshot.openedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
+		SpecCode:    snapshot.specCode,
+		ResumedFrom: snapshot.resumedFrom,
 	}
 	// The state is what the collaborator reports, never what this handler
 	// believes: a conversation whose process has left is CLOSED or CRASHED
@@ -241,6 +250,14 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 		view.Proposal = s.resolveProposal(ctx, ws, proposal, proposalID)
 	}
 	events := session.Events(afterID)
+	// The read of the live conversation is also what writes it down. It is
+	// journalled from the whole history and not from the tail this caller asked
+	// for, because the record is the conversation and not the increment; and a
+	// failure to write must not fail the read, since a conversation that cannot
+	// be saved is still a conversation somebody is entitled to go on reading.
+	if err := ws.journal.record(ctx, snapshot.id, session.Events(0), true); err != nil && view.Notice == "" {
+		view.Notice = "this conversation could not be written to disk: " + err.Error()
+	}
 	view.Events = events
 	if len(events) > 0 {
 		view.LastID = events[len(events)-1].ID
@@ -300,6 +317,15 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		writeError(w, err)
 		return
 	}
+	// The body is optional: a conversation is free by default, and asking for
+	// one bound to a spec is the exception a caller has to state. An empty body
+	// is therefore not a malformed one.
+	var body openConversationReq
+	if err := decodeJSON(r, &body); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, err)
+		return
+	}
+	specCode := strings.TrimSpace(body.SpecCode)
 	if current, open := ws.conversation.current(); open {
 		writeError(w, iox.NewConflict(
 			"conversation "+current.id+" is already open for this workspace",
@@ -309,6 +335,19 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		return
 	}
 	ctx := r.Context()
+	// The spec is verified before the provider is even resolved, so a
+	// conversation asked about a spec that is not in this backlog refuses
+	// without any agent process ever existing to be released.
+	if specCode != "" {
+		if _, err := ws.conn.ReadSpecDetail(ctx, specCode); err != nil {
+			writeError(w, iox.NewConflict(
+				"the spec "+specCode+" does not exist in this workspace",
+				"open the conversation with no spec, or name a spec that is in the backlog",
+				err,
+			))
+			return
+		}
+	}
 	target := s.conversationAvailabilityFor(ctx, ws)
 	if target.reason != "" {
 		// The very sentence the GET renders next to available:false, so pressing
@@ -353,7 +392,7 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		writeError(w, iox.NewInternal("opening a conversation with the "+quoted(target.availability.providerID)+" provider", openErr))
 		return
 	}
-	if err := ws.conversation.open(id, target.availability.providerID, target.provider, target.collaborator, providerConfig, ws.cfg.ProjectRoot, time.Now().UTC()); err != nil {
+	if err := ws.conversation.open(id, target.availability.providerID, target.provider, target.collaborator, providerConfig, ws.cfg.ProjectRoot, time.Now().UTC(), specCode, ""); err != nil {
 		// The holder refused it — another request won the race, or the workspace
 		// has been left. Either way this process is the only one holding the
 		// handle, so it closes what it just started instead of leaking it.
@@ -364,7 +403,16 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		return
 	}
 	snapshot, open := ws.conversation.current()
-	writeJSON(w, http.StatusCreated, s.conversationViewOf(ctx, ws, target, snapshot, open, 0))
+	// Written down before the view is rendered, and a failure to write is
+	// reported rather than raised: the conversation is open either way, and the
+	// caller has to learn it will not be found again rather than be told the
+	// open failed when it did not.
+	journalErr := ws.journal.begin(ctx, snapshot, specCode, "")
+	view := s.conversationViewOf(ctx, ws, target, snapshot, open, 0)
+	if journalErr != nil && view.Notice == "" {
+		view.Notice = "this conversation could not be written to disk: " + journalErr.Error()
+	}
+	writeJSON(w, http.StatusCreated, view)
 }
 
 // conversationActionsOf turns the steps a process declares into the vocabulary
@@ -394,6 +442,13 @@ func conversationID() (string, error) {
 		return "", err
 	}
 	return conversationIDPrefix + strings.TrimPrefix(id, "exec-"), nil
+}
+
+// openConversationReq is the optional body of an open request. SpecCode binds
+// the conversation to a spec of this workspace; left out, or left empty, the
+// conversation is free — which is what an open with no body at all asks for.
+type openConversationReq struct {
+	SpecCode string `json:"spec_code"`
 }
 
 type sendConversationMessageReq struct {
@@ -469,6 +524,10 @@ func (s *Server) handleCloseWorkspaceConversation(w http.ResponseWriter, r *http
 		return
 	}
 	ctx := r.Context()
+	// Sealed while the holder still holds it: the final state is read from the
+	// conversation that is about to be released, and everything said since the
+	// last read is written down before the process behind it goes away.
+	ws.sealConversation(ctx, snapshot)
 	if err := ws.conversation.close(ctx); err != nil {
 		writeError(w, iox.NewInternal("closing the conversation "+snapshot.id, err))
 		return

@@ -31,6 +31,14 @@ type ConversationRequest struct {
 	// empty list is a legitimate state and means the agent has nothing to
 	// propose.
 	ProcessActions []ConversationAction `json:"process_actions,omitempty"`
+	// Context is the transcript of a past conversation this one resumes; empty
+	// for a conversation that resumes nothing.
+	//
+	// It travels on the request rather than being sent as a first message
+	// because it is not something anybody said in *this* conversation: it is
+	// what the agent has to know before the person says anything, and a
+	// provider that cannot converse at all has no use for it.
+	Context string `json:"context,omitempty"`
 }
 
 // ConversationAction is one step of the process as a conversation agent sees

@@ -138,6 +138,17 @@
              renderer in workspace-runs.js from /api/workspace/runs. -->
         <section id="workspace-runs" class="workspace-runs" aria-live="polite" data-workspace-scoped></section>
 
+        <!-- The index of the conversations this workspace has had (US-058).
+             It lives in the shell and not in #workspace-primary on purpose: it
+             is not one of the views workspace-layout.js alternates, it is the
+             rail beside them. Its contents — the standing offer of a new
+             conversation and the grouped list of the past ones — are drawn by
+             the pure renderer in conversation-index.js; this element is the
+             holder the renderer deliberately does not return. In a narrow
+             window it becomes a horizontal strip above the primary column, so
+             the conversation never loses width (US-057 AC-6). -->
+        <aside id="workspace-conversations" class="conversation-rail" aria-label="Conversazioni"></aside>
+
         <div id="workspace-primary" class="workspace-primary">
             <!-- The conversation of the open workspace (US-053), mounted once
                  and in one place only: a workspace holds a single conversation.
@@ -158,6 +169,10 @@
                 <div class="spec-pane-body">
             <header class="modal-header">
                 <h2 id="story-editor-title" class="modal-title">Story</h2>
+                <!-- Opens a conversation about the spec on screen (US-058): a
+                     new conversation carrying this spec's code, so it lands in
+                     the rail under Spec and not among the free threads. -->
+                <button id="spec-conversation-btn" type="button" class="ghost-btn" data-conversation-new-spec>Conversa su questa spec</button>
                 <button id="modal-close" type="button" class="icon-btn" aria-label="Close">
                     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
                 </button>
@@ -751,6 +766,7 @@
     <script src="/task-markdown.js"></script>
     <script src="/workspace-status.js"></script>
     <script src="/conversation.js"></script>
+<script src="/conversation-index.js"></script>
     <script src="/workspace-home.js"></script>
     <script src="/provider-fields.js"></script>
 <script src="/workspace-layout.js"></script>

@@ -53,6 +53,14 @@ type conversationState struct {
 	// fact of the workspace, not of the provider, which is shared.
 	workingDir string
 	openedAt   time.Time
+	// specCode is the spec the conversation was opened about, empty for a free
+	// conversation — which is the default. It lives in the holder because it is
+	// a fact of *this* conversation and not of the workspace: the next one may
+	// well be about nothing.
+	specCode string
+	// resumedFrom is the id of the past conversation this one was resumed from,
+	// empty for a conversation that started on its own.
+	resumedFrom string
 	// closed says the holder has been shut down for good. It is not "there is
 	// no conversation right now": a stopped session must never accept a new
 	// one, because nothing would be left to close it.
@@ -107,6 +115,8 @@ type conversationSnapshot struct {
 	providerConfig map[string]any
 	workingDir     string
 	openedAt       time.Time
+	specCode       string
+	resumedFrom    string
 	// decidedProposalID and outcome travel in the copy because every reader of
 	// the conversation needs them together with its history: what is pending is
 	// decided against the watermark, and what was decided is read from the
@@ -126,7 +136,7 @@ func newConversationState() *conversationState {
 // outlive everything that could stop it. It also refuses on a holder that has
 // been closed, for the same reason runFollowers refuses after closeAll — the
 // workspace it belonged to is gone.
-func (c *conversationState) open(id, providerID string, provider execution.Conversationalist, collaborator execution.RunCollaborator, providerConfig map[string]any, workingDir string, openedAt time.Time) error {
+func (c *conversationState) open(id, providerID string, provider execution.Conversationalist, collaborator execution.RunCollaborator, providerConfig map[string]any, workingDir string, openedAt time.Time, specCode, resumedFrom string) error {
 	if c == nil {
 		return fmt.Errorf("this workspace cannot hold a conversation")
 	}
@@ -151,6 +161,8 @@ func (c *conversationState) open(id, providerID string, provider execution.Conve
 	c.providerConfig = providerConfig
 	c.workingDir = workingDir
 	c.openedAt = openedAt
+	c.specCode = specCode
+	c.resumedFrom = resumedFrom
 	// A new conversation is a new story, and it starts with nothing decided. An
 	// inherited watermark would silently mark as already decided a proposal this
 	// conversation has never made — the first one it makes would arrive with an
@@ -206,6 +218,8 @@ func (c *conversationState) current() (conversationSnapshot, bool) {
 		providerConfig:    c.providerConfig,
 		workingDir:        c.workingDir,
 		openedAt:          c.openedAt,
+		specCode:          c.specCode,
+		resumedFrom:       c.resumedFrom,
 		decidedProposalID: c.decidedProposalID,
 		outcome:           c.outcome,
 	}, true
@@ -246,6 +260,11 @@ func (c *conversationState) releaseCurrent(ctx context.Context, markClosed bool)
 	c.providerConfig = nil
 	c.workingDir = ""
 	c.openedAt = time.Time{}
+	// Same reason the fields above are cleared: they described the conversation
+	// being released, and a spec code left behind would bind the next one to a
+	// spec nobody named.
+	c.specCode = ""
+	c.resumedFrom = ""
 	// Same reason open clears them: the decision belonged to the conversation
 	// being released. Left behind, the watermark would make the first proposal
 	// of the next conversation look already decided, and the outcome would

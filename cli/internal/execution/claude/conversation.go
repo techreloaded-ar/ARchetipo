@@ -89,7 +89,7 @@ func (p *Provider) OpenConversation(ctx context.Context, req execution.Conversat
 		ExecutionID:    id,
 		WorkingDir:     dir,
 		ProviderConfig: req.ProviderConfig,
-	}, cfg, dir, buildConversationPrompt(req.ProcessActions), true, conversationRetainedEvents)
+	}, cfg, dir, buildConversationPrompt(req.ProcessActions, req.Context), true, conversationRetainedEvents)
 	if err != nil {
 		// openSession already closed the session it had registered and released
 		// the process, so all that is left is to give back the id: a failed open

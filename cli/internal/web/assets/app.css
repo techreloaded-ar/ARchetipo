@@ -5256,3 +5256,362 @@ body.no-workspace [data-workspace-scoped] {
 		padding: 12px 16px 16px;
 	}
 }
+
+/* ---- Thread rail (US-058) -----------------------------------------------
+   The index of the conversations this workspace has had, beside the primary
+   column and never inside it: it is not one of the views the layout module
+   alternates, so it survives every change of view untouched.
+
+   The class names are the ones docs/mockups/redesign-chat/stato-b-storico.html
+   uses, and the rules below are that mockup's rules resolved against the
+   viewer's own tokens — the search field it draws is deliberately absent, since
+   full-text search is out of this spec's scope and an inert box would promise
+   what the page cannot keep. */
+
+/* The switcher and the runs strip stay full width in both layouts: the rail
+   takes a column of the third row only, so what is running keeps spanning the
+   whole shell. */
+.workspace-shell > .workspace-views,
+.workspace-shell > .workspace-runs {
+	grid-column: 1 / -1;
+}
+
+.conversation-rail {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	background: color-mix(in srgb, var(--surface) 60%, transparent);
+}
+
+/* Nothing drawn — no workspace open, or the index not read yet — is no column
+   at all. The `auto` track below collapses with it, so an empty rail never
+   takes width away from the conversation. */
+.conversation-rail:empty {
+	display: none;
+}
+
+/* Wide: a fixed column to the left of the primary column. */
+.workspace-shell--wide {
+	grid-template-columns: auto minmax(0, 1fr);
+}
+
+.workspace-shell--wide > .conversation-rail {
+	grid-row: 3;
+	grid-column: 1;
+	width: 264px;
+	border-right: 1px solid var(--border);
+}
+
+.workspace-shell--wide > .workspace-primary {
+	grid-column: 2;
+}
+
+.rail-top {
+	padding: 12px 12px 8px;
+	display: grid;
+	gap: 8px;
+}
+
+.new-thread {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	width: 100%;
+	border: 1px solid var(--accent);
+	border-radius: var(--radius);
+	background: var(--accent-soft);
+	color: var(--accent-strong);
+	padding: 7px 10px;
+	font-family: inherit;
+	font-size: 13px;
+	font-weight: 500;
+	cursor: pointer;
+	transition: var(--transition);
+}
+
+.new-thread:hover {
+	background: var(--accent);
+	color: var(--accent-ink);
+}
+
+.new-thread kbd {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	opacity: 0.75;
+	border: 1px solid currentColor;
+	border-radius: var(--radius-sm);
+	padding: 0 4px;
+}
+
+.rail-list {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 4px 8px 12px;
+}
+
+.rail-empty {
+	margin: 10px 4px;
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--text-muted);
+}
+
+/* A group heading is a typographic rule, not a bar: the index has to read like
+   the table of contents of a notebook. */
+.rail-group {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 14px 4px 6px;
+	font-family: var(--font-mono);
+	font-size: 9px;
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+}
+
+.rail-group::after {
+	content: "";
+	flex: 1 1 auto;
+	height: 1px;
+	background: var(--rule);
+}
+
+.thread {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 2px 8px;
+	width: 100%;
+	text-align: left;
+	border: 1px solid transparent;
+	border-radius: var(--radius);
+	background: transparent;
+	color: inherit;
+	font-family: inherit;
+	padding: 7px 9px;
+	margin-bottom: 1px;
+	cursor: pointer;
+	transition: var(--transition);
+}
+
+.thread:hover {
+	background: var(--surface-hover);
+}
+
+.thread.is-current {
+	background: var(--surface-2);
+	border-color: var(--border-strong);
+	box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* The spec code anchors the thread: in mono, before the title, so the eye tells
+   a spec's thread from a free one at a glance — the free one carries a mark in
+   its place. */
+.thread-code {
+	grid-row: span 2;
+	align-self: start;
+	font-family: var(--font-mono);
+	font-size: 9px;
+	letter-spacing: 0.06em;
+	color: var(--text-muted);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	padding: 1px 4px;
+	margin-top: 2px;
+	white-space: nowrap;
+}
+
+.thread.is-free .thread-code {
+	border-style: dashed;
+	color: var(--text-dim);
+}
+
+.thread.is-current .thread-code {
+	color: var(--accent-strong);
+	border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.thread-title {
+	font-size: 13px;
+	color: var(--text);
+	line-height: 1.35;
+	overflow: hidden;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	-webkit-box-orient: vertical;
+}
+
+.thread.is-current .thread-title {
+	color: var(--text-strong);
+	font-weight: 500;
+}
+
+.thread-meta {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-family: var(--font-mono);
+	font-size: 9px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+}
+
+.thread-flag {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--text-muted);
+}
+
+.thread-flag::before {
+	content: "";
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: currentColor;
+}
+
+.thread-flag.is-live {
+	color: var(--status-progress);
+}
+
+.thread-flag.is-live::before {
+	animation: thread-pulse 1.4s var(--ease) infinite;
+}
+
+@keyframes thread-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.25;
+	}
+}
+
+/* ---- Resume banner (US-058 AC-4) ---------------------------------------
+   Drawn at the head of a conversation that was opened to take up an earlier
+   one. It says out loud that this is a *new* conversation handed the old one as
+   context, so the page never implies the agent remembers a session it does not
+   hold. */
+.resume-banner {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	margin: 0 0 10px;
+	padding: 8px 10px;
+	border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+	border-radius: var(--radius);
+	background: var(--accent-soft);
+}
+
+.resume-banner-mark {
+	font-family: var(--font-mono);
+	font-size: 9px;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--accent-strong);
+	white-space: nowrap;
+}
+
+.resume-banner-body {
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--text-muted);
+}
+
+.resume-banner-body code {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--text);
+}
+
+/* The spec pane keeps its title on the left and gathers its two commands on the
+   right, now that "Conversa su questa spec" stands beside the close. */
+.spec-pane .modal-header {
+	gap: 12px;
+}
+
+.spec-pane .modal-header .modal-title {
+	margin-right: auto;
+}
+
+/* ---- Thread rail, narrow mode ------------------------------------------
+   Below NARROW_MAX_WIDTH the rail stops being a column and becomes a
+   horizontal strip *above* the primary column: the conversation keeps the whole
+   width of the window, which is the non-negotiable rule of US-057 AC-6 and of
+   state E of the design. The rules are scoped to .workspace-shell rather than
+   to its --narrow modifier so a stale modifier — the instant between a resize
+   and the module's answer — can never lay a 264px column beside a 400px
+   window. */
+@media (max-width: 900px) {
+	.workspace-shell {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto auto auto minmax(0, 1fr);
+	}
+
+	.workspace-shell > .conversation-rail {
+		grid-row: 3;
+		grid-column: 1;
+		width: auto;
+		flex-direction: row;
+		align-items: stretch;
+		border-right: 0;
+		border-bottom: 1px solid var(--rule);
+		overflow-x: auto;
+		overflow-y: hidden;
+	}
+
+	.workspace-shell > .workspace-primary {
+		grid-row: 4;
+		grid-column: 1;
+	}
+
+	.workspace-shell > .conversation-rail .rail-top {
+		padding: 8px 8px 8px 14px;
+		align-content: center;
+	}
+
+	.workspace-shell > .conversation-rail .new-thread {
+		width: auto;
+		white-space: nowrap;
+	}
+
+	.workspace-shell > .conversation-rail .rail-list {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		overflow-y: hidden;
+		padding: 8px 14px 8px 6px;
+	}
+
+	/* The group headings are the one thing a strip cannot carry: stacked, they
+	   are a table of contents; in a row they would be labels floating between
+	   unrelated threads. The order the renderer emits keeps the groups
+	   together anyway. */
+	.workspace-shell > .conversation-rail .rail-group {
+		display: none;
+	}
+
+	.workspace-shell > .conversation-rail .thread {
+		flex: 0 0 auto;
+		width: 190px;
+		margin-bottom: 0;
+		background: var(--surface-2);
+		border-color: var(--border);
+	}
+
+	.workspace-shell > .conversation-rail .rail-empty {
+		margin: 0;
+		align-self: center;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+}

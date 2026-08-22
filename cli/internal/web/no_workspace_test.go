@@ -85,6 +85,9 @@ var workspaceScopedRoutes = []scopedRoute{
 	{"POST /api/workspace/conversation/messages", http.MethodPost, "/api/workspace/conversation/messages", "{}"},
 	{"POST /api/workspace/conversation/proposal", http.MethodPost, "/api/workspace/conversation/proposal", "{}"},
 	{"DELETE /api/workspace/conversation", http.MethodDelete, "/api/workspace/conversation", ""},
+	{"GET /api/workspace/conversations", http.MethodGet, "/api/workspace/conversations", ""},
+	{"GET /api/workspace/conversations/{id}", http.MethodGet, "/api/workspace/conversations/c-1", ""},
+	{"POST /api/workspace/conversations/{id}/resume", http.MethodPost, "/api/workspace/conversations/c-1/resume", "{}"},
 	{"GET /api/mockups", http.MethodGet, "/api/mockups", ""},
 }
 
