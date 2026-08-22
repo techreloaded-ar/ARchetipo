@@ -92,8 +92,20 @@ type streamSession struct {
 	// into a wait for the timeout.
 	conversational bool
 
-	mu                sync.Mutex
-	seq               int
+	mu  sync.Mutex
+	seq int
+	// openingPrompt is the instruction start wrote as the first user frame,
+	// kept only until the process replays it back. `--replay-user-messages`
+	// re-emits every user frame, the opening one included, and a replay is what
+	// makes a message history: without this the instruction the caller composed
+	// would enter the transcript as something the person said — titling a
+	// conversation with it, counting it as a message, and handing it to a
+	// resumed conversation as a request somebody made.
+	openingPrompt string
+	// openingHeld says the instruction has not been written yet, because this
+	// session opened without starting anything. It is given up to the first
+	// message, which carries it.
+	openingHeld       bool
 	completed         bool
 	finalMessage      string
 	lastAssistantText string
@@ -199,11 +211,24 @@ func (s *streamSession) forget(id string) {
 // writeUserText hands one operator message to the process as a `user` frame,
 // which is the only shape the streaming input accepts.
 func (s *streamSession) writeUserText(text string) error {
+	return s.writeUserBlocks(text)
+}
+
+// writeUserBlocks writes one `user` frame carrying several text blocks, which
+// is how a held opening instruction travels together with the first message of
+// the person: one frame, so it opens exactly one turn, and separate blocks, so
+// the replay comes back with the instruction and the message still told apart
+// and only the instruction is kept out of the history.
+func (s *streamSession) writeUserBlocks(texts ...string) error {
+	blocks := make([]any, 0, len(texts))
+	for _, text := range texts {
+		blocks = append(blocks, map[string]any{"type": "text", "text": text})
+	}
 	payload, err := json.Marshal(map[string]any{
 		"type": frameUser,
 		"message": map[string]any{
 			"role":    "user",
-			"content": []any{map[string]any{"type": "text", "text": text}},
+			"content": blocks,
 		},
 	})
 	if err != nil {
@@ -219,6 +244,12 @@ func (s *streamSession) writeUserText(text string) error {
 // process that never came up, and every command sent to it would be delivered
 // into nothing while the run looked live.
 func (s *streamSession) start(ctx context.Context, prompt string) error {
+	// Remembered before it is written, never after: the process can replay it
+	// while this call is still returning, and a prompt recorded too late would
+	// already have entered the history it is remembered to keep out of.
+	s.mu.Lock()
+	s.openingPrompt = prompt
+	s.mu.Unlock()
 	if err := s.writeUserText(prompt); err != nil {
 		return fmt.Errorf("the claude session could not be given its instruction: %w", err)
 	}
@@ -230,6 +261,72 @@ func (s *streamSession) start(ctx context.Context, prompt string) error {
 	case <-ctx.Done():
 		return fmt.Errorf("the claude session did not announce itself: %w", ctx.Err())
 	}
+}
+
+// hold keeps the opening instruction instead of writing it, so that opening the
+// session starts no work at all.
+//
+// It is what a free conversation opens with. The instruction is the caller's,
+// not the person's: written now it would open a turn on a workspace nobody has
+// asked anything about yet, and the person would find the agent already talking
+// in a conversation they have not started. Held, it travels with the first
+// message they write — in the same frame, so it still arrives before anything
+// is answered and still opens exactly one turn.
+//
+// There is no handshake to wait for, and none is lost: the process announces
+// itself only once a first frame reaches it, so a session that writes nothing
+// has nothing to be announced by. What it costs is learning at the first
+// message, rather than at the open, that the process never came up — and a
+// process that leaves is observed either way, through the end of its output.
+//
+// The turn is closed because there is none: before the first message nothing is
+// in progress, which is what makes a cancel arriving in the meantime end the
+// conversation instead of interrupting work that was never started.
+func (s *streamSession) hold(prompt string) {
+	s.mu.Lock()
+	s.openingPrompt = prompt
+	s.openingHeld = true
+	s.mu.Unlock()
+	s.endTurn()
+}
+
+// takeHeldOpening hands back the instruction still waiting to be delivered, and
+// gives it up: an instruction delivered twice would open the conversation
+// twice.
+func (s *streamSession) takeHeldOpening() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.openingHeld {
+		return "", false
+	}
+	s.openingHeld = false
+	return s.openingPrompt, true
+}
+
+// openingEchoOf answers what is left of a replayed block once the opening
+// instruction has been taken out of it: the whole block was the instruction and
+// nothing remains, or it began with the instruction and the person's own
+// message follows it. It consumes the memory of the instruction, so it can
+// answer that at most once.
+//
+// The prefix is looked at and not only the whole text because the instruction
+// can be delivered in the same frame as the first message, as its own block: a
+// build that replays such a frame as one joined block would otherwise put the
+// instruction back into the history with the message glued to it.
+//
+// It is only ever consulted while the opening instruction is still outstanding:
+// a person who wrote, word for word, the instruction the caller composed would
+// be an operator quoting a prompt they never saw, and everything they write
+// after the replay enters the history as it always did.
+func (s *streamSession) openingEchoOf(text string) (rest string, echo bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.openingPrompt == "" || !strings.HasPrefix(text, s.openingPrompt) {
+		return "", false
+	}
+	rest = strings.TrimSpace(strings.TrimPrefix(text, s.openingPrompt))
+	s.openingPrompt = ""
+	return rest, true
 }
 
 // Send hands an operator message to the turn in progress. It writes nothing
@@ -279,7 +376,15 @@ func (s *streamSession) Send(ctx context.Context, text string) error {
 		default:
 		}
 	}
-	if err := s.writeUserText(text); err != nil {
+	// The held instruction, when there is one, travels in the same frame as this
+	// message and before it. It is given up before the write and never put back:
+	// a write that fails means the process is gone, and a retry that delivered
+	// the instruction a second time would open the conversation twice.
+	write := func() error { return s.writeUserText(text) }
+	if opening, held := s.takeHeldOpening(); held {
+		write = func() error { return s.writeUserBlocks(opening, text) }
+	}
+	if err := write(); err != nil {
 		// The guard above and the write are not one atomic act, and they cannot
 		// be: the process can leave in between. When it has, the write failed for
 		// a reason the caller must be able to branch on — the run is no longer

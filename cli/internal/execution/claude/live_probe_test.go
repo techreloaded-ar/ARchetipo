@@ -84,14 +84,12 @@ func TestLiveClaudeDialogue(t *testing.T) {
 	}
 	session.AttachDialogue(client)
 
-	// The first thing the history must show is the prompt itself, re-emitted by
-	// Claude as a user message. That re-emission is the mechanism the whole
-	// dialogue rests on — it is what `--replay-user-messages` buys — and it is
-	// verified here against the real binary rather than against a double.
-	waitForLiveEvent(t, ctx, session, func(event execution.RunEvent) bool {
-		return event.Kind == localrun.KindUserMessage && event.Text == prompt
-	}, "the prompt re-emitted as a user message")
-
+	// The re-emission is the mechanism the whole dialogue rests on — it is what
+	// `--replay-user-messages` buys — and it is verified below against the real
+	// binary rather than against a double, on the operator's own message. The
+	// opening prompt is replayed too, and is deliberately absent from the
+	// history: it is the caller's instruction, not something anybody said. That
+	// absence is asserted after the turn, over the whole transcript.
 	if err := client.Send(ctx, steered); err != nil {
 		assertDeliveredOrRefused(t, "the operator message", err)
 	} else {
@@ -111,6 +109,9 @@ func TestLiveClaudeDialogue(t *testing.T) {
 
 	for _, event := range session.Events(0) {
 		t.Logf("event %d %s %q", event.ID, event.Kind, event.Text)
+		if event.Kind == localrun.KindUserMessage && event.Text == prompt {
+			t.Fatalf("the opening prompt entered the history as event %d", event.ID)
+		}
 	}
 	if snapshot := session.Snapshot(); snapshot.State != execution.RunActive {
 		t.Fatalf("the session closed itself: %#v — only the observed end of the process may do that", snapshot)

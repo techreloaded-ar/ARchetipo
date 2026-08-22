@@ -65,8 +65,13 @@
 	// The lifecycle words the wire carries. They are the vocabulary of a live
 	// process, not of the process a workspace follows: nothing here names a step
 	// of anybody's method.
+	//
+	// ACTIVE says the conversation is open and can be written to, and says
+	// nothing about the agent doing something: a conversation just opened has an
+	// agent waiting for a first message, and a badge reading "talking" would
+	// describe work that nobody has asked for yet.
 	const STATE_LABELS = {
-		ACTIVE: "talking",
+		ACTIVE: "open",
 		CLOSED: "ended",
 		CRASHED: "ended badly",
 	};

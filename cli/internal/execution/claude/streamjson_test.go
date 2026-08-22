@@ -214,7 +214,14 @@ func (f *fakeClaude) messagesReceived() []string {
 		if payload.Message.Role != "user" || len(payload.Message.Content) == 0 {
 			continue
 		}
-		out = append(out, payload.Message.Content[0].Text)
+		// Every text block, and not only the first: one frame can carry the held
+		// opening instruction and the first message of the person, and a helper
+		// that read only the head of it would report the message as never sent.
+		for _, block := range payload.Message.Content {
+			if block.Type == "text" {
+				out = append(out, block.Text)
+			}
+		}
 	}
 	return out
 }
@@ -440,6 +447,56 @@ func TestStreamSessionIgnoresTheFramesThatCarryNoHistory(t *testing.T) {
 	events := session.Events(after)
 	if len(events) != 1 || events[0].Kind != localrun.KindText || events[0].Text != "ci sono" {
 		t.Fatalf("the noise entered the history: %#v", events)
+	}
+}
+
+// The opening instruction is replayed like every other user frame and must not
+// enter the history: a conversation opens on an empty transcript, and what a
+// reader sees first is what a person really wrote.
+func TestStreamSessionKeepsTheOpeningPromptOutOfTheHistory(t *testing.T) {
+	fake := newFakeClaude()
+	client, session := openConversation(t, fake)
+
+	fake.emit(userFrame("PROMPT", true))
+	// A frame that does carry history follows, so the assertion below fails on a
+	// dropped frame instead of merely on a slow one.
+	fake.emit(`{"type":"assistant","message":{"content":[{"type":"text","text":"eccomi"}]}}`)
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindText) == 1 })
+
+	if n := countEvents(session.Events(0), localrun.KindUserMessage); n != 0 {
+		t.Fatalf("the opening prompt entered the history: %#v", session.Events(0))
+	}
+
+	// Only the opening one is silent. A message the person writes — even the
+	// same words the prompt happened to use — is history like any other.
+	if err := client.Send(context.Background(), "PROMPT"); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	fake.emit(userFrame("PROMPT", true))
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindUserMessage) == 1 })
+}
+
+// A held instruction and the first message travel in one frame, and a build
+// that replayed that frame as a single joined block must still leave only the
+// instruction out: what the person wrote keeps its place in the history.
+func TestStreamSessionKeepsAJoinedOpeningEchoOutOfTheHistory(t *testing.T) {
+	fake := newFakeClaude()
+	session := localrun.NewSession("run-held", nil)
+	client := newStreamSession(fake, session, true)
+	go client.consume()
+	client.hold("PROMPT")
+	session.AttachDialogue(client)
+	t.Cleanup(fake.end)
+
+	const first = "di cosa parla questo workspace?"
+	if err := client.Send(context.Background(), first); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	fake.emit(userFrame("PROMPT\n\n"+first, true))
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindUserMessage) == 1 })
+
+	if got := session.Events(0)[0].Text; got != first {
+		t.Fatalf("the history opens on %q; want only what the person wrote", got)
 	}
 }
 

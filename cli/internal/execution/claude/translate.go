@@ -150,6 +150,11 @@ func (s *streamSession) projectAssistant(f frame, raw json.RawMessage) {
 // results of the tools the agent ran, and the operator's own message coming
 // back out. The re-emission is the only way a message enters the history — it
 // is never written when it is sent.
+//
+// One user frame is not an operator's message at all: the opening instruction
+// the caller composed, which the process replays like every other. It is
+// dropped here, so a conversation opens on an empty transcript and the first
+// thing a reader sees is what a person really wrote.
 func (s *streamSession) projectUser(f frame, raw json.RawMessage) {
 	blocks, ok := decodeBlocks(f.Message)
 	if !ok || len(blocks) == 0 {
@@ -165,7 +170,20 @@ func (s *streamSession) projectUser(f frame, raw json.RawMessage) {
 			}
 			s.append(kind, toolResultText(block.Content), s.toolNameOf(block.ToolUseID), raw)
 		case "text":
-			s.append(localrun.KindUserMessage, block.Text, "", raw)
+			// The opening instruction comes back like any other user frame, and
+			// it is the one that is not history: it is what the caller asked
+			// for, not what the person said. Only the instruction is dropped —
+			// a message replayed together with it keeps its place in the
+			// history — and everything the person writes afterwards enters it
+			// exactly as before.
+			text := block.Text
+			if rest, echo := s.openingEchoOf(text); echo {
+				if rest == "" {
+					continue
+				}
+				text = rest
+			}
+			s.append(localrun.KindUserMessage, text, "", raw)
 		default:
 			s.append(kindOf(f), "", "", raw)
 		}

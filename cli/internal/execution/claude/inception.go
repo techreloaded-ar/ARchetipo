@@ -43,7 +43,7 @@ func (p *Provider) executeInception(ctx context.Context, req execution.Request, 
 	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	live, err := p.openSession(runCtx, req, cfg, dir, buildInceptionPrompt(req), true, 0)
+	live, err := p.openSession(runCtx, req, cfg, dir, buildInceptionPrompt(req), true, false, 0)
 	if err != nil {
 		return execution.Result{}, err
 	}

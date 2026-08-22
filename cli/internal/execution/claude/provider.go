@@ -299,7 +299,7 @@ type singleTurn struct {
 // Every failure closes the session before returning; a success deliberately
 // leaves it open.
 func (p *Provider) runSingleTurn(runCtx context.Context, req execution.Request, cfg settings, dir, prompt, gerund string) (*singleTurn, error) {
-	live, err := p.openSession(runCtx, req, cfg, dir, prompt, false, 0)
+	live, err := p.openSession(runCtx, req, cfg, dir, prompt, false, false, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -390,8 +390,16 @@ type liveSession struct {
 
 // openSession starts the process, opens the protocol on it, gives it its
 // instruction and makes the run followable and commandable. Everything in it is
-// identical for every action but the mode of the session, the prompt and how
-// much history the session keeps, which are the three parameters.
+// identical for every action but the mode of the session, the prompt, when the
+// instruction is delivered and how much history the session keeps, which are
+// the four parameters.
+//
+// deferOpening decides the last of those: false — what every action passes —
+// writes the instruction at once and waits for the process to announce itself,
+// which is the handshake of always. True holds it back for the first message of
+// the person, which is what a free conversation opens with and the only thing
+// that makes an open start no work; the reasoning is written out on
+// streamSession.hold.
 //
 // retain bounds that history: 0 — what every execution passes — is the
 // unlimited session of always, so no dispatched action changes behaviour, and a
@@ -401,7 +409,7 @@ type liveSession struct {
 //
 // A failure here always leaves the session closed and the process gone: a
 // registered run that nothing will ever end would stay ACTIVE forever.
-func (p *Provider) openSession(runCtx context.Context, req execution.Request, cfg settings, dir, prompt string, conversational bool, retain int) (*liveSession, error) {
+func (p *Provider) openSession(runCtx context.Context, req execution.Request, cfg settings, dir, prompt string, conversational, deferOpening bool, retain int) (*liveSession, error) {
 	// The session is registered before anything is started, so the run is
 	// followable from the instant it can produce history — including while this
 	// call is still inside the agent's work.
@@ -418,7 +426,9 @@ func (p *Provider) openSession(runCtx context.Context, req execution.Request, cf
 	client := newStreamSession(process, session, conversational)
 	go client.consume()
 
-	if err := client.start(runCtx, prompt); err != nil {
+	if deferOpening {
+		client.hold(prompt)
+	} else if err := client.start(runCtx, prompt); err != nil {
 		_, _, _ = p.shutdown(process)
 		session.Close(execution.RunCrashed, err.Error())
 		return nil, err

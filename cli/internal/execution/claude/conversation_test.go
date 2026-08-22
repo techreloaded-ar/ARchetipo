@@ -151,6 +151,57 @@ func TestOpenConversationStartsTheProcessInTheRequestedDirectoryAndReturns(t *te
 	}
 }
 
+// Opening a conversation starts no work: nothing is written to the process, so
+// the agent has nothing to answer and the person finds an empty conversation
+// waiting for their first message. The instruction the conversation runs under
+// is delivered with that message, ahead of it and in the same frame, so it
+// still arrives before anything is answered.
+func TestOpenConversationWritesNothingUntilTheFirstMessage(t *testing.T) {
+	command := fakeCommand(t)
+	dir := t.TempDir()
+	fake := newFakeClaude()
+	t.Cleanup(fake.end)
+	provider := openConversationProvider(t, fake)
+
+	if err := provider.OpenConversation(context.Background(), conversationRequest(command, dir)); err != nil {
+		t.Fatalf("opening the conversation failed: %v", err)
+	}
+	t.Cleanup(func() { _ = provider.CloseConversation(context.Background(), conversationID) })
+
+	if got := fake.messagesReceived(); len(got) != 0 {
+		t.Fatalf("opening the conversation wrote %v to the process; it must write nothing", got)
+	}
+
+	const first = "Ciao, di cosa parla questo workspace?"
+	if err := provider.SendRunMessage(context.Background(), execution.RunRequest{RunID: conversationID}, first); err != nil {
+		t.Fatalf("the first message of the conversation was refused: %v", err)
+	}
+	got := fake.messagesReceived()
+	if len(got) != 2 || got[1] != first {
+		t.Fatalf("the process received %v; want the held instruction and then exactly the first message", got)
+	}
+	if !strings.Contains(got[0], "free conversation") {
+		t.Fatalf("what travelled ahead of the first message was not the conversation instruction: %q", got[0])
+	}
+	// One frame and one turn: the instruction and the message arrive together,
+	// so the agent answers once and not twice.
+	if frames := len(fake.framesReceived()); frames != 1 {
+		t.Fatalf("the first message opened %d frames; want exactly one", frames)
+	}
+
+	// The replay puts the message into the history and leaves the instruction
+	// out of it.
+	fake.emit(userFrame(got[0], true))
+	fake.emit(userFrame(first, true))
+	waitFor(t, func() bool {
+		return countEvents(collectEvents(provider, conversationID, 0), localrun.KindUserMessage) == 1
+	})
+	events := collectEvents(provider, conversationID, 0)
+	if events[0].Text != first {
+		t.Fatalf("the history opens on %q; want the first message of the person", events[0].Text)
+	}
+}
+
 // --- AC-3: the conversation is followable and commandable at once ------------
 
 // The conversation borrows the whole vocabulary of a run without borrowing its
@@ -185,7 +236,8 @@ func TestOpenConversationIsFollowableAndCommandableAtOnce(t *testing.T) {
 	if err := provider.SendRunMessage(context.Background(), execution.RunRequest{RunID: conversationID}, question); err != nil {
 		t.Fatalf("the message was refused by an open conversation: %v", err)
 	}
-	// The prompt is the first user frame; the operator's question is the second.
+	// The instruction the conversation was opened with travels with this first
+	// message, ahead of it, and the person's own words follow it.
 	if got := fake.messagesReceived(); len(got) != 2 || got[1] != question {
 		t.Fatalf("the process received %v; want the conversation prompt and then exactly the operator's message", got)
 	}
