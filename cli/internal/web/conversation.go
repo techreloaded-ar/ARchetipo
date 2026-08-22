@@ -80,6 +80,53 @@ type conversationView struct {
 	// omitted while nothing has been decided: a conversation that has never
 	// answered a proposal has no outcome to speak of.
 	Outcome *conversationOutcomeView `json:"outcome,omitempty"`
+	// Runs is one block per execution this conversation started, in the order
+	// the decisions were taken. It is never nil, so a client always iterates an
+	// array: a conversation that has started nothing answers with an empty list
+	// and not with null.
+	Runs []conversationRunView `json:"runs"`
+}
+
+// conversationRunEventWindow bounds how many events of a single run travel
+// inside the conversation payload. The conversation is polled every couple of
+// seconds and can carry several runs at once, so the whole log of each of them
+// would make the payload grow without bound; the run panel remains the place
+// where a full history is read.
+const conversationRunEventWindow = 200
+
+// conversationRunView is one execution born from this conversation, rendered at
+// the point of the discourse that asked for it.
+//
+// The runView is embedded anonymously on purpose: run, events, last_id,
+// approvals, connected, truncated and notice keep exactly the names and the
+// types the browser already knows from the run panel, so the same rendering
+// code reads a run whether it is met in the panel or inside the conversation.
+type conversationRunView struct {
+	runView
+	ExecutionID string `json:"execution_id"`
+	// AnchorEventID is the id of the event that carried the proposal whose
+	// confirmation started this execution — "the point at which it was asked
+	// for". It is what lets the flow draw the run where the conversation asked
+	// for it instead of at the end.
+	AnchorEventID int64              `json:"anchor_event_id"`
+	Action        execution.ActionID `json:"action"`
+	Label         string             `json:"label,omitempty"`
+	Scope         execution.Scope    `json:"scope"`
+	SpecCode      string             `json:"spec_code,omitempty"`
+	// Status and CreatedAt come from the execution record, and are empty
+	// exactly when the record could not be read — which Notice then explains.
+	Status    execution.ExecutionStatus `json:"status,omitempty"`
+	CreatedAt string                    `json:"created_at,omitempty"`
+	// Decision is what was answered on the proposal, in the routes' own
+	// vocabulary. A block exists only for a confirmation, since a refusal
+	// starts nothing, but the field is carried so the flow never has to infer
+	// it.
+	Decision string `json:"decision"`
+	// AwaitingResponse is a fact of the server and not a derivation the browser
+	// is asked to make, by the same rule as handleGetWorkspaceRuns: pending
+	// approvals exist only while a follower is attached, and attaching it is
+	// this side's job.
+	AwaitingResponse bool `json:"awaiting_response"`
 }
 
 // conversationTarget is everything the routes need once the configuration has
@@ -192,6 +239,86 @@ func conversationSessionOf(snapshot conversationSnapshot) (*localrun.Session, bo
 	return source.Registry().Lookup(snapshot.id)
 }
 
+// conversationRunsOf composes the run blocks of a conversation from the
+// decisions its holder has recorded.
+//
+// It reads the register and not the history: a decision that started an
+// execution is a fact of the workspace, so a run is still reported when the
+// event that proposed it has fallen out of the retention window. Every
+// projection is read with cursor 0, exactly as handleGetWorkspaceRuns does,
+// because this route reads the run and never advances it — consuming events
+// here would starve the panel following the same run.
+func (s *Server) conversationRunsOf(ctx context.Context, ws *workspaceSession, snapshot conversationSnapshot) []conversationRunView {
+	views := make([]conversationRunView, 0, len(snapshot.outcomes))
+	for _, outcome := range snapshot.outcomes {
+		if strings.TrimSpace(outcome.ExecutionID) == "" {
+			// A refusal started nothing, and there is no run to show for it.
+			continue
+		}
+		view := conversationRunView{
+			runView:       emptyRunView(""),
+			ExecutionID:   outcome.ExecutionID,
+			AnchorEventID: outcome.ProposalID,
+			Action:        execution.ActionID(outcome.Action),
+			Label:         outcome.Label,
+			Scope:         execution.Scope(outcome.Scope),
+			SpecCode:      outcome.SpecCode,
+			Decision:      outcome.Decision,
+		}
+		record, err := ws.store.Get(ctx, outcome.ExecutionID)
+		if err != nil {
+			// A run that could not be read is reported with the facts the
+			// outcome already carries, never hidden: the person decided it, and
+			// the conversation has to keep saying so.
+			view.Notice = err.Error()
+			views = append(views, view)
+			continue
+		}
+		view.Status = record.Status
+		view.CreatedAt = record.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z")
+		view.Scope = runScopeOf(record)
+		if record.SpecCode != "" {
+			view.SpecCode = record.SpecCode
+		}
+		var projection runProjection
+		followed := false
+		if record.Status == execution.StatusRunning {
+			target, notice, resolveErr := s.resolveRunTarget(ctx, ws, outcome.ExecutionID)
+			switch {
+			case resolveErr != nil:
+				view.Notice = resolveErr.Error()
+			case target.follower == nil:
+				// No run assigned yet: there is nothing to read and nothing to
+				// be waiting on.
+				view.Notice = notice
+			default:
+				projection = target.follower.snapshotView(0)
+				followed = true
+			}
+		} else if follower, ok := ws.followers.get(outcome.ExecutionID); ok {
+			// A terminal record never starts a stream: only a follower that is
+			// already attached is read, so rendering the conversation cannot
+			// resurrect a run that has ended.
+			projection = follower.snapshotView(0)
+			followed = true
+		}
+		if followed {
+			rendered := projectionView(projection)
+			// The tail is what is kept: the newest events are the ones the
+			// person is reading, and dropping the head is what the window is
+			// for.
+			if len(rendered.Events) > conversationRunEventWindow {
+				rendered.Events = rendered.Events[len(rendered.Events)-conversationRunEventWindow:]
+				rendered.Truncated = true
+			}
+			view.runView = rendered
+			view.AwaitingResponse = len(rendered.Approvals) > 0
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
 // conversationViewOf renders the workspace's conversation as the browser reads
 // it.
 //
@@ -206,6 +333,9 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 		ProviderID:        target.availability.providerID,
 		Events:            []execution.RunEvent{},
 		LastID:            afterID,
+		// Never nil, whether or not a conversation is open: a client reading a
+		// workspace that holds none still iterates an array.
+		Runs: []conversationRunView{},
 	}
 	if !open {
 		return view
@@ -233,6 +363,11 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 	// rendered even by a viewer that cannot read the events: what was decided
 	// and what it started are facts of the workspace, not lines of a timeline.
 	view.Outcome = newConversationOutcomeView(snapshot.outcome)
+	// The runs are composed before the history is read, and for the same
+	// reason the outcome is: what a conversation started is a fact of the
+	// workspace, so it is rendered even by a viewer that cannot read the
+	// events of the conversation itself.
+	view.Runs = s.conversationRunsOf(ctx, ws, snapshot)
 
 	session, found := conversationSessionOf(snapshot)
 	if !found {
@@ -499,7 +634,11 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 		writeError(w, mapRunRefusal(err))
 		return
 	}
-	target := s.conversationAvailabilityFor(ctx, ws)
+	// A conversation that is already open is held by the provider holding it,
+	// not by today's default, so this answer names the same one the GET does:
+	// the two routes render the same conversation and must not disagree about
+	// who has it or about whether it is available.
+	target := heldConversationTarget(snapshot)
 	writeJSON(w, http.StatusAccepted, s.conversationViewOf(ctx, ws, target, snapshot, true, afterID))
 }
 

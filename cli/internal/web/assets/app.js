@@ -864,6 +864,12 @@
 	// waiting mark all come from /api/workspace/runs through the pure renderer
 	// in workspace-runs.js; this section reads the payload only to answer where
 	// a press should lead, which is the one thing the renderer refuses to do.
+	//
+	// And where a press leads is no longer a panel by default: since US-060 the
+	// payload says which conversation a run was started from and at which line,
+	// so the strip and its topbar indicator lead to that point in the
+	// conversation whenever the entry names one, and to the panel that mounts
+	// the run only when it does not.
 
 	const WORKSPACE_RUNS_POLL_MS = 2000;
 	const WORKSPACE_RUNS_POLL_FAILURE_LIMIT = 3;
@@ -975,7 +981,20 @@
 	// the spec detail for a spec run, and for a workspace run the panel it was
 	// started from, which is the New spec modal for the assisted creation and
 	// the PRD modal for every other workspace action.
-	function openRunTarget(scope, code, id) {
+	//
+	// A run that was started from a conversation is reached in that
+	// conversation, at the line that asked for it (US-060, AC-6): the panel that
+	// mounts the whole log is still there behind the block's own control, but
+	// the place where the wait is happening is the flow that produced it.
+	function openRunTarget(entry) {
+		const row = entry && typeof entry === "object" ? entry : {};
+		const scope = row.scope || "";
+		const code = row.spec_code || "";
+		const id = row.id || "";
+		if (row.conversation_id) {
+			revealConversationRun(row.conversation_id, row.anchor_event_id);
+			return;
+		}
 		if (scope === "spec" && code) {
 			openEditor(code);
 			return;
@@ -995,18 +1014,34 @@
 		workspaceRunsEl.addEventListener("click", (e) => {
 			const row = e.target.closest("[data-run-id]");
 			if (!row) return;
-			openRunTarget(row.dataset.runScope, row.dataset.runSpec, row.dataset.runId);
+			// The row declares its identity; the entry behind it declares where
+			// it came from. Both are handed over, so a run started from a
+			// conversation is reached there and one started from the board keeps
+			// leading exactly where it always did.
+			const id = row.dataset.runId || "";
+			openRunTarget(
+				Object.assign(
+					{
+						scope: row.dataset.runScope || "",
+						spec_code: row.dataset.runSpec || "",
+						id,
+					},
+					workspaceRunByID(id) || {},
+				),
+			);
 		});
 	}
 
 	if (runsAttentionEl) {
 		// The indicator leads to the first entry that is waiting: seeing that
-		// something needs an answer and reaching the answer are one gesture.
+		// something needs an answer and reaching the answer are one gesture. The
+		// whole entry is handed over, so when the run was born in a conversation
+		// the press lands on the very block that is waiting.
 		runsAttentionEl.addEventListener("click", () => {
 			const runs = (workspaceRunsView && workspaceRunsView.runs) || [];
 			const waiting = runs.find((run) => run && run.awaiting_response);
 			if (!waiting) return;
-			openRunTarget(waiting.scope, waiting.spec_code, waiting.id);
+			openRunTarget(waiting);
 		});
 	}
 
@@ -3917,6 +3952,17 @@
 	let conversationsCurrentId = ""; // which thread the panel is showing
 	let conversationTranscript = null; // the past thread being read, or null
 
+	// ---- Answers given inside the conversation (US-060) ---
+	// Two pieces of local state, and neither of them a second copy of anything
+	// the server holds. The first remembers how an approval was answered from
+	// this panel, so the decision stays readable once the provider stops listing
+	// it as pending — the same discipline as runAnswered in the run panel, kept
+	// per approval id because a conversation can carry more than one run. The
+	// second names the run block the viewer was just sent to, so arriving at it
+	// marks it instead of only scrolling to it.
+	let conversationAnsweredApprovals = {}; // approvalID → {optionID, label, denied, executionID, approval}
+	let conversationHighlightAnchor = ""; // anchor event id of the block just reached
+
 	// The panel is redrawn on every poll, so its controls cannot own their
 	// handlers: the container does, bound once, and each control declares what
 	// it is through its data attributes.
@@ -3953,6 +3999,20 @@
 			const decline = e.target.closest("[data-conversation-proposal-decline]");
 			if (decline) {
 				decideProposal(decline.getAttribute("data-proposal-id"), "decline");
+				return;
+			}
+			// Answering a run's approval from the flow that asked for it (AC-4).
+			// This branch comes *before* the reach one on purpose: the buttons of
+			// a waiting card live inside a run block that also carries the "go to
+			// the whole log" control, and a press must answer rather than
+			// navigate away from the very decision it just took.
+			const answer = e.target.closest("[data-run-approval-id]");
+			if (answer) {
+				respondConversationApproval(
+					answer.getAttribute("data-execution-id") || "",
+					answer.getAttribute("data-run-approval-id") || "",
+					answer.getAttribute("data-run-option-id") || "",
+				);
 				return;
 			}
 			// Same rule as the status strip: reaching a run only navigates to the
@@ -4231,6 +4291,10 @@
 		conversationLink = "";
 		conversationPollBusy = false;
 		conversationPollFailures = 0;
+		// The answers given here and the block last reached belong to the
+		// conversation being left: neither may be read as the new one's.
+		conversationAnsweredApprovals = {};
+		conversationHighlightAnchor = "";
 		// The rail is forgotten with the conversation (AC-6): the index of the
 		// workspace being left must never be on screen beside the workspace now
 		// open, not even for the instant it takes to read the new one. Emptied
@@ -4401,11 +4465,14 @@
 		try {
 			await releaseLiveConversation();
 			const view = await apiPost("/api/workspace/conversation", {});
-			// A new conversation is a new history: the cursor, the timeline and
-			// the past thread being read must not survive into it.
+			// A new conversation is a new history: the cursor, the timeline, the
+			// past thread being read and the answers given in the previous one
+			// must not survive into it.
 			conversationTranscript = null;
 			conversationAfterID = 0;
 			conversationEvents = [];
+			conversationAnsweredApprovals = {};
+			conversationHighlightAnchor = "";
 			conversationRefusal = "";
 			conversationLink = "";
 			conversationPollFailures = 0;
@@ -4490,6 +4557,138 @@
 		}
 	}
 
+	// respondConversationApproval answers, from the conversation, an approval a
+	// run of that conversation is waiting on (AC-4). It calls the very route the
+	// run panel calls — one decision route for one decision — and it starts no
+	// loop of its own: the conversation poll already carries the run and its
+	// approvals on every turn, so the only extra read here is the immediate one
+	// that makes the answer visible without waiting for the next tick.
+	//
+	// The composer is not touched by any of this: conversationBusy rises and
+	// falls exactly as it does for every other command of this panel, so writing
+	// to the agent while a run is stopped stays possible (AC-5).
+	async function respondConversationApproval(executionID, approvalID, optionID) {
+		if (conversationBusy || !executionID || !approvalID || !optionID) return;
+		// The label and the tone are the provider's own words, read from the
+		// option the payload declared — never invented from the id that was
+		// pressed.
+		const answering = findConversationApproval(executionID, approvalID);
+		const option = findRunApprovalOption(answering, optionID);
+		const label = (option && (option.label || option.id)) || optionID;
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			await apiPost(
+				`/api/execution/${encodeURIComponent(executionID)}/run/approvals/${encodeURIComponent(approvalID)}`,
+				{ option_id: optionID },
+			);
+			conversationRefusal = "";
+			// The decision stays on the page once the provider stops listing the
+			// approval as pending: a refusal must remain readable in the
+			// conversation that refused (AC-4).
+			// The approval itself travels with the answer: the provider stops
+			// listing it the moment it is answered, and a card that can only be
+			// drawn from the pending list would disappear with it. Keeping the
+			// declaration keeps the command and the options on the page.
+			conversationAnsweredApprovals[approvalID] = {
+				optionID,
+				label,
+				denied: approvalOptionTone(option) === " deny",
+				executionID,
+				approval: answering,
+			};
+			try {
+				const view = await apiGet(
+					`/api/workspace/conversation?after_id=${conversationAfterID}`,
+				);
+				applyConversationView(view);
+			} catch (_) {
+				// The answer was accepted; only the read that would have shown its
+				// effect failed. The next poll says the same thing, so nothing is
+				// refused here over a read.
+			}
+		} catch (err) {
+			showConversationRefusal(err);
+		} finally {
+			conversationBusy = false;
+			renderConversationPanel();
+		}
+	}
+
+	// The approval a run of this conversation is waiting on, as the payload
+	// declares it. It is the object itself, not a copy of some of its fields:
+	// the resolved card is drawn from the provider's own declaration, so the
+	// command and the options stay readable once the approval has stopped being
+	// pending — the same discipline as findRunApproval in the run panel.
+	function findConversationApproval(executionID, approvalID) {
+		const runs =
+			conversationView && Array.isArray(conversationView.runs)
+				? conversationView.runs
+				: [];
+		for (const run of runs) {
+			if (!run || run.execution_id !== executionID) continue;
+			const approvals = Array.isArray(run.approvals) ? run.approvals : [];
+			for (const approval of approvals) {
+				if (!approval || approval.id !== approvalID) continue;
+				return approval;
+			}
+		}
+		return null;
+	}
+
+	// revealConversationRun brings the viewer to the exact block that is waiting
+	// (AC-6): the conversation view, the live thread, and the run block at the
+	// point where it was asked for.
+	async function revealConversationRun(conversationID, anchorEventID) {
+		// Reaching the conversation is a selection like any other, so the layout
+		// module says what the view becomes — an open spec is left open, and in a
+		// narrow window the overlay the press was made in closes with the change
+		// of view.
+		const next = WorkspaceLayout.nextViewAfterSelection(
+			{ view: shellView, specOpen, narrow: shellNarrow },
+			"conversation",
+		);
+		shellView = next.view;
+		specOpen = next.specOpen;
+		applyShellLayout();
+		// A past thread on screen is not where the run is waiting, and neither is
+		// a thread other than the one the entry names: the wait belongs to the
+		// live conversation, so the panel goes back to it before looking for the
+		// block.
+		const wanted = conversationID ? String(conversationID) : "";
+		if (
+			conversationTranscript ||
+			(wanted && conversationsCurrentId && wanted !== conversationsCurrentId)
+		) {
+			await loadConversation();
+		}
+		if (!conversationEl) return;
+		const anchor =
+			anchorEventID === null || anchorEventID === undefined
+				? ""
+				: String(anchorEventID);
+		if (!anchor) return;
+		// Marked, not merely framed: the anchor is raised first so the redraw
+		// carries the mark, and the block that comes out of that redraw is the
+		// one brought into view.
+		conversationHighlightAnchor = anchor;
+		renderConversationPanel();
+		// Looked up by comparison rather than by an interpolated selector: the
+		// anchor is remote text, and it never reaches the selector parser.
+		const blocks = conversationEl.querySelectorAll(
+			"[data-conversation-run-anchor]",
+		);
+		for (const block of blocks) {
+			if (block.getAttribute("data-conversation-run-anchor") !== anchor) {
+				continue;
+			}
+			if (typeof block.scrollIntoView === "function") {
+				block.scrollIntoView({ block: "center" });
+			}
+			return;
+		}
+	}
+
 	async function closeConversation() {
 		if (conversationBusy) return;
 		conversationCloseArmed = false;
@@ -4555,6 +4754,11 @@
 				closeArmed: conversationCloseArmed,
 				refusal: conversationRefusal,
 				link: conversationLink,
+				// Two facts the payload cannot carry, because neither is the
+				// server's: how an approval was answered from this panel, and
+				// which block the viewer was just sent to.
+				answeredApprovals: conversationAnsweredApprovals,
+				highlightAnchor: conversationHighlightAnchor,
 			},
 		);
 

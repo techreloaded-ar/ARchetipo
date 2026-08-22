@@ -588,3 +588,345 @@ describe("renderConversation — esito", () => {
 		assert.ok(!html.includes("<img"), "l'esito ha prodotto un tag reale");
 	});
 });
+
+// US-060 — the run inside the flow. A run started from a conversation belongs
+// where it was asked for, its consent request must read the command in the
+// clear, a refusal must stay on the page after the provider stops listing it,
+// and none of this may take the word away from the person: the composer stays
+// writable while a run waits.
+//
+// Verifies:
+//   - AC-1 the block sits right after the event it names as its anchor, and a
+//     run whose anchor has left the history is still present, at the tail
+//   - AC-3 the command is textual in the HTML and the buttons are exactly the
+//     options the payload declares
+//   - AC-4 an answered decision stays readable with the option that was chosen
+//   - AC-5 the composer is not disabled while a run is waiting
+
+const RUN_EVENTS = [
+	{ id: 1, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "user_message", text: "EVENTO-UNO" },
+	{ id: 2, seq: 2, at: "2026-08-21T10:00:02.000Z", kind: "text", text: "EVENTO-DUE" },
+	{ id: 3, seq: 3, at: "2026-08-21T10:00:03.000Z", kind: "text", text: "EVENTO-TRE" },
+];
+
+// The rail of an event ends with `#<id></div>`: matching the whole tail keeps
+// the oracle away from any other `#` the escaping may have produced.
+function railOf(id) {
+	return `#${id}</div>`;
+}
+
+function runAt(anchor, overrides) {
+	return Object.assign(
+		{
+			execution_id: "exec-1",
+			anchor_event_id: anchor,
+			spec_code: "XX-999",
+			scope: "AMBITO-X",
+			label: "AZIONE-AVVIATA",
+			run: { state: "ACTIVE" },
+			events: [],
+			approvals: [],
+		},
+		overrides,
+	);
+}
+
+const APPROVAL = {
+	id: "appr-1",
+	tool_name: "Bash",
+	title: "TITOLO-DELLA-RICHIESTA",
+	created_at: "2026-08-21T10:00:04.000Z",
+	args: { command: "git worktree prune --verbose" },
+	options: [
+		{ id: "allow-once", kind: "allow", label: "OPZIONE-CONSENSO" },
+		{ id: "deny-once", kind: "deny", label: "OPZIONE-RIFIUTO" },
+	],
+};
+
+function timelineOf(html) {
+	const from = html.indexOf('<ol class="conv-timeline');
+	return html.slice(from, html.indexOf("</ol>", from));
+}
+
+describe("renderConversation — la run dentro il flusso", () => {
+	it("il blocco della run sta subito dopo l'evento che l'ha chiesta", () => {
+		const html = renderConversation(
+			withConversation({ events: RUN_EVENTS, last_id: 3, runs: [runAt(2)] }),
+			"",
+		);
+
+		const block = html.indexOf('data-conversation-run-anchor="2"');
+		assert.ok(block > 0, "il blocco della run non è stato disegnato");
+		assert.ok(
+			html.indexOf(railOf(2)) < block,
+			"il blocco deve seguire l'evento che lo ha chiesto",
+		);
+		assert.ok(
+			block < html.indexOf(railOf(3)),
+			"il blocco deve precedere l'evento successivo",
+		);
+	});
+
+	it("una run la cui ancora non è più nella storia va in coda", () => {
+		const html = renderConversation(
+			withConversation({ events: RUN_EVENTS, last_id: 3, runs: [runAt(99)] }),
+			"",
+		);
+
+		const block = html.indexOf('data-conversation-run-anchor="99"');
+		assert.ok(
+			block > 0,
+			"una run la cui ancora è uscita dalla storia non deve sparire",
+		);
+		assert.ok(
+			html.indexOf(railOf(3)) < block,
+			"senza la sua ancora il blocco deve stare dopo l'ultimo evento",
+		);
+		assert.ok(
+			timelineOf(html).includes('data-conversation-run-anchor="99"'),
+			"il blocco deve comunque restare dentro la timeline",
+		);
+	});
+
+	it("due run producono due blocchi ancorati ai propri eventi", () => {
+		const html = renderConversation(
+			withConversation({
+				events: RUN_EVENTS,
+				last_id: 3,
+				runs: [
+					runAt(3, { execution_id: "exec-tardi", label: "AZIONE-SECONDA" }),
+					runAt(1, { execution_id: "exec-presto", label: "AZIONE-PRIMA" }),
+				],
+			}),
+			"",
+		);
+
+		const first = html.indexOf('data-conversation-run-anchor="1"');
+		const second = html.indexOf('data-conversation-run-anchor="3"');
+		assert.ok(first > 0 && second > 0, "entrambi i blocchi devono esserci");
+		assert.ok(
+			first < second,
+			"l'ordine dei blocchi è quello delle ancore, non quello del payload",
+		);
+		assert.ok(
+			html.indexOf(railOf(1)) < first && first < html.indexOf(railOf(2)),
+			"il primo blocco non è ancorato al proprio evento",
+		);
+		assert.ok(
+			html.indexOf(railOf(3)) < second,
+			"il secondo blocco non è ancorato al proprio evento",
+		);
+	});
+
+	it("il comando di un consenso si legge in chiaro", () => {
+		const html = renderConversation(
+			withConversation({
+				events: RUN_EVENTS,
+				last_id: 3,
+				runs: [runAt(2, { awaiting_response: true, approvals: [APPROVAL] })],
+			}),
+			"",
+		);
+
+		const from = html.indexOf('<pre class="run-approval-args">');
+		assert.ok(from > 0, "manca il blocco degli argomenti della richiesta");
+		const args = html.slice(from, html.indexOf("</pre>", from));
+		assert.ok(
+			args.includes("git worktree prune --verbose"),
+			"il comando non si legge in chiaro dentro run-approval-args",
+		);
+		assert.ok(
+			args.includes("&quot;command&quot;"),
+			"gli argomenti non sono stati neutralizzati dove serviva",
+		);
+		assert.ok(
+			visibleText(html).includes("TITOLO-DELLA-RICHIESTA"),
+			"il titolo della richiesta non è testo visibile",
+		);
+
+		const buttons = html.match(/data-run-approval-id="appr-1"/g) || [];
+		assert.equal(
+			buttons.length,
+			APPROVAL.options.length,
+			"i bottoni devono essere esattamente le opzioni dichiarate dal payload",
+		);
+		assert.ok(
+			html.includes("OPZIONE-CONSENSO") && html.includes("OPZIONE-RIFIUTO"),
+			"le etichette delle opzioni dichiarate non compaiono",
+		);
+		assert.ok(
+			html.includes('data-run-option-id="allow-once"') &&
+				html.includes('data-run-option-id="deny-once"'),
+			"i bottoni non portano gli identificativi delle opzioni del payload",
+		);
+	});
+
+	it("un'approvazione risolta resta leggibile", () => {
+		const html = renderConversation(
+			withConversation({
+				events: RUN_EVENTS,
+				last_id: 3,
+				runs: [runAt(2, { approvals: [APPROVAL] })],
+			}),
+			"",
+			{
+				answeredApprovals: {
+					"appr-1": {
+						optionID: "deny-once",
+						label: "OPZIONE-RIFIUTO",
+						denied: true,
+					},
+				},
+			},
+		);
+
+		assert.ok(
+			html.includes("is-answered"),
+			"una decisione già data deve essere disegnata come risolta",
+		);
+		assert.ok(
+			visibleText(html).includes("OPZIONE-RIFIUTO"),
+			"l'opzione scelta non resta leggibile",
+		);
+		const enabled = (html.match(/<button[^>]*data-run-approval-id[^>]*>/g) || [])
+			.filter((button) => !/\sdisabled/.test(button));
+		assert.equal(
+			enabled.length,
+			0,
+			"una decisione già data non deve lasciare bottoni premibili",
+		);
+	});
+
+	it("il rifiuto resta leggibile quando l'approvazione non è più pendente", () => {
+		const html = renderConversation(
+			withConversation({
+				events: RUN_EVENTS,
+				last_id: 3,
+				// Il provider ha smesso di elencare l'approvazione: è esattamente il
+				// momento in cui la carta sparirebbe portandosi via il rifiuto.
+				runs: [runAt(2, { approvals: [] })],
+			}),
+			"",
+			{
+				answeredApprovals: {
+					"appr-1": {
+						optionID: "deny-once",
+						label: "OPZIONE-RIFIUTO",
+						denied: true,
+						approval: APPROVAL,
+					},
+				},
+			},
+		);
+
+		assert.ok(
+			html.includes("is-denied"),
+			"un rifiuto già dato deve restare disegnato come rifiuto",
+		);
+		assert.ok(
+			visibleText(html).includes("OPZIONE-RIFIUTO"),
+			"l'opzione rifiutata non resta leggibile nella conversazione",
+		);
+		assert.ok(
+			visibleText(html).includes("git worktree prune --verbose"),
+			"il comando rifiutato non resta leggibile",
+		);
+		const enabled = (html.match(/<button[^>]*data-run-approval-id[^>]*>/g) || [])
+			.filter((button) => !/\sdisabled/.test(button));
+		assert.equal(
+			enabled.length,
+			0,
+			"una decisione già data non deve lasciare bottoni premibili",
+		);
+	});
+
+	it("un'approvazione risolta non viene disegnata due volte", () => {
+		const html = renderConversation(
+			withConversation({
+				events: RUN_EVENTS,
+				last_id: 3,
+				// Finché il provider la elenca ancora, la carta del payload è
+				// l'unica: la copia locale non ne aggiunge una seconda.
+				runs: [runAt(2, { approvals: [APPROVAL] })],
+			}),
+			"",
+			{
+				answeredApprovals: {
+					"appr-1": {
+						optionID: "deny-once",
+						label: "OPZIONE-RIFIUTO",
+						denied: true,
+						approval: APPROVAL,
+					},
+				},
+			},
+		);
+
+		const cards = html.match(/run-approval-title/g) || [];
+		assert.equal(cards.length, 1, "la carta è stata disegnata due volte");
+	});
+
+	it("il composer resta scrivibile mentre una run attende", () => {
+		const html = renderConversation(
+			withConversation({
+				events: RUN_EVENTS,
+				last_id: 3,
+				runs: [runAt(2, { awaiting_response: true, approvals: [APPROVAL] })],
+			}),
+			"",
+		);
+
+		assert.ok(
+			!/<textarea[^>]*\sdisabled/.test(html),
+			"un'attesa non deve togliere la parola a chi scrive",
+		);
+		assert.ok(
+			html.includes("conv-composer-await"),
+			"manca il suggerimento sull'attesa sotto il compositore",
+		);
+	});
+
+	it("un payload senza runs non cambia nulla", () => {
+		const baseline = timelineOf(
+			renderConversation(withConversation({ events: RUN_EVENTS, last_id: 3 }), ""),
+		);
+		const empty = timelineOf(
+			renderConversation(
+				withConversation({ events: RUN_EVENTS, last_id: 3, runs: [] }),
+				"",
+			),
+		);
+
+		assert.equal(empty, baseline, "un elenco di run vuoto ha cambiato la timeline");
+		assert.ok(
+			!baseline.includes("data-conversation-run-anchor"),
+			"senza run non deve restare alcun blocco",
+		);
+		assert.ok(
+			!baseline.includes("conv-composer-await"),
+			"senza run non deve esserci alcun suggerimento d'attesa",
+		);
+	});
+
+	it("un payload malformato non fa lanciare", () => {
+		const views = [
+			withConversation({ events: RUN_EVENTS, runs: "RUNS-INVENTATE" }),
+			withConversation({ events: RUN_EVENTS, runs: null }),
+			withConversation({ events: RUN_EVENTS, runs: [null] }),
+			withConversation({ events: RUN_EVENTS, runs: [null, 3, "x", {}] }),
+			withConversation({
+				events: RUN_EVENTS,
+				runs: [{ anchor_event_id: 2, approvals: "X", events: 7, run: null }],
+			}),
+			withConversation({
+				events: RUN_EVENTS,
+				runs: [runAt(2, { approvals: [null, {}, { id: "appr-2", options: "X" }] })],
+			}),
+		];
+		for (const view of views) {
+			const html = renderConversation(view, "");
+			assert.equal(typeof html, "string");
+			assert.ok(html.includes("conv-timeline"));
+		}
+	});
+});

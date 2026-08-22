@@ -38,6 +38,13 @@ type workspaceRunView struct {
 	// rather than no, so a client never reads a false AwaitingResponse as a
 	// confident "nothing to decide".
 	Notice string `json:"notice,omitempty"`
+	// ConversationID and AnchorEventID say which conversation asked for this
+	// run and at which point of its history. They are omitempty because a run
+	// started from the board was born in no conversation at all, and an empty
+	// id travelling anyway would be a promise of navigation that cannot be
+	// kept.
+	ConversationID string `json:"conversation_id,omitempty"`
+	AnchorEventID  int64  `json:"anchor_event_id,omitempty"`
 }
 
 // workspaceRunsView is never nil in Runs: a client always iterates an array.
@@ -74,6 +81,10 @@ func (s *Server) handleGetWorkspaceRuns(w http.ResponseWriter, r *http.Request) 
 		writeError(w, iox.NewInternal("listing the executions of the workspace", err))
 		return
 	}
+	// The open conversation is read once, before the loop: which conversation
+	// is open does not change inside a single response, and asking the holder
+	// per row would cost a lock per row for a fact that is already settled.
+	snapshot, conversationOpen := ws.conversation.current()
 	views := make([]workspaceRunView, 0, len(records))
 	for _, record := range records {
 		if record.Status != execution.StatusRunning {
@@ -86,6 +97,12 @@ func (s *Server) handleGetWorkspaceRuns(w http.ResponseWriter, r *http.Request) 
 			Action:    record.Action,
 			Status:    record.Status,
 			CreatedAt: record.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
+		}
+		if conversationOpen {
+			if anchor, ok := ws.conversation.anchorOf(record.ID); ok {
+				view.ConversationID = snapshot.id
+				view.AnchorEventID = anchor
+			}
 		}
 		target, notice, resolveErr := s.resolveRunTarget(ctx, ws, record.ID)
 		switch {

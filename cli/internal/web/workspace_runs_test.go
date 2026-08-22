@@ -461,3 +461,127 @@ func TestWorkspaceRunsRefusedWithoutAnOpenWorkspace(t *testing.T) {
 		t.Fatalf("the refusal carries a runs list — it answered emptily instead of declaring that no workspace is open: %s", rec.Body.String())
 	}
 }
+
+// openConversation installs a conversation on the workspace the fixture serves,
+// so a decision can be recorded against it. The provider is the same stub the
+// holder's own tests use: what these tests are about is the anchor the register
+// keeps, not what closing a conversation releases.
+func (f *workspaceRunsFixture) openConversation(t *testing.T, id string) {
+	t.Helper()
+	if err := f.srv.session().conversation.open(id, "stub", &stubConversationalist{}, nil, nil, t.TempDir(), time.Now(), "", ""); err != nil {
+		t.Fatalf("opening the conversation: %v", err)
+	}
+}
+
+// confirmRun records, in the open conversation, that the proposal carried by
+// proposalID was confirmed and started executionID.
+func (f *workspaceRunsFixture) confirmRun(t *testing.T, proposalID int64, executionID string) {
+	t.Helper()
+	outcome := confirmedOutcome(proposalID, "Implementa US-901", executionID)
+	if err := f.srv.session().conversation.decide(proposalID, outcome); err != nil {
+		t.Fatalf("recording the decision: %v", err)
+	}
+}
+
+// rawRunEntries decodes the response body into plain maps, keyed by run id.
+//
+// It exists because the two fields under test are `omitempty`: only the raw
+// JSON can tell "the key is absent" from "the key is there and zero", and a
+// typed struct would read both as the same empty string.
+func rawRunEntries(t *testing.T, body string) map[string]map[string]any {
+	t.Helper()
+	var raw struct {
+		Runs []map[string]any `json:"runs"`
+	}
+	if err := json.Unmarshal([]byte(body), &raw); err != nil {
+		t.Fatalf("undecodable runs view: %v (%s)", err, body)
+	}
+	entries := make(map[string]map[string]any, len(raw.Runs))
+	for _, run := range raw.Runs {
+		id, _ := run["id"].(string)
+		entries[id] = run
+	}
+	return entries
+}
+
+func assertNoAnchorKeys(t *testing.T, entry map[string]any, what string) {
+	t.Helper()
+	for _, key := range []string{"conversation_id", "anchor_event_id"} {
+		if _, present := entry[key]; present {
+			t.Fatalf("%s carries %q on the wire: a run nobody asked for in a conversation must not promise a place to reach: %#v", what, key, entry)
+		}
+	}
+}
+
+// AC-6: an entry born from a conversation says which one and at which point,
+// so the notice that a run is waiting has something to navigate to.
+func TestWorkspaceRunsCarryTheConversationThatAskedThem(t *testing.T) {
+	fixture := newWorkspaceRunsFixture(t)
+	started := fixture.seedRun(t, "US-901", execution.ActionPlan, execution.StatusRunning)
+	fixture.collaborator.setRun(started, "run-started")
+	fixture.openConversation(t, "conv-60")
+	fixture.confirmRun(t, 42, started)
+
+	status, _, body := fixture.readRuns(t)
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/workspace/runs = %d, want 200: %s", status, body)
+	}
+	entry, ok := rawRunEntries(t, body)[started]
+	if !ok {
+		t.Fatalf("the run started from the conversation is missing: %s", body)
+	}
+	if got, _ := entry["conversation_id"].(string); got != "conv-60" {
+		t.Fatalf("conversation_id = %v, want the conversation that asked for the run: %#v", entry["conversation_id"], entry)
+	}
+	if got, _ := entry["anchor_event_id"].(float64); int64(got) != 42 {
+		t.Fatalf("anchor_event_id = %v, want the event that carried the proposal: %#v", entry["anchor_event_id"], entry)
+	}
+}
+
+// A run started from the board was born in no conversation: the two fields must
+// be absent from its JSON, not present and empty.
+func TestWorkspaceRunsOmitTheAnchorForABoardRun(t *testing.T) {
+	fixture := newWorkspaceRunsFixture(t)
+	asked := fixture.seedRun(t, "US-901", execution.ActionPlan, execution.StatusRunning)
+	fromBoard := fixture.seedRun(t, "US-902", execution.ActionPlan, execution.StatusRunning)
+	fixture.collaborator.setRun(asked, "run-asked")
+	fixture.collaborator.setRun(fromBoard, "run-board")
+	fixture.openConversation(t, "conv-60")
+	fixture.confirmRun(t, 42, asked)
+
+	status, _, body := fixture.readRuns(t)
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/workspace/runs = %d, want 200: %s", status, body)
+	}
+	entries := rawRunEntries(t, body)
+	if _, ok := entries[asked]; !ok {
+		t.Fatalf("the run started from the conversation is missing: %s", body)
+	}
+	entry, ok := entries[fromBoard]
+	if !ok {
+		t.Fatalf("the run started from the board is missing: %s", body)
+	}
+	assertNoAnchorKeys(t, entry, "the board run")
+}
+
+// With no conversation open there is no history to point at, so no entry may
+// carry the anchor.
+func TestWorkspaceRunsOmitTheAnchorWithNoConversationOpen(t *testing.T) {
+	fixture := newWorkspaceRunsFixture(t)
+	planning := fixture.seedRun(t, "US-901", execution.ActionPlan, execution.StatusRunning)
+	inception := fixture.seedRun(t, "", execution.ActionInception, execution.StatusRunning)
+	fixture.collaborator.setRun(planning, "run-plan")
+	fixture.collaborator.setRun(inception, "run-inception")
+
+	status, _, body := fixture.readRuns(t)
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/workspace/runs = %d, want 200: %s", status, body)
+	}
+	entries := rawRunEntries(t, body)
+	if len(entries) != 2 {
+		t.Fatalf("runs = %d, want the two running executions: %s", len(entries), body)
+	}
+	for id, entry := range entries {
+		assertNoAnchorKeys(t, entry, "run "+id)
+	}
+}

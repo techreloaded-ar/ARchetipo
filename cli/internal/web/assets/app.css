@@ -4839,6 +4839,176 @@ body.no-workspace [data-workspace-scoped] {
 	color: var(--text-muted);
 }
 
+/* ---- Run blocks inside the flow (US-060) --------------------------------
+   Shape taken from the mockup docs/mockups/redesign-chat/stato-c-run-attesa.html
+   (.block / .block-head / .log / .block-controls in its shared.css): a card
+   inset in the timeline, with the coloured rail on the left that declares its
+   state. Nothing here restyles .run-approval* or .approval-btn — the waiting
+   card is the one already used by the run panel, so the two places where the
+   reviewer decides something look alike instead of drifting apart. The colour
+   variables and radii are the ones .conv-proposal already borrows. */
+.conv-run-row {
+	list-style: none;
+	margin: 6px 0;
+}
+
+.conv-run {
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--border-strong);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	overflow: hidden;
+}
+
+.conv-run.is-live {
+	border-left-color: var(--status-progress);
+}
+
+.conv-run.is-waiting {
+	border-left-color: var(--priority-high);
+	border-color: color-mix(in srgb, var(--priority-high) 34%, var(--border));
+	background: color-mix(in srgb, var(--priority-high) 5%, var(--surface-2));
+}
+
+/* A run that has stopped keeps its shape and loses every sign of life. */
+.conv-run.is-ended {
+	border-left-color: var(--border-strong);
+	background: var(--surface);
+}
+
+/* Reached from another view: the block says where the wait is, for as long as
+   the anchor stays selected. */
+.conv-run.is-highlight {
+	border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+	box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.conv-run-head {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 9px;
+	padding: 9px 12px;
+	border-bottom: 1px solid var(--rule);
+	background: color-mix(in srgb, var(--surface-3) 40%, transparent);
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+}
+
+.conv-run-mark {
+	color: var(--text-dim);
+	flex-shrink: 0;
+}
+
+.conv-run-label {
+	color: var(--text);
+	font-weight: 500;
+	letter-spacing: 0.06em;
+	text-transform: none;
+	min-width: 0;
+	word-break: break-word;
+}
+
+.conv-run-code {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	color: var(--text-muted);
+	background: var(--surface-3);
+	border-radius: 3px;
+	padding: 1px 6px;
+}
+
+.conv-run-head-spacer {
+	flex: 1 1 auto;
+}
+
+.conv-run-state,
+.conv-run-status {
+	flex-shrink: 0;
+	letter-spacing: 0.08em;
+}
+
+.conv-run.is-live .conv-run-state {
+	color: var(--status-progress);
+}
+
+.conv-run.is-waiting .conv-run-state {
+	color: var(--priority-high);
+}
+
+.conv-run-notice {
+	padding: 9px 12px;
+	font-size: 12px;
+	line-height: 1.55;
+	color: var(--text-muted);
+	border-bottom: 1px solid var(--rule);
+	word-break: break-word;
+}
+
+/* The log is consultation material, not the conversation: tall enough to be
+   read, and scrolling on both axes inside its own box. A long line must never
+   widen the column — in the narrow layout that would make the whole
+   conversation unreadable. */
+.conv-run-log {
+	margin: 0;
+	max-height: 148px;
+	overflow-x: auto;
+	overflow-y: auto;
+	white-space: pre;
+	padding: 10px 12px;
+	background: color-mix(in srgb, var(--surface-3) 30%, transparent);
+	font-family: var(--font-mono);
+	font-size: 11.5px;
+	line-height: 1.75;
+	color: var(--text-muted);
+}
+
+.conv-run-log-empty {
+	color: var(--text-dim);
+	font-style: italic;
+	white-space: pre-wrap;
+}
+
+/* The same declaration the timeline makes about its own missing history. */
+.conv-run-partial {
+	margin: 0;
+	padding: 7px 12px;
+	border-top: 1px solid var(--rule);
+	background: color-mix(in srgb, var(--status-planned) 6%, transparent);
+	font-size: 11.5px;
+	line-height: 1.5;
+	color: var(--text-muted);
+}
+
+/* The waiting card reused as it is; only its place in the block is set here. */
+.conv-run-approval {
+	margin: 10px 12px;
+}
+
+.conv-run-controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 0 12px 11px;
+}
+
+.conv-run-head + .conv-run-controls {
+	padding-top: 11px;
+}
+
+/* Said under the composer while a run is stopped: writing to the agent is
+   still allowed, but it is not what makes the run start again. */
+.conv-composer-await {
+	margin: 0;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.06em;
+	color: var(--priority-high);
+}
+
 /* ---- Workspace shell (US-057) ------------------------------------------
    One column, not two. The shell is a stack of three rows — the permanent view
    switcher, the full-width strip of what is running, and the primary column —

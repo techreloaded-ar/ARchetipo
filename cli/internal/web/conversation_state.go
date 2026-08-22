@@ -77,6 +77,14 @@ type conversationState struct {
 	// under which id. It is a pointer because "nothing has been decided yet" is
 	// an answer of its own, not a zero outcome.
 	outcome *conversationOutcome
+	// outcomes is every decision taken in this conversation, in the order they
+	// were taken. It is a list and not a single value because one conversation
+	// can start more than one step, and each of them has its own point in the
+	// discourse: keeping only the last would lose the place of every earlier
+	// one. A second decision on the *same* proposal replaces the entry instead
+	// of adding one, because a refusal followed by a confirmation of the same
+	// proposal is one gesture, not two.
+	outcomes []conversationOutcome
 }
 
 // conversationOutcome is the record of the last decision taken on a proposal:
@@ -123,6 +131,10 @@ type conversationSnapshot struct {
 	// outcome.
 	decidedProposalID int64
 	outcome           *conversationOutcome
+	// outcomes is the whole ordered register of decisions, copied like
+	// providerConfig is, so a reader can place every started step at the point
+	// of the history that asked for it.
+	outcomes []conversationOutcome
 }
 
 func newConversationState() *conversationState {
@@ -171,6 +183,7 @@ func (c *conversationState) open(id, providerID string, provider execution.Conve
 	// decision taken about a conversation that no longer exists.
 	c.decidedProposalID = 0
 	c.outcome = nil
+	c.outcomes = nil
 	return nil
 }
 
@@ -194,8 +207,52 @@ func (c *conversationState) decide(proposalID int64, outcome conversationOutcome
 		return fmt.Errorf("no conversation is open for this workspace")
 	}
 	c.decidedProposalID = proposalID
-	c.outcome = &outcome
+	// The register keeps one entry per proposal. A decision on a proposal that
+	// already has one replaces it — the watermark makes that happen only for a
+	// refusal answered again by a confirmation of the same proposal, and two
+	// entries for one proposal would be two blocks for a single gesture.
+	replaced := false
+	for i := range c.outcomes {
+		if c.outcomes[i].ProposalID == outcome.ProposalID {
+			c.outcomes[i] = outcome
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		c.outcomes = append(c.outcomes, outcome)
+	}
+	// outcome keeps pointing at the last decision taken, exactly as before. It
+	// is a copy and not the address of the entry in the register: a reader that
+	// received the pointer would otherwise be dereferencing a value a later
+	// decision on the same proposal is free to rewrite underneath it.
+	last := outcome
+	c.outcome = &last
 	return nil
+}
+
+// anchorOf answers with the id of the event that carried the proposal whose
+// confirmation started executionID — the point of the history where that step
+// was asked for.
+//
+// It answers false for an empty id, for a closed or empty holder, and for an
+// execution this conversation never started: none of those has a point in this
+// discourse, and a zero anchor would claim the top of the history.
+func (c *conversationState) anchorOf(executionID string) (int64, bool) {
+	if c == nil || strings.TrimSpace(executionID) == "" {
+		return 0, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.id == "" {
+		return 0, false
+	}
+	for i := range c.outcomes {
+		if c.outcomes[i].ExecutionID == executionID {
+			return c.outcomes[i].ProposalID, true
+		}
+	}
+	return 0, false
 }
 
 // current returns a copy of the open conversation, and false when there is
@@ -210,6 +267,14 @@ func (c *conversationState) current() (conversationSnapshot, bool) {
 	if c.id == "" {
 		return conversationSnapshot{}, false
 	}
+	// The register travels as a copy for the same reason the snapshot itself is
+	// one: the caller must not be holding the slice the next decision appends
+	// to or rewrites.
+	var outcomes []conversationOutcome
+	if len(c.outcomes) > 0 {
+		outcomes = make([]conversationOutcome, len(c.outcomes))
+		copy(outcomes, c.outcomes)
+	}
 	return conversationSnapshot{
 		id:                c.id,
 		providerID:        c.providerID,
@@ -222,6 +287,7 @@ func (c *conversationState) current() (conversationSnapshot, bool) {
 		resumedFrom:       c.resumedFrom,
 		decidedProposalID: c.decidedProposalID,
 		outcome:           c.outcome,
+		outcomes:          outcomes,
 	}, true
 }
 
@@ -271,6 +337,7 @@ func (c *conversationState) releaseCurrent(ctx context.Context, markClosed bool)
 	// describe a run started from a history nobody can read here any more.
 	c.decidedProposalID = 0
 	c.outcome = nil
+	c.outcomes = nil
 	if markClosed {
 		c.closed = true
 	}

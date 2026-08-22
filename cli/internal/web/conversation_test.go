@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
@@ -187,6 +188,41 @@ type conversationResponse struct {
 	LastID    int64  `json:"last_id"`
 	Truncated bool   `json:"truncated"`
 	Notice    string `json:"notice"`
+	// Runs is the block list the flow draws inside the conversation. It is
+	// decoded from the wire like everything else here, so the assertions are
+	// about the JSON the browser reads and not about the server's own struct.
+	Runs []conversationRunResponse `json:"runs"`
+}
+
+// conversationRunResponse is one run block of the conversation, as the browser
+// receives it.
+type conversationRunResponse struct {
+	ExecutionID   string `json:"execution_id"`
+	AnchorEventID int64  `json:"anchor_event_id"`
+	Action        string `json:"action"`
+	Label         string `json:"label"`
+	Scope         string `json:"scope"`
+	SpecCode      string `json:"spec_code"`
+	Status        string `json:"status"`
+	CreatedAt     string `json:"created_at"`
+	Decision      string `json:"decision"`
+	Run           *struct {
+		RunID string `json:"run_id"`
+		State string `json:"state"`
+	} `json:"run"`
+	Events []struct {
+		ID   int64  `json:"id"`
+		Kind string `json:"kind"`
+		Text string `json:"text"`
+	} `json:"events"`
+	Approvals []struct {
+		ID       string          `json:"id"`
+		ToolName string          `json:"tool_name"`
+		Title    string          `json:"title"`
+		Args     json.RawMessage `json:"args"`
+	} `json:"approvals"`
+	AwaitingResponse bool   `json:"awaiting_response"`
+	Notice           string `json:"notice"`
 }
 
 func decodeConversation(t *testing.T, body string) conversationResponse {
@@ -774,5 +810,437 @@ func TestReadingAnOpenConversationProbesNothing(t *testing.T) {
 	}
 	if got := provider.probeCount(); got != before {
 		t.Errorf("following an open conversation probed the runtime %d extra times: the reading loop forks a process per tick", got-before)
+	}
+}
+
+// conversationRunsProvider is the conversing provider that also owns the runs
+// the conversation starts.
+//
+// It is a second double and not a widening of conversingProvider because the
+// two answer different questions: conversingProvider is the agent process
+// behind the conversation, while this one is the hub behind the executions that
+// conversation asked for. Only the provider side is a double — the store, the
+// followers, the routes and the JSON serialization are the production ones.
+//
+// streams counts, per run, how many times the event stream was really opened.
+// Without it "the block carries no events" could equally mean "this run was
+// never followed" or "the stream delivered nothing", and only the first of the
+// two is the assertion a terminal run is worth making.
+type conversationRunsProvider struct {
+	*conversingProvider
+
+	runsMu sync.Mutex
+	// runs maps an execution id to the run behind it, events maps a run id to
+	// what its stream delivers, and approvals maps a run id to what it is
+	// waiting on.
+	runs      map[string]string
+	events    map[string][]execution.RunEvent
+	approvals map[string][]execution.PendingApproval
+	streams   map[string]int
+}
+
+func newConversationRunsProvider(id string) *conversationRunsProvider {
+	return &conversationRunsProvider{
+		conversingProvider: newConversingProvider(id, 0),
+		runs:               map[string]string{},
+		events:             map[string][]execution.RunEvent{},
+		approvals:          map[string][]execution.PendingApproval{},
+		streams:            map[string]int{},
+	}
+}
+
+func (p *conversationRunsProvider) ResolveRun(_ context.Context, exec execution.Execution, _ map[string]any) (string, error) {
+	p.runsMu.Lock()
+	defer p.runsMu.Unlock()
+	return p.runs[exec.ID], nil
+}
+
+// ReadRun answers for two different subjects with one method, because the
+// viewer really does ask one collaborator both questions: the conversation is
+// read by its own id — and answered by the local session holding it — while a
+// run is read by the run id the hub assigned.
+func (p *conversationRunsProvider) ReadRun(ctx context.Context, req execution.RunRequest) (execution.RunSnapshot, error) {
+	if strings.HasPrefix(req.RunID, conversationIDPrefix) {
+		return p.conversingProvider.ReadRun(ctx, req)
+	}
+	return execution.RunSnapshot{RunID: req.RunID, State: execution.RunActive}, nil
+}
+
+func (p *conversationRunsProvider) ReadRunApprovals(ctx context.Context, req execution.RunRequest) ([]execution.PendingApproval, error) {
+	if strings.HasPrefix(req.RunID, conversationIDPrefix) {
+		return p.conversingProvider.ReadRunApprovals(ctx, req)
+	}
+	p.runsMu.Lock()
+	defer p.runsMu.Unlock()
+	pending := p.approvals[req.RunID]
+	out := make([]execution.PendingApproval, len(pending))
+	copy(out, pending)
+	return out, nil
+}
+
+// StreamRunEvents delivers the configured backlog and then stays open until the
+// follower is closed: a stream that returned would only make the follower
+// declare the run over and reconnect in a loop.
+func (p *conversationRunsProvider) StreamRunEvents(ctx context.Context, req execution.RunRequest, afterID int64, sink func(execution.RunEvent) error) error {
+	if strings.HasPrefix(req.RunID, conversationIDPrefix) {
+		return p.conversingProvider.StreamRunEvents(ctx, req, afterID, sink)
+	}
+	p.runsMu.Lock()
+	p.streams[req.RunID]++
+	pending := append([]execution.RunEvent(nil), p.events[req.RunID]...)
+	p.runsMu.Unlock()
+	for _, event := range pending {
+		if event.ID <= afterID {
+			continue
+		}
+		if err := sink(event); err != nil {
+			return err
+		}
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (p *conversationRunsProvider) setRun(executionID, runID string) {
+	p.runsMu.Lock()
+	defer p.runsMu.Unlock()
+	p.runs[executionID] = runID
+}
+
+func (p *conversationRunsProvider) setRunEvents(runID string, events ...execution.RunEvent) {
+	p.runsMu.Lock()
+	defer p.runsMu.Unlock()
+	p.events[runID] = events
+}
+
+func (p *conversationRunsProvider) setRunApprovals(runID string, approvals ...execution.PendingApproval) {
+	p.runsMu.Lock()
+	defer p.runsMu.Unlock()
+	p.approvals[runID] = approvals
+}
+
+func (p *conversationRunsProvider) streamCount(runID string) int {
+	p.runsMu.Lock()
+	defer p.runsMu.Unlock()
+	return p.streams[runID]
+}
+
+var (
+	_ execution.Provider          = (*conversationRunsProvider)(nil)
+	_ execution.Conversationalist = (*conversationRunsProvider)(nil)
+	_ execution.RunCollaborator   = (*conversationRunsProvider)(nil)
+)
+
+// newConversationRunsServer is a viewer whose default provider both holds the
+// conversation and owns the runs it starts.
+func newConversationRunsServer(t *testing.T) (*Server, *conversationRunsProvider) {
+	t.Helper()
+	provider := newConversationRunsProvider("chatty-runs")
+	srv := newConversationServer(t, provider)
+	// The followers this route attaches outlive the request that started them,
+	// and their streams stay open until they are cancelled.
+	t.Cleanup(func() { srv.session().followers.closeAll() })
+	return srv, provider
+}
+
+// seedConversationRun writes one execution record straight into the store, the
+// way a confirmed proposal would have. No provider is dispatched: what the
+// conversation reads is the record, and starting a real run would only add a
+// scheduler to the oracle.
+func seedConversationRun(t *testing.T, srv *Server, specCode string, action execution.ActionID, status execution.ExecutionStatus) string {
+	t.Helper()
+	id, err := execution.RandomID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability, err := execution.RequiredCapability(action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := execution.Execution{
+		ID:         id,
+		SpecCode:   specCode,
+		Action:     action,
+		Capability: capability,
+		ProviderID: "chatty-runs",
+		Status:     status,
+		Result:     &execution.Result{ExternalID: "task-" + id},
+		CreatedAt:  time.Now().UTC(),
+	}
+	if status != execution.StatusRunning {
+		completed := time.Now().UTC()
+		record.CompletedAt = &completed
+	}
+	if err := srv.session().store.Create(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// confirmProposal records in the holder the decision a person took on the
+// proposal carried by proposalID. It is the register the routes write when a
+// proposal is confirmed, seeded here directly so the test owns the execution id
+// and its status instead of inheriting them from a scheduler.
+func confirmProposal(t *testing.T, srv *Server, proposalID int64, executionID string, action execution.ActionID, specCode string) {
+	t.Helper()
+	scope := string(execution.ScopeWorkspace)
+	if specCode != "" {
+		scope = string(execution.ScopeSpec)
+	}
+	if err := srv.session().conversation.decide(proposalID, conversationOutcome{
+		ProposalID:  proposalID,
+		Decision:    "confirmed",
+		Action:      string(action),
+		Label:       "Pianificare",
+		Scope:       scope,
+		SpecCode:    specCode,
+		ExecutionID: executionID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestConversationViewCarriesTheRunsItAsked is AC-1 and AC-2 on one payload: the
+// run a conversation started travels inside that conversation, anchored to the
+// event that proposed it, and its events arrive there too — nobody has to open
+// a separate list to follow it.
+func TestConversationViewCarriesTheRunsItAsked(t *testing.T) {
+	srv, provider := newConversationRunsServer(t)
+
+	view := openConversationOK(t, srv)
+	proposal := provider.emit(t, view.Conversation.ID, "text", "posso pianificare US-901?")
+	executionID := seedConversationRun(t, srv, "US-901", execution.ActionPlan, execution.StatusRunning)
+	provider.setRun(executionID, "run-plan")
+	provider.setRunEvents("run-plan", event(1, "planning"), event(2, "still planning"))
+	confirmProposal(t, srv, proposal.ID, executionID, execution.ActionPlan, "US-901")
+
+	var read conversationResponse
+	var body string
+	waitFor(t, "the run block to carry the events of its run", func() bool {
+		var status int
+		status, read, body = readConversation(t, srv, 0)
+		return status == http.StatusOK && len(read.Runs) == 1 && len(read.Runs[0].Events) == 2
+	})
+
+	block := read.Runs[0]
+	if block.ExecutionID != executionID {
+		t.Errorf("execution_id = %q, want the execution the confirmation started %q: %s", block.ExecutionID, executionID, body)
+	}
+	if block.AnchorEventID != proposal.ID {
+		t.Errorf("anchor_event_id = %d, want the event that proposed it %d: %s", block.AnchorEventID, proposal.ID, body)
+	}
+	if block.Decision != "confirmed" {
+		t.Errorf("decision = %q, want the answer the person gave: %s", block.Decision, body)
+	}
+	if block.Status != string(execution.StatusRunning) {
+		t.Errorf("status = %q, want %q: %s", block.Status, execution.StatusRunning, body)
+	}
+	if block.Run == nil || block.Run.State != string(execution.RunActive) {
+		t.Fatalf("the run block carries no active run: %s", body)
+	}
+	if block.Events[0].Text != "planning" || block.Events[1].Text != "still planning" {
+		t.Errorf("the run events did not travel in the conversation: %s", body)
+	}
+	if block.Notice != "" {
+		t.Errorf("notice = %q on a run that was read: %s", block.Notice, body)
+	}
+}
+
+// TestConversationViewCarriesOneBlockPerDecision is the other half of AC-1: two
+// steps asked at two points of the discourse are two blocks, each anchored
+// where it was asked for, in the order the decisions were taken.
+func TestConversationViewCarriesOneBlockPerDecision(t *testing.T) {
+	srv, provider := newConversationRunsServer(t)
+
+	view := openConversationOK(t, srv)
+	id := view.Conversation.ID
+	firstProposal := provider.emit(t, id, "text", "posso pianificare US-901?")
+	firstExecution := seedConversationRun(t, srv, "US-901", execution.ActionPlan, execution.StatusSucceeded)
+	confirmProposal(t, srv, firstProposal.ID, firstExecution, execution.ActionPlan, "US-901")
+
+	provider.emit(t, id, "text", "fatto")
+	secondProposal := provider.emit(t, id, "text", "posso pianificare US-902?")
+	secondExecution := seedConversationRun(t, srv, "US-902", execution.ActionPlan, execution.StatusSucceeded)
+	confirmProposal(t, srv, secondProposal.ID, secondExecution, execution.ActionPlan, "US-902")
+
+	_, read, body := readConversation(t, srv, 0)
+	if len(read.Runs) != 2 {
+		t.Fatalf("runs = %d, want one block per decision: %s", len(read.Runs), body)
+	}
+	if read.Runs[0].ExecutionID != firstExecution || read.Runs[1].ExecutionID != secondExecution {
+		t.Fatalf("the blocks are not in the order the decisions were taken: %s", body)
+	}
+	if read.Runs[0].AnchorEventID != firstProposal.ID || read.Runs[1].AnchorEventID != secondProposal.ID {
+		t.Errorf("the two blocks are not anchored to the two proposals (%d, %d): %s", firstProposal.ID, secondProposal.ID, body)
+	}
+	if read.Runs[0].AnchorEventID == read.Runs[1].AnchorEventID {
+		t.Errorf("two steps asked at two points share one anchor: %s", body)
+	}
+	if read.Runs[0].SpecCode != "US-901" || read.Runs[1].SpecCode != "US-902" {
+		t.Errorf("the blocks do not name the specs they are about: %s", body)
+	}
+}
+
+// TestConversationViewReportsAnUnreachableRunAsANotice: a run whose record
+// cannot be read is a block with a notice, never an error — the person decided
+// it, and the conversation has to stay readable and keep saying so.
+func TestConversationViewReportsAnUnreachableRunAsANotice(t *testing.T) {
+	srv, provider := newConversationRunsServer(t)
+
+	view := openConversationOK(t, srv)
+	proposal := provider.emit(t, view.Conversation.ID, "text", "posso pianificare US-901?")
+	confirmProposal(t, srv, proposal.ID, "exec-does-not-exist", execution.ActionPlan, "US-901")
+
+	status, read, body := readConversation(t, srv, 0)
+	if status != http.StatusOK {
+		t.Fatalf("GET conversation = %d, want 200 despite the unreachable run: %s", status, body)
+	}
+	if len(read.Runs) != 1 {
+		t.Fatalf("runs = %d, want the block of the decision that was taken: %s", len(read.Runs), body)
+	}
+	block := read.Runs[0]
+	if strings.TrimSpace(block.Notice) == "" {
+		t.Fatalf("the unreachable run carries no notice, so an empty block reads as a run with nothing to say: %s", body)
+	}
+	if block.ExecutionID != "exec-does-not-exist" || block.AnchorEventID != proposal.ID {
+		t.Errorf("the block lost what the decision already knew: %#v", block)
+	}
+	if block.AwaitingResponse {
+		t.Errorf("a run that could not even be read is reported as waiting: %#v", block)
+	}
+	if read.Conversation == nil || len(read.Events) != 1 {
+		t.Errorf("the conversation stopped being readable because one run could not be: %s", body)
+	}
+}
+
+// TestConversationViewOpensNoFollowerForATerminalRun: rendering the
+// conversation must not resurrect a run that has ended. The count on the double
+// is the oracle — the stream is either opened or it is not, and no internal
+// state is inspected to find out.
+func TestConversationViewOpensNoFollowerForATerminalRun(t *testing.T) {
+	srv, provider := newConversationRunsServer(t)
+
+	view := openConversationOK(t, srv)
+	proposal := provider.emit(t, view.Conversation.ID, "text", "posso pianificare US-901?")
+	executionID := seedConversationRun(t, srv, "US-901", execution.ActionPlan, execution.StatusSucceeded)
+	provider.setRun(executionID, "run-done")
+	provider.setRunEvents("run-done", event(1, "planning"))
+	confirmProposal(t, srv, proposal.ID, executionID, execution.ActionPlan, "US-901")
+
+	for tick := 0; tick < 3; tick++ {
+		_, read, body := readConversation(t, srv, 0)
+		if len(read.Runs) != 1 {
+			t.Fatalf("runs = %d, want the block of the step that ran: %s", len(read.Runs), body)
+		}
+		block := read.Runs[0]
+		if block.Status != string(execution.StatusSucceeded) {
+			t.Errorf("status = %q, want %q: %s", block.Status, execution.StatusSucceeded, body)
+		}
+		if block.Run != nil && len(block.Events) != 0 {
+			t.Errorf("a terminal run was followed and delivered events: %s", body)
+		}
+		if block.AwaitingResponse {
+			t.Errorf("a terminal run is reported as waiting: %s", body)
+		}
+	}
+	if got := provider.streamCount("run-done"); got != 0 {
+		t.Fatalf("reading the conversation opened %d streams on a run that had already ended", got)
+	}
+}
+
+// TestConversationViewMarksTheRunAwaitingAnAnswer is AC-3: the conversation says
+// the run is stopped on a decision, and carries the command in clear — the very
+// argument the hub is waiting on, not a summary of it.
+func TestConversationViewMarksTheRunAwaitingAnAnswer(t *testing.T) {
+	srv, provider := newConversationRunsServer(t)
+
+	view := openConversationOK(t, srv)
+	proposal := provider.emit(t, view.Conversation.ID, "text", "posso pianificare US-901?")
+	executionID := seedConversationRun(t, srv, "US-901", execution.ActionPlan, execution.StatusRunning)
+	provider.setRun(executionID, "run-waiting")
+	provider.setRunApprovals("run-waiting", workspaceApproval("appr-7", "Eseguire il comando"))
+	confirmProposal(t, srv, proposal.ID, executionID, execution.ActionPlan, "US-901")
+
+	var read conversationResponse
+	var body string
+	waitFor(t, "the conversation to report the run waiting for an answer", func() bool {
+		var status int
+		status, read, body = readConversation(t, srv, 0)
+		return status == http.StatusOK && len(read.Runs) == 1 && read.Runs[0].AwaitingResponse
+	})
+
+	block := read.Runs[0]
+	if len(block.Approvals) != 1 {
+		t.Fatalf("the waiting run carries %d approvals, want the one it is stopped on: %s", len(block.Approvals), body)
+	}
+	pending := block.Approvals[0]
+	if pending.ID != "appr-7" || pending.Title != "Eseguire il comando" {
+		t.Errorf("the decision is not named: %#v", pending)
+	}
+	if pending.ToolName != "Bash" {
+		t.Errorf("tool_name = %q, want the tool the run is asking to use", pending.ToolName)
+	}
+	if !strings.Contains(string(pending.Args), `"command":"ls"`) {
+		t.Errorf("args = %s, want the command in clear, neither summarized nor truncated", pending.Args)
+	}
+}
+
+// TestSendConversationMessageKeepsTheConversationAvailable is AC-5 on the
+// command route: a conversation is held by the provider holding it, not by
+// today's default, so writing to a live conversation whose workspace default
+// has since changed is answered — and answered as available, exactly as the
+// reading route answers.
+func TestSendConversationMessageKeepsTheConversationAvailable(t *testing.T) {
+	srv, provider := newConversationRunsServer(t)
+
+	view := openConversationOK(t, srv)
+	id := view.Conversation.ID
+
+	// The default is changed the way the Execution panel changes it: on disk,
+	// while the conversation is alive.
+	mute := releasedProvider("mute", nil)
+	if err := srv.registry.Register(mute); err != nil {
+		t.Fatal(err)
+	}
+	root := srv.session().cfg.ProjectRoot
+	if _, err := config.UpdateDefaultProvider(root, config.DefaultProviderConfig{ID: mute.ID(), Config: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+
+	status, accepted, body := sendConversationMessage(t, srv, "ci sei?")
+	if status != http.StatusAccepted {
+		t.Fatalf("POST message = %d, want 202: %s", status, body)
+	}
+	if !accepted.Available {
+		t.Errorf("available = false on a conversation that is alive and just accepted a message: %s", body)
+	}
+	if accepted.Conversation == nil || accepted.Conversation.ID != id {
+		t.Fatalf("the 202 lost the conversation it wrote to: %s", body)
+	}
+	if sent := provider.dialogueOf(t, id).messages(); len(sent) != 1 || sent[0] != "ci sei?" {
+		t.Errorf("the process received %v, want exactly one \"ci sei?\"", sent)
+	}
+
+	_, read, readBody := readConversation(t, srv, 0)
+	if !read.Available {
+		t.Errorf("the reading route disagrees with the command route about availability: %s", readBody)
+	}
+}
+
+// TestConversationViewAlwaysCarriesARunsArray: a conversation that has started
+// nothing answers with an empty array and never with null, so the flow iterates
+// without testing.
+func TestConversationViewAlwaysCarriesARunsArray(t *testing.T) {
+	srv, provider := newConversationRunsServer(t)
+
+	view := openConversationOK(t, srv)
+	provider.emit(t, view.Conversation.ID, "text", "buongiorno")
+
+	_, read, body := readConversation(t, srv, 0)
+	if len(read.Runs) != 0 {
+		t.Fatalf("runs = %#v, want empty on a conversation that decided nothing", read.Runs)
+	}
+	if !strings.Contains(body, `"runs":[]`) {
+		t.Fatalf("the empty list is not an array on the wire: %s", body)
 	}
 }
