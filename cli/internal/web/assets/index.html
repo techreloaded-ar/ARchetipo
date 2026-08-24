@@ -10,13 +10,18 @@
          dato tecnico: codici spec, id di esecuzione, rami, log, YAML, diff. -->
     <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wght@6..12,300..1000&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <script>
-        // Apply persisted theme before paint to avoid flash-of-wrong-theme.
-        // Default is light; only honor a persisted user choice.
+        // Apply persisted theme and density before paint to avoid a
+        // flash-of-wrong-theme and a topbar that is drawn tall and then shrinks.
+        // Defaults are light and comfortable; only a persisted choice changes them.
         (function () {
             try {
                 var saved = localStorage.getItem('archetipo.theme');
                 document.documentElement.dataset.theme = saved || 'light';
             } catch (_) { document.documentElement.dataset.theme = 'light'; }
+            try {
+                var density = localStorage.getItem('archetipo.density');
+                document.documentElement.dataset.density = density === 'compatta' ? 'compatta' : 'comoda';
+            } catch (_) { document.documentElement.dataset.density = 'comoda'; }
         })();
     </script>
     <link rel="stylesheet" href="/vendor/easymde.min.css" />
@@ -43,6 +48,16 @@
                 <span class="workspace-indicator-name" id="workspace-indicator-name">&mdash;</span>
             </button>
         </div>
+
+        <!-- The permanent view switcher: Conversazione · Spec · Board. It is
+             filled by app.js from the switcher list the layout module returns,
+             so the board is always one press away from the home screen. The Spec
+             tab is offered only while a spec is open.
+             It sits in the middle cell of the bar — the one US-061 left empty
+             when the counters moved into the board — instead of taking a band
+             of its own below it: a second full-width band costs a whole row of
+             the window and says nothing this cell cannot hold. -->
+        <nav id="workspace-views" class="workspace-views" role="tablist" aria-label="Viste del workspace"></nav>
 
         <div class="topbar-actions">
             <button id="new-spec-btn" type="button" class="ghost-btn new-spec-btn" data-workspace-scoped>
@@ -90,6 +105,10 @@
                         <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l1 .35.5 1.24 1.3.36 1.04-.72.88.88-.72 1.04.36 1.3 1.24.5.35 1-.35 1-1.24.5-.36 1.3.72 1.04-.88.88-1.04-.72-1.3.36-.5 1.24-1 .35-1-.35-.5-1.24-1.3-.36-1.04.72-.88-.88.72-1.04-.36-1.3-1.24-.5-.35-1 .35-1 1.24-.5.36-1.3-.72-1.04.88-.88 1.04.72 1.3-.36.5-1.24z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>
                         <span>Config</span>
                     </button>
+                    <button id="density-toggle" type="button" class="ghost-btn" title="How much the interface breathes">
+                        <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12M2 8h12M2 13h12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                        <span data-density-label>Compact density</span>
+                    </button>
                     <button id="refresh-btn" type="button" class="ghost-btn" aria-label="Refresh board" title="Refresh (R)" data-workspace-scoped>
                         <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.88" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
                         <span>Refresh</span>
@@ -134,12 +153,6 @@
          workspace is open — #workspace-home stays outside it, and
          body.no-workspace hides the shell. -->
     <div id="workspace-shell" class="workspace-shell workspace-shell--wide">
-        <!-- The permanent view switcher: Conversazione · Spec · Board. It is
-             filled by app.js from the switcher list the layout module returns,
-             so the board is always one press away from the home screen. The Spec
-             tab is offered only while a spec is open. -->
-        <nav id="workspace-views" class="workspace-views" role="tablist" aria-label="Viste del workspace"></nav>
-
         <!-- What the workspace is running right now (US-055), as a full-width
              strip above the primary column: it is visible in every view, so it
              never takes width away from the conversation. Drawn by the pure

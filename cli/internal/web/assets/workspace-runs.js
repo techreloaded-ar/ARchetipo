@@ -65,6 +65,9 @@
 		awaiting: "waiting for you",
 	};
 
+	/** How many targets the closed summary names before it counts the rest. */
+	const DIGEST_MAX = 3;
+
 	function textOption(opts, key) {
 		const given = opts && typeof opts === "object" ? opts[key] : null;
 		return typeof given === "string" && given.trim() ? given : DEFAULT_TEXT[key];
@@ -128,6 +131,30 @@
 		return `<div class="ws-run-notice">${escapeHtml(notice)}</div>`;
 	}
 
+	/**
+	 * The one-line digest read on the closed summary: the very targets the rows
+	 * carry, in the very order they carry them. Nothing is named here that the
+	 * open list does not repeat, and past DIGEST_MAX the remainder is counted
+	 * rather than truncated in silence.
+	 *
+	 * With nothing in flight the digest is the sentence that says so, because a
+	 * closed summary is the only thing on screen and the absence must still be
+	 * declared.
+	 */
+	function renderDigest(entries, opts) {
+		if (!entries.length) {
+			return `<span class="ws-runs-digest">${escapeHtml(textOption(opts, "empty"))}</span>`;
+		}
+		const names = entries
+			.map((entry) => stringAt(entry, "spec_code") || stringAt(entry, "scope"))
+			.filter(Boolean);
+		if (!names.length) return "";
+		const shown = names.slice(0, DIGEST_MAX);
+		const rest = names.length - shown.length;
+		const text = shown.join(" \u00b7 ") + (rest > 0 ? ` +${rest}` : "");
+		return `<span class="ws-runs-digest">${escapeHtml(text)}</span>`;
+	}
+
 	function renderRow(entry, opts) {
 		if (!entry || typeof entry !== "object") return "";
 		const id = stringAt(entry, "id");
@@ -179,9 +206,16 @@
 	 * rendering. An empty list is a rendered state, not an empty string — the
 	 * rail says that nothing is in flight rather than silently disappearing.
 	 *
+	 * The panel is a <details>: closed it is one line — what the list is, what
+	 * it is working on, and how many entries are waiting — and open it is the
+	 * full list. Whether it is open is not this module's memory: the caller
+	 * passes it in, because it is a choice a person made and the strip is
+	 * redrawn from scratch on every poll.
+	 *
 	 * @param {object|null} view  The /api/workspace/runs payload.
-	 * @param {{title?: string, empty?: string, awaiting?: string}} [opts]
-	 *        Wording overrides for the furniture of the list.
+	 * @param {{title?: string, empty?: string, awaiting?: string, expanded?: boolean}} [opts]
+	 *        Wording overrides for the furniture of the list, and whether the
+	 *        panel is drawn open.
 	 * @returns {string} HTML string.
 	 */
 	function renderWorkspaceRuns(view, opts) {
@@ -192,18 +226,21 @@
 		const badge = waiting
 			? `<span class="ws-runs-badge is-awaiting">${escapeHtml(String(waiting))}</span>`
 			: "";
-		const head = `<div class="ws-runs-head">
+		const expanded = !!(opts && typeof opts === "object" && opts.expanded);
+		const head = `<summary class="ws-runs-head">
 			<span class="ws-runs-title">${escapeHtml(textOption(opts, "title"))}</span>
+			${renderDigest(entries, opts)}
 			<span class="ws-runs-head-spacer"></span>
 			${badge}
-		</div>`;
+		</summary>`;
 		const rows = entries.length
 			? entries.map((entry) => renderRow(entry, opts)).join("")
 			: `<li class="ws-runs-empty">${escapeHtml(textOption(opts, "empty"))}</li>`;
-		return `<div class="ws-runs-panel">
+		const classes = `ws-runs-panel${waiting ? " is-awaiting" : ""}`;
+		return `<details class="${classes}"${expanded ? " open" : ""}>
 			${head}
 			<ul class="ws-runs-list">${rows}</ul>
-		</div>`;
+		</details>`;
 	}
 
 	// ---- exports ----

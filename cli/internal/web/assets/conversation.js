@@ -526,7 +526,7 @@
 			? '<p class="conv-composer-await">the run resumes when you answer the wait above</p>'
 			: "";
 		return `<form class="conv-composer">
-			<textarea class="conv-composer-input" rows="2" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
+			<textarea class="conv-composer-input" rows="1" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
 			<div class="conv-composer-row">
 				${close}
 				<span class="conv-composer-spacer"></span>
@@ -670,8 +670,10 @@
 		const codeHtml = code
 			? `<code class="conv-nextstep-code">${escapeHtml(code)}</code>`
 			: "";
+		// No eyebrow announcing what this is: the accent frame and the place —
+		// the tail of the thread, right above the composer — already say it, and
+		// a label repeating them would only cost the thread a line.
 		const head = `<div class="conv-nextstep-head">
-			<span class="conv-nextstep-mark">passo successivo</span>
 			<span class="conv-nextstep-label">${escapeHtml(label)}</span>
 			${codeHtml}
 		</div>`;

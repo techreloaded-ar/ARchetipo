@@ -177,8 +177,10 @@
 	const reviewIntegrateBtn = document.getElementById("review-integrate-btn");
 	const reviewApproveBtn = document.getElementById("review-approve-btn");
 	const reviewDossier = document.getElementById("review-dossier");
+	const densityToggle = document.getElementById("density-toggle");
 
 	const THEME_KEY = "archetipo.theme";
+	const DENSITY_KEY = "archetipo.density";
 
 	function setTheme(theme, persist) {
 		const next = theme === "light" ? "light" : "dark";
@@ -204,6 +206,37 @@
 
 	setTheme(document.documentElement.dataset.theme, false);
 	themeToggle.addEventListener("click", toggleTheme);
+
+	// Quanto respira la cornice dell'interfaccia. Vive accanto al tema perché è
+	// la stessa specie di scelta — come si guarda, non cosa si guarda — e come
+	// il tema viene applicata prima del disegno da index.html, così la barra non
+	// nasce alta per poi stringersi sotto gli occhi.
+	function setDensity(density, persist) {
+		const next = density === "compatta" ? "compatta" : "comoda";
+		document.documentElement.dataset.density = next;
+		if (densityToggle) {
+			densityToggle.querySelector("[data-density-label]").textContent =
+				next === "compatta" ? "Comfortable density" : "Compact density";
+		}
+		if (persist) {
+			try {
+				localStorage.setItem(DENSITY_KEY, next);
+			} catch (_) {
+				/* ignore */
+			}
+		}
+	}
+
+	setDensity(document.documentElement.dataset.density, false);
+	if (densityToggle) {
+		densityToggle.addEventListener("click", () => {
+			const current =
+				document.documentElement.dataset.density === "compatta"
+					? "compatta"
+					: "comoda";
+			setDensity(current === "compatta" ? "comoda" : "compatta", true);
+		});
+	}
 
 	const editorToolbar = [
 		"bold",
@@ -890,6 +923,7 @@
 	// conversation whenever the entry names one, and to the panel that mounts
 	// the run only when it does not.
 
+	const WORKSPACE_RUNS_RAIL_OPEN_KEY = "archetipo.runsOpen";
 	const WORKSPACE_RUNS_POLL_MS = 2000;
 	const WORKSPACE_RUNS_POLL_FAILURE_LIMIT = 3;
 
@@ -929,10 +963,23 @@
 		);
 	}
 
+	// Aperta o chiusa la striscia lo decide chi guarda, e la scelta sopravvive
+	// al ridisegno: il pannello viene riscritto da zero a ogni passata, quindi
+	// lo stato non può stare nel DOM. Chiusa di partenza — una riga — perché
+	// quello che serve a colpo d'occhio è quante run ci sono e su cosa stanno.
+	let workspaceRunsExpanded = false;
+	try {
+		workspaceRunsExpanded =
+			localStorage.getItem(WORKSPACE_RUNS_RAIL_OPEN_KEY) === "1";
+	} catch (_) {
+		/* ignore */
+	}
+
 	function renderWorkspaceRunsPanel() {
 		if (!workspaceRunsEl) return;
 		workspaceRunsEl.innerHTML = WorkspaceRuns.renderWorkspaceRuns(
 			workspaceRunsView,
+			{ expanded: workspaceRunsExpanded },
 		);
 		renderRunsAttention();
 	}
@@ -1028,6 +1075,26 @@
 	}
 
 	if (workspaceRunsEl) {
+		// `toggle` non risale la gerarchia: la cattura è l'unico modo di sentirlo
+		// su un <details> che il ridisegno sostituisce di continuo.
+		workspaceRunsEl.addEventListener(
+			"toggle",
+			(e) => {
+				const panel = e.target;
+				if (!panel || !panel.classList.contains("ws-runs-panel")) return;
+				workspaceRunsExpanded = panel.open;
+				try {
+					localStorage.setItem(
+						WORKSPACE_RUNS_RAIL_OPEN_KEY,
+						panel.open ? "1" : "0",
+					);
+				} catch (_) {
+					/* ignore */
+				}
+			},
+			true,
+		);
+
 		// The strip is redrawn on every poll, so the handler lives on the section
 		// and each row carries its own identity in its data attributes.
 		workspaceRunsEl.addEventListener("click", (e) => {
@@ -4023,6 +4090,21 @@
 	let conversationAnsweredApprovals = {}; // approvalID → {optionID, label, denied, executionID, approval}
 	let conversationHighlightAnchor = ""; // anchor event id of the block just reached
 
+	// Quanto è alto il campo lo decide ciò che c'è scritto, non un numero fisso:
+	// da vuoto è una riga sola, e cresce riga per riga mentre si scrive. Serve
+	// perché il pannello vive in una colonna e ogni pixel che il compositore
+	// tiene fermo da vuoto è un pixel di conversazione in meno. Il tetto sta nel
+	// CSS (max-height): oltre quello subentra la barra di scorrimento.
+	function adattaAltezzaCompositore(input) {
+		if (!input) return;
+		// Azzerare prima è ciò che permette al campo di *tornare indietro*
+		// quando il testo viene cancellato: scrollHeight non scende mai sotto
+		// l'altezza già imposta.
+		input.style.height = "auto";
+		const bordi = input.offsetHeight - input.clientHeight;
+		input.style.height = `${input.scrollHeight + bordi}px`;
+	}
+
 	// The panel is redrawn on every poll, so its controls cannot own their
 	// handlers: the container does, bound once, and each control declares what
 	// it is through its data attributes.
@@ -4117,7 +4199,9 @@
 		});
 		container.addEventListener("input", (e) => {
 			const input = e.target.closest(".conv-composer-input");
-			if (input) conversationDraft = input.value;
+			if (!input) return;
+			conversationDraft = input.value;
+			adattaAltezzaCompositore(input);
 		});
 		container.addEventListener("keydown", (e) => {
 			const input = e.target.closest(".conv-composer-input");
@@ -4922,6 +5006,7 @@
 			// The draft is restored as a value and never as markup, so no amount
 			// of typing can reach the parser.
 			input.value = conversationDraft;
+			adattaAltezzaCompositore(input);
 			if (composerHadFocus && !input.disabled) {
 				input.focus();
 				const at = Math.min(caret, input.value.length);

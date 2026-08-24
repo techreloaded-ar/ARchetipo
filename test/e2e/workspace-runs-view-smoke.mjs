@@ -375,7 +375,7 @@ async function scenario(runDir) {
 		assertBoardCounters(appJS);
 		ok(
 			"AC-1, AC-2, AC-4, AC-5",
-			`the served index.html holds #workspace-conversation, #board and #modal-root in the one primary column of #workspace-shell — the conversation first — keeps #workspace-runs and #workspace-views outside that column, carries no <aside id="workspace-rail"> any more, no longer shows the counters in the topbar but has the served app.js emit #stat-total and #stat-progress into the board, keeps every entry moved into #topbar-more-menu, and still carries all ${SPEC_OPERATION_IDS.length} identifiers of the spec operations plus the ${SPEC_TABS.length} tabs ${SPEC_TABS.join("/")}`,
+			`the served index.html holds #workspace-conversation, #board and #modal-root in the one primary column of #workspace-shell — the conversation first — keeps #workspace-runs outside that column and #workspace-views in the topbar, carries no <aside id="workspace-rail"> any more, no longer shows the counters in the topbar but has the served app.js emit #stat-total and #stat-progress into the board, keeps every entry moved into #topbar-more-menu, and still carries all ${SPEC_OPERATION_IDS.length} identifiers of the spec operations plus the ${SPEC_TABS.length} tabs ${SPEC_TABS.join("/")}`,
 		);
 
 		// --- AC-6 -------------------------------------------------------------
@@ -456,9 +456,24 @@ function assertShellStructure(html) {
 	// The primary column ends where the shell's own wrapper closes; everything
 	// asserted below is located against its opening offset, which is enough to
 	// separate what precedes it from what it contains.
-	if (!(shellAt < viewsAt && viewsAt < runsAt && runsAt < primaryAt)) {
+	//
+	// The switcher no longer sits inside the shell: it is drawn in the middle
+	// cell of the topbar, which precedes the shell in the document. What AC-2
+	// asks for is that the board stays one press away in every view, and a
+	// switcher in the permanent bar keeps that promise more strongly than a band
+	// of its own did — the bar survives every change of view, and the window
+	// spends one row instead of two on furniture. What is still asserted, and
+	// is the part the criterion rests on, is that neither the switcher nor the
+	// runs strip is *inside* the primary column: there they would take space
+	// away from the conversation and disappear with the view.
+	if (!(viewsAt < shellAt)) {
 		throw new Error(
-			`AC-1, AC-2: the view switcher and the runs strip must sit inside the shell and above the primary column; got offsets shell=${shellAt}, views=${viewsAt}, runs=${runsAt}, primary=${primaryAt}`,
+			`AC-2: the view switcher must be drawn in the topbar, above the shell, so it survives every change of view; got offsets views=${viewsAt}, shell=${shellAt}`,
+		);
+	}
+	if (!(shellAt < runsAt && runsAt < primaryAt)) {
+		throw new Error(
+			`AC-1: the runs strip must sit inside the shell and above the primary column; got offsets shell=${shellAt}, runs=${runsAt}, primary=${primaryAt}`,
 		);
 	}
 

@@ -23,7 +23,7 @@
 	/* Raggi generosi: nessuno spigolo vivo. */
 	--radius-sm: 8px;
 	--radius: 14px;
-	--radius-lg: 20px;
+	--radius-lg: 14px;
 	--radius-pill: 999px;
 
 	/* Ritmo verticale 4/8. */
@@ -34,11 +34,37 @@
 	--space-5: 24px;
 	--space-6: 32px;
 
+	/* Densità: quanto respira la *cornice* dell'interfaccia — le fasce, i
+	   controlli, i margini interni delle viste. Non il contenuto: il testo di
+	   una conversazione, di una spec o di una card non passa mai di qui, e
+	   resta a 16px con la sua interlinea. Un posto solo da cui stringere, e
+	   l'unica cosa che il modo "compatta" ridefinisce. */
+	--topbar-h: 48px;
+	--control-h: 34px;
+	--control-h-lg: 40px;
+	--ui-text: 14px;
+	--ui-text-sm: 12px;
+	--gutter: var(--space-5);
+	--band-y: var(--space-2);
+
 	--ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 	--ease-soft: cubic-bezier(0.34, 1.4, 0.64, 1);
 	--transition: 0.2s var(--ease);
 
 	--reading-width: 68ch;
+}
+
+/* Il modo compatto, scelto dalla persona che guarda e ricordato come il tema.
+   Ridefinisce i token qui sopra e nient'altro: nessuna regola sa che esiste, e
+   nessun corpo di testo si muove. */
+html[data-density="compatta"] {
+	--topbar-h: 40px;
+	--control-h: 28px;
+	--control-h-lg: 32px;
+	--ui-text: 13px;
+	--ui-text-sm: 11px;
+	--gutter: var(--space-4);
+	--band-y: 4px;
 }
 
 /* ---- Tema chiaro: "carta" (predefinito) -------------------------------- */
@@ -232,20 +258,41 @@ h4 {
 /* ---- Topbar ------------------------------------------------------------ */
 .topbar {
 	display: grid;
-	/* Two cells since US-061: the identity of the workspace on the left, what
-	   is one click away on the right. The counters that used to sit between
-	   them are read in the board now. */
-	grid-template-columns: auto 1fr;
+	/* Three cells: the identity of the workspace on the left, the view
+	   switcher in the middle — the cell US-061 left empty when the counters
+	   moved into the board — and what is one click away on the right. The
+	   switcher is drawn here and not as a band of its own because a second
+	   full-width band costs a whole row of the window and says nothing the bar
+	   could not hold. */
+	grid-template-columns: auto 1fr auto;
 	align-items: center;
-	gap: 24px;
-	padding: 0 var(--space-5);
-	min-height: 64px;
+	gap: var(--space-4);
+	padding: 0 var(--gutter);
+	min-height: var(--topbar-h);
 	background: var(--surface);
 	border-bottom: 1px solid var(--border);
 	box-shadow: var(--shadow-sm);
 	position: sticky;
 	top: 0;
 	z-index: 50;
+}
+
+/* I controlli che stanno *nella* barra prendono l'altezza della densità. La
+   regola è ristretta alla barra di proposito: la stessa altezza applicata a
+   .ghost-btn ovunque stringerebbe anche i pulsanti dei moduli e delle finestre,
+   che non sono cornice ma comandi da premere. */
+.topbar .ghost-btn,
+.topbar .primary-btn,
+.topbar .icon-btn,
+.topbar .theme-toggle,
+.workspace-indicator {
+	min-height: var(--control-h);
+}
+
+.topbar .theme-toggle {
+	width: var(--control-h);
+	min-width: var(--control-h);
+	height: var(--control-h);
 }
 
 .brand {
@@ -309,7 +356,6 @@ h4 {
 	display: inline-flex;
 	align-items: center;
 	gap: var(--space-2);
-	min-height: 40px;
 	border: 1px solid var(--border);
 	border-radius: var(--radius-pill);
 	padding: 0 var(--space-3) 0 var(--space-4);
@@ -356,14 +402,16 @@ h4 {
 }
 
 /* The three counters of the backlog — editorial summary of the board, read
-   where the backlog is (US-061 AC-6). Same type and same proportions they had
-   in the topbar: only their place changed. */
+   where the backlog is (US-061 AC-6). They are a band of the frame, not a
+   heading of the content: they take the band's own vertical rhythm and the
+   view's gutter, so on one line they cost the board almost nothing and the
+   columns start higher. */
 .board-stats {
 	display: flex;
 	align-items: baseline;
 	gap: var(--space-3);
 	flex: 0 0 auto;
-	padding: var(--space-4) var(--space-5) var(--space-3);
+	padding: var(--band-y) var(--gutter);
 	color: var(--text-muted);
 }
 
@@ -375,7 +423,7 @@ h4 {
 
 .stat-num {
 	font-family: var(--font-sans);
-	font-size: 26px;
+	font-size: 15px;
 	font-weight: 800;
 	font-variant-numeric: tabular-nums;
 	letter-spacing: -0.03em;
@@ -392,7 +440,7 @@ h4 {
 
 .stat-sep {
 	color: var(--border-strong);
-	font-size: 22px;
+	font-size: 15px;
 }
 
 .topbar-actions {
@@ -730,12 +778,12 @@ html[data-theme="light"] .theme-ico-moon {
 .board-columns {
 	display: flex;
 	gap: var(--space-3);
-	padding: 0 var(--space-5) var(--space-5);
+	padding: 0 var(--gutter) var(--gutter);
 	overflow-x: auto;
 	flex: 1 1 auto;
 	min-height: 0;
 	align-items: stretch;
-	scroll-padding: var(--space-5);
+	scroll-padding: var(--gutter);
 }
 
 .column {
@@ -4483,12 +4531,14 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 /* ---- Head --------------------------------------------------------------- */
+/* La testata della conversazione è una fascia come le altre: stesso respiro
+   verticale, stesso margine laterale del corpo che intesta. */
 .conv-head {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
 	flex-wrap: wrap;
-	padding: var(--space-3) var(--space-5);
+	padding: var(--band-y) var(--gutter);
 	border-bottom: 1px solid var(--border);
 	background: var(--surface);
 }
@@ -4700,12 +4750,20 @@ body.no-workspace [data-workspace-scoped] {
 /* The step the workspace recommends closes the thread. It borrows the frame of
    .conv-proposal because it is the same kind of thing — something offered and
    not yet started — and it must read as part of the conversation, not as a
-   strip laid over it. */
+   strip laid over it.
+   One line, not a stack: what it is, is already said by the accent frame and by
+   the place it occupies — in the tail of the thread, right above the composer.
+   So name and control share a row, and the block costs the thread the height of
+   its own button and nothing more. */
 .conv-nextstep {
-	margin: var(--space-3) var(--space-5) 0;
-	padding: var(--space-3) var(--space-4);
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--space-2) var(--space-3);
+	margin: var(--space-2) var(--gutter) 0;
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--accent);
-	border-radius: var(--radius-lg);
+	border-radius: var(--radius);
 	background: var(--accent-soft);
 }
 
@@ -4723,15 +4781,7 @@ body.no-workspace [data-workspace-scoped] {
 	align-items: baseline;
 	flex-wrap: wrap;
 	gap: 8px;
-}
-
-.conv-nextstep-mark {
-	font-size: 11px;
-	font-weight: 800;
-	letter-spacing: 0.1em;
-	text-transform: uppercase;
-	color: var(--accent);
-	flex-shrink: 0;
+	min-width: 0;
 }
 
 .conv-nextstep-label {
@@ -4751,7 +4801,7 @@ body.no-workspace [data-workspace-scoped] {
 .conv-nextstep-controls {
 	display: flex;
 	gap: var(--space-2);
-	margin-top: var(--space-3);
+	margin-left: auto;
 	flex-wrap: wrap;
 }
 
@@ -4761,8 +4811,8 @@ body.no-workspace [data-workspace-scoped] {
 	border: 1px solid var(--accent);
 	background: var(--accent);
 	color: var(--accent-ink);
-	min-height: 44px;
-	padding: 0 var(--space-5);
+	min-height: var(--control-h-lg);
+	padding: 0 var(--space-4);
 	border-radius: var(--radius-pill);
 	font-family: var(--font-sans);
 	font-size: 15px;
@@ -4804,7 +4854,8 @@ body.no-workspace [data-workspace-scoped] {
 /* The reason lives inside the block, under its control and not beside it: the
    refusal is about this step and is read where the step is. */
 .conv-nextstep-unlock {
-	margin: var(--space-2) 0 0;
+	flex: 1 0 100%;
+	margin: 0;
 	font-size: 13px;
 	font-weight: 600;
 	line-height: 1.45;
@@ -4880,12 +4931,12 @@ body.no-workspace [data-workspace-scoped] {
 .conv-timeline {
 	list-style: none;
 	margin: 0;
-	padding: var(--space-5);
+	padding: var(--space-4) var(--gutter);
 	max-height: 320px;
 	overflow-y: auto;
 	display: flex;
 	flex-direction: column;
-	gap: var(--space-4);
+	gap: var(--space-3);
 	/* Deliberately not `scroll-behavior: smooth`: the panel is redrawn on every
 	   poll and the reading position is restored by assigning scrollTop. */
 }
@@ -5122,7 +5173,7 @@ body.no-workspace [data-workspace-scoped] {
 .conv-composer {
 	border-top: 1px solid var(--border);
 	background: var(--surface);
-	padding: var(--space-3) var(--space-5) var(--space-4);
+	padding: var(--space-3) var(--gutter) var(--space-4);
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
@@ -5140,7 +5191,12 @@ body.no-workspace [data-workspace-scoped] {
 	line-height: 1.5;
 	padding: var(--space-3) var(--space-4);
 	resize: vertical;
-	min-height: 84px;
+	/* Da vuoto è una riga sola e cresce su ciò che ci si scrive dentro: è
+	   adattaAltezzaCompositore in app.js a misurarla. L'altezza da vuoto non è
+	   più una promessa di quanto si scriverà, e il tetto qui sotto è ciò che
+	   impedisce al campo di mangiarsi la conversazione. */
+	min-height: 56px;
+	max-height: 40vh;
 	transition:
 		border-color var(--transition),
 		box-shadow var(--transition);
@@ -5381,10 +5437,12 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 /* ---- Workspace shell (US-057) ------------------------------------------
-   One column, not two. The shell is a stack of three rows — the permanent view
-   switcher, the full-width strip of what is running, and the primary column —
-   and the primary column holds one view at a time: the conversation, which is
-   the home of the workspace, the board, or the spec detail. The three views
+   One column, not two. The shell is a stack of two rows — the full-width strip
+   of what is running and the primary column — and the primary column holds one
+   view at a time: the conversation, which is the home of the workspace, the
+   board, or the spec detail. The permanent view switcher is no longer a row of
+   its own: it is drawn in the topbar, in the middle cell US-061 left free, so
+   the window spends one band instead of two on furniture. The three views
    share one grid cell, so the view that comes on screen occupies exactly the
    space the previous one occupied, and the one that leaves is hidden, never
    unmounted.
@@ -5400,7 +5458,7 @@ body.no-workspace [data-workspace-scoped] {
 	flex: 1 1 auto;
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);
-	grid-template-rows: auto auto minmax(0, 1fr);
+	grid-template-rows: auto minmax(0, 1fr);
 	min-height: 0;
 }
 
@@ -5412,11 +5470,11 @@ body.no-workspace [data-workspace-scoped] {
 /* Full width, and the single cell every view shares. Each view scrolls on its
    own, so reading a long spec never moves the switcher or the runs strip. */
 .workspace-primary {
-	/* Row 3 explicitly, never by auto-placement: the two rows above are `auto`
-	   tracks and an implicitly placed column would land in one of them, leaving
-	   the `1fr` track empty — the free space would pool below the content and
-	   overflow-y would never engage. */
-	grid-row: 3;
+	/* Row 2 explicitly, never by auto-placement: the row above is an `auto`
+	   track and an implicitly placed column would land in it, leaving the `1fr`
+	   track empty — the free space would pool below the content and overflow-y
+	   would never engage. */
+	grid-row: 2;
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);
 	grid-template-rows: minmax(0, 1fr);
@@ -5469,17 +5527,18 @@ body.no-workspace [data-workspace-scoped] {
 /* Permanent, in both widths: Conversazione · Spec · Board. The board is one
    press away from the home screen, and the current view is the one marked
    is-current. Filled by the caller from the switcher list workspace-layout.js
-   returns; the markup here takes no decision. */
+   returns; the markup here takes no decision.
+
+   It lives in the middle cell of the topbar, so it takes no band of its own:
+   no border below it, no ground of its own, no vertical padding — the bar it
+   sits in already provides all three. */
 .workspace-views {
-	grid-row: 1;
 	display: flex;
 	align-items: center;
 	justify-content: flex-start;
 	gap: var(--space-1);
-	flex-wrap: wrap;
-	padding: var(--space-2) var(--space-5);
-	border-bottom: 1px solid var(--border);
-	background: var(--surface);
+	min-width: 0;
+	padding: 0;
 }
 
 .workspace-views:empty {
@@ -5490,15 +5549,15 @@ body.no-workspace [data-workspace-scoped] {
 	display: inline-flex;
 	align-items: center;
 	gap: var(--space-2);
-	min-height: 40px;
+	min-height: var(--control-h);
 	border: 1px solid transparent;
 	border-radius: var(--radius-pill);
 	background: transparent;
 	color: var(--text-muted);
-	padding: 0 var(--space-4);
+	padding: 0 var(--space-3);
 	cursor: pointer;
 	font-family: var(--font-sans);
-	font-size: 14px;
+	font-size: var(--ui-text);
 	font-weight: 700;
 	transition:
 		color var(--transition),
@@ -5520,11 +5579,14 @@ body.no-workspace [data-workspace-scoped] {
 /* ---- Runs strip --------------------------------------------------------- */
 /* Full width, above the primary column, so what is in flight stays readable in
    every view without taking width away from the conversation. It collapses
-   entirely when nothing is running (see .workspace-runs:empty below). */
+   entirely when nothing is running (see .workspace-runs:empty below).
+
+   The strip *is* the summary line: no padding of its own and no ground of its
+   own, because the panel inside it is one row tall until it is opened. */
 .workspace-shell > .workspace-runs {
-	grid-row: 2;
-	padding: var(--space-2) var(--space-5) var(--space-3);
-	background: var(--bg);
+	grid-row: 1;
+	padding: 0;
+	background: var(--surface);
 	border-bottom: 1px solid var(--border);
 	min-width: 0;
 }
@@ -5577,30 +5639,95 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 .ws-runs-panel {
-	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: var(--surface);
-	box-shadow: var(--shadow-sm);
-	display: flex;
-	flex-direction: column;
-	overflow: hidden;
+	display: block;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	min-width: 0;
 }
 
+/* La riga di sommario è la striscia. Chiusa dice quante run ci sono e su cosa
+   stanno lavorando — che è ciò che si legge a colpo d'occhio — e costa una riga
+   sola; il dettaglio di ognuna si apre premendola. Aperta o chiusa che sia, il
+   contatore in attesa resta al suo posto, ed è lo stesso numero che la barra
+   superiore mostra. */
 .ws-runs-head {
 	display: flex;
 	align-items: center;
-	gap: var(--space-2);
-	padding: var(--space-2) var(--space-4);
+	gap: var(--space-3);
+	min-height: var(--control-h);
+	padding: 0 var(--gutter);
+	border-bottom: 0;
+	background: transparent;
+	cursor: pointer;
+	user-select: none;
+	list-style: none;
+}
+
+.ws-runs-head::-webkit-details-marker {
+	display: none;
+}
+
+/* Il verso della freccia è l'unico segno che dice se la riga è aperta: sta in
+   fondo, dove la si preme, e ruota invece di cambiare forma. */
+.ws-runs-head::after {
+	content: "";
+	flex: none;
+	width: 7px;
+	height: 7px;
+	border-right: 1.6px solid var(--text-dim);
+	border-bottom: 1.6px solid var(--text-dim);
+	transform: translateY(-2px) rotate(45deg);
+	transition: transform var(--transition);
+}
+
+.ws-runs-panel[open] > .ws-runs-head {
 	border-bottom: 1px solid var(--border);
+}
+
+.ws-runs-panel[open] > .ws-runs-head::after {
+	transform: translateY(1px) rotate(225deg);
+}
+
+.ws-runs-head:hover {
 	background: var(--surface-3);
 }
 
+/* Qualcosa aspetta una risposta: l'albicocca prende la riga intera, così la
+   striscia si fa notare anche chiusa. */
+.ws-runs-panel.is-awaiting > .ws-runs-head {
+	background: var(--attention-soft);
+}
+
+.ws-runs-panel.is-awaiting > .ws-runs-head:hover {
+	background: var(--attention-soft);
+	filter: brightness(0.99);
+}
+
 .ws-runs-title {
-	font-size: 12px;
+	font-size: var(--ui-text-sm);
 	font-weight: 800;
 	text-transform: uppercase;
 	letter-spacing: 0.09em;
 	color: var(--text-muted);
+	flex: none;
+}
+
+/* Su cosa stanno lavorando, in una riga sola. Sparisce all'apertura, dove ogni
+   run ha la sua riga e ripeterlo sarebbe rumore. */
+.ws-runs-digest {
+	font-family: var(--font-mono);
+	font-size: var(--ui-text-sm);
+	color: var(--text-dim);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ws-runs-panel[open] .ws-runs-digest {
+	display: none;
 }
 
 .ws-runs-head-spacer {
@@ -5615,10 +5742,11 @@ body.no-workspace [data-workspace-scoped] {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-pill);
 	padding: 2px 10px;
-	font-size: 12px;
+	font-size: var(--ui-text-sm);
 	font-weight: 800;
 	color: var(--text-muted);
 	background: var(--surface);
+	flex: none;
 }
 
 .ws-runs-badge.is-awaiting {
@@ -5636,13 +5764,13 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 .ws-runs-empty {
-	padding: var(--space-4);
-	font-size: 14px;
+	padding: var(--space-3) var(--gutter);
+	font-size: var(--ui-text);
 	color: var(--text-dim);
 }
 
 .ws-run {
-	padding: var(--space-2) var(--space-4);
+	padding: var(--space-2) var(--gutter);
 	border-top: 1px solid var(--border);
 	display: flex;
 	flex-direction: column;
@@ -5793,12 +5921,23 @@ body.no-workspace [data-workspace-scoped] {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
-	.workspace-shell--narrow .workspace-views {
-		padding: var(--space-2) var(--space-4);
+	/* Sotto i 900px la barra rinuncia alla cella di mezzo: il commutatore
+	   scende su una riga propria dentro la barra, dove ha tutta la larghezza
+	   invece di contendersela con l'identità del workspace e con le azioni. */
+	.topbar {
+		grid-template-columns: auto 1fr;
+		row-gap: var(--band-y);
+		padding-bottom: var(--band-y);
 	}
 
-	.workspace-shell--narrow > .workspace-runs {
-		padding: var(--space-2) var(--space-4);
+	.topbar > .workspace-views {
+		grid-row: 2;
+		grid-column: 1 / -1;
+		overflow-x: auto;
+	}
+
+	.brand-sub {
+		display: none;
 	}
 
 	/* La conversazione non perde mai larghezza: cambia solo il margine
@@ -5864,10 +6003,8 @@ body.no-workspace [data-workspace-scoped] {
    full-text search is out of this spec's scope and an inert box would promise
    what the page cannot keep. */
 
-/* The switcher and the runs strip stay full width in both layouts: the rail
-   takes a column of the third row only, so what is running keeps spanning the
-   whole shell. */
-.workspace-shell > .workspace-views,
+/* The runs strip stays full width in both layouts: the rail takes a column of
+   the last row only, so what is running keeps spanning the whole shell. */
 .workspace-shell > .workspace-runs {
 	grid-column: 1 / -1;
 }
@@ -5894,7 +6031,7 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 .workspace-shell--wide > .conversation-rail {
-	grid-row: 3;
+	grid-row: 2;
 	grid-column: 1;
 	width: 264px;
 	border-right: 1px solid var(--border);
@@ -6177,11 +6314,11 @@ body.no-workspace [data-workspace-scoped] {
 @media (max-width: 900px) {
 	.workspace-shell {
 		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: auto auto auto minmax(0, 1fr);
+		grid-template-rows: auto auto minmax(0, 1fr);
 	}
 
 	.workspace-shell > .conversation-rail {
-		grid-row: 3;
+		grid-row: 2;
 		grid-column: 1;
 		width: auto;
 		flex-direction: row;
@@ -6193,7 +6330,7 @@ body.no-workspace [data-workspace-scoped] {
 	}
 
 	.workspace-shell > .workspace-primary {
-		grid-row: 4;
+		grid-row: 3;
 		grid-column: 1;
 	}
 
