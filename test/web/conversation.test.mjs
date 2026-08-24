@@ -1083,6 +1083,61 @@ describe("renderConversation — passo successivo", () => {
 		);
 	});
 
+	it("un passo già in corso porta alla sua run invece di offrire un avvio inerte", () => {
+		const html = renderConversation(LIVE, "", {
+			nextStep: {
+				scope: "spec",
+				action: "plan",
+				label: "Pianifica",
+				runnable: false,
+				spec: { code: "US-002" },
+				unavailable_reason: "RAGIONE-DEL-RIFIUTO dal processo",
+				running_execution_id: "exec-abc",
+			},
+		});
+		const block = nextStepBlock(html);
+
+		assert.ok(
+			block.includes("data-conversation-reach-run"),
+			"il passo già in corso non offre alcun modo di raggiungere la run che lo blocca",
+		);
+		assert.ok(
+			block.includes('data-code="US-002"'),
+			"il comando di raggiungimento non porta la spec su cui la run è in corso",
+		);
+		assert.ok(
+			!/<button[^>]*conv-nextstep-run/.test(block),
+			"il passo già in corso offre ancora l'avvio di ciò che sta già avvenendo",
+		);
+		assert.ok(
+			visibleText(block).includes("RAGIONE-DEL-RIFIUTO dal processo"),
+			"il motivo del blocco non si legge più dentro il blocco del passo",
+		);
+	});
+
+	it("un passo bloccato da altro resta un avvio non premibile", () => {
+		const html = renderConversation(LIVE, "", {
+			nextStep: {
+				scope: "spec",
+				action: "review",
+				label: "Rivedi",
+				runnable: false,
+				spec: { code: "US-002" },
+				unavailable_reason: "RAGIONE-DEL-RIFIUTO dal processo",
+			},
+		});
+		const block = nextStepBlock(html);
+
+		assert.ok(
+			/<button[^>]*conv-nextstep-run[^>]*disabled/.test(block),
+			"un passo bloccato da una condizione da soddisfare non è più un avvio inerte",
+		);
+		assert.ok(
+			!block.includes("data-conversation-reach-run"),
+			"un passo bloccato da altro promette una run da raggiungere che nessuno ha nominato",
+		);
+	});
+
 	it("neutralizza l'HTML che arriva dal payload del passo", () => {
 		const injected = '<img src=x onerror=1>';
 		const html = renderConversation(LIVE, "", {

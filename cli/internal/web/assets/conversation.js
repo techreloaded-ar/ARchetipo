@@ -686,10 +686,19 @@
 			const unlockHtml = unlock
 				? `<p class="conv-nextstep-unlock">${escapeHtml(unlock)}</p>`
 				: "";
+			// A step refused because it is already running is the one refusal
+			// that has somewhere to go: what is offered is the way to the run,
+			// not an inert copy of the button that started it. Which refusal
+			// this is, is not guessed from the sentence — the payload says so by
+			// naming the run.
+			const running = textAt(step, "running_execution_id");
+			const control = running
+				? `<button type="button" class="ghost-btn conv-nextstep-reach" data-conversation-reach-run data-scope="${escapeHtml(textAt(step, "scope"))}" data-code="${escapeHtml(code)}" data-execution-id="${escapeHtml(running)}">Vai alla run</button>`
+				: `<button type="button" class="conv-nextstep-run"${attrs} disabled>Avvia</button>`;
 			return `<div class="conv-nextstep is-refused">
 				${head}
 				<div class="conv-nextstep-controls">
-					<button type="button" class="conv-nextstep-run"${attrs} disabled>Avvia</button>
+					${control}
 				</div>
 				${unlockHtml}
 			</div>`;

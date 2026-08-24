@@ -59,6 +59,14 @@ type nextStepView struct {
 	Runnable          bool              `json:"runnable"`
 	UnavailableReason string            `json:"unavailable_reason,omitempty"`
 	UnlockedBy        string            `json:"unlocked_by,omitempty"`
+	// RunningExecutionID is the run already under way on this very target, and
+	// is present exactly when that is what refuses the step. It is carried
+	// because "you cannot start this, it is already running" is the one refusal
+	// a person does not answer by satisfying a condition: they answer it by
+	// going to the run. Without the id a client can only offer an inert button
+	// next to a sentence naming a run it has no way to reach — which is a step
+	// recommended, refused, and unreachable at the same time.
+	RunningExecutionID string `json:"running_execution_id,omitempty"`
 }
 
 // workspaceStatusView is the whole answer in one payload, because the three
@@ -246,9 +254,16 @@ func (s *Server) nextStepFor(
 		if err != nil {
 			tasks = nil
 		}
-		reason := s.actionAvailabilityFor(ctx, ws, targetSpec.Code, len(tasks)).reasonFor(stage.Action)
+		availability := s.actionAvailabilityFor(ctx, ws, targetSpec.Code, len(tasks))
+		reason := availability.reasonFor(stage.Action)
 		step.Runnable = reason == ""
 		step.UnavailableReason = reason
+		// The run that refuses the step travels with the refusal, and only when
+		// it is the refusal: an id next to a step blocked by anything else
+		// would name a run that has nothing to do with why it is blocked.
+		if !step.Runnable && availability.specHasRunning {
+			step.RunningExecutionID = availability.runningID
+		}
 		if reason != "" {
 			// The spec-scoped refusals are already the condition to satisfy —
 			// install the provider, plan the spec, wait for the run — so the

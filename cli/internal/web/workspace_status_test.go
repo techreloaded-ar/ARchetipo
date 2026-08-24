@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
@@ -37,9 +38,10 @@ type workspaceStatusResponse struct {
 			Title  string        `json:"title"`
 			Status domain.Status `json:"status"`
 		} `json:"spec"`
-		Runnable          bool   `json:"runnable"`
-		UnavailableReason string `json:"unavailable_reason"`
-		UnlockedBy        string `json:"unlocked_by"`
+		Runnable           bool   `json:"runnable"`
+		UnavailableReason  string `json:"unavailable_reason"`
+		UnlockedBy         string `json:"unlocked_by"`
+		RunningExecutionID string `json:"running_execution_id"`
 	} `json:"next_step"`
 	HasPRD     bool `json:"has_prd"`
 	HasBacklog bool `json:"has_backlog"`
@@ -191,6 +193,51 @@ func TestWorkspaceStatusRecommendsPlanningTheFirstSpec(t *testing.T) {
 	}
 	if view.NextStep.Spec.Status != domain.StatusTodo {
 		t.Fatalf("next_step.spec.status = %q, want %q", view.NextStep.Spec.Status, domain.StatusTodo)
+	}
+}
+
+// TestWorkspaceStatusNamesTheRunThatRefusesTheStep is the refusal a person
+// cannot answer by satisfying a condition: the step is already under way. The
+// payload names the run, so what is offered next to it is the way to it and not
+// an inert copy of the button that started it.
+func TestWorkspaceStatusNamesTheRunThatRefusesTheStep(t *testing.T) {
+	srv, cfg, _ := newRunServer(t, releasedInceptionProvider("prov", nil), true)
+	writePRDFile(t, cfg.ProjectRoot, "# PRD\n\nVisione e MVP.\n")
+	running := seedConversationRun(t, srv, "US-901", execution.ActionPlan, execution.StatusRunning)
+
+	view := readWorkspaceStatus(t, srv)
+
+	if view.NextStep == nil || view.NextStep.Spec == nil || view.NextStep.Spec.Code != "US-901" {
+		t.Fatalf("the recommended step is no longer planning US-901: %+v", view.NextStep)
+	}
+	if view.NextStep.Runnable {
+		t.Fatal("the step is runnable while a run of it is already under way")
+	}
+	if view.NextStep.RunningExecutionID != running {
+		t.Errorf("next_step.running_execution_id = %q, want the run that refuses it %q", view.NextStep.RunningExecutionID, running)
+	}
+}
+
+// TestWorkspaceStatusNamesNoRunForAStepBlockedByAnythingElse is the boundary:
+// the id travels with the refusal it explains and with no other, so a client
+// never offers a way to a run that has nothing to do with why the step is
+// blocked.
+func TestWorkspaceStatusNamesNoRunForAStepBlockedByAnythingElse(t *testing.T) {
+	// No provider configured at all: the step is refused, and by nothing that
+	// is running.
+	srv, cfg, _ := newRunServer(t, nil, true)
+	writePRDFile(t, cfg.ProjectRoot, "# PRD\n\nVisione e MVP.\n")
+
+	view := readWorkspaceStatus(t, srv)
+
+	if view.NextStep == nil {
+		t.Fatal("a backlog with specs in TODO has a next step, but next_step is null")
+	}
+	if view.NextStep.Runnable {
+		t.Fatalf("the step is runnable without a provider: %+v", view.NextStep)
+	}
+	if view.NextStep.RunningExecutionID != "" {
+		t.Errorf("next_step.running_execution_id = %q, want none: nothing is running", view.NextStep.RunningExecutionID)
 	}
 }
 
