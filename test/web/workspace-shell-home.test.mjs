@@ -14,8 +14,9 @@
 //   - no path that changes view ever empties or rebuilds the conversation, so
 //     its history and the text being typed survive (AC-3);
 //   - the spec detail is a region of the primary column, not a window (AC-4);
-//   - nothing hides the counters, and boot() reads the board even when the
-//     board is not the visible view (AC-5);
+//   - nothing hides the counters — which US-061 AC-6 moved from the topbar to
+//     the board — and boot() reads the board even when the board is not the
+//     visible view (AC-5);
 //   - the narrow state is styled, overlay included (AC-6).
 //
 // These are facts a future refactor would break in silence: no unit test would
@@ -315,12 +316,25 @@ describe("AC-4 — il dettaglio spec non è una finestra", () => {
 	});
 });
 
-describe("AC-5 — i contatori restano leggibili dalla schermata iniziale", () => {
-	it("sono nel documento", () => {
-		for (const id of ["topbar-stats", "stat-total", "stat-progress"]) {
+// AC-5 di US-057 chiedeva che i contatori restassero leggibili dalla schermata
+// iniziale, e li teneva nella barra superiore. AC-6 di US-061 la supera: i
+// contatori restano leggibili, ma dalla board. Le due garanzie del blocco
+// originale sono riportate qui sulla nuova posizione — che i tre numeri siano
+// nel documento, e che nessuna regola li nasconda — mentre la terza, che boot()
+// legga la board anche quando non è la vista visibile, resta invariata: è
+// ancora ciò che garantisce che i numeri siano pronti quando la board viene
+// aperta.
+describe("AC-5 (US-057, superata da US-061 AC-6) — i contatori restano leggibili, dalla board", () => {
+	it("sono emessi dalla board, non più dalla barra superiore", () => {
+		const body = sectionOf(js, "function boardStatsHeader(");
+		for (const id of ["stat-total", "stat-progress", "stat-done"]) {
 			assert.ok(
-				html.includes(`id="${id}"`),
-				`index.html non contiene più #${id}: il totale delle spec o il numero di spec in corso non sarebbero più leggibili`,
+				body.includes(id),
+				`la board non emette più #${id}: quel contatore del backlog non sarebbe più leggibile da nessuna parte`,
+			);
+			assert.ok(
+				!html.includes(`id="${id}"`),
+				`index.html contiene ancora #${id}: i contatori sono tornati nella barra superiore, che è ciò che US-061 AC-6 toglie`,
 			);
 		}
 	});
@@ -328,13 +342,13 @@ describe("AC-5 — i contatori restano leggibili dalla schermata iniziale", () =
 	it("nessuna regola di app.css li nasconde", () => {
 		const hiding = cssRules(css).filter(
 			(rule) =>
-				/(^|[\s,>])\.topbar-stats\s*(,|$)/.test(rule.selector) &&
+				/(^|[\s,>])\.board-stats\s*(,|$)/.test(rule.selector) &&
 				/display\s*:\s*none/.test(rule.body),
 		);
 		assert.deepEqual(
 			hiding.map((r) => r.selector),
 			[],
-			"una regola di app.css applica display:none a .topbar-stats: i contatori sparirebbero a una certa larghezza, e AC-5 chiede che restino leggibili dalla schermata iniziale",
+			"una regola di app.css applica display:none a .board-stats: i contatori sparirebbero a una certa larghezza, e restare leggibili è ciò che il criterio chiede",
 		);
 	});
 
@@ -345,7 +359,7 @@ describe("AC-5 — i contatori restano leggibili dalla schermata iniziale", () =
 		assert.notEqual(
 			load,
 			-1,
-			"boot() non legge più la board: i contatori della topbar resterebbero vuoti finché non si apre la board",
+			"boot() non legge più la board: i contatori resterebbero vuoti finché non si apre la board",
 		);
 		assert.ok(
 			open !== -1 && load > open,

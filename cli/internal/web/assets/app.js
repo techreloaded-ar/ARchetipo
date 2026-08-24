@@ -4,7 +4,6 @@
 	// and CSS stability. The data model exposed by the API is "spec", which
 	// is reflected in variable names, payloads and envelope keys.
 	const boardEl = document.getElementById("board");
-	const workspaceStatusEl = document.getElementById("workspace-status");
 	const refreshBtn = document.getElementById("refresh-btn");
 	// The shell: one primary column holding one view at a time — the
 	// conversation, the board or the spec detail — plus the permanent view
@@ -163,10 +162,13 @@
 	const mockupsBtn = document.getElementById("mockups-btn");
 	const mockupsMenu = document.getElementById("mockups-menu");
 	const mockupsDropdown = document.getElementById("mockups-dropdown");
+	// The collector menu of the topbar (US-061): everything that used to sit
+	// one click away is inside it now, with the same ids, so nothing here binds
+	// a behaviour — this is the menu itself, not what it holds.
+	const topbarMoreBtn = document.getElementById("topbar-more-btn");
+	const topbarMoreMenu = document.getElementById("topbar-more-menu");
+	const topbarMoreDropdown = document.getElementById("topbar-more");
 	const themeToggle = document.getElementById("theme-toggle");
-	const statTotal = document.getElementById("stat-total");
-	const statProgress = document.getElementById("stat-progress");
-	const statDone = document.getElementById("stat-done");
 	const reviewTab = document.getElementById("review-tab");
 	const reviewBranch = document.getElementById("review-branch");
 	const reviewDiff = document.getElementById("review-diff");
@@ -574,6 +576,23 @@
 	document.addEventListener("click", (e) => {
 		if (!mockupsDropdown.contains(e.target))
 			mockupsMenu.classList.add("hidden");
+	});
+
+	topbarMoreBtn.addEventListener("click", toggleTopbarMoreMenu);
+	// A click outside the collector closes it. The mockups dropdown is *inside*
+	// this menu, so the condition is containment in #topbar-more and not in any
+	// one entry: opening the nested submenu keeps the menu that holds it open.
+	document.addEventListener("click", (e) => {
+		if (!topbarMoreDropdown.contains(e.target)) closeTopbarMoreMenu();
+	});
+	// And so does pressing one of its entries: a menu that stays open over the
+	// modal its own entry just opened would be the behaviour these buttons did
+	// not have when they sat in the bar. The button that opens the collector
+	// and the one that opens the nested submenu are the two exceptions — the
+	// first toggles it, the second opens something inside it.
+	topbarMoreMenu.addEventListener("click", (e) => {
+		if (e.target.closest("#mockups-btn")) return;
+		if (e.target.closest("button, a")) closeTopbarMoreMenu();
 	});
 
 	// Global single-key shortcuts (ignored while typing in inputs / editors).
@@ -1057,12 +1076,13 @@
 			// workspace is being looked at destroys no edit in progress, which
 			// is why it sits before the guards (AC-3).
 			refreshWorkspaceIdentity();
-			// The recommended step sits before the guards for the same reason:
-			// the strip is read-only and holds nothing to save, so redrawing it
-			// destroys no edit in progress. Behind the guards it froze for as
-			// long as a window stayed open — exactly what starting a
-			// workspace-scoped step produces, since that opens the PRD modal
-			// (AC-3).
+			// The recommended step sits before the guards because behind them it
+			// froze for as long as a window stayed open — exactly what starting
+			// a workspace-scoped step produces, since that opens the PRD modal
+			// (AC-3). Reading it redraws the thread that hosts it, and that
+			// redraw destroys no edit in progress: renderConversationPanel
+			// carries the draft, the caret and the scroll across every render,
+			// which is what makes it safe to run here.
 			loadWorkspaceStatus();
 			// Skip while something is being edited: reloading would discard the
 			// user's in-progress edits. The next event after the edit ends will
@@ -1090,7 +1110,10 @@
 	}
 
 	async function loadBoard() {
-		boardEl.innerHTML = '<div class="empty-board">Loading…</div>';
+		// Inside .board-columns, like every other message the board shows: .board
+		// itself is only the stack of header and row, and carries no padding.
+		boardEl.innerHTML =
+			'<div class="board-columns"><div class="empty-board">Loading…</div></div>';
 		try {
 			const view = await apiGet("/api/board");
 			renderBoard(view);
@@ -1108,18 +1131,19 @@
 			// A board that could not be read cannot vouch for its epics either.
 			newSpecBtn.disabled = true;
 			newSpecBtn.title = "The backlog could not be read";
-			boardEl.innerHTML = `<div class="empty-board">Error: ${escapeHtml(err.message || err)}</div>`;
+			boardEl.innerHTML = `<div class="board-columns"><div class="empty-board">Error: ${escapeHtml(err.message || err)}</div></div>`;
 		}
 	}
 
-	// ---- Workspace status strip --------------------------------------------
+	// ---- Recommended step ---------------------------------------------------
 	//
-	// Where the workspace is in the process, and which step comes next, are a
-	// server verdict: /api/workspace/status derives both from the installed
-	// Archetipo and from the real state of the workspace. Nothing here decides
-	// which stage exists, which step follows it, or what unlocks a refused one —
-	// every word drawn comes from the payload, through the pure renderer in
-	// workspace-status.js.
+	// Which step comes next is a server verdict: /api/workspace/status derives
+	// it from the installed Archetipo and from the real state of the workspace.
+	// Nothing here decides which step follows which, or what unlocks a refused
+	// one — every word drawn comes from the payload, and it is drawn at the tail
+	// of the thread, by conversation.js. This section reads the payload, keeps
+	// it, and performs the start it names; whether the step can be started at
+	// all is decided by the pure module in workspace-status.js.
 
 	// The last payload, kept because the navigation must read the step from the
 	// payload and not from the DOM it produced.
@@ -1130,16 +1154,17 @@
 		try {
 			view = await apiGet("/api/workspace/status");
 		} catch (_) {
-			// The strip is an addition to the board, not a precondition of it: a
-			// viewer that cannot answer must not stop anyone from working, so the
-			// strip simply disappears and no toast is raised.
+			// The recommended step is an addition to the workspace, not a
+			// precondition of it: a viewer that cannot answer must not stop anyone
+			// from working, so the block simply disappears and no toast is raised.
 			resetWorkspaceStatusState();
 			return;
 		}
 		workspaceStatusSnapshot = view;
-		workspaceStatusEl.innerHTML =
-			window.WorkspaceStatus.renderWorkspaceStatus(view);
-		workspaceStatusEl.classList.remove("hidden");
+		// The step lives in the thread, so the read that updates it must redraw
+		// the thread: otherwise the block would stay on the step of a moment ago
+		// until the next poll of the conversation.
+		renderConversationPanel();
 	}
 
 	// The recommended step belongs to the workspace that produced it: leaving
@@ -1149,8 +1174,10 @@
 	// workspace, so the two can never drift apart.
 	function resetWorkspaceStatusState() {
 		workspaceStatusSnapshot = null;
-		workspaceStatusEl.innerHTML = "";
-		workspaceStatusEl.classList.add("hidden");
+		// Forgetting the step of a workspace that is no longer open must take it
+		// off the screen too: the block lives in the thread, so the thread is
+		// what has to be redrawn.
+		renderConversationPanel();
 	}
 
 	// startNextStep runs the recommended step, and runs it through the single
@@ -1167,7 +1194,7 @@
 	// you stand": the run must be started somewhere it can be followed.
 	// The "one press, one execution" guarantee is the server's here, not the
 	// disabled attribute's: startPanelAction disables the button it was handed,
-	// but that button lives inside the strip's markup, which the very
+	// but that button lives inside the thread's markup, which the very
 	// board_changed the start produces redraws. What refuses a second press is
 	// the reservation on the server.
 	async function startNextStep(target, button) {
@@ -1195,25 +1222,6 @@
 		await startPanelAction(target.action, button);
 	}
 
-	// One delegated listener for a strip that is redrawn on every refresh.
-	// The recommended step is the one control of the strip: pressing it starts
-	// the step, through startNextStep. The `actions` chips are informative and
-	// are deliberately ignored here.
-	workspaceStatusEl.addEventListener("click", (e) => {
-		const btn = e.target.closest(".ws-status-next");
-		if (!btn || !workspaceStatusEl.contains(btn)) return;
-		// A blocked step is refused here as well, not only by the disabled
-		// attribute the renderer emits: the refusal is a decision, and it is
-		// taken by the pure module.
-		const target = window.WorkspaceStatus.nextStepDispatch(
-			workspaceStatusSnapshot,
-		);
-		if (!target) return;
-		startNextStep(target, btn).catch((err) => {
-			showToast(err.message || String(err), "err");
-		});
-	});
-
 	function updateStats(view) {
 		const cols = view.columns || [];
 		let total = 0,
@@ -1225,16 +1233,48 @@
 			if (c.id === "in_progress" || c.id === "review") progress += n;
 			if (c.id === "done") done += n;
 		});
-		if (statTotal) statTotal.textContent = total;
-		if (statProgress) statProgress.textContent = progress;
-		if (statDone) statDone.textContent = done;
+		// The counters live in the board's own header now (US-061 AC-6), and
+		// renderBoard emits that header on every draw: resolving the elements at
+		// boot would keep three nodes that the next draw has already replaced.
+		// Before the first draw there is nothing to write on, and that is an
+		// answer too.
+		const total_el = document.getElementById("stat-total");
+		const progress_el = document.getElementById("stat-progress");
+		const done_el = document.getElementById("stat-done");
+		if (total_el) total_el.textContent = total;
+		if (progress_el) progress_el.textContent = progress;
+		if (done_el) done_el.textContent = done;
+	}
+
+	// The three counters of the backlog, read where the backlog is (US-061
+	// AC-6). They are emitted on every draw and in both branches — an empty
+	// backlog is a backlog with three zeros, not a board with no header —
+	// because renderBoard clears #board before drawing anything.
+	function boardStatsHeader() {
+		return `<header class="board-stats" id="board-stats" aria-live="polite">
+			<span class="stat"><span class="stat-num" id="stat-total">&mdash;</span><span class="stat-label">stories</span></span>
+			<span class="stat-sep">/</span>
+			<span class="stat"><span class="stat-num" id="stat-progress">&mdash;</span><span class="stat-label">in flight</span></span>
+			<span class="stat-sep">/</span>
+			<span class="stat"><span class="stat-num" id="stat-done">&mdash;</span><span class="stat-label">done</span></span>
+		</header>`;
 	}
 
 	function renderBoard(view) {
-		boardEl.innerHTML = "";
+		// Two children, always: the counters and the row that holds the columns.
+		// The header is emitted in both branches — an empty backlog is a backlog
+		// with three zeros, not a board with no header — and the row is what
+		// scrolls sideways, so the counters stay put while the columns are
+		// scanned.
+		boardEl.innerHTML = `${boardStatsHeader()}<div class="board-columns"></div>`;
+		const columnsEl = boardEl.querySelector(".board-columns");
 		if (!view.columns || view.columns.length === 0) {
-			boardEl.innerHTML =
-				'<div class="empty-board">No backlog yet — run <code>archetipo init</code> to begin.</div>';
+			// The message is *added* under the header, never in its place: an
+			// empty backlog must still be able to say it is empty in numbers.
+			columnsEl.insertAdjacentHTML(
+				"beforeend",
+				'<div class="empty-board">No backlog yet — run <code>archetipo init</code> to begin.</div>',
+			);
 			return;
 		}
 		view.columns.forEach((col) => {
@@ -1260,7 +1300,7 @@
 				body.appendChild(emptyHint(col.id));
 			}
 			columnEl.appendChild(body);
-			boardEl.appendChild(columnEl);
+			columnsEl.appendChild(columnEl);
 
 			createBoardSortable(body, col.id);
 		});
@@ -4023,6 +4063,26 @@
 				);
 				return;
 			}
+			// The recommended step, pressed from the tail of the thread. This
+			// branch comes *before* the reach one on purpose: a block inside the
+			// thread must not be mistaken for a navigation.
+			//
+			// The refusal of a blocked step is a decision of the pure module, not
+			// the disabled attribute of the markup, and it holds for anyone
+			// reaching this handler by any route. What runs afterwards is
+			// startNextStep, hence startPanelAction: the very line the board
+			// presses, on the very same target.
+			const next = e.target.closest(".conv-nextstep-run");
+			if (next) {
+				const target = window.WorkspaceStatus.nextStepDispatch(
+					workspaceStatusSnapshot,
+				);
+				if (!target) return;
+				startNextStep(target, next).catch((err) => {
+					showToast(err.message || String(err), "err");
+				});
+				return;
+			}
 			// Same rule as the status strip: reaching a run only navigates to the
 			// panel where the run already lives, so there is a single place that
 			// mounts execution panels and resumes a record.
@@ -4789,6 +4849,14 @@
 				// which block the viewer was just sent to.
 				answeredApprovals: conversationAnsweredApprovals,
 				highlightAnchor: conversationHighlightAnchor,
+				// The recommended step is a fact of the workspace, not of this
+				// conversation: it comes from /api/workspace/status and from no
+				// other source. The thread hosts it at its tail — it does not
+				// own it, and it does not decide whether it can be taken.
+				nextStep:
+					workspaceStatusSnapshot && typeof workspaceStatusSnapshot === "object"
+						? workspaceStatusSnapshot.next_step
+						: null,
 			},
 		);
 
@@ -5917,6 +5985,18 @@
 		section.classList.add("collapsed");
 		const body = section.querySelector(".mockups-section-body");
 		if (body) body.classList.add("hidden");
+	}
+
+	function toggleTopbarMoreMenu(e) {
+		e.stopPropagation();
+		const wasHidden = topbarMoreMenu.classList.contains("hidden");
+		topbarMoreMenu.classList.toggle("hidden");
+		topbarMoreBtn.setAttribute("aria-expanded", wasHidden ? "true" : "false");
+	}
+
+	function closeTopbarMoreMenu() {
+		topbarMoreMenu.classList.add("hidden");
+		topbarMoreBtn.setAttribute("aria-expanded", "false");
 	}
 
 	function toggleMockupsMenu(e) {

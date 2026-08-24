@@ -371,9 +371,11 @@ async function scenario(runDir) {
 		// in the repository: what ships is what the viewer embeds.
 		const html = await rawGet(`${view.url}/index.html`);
 		assertShellStructure(html);
+		const appJS = await rawGet(`${view.url}/app.js`);
+		assertBoardCounters(appJS);
 		ok(
 			"AC-1, AC-2, AC-4, AC-5",
-			`the served index.html holds #workspace-conversation, #board and #modal-root in the one primary column of #workspace-shell — the conversation first — keeps #workspace-runs and #workspace-views outside that column, carries no <aside id="workspace-rail"> any more, still shows the counters #stat-total and #stat-progress in the topbar, and still carries all ${SPEC_OPERATION_IDS.length} identifiers of the spec operations plus the ${SPEC_TABS.length} tabs ${SPEC_TABS.join("/")}`,
+			`the served index.html holds #workspace-conversation, #board and #modal-root in the one primary column of #workspace-shell — the conversation first — keeps #workspace-runs and #workspace-views outside that column, carries no <aside id="workspace-rail"> any more, no longer shows the counters in the topbar but has the served app.js emit #stat-total and #stat-progress into the board, keeps every entry moved into #topbar-more-menu, and still carries all ${SPEC_OPERATION_IDS.length} identifiers of the spec operations plus the ${SPEC_TABS.length} tabs ${SPEC_TABS.join("/")}`,
 		);
 
 		// --- AC-6 -------------------------------------------------------------
@@ -477,12 +479,27 @@ function assertShellStructure(html) {
 			`AC-1: the conversation must be the first view of the primary column; got offsets conversation=${conversationAt}, board=${boardAt}`,
 		);
 	}
-	// AC-5 — the counters are readable from the home screen, without opening the
-	// board.
+	// US-057 AC-5 asked for the counters to be readable from the home screen and
+	// kept them in the topbar. US-061 AC-6 supersedes that: they are read in the
+	// board now, and the topbar must not carry them any more. What the served
+	// document can say about it is that they left; that they arrived is asserted
+	// on the served app.js, in assertBoardCounters.
 	for (const id of ["topbar-stats", "stat-total", "stat-progress"]) {
-		if (!html.includes(`id="${id}"`)) {
-			throw new Error(`AC-5: the served index.html lost #${id}: the spec totals would no longer be readable from the home screen`);
+		if (html.includes(`id="${id}"`)) {
+			throw new Error(`US-061 AC-6: the served index.html carries #${id} again: the three backlog counters are back in the topbar, which is exactly what the criterion removes`);
 		}
+	}
+
+	// US-061 AC-5 — one collector menu holds every entry the bar used to keep
+	// one click away. Losing one is losing a command, and the served document is
+	// where that loss would be real.
+	if (!html.includes('id="topbar-more-menu"')) {
+		throw new Error("US-061 AC-5: the served index.html carries no #topbar-more-menu: the entries moved out of the topbar would have nowhere to live");
+	}
+	const collected = ["metrics-btn", "prd-btn", "mockups-dropdown", "new-workspace-btn", "workspaces-btn", "config-btn", "refresh-btn"];
+	const lostEntries = collected.filter((id) => !html.includes(`id="${id}"`));
+	if (lostEntries.length) {
+		throw new Error(`US-061 AC-5: the served index.html lost the topbar entries ${JSON.stringify(lostEntries)}: they are reachable from neither the bar nor the menu`);
 	}
 
 	// AC-4 — nothing of what could be done on a spec was lost by the move.
@@ -493,6 +510,22 @@ function assertShellStructure(html) {
 	const missingTabs = SPEC_TABS.filter((tab) => !html.includes(`data-tab="${tab}"`));
 	if (missingTabs.length) {
 		throw new Error(`AC-4: the served index.html lost the spec tabs ${JSON.stringify(missingTabs)}`);
+	}
+}
+
+// assertBoardCounters checks the script the browser is really served: since
+// US-061 the three counters of the backlog are not in the document at all, they
+// are written into the board on every draw. Asserting their absence from
+// index.html without asserting their presence here would let them disappear
+// altogether and still pass.
+function assertBoardCounters(js) {
+	for (const id of ["stat-total", "stat-progress", "stat-done"]) {
+		if (!js.includes(id)) {
+			throw new Error(`US-061 AC-6: the served app.js never writes #${id}: that backlog counter would be readable nowhere`);
+		}
+	}
+	if (!js.includes("board-stats")) {
+		throw new Error("US-061 AC-6: the served app.js emits no .board-stats header: the counters lost the place the criterion gives them");
 	}
 }
 
@@ -524,11 +557,12 @@ function assertNarrowMode(css) {
 		throw new Error(`AC-6: the served app.css styles none of ${JSON.stringify(missing)}, which the layout module returns`);
 	}
 
-	// AC-5 — no width may hide the counters, because they are what the home
-	// screen says about the board without opening it.
-	const hidesStats = /\.topbar-stats\s*\{[^}]*display\s*:\s*none/.test(css);
+	// AC-5 — no width may hide the counters, because they are what the board
+	// says about the backlog at a glance. Since US-061 they are styled as the
+	// board's own header, so the selector moved with them.
+	const hidesStats = /\.board-stats\s*\{[^}]*display\s*:\s*none/.test(css);
 	if (hidesStats) {
-		throw new Error("AC-5: the served app.css applies display:none to .topbar-stats: the counters would disappear at some width");
+		throw new Error("AC-5: the served app.css applies display:none to .board-stats: the counters would disappear at some width");
 	}
 	return { breakpoint: NARROW_MAX_WIDTH, classes };
 }

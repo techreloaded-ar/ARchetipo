@@ -1,21 +1,29 @@
 // test/web/workspace-status-shell.test.mjs
-// Structural oracles for the workspace status strip (US-056).
+// Structural oracles for the recommended step (US-056, moved by US-061).
 // Run: node --test test/web/workspace-status-shell.test.mjs
 //
-// The decisions the strip takes live in a pure module and are tested there
-// (workspace-status.test.mjs). What is checked here is everything the pure
-// module cannot possibly express, because it is a property of *where* things
-// are written rather than of what a function returns:
+// The decisions the step takes live in a pure module and are tested there
+// (workspace-status.test.mjs); how the block is drawn is tested on the pure
+// renderer (conversation.test.mjs). What is checked here is everything neither
+// can possibly express, because it is a property of *where* things are written
+// rather than of what a function returns:
 //
-//   - the strip is a sibling that sits before the two-column shell, and the
-//     only rule that hides it is the one for "no workspace open" — so opening
-//     a spec never covers it (AC-1);
+//   - the status strip that used to sit between the topbar and the shell does
+//     not exist any more — not the element, not its rules, not its renderer
+//     (US-061 AC-1);
 //   - there is exactly one way to start an execution in this application, the
-//     mounted panel's `startURL`, and the strip reaches it through the very
-//     function the board presses (AC-2);
-//   - the strip is redrawn before the guards that freeze the board while a
-//     window or a form is open (AC-3);
-//   - closing the workspace forgets the step it recommended (AC-5).
+//     mounted panel's `startURL`, and the block in the thread reaches it
+//     through the very function the board presses (AC-2);
+//   - the panel is fed the recommended step from the status payload and from
+//     no other source, and is redrawn whenever that payload changes (AC-2);
+//   - closing the workspace forgets the step it recommended and takes it off
+//     the screen (US-056 AC-5);
+//   - the step is refreshed before the guards that freeze the board while a
+//     window or a form is open (US-056 AC-3).
+//
+// The two oracles of US-056 that read the strip's position and its single
+// hiding rule are superseded by US-061 AC-1, which removes the strip: they are
+// rewritten below as the assertion that nothing of it is left.
 //
 // These are facts a future refactor would break in silence: no unit test would
 // go red, and the screen would only misbehave for a person. Hence the reading
@@ -78,41 +86,41 @@ function cssRules(text) {
 	return rules;
 }
 
-describe("AC-1 — la striscia sta fuori dal guscio", () => {
-	it("è un fratello che precede #workspace-shell, non un suo discendente", () => {
-		const strip = html.indexOf('id="workspace-status"');
-		const shell = html.indexOf('id="workspace-shell"');
-		assert.notEqual(strip, -1, "index.html non contiene più #workspace-status");
-		assert.notEqual(shell, -1, "index.html non contiene più #workspace-shell");
+describe("AC-1 — la fascia di stato non esiste più", () => {
+	it("index.html non disegna più alcuna fascia sopra la conversazione", () => {
 		assert.ok(
-			strip < shell,
-			"la striscia deve essere dichiarata prima del guscio: dentro o dopo il guscio seguirebbe la colonna primaria e il pannello spec la coprirebbe",
-		);
-		const between = html.slice(strip, shell);
-		assert.ok(
-			!between.includes("workspace-primary"),
-			"fra la striscia e il guscio compare workspace-primary: la striscia è finita dentro la colonna che ospita il dettaglio spec, e aprire una spec la coprirebbe",
+			!html.includes('id="workspace-status"'),
+			"la fascia di stato è tornata fra la barra superiore e la conversazione",
 		);
 	});
 
-	it("è nascosta da una regola sola, quella del workspace non aperto", () => {
-		const hiding = cssRules(css).filter(
-			(rule) =>
-				rule.selector.includes("#workspace-status") &&
-				/display\s*:\s*none/.test(rule.body),
-		);
-		assert.equal(
-			hiding.length,
-			1,
-			`#workspace-status deve essere nascosto da una regola sola; regole trovate: ${hiding
-				.map((r) => JSON.stringify(r.selector))
-				.join(", ")}`,
+	it("app.css non stila più nulla della fascia", () => {
+		const leftovers = cssRules(css)
+			.map((rule) => rule.selector)
+			.filter((selector) => /\.workspace-status\b|\.ws-status/.test(selector));
+		assert.deepEqual(
+			leftovers,
+			[],
+			`sono rimaste regole della fascia rimossa: ${leftovers.join(", ")}`,
 		);
 		assert.ok(
-			hiding[0].selector.includes("body.no-workspace"),
-			`l'unica regola che nasconde la striscia deve essere quella del workspace non aperto; selettore intruso: ${JSON.stringify(
-				hiding[0].selector,
-			)} — con questa regola il passo suggerito può sparire mentre il revisore lavora`,
+			!css.includes("#workspace-status"),
+			"app.css nomina ancora #workspace-status: un elemento che non esiste più",
+		);
+	});
+
+	it("il modulo puro non disegna più la fascia", () => {
+		const module = readFileSync(
+			resolve(assetsDir, "workspace-status.js"),
+			"utf8",
+		);
+		assert.ok(
+			!module.includes("renderWorkspaceStatus"),
+			"workspace-status.js disegna di nuovo la fascia: il passo raccomandato si disegna nel thread, in conversation.js",
+		);
+		assert.ok(
+			!js.includes("workspaceStatusEl"),
+			"app.js scrive di nuovo su un elemento della fascia rimossa",
 		);
 	});
 });
@@ -128,29 +136,63 @@ describe("AC-2 — il cammino di avvio è uno solo", () => {
 		assert.deepEqual(
 			offenders.map(({ n, line }) => `${n}: ${line.trim()}`),
 			[],
-			"è stato introdotto un secondo cammino di avvio: una rotta di esecuzione viene chiamata fuori da un `startURL:` di mountExecutionPanels. L'avvio deve passare da startPanelAction, che è ciò che rende l'avvio dalla striscia identico a quello dalla board",
+			"è stato introdotto un secondo cammino di avvio: una rotta di esecuzione viene chiamata fuori da un `startURL:` di mountExecutionPanels. L'avvio deve passare da startPanelAction, che è ciò che rende l'avvio dal thread identico a quello dalla board",
 		);
 	});
 
-	it("il gestore della striscia delega, non riscrive l'avvio", () => {
-		const listener = blockAfter(js, 'workspaceStatusEl.addEventListener("click"');
+	it("il gestore del thread delega, non riscrive l'avvio", () => {
+		const listener = blockAfter(js, "function bindConversationPanel(");
 		assert.ok(
-			listener.includes("ws-status-next"),
-			"il listener della striscia non riconosce più il controllo .ws-status-next: il passo suggerito non sarebbe più avviabile da dove è mostrato",
+			listener.includes("conv-nextstep-run"),
+			"il pannello conversazione non riconosce più il controllo .conv-nextstep-run: il passo raccomandato non sarebbe più avviabile da dove è mostrato",
+		);
+		assert.ok(
+			listener.includes("nextStepDispatch"),
+			"il gestore del thread non chiede più al modulo puro se il passo è avviabile: il rifiuto di un passo bloccato tornerebbe a essere il solo attributo disabled del markup",
 		);
 		assert.ok(
 			listener.includes("startNextStep"),
-			"il gestore della striscia non delega più a startNextStep",
+			"il gestore del thread non delega più a startNextStep",
 		);
 		const startNextStep = blockAfter(js, "async function startNextStep(");
 		assert.ok(
 			startNextStep.includes("startPanelAction"),
-			"startNextStep non chiama più startPanelAction: l'avvio dalla striscia smetterebbe di essere lo stesso avvio della board",
+			"startNextStep non chiama più startPanelAction: l'avvio dal thread smetterebbe di essere lo stesso avvio della board",
+		);
+	});
+
+	// Il numero di punti che avviano un'azione è un fatto, non uno stile: due
+	// cammini di avvio sono due modi di partire che possono divergere. Sono la
+	// chip del pannello, il passo raccomandato e la dichiarazione della
+	// funzione stessa.
+	it("nessun nuovo punto di avvio è comparso in app.js", () => {
+		const occurrences = js.split("startPanelAction(").length - 1;
+		assert.equal(
+			occurrences,
+			3,
+			`i punti che nominano startPanelAction( sono ${occurrences} invece di 3: è comparso (o sparito) un cammino di avvio, e l'identità fra l'avvio dal thread e quello dalla board va riverificata`,
+		);
+	});
+
+	it("il pannello conversazione riceve il passo dallo stato del workspace", () => {
+		const body = blockAfter(js, "function renderConversationPanel(");
+		assert.ok(
+			body.includes("nextStep:"),
+			"il pannello conversazione non passa più il passo raccomandato al renderer: in coda al thread non comparirebbe alcun blocco",
+		);
+		assert.ok(
+			body.includes("workspaceStatusSnapshot"),
+			"il passo raccomandato non arriva più dal payload di /api/workspace/status: il thread lo starebbe inventando da un'altra fonte",
+		);
+		const load = blockAfter(js, "async function loadWorkspaceStatus(");
+		assert.ok(
+			load.includes("renderConversationPanel("),
+			"leggere lo stato del workspace non ridisegna più il thread: il blocco resterebbe fermo sul passo di un momento fa",
 		);
 	});
 });
 
-describe("AC-3 — la striscia si ridisegna prima delle guardie", () => {
+describe("US-056 AC-3 — il passo si aggiorna prima delle guardie", () => {
 	it("scheduleBoardReload aggiorna il passo suggerito anche a finestra o form aperti", () => {
 		const body = blockAfter(js, "function scheduleBoardReload(");
 		const status = body.indexOf("loadWorkspaceStatus()");
@@ -179,12 +221,24 @@ describe("AC-3 — la striscia si ridisegna prima delle guardie", () => {
 	});
 });
 
-describe("AC-5 — senza workspace aperto nessun passo è suggerito", () => {
-	it("enterNoWorkspaceMode azzera lo stato della striscia", () => {
+describe("US-056 AC-5 — senza workspace aperto nessun passo è suggerito", () => {
+	it("enterNoWorkspaceMode azzera lo stato del passo raccomandato", () => {
 		const body = blockAfter(js, "function enterNoWorkspaceMode(");
 		assert.ok(
 			body.includes("resetWorkspaceStatusState"),
-			"enterNoWorkspaceMode non azzera più lo stato della striscia: l'ultimo passo suggerito sopravvivrebbe al workspace che lo ha prodotto e il redraw successivo potrebbe rimetterlo in scena",
+			"enterNoWorkspaceMode non azzera più lo stato del passo raccomandato: l'ultimo passo suggerito sopravvivrebbe al workspace che lo ha prodotto e il redraw successivo potrebbe rimetterlo in scena",
+		);
+	});
+
+	it("dimenticare il passo lo toglie anche dallo schermo", () => {
+		const body = blockAfter(js, "function resetWorkspaceStatusState(");
+		assert.ok(
+			/workspaceStatusSnapshot\s*=\s*null/.test(body),
+			"resetWorkspaceStatusState non dimentica più il passo del workspace che si è appena chiuso",
+		);
+		assert.ok(
+			body.includes("renderConversationPanel("),
+			"dimenticare il passo non ridisegna più il thread: il blocco resterebbe sullo schermo con il passo di un workspace che non è più aperto",
 		);
 	});
 });

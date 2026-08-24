@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>E · La finestra stretta</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body class="">
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">redesign chat</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-conversazione.html">A · conversazione</a>
+        <a href="stato-b-storico.html">B · storico</a>
+        <a href="stato-c-run-attesa.html">C · run e attesa</a>
+        <a href="stato-d-board.html">D · board</a>
+        <a href="stato-e-stretto.html" class="current">E · stretto</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">stato E</p>
+    <h1 class="mk-title">Quando la finestra<br /><em>è stretta</em></h1>
+    <p class="mk-lede">
+        Sotto i 900 pixel l'indice smette di dividere la larghezza con la conversazione:
+        scorre sopra come pannello e si richiude appena scegli un thread. La chat resta
+        <strong>intera</strong> — è la sola cosa che non si comprime mai, perché è la
+        pagina. I due riquadri qui sotto sono la stessa finestra, prima e dopo il tocco
+        sul comando dell'indice.
+    </p>
+
+    <hr class="mk-rule" />
+
+    <div class="mk-grid">
+        <div>
+            <p class="mk-frame-label">1 · indice chiuso — la conversazione occupa tutto</p>
+            <div class="narrow-frame">
+                <div class="app">
+    <header class="topbar">
+        <span class="brand"><em>A</em><b>Rchetipo</b></span>
+        <span class="topbar-sep"></span>
+        <button type="button" class="workspace-pill">
+            <span class="dot"></span>
+            <span>archetipo</span>
+            <span class="path">~/Project/ARchetipo</span>
+            <span class="path">▾</span>
+        </button>
+        <span class="topbar-spacer"></span>
+        <span class="topbar-stat"><b>24</b> spec</span>
+        <span class="topbar-stat"><b>2</b> in corso</span>
+        <button type="button" class="ghost-btn">☾</button>
+    </header>
+    <div class="shell">
+    <aside class="rail">
+        <div class="rail-top">
+            <button type="button" class="new-thread">
+                <span>Nuova conversazione</span>
+                <kbd>N</kbd>
+            </button>
+            <div class="rail-search">
+                <span class="glyph">⌕</span>
+                <input type="search" placeholder="Cerca nelle conversazioni" />
+            </div>
+        </div>
+
+        <div class="rail-list">
+            <p class="rail-group">In corso</p>
+
+            <button type="button" class="thread">
+                <span class="thread-code">US-057</span>
+                <span class="thread-title">Redisegnare la home del viewer attorno alla conversazione</span>
+                <span class="thread-meta"><span class="thread-flag is-live">in corso</span> · 2 min fa</span>
+            </button>
+
+            <button type="button" class="thread is-current">
+                <span class="thread-code">US-056</span>
+                <span class="thread-title">Vedere il passo successivo suggerito mentre si lavora</span>
+                <span class="thread-meta"><span class="thread-flag is-waiting">attesa</span> · 14 min fa</span>
+            </button>
+
+            <p class="rail-group">Spec</p>
+
+            <button type="button" class="thread">
+                <span class="thread-code">US-055</span>
+                <span class="thread-title">Lavorare su una spec senza perdere di vista conversazione e board</span>
+                <span class="thread-meta"><span class="thread-flag is-done">done</span> · ieri</span>
+            </button>
+
+            <button type="button" class="thread">
+                <span class="thread-code">US-054</span>
+                <span class="thread-title">Avviare un'azione del processo dalla conversazione</span>
+                <span class="thread-meta"><span class="thread-flag is-done">done</span> · ieri</span>
+            </button>
+
+            <button type="button" class="thread">
+                <span class="thread-code">US-053</span>
+                <span class="thread-title">Conversare con l'agente sul workspace aperto</span>
+                <span class="thread-meta"><span class="thread-flag is-done">done</span> · 3 giorni fa</span>
+            </button>
+
+            <p class="rail-group">Progetto</p>
+
+            <button type="button" class="thread is-free">
+                <span class="thread-code">···</span>
+                <span class="thread-title">Come dividiamo gli epic del prossimo trimestre</span>
+                <span class="thread-meta">oggi, 09:12</span>
+            </button>
+
+            <button type="button" class="thread is-free">
+                <span class="thread-code">···</span>
+                <span class="thread-title">Perché la board si è svuotata dopo il merge di main</span>
+                <span class="thread-meta">2 giorni fa</span>
+            </button>
+
+            <button type="button" class="thread is-free">
+                <span class="thread-code">···</span>
+                <span class="thread-title">Note sul provider di esecuzione remoto</span>
+                <span class="thread-meta">la settimana scorsa</span>
+            </button>
+        </div>
+
+        <div class="rail-foot">
+            <button type="button" class="rail-link"><span class="glyph">▦</span> Board<span class="count">24</span></button>
+            <button type="button" class="rail-link"><span class="glyph">◈</span> Run attive<span class="count is-hot">2</span></button>
+            <button type="button" class="rail-link"><span class="glyph">◇</span> PRD e metriche</button>
+        </div>
+    </aside>
+
+        <main class="main">
+            <div class="thread-head">
+                <button type="button" class="rail-toggle" data-rail-toggle aria-label="Mostra o nascondi l'indice">☰</button>
+                <div class="thread-head-body">
+                    <div class="thread-head-title">Vedere il passo successivo suggerito</div>
+                    <div class="thread-head-sub">
+                        <span>US-056</span>
+                        <span>·</span>
+                        <span class="status-chip st-progress">in progress</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stream">
+                <div class="stream-inner">
+                    <div class="msg msg-agent">
+                        <div class="msg-who"><span class="avatar">U</span> Ugo</div>
+                        <div class="msg-body">
+                            <p>Task 3 in corso. La suite gira appena ho ripulito i worktree già integrati.</p>
+                        </div>
+                    </div>
+
+                    <div class="block is-waiting">
+                        <div class="block-head">
+                            <span>attesa</span>
+                            <b>Comando</b>
+                            <span class="spacer"></span>
+                            <span>40s</span>
+                        </div>
+                        <div class="block-body">
+                            <code class="mono">git worktree prune --verbose</code>
+                        </div>
+                        <div class="block-controls">
+                            <button type="button" class="primary-btn">Consenti</button>
+                            <button type="button" class="ghost-btn">Nega</button>
+                        </div>
+                    </div>
+
+                    <div class="msg msg-user">
+                        <div class="msg-who"><span class="avatar">S</span> Stefano</div>
+                        <div class="msg-body">
+                            <p>Sono già stati integrati tutti?</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="composer-wrap">
+                <form class="composer" onsubmit="return false">
+                    <textarea placeholder="Scrivi…"></textarea>
+                    <div class="composer-bar">
+                        <button type="button" class="chip-btn">/diff</button>
+                        <span class="spacer"></span>
+                        <button type="submit" class="send-btn">Invia ⏎</button>
+                    </div>
+                </form>
+            </div>
+        </main>
+    </div>
+                </div>
+            </div>
+        </div>
+
+        <div>
+            <p class="mk-frame-label">2 · indice aperto — scorre sopra, non restringe</p>
+            <div class="narrow-frame">
+                <div class="app">
+    <header class="topbar">
+        <span class="brand"><em>A</em><b>Rchetipo</b></span>
+        <span class="topbar-sep"></span>
+        <button type="button" class="workspace-pill">
+            <span class="dot"></span>
+            <span>archetipo</span>
+            <span class="path">~/Project/ARchetipo</span>
+            <span class="path">▾</span>
+        </button>
+        <span class="topbar-spacer"></span>
+        <span class="topbar-stat"><b>24</b> spec</span>
+        <span class="topbar-stat"><b>2</b> in corso</span>
+        <button type="button" class="ghost-btn">☾</button>
+    </header>
+    <div class="shell rail-open">
+    <aside class="rail">
+        <div class="rail-top">
+            <button type="button" class="new-thread">
+                <span>Nuova conversazione</span>
+                <kbd>N</kbd>
+            </button>
+            <div class="rail-search">
+                <span class="glyph">⌕</span>
+                <input type="search" placeholder="Cerca nelle conversazioni" />
+            </div>
+        </div>
+
+        <div class="rail-list">
+            <p class="rail-group">In corso</p>
+
+            <button type="button" class="thread">
+                <span class="thread-code">US-057</span>
+                <span class="thread-title">Redisegnare la home del viewer attorno alla conversazione</span>
+                <span class="thread-meta"><span class="thread-flag is-live">in corso</span> · 2 min fa</span>
+            </button>
+
+            <button type="button" class="thread is-current">
+                <span class="thread-code">US-056</span>
+                <span class="thread-title">Vedere il passo successivo suggerito mentre si lavora</span>
+                <span class="thread-meta"><span class="thread-flag is-waiting">attesa</span> · 14 min fa</span>
+            </button>
+
+            <p class="rail-group">Spec</p>
+
+            <button type="button" class="thread">
+                <span class="thread-code">US-055</span>
+                <span class="thread-title">Lavorare su una spec senza perdere di vista conversazione e board</span>
+                <span class="thread-meta"><span class="thread-flag is-done">done</span> · ieri</span>
+            </button>
+
+            <button type="button" class="thread">
+                <span class="thread-code">US-054</span>
+                <span class="thread-title">Avviare un'azione del processo dalla conversazione</span>
+                <span class="thread-meta"><span class="thread-flag is-done">done</span> · ieri</span>
+            </button>
+
+            <button type="button" class="thread">
+                <span class="thread-code">US-053</span>
+                <span class="thread-title">Conversare con l'agente sul workspace aperto</span>
+                <span class="thread-meta"><span class="thread-flag is-done">done</span> · 3 giorni fa</span>
+            </button>
+
+            <p class="rail-group">Progetto</p>
+
+            <button type="button" class="thread is-free">
+                <span class="thread-code">···</span>
+                <span class="thread-title">Come dividiamo gli epic del prossimo trimestre</span>
+                <span class="thread-meta">oggi, 09:12</span>
+            </button>
+
+            <button type="button" class="thread is-free">
+                <span class="thread-code">···</span>
+                <span class="thread-title">Perché la board si è svuotata dopo il merge di main</span>
+                <span class="thread-meta">2 giorni fa</span>
+            </button>
+
+            <button type="button" class="thread is-free">
+                <span class="thread-code">···</span>
+                <span class="thread-title">Note sul provider di esecuzione remoto</span>
+                <span class="thread-meta">la settimana scorsa</span>
+            </button>
+        </div>
+
+        <div class="rail-foot">
+            <button type="button" class="rail-link"><span class="glyph">▦</span> Board<span class="count">24</span></button>
+            <button type="button" class="rail-link"><span class="glyph">◈</span> Run attive<span class="count is-hot">2</span></button>
+            <button type="button" class="rail-link"><span class="glyph">◇</span> PRD e metriche</button>
+        </div>
+    </aside>
+
+        <main class="main">
+            <div class="thread-head">
+                <button type="button" class="rail-toggle" data-rail-toggle aria-label="Mostra o nascondi l'indice">☰</button>
+                <div class="thread-head-body">
+                    <div class="thread-head-title">Vedere il passo successivo suggerito</div>
+                    <div class="thread-head-sub">
+                        <span>US-056</span>
+                        <span>·</span>
+                        <span class="status-chip st-progress">in progress</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stream">
+                <div class="stream-inner">
+                    <div class="msg msg-agent">
+                        <div class="msg-who"><span class="avatar">U</span> Ugo</div>
+                        <div class="msg-body">
+                            <p>Task 3 in corso. La suite gira appena ho ripulito i worktree già integrati.</p>
+                        </div>
+                    </div>
+
+                    <div class="block is-waiting">
+                        <div class="block-head">
+                            <span>attesa</span>
+                            <b>Comando</b>
+                            <span class="spacer"></span>
+                            <span>40s</span>
+                        </div>
+                        <div class="block-body">
+                            <code class="mono">git worktree prune --verbose</code>
+                        </div>
+                        <div class="block-controls">
+                            <button type="button" class="primary-btn">Consenti</button>
+                            <button type="button" class="ghost-btn">Nega</button>
+                        </div>
+                    </div>
+
+                    <div class="msg msg-user">
+                        <div class="msg-who"><span class="avatar">S</span> Stefano</div>
+                        <div class="msg-body">
+                            <p>Sono già stati integrati tutti?</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="composer-wrap">
+                <form class="composer" onsubmit="return false">
+                    <textarea placeholder="Scrivi…"></textarea>
+                    <div class="composer-bar">
+                        <button type="button" class="chip-btn">/diff</button>
+                        <span class="spacer"></span>
+                        <button type="submit" class="send-btn">Invia ⏎</button>
+                    </div>
+                </form>
+            </div>
+        </main>
+    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <p class="mk-note" style="margin-top:26px">
+        <strong>Perché non un commutatore board / chat.</strong> Nella finestra stretta la
+        tentazione è dare pari dignità alle due viste e farle alternare. Ma le due cose non
+        hanno pari dignità: la board si consulta, la conversazione si abita. Il pannello
+        che scorre è per ciò che si consulta; ciò che si abita resta sotto, dove era.
+    </p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

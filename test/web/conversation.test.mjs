@@ -23,6 +23,12 @@
 //     reason and offers no confirmation
 //   - US-054 AC-4 without a proposal there is no control left to press
 //   - US-054 AC-5 from an accepted outcome the run can be reached
+//   - US-061 AC-2 the recommended step is drawn at the tail of the thread, it
+//     names the action and the spec it acts on, and carries the target in its
+//     attributes
+//   - US-061 AC-3 a step that cannot be taken is not pressable and its reason
+//     is read inside the block itself
+//   - US-061 AC-4 with nothing pending no block and no placeholder is drawn
 //   - the module carries no process rules: no capability, no provider, no
 //     action identifier
 
@@ -928,5 +934,251 @@ describe("renderConversation — la run dentro il flusso", () => {
 			assert.equal(typeof html, "string");
 			assert.ok(html.includes("conv-timeline"));
 		}
+	});
+});
+
+// The recommended step of the workspace, hosted at the tail of the thread.
+// Same discipline as the proposal block above: the oracles are on the visible
+// text and on the `data-*` attributes that are the contract with app.js — the
+// handles the wiring binds to, so their presence and their absence are
+// behaviour. The step arrives as local, non-payload state of the panel
+// (`ui.nextStep`), because it is a fact of the workspace and not of this
+// conversation.
+describe("renderConversation — passo successivo", () => {
+	const RUNNABLE = {
+		scope: "spec",
+		action: "implement",
+		label: "Implementa",
+		runnable: true,
+		spec: { code: "US-002" },
+	};
+
+	// The markup of the block alone, opening tag to matching close, div depth
+	// counted: what is asserted "inside the block" must be inside the block and
+	// not merely somewhere in the panel. Slicing to the end of the string would
+	// swallow the composer, and a reason drawn *under* the composer would pass.
+	function nextStepBlock(html) {
+		const start = html.indexOf('<div class="conv-nextstep');
+		assert.notEqual(start, -1, "il blocco del passo successivo non è disegnato");
+		const re = /<div\b|<\/div>/g;
+		re.lastIndex = start;
+		let depth = 0;
+		let m;
+		while ((m = re.exec(html)) !== null) {
+			depth += m[0] === "</div>" ? -1 : 1;
+			if (depth === 0) return html.slice(start, m.index + m[0].length);
+		}
+		assert.fail("il blocco del passo successivo non si chiude");
+	}
+
+	it("nomina il passo e la spec su cui agisce", () => {
+		const html = renderConversation(LIVE, "", { nextStep: RUNNABLE });
+		const text = visibleText(html);
+
+		assert.ok(
+			text.includes("Implementa"),
+			"l'etichetta del passo successivo non è testo visibile",
+		);
+		assert.ok(
+			text.includes("US-002"),
+			"il codice della spec su cui agisce il passo non è testo visibile",
+		);
+		assert.ok(
+			html.includes('class="conv-nextstep-run"'),
+			"il passo successivo non offre alcun comando da premere",
+		);
+		assert.ok(
+			html.includes('data-next-action="implement"'),
+			"il comando del passo non porta l'azione da avviare",
+		);
+		assert.ok(
+			html.includes('data-next-scope="spec"'),
+			"il comando del passo non porta l'ambito su cui avviare",
+		);
+		assert.ok(
+			html.includes('data-next-spec="US-002"'),
+			"il comando del passo non porta la spec bersaglio",
+		);
+	});
+
+	it("un passo di workspace non nomina nessuna spec", () => {
+		const html = renderConversation(LIVE, "", {
+			nextStep: {
+				scope: "workspace",
+				action: "prd",
+				label: "Scrivi il PRD",
+				runnable: true,
+			},
+		});
+
+		assert.ok(
+			html.includes('data-next-spec=""'),
+			"un passo di workspace dichiara comunque una spec bersaglio",
+		);
+		assert.ok(
+			!html.includes("conv-nextstep-code"),
+			"un passo di workspace disegna il posto di un codice spec che non esiste",
+		);
+	});
+
+	it("sta in coda alla conversazione, prima del compositore", () => {
+		const html = renderConversation(LIVE, "", { nextStep: RUNNABLE });
+		const idxTimeline = html.indexOf("conv-timeline");
+		const idxNextStep = html.indexOf("conv-nextstep");
+		const idxComposer = html.indexOf("conv-composer");
+
+		assert.ok(
+			idxTimeline !== -1 && idxNextStep !== -1 && idxComposer !== -1,
+			"timeline, passo successivo o compositore non sono disegnati",
+		);
+		assert.ok(
+			idxTimeline < idxNextStep,
+			"il blocco non è più in coda alla conversazione: precede la storia invece di seguirla",
+		);
+		assert.ok(
+			idxNextStep < idxComposer,
+			"il blocco non è più in coda alla conversazione: segue il compositore invece di precederlo",
+		);
+	});
+
+	it("un passo bloccato non è premibile e dice perché", () => {
+		const html = renderConversation(LIVE, "", {
+			nextStep: {
+				scope: "spec",
+				action: "review",
+				label: "Rivedi",
+				runnable: false,
+				spec: { code: "US-002" },
+				unavailable_reason: "RAGIONE-DEL-RIFIUTO dal processo",
+				unlocked_by: "SBLOCCATO-DA un passo precedente",
+			},
+		});
+		const block = nextStepBlock(html);
+
+		assert.ok(
+			/<button[^>]*conv-nextstep-run[^>]*disabled/.test(block),
+			"il comando di un passo bloccato è premibile",
+		);
+		assert.ok(
+			visibleText(block).includes("SBLOCCATO-DA un passo precedente"),
+			"il motivo del blocco non si legge dentro il blocco del passo",
+		);
+	});
+
+	it("senza unlocked_by mostra la ragione del rifiuto", () => {
+		const html = renderConversation(LIVE, "", {
+			nextStep: {
+				scope: "spec",
+				action: "review",
+				label: "Rivedi",
+				runnable: false,
+				spec: { code: "US-002" },
+				unavailable_reason: "RAGIONE-DEL-RIFIUTO dal processo",
+			},
+		});
+
+		assert.ok(
+			visibleText(nextStepBlock(html)).includes("RAGIONE-DEL-RIFIUTO dal processo"),
+			"senza rimedio dichiarato il blocco tace sul motivo del rifiuto",
+		);
+	});
+
+	it("neutralizza l'HTML che arriva dal payload del passo", () => {
+		const injected = '<img src=x onerror=1>';
+		const html = renderConversation(LIVE, "", {
+			nextStep: {
+				scope: "spec",
+				action: "review",
+				label: injected,
+				runnable: false,
+				unavailable_reason: injected,
+			},
+		});
+
+		assert.ok(
+			html.includes("&lt;img"),
+			"il testo del passo non è neutralizzato",
+		);
+		assert.ok(
+			!html.includes("<img"),
+			"il payload del passo ha prodotto un tag reale",
+		);
+	});
+
+	it("non lancia su un passo parziale", () => {
+		const partials = [{}, { action: "plan" }, { runnable: true }];
+		for (const nextStep of partials) {
+			const html = renderConversation(LIVE, "", { nextStep });
+			assert.equal(typeof html, "string");
+			assert.ok(html.includes("conv-timeline"));
+		}
+	});
+
+	it("senza passo raccomandato non c'è alcun blocco", () => {
+		const html = renderConversation(LIVE, "", {});
+
+		assert.ok(
+			!html.includes("conv-nextstep"),
+			"in coda alla conversazione compare un blocco anche senza passo in sospeso",
+		);
+	});
+
+	it("ogni forma di assenza produce la stessa assenza di blocco", () => {
+		const absences = [
+			{ nextStep: null },
+			{ nextStep: undefined },
+			{ nextStep: "plan" },
+		];
+		for (const ui of absences) {
+			const html = renderConversation(LIVE, "", ui);
+			assert.ok(
+				!html.includes("conv-nextstep"),
+				`in coda alla conversazione compare un blocco con nextStep = ${JSON.stringify(ui.nextStep)}`,
+			);
+		}
+	});
+
+	it("un passo senza nome non viene proposto", () => {
+		const html = renderConversation(LIVE, "", {
+			nextStep: { scope: "spec", runnable: true, spec: { code: "US-002" } },
+		});
+
+		assert.ok(
+			!html.includes("conv-nextstep"),
+			"un passo che non ha un nome da mostrare viene comunque proposto",
+		);
+	});
+
+	it("senza conversazione da mostrare non c'è coda a cui accodarsi", () => {
+		const html = renderConversation({}, "", { nextStep: RUNNABLE });
+
+		assert.ok(
+			html.includes("conv-empty"),
+			"senza conversazione manca l'invito ad aprirne una",
+		);
+		assert.ok(
+			!html.includes("conv-nextstep"),
+			"il blocco del passo compare dove non c'è alcuna conversazione a cui accodarlo",
+		);
+	});
+
+	// The assumption this spec registered, made explicit so a later change
+	// cannot break it in silence: the block follows *a* conversation being
+	// shown, not a live one. Tied to ACTIVE alone, the recommended step would
+	// be unreachable from the workspace home every time the last conversation
+	// has ended.
+	it("una conversazione conclusa mostra comunque il passo", () => {
+		const html = renderConversation(
+			withConversation({
+				conversation: Object.assign({}, LIVE.conversation, { state: "CLOSED" }),
+			}),
+			"",
+			{ nextStep: RUNNABLE },
+		);
+
+		assert.ok(
+			html.includes("conv-nextstep"),
+			"una conversazione conclusa nasconde il passo raccomandato",
+		);
 	});
 });

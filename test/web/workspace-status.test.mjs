@@ -1,21 +1,22 @@
 // test/web/workspace-status.test.mjs
-// Tests for the pure workspace-status renderer used by the ARchetipo web viewer.
+// Tests for the pure workspace-status module used by the ARchetipo web viewer.
 // Run: node --test test/web/workspace-status.test.mjs
 //
-// The oracles are on the *visible text* of the rendered HTML, not on the shape
-// of the module: what the person reading the board actually sees is what the
-// acceptance criteria are about.
+// Since US-061 the module renders nothing: the recommended step is drawn at
+// the tail of the thread by conversation.js, and its rendering is tested in
+// conversation.test.mjs (label, target spec, position, disabled state, reason
+// inside the block). What is left here is the decision — whether pressing the
+// step starts anything, and on what — which is the one part of the frontend
+// this project can test without a DOM, and the part that answers anyone
+// reaching the handler by any route.
 //
 // Verifies:
-//   - AC-1 the stage is declared with the Archetipo's own words
-//   - AC-2 the recommended step names its label, scope, action and target spec
-//   - AC-3 the renderer carries no process rules and echoes identifiers it
-//     has never seen
-//   - AC-4 a refused action states the condition that unlocks it, as text
 //   - US-056 AC-2 the recommended step dispatches exactly the action the
-//     payload declares, and the same one the strip would navigate to
-//   - US-056 AC-4 a blocked step dispatches nothing, not only a disabled button
+//     payload declares, on exactly the target it names
+//   - US-056 AC-4 a blocked step dispatches nothing, whatever the markup says
 //   - US-056 AC-5 an absent workspace status suggests no step at all
+//   - the module carries no process rules and echoes identifiers it has never
+//     seen
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -50,135 +51,14 @@ function loadWorkspaceStatus() {
 	return mod.exports;
 }
 
-const { renderWorkspaceStatus, nextStepTarget, nextStepDispatch } =
-	loadWorkspaceStatus();
+const { nextStepTarget, nextStepDispatch } = loadWorkspaceStatus();
 
-// Strip every attribute from the markup, leaving only what a reader sees.
-// An identifier that survives this is visible text; one that does not was
-// only ever hidden in an attribute.
-function visibleText(html) {
-	return html.replace(/\s\w[\w-]*="[^"]*"/g, "");
-}
-
-describe("renderWorkspaceStatus", () => {
-	it("dichiara lo stadio con le parole dell'Archetipo", () => {
-		const html = renderWorkspaceStatus({
-			template: { id: "identificativo-archetipo", label: "ARCHETIPO-Y", version: "9.9.9" },
-			stage: { id: "stadio-x", label: "ETICHETTA-X", summary: "SINTESI-X" },
-		});
-
-		const text = visibleText(html);
-		assert.ok(text.includes("ETICHETTA-X"), "stage label mancante nel testo reso");
-		assert.ok(text.includes("SINTESI-X"), "stage summary mancante nel testo reso");
-		assert.ok(text.includes("ARCHETIPO-Y"), "identità dell'Archetipo mancante");
-		assert.ok(text.includes("9.9.9"), "versione dell'Archetipo mancante");
-	});
-
-	it("ricade sull'id dell'Archetipo quando manca l'etichetta", () => {
-		const html = renderWorkspaceStatus({
-			template: { id: "IDENTIFICATIVO-T", version: "1.2.3" },
-			stage: { id: "s", label: "L", summary: "S" },
-		});
-		assert.ok(visibleText(html).includes("IDENTIFICATIVO-T"));
-	});
-
-	it("nomina il passo raccomandato e l'azione che lo esegue", () => {
-		const workspaceStep = renderWorkspaceStatus({
-			template: { label: "T", version: "1" },
-			stage: { id: "s", label: "L", summary: "S" },
-			next_step: {
-				scope: "workspace",
-				action: "azione-inventata",
-				label: "ETICHETTA-AZIONE",
-				runnable: true,
-			},
-		});
-
-		assert.ok(
-			visibleText(workspaceStep).includes("ETICHETTA-AZIONE"),
-			"l'etichetta del passo non è testo visibile",
-		);
-		assert.ok(workspaceStep.includes('data-next-action="azione-inventata"'));
-		assert.ok(workspaceStep.includes('data-next-scope="workspace"'));
-		assert.ok(
-			!/<button[^>]*\sdisabled/.test(workspaceStep),
-			"un passo eseguibile non deve essere disabled",
-		);
-
-		const specStep = renderWorkspaceStatus({
-			template: { label: "T", version: "1" },
-			stage: { id: "s", label: "L", summary: "S" },
-			next_step: {
-				scope: "spec",
-				action: "azione-inventata",
-				label: "ETICHETTA-AZIONE",
-				runnable: true,
-				spec: { code: "US-777", title: "Una spec bersaglio" },
-			},
-		});
-
-		assert.ok(
-			visibleText(specStep).includes("US-777"),
-			"il codice della spec bersaglio non è testo visibile",
-		);
-		assert.ok(specStep.includes('data-next-spec="US-777"'));
-		assert.ok(specStep.includes('data-next-scope="spec"'));
-	});
-
-	it("mostra la condizione che sblocca il passo non eseguibile", () => {
-		const html = renderWorkspaceStatus({
-			template: { label: "T", version: "1" },
-			stage: { id: "s", label: "L", summary: "S" },
-			next_step: {
-				scope: "workspace",
-				action: "azione-inventata",
-				label: "ETICHETTA-AZIONE",
-				runnable: false,
-				unlocked_by: "CONDIZIONE-PASSO",
-			},
-		});
-
-		assert.ok(/<button[^>]*\sdisabled/.test(html), "il passo non eseguibile deve essere disabled");
-		assert.ok(
-			visibleText(html).includes("CONDIZIONE-PASSO"),
-			"la condizione di sblocco del passo non è testo visibile",
-		);
-	});
-
-	it("senza passo raccomandato mostra la sintesi dello stadio e nessun bottone", () => {
-		const html = renderWorkspaceStatus({
-			template: { label: "T", version: "1" },
-			stage: { id: "s", label: "L", summary: "SINTESI-FINALE" },
-		});
-
-		assert.ok(html.includes("ws-status-next-none"));
-		assert.ok(visibleText(html).includes("SINTESI-FINALE"));
-		assert.ok(!html.includes("<button"), "senza passo non deve esserci un bottone");
-	});
-
-	it("non contiene regole di processo", () => {
-		const html = renderWorkspaceStatus({
-			template: { label: "T", version: "1" },
-			stage: { id: "stadio-inventato", label: "ETICHETTA-INVENTATA", summary: "S" },
-			next_step: {
-				scope: "workspace",
-				action: "azione-inventata",
-				label: "ETICHETTA-AZIONE",
-				runnable: true,
-			},
-		});
-
-		// Identifiers the module has never seen are echoed as they are.
-		assert.ok(html.includes('data-next-action="azione-inventata"'));
-		const withUnknownStageLabel = renderWorkspaceStatus({
-			stage: { id: "stadio-inventato" },
-		});
-		assert.ok(
-			visibleText(withUnknownStageLabel).includes("stadio-inventato"),
-			"uno stadio sconosciuto deve essere riportato tale e quale",
-		);
-
-		// And the source itself declares no real stage or action identifier.
+// The absence of process knowledge is a property of the module itself, not of
+// anything it returns: it survived the removal of the rendering because it is
+// what makes an action identifier the module has never seen travel through
+// untouched.
+describe("il modulo non contiene regole di processo", () => {
+	it("non nomina alcuno stadio né alcuna azione reale", () => {
 		const source = readFileSync(helperPath, "utf8");
 		const forbidden = [
 			"senza-prd",
@@ -196,75 +76,21 @@ describe("renderWorkspaceStatus", () => {
 		for (const token of forbidden) {
 			assert.ok(
 				!source.includes(token),
-				`il renderer non deve contenere l'identificativo di processo ${token}`,
+				`il modulo non deve contenere l'identificativo di processo ${token}`,
 			);
 		}
 	});
 
-	it("mostra la condizione che sblocca ogni azione non eseguibile", () => {
-		const html = renderWorkspaceStatus({
-			template: { label: "T", version: "1" },
-			stage: { id: "s", label: "L", summary: "S" },
-			actions: [
-				{ id: "a1", label: "A1", runnable: false, unlocked_by: "CONDIZIONE-Z" },
-				{ id: "a2", label: "A2", runnable: true },
-			],
+	it("riporta tale e quale un'azione mai vista", () => {
+		const target = nextStepTarget({
+			next_step: {
+				scope: "ambito-inventato",
+				action: "azione-inventata",
+				runnable: true,
+			},
 		});
-
-		assert.ok(html.includes("CONDIZIONE-Z"));
-		// The condition must survive attribute stripping: a chip with only a
-		// tooltip would fail here, a talking chip passes.
-		assert.ok(
-			visibleText(html).includes("CONDIZIONE-Z"),
-			"la condizione di sblocco è presente solo in un attributo",
-		);
-
-		// Le chip della striscia sono informative in entrambi i casi: la striscia
-		// dichiara, non esegue. Un <button> qui sarebbe focalizzabile e annunciato
-		// come premibile senza che nessuno lo ascolti — un controllo inerte.
-		assert.ok(
-			/<span[^>]*data-action-id="a1"/.test(html),
-			"la chip non eseguibile deve essere uno <span>",
-		);
-		assert.ok(
-			/<span[^>]*data-action-id="a2"/.test(html),
-			"anche la chip eseguibile della striscia deve essere uno <span>",
-		);
-		assert.ok(
-			!/<button[^>]*data-action-id=/.test(html),
-			"nessuna chip della striscia deve essere un bottone",
-		);
-
-		const onlyReason = renderWorkspaceStatus({
-			stage: { id: "s", label: "L", summary: "S" },
-			actions: [
-				{
-					id: "a3",
-					label: "A3",
-					runnable: false,
-					unavailable_reason: "MOTIVO-VISIBILE",
-				},
-			],
-		});
-		assert.ok(
-			visibleText(onlyReason).includes("MOTIVO-VISIBILE"),
-			"con il solo unavailable_reason la frase deve restare testo visibile",
-		);
-	});
-
-	it("non lancia su payload parziali", () => {
-		for (const view of [null, undefined, {}, { actions: [] }, { next_step: null }]) {
-			const html = renderWorkspaceStatus(view);
-			assert.equal(typeof html, "string");
-		}
-	});
-
-	it("neutralizza l'HTML che arriva dal payload", () => {
-		const html = renderWorkspaceStatus({
-			stage: { id: "s", label: '<img src=x onerror=1>', summary: "S" },
-		});
-		assert.ok(html.includes("&lt;img"), "il markup del payload non è stato neutralizzato");
-		assert.ok(!html.includes("<img"), "il payload ha prodotto un tag reale");
+		assert.equal(target.action, "azione-inventata");
+		assert.equal(target.scope, "ambito-inventato");
 	});
 });
 
@@ -345,7 +171,11 @@ describe("nextStepDispatch", () => {
 		assert.ok(!dispatch.code, "un passo di workspace non ha una spec bersaglio");
 	});
 
-	it("un passo bloccato è disabled, dichiara la sua condizione e non avvia nulla", () => {
+	// The refusal that counts: an attribute on the markup is a hint to the
+	// pointer, while this is the answer given to anyone who reaches the handler
+	// by any route. That the button is drawn disabled, and that its condition is
+	// readable inside the block, is proved in conversation.test.mjs.
+	it("un passo bloccato non avvia nulla", () => {
 		const step = {
 			scope: "workspace",
 			action: "inception",
@@ -354,19 +184,10 @@ describe("nextStepDispatch", () => {
 			unlocked_by: "installa un provider utilizzabile",
 		};
 
-		assert.equal(nextStepDispatch({ next_step: step }), null);
-
-		const html = renderWorkspaceStatus({
-			stage: { id: "s", label: "L", summary: "S" },
-			next_step: step,
-		});
-		assert.ok(
-			/<button[^>]*\sdisabled/.test(html),
-			"il passo non eseguibile deve essere disabled",
-		);
-		assert.ok(
-			visibleText(html).includes("installa un provider utilizzabile"),
-			"la condizione di sblocco deve essere testo visibile con le parole del payload",
+		assert.equal(
+			nextStepDispatch({ next_step: step }),
+			null,
+			"un passo bloccato produce comunque un avvio",
 		);
 	});
 
@@ -386,11 +207,12 @@ describe("nextStepDispatch", () => {
 				null,
 				`un payload ${JSON.stringify(view)} non deve suggerire nessun passo`,
 			);
+			assert.equal(
+				nextStepTarget(view),
+				null,
+				`un payload ${JSON.stringify(view)} non deve nominare nessun bersaglio`,
+			);
 		}
-		assert.ok(
-			!renderWorkspaceStatus({}).includes('ws-status-next"'),
-			"senza passo suggerito non deve esserci nessun bottone di avvio",
-		);
 	});
 
 	it("avvio e navigazione leggono lo stesso payload senza divergere", () => {

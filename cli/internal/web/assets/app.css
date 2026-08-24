@@ -149,7 +149,10 @@ body {
 /* ---- Topbar ------------------------------------------------------------ */
 .topbar {
 	display: grid;
-	grid-template-columns: auto 1fr auto;
+	/* Two cells since US-061: the identity of the workspace on the left, what
+	   is one click away on the right. The counters that used to sit between
+	   them are read in the board now. */
+	grid-template-columns: auto 1fr;
 	align-items: center;
 	gap: 32px;
 	padding: 18px 28px;
@@ -264,19 +267,22 @@ body {
 	color: var(--text-muted);
 }
 
-/* Centered topbar stats — editorial summary of the board. */
-.topbar-stats {
+/* The three counters of the backlog — editorial summary of the board, read
+   where the backlog is (US-061 AC-6). Same type and same proportions they had
+   in the topbar: only their place changed. */
+.board-stats {
 	display: flex;
 	align-items: baseline;
-	justify-content: center;
 	gap: 14px;
+	flex: 0 0 auto;
+	padding: 20px 28px 0;
 	color: var(--text-muted);
 	font-family: var(--font-mono);
 	font-size: 11px;
 	letter-spacing: 0.04em;
 }
 
-.topbar-stats .stat {
+.stat {
 	display: inline-flex;
 	align-items: baseline;
 	gap: 6px;
@@ -308,6 +314,41 @@ body {
 	gap: 6px;
 	align-items: center;
 	justify-self: end;
+}
+
+/* The collector menu of the topbar (US-061). Its entries are the very same
+   .ghost-btn elements that used to sit in the bar: inside a menu they need to
+   read as rows, so they take the full width and align left. */
+.topbar-more-menu {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 220px;
+}
+
+.topbar-more-menu > .ghost-btn,
+.topbar-more-menu .dropdown > .ghost-btn {
+	width: 100%;
+	justify-content: flex-start;
+	gap: 10px;
+	border-color: transparent;
+	background: transparent;
+}
+
+.topbar-more-menu > .ghost-btn:hover,
+.topbar-more-menu .dropdown > .ghost-btn:hover {
+	background: var(--accent-soft);
+	color: var(--accent);
+}
+
+.topbar-more-menu .dropdown {
+	display: block;
+}
+
+/* The nested submenu opens beside the menu that holds it, not on top of it. */
+.topbar-more-menu .dropdown-menu {
+	right: calc(100% + 6px);
+	top: 0;
 }
 
 .action-sep {
@@ -545,143 +586,18 @@ html[data-theme="light"] .theme-ico-moon {
 	display: none !important;
 }
 
-/* ---- Workspace status strip -------------------------------------------
-   Sits between the topbar and the board and shares the board's horizontal
-   padding, so stage, summary and recommended step line up with the columns
-   below. Every word it shows comes from /api/workspace/status; the styling
-   only decides emphasis. */
-.workspace-status {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 10px 20px;
-	padding: 14px 28px;
-	border-bottom: 1px solid var(--rule);
-	background: color-mix(in srgb, var(--surface) 55%, transparent);
-}
-
-.ws-status-header {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	gap: 4px 12px;
-	min-width: 0;
-}
-
-.ws-status-stage {
-	font-family: var(--font-display);
-	font-size: 19px;
-	line-height: 1.2;
-	color: var(--text-strong);
-}
-
-.ws-status-summary {
-	font-size: 13px;
-	color: var(--text-muted);
-}
-
-.ws-status-template {
-	font-family: var(--font-mono);
-	font-size: 10px;
-	letter-spacing: 0.05em;
-	text-transform: uppercase;
-	color: var(--text-dim);
-}
-
-.ws-status-next-wrap {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 4px 10px;
-	margin-left: auto;
-}
-
-/* The recommended step is the one emphatic control of the strip. */
-.ws-status-next {
-	border: 1px solid var(--accent);
-	background: var(--accent);
-	color: var(--accent-ink);
-	padding: 7px 14px;
-	border-radius: var(--radius);
-	font-family: var(--font-sans);
-	font-size: 12px;
-	font-weight: 600;
-	letter-spacing: 0.01em;
-	cursor: pointer;
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	transition:
-		background var(--transition),
-		border-color var(--transition),
-		transform 0.1s var(--ease);
-}
-
-.ws-status-next:hover:not(:disabled) {
-	background: var(--accent-strong);
-	border-color: var(--accent-strong);
-}
-
-.ws-status-next:active:not(:disabled) {
-	transform: translateY(1px);
-}
-
-/* Visibly inert, never silently inert: the unlock text below says what it
-   would take, so the disabled state is never the whole answer. */
-.ws-status-next:disabled {
-	cursor: default;
-	background: transparent;
-	border-color: var(--border-strong);
-	color: var(--text-muted);
-}
-
-.ws-status-next-spec {
-	font-family: var(--font-mono);
-	font-size: 11px;
-	letter-spacing: 0.04em;
-	opacity: 0.85;
-}
-
-.ws-status-next-none {
-	font-size: 13px;
-	color: var(--text-muted);
-}
-
-/* The unlock condition must stay readable in both themes: it carries the
-   reason an action cannot run, so it is dimmer than body text but never
-   faint. */
-.ws-status-next-unlock,
-.action-chip-unlock {
-	font-size: 11px;
-	line-height: 1.4;
-	color: var(--text);
-	opacity: 0.8;
-}
-
-.ws-status-actions {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 6px;
-	flex-basis: 100%;
-}
-
-/* The chips in the strip are informative: they state what the process offers
-   here, while running an action stays the execution panel's job. */
-.ws-status-action {
-	flex-wrap: wrap;
-	font-family: var(--font-sans);
-	background: transparent;
-	cursor: default;
-}
-
-.ws-status-action .action-chip-label {
-	font-size: 11px;
-	color: var(--text-muted);
-}
-
 /* ---- Board / Columns -------------------------------------------------- */
+/* Since US-061 the board is a stack of two things: the counters of the backlog
+   and the row of columns. Only the row scrolls sideways, so the counters stay
+   put while the columns are scanned. */
 .board {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	flex: 1 1 auto;
+}
+
+.board-columns {
 	display: flex;
 	gap: 18px;
 	padding: 24px 28px 16px;
@@ -2302,26 +2218,27 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 /* ---- Responsive tweaks ------------------------------------------------- */
 @media (max-width: 900px) {
 	.topbar {
-		/* Three cells still, because the counters stay: the middle one is what
-		   gives way when the row tightens. */
-		grid-template-columns: auto minmax(0, auto) auto;
+		/* Two cells, like the wide layout: identity and the menu of what is one
+		   click away. */
+		grid-template-columns: auto minmax(0, auto);
 		gap: 12px;
 		padding: 14px 18px;
 	}
-	/* The counters stay readable in a narrow window (US-057 AC-5): the two the
-	   criterion names keep their word beside the number, as state E of the
-	   design shows. Only the separators and the third counter give way, which
-	   is what buys the room — never a number, and never a label without one. */
-	.topbar-stats {
+	/* The counters stay readable in a narrow window (US-057 AC-5, now read in
+	   the board): the two the criterion names keep their word beside the
+	   number. Only the separators and the third counter give way, which is what
+	   buys the room — never a number, and never a label without one. */
+	.board-stats {
 		gap: 10px;
+		padding: 14px 16px 0;
 	}
-	.topbar-stats .stat-sep {
+	.board-stats .stat-sep {
 		display: none;
 	}
-	.topbar-stats .stat:last-of-type {
+	.board-stats .stat:last-of-type {
 		display: none;
 	}
-	.topbar-stats .stat {
+	.board-stats .stat {
 		gap: 4px;
 	}
 	.stat-num {
@@ -2331,7 +2248,7 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 		font-size: 9px;
 		letter-spacing: 0.08em;
 	}
-	.board {
+	.board-columns {
 		padding: 16px;
 		gap: 12px;
 	}
@@ -2965,6 +2882,17 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	border-radius: 12px;
 	padding: 6px 10px;
 	max-width: 340px;
+}
+
+/* The unlock condition must stay readable in both themes: it carries the
+   reason an action cannot run, so it is dimmer than body text but never
+   faint. These values used to be shared with the removed status strip; they
+   live here now, where the chips that still use them are. */
+.action-chip-unlock {
+	font-size: 11px;
+	line-height: 1.4;
+	color: var(--text);
+	opacity: 0.8;
 }
 
 .action-chip .action-chip-unlock {
@@ -4149,7 +4077,6 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 
 body.no-workspace #board,
 body.no-workspace #workspace-shell,
-body.no-workspace #workspace-status,
 body.no-workspace [data-workspace-scoped] {
 	display: none !important;
 }
@@ -4476,6 +4403,113 @@ body.no-workspace [data-workspace-scoped] {
 	display: flex;
 	gap: 8px;
 	margin-top: 10px;
+}
+
+/* ---- Recommended step in the thread ------------------------------------- */
+/* The step the workspace recommends closes the thread. It borrows the frame of
+   .conv-proposal because it is the same kind of thing — something offered and
+   not yet started — and it must read as part of the conversation, not as a
+   strip laid over it. */
+.conv-nextstep {
+	margin: 10px 12px 0;
+	padding: 10px;
+	border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+	border-radius: var(--radius);
+	background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+/* A step that cannot be taken states its condition instead of promising an
+   action: the frame drops to a dashed outline so the block is legible as
+   inert before the button is even read. */
+.conv-nextstep.is-refused {
+	border-style: dashed;
+	border-color: var(--border);
+	background: transparent;
+}
+
+.conv-nextstep-head {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.conv-nextstep-mark {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+	flex-shrink: 0;
+}
+
+.conv-nextstep-label {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.conv-nextstep-code {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+
+.conv-nextstep-controls {
+	display: flex;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+/* The one emphatic control of the block, with the weight the strip's step
+   used to carry. */
+.conv-nextstep-run {
+	border: 1px solid var(--accent);
+	background: var(--accent);
+	color: var(--accent-ink);
+	padding: 7px 14px;
+	border-radius: var(--radius);
+	font-family: var(--font-sans);
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	transition:
+		background var(--transition),
+		border-color var(--transition),
+		transform 0.1s var(--ease);
+}
+
+.conv-nextstep-run:hover:not(:disabled) {
+	background: var(--accent-strong);
+	border-color: var(--accent-strong);
+}
+
+.conv-nextstep-run:active:not(:disabled) {
+	transform: translateY(1px);
+}
+
+/* Visibly inert, never silently inert: the unlock sentence right below says
+   what it would take, so the disabled state is never the whole answer. */
+.conv-nextstep-run:disabled {
+	cursor: default;
+	background: transparent;
+	border-color: var(--border-strong);
+	color: var(--text-muted);
+}
+
+/* The reason lives inside the block, under its control and not beside it: the
+   refusal is about this step and is read where the step is. */
+.conv-nextstep-unlock {
+	margin: 8px 0 0;
+	font-size: 11px;
+	line-height: 1.4;
+	color: var(--text);
+	opacity: 0.8;
 }
 
 /* The outcome is a quieter row: it states a decision already taken, and its

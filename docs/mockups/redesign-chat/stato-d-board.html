@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>D · La board come vista secondaria</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body class="is-state">
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">redesign chat</span>
+    <nav class="mk-nav">
+        <a href="index.html">Indice</a>
+        <a href="stato-a-conversazione.html">A · conversazione</a>
+        <a href="stato-b-storico.html">B · storico</a>
+        <a href="stato-c-run-attesa.html">C · run e attesa</a>
+        <a href="stato-d-board.html" class="current">D · board</a>
+        <a href="stato-e-stretto.html">E · stretto</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<div class="app">
+    <header class="topbar">
+        <span class="brand"><em>A</em><b>Rchetipo</b></span>
+        <span class="topbar-sep"></span>
+        <button type="button" class="workspace-pill">
+            <span class="dot"></span>
+            <span>archetipo</span>
+            <span class="path">~/Project/ARchetipo</span>
+            <span class="path">▾</span>
+        </button>
+        <span class="topbar-spacer"></span>
+        <span class="topbar-stat"><b>24</b> spec</span>
+        <span class="topbar-stat"><b>2</b> in corso</span>
+        <button type="button" class="ghost-btn">☾</button>
+    </header>
+    <div class="shell">
+    <aside class="rail">
+        <div class="rail-top">
+            <button type="button" class="new-thread">
+                <span>Nuova conversazione</span>
+                <kbd>N</kbd>
+            </button>
+            <div class="rail-search">
+                <span class="glyph">⌕</span>
+                <input type="search" placeholder="Cerca nelle conversazioni" />
+            </div>
+        </div>
+
+        <div class="rail-list">
+            <p class="rail-group">In corso</p>
+
+            <button type="button" class="thread is-current">
+                <span class="thread-code">US-057</span>
+                <span class="thread-title">Redisegnare la home del viewer attorno alla conversazione</span>
+                <span class="thread-meta"><span class="thread-flag is-live">in corso</span> · 2 min fa</span>
+            </button>
+
+            <button type="button" class="thread">
+                <span class="thread-code">US-056</span>
+                <span class="thread-title">Vedere il passo successivo suggerito mentre si lavora</span>
+                <span class="thread-meta"><span class="thread-flag is-waiting">attesa</span> · 14 min fa</span>
+            </button>
+
+            <p class="rail-group">Spec</p>
+
+            <button type="button" class="thread">
+                <span class="thread-code">US-055</span>
+                <span class="thread-title">Lavorare su una spec senza perdere di vista conversazione e board</span>
+                <span class="thread-meta"><span class="thread-flag is-done">done</span> · ieri</span>
+            </button>
+
+            <button type="button" class="thread">
+                <span class="thread-code">US-054</span>
+                <span class="thread-title">Avviare un'azione del processo dalla conversazione</span>
+                <span class="thread-meta"><span class="thread-flag is-done">done</span> · ieri</span>
+            </button>
+
+            <button type="button" class="thread">
+                <span class="thread-code">US-053</span>
+                <span class="thread-title">Conversare con l'agente sul workspace aperto</span>
+                <span class="thread-meta"><span class="thread-flag is-done">done</span> · 3 giorni fa</span>
+            </button>
+
+            <p class="rail-group">Progetto</p>
+
+            <button type="button" class="thread is-free">
+                <span class="thread-code">···</span>
+                <span class="thread-title">Come dividiamo gli epic del prossimo trimestre</span>
+                <span class="thread-meta">oggi, 09:12</span>
+            </button>
+
+            <button type="button" class="thread is-free">
+                <span class="thread-code">···</span>
+                <span class="thread-title">Perché la board si è svuotata dopo il merge di main</span>
+                <span class="thread-meta">2 giorni fa</span>
+            </button>
+
+            <button type="button" class="thread is-free">
+                <span class="thread-code">···</span>
+                <span class="thread-title">Note sul provider di esecuzione remoto</span>
+                <span class="thread-meta">la settimana scorsa</span>
+            </button>
+        </div>
+
+        <div class="rail-foot">
+            <button type="button" class="rail-link"><span class="glyph">▦</span> Board<span class="count">24</span></button>
+            <button type="button" class="rail-link"><span class="glyph">◈</span> Run attive<span class="count is-hot">2</span></button>
+            <button type="button" class="rail-link"><span class="glyph">◇</span> PRD e metriche</button>
+        </div>
+    </aside>
+
+        <main class="main">
+            <div class="thread-head">
+                <button type="button" class="rail-toggle" data-rail-toggle aria-label="Mostra o nascondi l'indice">☰</button>
+                <div class="thread-head-body">
+                    <div class="thread-head-title">Board del workspace</div>
+                    <div class="thread-head-sub">
+                        <span>24 spec</span>
+                        <span>·</span>
+                        <span>2 in corso</span>
+                        <span>·</span>
+                        <span>la conversazione resta aperta dietro questa vista</span>
+                    </div>
+                </div>
+                <div class="view-tabs">
+                    <button type="button" class="view-tab">Conversazione</button>
+                    <button type="button" class="view-tab">Spec</button>
+                    <button type="button" class="view-tab is-current">Board</button>
+                </div>
+            </div>
+
+            <div class="board">
+                <section class="col c-todo">
+                    <p class="col-head">todo <span class="n">9</span></p>
+                    <article class="card">
+                        <span class="card-code">US-058</span>
+                        <p class="card-title">Il viewer legge sempre il backlog del progetto, anche dentro un worktree</p>
+                        <p class="card-foot"><span class="pri high">high</span> · 3 pt</p>
+                        <button type="button" class="card-thread">↩ thread</button>
+                    </article>
+                    <article class="card">
+                        <span class="card-code">US-059</span>
+                        <p class="card-title">Ricerca a testo pieno nelle conversazioni</p>
+                        <p class="card-foot"><span class="pri">medium</span> · 5 pt</p>
+                        <button type="button" class="card-thread">↩ thread</button>
+                    </article>
+                    <article class="card">
+                        <span class="card-code">US-060</span>
+                        <p class="card-title">Archiviare una conversazione senza perderne la traccia</p>
+                        <p class="card-foot"><span class="pri low">low</span> · 2 pt</p>
+                        <button type="button" class="card-thread">↩ thread</button>
+                    </article>
+                </section>
+
+                <section class="col c-planned">
+                    <p class="col-head">planned <span class="n">4</span></p>
+                    <article class="card">
+                        <span class="card-code">US-057</span>
+                        <p class="card-title">Redisegnare la home del viewer attorno alla conversazione</p>
+                        <p class="card-foot"><span class="pri high">high</span> · 5 pt</p>
+                        <button type="button" class="card-thread">↩ thread</button>
+                    </article>
+                    <article class="card">
+                        <span class="card-code">US-061</span>
+                        <p class="card-title">Scorciatoie da tastiera per passare fra i thread</p>
+                        <p class="card-foot"><span class="pri">medium</span> · 3 pt</p>
+                        <button type="button" class="card-thread">↩ thread</button>
+                    </article>
+                </section>
+
+                <section class="col c-progress">
+                    <p class="col-head">in progress <span class="n">2</span></p>
+                    <article class="card">
+                        <span class="card-code">US-056</span>
+                        <p class="card-title">Vedere il passo successivo suggerito mentre si lavora</p>
+                        <p class="card-foot"><span class="pri high">high</span> · 5 pt · run attiva</p>
+                        <button type="button" class="card-thread">↩ thread</button>
+                    </article>
+                    <article class="card">
+                        <span class="card-code">US-062</span>
+                        <p class="card-title">Provider di esecuzione remoto configurabile per workspace</p>
+                        <p class="card-foot"><span class="pri">medium</span> · 8 pt</p>
+                        <button type="button" class="card-thread">↩ thread</button>
+                    </article>
+                </section>
+
+                <section class="col c-review">
+                    <p class="col-head">review <span class="n">1</span></p>
+                    <article class="card">
+                        <span class="card-code">US-052</span>
+                        <p class="card-title">Riconoscere il workspace aperto senza aprire una finestra</p>
+                        <p class="card-foot"><span class="pri">medium</span> · 3 pt · attende verdetto</p>
+                        <button type="button" class="card-thread">↩ thread</button>
+                    </article>
+                </section>
+
+                <section class="col c-done">
+                    <p class="col-head">done <span class="n">8</span></p>
+                    <article class="card">
+                        <span class="card-code">US-055</span>
+                        <p class="card-title">Lavorare su una spec senza perdere di vista conversazione e board</p>
+                        <p class="card-foot"><span class="pri high">high</span> · 5 pt</p>
+                        <button type="button" class="card-thread">↩ thread</button>
+                    </article>
+                    <article class="card">
+                        <span class="card-code">US-054</span>
+                        <p class="card-title">Avviare un'azione del processo dalla conversazione</p>
+                        <p class="card-foot"><span class="pri">medium</span> · 3 pt</p>
+                        <button type="button" class="card-thread">↩ thread</button>
+                    </article>
+                    <article class="card">
+                        <span class="card-code">US-053</span>
+                        <p class="card-title">Conversare con l'agente sul workspace aperto</p>
+                        <p class="card-foot"><span class="pri high">high</span> · 8 pt</p>
+                        <button type="button" class="card-thread">↩ thread</button>
+                    </article>
+                </section>
+            </div>
+        </main>
+    </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

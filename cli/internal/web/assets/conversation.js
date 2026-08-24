@@ -11,7 +11,9 @@
 // cannot be taken and the remedy that would unlock it all arrive in the
 // payload, already resolved by the server against the workspace. This module
 // still does not know what a step of anybody's method is — it draws a label, a
-// code and a sentence — and it never decides whether one can be taken.
+// code and a sentence — and it never decides whether one can be taken. The step
+// the workspace recommends next is drawn the same way, at the tail of the
+// thread, from what the caller hands over in ui.nextStep.
 //
 // It also draws the runs the payload carries: a run started from this
 // conversation is drawn where it was asked for — right after the event whose id
@@ -647,6 +649,61 @@
 		</div>`;
 	}
 
+	// The step the workspace recommends next, drawn at the tail of the thread —
+	// after everything that has been said and before the place where the next
+	// thing is said. It is not a fact of this conversation: the caller reads it
+	// from the workspace status and hands it over, exactly as it hands over the
+	// answers already given and the anchor to highlight.
+	//
+	// Nothing here is decided: whether the step can be taken, what it acts on
+	// and why it is refused all arrive resolved in the payload and are drawn as
+	// they are. The disabled attribute on a refused step is a hint to the
+	// pointer; the refusal itself belongs to the caller's dispatcher, which
+	// answers anyone reaching the handler by any route.
+	function renderNextStep(step, ui) {
+		if (!step || typeof step !== "object") return "";
+		const label = textAt(step, "label") || textAt(step, "action");
+		// A step with no name is not proposable: there would be nothing to press.
+		if (!label) return "";
+		const spec = objectAt(step, "spec");
+		const code = spec ? textAt(spec, "code") : "";
+		const codeHtml = code
+			? `<code class="conv-nextstep-code">${escapeHtml(code)}</code>`
+			: "";
+		const head = `<div class="conv-nextstep-head">
+			<span class="conv-nextstep-mark">passo successivo</span>
+			<span class="conv-nextstep-label">${escapeHtml(label)}</span>
+			${codeHtml}
+		</div>`;
+		const attrs =
+			` data-next-scope="${escapeHtml(textAt(step, "scope"))}"` +
+			` data-next-action="${escapeHtml(textAt(step, "action"))}"` +
+			` data-next-spec="${escapeHtml(code)}"`;
+
+		if (step.runnable !== true) {
+			const unlock =
+				textAt(step, "unlocked_by") || textAt(step, "unavailable_reason");
+			const unlockHtml = unlock
+				? `<p class="conv-nextstep-unlock">${escapeHtml(unlock)}</p>`
+				: "";
+			return `<div class="conv-nextstep is-refused">
+				${head}
+				<div class="conv-nextstep-controls">
+					<button type="button" class="conv-nextstep-run"${attrs} disabled>Avvia</button>
+				</div>
+				${unlockHtml}
+			</div>`;
+		}
+
+		const disabled = ui && ui.busy ? " disabled" : "";
+		return `<div class="conv-nextstep">
+			${head}
+			<div class="conv-nextstep-controls">
+				<button type="button" class="conv-nextstep-run"${attrs}${disabled}>Avvia</button>
+			</div>
+		</div>`;
+	}
+
 	// ---- public API ----
 
 	/**
@@ -668,6 +725,10 @@
 	 *                            kept approval is what the resolved card is
 	 *                            drawn from, and executionID names the run it
 	 *                            belongs to.
+	 *                            nextStep is the step the workspace recommends,
+	 *                            read by the caller from /api/workspace/status:
+	 *                            the thread hosts it at its tail, draws it, and
+	 *                            never decides whether it can be taken.
 	 * @returns {string} HTML string.
 	 */
 	function renderConversation(view, draft, ui) {
@@ -755,6 +816,10 @@
 		const outcome = objectAt(value, "outcome");
 		if (outcome) blocks.push(renderOutcome(outcome, local));
 		blocks.push(renderTimeline(value, active, local));
+		// The recommended step closes the thread: it is what to do next, and it
+		// belongs after everything that has been said and before the place where
+		// the next thing is said.
+		blocks.push(renderNextStep(objectAt(local, "nextStep"), local));
 		blocks.push(
 			renderComposer(active, typed, local, offered, anyRunAwaiting(value)),
 		);

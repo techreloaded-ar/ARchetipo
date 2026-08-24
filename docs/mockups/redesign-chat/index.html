@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Redesign · la conversazione come schermata principale</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+</head>
+<body class="">
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="mk-topbar">
+    <span class="mk-brand"><em>A</em>Rchetipo · mockup</span>
+    <span class="mk-code">redesign chat</span>
+    <nav class="mk-nav">
+        <a href="index.html" class="current">Indice</a>
+        <a href="stato-a-conversazione.html">A · conversazione</a>
+        <a href="stato-b-storico.html">B · storico</a>
+        <a href="stato-c-run-attesa.html">C · run e attesa</a>
+        <a href="stato-d-board.html">D · board</a>
+        <a href="stato-e-stretto.html">E · stretto</a>
+        <button type="button" class="ghost-btn" data-theme-toggle>tema scuro</button>
+    </nav>
+</header>
+
+<main class="mk-page">
+    <p class="mk-eyebrow">redesign · shell del viewer</p>
+    <h1 class="mk-title">La conversazione<br />non è un pannello.<br /><em>È la pagina.</em></h1>
+    <p class="mk-lede">
+        Oggi il viewer apre su una board, e la conversazione con l'agente vive in una
+        colonna stretta a destra, insieme alle run. Si vede poco, si scrive scomodi, e
+        di quello che ci si è detti ieri non resta niente di raggiungibile. Questo
+        mockup ribalta la gerarchia: <strong>l'indice delle conversazioni a sinistra,
+        la conversazione a tutta larghezza al centro</strong>, e tutto ciò che il
+        processo produce — run, approvazioni, passi suggeriti — dentro il flusso.
+    </p>
+
+    <p class="mk-note">
+        <strong>Le tre regole del disegno.</strong>
+        <br />1 · La conversazione occupa la colonna larga e non viene mai smontata:
+        cambiare thread cambia il contenuto, non il posto in cui si guarda.
+        <br />2 · I thread hanno una storia e la storia ha un indice: quelli ancorati a
+        una spec portano il codice in mono, quelli liberi un segno tratteggiato, nello
+        stesso elenco.
+        <br />3 · Non esiste più una rail parallela da sorvegliare. Una run che parte è
+        un blocco nel discorso, un comando da approvare è un blocco nel discorso.
+    </p>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">La forma, in due rettangoli</p>
+
+    <div class="mk-grid">
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">1</span>
+                <h3 class="mk-card-title">Prima</h3>
+            </div>
+            <p class="mk-card-sub">
+                La board è la casa. La chat è una fetta della rail destra, condivisa con
+                l'elenco delle run: poche righe visibili, nessuno storico.
+            </p>
+            <div class="mk-schema">
+                <div class="mk-schema-row">
+                    <div class="mk-schema-box is-filled" style="min-height:112px">board kanban</div>
+                    <div class="mk-schema-box is-narrow" style="min-height:112px">run<br />+<br />chat</div>
+                </div>
+            </div>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">2</span>
+                <h3 class="mk-card-title">Dopo</h3>
+            </div>
+            <p class="mk-card-sub">
+                A sinistra l'indice dei thread. Al centro la conversazione, larga quanto la
+                finestra, con dentro le run. La board è una vista che si richiama.
+            </p>
+            <div class="mk-schema">
+                <div class="mk-schema-row">
+                    <div class="mk-schema-box is-narrow" style="min-height:112px">indice<br />thread</div>
+                    <div class="mk-schema-box is-filled" style="min-height:112px">conversazione<br />+ run inline</div>
+                </div>
+            </div>
+        </article>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Gli stati</p>
+
+    <div class="mk-grid">
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">A</span>
+                <h3 class="mk-card-title">La conversazione è la pagina</h3>
+            </div>
+            <p class="mk-card-sub">
+                Un thread ancorato a US-057: discussione, run di pianificazione conclusa
+                con il suo log, passo successivo proposto come blocco. Composer grande,
+                comandi del processo a portata di mano.
+            </p>
+            <a href="stato-a-conversazione.html">apri lo stato A →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">B</span>
+                <h3 class="mk-card-title">Storico e conversazioni libere</h3>
+            </div>
+            <p class="mk-card-sub">
+                Un thread di progetto, non legato ad alcuna spec: si parla di un problema
+                e a un certo punto ne nasce US-058. L'indice tiene insieme le due specie
+                di conversazione senza confonderle.
+            </p>
+            <a href="stato-b-storico.html">apri lo stato B →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">C</span>
+                <h3 class="mk-card-title">Run e approvazione nel flusso</h3>
+            </div>
+            <p class="mk-card-sub">
+                Una run che scrive mentre parla, e un comando fermo in attesa di un sì.
+                Si risponde da dove si stava già leggendo, e nel frattempo si può chiedere
+                all'agente perché lo sta chiedendo.
+            </p>
+            <a href="stato-c-run-attesa.html">apri lo stato C →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">D</span>
+                <h3 class="mk-card-title">La board come vista secondaria</h3>
+            </div>
+            <p class="mk-card-sub">
+                Stessa colonna, contenuto diverso. Le colonne del kanban restano quelle di
+                oggi; da ogni card si torna al thread di quella spec, che è dove si lavora.
+            </p>
+            <a href="stato-d-board.html">apri lo stato D →</a>
+        </article>
+
+        <article class="mk-card">
+            <div class="mk-card-head">
+                <span class="mk-card-index">E</span>
+                <h3 class="mk-card-title">La finestra stretta</h3>
+            </div>
+            <p class="mk-card-sub">
+                L'indice scorre sopra invece di rubare larghezza. La conversazione non si
+                comprime mai: è la sola cosa che in questa shell non è negoziabile.
+            </p>
+            <a href="stato-e-stretto.html">apri lo stato E →</a>
+        </article>
+    </div>
+
+    <hr class="mk-rule" />
+    <p class="mk-section-title">Cosa cambia davvero</p>
+
+    <ul class="mk-list">
+        <li><strong>La topbar dimagrisce.</strong> Non è più il centro di comando, perché i comandi sono passati nel composer e nei blocchi. Restano identità, workspace aperto e il riassunto numerico che prima si leggeva solo dalla board.</li>
+        <li><strong>La rail delle run sparisce come luogo.</strong> Quello che mostrava resta, ma dentro il thread che l'ha generato: una run senza la conversazione che l'ha chiesta è un log orfano.</li>
+        <li><strong>Il dettaglio spec diventa una vista del thread</strong> (la scheda «Spec» accanto a «Conversazione» e «Board»), non una finestra che copre il resto.</li>
+        <li><strong>I thread persistono e si cercano.</strong> È la parte con più sostanza tecnica dietro: oggi la conversazione è dello stato del workspace, non una collezione con una storia.</li>
+    </ul>
+
+    <p class="mk-note" style="margin-top:24px">
+        <strong>Fuori dal disegno, per scelta.</strong> Qui non si tocca il contenuto di
+        nessuna spec, né il modo in cui gli agenti lavorano: questo mockup sposta i
+        contenitori. Non ci sono ricerca a testo pieno, archiviazione dei thread, né
+        scorciatoie da tastiera — sono cose che il redesign rende sensate, non cose che
+        deve portare con sé per stare in piedi.
+    </p>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
