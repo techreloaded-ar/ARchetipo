@@ -1,0 +1,911 @@
+schema: archetipo/plan/v2
+spec_code: US-054
+body: |-
+  ## Soluzione tecnica
+
+  ### Il problema in una frase
+
+  Oggi la conversazione (US-053) è deliberatamente sterile: `buildConversationPrompt()` vieta all'agente di agire, e la garanzia è strutturale — una conversazione non scrive alcun record sotto `.archetipo/executions`. US-054 non rimuove quella garanzia: aggiunge un **canale di proposta**. L'agente non avvia nulla; dichiara che cosa avvierebbe, il viewer risolve la proposta contro il processo, e una persona conferma. L'avvio, quando arriva, passa per lo **stesso codice** che usa la board.
+
+  ### Decisione architetturale (registrata qui perché il Wiki è disattivato)
+
+  **Contesto.** L'agente della conversazione è un processo `claude` in stream-json: il viewer ne vede solo eventi `text`, `thinking`, `tool_*`. Perché una richiesta in linguaggio naturale diventi un'azione del processo serve un punto in cui l'intenzione diventa una struttura.
+
+  **Opzioni valutate.**
+
+  1. *Riconoscimento lato viewer del messaggio della persona* (parsing del testo digitato). Scartata: l'intenzione la interpreta chi ha il contesto del workspace — l'agente — e AC-1 chiede esplicitamente che sia l'agente a proporre. Un matcher di frasi nel viewer sarebbe process knowledge nel client, contro la regola già scritta su `conversation.js`.
+  2. *Tool call / MCP dedicato esposto all'agente*. Scartata per questo incremento: richiederebbe un canale di controllo verso il processo agente che oggi non esiste (il client stream-json è unidirezionale sui messaggi utente), e introdurrebbe una superficie di esecuzione nuova proprio dove la garanzia "una conversazione non esegue" è strutturale.
+  3. **Scelta: riga JSON di proposta nella risposta dell'agente, riconosciuta lato server.** È esattamente il meccanismo che il repository usa già per ogni ricevuta (`parseTrailingReceipt` in `execution/planreceipt.go`, riusata da `specdraftreceipt.go`), ed è il meccanismo che US-042 usa già per far *proporre* all'agente una spec che poi una persona conferma. Zero nuova superficie di esecuzione: l'agente continua a poter solo parlare.
+
+  **Tradeoff accettato.** La riga JSON resta visibile nella timeline come testo dell'agente. La storia non viene riscritta (la storia è ciò che l'agente ha detto, e mutarla renderebbe non ispezionabile ciò che il viewer ha davvero ricevuto); il prompt chiede all'agente di far precedere la riga da una frase leggibile che nomina azione e bersaglio, e la scheda di proposta è ciò che la persona usa.
+
+  **Seconda decisione: chi avvia.** L'accettazione **non** riscrive la sequenza di avvio. `handleRunSpecAction` e `handleRunWorkspaceAction` vengono spaccati in due metà — la decodifica HTTP e la sequenza di avvio — e la rotta di decisione chiama la stessa sequenza. AC-2 diventa così vero per costruzione e non per somiglianza: non esistono due percorsi che possano divergere. L'alternativa (far chiamare al browser la rotta della board dopo la conferma) è stata scartata: renderebbe il viewer dipendente da un id di esecuzione fornito dal client, contro la regola "il calcolo sta sul server" scritta su `actionAvailability`.
+
+  **Verifica dell'intento.** Un test Go che avvia la stessa azione dalle due porte e confronta record e transizione; uno smoke e2e che osserva il record su filesystem e lo stato della spec nel backlog.
+
+  ### Le parti
+
+  **1. Vocabolario della proposta — `cli/internal/execution/actionproposal.go` (nuovo).**
+
+  ```go
+  type ActionProposal struct {
+      Artifact string `json:"artifact"` // "action_proposal"
+      Action   string `json:"action"`   // id dichiarato dal processo
+      Spec     string `json:"spec"`     // vuoto per un'azione di workspace
+  }
+  func ParseActionProposal(text string) (ActionProposal, bool)
+  ```
+
+  Riconoscimento tramite `parseTrailingReceipt[ActionProposal](text, []string{"artifact", "action"})` e `Artifact == "action_proposal"`. Il pacchetto `execution` non conosce il processo: non valida l'id dell'azione, non conosce gli stati. Dice soltanto "questa riga è una proposta e nomina questi due valori".
+
+  **2. Vocabolario nel prompt — `execution/conversation.go` + `execution/claude/prompt.go`.**
+
+  `ConversationRequest` guadagna `ProcessActions []ConversationAction` (`{ID, Label, Scope}`), riempito dal layer web dal `template.Template` risolto. Il provider non impara il processo: rende ciò che gli viene passato. `buildConversationPrompt(actions)` continua a vietare l'azione e aggiunge l'unica cosa che l'agente può fare al riguardo: quando la persona chiede un'azione del processo, la si propone con una frase leggibile e una sola riga JSON finale, e non la si avvia mai — conferma e avvio appartengono alla persona nel viewer.
+
+  **3. Stato della decisione — `cli/internal/web/conversation_state.go`.**
+
+  `conversationState` guadagna, sotto lo stesso `mu`:
+
+  - `decidedProposalID int64` — l'id dell'evento dell'ultima proposta decisa. Una proposta con id `<=` questo valore non è più pendente. Un solo intero basta: pendente è sempre e solo la proposta più recente.
+  - `outcome *conversationOutcome` — `{proposalID, decision, action, label, scope, specCode, executionID}`, l'esito dell'ultima decisione, che è ciò da cui AC-5 raggiunge la run.
+
+  Entrambi azzerati da `open` e da `releaseCurrent`: una nuova conversazione è una nuova storia.
+
+  **4. Derivazione della proposta — `cli/internal/web/conversation_proposal.go` (nuovo).**
+
+  `conversationView` guadagna due campi nullable: `proposal` e `outcome`. La derivazione avviene solo quando c'è una conversazione aperta e la sessione locale è leggibile:
+
+  1. scorre a ritroso gli eventi ritenuti della sessione (`session.Events(0)`), fermandosi al primo evento di kind `text` la cui coda si lascia leggere come `ActionProposal`;
+  2. se il suo `ID <= decidedProposalID`, non c'è nulla di pendente;
+  3. altrimenti risolve l'azione contro il processo installato (`s.resolveTemplate(ws)`), producendo `conversationProposalView{event_id, action, label, scope, spec_code, spec_title, spec_status, runnable, unavailable_reason, unlocked_by}`.
+
+  La risoluzione riusa, senza riscriverle, le stesse frasi delle rotte di avvio:
+
+  - id che il processo non dichiara → `runnable:false`, ragione costruita con `actionNames(tpl.Actions)` / `workspaceActionNames(tpl.WorkspaceActions)`;
+  - scope spec, spec inesistente → la ragione del connettore;
+  - scope spec, stato che non ammette l'azione → **la stessa frase** di `handleRunSpecAction` (`"the %s process does not admit the %q action while %s is %s"`), con `specStageRemedy` come `unlocked_by`;
+  - scope spec, resto → `s.actionAvailabilityFor(...).reasonFor(action)`;
+  - scope workspace → `s.workspaceAvailability(...).reasonFor(action)` con `workspaceRemedy(...)`.
+
+  Costo: la risoluzione gira **solo** quando esiste una proposta pendente non decisa, mai sul poll ordinario ogni due secondi.
+
+  **5. Estrazione del percorso di avvio — `cli/internal/web/execution_run.go` e `workspace_execution.go`.**
+
+  - `func (s *Server) startSpecAction(ctx, ws, code string, action execution.ActionID, model string, modelOptions map[string]string) (*execution.Execution, error)` — tutto il corpo attuale di `handleRunSpecAction` dopo la decodifica: `requireReachable`, lettura spec, template, le tre rifiuti distinti, preflight, guard, transizione, `Start`, `claim`, `dispatch.run`.
+  - `func (s *Server) startWorkspaceAction(ctx, ws, action execution.ActionID, model string, modelOptions map[string]string) (*execution.Execution, error)` — idem per il corpo di `handleRunWorkspaceAction`.
+  - `func writeStartError(w http.ResponseWriter, err error)` — la mappatura oggi duplicata nei due handler (`*execution.ConfigurationError` → `writeProviderConfigError`, altrimenti `writeError`).
+
+  I due handler diventano: decodifica → chiamata → `writeJSON(w, http.StatusCreated, started)`. L'unico spostamento osservabile è che la risposta viene scritta dopo il lancio del dispatch anziché appena prima: il dispatch è asincrono, quindi il comportamento non cambia, e la suite esistente (`execution_test.go`, `execution_implement_test.go`, `workspace_execution_test.go`, `execution_model_choice_test.go`) è l'oracolo di regressione.
+
+  **6. Rotta di decisione — `POST /api/workspace/conversation/proposal`.**
+
+  Corpo `{"proposal_id": <int64>, "decision": "accept"|"decline"}`, risposta: la `conversationView` aggiornata (stessa forma della GET, così il pannello si ridisegna da una sola sorgente).
+
+  - `decline` → segna `decidedProposalID`, registra l'esito `declined`, **non tocca nulla**: nessun record, nessuna transizione, la conversazione resta ACTIVE e continua ad accettare messaggi (AC-4).
+  - `accept` → **ricalcola** la disponibilità (una proposta accettata dopo che lo stato è cambiato dev'essere rifiutata con la frase del processo, non avviata) e, se disponibile, chiama `startSpecAction` / `startWorkspaceAction`. Solo un avvio riuscito segna la proposta come decisa e registra `outcome{accepted, executionID, specCode, scope}`; un rifiuto lascia la proposta pendente, così la persona può riprovarla dopo aver rimosso l'impedimento.
+  - `proposal_id` che non è la proposta pendente → `E_CONFLICT`: si decide ciò che si sta guardando, mai una proposta che nel frattempo è stata superata.
+
+  **7. Renderer — `cli/internal/web/assets/conversation.js`.**
+
+  Due blocchi nuovi, entrambi disegnati **solo** da ciò che il payload dice, senza una sola parola del processo nel modulo (il test esistente asserisce proprio questa purezza):
+
+  - scheda proposta sopra il composer: etichetta dell'azione, bersaglio (`spec_code — spec_title` oppure la dicitura di workspace che il payload porta), e — se `runnable` — i due controlli `data-conversation-proposal-accept` / `data-conversation-proposal-decline`; se non `runnable`, la ragione verbatim e `unlocked_by`, **senza** alcun controllo di conferma;
+  - blocco esito: che cosa è stato deciso e, quando accettato, il controllo `data-conversation-reach-run` con `data-scope`/`data-code` che porta alla run.
+
+  **8. Cablaggio — `cli/internal/web/assets/app.js` e `app.css`.**
+
+  Listener delegati sul pannello già esistente (`bindConversationPanel`): accetta/rifiuta chiamano la rotta di decisione e applicano la vista; "raggiungi la run" ripete esattamente il gesto della striscia di stato del workspace (`workspaceStatusEl` click handler): `openEditor(code)` per lo scope spec, `openPRD()` per quello di workspace — entrambe le porte rimontano i pannelli di esecuzione e riprendono la run e il suo dialogo dal record che il server restituisce (AC-5).
+
+  ### Fuori ambito confermato
+
+  Nessuna azione non dichiarata dal processo; nessun avvio senza conferma; nessuna riorganizzazione della disposizione della conversazione nell'interfaccia; nessun suggerimento sul passo successivo (quello resta della striscia di stato di US-043).
+
+  ## Baseline
+
+  Misurata su `/Users/stefanoleli/Project/Archetipo` a `027b500`, prima di qualunque modifica. Ogni `Verify` dei task sotto è coerente con questi valori: nessun comando è promesso verde se qui è rosso.
+
+  | Comando (cwd) | Esito osservato |
+  |---|---|
+  | `gofmt -l .` (`cli/`) | nessun output — pulito |
+  | `go vet ./...` (`cli/`) | nessun problema |
+  | `go build ./...` (`cli/`) | compila pulito |
+  | `go test ./...` (`cli/`) | tutti i pacchetti `ok` (web 10.7s, claude 13.8s, execution 2.3s) |
+  | `npm run test:web` (root) | 73 test, 73 pass, 0 fail |
+  | `node ./test/e2e/conversation-view-smoke.mjs` (root) | non eseguito nella baseline: costruisce da sé il CLI e avvia processi reali. Va eseguito dal task e2e; se fallisce **prima** delle modifiche, la sua diagnosi va registrata invece di essere attribuita a questo incremento |
+
+  **Prerequisito d'ambiente, non un difetto del codice.** `golangci-lint` non è installato su questa macchina (`golangci-lint not found`). AGENTS.md lo richiede tra i controlli pre-consegna. Installazione deterministica:
+
+  ```bash
+  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+  ```
+
+  Se l'installazione non è possibile nell'ambiente di esecuzione, va registrato come lacuna d'ambiente nel task di gate — mai come un fallimento introdotto da questo incremento.
+
+  Nessuno dei file toccati da questo piano presenta oggi diagnostiche locali di compilatore o vet: il piano non deve lasciarne.
+
+  ## Mappa delle evidenze di accettazione
+
+  Per ogni criterio: dove si misura, che cosa si osserva davvero, da quale stato di partenza, e quale task produce l'evidenza.
+
+  | AC | Livello | Oracolo osservabile | Stato di partenza / fixture | Task |
+  |---|---|---|---|---|
+  | AC-1 | Handler Go (`cli/internal/web`) | La `GET /api/workspace/conversation` restituisce `proposal` con `action`, `label` e il bersaglio nominato (`spec_code`+`spec_title`), e `store.ListBySpec` non contiene **alcun** record per quella spec: leggere la proposta non avvia nulla | conversazione aperta su provider fake; sessione con un evento `text` che porta la riga di proposta per una spec pianificabile | TASK-08 |
+  | AC-1 | Renderer (`test/web`) | Il testo visibile della scheda nomina l'etichetta dell'azione e il bersaglio, e i due controlli di conferma/rifiuto esistono; senza decisione non c'è alcun esito disegnato | payload di proposta `runnable:true` | TASK-10 |
+  | AC-1 | e2e (`test/e2e`) | Dopo che l'agente fake ha emesso la riga di proposta, `.archetipo/executions/` è vuota e la spec è ancora nel suo stato iniziale | workspace reale con backlog e spec `PLANNED`/`TODO`, binario agente fake | TASK-12 |
+  | AC-2 | Handler Go | Avviando la **stessa** azione sulla **stessa** spec dalle due porte (rotta board e rotta di decisione con `accept`), il record creato ha stessi `action`/`spec`/`status` e la spec compie la stessa transizione. Ottenuto perché entrambe passano per `startSpecAction` | spec in uno stato che ammette l'azione, provider fake disponibile | TASK-08 |
+  | AC-2 | e2e | Dopo la conferma: un record esiste su filesystem sotto `.archetipo/executions/` e lo stato della spec nel backlog è quello che l'avvio dalla board produce | come sopra | TASK-12 |
+  | AC-3 | Handler Go | Con la spec in uno stato che il processo non ammette: `proposal.runnable=false` e `unavailable_reason` è **letteralmente** la frase che `handleRunSpecAction` produce per lo stesso caso; l'`accept` risponde `E_CONFLICT` con quella stessa frase; nessun record creato, stato della spec invariato | spec in stato non ammesso per l'azione proposta | TASK-08 |
+  | AC-3 | Renderer | Con `runnable:false` la scheda mostra la ragione verbatim e **non** offre alcun controllo di conferma | payload di proposta `runnable:false` con `unavailable_reason` e `unlocked_by` | TASK-10 |
+  | AC-4 | Handler Go | Dopo `decline`: nessun record, nessuna transizione, `proposal` è `null`, la conversazione è ancora `ACTIVE` e un messaggio successivo viene accettato | proposta pendente `runnable:true` | TASK-08 |
+  | AC-4 | e2e | Dopo il rifiuto: `.archetipo/executions/` vuota, backlog invariato byte per byte sullo stato della spec, e il frame del messaggio successivo arriva davvero al processo agente | come AC-1 e2e | TASK-12 |
+  | AC-5 | Handler Go | Dopo un `accept` riuscito la vista porta `outcome` con `execution_id`, `scope` e `spec_code`: l'identità della run nata dalla proposta è nel payload, non da ricostruire | proposta accettata | TASK-08 |
+  | AC-5 | Renderer | Il blocco esito disegna un controllo di raggiungimento che porta scope e codice della spec, e non lo disegna per un esito rifiutato | payload con `outcome` accettato / rifiutato | TASK-10 |
+  | AC-5 | Codice app | Il listener delegato instrada su `openEditor(code)` / `openPRD()`, le due porte che rimontano i pannelli e riprendono la run e il suo dialogo | — | TASK-11 |
+
+  ## Strategia di test
+
+  Tre livelli, esattamente quelli che US-053 ha già stabilito per la stessa superficie — non se ne introducono di nuovi:
+
+  1. **Go, pacchetto `execution`** — il riconoscimento della riga di proposta come funzione pura: riconosce, ignora il rumore intorno, prende l'ultima, rifiuta ciò che non è una proposta.
+  2. **Go, pacchetto `web`** — le rotte contro un `Server` costruito in memoria con provider fake, come fanno già `conversation_test.go` e `workspace_execution_test.go`. È qui che vivono gli oracoli di AC-1..AC-5: payload delle rotte, record in `store`, stato della spec nel connettore.
+  3. **Node, `test/web`** — il renderer puro, con oracoli sul **testo visibile** dell'HTML prodotto (disciplina già scritta in testa a `test/web/conversation.test.mjs`), più il controllo di purezza del modulo.
+  4. **Node, `test/e2e`** — uno smoke con viewer, CLI, connettore filefs e provider `claude` reali, e solo il binario dell'agente sostituito da `test/e2e/support/fake-claude.mjs`. Gli oracoli sono quelli che nessun campo di payload può sostituire: i record su filesystem, lo stato della spec nel backlog su disco, i frame realmente consegnati al processo agente.
+
+  ### I doppi non nascondono ciò che va provato
+
+  Il provider agente è finto, ma **nulla** di ciò che i criteri riguardano lo è: la risoluzione della proposta contro il processo, la sequenza di avvio, la scrittura del record e la transizione della spec sono codice reale in ogni livello. In particolare, per AC-2 non si asserisce "la funzione condivisa è stata chiamata": si confrontano il record e la transizione prodotti dalle due porte, che è la cosa che il criterio chiede davvero.
+
+  Per AC-1 e AC-4 l'oracolo è **negativo** e va misurato dove le prove esistono davvero: `store.ListBySpec` nei test Go e la directory `.archetipo/executions/` nello smoke. "Il pannello non mostra una run" non proverebbe che nessuna esecuzione è nata.
+
+  ### Rinuncia motivata all'e2e di browser
+
+  Il repository non ha né usa un driver di browser (nessun Playwright, nessun Puppeteer): la catena stabilita è handler Go + renderer puro + smoke Node sul viewer reale. Ogni esito osservabile di questi criteri attraversa un confine che quella catena copre per intero — le rotte HTTP, il filesystem, il backlog, l'HTML prodotto dal renderer. L'unica parte non coperta da macchina è il legame click → navigazione in `app.js`, che è un listener delegato di due righe che ripete alla lettera quello già esistente per il passo successivo del workspace (US-043). Introdurre un framework di browser per quelle due righe non è giustificato, e `archetipo e2e ensure` resta non necessario per questo incremento.
+
+  **Filmabilità.** La Dimostrazione della spec è filmabile: si svolge interamente nel viewer (proporre, confermare, vedere partire la run, chiedere un'azione non ammessa, rifiutare una proposta). La decisione finale su registrare o meno il video appartiene ad `archetipo-review`; qui si segnala solo l'aspettativa.
+
+  ## Note di contesto e assunzioni
+
+  - **Dipendenza.** `US-053` (bloccante dichiarato) è `DONE` e integrata a `027b500`: la conversazione, il suo stato, le sue quattro rotte e il suo renderer esistono. Questo piano vi si innesta e non ne riscrive nessuna garanzia.
+  - **Wiki.** `config show` riporta `wiki.enabled: false`: questo incremento non produce, non legge e non tocca alcuna pagina Wiki. La decisione architetturale che avrebbe meritato una pagina `type: decision` è registrata per intero nella soluzione tecnica qui sopra.
+  - **Mockup.** Non generati, e la scelta è deliberata: la proposta è un blocco che si aggiunge dentro il pannello conversazione esistente, accanto alla conferma inline di chiusura già presente (`conv-close-confirm`) e alle `conv-notice`. Non c'è né una schermata nuova, né una rotta nuova, né una ristrutturazione del layout — i tre soli casi che richiedono mockup. Chi implementa riusa le classi già in `app.css`.
+  - **Provider.** Solo il provider `claude` implementa `Conversationalist`; è quindi l'unico il cui prompt cambia. `arcipelago` e `codex` non sono toccati e restano privi della capacità `workspace.converse`, esattamente come oggi.
+  - **Assunzione registrata.** Il modello dell'agente potrebbe emettere la riga di proposta in modo imperfetto o non emetterla affatto. Il piano non la tratta come un guasto: se nessuna riga è riconoscibile, semplicemente non esiste una proposta pendente e la conversazione resta una conversazione. Nessun criterio dipende dall'obbedienza del modello negli oracoli automatici, perché lo smoke comanda i frame dell'agente fake.
+  - **Costo del polling.** La risoluzione della disponibilità di una proposta gira solo in presenza di una proposta pendente non ancora decisa, mai sul poll ordinario ogni due secondi: una `GET` che non ha nulla da risolvere resta economica quanto oggi.
+tasks:
+  - id: TASK-01
+    title: Riconoscere la riga di proposta di un'azione in execution/actionproposal.go
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      Il pacchetto `execution` sa riconoscere, in un testo prodotto da un agente, la singola riga JSON con cui una proposta d'azione si dichiara — e nient'altro.
+
+      ## Read
+
+      - `cli/internal/execution/planreceipt.go` — `parseTrailingReceipt[T any](output string, required []string) (T, bool)` e `hasReceiptFields`: sono la meccanica da riusare, non da riscrivere.
+      - `cli/internal/execution/specdraftreceipt.go` — precedente più vicino: campi di riconoscimento dichiarati in una `var`, costante d'artefatto, funzione `Parse*` che estrae senza giudicare.
+      - `cli/internal/execution/conversation.go` — dove vive il vocabolario della conversazione.
+
+      ## Change
+
+      - Nuovo file `cli/internal/execution/actionproposal.go`.
+
+      Non-goal espliciti: questo file **non** valida l'id dell'azione contro un processo, **non** conosce gli stati del workflow, **non** conosce le spec e **non** legge alcun connettore. Sapere se un'azione è ammessa appartiene al layer web (TASK-06). Non toccare i file delle ricevute esistenti.
+
+      ## Steps
+
+      1. Dichiara la costante `ActionProposalArtifact = "action_proposal"`.
+      2. Dichiara `var actionProposalFields = []string{"artifact", "action"}` — le chiavi senza le quali una riga non è questa proposta.
+      3. Dichiara il tipo:
+         ```go
+         type ActionProposal struct {
+             Artifact string `json:"artifact"`
+             Action   string `json:"action"`
+             Spec     string `json:"spec,omitempty"`
+         }
+         ```
+         `Spec` vuoto significa proposta di scope workspace: è un'assenza legittima, non un difetto.
+      4. Scrivi `func ParseActionProposal(text string) (ActionProposal, bool)`: chiama `parseTrailingReceipt[ActionProposal](text, actionProposalFields)`; se non trova nulla ritorna `(ActionProposal{}, false)`; se l'artefatto trovato non è `ActionProposalArtifact` oppure `strings.TrimSpace(Action)` è vuoto ritorna `(ActionProposal{}, false)`; altrimenti restituisce il valore con `Action` e `Spec` ripuliti con `strings.TrimSpace` e `true`.
+      5. Documenta in testa al file, nello stile del pacchetto, perché la proposta riusa la meccanica delle ricevute e perché è `bool` e non `error`: l'assenza di una proposta in un messaggio di conversazione è il caso ordinario, non un guasto da diagnosticare.
+
+      ## Verify
+
+      - Run (cwd `cli/`): `gofmt -l . && go vet ./... && go build ./...`
+      - Expect: nessun output da `gofmt`, nessun problema da `vet`, compilazione pulita — la baseline è verde su tutti e tre e deve restarlo.
+
+      ## Done
+
+      - [ ] `ParseActionProposal` esiste ed è l'unico punto del repository che riconosce una proposta.
+      - [ ] Nessun identificativo d'azione, nessuno stato del workflow e nessun nome di provider compare nel file.
+      - [ ] `gofmt`, `go vet`, `go build` restano puliti come in baseline.
+
+      ## Blockers
+
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test del riconoscimento della proposta in execution
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Il riconoscimento della riga di proposta è provato sui quattro casi che decidono se una conversazione produce o no una proposta.
+
+      ## Read
+
+      - `cli/internal/execution/specdraftreceipt_test.go` e `cli/internal/execution/planreceipt_test.go` — forma, nomi e stile dei test di questo pacchetto: tabelle no, un test per comportamento sì.
+      - `cli/internal/execution/actionproposal.go` — la firma prodotta da TASK-01.
+
+      ## Change
+
+      - Nuovo file `cli/internal/execution/actionproposal_test.go`.
+
+      Non-goal: nessun test qui deve conoscere un id d'azione del processo `fabbrica-del-software`; usa nomi d'azione fittizi, perché il pacchetto non li valida.
+
+      ## Steps
+
+      1. `TestParseActionProposalTakesTheProposalDespiteSurroundingNoise`: testo con due righe di prosa, poi la riga di proposta, poi una riga di prosa. Assert: `ok == true`, `Action` e `Spec` sono quelli della riga.
+      2. `TestParseActionProposalKeepsTheLastProposal`: due righe di proposta con azioni diverse; assert che vince l'ultima.
+      3. `TestParseActionProposalRejectsWhatIsNotOne`: tre sotto-casi, ciascuno con `ok == false` — un testo senza JSON; una riga JSON valida con `artifact` diverso; una riga con l'artefatto giusto e `action` vuoto.
+      4. `TestParseActionProposalAcceptsAWorkspaceScopedProposal`: riga senza `spec`; assert `ok == true` e `Spec == ""`, perché l'assenza della spec è la forma normale di una proposta di workspace.
+
+      ## Verify
+
+      - Run (cwd `cli/`): `go test ./internal/execution/ -run ActionProposal -v`
+      - Expect: tutti i test nuovi passano.
+      - Run (cwd `cli/`): `go test ./internal/execution/`
+      - Expect: `ok` — il pacchetto era verde in baseline e resta verde.
+
+      ## Done
+
+      - [ ] I quattro comportamenti sopra sono provati e falliscono se `ParseActionProposal` viene indebolita.
+      - [ ] `go test ./internal/execution/` resta `ok`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Il prompt della conversazione autorizza a proporre e continua a vietare di agire
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      L'agente della conversazione riceve, insieme al divieto di agire che ha già, il vocabolario delle azioni che il processo dichiara e l'unico modo lecito di proporne una.
+
+      ## Read
+
+      - `cli/internal/execution/conversation.go` — `ConversationRequest`, e il commento che spiega perché porta solo i fatti che servono ad aprire.
+      - `cli/internal/execution/claude/prompt.go` — `buildConversationPrompt()` (righe ~262-285) e i commenti che spiegano perché vieta di agire e perché non chiede ricevute.
+      - `cli/internal/execution/claude/conversation.go` — `OpenConversation`, dove il prompt è costruito e passato a `openSession`.
+      - `cli/internal/web/conversation.go` — `handleOpenWorkspaceConversation`, che costruisce la `ConversationRequest`.
+      - `cli/internal/template/template.go` — `Action`, `WorkspaceAction`, `ScopeSpec`, `ScopeWorkspace`.
+
+      ## Change
+
+      - `cli/internal/execution/conversation.go`: aggiungi il tipo `ConversationAction{ID, Label, Scope string}` e il campo `ProcessActions []ConversationAction` su `ConversationRequest`.
+      - `cli/internal/execution/claude/prompt.go`: `buildConversationPrompt(actions []execution.ConversationAction) string`.
+      - `cli/internal/execution/claude/conversation.go`: passa `req.ProcessActions` alla costruzione del prompt.
+      - `cli/internal/web/conversation.go`: riempi `ProcessActions` dal template risolto in `handleOpenWorkspaceConversation`.
+
+      Non-goal: il provider non deve imparare il processo. Non introdurre in `claude/` alcun id d'azione letterale, alcuno stato del workflow, alcuna dipendenza da `internal/template`. Non toccare gli altri prompt del file.
+
+      ## Steps
+
+      1. In `execution/conversation.go` dichiara `ConversationAction` documentando che è il vocabolario *del processo del workspace*, passato al provider perché il provider non lo conosce.
+      2. In `prompt.go` cambia la firma di `buildConversationPrompt` accettando le azioni. Mantieni intatte le righe esistenti su lavoro nella cwd, libertà di lettura e divieto di agire. Sostituisci la sola riga finale sul "nessun envelope JSON" con il nuovo contratto:
+         - quando la persona chiede un'azione del processo, la si **propone**: prima una frase leggibile che nomina l'azione e il suo bersaglio, poi come **ultima riga del messaggio** esattamente `{"artifact":"action_proposal","action":"<id>","spec":"<US-XXX>"}` — `spec` omessa quando l'azione riguarda il workspace;
+         - `<id>` dev'essere uno degli id elencati nel prompt stesso, resi da `actions` come righe `- <id> (<scope>): <label>`;
+         - l'azione non va **mai** avviata: la conferma e l'avvio appartengono alla persona nel viewer, e nessuna riga JSON avvia alcunché;
+         - resta valido tutto il resto: nessuna ricevuta di chiusura, nessun comando `archetipo` che scrive, nessuna invocazione di skill `archetipo-*`.
+      3. Con `actions` vuoto, il prompt deve omettere l'intero blocco della proposta: un processo che non dichiara azioni non ha nulla da proporre, e un elenco vuoto lascerebbe l'agente a inventare id.
+      4. In `handleOpenWorkspaceConversation`, dopo il controllo di disponibilità e prima di `OpenConversation`, risolvi il template con `s.resolveTemplate(ws)` e converti `tpl.Actions` (scope `template.ScopeSpec`) e `tpl.WorkspaceActions` (scope `template.ScopeWorkspace`) in `[]execution.ConversationAction`. Un template irrisolvibile è già oggi un errore di rotta: propaga con `writeError` come fanno le altre rotte.
+      5. Aggiorna i commenti in testa a `buildConversationPrompt` spiegando perché il divieto e l'autorizzazione a proporre convivono: proporre non è agire, e la garanzia strutturale — una conversazione non scrive alcun record — resta intatta e resta quella su cui si fa affidamento.
+
+      ## Verify
+
+      - Run (cwd `cli/`): `go build ./... && go test ./internal/execution/... ./internal/web/`
+      - Expect: compila; i pacchetti restano `ok` come in baseline. Se un test esistente della conversazione asserisce il testo del vecchio prompt, aggiornalo alla nuova formulazione anziché indebolire l'asserzione.
+
+      ## Done
+
+      - [ ] `ConversationRequest.ProcessActions` esiste ed è riempito dal layer web dal template risolto.
+      - [ ] Il prompt elenca gli id dichiarati, chiede una sola riga JSON di proposta e continua a vietare di avviare l'azione — contributo ad AC-1.
+      - [ ] Nessun id d'azione letterale e nessuna dipendenza da `internal/template` è entrata nel pacchetto `claude`.
+      - [ ] `go build ./...` e `go test ./internal/execution/... ./internal/web/` restano verdi.
+
+      ## Blockers
+
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test del prompt di conversazione con vocabolario di proposta
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      Il prompt della conversazione è provato su ciò che decide il comportamento dell'agente: elenca gli id che gli sono stati dati, chiede la riga di proposta, e non smette di vietare l'azione.
+
+      ## Read
+
+      - `cli/internal/execution/claude/conversation_test.go` — come questo pacchetto prova la conversazione oggi; se contiene già asserzioni sul prompt, sono quelle da estendere.
+      - `cli/internal/execution/claude/prompt.go` — la funzione prodotta da TASK-03.
+
+      ## Change
+
+      - `cli/internal/execution/claude/conversation_test.go` (o un nuovo `prompt_conversation_test.go` se il primo è già lungo e tematicamente chiuso).
+
+      Non-goal: nessuna asserzione sul testo integrale del prompt. Si asserisce ciò che il contratto richiede, non la prosa.
+
+      ## Steps
+
+      1. `TestConversationPromptNamesTheDeclaredActions`: passa due azioni fittizie (una di scope spec, una di workspace) e asserisci che entrambi gli id e entrambe le etichette compaiono nel prompt.
+      2. `TestConversationPromptAsksForOneProposalLine`: asserisci che il prompt contiene la chiave `"artifact"` con il valore `action_proposal` e la parola chiave `"action"`, cioè che la forma richiesta è quella che `ParseActionProposal` riconosce.
+      3. `TestConversationPromptStillForbidsActing`: asserisci che le frasi che vietano di avviare azioni del processo e di invocare skill `archetipo-*` sono ancora presenti — proporre non ha rimosso il divieto.
+      4. `TestConversationPromptWithoutActionsProposesNothing`: con `nil` azioni, asserisci che `action_proposal` **non** compare nel prompt.
+      5. `TestConversationPromptIsDeterministic`: due invocazioni con lo stesso input producono la stessa stringa, come per ogni altro prompt del file.
+
+      ## Verify
+
+      - Run (cwd `cli/`): `go test ./internal/execution/claude/ -run Conversation -v`
+      - Expect: i test nuovi passano.
+      - Run (cwd `cli/`): `go test ./internal/execution/claude/`
+      - Expect: `ok` — il pacchetto era verde in baseline (13.8s) e resta verde.
+
+      ## Done
+
+      - [ ] I cinque comportamenti sopra sono provati.
+      - [ ] `go test ./internal/execution/claude/` resta `ok`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Un solo percorso di avvio condiviso da board e conversazione
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      La sequenza che avvia un'azione — spec e workspace — esiste una sola volta e non dentro un handler HTTP, così che una seconda porta non possa produrre un avvio diverso.
+
+      ## Read
+
+      - `cli/internal/web/execution_run.go` — `handleRunSpecAction` (righe ~140-430): tutta la sequenza da `requireReachable` fino a `ws.dispatch.run(...)`.
+      - `cli/internal/web/workspace_execution.go` — `handleRunWorkspaceAction` (righe ~132-279): la sequenza gemella, con `confirm`, `existedBefore`, `backlogExistedBefore`, `specCodesBefore`.
+      - `cli/internal/web/execution.go` — `resolveRunModelChoice`, `writeRunModelChoiceError`, `writeProviderConfigError`.
+
+      ## Change
+
+      - `cli/internal/web/execution_run.go`: nuovo metodo `startSpecAction`.
+      - `cli/internal/web/workspace_execution.go`: nuovo metodo `startWorkspaceAction`.
+      - Uno dei due file (o `execution.go`): la funzione condivisa `writeStartError`.
+
+      Non-goal, decisivi: **nessun cambiamento di comportamento**. Stesse verifiche, stesso ordine, stesse frasi di rifiuto, stessi codici HTTP, stessa semantica di `claim`/`release`, stesse `confirm`/rollback. Non toccare la logica di disponibilità né i rollback. Non cambiare la forma dei payload di richiesta o di risposta.
+
+      ## Steps
+
+      1. Estrai da `handleRunSpecAction` tutto ciò che segue la decodifica del corpo in:
+         ```go
+         func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code string, action execution.ActionID, model string, modelOptions map[string]string) (*execution.Execution, error)
+         ```
+         Ogni ramo che oggi fa `writeError(w, X); return` diventa `return nil, X`; ogni ramo che fa `writeRunModelChoiceError(w, err)` o `writeProviderConfigError(w, err)` restituisce l'errore **tipizzato** invariato, perché la mappatura si sposta nel chiamante. La validazione di `code` vuoto e di `action` vuota resta nell'handler, dove sono errori di richiesta. `ws.dispatch.run(...)` resta dentro la funzione: il dispatch appartiene all'avvio, non alla risposta HTTP.
+      2. Fai lo stesso per `handleRunWorkspaceAction` in:
+         ```go
+         func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession, action execution.ActionID, model string, modelOptions map[string]string) (*execution.Execution, error)
+         ```
+         portandosi dietro `existedBefore`, `backlogExistedBefore`, `specCodesBefore` e la closure `confirm` così come sono.
+      3. Scrivi `func writeStartError(w http.ResponseWriter, err error)`: in ordine, `*execution.ModelChoiceUnavailableError` e `*execution.ConfigurationError` attraverso i renderer già esistenti (`writeRunModelChoiceError` copre il primo e delega il secondo), poi `writeError` per tutto il resto. È l'unico punto in cui un errore d'avvio diventa una risposta, così le due porte non possono rifiutare con parole diverse.
+      4. Riduci i due handler a: `requireReachable` dove già sta, decodifica, validazione dei campi obbligatori, chiamata, `writeStartError` in caso di errore, `writeJSON(w, http.StatusCreated, started)` altrimenti. Annota nel commento che la risposta viene ora scritta dopo il lancio del dispatch e perché è indifferente: il dispatch è asincrono e non tocca la risposta.
+      5. Documenta sopra le due funzioni estratte perché esistono: sono l'unico percorso d'avvio, e la seconda porta che le userà (la conferma di una proposta in conversazione) deve produrre per costruzione la stessa esecuzione e la stessa transizione della board.
+
+      ## Verify
+
+      - Run (cwd `cli/`): `gofmt -l . && go vet ./... && go build ./...`
+      - Expect: puliti, come in baseline.
+      - Run (cwd `cli/`): `go test ./internal/web/`
+      - Expect: `ok`. È l'oracolo di regressione dell'estrazione: `execution_test.go`, `execution_implement_test.go`, `execution_model_choice_test.go`, `execution_review_test.go`, `workspace_execution_test.go` e `run_routes_test.go` coprono già rifiuti, transizioni, rollback e reservation. Un solo fallimento qui significa che l'estrazione ha cambiato comportamento: correggi l'estrazione, mai il test.
+
+      ## Done
+
+      - [ ] `startSpecAction` e `startWorkspaceAction` esistono e sono l'unico posto in cui un'esecuzione viene avviata.
+      - [ ] I due handler non contengono più logica di avvio, solo HTTP.
+      - [ ] `writeStartError` è l'unico punto di mappatura degli errori d'avvio in risposta.
+      - [ ] `go test ./internal/web/` resta `ok` senza che alcun test sia stato modificato — la prova che il comportamento non è cambiato (precondizione di AC-2).
+
+      ## Blockers
+
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Stato della decisione e derivazione della proposta nella vista conversazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-05
+    body: |-
+      ## Objective
+
+      La conversazione del workspace sa dire, in un solo payload, quale proposta è pendente, se il processo la ammette adesso e con quale ragione se non la ammette — e ricorda che cosa è stato deciso dell'ultima.
+
+      ## Read
+
+      - `cli/internal/web/conversation_state.go` — `conversationState`, `conversationSnapshot`, `open`, `current`, `releaseCurrent`: ogni campo si legge e si scrive sotto `mu`, e `current()` restituisce una copia.
+      - `cli/internal/web/conversation.go` — `conversationView`, `conversationViewOf`, `conversationSessionOf`, `handleGetWorkspaceConversation`.
+      - `cli/internal/web/execution_run.go` — `actionAvailability`, `actionAvailabilityFor`, `decorateActions`, `admitsAction`, `actionNames`, e in `handleRunSpecAction` la frase esatta del rifiuto di stato: `"the %s process does not admit the %q action while %s is %s"`.
+      - `cli/internal/web/workspace_execution.go` — `workspaceAvailability`, `workspaceAvailabilityFor`, `workspaceRemedy`, `admitsWorkspaceAction`, `workspaceActionNames`.
+      - `cli/internal/web/workspace_status.go` — `specStageRemedy` e `nextStepFor`: il precedente esatto di "azione + bersaglio + eseguibile + ragione + ciò che la sblocca".
+      - `cli/internal/execution/localrun/session.go` — `Events(afterID)`, `FirstID`, `Dropped`.
+
+      ## Change
+
+      - `cli/internal/web/conversation_state.go`: campi di decisione e loro azzeramento.
+      - Nuovo file `cli/internal/web/conversation_proposal.go`: tipi di vista e derivazione.
+      - `cli/internal/web/conversation.go`: i due campi nuovi su `conversationView` e la loro valorizzazione in `conversationViewOf`.
+
+      Non-goal: nessuna rotta nuova in questo task (è TASK-07). Nessuna nuova frase di rifiuto inventata: ogni ragione viene dalle funzioni sopra. La timeline non viene alterata: l'evento che porta la proposta resta nella storia così com'è.
+
+      ## Steps
+
+      1. In `conversationState` aggiungi, sotto lo stesso `mu`: `decidedProposalID int64` e `outcome *conversationOutcome` con `{ProposalID int64; Decision string; Action, Label, Scope, SpecCode, ExecutionID string}`. Aggiungi `decide(proposalID int64, outcome conversationOutcome) error` che rifiuta su holder chiuso o vuoto e scrive entrambi i campi; esponili nella copia restituita da `current()`. Azzerali in `open` e in `releaseCurrent`, con un commento sul perché: una nuova conversazione è una nuova storia, e una decisione ereditata renderebbe non pendente una proposta mai vista.
+      2. In `conversation_proposal.go` dichiara:
+         ```go
+         type conversationProposalView struct {
+             EventID int64  `json:"event_id"`
+             Action  string `json:"action"`
+             Label   string `json:"label"`
+             Scope   string `json:"scope"`
+             SpecCode  string `json:"spec_code,omitempty"`
+             SpecTitle string `json:"spec_title,omitempty"`
+             SpecStatus domain.Status `json:"spec_status,omitempty"`
+             Runnable bool   `json:"runnable"`
+             UnavailableReason string `json:"unavailable_reason,omitempty"`
+             UnlockedBy        string `json:"unlocked_by,omitempty"`
+         }
+         type conversationOutcomeView struct { /* i campi di conversationOutcome, in json snake_case */ }
+         ```
+         `UnavailableReason` e `UnlockedBy` omessi quando `Runnable`, per la regola già scritta altrove: mai una ragione accanto a qualcosa che si può premere.
+      3. Scrivi `func pendingProposal(session *localrun.Session, decidedID int64) (execution.ActionProposal, int64, bool)`: scorre `session.Events(0)` **a ritroso**, considera solo `event.Kind == localrun.KindText`, si ferma al primo che `execution.ParseActionProposal(event.Text)` riconosce; restituisce falso se non ne trova o se l'id trovato è `<= decidedID`.
+      4. Scrivi `func (s *Server) resolveProposal(ctx context.Context, ws *workspaceSession, proposal execution.ActionProposal, eventID int64) *conversationProposalView`, con questa cascata e nessun'altra:
+         - template irrisolvibile → `runnable:false` con la ragione dell'errore, mai una richiesta fallita: la conversazione deve restare leggibile.
+         - `proposal.Spec` non vuota ⇒ scope `spec`. Se `admitsAction(tpl.Actions, proposal.Action)` è falso → ragione che elenca `actionNames(tpl.Actions)` e `unlocked_by = specStageRemedy`. Leggi la spec con `ws.conn.ReadSpecDetail`; un errore diventa ragione (spec inesistente compresa). Se `admitsAction(tpl.ActionsFor(spec.Status), proposal.Action)` è falso → **la frase identica** di `handleRunSpecAction` e `unlocked_by = specStageRemedy`. Altrimenti leggi il piano con `s.readPlanForSpec` e usa `s.actionAvailabilityFor(ctx, ws, code, len(tasks)).reasonFor(proposal.Action)`, con `unlocked_by` uguale alla ragione stessa, come fa `nextStepFor`.
+         - `proposal.Spec` vuota ⇒ scope `workspace`. Se `admitsWorkspaceAction(tpl.WorkspaceActions, proposal.Action)` è falso → ragione che elenca `workspaceActionNames(...)`. Altrimenti `s.workspaceAvailability(ctx, ws).reasonFor(proposal.Action)` e `workspaceRemedy(availability, proposal.Action)` quando la ragione non è vuota.
+         - `Label` sempre dall'`Action`/`WorkspaceAction` del template quando esiste, altrimenti dall'id: il bersaglio va nominato anche quando l'azione è rifiutata (AC-1 e AC-3).
+      5. In `conversationView` aggiungi `Proposal *conversationProposalView \`json:"proposal"\`` e `Outcome *conversationOutcomeView \`json:"outcome,omitempty"\``. In `conversationViewOf`, **dopo** aver letto gli eventi della sessione: valorizza `Outcome` dallo snapshot, e valorizza `Proposal` solo se `pendingProposal` trova qualcosa — così la risoluzione (che legge il connettore e sonda il provider) non gira sui poll che non hanno nulla da risolvere.
+      6. `pendingProposal` deve leggere **tutta** la storia ritenuta, non la sola pagina restituita al chiamante: il cursore `after_id` è del client e non deve poter far sparire una proposta già consegnata.
+
+      ## Verify
+
+      - Run (cwd `cli/`): `gofmt -l . && go vet ./... && go build ./...`
+      - Expect: puliti come in baseline.
+      - Run (cwd `cli/`): `go test ./internal/web/`
+      - Expect: `ok`. I test esistenti della conversazione devono restare verdi senza modifiche: i due campi sono additivi e `proposal` è `null` quando non c'è nulla da proporre.
+
+      ## Done
+
+      - [ ] AC-1 — la vista nomina l'azione proposta e il suo bersaglio, e derivarla non crea alcuna esecuzione.
+      - [ ] AC-3 — un'azione che lo stato corrente non ammette arriva con `runnable:false` e la ragione dichiarata dal processo, parola per parola quella delle rotte d'avvio.
+      - [ ] AC-5 — l'esito dell'ultima decisione viaggia nel payload con l'id dell'esecuzione nata.
+      - [ ] Una `GET` senza proposta pendente non legge il connettore e non sonda il provider più di quanto facesse prima.
+      - [ ] `go test ./internal/web/` resta `ok`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Rotta di decisione della proposta — POST /api/workspace/conversation/proposal
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+
+      Una proposta pendente si accetta o si rifiuta, e solo l'accettazione avvia — attraverso lo stesso percorso della board.
+
+      ## Read
+
+      - `cli/internal/web/conversation.go` — `handleSendWorkspaceConversationMessage` e `handleCloseWorkspaceConversation`: forma degli handler della conversazione, uso di `parseAfterID`, `decodeJSON`, `ws.conversation.current()` e delle risposte costruite con `conversationViewOf`.
+      - `cli/internal/web/server.go` — `registerRoutes`, in particolare il blocco delle quattro rotte di conversazione e il commento che spiega perché non hanno id nel pattern.
+      - `cli/internal/web/conversation_proposal.go` — `resolveProposal`, `pendingProposal` (TASK-06).
+      - `cli/internal/web/execution_run.go` / `workspace_execution.go` — `startSpecAction`, `startWorkspaceAction`, `writeStartError` (TASK-05).
+      - `cli/internal/iox` — `NewInvalidInput`, `NewConflict`.
+
+      ## Change
+
+      - `cli/internal/web/conversation_proposal.go`: l'handler.
+      - `cli/internal/web/server.go`: una riga di registrazione.
+
+      Non-goal: nessuna scelta di modello per run in questo incremento — la conferma avvia con la configurazione del workspace, e `model`/`model_options` restano vuoti. Nessuna coda di proposte: pendente è sempre e solo la più recente.
+
+      ## Steps
+
+      1. Dichiara il corpo:
+         ```go
+         type decideConversationProposalReq struct {
+             ProposalID int64  `json:"proposal_id"`
+             Decision   string `json:"decision"` // "accept" | "decline"
+         }
+         ```
+      2. Scrivi `handleDecideWorkspaceConversationProposal`, in quest'ordine e non in un altro:
+         1. `parseAfterID(r)`, `decodeJSON`; `decision` diversa dalle due ammesse → `iox.NewInvalidInput` che le elenca.
+         2. `ws.conversation.current()`; nessuna conversazione aperta → `iox.NewConflict("no conversation is open for this workspace", ...)`, la stessa frase già usata dalle rotte gemelle.
+         3. Recupera la sessione con `conversationSessionOf`; nessuna sessione leggibile → conflitto che dice che la proposta non è decidibile da questo viewer.
+         4. `pendingProposal(...)`; nessuna proposta pendente, oppure `proposal_id` diverso dall'id pendente → `iox.NewConflict` che dice che quella proposta non è più quella corrente, con il rimedio "rileggi la conversazione". Si decide ciò che si sta guardando.
+         5. `decline` → `ws.conversation.decide(id, conversationOutcome{Decision:"declined", ...})` e risposta `200` con `conversationViewOf(...)`. **Nessun'altra chiamata**: nessun avvio, nessuna transizione, nessun record. La conversazione resta ACTIVE.
+         6. `accept` → `s.resolveProposal(...)`; se `!Runnable` → `writeError(w, iox.NewConflict(view.UnavailableReason, view.UnlockedBy, nil))` **senza** segnare la proposta come decisa, così resta riproponibile una volta rimosso l'impedimento. Altrimenti chiama `startSpecAction` (scope spec) o `startWorkspaceAction` (scope workspace); un errore va a `writeStartError` e, di nuovo, non segna nulla come deciso. Solo su avvio riuscito chiama `decide(...)` con `ExecutionID: started.ID` e rispondi `201` con `conversationViewOf(...)`, che porterà `outcome`.
+      3. Registra in `registerRoutes`, accanto alle altre quattro:
+         `s.handleWorkspace("POST /api/workspace/conversation/proposal", s.handleDecideWorkspaceConversationProposal)`.
+      4. Documenta in testa all'handler la regola che lo governa: la disponibilità è **ricalcolata** al momento dell'accettazione e non fidata dalla proposta, perché tra il momento in cui l'agente ha proposto e quello in cui una persona conferma lo stato del workspace può essere cambiato — ed è esattamente il caso che AC-3 protegge.
+
+      ## Verify
+
+      - Run (cwd `cli/`): `gofmt -l . && go vet ./... && go build ./...`
+      - Expect: puliti come in baseline.
+      - Run (cwd `cli/`): `go test ./internal/web/`
+      - Expect: `ok`. Nessun test esistente cambia: la rotta è nuova e additiva.
+
+      ## Done
+
+      - [ ] AC-1 — nessuna esecuzione nasce prima di una `decision: "accept"` esplicita.
+      - [ ] AC-2 — l'accettazione avvia chiamando `startSpecAction`/`startWorkspaceAction`, le stesse funzioni degli handler della board.
+      - [ ] AC-3 — un'accettazione che il processo non ammette risponde `E_CONFLICT` con la ragione del processo e non avvia nulla.
+      - [ ] AC-4 — `decline` non chiama alcuna funzione d'avvio e non tocca il connettore.
+      - [ ] AC-5 — la risposta di un'accettazione riuscita porta `outcome.execution_id`.
+      - [ ] `go test ./internal/web/` resta `ok`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Test delle rotte — proposta, conferma, rifiuto e parità con la board
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+
+      I cinque criteri hanno, sul lato server, l'oracolo che li prova davvero: il payload delle rotte, i record nello store e lo stato della spec nel connettore.
+
+      ## Read
+
+      - `cli/internal/web/conversation_test.go` — come si costruisce un `Server` con conversazione aperta, provider fake e sessione locale in questi test; è l'impalcatura da riusare, non da reinventare.
+      - `cli/internal/web/workspace_execution_test.go` e `cli/internal/web/execution_test.go` — come si asseriscono record creati, transizioni di stato e rifiuti.
+      - `cli/internal/execution/localrun/session.go` — `Append`, per iniettare un evento `text` che porta la riga di proposta.
+      - `cli/internal/template/template.go` — gli stati che ammettono ogni azione del processo `fabbrica-del-software`.
+
+      ## Change
+
+      - Nuovo file `cli/internal/web/conversation_proposal_test.go`.
+
+      Non-goal: nessun mock del percorso d'avvio. L'avvio deve essere quello vero, contro lo store e il connettore in memoria dei test esistenti; un doppio lì renderebbe AC-2 non dimostrato.
+
+      ## Steps
+
+      1. `TestConversationCarriesThePendingProposalWithoutStartingAnything`: apri una conversazione, appendi alla sessione un evento `text` che contiene una frase e poi la riga di proposta per una spec pianificabile; `GET /api/workspace/conversation`. Assert: `proposal.action`, `proposal.label`, `proposal.spec_code` e `proposal.spec_title` nominano azione e bersaglio; `proposal.runnable` è vero; **e** `ws.store.ListBySpec(ctx, code)` è vuoto e lo stato della spec è invariato. (AC-1)
+      2. `TestAcceptingAProposalStartsTheSameExecutionAsTheBoard`: dal medesimo stato iniziale, in un caso avvia con `POST /api/spec/{code}/execution`, nell'altro con `POST /api/workspace/conversation/proposal` e `decision:"accept"`. Assert che i due record hanno lo stesso `action` e la stessa `spec`, e che la spec compie in entrambi i casi la stessa transizione. (AC-2)
+      3. `TestAProposalTheProcessDoesNotAdmitIsRefusedWithItsOwnReason`: metti la spec in uno stato che non ammette l'azione proposta. Assert: `proposal.runnable` falso e `unavailable_reason` **uguale carattere per carattere** alla frase che `POST /api/spec/{code}/execution` produce per lo stesso caso (costruiscila con `fmt.Sprintf` dalla stessa formulazione, oppure invoca la rotta della board e confronta le due stringhe — è l'asserzione più forte); l'`accept` risponde `409`; nessun record; stato della spec invariato. (AC-3)
+      4. `TestDecliningAProposalLeavesTheWorkspaceUntouched`: `decision:"decline"`. Assert: `200`; `proposal` è `null` nella risposta e nella `GET` successiva; nessun record; stato della spec invariato; la conversazione è ancora `ACTIVE` e un `POST .../messages` successivo è accettato. (AC-4)
+      5. `TestAnAcceptedProposalNamesTheRunItStarted`: dopo un'accettazione riuscita, assert che `outcome.decision` è accettato, `outcome.execution_id` è l'id del record creato, `outcome.scope` e `outcome.spec_code` identificano il bersaglio. (AC-5)
+      6. `TestOnlyTheCurrentProposalCanBeDecided`: `proposal_id` di un evento che non è la proposta pendente → `409`, nessun avvio.
+      7. `TestASecondProposalSupersedesTheDecidedOne`: dopo una decisione, appendi un nuovo evento di proposta e assert che `proposal` torna pendente con il nuovo `event_id`, mentre `outcome` continua a raccontare la decisione precedente.
+
+      ## Verify
+
+      - Run (cwd `cli/`): `go test ./internal/web/ -run Proposal -v`
+      - Expect: tutti i test nuovi passano.
+      - Run (cwd `cli/`): `go test ./internal/web/`
+      - Expect: `ok` — il pacchetto era verde in baseline (10.7s) e resta verde con i test nuovi dentro.
+
+      ## Done
+
+      - [ ] AC-1 — provato che leggere una proposta non crea alcuna esecuzione.
+      - [ ] AC-2 — provato confrontando record e transizione prodotti dalle due porte, non asserendo una chiamata.
+      - [ ] AC-3 — provato che la ragione è letteralmente quella del processo e che nulla parte.
+      - [ ] AC-4 — provato che il rifiuto non lascia record né transizioni e che la conversazione prosegue.
+      - [ ] AC-5 — provato che l'esito nomina l'esecuzione nata.
+      - [ ] `go test ./internal/web/` resta `ok`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Scheda proposta ed esito nel renderer conversation.js
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+
+      Il pannello conversazione disegna la proposta pendente con il suo bersaglio e i suoi due controlli, la ragione verbatim quando il processo non la ammette, e l'esito con il modo per raggiungere la run.
+
+      ## Read
+
+      - `cli/internal/web/assets/conversation.js` — l'intero modulo: `renderNotice`, `renderCloseControl` (il precedente esatto di una conferma inline), `renderComposer`, `renderConversation`, e il commento in testa che vieta al modulo di contenere regole di processo.
+      - `cli/internal/web/assets/app.css` — le classi `conv-*`, `approval-btn`, `ghost-btn`, `primary-btn` già disponibili.
+      - `cli/internal/web/assets/workspace-status.js` — come un altro renderer puro disegna azione, bersaglio, `unavailable_reason` e `unlocked_by`.
+
+      ## Change
+
+      - `cli/internal/web/assets/conversation.js`.
+      - `cli/internal/web/assets/app.css`: solo le classi nuove che servono (`conv-proposal*`, `conv-outcome*`), riusando le variabili e i toni già definiti.
+
+      Non-goal, vincolanti: il modulo resta **puro** — nessun DOM, nessun fetch, nessun timer — e resta **privo di conoscenza del processo**: nessun id d'azione, nessun nome di provider, nessun nome di capacità, nessuna soglia di stato. Un test esistente asserisce questa assenza sul sorgente del modulo. Ogni parola disegnata viene dal payload. Non modificare la timeline: l'evento che porta la riga JSON resta com'è.
+
+      ## Steps
+
+      1. Scrivi `renderProposal(proposal, ui)`, chiamata solo quando il payload porta un oggetto `proposal`:
+         - intestazione con l'etichetta dell'azione (`label`, con fallback su `action`) e il bersaglio: `spec_code` più `spec_title` quando ci sono, altrimenti nulla — la dicitura di scope viene dal payload e non si inventa qui;
+         - se `runnable`: due bottoni, `data-conversation-proposal-accept` e `data-conversation-proposal-decline`, entrambi portando `data-proposal-id` con `event_id`, entrambi disabilitati quando `ui.busy`;
+         - se non `runnable`: `renderNotice("refused", ...)` con `unavailable_reason` verbatim, più `unlocked_by` quando presente, e **nessun** bottone di conferma;
+         - una frase che dichiara, per la proposta eseguibile, che nulla è ancora partito: è la promessa che AC-1 rende leggibile.
+      2. Scrivi `renderOutcome(outcome, ui)`: che cosa è stato deciso, e — solo per un esito accettato che porta un `execution_id` — un controllo `data-conversation-reach-run` con `data-scope` e `data-code` valorizzati dal payload. Un esito rifiutato non offre alcun controllo di raggiungimento: non c'è nulla da raggiungere.
+      3. In `renderConversation`, inserisci i due blocchi tra gli avvisi e la timeline (proposta ed esito riguardano l'adesso e devono essere visibili senza scorrere), lasciando invariati ordine e presenza di tutto il resto. Nessuno dei due blocchi viene disegnato quando il campo corrispondente manca o è `null`.
+      4. Aggiungi le regole CSS minime per i due blocchi, riusando i toni esistenti di `conv-notice`.
+      5. Aggiorna il commento in testa al modulo per dire che anche azione, bersaglio, ragione e rimedio della proposta arrivano dal payload — il modulo continua a non sapere che cosa sia un'azione del processo.
+
+      ## Verify
+
+      - Run (root): `npm run test:web`
+      - Expect: 73 test passano ancora — la baseline è 73/73 e i test esistenti di `conversation.test.mjs`, incluso quello di purezza del modulo, non devono cambiare per restare verdi.
+
+      ## Done
+
+      - [ ] AC-1 — la scheda nomina azione e bersaglio e offre i due controlli.
+      - [ ] AC-3 — con `runnable:false` la ragione è verbatim e non esiste alcun controllo di conferma.
+      - [ ] AC-5 — un esito accettato porta il controllo di raggiungimento con scope e codice.
+      - [ ] Il modulo resta puro e privo di vocabolario di processo.
+      - [ ] `npm run test:web` resta a 0 fallimenti.
+
+      ## Blockers
+
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Test del renderer sulla proposta e sull'esito
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+
+      Ciò che una persona legge nel pannello davanti a una proposta è provato sul testo visibile, non sulla forma del modulo.
+
+      ## Read
+
+      - `test/web/conversation.test.mjs` — l'intero file: `loadConversation()`, `visibleText(html)`, `withConversation(overrides)` e la disciplina dichiarata in testa (oracoli sul testo visibile; unica eccezione il controllo di purezza sul sorgente).
+      - `cli/internal/web/assets/conversation.js` — le due funzioni prodotte da TASK-09.
+
+      ## Change
+
+      - `test/web/conversation.test.mjs`: una nuova `describe` per la proposta e una per l'esito, senza toccare le esistenti.
+
+      Non-goal: nessuna asserzione su nomi di classi CSS se non per i due `data-*` che sono il contratto con `app.js`. Gli oracoli restano sul testo visibile.
+
+      ## Steps
+
+      1. `propone l'azione nominando bersaglio e azione`: payload con `proposal` `runnable:true` che porta label, `spec_code` e `spec_title`. Assert: il testo visibile contiene la label e il codice della spec; l'HTML contiene entrambi i `data-conversation-proposal-accept` e `data-conversation-proposal-decline`; il testo dichiara che nulla è ancora partito. (AC-1)
+      2. `non offre conferma per un'azione che il processo non ammette`: `runnable:false` con `unavailable_reason` e `unlocked_by`. Assert: entrambe le frasi compaiono verbatim nel testo visibile; `data-conversation-proposal-accept` **non** compare. (AC-3)
+      3. `non disegna nulla senza proposta`: payload senza `proposal`. Assert: nessuno dei due `data-*` compare. (AC-4, lato lettura: dopo un rifiuto non resta alcun controllo da premere.)
+      4. `dall'esito accettato si raggiunge la run`: payload con `outcome` accettato che porta `execution_id`, `scope` e `spec_code`. Assert: il testo visibile nomina la decisione; l'HTML contiene `data-conversation-reach-run` con lo scope e il codice del payload. (AC-5)
+      5. `un esito rifiutato non offre nulla da raggiungere`: `outcome` rifiutato. Assert: `data-conversation-reach-run` non compare.
+      6. `neutralizza l'HTML che arriva dal payload`: ragione e titolo della spec contenenti `<script>`; assert che non compaiono tag non neutralizzati — la stessa disciplina del test omonimo già presente.
+      7. Estendi il test di purezza esistente, se elenca token vietati, in modo che copra anche il nuovo codice: nessun id d'azione, nessun nome di provider, nessuna capacità nel modulo.
+
+      ## Verify
+
+      - Run (root): `npm run test:web`
+      - Expect: tutti i test passano, con un conteggio superiore ai 73 della baseline e 0 fallimenti.
+
+      ## Done
+
+      - [ ] AC-1, AC-3, AC-4 e AC-5 hanno ciascuno un oracolo sul testo visibile o sul contratto `data-*`.
+      - [ ] Il testo che arriva dal payload resta neutralizzato.
+      - [ ] `npm run test:web` resta a 0 fallimenti.
+
+      ## Blockers
+
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Cablaggio in app.js — decidere la proposta e raggiungere la run
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-09
+    body: |-
+      ## Objective
+
+      Dal pannello conversazione la persona conferma o rifiuta la proposta, e dall'esito raggiunge la run e il suo dialogo.
+
+      ## Read
+
+      - `cli/internal/web/assets/app.js` righe ~3388-3730 — la sezione della conversazione: `bindConversationPanel`, `openConversation`, `sendConversationMessage`, `closeConversation`, `applyConversationView`, `renderConversationPanel`, `showConversationRefusal`, `startConversationPolling`, `resetConversationState`.
+      - `cli/internal/web/assets/app.js` righe ~690-712 — il listener delegato della striscia di stato: è il precedente **esatto** della navigazione da imitare (`openEditor(target.code)` per lo scope spec, `openPRD()` per quello di workspace, e il commento sul perché la striscia non avvia mai nulla da sé).
+      - `cli/internal/web/assets/app.js` righe ~886-935 — `openEditor(code)`: monta i pannelli di esecuzione e riprende la run del record che il server restituisce.
+      - `cli/internal/web/assets/app.js` righe ~4548-4630 — `openPRD()` e `renderWorkspaceActions`, la porta gemella per lo scope workspace.
+
+      ## Change
+
+      - `cli/internal/web/assets/app.js`, solo dentro la sezione della conversazione più il listener di raggiungimento.
+
+      Non-goal: il pannello conversazione **non** avvia mai un'esecuzione da sé e non chiama le rotte d'avvio — chiama solo la rotta di decisione, esattamente come la striscia di stato non avvia e si limita a navigare. Non duplicare la macchina dei pannelli di esecuzione dentro la conversazione.
+
+      ## Steps
+
+      1. In `bindConversationPanel`, aggiungi tre rami al listener delegato già esistente, prima del `submit` del composer:
+         - `[data-conversation-proposal-accept]` → `decideProposal(id, "accept")`;
+         - `[data-conversation-proposal-decline]` → `decideProposal(id, "decline")`;
+         - `[data-conversation-reach-run]` → legge `data-scope` e `data-code` dal bottone e chiama `openEditor(code)` oppure `openPRD()`, esattamente come fa il listener della striscia di stato.
+      2. Scrivi `decideProposal(proposalID, decision)` sullo stampo di `sendConversationMessage`: esce subito se `conversationBusy`; alza `conversationBusy` e ridisegna; `apiPost("/api/workspace/conversation/proposal?after_id=" + conversationAfterID, {proposal_id: Number(proposalID), decision})`; in caso di successo azzera `conversationRefusal` e chiama `applyConversationView(view)`; in caso di errore chiama `showConversationRefusal(err)`, che mostra la ragione del server verbatim e alza il toast; in `finally` abbassa `conversationBusy`, ridisegna e riavvia il polling se la conversazione è ancora attiva.
+      3. Dopo un'accettazione riuscita, ricarica ciò che l'avvio ha cambiato con le funzioni già esistenti — `loadBoard()` e `loadWorkspaceStatus()` — così la board mostra la transizione senza attendere il prossimo evento: è lo stesso gesto che `onDragMove` compie dopo una mossa.
+      4. Verifica che `applyConversationView` lasci passare i due campi nuovi: se copia campo per campo, aggiungi `proposal` e `outcome`; se assegna la vista intera (`conversationView = view`), non serve nulla.
+      5. Controlla `resetConversationState`: cambiando workspace o chiudendo la conversazione, proposta ed esito devono sparire con tutto il resto — se lo stato locale è la sola `conversationView`, è già così.
+
+      ## Verify
+
+      - Run (root): `npm run test:web`
+      - Expect: 0 fallimenti — `app.js` non è coperto da questi test, che restano l'oracolo del renderer; qui si prova solo che nulla è regredito.
+      - Run (cwd `cli/`): `go build ./...`
+      - Expect: compila — gli asset sono embeddati, quindi una modifica agli asset deve continuare a costruire.
+      - Ispezione manuale guidata dal codice: i tre rami del listener puntano a `decideProposal`, `openEditor` e `openPRD`, e nessuna chiamata alle rotte `/execution` è stata aggiunta nella sezione conversazione (`grep -n "execution" ` sulla sezione).
+
+      ## Done
+
+      - [ ] AC-1 e AC-4 — conferma e rifiuto passano solo dalla rotta di decisione, e il rifiuto non innesca alcuna chiamata d'avvio.
+      - [ ] AC-3 — una decisione rifiutata dal server mostra la ragione del server verbatim nel pannello.
+      - [ ] AC-5 — dal controllo di esito si arriva a `openEditor(code)` o `openPRD()`, che rimontano i pannelli e riprendono la run e il suo dialogo.
+      - [ ] Dopo un'accettazione board e striscia di stato sono ricaricate.
+      - [ ] `npm run test:web` a 0 fallimenti e `go build ./...` pulito.
+
+      ## Blockers
+
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Smoke e2e — proporre, confermare, rifiutare contro viewer e filesystem reali
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-11
+    body: |-
+      ## Objective
+
+      I criteri sono provati contro il viewer vero, il CLI vero, il connettore filefs vero e il filesystem, con solo il binario dell'agente sostituito.
+
+      ## Read
+
+      - `test/e2e/conversation-view-smoke.mjs` — l'intero file: `buildCLI()`, l'avvio di `archetipo view`, il server di controllo, l'attesa a polling con timeout che nomina che cosa attendeva, la funzione `ok(criterion, statement)` e il report finale. È l'impalcatura da riusare.
+      - `test/e2e/support/fake-claude.mjs` — come i frame emessi sono comandati dallo smoke e come i frame ricevuti sono riportati indietro.
+      - `test/e2e/run-from-view-smoke.mjs` — come uno smoke asserisce record di esecuzione su filesystem e transizioni nel backlog.
+      - `package.json` — la lista degli script `test:view-*-smoke`.
+
+      ## Change
+
+      - Nuovo file `test/e2e/conversation-action-view-smoke.mjs`.
+      - `package.json`: nuovo script `"test:view-conversation-action-smoke": "node ./test/e2e/conversation-action-view-smoke.mjs"`.
+
+      Non-goal: nessun driver di browser, nessuna dipendenza nuova, nessuno `sleep` arbitrario — ogni attesa interroga una rotta o il server di controllo con un timeout esplicito, come già fa lo smoke di US-053.
+
+      ## Steps
+
+      1. Prepara un workspace con `archetipo init`, un backlog con almeno due spec: una in uno stato che ammette l'azione da proporre, una in uno stato che **non** la ammette. Configura il provider di default `claude` puntato al binario fake.
+      2. Apri una conversazione via `POST /api/workspace/conversation` e attendi che il processo fake sia vivo.
+      3. **Scenario proposta e conferma.** Comanda al fake di emettere un frame `assistant` la cui parte testuale è una frase seguita dalla riga di proposta per la spec pianificabile. Attendi che `GET /api/workspace/conversation` porti `proposal.runnable === true`. Assert prima della conferma: `.archetipo/executions/` non contiene alcun record e lo stato della spec nel backlog su disco è quello di partenza (AC-1). Poi `POST /api/workspace/conversation/proposal` con `accept`; assert: un record esiste su filesystem con l'azione proposta e la spec proposta, lo stato della spec è quello che l'avvio dalla board produce, e la risposta porta `outcome.execution_id` pari all'id di quel record (AC-2, AC-5).
+      4. **Scenario rifiuto.** Su un secondo workspace preparato allo stesso modo, fai emettere la proposta, poi `decline`. Assert: `.archetipo/executions/` vuota, stato della spec invariato, `proposal` è `null`, la conversazione è ancora `ACTIVE` e un messaggio inviato dopo il rifiuto arriva davvero al processo fake — riportato dal server di controllo, non dedotto dalla risposta della rotta (AC-4).
+      5. **Scenario azione non ammessa.** Fai proporre la stessa azione sulla spec che il processo non ammette in quello stato. Assert: `proposal.runnable === false` e `unavailable_reason` nomina lo stato e l'azione; l'`accept` risponde `409` con quella stessa ragione; `.archetipo/executions/` resta vuota e lo stato della spec resta invariato (AC-3).
+      6. Chiudi la conversazione e termina il viewer con la stessa disciplina di chiusura dello smoke esistente; emetti il report finale con una riga `ok()` per criterio.
+
+      ## Verify
+
+      - Run (root): `node ./test/e2e/conversation-action-view-smoke.mjs`
+      - Expect: tutti gli scenari verdi. Lo script costruisce da sé il CLI: Go dev'essere installato.
+      - Run (root): `node ./test/e2e/conversation-view-smoke.mjs`
+      - Expect: verde. È lo smoke di US-053 sulla stessa superficie: prova che il prompt cambiato e i due campi nuovi non hanno rotto la conversazione libera. Se fallisce già **prima** delle modifiche di questo incremento, registra la diagnosi invece di attribuirgliela.
+
+      ## Done
+
+      - [ ] AC-1 — provato su filesystem che nulla nasce prima della conferma.
+      - [ ] AC-2 — provato su filesystem e backlog che la conferma produce la stessa esecuzione e la stessa transizione della board.
+      - [ ] AC-3 — provato che un'azione non ammessa è rifiutata con la ragione del processo e non crea nulla.
+      - [ ] AC-4 — provato che il rifiuto non lascia record né transizioni e che la conversazione prosegue davvero fino al processo agente.
+      - [ ] AC-5 — provato che l'esito nomina l'esecuzione nata.
+      - [ ] Lo smoke di US-053 resta verde.
+      - [ ] `package.json` espone il nuovo script accanto agli altri `test:view-*-smoke`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Gate finale — controlli completi e verifica dei task prima della review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+
+      L'incremento è consegnato solo dopo che i controlli che questo repository si fida esistono verdi e che nessun task è rimasto aperto.
+
+      ## Read
+
+      - `AGENTS.md`, sezione "Before delivering changes" — i cinque controlli locali che CI ripete.
+      - Il blocco `## Baseline` del corpo di questo piano — i valori di partenza rispetto a cui va letto ogni esito.
+
+      ## Change
+
+      Nessuna modifica al codice, salvo la riparazione di ciò che i controlli scoprono. Se una riparazione è più che banale, va fatta nel task che l'ha introdotta e non nascosta qui.
+
+      ## Steps
+
+      1. Esegui i controlli nell'ordine di AGENTS.md e registra l'output di ciascuno.
+      2. Se `golangci-lint` non è installato, installalo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`; se l'ambiente non lo consente, registralo come lacuna d'ambiente citando la baseline, mai come fallimento introdotto da questo incremento.
+      3. Verifica che nessun file toccato dal piano abbia aggiunto diagnostiche di `vet` o del linter rispetto alla baseline, che era pulita su entrambi.
+      4. Marca **questo** task `DONE`.
+      5. Ricarica la spec da `data.project_root` con `archetipo spec show US-054` e leggi lo stato di **ogni** task.
+      6. Solo se nessun task è rimasto `TODO`, richiedi la review con `archetipo spec review US-054`. Un solo task aperto significa che l'incremento non è pronto: completalo prima.
+
+      ## Verify
+
+      - Run (cwd `cli/`): `gofmt -l .`
+      - Expect: nessun output (baseline: pulito).
+      - Run (cwd `cli/`): `go vet ./...`
+      - Expect: nessun problema (baseline: pulito).
+      - Run (cwd `cli/`): `go build ./...`
+      - Expect: compila pulito (baseline: pulito).
+      - Run (cwd `cli/`): `go test ./...`
+      - Expect: ogni pacchetto `ok`, inclusi i nuovi test in `internal/execution`, `internal/execution/claude` e `internal/web` (baseline: tutti `ok`).
+      - Run (cwd `cli/`): `golangci-lint run --timeout 5m ./...`
+      - Expect: 0 issue; oppure la lacuna d'ambiente registrata al punto 2.
+      - Run (root): `npm run test:web`
+      - Expect: 0 fallimenti, con più test dei 73 di baseline.
+      - Run (root): `node ./test/e2e/conversation-action-view-smoke.mjs && node ./test/e2e/conversation-view-smoke.mjs`
+      - Expect: entrambi verdi.
+      - Run (cwd `/Users/stefanoleli/Project/Archetipo`): `archetipo spec show US-054`
+      - Expect: ogni task riporta `DONE`.
+
+      ## Done
+
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5 — tutte le evidenze della mappa di accettazione sono state prodotte da comandi realmente eseguiti e verdi.
+      - [ ] I cinque controlli di AGENTS.md sono verdi, o la sola lacuna d'ambiente su `golangci-lint` è registrata esplicitamente.
+      - [ ] Nessuna diagnostica nuova di compilatore o linter sui file toccati rispetto alla baseline.
+      - [ ] `archetipo spec show US-054` prova che nessun task è `TODO`, e solo dopo è stata invocata `archetipo spec review US-054`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-13

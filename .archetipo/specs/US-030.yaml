@@ -1,0 +1,52 @@
+schema: archetipo/spec/v2
+code: US-030
+title: Interagire con una run remota dalla UI
+epic:
+  code: EP-005
+  title: Esperienza operativa ARchetipo
+priority: HIGH
+points: 5
+status: DONE
+blocked_by:
+  - US-029
+scope: MVP
+body: |-
+  #### US-030: Interagire con una run remota dalla UI
+
+  **Epic:** EP-005 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** US-029
+
+  **User Story**
+  Come utilizzatore che segue un'esecuzione ARcipelago da ARchetipo,
+  voglio vedere gli eventi, inviare messaggi, rispondere alle approvazioni e annullare la run,
+  così da collaborare con l'agente senza lasciare la UI ARchetipo.
+
+  **Dimostrazione**
+  Partendo da una run attiva visibile al workspace, il revisore apre l'esecuzione e osserva lo storico ordinato e i nuovi eventi. Invia un messaggio, risponde a un'approvazione pendente e vede entrambi nello storico; quindi richiede l'annullamento e osserva lo stato conseguente. Su una run non più controllabile, la UI mostra un rifiuto e non aggiunge eventi locali fittizi.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — La UI mostra lo storico ordinato della run e applica i nuovi eventi senza duplicazioni visibili.
+  - [ ] AC-2 — Dopo una riconnessione la UI riprende dagli eventi già ricevuti senza perdere quelli successivi.
+  - [ ] AC-3 — Un messaggio inviato dalla UI compare nello storico soltanto dopo la conferma del provider.
+  - [ ] AC-4 — Una risposta a un'approvazione pendente mostra l'esito restituito dal provider e aggiorna la run.
+  - [ ] AC-5 — Una richiesta di annullamento mostra lo stato confermato dal provider e non riapre una run terminale.
+  - [ ] AC-6 — Un comando non autorizzato o non più valido viene mostrato come rifiutato senza alterare la proiezione locale della run.
+
+  **Fuori ambito**
+  Collaborazione multiutente simultanea, conversazioni vocali, policy di approvazione definite in ARchetipo e riapertura di run concluse.
+
+  ## Contesto Wiki
+  - `architecture/context-map`
+  - `decisions/execution-provider-boundary`
+  - `engineering/code-map`
+history:
+  - status: TODO
+    at: "2026-08-16T22:51:59Z"
+  - status: PLANNED
+    at: "2026-08-18T08:45:22Z"
+  - status: IN PROGRESS
+    at: "2026-08-18T08:48:09Z"
+  - status: REVIEW
+    at: "2026-08-18T09:58:39Z"
+  - status: DONE
+    at: "2026-08-18T10:01:57Z"

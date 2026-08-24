@@ -1,0 +1,46 @@
+schema: archetipo/spec/v2
+code: US-045
+title: Ritrovare i workspace conosciuti
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: MEDIUM
+points: 3
+status: DONE
+blocked_by:
+  - US-044
+scope: GROWTH
+body: |-
+  #### US-045: Ritrovare i workspace conosciuti
+
+  **Epic:** EP-008 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccata da:** US-044
+
+  **User Story**
+  Come persona che lavora su più workspace,
+  voglio ritrovare l'elenco dei workspace che ho già creato o aperto,
+  così da non doverne ricordare i percorsi.
+
+  **Dimostrazione**
+  Partendo da un'installazione senza workspace registrati, il revisore crea un workspace dalla UI e lo ritrova nell'elenco con nome, percorso e ultimo accesso. Aggiunge un secondo workspace già esistente sul disco e osserva entrambi elencati. Rinomina la directory di uno dei due, ricarica l'elenco e osserva quel workspace segnalato come non più raggiungibile; lo rimuove dall'elenco e verifica che i file sul disco non siano stati toccati.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Un workspace creato o aperto dalla UI entra in un registro persistente conservato fuori dai singoli workspace.
+  - [ ] AC-2 — L'elenco riporta per ciascun workspace nome, percorso e ultimo accesso.
+  - [ ] AC-3 — Un workspace la cui directory non è più leggibile è segnalato come non raggiungibile invece di sparire in silenzio.
+  - [ ] AC-4 — La rimozione di una voce dal registro non modifica né cancella i file del workspace.
+  - [ ] AC-5 — Un registro assente o illeggibile non impedisce di usare il workspace corrente e viene ricreato alla prima scrittura.
+
+  **Fuori ambito**
+  Apertura di un workspace dall'elenco, sincronizzazione del registro tra macchine, gruppi o preferiti e anteprima dello stato di un workspace non aperto.
+history:
+  - status: TODO
+    at: "2026-08-19T11:03:29Z"
+  - status: PLANNED
+    at: "2026-08-20T00:33:07Z"
+  - status: IN PROGRESS
+    at: "2026-08-20T00:34:02Z"
+  - status: REVIEW
+    at: "2026-08-20T00:52:51Z"
+  - status: DONE
+    at: "2026-08-20T00:55:10Z"

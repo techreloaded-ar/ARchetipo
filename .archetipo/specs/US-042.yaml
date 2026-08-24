@@ -1,0 +1,44 @@
+schema: archetipo/spec/v2
+code: US-042
+title: Creare una spec con l'assistenza dell'agente
+epic:
+  code: EP-005
+  title: Esperienza operativa ARchetipo
+priority: MEDIUM
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-042: Creare una spec con l'assistenza dell'agente
+
+  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come persona che vuole aggiungere una storia al backlog,
+  voglio descrivere l'intento e lasciare che l'agente mi faccia domande e proponga la spec,
+  così da ottenere criteri di accettazione verificabili senza scriverli a mano nel modulo.
+
+  **Dimostrazione**
+  Partendo da un workspace con un backlog esistente, il revisore sceglie la creazione assistita, descrive l'intento in una frase, risponde alle domande dell'agente e riceve una spec proposta con titolo, epica e criteri di accettazione. Ne modifica un criterio, conferma, e ritrova la card in TODO nella board. Ripetendo la prova e annullando prima della conferma, osserva che nessuna spec è stata creata e che il codice progressivo non è stato consumato.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Accanto alla creazione manuale la UI offre la creazione assistita dall'agente.
+  - [ ] AC-2 — L'agente pone domande nella UI e la persona può rispondere prima che la spec sia proposta.
+  - [ ] AC-3 — La spec proposta è mostrata per intero e modificabile prima di essere persistita.
+  - [ ] AC-4 — La spec è scritta nel backlog soltanto dopo una conferma esplicita.
+  - [ ] AC-5 — L'annullamento non crea alcuna spec e non consuma il codice progressivo.
+
+  **Fuori ambito**
+  Sostituzione del modulo manuale già consegnato, modifica assistita di una spec esistente, pianificazione automatica della spec creata.
+history:
+  - status: TODO
+    at: "2026-08-19T11:03:29Z"
+  - status: PLANNED
+    at: "2026-08-20T08:39:14Z"
+  - status: IN PROGRESS
+    at: "2026-08-20T08:39:31Z"
+  - status: REVIEW
+    at: "2026-08-20T08:59:34Z"
+  - status: DONE
+    at: "2026-08-20T09:00:30Z"

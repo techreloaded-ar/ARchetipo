@@ -1,0 +1,45 @@
+schema: archetipo/spec/v2
+code: US-039
+title: Dialogare con una run locale di Claude
+epic:
+  code: EP-006
+  title: Esecuzione locale e ciclo di delivery
+priority: HIGH
+points: 3
+status: DONE
+blocked_by:
+  - US-038
+scope: MVP
+body: |-
+  #### US-039: Dialogare con una run locale di Claude
+
+  **Epic:** EP-006 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccata da:** US-038
+
+  **User Story**
+  Come operatore che ha scelto Claude come provider locale,
+  voglio la stessa collaborazione conversazionale disponibile con Codex,
+  così da non dover cambiare provider per condurre un lavoro a più giri.
+
+  **Dimostrazione**
+  Partendo da un workspace con Claude come provider predefinito, il revisore ripete lo stesso copione già verificato su Codex — storia ordinata, messaggio recapitato, cancellazione, rifiuti su run chiusa — e osserva risultati equivalenti. Confrontando le due esecuzioni osserva che la semantica del dialogo è la stessa e non è stata riscritta per provider.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Claude dichiara la capacità di dialogo nell'elenco dei provider.
+  - [ ] AC-2 — Storia, messaggio, cancellazione e rifiuti su run non attiva si comportano come per Codex, verificati dallo stesso copione di revisione.
+  - [ ] AC-3 — Le regole comuni del dialogo restano definite una sola volta e non sono duplicate nel provider.
+  - [ ] AC-4 — Nessuna credenziale o materiale di sessione di Claude entra nella configurazione del workspace o nelle risposte esposte dal viewer.
+
+  **Fuori ambito**
+  Nuove capacità di dialogo non già consegnate per Codex e differenze di comportamento specifiche del provider.
+history:
+  - status: TODO
+    at: "2026-08-19T11:03:29Z"
+  - status: PLANNED
+    at: "2026-08-19T15:57:45Z"
+  - status: IN PROGRESS
+    at: "2026-08-19T15:58:15Z"
+  - status: REVIEW
+    at: "2026-08-19T18:02:27Z"
+  - status: DONE
+    at: "2026-08-19T18:03:30Z"

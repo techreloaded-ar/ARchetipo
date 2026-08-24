@@ -1,0 +1,51 @@
+schema: archetipo/spec/v2
+code: US-061
+title: Liberare lo spazio sopra la conversazione
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: HIGH
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-061: Liberare lo spazio sopra la conversazione
+
+  **Epic:** EP-008 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come persona che guida il processo dal viewer,
+  voglio che sopra la conversazione ci sia soltanto ciò che sto usando,
+  così che aprire il workspace mi metta davanti al lavoro e non a un cruscotto di stato.
+
+  **Dimostrazione**
+  Partendo da un workspace con PRD e backlog presenti e almeno una spec in TODO, il revisore apre il workspace e osserva che fra la barra superiore e la conversazione non c'è più alcuna fascia: né lo stage con il suo riassunto, né l'identità del template, né i riquadri che spiegano perché un'azione è bloccata. In coda alla conversazione legge invece un blocco che propone il passo successivo con l'azione e la spec su cui agisce; lo preme e osserva che parte quella stessa azione su quella stessa spec. Porta poi il workspace in uno stato in cui il passo successivo è bloccato e osserva che il blocco non è premibile e che il motivo del blocco si legge lì dentro; porta il workspace in uno stato senza passi in sospeso e osserva che in coda alla conversazione non compare alcun blocco. Nella barra superiore conta una sola azione a un click oltre all'identità del workspace, al contatore delle run in attesa e al comando del tema, apre il menu che raccoglie le altre e vi ritrova ognuna delle voci che prima stavano affiancate. Apre infine la board e vi legge i tre contatori del backlog, che nella barra superiore non ci sono più.
+
+  **Riferimento visivo**
+  `docs/mockups/redesign-chat`, stato A: il passo successivo proposto come blocco dentro il thread.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Con un workspace aperto, fra la barra superiore e la conversazione non compare alcuna fascia di stato: stage, riassunto, identità del template e chip delle azioni di workspace non sono più disegnati in quella posizione.
+  - [ ] AC-2 — In coda alla conversazione attiva compare un blocco che propone il passo successivo con l'etichetta dell'azione e, quando l'azione riguarda una spec, il codice della spec; premendolo parte quella stessa azione su quello stesso bersaglio.
+  - [ ] AC-3 — Quando il passo successivo non è eseguibile, il blocco è mostrato come non premibile, il motivo del blocco si legge dentro il blocco stesso e premerlo non avvia nulla.
+  - [ ] AC-4 — Quando non c'è alcun passo in sospeso, in coda alla conversazione non compare alcun blocco vuoto né segnaposto.
+  - [ ] AC-5 — La barra superiore espone a un click l'identità del workspace, una sola azione primaria, il contatore delle run in attesa e il comando del tema; ogni altra voce oggi presente resta raggiungibile da un unico menu di raccolta e nessuna voce va persa.
+  - [ ] AC-6 — I tre contatori del backlog non compaiono più nella barra superiore e si leggono nella vista board.
+
+  **Fuori ambito**
+  La traduzione in italiano delle etichette della barra superiore; il ridisegno della board, del composer e dell'indice delle conversazioni; nuove scorciatoie da tastiera; qualunque cambiamento a quali azioni il processo offre e a quando le considera eseguibili — questa spec sposta e riordina ciò che è già offerto, non ne cambia le regole.
+
+  **Assunzione**
+  Che l'azione primaria da tenere fuori dal menu sia la creazione di una spec non è confermato dall'uso: se la scelta si rivelasse sbagliata, cambia quale voce resta fuori dal menu, non la struttura della barra.
+history:
+  - status: TODO
+    at: "2026-08-22T22:27:47Z"
+  - status: PLANNED
+    at: "2026-08-22T22:50:25Z"
+  - status: IN PROGRESS
+    at: "2026-08-22T22:51:46Z"
+  - status: REVIEW
+    at: "2026-08-22T23:06:21Z"
+  - status: DONE
+    at: "2026-08-22T23:17:39Z"

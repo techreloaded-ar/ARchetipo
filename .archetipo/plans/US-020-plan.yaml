@@ -1,0 +1,654 @@
+schema: archetipo/plan/v2
+spec_code: US-020
+body: |-
+  # US-020: Usare Control Operations senza il modulo Product — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-07-26
+
+  ---
+
+  ## Specifica
+
+  **Epica:** EP-002 — Inception governata in ARchetipo Control
+  **Priorità:** MEDIUM | **Punti:** 3
+
+  **Storia utente**
+  Come team di sviluppo, voglio usare Control solo per gestire Runner, Agent Profile e Run, così da adottare l'orchestrazione remota senza introdurre il modello aziendale di progetto e processo.
+
+  **Criteri di accettazione**
+  - AC-1 — Un amministratore può disabilitare il modulo Product per l'installazione.
+  - AC-2 — Runner, Agent Profile, Run e audit restano utilizzabili con Product disabilitato.
+  - AC-3 — Le funzioni Project e Process non sono esposte quando Product è disabilitato.
+  - AC-4 — La disabilitazione non elimina la cronologia Operations esistente.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Rendere Product un modulo realmente opzionale dell'installazione Control agendo su due piani: un interruttore di configurazione dell'installazione che decide se il modulo viene composto, e il disaccoppiamento della Run remota dal Project, oggi obbligatorio a livello di schema, servizio e UI. Senza il secondo intervento AC-2 non è soddisfacibile: `remote_runs.project_id` è `NOT NULL` con vincolo di integrità verso `projects`, `RemoteRunService.create` risolve l'Agent Profile solo attraverso `project_agent_profile_assignments`, e `POST /api/operations/runs` richiede un `projectId`. Con Product disabilitato non esisterebbe alcun modo di avviare una Run.
+
+  - **Configurazione.** `control/src/server/config.ts` acquisisce `modules.product.enabled`, letto da `CONTROL_MODULE_PRODUCT` con valori ammessi `enabled` (default) e `disabled`; qualsiasi altro valore fa fallire l'avvio, coerentemente con la disciplina già applicata a porta, segreti e URL di produzione. La scelta è dell'amministratore dell'installazione, non del singolo utente, come richiesto dal fuori ambito della spec. Un endpoint `GET /api/modules`, registrato accanto a `/health/live` e indipendente da database e sessione, pubblica `{"modules":{"product":{"enabled":boolean}}}` perché la SPA possa comporre navigazione e rotte al boot allo stesso modo in cui già usa `/api/setup`.
+  - **Non esposizione, non disattivazione a valle.** In `buildApp` tutte le registrazioni Product (`registerProductHttp`, `registerProcessHttp`, `registerCockpitHttp`, `registerProjectSessionRunHttp`, `registerProcessInputHttp`, `registerProjectWorkflowRunHttp`, `registerPrdReviewHttp`) e i rispettivi service vengono composti solo a modulo abilitato; l'elenco delle rotte SPA servite staticamente perde `/projects/new` e `/projects/:projectId`. Le rotte Product non vengono cioè registrate affatto e Fastify risponde con il proprio 404: è la prova più forte di non esposizione, più solida di un handler che risponde `module_disabled` restando comunque montato. Identity, Organization, Audit, Operations, Agent Profile, Run e trasporto Runner restano invariati e sempre composti.
+  - **Run tecnica senza Project.** La migrazione `011_optional_project_runs.sql` rende `remote_runs.project_id` nullable; il vincolo composito `remote_runs_project_organization_fk` resta valido perché `MATCH SIMPLE` non applica la referenza quando una colonna è `NULL`, quindi le Run Product esistenti conservano identica integrità. `RemoteRunService.create` accetta in alternativa `projectId` (percorso Product invariato, profilo risolto da `effectiveConfiguration`) oppure `agentProfileId` (percorso tecnico, profilo risolto da `AgentProfileService.get`, `projectId` persistito `null`, `context` non ammesso). `correlation.project` diventa opzionale e la proiezione Workflow viene richiesta solo per Run con Project. `POST /api/operations/runs` accetta esattamente uno dei due riferimenti e, a Product disabilitato, rifiuta `projectId` con `400 invalid_request`.
+  - **Superficie utente.** `router.tsx` legge i moduli al boot, normalizza `/projects/*` su `/settings/members` quando Product è disabilitato e propaga il flag a `ControlShell`, che omette la voce di navigazione `Project`. `runs.tsx` mostra il campo `Project ID` solo a modulo abilitato e altrimenti una select di Agent Profile alimentata da `getAgentProfiles`, così la Run tecnica è avviabile interamente da Operations. Il dettaglio Run rende la riga `Project` solo quando la correlazione la contiene.
+  - **Cronologia preservata.** Nessuna operazione distruttiva è prevista: disabilitare il modulo non tocca `projects`, `workspaces`, `process_instances` né `remote_runs`. Le Run già eseguite, comprese quelle nate da Project o da Workflow, restano elencate e apribili in `/operations/runs` perché il percorso di lettura Operations non attraversa alcun servizio Product.
+
+  ### Decisioni architetturali
+
+  La scelta supera la soglia ADR: cambia il modello dati persistente (`remote_runs.project_id` nullable), fissa una policy tecnica trasversale sulla composizione dei moduli e definisce il confine di adozione fra Operations e Product. Creare `decisions/module-adoption-gating`: la modularità commerciale già dichiarata da [Architettura di prodotto a quattro layer](/decisions/four-layer-product-architecture.md) viene resa effettiva come **gating di composizione a livello di installazione**, con la Run remota promossa a risorsa Operations che *può* riferire un Project invece di doverlo riferire.
+
+  Alternative valutate e respinte:
+
+  - **Interruttore persistito sull'Organization con toggle runtime dalla UI.** Introdurrebbe migrazione, endpoint amministrativo, cache e invalidazione per una scelta che è di installazione e non di esercizio quotidiano, e lascerebbe comunque irrisolto l'accoppiamento Run–Project. La spec esclude esplicitamente la granularità per utente.
+  - **Mantenere `project_id` obbligatorio creando un Project tecnico implicito.** Reintrodurrebbe di nascosto proprio il modello aziendale che la spec vuole evitare e renderebbe AC-3 verificabile solo in facciata.
+  - **Gating solo nella SPA.** Respinta: lascerebbe le API Product raggiungibili, quindi il modulo esposto.
+  - **Estrarre Product in un deployable separato.** È l'alternativa già rinviata dall'ADR a quattro layer e resta prematura: duplicherebbe identità, audit e deployment.
+
+  Costi accettati: due percorsi di creazione Run da mantenere coerenti, e un accoppiamento residuo a livello di codice (`run-service.ts` importa parser di dominio da `modules/product/`) che resta inerte a modulo disabilitato perché nessuna Run Workflow può essere creata. La sua rimozione non è in ambito e va registrata come conseguenza nell'ADR.
+
+  ---
+
+  ## Baseline
+
+  Tutti i comandi sono stati eseguiti da `/Users/stefanoleli/Project/Archetipo` prima della pianificazione.
+
+  | Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `npm run typecheck:control` | Passa (exit 0) | Ogni task che tocca TypeScript deve restare verde; nessuna diagnostica preesistente da tollerare. |
+  | `npm run lint:control` | Passa (exit 0) | I file modificati non devono aggiungere diagnostiche ESLint. |
+  | `npm --prefix control run test:web` | Passa — 5 file, 52 test | I test web esistenti sono la rete di sicurezza per le modifiche a router, shell e pagina Run. |
+  | `npm --prefix control run test:integration` | Passa — 27 file, 98 test (≈66 s) | Richiede Docker attivo: la fixture avvia PostgreSQL 17 in container. L'intera suite è la regressione di riferimento per migrazione e API. |
+  | `npm run test:control:e2e` | **Rosso preesistente:** 19 passati, 1 fallito | Vedi il confine di fallimento qui sotto. Nessun task può promettere il verde sull'intera suite E2E. |
+
+  **Confine di fallimento E2E già presente su albero pulito.** Fallisce soltanto `test/e2e/control-project-workflow-inception.spec.ts:341` («AC-1..AC-5: completa e recupera Inception senza artefatti concorrenti»), all'asserzione di riga 405 `expect(completed.projection).toMatchObject({ projectId, runId, processInputId })`, con `completed.projection` uguale a `undefined`. Il difetto è anteriore a questa spec e non va corretto qui. È però adiacente al codice toccato da TASK-04, che condiziona `getWorkflowProjection` alla presenza di un Project: l'implementatore deve verificare che dopo le proprie modifiche il fallimento resti **esattamente questo** — stesso file, stesso test, stessa asserzione — e che nessuno scenario oggi verde diventi rosso. Attribuire questo rosso alla propria modifica, o farlo sparire per effetto collaterale senza capirne la causa, sono entrambi esiti da segnalare invece che da ignorare.
+
+  **Forma dei comandi E2E.** Lo script `test:control:e2e` è `npm run build:control && playwright test test/e2e/control-*.spec.ts`: gli argomenti passati con `--` vengono **aggiunti** al pattern, non lo sostituiscono, quindi non filtrano nulla e l'intera suite viene eseguita. Per lanciare un singolo scenario usare `npm run build:control && npx playwright test test/e2e/<file>.spec.ts`.
+
+  **Prerequisiti d'ambiente (distinti dai difetti di codice):** Docker deve essere in esecuzione per `test:integration` e per gli scenari `test/e2e/control-*.spec.ts` (PostgreSQL 17, e per alcuni scenari container Runner). Gli E2E richiedono inoltre i browser Playwright installati. La suite E2E completa impiega circa due minuti.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task produttore |
+  |---|---|---|---|---|
+  | AC-1 | `loadConfig` con ambiente controllato | unit | `CONTROL_MODULE_PRODUCT=disabled` produce `modules.product.enabled === false`, assenza produce `true`, valore arbitrario fa lanciare `loadConfig` | TASK-02 |
+  | AC-1 | Control avviato con Product disabilitato | integration | `GET /api/modules` risponde `200` con `modules.product.enabled === false` | TASK-07 |
+  | AC-1 | Installazione E2E riavviata con Product disabilitato | e2e browser | Dopo il login amministratore la navigazione Control non contiene il link `Project` | TASK-11 |
+  | AC-2 | Control con Product disabilitato, database migrato | integration | Enrollment Runner, creazione Agent Profile, `GET /api/operations/runners`, `GET /api/audit` rispondono `2xx`; `POST /api/operations/runs` con `agentProfileId` risponde `201` e la riga `remote_runs` ha `project_id IS NULL` | TASK-07 |
+  | AC-2 | Runner online E2E, Product disabilitato | e2e browser | Dal browser: Runner associato visibile come `online`, Agent Profile creato, Run avviata dalla pagina `/operations/runs` senza alcun Project e passata a stato assegnato/eseguito | TASK-11 |
+  | AC-3 | Control con Product disabilitato | integration | `POST /api/projects`, `GET /api/projects/:id`, `POST /api/projects/:id/process`, `GET /api/projects/:id/cockpit` rispondono `404`; `POST /api/operations/runs` con `projectId` risponde `400 invalid_request` | TASK-07 |
+  | AC-3 | SPA con `modules.product.enabled === false` | component | `ControlShell` non rende il link `Project`; l'apertura di `/projects/new` rende la pagina Membri e non la pagina Project | TASK-09 |
+  | AC-3 | Installazione E2E con Product disabilitato | e2e browser | `GET /projects/new` non serve la SPA (404) e il tentativo di raggiungere l'URL non mostra alcuna interfaccia Project | TASK-11 |
+  | AC-4 | Database con Project, Process e Run Product già presenti, poi Control ricomposto con Product disabilitato | integration | `SELECT count(*)` su `projects`, `process_instances` e `remote_runs` invariato prima/dopo; `GET /api/operations/runs` continua a elencare la Run Product preesistente e `GET /api/operations/runs/:runId` ne restituisce eventi e osservazioni | TASK-07 |
+  | AC-4 | Installazione E2E con storico creato a modulo abilitato | e2e browser | Dopo il riavvio con Product disabilitato la Run eseguita in precedenza è ancora elencata e apribile in `/operations/runs` con la sua timeline | TASK-11 |
+
+  ---
+
+  ## Strategia di test
+
+  La verifica procede dal contratto di configurazione fino al percorso utente completo, tenendo separati i due assi della spec: *composizione del modulo* e *usabilità di Operations senza Project*.
+
+  - **Unit** su `loadConfig` per il contratto dell'interruttore, incluso il rifiuto dei valori non ammessi: è l'unico livello dove il fallimento all'avvio è osservabile in modo deterministico.
+  - **Integration** su Fastify reale con PostgreSQL 17, costruendo l'app due volte sullo stesso database — prima con Product abilitato per creare Project, Process e Run, poi con Product disabilitato — così che AC-3 e AC-4 siano provati sullo stesso stato persistito e non su installazioni diverse. Nessun mock nasconde l'oracolo: le asserzioni leggono i codici HTTP effettivi e le righe reali delle tabelle.
+  - **Component** su router, shell e pagina Run con `ControlApi` sostituito da un doppio: il doppio sostituisce il trasporto, non i componenti responsabili dell'esito, quindi la presenza o assenza del link `Project` e la resa della select Agent Profile restano direttamente osservabili.
+  - **E2E browser** obbligatorio: il percorso di accettazione attraversa confine di rotta e server, autenticazione OIDC, persistenza, connessione Runner remota e navigazione fra schermate; nessun livello inferiore può provare che l'installazione con Product disabilitato è realmente usabile end to end. Si riusa il framework già presente (`@playwright/test`, `playwright.config.ts`, `test/e2e/control-fixture.mjs`) senza introdurne di nuovi.
+
+  ### Test E2E — simulazione utente
+
+  **Framework:** `@playwright/test` con `test/e2e/control-fixture.mjs` (Control reale, PostgreSQL 17 in Docker, issuer OIDC deterministico)
+  **Video dimostrativo:** atteso — la spec è filmabile; la registrazione è responsabilità di `archetipo-review`, non dell'implementazione
+
+  | Scenario | Descrizione del flusso utente |
+  |---|---|
+  | Adozione Operations senza Product | L'amministratore accede a un'installazione con Product disabilitato, verifica che la navigazione non offra `Project`, associa un Runner, definisce un Agent Profile, avvia dalla pagina Run una Run tecnica indicando solo Agent Profile e obiettivo e ne osserva l'assegnazione e l'esito. |
+  | Cronologia Operations preservata | Con Product abilitato viene prodotta una Run; dopo il riavvio dell'installazione con Product disabilitato l'amministratore ritrova la stessa Run nell'elenco, ne apre la timeline, e osserva che le rotte Product non sono più servite. |
+
+  ---
+
+  ## Impatto Wiki
+
+  ```yaml
+  wiki_impact:
+    read:
+      - decisions/four-layer-product-architecture
+      - architecture/context-map
+      - overview
+      - decisions/control-foundation
+      - domains/fleet-and-run-management
+      - domains/product-process-management
+    update_after_acceptance:
+      - decisions/four-layer-product-architecture
+      - architecture/context-map
+      - domains/fleet-and-run-management
+      - engineering/code-map
+    create:
+      - decisions/module-adoption-gating
+  ```
+
+  ---
+
+  ## Note e assunzioni
+
+  - **Attore di AC-1.** «Amministratore» è inteso come amministratore dell'installazione self-hosted, che agisce sulla configurazione del deployment e riavvia Control. Il `Dimostra` della spec parte infatti da «un'installazione configurata con Product disabilitato» e il fuori ambito esclude la granularità per utente. Un toggle runtime per l'amministratore d'organizzazione resterebbe una decisione successiva, da prendere sopra questo ADR.
+  - **Stima.** I 3 punti riflettono il solo interruttore. Il disaccoppiamento Run–Project richiesto da AC-2 comporta migrazione, servizio, API e UI: il volume reale è coerente con 5–8 punti. Il piano copre l'intero ambito; la ristima è una decisione di prodotto.
+  - **Mockup.** Non generati: la spec non introduce pagine o componenti nuovi né riorganizza layout. Le modifiche visive sono la rimozione di una voce di navigazione e la sostituzione di un campo del form Run già esistente.
+
+  _Piano generato da ARchetipo Planning — 2026-07-26_
+tasks:
+  - id: TASK-01
+    title: Introdurre l'interruttore di installazione del modulo Product
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      `ControlConfig` espone `modules.product.enabled` e Control pubblica lo stato dei moduli su `GET /api/modules`.
+
+      ## Read
+      - `control/src/server/config.ts` — `ControlConfig`, `loadConfig`, helper `nonEmpty`/`readPort` per lo stile di validazione degli input d'ambiente
+      - `control/src/server/app.ts` — registrazione di `/health/live` e `/health/ready`, punto in cui montare la nuova rotta prima del blocco che richiede database e OIDC
+      - `control/.env.example` — elenco delle variabili documentate
+      - `control/README.md` — sezione di configurazione
+
+      ## Change
+      - `control/src/server/config.ts` — aggiungere a `ControlConfig` il campo `modules: { product: { enabled: boolean } }` e popolarlo in `loadConfig` leggendo `CONTROL_MODULE_PRODUCT`
+      - `control/src/server/app.ts` — registrare `app.get("/api/modules", ...)` subito dopo `/health/live`
+      - `control/.env.example`, `control/README.md` — documentare la nuova variabile
+      - Non gate: in questo task nessuna registrazione Product cambia e nessuna rotta esistente viene rimossa
+
+      ## Steps
+      1. In `config.ts` scrivere una funzione locale `readProductModule(value: string | undefined): boolean` che restituisce `true` per `undefined` e `"enabled"`, `false` per `"disabled"`, e lancia `new Error("CONTROL_MODULE_PRODUCT must be one of enabled or disabled")` per ogni altro valore; applicare `nonEmpty` all'input come fanno le altre letture.
+      2. Estendere il tipo `ControlConfig` con `modules: { product: { enabled: boolean } }` e valorizzarlo nel `return` di `loadConfig` con `modules: { product: { enabled: readProductModule(nonEmpty(environment.CONTROL_MODULE_PRODUCT)) } }`.
+      3. In `app.ts` aggiungere `app.get("/api/modules", () => ({ modules: { product: { enabled: config.modules.product.enabled } } }));` accanto a `/health/live`, quindi fuori dal blocco condizionato da database, OIDC e bootstrap: la SPA deve poterlo leggere anche prima del setup.
+      4. Aggiungere `CONTROL_MODULE_PRODUCT=enabled` a `control/.env.example` con un commento che indica i due valori ammessi, e documentare la variabile nella sezione di configurazione di `control/README.md`.
+      5. Allineare i chiamanti di `buildApp` che costruiscono un `ControlConfig` letterale (`control/src/server/app.test.ts`, `control/test/integration/**`, `test/e2e/control-fixture.mjs`) aggiungendo `modules: { product: { enabled: true } }`, così il typecheck resta verde e il comportamento corrente non cambia.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run typecheck:control && npm run lint:control`
+      - Expect: entrambi passano, come nella baseline registrata
+
+      ## Done
+      - [ ] AC-1 — `loadConfig` restituisce `modules.product.enabled === false` quando `CONTROL_MODULE_PRODUCT=disabled` e `true` in assenza della variabile
+      - [ ] `GET /api/modules` è registrato senza dipendere da database, sessione o bootstrap
+      - [ ] `CONTROL_MODULE_PRODUCT` è documentata in `.env.example` e nel README di Control
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Coprire con unit test il contratto dell'interruttore di modulo
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il contratto di `CONTROL_MODULE_PRODUCT` è verificato su default, disabilitazione e valore non ammesso.
+
+      ## Read
+      - `control/src/server/config.test.ts` — struttura dei casi esistenti e modo in cui l'ambiente viene passato a `loadConfig`
+      - `control/src/server/config.ts` — implementazione introdotta da TASK-01
+
+      ## Change
+      - `control/src/server/config.test.ts` — aggiungere i casi per `modules.product`
+      - Non modificare `config.ts` in questo task: se un test rivela un difetto, correggerlo qui è ammesso solo per il codice introdotto da TASK-01
+
+      ## Steps
+      1. Aggiungere un test che invoca `loadConfig` con un ambiente di sviluppo minimo privo di `CONTROL_MODULE_PRODUCT` e asserisce `config.modules.product.enabled === true`.
+      2. Aggiungere un test con `CONTROL_MODULE_PRODUCT: "disabled"` che asserisce `config.modules.product.enabled === false`.
+      3. Aggiungere un test con `CONTROL_MODULE_PRODUCT: "off"` che asserisce che `loadConfig` lancia, verificando che il messaggio nomini la variabile.
+      4. Verificare che i test usino lo stesso stile di costruzione dell'ambiente già presente nel file, senza introdurre helper nuovi.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm --prefix control run test:config`
+      - Expect: tutti i test del file passano, inclusi i tre nuovi
+
+      ## Done
+      - [ ] AC-1 — l'assenza della variabile lascia il modulo abilitato, `disabled` lo disabilita, un valore arbitrario impedisce l'avvio
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Rendere opzionale il Project sulla Run remota a livello di schema e dominio
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Una riga `remote_runs` può esistere senza Project, conservando l'integrità delle Run che ne hanno uno.
+
+      ## Read
+      - `control/migrations/005_remote_runs.sql` — definizione di `remote_runs`, in particolare `project_id NOT NULL` e `remote_runs_project_organization_fk`
+      - `control/migrations/010_remote_run_observability.sql` — convenzioni dell'ultima migrazione, per numerazione e stile
+      - `control/src/modules/operations/run-domain.ts` — tipo `RemoteRun`
+      - `control/src/modules/operations/run-repository.ts` — tabella tipizzata `remote_runs`, `createRun`, mapping da riga a dominio
+      - `control/test/integration/migrations.test.ts` — come le migrazioni vengono applicate e verificate
+
+      ## Change
+      - `control/migrations/011_optional_project_runs.sql` — nuovo file
+      - `control/src/modules/operations/run-domain.ts` — `RemoteRun.projectId` diventa `string | null`
+      - `control/src/modules/operations/run-repository.ts` — tipo di colonna, input di `createRun` e mapping allineati al valore nullable
+      - Non toccare: il vincolo `remote_runs_profile_organization_fk` e `agent_profile_id`, che restano obbligatori
+
+      ## Steps
+      1. Creare `control/migrations/011_optional_project_runs.sql` con `ALTER TABLE remote_runs ALTER COLUMN project_id DROP NOT NULL;` e un commento che spiega perché il vincolo composito verso `projects` resta valido: con `MATCH SIMPLE`, il default di PostgreSQL, la referenza non è applicata quando una colonna della chiave è `NULL`.
+      2. In `run-domain.ts` cambiare `projectId: string;` in `projectId: string | null;` dentro `RemoteRun`.
+      3. In `run-repository.ts` rendere nullable la colonna `project_id` nella definizione della tabella Kysely, accettare `projectId: string | null` nell'input di `createRun` e propagare il valore nel mapping da riga a dominio senza coercizioni.
+      4. Correggere i punti che il compilatore segnala come non più validi limitandosi alla propagazione del tipo; le decisioni di comportamento sui due percorsi di creazione appartengono a TASK-04.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run typecheck:control && npm --prefix control run test:integration`
+      - Expect: typecheck verde; suite di integrazione verde con lo stesso numero di test della baseline (27 file, 98 test), a conferma che la migrazione applicata non rompe alcun percorso esistente. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-2 — lo schema ammette una Run senza Project senza indebolire l'integrità delle Run che ne hanno uno
+      - [ ] La suite di integrazione preesistente resta verde dopo l'applicazione della migrazione
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Consentire l'avvio di una Run tecnica indicando l'Agent Profile
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      `RemoteRunService` e l'API Operations accettano una Run avviata con il solo Agent Profile, oltre alla Run Product esistente.
+
+      ## Read
+      - `control/src/modules/operations/run-service.ts` — `create` (risoluzione via `profiles.effectiveConfiguration`, payload di sessione, audit, dispatch) e `get` (costruzione di `correlation` e proiezione Workflow)
+      - `control/src/modules/operations/agent-profile-service.ts` — `get(organizationId, profileId)` e `AgentProfileNotFoundError`
+      - `control/src/modules/operations/run-http.ts` — `POST /api/operations/runs`, `publicRun`, `mapRunError`
+      - `control/src/modules/operations/run-domain.ts` — `RemoteRunDetails` non è qui ma in `run-service.ts`; verificare `parseProjectSessionContext`
+
+      ## Change
+      - `control/src/modules/operations/run-service.ts` — input di `create` e forma di `correlation`
+      - `control/src/modules/operations/run-http.ts` — validazione del corpo della richiesta
+      - Non toccare: `createWorkflow`, `session-run-service.ts`, `workflow-run-service.ts` e ogni percorso Product, che continuano a passare `projectId`
+
+      ## Steps
+      1. In `run-service.ts` cambiare l'input di `create` in `{ organizationId; goal; actorIdentityId; actor; correlationId; projectId?: string; agentProfileId?: string; context?: ProjectSessionContext }` e, all'ingresso, rifiutare con `new Error("invalid_run_target")` i casi in cui i due riferimenti sono entrambi presenti o entrambi assenti.
+      2. Risolvere il profilo efficace: con `projectId` mantenere invariata la chiamata a `this.profiles.effectiveConfiguration` e la validazione del `context`; con `agentProfileId` usare `this.profiles.get(organizationId, agentProfileId)` e rifiutare un `context` valorizzato con `new Error("invalid_session_context")`, perché il contesto di sessione descrive un Project.
+      3. Passare a `repository.createRun` `projectId: input.projectId ?? null` e allineare i metadati di audit: includere `projectId` solo quando presente e aggiungere sempre `agentProfileId`.
+      4. In `get` rendere `correlation.project` opzionale nel tipo `RemoteRunDetails` e ometterlo quando `run.projectId === null`; richiedere `getWorkflowProjection` solo quando `run.projectId !== null`.
+      5. In `run-http.ts` accettare `{ projectId?, agentProfileId?, goal }`, validare come UUID il riferimento presente, rispondere `400 invalid_request` con messaggio esplicito quando i riferimenti presenti non sono esattamente uno, e mappare `AgentProfileNotFoundError` su `404 agent_profile_not_found` dentro `mapRunError`.
+      6. Aggiornare `publicRun` perché esponga `projectId` eventualmente `null` senza sostituirlo con una stringa vuota.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run typecheck:control && npm run lint:control && npm --prefix control run test:integration`
+      - Expect: typecheck e lint verdi; suite di integrazione verde senza regressioni rispetto ai 98 test della baseline, a conferma che il percorso Product resta invariato. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-2 — `RemoteRunService.create` produce una Run valida ricevendo solo `agentProfileId` e obiettivo
+      - [ ] Il percorso Product con `projectId` conserva risoluzione del profilo, contesto, audit e dispatch invariati
+      - [ ] `correlation.project` è assente per le Run senza Project e presente per quelle che ne hanno uno
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Verificare in integrazione la Run tecnica senza Project
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Con Product abilitato, una Run avviata con il solo Agent Profile è creata, assegnata e rileggibile senza correlazione a un Project.
+
+      ## Read
+      - `control/test/integration/remote-run-http.test.ts` — costruzione dell'app, autenticazione della sessione di test, creazione di Runner e Agent Profile, asserzioni sulle risposte
+      - `control/test/fixtures/postgres.ts` — avvio del database e applicazione delle migrazioni
+      - `control/src/modules/operations/run-http.ts` — contratto introdotto da TASK-04
+
+      ## Change
+      - `control/test/integration/remote-run-http.test.ts` — aggiungere i casi per la Run tecnica
+      - Non modificare i casi esistenti: devono continuare a provare il percorso Product invariato
+
+      ## Steps
+      1. Aggiungere un test che, con un Runner compatibile online e un Agent Profile creato, invia `POST /api/operations/runs` con `{ agentProfileId, goal }` e asserisce risposta `201`.
+      2. Asserire sulla riga persistita che `project_id` è `NULL` e che `agent_profile_id` corrisponde al profilo indicato, leggendo il database della fixture e non solo la risposta HTTP.
+      3. Asserire che `GET /api/operations/runs/:runId` restituisce `details.correlation.agentProfile.id` corretto e che `details.correlation.project` è assente.
+      4. Aggiungere un test che invia sia `projectId` sia `agentProfileId` e asserisce `400` con codice `invalid_request`, e un test che non invia alcun riferimento e asserisce lo stesso esito.
+      5. Aggiungere un test che invia un `agentProfileId` inesistente e asserisce `404 agent_profile_not_found`.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm --prefix control run test:integration`
+      - Expect: suite verde, con i nuovi casi eseguiti; nessun test preesistente fallito rispetto ai 98 della baseline. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-2 — la Run tecnica risulta creata in database con `project_id IS NULL` e rileggibile via API senza correlazione a Project
+      - [ ] Gli input ambigui o incompleti sono rifiutati con `400`, il profilo inesistente con `404`
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Comporre Control senza il modulo Product quando è disabilitato
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Con `modules.product.enabled === false` nessuna rotta o servizio Product viene registrato, mentre Identity, Audit e Operations restano completi.
+
+      ## Read
+      - `control/src/server/app.ts` — blocco che costruisce service e registra le rotte, ed elenco delle rotte SPA servite staticamente
+      - `control/src/modules/product/http.ts`, `process-http.ts`, `cockpit-http.ts`, `session-run-http.ts`, `process-input-http.ts`, `workflow-run-http.ts`, `prd-review-http.ts` — i registrar da condizionare e i prefissi che espongono
+      - `control/src/modules/operations/run-http.ts` — punto in cui rifiutare `projectId` a modulo disabilitato
+
+      ## Change
+      - `control/src/server/app.ts` — condizionare la composizione Product e l'elenco delle rotte SPA
+      - `control/src/modules/operations/run-http.ts` — `registerRemoteRunHttp` riceve lo stato del modulo
+      - Non toccare: `registerIdentityHttp`, `registerOrganizationHttp`, `registerAuditHttp`, `registerOperationsHttp`, `registerAgentProfileHttp`, `registerRemoteRunHttp`, `registerArtifactSnapshotHttp` e `registerRunnerTransport`, che restano sempre composti
+
+      ## Steps
+      1. In `app.ts` raccogliere in `const productEnabled = config.modules.product.enabled;` e racchiudere in `if (productEnabled) { ... }` la costruzione di `ProductService`, `ProcessService`, `CockpitService`, `ProcessInputService`, `ProjectSessionRunService`, `ProjectWorkflowRunService`, `PrdReviewService` e le rispettive `register*Http`.
+      2. Riordinare il blocco in modo che `ProcessInputRepository`, `AgentProfileService`, `OperationsService`, `RemoteRunService`, `AssignmentExpiryCoordinator` e il trasporto Runner restino costruiti e registrati fuori dal condizionale: le Run remote non dipendono da Product.
+      3. Passare `productEnabled` a `registerRemoteRunHttp` e, quando è `false`, rispondere `400 invalid_request` con messaggio esplicito a ogni richiesta di creazione Run che contenga `projectId`; la Run tecnica con `agentProfileId` resta ammessa.
+      4. Costruire l'elenco delle rotte SPA in modo che `/projects/new` e `/projects/:projectId` siano presenti solo quando `productEnabled` è `true`, lasciando invariate `/`, `/setup`, `/settings/members`, `/audit` e le rotte `/operations/*`.
+      5. Verificare che nessuna registrazione Operations sia rimasta accidentalmente dentro il condizionale, in particolare `registerArtifactSnapshotHttp` e `registerRunnerTransport`, che appartengono al modulo Operations pur essendo vicini nel file.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run typecheck:control && npm run lint:control && npm --prefix control run test:integration`
+      - Expect: typecheck e lint verdi; suite di integrazione verde, perché la configurazione di default lascia Product abilitato e il comportamento corrente non cambia. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-3 — con Product disabilitato nessun registrar Product è invocato e le rotte SPA Product non sono servite
+      - [ ] AC-2 — Identity, Organization, Audit, Runner, Agent Profile, Run e trasporto Runner restano composti in entrambe le configurazioni
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Verificare in integrazione l'installazione con Product disabilitato
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Sullo stesso database, la ricomposizione di Control con Product disabilitato rende le funzioni Project e Process non esposte, lascia Operations utilizzabile e non altera la cronologia esistente.
+
+      ## Read
+      - `control/test/integration/project-http.test.ts` — come vengono create Project e risorse Product via API
+      - `control/test/integration/remote-run-http.test.ts` — costruzione dell'app, sessione autenticata, Runner e Agent Profile
+      - `control/test/fixtures/postgres.ts` — fixture del database condiviso
+      - `control/src/server/app.ts` — composizione condizionata introdotta da TASK-06
+
+      ## Change
+      - `control/test/integration/module-product-disabled.test.ts` — nuovo file
+      - Non modificare i test esistenti
+
+      ## Steps
+      1. Avviare la fixture PostgreSQL una sola volta e costruire una prima istanza `buildApp` con `modules.product.enabled: true`; creare tramite API un Project, un Agent Profile e una Run Product, così da produrre lo stato di partenza di AC-4. Registrare i conteggi di `projects` e `remote_runs` e l'id della Run.
+      2. Chiudere la prima istanza e costruire una seconda istanza `buildApp` sullo stesso `databaseUrl` con `modules.product.enabled: false`.
+      3. Asserire AC-1: `GET /api/modules` risponde `200` con `modules.product.enabled === false`.
+      4. Asserire AC-3: `POST /api/projects`, `GET /api/projects/:projectId`, `POST /api/projects/:projectId/process` e `GET /api/projects/:projectId/cockpit` rispondono `404`; `POST /api/operations/runs` con `projectId` risponde `400 invalid_request`.
+      5. Asserire AC-2: `GET /api/operations/runners`, `GET /api/agent-profiles` e `GET /api/audit` rispondono `200`; la creazione di un Agent Profile riesce; `POST /api/operations/runs` con `{ agentProfileId, goal }` risponde `201` e la riga creata ha `project_id IS NULL`.
+      6. Asserire AC-4: i conteggi di `projects` e `remote_runs` sono invariati rispetto al passo 1 salvo la nuova Run tecnica; `GET /api/operations/runs` elenca ancora la Run Product preesistente e `GET /api/operations/runs/:runId` ne restituisce eventi e osservazioni.
+      7. Chiudere entrambe le istanze e la fixture in `afterAll`, seguendo la disciplina di cleanup dei test di integrazione esistenti.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm --prefix control run test:integration`
+      - Expect: suite verde, con il nuovo file eseguito e nessuna regressione sui 98 test della baseline. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-1 — `GET /api/modules` riporta il modulo disabilitato sull'istanza ricomposta
+      - [ ] AC-2 — Runner, Agent Profile, Run tecnica e audit rispondono correttamente con Product disabilitato
+      - [ ] AC-3 — le rotte `/api/projects/**` rispondono `404` e la creazione Run con `projectId` è rifiutata
+      - [ ] AC-4 — i conteggi delle tabelle Product e Operations sono invariati e la Run Product preesistente resta elencata e apribile
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Adeguare la SPA all'installazione senza modulo Product
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      La SPA non offre alcuna funzione Project quando il modulo è disabilitato e consente di avviare una Run scegliendo l'Agent Profile.
+
+      ## Read
+      - `control/src/web/api/client.ts` — `ControlApi`, `getSetup`, `getSession`, `createRun`, `getAgentProfiles`, tipi `RemoteRun` e `RemoteRunDetails`
+      - `control/src/web/router.tsx` — `normalizeRoute`, `loadApplication`, calcolo di `active`, resa condizionale delle pagine
+      - `control/src/web/layouts/control-shell.tsx` — elenco dei link di navigazione
+      - `control/src/web/pages/runs.tsx` — form di creazione Run e blocco di dettaglio che rende `correlation.project`
+
+      ## Change
+      - `control/src/web/api/client.ts` — aggiungere `getModules`, rendere `RemoteRun.projectId` nullable, rendere opzionale `correlation.project`, cambiare `createRun` in una firma a oggetto
+      - `control/src/web/router.tsx` — caricamento dei moduli e normalizzazione delle rotte
+      - `control/src/web/layouts/control-shell.tsx` — link `Project` condizionato
+      - `control/src/web/pages/runs.tsx` — form e dettaglio condizionati
+      - Non toccare: `control/src/web/pages/project.tsx`, che resta invariato e semplicemente non viene più raggiunto a modulo disabilitato
+
+      ## Steps
+      1. In `client.ts` aggiungere al tipo `ControlApi` e all'implementazione `getModules: (signal?: AbortSignal) => Promise<{ product: { enabled: boolean } }>` che legge `/api/modules` e restituisce `payload.modules`.
+      2. Sempre in `client.ts`, cambiare `RemoteRun.projectId` in `string | null`, rendere opzionale `correlation.project` in `RemoteRunDetails` e sostituire `createRun(projectId, goal)` con `createRun(input: { projectId?: string; agentProfileId?: string; goal: string })`, serializzando nel corpo solo il riferimento presente.
+      3. In `router.tsx` aggiungere uno stato `productEnabled` valorizzato in `loadApplication` tramite `api.getModules()`, e far sì che `normalizeRoute` non produca più rotte `/projects/*` quando il modulo è disabilitato: in quel caso il percorso normalizza su `/settings/members`. Poiché `normalizeRoute` è invocata anche fuori dal componente, passarle il flag esplicitamente invece di leggerlo da uno stato globale.
+      4. Propagare `productEnabled` a `ControlShell` e, in `control-shell.tsx`, rendere il link `Project` solo quando è `true`; lasciare invariati gli altri link e l'attributo `aria-current`.
+      5. In `runs.tsx` caricare gli Agent Profile con `api.getAgentProfiles()` e, quando il modulo è disabilitato, sostituire il campo `Project ID` con una `select` etichettata `Agent Profile` che elenca i profili per nome; inviare `createRun({ agentProfileId, goal })`. Quando il modulo è abilitato mantenere il campo `Project ID` e inviare `createRun({ projectId, goal })`.
+      6. Nel dettaglio Run rendere la riga `Project` solo quando `selected.correlation.project` è definita, evitando accessi a proprietà di un valore assente.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run typecheck:control && npm run lint:control && npm --prefix control run test:web`
+      - Expect: typecheck e lint verdi; i 52 test web della baseline restano verdi, eventualmente adattati alla nuova firma di `createRun` e al doppio `getModules` richiesto dal router
+
+      ## Done
+      - [ ] AC-3 — con `product.enabled === false` la navigazione non contiene il link `Project` e le rotte `/projects/*` non vengono rese
+      - [ ] AC-2 — la pagina Run consente di avviare una Run scegliendo un Agent Profile, senza indicare alcun Project
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Verificare a livello di componente la SPA senza modulo Product
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      I test web provano che l'interfaccia non espone funzioni Project a modulo disabilitato e che la Run tecnica è avviabile dalla pagina Run.
+
+      ## Read
+      - `control/test/web/setup-members-audit.test.tsx` — come il router viene montato con un doppio di `ControlApi` e come si asseriscono i link di navigazione
+      - `control/test/web/runs.test.tsx` — doppio dell'API e asserzioni sulla pagina Run
+      - `control/src/web/router.tsx` e `control/src/web/pages/runs.tsx` — comportamento introdotto da TASK-08
+
+      ## Change
+      - `control/test/web/module-product-disabled.test.tsx` — nuovo file
+      - `control/test/web/runs.test.tsx` — estendere con il caso della Run avviata per Agent Profile
+      - Non introdurre nuovi helper di mount: riusare quelli già presenti nei test web
+
+      ## Steps
+      1. Nel nuovo file montare il router con un doppio la cui `getModules` restituisce `{ product: { enabled: false } }`, sessione amministratore attiva e setup completato; asserire con una query accessibile che non esiste alcun link di navigazione con nome accessibile `Project`.
+      2. Aggiungere il caso complementare con `{ product: { enabled: true } }` che asserisce la presenza del link, così l'assenza nel primo caso non è un falso positivo dovuto a un errore di rendering.
+      3. Aggiungere un caso che monta il router con `initialPath` `/projects/new` e modulo disabilitato, asserendo che compare l'intestazione della pagina Membri e non quella della pagina Project.
+      4. In `runs.test.tsx` aggiungere un caso con modulo disabilitato che compila la select `Agent Profile`, inserisce un obiettivo, invia il form e asserisce che il doppio ha ricevuto `createRun` con `agentProfileId` valorizzato e `projectId` assente, e che la Run creata compare nell'elenco.
+      5. Verificare che i doppi sostituiscano soltanto il trasporto HTTP: router, shell e pagina Run devono restare i componenti reali, altrimenti l'oracolo di AC-3 non sarebbe osservabile.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm --prefix control run test:web`
+      - Expect: tutti i test web passano, inclusi i nuovi casi; nessuna regressione rispetto ai 52 della baseline
+
+      ## Done
+      - [ ] AC-3 — l'assenza del link `Project` è provata a modulo disabilitato e la sua presenza a modulo abilitato
+      - [ ] AC-3 — l'apertura di `/projects/new` a modulo disabilitato non rende l'interfaccia Project
+      - [ ] AC-2 — la pagina Run invia una richiesta di creazione con il solo `agentProfileId` e mostra la Run risultante
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Consentire alla fixture E2E di ricomporre Control senza Product
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      La fixture Playwright può riavviare Control sullo stesso database e sulla stessa porta con il modulo Product disabilitato.
+
+      ## Read
+      - `test/e2e/control-fixture.mjs` — costruzione di `controlApp` con `buildApp`, `waitForControl`, oggetto restituito da `startControlFixture`, metodi `reset` e `stop`
+      - `control/src/server/app.ts` — firma di `buildApp` e opzioni `BuildAppOptions`
+
+      ## Change
+      - `test/e2e/control-fixture.mjs` — estrarre la costruzione dell'app e aggiungere un metodo di ricomposizione
+      - Non modificare la sequenza di avvio di PostgreSQL, issuer OIDC e Runner: devono sopravvivere al riavvio dell'app
+
+      ## Steps
+      1. Estrarre in una funzione locale `composeControl(productEnabled)` la chiamata a `buildApp` già presente, aggiungendo al `ControlConfig` letterale `modules: { product: { enabled: productEnabled } }` e riusando le stesse opzioni `{ database, operations, runnerConnections, remoteRuns }`.
+      2. Sostituire la costruzione iniziale con `composeControl(true)`, preservando `listen` sulla stessa porta e la successiva attesa di prontezza.
+      3. Aggiungere al valore restituito un metodo `async restartControl({ product })` che chiude l'istanza corrente con `controlApp.close()`, invoca `composeControl(product)`, riesegue `listen` sulla stessa porta e attende `/health/ready`.
+      4. Assicurarsi che `stop` continui a chiudere l'istanza corrente e non una riferenza obsoleta, aggiornando la variabile `controlApp` a ogni ricomposizione.
+      5. Non svuotare il database durante la ricomposizione: la persistenza dello stato attraverso il riavvio è esattamente l'evidenza richiesta da AC-4.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run build:control && npx playwright test test/e2e/control-agent-profile.spec.ts`
+      - Expect: lo scenario passa, provando che l'estrazione non ha alterato l'avvio della fixture. È verde in baseline. Richiede Docker attivo e browser Playwright installati.
+
+      ## Done
+      - [ ] La fixture espone `restartControl({ product })` e riavvia Control senza perdere database, issuer e Runner
+      - [ ] Uno scenario Control preesistente resta verde dopo la modifica della fixture
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Dimostrare con test browser l'adozione di Operations senza Product
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-09
+      - TASK-10
+    body: |-
+      ## Objective
+      Uno scenario Playwright prova dal browser l'intero percorso di accettazione della spec su un'installazione con Product disabilitato.
+
+      ## Read
+      - `test/e2e/control-agent-profile.spec.ts` — login amministratore, creazione di Agent Profile, uso dei metodi della fixture
+      - `test/e2e/control-remote-run.spec.ts` — avvio e osservazione di una Run dal browser
+      - `test/e2e/control-fixture.mjs` — `startRunner`, `restartControl`, `reset`, selettori e attese disponibili
+
+      ## Change
+      - `test/e2e/control-module-product-disabled.spec.ts` — nuovo file
+      - Non modificare gli scenari esistenti
+
+      ## Steps
+      1. Con Product abilitato, eseguire il bootstrap, accedere come amministratore, associare un Runner, creare un Agent Profile e produrre una Run; annotarne l'identificativo come cronologia di partenza per AC-4.
+      2. Invocare `restartControl({ product: false })` e ricaricare l'applicazione nel browser.
+      3. Asserire AC-1 e AC-3 dall'interfaccia: la navigazione Control non espone un link `Project`; una richiesta a `/projects/new` non serve la SPA e nessuna interfaccia Project è visibile.
+      4. Asserire AC-2: dal browser il Runner risulta ancora associato con il proprio stato, un nuovo Agent Profile è creabile dalla pagina dedicata, e dalla pagina `/operations/runs` è possibile avviare una Run scegliendo solo Agent Profile e obiettivo; attendere che la Run raggiunga uno stato assegnato o successivo e asserirlo sul testo visibile.
+      5. Asserire AC-4: la Run prodotta al passo 1 è ancora elencata e, selezionandola, il dettaglio ne mostra la timeline.
+      6. Chiudere lo scenario con la disciplina di `stop({ failed })` già usata dagli altri file, senza lasciare container o risorse residue.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run build:control && npx playwright test test/e2e/control-module-product-disabled.spec.ts`
+      - Expect: lo scenario passa. Richiede Docker attivo e browser Playwright installati. Se l'ambiente non consente l'esecuzione, dichiararlo esplicitamente come non eseguito invece di riportarlo verde.
+
+      ## Done
+      - [ ] AC-1 — la navigazione dell'installazione con Product disabilitato non offre funzioni Project
+      - [ ] AC-2 — Runner, Agent Profile e Run tecnica sono usati dal browser fino a un esito osservabile
+      - [ ] AC-3 — la rotta Product non è servita e nessuna interfaccia Project è raggiungibile
+      - [ ] AC-4 — la Run creata prima della disabilitazione resta elencata e apribile con la sua timeline
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Registrare la decisione sul gating di adozione dei moduli
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      La Wiki contiene un ADR che spiega perché il modulo Product è disabilitabile per installazione e perché la Run può esistere senza Project.
+
+      ## Read
+      - `docs/wiki/decisions/four-layer-product-architecture.md` — frontmatter, marcatori `<!-- archetipo:wiki section=... -->` e stile della prosa
+      - `docs/wiki/decisions/outbound-runner-transport.md` — esempio di ADR con evidenza di codice e verifica
+      - `docs/wiki/index.md` — formato delle voci di navigazione
+
+      ## Change
+      - `docs/wiki/decisions/module-adoption-gating.md` — nuova pagina
+      - `docs/wiki/index.md` — aggiornato tramite comando, non a mano
+      - Non promuovere la pagina a `reviewed`: l'approvazione appartiene a `archetipo-review`
+
+      ## Steps
+      1. Creare la pagina con frontmatter `type: decision`, `status: generated`, `decision_status: accepted`, titolo e descrizione in italiano, e `sources` che puntano all'evidenza reale: `control/src/server/config.ts`, `control/src/server/app.ts`, `control/migrations/011_optional_project_runs.sql`, `control/src/modules/operations/run-service.ts`, `control/test/integration/module-product-disabled.test.ts`, `test/e2e/control-module-product-disabled.spec.ts`.
+      2. Compilare tutte le sezioni marcate: contesto, decisione, alternative, conseguenze e verifica, riprendendo dal piano le alternative respinte e i costi accettati, incluso l'accoppiamento residuo a livello di import fra `run-service.ts` e `modules/product/`.
+      3. Collegare la pagina a `/decisions/four-layer-product-architecture.md`, `/decisions/control-foundation.md` e `/domains/fleet-and-run-management.md` con link Markdown, come fanno gli ADR esistenti.
+      4. Rigenerare la navigazione eseguendo `archetipo wiki catalog` da `/Users/stefanoleli/Project/Archetipo`.
+      5. Eseguire `archetipo wiki validate --profile bootstrap` e correggere i finding di severità `error`; i warning vanno risolti se la correzione è immediata.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `archetipo wiki validate --profile bootstrap`
+      - Expect: envelope `kind: "validation_result"` con `data.ok: true` e nessun finding di severità `error`
+
+      ## Done
+      - [ ] La pagina `decisions/module-adoption-gating` esiste con tutti i marcatori di sezione compilati e fonti verificabili nel repository
+      - [ ] `docs/wiki/index.md` elenca la nuova decisione e la pagina resta in stato `generated`
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Eseguire il cancello finale di verifica della spec
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-05
+      - TASK-07
+      - TASK-09
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+      L'incremento è verificato end to end e la spec può essere proposta alla review solo con ogni task completato.
+
+      ## Read
+      - La sezione Baseline di questo piano, per confrontare i risultati con lo stato iniziale registrato
+      - `package.json` alla radice — script `typecheck:control`, `lint:control`, `test:control`, `test:control:e2e`
+
+      ## Change
+      - Nessuna modifica di codice attesa. Se un controllo fallisce, correggere il difetto nel file responsabile e rieseguire l'intera sequenza dall'inizio
+
+      ## Steps
+      1. Eseguire da `/Users/stefanoleli/Project/Archetipo`, nell'ordine: `npm run typecheck:control`, `npm run lint:control`, `npm --prefix control run test:config`, `npm --prefix control run test:web`, `npm --prefix control run test:integration`.
+      2. Eseguire l'intera suite browser: `npm run test:control:e2e`. Non usare `--` per filtrare: gli argomenti si aggiungono al pattern e non lo restringono.
+      3. Confrontare i risultati con la baseline. Nessun controllo verde in baseline può essere rosso ora, e nessun file modificato dal piano può presentare diagnostiche di compilatore o linter. Sulla suite E2E la baseline è 19 passati e 1 fallito: l'unico fallimento ammesso resta `test/e2e/control-project-workflow-inception.spec.ts:341`, all'asserzione `expect(completed.projection).toMatchObject(...)` di riga 405 con `projection` `undefined`. Qualsiasi altro fallimento, o un numero diverso di scenari passati, è una regressione da correggere prima di proseguire.
+      4. Eseguire `archetipo wiki validate --profile bootstrap` e verificare `data.ok: true`.
+      5. Marcare questo task come `DONE`.
+      6. Ricaricare la spec eseguendo `archetipo spec show US-020` da `/Users/stefanoleli/Project/Archetipo` e verificare che nessun task risulti ancora `TODO`.
+      7. Solo dopo che il passo 6 conferma l'assenza di task aperti, invocare `archetipo spec review US-020`.
+
+      ## Verify
+      - Run: `npm run typecheck:control && npm run lint:control && npm --prefix control run test:config && npm --prefix control run test:web && npm --prefix control run test:integration`
+      - Expect: tutti passano, coerentemente con la baseline registrata (52 test web, 98 test di integrazione come minimo, più i casi aggiunti)
+      - Run: `npm run test:control:e2e`
+      - Expect: `control-module-product-disabled.spec.ts` passa e il conteggio complessivo migliora la baseline di almeno gli scenari aggiunti, con l'unico fallimento residuo ammesso in `control-project-workflow-inception.spec.ts:341`; se l'ambiente non dispone di Docker o dei browser Playwright, riportarlo come non eseguito e non come verde
+      - Run: `archetipo spec show US-020`
+      - Expect: l'envelope mostra tutti i task in stato `DONE`
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4 — le evidenze della mappa di accettazione sono state prodotte ed eseguite
+      - [ ] Nessun controllo verde in baseline è diventato rosso e i file modificati non introducono diagnostiche
+      - [ ] `archetipo spec show US-020` prova che nessun task è rimasto `TODO` prima della richiesta di review
+
+      ## Blockers
+      None.
+    ref: TASK-13

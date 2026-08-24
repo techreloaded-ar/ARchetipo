@@ -1,0 +1,46 @@
+schema: archetipo/spec/v2
+code: US-046
+title: Aprire un workspace dalla home senza riavviare il viewer
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: HIGH
+points: 5
+status: DONE
+blocked_by:
+  - US-045
+scope: GROWTH
+body: |-
+  #### US-046: Aprire un workspace dalla home senza riavviare il viewer
+
+  **Epic:** EP-008 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** US-045
+
+  **User Story**
+  Come persona che segue più workspace nella stessa giornata,
+  voglio passare da un workspace all'altro dalla home della UI,
+  così da non chiudere e riavviare il viewer per ogni cambio di contesto.
+
+  **Dimostrazione**
+  Partendo da due workspace registrati con backlog diversi, il revisore apre il primo dalla home e osserva la sua board; torna alla home, apre il secondo e osserva board, configurazione e azioni ammesse del secondo, senza che il processo sia stato riavviato. Rende illeggibile la directory del secondo, tenta di aprirlo e osserva il motivo dichiarato con il workspace precedente ancora attivo e utilizzabile.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Dalla home si apre un workspace del registro e la UI mostra la board di quel workspace.
+  - [ ] AC-2 — Il cambio di workspace ricarica configurazione, backlog e azioni ammesse del workspace aperto, senza riavviare il processo del viewer.
+  - [ ] AC-3 — Dopo il cambio nessun dato del workspace precedente resta visibile nella board o nelle azioni.
+  - [ ] AC-4 — Un workspace non più leggibile dichiara il motivo e lascia attivo e utilizzabile il workspace precedente.
+  - [ ] AC-5 — L'apertura di un workspace ne aggiorna l'ultimo accesso nel registro.
+
+  **Fuori ambito**
+  Visualizzazione simultanea di più workspace, esecuzioni in corso che sopravvivono al cambio di workspace e condivisione del viewer tra più persone.
+history:
+  - status: TODO
+    at: "2026-08-19T11:03:29Z"
+  - status: PLANNED
+    at: "2026-08-20T01:06:45Z"
+  - status: IN PROGRESS
+    at: "2026-08-20T01:08:01Z"
+  - status: REVIEW
+    at: "2026-08-20T01:36:45Z"
+  - status: DONE
+    at: "2026-08-20T01:39:46Z"

@@ -1,0 +1,729 @@
+schema: archetipo/plan/v2
+spec_code: US-030
+body: "# US-030: Interagire con una run remota dalla UI — Piano di implementazione\n\n**Prodotto da:** Team di Pianificazione ARchetipo\n**Data:** 2026-08-18\n\n---\n\n## Spec\n\n**Epic:** EP-005\n**Priorità:** HIGH | **Punti:** 5\n**Bloccata da:** US-029 (stato `DONE`, precondizione soddisfatta)\n\n**User Story**\nCome utilizzatore che segue un'esecuzione ARcipelago da ARchetipo, voglio vedere gli eventi, inviare messaggi, rispondere alle approvazioni e annullare la run, così da collaborare con l'agente senza lasciare la UI ARchetipo.\n\n**Criteri di accettazione**\n- AC-1 — La UI mostra lo storico ordinato della run e applica i nuovi eventi senza duplicazioni visibili.\n- AC-2 — Dopo una riconnessione la UI riprende dagli eventi già ricevuti senza perdere quelli successivi.\n- AC-3 — Un messaggio inviato dalla UI compare nello storico soltanto dopo la conferma del provider.\n- AC-4 — Una risposta a un'approvazione pendente mostra l'esito restituito dal provider e aggiorna la run.\n- AC-5 — Una richiesta di annullamento mostra lo stato confermato dal provider e non riapre una run terminale.\n- AC-6 — Un comando non autorizzato o non più valido viene mostrato come rifiutato senza alterare la proiezione locale della run.\n\n---\n\n## Soluzione tecnica\n\nUS-029 ha lasciato l'esecuzione remota **osservabile ma muta**: il viewer avvia un'azione, persiste un record `execution.Execution` e ne segue lo stato con un polling di due secondi su `GET /api/execution/{id}`. Il record conosce solo l'esito finale. US-030 aggiunge il canale collaborativo su quella stessa esecuzione, riusando l'infrastruttura già in piedi invece di aprirne una seconda.\n\nL'hub ARcipelago espone già l'intero namespace esterno necessario, quindi non serve inventare un protocollo: `GET /api/external/runs/:id/events` (SSE, cursore `afterId`/`Last-Event-ID`), `GET /api/external/runs/:id`, `GET /api/external/runs/:id/approvals`, `POST /api/external/runs/:id/messages`, `POST /api/external/runs/:id/approvals/:approvalId/respond`, `POST /api/external/runs/:id/cancel`. Il lavoro è tradurre quelle rotte in una porta neutra rispetto al provider, proiettarle lato server e renderle nel dettaglio della spec.\n\nL'approccio si articola su quattro livelli, dal basso verso l'alto:\n\n- **Porta neutra in `cli/internal/execution`.** Un'interfaccia opzionale `RunCollaborator`, separata da `Provider`, con tipi propri (`RunSnapshot`, `RunEvent`, `PendingApproval`, `ApprovalOption`) ed errori di rifiuto tipizzati (`RunCommandError` con `RunRefusalReason`). Il resto del sistema non impara mai che esiste ARcipelago.\n- **Implementazione ARcipelago.** Il provider risolve il `run_id` dal task remoto (`task.runId`, oggi non deserializzato), consuma lo stream SSE traducendo `AgentEvent` in `RunEvent` neutri, e mappa i quattro comandi HTTP con la loro tabella di rifiuti (`404 not_found`, `409 run_not_active`, `409 runner_offline`, `401` credenziale).\n- **Proiezione lato server in `cli/internal/web`.** Un `runFollower` per esecuzione tiene aperto un solo consumatore SSE verso l'hub, mantiene la proiezione ordinata degli eventi con deduplica sull'`id` monotono, l'ultimo snapshot della run, le approvazioni pendenti e lo stato di connessione; si riconnette da solo usando il proprio cursore alto come `afterId`.\n- **Rendering nel browser.** Un pannello dentro il tab Story del modale spec, sotto al pannello esecuzione esistente: timeline ordinata, composer messaggi, card di approvazione, controllo di annullamento. Il browser fa polling incrementale con `after_id` e **non appende mai nulla localmente**.\n\nTre proprietà tengono insieme i criteri di accettazione e sono deliberate:\n\n- **Il cursore è `id`, mai `seq`.** L'hub documenta che un messaggio dell'operatore riusa il `seq` corrente della run, quindi due righe possono legittimamente condividerlo. La deduplica avviene su `id` monotono a due livelli — il follower scarta le frame con `id <= lastID`, il browser rende solo gli eventi con `id > renderedLastID` — ed è ciò che soddisfa AC-1 e AC-2 insieme.\n- **Nessuna scrittura ottimistica.** Un messaggio inviato non entra nella timeline: entra quando l'hub lo ripubblica come evento `user_message` sullo stream. Il `202` della rotta significa \"consegnato al runner\", non \"storicizzato\". È esattamente ciò che AC-3 richiede, ed è anche ciò che rende AC-6 gratuito: un comando rifiutato non ha nulla da annullare, perché non aveva scritto nulla.\n- **Lo stato terminale è un fatto del runner, non una deduzione locale.** L'annullamento consegna `session_close` e attende che l'hub riporti lo stato; il viewer non sintetizza mai `closed`. Un `cancel` su una run non attiva riceve `run_not_active` e la proiezione resta quella che era — AC-5 in entrambe le sue metà.\n\n### Decisioni architetturali\n\n**1. Interfaccia opzionale separata invece di estendere `execution.Provider`.**\nAlternative valutate: (a) aggiungere i sette metodi a `Provider`; (b) una seconda interfaccia opzionale ottenuta con type assertion. Scelta la (b), sullo stesso precedente già presente nel codice per `ConfigDescriber` (`cli/internal/execution/provider.go`), la cui motivazione è scritta lì: «Provider is a stable contract and adding a method to it would break every existing implementation for the sake of one caller». Tradeoff: la capacità va scoperta a runtime e il chiamante deve gestire il caso \"provider che non collabora\" — che è comunque uno stato reale, non un artificio, perché un provider futuro può eseguire senza esporre una run interattiva.\n\n**2. Consumo SSE lato server con proiezione, invece di proxy SSE fino al browser.**\nAlternative valutate: (a) il browser apre un `EventSource` verso il viewer che fa da proxy dello stream dell'hub; (b) il viewer tiene un solo consumatore SSE e il browser fa polling incrementale con `after_id`. Scelta la (b). Motivi: il browser fa già polling ogni due secondi sull'esecuzione, quindi non si introduce un secondo modello di trasporto; il token ARcipelago resta confinato al processo Go, che è l'invariante di sicurezza già verificato dallo smoke di US-029; e soprattutto la riconnessione diventa **due cursori indipendenti** — quello del follower verso l'hub e quello del browser verso il viewer — che è la forma in cui AC-2 è dimostrabile senza dipendere da cosa il browser ha in memoria. Tradeoff accettato: latenza fino a un intervallo di polling sugli eventi nuovi, e una proiezione in memoria limitata che si perde al riavvio del viewer (il ricaricamento riparte dal cursore zero e ricostruisce lo storico dall'hub, che ne è la fonte).\n\n**3. Nessun ADR persistito.**\nIl workspace ha `wiki.enabled: false` in `.archetipo/config.yaml`, quindi la manutenzione automatica del Wiki è disattivata per l'intero workflow: questo piano non legge pagine come sorgente, non dichiara un contratto `wiki_impact` e non pianifica task di documentazione Wiki. Le due decisioni sopra restano registrate qui, che è il loro luogo effettivo in questo workspace.\n\n---\n\n## Baseline\n\nTutti i comandi sono stati eseguiti in `/Users/stefanoleli/Project/Archetipo` prima della stesura del piano. **Nessun comando è rosso**: non esiste alcun confine di fallimento preesistente da preservare, quindi ogni task può legittimamente attendersi verde e qualunque nuovo fallimento è imputabile al task che lo introduce.\n\n| Verifica | Risultato prima dell'implementazione | Conseguenza per la pianificazione |\n|---|---|---|\n| `cd cli && gofmt -l .` | nessun output | Ogni task che tocca file Go deve lasciare l'output vuoto. |\n| `cd cli && go vet ./...` | nessun problema | Verifica ripetibile a costo nullo: inclusa nel gate. |\n| `cd cli && go build ./...` | compila pulito | Ogni task di implementazione la ripete come controllo minimo. |\n| `cd cli && go test ./internal/web/... ./internal/execution/...` | 177 test verdi, 3 package | Suite focalizzata dei due package toccati: è il controllo interleaved di ogni task. |\n| `cd cli && go test ./...` | 806 test verdi, 24 package | Regressione completa: gate finale. |\n| `cd cli && go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run --timeout 5m ./...` | `0 issues.` | I file toccati non devono introdurre diagnostiche. |\n| `npm run test:view-plan-smoke` | `PASS` (AC-1..AC-5 di US-029, token assente da 21 risposte del viewer) | Smoke esistente sul viewer: è regressione, non va modificato per far passare il nuovo. |\n\n**Prerequisiti d'ambiente**, distinti dai fallimenti di codice e già verificati su questa macchina:\n\n- Go installato: richiesto da ogni comando `cli/`.\n- Node.js installato: richiesto dagli smoke `test/e2e/*.mjs`, che compilano il binario in `test/e2e/.bin/archetipo` prima di partire.\n- `golangci-lint` **non è installato globalmente**. Non installarlo: invocalo con `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`, che è la forma già usata per produrre la baseline sopra. La prima invocazione scarica il modulo e può richiedere alcuni minuti.\n- Nessuna credenziale è necessaria: lo smoke di questa spec, come quello di US-029, sostituisce l'hub ARcipelago con un server Node locale su `127.0.0.1` e non esce dalla macchina.\n\n---\n\n## Mappa delle evidenze di accettazione\n\nOgni criterio ha un oracolo osservabile e un task che lo produce. Le evidenze principali vivono al confine HTTP del viewer reale, dove l'oracolo di ogni AC è visibile: il doppio finto è **solo l'hub ARcipelago**, quindi il follower, la proiezione, il client SSE, il provider e le rotte attraversate sono quelli veri.\n\n| Criterio | Stato iniziale / fixture | Livello | Oracolo osservabile | Task che lo produce |\n|---|---|---|---|---|\n| AC-1 | Hub finto con una run attiva e uno storico di eventi noto, più eventi emessi dopo la prima lettura | Integrazione HTTP (Go) + smoke Node end-to-end | `GET /api/execution/{id}/run` restituisce gli eventi con `id` strettamente crescente e nell'ordine emesso dall'hub; una seconda lettura con `after_id` uguale a `last_id` non restituisce alcun evento già consegnato, e la lettura completa dopo l'arrivo dei nuovi eventi contiene ciascun `id` **esattamente una volta** | TASK-11, TASK-13 |\n| AC-2 | Stream SSE che l'hub finto interrompe deliberatamente dopo N eventi, per poi emetterne altri M | Unit Go sul follower + smoke Node | Alla riconnessione il follower richiede l'hub con `afterId` uguale all'ultimo `id` già ricevuto (l'hub finto registra il cursore di ogni sottoscrizione e il test lo asserisce), e la proiezione finale contiene tutti gli N+M eventi, una sola volta ciascuno, senza buchi negli `id` | TASK-09, TASK-13 |\n| AC-3 | Run attiva; hub finto che accetta `POST .../messages` con `202` ma pubblica l'evento `user_message` solo su comando del test | Integrazione HTTP (Go) + smoke Node | Subito dopo il `202` la lettura di `GET /api/execution/{id}/run` **non** contiene il testo inviato; dopo che l'hub lo pubblica sullo stream, la stessa lettura lo contiene come evento `user_message` con il testo esatto | TASK-11, TASK-13 |\n| AC-4 | Run attiva con un'approvazione pendente esposta da `GET .../approvals` | Integrazione HTTP (Go) + smoke Node | Prima della risposta la lettura espone l'approvazione con le sue opzioni; `POST /api/execution/{id}/run/approvals/{approvalId}` con un `option_id` valido risponde `202` e la risposta riporta l'esito del provider; l'hub finto registra di aver ricevuto esattamente quell'`optionId` su quel `runId`, e la lettura successiva non espone più l'approvazione risolta | TASK-11, TASK-13 |\n| AC-5 | (a) run attiva; (b) run che l'hub finto dichiara non più attiva | Integrazione HTTP (Go) + smoke Node | (a) `POST /api/execution/{id}/run/cancel` risponde `202`, l'hub finto registra la richiesta di chiusura, e lo stato mostrato resta quello che l'hub riporta — mai `closed` sintetizzato dal viewer prima che l'hub lo dica; (b) sulla run già terminale la stessa chiamata risponde `409` con motivo `run_not_active` e la lettura successiva mostra ancora lo stato terminale, non una run riaperta | TASK-11, TASK-13 |\n| AC-6 | Run resa non visibile (`404`) e run non più attiva (`409 run_not_active`) dall'hub finto, con una proiezione già popolata | Unit Go sulla mappatura dei rifiuti + integrazione HTTP + smoke Node | I tre comandi rispondono con lo stato e il codice di rifiuto stabili (`404` / `409`) e un messaggio che nomina il motivo; lo snapshot completo di `GET /api/execution/{id}/run` **letto prima e dopo il rifiuto è identico** — stessi `id`, stesso `last_id`, stesso stato run, stesse approvazioni | TASK-07, TASK-11, TASK-13 |\n\nNessun oracolo qui sopra è un proxy. In particolare: AC-3 non si accontenta del `202` (che proverebbe solo la chiamata) ma richiede l'assenza e poi la presenza del testo nella proiezione; AC-6 non si accontenta del codice di stato ma confronta la proiezione completa prima e dopo; AC-2 non si accontenta del conteggio finale ma asserisce il cursore che il follower ha realmente inviato all'hub.\n\n---\n\n## Strategia di test\n\nI test seguono i quattro livelli della soluzione e sono interleaved: ogni blocco di implementazione ha il suo test prima che il livello successivo lo dia per acquisito.\n\n- **Unit sulla porta neutra** (`cli/internal/execution`): classificazione dei rifiuti e scoperta della capacità opzionale su un provider che non la implementa. Nessun HTTP.\n- **Unit sul provider ARcipelago** (`cli/internal/execution/arcipelago`): tutto contro `httptest`, come già fa `provider_test.go` tramite il seam `Doer`. Si verificano la costruzione reale delle richieste, il parsing SSE (frame `run_event`, frame `end`, cursore `Last-Event-ID`, frame malformata) e la mappatura degli stati HTTP sui motivi di rifiuto.\n- **Unit sul follower** (`cli/internal/web`): deduplica, ripresa dal cursore dopo uno stream interrotto, chiusura sul frame terminale, buffer limitato. Il collaboratore è un doppio in-process, perché ciò che si prova qui è la logica di proiezione, non il trasporto.\n- **Integrazione HTTP sul viewer** (`cli/internal/web`): le nuove rotte esercitate su un `Server` reale con un collaboratore doppio, per coprire i sei AC al confine che il browser vede davvero. È il livello dove AC-6 confronta la proiezione prima e dopo il rifiuto.\n- **Smoke Node end-to-end** (`test/e2e/run-from-view-smoke.mjs`): binario compilato, `archetipo view` reale, connettore `file` reale, provider `arcipelago` reale, client SSE reale; finto solo l'hub, servito su `127.0.0.1` con SSE, approvazioni e i tre comandi. È l'unico livello che prova la catena intera e ripete il controllo di segretezza già presente in US-029 — il token non deve comparire in nessuna risposta del viewer.\n\n**Demo filmabile:** sì. La `Dimostrazione` della spec è un percorso interamente osservabile nel browser (apertura dell'esecuzione, storico, invio messaggio, risposta a un'approvazione, annullamento, rifiuto su run non più controllabile). La registrazione non appartiene a questa fase: la decide ed esegue `archetipo-review`. Si noti che `e2e.record_demo_video` è `false` in `.archetipo/config.yaml`.\n\n### Deroga E2E browser\n\n**Motivo:** il percorso di accettazione attraversa un confine di rotta, un'integrazione esterna e una proiezione con stato, quindi la regola generale chiederebbe un e2e browser. Non viene aperto un framework browser per tre ragioni concrete e verificate. Primo, **il repository non ne ha uno**: non esiste alcuna configurazione Playwright (`find . -name \"playwright*\"` non trova nulla fuori da `node_modules`) e introdurlo sarebbe un'infrastruttura nuova a carico di questa spec. Secondo, **ognuno dei sei oracoli è integralmente osservabile al confine HTTP del viewer**, che lo smoke Node guida contro il server reale: ordinamento e deduplica sono proprietà degli `id` restituiti da `GET /api/execution/{id}/run` (AC-1); la ripresa dal cursore è asserita sul cursore che il follower invia realmente all'hub (AC-2); la conferma provider prima della storicizzazione è la differenza tra due letture della stessa rotta (AC-3); l'esito dell'approvazione e quello dell'annullamento sono corpi di risposta e registrazioni dell'hub (AC-4, AC-5); l'invarianza della proiezione sotto rifiuto è il confronto di due snapshot completi (AC-6). Nessuno di essi dipende dal rendering. Terzo, **è il precedente diretto di US-029**, la spec bloccante, che ha coperto una forma di accettazione identica con lo smoke Node più una prova manuale nel browser, e i cui task risultano tutti `DONE`.\n\n**Livello di evidenza usato al suo posto:** lo smoke Node deterministico `test/e2e/run-from-view-smoke.mjs` (hub finto a passi comandati dal test, senza `sleep` arbitrari, come `plan-from-view-smoke.mjs`), affiancato dai test di integrazione HTTP Go sulle stesse rotte. Il rendering — l'unica parte non coperta da quei livelli — è verificato con una prova manuale esplicita nel browser, elencata passo per passo nel task di gate finale.\n\n---\n\n**Wiki:** il workspace ha `wiki.enabled: false`, quindi questo piano non dichiara alcun contratto Wiki e non pianifica task di documentazione Wiki. La documentazione dovuta è quella di repository: `AGENTS.md`, che elenca smoke e script npm ed è aggiornato da TASK-13.\n\n---\n\n> \U0001F3A8 I mockup di questa spec sono disponibili in `docs/mockups/US-030/`, uno per ciascuno dei sei stati del pannello: run attiva, riconnessione, approvazione pendente, messaggio in attesa di conferma, comando rifiutato, run terminata. Sono il riferimento visivo e di copy di TASK-12.\n\n---\n\n_Piano prodotto da ARchetipo Planning — 2026-08-18_"
+tasks:
+  - id: TASK-01
+    title: Porta neutra di collaborazione con una run remota in execution
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Il package `execution` espone un contratto neutro rispetto al provider per osservare e comandare una run remota, senza che alcun altro package impari che esiste ARcipelago.
+
+      ## Read
+      - `cli/internal/execution/provider.go` — l'interfaccia `Provider` e soprattutto `ConfigDescriber` con `DescribeConfig`: è il precedente esatto di "capacità opzionale scoperta con type assertion", e la sua motivazione scritta nel commento va rispettata, non riscritta.
+      - `cli/internal/execution/types.go` — `Execution`, `Result`, `ExecutionError`, `RemoteError`: il campo `ExternalID` che entrambi portano è il ponte verso il task remoto.
+      - `cli/internal/execution/store.go` — `StoreError`/`StoreErrorKind`: modello di errore tipizzato con `Kind` discriminante da imitare.
+
+      ## Change
+      - `cli/internal/execution/run.go` — nuovo file. Contiene solo tipi, errori e l'interfaccia; nessuna chiamata HTTP e nessun riferimento ad ARcipelago.
+
+      Non-goal espliciti: non modificare l'interfaccia `Provider` (aggiungere metodi lì è una rottura per ogni implementazione esistente); non toccare `service.go`, `store.go` o il record `Execution`; non introdurre dipendenze da `net/http` in questo file.
+
+      ## Steps
+      1. Definisci `type RunState string` con le costanti `RunActive = "ACTIVE"`, `RunClosed = "CLOSED"`, `RunCrashed = "CRASHED"`. Sono i valori neutri; la traduzione dai valori dell'hub è responsabilità dell'implementazione, non di questo file.
+      2. Definisci `RunSnapshot{ RunID string; State RunState; Error string; ClosedAt *time.Time }` con tag JSON `run_id`, `state`, `error,omitempty`, `closed_at,omitempty`.
+      3. Definisci `RunEvent{ ID int64; Seq int; At time.Time; Kind string; Text string; Tool string; Raw json.RawMessage }` con tag JSON `id`, `seq`, `at`, `kind`, `text,omitempty`, `tool,omitempty`, `raw,omitempty`. Documenta nel commento che `ID` è l'unico cursore ammesso e che `Seq` non è univoco, perché un messaggio dell'operatore riusa il seq corrente della run: un cursore su `Seq` perderebbe o ripeterebbe una riga.
+      4. Definisci `ApprovalOption{ ID, Label, Kind string }` (JSON `id`, `label`, `kind`) e `PendingApproval{ ID, ToolName, Title string; Args json.RawMessage; Options []ApprovalOption; CreatedAt time.Time }` (JSON `id`, `tool_name`, `title`, `args,omitempty`, `options`, `created_at`).
+      5. Definisci `type RunRefusalReason string` con le costanti `RunRefusedNotFound = "not_found"`, `RunRefusedNotActive = "run_not_active"`, `RunRefusedRunnerOffline = "runner_offline"`, `RunRefusedUnauthorized = "unauthorized"`, `RunRefusedUnsupported = "unsupported"`.
+      6. Definisci `RunCommandError{ Reason RunRefusalReason; RunID string; Err error }` con `Error() string` che nomina motivo e run, e `Unwrap() error`. Aggiungi l'helper `func RefusalOf(err error) (RunRefusalReason, bool)` che usa `errors.As` e restituisce `("", false)` quando l'errore non è un rifiuto. Documenta che ogni chiamante deve ramificare su `Reason`, mai sul testo.
+      7. Definisci `RunRequest{ RunID string; ProviderConfig map[string]any }`.
+      8. Definisci l'interfaccia `RunCollaborator` con esattamente questi metodi:
+         - `ResolveRun(ctx context.Context, exec Execution, providerConfig map[string]any) (string, error)` — restituisce l'id della run remota, oppure `""` senza errore quando il lavoro remoto esiste ma non ha ancora una run.
+         - `ReadRun(ctx context.Context, req RunRequest) (RunSnapshot, error)`
+         - `ReadRunApprovals(ctx context.Context, req RunRequest) ([]PendingApproval, error)`
+         - `StreamRunEvents(ctx context.Context, req RunRequest, afterID int64, sink func(RunEvent) error) error` — consuma finché il contesto non è chiuso, la run non termina o `sink` non restituisce errore.
+         - `SendRunMessage(ctx context.Context, req RunRequest, message string) error`
+         - `RespondRunApproval(ctx context.Context, req RunRequest, approvalID, optionID string) error`
+         - `CancelRun(ctx context.Context, req RunRequest) error`
+      9. Aggiungi `func RunCollaboratorFor(provider Provider) (RunCollaborator, bool)` che fa la type assertion e restituisce `(nil, false)` quando il provider non collabora, incluso il caso `provider == nil`.
+      10. Esegui `gofmt -w cli/internal/execution/run.go`.
+
+      ## Verify
+      - Esegui da `cli/`: `gofmt -l .` → nessun output.
+      - Esegui da `cli/`: `go build ./...` → compila pulito.
+      - Esegui da `cli/`: `go vet ./internal/execution/...` → nessun problema.
+
+      ## Done
+      - [ ] `cli/internal/execution/run.go` esiste e contiene `RunState`, `RunSnapshot`, `RunEvent`, `ApprovalOption`, `PendingApproval`, `RunRefusalReason`, `RunCommandError`, `RefusalOf`, `RunRequest`, `RunCollaborator`, `RunCollaboratorFor`.
+      - [ ] L'interfaccia `Provider` in `cli/internal/execution/provider.go` è invariata (verificabile con `git diff --stat cli/internal/execution/provider.go`, che non deve elencare il file).
+      - [ ] Il file non importa `net/http` e non nomina ARcipelago.
+      - [ ] `gofmt -l .`, `go build ./...` e `go vet ./internal/execution/...` sono verdi come nella baseline.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test unitari della porta di collaborazione e della classificazione dei rifiuti
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      La scoperta della capacità opzionale e la classificazione dei rifiuti sono provate dai loro effetti osservabili, così che i livelli superiori possano ramificare su `Reason` senza rileggere il testo di un errore.
+
+      ## Read
+      - `cli/internal/execution/run.go` — i tipi introdotti da TASK-01.
+      - `cli/internal/execution/provider_test.go` — stile dei test del package: doppi in-process, tabelle, nessun HTTP.
+
+      ## Change
+      - `cli/internal/execution/run_test.go` — nuovo file.
+
+      Non-goal: non testare qui alcuna implementazione ARcipelago, e non introdurre un server `httptest` in questo package.
+
+      ## Steps
+      1. Definisci nel file di test due doppi minimi: un `plainProvider` che implementa solo `Provider`, e un `collaboratingProvider` che implementa anche `RunCollaborator`.
+      2. Scrivi `TestRunCollaboratorForDiscoversTheCapability`: su `collaboratingProvider` restituisce `ok == true` e un valore non nil utilizzabile; su `plainProvider` restituisce `(nil, false)`; su un `Provider` nil restituisce `(nil, false)` senza panicare.
+      3. Scrivi `TestRefusalOfClassifiesEveryReason` come tabella su tutte e cinque le costanti `RunRefused*`: per ciascuna, `RefusalOf(&RunCommandError{Reason: r, RunID: "run-1"})` restituisce `(r, true)`.
+      4. Scrivi `TestRefusalOfIgnoresOtherErrors`: su `errors.New("boom")` e su `nil` restituisce `("", false)`.
+      5. Scrivi `TestRunCommandErrorWrapsItsCause`: `RunCommandError{Reason: RunRefusedNotFound, Err: cause}` soddisfa `errors.Is(err, cause)`, e `RefusalOf` continua a classificarlo correttamente quando è avvolto con `fmt.Errorf("contesto: %w", err)` — è la forma in cui l'errore attraverserà davvero i livelli.
+      6. Scrivi `TestRunCommandErrorMessageNamesReasonAndRun`: il messaggio contiene sia il motivo sia l'id della run, così che un log resti diagnosticabile.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/execution/ -run 'TestRunCollaboratorFor|TestRefusalOf|TestRunCommandError' -v` → tutti PASS.
+      - Esegui da `cli/`: `go test ./internal/execution/...` → verde, senza regressioni rispetto ai 177 test della baseline sui package toccati.
+
+      ## Done
+      - [ ] `RefusalOf` è provato su tutte e cinque le ragioni, su un errore estraneo, su `nil` e su un errore avvolto con `%w`.
+      - [ ] `RunCollaboratorFor` è provato sul provider che collabora, su quello che non collabora e su `nil`.
+      - [ ] `go test ./internal/execution/...` è verde.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Risoluzione della run remota dal record di esecuzione nel provider ARcipelago
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Dato un `execution.Execution` prodotto da US-029, il provider ARcipelago sa dire quale run remota gli corrisponde, oppure che non ne ha ancora una.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/client.go` — `remoteTask`, `taskEnvelope`, `do`, `classify`, `byReferenceQuery`, le costanti `pathTasks`/`sourceARchetipo`. `remoteTask` oggi deserializza solo `id`, `status`, `resultSummary`.
+      - `cli/internal/execution/arcipelago/provider.go` — `Execute`, `createTask`, `resultFor`: mostrano dove l'`ExternalID` del task remoto finisce nel record (`Result.ExternalID`) e, in caso di fallimento dopo la creazione, in `Error.ExternalID` tramite `execution.RemoteError`.
+      - `cli/internal/execution/arcipelago/config.go` — `parseConfig` e `settings`: ogni operazione remota parte da lì.
+      - `cli/internal/execution/run.go` — `RunCommandError`, `RunRefusalReason`.
+
+      ## Change
+      - `cli/internal/execution/arcipelago/client.go` — aggiungi il campo `RunID string` con tag `json:"runId"` a `remoteTask`.
+      - `cli/internal/execution/arcipelago/run.go` — nuovo file: `ResolveRun` e l'helper interno che mappa uno stato HTTP su un `execution.RunRefusalReason`.
+
+      Non-goal: non modificare `Execute`, `createTask`, `awaitTerminal` o `resultFor`; il percorso di dispatch di US-029 deve restare identico. Non aggiungere ancora i comandi o lo stream: sono TASK-04 e TASK-06.
+
+      ## Steps
+      1. In `client.go`, aggiungi `RunID string \`json:"runId"\`` a `remoteTask`. È additivo: l'hub lo espone già su `Task`, e nessun campo esistente cambia.
+      2. In `run.go`, scrivi `func refusalFor(status int, runID string, cause error) error`: `401` → `RunRefusedUnauthorized`; `404` → `RunRefusedNotFound`; `409` → `RunRefusedNotActive`; ogni altro stato → restituisce `cause` invariato, perché un `5xx` è un guasto, non un rifiuto. Documenta che sul confine esterno dell'hub `404` significa soltanto "non visibile a questa credenziale", mai "sparito".
+      3. In `run.go`, implementa `func (p *Provider) ResolveRun(ctx context.Context, exec execution.Execution, providerConfig map[string]any) (string, error)`:
+         - `parseConfig(providerConfig)`; leggi il token da `p.getenv(cfg.TokenEnv)` e, se vuoto, restituisci lo stesso errore parlante che usa `Execute`.
+         - Ricava l'id del task remoto in quest'ordine: `exec.Result.ExternalID` se il record è riuscito, altrimenti `exec.Error.ExternalID`. Se entrambi sono vuoti, ricadi su `byReferenceQuery(cfg, exec.ID)` — l'`ExecutionID` è l'`externalId` che il task porta, quindi la run di un'esecuzione ancora `RUNNING` è raggiungibile per riferimento esterno anche prima che il record porti un id remoto.
+         - Interroga `GET pathTasks + "/" + url.PathEscape(taskID)` (o la rotta by-reference nel caso di ricaduta) e leggi `taskEnvelope`.
+         - Su errore, decora con `refusalFor(status, "", err)`.
+         - Restituisci `strings.TrimSpace(envelope.Task.RunID)`. Una stringa vuota **non è un errore**: significa che il task esiste ma non è ancora stato assegnato a una run.
+      4. Dichiara l'aderenza al contratto con `var _ execution.RunCollaborator = (*Provider)(nil)` **solo dopo** TASK-06, quando tutti i metodi esistono; per ora non aggiungerla, altrimenti il package non compila.
+      5. Esegui `gofmt -w cli/internal/execution/arcipelago/`.
+
+      ## Verify
+      - Esegui da `cli/`: `go build ./...` → compila pulito.
+      - Esegui da `cli/`: `go test ./internal/execution/...` → verde (la modifica a `remoteTask` è additiva e non deve rompere alcun test esistente del provider).
+      - Esegui da `cli/`: `gofmt -l .` → nessun output.
+
+      ## Done
+      - [ ] `remoteTask` deserializza `runId` e i test esistenti del provider restano verdi.
+      - [ ] `ResolveRun` ricava l'id del task da `Result.ExternalID`, da `Error.ExternalID` o dal riferimento esterno, in quest'ordine.
+      - [ ] Un task senza run restituisce `("", nil)`, non un errore.
+      - [ ] `refusalFor` mappa 401/404/409 sui tre motivi e lascia passare invariato ogni altro errore.
+      - [ ] `go build ./...` e `go test ./internal/execution/...` verdi.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Consumo dello stream SSE degli eventi della run nel provider ARcipelago
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Il provider ARcipelago consuma `GET /api/external/runs/:id/events` e consegna al chiamante `execution.RunEvent` neutri, ordinati e ripartibili da un cursore.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/client.go` — `do` bufferizza l'intero corpo con `io.ReadAll`: **non è utilizzabile per lo stream** e non va modificato. Serve un percorso separato che tenga il corpo aperto. Riusa invece `classify` e la costruzione dell'header `Authorization`.
+      - `cli/internal/execution/arcipelago/provider.go` — il seam `Doer` e come i test lo sostituiscono con `httptest`.
+      - `cli/internal/execution/run.go` — `RunEvent`, `RunRequest`, `RunCommandError`.
+
+      ## Change
+      - `cli/internal/execution/arcipelago/events.go` — nuovo file: il parser SSE, la traduzione dell'evento e `StreamRunEvents`.
+
+      Non-goal: nessuna riconnessione automatica qui. `StreamRunEvents` consuma **una** connessione e ritorna quando finisce; la politica di riconnessione appartiene al follower (TASK-08), perché è lì che vive il cursore alto. Non introdurre dipendenze esterne: il parser SSE è una decina di righe su `bufio.Scanner`.
+
+      ## Steps
+      1. Definisci le costanti del contratto SSE dell'hub: nome evento `run_event`, nome evento terminale `end`, e un tetto di sicurezza sulla dimensione di una singola frame (riusa l'ordine di grandezza di `maxResponseBody`, cioè 1 MiB) per non bufferizzare senza limite.
+      2. Scrivi il parser: leggi il corpo riga per riga con `bufio.Scanner` e un `Buffer` dimensionato sul tetto; accumula i campi `id:`, `event:` e `data:` fino alla riga vuota che chiude la frame; ignora le righe che iniziano con `:` (sono i keep-alive `: keep-alive`). Una frame senza `data` viene scartata in silenzio.
+      3. Traduci la frame `run_event`: il `data` è un JSON con `id`, `runId`, `seq`, `ts`, `event`. Mappa su `execution.RunEvent` con `ID` da `id`, `Seq` da `seq`, `At` da `time.UnixMilli(ts).UTC()`, e `Raw` uguale al JSON grezzo del campo `event`.
+      4. Deriva `Kind`, `Text` e `Tool` dal campo `event.type`, in una funzione dedicata e testabile:
+         - `user_message` → `Kind: "user_message"`, `Text` dal campo `text`.
+         - `message_update` con `assistantMessageEvent.type == "text_delta"` → `Kind: "text"`, `Text` dal `delta`.
+         - `message_update` con `assistantMessageEvent.type == "thinking_delta"` → `Kind: "thinking"`, `Text` dal `delta`.
+         - `tool_execution_start` → `Kind: "tool_start"`, `Tool` da `toolName`.
+         - `tool_execution_end` → `Kind: "tool_end"` (oppure `"tool_error"` quando `isError` è vero), `Tool` da `toolName`.
+         - `message_end` → `Kind: "turn_end"`, e `Text` dal `message.errorMessage` quando `message.stopReason` è `"error"` o `"aborted"`, altrimenti vuoto.
+         - qualunque altro `type` → `Kind` uguale al `type` grezzo e `Text` vuoto. È la via di fuga che impedisce di perdere un evento che l'hub aggiungerà in futuro.
+      5. Traduci la frame `end`: il `data` è `{"reason":"run_closed"|"unauthorized"}`. `run_closed` termina lo stream restituendo `nil`. `unauthorized` termina restituendo `&execution.RunCommandError{Reason: execution.RunRefusedUnauthorized, RunID: req.RunID}`.
+      6. Implementa `func (p *Provider) StreamRunEvents(ctx context.Context, req execution.RunRequest, afterID int64, sink func(execution.RunEvent) error) error`:
+         - `parseConfig(req.ProviderConfig)` e lettura del token, come in `ResolveRun`.
+         - Costruisci `GET cfg.BaseURL + "/api/external/runs/" + url.PathEscape(req.RunID) + "/events"` con la query `afterId` quando `afterID > 0`, header `Accept: text/event-stream`, `Authorization: Bearer …` e il contesto passato.
+         - Su risposta non-2xx, chiudi il corpo e restituisci `refusalFor(status, req.RunID, classify(status, body, cfg))`.
+         - Su 2xx, consuma con il parser; chiama `sink` per ogni evento e propaga senza modificarlo l'errore che `sink` restituisce (è così che il follower interrompe lo stream).
+         - Chiudi sempre il corpo con un `defer`.
+         - Un `ctx` chiuso deve far ritornare `ctx.Err()`, non un errore di rete opaco.
+      7. Esegui `gofmt -w cli/internal/execution/arcipelago/`.
+
+      ## Verify
+      - Esegui da `cli/`: `go build ./...` → compila pulito.
+      - Esegui da `cli/`: `go vet ./internal/execution/...` → nessun problema.
+      - Esegui da `cli/`: `gofmt -l .` → nessun output.
+
+      ## Done
+      - [ ] `StreamRunEvents` esiste con la firma dichiarata in `execution.RunCollaborator` e non riusa `do`.
+      - [ ] Il parser gestisce frame `run_event`, frame `end`, righe di commento keep-alive e frame senza `data`.
+      - [ ] La traduzione copre i sei tipi di evento elencati e ha una via di fuga per i tipi sconosciuti, che non vengono mai persi.
+      - [ ] `RunEvent.ID` proviene dall'`id` della frame SSE, mai dal `seq`.
+      - [ ] `go build ./...` e `go vet ./internal/execution/...` verdi.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Test del lato lettura ARcipelago — risoluzione run e stream SSE su httptest
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      La risoluzione della run e il consumo dello stream sono provati contro un server HTTP reale, sulle richieste che il provider costruisce davvero e sulle frame che l'hub emette davvero.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/provider_test.go` — come i test montano un `httptest.Server` e lo iniettano tramite `Options{Doer: ...}`, e come sostituiscono `Getenv`, `Sleep` e `Now`.
+      - `cli/internal/execution/arcipelago/events.go` e `run.go` — il codice introdotto da TASK-03 e TASK-04.
+
+      ## Change
+      - `cli/internal/execution/arcipelago/run_test.go` — nuovo file.
+
+      Non-goal: niente rete reale, niente credenziali, nessun `time.Sleep` non deterministico. Il server di test decide quando emettere ogni frame.
+
+      ## Steps
+      1. `TestResolveRunReadsTheRunIdOfTheRemoteTask`: il server risponde a `GET /api/external/tasks/{id}` con `{"task":{"id":"task-1","status":"running","runId":"run-9"}}`; asserisci che `ResolveRun` su un record con `Result.ExternalID = "task-1"` restituisca `"run-9"` e che la richiesta abbia portato l'header `Authorization: Bearer <token di test>`.
+      2. `TestResolveRunAcceptsATaskWithoutARunYet`: stessa rotta senza `runId`; il risultato è `("", nil)` — assenza, non errore.
+      3. `TestResolveRunFallsBackToTheExternalReference`: record `RUNNING` senza alcun `ExternalID`; asserisci che il server sia stato interrogato su `/api/external/tasks/by-reference` con `workspaceId`, `source=archetipo` ed `externalId` uguale all'`Execution.ID`, e che la run venga risolta.
+      4. `TestResolveRunClassifiesRefusals`: tabella su 401/404/409; per ciascuno `execution.RefusalOf` sull'errore restituito deve dare rispettivamente `unauthorized`, `not_found`, `run_not_active`. Aggiungi un caso `500` che **non** è un rifiuto (`RefusalOf` → `false`).
+      5. `TestStreamRunEventsDeliversHistoryInOrder`: il server emette tre frame `run_event` con `id` 1, 2, 3 e poi la frame `end` con `run_closed`; asserisci che il sink abbia ricevuto esattamente tre eventi con `ID` 1, 2, 3 in quest'ordine e che `StreamRunEvents` sia ritornato `nil`.
+      6. `TestStreamRunEventsSendsTheCursor`: invocato con `afterID = 7`, il server registra la query ricevuta; asserisci `afterId=7`. Invocato con `afterID = 0`, la query non contiene `afterId`.
+      7. `TestStreamRunEventsIgnoresKeepAliveAndEmptyFrames`: il corpo mescola `: keep-alive`, una frame senza `data` e due frame valide; il sink riceve esattamente i due eventi.
+      8. `TestStreamRunEventsTranslatesEventKinds`: tabella che copre `user_message`, `text_delta`, `thinking_delta`, `tool_execution_start`, `tool_execution_end` con `isError` vero e falso, `message_end` con `stopReason: "error"`, e un `type` inventato. Asserisci `Kind`, `Text` e `Tool` attesi per ciascuno, e che il tipo inventato produca comunque un evento con `Kind` uguale al tipo grezzo — nessun evento viene scartato.
+      9. `TestStreamRunEventsEndsUnauthorized`: la frame `end` con `{"reason":"unauthorized"}` fa ritornare un errore che `RefusalOf` classifica `unauthorized`.
+      10. `TestStreamRunEventsStopsWhenTheSinkFails`: il sink restituisce un errore sentinella al secondo evento; asserisci che `StreamRunEvents` restituisca un errore che soddisfa `errors.Is` su quella sentinella e che il terzo evento non sia mai stato consegnato.
+      11. `TestStreamRunEventsHonoursContextCancellation`: contesto già cancellato, oppure cancellato dal sink; asserisci il ritorno entro il timeout del test e un errore che soddisfa `errors.Is(err, context.Canceled)`.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/execution/arcipelago/ -run 'TestResolveRun|TestStreamRunEvents' -v` → tutti PASS.
+      - Esegui da `cli/`: `go test ./internal/execution/... -race` → verde. La `-race` è mirata: lo stream introduce una goroutine di scrittura nel server di test.
+
+      ## Done
+      - [ ] AC-1 — l'ordinamento per `id` crescente è asserito sulla sequenza consegnata al sink, non sul conteggio.
+      - [ ] AC-2 — il valore di `afterId` realmente inviato all'hub è asserito sia per `afterID > 0` sia per `afterID == 0`.
+      - [ ] AC-6 — 401/404/409 sono provati come rifiuti classificati, e `500` è provato **non** essere un rifiuto.
+      - [ ] Ogni tipo di evento della tabella produce il `Kind` atteso, e un tipo sconosciuto non viene perso.
+      - [ ] `go test ./internal/execution/... -race` è verde.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Lettura di stato e approvazioni e i tre comandi della run nel provider ARcipelago
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Il provider ARcipelago completa `execution.RunCollaborator`: legge stato e approvazioni pendenti della run ed esegue i tre comandi (messaggio, risposta a un'approvazione, annullamento), traducendo ogni rifiuto dell'hub in un motivo tipizzato.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/client.go` — `do` (qui è utilizzabile: i corpi sono piccoli e non streaming), `classify`, `taskEnvelope`.
+      - `cli/internal/execution/arcipelago/run.go` — `refusalFor` introdotto da TASK-03.
+      - `cli/internal/execution/run.go` — `RunSnapshot`, `RunState`, `PendingApproval`, `ApprovalOption`, `RunRequest`.
+
+      ## Change
+      - `cli/internal/execution/arcipelago/run.go` — aggiungi i cinque metodi e i tipi di deserializzazione delle risposte dell'hub.
+
+      Non-goal: non toccare `Execute` né il percorso di dispatch; non aggiungere retry o backoff qui (la ripetizione è una scelta del chiamante); non sintetizzare mai uno stato locale per la run.
+
+      ## Steps
+      1. Definisci i tipi di trasporto privati che rispecchiano le risposte dell'hub: `runEnvelope{ Run struct{ ID, RunnerID, State string; TaskID string; CreatedAt, ClosedAt int64; Error string } }` e `approvalsEnvelope{ Approvals []struct{ ID, RunID, RunnerID string; CreatedAt int64; Request struct{ ToolName, Title string; Args json.RawMessage; Options []struct{ OptionID, Name, Kind string } } } }`.
+      2. Implementa `ReadRun`: `GET /api/external/runs/{runID}`. Traduci lo `state` dell'hub sui valori neutri — `"active"` → `execution.RunActive`, `"closed"` → `execution.RunClosed`, `"crashed"` → `execution.RunCrashed`, qualunque altro valore → `execution.RunCrashed` con l'originale conservato nel campo `Error`, perché uno stato ignoto non deve mai leggersi come "attiva". Riporta `Error` e `ClosedAt` quando presenti.
+      3. Implementa `ReadRunApprovals`: `GET /api/external/runs/{runID}/approvals`. Traduci in `[]execution.PendingApproval` mappando `optionId` → `ApprovalOption.ID`, `name` → `Label`, `kind` → `Kind`. Restituisci sempre una slice non nil, così che un chiamante che serializza produca `[]` e non `null`.
+      4. Implementa `SendRunMessage`: `POST /api/external/runs/{runID}/messages` con corpo `{"message": …}`. Rifiuta prima della chiamata un messaggio vuoto dopo `strings.TrimSpace`, con `&execution.RunCommandError{Reason: execution.RunRefusedUnsupported, ...}`: è un errore del chiamante, non un rifiuto dell'hub. Successo su `202`.
+      5. Implementa `RespondRunApproval`: `POST /api/external/runs/{runID}/approvals/{approvalID}/respond` con corpo `{"optionId": …}`. Successo su `202`.
+      6. Implementa `CancelRun`: `POST /api/external/runs/{runID}/cancel`, corpo assente. Successo su `202`. Documenta nel commento che `202` significa "comando consegnato al runner", non "run conclusa": lo stato terminale lo riporta il runner e va riletto con `ReadRun`, mai dedotto qui.
+      7. Fai passare ogni errore HTTP dei cinque metodi per `refusalFor(status, req.RunID, err)`. Distinzione da rispettare sui `409`: l'hub codifica sia `run_not_active` sia `runner_offline` con `409` e li distingue nel campo `error` del corpo JSON. Estendi `refusalFor` (o avvolgilo) perché legga quel campo e restituisca `RunRefusedRunnerOffline` quando vale `"runner_offline"`, `RunRefusedNotActive` altrimenti. Un runner offline è una condizione transitoria e l'interfaccia deve poterlo dire.
+      8. Aggiungi ora `var _ execution.RunCollaborator = (*Provider)(nil)` in `run.go`: da questo punto il compilatore garantisce che il contratto sia completo.
+      9. Esegui `gofmt -w cli/internal/execution/arcipelago/`.
+
+      ## Verify
+      - Esegui da `cli/`: `go build ./...` → compila pulito; l'asserzione `var _ execution.RunCollaborator` fallirebbe la compilazione se mancasse un metodo.
+      - Esegui da `cli/`: `go vet ./internal/execution/...` → nessun problema.
+      - Esegui da `cli/`: `gofmt -l .` → nessun output.
+
+      ## Done
+      - [ ] `*Provider` soddisfa `execution.RunCollaborator`, provato dall'asserzione a tempo di compilazione.
+      - [ ] AC-5 — `CancelRun` non scrive né deduce alcuno stato locale; lo stato viene solo da `ReadRun`.
+      - [ ] AC-6 — i due `409` dell'hub sono distinti leggendo il campo `error` del corpo: `runner_offline` e `run_not_active` producono motivi diversi.
+      - [ ] Uno stato di run sconosciuto non viene mai tradotto in `RunActive`.
+      - [ ] `go build ./...` e `go vet ./internal/execution/...` verdi.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Test dei comandi ARcipelago e della tabella dei rifiuti
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      I tre comandi e le due letture sono provati sulle richieste HTTP che partono davvero e sulla classificazione di ogni rifiuto che l'hub sa produrre.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/run.go` — i metodi introdotti da TASK-06.
+      - `cli/internal/execution/arcipelago/run_test.go` — le utilità di test già scritte in TASK-05, da riusare invece di duplicare.
+
+      ## Change
+      - `cli/internal/execution/arcipelago/run_test.go` — estendi il file esistente.
+
+      Non-goal: non riscrivere i test di TASK-05; non testare qui il follower né le rotte del viewer.
+
+      ## Steps
+      1. `TestReadRunTranslatesState`: tabella su `active`/`closed`/`crashed` e su uno stato inventato; asserisci il `RunState` neutro atteso e che lo stato inventato non produca mai `RunActive` e conservi l'originale in `Error`.
+      2. `TestReadRunApprovalsTranslatesOptions`: il server risponde con un'approvazione a due opzioni; asserisci `ID`, `ToolName`, `Title` e che ogni `ApprovalOption` porti `optionId`, `name` e `kind` nei campi giusti. Con una lista vuota, il risultato è una slice non nil di lunghezza zero.
+      3. `TestSendRunMessagePostsTheBody`: il server registra metodo, percorso e corpo; asserisci `POST`, `/api/external/runs/run-9/messages` e corpo `{"message":"ciao"}`; con risposta `202` il metodo restituisce `nil`.
+      4. `TestSendRunMessageRejectsAnEmptyMessage`: con `"   "` il metodo fallisce **senza** aver effettuato alcuna chiamata (il server conta zero richieste) e `RefusalOf` classifica `unsupported`.
+      5. `TestRespondRunApprovalPostsTheOption`: asserisci percorso `/api/external/runs/run-9/approvals/appr-1/respond` e corpo `{"optionId":"allow-once"}`.
+      6. `TestCancelRunPostsWithoutABody`: asserisci `POST /api/external/runs/run-9/cancel` e nessun corpo.
+      7. `TestRunCommandsClassifyRefusals`: tabella a due dimensioni — i tre comandi per ciascuno di: `404` → `not_found`; `409` con corpo `{"error":"run_not_active"}` → `run_not_active`; `409` con corpo `{"error":"runner_offline"}` → `runner_offline`; `401` → `unauthorized`. È la prova diretta che i due `409` non collassano su un unico motivo.
+      8. `TestRunCommandsDoNotLeakTheToken`: per ciascun comando, verifica che il testo dell'errore restituito su un fallimento non contenga il valore del token di test. È l'invariante di segretezza già in vigore nel resto del provider.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/execution/arcipelago/ -v` → tutti PASS, inclusi i test preesistenti del provider.
+      - Esegui da `cli/`: `go test ./internal/execution/...` → verde.
+
+      ## Done
+      - [ ] AC-4 — la risposta a un'approvazione è provata sull'`optionId` che raggiunge davvero l'hub, non sul solo codice di ritorno.
+      - [ ] AC-5 — l'annullamento è provato sul percorso e sul metodo esatti, senza corpo.
+      - [ ] AC-6 — tutti e quattro i rifiuti sono classificati per ciascuno dei tre comandi, con i due `409` distinti.
+      - [ ] Nessun messaggio di errore contiene il token.
+      - [ ] `go test ./internal/execution/...` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Proiezione lato server della run seguita, con deduplica e riconnessione dal cursore
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Il viewer mantiene, per un'esecuzione, una proiezione ordinata e deduplicata degli eventi della run remota, lo stato della run, le approvazioni pendenti e lo stato di connessione, riconnettendosi da solo dal proprio cursore alto.
+
+      ## Read
+      - `cli/internal/web/execution_run.go` — `dispatchGroup`: possiede il contesto su cui girano i lavori che sopravvivono alla risposta HTTP (`bind`, `run`, `wait`) ed è il modello esatto di ciclo di vita da riusare. Leggi anche `latestExecution` e `actionAvailabilityFor` per come il server risale al record di una spec.
+      - `cli/internal/web/server.go` — `Server` (campi `store`, `service`, `registry`, `dispatch`), `Run` e il drenaggio a `dispatchDrainTimeout`.
+      - `cli/internal/web/broker.go` — il pub/sub in memoria già presente, per capire lo stile del package.
+      - `cli/internal/execution/run.go` — la porta introdotta da TASK-01.
+
+      ## Change
+      - `cli/internal/web/run_follow.go` — nuovo file: `runFollower` e il registro `runFollowers` che ne tiene uno per id di esecuzione.
+      - `cli/internal/web/server.go` — aggiungi il campo del registro alla `struct Server`, inizializzalo in `NewServer` e chiudi tutti i follower nel percorso di uscita di `Run`, accanto a `s.broker.Close()`.
+
+      Non-goal: nessuna rotta HTTP in questo task (è TASK-10) e nessuna modifica al comportamento di `handleRunSpecAction`. La proiezione è in memoria e non va persistita: l'hub resta la fonte dello storico.
+
+      ## Steps
+      1. Definisci `runFollower` con: `mu sync.Mutex`; `executionID`, `runID string`; `providerConfig map[string]any`; `events []execution.RunEvent`; `lastID int64`; `snapshot execution.RunSnapshot`; `approvals []execution.PendingApproval`; `connected bool`; `notice string` (l'ultimo problema di trasporto, mostrabile); `cancel context.CancelFunc`; `done chan struct{}`.
+      2. Definisci la costante `maxFollowedEvents = 2000` e il commento che ne spiega il ruolo: la proiezione è una finestra, non un archivio. Quando il buffer supera il tetto, scarta **dalla testa** e conserva un campo `truncated bool`, così che la UI possa dire che lo storico più vecchio è oltre la finestra invece di fingere che non sia mai esistito. Non toccare mai `lastID` durante lo scarto: è il cursore, non un indice del buffer.
+      3. Implementa `appendEvent(ev execution.RunEvent) bool`: sotto lock, scarta e restituisce `false` quando `ev.ID <= lastID` (è la deduplica di AC-1, ed è la stessa regola che l'hub applica sul proprio lato); altrimenti appende, aggiorna `lastID = ev.ID`, applica il tetto e restituisce `true`.
+      4. Implementa `snapshotView()` che restituisce sotto lock una copia difensiva di stato, eventi con `ID > afterID`, approvazioni, `lastID`, `connected`, `truncated` e `notice`. Restituire le slice interne farebbe uscire lo stato condiviso dal lock.
+      5. Implementa il ciclo `follow(ctx, collaborator, req)` eseguito su una goroutine:
+         - imposta `connected = true` e `notice = ""`, poi invoca `collaborator.StreamRunEvents(ctx, req, f.lastID, sink)` dove `sink` chiama `appendEvent`;
+         - al ritorno imposta `connected = false`; se l'errore è un rifiuto `unauthorized` o `not_found`, registra il `notice` e **termina** il ciclo, perché ritentare non può cambiare l'esito;
+         - se lo stream è terminato con `nil` (run chiusa), rileggi una volta `ReadRun` per fissare lo stato terminale e termina;
+         - altrimenti attendi un backoff e riconnetti **con il `lastID` corrente**, che è ciò che rende AC-2 una proprietà del server e non del browser. Backoff esponenziale a partire da 1s con tetto a 15s, con un `select` su `ctx.Done()` così che una chiusura non attenda il timer.
+      6. Dopo ogni riconnessione riuscita e a ogni chiusura dello stream, aggiorna `snapshot` e `approvals` con `ReadRun` e `ReadRunApprovals`. Un fallimento di queste due letture popola `notice` e non azzera mai i valori precedenti: una lettura fallita non è un'assenza.
+      7. Implementa il registro `runFollowers` con `mu sync.Mutex` e `byExecution map[string]*runFollower`, e i metodi:
+         - `ensure(ctx, executionID, runID string, providerConfig map[string]any, collaborator execution.RunCollaborator) *runFollower` — idempotente: restituisce il follower esistente per quell'esecuzione, oppure ne crea e avvia uno solo. Se esiste ma con un `runID` diverso, chiudi il vecchio e creane uno nuovo.
+         - `get(executionID string) (*runFollower, bool)`
+         - `closeAll()` — cancella ogni follower e attende il suo `done` con un tetto complessivo pari a `dispatchDrainTimeout`, con la stessa motivazione già scritta per `dispatchGroup.wait`.
+      8. In `server.go`, aggiungi `followers *runFollowers` alla `struct Server`, inizializzalo in `NewServer` e invoca `s.followers.closeAll()` nei due rami di uscita di `Run` dove oggi si chiama `s.broker.Close()`.
+      9. Esegui `gofmt -w cli/internal/web/`.
+
+      ## Verify
+      - Esegui da `cli/`: `go build ./...` → compila pulito.
+      - Esegui da `cli/`: `go vet ./internal/web/...` → nessun problema.
+      - Esegui da `cli/`: `go test ./internal/web/...` → verde; i test esistenti del viewer non devono cambiare comportamento.
+
+      ## Done
+      - [ ] AC-1 — `appendEvent` scarta ogni evento con `ID <= lastID` e la proiezione resta ordinata per `ID` crescente.
+      - [ ] AC-2 — la riconnessione passa il `lastID` corrente come `afterID`, e lo scarto degli eventi vecchi dal buffer non altera `lastID`.
+      - [ ] Un rifiuto `unauthorized` o `not_found` ferma il ciclo invece di ritentare all'infinito.
+      - [ ] `ensure` è idempotente: due invocazioni per la stessa esecuzione non avviano due stream.
+      - [ ] I follower sono chiusi all'uscita del server, con lo stesso tetto temporale dei dispatch.
+      - [ ] `go build ./...`, `go vet ./internal/web/...` e `go test ./internal/web/...` verdi.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Test unitari del follower — deduplica, ripresa dal cursore, chiusura, finestra
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Le proprietà che reggono AC-1 e AC-2 sono provate direttamente sul follower, con uno stream che il test può interrompere quando vuole.
+
+      ## Read
+      - `cli/internal/web/run_follow.go` — il codice introdotto da TASK-08.
+      - `cli/internal/web/execution_test.go` e `cli/internal/web/broker_test.go` — stile dei test del package e uso di doppi in-process.
+
+      ## Change
+      - `cli/internal/web/run_follow_test.go` — nuovo file.
+
+      Non-goal: nessun `httptest`, nessun provider ARcipelago. Qui si prova la logica di proiezione, quindi il collaboratore è un doppio che il test pilota passo per passo.
+
+      ## Steps
+      1. Scrivi un doppio `fakeCollaborator` che implementa `execution.RunCollaborator` e registra **ogni `afterID` ricevuto da `StreamRunEvents`** in una slice consultabile: è l'oracolo di AC-2. Lo stream emette gli eventi che il test gli consegna su un canale e ritorna quando il test lo decide (con `nil`, con un errore di trasporto o con un rifiuto).
+      2. `TestFollowerKeepsEventsOrderedAndDeduplicated`: consegna gli eventi con `id` 1, 2, 2, 3, 2 in quest'ordine; la proiezione contiene esattamente 1, 2, 3, in quest'ordine, e `lastID` vale 3.
+      3. `TestFollowerResumesFromItsCursorAfterADrop`: emetti 1, 2, 3, poi fai fallire lo stream con un errore di trasporto; attendi la riconnessione e emetti 4, 5. Asserisci che il **secondo** `afterID` registrato dal doppio valga `3` e che la proiezione finale contenga 1..5, ciascuno una volta. È l'evidenza diretta di AC-2.
+      4. `TestFollowerDoesNotRetryAfterATerminalRefusal`: lo stream ritorna un `execution.RunCommandError` con `unauthorized`; asserisci che il doppio registri **una sola** invocazione di `StreamRunEvents` anche dopo aver atteso più del backoff iniziale, che `connected` sia falso e che `notice` sia non vuoto.
+      5. `TestFollowerFixesTheTerminalStateWhenTheRunCloses`: lo stream ritorna `nil`; il doppio espone `ReadRun` con stato `CLOSED`; asserisci che lo snapshot esposto dal follower diventi `CLOSED` e che il ciclo termini (il canale `done` si chiude).
+      6. `TestFollowerWindowDropsFromTheHeadWithoutMovingTheCursor`: emetti `maxFollowedEvents + 10` eventi; asserisci che la proiezione contenga al più `maxFollowedEvents` elementi, che il primo conservato non sia l'evento 1, che `truncated` sia vero, e soprattutto che `lastID` valga l'`id` dell'ultimo evento emesso — lo scarto non deve mai far arretrare il cursore, o la riconnessione ripeterebbe eventi già visti.
+      7. `TestFollowerSnapshotViewFiltersByAfterID`: con la proiezione a 1..5, `snapshotView(3)` restituisce solo 4 e 5 e riporta `last_id` 5; `snapshotView(5)` non restituisce alcun evento.
+      8. `TestFollowersEnsureIsIdempotent`: due `ensure` consecutivi per la stessa esecuzione restituiscono lo stesso puntatore e il doppio registra una sola apertura di stream. Un `ensure` con un `runID` diverso chiude il precedente e ne apre uno nuovo.
+      9. `TestFollowersCloseAllStopsEveryFollower`: dopo `closeAll`, ogni contesto passato al doppio risulta cancellato e ogni `done` è chiuso.
+      10. Usa attese condizionate (poll su una condizione con scadenza) invece di `time.Sleep` fissi, così che il test non diventi lento né instabile.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/web/ -run 'TestFollower' -v` → tutti PASS.
+      - Esegui da `cli/`: `go test ./internal/web/... -race` → verde. La `-race` è obbligatoria qui: il follower è concorrente per costruzione.
+
+      ## Done
+      - [ ] AC-1 — la deduplica è provata su una sequenza che contiene davvero un `id` ripetuto e uno fuori ordine.
+      - [ ] AC-2 — il valore del cursore alla riconnessione è asserito su ciò che il follower ha realmente passato al collaboratore, e la proiezione finale non ha né buchi né ripetizioni.
+      - [ ] Lo scarto dalla finestra è provato non far arretrare `lastID`.
+      - [ ] Un rifiuto terminale è provato non generare ritentativi.
+      - [ ] `go test ./internal/web/... -race` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Rotte HTTP del viewer per leggere e comandare la run di un'esecuzione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Il browser può leggere la proiezione della run di un'esecuzione e inviarle i tre comandi, e ogni rifiuto arriva con uno stato e un codice stabili senza aver modificato la proiezione.
+
+      ## Read
+      - `cli/internal/web/server.go` — `registerRoutes`: forma esatta dei pattern (`GET /api/execution/{id}`) e ordine delle registrazioni.
+      - `cli/internal/web/execution_run.go` — `handleGetExecution` (mappatura di `StoreError` su `iox`), `handleRunSpecAction` (lettura del default provider da disco con `readConfigState`, uso di `execution.CloneConfig`), `actionAvailabilityFor` (risoluzione del provider dal registro).
+      - `cli/internal/web/handlers.go` — `writeJSON`, `writeError`, `decodeJSON` (che rifiuta i campi sconosciuti) e la mappatura `iox.Code*` → stato HTTP.
+      - `cli/internal/iox` — i costruttori `NewInvalidInput`, `NewNotFound`, `NewConflict`, `NewInternal` e i loro codici.
+
+      ## Change
+      - `cli/internal/web/run_routes.go` — nuovo file: le quattro rotte, le view JSON e la mappatura dei rifiuti.
+      - `cli/internal/web/server.go` — registra le quattro rotte in `registerRoutes`, accanto a quelle di esecuzione esistenti.
+
+      Non-goal: non modificare le rotte di US-029 né il payload di `GET /api/spec/{code}`; non aggiungere autenticazione (il viewer resta locale a `127.0.0.1`); non far comparire in alcuna risposta il token o un altro segreto.
+
+      ## Steps
+      1. Scrivi l'helper `resolveRunTarget(ctx, executionID)` che, in quest'ordine: legge il record con `s.store.Get`; legge il default provider da disco con `readConfigState` (mai dalla config di boot, per la stessa ragione già scritta in `handleRunSpecAction`); risolve il provider dal registro; ottiene il collaboratore con `execution.RunCollaboratorFor`; invoca `ResolveRun` e infine `s.followers.ensure(...)`. Restituisce follower, collaboratore e `execution.RunRequest`.
+         Ogni passo mancante ha un errore proprio e distinto: record assente → `iox.NewNotFound`; nessun default provider → `iox.NewConflict` con lo stesso suggerimento già usato altrove ("pick a default provider in the Execution panel of the configuration"); provider che non implementa `RunCollaborator` → `iox.NewConflict` che dice che quel provider non espone una run interattiva; `ResolveRun` che restituisce `""` → **non è un errore**: è una `200` con `run: null` e una nota, perché il lavoro remoto può non avere ancora una run.
+      2. Scrivi `mapRunRefusal(err error) error`: usa `execution.RefusalOf` e traduci `not_found` → `iox.NewNotFound`, `run_not_active` → `iox.NewConflict`, `runner_offline` → `iox.NewConflict`, `unauthorized` → `iox.NewConflict`, `unsupported` → `iox.NewInvalidInput`. Ogni messaggio nomina il motivo in forma stabile e dice cosa fare. Un errore che non è un rifiuto diventa `iox.NewInternal`. Ramifica solo sulla `Reason`, mai sul testo.
+      3. Implementa `GET /api/execution/{id}/run` → `handleGetExecutionRun`: legge il parametro di query `after_id` (intero, default 0; un valore non intero o negativo è `iox.NewInvalidInput` che nomina `after_id`), risolve il target e risponde con `runView{ Run *runSnapshotView; Events []execution.RunEvent; LastID int64; Approvals []execution.PendingApproval; Connected bool; Truncated bool; Notice string }` (JSON `run`, `events`, `last_id`, `approvals`, `connected`, `truncated`, `notice,omitempty`). `Events` e `Approvals` non sono mai nil, così il browser riceve `[]` e non `null`.
+      4. Implementa `POST /api/execution/{id}/run/messages` → `handleSendRunMessage`: corpo `{"message": string}` decodificato con `decodeJSON`; invoca `SendRunMessage`; su successo risponde `202` con il corpo di `handleGetExecutionRun` calcolato con `after_id` uguale a quello passato dal chiamante, così che il browser riceva la proiezione **così com'è ora** e possa constatare che il messaggio non c'è ancora. Non appendere nulla alla proiezione: è AC-3, ed è anche ciò che rende AC-6 automatico.
+      5. Implementa `POST /api/execution/{id}/run/approvals/{approvalId}` → `handleRespondRunApproval`: corpo `{"option_id": string}`; `option_id` vuoto è `iox.NewInvalidInput` che nomina il campo; invoca `RespondRunApproval`; su successo rilegge approvazioni e stato con il collaboratore, aggiorna il follower e risponde `202` con la stessa view. È il "mostra l'esito restituito dal provider e aggiorna la run" di AC-4.
+      6. Implementa `POST /api/execution/{id}/run/cancel` → `handleCancelRun`: nessun corpo; invoca `CancelRun`; su successo rilegge **solo** `ReadRun` e risponde `202` con la view. Non impostare mai `CLOSED` localmente: lo stato è quello che l'hub riporta (AC-5).
+      7. In tutti e tre i comandi, sul ramo di rifiuto rispondi con `writeError(w, mapRunRefusal(err))` e **non toccare il follower**: nessuna scrittura sulla proiezione, nessuna invalidazione, nessun azzeramento. È la metà osservabile di AC-6.
+      8. Registra le quattro rotte in `registerRoutes` subito dopo `GET /api/execution/{id}`.
+      9. Esegui `gofmt -w cli/internal/web/`.
+
+      ## Verify
+      - Esegui da `cli/`: `go build ./...` → compila pulito.
+      - Esegui da `cli/`: `go vet ./internal/web/...` → nessun problema.
+      - Esegui da `cli/`: `go test ./internal/web/...` → verde; in particolare `handlers_test.go` ed `execution_run_test.go` non devono cambiare, perché nessuna rotta esistente è stata toccata.
+
+      ## Done
+      - [ ] Le quattro rotte sono registrate e rispondono; nessuna rotta preesistente è modificata.
+      - [ ] AC-3 — la rotta dei messaggi non appende nulla alla proiezione e restituisce la proiezione corrente.
+      - [ ] AC-5 — la rotta di annullamento non imposta mai uno stato terminale locale.
+      - [ ] AC-6 — sul ramo di rifiuto non viene eseguita alcuna scrittura sul follower, e la risposta porta uno stato `404`/`409`/`400` coerente con la `Reason`.
+      - [ ] `events` e `approvals` sono sempre serializzati come array, mai `null`.
+      - [ ] `go build ./...`, `go vet ./internal/web/...` e `go test ./internal/web/...` verdi.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Test di integrazione HTTP delle rotte della run sui sei criteri
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+      I sei criteri di accettazione sono provati al confine HTTP che il browser vede, su un `Server` reale con le rotte reali.
+
+      ## Read
+      - `cli/internal/web/execution_run_test.go` — come i test montano un `Server` con un registro di provider doppi, uno store reale su directory temporanea e chiamate `httptest.NewRequest`/`ServeHTTP`. Riusa quelle utilità invece di crearne di nuove.
+      - `cli/internal/web/run_routes.go` — le rotte introdotte da TASK-10.
+      - `cli/internal/web/run_follow_test.go` — il `fakeCollaborator` di TASK-09, da riusare o estendere.
+
+      ## Change
+      - `cli/internal/web/run_routes_test.go` — nuovo file.
+
+      Non-goal: non duplicare qui i test unitari del follower; non usare il provider ARcipelago reale (lo fa lo smoke di TASK-13). Il doppio deve però restare **fuori dal percorso che produce ciascun oracolo**: il collaboratore è finto, il follower, le rotte, la serializzazione e la mappatura degli errori sono quelli veri.
+
+      ## Steps
+      1. Predisponi un helper `newRunServer(t)` che costruisce un `Server` con un provider doppio che implementa sia `execution.Provider` sia `execution.RunCollaborator`, uno store con un record di esecuzione già presente e `execution.default_provider` scritto nella config del progetto temporaneo.
+      2. **AC-1** `TestRunReadIsOrderedAndDeduplicated`: il doppio emette gli eventi 1, 2, 3, poi 3, 4. `GET /api/execution/{id}/run` restituisce `events` con `id` 1..4 in ordine crescente e ciascuno una sola volta, e `last_id` 4. Una seconda `GET` con `after_id=4` restituisce `events: []` e lo stesso `last_id`.
+      3. **AC-2** `TestRunReadResumesAfterAReconnection`: il doppio interrompe lo stream dopo l'evento 3 e ne emette altri due dopo la riconnessione; asserisci che il secondo `afterID` ricevuto dal doppio sia 3 e che una `GET` con `after_id=0` restituisca 1..5 senza buchi né ripetizioni.
+      4. **AC-3** `TestSentMessageAppearsOnlyAfterTheProviderConfirms`: `POST /api/execution/{id}/run/messages` con `{"message":"ciao agente"}` risponde `202`; il corpo della risposta **non** contiene `"ciao agente"` in alcun evento. Poi il doppio pubblica sullo stream un evento `user_message` con quel testo; una `GET` successiva lo contiene esattamente una volta con `kind: "user_message"`. Asserisci anche che il doppio abbia ricevuto il messaggio con il testo esatto.
+      5. **AC-4** `TestApprovalResponseShowsTheProviderOutcome`: il doppio espone un'approvazione pendente con due opzioni; la `GET` la mostra; `POST /api/execution/{id}/run/approvals/{approvalId}` con `{"option_id":"allow-once"}` risponde `202`, il doppio registra `("appr-1","allow-once")`, e il corpo della risposta riflette la rilettura del provider: l'approvazione non è più fra le pendenti e lo stato della run è quello che il doppio ora riporta.
+      6. **AC-5** `TestCancelShowsTheProviderConfirmedState`: su run attiva, `POST .../run/cancel` risponde `202`, il doppio registra la richiesta, e il corpo mostra lo stato che il doppio riporta — se il doppio tiene ancora `ACTIVE`, la risposta dice `ACTIVE`, mai `CLOSED` anticipato. Poi il doppio passa a `CLOSED` e la `GET` lo mostra.
+      7. **AC-5 (seconda metà)** `TestCancelOnATerminalRunIsRefusedAndDoesNotReopenIt`: con il doppio che rifiuta `run_not_active`, la `POST` risponde `409`, e la `GET` successiva mostra ancora lo stato terminale — non `ACTIVE`.
+      8. **AC-6** `TestRefusedCommandsLeaveTheProjectionUnchanged`: popola la proiezione con tre eventi e un'approvazione; cattura lo snapshot completo con una `GET after_id=0`; poi esegui i tre comandi con il doppio che rifiuta, in tabella, `not_found` (atteso `404`) e `run_not_active`, `runner_offline`, `unauthorized` (attesi `409`); dopo **ciascun** rifiuto rileggi lo snapshot completo e asserisci l'uguaglianza con quello catturato prima — stessi `id` nello stesso ordine, stesso `last_id`, stesso `run.state`, stesse approvazioni. È l'oracolo di "senza alterare la proiezione locale".
+      9. `TestRunReadWithoutARunYet`: `ResolveRun` del doppio restituisce `""`; la `GET` risponde `200` con `run: null` ed `events: []`, non un errore.
+      10. `TestRunRoutesRejectABadCursor`: `after_id=abc` e `after_id=-1` rispondono `400` nominando `after_id`.
+      11. `TestRunRoutesOnAProviderThatDoesNotCollaborate`: con un provider che implementa solo `execution.Provider`, tutte e quattro le rotte rispondono `409` con un messaggio che spiega che quel provider non espone una run interattiva.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/web/ -run 'TestRun|TestSentMessage|TestApprovalResponse|TestCancel|TestRefusedCommands' -v` → tutti PASS.
+      - Esegui da `cli/`: `go test ./internal/web/... -race` → verde.
+
+      ## Done
+      - [ ] AC-1 provato su ordine, unicità degli `id` e `after_id` che non riconsegna il già consegnato.
+      - [ ] AC-2 provato sul cursore realmente inviato dopo l'interruzione e sull'assenza di buchi.
+      - [ ] AC-3 provato sull'assenza del testo subito dopo il `202` e sulla sua presenza dopo la pubblicazione del provider.
+      - [ ] AC-4 provato sull'`option_id` ricevuto dal provider e sulla rilettura che ne segue.
+      - [ ] AC-5 provato in entrambe le metà: stato confermato dal provider, e rifiuto su run terminale che non la riapre.
+      - [ ] AC-6 provato confrontando lo snapshot completo prima e dopo ciascuno dei quattro rifiuti, sui tre comandi.
+      - [ ] `go test ./internal/web/... -race` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Pannello della run nel dettaglio spec — timeline, composer, approvazioni, annullamento
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+      Dal dettaglio di una spec con un'esecuzione in corso, l'utente vede lo storico ordinato della run, invia messaggi, risponde alle approvazioni e chiede l'annullamento, senza lasciare la UI ARchetipo.
+
+      ## Read
+      - `docs/mockups/US-030/` — i mockup di questa spec: sono il riferimento visivo e di copy per tutti gli stati da rendere (run attiva, riconnessione, approvazione pendente, messaggio in attesa di conferma, comando rifiutato, run terminata). Aprili prima di scrivere markup o CSS e riusane classi e testi.
+      - `cli/internal/web/assets/app.js` — la sezione `// ---- Spec execution ----` (righe circa 1580-1780): `renderExecution`, `resumeExecution`, `startExecutionPolling`, `stopExecutionPolling`, `settleExecution`, `isExecutionTerminal`, e `openEditor` che azzera tutto all'apertura di una spec. Il nuovo pannello deve agganciarsi a questo ciclo di vita, non crearne uno parallelo.
+      - `cli/internal/web/assets/index.html` — riga 108, il contenitore `<div id="story-execution" class="story-execution">`: il nuovo pannello gli va accanto.
+      - `cli/internal/web/assets/app.css` — le regole `.execution-panel`, `.execution-head`, `.execution-meta`, `.action-chip` e i token in `:root`: il nuovo pannello riusa quel vocabolario visivo.
+      - `cli/internal/web/run_routes.go` — la forma esatta della view JSON (`run`, `events`, `last_id`, `approvals`, `connected`, `truncated`, `notice`).
+
+      ## Change
+      - `cli/internal/web/assets/index.html` — aggiungi `<div id="story-run" class="story-run"></div>` subito dopo `#story-execution`.
+      - `cli/internal/web/assets/app.js` — nuova sezione `// ---- Remote run ----` e gli agganci in `openEditor` e nel ciclo di polling dell'esecuzione.
+      - `cli/internal/web/assets/app.css` — le regole del pannello run, in coda al file accanto a quelle dell'esecuzione.
+
+      Non-goal: nessuna libreria nuova e nessun bundler — il viewer è JS vanilla con templating a stringhe. Nessun `EventSource` verso il viewer: il trasporto scelto è il polling incrementale. Non modificare il comportamento del pannello esecuzione esistente.
+
+      ## Steps
+      1. In `index.html` aggiungi il contenitore `#story-run` e in `app.js` recuperane il riferimento accanto a `storyExecution` (righe ~64-69).
+      2. Aggiungi lo stato di modulo: `runPollTimer`, `runAfterID`, `runEvents` (l'array reso), `runSnapshot`, `runPendingMessage` (il testo inviato e non ancora confermato), `runNotice`.
+      3. Scrivi `stopRunPolling()` e chiamalo da `stopExecutionPolling()`, così che lasciare una spec fermi anche questo timer. In `openEditor`, azzera lo stato della run e svuota `#story-run` prima di caricare il dettaglio, esattamente come già si fa con `renderExecution(null)`.
+      4. Scrivi `resumeRun(record, code)`, invocata da `resumeExecution`: se non c'è record, non fare nulla. Altrimenti esegui una prima `GET /api/execution/{id}/run?after_id=0` e, se la risposta ha `run` non nullo, rendi il pannello e avvia il polling. Una `409` su questa prima lettura significa "questo provider non espone una run interattiva": non è un errore da mostrare come rosso, il pannello semplicemente non compare.
+      5. Scrivi `startRunPolling(executionID, code)` con lo stesso intervallo già in uso (`EXECUTION_POLL_MS`, 2000 ms) e la stessa disciplina di `startExecutionPolling`: ogni tick verifica che `currentSpecCode === code`, altrimenti si ferma da solo. Ogni tick chiama `GET /api/execution/{id}/run?after_id={runAfterID}` e **appende soltanto** gli eventi restituiti, aggiornando `runAfterID = last_id`. Non ricostruire mai la lista da zero: è la deduplica lato client di AC-1, complementare a quella del server.
+      6. Continua il polling anche quando `run.state` non è `ACTIVE`: una run chiusa può ancora avere eventi finali da consegnare. Ferma il polling quando lo stato non è `ACTIVE` **e** una lettura successiva non ha restituito nuovi eventi, così l'ultimo turno non viene perso.
+      7. Scrivi `renderRun()` che disegna dal solo stato locale, seguendo i mockup:
+         - intestazione con badge di stato (attiva / chiusa / terminata male), id run in monospace, e indicatore di connessione che mostra "riconnessione…" quando `connected` è falso;
+         - `notice` reso come riga informativa, mai come cancellazione del contenuto;
+         - quando `truncated` è vero, una riga che dice che lo storico più vecchio è oltre la finestra;
+         - timeline scrollabile con una riga per evento, differenziata per `kind` (`text`, `thinking`, `user_message`, `tool_start`, `tool_end`, `tool_error`, `turn_end`, sconosciuto); usa `escapeHtml` su ogni testo proveniente dal provider — è testo remoto e non deve mai essere interpretato come markup;
+         - la timeline mantiene lo scroll in fondo solo se l'utente era già in fondo, per non strappargli la posizione mentre legge.
+      8. Composer: textarea più bottone "Invia". Al submit, disabilita i controlli, `POST /api/execution/{id}/run/messages` con `{message}`, e al `202` **non** appendere il testo: imposta `runPendingMessage` e mostra l'affordance "in attesa di conferma" del mockup. Applica la risposta come una normale lettura. Azzera `runPendingMessage` quando compare in timeline un evento `user_message` con quel testo. Su errore, mostra un toast con il messaggio del server e riabilita i controlli senza toccare la timeline.
+      9. Approvazioni: quando `approvals` non è vuoto, rendi la card sopra il composer con `tool_name`, `title`, gli argomenti in un blocco monospace e un bottone per ogni opzione (etichetta da `label`). Al click, `POST /api/execution/{id}/run/approvals/{approvalId}` con `{option_id}`; applica la risposta e mostra l'esito. Su rifiuto, toast e nessuna modifica alla card.
+      10. Annullamento: bottone "Annulla run", visibile solo quando lo stato è `ACTIVE`, con conferma prima di procedere. Al `202` applica la risposta e non impostare mai localmente uno stato terminale — lo stato mostrato è solo quello che il server riporta (AC-5).
+      11. Gestione unificata dei rifiuti: una funzione `showRunRefusal(err)` che mostra un toast e, in linea nel pannello, la riga di rifiuto prevista dal mockup; non deve toccare `runEvents`, `runAfterID` né `runSnapshot` (AC-6).
+      12. Aggiungi in `app.css` le regole `.story-run`, `.run-head`, `.run-state`, `.run-timeline`, `.run-event`, `.run-event-*` per kind, `.run-approval`, `.run-composer`, `.run-refusal`, riusando i token di `:root` e lo stile già stabilito da `.execution-panel`.
+      13. Verifica manualmente nel browser durante lo sviluppo con `cd cli && go run ./cmd/archetipo view` dalla radice di un workspace di prova, oppure con il sandbox prodotto dallo smoke di TASK-13.
+
+      ## Verify
+      - Esegui da `cli/`: `go build ./...` → compila pulito (gli asset sono embedded, quindi una modifica agli asset deve comunque ricompilare).
+      - Esegui da `cli/`: `go test ./internal/web/...` → verde.
+      - Esegui dalla radice: `node --check cli/internal/web/assets/app.js` → nessun errore di sintassi.
+      - Verifica manuale nel browser sul sandbox dello smoke: la timeline si popola in ordine, l'invio di un messaggio non lo mostra prima della conferma, l'approvazione presenta le sue opzioni, l'annullamento è disponibile solo su run attiva.
+
+      ## Done
+      - [ ] AC-1 — la timeline appende solo gli eventi con `id` successivo a `runAfterID` e non ricostruisce mai la lista, quindi nessun evento appare due volte.
+      - [ ] AC-2 — lo stato di riconnessione è visibile all'utente e il polling riprende da `runAfterID` senza saltare eventi.
+      - [ ] AC-3 — il testo inviato non compare in timeline al `202`, ma solo quando arriva l'evento `user_message`; nel frattempo è visibile l'affordance "in attesa di conferma".
+      - [ ] AC-4 — la card di approvazione mostra le opzioni del provider e l'esito dopo la risposta.
+      - [ ] AC-5 — il bottone di annullamento è presente solo su run attiva e lo stato mostrato dopo l'annullamento proviene esclusivamente dalla risposta del server.
+      - [ ] AC-6 — un rifiuto produce toast e riga in linea senza modificare timeline, cursore o stato run.
+      - [ ] Il pannello riusa il linguaggio visivo dei mockup in `docs/mockups/US-030/` e i token di `app.css`.
+      - [ ] Ogni testo proveniente dal provider passa da `escapeHtml`.
+      - [ ] `go build ./...`, `go test ./internal/web/...` e `node --check` verdi.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Smoke Node end-to-end su una run remota, con hub finto SSE, e documentazione in AGENTS.md
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+      Un unico smoke senza credenziali esercita la catena reale — binario, `archetipo view`, connettore, provider ARcipelago, client SSE, follower e rotte — contro un hub finto locale, coprendo tutti e sei i criteri.
+
+      ## Read
+      - `test/e2e/plan-from-view-smoke.mjs` — è il modello da seguire quasi per intero: `buildCLI`, `runCommand`, `startViewServer`, `apiJSON`, `expectStatus`, `startFakeHub` con progressione **comandata dal test e non da un timer**, la raccolta di `viewerBodies` per il controllo del segreto, la creazione del run dir. Riusane struttura e utilità.
+      - `AGENTS.md` — le sezioni "Standalone smoke tests" e "Installation for end users", e lo stile delle voci esistenti.
+      - `package.json` — la forma degli script `test:view-*-smoke`.
+
+      ## Change
+      - `test/e2e/run-from-view-smoke.mjs` — nuovo file.
+      - `package.json` — aggiungi lo script `"test:view-run-smoke": "node ./test/e2e/run-from-view-smoke.mjs"`.
+      - `AGENTS.md` — aggiungi la voce dello smoke nella sezione "Standalone smoke tests" e documenta le quattro nuove rotte del viewer.
+
+      Non-goal: non modificare `plan-from-view-smoke.mjs` (è regressione e deve restare verde com'è); nessun accesso di rete fuori da `127.0.0.1`; nessuna credenziale reale; nessun `sleep` arbitrario per sincronizzare il test con l'hub.
+
+      ## Steps
+      1. Copia lo scheletro di `plan-from-view-smoke.mjs`: parsing argomenti, run dir sotto `test/workspaces/run-from-view-smoke/runs/<timestamp>/sandbox`, build del CLI in `test/e2e/.bin/`, `archetipo init --tool pi --connector file --yes`, `spec add`, avvio del viewer su porta effimera, salvataggio del default provider `arcipelago` puntato all'hub finto con `poll_interval_seconds: 1`.
+      2. Estendi l'hub finto con le rotte della run, oltre a quelle dei task che già serve:
+         - `GET /api/external/tasks/{id}` deve ora restituire anche `runId`, altrimenti `ResolveRun` non trova nulla;
+         - `GET /api/external/runs/{id}` restituisce `{run:{id,state,...}}` con lo stato che il test controlla;
+         - `GET /api/external/runs/{id}/events` risponde `text/event-stream` e scrive le frame che il test gli consegna, nel formato SSE reale (`id:`, `event: run_event`, `data: {...}`, riga vuota). **Registra il valore di `afterId` (o dell'header `Last-Event-ID`) di ogni sottoscrizione** in una lista consultabile: è l'oracolo di AC-2. Fornisci un metodo `dropStream()` che chiude la connessione aperta per simulare la caduta.
+         - `GET /api/external/runs/{id}/approvals` restituisce le approvazioni che il test ha impostato;
+         - `POST /api/external/runs/{id}/messages`, `POST /api/external/runs/{id}/approvals/{approvalId}/respond`, `POST /api/external/runs/{id}/cancel` rispondono `202` e registrano quanto ricevuto; ciascuna può essere messa in modalità rifiuto (`404`, oppure `409` con corpo `{"error":"run_not_active"}`) su comando del test.
+         - Ogni richiesta continua a richiedere `Authorization: Bearer <TOKEN_SENTINEL>` e a contare le chiamate autorizzate e non.
+      3. Avvia l'esecuzione dalla UI come fa lo smoke esistente (`POST /api/spec/{code}/execution` con `{"action":"plan"}`) e attendi che l'hub abbia creato il task; assegnagli un `runId` e dichiara la run `active`.
+      4. **AC-1**: emetti le frame 1, 2, 3, poi riemetti la 3 e aggiungi la 4. Leggi `GET /api/execution/{id}/run?after_id=0` finché non compaiono quattro eventi; asserisci `id` 1..4 in ordine crescente, ciascuno esattamente una volta, e `last_id === 4`. Una lettura con `after_id=4` restituisce `events: []`.
+      5. **AC-2**: chiama `dropStream()`, poi emetti le frame 5 e 6. Attendi che compaiano; asserisci che la **seconda** sottoscrizione registrata dall'hub porti `afterId=4`, e che la lettura da `after_id=0` contenga 1..6 senza buchi né ripetizioni.
+      6. **AC-3**: `POST /api/execution/{id}/run/messages` con un testo sentinella; asserisci `202` e che il corpo della risposta non contenga quel testo. Asserisci che l'hub abbia ricevuto esattamente quel messaggio. Poi fai emettere all'hub la frame `user_message` con quel testo e asserisci che compaia in timeline una sola volta.
+      7. **AC-4**: imposta un'approvazione pendente con due opzioni; asserisci che la `GET` la esponga; `POST /api/execution/{id}/run/approvals/{approvalId}` con `{"option_id":"allow-once"}` risponde `202`; asserisci che l'hub abbia registrato `("appr-1","allow-once")` su quel `runId` e che la risposta rifletta la rilettura (approvazione non più pendente).
+      8. **AC-5**: `POST /api/execution/{id}/run/cancel` risponde `202` e l'hub registra la richiesta; asserisci che lo stato riportato sia ancora quello dell'hub. Poi porta l'hub a `closed`, verifica che la lettura lo mostri, e infine ripeti la `POST` di annullamento: l'hub risponde `409 run_not_active`, il viewer risponde `409`, e la lettura successiva mostra ancora `CLOSED`, non una run riaperta.
+      9. **AC-6**: cattura lo snapshot completo con `after_id=0`; metti l'hub in modalità rifiuto ed esegui i tre comandi con `404` e con `409 run_not_active`; dopo ciascuno rileggi lo snapshot completo e asserisci l'uguaglianza con quello catturato (confronto sugli `id`, su `last_id`, su `run.state` e sulle approvazioni).
+      10. Ripeti il controllo di segretezza già presente in US-029: accumula ogni corpo di risposta del viewer e asserisci che il `TOKEN_SENTINEL` non compaia in nessuno, mentre l'hub ha ricevuto un numero di chiamate autorizzate maggiore di zero e zero non autorizzate.
+      11. Chiudi ordinatamente hub e viewer nel `finally` e stampa un riepilogo per criterio, come fa lo smoke esistente.
+      12. Aggiungi lo script in `package.json`.
+      13. In `AGENTS.md`, aggiungi la voce di `npm run test:view-run-smoke` nella sezione "Standalone smoke tests", descrivendo che cosa è reale e che cosa è finto e quali criteri prova; documenta le quattro rotte `GET /api/execution/{id}/run`, `POST /api/execution/{id}/run/messages`, `POST /api/execution/{id}/run/approvals/{approvalId}` e `POST /api/execution/{id}/run/cancel`.
+
+      ## Verify
+      - Esegui dalla radice: `npm run test:view-run-smoke` → `PASS`, con una riga di riepilogo per ciascuno dei sei criteri.
+      - Esegui dalla radice: `npm run test:view-plan-smoke` → `PASS`, invariato rispetto alla baseline: lo smoke di US-029 è regressione.
+      - Esegui dalla radice: `node --check test/e2e/run-from-view-smoke.mjs` → nessun errore di sintassi.
+      - Verifica che `test/workspaces/` resti ignorato da git: `git status --porcelain test/workspaces` → nessun output.
+
+      ## Done
+      - [ ] Tutti e sei i criteri hanno una riga di riepilogo verde nello smoke, con gli oracoli descritti negli step 4-9.
+      - [ ] AC-2 è provato sul valore di `afterId` che il provider reale ha inviato all'hub dopo la caduta dello stream.
+      - [ ] AC-6 è provato confrontando lo snapshot completo prima e dopo ciascun rifiuto.
+      - [ ] Il token non compare in alcuna risposta del viewer, e l'hub registra zero chiamate non autorizzate.
+      - [ ] `npm run test:view-plan-smoke` resta `PASS`.
+      - [ ] `package.json` espone `test:view-run-smoke` e `AGENTS.md` documenta smoke e rotte.
+      - [ ] Nessun artefatto generato è tracciato da git.
+
+      ## Blockers
+      None.
+    ref: TASK-13
+  - id: TASK-14
+    title: Gate finale — verifiche complete, prova manuale nel browser e controllo dello stato dei task
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+      - TASK-13
+    body: |-
+      ## Objective
+      L'incremento è completo e verificato: le suite mirate e quelle di regressione sono verdi, il rendering è stato osservato davvero in un browser, e nessun task resta aperto prima di chiedere la review.
+
+      ## Read
+      - Il corpo della spec US-030 e i suoi sei criteri di accettazione: ogni voce della checklist qui sotto va confrontata con il criterio corrispondente.
+      - La sezione `Baseline` del corpo di questo piano: ogni comando elencato qui era verde prima dell'implementazione, quindi ogni fallimento è una regressione introdotta e va corretta, mai giustificata.
+
+      ## Change
+      Nessuna modifica prevista in questo task. Se una verifica fallisce, la correzione appartiene al task che ha introdotto il problema; correggi lì e riesegui il gate da capo.
+
+      ## Steps
+      1. Esegui i controlli statici da `cli/`, nell'ordine: `gofmt -l .`, `go vet ./...`, `go build ./...`.
+      2. Esegui i test focalizzati da `cli/`: `go test ./internal/execution/... ./internal/web/... -race`.
+      3. Esegui la regressione completa da `cli/`: `go test ./...`.
+      4. Esegui il linter da `cli/`: `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run --timeout 5m ./...`. È la forma usata per produrre la baseline, perché `golangci-lint` non è installato globalmente su questa macchina.
+      5. Esegui gli smoke dalla radice: `npm run test:view-run-smoke` e poi `npm run test:view-plan-smoke`.
+      6. Esegui il controllo di sintassi degli asset: `node --check cli/internal/web/assets/app.js` e `node --check test/e2e/run-from-view-smoke.mjs`.
+      7. **Prova manuale nel browser**, che è l'unica evidenza del rendering non coperta dai livelli automatici. Usa il sandbox lasciato dallo smoke (il suo output ne stampa il percorso) oppure un workspace di prova, avvia `archetipo view` e, sulla spec con l'esecuzione, verifica nell'ordine: (a) il pannello run compare sotto il pannello esecuzione e la timeline è ordinata; (b) interrompendo l'hub finto compare lo stato di riconnessione e alla ripresa non si vedono eventi duplicati; (c) inviando un messaggio il testo **non** compare subito e compare l'affordance di attesa, poi appare come evento quando l'hub lo pubblica; (d) la card di approvazione mostra le opzioni e risponde; (e) il bottone di annullamento è presente solo su run attiva; (f) su un comando rifiutato compare la riga di rifiuto e la timeline resta identica.
+      8. Verifica che nessun artefatto generato sia tracciato: `git status --porcelain test/workspaces cli/dist` → nessun output.
+      9. Segna questo task `DONE` con `archetipo task done US-030 TASK-14`, eseguito da `/Users/stefanoleli/Project/Archetipo`.
+      10. Ricarica la spec con `archetipo spec show US-030`, eseguito da `/Users/stefanoleli/Project/Archetipo`, e verifica che **nessun** task risulti `TODO`. Solo a quel punto è ammesso invocare `archetipo spec review US-030`. Un solo task ancora aperto significa che il gate non è superato: torna a completarlo.
+
+      ## Verify
+      - Da `cli/`: `gofmt -l .` → nessun output.
+      - Da `cli/`: `go vet ./...` → nessun problema.
+      - Da `cli/`: `go build ./...` → compila pulito.
+      - Da `cli/`: `go test ./internal/execution/... ./internal/web/... -race` → verde.
+      - Da `cli/`: `go test ./...` → verde, con almeno gli 806 test della baseline più quelli aggiunti.
+      - Da `cli/`: `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run --timeout 5m ./...` → `0 issues.`
+      - Dalla radice: `npm run test:view-run-smoke` → `PASS`.
+      - Dalla radice: `npm run test:view-plan-smoke` → `PASS`.
+      - Dalla radice: `node --check cli/internal/web/assets/app.js` e `node --check test/e2e/run-from-view-smoke.mjs` → nessun errore.
+      - Da `/Users/stefanoleli/Project/Archetipo`: `archetipo spec show US-030` → nessun task in stato `TODO`.
+
+      ## Done
+      - [ ] AC-1 — provato da `run_routes_test.go`, dallo smoke e dal punto (a) della prova manuale.
+      - [ ] AC-2 — provato da `run_follow_test.go`, dallo smoke sul cursore reale e dal punto (b) della prova manuale.
+      - [ ] AC-3 — provato da `run_routes_test.go`, dallo smoke e dal punto (c) della prova manuale.
+      - [ ] AC-4 — provato da `run_routes_test.go`, dallo smoke e dal punto (d) della prova manuale.
+      - [ ] AC-5 — provato in entrambe le metà da `run_routes_test.go`, dallo smoke e dal punto (e) della prova manuale.
+      - [ ] AC-6 — provato dal confronto degli snapshot in `run_routes_test.go` e nello smoke, e dal punto (f) della prova manuale.
+      - [ ] Tutti i comandi della sezione `Verify` sono verdi, nessuno dei quali era rosso nella baseline.
+      - [ ] I file modificati non introducono diagnostiche di compilatore o linter: `go vet` e `golangci-lint` sono puliti.
+      - [ ] Nessun artefatto generato è tracciato da git.
+      - [ ] Ordine di chiusura rispettato: eseguite le verifiche, questo task è stato marcato `DONE`, la spec è stata ricaricata con `archetipo spec show US-030`, nessun task risulta `TODO`, e solo allora è ammesso `archetipo spec review US-030`.
+
+      ## Blockers
+      None.
+    ref: TASK-14

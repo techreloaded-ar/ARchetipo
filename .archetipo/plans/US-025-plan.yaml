@@ -1,0 +1,885 @@
+schema: archetipo/plan/v2
+spec_code: US-025
+body: |-
+  # US-025: Pianificare una spec tramite ARcipelago — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-08-16
+
+  ---
+
+  ## Spec
+
+  **Epica:** EP-003 — Esecuzione gestita e portabile
+  **Priorità:** HIGH | **Punti:** 5
+  **Bloccata da:** US-023 (DONE), US-024 (DONE)
+
+  **Storia utente**
+  Come utilizzatore di ARchetipo con esecuzione remota, voglio pianificare una spec esistente usando ARcipelago, così da ottenere un piano senza aprire manualmente un coding agent o la console ARcipelago.
+
+  **Criteri di accettazione**
+
+  - AC-1 — L'avvio della pianificazione restituisce un'esecuzione ARchetipo collegata alla spec e all'identificativo remoto assegnato da ARcipelago.
+  - AC-2 — Il completamento remoto produce un piano valido nel connector configurato e porta la spec a `PLANNED`.
+  - AC-3 — La ripetizione della stessa richiesta con il medesimo identificativo restituisce l'esecuzione già creata.
+  - AC-4 — Un fallimento remoto lascia la spec fuori da `PLANNED` e rende visibile il motivo del fallimento.
+  - AC-5 — L'intero percorso può essere completato senza interagire con l'interfaccia utente di ARcipelago.
+
+  ---
+
+  ## Soluzione tecnica
+
+  La slice chiude il confine `execution` aperto da US-023 e configurato da US-024 aggiungendo il **primo provider di rete reale** e la **idempotenza cross-request**, entrambi dichiarati non-goal delle due slice precedenti. La superficie pubblica resta `archetipo execution run <US-CODE> plan`, che acquisisce il flag `--request-id <chiave>`; il provider `arcipelago` traduce il dispatch in un task esterno del hub ARcipelago e attende il suo esito.
+
+  - **Provider `arcipelago` nel package `cli/internal/execution/arcipelago`.** Dichiara `ID() = "arcipelago"` e la sola capability `spec.plan`. `Execute` esegue `POST {base_url}/api/external/tasks` con `Authorization: Bearer <segreto>` e corpo `{workspaceId, source: "archetipo", externalId, title, prompt, metadata}`, poi effettua polling su `GET {base_url}/api/external/tasks/{id}` fino a uno stato terminale (`completed`, `failed`, `cancelled`) o alla scadenza del timeout. Tutto l'HTTP passa da un'interfaccia `Doer` iniettabile, esattamente come il connector Jira in `cli/internal/connector/jira/http.go`, così i test non toccano la rete.
+  - **`externalId` remoto uguale all'ID dell'esecuzione ARchetipo.** L'ID dell'esecuzione diventa deterministico quando è presente `--request-id`: `execution.DeriveID(specCode, action, providerID, requestID)` produce `req-<sha256 troncato>`, filename-safe e già accettato da `validID`. Poiché lo stesso valore viaggia come `externalId`, l'idempotenza ARchetipo e quella ARcipelago coincidono: nessuna coppia richiesta/spec può collidere con un'altra e una ripetizione non crea mai un secondo task remoto. La chiave di equivalenza remota, però, non è la sola terna `(workspaceId, source, externalId)`: `createExternal` confronta anche un'impronta SHA-256 canonica su `workspaceId`, `source`, `externalId`, `title`, `prompt` e `metadata` (`packages/hub/src/db/tasks-repository.ts:87,445-459`), e una ripetizione con la stessa terna ma payload diverso risponde `409 external_task_conflict`, non `200`. Ne segue un vincolo di contratto: `buildTask` deve essere una funzione pura e deterministica dei soli campi di `execution.Request`, così che la ripetizione produca un payload identico. L'ordine delle chiavi non conta — l'hub canonicalizza ricorsivamente ordinando le chiavi degli oggetti — ma ogni valore sì.
+  - **Riuso incondizionato del record esistente.** `Service.RunIdempotent` deriva l'ID, legge lo store e, se il record esiste, lo restituisce **senza invocare il provider**; se `Create` incontra `StoreAlreadyExist` per una corsa concorrente, rilegge e restituisce lo stesso record. `Service.Run` resta invariato byte per byte nel comportamento: entrambi delegano a un unico lifecycle interno parametrizzato sul generatore di ID. Ritentare dopo un fallimento significa quindi usare un nuovo `--request-id`; questa è la semantica letterale di AC-3 e viene documentata come limite noto.
+  - **Proprietà remota della persistenza del piano.** Il prompt inviato ad ARcipelago invoca la skill di pianificazione di ARchetipo (`/archetipo-plan <US-CODE>`) nella working directory del runner, che è un checkout dello stesso progetto e condivide il connector configurato. È l'agente remoto a chiamare `archetipo spec plan`, quindi il piano e la transizione a `PLANNED` nascono dal connector configurato senza che ARchetipo trasporti il payload. Il prompt impone all'agente remoto di chiudere con una singola riga JSON di ricevuta `{"spec_code","status","tasks"}`, e il provider la **legge e la pretende**: un `resultSummary` privo di ricevuta, o con `status` diverso da `PLANNED`, o con `tasks` non maggiore di zero, è un fallimento del provider anche quando il task remoto è `completed`. Senza questo controllo un agente remoto che chiude senza aver prodotto alcun piano genererebbe un'esecuzione `SUCCEEDED` con la spec ancora `TODO`, cioè un falso positivo su AC-2. `Result.Payload` porta la ricevuta compatta (`task_id`, `workspace_id`, `status`, `result_summary`, `plan_tasks`) e `Result.ExternalID` porta l'ID del task ARcipelago, come previsto da US-023.
+  - **Segreti fuori dal config.** La configurazione non segreta vive in `execution.default_provider.config`: `base_url` e `workspace_id` obbligatori, `token_env` (default `ARCIPELAGO_TOKEN`), `poll_interval_seconds` (default 5) e `timeout_seconds` (default 3600) opzionali. Chiavi sconosciute sono rifiutate per intercettare i refusi. `ValidateConfig` valida soltanto la forma e non richiede la presenza della variabile d'ambiente, così `set-default` resta eseguibile su una macchina priva del segreto; l'assenza del token viene rilevata in `Execute` e produce un'esecuzione `FAILED` con un messaggio che nomina la variabile e mai il suo valore.
+  - **Fallimenti sempre leggibili.** Ogni esito remoto non riuscito — task `failed`, `cancelled`, timeout, HTTP 4xx/5xx, token assente — diventa un errore del provider che `Service.Run` registra come `FAILED` con `error.code = PROVIDER_ERROR` e un messaggio che include lo stato remoto, il `resultSummary` e, quando il task era già stato creato, il suo identificativo. Il servizio non riceve il connector e non può quindi toccare la spec: la spec resta esattamente dove si trovava. Per i casi in cui il task remoto esiste ma la risposta locale è andata persa o l'attesa è scaduta, ARcipelago espone `GET /api/external/tasks/by-reference?workspaceId&source&externalId` (`packages/hub/src/api/app.ts:341-360`, consegnata con US-003 di ARcipelago): è la via di recupero canonica del task remoto a partire dal riferimento che ARchetipo già possiede. Il provider la usa per nominare il task preesistente quando la creazione risponde `409 external_task_conflict`, e la cita nel messaggio di timeout come modo per seguire il lavoro remoto rimasto vivo.
+  - **Correzione della mappatura d'errore.** Oggi `mapExecutionError` non riconosce `*execution.ConfigurationError`, quindi `--provider arcipelago` senza configurazione produrrebbe un fuorviante `E_INTERNAL`. La mappatura viene estesa a `E_INVALID_INPUT` anche fuori dal percorso del default provider. Nello stesso passaggio `mapProviderConfigurationError` (`cli/internal/cli/execution_cmd.go:178-189`) viene parametrizzata sul prefisso del percorso: oggi codifica sempre `execution.default_provider.config.<campo>`, ma con `--provider` esplicito la configurazione passata al servizio è una mappa vuota (`cli/internal/cli/execution_cmd.go:144`) e non proviene affatto da `execution.default_provider`, quindi il rimedio suggerito indirizza l'utente verso un campo che non è quello da correggere. Il prefisso diventa un argomento della funzione: `execution.default_provider.config` sul percorso del default, e sull'altro un prefisso che nomina il provider esplicito e rimanda al rimedio corretto, cioè configurare il default di workspace con `execution provider set-default`.
+  - **Registrazione nel registry reale.** `newRootCmd` costruisce oggi un `execution.NewRegistry()` vuoto: nessun provider è raggiungibile dalla CLI reale. La slice registra `arcipelago` lì, lasciando intatto `newRootCmdWithExecution`, che i test usano con provider fake.
+
+  Non-goal espliciti: azioni diverse da `plan`, implement/review/autopilot remoti, lifecycle asincrono con comando di ripresa, streaming degli eventi della run, trasferimento automatico di skill o repository al runner, UI web e qualunque forma di retry automatico.
+
+  ### Decisioni architetturali
+
+  Due pagine `type: decision` sono coinvolte, entrambe sopra soglia perché toccano confine di integrazione, modello di sicurezza e semantica di fallimento.
+
+  **Nuova decisione `decisions/remote-plan-ownership`.** La domanda è chi possiede la scrittura del piano prodotto in remoto. Opzione scelta: la possiede l'agente remoto, che scrive attraverso il connector condiviso dal checkout del runner; ARchetipo avvia, osserva e registra l'esito, senza trasportare il piano. Alternative valutate: (a) far tornare il payload completo del piano dentro `resultSummary` del task ARcipelago — scartata perché quel campo è `lastAssistantText()` del runner, cioè un messaggio finale di agente, mentre un piano reale supera facilmente le decine di migliaia di token, ed è esattamente l'anti-pattern che la stessa skill di pianificazione vieta; (b) far tornare un riferimento ad artefatto e scaricarlo — scartata perché l'API esterna di ARcipelago oggi espone solo `status` e `resultSummary` e non ha canale artefatti; (c) far ricostruire il piano localmente da un riassunto — scartata perché produrrebbe un piano diverso da quello verificato in remoto. Il costo accettato è un prerequisito operativo esplicito e verificabile: la **prima** working directory del runner — `runner.system.workdirs[0]`, l'unica raggiungibile perché l'API esterna non accetta `cwdHint` — deve essere un checkout dello stesso progetto e condividere lo stato del connector configurato (immediato con `github` o `jira`, e con `file` quando il runner lavora sulla stessa checkout). Il beneficio è che nessun payload voluminoso attraversa il canale dei messaggi e che il piano nasce già valido nel connector. Perché la proprietà remota della scrittura non si traduca in cecità sull'esito, il prompt impone una ricevuta compatta di una sola riga JSON e il provider la pretende. Si è scartato il controllo alternativo — rileggere la spec dal connector dopo il successo — perché darebbe al confine di esecuzione un accesso al connector che US-023 gli nega di proposito, ed è precisamente quella negazione a garantire che un fallimento remoto non possa toccare la spec; e si è scartato anche il rinunciare del tutto alla verifica dichiarando AC-2 non osservabile localmente, perché renderebbe indistinguibile un piano prodotto da un agente che si è limitato a terminare.
+
+  **Aggiornamento di `decisions/execution-provider-boundary`.** La pagina esistente afferma oggi che retry, idempotenza cross-request e provider remoto reale restano fuori dalla decisione: entrambe le affermazioni diventano false con questa slice. L'aggiornamento registra l'idempotenza per `--request-id` con ID derivato, il riuso incondizionato del record, l'allineamento fra ID di esecuzione ed `externalId` remoto, la provenienza dei segreti dall'ambiente e la registrazione del primo provider di rete nel registry reale. Non si tratta di una decisione separata: resta lo stesso modello di registry iniettabile, provider separato dai connector e dispatch fail-closed, quindi la pagina viene estesa e non superseded.
+
+  Si è valutato e scartato un lifecycle asincrono (avvio non bloccante, `RUNNING` persistito, ripresa successiva): richiederebbe di riaprire il lifecycle di US-023 che finalizza il record nella stessa invocazione, e l'attesa sincrona limitata soddisfa tutti i criteri di accettazione. Il limite noto — un timeout locale lascia il task remoto vivo e una nuova richiesta richiede un nuovo `--request-id` — viene documentato nelle conseguenze della decisione insieme alla mitigazione (`timeout_seconds` più alto e identificativo del task remoto sempre riportato nell'errore).
+
+  ---
+
+  ## Baseline
+
+  Comandi eseguiti in `/Users/stefanoleli/Project/ARchetipo` prima dell'implementazione.
+
+  | Check | Risultato prima dell'implementazione | Conseguenza sulla pianificazione |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | passa, nessun file elencato | ogni file Go nuovo o modificato deve restare nella formattazione canonica |
+  | `cd cli && go vet ./...` | passa, nessuna diagnostica | il nuovo package `arcipelago` e i file toccati devono restare privi di diagnostiche vet |
+  | `cd cli && go build ./...` | passa, nessun output | provider, servizio e wiring CLI devono compilare nell'intero modulo |
+  | `cd cli && go test ./internal/execution ./internal/cli ./internal/config -count=1` | passa, 176 test verdi nei tre package | i task interleavano test focalizzati su questi tre confini e non possono introdurre fallimenti |
+  | `cd cli && go test ./... -count=1` | **rosso intermittente pre-esistente**: 601 passati, 1 fallito, 2 skippati — `internal/web` `TestWatcherCoalescesBurst` (`watcher_test.go:140: did not expect a second coalesced event so soon`). Rieseguito in isolamento 3 volte su 3 con esito verde: è un test sensibile ai tempi, non una regressione | il gate finale richiede la suite completa con il confine esplicito: nessun **nuovo** fallimento oltre a `TestWatcherCoalescesBurst`, che va rieseguito in isolamento per confermarlo verde |
+  | `cd cli && golangci-lint run --timeout 5m ./...` | **non eseguibile**: `golangci-lint` non è installato sulla macchina | prerequisito d'ambiente, non un fallimento del codice. Installazione deterministica: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`. Il gate finale lo esegue dopo l'installazione e richiede 0 issue |
+  | `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status` | `ok: true`, 5 pagine: 3 `reviewed`, 2 già `evidence-changed` (`architecture/context-map`, `decisions/execution-provider-boundary`) prima di qualunque modifica | i task documentali partono comunque da `archetipo wiki reset`, che è l'unica transizione verso `generated` sia da `reviewed` sia da `evidence-changed` |
+  | `archetipo -C /Users/stefanoleli/Project/ARchetipo spec show US-023 / US-024` | entrambe `DONE` | nessun blocco di dipendenza: il confine `execution` e il default provider di workspace sono disponibili |
+
+  ### Prerequisiti d'ambiente
+
+  - Go installato e modulo `cli` risolvibile offline (già verificato dalla baseline).
+  - `golangci-lint` assente: va installato una sola volta con il comando indicato sopra prima del gate finale.
+  - Nessun servizio esterno è richiesto dai test: ogni chiamata HTTP passa da `httptest` e da un `Doer` iniettato. Un hub ARcipelago reale serve soltanto alla dimostrazione manuale di accettazione, non alla suite.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | `t.Chdir` su directory temporanea, spec `US-001` seminata con `seedExecutionSpec`, hub ARcipelago simulato da `httptest` che risponde `201` con `task.id = "task-remote-1"` e poi `completed` | Integrazione CLI (`internal/cli`) | L'envelope `kind: "execution"` di `execution run US-001 plan --request-id r1` ha `status = SUCCEEDED`, `spec_code = "US-001"`, `provider_id = "arcipelago"` e `result.external_id = "task-remote-1"`; il body ricevuto dallo stub ha `source = "archetipo"` ed `externalId` uguale a `execution.id` | TASK-08 |
+  | AC-2 | come sopra; lo stub, alla prima lettura del task, simula l'agente remoto persistendo il piano con `spec plan US-001 --file <payload>` sullo stesso connector `file`, poi risponde `status: "completed"` con la riga di ricevuta `{"spec_code":"US-001","status":"PLANNED","tasks":1}` | Integrazione CLI (`internal/cli`) | Dopo il run, `spec show US-001` restituisce `status = PLANNED` e `data.tasks` non vuoto, `archetipo validate plan` sul payload usato è `ok: true` e il payload dell'esecuzione riporta `plan_tasks = 1`, cioè la ricevuta è stata letta e accettata. La ricevuta non è però l'oracolo di AC-2: lo è lo stato del connector, che il comando rilegge da sé dopo il successo e senza il quale non presenta l'esecuzione come riuscita | TASK-08 |
+  | AC-2 | come sopra, ma lo stub chiude `completed` **senza** aver pianificato e senza ricevuta valida (`resultSummary` vuoto, oppure con `status: "TODO"`, oppure con `tasks: 0`) | Integrazione CLI (`internal/cli`) + Unit (`internal/execution/arcipelago`) | L'esecuzione è `FAILED` con `error.code = PROVIDER_ERROR` e un messaggio che dice che il task remoto si è chiuso senza aver prodotto un piano; `spec show US-001` resta `TODO`. È l'oracolo che impedisce a un task remoto vuoto di produrre un `SUCCEEDED` con la spec non pianificata | TASK-06, TASK-08 |
+  | AC-2 | come sopra, ma lo stub chiude `completed` con una ricevuta **valida** (`status: "PLANNED"`, `tasks: 3`) senza aver mai pianificato: è il caso della skill remota interrotta a metà o dell'agente che allucina la propria chiusura | Integrazione CLI (`internal/cli`) | Il comando esce in errore con `E_PRECONDITION` che nomina `US-001`, `TODO` e `PLANNED`; `execution show <id>` riporta `status = FAILED`, `error.code = UNCONFIRMED_EFFECT`, `error.external_id = "task-remote-1"` e nessun `result`; `spec show US-001` resta `TODO`. È l'oracolo che impedisce alla sola ricevuta — una dichiarazione dell'agente — di valere come prova di AC-2 | TASK-08 |
+  | AC-3 | come AC-2, con il primo run già concluso | Integrazione CLI (`internal/cli`) | Un secondo `execution run US-001 plan --request-id r1` restituisce lo **stesso** `execution.id`, `created_at` e `result`; lo stub ha ricevuto esattamente **una** `POST /api/external/tasks`; `.archetipo/executions/` contiene un solo file | TASK-08 |
+  | AC-3 | store in memoria, provider fake contatore | Unit (`internal/execution`) | `RunIdempotent` invocato due volte con la stessa `requestID` restituisce lo stesso record e lascia il contatore del provider a 1; con `requestID` diverse produce ID diversi; `DeriveID` è stabile, filename-safe e distingue spec, action, provider e requestID | TASK-02 |
+  | AC-4 | spec `US-001` in `TODO`; lo stub risponde `201` alla creazione e poi `status: "failed"` con `resultSummary: "planning aborted: missing tool"` | Integrazione CLI (`internal/cli`) | L'envelope ha exit `0`, `status = FAILED`, `error.code = PROVIDER_ERROR` e `error.message` contiene sia `"failed"` sia `"planning aborted: missing tool"` sia `"task-remote-1"`; `spec show US-001` restituisce ancora `status = TODO` con `history` immutata rispetto alla fotografia pre-run | TASK-08 |
+  | AC-4 | stub che risponde `401`, stub che non raggiunge mai lo stato terminale entro `timeout_seconds`, e `Getenv` che restituisce stringa vuota | Unit (`internal/execution/arcipelago`) | `Execute` restituisce un errore il cui testo nomina rispettivamente lo status HTTP, la scadenza dell'attesa con l'ID del task remoto, e il nome della variabile d'ambiente configurata — mai il valore del segreto | TASK-06 |
+  | AC-5 | root CLI reale costruita da `newRootCmd` (non da `newRootCmdWithExecution`) | Integrazione CLI (`internal/cli`) | `execution run US-001 plan --provider arcipelago` senza configurazione fallisce con `E_INVALID_INPUT` che nomina `base_url`, **non** con `E_PRECONDITION` "is not registered": prova che il provider reale è registrato e raggiungibile dalla sola CLI. L'intero scenario AC-1..AC-4 è guidato esclusivamente da comandi `archetipo`, senza alcuna UI | TASK-08 |
+
+  Ogni criterio ha un oracolo osservabile e nessun doppio di test nasconde il confine responsabile: il provider reale viene esercitato attraverso `httptest` e un `Doer` reale, non attraverso un mock del provider, e la persistenza del piano viene provata rileggendo lo stato del connector con `spec show`, non contando invocazioni.
+
+  ---
+
+  ## Strategia di test
+
+  La verifica è a due livelli, con i test interleavati fra i task implementativi e mai accumulati in fondo: unit test sul nuovo package `arcipelago` e sull'idempotenza del core, test di integrazione CLI che attraversano connector `file`, store reale, envelope e hub simulato.
+
+  - **Unit sull'idempotenza (`internal/execution`).** `DeriveID` deve essere deterministica, stabile fra esecuzioni, filename-safe secondo `validID` e sensibile a tutte e quattro le componenti. `RunIdempotent` deve riusare senza dispatch, gestire `StoreAlreadyExist` come riuso e non alterare il comportamento di `Run`, che va riverificato con i test già esistenti di US-023 e US-024 lasciati intatti.
+  - **Unit sul provider (`internal/execution/arcipelago`).** `ValidateConfig` è testata a tabella: campi obbligatori assenti, tipi errati, URL non assoluto o non http/https, chiavi sconosciute, valori numerici fuori range, default applicati. Ogni caso deve produrre un `*execution.ConfigurationError` con il campo esatto, perché la CLI lo rende come `execution.default_provider.config.<campo>`. `Execute` è testata contro `httptest.NewServer`: creazione `201`, creazione idempotente `200`, `409 external_task_conflict` per stesso `externalId` con prompt diverso, `409 workspace_archived`, `404` per workspace non concesso, `401`, `400` per `metadata` non oggetto, task creato con `id` vuoto, esito `completed` con ricevuta valida, `completed` senza ricevuta valida, `failed`, `cancelled`, timeout e token assente. Non esiste un caso `403`: il namespace esterno non lo produce. Il `Sleep` è iniettato come no-op, così il polling è istantaneo e deterministico.
+  - **Integrazione CLI (`internal/cli`).** Un solo test scenario copre AC-1..AC-5 usando `runExecutionRoot`, `seedExecutionSpec` e `decodeExecution`, già presenti nel file dei test di esecuzione. L'hub simulato è un `httptest.Server`; alla prima lettura del task esegue la persistenza del piano come farebbe l'agente remoto, invocando `spec plan US-001 --file <payload>` sulla stessa root. L'handler non chiama mai `t.Fatal`: registra l'eventuale errore in una variabile protetta da mutex, che il test asserisce dopo il run.
+  - **Nessun segreto nei log.** Un'asserzione esplicita verifica che né stdout né stderr contengano il valore del bearer usato nei test.
+  - **Regressione.** Ogni task implementativo esegue almeno i package toccati; il gate finale esegue `gofmt`, `go vet`, `go build`, `go test ./... -count=1` e `golangci-lint` con il confine di baseline dichiarato.
+
+  ### Rinuncia agli E2E di browser
+
+  **Motivo:** la slice non introduce alcuna superficie utente. L'intero percorso è una CLI a envelope JSON e il criterio AC-5 richiede esplicitamente che sia completabile senza interfaccia; non esiste rotta, schermo o interazione da guidare in un browser.
+  **Livello di evidenza usato al suo posto:** test di integrazione Go sul confine CLI reale (connector `file`, store `.archetipo/executions/`, envelope `kind: "execution"` e `kind: "spec"`) più un hub ARcipelago simulato con `httptest`, che esercita il provider HTTP vero.
+
+  **Video di dimostrazione:** la `Dimostrazione` della spec è filmabile come sessione di terminale, non come flusso browser. La pianificazione si limita a segnalarlo: la decisione finale di registrare o saltare appartiene ad `archetipo-review`.
+
+  ### Prerequisito operativo della dimostrazione manuale
+
+  La dimostrazione con un hub reale richiede: un hub ARcipelago raggiungibile, una credenziale applicativa valida esportata nella variabile indicata da `token_env`, un workspace concesso a quella identità e un runner disponibile la cui **prima** working directory sia il checkout del progetto ARchetipo, con le skill ARchetipo già installate e il medesimo connector configurato. Il vincolo sulla *prima* working directory non è una preferenza: l'API esterna accetta soltanto `workspaceId`, `source`, `externalId`, `title`, `prompt` e `metadata` (`packages/hub/src/api/app.ts:391-409`) e non accetta `cwdHint`, `skills`, `assigneeAgentId` né `targetRunnerId`, mentre il dispatcher risolve la directory come `task.cwdHint ?? runner.system.workdirs[0]` (`packages/hub/src/orchestrator/dispatcher.ts:226`); un task esterno non ha quindi alcun modo di dirigere sé stesso. Il workspace usato per la pianificazione remota deve perciò ammettere soltanto runner la cui prima working directory è il checkout di ARchetipo. Il trasferimento automatico delle skill al runner è fuori ambito per la spec.
+
+  ---
+
+  ## Impatto Wiki
+
+  ```yaml
+  wiki_impact:
+    read: [overview, engineering/code-map, architecture/context-map, decisions/execution-provider-boundary]
+    update: [decisions/execution-provider-boundary, architecture/context-map, engineering/code-map]
+    create: [decisions/remote-plan-ownership]
+  ```
+
+  `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo affected` sui percorsi attesi ha restituito quattro candidati: `architecture/context-map`, `decisions/execution-provider-boundary`, `engineering/code-map` e `overview`. La decisione è stata presa pagina per pagina sul cambiamento di conoscenza atteso, non sulla co-citazione dei file.
+
+  - `decisions/execution-provider-boundary` → **update**: la sezione Conseguenze afferma oggi che "retry, idempotenza cross-request, fallback, selezione automatica e provider remoto reale restano fuori da questa decisione". Idempotenza cross-request e provider remoto reale entrano con questa slice, quindi la pagina diventerebbe falsa senza aggiornamento.
+  - `architecture/context-map` → **update**: compare il primo confine runtime uscente verso un sistema esterno (CLI ARchetipo → API REST `/api/external/*` dell'hub ARcipelago), con credenziale letta dall'ambiente. È una dipendenza fra contesti che la pagina non descrive.
+  - `engineering/code-map` → **update**: nasce il package `cli/internal/execution/arcipelago`, cambiano `root.go` (composizione dei comandi, ora con un provider registrato) e la superficie di test. La corrispondenza fisica descritta dalla pagina cambia davvero.
+  - `decisions/remote-plan-ownership` → **create**: la proprietà remota della persistenza del piano e il divieto di trasportare payload di piano nel canale dei messaggi non sono coperti da nessuna pagina esistente e superano la soglia ADR (confine di integrazione e semantica di consistenza).
+  - `overview` → **nessun contratto**: descrive scopo, attori, stack e perimetro del prodotto, che restano accurati. Resta un candidato affected-only da riconciliare esplicitamente in accettazione.
+
+  `archetipo wiki search --type decision` ha restituito il solo ID `decisions/execution-provider-boundary`: non esiste una pagina riutilizzabile per la proprietà remota del piano, quindi il nuovo ID è necessario e nessuna decisione viene superseded — la pagina esistente viene estesa e resta `accepted`.
+
+  Ogni task documentale esegue `archetipo wiki --project-root {data.workdir} reset <page-id>` come **primo passo** quando la pagina esiste già, perché modificare una pagina `reviewed` deriva `stale` e `reset` è l'unica transizione verso `generated`. Non si deve mai modificare a mano il blocco `review`: si usa `archetipo wiki reset`.
+
+  ---
+
+  _Piano generato da ARchetipo Planning — 2026-08-16_
+tasks:
+  - id: TASK-01
+    title: Idempotenza cross-request nel core execution (DeriveID e RunIdempotent)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      Il package `cli/internal/execution` sa derivare un ID di esecuzione deterministico da una chiave di richiesta e sa riusare un record già presente senza invocare il provider, lasciando `Service.Run` invariato nel comportamento.
+
+      ## Read
+
+      - `cli/internal/execution/id.go` — `RandomID`, formato `exec-<hex>`.
+      - `cli/internal/execution/types.go` — struct `Execution` e i suoi tag JSON.
+      - `cli/internal/execution/service.go` — `Service.Run` per intero: ordine di capability, `Resolve`, `Capabilities`, `ValidateConfig`, generazione ID, `validID`, `store.Create`, dispatch singolo, `store.Update` con `context.WithoutCancel`.
+      - `cli/internal/execution/file_store.go` — `validID` e il significato di `StoreAlreadyExist`.
+      - `cli/internal/execution/store.go` — `Store`, `StoreError`, `StoreNotFound`.
+
+      ## Change
+
+      - `cli/internal/execution/id.go` — aggiungi `func DeriveID(specCode string, action ActionID, providerID, requestID string) string`.
+      - `cli/internal/execution/types.go` — aggiungi a `Execution` il campo `RequestID string \`json:"request_id,omitempty"\`` subito dopo `ProviderID`.
+      - `cli/internal/execution/service.go` — estrai il lifecycle esistente in un metodo privato e aggiungi `RunIdempotent`.
+
+      Non-goal di questo task: nessuna modifica alla firma o al comportamento osservabile di `Run`, nessun nuovo metodo sull'interfaccia `Store`, nessun indice su disco, nessun retry, nessun tocco alla CLI o al provider.
+
+      ## Steps
+
+      1. In `id.go` implementa `DeriveID` con `crypto/sha256` su una stringa canonica che separa i quattro componenti con un byte impossibile nei valori (usa `"\x00"`): `sha256.Sum256([]byte(specCode + "\x00" + string(action) + "\x00" + providerID + "\x00" + requestID))`. Restituisci `"req-" + hex.EncodeToString(sum[:16])`, cioè 32 caratteri esadecimali: il risultato passa `validID` perché non contiene separatori di percorso e non è `.` né `..`.
+      2. In `types.go` aggiungi `RequestID` come descritto. Non cambiare nessun altro campo e non riordinare i tag esistenti.
+      3. In `service.go` rinomina il corpo di `Run` in un metodo privato `func (s *Service) run(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any, requestID string, resolveID func() (string, error)) (Execution, error)`, mantenendo **identico** l'ordine delle operazioni attuali. L'unica differenza interna: l'ID viene ottenuto da `resolveID()` invece che da `s.newID()`, e il campo `RequestID` dell'`Execution` viene valorizzato con `requestID`.
+      4. Riscrivi `Run` come `return s.run(ctx, spec, action, providerID, providerConfig, "", s.newID)`. Verifica leggendo il diff che nessuna altra istruzione sia cambiata: i test di US-023 e US-024 sono il contratto di questa invarianza.
+      5. Aggiungi `func (s *Service) RunIdempotent(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any, requestID string) (Execution, bool, error)`. Se `strings.TrimSpace(requestID) == ""` restituisci un errore `fmt.Errorf("request id is required")`. Altrimenti calcola `id := DeriveID(spec.Code, action, providerID, requestID)` e prova `s.store.Get(ctx, id)`: se non c'è errore restituisci `(existing, true, nil)` **senza** risolvere il provider e senza dispatch; se l'errore è uno `*StoreError` con `Kind == StoreNotFound` prosegui; qualsiasi altro errore va propagato.
+      6. Nel percorso di creazione chiama `s.run(...)` passando `requestID` e `resolveID = func() (string, error) { return id, nil }`, e restituisci `(execution, false, err)`.
+      7. Gestisci la corsa concorrente: se `s.run` fallisce con uno `*StoreError` di `Kind == StoreAlreadyExist`, rileggi con `s.store.Get(ctx, id)` e restituisci `(existing, true, nil)`; se anche la rilettura fallisce propaga l'errore originale della `Create`.
+      8. Esegui `gofmt -w` sui file toccati.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `gofmt -l . && go vet ./internal/execution && go build ./... && go test ./internal/execution ./internal/cli ./internal/config -count=1`
+      - Expect: `gofmt` non elenca file, `go vet` senza diagnostiche, build pulita e i 176 test dei tre package ancora verdi, esattamente come nella baseline. Nessun test esistente va modificato in questo task.
+
+      ## Done
+
+      - [ ] `DeriveID` esiste, è deterministica e restituisce un valore accettato da `validID`.
+      - [ ] `Execution.RequestID` è serializzato come `request_id` e omesso quando vuoto.
+      - [ ] `Run` conserva firma e comportamento: i test preesistenti di `internal/execution` e `internal/cli` passano senza alcuna modifica.
+      - [ ] `RunIdempotent` restituisce `reused = true` senza invocare il provider quando il record esiste, e tratta `StoreAlreadyExist` come riuso.
+      - [ ] AC-3 — la primitiva che consente a una ripetizione con lo stesso identificativo di restituire l'esecuzione già creata è disponibile nel core.
+
+      ## Blockers
+
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test unitari su DeriveID e sul riuso di RunIdempotent
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Provare che una ripetizione con lo stesso identificativo restituisce lo stesso record senza un secondo dispatch, e che l'ID derivato è stabile e distingue tutte le componenti della richiesta.
+
+      ## Read
+
+      - `cli/internal/execution/service_test.go` — i fake già presenti (provider con contatore di invocazioni, store in memoria, clock e generatore di ID deterministici) e le convenzioni di asserzione del file.
+      - `cli/internal/execution/file_store.go` — `validID`, per riusarla come oracolo.
+      - `cli/internal/execution/service.go` — la firma di `RunIdempotent` prodotta da TASK-01.
+
+      ## Change
+
+      - `cli/internal/execution/service_test.go` — aggiungi i nuovi test in coda al file, riusando i fake esistenti senza modificarli.
+      - `cli/internal/execution/id_test.go` — crea il file se non esiste, per i test di `DeriveID`.
+
+      Non-goal: non modificare né rinominare i test esistenti di US-023 e US-024; restano il contratto di invarianza di `Run`.
+
+      ## Steps
+
+      1. In `id_test.go` scrivi `TestDeriveIDIsStableAndComponentSensitive`: due invocazioni con gli stessi quattro argomenti restituiscono la stessa stringa; variando **una sola** componente per volta (spec code, action, provider id, request id) il risultato cambia in tutti e quattro i casi; il valore ha prefisso `req-`, lunghezza 36 e supera `validID`.
+      2. In `service_test.go` scrivi `TestRunIdempotentReusesWithoutDispatch`: costruisci un `Service` con provider fake che supporta `spec.plan` e conta le invocazioni. Prima chiamata a `RunIdempotent` con `requestID = "r1"`: attendi `reused == false`, `status == StatusSucceeded`, `execution.RequestID == "r1"` e contatore a 1. Seconda chiamata con gli stessi argomenti: attendi `reused == true`, lo **stesso** `ID`, lo stesso `CreatedAt` e contatore ancora a 1.
+      3. Aggiungi `TestRunIdempotentDistinctRequestIDsProduceDistinctExecutions`: due `requestID` diversi sulla stessa spec e azione producono ID diversi e due invocazioni del provider.
+      4. Aggiungi `TestRunIdempotentTreatsAlreadyExistsAsReuse`: pre-crea nello store un record con `DeriveID(...)` e uno stato terminale riconoscibile (per esempio `StatusFailed` con un messaggio noto); invoca `RunIdempotent` e attendi `reused == true`, lo stesso `Error.Message` e contatore del provider a 0.
+      5. Aggiungi `TestRunIdempotentRejectsEmptyRequestID`: `requestID` vuoto o di soli spazi restituisce errore e non crea alcun record nello store.
+      6. Esegui `gofmt -w` sui file toccati.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `gofmt -l . && go vet ./internal/execution && go test ./internal/execution -count=1 -run 'DeriveID|RunIdempotent' -v` seguito da `go test ./internal/execution ./internal/cli ./internal/config -count=1`
+      - Expect: i nuovi test passano e i tre package restano verdi come in baseline.
+
+      ## Done
+
+      - [ ] AC-3 — è provato che una seconda `RunIdempotent` con lo stesso identificativo restituisce lo stesso record e lascia il contatore di invocazioni del provider a 1.
+      - [ ] `DeriveID` è provata stabile, sensibile a tutte e quattro le componenti e compatibile con `validID`.
+      - [ ] Il riuso vale anche quando il record preesistente è `FAILED`: il record viene restituito e il provider non viene invocato.
+      - [ ] Nessun test preesistente è stato modificato.
+
+      ## Blockers
+
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Package arcipelago con identità, capability e validazione della configurazione
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      Esiste un provider `arcipelago` che dichiara la capability `spec.plan` e valida la propria configurazione non segreta indicando il campo esatto in errore.
+
+      ## Read
+
+      - `cli/internal/execution/provider.go` — interfaccia `Provider`, `ConfigurationError` (campi `Field`, `Reason`, `Err`), `CloneConfig`.
+      - `cli/internal/execution/types.go` — `Capability`, `CapabilitySpecPlan`, `Request`, `Result`.
+      - `cli/internal/cli/execution_cmd.go` — `mapProviderConfigurationError`, per capire come `Field` diventa `execution.default_provider.config.<campo>`.
+      - `cli/internal/connector/jira/http.go` — il pattern `Doer` e `NewRealDoer`, da replicare per l'iniettabilità.
+
+      ## Change
+
+      - `cli/internal/execution/arcipelago/provider.go` — nuovo file: package doc, tipo `Provider`, `Options`, `New`, `ID`, `Capabilities`, `ValidateConfig`.
+      - `cli/internal/execution/arcipelago/config.go` — nuovo file: tipo `settings` e il parser `parseConfig`.
+
+      Non-goal di questo task: nessuna chiamata HTTP, nessun `Execute` funzionante (uno stub che restituisce `errors.New("not implemented")` è accettabile e verrà sostituito da TASK-05), nessuna modifica a `root.go`.
+
+      ## Steps
+
+      1. Crea il package `arcipelago` con un commento di package che ne descrive lo scopo: tradurre un dispatch `spec.plan` in un task esterno dell'hub ARcipelago e attenderne l'esito.
+      2. Definisci `type Doer interface { Do(*http.Request) (*http.Response, error) }` e `type Options struct { Doer Doer; Getenv func(string) string; Sleep func(context.Context, time.Duration) error; Now func() time.Time }`.
+      3. `func New(options Options) *Provider` applica i default: `Doer` → `&http.Client{Timeout: 30 * time.Second}`, `Getenv` → `os.Getenv`, `Sleep` → un'attesa che rispetta `ctx.Done()`, `Now` → `time.Now`. Il costruttore non deve mai restituire `nil` e non deve leggere l'ambiente.
+      4. `func (p *Provider) ID() string { return "arcipelago" }`. Definisci la costante `const ProviderID = "arcipelago"` e usala.
+      5. `func (p *Provider) Capabilities(context.Context) ([]execution.Capability, error)` restituisce `[]execution.Capability{execution.CapabilitySpecPlan}`.
+      6. In `config.go` definisci `type settings struct { BaseURL string; WorkspaceID string; TokenEnv string; PollInterval time.Duration; Timeout time.Duration }` e `func parseConfig(raw map[string]any) (settings, error)` con queste regole, ognuna che restituisce `&execution.ConfigurationError{Field: <nome chiave>, Reason: <motivo>}`:
+         - `base_url`: obbligatorio, stringa non vuota; deve essere parsabile da `url.Parse`, avere schema `http` o `https` e host non vuoto. Normalizza togliendo gli slash finali.
+         - `workspace_id`: obbligatorio, stringa non vuota, lunghezza massima 64.
+         - `token_env`: opzionale, default `"ARCIPELAGO_TOKEN"`; se presente deve essere una stringa non vuota composta solo da lettere maiuscole, cifre e underscore, e non iniziare con una cifra.
+         - `poll_interval_seconds`: opzionale, default 5; intero fra 1 e 300. Accetta `int`, `int64` e `float64` con parte frazionaria nulla, perché il config arriva sia da YAML sia da JSON.
+         - `timeout_seconds`: opzionale, default 3600; intero fra 1 e 86400; deve essere maggiore o uguale a `poll_interval_seconds`.
+         - qualunque chiave non prevista: errore con `Field` uguale al nome della chiave sconosciuta e `Reason` che segnala la chiave non riconosciuta. Ordina le chiavi prima di segnalarle, così il messaggio è deterministico.
+      7. `func (p *Provider) ValidateConfig(_ context.Context, raw map[string]any) error { _, err := parseConfig(raw); return err }`. La validazione riguarda solo la forma: **non** deve leggere `Getenv` né verificare la presenza del segreto, altrimenti `execution provider set-default` diventerebbe ineseguibile su una macchina priva della credenziale.
+      8. Aggiungi lo stub temporaneo di `Execute` per soddisfare l'interfaccia, con un commento che rimanda a TASK-05.
+      9. Esegui `gofmt -w` sui file nuovi.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `gofmt -l . && go vet ./internal/execution/... && go build ./...`
+      - Expect: nessun file elencato da `gofmt`, nessuna diagnostica `vet`, build pulita. Un controllo di compilazione dell'interfaccia va incluso nel codice come `var _ execution.Provider = (*Provider)(nil)`.
+
+      ## Done
+
+      - [ ] Il package `cli/internal/execution/arcipelago` compila e soddisfa `execution.Provider`.
+      - [ ] `ID()` restituisce `arcipelago` e `Capabilities` restituisce esattamente `spec.plan`.
+      - [ ] `parseConfig` applica i default documentati e rifiuta chiavi sconosciute.
+      - [ ] Ogni rifiuto è un `*execution.ConfigurationError` con il nome esatto del campo, così la CLI può renderlo come `execution.default_provider.config.<campo>`.
+      - [ ] `ValidateConfig` non legge l'ambiente e non menziona segreti.
+
+      ## Blockers
+
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test a tabella su parseConfig e ValidateConfig del provider arcipelago
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      Provare che la configurazione del provider è validata sulla forma, con default corretti e con il campo esatto nominato in ogni rifiuto.
+
+      ## Read
+
+      - `cli/internal/execution/arcipelago/config.go` — regole e default prodotti da TASK-03.
+      - `cli/internal/execution/provider.go` — `ConfigurationError` e la sua `Error()`.
+      - `cli/internal/cli/execution_cmd_internal_test.go` — lo stile di asserzione a tabella già in uso nel repository.
+
+      ## Change
+
+      - `cli/internal/execution/arcipelago/config_test.go` — nuovo file.
+
+      Non-goal: nessun test HTTP in questo task; `Execute` è coperto da TASK-06.
+
+      ## Steps
+
+      1. Scrivi `TestParseConfigAppliesDefaults`: con la sola coppia `base_url` e `workspace_id` valida, verifica `TokenEnv == "ARCIPELAGO_TOKEN"`, `PollInterval == 5 * time.Second`, `Timeout == 3600 * time.Second` e `BaseURL` normalizzata senza slash finale (passa `"https://hub.test/"` e attendi `"https://hub.test"`).
+      2. Scrivi `TestParseConfigRejectsInvalidFields` come tabella. Ogni riga porta la mappa di input e il `Field` atteso. Copri almeno: `base_url` assente, vuoto, non stringa, non assoluto (`"hub.test"`), schema non http (`"ftp://hub.test"`), host vuoto; `workspace_id` assente, vuoto, non stringa, più lungo di 64; `token_env` vuoto, con minuscole, con trattino, che inizia con una cifra; `poll_interval_seconds` pari a 0, negativo, oltre 300, non numerico, con parte frazionaria; `timeout_seconds` pari a 0, oltre 86400, minore di `poll_interval_seconds`; una chiave sconosciuta, per esempio `base_urls`. Per ogni riga verifica con `errors.As` che l'errore sia un `*execution.ConfigurationError` e che `Field` sia esattamente quello atteso.
+      3. Scrivi `TestParseConfigAcceptsNumericFormsFromYAMLAndJSON`: `poll_interval_seconds` fornito come `int`, `int64` e `float64(10)` produce lo stesso risultato, mentre `float64(10.5)` viene rifiutato con `Field == "poll_interval_seconds"`.
+      4. Scrivi `TestValidateConfigDoesNotReadEnvironment`: costruisci il provider con `Options{Getenv: func(string) string { t.Fatal("ValidateConfig must not read the environment"); return "" }}` e invoca `ValidateConfig` con una configurazione valida; attendi `nil` e nessuna chiamata a `Getenv`.
+      5. Esegui `gofmt -w` sul file nuovo.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `gofmt -l . && go vet ./internal/execution/... && go test ./internal/execution/... -count=1`
+      - Expect: tutti i test del package `arcipelago` verdi e `internal/execution` ancora verde come in baseline.
+
+      ## Done
+
+      - [ ] Ogni default documentato è verificato da un'asserzione.
+      - [ ] Ogni classe di rifiuto nomina il campo esatto, verificato con `errors.As` su `*execution.ConfigurationError`.
+      - [ ] È provato che `ValidateConfig` non legge l'ambiente, requisito che tiene `execution provider set-default` eseguibile senza credenziale.
+      - [ ] AC-4 — la parte di configurazione dei fallimenti è resa diagnosticabile prima di qualunque dispatch.
+
+      ## Blockers
+
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Execute del provider arcipelago con creazione idempotente e attesa dell'esito
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      `Execute` crea il task esterno su ARcipelago, ne attende l'esito e restituisce un `execution.Result` con l'identificativo remoto, oppure un errore che descrive con precisione il motivo del fallimento.
+
+      ## Read
+
+      - `cli/internal/execution/service.go` — come `Execute` viene invocato una sola volta, come `dispatchErr` diventa `error.code = PROVIDER_ERROR` e perché `Result.Payload` deve essere JSON valido e non vuoto.
+      - `cli/internal/execution/types.go` — `Request` (`ExecutionID`, `SpecCode`, `Action`, `Capability`, `ProviderConfig`) e `Result` (`Payload`, `ExternalID`).
+      - `cli/internal/connector/jira/http.go` — costruzione della richiesta, lettura del corpo, chiusura, classificazione dello status.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/hub/src/api/app.ts` righe 322-420 — il contratto reale delle rotte `/api/external/tasks`, `/api/external/tasks/by-reference` e `/api/external/tasks/:id`: campi accettati (riga 379 per `metadata`, righe 391-409 per il task costruito), `201` per creato, `200` per già esistente, `409 workspace_archived` (riga 388), `409 external_task_conflict` (riga 412), `404` per workspace non concesso.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/hub/src/db/tasks-repository.ts` righe 87 e 445-459 — `createExternal` e `externalRequestHash`: l'equivalenza remota confronta anche un'impronta SHA-256 canonica su `workspaceId`, `source`, `externalId`, `title`, `prompt` e `metadata`, quindi stessa terna con payload diverso è `conflict`, non `existing`.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/hub/src/application-auth.ts` riga 32 — l'unico esito di autenticazione negata sul namespace esterno è `401`: non esiste un `403` da mappare.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/protocol/src/validate.ts` righe 23-28 — `asRecord`: `metadata` deve essere un oggetto JSON, e `null` produce `400`.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/protocol/src/entities.ts` — `TaskStatus` (`draft`, `queued`, `assigned`, `running`, `completed`, `failed`, `cancelled`) e `resultSummary`.
+
+      ## Change
+
+      - `cli/internal/execution/arcipelago/client.go` — nuovo file: chiamate HTTP, tipi di richiesta e risposta, classificazione degli status.
+      - `cli/internal/execution/arcipelago/provider.go` — sostituisci lo stub di `Execute` con l'implementazione.
+      - `cli/internal/execution/arcipelago/prompt.go` — nuovo file: costruzione di titolo, prompt e metadata.
+
+      Non-goal: nessuna scrittura sul connector, nessuna transizione della spec, nessun retry automatico, nessuna cancellazione del task remoto, nessun uso di `iox` dentro il package (gli errori del provider sono errori Go semplici, che il servizio trasforma in `PROVIDER_ERROR`).
+
+      ## Steps
+
+      1. In `prompt.go` definisci tre elementi.
+         - `func buildTask(req execution.Request) (title, prompt string, metadata map[string]any)`. Il titolo è `"ARchetipo plan " + req.SpecCode`. Il prompt è deterministico e su più righe: una riga di contratto che dice di lavorare nella working directory del runner, che è un checkout del progetto ARchetipo con la CLI e le skill già installate; l'invocazione `/archetipo-plan <SPEC_CODE>`; e la richiesta di terminare con una singola riga JSON di ricevuta `{"spec_code":"<SPEC_CODE>","status":"PLANNED","tasks":<N>}`, dove `<N>` è il numero di task del piano effettivamente persistito.
+         - **Determinismo come contratto di idempotenza, non come stile.** ARcipelago non confronta soltanto la terna `(workspaceId, source, externalId)`: `createExternal` calcola un'impronta SHA-256 canonica su `workspaceId`, `source`, `externalId`, `title`, `prompt` e `metadata` (`packages/hub/src/db/tasks-repository.ts:87,445-459`) e, a parità di terna con impronta diversa, risponde `409 external_task_conflict` invece di `200`. `buildTask` deve quindi essere una funzione pura dei soli campi di `req`: nessun timestamp, nessun valore casuale, nessun percorso locale, nessuna lettura di ambiente, nessun contenuto che dipenda dall'ora o dalla macchina. L'ordine di iterazione della mappa Go è irrilevante — l'hub canonicalizza ricorsivamente ordinando le chiavi degli oggetti prima di calcolare l'impronta — ma i **valori** devono essere identici fra due invocazioni con la stessa `Request`.
+         - **`metadata` sempre non-nil.** `buildTask` deve restituire sempre una mappa inizializzata con `map[string]any{}` e popolata con `spec_code`, `action`, `capability` ed `execution_id` presi da `req`. Il vincolo è imposto dal contratto remoto: `metadata` è obbligatorio e deve essere un oggetto JSON (`packages/hub/src/api/app.ts:379` con `asRecord`, `packages/protocol/src/validate.ts:23-28`), mentre una mappa Go `nil` serializza `null` e produce un `400 metadata must be an object`.
+         - `func parseReceipt(resultSummary string) (receipt, error)`, con `type receipt struct { SpecCode string \`json:"spec_code"\`; Status string \`json:"status"\`; Tasks int \`json:"tasks"\` }`. La funzione scandisce le righe di `resultSummary` e decodifica l'**ultima** riga non vuota che sia un oggetto JSON valido; se nessuna riga lo è, restituisce un errore che dice che l'agente remoto non ha emesso la ricevuta prevista. `parseReceipt` estrae soltanto: la politica su cosa sia accettabile vive in `Execute`.
+      2. In `client.go` definisci i tipi minimi corrispondenti al contratto REST: `createTaskRequest{WorkspaceID, Source, ExternalID, Title, Prompt string; Metadata map[string]any}` con tag `workspaceId`, `source`, `externalId`, `title`, `prompt`, `metadata`; `taskEnvelope{Task remoteTask \`json:"task"\`}`; `remoteTask{ID string \`json:"id"\`; Status string \`json:"status"\`; ResultSummary string \`json:"resultSummary"\`}`; e `errorResponse{Error string \`json:"error"\`}`, che serve a discriminare le due cause distinte del `409`. Il campo `Metadata` non porta `omitempty`: deve viaggiare sempre, e sempre come oggetto. Non aggiungere `cwdHint`, `skills`, `assigneeAgentId` o `targetRunnerId`: l'API esterna non li accetta (`packages/hub/src/api/app.ts:391-409`) e mandarli non produce alcun effetto.
+      3. Implementa `func (p *Provider) do(ctx context.Context, cfg settings, token, method, path string, body any, out any) (int, error)`: costruisce l'URL come `cfg.BaseURL + path`, imposta `Accept: application/json`, `Content-Type: application/json` quando c'è un corpo e `Authorization: Bearer ` + token, esegue `p.doer.Do`, chiude sempre il body con `defer`, legge il payload e decodifica in `out` solo per status 2xx. Restituisce lo status insieme all'errore, così il chiamante può classificarlo. Il token non deve mai comparire in un messaggio d'errore né in un log.
+      4. Implementa `classify(status int, payload []byte, cfg settings) error` che produce messaggi stabili. La superficie di errore del namespace esterno è ristretta e va rispecchiata esattamente, senza rami inventati:
+         - `401` → credenziale rifiutata dall'hub, con l'invito a verificare la variabile d'ambiente configurata (nominata, mai il valore).
+         - **Nessun ramo `403`.** Il middleware `applicationAuth` risponde solo `401` quando il bearer non risolve (`packages/hub/src/application-auth.ts:32`) e l'autorizzazione per workspace è espressa come `404`, non come `403`. Un ramo `403` dedicato descriverebbe un comportamento che il server non ha; se un `403` arrivasse comunque da un proxy interposto, lo raccoglie il ramo generico.
+         - `404` → workspace o task non visibile alla credenziale, oppure task inesistente.
+         - `409` → **due cause distinte**, da discriminare decodificando il campo `error` del corpo in `errorResponse`. `external_task_conflict` (`packages/hub/src/api/app.ts:412`) significa che la terna `(workspaceId, source, externalId)` esiste già con un'impronta di richiesta diversa, cioè stesso identificativo ma titolo, prompt o metadata diversi: il messaggio deve dirlo in questi termini e suggerire una nuova `--request-id`. `workspace_archived` (`packages/hub/src/api/app.ts:388`) significa che il workspace configurato è archiviato: il messaggio deve nominare il `workspace_id` della configurazione e non parlare affatto di conflitto di identità. Un corpo `409` assente o non decodificabile ricade sul messaggio generico.
+         - `400` → richiesta rifiutata dalla validazione dell'hub; riporta il corpo, che nomina il campo in errore (per esempio `metadata must be an object`).
+         - altri non-2xx → messaggio con lo status e il corpo troncato a 512 byte.
+      5. Implementa `Execute`:
+         1. `cfg, err := parseConfig(req.ProviderConfig)`; se fallisce restituisci l'errore così com'è, perché è già un `*execution.ConfigurationError`.
+         2. `token := strings.TrimSpace(p.getenv(cfg.TokenEnv))`; se vuoto restituisci un errore che nomina `cfg.TokenEnv` e spiega che la credenziale applicativa ARcipelago non è disponibile nell'ambiente.
+         3. `POST /api/external/tasks` con `Source: "archetipo"`, `ExternalID: req.ExecutionID` e titolo, prompt e metadata prodotti da `buildTask`. Accetta sia `201` sia `200`: entrambi restituiscono il task, e `200` significa che ARcipelago ha riconosciuto la richiesta come ripetizione con impronta identica e non ha creato un secondo task. Conserva `task.ID` in una variabile locale disponibile a tutti i rami successivi e **verifica subito che non sia vuoto** dopo `strings.TrimSpace`: senza il controllo, una risposta malformata farebbe costruire `GET /api/external/tasks/` e produrrebbe un `404` che l'operatore leggerebbe come "workspace non concesso", cioè una diagnosi sbagliata. Un `id` vuoto è un errore del provider con un messaggio che dice che l'hub ha risposto con un task privo di identificativo, e il polling non deve iniziare. Quando invece la creazione risponde `409 external_task_conflict`, arricchisci il messaggio interrogando `GET /api/external/tasks/by-reference?workspaceId=<ws>&source=archetipo&externalId=<execution id>` (`packages/hub/src/api/app.ts:341-360`) e riportando l'`id` del task preesistente quando la lettura riesce; se la lettura fallisce, resta il messaggio prodotto da `classify`, senza errori a cascata.
+         4. Polling: calcola la scadenza con `p.now().Add(cfg.Timeout)`; a ogni giro esegui `GET /api/external/tasks/{id}` e valuta `status`. Su `completed` esci con successo; su `failed` o `cancelled` restituisci un errore che include lo stato remoto, l'ID del task e il `resultSummary` quando presente. Su stato non terminale attendi con `p.sleep(ctx, cfg.PollInterval)` e ripeti. Propaga subito un errore quando `ctx.Err() != nil`.
+         5. Alla scadenza restituisci un errore che dichiara il timeout, la durata attesa, l'ultimo stato remoto osservato e l'ID del task, e che indica esplicitamente la via di recupero: il task remoto resta vivo e si ritrova sia con `GET /api/external/tasks/{id}` sia, quando l'ID locale è andato perso, con `GET /api/external/tasks/by-reference?workspaceId=<ws>&source=archetipo&externalId=<execution id>` (`packages/hub/src/api/app.ts:341-360`). Il messaggio deve contenere i tre valori necessari a costruire la query, così l'operatore non deve dedurli.
+         6. Su `completed` **verifica la ricevuta prima di dichiarare il successo**. Invoca `parseReceipt(task.ResultSummary)` e pretendi quattro condizioni: la ricevuta è presente e decodificabile; `Status == "PLANNED"`; `Tasks > 0`; `SpecCode == req.SpecCode`. Se una qualsiasi manca, restituisci un errore del provider che dice che il task remoto si è chiuso `completed` senza aver prodotto un piano per la spec richiesta, riportando l'ID del task e il `resultSummary` troncato. Questo controllo è ciò che rende AC-2 osservabile dal lato ARchetipo: senza di esso un task remoto che termina senza pianificare produrrebbe un'esecuzione `SUCCEEDED` con la spec ancora `TODO`. Resta una verifica di **ricevuta**, non una rilettura del connector: il provider non ha e non deve avere accesso al connector, perché è quella mancanza a garantire che un fallimento remoto non tocchi la spec.
+         7. Solo dopo che la ricevuta è stata accettata costruisci il payload con `json.Marshal` di una struct anonima `{task_id, workspace_id, status, result_summary, plan_tasks}` — dove `plan_tasks` è il numero di task dichiarato dalla ricevuta — e restituisci `execution.Result{Payload: payload, ExternalID: task.ID}`. Il payload deve essere sempre JSON valido e non vuoto, altrimenti `Service.Run` marcherebbe l'esecuzione `FAILED` con `INVALID_PROVIDER_RESULT`.
+      6. Esegui `gofmt -w` sui file toccati.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `gofmt -l . && go vet ./internal/execution/... && go build ./... && go test ./internal/execution/... -count=1`
+      - Expect: `gofmt` non elenca file, nessuna diagnostica `vet`, build pulita e i test già scritti da TASK-04 ancora verdi. I test di `Execute` arrivano in TASK-06.
+
+      ## Done
+
+      - [ ] AC-1 — su esito `completed` il risultato porta `ExternalID` uguale all'ID del task ARcipelago e un payload JSON valido con `task_id` e `workspace_id`.
+      - [ ] L'`externalId` inviato ad ARcipelago è esattamente `req.ExecutionID`, così l'idempotenza remota coincide con quella locale.
+      - [ ] `buildTask` è una funzione pura dei soli campi di `req` ed emette sempre una mappa `metadata` non `nil`: è parte del contratto di idempotenza remota, che comprende l'impronta su titolo, prompt e metadata oltre alla terna.
+      - [ ] Sia `201` sia `200` sono trattati come creazione riuscita, e `200` non produce un secondo task.
+      - [ ] Un task restituito con `id` vuoto è rifiutato **prima** di iniziare il polling, invece di produrre un `404` fuorviante.
+      - [ ] AC-2 — un esito `completed` privo di ricevuta valida (`status == "PLANNED"`, `tasks > 0`, `spec_code` corrispondente) è un fallimento del provider, non un successo.
+      - [ ] AC-4 — token assente, `401`, `404`, `400`, `409 external_task_conflict`, `409 workspace_archived`, esito `failed`, esito `cancelled` e timeout producono errori distinti e leggibili, ciascuno con l'ID del task remoto quando esiste; non esiste un ramo `403`, perché il namespace esterno non lo produce.
+      - [ ] Il messaggio di timeout cita `GET /api/external/tasks/by-reference` con i tre valori necessari a ritrovare il task remoto.
+      - [ ] Il valore del segreto non compare in nessun messaggio d'errore.
+      - [ ] Il provider non usa `iox` e non tocca il connector.
+
+      ## Blockers
+
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test di Execute contro un hub ARcipelago simulato con httptest
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Provare, contro un server HTTP reale in-process, che `Execute` crea il task una sola volta, attende l'esito e traduce ogni esito remoto in un risultato o in un errore leggibile.
+
+      ## Read
+
+      - `cli/internal/execution/arcipelago/client.go` e `provider.go` — implementazione prodotta da TASK-05.
+      - `cli/internal/execution/types.go` — `Request` e `Result`.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/hub/src/api/app.ts` righe 341-420 — le forme esatte di risposta da riprodurre nello stub: `{"task": {...}}` con `id`, `status`, `resultSummary` per `/api/external/tasks`, `/api/external/tasks/:id` e `/api/external/tasks/by-reference`; i corpi d'errore `{"error":"..."}` con `workspace_archived` (riga 388) e `external_task_conflict` (riga 412), entrambi serviti con status `409`.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/hub/src/db/tasks-repository.ts` righe 87 e 445-459 — perché stesso `externalId` con prompt diverso è un conflitto e non un riuso: lo stub deve poterlo simulare.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/hub/src/application-auth.ts` riga 32 — l'unico esito di autenticazione negata è `401`: nessun caso `403` va scritto.
+
+      ## Change
+
+      - `cli/internal/execution/arcipelago/provider_test.go` — nuovo file.
+
+      Non-goal: nessuna chiamata di rete reale, nessuna dipendenza da variabili d'ambiente del processo (`Getenv` è sempre iniettato), nessun `time.Sleep` reale.
+
+      ## Steps
+
+      1. Scrivi un helper `newStubHub(t *testing.T, script hubScript) (*httptest.Server, *hubCalls)` basato su `httptest.NewServer`. `hubCalls` conta separatamente le `POST /api/external/tasks`, le `GET /api/external/tasks/{id}` e le `GET /api/external/tasks/by-reference`, e conserva l'ultimo corpo di creazione sia decodificato sia grezzo, perché alcuni casi asseriscono sulla forma serializzata. Lo stub verifica l'header `Authorization` e risponde `401` quando non è `Bearer <token atteso>`; sa rispondere con un corpo d'errore `{"error":"..."}` per i casi `409`, e sa servire `by-reference` restituendo un task preesistente. Instrada sulla rotta `by-reference` **prima** della rotta `:id`, come fa l'hub reale, altrimenti la stringa `by-reference` verrebbe letta come identificativo.
+      2. Costruisci il provider con `New(Options{Doer: server.Client(), Getenv: func(string) string { return "secret-token" }, Sleep: func(context.Context, time.Duration) error { return nil }, Now: <clock deterministico>})`. La configurazione di test usa `base_url` uguale a `server.URL`, `workspace_id` `"ws-1"`, `poll_interval_seconds` 1 e `timeout_seconds` 60.
+      3. `TestExecuteCreatesTaskAndReturnsExternalID`: lo stub risponde `201` con `{"task":{"id":"task-remote-1","status":"queued"}}` e, alla prima `GET`, `{"task":{"id":"task-remote-1","status":"completed","resultSummary":"{\"spec_code\":\"US-001\",\"status\":\"PLANNED\",\"tasks\":9}"}}`. Verifica: `Result.ExternalID == "task-remote-1"`; `Result.Payload` è JSON valido con `task_id`, `workspace_id == "ws-1"`, `status == "completed"` e `plan_tasks == 9`, cioè la ricevuta è stata letta e non solo ricopiata; il corpo di creazione ha `source == "archetipo"`, `externalId` uguale a `req.ExecutionID`, `title` che contiene lo spec code e `metadata` presente come **oggetto JSON**; le POST sono esattamente 1.
+      4. `TestExecuteAcceptsIdempotentTwoHundred`: lo stub risponde `200` alla creazione. Verifica che l'esito sia lo stesso del caso `201` e che non venga tentata una seconda creazione.
+      5. `TestBuildTaskIsDeterministicAndCarriesObjectMetadata`: due invocazioni di `buildTask` con la stessa `execution.Request` producono titolo e prompt identici e `metadata` con le stesse coppie chiave/valore; il `metadata` restituito non è mai `nil`, nemmeno per una `Request` con i soli campi obbligatori; e `json.Marshal` del corpo di creazione, riletto in `map[string]any`, ha `metadata` di tipo oggetto e mai `null`. È il test che protegge due contratti remoti in un colpo solo: l'impronta SHA-256 che ARcipelago calcola anche su titolo, prompt e metadata, e la validazione `asRecord` che rifiuta `null` con `400`.
+      6. `TestExecutePollsUntilTerminal`: la prima `GET` restituisce `running`, la seconda `assigned`, la terza `completed` con ricevuta valida. Verifica che le `GET` siano 3 e che il risultato sia di successo.
+      7. `TestExecuteRejectsCompletedWithoutValidReceipt` come tabella: il task chiude `completed` ma il `resultSummary` è vuoto; è testo libero senza alcuna riga JSON; è `{"spec_code":"US-001","status":"TODO","tasks":3}`; è `{"spec_code":"US-001","status":"PLANNED","tasks":0}`; è `{"spec_code":"US-999","status":"PLANNED","tasks":3}`. In tutti i casi `Execute` restituisce **errore**, il testo dice che il task remoto si è chiuso senza aver prodotto un piano per la spec richiesta e nomina `task-remote-1`. È la prova che AC-2 non può essere soddisfatto da un task remoto che termina senza pianificare.
+      8. `TestExecuteRejectsEmptyTaskID`: lo stub risponde `201` con `{"task":{"id":"","status":"queued"}}`. Verifica che `Execute` fallisca **prima** di qualunque `GET` — il contatore delle `GET` resta 0 — e che il messaggio parli di task privo di identificativo e non di `404`. Senza il controllo il provider costruirebbe `GET /api/external/tasks/` e riporterebbe un `404` fuorviante.
+      9. `TestExecuteFailedAndCancelledRemoteOutcomes` come tabella: `failed` con `resultSummary: "planning aborted: missing tool"` e `cancelled` con `resultSummary: "cancelled by the operator"`. In entrambi i casi `Execute` restituisce errore e il testo contiene lo stato remoto, `task-remote-1` e il `resultSummary`.
+      10. `TestExecuteHTTPErrors` come tabella su `401`, `404` e `400` alla creazione: `Execute` restituisce errore, il testo distingue i tre casi e non contiene mai `"secret-token"`. **Non** scrivere un caso `403`: il namespace esterno non lo produce, perché `applicationAuth` risponde `401` quando il bearer non risolve e l'autorizzazione per workspace è espressa come `404`.
+      11. `TestExecuteDiscriminatesConflictCauses` come tabella sui due `409`. Riga uno, **stesso `externalId` con prompt diverso**: lo stub risponde `409` con `{"error":"external_task_conflict"}` e serve su `by-reference` il task preesistente `{"task":{"id":"task-remote-0","status":"running"}}`; verifica che l'errore dica che l'identificativo è già usato con un incarico diverso, suggerisca una nuova chiave di richiesta e riporti `task-remote-0`, cioè che la rotta di recupero per riferimento esterno sia stata interrogata. Riga due, **workspace archiviato**: lo stub risponde `409` con `{"error":"workspace_archived"}`; verifica che il messaggio nomini `ws-1` e **non** parli di conflitto di identità esterna. Riga tre, corpo `409` non decodificabile: il messaggio generico riporta lo status e il corpo troncato. In tutte e tre le righe il testo non contiene mai `"secret-token"`.
+      12. `TestExecuteTimesOutNamingRemoteTask`: lo stub restituisce sempre `running`; il clock iniettato avanza oltre `timeout_seconds` a ogni `Sleep`. Verifica che l'errore dichiari il timeout, l'ultimo stato osservato, `task-remote-1` e la via di recupero `by-reference` con `ws-1`, `archetipo` e l'`externalId` usato, e che il numero di `GET` resti finito.
+      13. `TestExecuteMissingTokenNamesEnvVariable`: `Getenv` restituisce stringa vuota. Verifica che l'errore nomini `ARCIPELAGO_TOKEN`, che lo stub non abbia ricevuto alcuna richiesta e che il testo non contenga il valore del segreto.
+      14. `TestExecuteHonoursContextCancellation`: con un contesto già cancellato, `Execute` restituisce errore senza esaurire il polling.
+      15. Aggiungi un'asserzione trasversale riusabile che, in ogni test con errore, verifica `!strings.Contains(err.Error(), "secret-token")`.
+      16. Esegui `gofmt -w` sul file nuovo.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `gofmt -l . && go vet ./internal/execution/... && go test ./internal/execution/... -count=1 -v`
+      - Expect: tutti i test del package `arcipelago` verdi; l'esecuzione dura pochi secondi perché `Sleep` è un no-op e non c'è rete reale.
+
+      ## Done
+
+      - [ ] AC-1 — è provato che l'`ExternalID` restituito è l'ID del task assegnato dall'hub e che l'`externalId` inviato è l'ID dell'esecuzione.
+      - [ ] È provato che una risposta `200` non produce una seconda creazione.
+      - [ ] AC-2 — è provato che un `completed` privo di ricevuta valida (`status == "PLANNED"`, `tasks > 0`, `spec_code` corrispondente) produce un errore e non un successo.
+      - [ ] È provato che `buildTask` è deterministica e che `metadata` viaggia sempre come oggetto JSON, mai `null`.
+      - [ ] È provato che un task con `id` vuoto è rifiutato prima di qualunque `GET`.
+      - [ ] AC-4 — ogni esito non riuscito (`failed`, `cancelled`, `401`, `404`, `400`, `409 external_task_conflict`, `409 workspace_archived`, timeout, token assente) è provato produrre un errore distinto e leggibile; nessun caso `403` è scritto, perché il namespace esterno non lo produce.
+      - [ ] È provato che il conflitto di identità esterna riporta il task preesistente letto da `GET /api/external/tasks/by-reference` e che il messaggio di timeout riporta i valori necessari a interrogarla.
+      - [ ] Nessun test esegue rete reale, attese reali o legge l'ambiente del processo.
+      - [ ] È provato che il valore del segreto non compare in alcun messaggio d'errore.
+
+      ## Blockers
+
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Wiring CLI del flag --request-id e registrazione del provider arcipelago
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-05
+    body: |-
+      ## Objective
+
+      `archetipo execution run` accetta `--request-id` con semantica idempotente e il provider `arcipelago` è raggiungibile dalla CLI reale con una mappatura d'errore corretta.
+
+      ## Read
+
+      - `cli/internal/cli/execution_cmd.go` — `newExecutionRunCmd` per intero, `mapExecutionRunError`, `mapExecutionError`, `mapProviderConfigurationError`.
+      - `cli/internal/cli/root.go` righe 50-120 — `newRootCmd`, `executionDependencies` e `newRootCmdWithExecution`.
+      - `cli/internal/cli/runner.go` — `withConnectorCfg` e `loadConfigFor`.
+      - `cli/internal/execution/service.go` — la firma di `RunIdempotent` prodotta da TASK-01.
+      - `cli/internal/iox/` — `NewInvalidInput`, `NewPrecondition`, `NewNotFound`, `NewInternal`.
+
+      ## Change
+
+      - `cli/internal/cli/execution_cmd.go` — nuovo flag `--request-id`, selezione fra `Run` e `RunIdempotent`, estensione di `mapExecutionError` e parametrizzazione del prefisso di `mapProviderConfigurationError`.
+      - `cli/internal/cli/root.go` — registrazione del provider `arcipelago` nel registry di default.
+
+      Non-goal: nessun nuovo sottocomando, nessuna modifica al `kind` dell'envelope (resta `execution`), nessuna verifica automatica dello stato della spec dentro il comando, nessuna modifica a `newRootCmdWithExecution`, che i test usano con registry fake.
+
+      ## Steps
+
+      1. In `newExecutionRunCmd` aggiungi `var requestID string` e `cmd.Flags().StringVar(&requestID, "request-id", "", "idempotency key: repeating the same value returns the execution already created")`.
+      2. Dentro la closure di `withConnectorCfg`, dopo la costruzione del `service`, ramifica: se `strings.TrimSpace(requestID) == ""` mantieni esattamente la chiamata odierna `service.Run(...)`; altrimenti chiama `outcome, _, err := service.RunIdempotent(ctx, spec, action, resolvedProviderID, providerConfig, strings.TrimSpace(requestID))`. In entrambi i rami l'errore passa da `mapExecutionRunError(err, fromDefault)` e l'esito restituito è l'`Execution`, così il `kind` dell'envelope non cambia.
+      3. Rifiuta un `--request-id` presente ma vuoto con `errInvalidUsage("--request-id requires a non-empty value", "pass --request-id <key> or omit it")`, usando `cmd.Flags().Changed("request-id")` per distinguere l'assenza dal valore vuoto.
+      4. Estendi `mapExecutionError` aggiungendo, prima del fallback `NewInternal`, il ramo `var configErr *execution.ConfigurationError; if errors.As(err, &configErr) { return mapProviderConfigurationError(err, <prefisso>) }`. Senza questa correzione `--provider arcipelago` senza configurazione produrrebbe un fuorviante `E_INTERNAL` invece di `E_INVALID_INPUT`.
+      5. Parametrizza `mapProviderConfigurationError` sul prefisso del percorso di configurazione, oggi cablato a `execution.default_provider.config` (`cli/internal/cli/execution_cmd.go:178-189`). Sul percorso del default provider il prefisso resta invariato, così i test di US-024 continuano a passare. Sul percorso `--provider` esplicito il prefisso odierno è sbagliato: il comando passa al servizio una configurazione vuota (`cli/internal/cli/execution_cmd.go:144`), che non proviene da `execution.default_provider`, quindi indirizzare l'utente su `execution.default_provider.config.base_url` lo manda a correggere un campo che non è la causa. Il messaggio del ramo esplicito deve continuare a nominare il campo mancante — `base_url` — ma il rimedio deve dire che `--provider` non riceve configurazione e che il modo di fornirla è `execution provider set-default <id> --file <path>`. Mantieni una sola funzione con un argomento in più: non duplicare la logica di estrazione del `Field`.
+      6. In `root.go` estrai la costruzione del registry di default in `func defaultExecutionRegistry() *execution.Registry`, che crea il registry, registra `arcipelago.New(arcipelago.Options{})` e lo restituisce. La registrazione di un unico provider statico non può fallire: scarta l'errore con `_ = registry.Register(...)` e un commento che spiega perché. Usa la funzione dentro `newRootCmd` al posto di `execution.NewRegistry()`.
+      7. Verifica di non aver toccato `newRootCmdWithExecution`: i test di US-023 e US-024 costruiscono il registry con i loro fake e devono continuare a passare senza modifiche.
+      8. Esegui `gofmt -w` sui file toccati.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `gofmt -l . && go vet ./... && go build ./... && go test ./internal/cli ./internal/execution/... ./internal/config -count=1`
+      - Expect: `gofmt` non elenca file, nessuna diagnostica `vet`, build pulita e tutti i test dei package indicati verdi, inclusi quelli preesistenti di US-023 e US-024 lasciati intatti.
+
+      ## Done
+
+      - [ ] `execution run` accetta `--request-id` e con esso instrada su `RunIdempotent`; senza di esso il comportamento resta identico a quello odierno.
+      - [ ] `--request-id` presente ma vuoto è rifiutato come uso non valido.
+      - [ ] `mapExecutionError` mappa `*execution.ConfigurationError` su `E_INVALID_INPUT` nominando il campo.
+      - [ ] `mapProviderConfigurationError` è parametrizzata sul prefisso: con `--provider` esplicito il rimedio non indirizza più l'utente su `execution.default_provider.config`, e il messaggio continua a nominare il campo mancante.
+      - [ ] AC-5 — il provider `arcipelago` è registrato nel registry costruito da `newRootCmd`, quindi raggiungibile dalla sola CLI senza alcuna UI.
+      - [ ] `newRootCmdWithExecution` non è cambiata e i test preesistenti passano senza modifiche.
+
+      ## Blockers
+
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Test di integrazione CLI end-to-end del percorso di pianificazione remota
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+
+      Provare dalla sola CLI, contro un hub ARcipelago simulato, che l'avvio remoto collega spec e identificativo remoto, che il completamento porta la spec a `PLANNED` con un piano nel connector, che la ripetizione non crea una seconda esecuzione e che un fallimento remoto lascia la spec intatta con il motivo visibile.
+
+      ## Read
+
+      - `cli/internal/cli/execution_cmd_internal_test.go` — `runExecutionRoot`, `executionTestDeps`, `seedExecutionSpec`, `decodeExecution`, `decodeExecutionError`, `decodeExecutionSpecState`, `executionSpecState`. Sono già tutti disponibili e vanno riusati.
+      - `cli/internal/cli/spec_cmd.go` — la forma del payload accettata da `spec plan <US-CODE> --file <path>` e il fatto che salvi il piano e transisca la spec a `PLANNED` in modo atomico.
+      - `cli/internal/execution/arcipelago/provider.go` — `Options` e i punti di iniezione.
+      - `cli/internal/cli/root.go` — `newRootCmd` e `defaultExecutionRegistry` prodotti da TASK-07.
+
+      ## Change
+
+      - `cli/internal/cli/execution_arcipelago_test.go` — nuovo file nel package `cli`, che riusa gli helper del file di test esistente.
+
+      Non-goal: nessun test di rete reale; nessun accesso a variabili d'ambiente del processo; nessuna modifica agli helper **esistenti**, che vanno solo riusati. Su questo punto il piano è esplicito, perché lo scenario del passo 8 sembra contraddirlo: quello scenario richiede una root costruita con `newRootCmd`, mentre `runExecutionRoot` costruisce la root con `newRootCmdWithExecution` (`cli/internal/cli/execution_cmd_internal_test.go:51-53`). `runExecutionRoot` non va toccata: si **aggiunge** nel file nuovo un helper locale, per esempio `runRealRoot(t *testing.T, args ...string) executionCLIResult`, che replica la stessa forma — stessi stream, stessa cattura dell'errore con `iox.WriteError` — chiamando `newRootCmd`. Aggiungere un helper nel file nuovo non è modificare gli helper esistenti.
+
+      ## Steps
+
+      1. Scrivi un helper `newRemoteHub(t *testing.T, opts hubBehaviour) (*httptest.Server, *hubState)`. `hubState` conserva, protetti da `sync.Mutex`: numero di `POST`, numero di `GET`, ultimo corpo di creazione decodificato e un `error` per gli errori accaduti dentro l'handler. L'handler non chiama mai `t.Fatal`: registra l'errore e restituisce `500`.
+      2. Nel ramo `GET` dell'hub, quando `opts.plansSuccessfully` è vero, alla **prima** lettura simula l'agente remoto che pianifica: scrivi in una directory temporanea un payload di piano minimo ma valido — `plan_body` non vuoto e un task con `id`, `title`, `body`, `type: "Impl"`, `status: "TODO"` — e invoca `runExecutionRoot(t, deps, "spec", "plan", "US-001", "--file", payloadPath)`. Se l'esito ha `exit != 0` registra l'errore in `hubState`. Solo dopo rispondi `{"task":{"id":"task-remote-1","status":"completed","resultSummary":"{\"spec_code\":\"US-001\",\"status\":\"PLANNED\",\"tasks\":1}"}}`. La ricevuta non è decorativa: il provider la legge e pretende `status == "PLANNED"` e `tasks > 0`, quindi deve riflettere il piano davvero persistito dal passo precedente. Uno stub che rispondesse `completed` senza aver pianificato deve far **fallire** l'esecuzione, ed è esattamente lo scenario del passo 7.
+      3. Costruisci le dipendenze con `deps := executionTestDeps(t, arcipelago.New(arcipelago.Options{Doer: server.Client(), Getenv: func(string) string { return "secret-token" }, Sleep: func(context.Context, time.Duration) error { return nil }}))`, poi `seedExecutionSpec(t, deps)`. Configura il provider di workspace con `runExecutionRoot(t, deps, "execution", "provider", "set-default", "arcipelago", "--file", cfgPath)`, dove `cfgPath` contiene `{"base_url":"<server.URL>","workspace_id":"ws-1","poll_interval_seconds":1,"timeout_seconds":60}`. Questo prova per costruzione che AC-5 è raggiungibile a soli comandi CLI.
+      4. `TestArcipelagoPlanRemoteHappyPath` copre AC-1, AC-2 e AC-5 in un solo scenario:
+         - fotografa lo stato iniziale con `decodeExecutionSpecState(t, runExecutionRoot(t, deps, "spec", "show", "US-001"))` e verifica `StatusTodo`;
+         - esegui `run := decodeExecution(t, runExecutionRoot(t, deps, "execution", "run", "US-001", "plan", "--request-id", "r1"))`;
+         - **AC-1**: `run.Status == execution.StatusSucceeded`, `run.SpecCode == "US-001"`, `run.ProviderID == "arcipelago"`, `run.RequestID == "r1"`, `run.Result != nil` e `run.Result.ExternalID == "task-remote-1"`; il corpo di creazione registrato dall'hub ha `source == "archetipo"`, `workspaceId == "ws-1"` ed `externalId == run.ID`;
+         - **AC-2**: `after := decodeExecutionSpecState(...)` ha `Status == domain.StatusPlanned`, e un `spec show US-001` decodificato in modo da leggere `data.tasks` restituisce almeno un task; verifica inoltre che `hubState.err` sia `nil`, altrimenti la simulazione dell'agente remoto è fallita silenziosamente;
+         - **AC-5**: nessun passo dello scenario usa qualcosa di diverso da comandi `archetipo`.
+      5. `TestArcipelagoPlanRemoteIsIdempotentPerRequestID` copre AC-3: dopo lo scenario felice, esegui una seconda volta `execution run US-001 plan --request-id r1`. Verifica che l'`ID`, il `CreatedAt`, il `CompletedAt` e il `Result` siano identici al primo run; che `hubState` abbia registrato esattamente **una** `POST`; e che `os.ReadDir(filepath.Join(".archetipo", "executions"))` restituisca esattamente **una** voce.
+      6. `TestArcipelagoRemoteFailurePreservesSpec` copre AC-4: hub configurato per rispondere `201` alla creazione e poi `{"task":{"id":"task-remote-1","status":"failed","resultSummary":"planning aborted: missing tool"}}`. Verifica: exit `0`; `run.Status == execution.StatusFailed`; `run.Error != nil` con `Code == "PROVIDER_ERROR"` e `Message` che contiene `"failed"`, `"planning aborted: missing tool"` e `"task-remote-1"`; e soprattutto che `decodeExecutionSpecState` dopo il run sia **profondamente uguale** alla fotografia precedente, quindi `Status == domain.StatusTodo` e `History` immutata.
+      7. `TestArcipelagoCompletedWithoutPlanFailsExecution` chiude il buco che renderebbe AC-2 un falso positivo: l'hub risponde `201` alla creazione e poi `{"task":{"id":"task-remote-1","status":"completed","resultSummary":"done"}}` **senza** che nessun `spec plan` sia stato eseguito. Verifica: exit `0`; `run.Status == execution.StatusFailed` con `error.code = PROVIDER_ERROR` e un messaggio che dice che il task remoto si è chiuso senza aver prodotto un piano; e soprattutto `decodeExecutionSpecState` dopo il run ancora `domain.StatusTodo`. Senza il controllo di ricevuta introdotto da TASK-05 questo test fallirebbe con un'esecuzione `SUCCEEDED` su una spec non pianificata, che è precisamente la regressione da impedire. Aggiungi la variante con ricevuta presente ma `"status":"TODO"` per coprire anche l'agente che riporta un esito diverso da `PLANNED`.
+      8. `TestArcipelagoProviderIsRegisteredInRealRoot` copre AC-5 sul wiring reale: costruisci la root con l'helper locale `runRealRoot`, che usa `newRootCmd` e non `newRootCmdWithExecution`, in una directory temporanea con la spec seminata e nessun default provider; esegui `execution run US-001 plan --provider arcipelago` e verifica che l'errore sia `E_INVALID_INPUT` con un messaggio che nomina `base_url`. Un `E_PRECONDITION` con `"is not registered"` significa che la registrazione di TASK-07 manca ed è il fallimento che questo test deve produrre. Verifica anche che il rimedio suggerito non indirizzi su `execution.default_provider.config`, coerentemente con la parametrizzazione del prefisso fatta in TASK-07: con `--provider` esplicito la configurazione non viene da lì.
+      9. `TestArcipelagoRunNeverLeaksSecret`: al termine di ogni scenario verifica che né stdout né stderr contengano `"secret-token"`.
+      10. Esegui `gofmt -w` sul file nuovo.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `gofmt -l . && go vet ./... && go test ./internal/cli -count=1 -run Arcipelago -v` seguito da `go test ./internal/cli ./internal/execution/... ./internal/config -count=1`
+      - Expect: i cinque test `Arcipelago` verdi e i package indicati verdi nel complesso, senza modifiche ai test preesistenti.
+
+      ## Done
+
+      - [ ] AC-1 — provato che l'esecuzione restituita porta lo spec code e l'identificativo del task assegnato da ARcipelago, e che l'`externalId` inviato è l'ID dell'esecuzione.
+      - [ ] AC-2 — provato leggendo il connector con `spec show` che dopo il completamento remoto la spec è `PLANNED` e ha un piano con almeno un task; l'oracolo è lo stato persistito, non un contatore di chiamate.
+      - [ ] AC-2, verso negativo — provato che un task remoto `completed` senza ricevuta valida produce un'esecuzione `FAILED` e lascia la spec `TODO`, invece di un `SUCCEEDED` su una spec non pianificata.
+      - [ ] L'helper locale che costruisce la root reale con `newRootCmd` vive nel file nuovo: `runExecutionRoot` e gli altri helper preesistenti non sono stati modificati.
+      - [ ] AC-3 — provato che una seconda richiesta con lo stesso `--request-id` restituisce la stessa esecuzione, non genera una seconda `POST` e non crea un secondo record.
+      - [ ] AC-4 — provato che un esito remoto fallito produce exit `0`, un'esecuzione `FAILED` con motivo e ID remoto nel messaggio, e una spec identica alla fotografia pre-run.
+      - [ ] AC-5 — provato che l'intero percorso è guidato da soli comandi `archetipo` e che il provider è registrato nella root reale.
+      - [ ] Provato che il segreto non compare negli stream della CLI.
+
+      ## Blockers
+
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Aggiorna la pagina Wiki decisions/execution-provider-boundary
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+
+      La pagina `decisions/execution-provider-boundary` smette di dichiarare fuori ambito l'idempotenza cross-request e il provider remoto reale, e descrive la forma effettiva che il confine ha assunto.
+
+      ## Read
+
+      - `docs/wiki/decisions/execution-provider-boundary.md` — l'intera pagina, in particolare la sezione `consequences`, che oggi afferma: "Retry, idempotenza cross-request, fallback, selezione automatica e provider remoto reale restano fuori da questa decisione".
+      - `cli/internal/execution/service.go`, `cli/internal/execution/id.go`, `cli/internal/cli/execution_cmd.go`, `cli/internal/cli/root.go` — il codice consegnato, che è l'evidenza da citare.
+      - `.archetipo/shared-runtime.md`, sezione **Wiki page state transitions**.
+
+      ## Change
+
+      - `docs/wiki/decisions/execution-provider-boundary.md` — aggiorna corpo e `sources`; la pagina resta `type: decision` e `decision_status: accepted`.
+
+      Non-goal: nessuna modifica a mano del blocco `review` — si usa `archetipo wiki reset`. La pagina non viene superseded: la decisione è estesa, non sostituita.
+
+      ## Steps
+
+      1. **Primo passo obbligatorio:** `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo reset decisions/execution-provider-boundary`.
+      2. In `<!-- archetipo:wiki section=context -->` aggiungi che la prima azione `plan` ha ora un esecutore remoto reale e che una richiesta ripetibile deve poter essere ritentata senza duplicare il lavoro.
+      3. In `<!-- archetipo:wiki section=decision -->` aggiungi: l'idempotenza è esplicita e opt-in tramite `--request-id`; con essa l'ID dell'esecuzione è derivato deterministicamente da spec code, azione, provider e chiave di richiesta; il record esistente viene riusato senza invocare il provider, e una `Create` che incontra un record già presente è trattata come riuso; il medesimo ID viaggia come identità esterna verso il sistema remoto, così le due idempotenze coincidono, con l'avvertenza che l'equivalenza remota comprende anche un'impronta della richiesta (titolo, prompt e metadata) oltre alla terna di identità, quindi la stessa chiave con un incarico diverso è un conflitto e non un riuso; i segreti dei provider provengono dall'ambiente tramite un nome di variabile dichiarato nella configurazione non segreta, mai dal file di configurazione; il registry costruito dalla CLI reale contiene ora un provider di rete registrato.
+      4. In `<!-- archetipo:wiki section=alternatives -->` aggiungi la voce scartata "lifecycle asincrono con avvio non bloccante e comando di ripresa", con il motivo: richiederebbe di riaprire il lifecycle che finalizza il record nella stessa invocazione, mentre l'attesa sincrona limitata soddisfa già i criteri.
+      5. In `<!-- archetipo:wiki section=consequences -->` sostituisci la frase ormai falsa. La nuova formulazione deve mantenere fuori ambito soltanto ciò che è ancora fuori ambito — retry automatico, fallback e selezione automatica del provider — e dichiarare i limiti noti: il riuso è incondizionato, quindi ritentare dopo un fallimento significa usare una nuova chiave di richiesta; la stessa chiave con un incarico diverso è respinta come conflitto, perché l'equivalenza remota comprende un'impronta della richiesta; e un timeout locale non annulla il lavoro remoto già avviato, che resta ritrovabile per riferimento esterno con `GET /api/external/tasks/by-reference?workspaceId&source&externalId`, la rotta di recupero che l'hub espone e che il messaggio di timeout cita.
+      6. In `<!-- archetipo:wiki section=verification -->` cita i file consegnati con link relativi nello stile già usato dalla pagina: `id.go` per la derivazione dell'ID, `service.go` per il riuso, `execution_cmd.go` e `root.go` per flag, mappatura d'errore e registrazione, `execution_arcipelago_test.go` per la prova end-to-end.
+      7. Allinea il blocco `sources` del frontmatter aggiungendo `cli/internal/execution/id.go` con ruolo `implementation`, `cli/internal/cli/root.go` con ruolo `implementation` e `cli/internal/cli/execution_arcipelago_test.go` con ruolo `verification`.
+      8. Rigenera la navigazione con `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo catalog`.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap` e `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status`
+      - Expect: `validate` restituisce `kind: "validation_result"` con `data.ok: true`; `status` riporta `decisions/execution-provider-boundary` in `state: generated` e senza `issues`.
+
+      ## Done
+
+      - [ ] La pagina non contiene più l'affermazione che idempotenza cross-request e provider remoto reale sono fuori dalla decisione.
+      - [ ] Tutti e cinque i marker di sezione (`context`, `decision`, `alternatives`, `consequences`, `verification`) sono presenti e coerenti con il codice consegnato.
+      - [ ] Il limite noto del riuso incondizionato e del timeout è documentato nelle conseguenze, insieme alla via di recupero per riferimento esterno e al fatto che l'equivalenza remota comprende un'impronta della richiesta.
+      - [ ] `sources` cita i file effettivamente introdotti o modificati dalla slice.
+      - [ ] `archetipo wiki status` riporta la pagina in `state: generated`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Crea la pagina Wiki decisions/remote-plan-ownership
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+
+      Esiste una pagina `type: decision` con ID canonico `decisions/remote-plan-ownership` che registra chi possiede la scrittura del piano prodotto in remoto e perché ARchetipo non trasporta payload di piano.
+
+      ## Read
+
+      - `docs/wiki/decisions/execution-provider-boundary.md` — la struttura di riferimento di una pagina decisionale in questo repository: frontmatter, `decision_status`, i cinque marker di sezione e lo stile dei link relativi.
+      - `cli/internal/execution/arcipelago/prompt.go` e `client.go` — il prompt inviato al runner e il payload di ricevuta effettivamente restituito.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/runner/src/session-manager.ts` riga 149 — `resultSummary` è `lastAssistantText()`, cioè il messaggio finale dell'agente: è il fatto che rende inadeguato quel canale per un piano completo.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/hub/src/api/app.ts` righe 322-420 — l'API esterna espone `status` e `resultSummary` e non ha canale artefatti; righe 341-360 la rotta di recupero `GET /api/external/tasks/by-reference?workspaceId&source&externalId`; righe 391-409 i soli campi accettati alla creazione, che non comprendono `cwdHint`, `skills`, `assigneeAgentId` né `targetRunnerId`.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/hub/src/orchestrator/dispatcher.ts` riga 226 — `cwd: task.cwdHint ?? runner.system.workdirs[0]`: è il fatto che trasforma il prerequisito operativo in un vincolo sulla **prima** working directory del runner.
+
+      ## Change
+
+      - `docs/wiki/decisions/remote-plan-ownership.md` — nuovo file.
+      - `docs/wiki/index.md` — rigenerato dal comando `catalog`, non a mano.
+
+      Non-goal: nessuna modifica alla pagina `decisions/execution-provider-boundary`, che è responsabilità di TASK-09; nessuna decisione superseded.
+
+      ## Steps
+
+      1. Crea la pagina con frontmatter `type: decision`, `title` e `description` in italiano, `status: generated`, `decision_status: accepted` e un blocco `sources` che cita `cli/internal/execution/arcipelago/provider.go` e `prompt.go` come `implementation`, `cli/internal/execution/arcipelago/provider_test.go` e `cli/internal/cli/execution_arcipelago_test.go` come `verification`.
+      2. `<!-- archetipo:wiki section=context -->` — ARchetipo può affidare l'azione `plan` a un esecutore remoto. Il piano è un artefatto voluminoso e strutturato, e la sua persistenza deve avvenire nel connector configurato. Occorre stabilire chi lo scrive.
+      3. `<!-- archetipo:wiki section=decision -->` — la scrittura del piano appartiene all'agente remoto, che invoca la skill di pianificazione nella working directory del runner e persiste attraverso il connector configurato condiviso. ARchetipo avvia l'azione, attende l'esito e registra nel proprio record soltanto l'identificativo remoto e una ricevuta compatta. La ricevuta non è un residuo informativo ma la condizione di successo: il prompt impone all'agente remoto di chiudere con una riga JSON `{"spec_code","status","tasks"}` e il provider la pretende, perché un task remoto che chiude `completed` senza aver pianificato non deve poter produrre un'esecuzione riuscita su una spec ancora `TODO`. La verifica resta però una verifica di ricevuta: si è scartato il rileggere la spec dal connector dopo il successo, perché darebbe al confine di esecuzione un accesso al connector che il modello gli nega di proposito. Ne segue il prerequisito operativo esplicito: la working directory del runner è un checkout dello stesso progetto e condivide lo stato del connector configurato. Ne segue anche che la spec non viene mai transitata dal confine di esecuzione: un fallimento remoto la lascia dov'era, per costruzione.
+      4. `<!-- archetipo:wiki section=alternatives -->` — elenca le tre alternative scartate con il rispettivo motivo: far tornare il payload completo del piano nel campo di riassunto del task, scartata perché quel campo è il messaggio finale dell'agente mentre un piano reale supera facilmente le decine di migliaia di token; far tornare un riferimento ad artefatto e scaricarlo, scartata perché l'API esterna non espone un canale artefatti; ricostruire il piano localmente da un riassunto, scartata perché produrrebbe un artefatto diverso da quello verificato in remoto.
+      5. `<!-- archetipo:wiki section=consequences -->` — nessun payload voluminoso attraversa il canale dei messaggi; il piano nasce già valido nel connector; in cambio l'integrazione richiede il prerequisito operativo sul checkout del runner ed è immediata con connector condivisi mentre con un connector locale richiede che il runner lavori sulla stessa checkout. Enuncia il prerequisito nella sua forma esatta e verificabile: l'API esterna non accetta `cwdHint`, `skills`, `assigneeAgentId` né `targetRunnerId`, e il dispatcher risolve la working directory come `task.cwdHint ?? runner.system.workdirs[0]`; poiché `cwdHint` è assente per costruzione, la directory effettiva è sempre la **prima** working directory del runner scelto, e il workspace usato per la pianificazione remota deve quindi ammettere soltanto runner la cui prima working directory è il checkout di ARchetipo. Documenta inoltre che l'esito remoto è verificato tramite ricevuta e non rileggendo il connector, che un task remoto avviato sopravvive a un timeout locale e si ritrova con `GET /api/external/tasks/by-reference?workspaceId&source&externalId`, e che il trasferimento automatico di skill o repository al runner resta fuori ambito.
+      6. `<!-- archetipo:wiki section=verification -->` — cita con link relativi il costruttore del prompt, il provider e i due file di test che provano rispettivamente il contratto HTTP e il fatto che dopo il completamento remoto la spec risulta `PLANNED` con un piano leggibile dal connector.
+      7. Rigenera la navigazione con `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo catalog`.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap` e `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo search --type decision`
+      - Expect: `validate` restituisce `data.ok: true`; `search --type decision` elenca due ID, `decisions/execution-provider-boundary` e `decisions/remote-plan-ownership`.
+
+      ## Done
+
+      - [ ] Il file `docs/wiki/decisions/remote-plan-ownership.md` esiste con ID canonico `decisions/remote-plan-ownership`.
+      - [ ] La pagina è `type: decision` con `decision_status: accepted` e contiene tutti e cinque i marker di sezione.
+      - [ ] Contesto, opzione scelta, almeno tre alternative con motivo, conseguenze e verifica sono presenti e ancorati a evidenze reali del repository.
+      - [ ] Il prerequisito operativo sul checkout del runner è dichiarato esplicitamente e nella forma vincolante: prima working directory del runner, perché il task esterno non può trasportare `cwdHint`.
+      - [ ] La pagina dichiara che il successo remoto è accettato solo dietro ricevuta e cita la rotta di recupero per riferimento esterno.
+      - [ ] `archetipo wiki status` riporta la pagina in `state: generated` e `docs/wiki/index.md` la elenca.
+
+      ## Blockers
+
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Aggiorna la pagina Wiki architecture/context-map con il confine verso ARcipelago
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+
+      La mappa dei contesti descrive il primo confine runtime uscente di ARchetipo verso un sistema esterno: la CLI che chiama l'API `/api/external/*` dell'hub ARcipelago con una credenziale letta dall'ambiente.
+
+      ## Read
+
+      - `docs/wiki/architecture/context-map.md` — l'intera pagina, i confini già descritti e lo stile con cui vengono espressi.
+      - `cli/internal/cli/root.go` — la composizione runtime, ora con il registry che contiene un provider di rete.
+      - `cli/internal/execution/arcipelago/client.go` — le rotte, gli header e la provenienza della credenziale.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/hub/src/api/app.ts` righe 341-360 e 391-409 — la rotta di recupero `by-reference` e i soli campi accettati alla creazione.
+      - `/Users/stefanoleli/Project/ARcipelago/packages/hub/src/orchestrator/dispatcher.ts` riga 226 — la risoluzione della working directory del runner.
+      - `.archetipo/shared-runtime.md`, sezione **Wiki page state transitions**.
+
+      ## Change
+
+      - `docs/wiki/architecture/context-map.md` — aggiungi il nuovo confine e aggiorna `sources`.
+
+      Non-goal: nessuna modifica a mano del blocco `review` — si usa `archetipo wiki reset`. Nessuna descrizione di dettagli fisici di file, che appartengono a `engineering/code-map`.
+
+      ## Steps
+
+      1. **Primo passo obbligatorio:** `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo reset architecture/context-map`.
+      2. Aggiungi il confine "esecuzione remota": la CLI ARchetipo agisce da client machine-to-machine dell'hub ARcipelago sulle rotte `/api/external/tasks` (creazione), `/api/external/tasks/{id}` (attesa dell'esito) e `/api/external/tasks/by-reference?workspaceId&source&externalId` (recupero del task a partire dal riferimento esterno, quando l'identificativo locale è andato perso o l'attesa è scaduta), autenticandosi con un bearer applicativo il cui **nome di variabile d'ambiente** è configurato mentre il valore non è mai persistito. La direzione è unidirezionale e uscente: ARcipelago non chiama ARchetipo.
+      3. Descrivi la relazione fra i due contesti senza duplicare la decisione: ARchetipo possiede backlog, piani e stato del workflow; ARcipelago possiede l'esecuzione degli agenti; il piano viene scritto nel connector configurato dal lato che esegue, non trasferito fra i due.
+      4. Indica il prerequisito di confine nella forma che lo rende verificabile. L'API esterna accetta soltanto `workspaceId`, `source`, `externalId`, `title`, `prompt` e `metadata` (`packages/hub/src/api/app.ts:391-409`) e non accetta `cwdHint`, `skills`, `assigneeAgentId` né `targetRunnerId`; il dispatcher risolve la working directory come `task.cwdHint ?? runner.system.workdirs[0]` (`packages/hub/src/orchestrator/dispatcher.ts:226`), quindi per un task esterno la directory effettiva è sempre la **prima** working directory del runner scelto. Ne segue il vincolo di confine: il workspace ARcipelago usato per la pianificazione remota deve ammettere soltanto runner la cui prima working directory è il checkout di ARchetipo, e quel checkout deve condividere lo stato del connector configurato. Non è un dettaglio di configurazione: è la condizione che rende vero il confine descritto.
+      5. Se la pagina ha una sezione o una tabella di dipendenze esterne, aggiungi lì la riga corrispondente invece di creare una sezione nuova.
+      6. Aggiungi a `sources` `cli/internal/execution/arcipelago/client.go` con ruolo `execution-contract` e `cli/internal/execution/arcipelago/provider.go` con ruolo `implementation`, mantenendo le voci esistenti.
+      7. Rigenera la navigazione con `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo catalog`.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap` e `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status`
+      - Expect: `validate` restituisce `data.ok: true`; `status` riporta `architecture/context-map` in `state: generated` e senza `issues`.
+
+      ## Done
+
+      - [ ] Il confine uscente verso l'hub ARcipelago è descritto con rotte, direzione e provenienza della credenziale.
+      - [ ] È dichiarato che il valore del segreto non è mai persistito nella configurazione.
+      - [ ] Il prerequisito sul checkout del runner è presente nella forma vincolante: **prima** working directory, con la ragione (il task esterno non può trasportare `cwdHint`).
+      - [ ] La rotta di recupero `by-reference` è elencata fra le rotte del confine.
+      - [ ] `sources` cita i file del nuovo package.
+      - [ ] `archetipo wiki status` riporta la pagina in `state: generated`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Aggiorna la pagina Wiki engineering/code-map con il package arcipelago
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+
+      La mappa del codice riflette il nuovo package `cli/internal/execution/arcipelago`, la superficie CLI aggiornata e i test che la verificano.
+
+      ## Read
+
+      - `docs/wiki/engineering/code-map.md` — l'intera pagina, la struttura della corrispondenza responsabilità/percorso e il blocco `coverage` nel frontmatter.
+      - I file consegnati: `cli/internal/execution/arcipelago/provider.go`, `config.go`, `client.go`, `prompt.go`, `provider_test.go`, `config_test.go`; `cli/internal/execution/id.go`, `service.go`; `cli/internal/cli/execution_cmd.go`, `root.go`, `execution_arcipelago_test.go`.
+      - `.archetipo/shared-runtime.md`, sezione **Wiki page state transitions**.
+
+      ## Change
+
+      - `docs/wiki/engineering/code-map.md` — aggiungi le voci mancanti e allinea `sources` e `coverage`.
+
+      Non-goal: nessuna modifica a mano del blocco `review` — si usa `archetipo wiki reset`. Nessuna motivazione architetturale, che appartiene alle pagine decisionali.
+
+      ## Steps
+
+      1. **Primo passo obbligatorio:** `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo reset engineering/code-map`.
+      2. Aggiungi la voce del package `cli/internal/execution/arcipelago` con la ripartizione fisica delle responsabilità: identità e capability del provider e validazione della configurazione in `provider.go` e `config.go`, contratto HTTP e classificazione degli status in `client.go`, costruzione di titolo, prompt e metadata in `prompt.go`.
+      3. Aggiorna la voce del confine `cli` esistente: `execution/id.go` ospita ora anche la derivazione deterministica dell'ID, `execution/service.go` il riuso idempotente, `cli/execution_cmd.go` il flag `--request-id` e la mappatura degli errori di configurazione, `cli/root.go` la registrazione del provider nel registry reale.
+      4. Aggiorna la parte dedicata alla verifica elencando `cli/internal/execution/arcipelago/config_test.go` e `provider_test.go` come test di package e `cli/internal/cli/execution_arcipelago_test.go` come test di integrazione end-to-end del percorso remoto.
+      5. Se la pagina mantiene un `coverage` per boundary, verifica che il boundary `cli` resti `mapped` e includa fra le pagine anche `decisions/remote-plan-ownership` quando il nuovo package è coperto anche da quella decisione.
+      6. Aggiungi a `sources` `cli/internal/execution/arcipelago/provider.go` con ruolo `implementation` e `cli/internal/cli/execution_arcipelago_test.go` con ruolo `verification`, mantenendo le voci esistenti.
+      7. Rigenera la navigazione con `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo catalog`.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap` e `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status`
+      - Expect: `validate` restituisce `data.ok: true`, senza finding di link rotti o di percorsi inesistenti; `status` riporta `engineering/code-map` in `state: generated` e senza `issues`.
+
+      ## Done
+
+      - [ ] Il package `cli/internal/execution/arcipelago` è mappato file per file con la sua responsabilità.
+      - [ ] Le modifiche a `id.go`, `service.go`, `execution_cmd.go` e `root.go` sono riflesse nella voce del confine `cli`.
+      - [ ] I tre file di test nuovi sono elencati come evidenza di verifica.
+      - [ ] Ogni percorso citato esiste davvero nel repository, come confermato da `wiki validate`.
+      - [ ] `archetipo wiki status` riporta la pagina in `state: generated`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Gate finale di verifica e richiesta di review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+
+      Dimostrare con comandi espliciti che la slice non introduce alcun fallimento oltre il confine registrato in baseline, che la Wiki è pronta e che ogni task è concluso, prima di chiedere la review.
+
+      ## Read
+
+      - La sezione **Baseline** del piano: è il confine con cui vanno confrontati gli esiti, in particolare il rosso intermittente pre-esistente e il prerequisito `golangci-lint`.
+      - `AGENTS.md`, sezione "Rules for CLI changes": è l'elenco dei controlli che la CI esegue.
+
+      ## Change
+
+      Nessuna modifica di codice. Se un controllo fallisce, la correzione appartiene al task che ha introdotto il difetto: torna lì, correggi e riesegui questo gate da capo.
+
+      ## Steps
+
+      1. Prerequisito d'ambiente, una sola volta: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`.
+      2. Da `/Users/stefanoleli/Project/ARchetipo/cli` esegui in sequenza `gofmt -l .`, `go vet ./...`, `go build ./...`.
+      3. Esegui i controlli focalizzati sul comportamento cambiato: `go test ./internal/execution/... ./internal/cli ./internal/config -count=1`.
+      4. Esegui la regressione completa: `go test ./... -count=1`. Confronta l'esito con la baseline: l'unico fallimento tollerato è `internal/web` `TestWatcherCoalescesBurst`. Se compare, rieseguilo in isolamento con `go test ./internal/web -run TestWatcherCoalescesBurst -count=1` e richiedi esito verde; qualunque altro fallimento è una regressione e blocca il gate.
+      5. Esegui `golangci-lint run --timeout 5m ./...` e richiedi 0 issue. Nessun file toccato dalla slice deve introdurre diagnostiche nuove.
+      6. Da `/Users/stefanoleli/Project/ARchetipo` esegui `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap` e `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status`. Richiedi `data.ok: true` e le quattro pagine del contratto Wiki — `decisions/execution-provider-boundary`, `decisions/remote-plan-ownership`, `architecture/context-map`, `engineering/code-map` — tutte in `state: generated` e senza `issues`.
+      7. Marca **questo** task come `DONE` con `archetipo task done US-025 TASK-13` eseguito da `/Users/stefanoleli/Project/ARchetipo`.
+      8. Ricarica la spec con `archetipo spec show US-025` eseguito da `/Users/stefanoleli/Project/ARchetipo` e verifica che **nessun** task risulti ancora `TODO`.
+      9. Solo dopo che il passo 8 ha confermato che tutti i task sono `DONE`, esegui `archetipo spec review US-025`. Se anche un solo task è ancora `TODO`, non richiedere la review: completa prima quel task.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `gofmt -l . && go vet ./... && go build ./... && go test ./internal/execution/... ./internal/cli ./internal/config -count=1 && go test ./... -count=1 && golangci-lint run --timeout 5m ./...`
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap && archetipo spec show US-025`
+      - Expect: `gofmt` non elenca file; `go vet` e `go build` senza output; i package focalizzati verdi; la suite completa senza fallimenti nuovi rispetto alla baseline, con `TestWatcherCoalescesBurst` verde in isolamento se compare; `golangci-lint` con 0 issue; `wiki validate` con `data.ok: true`; `spec show US-025` senza alcun task in `TODO`.
+
+      ## Done
+
+      - [ ] Formattazione, vet, build, test focalizzati, regressione completa e lint eseguiti con esito confrontato esplicitamente con la baseline.
+      - [ ] Nessun file modificato dalla slice introduce diagnostiche di compilatore o linter.
+      - [ ] AC-1, AC-2, AC-3, AC-4 e AC-5 sono coperti dai test di TASK-02, TASK-04, TASK-06 e TASK-08, tutti verdi in questa esecuzione.
+      - [ ] Le quattro pagine Wiki del contratto sono `generated`, prive di `issues`, e `wiki validate --profile bootstrap` è `ok: true`.
+      - [ ] `archetipo spec show US-025` prova che nessun task è rimasto `TODO` **prima** che `archetipo spec review US-025` venga invocato.
+
+      ## Blockers
+
+      None.
+    ref: TASK-13

@@ -1,0 +1,47 @@
+schema: archetipo/spec/v2
+code: US-059
+title: Tenere aperte più conversazioni sullo stesso workspace
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: MEDIUM
+points: 5
+status: DONE
+blocked_by:
+  - US-058
+scope: MVP
+body: |-
+  #### US-059: Tenere aperte più conversazioni sullo stesso workspace
+
+  **Epic:** EP-008 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** US-058
+
+  **User Story**
+  Come utilizzatore di ARchetipo che porta avanti più spec insieme,
+  voglio poter tenere vive più conversazioni sullo stesso workspace,
+  così da poter discutere una spec mentre l'agente sta ancora lavorando su un'altra, senza dover interrompere la prima.
+
+  **Dimostrazione**
+  Partendo da un workspace con una conversazione viva, il revisore ne avvia una seconda e osserva che entrambe risultano attive nell'elenco e che la prima non ha perso né la sua storia né il lavoro che stava svolgendo. Scrive nella seconda, torna alla prima e osserva che ognuna risponde per conto proprio, senza mescolare i messaggi. Chiude esplicitamente la seconda e osserva che risulta chiusa nell'elenco mentre la prima resta viva. Prova infine ad aprirne una oltre il numero consentito e osserva un messaggio che dichiara il limite raggiunto e quali conversazioni chiudere per procedere.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Avviando una nuova conversazione mentre un'altra è viva, entrambe restano attive e la prima conserva la sua storia e il lavoro in corso.
+  - [ ] AC-2 — I messaggi di ogni conversazione viva restano nella propria conversazione e non compaiono nelle altre.
+  - [ ] AC-3 — L'elenco distingue le conversazioni vive da quelle chiuse.
+  - [ ] AC-4 — Chiudendo una conversazione, questa risulta chiusa e le altre conversazioni vive non ne risentono.
+  - [ ] AC-5 — Oltre il numero massimo di conversazioni vive consentito, l'avvio è rifiutato con un messaggio che dichiara il limite e indica quali conversazioni chiudere.
+  - [ ] AC-6 — Chiudendo il workspace, tutte le sue conversazioni vive vengono chiuse e nessun agente resta in esecuzione.
+
+  **Fuori ambito**
+  Isolamento delle directory di lavoro fra conversazioni concorrenti e prevenzione dei conflitti quando due agenti toccano gli stessi file: qui le conversazioni condividono il workspace come lo condividono oggi le run. Non rientrano neppure il passaggio rapido da tastiera fra conversazioni e la ripresa della sessione originale di una conversazione chiusa.
+history:
+  - status: TODO
+    at: "2026-08-22T11:31:53Z"
+  - status: PLANNED
+    at: "2026-08-22T15:17:25Z"
+  - status: IN PROGRESS
+    at: "2026-08-22T15:18:39Z"
+  - status: REVIEW
+    at: "2026-08-22T16:47:37Z"
+  - status: DONE
+    at: "2026-08-22T16:52:04Z"

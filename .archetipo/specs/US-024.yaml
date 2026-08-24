@@ -1,0 +1,48 @@
+schema: archetipo/spec/v2
+code: US-024
+title: Configurare il provider predefinito del workspace
+epic:
+  code: EP-003
+  title: Esecuzione gestita e portabile
+priority: HIGH
+points: 3
+status: DONE
+blocked_by:
+  - US-023
+scope: MVP
+body: |-
+  #### US-024: Configurare il provider predefinito del workspace
+
+  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccata da:** US-023
+
+  **User Story**
+  Come responsabile di un workspace ARchetipo,
+  voglio scegliere e verificare il provider di esecuzione predefinito,
+  così che le azioni del workspace vengano affidate al sistema previsto senza selezioni ripetitive.
+
+  **Dimostrazione**
+  Partendo da un workspace senza provider, il revisore seleziona un provider disponibile, verifica la configurazione e osserva che una nuova azione lo usa automaticamente. Il revisore indica poi una configurazione non valida e osserva un errore esplicito senza perdere l'ultima configurazione valida.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Il workspace conserva l'identificativo e la configurazione non segreta del provider predefinito selezionato.
+  - [ ] AC-2 — Una nuova azione senza override usa il provider predefinito del workspace.
+  - [ ] AC-3 — Una configurazione non valida viene rifiutata con un messaggio che identifica il campo errato.
+  - [ ] AC-4 — Il rifiuto di una nuova configurazione conserva l'ultimo provider valido del workspace.
+
+  **Fuori ambito**
+  Gestione SaaS centralizzata dei segreti, selezione automatica del provider e fallback tra provider.
+
+  ## Contesto Wiki
+  Nessuna Wiki canonica è ancora presente nel repository; la configurazione esistente è stata verificata nel README e in `.archetipo/config.yaml`.
+history:
+  - status: TODO
+    at: "2026-08-14T23:13:08Z"
+  - status: PLANNED
+    at: "2026-08-15T20:32:27Z"
+  - status: IN PROGRESS
+    at: "2026-08-15T20:33:23Z"
+  - status: REVIEW
+    at: "2026-08-15T20:42:51Z"
+  - status: DONE
+    at: "2026-08-15T20:45:32Z"

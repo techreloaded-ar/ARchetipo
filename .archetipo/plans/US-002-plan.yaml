@@ -1,0 +1,314 @@
+schema: archetipo/plan/v2
+spec_code: US-002
+body: "# US-002: Avviare l'esperienza Agent dal comando archetipo — Piano di implementazione\n\n**Generato da:** Team di pianificazione ARchetipo\n**Data:** 2026-07-23\n\n---\n\n## Spec\n\n**Epica:** EP-001 — ARchetipo Agent locale e Run Protocol\n**Priorità:** HIGH | **Punti:** 3\n\n**Storia utente**\nCome sviluppatore nel terminale, voglio aprire l'esperienza interattiva di ARchetipo Agent dal comando archetipo, così da usare modello, strumenti e skill di progetto in un unico contesto riconoscibile.\n\n**Criteri di accettazione**\n- AC-1 — Il comando archetipo apre una sessione interattiva associata al progetto corrente.\n- AC-2 — La sessione rende visibili le skill ARchetipo disponibili nel progetto.\n- AC-3 — Fuori da un progetto valido il comando termina con un errore comprensibile e senza modifiche al filesystem.\n\n---\n\n## Soluzione tecnica\n\nL'entrypoint già distribuito `archetipo-agent` manterrà `--version` come controllo di compatibilità e userà l'invocazione senza argomenti come comando di avvio. Prima di creare qualunque runtime, risalirà dal `cwd` fino a una directory contenente `.archetipo/config.yaml`; quella directory diventerà il root esplicito per loader, strumenti e sessione. Questa interpretazione mantiene il Core `archetipo` indipendente come stabilito da US-001 e considera l'espressione «dal comando archetipo» come accesso tramite il comando del package Agent, senza aggiungere una quattordicesima operazione pubblica al Core.\n\n- Un modulo di contesto progetto puro e sincrono risolve il root, convalida il marker `.archetipo/config.yaml`, enumera soltanto skill ARchetipo valide sotto `.pi/skills/*/SKILL.md` e non scrive sul filesystem.\n- Un adapter isola `@earendil-works/pi-coding-agent` dal codice ARchetipo. La dipendenza sarà fissata esattamente a `0.81.1`, compatibile con Node `>=22.19.0`; l'adapter userà `DefaultResourceLoader` con il root risolto, `SessionManager.inMemory(root)` e `InteractiveMode`, così la persistenza e la selezione del modello restano nelle spec successive.\n- Un presenter iniziale testuale, leggibile senza colore, mostra `ARchetipo Agent`, percorso del progetto e nomi delle skill prima di delegare alla TUI Pi. Il testo è un oracolo diretto e testabile, non dipende dal rendering interno della libreria e segue il riferimento in `docs/mockups/US-002/`.\n- Gli errori di progetto precedono compatibilità e caricamento Pi, hanno exit code stabile e suggeriscono `archetipo init --tool pi`; non includono contenuti di configurazione, variabili d'ambiente o credenziali.\n- Il caricamento dell'SDK è ritardato fino al percorso interattivo valido, così `--version` e gli errori di precondizione restano veloci, deterministici e privi di effetti collaterali.\n\n### Decisioni architetturali\n\nLa scelta supera la soglia ADR perché fissa il confine d'integrazione sostituibile del runtime Agent. Si adotta l'SDK pubblico same-process `@earendil-works/pi-coding-agent@0.81.1` dietro un adapter locale, invece di avviare il binario Pi come subprocess/RPC o implementare una TUI proprietaria. L'SDK offre accesso tipizzato a `DefaultResourceLoader`, `SessionManager` e `InteractiveMode`, consente di fissare il root e ispezionare le skill prima dell'avvio; il costo è un accoppiamento di versione gestito con pin esatto e contract test. Il subprocess/RPC isolerebbe meglio i crash ma renderebbe più fragile branding, risorse e lifecycle; una TUI propria duplicherebbe capacità fuori scope. La decisione sarà registrata nel nuovo concetto `decisions/pi-sdk-adapter` e collegherà l'ADR esistente `decisions/four-layer-product-architecture`.\n\n---\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |\n|---|---|---|\n| `npm run test:agent` | Verde: 8 test superati, 0 falliti | Estendere la suite preservando compatibilità, errori e assenza di mutazioni già provate. |\n| `npm run test:agent-packaging` | Verde: 3 test superati, 0 falliti | Aggiornare le aspettative del tarball per includere SDK e nuovi moduli senza cambiare la dipendenza Core → Agent. |\n| `npm run test:agent-install-smoke` | Verde: Core-only, Core+Agent e post-rimozione verificati | Estendere lo smoke con un progetto Pi e mantenere invariati gli oracoli Core esistenti. |\n| `node --check agent/bin/archetipo-agent.js && node --check agent/src/compatibility.mjs && node --check test/e2e/agent-installation-smoke.mjs` | Verde, nessuna diagnostica | Ogni nuovo modulo `.mjs` deve superare `node --check`. |\n| `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./...` | Verde; `gofmt -l .` senza output | Il Core non deve essere modificato; il gate finale dimostra assenza di regressioni. |\n\n**Prerequisiti ambiente:** Node.js `>=22.19.0`, npm e Go 1.26 sono disponibili. I test di accettazione non richiederanno credenziali provider né rete: fermeranno il percorso al confine TUI tramite dipendenza iniettata, mentre un contract test caricherà l'SDK reale fissato.\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Progetto temporaneo con `.archetipo/config.yaml` e `.pi/skills/archetipo-plan/SKILL.md`, avvio da una sottodirectory | Integrazione CLI con confine TUI iniettato + contract test SDK reale | L'output iniziale mostra il root canonico e il launcher riceve esattamente quel root prima di entrare in modalità interattiva. | TASK-05 |\n| AC-2 | Stessa fixture con due skill ARchetipo e una directory non valida | Integrazione CLI/presenter | L'output elenca per nome soltanto le due skill con `SKILL.md`; il resource loader consegnato all'adapter espone gli stessi nomi. | TASK-05 |\n| AC-3 | Directory temporanea senza marker ARchetipo, contenente file sentinella e variabile segreta | Subprocess CLI | Exit code di precondizione non zero, stderr comprende il comando di inizializzazione, non contiene il segreto e lo snapshot byte-per-byte del filesystem resta invariato. | TASK-02 |\n\nQueste prove osservano direttamente il testo prodotto dal presenter e gli argomenti al confine che avvia la TUI; il test double sostituisce soltanto il loop interattivo esterno, non i componenti responsabili di root, identità, elenco skill o diagnostica.\n\n---\n\n## Strategia di test\n\n- Test unitari table-driven per risalita del root, avvio da root/sottodirectory, marker mancante, ordinamento skill, directory incomplete, symlink/path canonici e filesystem immutato.\n- Contract test dell'adapter contro l'export reale e fissato di Pi, con session manager in memoria e loader sul fixture, senza provider o chiamate LLM.\n- Test di integrazione dell'entrypoint con stdin/stdout/stderr controllati e launcher iniettato, più subprocess reale per l'errore fuori progetto e per `--version`.\n- Smoke di packaging/installazione su prefix isolato per provare che il tarball contiene l'integrazione e che Core-only e rimozione Agent restano invariati.\n- La dimostrazione è filmabile: `archetipo-review` potrà registrare apertura, sommario iniziale e uscita dalla TUI in un progetto fixture; la registrazione non appartiene all'implementazione.\n\n### E2E browser — deroga\n\n**Motivo:** la superficie è una TUI locale e non attraversa browser, server, autenticazione, persistenza o navigazione web. Un framework browser non può provare il comportamento terminale e non verrà introdotto.\n**Livello di evidenza usato:** integrazione CLI/subprocess con output testuale reale, contract test del Pi adapter e demo terminale filmabile.\n\n---\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [overview, decisions/four-layer-product-architecture, engineering/code-map]\n  update_after_acceptance: [overview, decisions/four-layer-product-architecture, engineering/code-map, operations/development]\n  create: [decisions/pi-sdk-adapter]\n```\n\n> \U0001F3A8 I mockup per questa spec sono disponibili in `docs/mockups/US-002/`\n\n_Piano generato tramite ARchetipo Planning — 2026-07-23_"
+tasks:
+  - id: TASK-01
+    title: Risolvere il contesto del progetto Agent
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Produrre un contesto progetto canonico e read-only a partire dal `cwd`, con root ARchetipo e skill Pi installate disponibili alle fasi successive.
+
+      ## Read
+      - `agent/bin/archetipo-agent.js` — parsing attuale e ordine del controllo di compatibilità
+      - `cli/internal/config/config.go` — semantica Core di risalita verso `.archetipo/config.yaml`
+      - `cli/internal/cli/init_project_cmd.go` — mapping `pi` verso `.pi/skills`
+      - `agent/test/cli.test.mjs` — fixture e snapshot filesystem esistenti
+
+      ## Change
+      - `agent/src/project-context.mjs` — nuovo resolver puro per root, marker e manifest delle skill
+      - `agent/test/project-context.test.mjs` — test unitari su directory temporanee
+      - Non leggere il contenuto di `.archetipo/config.yaml`, non cercare skill globali e non creare directory o file
+
+      ## Steps
+      1. Risalire dal `cwd` canonico fino al primo antenato che contiene il file regolare `.archetipo/config.yaml`.
+      2. Restituire un errore di precondizione tipizzato quando il marker manca o non è un file, includendo solo path e suggerimento sicuri.
+      3. Enumerare le directory immediate `.pi/skills/*` che contengono un file regolare `SKILL.md`, derivare il nome dalla directory, ordinare stabilmente e ignorare entry incomplete.
+      4. Restituire un oggetto immutabile `{ projectRoot, skills }` senza modificare il filesystem.
+      5. Coprire root, sottodirectory, marker mancante, ordinamento, entry invalide e snapshot immutato.
+
+      ## Verify
+      - Run: `node --test agent/test/project-context.test.mjs`
+      - Run: `node --check agent/src/project-context.mjs`
+      - Expect: tutti i casi passano, il root è canonico, le skill sono ordinate e gli snapshot prima/dopo sono identici.
+
+      ## Done
+      - [ ] AC-1 — Il contesto associa deterministicamente la futura sessione al progetto valido più vicino.
+      - [ ] AC-2 — Il contesto espone i nomi delle skill ARchetipo installate sotto `.pi/skills`.
+      - [ ] AC-3 — La risoluzione fallita restituisce una precondizione sicura senza alcuna scrittura.
+
+      ## Blockers
+      US-001 deve aver consegnato il package Agent; è in REVIEW con tutti i task DONE.
+    ref: TASK-01
+  - id: TASK-02
+    title: Provare il rifiuto fuori da un progetto valido
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Dimostrare a livello subprocess che l'avvio fuori progetto fallisce in modo guidato, non carica il runtime e non modifica alcun byte del filesystem.
+
+      ## Read
+      - `agent/test/cli.test.mjs` — helper `runAgent`, codici d'uscita e controllo secret leakage
+      - `agent/src/project-context.mjs` — errore di precondizione e ordine delle verifiche
+      - `agent/bin/archetipo-agent.js` — entrypoint reale da invocare
+
+      ## Change
+      - `agent/test/cli.test.mjs` — fixture senza `.archetipo/config.yaml`, snapshot ricorsivo e asserzioni su exit/stderr
+      - Eventuali sole correzioni in `agent/src/project-context.mjs` necessarie a soddisfare il contratto; non aggiungere fallback che inizializzino implicitamente il progetto
+
+      ## Steps
+      1. Creare una directory temporanea non inizializzata con file sentinella e sottodirectory di avvio.
+      2. Eseguire l'entrypoint reale senza argomenti, con una variabile d'ambiente sentinella segreta.
+      3. Verificare exit code di precondizione stabile, stdout vuoto e stderr che nomina `archetipo init --tool pi` senza esporre il segreto.
+      4. Confrontare snapshot completi prima e dopo e verificare che il loader Pi non sia stato importato o avviato.
+      5. Conservare verdi i casi `--version`, incompatibilità Core e argomenti non supportati.
+
+      ## Verify
+      - Run: `npm run test:agent`
+      - Expect: tutti i test passano; il nuovo caso prova messaggio guidato, nessun secret leakage e snapshot byte-per-byte invariato.
+
+      ## Done
+      - [ ] AC-3 — Il processo fuori progetto termina non zero con istruzione di inizializzazione comprensibile e senza mutazioni.
+
+      ## Blockers
+      TASK-01 deve definire l'errore di precondizione e il resolver read-only.
+    ref: TASK-02
+  - id: TASK-03
+    title: Integrare Pi tramite un adapter fissato
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Creare il solo confine sostituibile tra ARchetipo Agent e Pi che prepara loader, runtime e TUI sul root del progetto senza persistenza di sessione.
+
+      ## Read
+      - `agent/package.json` — vincoli Node, dipendenza Core e file distribuiti
+      - `agent/src/compatibility.mjs` — stile dei moduli e gestione degli errori
+      - Documentazione SDK ufficiale di `@earendil-works/pi-coding-agent@0.81.1` — `DefaultResourceLoader`, `createAgentSessionRuntime`, `SessionManager.inMemory` e `InteractiveMode`
+      - `docs/mockups/US-002/` — contenuto iniziale e gerarchia informativa della TUI
+
+      ## Change
+      - `agent/package.json` — aggiungere `@earendil-works/pi-coding-agent` con versione esatta `0.81.1`
+      - `agent/src/pi-adapter.mjs` — factory adapter e launcher interattivo con dipendenze iniettabili nei test
+      - `agent/test/pi-adapter.test.mjs` — contract test con export SDK reale e test di delega con fake controllato
+      - Non persistere sessioni, non scegliere provider/modelli, non introdurre RPC/headless e non importare moduli interni non esportati da Pi
+
+      ## Steps
+      1. Fissare la dipendenza SDK esatta mantenendo la dipendenza unidirezionale Agent → Core.
+      2. Costruire `DefaultResourceLoader` con `cwd` uguale al root risolto e ricaricarlo prima dell'avvio.
+      3. Costruire il runtime tramite API pubbliche e `SessionManager.inMemory(projectRoot)`, evitando qualunque session file.
+      4. Esporre dall'adapter i metadati delle skill caricati dal resource loader per il confronto con il contesto ARchetipo.
+      5. Avviare `InteractiveMode.run()` dietro una factory iniettabile e garantire `dispose`/cleanup su uscita o errore.
+      6. Aggiungere un contract test che importi l'SDK reale fissato e fallisca se gli export pubblici usati scompaiono.
+
+      ## Verify
+      - Run: `node --test agent/test/pi-adapter.test.mjs`
+      - Run: `node --check agent/src/pi-adapter.mjs`
+      - Expect: il contract test carica la versione fissata, il loader usa il root fixture, la sessione è in memoria e il launcher delega una sola volta con cleanup garantito.
+
+      ## Done
+      - [ ] AC-1 — L'adapter avvia il runtime interattivo con `cwd` e strumenti confinati al progetto corrente.
+      - [ ] AC-2 — Le skill caricate dal resource loader sono ispezionabili prima dell'avvio TUI.
+
+      ## Blockers
+      TASK-01 deve fornire il root progetto e l'elenco skill canonici.
+    ref: TASK-03
+  - id: TASK-04
+    title: Collegare il comando alla TUI con identità ARchetipo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Objective
+      Fare in modo che `archetipo-agent` senza argomenti mostri identità, progetto e skill e poi entri nella TUI Pi, preservando il contratto `--version`.
+
+      ## Read
+      - `agent/bin/archetipo-agent.js` — entrypoint e codici esistenti
+      - `agent/src/project-context.mjs` — contesto ed errori tipizzati
+      - `agent/src/pi-adapter.mjs` — launcher interattivo e metadati risorse
+      - `docs/mockups/US-002/` — riferimento visuale approvabile per layout testuale
+      - `agent/README.md` — comandi pubblici correnti
+
+      ## Change
+      - `agent/src/cli.mjs` — orchestrazione testabile con stream e launcher iniettati
+      - `agent/src/startup-presenter.mjs` — sommario testuale deterministico e accessibile
+      - `agent/bin/archetipo-agent.js` — delega asincrona, gestione segnali/errori e codici d'uscita
+      - Non modificare il binario Go `archetipo`, non aggiungere personalizzazione grafica avanzata e non inviare un prompt automatico al modello
+
+      ## Steps
+      1. Separare parsing/esecuzione dall'entrypoint, mantenendo `--version` e rifiuto degli argomenti sconosciuti.
+      2. Per l'invocazione vuota, risolvere prima il progetto, poi la compatibilità Core e infine caricare dinamicamente l'adapter Pi.
+      3. Confrontare le skill del contesto con quelle caricate dal resource loader e segnalare diagnostiche sicure senza nascondere le skill valide.
+      4. Stampare un sommario senza dipendenza dal colore: titolo `ARchetipo Agent`, root progetto e lista skill o messaggio esplicito se vuota.
+      5. Avviare la modalità interattiva senza messaggio iniziale e propagare uscita, SIGINT ed errori con cleanup.
+      6. Aggiornare `agent/README.md` con avvio, prerequisito `archetipo init --tool pi`, comportamento fuori progetto e confini di scope.
+
+      ## Verify
+      - Run: `node --test agent/test/cli.test.mjs agent/test/pi-adapter.test.mjs`
+      - Run: `node --check agent/bin/archetipo-agent.js && node --check agent/src/cli.mjs && node --check agent/src/startup-presenter.mjs`
+      - Expect: l'invocazione vuota valida mostra il sommario e delega una volta; `--version` conserva output ed exit code; errori e segnali effettuano cleanup.
+
+      ## Done
+      - [ ] AC-1 — Il comando senza argomenti entra nella sessione interattiva legata al root mostrato.
+      - [ ] AC-2 — L'utente vede identità ARchetipo e nomi delle skill prima della TUI.
+      - [ ] AC-3 — Il percorso di errore resta precedente al caricamento Pi e non crea file.
+
+      ## Blockers
+      TASK-01 deve fornire il contesto; TASK-03 deve fornire l'adapter Pi.
+    ref: TASK-04
+  - id: TASK-05
+    title: Automatizzare l'accettazione dell'avvio interattivo
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Produrre evidenza ripetibile per root progetto, skill visibili, delega alla TUI ed errore read-only fuori progetto senza richiedere credenziali LLM.
+
+      ## Read
+      - `test/e2e/agent-installation-smoke.mjs` — staging tarball, prefix npm isolato e snapshot progetto
+      - `agent/test/cli.test.mjs` — stream e launcher iniettati
+      - `test/npm/agent-packaging.test.mjs` — contenuto e dipendenze del package staged
+      - `agent/src/cli.mjs` — oracoli pubblici responsabili dell'accettazione
+
+      ## Change
+      - `agent/test/cli.test.mjs` — scenari d'integrazione in-process con launcher TUI sostituito dopo il presenter reale
+      - `test/e2e/agent-interactive-smoke.mjs` — smoke subprocess su package staged e progetto Pi fixture
+      - `test/e2e/agent-installation-smoke.mjs` — preservare gli oracoli Core-only/Core+Agent/rimozione e includere la nuova dipendenza nello staging offline
+      - `test/npm/agent-packaging.test.mjs` — verificare pin SDK e inclusione dei moduli runtime
+      - `package.json` — aggiungere `test:agent-interactive-smoke`
+      - Non contattare provider, non leggere credenziali utente e non modificare il prefix npm globale
+
+      ## Steps
+      1. Creare un progetto temporaneo tramite Core con `archetipo init --tool pi --connector file --yes` e aggiungere una skill fixture valida.
+      2. Avviare da una sottodirectory usando il presenter reale e un launcher iniettato soltanto al confine del loop TUI; catturare root, skill e numero di deleghe.
+      3. Asserire testo `ARchetipo Agent`, root canonico, nome skill e una sola delega con quel root.
+      4. Eseguire il binario reale in una directory non inizializzata, verificando exit, guida e snapshot immutato.
+      5. Aggiornare lo staging offline perché installi anche la dipendenza Pi già risolta dal tarball/cache di test, senza rete durante l'esecuzione.
+      6. Ripetere gli oracoli di US-001 per assicurare che Core-only e rimozione Agent non cambino.
+
+      ## Verify
+      - Run: `npm run test:agent`
+      - Run: `npm run test:agent-packaging`
+      - Run: `npm run test:agent-interactive-smoke`
+      - Run: `npm run test:agent-install-smoke`
+      - Expect: tutti i comandi terminano 0; lo smoke stampa evidenze separate per root, skill, TUI delegata, rifiuto read-only e compatibilità Core.
+
+      ## Done
+      - [ ] AC-1 — Il test osserva il root canonico mostrato e passato al launcher interattivo.
+      - [ ] AC-2 — Il test osserva il nome della skill fixture nel sommario e nel loader.
+      - [ ] AC-3 — Il subprocess fuori progetto mostra la guida e lascia invariato lo snapshot.
+
+      ## Blockers
+      TASK-02 deve stabilizzare il caso negativo; TASK-03 e TASK-04 devono consegnare adapter, presenter e comando.
+    ref: TASK-05
+  - id: TASK-06
+    title: Registrare la decisione Pi e aggiornare la conoscenza Agent
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Rendere verificabile nella Wiki la scelta SDK/adapter e descrivere la TUI locale come capacità corrente soltanto dopo le evidenze automatiche.
+
+      ## Read
+      - `docs/wiki/decisions/four-layer-product-architecture.md` — decisione di layer da estendere con evidenza Agent
+      - `docs/wiki/overview.md` — stato corrente e attori
+      - `docs/wiki/engineering/code-map.md` — boundary `agent/`
+      - `docs/wiki/operations/development.md` — toolchain, test e packaging Agent
+      - `docs/wiki/index.md` e `docs/wiki/log.md` — catalogo e cronologia
+      - `agent/package.json`, `agent/src/pi-adapter.mjs`, `test/e2e/agent-interactive-smoke.mjs` — evidenze implementate
+
+      ## Change
+      - `docs/wiki/decisions/pi-sdk-adapter.md` — nuovo ADR generated con contesto, decisione, alternative, conseguenze, verifica e marker richiesti
+      - `docs/wiki/decisions/four-layer-product-architecture.md` — collegare la nuova evidenza senza cambiare decision_status
+      - `docs/wiki/overview.md` — promuovere bootstrap interattivo, identità e skill a stato corrente
+      - `docs/wiki/engineering/code-map.md` — mappare resolver, adapter, presenter e test
+      - `docs/wiki/operations/development.md` — pin SDK, comandi di test e prerequisiti
+      - `docs/wiki/index.md` e `docs/wiki/log.md` — rigenerare catalogo e registrare l'impatto secondo il contratto Wiki
+      - Non dichiarare ancora persistenza, scelta provider/modello, Run Protocol, Runner o Control
+
+      ## Steps
+      1. Creare l'ADR `decisions/pi-sdk-adapter` con SDK same-process scelto, subprocess/RPC e TUI propria come alternative, tradeoff e strategia di contract test.
+      2. Citare fonti di repository puntuali per pin, adapter e smoke; mantenere la pagina in stato `generated` per la review umana.
+      3. Aggiornare le pagine esistenti distinguendo chiaramente la nuova TUI in-memory dalle capability delle spec successive.
+      4. Rigenerare indice e relazioni con i comandi Wiki previsti dal progetto.
+      5. Validare struttura, fonti e copertura prima della consegna.
+
+      ## Verify
+      - Run: `archetipo wiki catalog`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run: `rg -n "pi-sdk-adapter|0\.81\.1|InteractiveMode|agent-interactive-smoke" docs/wiki agent/package.json`
+      - Expect: la validazione restituisce `kind=validation_result` con `data.ok=true`, l'indice contiene il nuovo ADR e ogni affermazione di stato ha evidenza implementata.
+
+      ## Done
+      - [ ] AC-1 — La Wiki collega il root di progetto e la TUI all'adapter implementato.
+      - [ ] AC-2 — La Wiki documenta il caricamento e la visibilità delle skill.
+      - [ ] Il nuovo ADR contiene contesto, scelta, alternative, conseguenze e verifica con fonti di repository.
+
+      ## Blockers
+      TASK-05 deve fornire le evidenze automatiche da citare.
+    ref: TASK-06
+  - id: TASK-07
+    title: Eseguire il gate finale della sessione interattiva
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Confermare con i controlli focalizzati e di regressione che US-002 soddisfa tutti i criteri senza degradare Core, packaging, Wiki o i file modificati.
+
+      ## Read
+      - `AGENTS.md` — controlli CI obbligatori
+      - `package.json` — suite Agent, packaging e smoke
+      - `.github/workflows/ci.yml` e `.github/workflows/release.yml` — gate multipiattaforma e release
+      - `.archetipo/specs/US-002.yaml` — criteri e stato dei task
+      - Tutti i file modificati dai TASK-01..TASK-06 — diagnostica e scope finale
+
+      ## Change
+      - Solo correzioni strettamente necessarie nei file modificati dai TASK-01..TASK-06 quando un controllo fallisce; non ampliare a persistenza, provider, Run o Core pubblico
+      - `docs/test-results/` — riepilogo di comandi, esiti e ambiente se previsto dal flusso di implementazione
+
+      ## Steps
+      1. Eseguire unit/integration Agent, contract Pi, packaging e i due smoke isolati.
+      2. Eseguire `node --check` su tutti i nuovi o modificati `.mjs` e correggere ogni diagnostica introdotta.
+      3. Eseguire i controlli Go completi prescritti dal repository per provare che il Core invariato non regredisce.
+      4. Eseguire validazione Wiki e verificare che mockup e documentazione siano presenti e coerenti con lo scope consegnato.
+      5. Marcare `TASK-07` come `DONE` soltanto dopo tutti gli esiti verdi.
+      6. Da `/Users/stefanoleli/Project/ARchetipo`, eseguire `archetipo spec show US-002` e confermare che nessun task sia `TODO`; soltanto allora è consentito eseguire `archetipo spec review US-002`.
+
+      ## Verify
+      - Run: `npm run test:agent && npm run test:agent-packaging && npm run test:agent-interactive-smoke && npm run test:agent-install-smoke`
+      - Run: `find agent test/e2e test/npm -name '*.mjs' -type f -exec node --check {} \;`
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run after marking this gate DONE: `archetipo spec show US-002`
+      - Expect: tutti i comandi terminano 0, `gofmt -l .` non produce output, golangci-lint riporta 0 issue, la Wiki ha `data.ok=true`, gli smoke provano AC-1..AC-3 e lo spec ricaricato non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — Suite e smoke confermano sessione interattiva associata al root corrente.
+      - [ ] AC-2 — Suite e smoke confermano skill visibili nel sommario e nel loader.
+      - [ ] AC-3 — Suite e smoke confermano errore guidato senza mutazioni fuori progetto.
+      - [ ] Il gate è marcato `DONE` e `archetipo spec show US-002` conferma tutti i task `DONE` prima della richiesta di review.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04, TASK-05 e TASK-06 devono essere completati.
+    ref: TASK-07

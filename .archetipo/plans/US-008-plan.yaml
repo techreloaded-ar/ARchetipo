@@ -1,0 +1,367 @@
+schema: archetipo/plan/v2
+spec_code: US-008
+body: "# US-008: Avviare Control e amministrare l'organizzazione — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-24\n\n---\n\n## Soluzione tecnica\n\nRealizzare la prima vertical slice di ARchetipo Control come deployable self-hosted autonomo sotto `control/`, mantenuto separato da Core e Agent a livello di package, dipendenze, database e container. La slice usa un modular monolith TypeScript/Node, API Fastify, UI React e PostgreSQL 17 con migrazioni Kysely: è abbastanza piccola per US-008 ma stabilisce confini riusabili per Identity & Policy e Audit senza introdurre multi-tenancy o ruoli configurabili.\n\n- Il bootstrap è un'operazione one-time autenticata: dopo il login OIDC, un segreto di bootstrap configurato lato server consente di creare in una sola transazione la Organization singleton e la membership `admin`. Un lock transazionale e vincoli univoci fanno sì che richieste concorrenti producano una sola organizzazione; dopo il successo il bootstrap risponde come già completato e non crea altri tenant.\n- Le identità arrivano da un provider OIDC configurabile e diventano sessioni server-side con cookie `HttpOnly`, `Secure` in produzione e `SameSite=Lax`. L'invito registra email normalizzata, ruolo fisso `admin|collaborator` e stato `invited`; il primo login OIDC con email verificata corrispondente attiva la membership. Password locali, SCIM, SSO multi-provider e ruoli personalizzati restano fuori ambito.\n- Ogni endpoint amministrativo attraversa un'unica policy deterministica `requireRole('admin')`. Il rifiuto restituisce `403` senza mutare Organization o membership e aggiunge un evento audit logico append-only con organization, actor identity, action, target, outcome `denied`, reason, request correlation e timestamp; i collaboratori possono consultare l'audit in sola lettura per osservare il proprio tentativo negato.\n- La UI espone il percorso iniziale `/setup`, la gestione `/settings/members` e `/audit`, seguendo i mockup `docs/mockups/US-008/`, con stati espliciti oltre al colore, focus visibile, label e annunci accessibili. Le API restano il confine autorevole: nessuna regola di autorizzazione vive soltanto nel client.\n- L'avvio self-hosted include immagine OCI multi-stage, compose con PostgreSQL 17, migrazioni idempotenti, health/readiness e documentazione delle variabili OIDC/bootstrap. Il processo rifiuta configurazioni insicure o incomplete in produzione e non abilita adapter di test fuori da `NODE_ENV=test`.\n\n### Decisioni architetturali\n\nLa scelta supera la soglia ADR perché fissa un nuovo deployment boundary, il database autorevole di Organization/membership/audit, il modello di autenticazione e una policy cross-cutting. Creare `decisions/control-foundation`: scegliere TypeScript/Node + Fastify + React + PostgreSQL/Kysely in un package Control autonomo e containerizzato, rispetto a (a) estendere il server web del Core Go, che accoppierebbe lifecycle e dati incompatibili, (b) servizi separati Identity/Audit, prematuri per l'MVP, e (c) persistenza file/SQLite, inadatta ai vincoli transazionali e al target PostgreSQL dichiarato. Il subtree `control/` è isolato e trasferibile; non importa moduli privati di Core/Agent e conserva il deployment separato deciso da `decisions/four-layer-product-architecture`.\n\nL'ADR registra inoltre OIDC più sessione server-side come confine utente, ruoli minimi fissi, bootstrap singleton transazionale e audit append-only logico. Un modello multi-organization, policy granulari, retention audit e separazione in microservizi richiedono decisioni future. Aggiornare `decisions/four-layer-product-architecture` e `architecture/context-map` con evidenza reale del primo modulo Control; creare `domains/identity-and-policy` dopo che codice e test ne dimostrano il confine.\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |\n|---|---|---|\n| `test ! -d control` | PASS: nessun package o schema Control esiste | TASK-01 deve creare esplicitamente package, toolchain e confini; nessun test preesistente può essere usato come proxy per AC-1..AC-4. |\n| `npm test` | PASS: tutti i package Go verdi | La slice Control deve restare additiva e il gate finale deve preservare la suite Core. |\n| `npm run test:agent` | PASS: 139 test, 17 suite, 0 failure | Control non deve importare né degradare il runtime Agent esistente. |\n| `npm run test:agent-protocol-smoke` | PASS: entrambe le modalità, quattro comandi e terminali verificati | L'introduzione di Control non modifica il Run Protocol o i suoi smoke. |\n| `find agent test/e2e -name '*.mjs' -type f -exec node --check {} \\;` | PASS: nessuna diagnostica di parsing | I nuovi script E2E devono aggiungersi senza rompere gli smoke Node correnti. |\n\nPrerequisiti ambiente: Node.js >=22.19 (presente: v25.8.1), npm (presente: 11.17.0), Go come `cli/go.mod`, Docker con daemon disponibile (presente: 29.5.2) e accesso al registry per PostgreSQL 17/immagini Playwright. PostgreSQL locale e `golangci-lint` non sono installati: i test Control usano container effimeri; prima del gate Go installare il lint con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` se assente.\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Database PostgreSQL 17 vuoto e due richieste bootstrap concorrenti con la stessa identità admin | Integration DB/API + browser E2E | Una sola richiesta crea l'Organization; la seconda vede setup completato; query/API e UI mostrano esattamente una Organization con un admin | TASK-02, TASK-03, TASK-05, TASK-06 |\n| AC-2 | Organization inizializzata, sessione OIDC admin e identità collaboratore con email verificata | Integration API + browser E2E | L'admin invita l'email con ruolo `collaborator`; dopo login del membro la tabella mostra admin e collaborator con badge testuali distinti e membership attiva | TASK-02, TASK-03, TASK-04, TASK-06 |\n| AC-3 | Sessione attiva del collaborator e Organization invariata | Integration authorization + browser E2E | `PATCH /api/organization` restituisce `403`; nome/versione dell'Organization e membership rimangono byte/semanticamente invariati | TASK-03, TASK-04, TASK-06 |\n| AC-4 | Lo stesso tentativo negato porta un request id noto | Integration audit + browser E2E | `/audit` mostra una riga con actor del collaborator, action `organization.update`, outcome `denied` e correlation id; nessun payload sensibile è presente | TASK-02, TASK-03, TASK-04, TASK-06 |\n\nI test OIDC usano un issuer locale deterministico ma attraversano callback, creazione sessione e middleware reali; il double non sostituisce il confine di autorizzazione o audit responsabile degli esiti.\n\n## Strategia di test\n\n- Unit test table-driven per ruoli chiusi, normalizzazione email, mapping claim OIDC, policy e redazione audit.\n- Integration test PostgreSQL reale in container per migrazioni, bootstrap concorrente, vincoli singleton, invito/attivazione, transazioni e audit append-only; nessun database in-memory sostituisce le semantiche richieste.\n- Contract/API test Fastify con cookie firmati e issuer OIDC locale per `201/409/403`, invarianti dopo rifiuto e campi audit osservabili.\n- Component integration React per routing, form, badge ruolo, errori accessibili e tabella audit; le regole server non vengono mockate negli scenari di accettazione browser.\n- Browser E2E Playwright obbligatorio: la storia attraversa login OIDC, route, PostgreSQL, autorizzazione, navigazione tra schermate e audit. L'infrastruttura viene predisposta idempotentemente con `archetipo e2e ensure` e un harness che avvia PostgreSQL, issuer, API e web e ripulisce soltanto le risorse nominate dal test.\n- Gate finale con build/typecheck/lint Control, test unit/integration/browser, regressioni Agent e tutti i controlli Go prescritti da CI.\n\n### E2E browser — Simulazione utente\n\n**Framework:** Playwright, inizializzato con `archetipo e2e ensure` perché assente nel baseline.\n**Video demo:** filmabile; `archetipo-review` registra in seguito il percorso bootstrap → invito → rifiuto → audit.\n\n| Scenario | Flusso utente |\n|---|---|\n| Bootstrap e membership | Su PostgreSQL vuoto, login OIDC come admin, inserimento segreto e nome Organization, verifica del singleton, invito del collaborator, login del membro e verifica dei due ruoli distinti. |\n| Least privilege e audit | Come collaborator, tentativo di modifica amministrativa, osservazione del rifiuto accessibile, apertura Audit e verifica di actor, action, outcome e correlazione senza cambio dei dati. |\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [overview, decisions/four-layer-product-architecture, architecture/context-map]\n  update_after_acceptance: [overview, decisions/four-layer-product-architecture, architecture/context-map, engineering/code-map, operations/development]\n  create: [decisions/control-foundation, domains/identity-and-policy]\n```\n\n> \U0001F3A8 Mockup per questa specifica disponibili in `docs/mockups/US-008/`.\n\n_Piano generato tramite ARchetipo Planning — 2026-07-24_"
+tasks:
+  - id: TASK-01
+    title: Fondare il deployable Control e la toolchain verificabile
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Creare un package Control autonomo, compilabile e containerizzabile, con confini modulari e script deterministici prima di aggiungere comportamento di dominio.
+
+      ## Read
+      - `docs/PRD.md` — stack Control, proprietà dei dati, deployment e NFR
+      - `docs/wiki/decisions/four-layer-product-architecture.md` — separazione Core/Agent/Control
+      - `package.json` e `.github/workflows/ci.yml` — convenzioni script e gate correnti
+      - `docs/mockups/US-008/` — route e componenti attesi dalla vertical slice
+
+      ## Change
+      - `control/package.json`, `control/package-lock.json` — package privato Node >=22.19 con dipendenze Fastify, React, PostgreSQL/Kysely, OIDC e script build/test/typecheck/lint
+      - `control/tsconfig*.json`, `control/eslint.config.js`, `control/vite.config.ts` — toolchain TypeScript stretta per server e web
+      - `control/src/server/app.ts`, `control/src/server/config.ts`, `control/src/web/main.tsx` — composition root minime e health route
+      - `package.json` — soli alias `build:control`, `test:control`, `lint:control`, `typecheck:control` via `npm --prefix control`
+      - Non importare `cli/internal`, moduli privati Agent o configurazioni `.archetipo`; non creare ancora API di dominio fittizie
+
+      ## Steps
+      1. Inizializzare `control/` come package privato indipendente con lockfile proprio e versioni fissate.
+      2. Configurare TypeScript strict, lint, Node test runner/Vitest per React e build Vite più server.
+      3. Definire composition root Fastify e React separati per moduli, con configurazione validata e `GET /health/live` privo di dati sensibili.
+      4. Aggiungere alias root senza trasformare il repository in workspace npm e senza cambiare gli script Core/Agent esistenti.
+      5. Aggiungere smoke di build/config che fallisce in produzione quando secret, database URL o OIDC sono assenti.
+
+      ## Verify
+      - Run: `npm install --prefix control && npm run typecheck:control && npm run lint:control && npm run build:control`
+      - Run: `npm test && npm run test:agent`
+      - Expect: Control compila senza diagnostiche, la configurazione production fail-closed è testata e Core/Agent restano verdi rispetto al baseline.
+
+      ## Done
+      - [ ] AC-1 — Esiste un deployable Control autonomo capace di ospitare il bootstrap singleton senza dipendere da Core o Agent.
+      - [ ] I confini `identity`, `audit`, `http` e `web` sono predisposti senza logica duplicata o placeholder che dichiarino gli AC completati.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Persistire Organization singleton, membership e audit append-only
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Rendere PostgreSQL l'autorità transazionale per una sola Organization, membership con ruoli minimi e audit immutabile.
+
+      ## Read
+      - `control/src/server/app.ts` e `control/src/server/config.ts` — composition root creata in TASK-01
+      - `docs/PRD.md` — proprietà Control per Organization/membership/ruoli e NFR audit
+      - `docs/wiki/architecture/context-map.md` — confini Identity & Policy e Product candidati
+
+      ## Change
+      - `control/migrations/001_identity_policy.sql` — tabelle `organizations`, `identities`, `memberships`, `bootstrap_state`, `audit_events`, enum/check e indici
+      - `control/src/modules/identity/domain.ts`, `repository.ts`, `service.ts` — ruoli chiusi, bootstrap transazionale, invito e attivazione
+      - `control/src/modules/audit/repository.ts`, `service.ts` — append/list redatti e nessuna API update/delete
+      - `control/test/integration/identity-policy.test.ts` e fixture PostgreSQL — concorrenza, vincoli, transazioni, activation e append-only
+      - Non introdurre organization id scelto dal client, ruoli custom, retention o multi-tenancy
+
+      ## Steps
+      1. Definire chiavi UUID server-side, timestamp UTC, email normalizzata e ruolo `admin|collaborator`; rendere impossibile una seconda Organization con vincolo singleton esplicito.
+      2. Eseguire il bootstrap sotto transaction/advisory lock: creare Organization, identity, admin membership e stato consumed insieme oppure nessuno.
+      3. Implementare invito idempotente per email/ruolo e attivazione solo con claim OIDC `email_verified=true` corrispondente.
+      4. Persistire audit con organization, actor, action, target, outcome, reason e correlation; esporre soltanto append e query ordinata.
+      5. Provare due bootstrap concorrenti, rollback su failure, duplicati, ruoli non ammessi e impossibilità applicativa di modificare/cancellare audit.
+
+      ## Verify
+      - Run: `npm --prefix control run db:migrate:test && npm --prefix control run test:integration -- identity-policy`
+      - Run: `npm run typecheck:control && npm run lint:control`
+      - Expect: su PostgreSQL 17 reale una sola transazione bootstrap vince, i ruoli ammessi sono due, invito/attivazione sono deterministici e l'audit conserva eventi append-only redatti.
+
+      ## Done
+      - [ ] AC-1 — Due bootstrap concorrenti lasciano esattamente una Organization e una membership admin.
+      - [ ] AC-2 — Un invito admin crea o aggiorna idempotentemente una membership con uno dei ruoli disponibili e il login verificato la attiva.
+      - [ ] AC-4 — Gli eventi audit persistono actor e action con outcome/correlation senza secret o payload OIDC.
+
+      ## Blockers
+      TASK-01 fornisce package, configurazione e composition root.
+    ref: TASK-02
+  - id: TASK-03
+    title: Applicare autenticazione OIDC e autorizzazione amministrativa
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Esporre bootstrap, membership e azioni amministrative tramite sessioni OIDC e una policy server-side che nega e audita ogni operazione non autorizzata.
+
+      ## Read
+      - `control/src/modules/identity/domain.ts`, `repository.ts`, `service.ts` — invarianti e transazioni di TASK-02
+      - `control/src/modules/audit/service.ts` — contratto append/list
+      - `agent/src/run-protocol.mjs` — pattern di errori pubblici redatti, senza riusarne i tipi privati
+      - `docs/PRD.md` — OIDC, least privilege, audit e redazione
+
+      ## Change
+      - `control/src/modules/identity/oidc.ts`, `session.ts`, `policy.ts` — discovery/callback, sessioni server-side e `requireRole`
+      - `control/src/modules/identity/http.ts` — route login/callback/logout, bootstrap one-time, members list/invite e activate-on-login
+      - `control/src/modules/organization/http.ts` — lettura e azione admin `PATCH /api/organization`
+      - `control/src/modules/audit/http.ts` — consultazione read-only paginata
+      - `control/src/server/app.ts` — registrazione plugin, request correlation ed error handler accessibile/redatto
+      - `control/test/integration/http-authz.test.ts` — issuer OIDC locale, cookie, 201/409/403, immutabilità e audit
+      - Non accettare identity/role da header client, non abilitare test login in production e non affidare policy alla UI
+
+      ## Steps
+      1. Validare issuer/client/redirect e claim `sub`, `email`, `email_verified`; creare sessioni opache server-side con rotazione login/logout e cookie sicuri.
+      2. Richiedere login OIDC e segreto server-configured per il solo bootstrap; dopo consumption rispondere in modo stabile senza confronti di secret osservabili.
+      3. Esporre invito/lista membri agli admin; associare il primo login del destinatario all'invito verificato senza consentire cambio ruolo self-service.
+      4. Centralizzare `requireRole('admin')` e applicarlo alla modifica Organization; su deny aprire una transazione audit, restituire `403` strutturato e non chiamare il mutation handler.
+      5. Consentire audit read-only ai membri attivi e provare end-to-end HTTP che il collaborator vede il proprio evento negato con actor/action/correlation.
+
+      ## Verify
+      - Run: `npm --prefix control run test:integration -- http-authz`
+      - Run: `npm run typecheck:control && npm run lint:control`
+      - Expect: callback e sessione reali distinguono admin/collaborator; la modifica collaborator ritorna 403, i dati restano invariati e l'audit contiene l'evento denied correlato.
+
+      ## Done
+      - [ ] AC-1 — Solo il bootstrap autenticato e non consumato crea l'Organization iniziale; ripetizioni non ne creano altre.
+      - [ ] AC-2 — Solo l'admin invita e assegna `admin` o `collaborator`; il destinatario verificato diventa membro attivo.
+      - [ ] AC-3 — Il collaborator riceve `403` prima di qualsiasi mutazione amministrativa.
+      - [ ] AC-4 — Lo stesso deny genera un evento consultabile con actor e `organization.update`.
+
+      ## Blockers
+      TASK-02 fornisce repository transazionali e audit append-only.
+    ref: TASK-03
+  - id: TASK-04
+    title: Costruire il percorso web accessibile di setup, membri e audit
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Permettere ad admin e collaborator di completare e osservare la storia US-008 da browser con stati, ruoli, errori e audit comprensibili.
+
+      ## Read
+      - `docs/mockups/US-008/index.html`, `docs/mockups/US-008/app.js`, `docs/mockups/US-008/shared.css` — gerarchia, flussi e linguaggio approvati dal mockup
+      - `control/src/modules/identity/http.ts`, `control/src/modules/organization/http.ts`, `control/src/modules/audit/http.ts` — contratti API reali
+      - `docs/PRD.md` — WCAG 2.2 AA, terminologia e viste per ruolo
+
+      ## Change
+      - `control/src/web/router.tsx`, `layouts/control-shell.tsx` — shell, navigazione tastiera e route guards
+      - `control/src/web/pages/setup.tsx`, `members.tsx`, `audit.tsx` — bootstrap, invito/ruoli e tabella audit
+      - `control/src/web/api/client.ts`, `control/src/web/styles.css` — client same-origin, error mapping e design responsive
+      - `control/test/web/setup-members-audit.test.tsx` — component integration per focus, label, status e rendering dei contratti
+      - Non copiare JavaScript runtime del mockup in produzione, non nascondere autorizzazione nel client e non aggiungere dashboard/Project/Runner fuori ambito
+
+      ## Steps
+      1. Tradurre il mockup in componenti React semantici mantenendo gerarchia, contenuti e token visivi; supportare viewport desktop e mobile senza perdere azioni.
+      2. Mostrare setup soltanto quando l'API dichiara installazione vuota; dopo bootstrap navigare alla lista membri con Organization e ruolo admin espliciti.
+      3. Implementare form invito con email, select dei due ruoli e feedback `aria-live`; rendere la tabella membri leggibile senza dipendere dal colore.
+      4. Esporre una modifica Organization come azione amministrativa; per collaborator mostrare il 403 con testo e link diretto all'audit, senza ottimismo che alteri lo stato visualizzato.
+      5. Rendere audit filtrabile/ordinato e mostrare actor, action, outcome, time e correlation; testare tab order, focus dopo submit, label e messaggi.
+
+      ## Verify
+      - Run: `npm --prefix control run test:web -- setup-members-audit`
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control`
+      - Expect: i component test osservano setup singleton, due badge ruolo testuali, deny accessibile e riga audit completa; build e file modificati non hanno diagnostiche.
+
+      ## Done
+      - [ ] AC-1 — Dopo il setup la UI mostra una sola Organization amministrabile e non ripropone la creazione.
+      - [ ] AC-2 — La pagina membri mostra admin e collaborator con ruoli distinti e stato invito/attivo.
+      - [ ] AC-3 — Il collaborator vede il rifiuto dell'azione admin senza stato ottimistico falso.
+      - [ ] AC-4 — La vista audit rende visibili actor e action del tentativo negato oltre all'outcome.
+
+      ## Blockers
+      TASK-03 stabilisce API, sessione e codici di errore autorevoli.
+    ref: TASK-04
+  - id: TASK-05
+    title: Rendere Control avviabile e migrabile in self-hosting
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Consegnare un avvio self-hosted riproducibile da installazione vuota con PostgreSQL 17, migrazioni, readiness e configurazione sicura documentata.
+
+      ## Read
+      - `control/src/server/config.ts` e `control/package.json` — runtime e script di TASK-01
+      - `control/migrations/001_identity_policy.sql` — schema autorevole
+      - `.github/workflows/ci.yml` e `.github/workflows/release.yml` — baseline build e packaging del repository
+      - `docs/PRD.md` — target container OCI, backup/restore e servizi esterni disabilitabili
+
+      ## Change
+      - `control/Dockerfile`, `control/compose.yaml`, `control/.dockerignore` — immagini non-root, API/web e PostgreSQL 17 con healthcheck
+      - `control/src/server/migrate.ts`, `control/src/server/readiness.ts` — migrazioni bounded e readiness database/schema
+      - `control/README.md`, `control/.env.example` — bootstrap, OIDC, secret generation, startup, backup/restore e limiti MVP
+      - `control/test/self-host-smoke.mts` — avvio su porte dinamiche, database vuoto, health/readiness e restart
+      - `package.json` — script `test:control:self-host` senza cambiare il release train Core/Agent
+      - Non includere secret di esempio funzionanti, database embedded, auto-login o dipendenze da servizi SaaS non essenziali
+
+      ## Steps
+      1. Costruire asset web e server in un'immagine multi-stage con utente non-root e filesystem applicativo read-only dove possibile.
+      2. Aggiungere compose con volume nominato, health PostgreSQL, migrazione one-shot e servizio Control dipendente dalla readiness.
+      3. Rendere le migrazioni idempotenti ma non silenziare versioni incompatibili; separare live da ready.
+      4. Documentare issuer OIDC, redirect, bootstrap secret, rotazione session secret, backup/restore e disabilitazione di telemetry/servizi esterni.
+      5. Eseguire lo smoke con nomi container/volume univoci e cleanup mirato, verificando restart e persistenza della singola Organization.
+
+      ## Verify
+      - Run: `npm run build:control && npm run test:control:self-host`
+      - Run: `docker compose -f control/compose.yaml config --quiet`
+      - Expect: da volume vuoto Control diventa ready dopo migrazione, conserva la Organization dopo restart, gira non-root e la configurazione compose è valida senza secret committati.
+
+      ## Done
+      - [ ] AC-1 — Un amministratore può partire da un'installazione self-hosted vuota e il restart non duplica né perde l'Organization.
+      - [ ] La documentazione permette setup e rollback operativo senza richiedere Agent, Runner o un servizio multi-tenant.
+
+      ## Blockers
+      TASK-02 definisce lo schema; TASK-03 e TASK-04 forniscono API e asset da distribuire.
+    ref: TASK-05
+  - id: TASK-06
+    title: Dimostrare bootstrap, ruoli, rifiuto e audit nel browser
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Produrre evidenza browser completa e ripetibile per AC-1..AC-4 attraversando OIDC, API, PostgreSQL e UI reali.
+
+      ## Read
+      - `control/test/self-host-smoke.mts` — lifecycle container e cleanup nominato
+      - `control/src/web/pages/setup.tsx`, `members.tsx`, `audit.tsx` — selettori accessibili e flusso UI
+      - `control/src/modules/identity/oidc.ts` e `policy.ts` — issuer e confine autorizzativo reali
+      - `cli/internal/e2e/e2e.go` — contratto idempotente di `archetipo e2e ensure`
+
+      ## Change
+      - `playwright.config.ts` e dipendenza root Playwright tramite `archetipo e2e ensure` — infrastruttura browser standard, senza installer interattivi
+      - `test/e2e/control-fixture.mjs` — PostgreSQL 17, issuer OIDC locale, Control su porte dinamiche, reset e cleanup mirato
+      - `test/e2e/control-organization.spec.ts` — due scenari acceptance con admin e collaborator
+      - `package.json` e `package-lock.json` — script `test:control:e2e`
+      - Non sostituire policy/audit con mock, non interrogare solo implementazioni interne quando l'oracolo è UI/API e non lasciare container o volume anonimi
+
+      ## Steps
+      1. Eseguire `archetipo e2e ensure` dalla root e conservare la configurazione minima generata, adattando solo webServer/timeout necessari.
+      2. Avviare un issuer OIDC deterministico che emette claim verificati per due utenti, PostgreSQL vuoto e build Control production-like.
+      3. Come admin, completare setup; inviare anche una seconda richiesta concorrente/ritentata e verificare dalla UI/API una sola Organization.
+      4. Invitare il collaborator, completarne il login OIDC e verificare nella pagina membri i due attori con ruoli testuali distinti.
+      5. Come collaborator, tentare `organization.update`, aspettarsi 403 visibile e dati invariati; aprire Audit e asserire actor, action, denied e correlation.
+      6. Allegare trace/screenshot soltanto su failure; rendere fixture idempotente e filmabile per la review successiva.
+
+      ## Verify
+      - Run: `npm run test:control:e2e`
+      - Run: `npm run test:control && npm run test:control:self-host`
+      - Expect: i due flussi Playwright passano contro browser, PostgreSQL e HTTP reali; AC-1..AC-4 hanno oracle visibile e il cleanup lascia zero risorse test nominate.
+
+      ## Done
+      - [ ] AC-1 — Il browser osserva una sola Organization dopo bootstrap e retry concorrente.
+      - [ ] AC-2 — Admin e collaborator compaiono attivi con ruoli distinti dopo invito e login.
+      - [ ] AC-3 — Il collaborator osserva il 403 e la Organization resta invariata.
+      - [ ] AC-4 — Lo stesso collaborator osserva in Audit actor e action del deny correlato.
+
+      ## Blockers
+      TASK-03 fornisce il confine authz reale; TASK-04 la UI; TASK-05 l'avvio self-hosted.
+    ref: TASK-06
+  - id: TASK-07
+    title: Registrare fondazione Control e dominio Identity & Policy nella Wiki
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Aggiornare la conoscenza living con decisioni, confini e prove reali della prima vertical slice Control senza promuovere capacità non implementate.
+
+      ## Read
+      - `docs/wiki/decisions/four-layer-product-architecture.md` — decisione esistente da estendere
+      - `docs/wiki/architecture/context-map.md`, `docs/wiki/engineering/code-map.md`, `docs/wiki/operations/development.md`, `docs/wiki/overview.md` — pagine dichiarate nell'impatto
+      - `control/` e `test/e2e/control-organization.spec.ts` — evidenza repository consegnata dai task precedenti
+      - `.agents/skills/archetipo-wiki/SKILL.md` — contratto pagine, sezioni e validazione
+
+      ## Change
+      - `docs/wiki/decisions/control-foundation.md` — ADR con contesto, decisione, alternative, conseguenze e verifica
+      - `docs/wiki/domains/identity-and-policy.md` — Organization, identity, membership, ruoli, policy e audit osservati
+      - `docs/wiki/decisions/four-layer-product-architecture.md`, `docs/wiki/architecture/context-map.md`, `docs/wiki/engineering/code-map.md`, `docs/wiki/operations/development.md`, `docs/wiki/overview.md` — sole evidenze e relazioni effettivamente cambiate
+      - `docs/wiki/index.md`, `docs/wiki/log.md` — catalogo e voce di generazione secondo runtime Wiki
+      - Non marcare pagine `reviewed`, non descrivere Runner/Project/multi-tenant come implementati e non duplicare il PRD
+
+      ## Steps
+      1. Scrivere l'ADR `decisions/control-foundation` con stack, deployment boundary, ownership PostgreSQL, OIDC/session, ruoli minimi, alternative e tradeoff.
+      2. Creare `domains/identity-and-policy` con invarianti, comandi/query, eventi audit e fonti a codice/test.
+      3. Aggiornare architettura, code map, operations e overview dal futuro dichiarato allo stato osservato limitatamente a US-008.
+      4. Collegare decisione e dominio, rigenerare catalogo e lasciare tutte le pagine modificate in stato `generated` per il gate umano.
+      5. Validare struttura, link, marker e copertura senza approvare automaticamente la conoscenza.
+
+      ## Verify
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run: `archetipo wiki search control`
+      - Expect: validazione `data.ok=true`; ADR e dominio sono ricercabili, citano codice/test reali e nessuna pagina nuova o modificata è `reviewed`.
+
+      ## Done
+      - [ ] AC-1 — La Wiki documenta il vincolo singleton e il bootstrap self-hosted con evidenza testata.
+      - [ ] AC-2 — Membership e ruoli minimi hanno ownership e invarianti espliciti.
+      - [ ] AC-3 — Il confine di autorizzazione server-side è localizzato e collegato ai test.
+      - [ ] AC-4 — L'audit denied append-only è descritto con actor/action/correlation e fonti repository.
+
+      ## Blockers
+      TASK-02..TASK-06 devono fornire evidenza stabile; la Wiki non anticipa codice non accettabile.
+    ref: TASK-07
+  - id: TASK-08
+    title: Eseguire il gate completo e provare che ogni task è DONE
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Chiudere US-008 soltanto dopo build, lint, test, browser E2E, regressioni repository e verifica deterministica dello stato di tutti i task.
+
+      ## Read
+      - `AGENTS.md` — controlli CI obbligatori e prerequisiti
+      - `package.json` e `control/package.json` — suite e build finali esatte
+      - `playwright.config.ts` e `test/e2e/control-organization.spec.ts` — evidenza AC-1..AC-4
+      - `.archetipo/plans/US-008-plan.yaml` — dipendenze e criteri del piano
+
+      ## Change
+      - Solo correzioni minime necessarie a rendere verdi i controlli nei file già in scope; nessuna nuova capability o refactor opportunistico
+      - Artefatti temporanei, report Playwright, container e volume di test devono restare ignorati o essere rimossi con target espliciti
+
+      ## Steps
+      1. Se `golangci-lint` è assente, installarlo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`.
+      2. Eseguire build/typecheck/lint e tutte le suite Control, incluso self-host e Playwright, conservando gli oracle AC-1..AC-4.
+      3. Eseguire regressioni Agent/packaging/protocollo e i cinque controlli Go prescritti da `AGENTS.md`.
+      4. Eseguire validazione Wiki e verificare che nessun file modificato abbia diagnostiche o secret/sentinel nei log.
+      5. Marcare TASK-08 `DONE`, poi eseguire `archetipo spec show US-008` dalla root del progetto e controllare che nessun task sia `TODO`.
+      6. Solo dopo l'envelope con tutti i task `DONE`, eseguire `archetipo spec review US-008`; in caso contrario fermarsi senza richiedere review.
+
+      ## Verify
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control && npm run test:control && npm run test:control:self-host && npm run test:control:e2e`
+      - Run: `npm run test:agent && npm run test:agent-packaging && npm run test:agent-protocol-smoke`
+      - Run: `cd cli && test -z "$(gofmt -l .)" && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run after marking this gate DONE, from `/Users/stefanoleli/Project/ARchetipo`: `archetipo spec show US-008`
+      - Expect: ogni comando passa; Playwright prova i quattro AC; la validazione Wiki ha `data.ok=true`; l'envelope finale contiene TASK-01..TASK-08 tutti `DONE` e zero `TODO` prima di `archetipo spec review US-008`.
+
+      ## Done
+      - [ ] AC-1 — Suite DB/API/browser prova bootstrap singleton e restart self-hosted.
+      - [ ] AC-2 — Suite API/browser prova invito, attivazione e due ruoli distinti.
+      - [ ] AC-3 — Suite authz/browser prova 403 e assenza di mutazioni.
+      - [ ] AC-4 — Suite audit/browser prova actor, action, denied e correlation.
+      - [ ] Tutte le regressioni, build, lint e Wiki validation sono verdi e `spec show` non restituisce task `TODO`.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06 e TASK-07 devono essere DONE.
+    ref: TASK-08

@@ -1,0 +1,908 @@
+schema: archetipo/plan/v2
+spec_code: US-045
+body: |-
+  ## Soluzione tecnica
+
+  ### Problema
+
+  US-044 ha dato al viewer la capacità di **creare** un workspace altrove (`POST /api/workspace`), ma il risultato scompare appena il modale si chiude: la risposta si limita a suggerire «apri il nuovo workspace con `archetipo view` in <dir>». Non esiste alcun posto in cui un workspace conosciuto sia scritto. `cli/internal/viewreg` tiene traccia dei viewer **in esecuzione** (un pidfile per porta, cancellato all'uscita): è esattamente il contrario di ciò che serve qui, perché dimentica tutto quando il processo termina.
+
+  Serve quindi un elenco che sopravviva ai processi, viva **fuori** dai singoli workspace (AC-1) e sappia dire di ciascuna voce nome, percorso e ultimo accesso (AC-2), senza mai diventare un vincolo per il workspace corrente (AC-5).
+
+  ### Dove vive il registro
+
+  Un file JSON unico, `workspaces.json`, in una directory di stato a livello utente risolta con `os.UserConfigDir()` + `archetipo`:
+
+  | Sistema | Percorso |
+  |---|---|
+  | macOS | `~/Library/Application Support/archetipo/workspaces.json` |
+  | Linux | `$XDG_CONFIG_HOME/archetipo/workspaces.json` (o `~/.config/archetipo/...`) |
+  | Windows | `%AppData%\archetipo\workspaces.json` |
+
+  `os.UserConfigDir()` copre i tre sistemi in una sola chiamata, senza le diramazioni su `runtime.GOOS` che `viewreg` e `version/notifier` hanno dovuto scrivere per la cache. La variabile `ARCHETIPO_STATE_DIR` sovrascrive la directory: serve agli smoke e2e, che avviano un processo `archetipo view` vero e non devono toccare lo stato reale della macchina.
+
+  **Scelta rilevante (nessuna pagina Wiki disponibile, la registriamo qui).** Le alternative erano tre.
+
+  1. *Directory di cache* (`~/Library/Caches/archetipo/`, dove già stanno `viewreg` e il controllo versione). Coerente con il codice esistente, ma semanticamente sbagliata: una cache è ciò che il sistema può cancellare senza danno, e l'elenco dei workspace conosciuti dell'utente non è rigenerabile da nessuna fonte. Scartata.
+  2. *Un file dentro il workspace corrente* (`.archetipo/workspaces.json`). Violerebbe AC-1 alla lettera («conservato fuori dai singoli workspace») e produrrebbe N elenchi divergenti.
+  3. *Directory di stato utente*, scelta. Sopravvive alle pulizie di cache, è la stessa su tutti i workspace, e resta un file singolo — non una directory di voci — perché l'elenco ha un ordinamento e un'operazione di riscrittura sola.
+
+  Costo accettato: due viewer che scrivono nello stesso istante fanno read-modify-write senza lock fra processi, quindi l'ultima scrittura vince e può perdere una voce appena aggiunta. È una perdita ricreabile con un secondo click, mentre un lockfile fra processi introdurrebbe stati bloccati da recuperare; la scrittura è comunque atomica (file temporaneo nella stessa directory + `os.Rename`), quindi non esiste il caso «file mezzo scritto».
+
+  ### Perché dentro `internal/workspace` e non in un package nuovo
+
+  Il registro è la stessa materia di `internal/workspace`: parla di directory di workspace, valida percorsi e rifiuta con `ValidationError`/`FieldError`, che quel package già definisce e che il frontend già sa disegnare sotto il campo giusto. Un package `wsreg` separato dovrebbe duplicare quei due tipi o importarli, senza guadagnare nulla. Il registro nasce quindi come `cli/internal/workspace/registry.go`, e `internal/web` — che già importa `workspace` — non acquisisce alcuna dipendenza nuova.
+
+  ### Forma del registro
+
+  ```go
+  type Entry struct {
+      ID           string    `json:"id"`           // sha256(percorso pulito)[:16]
+      Name         string    `json:"name"`         // base name alla registrazione
+      Path         string    `json:"path"`         // assoluto, ripulito
+      LastOpenedAt time.Time `json:"lastOpenedAt"`
+  }
+  ```
+
+  Il file persistito è `{"schema":1,"workspaces":[...]}`: il numero di schema esiste perché un formato senza versione si può solo indovinare, e una lettura tollerante (vedi sotto) renderebbe muta ogni futura incompatibilità.
+
+  L'`ID` è derivato dal percorso perché il percorso **è** l'identità di un workspace, ma non si può mettere in un segmento di URL: `DELETE /api/workspaces/{id}` con un id esadecimale è pulito, mentre `DELETE /api/workspaces/%2FUsers%2F...` non lo è. Derivarlo invece di generarlo a caso rende l'operazione idempotente: registrare due volte lo stesso percorso aggiorna la voce esistente e non ne crea una seconda.
+
+  Il `Name` è **memorizzato** alla registrazione, non ricalcolato dal percorso a ogni lettura: AC-2 chiede il nome anche per le voci non più raggiungibili, e una directory rinominata continua a dover essere riconoscibile come «quella che si chiamava così».
+
+  `LastOpenedAt` viene aggiornato dalla sola `Touch`, cioè alla creazione, all'apertura del viewer su quel workspace e all'aggiunta esplicita di un workspace esistente. La lettura dell'elenco non è un accesso e non lo tocca: altrimenti aprire l'elenco riordinerebbe l'elenco.
+
+  ### API del registro
+
+  ```go
+  type Registry struct{ Dir string }
+
+  func StateDir() (string, error)                 // ARCHETIPO_STATE_DIR o os.UserConfigDir()/archetipo
+  func OpenRegistry() (*Registry, error)
+  func (r *Registry) List() ([]Entry, error)      // ordinate per LastOpenedAt decrescente
+  func (r *Registry) Touch(path string) (Entry, error)  // registra o aggiorna, senza validare
+  func (r *Registry) Add(path string) (Entry, error)    // valida, poi Touch
+  func (r *Registry) Remove(id string) error      // solo la voce; ErrEntryNotFound se assente
+  func Probe(e Entry) Status                      // raggiungibilità, calcolata al momento
+  ```
+
+  `Registry` è un tipo con una directory esplicita, non una manciata di funzioni sul percorso globale, perché così i test Go costruiscono `&Registry{Dir: t.TempDir()}` e non hanno bisogno di variabili d'ambiente.
+
+  **Lettura tollerante (AC-5).** `List` restituisce `nil, nil` quando il file non esiste, non è leggibile o non è JSON valido. Non è un errore ingoiato per pigrizia: è il comportamento che AC-5 richiede, cioè che un registro assente o illeggibile non impedisca di lavorare. L'unico errore vero che `List` propaga è l'impossibilità di risolvere la directory di stato. La prima scrittura successiva riscrive il file da zero, quindi un file corrotto si ripara da solo (AC-5, seconda metà).
+
+  **`Touch` non valida.** Chi la chiama ha già in mano un workspace reale: `Initialize` ha appena finito di crearlo, o il viewer è appena partito servendolo. Aggiungere lì una validazione significherebbe rifiutare di registrare un workspace che dimostrabilmente esiste.
+
+  **`Add` valida** perché lì il percorso arriva da un campo di testo. I rifiuti sono `FieldError` sul campo `path`, con codici stabili nello stile di US-044:
+
+  - `WORKSPACE_REGISTRY_PATH_REQUIRED`
+  - `WORKSPACE_REGISTRY_PATH_NOT_ABSOLUTE`
+  - `WORKSPACE_REGISTRY_PATH_MISSING`
+  - `WORKSPACE_REGISTRY_PATH_NOT_A_DIRECTORY`
+  - `WORKSPACE_REGISTRY_NOT_A_WORKSPACE` — la directory esiste ma non contiene `.archetipo/config.yaml`
+
+  **`Remove` tocca solo il registro (AC-4).** L'implementazione riscrive il file JSON senza una sola chiamata di rimozione sul filesystem: non esiste, nel codice di `Remove`, un `os.Remove` o `os.RemoveAll` che punti al percorso del workspace. È una proprietà che il test verifica con l'inventario del disco prima e dopo, non solo leggendo il codice.
+
+  ### Raggiungibilità calcolata, mai memorizzata
+
+  `Probe` interroga il disco a ogni lettura e restituisce uno `Status`:
+
+  | Status | Condizione |
+  |---|---|
+  | `reachable` | la directory esiste, è una directory, è apribile in lettura e contiene `.archetipo/config.yaml` |
+  | `missing` | `os.Stat` risponde `ErrNotExist` — il caso della directory rinominata |
+  | `not_a_directory` | il percorso esiste ma è un file |
+  | `not_readable` | `os.Stat` riesce ma l'apertura in lettura è negata dai permessi |
+  | `not_a_workspace` | directory leggibile, ma senza `.archetipo/config.yaml` |
+
+  Memorizzare la raggiungibilità sarebbe memorizzare una cosa che cambia mentre nessuno guarda. Calcolarla al momento è anche ciò che rende AC-3 vero *per costruzione*: la voce resta nel registro qualunque cosa dica il disco, e ciò che cambia è solo l'etichetta accanto. Il caso opposto — filtrare via le voci non trovate — è esattamente il «sparire in silenzio» che l'AC vieta.
+
+  `not_a_workspace` è una distinzione in più rispetto alla lettera dell'AC-3 («non più leggibile»), ma è quella che il revisore incontra davvero quando qualcuno cancella `.archetipo/` invece della directory intera; il codice separato la rende diagnosticabile senza cambiare il verdetto (non raggiungibile).
+
+  ### Superficie HTTP
+
+  Tre rotte nuove, in `cli/internal/web/workspaces.go` (il file `workspace.go` di US-044 resta com'è, salvo l'aggancio di registrazione):
+
+  - `GET /api/workspaces` → `200 {"workspaces":[{id,name,path,lastOpenedAt,status,reachable,current}]}`. `status` è lo `Status` di `Probe`, `reachable` è la sua riduzione booleana per il caso comune, `current` marca il workspace che *questo* viewer sta servendo (`cfg.ProjectRoot`), così l'elenco non offre di rimuovere sotto i piedi la voce che si sta guardando senza dirlo.
+  - `POST /api/workspaces` corpo `{"path":"/abs/path"}` → `201` con la voce; `400 {error,code,hint,fields[]}` sul rifiuto, riusando `writeFieldErrors` già presente in `workspace.go`.
+  - `DELETE /api/workspaces/{id}` → `204` senza corpo; `404` quando l'id non è nel registro.
+
+  Il plurale `/api/workspaces` è deliberatamente distinto dal singolare `/api/workspace` di US-044: quest'ultimo è l'azione «crea un workspace», la nuova è la collezione dei workspace conosciuti. `http.ServeMux` di Go 1.22 distingue i due pattern senza ambiguità.
+
+  ### I due momenti in cui una voce entra nel registro (AC-1)
+
+  1. **Creazione.** `handleCreateWorkspace` chiama `Touch(result.Dir)` dopo un `Initialize` riuscito. La registrazione è *best effort*: un registro non scrivibile non deve far fallire una creazione che è già avvenuta sul disco (AC-5). Perché il fallimento non sia però invisibile, la risposta `201` guadagna un campo opzionale `registryWarning`, che il modale mostra accanto all'esito.
+  2. **Apertura.** «Aperto dalla UI» è, oggi, un viewer avviato su quel workspace. La registrazione vive quindi in un metodo `(*Server).RegisterWorkspace()` chiamato da `view_cmd.go` dentro `onReady`, accanto al `viewreg.Register` che già c'è, con lo stesso trattamento dell'errore (una riga su stderr, il viewer parte comunque). Metterla nel package `web` invece che nel comando è ciò che la rende collaudabile con un test Go diretto, invece che solo dallo smoke.
+
+  Non si registra il workspace dentro `NewServer`: il costruttore è usato da decine di test, e trasformarlo in una scrittura su disco a livello utente sarebbe un effetto collaterale in un posto dove nessuno lo cerca.
+
+  ### Frontend
+
+  Un pulsante `Workspaces` nell'header, accanto a `New workspace`, apre un modale `#workspaces-modal` costruito con i mattoni già in `app.css` (`modal-root`, `modal`, `field`, `status-msg`, `primary-btn`, `ghost-btn`, `field-error`):
+
+  - una riga per workspace con nome, percorso in `code`, ultimo accesso reso con `toLocaleString()` (lo stesso `formatExecutionTime` già in `app.js`), un badge di stato e un pulsante `Remove`;
+  - le voci non raggiungibili portano un badge `unreachable` con il motivo e restano in elenco;
+  - il `Remove` passa da `window.confirm`, come già fa `confirmAndDeleteSpec`, con un testo che dice esplicitamente che i file sul disco non vengono toccati (AC-4);
+  - in fondo, un campo `Add an existing workspace` con il percorso assoluto e un pulsante `Add`, i cui rifiuti sono resi da `renderFieldErrors` sul campo `path`;
+  - un elenco vuoto mostra un messaggio, non una tabella vuota.
+
+  Il frontend non contiene alcun elenco di stati: rende ciò che `status` dice, con una mappa di etichette leggibili e un fallback sul valore grezzo per uno stato che ancora non conosce.
+
+  ### Non obiettivi
+
+  Aprire un workspace dall'elenco (resta a US-046), rinominare una voce, sincronizzare il registro fra macchine, gruppi o preferiti, anteprima dello stato di un workspace non aperto, migrazione o riparazione semantica di un registro di schema futuro, lock fra processi, ed esposizione del registro sulla CLI (`archetipo workspace list`): la storia chiede la UI.
+
+  ### Decisioni non prese come ADR
+
+  La Wiki automatica è disattivata in questo repository (`wiki.enabled: false`), quindi il piano non contiene lavoro Wiki e la sola scelta che avrebbe superato la soglia — dove e in che forma persistere il registro — è argomentata per esteso qui sopra, con alternative e costi accettati.
+
+  ## Baseline
+
+  Eseguita da `cli/` il 20 agosto 2026, prima di toccare codice.
+
+  | Comando | Esito registrato |
+  |---|---|
+  | `gofmt -l .` | nessun output |
+  | `go build ./...` | successo |
+  | `go vet ./...` | nessun errore |
+  | `go test ./...` | tutti i package verdi |
+  | `golangci-lint run --timeout 5m ./...` | **non eseguibile: `golangci-lint` non è installato su questa macchina** |
+
+  Il linter mancante è un prerequisito d'ambiente, non un fallimento del codice: va installato con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` (AGENTS.md lo prescrive fra i controlli pre-consegna). Il task di gate lo installa se assente e poi lo esegue; l'esito atteso è `0 issues`, perché la baseline Go è pulita.
+
+  Nessun comando della baseline è rosso: ogni task può quindi promettere verde, non esiste un confine di fallimento preesistente da preservare, e i file toccati non hanno diagnostiche locali.
+
+  Al momento della baseline l'albero di lavoro contiene modifiche non committate estranee a questa storia (`cli/internal/execution/claude/`, `cli/internal/execution/codex/`, `cli/internal/execution/arcipelago/events.go`, `cli/internal/execution/localrun/events.go`). Non toccano né `internal/workspace`, né `internal/web`, né `internal/cli/view_cmd.go`: nessun task di questo piano deve modificarle e nessuna verifica deve dipendere da esse.
+
+  Smoke UI disponibili dal root del repository, tutti su `127.0.0.1` e senza credenziali: `npm run test:view-workspace-smoke` (US-044, il modello diretto per il nuovo), `test:view-create-smoke`, `test:view-delete-smoke`, `test:view-execution-smoke`, `test:view-plan-smoke`. Costruiscono la CLI da sorgente in `test/e2e/.bin/` e richiedono Go installato.
+
+  ### Prerequisiti d'ambiente
+
+  - Go (già usato dalla baseline).
+  - Node.js ≥ 20 per gli smoke e2e.
+  - `golangci-lint`, da installare come sopra prima del gate finale.
+  - Gli smoke avviano un processo `archetipo view` reale: il nuovo smoke deve passargli `ARCHETIPO_STATE_DIR` puntato dentro la propria run directory, altrimenti scriverebbe nel registro reale della macchina che lo esegue.
+
+  ## Mappa delle evidenze di accettazione
+
+  | AC | Livello | Oracolo osservabile | Stato di partenza / fixture | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | Unit Go (`internal/workspace`) | Dopo `Touch(dir)`, il file `workspaces.json` nella directory di stato — **fuori** da `dir` — contiene una voce con quel percorso; `dir` non contiene alcun file nuovo | `Registry{Dir: t.TempDir()}` vuoto, workspace in un secondo `t.TempDir()` | TASK-04 |
+  | AC-1 | Unit Go (`internal/web`) | `POST /api/workspace` con esito `201` lascia nel registro una voce col percorso creato; `(*Server).RegisterWorkspace()` lascia una voce con `cfg.ProjectRoot` | server di test con registro su `t.TempDir()` | TASK-07 |
+  | AC-1 | Smoke e2e | Registro inesistente all'avvio; dopo la creazione dalla UI, `GET /api/workspaces` elenca il workspace creato e quello servito dal viewer | sandbox appena inizializzata, `ARCHETIPO_STATE_DIR` vuoto | TASK-09 |
+  | AC-2 | Unit Go (`internal/web`) | Ogni elemento di `GET /api/workspaces` ha `name` non vuoto, `path` assoluto e `lastOpenedAt` valorizzato e successivo all'inizio del test | due voci registrate a distanza | TASK-07 |
+  | AC-2 | Smoke e2e | Le voci elencate portano `name` = base name della directory, `path` = percorso assoluto atteso, `lastOpenedAt` parsabile come data; un `Touch` successivo lo fa avanzare | due workspace registrati | TASK-09 |
+  | AC-3 | Unit Go (`internal/workspace`) | `Probe` su una voce la cui directory è stata rinominata restituisce `StatusMissing`; su un file restituisce `StatusNotDirectory`; su una directory senza `.archetipo/config.yaml` restituisce `StatusNotWorkspace` | directory create e poi rinominate nel test | TASK-04 |
+  | AC-3 | Unit Go (`internal/web`) | Dopo la rinomina della directory, `GET /api/workspaces` **contiene ancora** la voce, con `reachable: false` e `status: "missing"` — non la omette | registro con una voce, directory rinominata a metà test | TASK-07 |
+  | AC-3 | Smoke e2e | Rinominata la directory di uno dei due workspace, l'elenco ha ancora **due** voci e quella rinominata riporta `reachable: false` | i due workspace del passo AC-1 | TASK-09 |
+  | AC-4 | Unit Go (`internal/workspace`) | Inventario ricorsivo della directory del workspace identico prima e dopo `Remove(id)`; il file `.archetipo/config.yaml` è ancora leggibile | workspace vero su `t.TempDir()` | TASK-04 |
+  | AC-4 | Unit Go (`internal/web`) | `DELETE /api/workspaces/{id}` risponde `204`, la voce sparisce dall'elenco successivo e la directory sul disco è intatta; un id ignoto risponde `404` | registro con due voci | TASK-07 |
+  | AC-4 | Smoke e2e | Inventario ricorsivo su disco della directory rimossa (e di quella rimasta) identico prima e dopo la `DELETE` | i due workspace dei passi precedenti | TASK-09 |
+  | AC-5 | Unit Go (`internal/workspace`) | `List()` su directory di stato inesistente → `nil, nil`; su file contenente `not json` → `nil, nil`; una `Touch` successiva riscrive un file valido che `List()` rilegge con la voce attesa | `Registry{Dir:}` su directory vuota, poi file corrotto scritto a mano | TASK-02 |
+  | AC-5 | Unit Go (`internal/web`) | Con la directory di stato resa non scrivibile, `POST /api/workspace` risponde comunque `201` e porta `registryWarning` non vuoto; `GET /api/workspaces` risponde `200` con elenco vuoto invece di `500` | directory di stato con permessi `0o500` | TASK-07 |
+  | AC-5 | Smoke e2e | Scritto `not json` nel file di registro, il viewer resta operativo (`GET /api/board` risponde `200`), `GET /api/workspaces` risponde `200`, e una `POST /api/workspaces` successiva rigenera un file JSON valido | registro corrotto a mano a metà smoke | TASK-09 |
+
+  ### Nota sui test double
+
+  Nessun test di questo piano sostituisce con un doppio il filesystem, il registro o il server HTTP: l'esito osservabile di ogni AC è un file sul disco o una risposta HTTP reale, e un doppio nasconderebbe proprio il confine responsabile (AC-1 «fuori dai workspace», AC-4 «i file non sono toccati», AC-5 «il registro illeggibile non blocca»). I test del package `web` usano `httptest` con il server vero e un registro su `t.TempDir()`.
+
+  Il caso `not_readable` per permessi non è verificato su Windows né come root: il test lo salta con `t.Skip` in quelle condizioni, e il verdetto di AC-3 poggia sui casi `missing` / `not_a_directory` / `not_a_workspace`, che sono portabili. Il caso «registro non scrivibile» di AC-5 riceve lo stesso trattamento.
+
+  ## Strategia di test
+
+  Tre livelli, nessuno ridondante rispetto agli altri:
+
+  1. **Unit Go su `internal/workspace`** — la semantica del registro: percorso, tolleranza in lettura, atomicità in scrittura, identità derivata dal percorso, idempotenza di `Touch`/`Add`, sonda di raggiungibilità, non distruttività di `Remove`. È il livello dove AC-3, AC-4 e AC-5 sono provati nel modo più diretto e più veloce.
+  2. **Unit Go su `internal/web`** — il contratto HTTP: le tre rotte, i codici di stato, la forma `fields[]` del rifiuto, il campo `current`, la registrazione automatica alla creazione e all'apertura, e la degradazione quando il registro non è scrivibile.
+  3. **Smoke e2e** — il percorso della dimostrazione della storia, con CLI costruita da sorgente, viewer reale e assert sul filesystem: creazione dalla UI, aggiunta di un workspace esistente, rinomina, rilettura, rimozione, inventario del disco.
+
+  Il livello 3 non ripete i casi limite del livello 1: ripercorre la dimostrazione scritta nella storia, che è ciò che il revisore eseguirà.
+
+  ### Rischio e2e browser
+
+  Questa storia tocca la UI, ma **non** richiede un e2e su browser, e il repository non ha alcun framework browser da riusare. La motivazione, per ciascun AC: l'esito osservabile di AC-1, AC-2, AC-3, AC-4 e AC-5 attraversa il confine HTTP e il filesystem, e lo smoke e2e lo prova esattamente lì, con il server vero e il disco vero. Ciò che il browser aggiungerebbe è solo la resa DOM di dati già verificati — nessun AC parla di come l'elenco è disegnato. Introdurre Playwright per questa storia significherebbe far nascere un'infrastruttura intera per coprire una traduzione JSON→DOM che nessun criterio nomina. La rinuncia è registrata qui come richiesto.
+
+  `Dimostrazione` è filmabile: è una sequenza interamente eseguibile nel viewer. La decisione finale su registrare o meno il video appartiene a `archetipo-review`; qui si segnala solo l'aspettativa. La configurazione del repository ha `e2e.record_demo_video: false`.
+
+  ## Contesto e assunzioni
+
+  - **Dipendenza US-044.** Lo stato di US-044 è `DONE`: `cli/internal/workspace/` e `POST /api/workspace` esistono e sono il punto d'aggancio della creazione. Nessun rischio di dipendenza aperta.
+  - **Assunzione su «aperto dalla UI» (AC-1).** La storia non definisce cosa sia un'apertura, e aprire un workspace *dall'elenco* è esplicitamente fuori ambito. L'interpretazione adottata è l'unica compatibile con entrambe: un workspace è «aperto» quando un viewer viene avviato su di esso, cioè al `RegisterWorkspace()` dentro `onReady` di `archetipo view`. È anche ciò che rende osservabile «ultimo accesso» richiesto da AC-2.
+  - **Assunzione su «nome» (AC-2).** Il nome è il base name della directory al momento della registrazione, memorizzato nella voce. La storia non chiede di rinominarlo, e ricalcolarlo dal percorso renderebbe illeggibile la voce di una directory scomparsa.
+  - **Lingua della UI.** Il viewer è interamente in inglese (`New workspace`, `Create workspace`, `Cancel`). Il nuovo modale segue quella lingua; questo documento e i commenti di piano restano in italiano, come il resto del backlog.
+  - **Nessun lavoro Wiki.** `wiki.enabled` è `false` in `.archetipo/config.yaml`: il piano non dichiara alcun impatto Wiki e non contiene task di Wiki.
+  - **`AGENTS.md` non richiede aggiornamento** per questa storia: la struttura dei package non cambia (nessun package nuovo) e non nasce alcuna regola nuova per gli autori di skill. Nasce invece uno script npm nuovo, che il task dello smoke aggiunge a `package.json`.
+tasks:
+  - id: TASK-01
+    title: Registro persistente dei workspace — percorso, lettura tollerante e scrittura atomica
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      Il package `workspace` sa dove vive il registro dei workspace conosciuti, sa leggerlo senza mai fallire su un file assente o corrotto, e sa riscriverlo in modo atomico.
+
+      ## Read
+
+      - `cli/internal/viewreg/registry.go` — è il precedente più vicino: risoluzione di una directory utente, `Entry` JSON, `List` che salta i file illeggibili. Copiane lo stile, **non** la directory (quella è una cache, questo è stato utente) né il formato a un file per voce.
+      - `cli/internal/workspace/options.go` — i tipi `FieldError` e `ValidationError` e le costanti dei codici di rifiuto: il registro riusa quei tipi, non ne definisce di nuovi.
+      - `cli/internal/workspace/fsutil.go` — convenzioni del package per le operazioni su file.
+      - `cli/internal/iox/iox.go` — `NewInternal`, `NewNotFound`, `NewPrecondition`.
+
+      ## Change
+
+      - **Nuovo** `cli/internal/workspace/registry.go`.
+      - Nessun altro file. In particolare non toccare `initialize.go`, `preflight.go`, `options.go`.
+      - Non obiettivo: qualsiasi rotta HTTP, qualsiasi modifica al frontend, qualsiasi comando CLI nuovo.
+
+      ## Steps
+
+      1. Crea `cli/internal/workspace/registry.go` con il commento di package già presente altrove (il package ha già la sua doc: non aggiungerne una seconda).
+      2. Dichiara le costanti:
+         - `EnvStateDir = "ARCHETIPO_STATE_DIR"`
+         - `registryFileName = "workspaces.json"`
+         - `registrySchema = 1`
+      3. Dichiara `type Entry struct` con i campi e i tag JSON esatti: `ID string \`json:"id"\``, `Name string \`json:"name"\``, `Path string \`json:"path"\``, `LastOpenedAt time.Time \`json:"lastOpenedAt"\``.
+      4. Dichiara il documento persistito, non esportato: `type registryFile struct { Schema int \`json:"schema"\`; Workspaces []Entry \`json:"workspaces"\` }`.
+      5. Scrivi `func StateDir() (string, error)`: se `os.Getenv(EnvStateDir)` è non vuoto dopo `strings.TrimSpace`, restituiscilo; altrimenti `os.UserConfigDir()` e `filepath.Join(base, "archetipo")`. Un errore di `os.UserConfigDir` diventa `iox.NewPrecondition("could not locate the ARchetipo state directory", "set ARCHETIPO_STATE_DIR to a writable directory", err)`. **Non** diramare su `runtime.GOOS`: `os.UserConfigDir` copre già macOS, Linux e Windows.
+      6. Dichiara `type Registry struct { Dir string }` e `func OpenRegistry() (*Registry, error)` che risolve `StateDir()` e restituisce `&Registry{Dir: dir}`. `OpenRegistry` **non** crea la directory: la creazione avviene alla prima scrittura.
+      7. Scrivi `func (r *Registry) Path() string` = `filepath.Join(r.Dir, registryFileName)`.
+      8. Scrivi il lettore non esportato `func (r *Registry) load() []Entry`: legge il file; su qualunque errore di lettura, su JSON non valido o su `Schema` diverso da `registrySchema` restituisce `nil`. Nessun errore esce da qui: la tolleranza è il comportamento richiesto (AC-5).
+      9. Scrivi `func (r *Registry) List() ([]Entry, error)`: se `r.Dir` è vuoto restituisce `iox.NewInternal("workspace registry has no directory", nil)`; altrimenti restituisce `r.load()` ordinato per `LastOpenedAt` decrescente e, a parità, per `Path` crescente, con errore `nil`. Il documento vuoto restituisce `nil, nil`.
+      10. Scrivi il persistore non esportato `func (r *Registry) save(entries []Entry) error`:
+          - `os.MkdirAll(r.Dir, 0o755)`;
+          - `json.MarshalIndent(registryFile{Schema: registrySchema, Workspaces: entries}, "", "  ")`;
+          - `os.CreateTemp(r.Dir, "workspaces-*.json")`, scrittura, `Close`, `os.Chmod` a `0o600`, `os.Rename` sul percorso definitivo;
+          - su qualunque fallimento rimuovi il temporaneo e avvolgi l'errore in `iox.NewInternal("cannot write the workspace registry", err)`.
+          Il temporaneo sta nella **stessa** directory del file definitivo, altrimenti `os.Rename` può attraversare un filesystem e fallire.
+      11. Scrivi `func EntryID(path string) string`: `sha256.Sum256([]byte(filepath.Clean(path)))` reso in esadecimale e troncato a 16 caratteri.
+      12. Verifica con `gofmt -l cli/internal/workspace` che il file sia formattato.
+
+      ## Verify
+
+      - Esegui da `cli/`: `gofmt -l . && go build ./... && go vet ./...`
+      - Expect: nessun output da `gofmt`, build e vet puliti. La baseline è verde, quindi non c'è alcun fallimento preesistente da tollerare.
+      - Esegui da `cli/`: `go test ./internal/workspace/...`
+      - Expect: verde (in questo task non sono ancora stati aggiunti test nuovi; il package non deve regredire).
+
+      ## Done
+
+      - [ ] `cli/internal/workspace/registry.go` esiste e dichiara `Entry`, `Registry`, `StateDir`, `OpenRegistry`, `List`, `EntryID` con le firme indicate.
+      - [ ] `StateDir()` risolve `ARCHETIPO_STATE_DIR` quando presente e `os.UserConfigDir()/archetipo` altrimenti, senza diramazioni su `runtime.GOOS`.
+      - [ ] AC-5 — `List()` su file assente, su file illeggibile e su JSON non valido restituisce elenco vuoto ed errore `nil` (verificato nel TASK-02).
+      - [ ] La scrittura passa da file temporaneo nella stessa directory più `os.Rename`.
+      - [ ] `gofmt -l .`, `go build ./...`, `go vet ./...` puliti da `cli/`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test del registro su file assente, corrotto e riscritto
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      È dimostrato che un registro assente o illeggibile non produce errori e che la prima scrittura successiva lo ricrea valido (AC-5).
+
+      ## Read
+
+      - `cli/internal/workspace/registry.go` — l'implementazione appena scritta.
+      - `cli/internal/workspace/preflight_test.go` — lo stile dei test del package: `t.TempDir()`, sottotest con `t.Run`, asserzioni dirette senza librerie esterne.
+      - `cli/internal/viewreg/registry_test.go` — precedente per i test di un registro su disco.
+
+      ## Change
+
+      - **Nuovo** `cli/internal/workspace/registry_test.go` (package `workspace`, test interni: servono `load` e `save`).
+      - Nessun file di produzione. Se un test non passa, il difetto va corretto in `registry.go`, non aggirato nel test.
+
+      ## Steps
+
+      1. `TestStateDirHonoursEnvOverride`: con `t.Setenv(EnvStateDir, dir)` verifica che `StateDir()` restituisca esattamente `dir`; con `t.Setenv(EnvStateDir, "")` verifica che restituisca un percorso che termina con `archetipo` e non vuoto.
+      2. `TestEntryIDIsStableAndPathDerived`: due chiamate sullo stesso percorso danno lo stesso id; `"/a/b"` e `"/a/b/"` danno lo stesso id (è `filepath.Clean` a garantirlo); percorsi diversi danno id diversi; l'id è lungo 16 ed è esadecimale.
+      3. `TestListMissingRegistryIsEmpty`: `r := &Registry{Dir: filepath.Join(t.TempDir(), "assente")}`; `List()` restituisce elenco vuoto ed errore `nil`, e la directory **non** viene creata dalla lettura.
+      4. `TestListCorruptRegistryIsEmpty`: crea la directory, scrivici `workspaces.json` con il contenuto `not json at all`; `List()` restituisce elenco vuoto ed errore `nil`.
+      5. `TestListUnknownSchemaIsEmpty`: scrivi `{"schema":999,"workspaces":[{"id":"x","name":"n","path":"/p"}]}`; `List()` restituisce elenco vuoto ed errore `nil`.
+      6. `TestSaveRecreatesCorruptRegistry`: partendo dal file corrotto del punto 4, chiama `r.save([]Entry{{ID: "a", Name: "n", Path: "/p", LastOpenedAt: time.Now()}})`; poi `List()` restituisce esattamente quella voce, e il file su disco è JSON valido con `schema: 1`.
+      7. `TestSaveIsAtomicAndLeavesNoTemporary`: dopo un `save` riuscito, la directory contiene **solo** `workspaces.json` — nessun residuo `workspaces-*.json`.
+      8. `TestListSortsByLastOpenedDesc`: salva tre voci con `LastOpenedAt` crescenti e verifica che `List()` le restituisca in ordine inverso.
+      9. Esegui `gofmt -l cli/internal/workspace`.
+
+      ## Verify
+
+      - Esegui da `cli/`: `go test ./internal/workspace/... -run 'TestStateDir|TestEntryID|TestList|TestSave' -v`
+      - Expect: tutti i sottotest passano.
+      - Esegui da `cli/`: `gofmt -l . && go vet ./...`
+      - Expect: nessun output, nessun errore.
+
+      ## Done
+
+      - [ ] AC-5 — esiste un test che prova che `List()` su registro assente restituisce elenco vuoto ed errore `nil`.
+      - [ ] AC-5 — esiste un test che prova che `List()` su registro con contenuto non JSON restituisce elenco vuoto ed errore `nil`.
+      - [ ] AC-5 — esiste un test che prova che dopo un `save` su un registro corrotto il file torna JSON valido e `List()` rilegge la voce salvata.
+      - [ ] Un test prova che la scrittura non lascia file temporanei nella directory di stato.
+      - [ ] `go test ./internal/workspace/...` verde da `cli/`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Touch, Add, Remove e sonda di raggiungibilità del registro
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Il registro sa registrare o aggiornare una voce, accettare un workspace esistente validandolo, rimuovere una voce senza toccare il disco del workspace, e dire di ciascuna voce se è raggiungibile.
+
+      ## Read
+
+      - `cli/internal/workspace/registry.go` — `Entry`, `Registry`, `load`, `save`, `EntryID` dal TASK-01.
+      - `cli/internal/workspace/options.go` — `FieldError`, `ValidationError`, `(*ValidationError).add` e lo stile dei codici di rifiuto (`CodeDirNotAbsolute`, `CodeDirNotADirectory`, …): i nuovi codici seguono la stessa forma `WORKSPACE_*`.
+      - `cli/internal/workspace/preflight.go` — come il package oggi valida una directory di destinazione (`filepath.IsAbs`, `os.Stat`, rilevamento di `.archetipo/config.yaml` per `CodeAlreadyInitialized`). Riusa quella logica di rilevamento, non inventarne una diversa.
+
+      ## Change
+
+      - `cli/internal/workspace/registry.go` — solo aggiunte.
+      - Nessun altro file.
+      - Non obiettivo: rinominare una voce, aprire un workspace, esporre alcunché sulla CLI o su HTTP.
+
+      ## Steps
+
+      1. Aggiungi i codici di rifiuto del registro accanto a quelli esistenti in `options.go` **oppure** in `registry.go` (scegli `registry.go`, per tenere insieme la nuova capacità):
+         - `CodeRegistryPathRequired = "WORKSPACE_REGISTRY_PATH_REQUIRED"`
+         - `CodeRegistryPathNotAbsolute = "WORKSPACE_REGISTRY_PATH_NOT_ABSOLUTE"`
+         - `CodeRegistryPathMissing = "WORKSPACE_REGISTRY_PATH_MISSING"`
+         - `CodeRegistryPathNotADirectory = "WORKSPACE_REGISTRY_PATH_NOT_A_DIRECTORY"`
+         - `CodeRegistryNotAWorkspace = "WORKSPACE_REGISTRY_NOT_A_WORKSPACE"`
+      2. Dichiara `var ErrEntryNotFound = errors.New("workspace registry entry not found")`.
+      3. Dichiara il tipo di stato e i valori:
+         ```go
+         type Status string
+         const (
+             StatusReachable    Status = "reachable"
+             StatusMissing      Status = "missing"
+             StatusNotDirectory Status = "not_a_directory"
+             StatusNotReadable  Status = "not_readable"
+             StatusNotWorkspace Status = "not_a_workspace"
+         )
+         ```
+      4. Scrivi `func Probe(e Entry) Status`:
+         - `os.Stat(e.Path)`: se `errors.Is(err, fs.ErrNotExist)` → `StatusMissing`; se un altro errore → `StatusNotReadable`;
+         - se `!info.IsDir()` → `StatusNotDirectory`;
+         - `os.Open(e.Path)` seguito da `f.ReadDir(1)`: un errore di permessi → `StatusNotReadable` (chiudi sempre il descrittore); `io.EOF` su directory vuota **non** è un errore;
+         - `os.Stat(filepath.Join(e.Path, ".archetipo", "config.yaml"))`: errore → `StatusNotWorkspace`;
+         - altrimenti `StatusReachable`.
+         Aggiungi `func (s Status) Reachable() bool { return s == StatusReachable }`.
+      5. Scrivi `func (r *Registry) Touch(path string) (Entry, error)`:
+         - normalizza: `filepath.Clean` e, se il percorso non è assoluto, `filepath.Abs`; un errore diventa `iox.NewInvalidInput`;
+         - `id := EntryID(clean)`;
+         - carica le voci con `r.load()`; se esiste una voce con quell'`ID`, aggiorna solo `LastOpenedAt = time.Now().UTC()` (nome e percorso restano quelli registrati); altrimenti aggiungi `Entry{ID: id, Name: filepath.Base(clean), Path: clean, LastOpenedAt: time.Now().UTC()}`;
+         - `r.save(...)` e restituisci la voce risultante.
+         `Touch` **non** valida la directory: chi la chiama ha già un workspace reale in mano.
+      6. Scrivi `func (r *Registry) Add(path string) (Entry, error)`:
+         - `trimmed := strings.TrimSpace(path)`; se vuoto → `&ValidationError{}` con `add("path", CodeRegistryPathRequired, "the workspace path is required")`;
+         - se `!filepath.IsAbs(trimmed)` → `CodeRegistryPathNotAbsolute`;
+         - `os.Stat`: `fs.ErrNotExist` → `CodeRegistryPathMissing`; altro errore → `CodeRegistryPathMissing` con il messaggio dell'errore; non directory → `CodeRegistryPathNotADirectory`;
+         - `os.Stat(filepath.Join(clean, ".archetipo", "config.yaml"))` fallisce → `CodeRegistryNotAWorkspace` con messaggio «the directory is not an ARchetipo workspace: .archetipo/config.yaml is missing»;
+         - superati i controlli, delega a `r.Touch(clean)`. Registrare due volte lo stesso percorso aggiorna la voce e non ne crea una seconda.
+      7. Scrivi `func (r *Registry) Remove(id string) error`:
+         - carica le voci, costruisci l'elenco senza quella con `ID == id`;
+         - se nessuna è stata rimossa restituisci `ErrEntryNotFound`;
+         - altrimenti `r.save(rimanenti)`.
+         Questa funzione non deve contenere **alcuna** chiamata a `os.Remove`, `os.RemoveAll` o simili sul percorso del workspace: l'unico file scritto è quello del registro (AC-4).
+      8. Scrivi `func (r *Registry) Get(id string) (Entry, error)` che restituisce la voce o `ErrEntryNotFound`: serve al gestore HTTP per rispondere `404` in modo distinguibile.
+      9. Esegui `gofmt -l cli/internal/workspace`.
+
+      ## Verify
+
+      - Esegui da `cli/`: `gofmt -l . && go build ./... && go vet ./...`
+      - Expect: nessun output, build e vet puliti.
+      - Esegui da `cli/`: `go test ./internal/workspace/...`
+      - Expect: verde — i test del TASK-02 continuano a passare.
+      - Esegui da `cli/`: `grep -n "RemoveAll" internal/workspace/registry.go`
+      - Expect: nessuna occorrenza (AC-4: il registro non cancella nulla sul disco del workspace).
+
+      ## Done
+
+      - [ ] AC-1 — `Touch` scrive la voce nel file del registro, che vive nella directory di stato e non dentro il workspace.
+      - [ ] AC-2 — la voce salvata porta `Name` (base name alla registrazione), `Path` assoluto e `LastOpenedAt` valorizzato.
+      - [ ] AC-3 — `Probe` distingue `reachable`, `missing`, `not_a_directory`, `not_readable` e `not_a_workspace`, e non rimuove mai la voce.
+      - [ ] AC-4 — `Remove` riscrive il solo file del registro e non contiene chiamate di rimozione sul percorso del workspace.
+      - [ ] `Add` rifiuta con `ValidationError` sul campo `path` con i cinque codici indicati.
+      - [ ] `gofmt -l .`, `go build ./...`, `go vet ./...` e `go test ./internal/workspace/...` puliti da `cli/`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test di Touch, Add, Remove e Probe, con inventario del disco
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      È dimostrato che una registrazione finisce fuori dal workspace con nome, percorso e ultimo accesso, che una directory scomparsa è segnalata invece di sparire, e che rimuovere una voce non tocca un solo file sul disco.
+
+      ## Read
+
+      - `cli/internal/workspace/registry.go` — `Touch`, `Add`, `Remove`, `Probe`, i codici di rifiuto.
+      - `cli/internal/workspace/registry_test.go` — i test del TASK-02, a cui questi si aggiungono nello stesso file.
+      - `cli/internal/workspace/initialize_test.go` — se contiene già un aiutante che elenca ricorsivamente un albero, riusalo invece di scriverne un secondo.
+
+      ## Change
+
+      - `cli/internal/workspace/registry_test.go` — solo aggiunte.
+      - Nessun file di produzione.
+
+      ## Steps
+
+      1. Scrivi l'aiutante `func makeWorkspace(t *testing.T, root, name string) string`: crea `root/name/.archetipo/`, ci scrive un `config.yaml` minimale e un file `README.md` di contorno, e restituisce il percorso assoluto. Se `initialize_test.go` ha già qualcosa di equivalente, riusalo.
+      2. Scrivi l'aiutante `func inventory(t *testing.T, root string) []string`: `filepath.WalkDir` che raccoglie i percorsi relativi ordinati, per confrontare l'albero prima e dopo.
+      3. `TestTouchRegistersOutsideTheWorkspace` (AC-1, AC-2): `state := t.TempDir()`, `ws := makeWorkspace(t, t.TempDir(), "alfa")`; `before := inventory(t, ws)`; `entry, err := (&Registry{Dir: state}).Touch(ws)`. Verifica: `err` nil; `entry.Name == "alfa"`; `entry.Path == filepath.Clean(ws)`; `!entry.LastOpenedAt.IsZero()`; il file `state/workspaces.json` esiste; `inventory(t, ws)` è identico a `before` (nulla è stato scritto **dentro** il workspace).
+      4. `TestTouchIsIdempotentAndAdvancesLastOpened` (AC-2): due `Touch` sullo stesso percorso lasciano **una** voce, con lo stesso `ID`, e il secondo `LastOpenedAt` non è precedente al primo. Con un percorso terminante in separatore la voce resta la stessa.
+      5. `TestAddRefusesInvalidPaths`: tabella dei casi → stringa vuota (`CodeRegistryPathRequired`), percorso relativo `docs` (`CodeRegistryPathNotAbsolute`), percorso assoluto inesistente (`CodeRegistryPathMissing`), percorso di un file (`CodeRegistryPathNotADirectory`), directory senza `.archetipo/config.yaml` (`CodeRegistryNotAWorkspace`). Per ciascuno verifica con `errors.As` di ottenere un `*ValidationError` con **un** campo, `Field == "path"` e il `Code` atteso.
+      6. `TestAddAcceptsAnExistingWorkspace` (AC-1): `Add` su un workspace creato da `makeWorkspace` restituisce una voce, e `List()` la contiene.
+      7. `TestProbeReportsUnreachableInsteadOfDropping` (AC-3): registra due workspace; rinomina la directory del primo con `os.Rename`; verifica che `List()` restituisca ancora **due** voci, che `Probe` della prima sia `StatusMissing` e della seconda `StatusReachable`. Poi: `Probe` su una voce il cui percorso punta a un file → `StatusNotDirectory`; su una directory senza `.archetipo/config.yaml` → `StatusNotWorkspace`.
+      8. `TestProbeReportsUnreadableDirectory` (AC-3, caso permessi): salta con `t.Skip` se `runtime.GOOS == "windows"` o se `os.Geteuid() == 0`; altrimenti `os.Chmod(dir, 0o000)` con `t.Cleanup` che ripristina `0o755`, e verifica `StatusNotReadable`.
+      9. `TestRemoveLeavesTheWorkspaceUntouched` (AC-4): registra un workspace; `before := inventory(t, ws)`; `Remove(entry.ID)`; verifica che `err` sia nil, che `List()` non contenga più quell'`ID`, che `inventory(t, ws)` sia identico a `before`, e che `.archetipo/config.yaml` sia ancora leggibile con lo stesso contenuto.
+      10. `TestRemoveUnknownID`: `Remove("00000000")` restituisce un errore che soddisfa `errors.Is(err, ErrEntryNotFound)`, e l'elenco non cambia.
+      11. Esegui `gofmt -l cli/internal/workspace`.
+
+      ## Verify
+
+      - Esegui da `cli/`: `go test ./internal/workspace/... -v`
+      - Expect: tutti i test del package verdi, compresi quelli preesistenti di `preflight_test.go`, `initialize_test.go`, `configfile_test.go`, `tools_test.go`.
+      - Esegui da `cli/`: `gofmt -l . && go vet ./...`
+      - Expect: nessun output, nessun errore.
+
+      ## Done
+
+      - [ ] AC-1 — un test prova che `Touch` scrive nel registro fuori dal workspace e non modifica l'albero del workspace.
+      - [ ] AC-2 — un test prova che la voce porta nome, percorso e ultimo accesso, e che l'ultimo accesso avanza a ogni `Touch`.
+      - [ ] AC-3 — un test prova che dopo la rinomina della directory la voce è ancora elencata e `Probe` risponde `missing`; sono coperti anche `not_a_directory` e `not_a_workspace`.
+      - [ ] AC-4 — un test confronta l'inventario ricorsivo del workspace prima e dopo `Remove` e li trova identici.
+      - [ ] I cinque codici di rifiuto di `Add` sono verificati su `Field == "path"`.
+      - [ ] `go test ./internal/workspace/...` verde da `cli/`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Rotte HTTP dell'elenco dei workspace conosciuti
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      Il viewer espone l'elenco dei workspace conosciuti, l'aggiunta di uno esistente sul disco e la rimozione di una voce.
+
+      ## Read
+
+      - `cli/internal/web/workspace.go` — le rotte di US-044, `createWorkspaceView`, `workspaceFieldErrors`, `writeFieldErrors`: forma e stile da riusare, non da riscrivere.
+      - `cli/internal/web/server.go` — `registerRoutes` (le rotte usano la sintassi `"METHOD /path/{param}"` di Go 1.22) e i campi di `Server`, in particolare `cfg`.
+      - `cli/internal/web/handlers.go` righe ~420-470 — `writeJSON`, `decodeJSON` (usa `DisallowUnknownFields`), `writeError` e la mappa `iox.Code*` → stato HTTP.
+      - `cli/internal/workspace/registry.go` — `Registry`, `OpenRegistry`, `List`, `Add`, `Remove`, `Probe`, `ErrEntryNotFound`.
+
+      ## Change
+
+      - **Nuovo** `cli/internal/web/workspaces.go` (plurale: la collezione; `workspace.go` resta l'azione di creazione).
+      - `cli/internal/web/server.go` — solo tre righe nuove in `registerRoutes` e, se serve, un campo `registry` su `Server`.
+      - Non obiettivo: modificare `handleCreateWorkspace` (è il TASK-06), toccare il frontend, aggiungere comandi CLI.
+
+      ## Steps
+
+      1. In `Server`, aggiungi il campo `registry *workspace.Registry`. In `NewServer` valorizzalo con `workspace.OpenRegistry()`: se restituisce errore, **non** far fallire la costruzione — lascia il campo `nil` e continua. Un viewer deve partire anche su una macchina la cui directory di stato non è risolvibile (AC-5).
+      2. In `workspaces.go` dichiara la vista:
+         ```go
+         type workspaceEntryView struct {
+             ID           string    `json:"id"`
+             Name         string    `json:"name"`
+             Path         string    `json:"path"`
+             LastOpenedAt time.Time `json:"lastOpenedAt"`
+             Status       string    `json:"status"`
+             Reachable    bool      `json:"reachable"`
+             Current      bool      `json:"current"`
+         }
+         type workspaceListView struct {
+             Workspaces []workspaceEntryView `json:"workspaces"`
+         }
+         ```
+         `Workspaces` va sempre inizializzato a slice vuota, mai lasciato `nil`: il JSON deve essere `[]` e non `null`, perché il frontend itera senza controlli.
+      3. Scrivi l'aiutante `func (s *Server) workspaceViews(entries []workspace.Entry) []workspaceEntryView`: per ogni voce chiama `workspace.Probe`, riempie `Status` con la stringa dello stato, `Reachable` con `status.Reachable()`, e `Current` confrontando `filepath.Clean(e.Path)` con `filepath.Clean(s.cfg.ProjectRoot)`.
+      4. `func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request)`:
+         - registro `nil` → `writeJSON(w, http.StatusOK, workspaceListView{Workspaces: []workspaceEntryView{}})`;
+         - altrimenti `s.registry.List()`; su errore rispondi comunque `200` con elenco vuoto (AC-5: l'elenco non è un punto di rottura del viewer);
+         - `writeJSON(w, http.StatusOK, ...)`.
+      5. `func (s *Server) handleAddWorkspace(w http.ResponseWriter, r *http.Request)`:
+         - corpo `struct{ Path string \`json:"path"\` }` via `decodeJSON`;
+         - registro `nil` → `writeError` con `iox.NewPrecondition("the workspace registry is unavailable", "set ARCHETIPO_STATE_DIR to a writable directory", nil)`;
+         - `s.registry.Add(req.Path)`; su `*workspace.ValidationError` usa `writeFieldErrors` con lo stesso messaggio/hint stilistico di `handleCreateWorkspace` («the workspace could not be added: …»), riusando `workspaceFieldErrors`; su altro errore `writeError`;
+         - successo → `writeJSON(w, http.StatusCreated, s.workspaceViews([]workspace.Entry{entry})[0])`.
+      6. `func (s *Server) handleRemoveWorkspace(w http.ResponseWriter, r *http.Request)`:
+         - `id := r.PathValue("id")`; vuoto → `writeError(iox.NewInvalidInput(...))`;
+         - registro `nil` → `writeError` con la stessa precondizione del punto 5;
+         - `s.registry.Remove(id)`: su `errors.Is(err, workspace.ErrEntryNotFound)` → `writeError(iox.NewNotFound("no known workspace with that id", "reload the list", err))` (che `writeError` traduce in `404`); altro errore → `writeError`;
+         - successo → `w.WriteHeader(http.StatusNoContent)`, senza corpo.
+      7. In `registerRoutes`, subito dopo le due rotte di US-044:
+         ```go
+         s.mux.HandleFunc("GET /api/workspaces", s.handleListWorkspaces)
+         s.mux.HandleFunc("POST /api/workspaces", s.handleAddWorkspace)
+         s.mux.HandleFunc("DELETE /api/workspaces/{id}", s.handleRemoveWorkspace)
+         ```
+      8. Commenta ogni gestore nello stile del file: perché la rotta esiste e perché degrada invece di fallire, non che cosa fa riga per riga.
+      9. Esegui `gofmt -l cli/internal/web`.
+
+      ## Verify
+
+      - Esegui da `cli/`: `gofmt -l . && go build ./... && go vet ./...`
+      - Expect: nessun output, build e vet puliti.
+      - Esegui da `cli/`: `go test ./internal/web/...`
+      - Expect: verde — nessuna regressione sui test esistenti del viewer.
+
+      ## Done
+
+      - [ ] AC-2 — `GET /api/workspaces` risponde `200` con `workspaces[]`, ogni elemento con `id`, `name`, `path`, `lastOpenedAt`, `status`, `reachable`, `current`.
+      - [ ] AC-3 — l'elenco è costruito su tutte le voci del registro, senza alcun filtro sulla raggiungibilità: `status` è calcolato da `workspace.Probe` al momento della richiesta.
+      - [ ] AC-4 — `DELETE /api/workspaces/{id}` chiama solo `Registry.Remove` e risponde `204`; un id ignoto risponde `404`.
+      - [ ] AC-5 — con registro non disponibile la lista risponde `200` con elenco vuoto e la costruzione del server non fallisce.
+      - [ ] `POST /api/workspaces` rifiuta con `400 {error,code,hint,fields[]}` sul campo `path`.
+      - [ ] `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test ./internal/web/...` puliti da `cli/`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Registrazione automatica alla creazione e all'apertura di un workspace
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Un workspace creato dalla UI e il workspace che il viewer sta servendo entrano nel registro da soli, senza che un registro indisponibile faccia fallire né la creazione né l'avvio del viewer.
+
+      ## Read
+
+      - `cli/internal/web/workspace.go` — `handleCreateWorkspace` e `createWorkspaceView`: qui si aggancia la registrazione della creazione.
+      - `cli/internal/web/server.go` — `Server`, il campo `registry` aggiunto dal TASK-05 e `cfg.ProjectRoot`.
+      - `cli/internal/cli/view_cmd.go` righe ~80-100 — `onReady`, con `viewreg.Register` e il trattamento del suo errore (una riga su `s.err`, il viewer parte comunque): la registrazione del workspace segue esattamente quel modello.
+      - `cli/internal/workspace/registry.go` — `Touch`.
+
+      ## Change
+
+      - `cli/internal/web/workspace.go` — un campo nuovo su `createWorkspaceView` e la chiamata a `Touch` dopo un `Initialize` riuscito.
+      - **Nuovo metodo** in `cli/internal/web/workspaces.go`: `func (s *Server) RegisterWorkspace() error`.
+      - `cli/internal/cli/view_cmd.go` — una chiamata dentro `onReady`.
+      - Non obiettivo: registrare il workspace dentro `NewServer` (il costruttore è usato da decine di test e non deve scrivere su disco a livello utente); registrare qualcosa in `archetipo init`, che resta un comando di CLI e non un'apertura dalla UI.
+
+      ## Steps
+
+      1. In `createWorkspaceView` aggiungi `RegistryWarning string \`json:"registryWarning,omitempty"\`` con un commento che spiega perché esiste: la creazione è già avvenuta sul disco, quindi un registro non scrivibile non può farla fallire, ma non deve nemmeno essere invisibile.
+      2. In `handleCreateWorkspace`, dopo l'`Initialize` riuscito e prima della risposta:
+         ```go
+         warning := ""
+         if s.registry == nil {
+             warning = "the workspace registry is unavailable: the new workspace was not added to the known list"
+         } else if _, terr := s.registry.Touch(result.Dir); terr != nil {
+             warning = "the new workspace could not be added to the known list: " + terr.Error()
+         }
+         ```
+         e passa `warning` in `RegistryWarning`. Lo stato della risposta resta `201` in ogni caso.
+      3. In `workspaces.go` scrivi:
+         ```go
+         // RegisterWorkspace records the workspace this viewer serves as opened now.
+         func (s *Server) RegisterWorkspace() error
+         ```
+         Restituisce `nil` quando `s.cfg.ProjectRoot` è vuoto (niente da registrare) e un errore avvolto in `iox` quando il registro è indisponibile o la scrittura fallisce; altrimenti `s.registry.Touch(s.cfg.ProjectRoot)` e `nil`.
+      4. In `view_cmd.go`, dentro `onReady`, subito dopo il blocco `viewreg.Register`:
+         ```go
+         if rerr := srv.RegisterWorkspace(); rerr != nil {
+             fmt.Fprintf(s.err, "(could not record the workspace in the known list: %v)\n", rerr)
+         }
+         ```
+         Nessun `return`: l'avvio del viewer non dipende dal registro (AC-5).
+      5. Esegui `gofmt -l cli/internal/web cli/internal/cli`.
+
+      ## Verify
+
+      - Esegui da `cli/`: `gofmt -l . && go build ./... && go vet ./...`
+      - Expect: nessun output, build e vet puliti.
+      - Esegui da `cli/`: `go test ./internal/web/... ./internal/cli/...`
+      - Expect: verde — in particolare `view_cmd_internal_test.go` non deve regredire.
+
+      ## Done
+
+      - [ ] AC-1 — `handleCreateWorkspace` chiama `Touch(result.Dir)` dopo ogni `Initialize` riuscito.
+      - [ ] AC-1 — `(*Server).RegisterWorkspace()` esiste ed è chiamato da `view_cmd.go` dentro `onReady`.
+      - [ ] AC-5 — un registro indisponibile o non scrivibile non cambia lo stato `201` della creazione, che porta invece `registryWarning`, e non impedisce al viewer di partire.
+      - [ ] Nessuna registrazione avviene dentro `NewServer`.
+      - [ ] `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test ./internal/web/... ./internal/cli/...` puliti da `cli/`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Test del contratto HTTP e della registrazione automatica
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+
+      È dimostrato sul server vero che l'elenco riporta nome, percorso e ultimo accesso, che una voce non raggiungibile resta elencata, che la rimozione non tocca il disco e che un registro indisponibile non rompe nulla.
+
+      ## Read
+
+      - `cli/internal/web/workspace_test.go` — è il modello diretto: come si costruisce un `Server` di test, come si fanno le richieste, come si asserisce sul JSON. Riusa i suoi aiutanti invece di scriverne di nuovi.
+      - `cli/internal/web/workspaces.go` — le tre rotte e `RegisterWorkspace`.
+      - `cli/internal/web/workspace.go` — `handleCreateWorkspace` con `registryWarning`.
+      - `cli/internal/workspace/registry.go` — `Registry`, `Touch`, `EntryID`.
+
+      ## Change
+
+      - **Nuovo** `cli/internal/web/workspaces_test.go` (package `web`, test interni: serve poter valorizzare il campo `registry` del `Server`).
+      - Nessun file di produzione.
+      - Non obiettivo: modificare `workspace_test.go` esistente, salvo un aiutante da esportare all'interno del package se necessario.
+
+      ## Steps
+
+      1. Scrivi l'aiutante `func newWorkspacesTestServer(t *testing.T, projectRoot string) (*Server, *workspace.Registry)`: costruisce il `Server` come fa `workspace_test.go`, con `cfg.ProjectRoot = projectRoot`, e sostituisce `srv.registry` con `&workspace.Registry{Dir: t.TempDir()}`. Il registro non deve mai finire nella directory di stato reale della macchina.
+      2. `TestListWorkspacesEmptyIsNotNull` (AC-5): senza alcuna voce, `GET /api/workspaces` risponde `200` e il corpo grezzo contiene `"workspaces":[]`, non `null`.
+      3. `TestListWorkspacesReportsNamePathAndLastOpened` (AC-2): registra due workspace veri (directory con `.archetipo/config.yaml`) via `reg.Touch`; `GET /api/workspaces` risponde `200`, ha due elementi, ciascuno con `name` non vuoto, `path` assoluto atteso, `lastOpenedAt` che si parsa come `time.Time` non zero, `status == "reachable"` e `reachable == true`. La voce il cui percorso è `cfg.ProjectRoot` ha `current == true`, l'altra `false`.
+      4. `TestListWorkspacesKeepsUnreachableEntries` (AC-3): registrati due workspace, `os.Rename` sulla directory del primo; `GET /api/workspaces` risponde ancora con **due** elementi, e quello rinominato ha `reachable == false` e `status == "missing"`. Aggiungi il caso di una directory a cui viene tolto `.archetipo/config.yaml` → `status == "not_a_workspace"`, `reachable == false`.
+      5. `TestAddWorkspaceAcceptsAnExistingOne` (AC-1): `POST /api/workspaces` con `{"path": <workspace vero>}` risponde `201`, il corpo ha `id`, `name`, `path`, `lastOpenedAt` e `reachable == true`; una `GET` successiva lo elenca. Una seconda `POST` sullo stesso percorso risponde ancora `201` e l'elenco resta di **un** elemento.
+      6. `TestAddWorkspaceRefusals`: tabella con corpo `{"path":""}` → `400` e `fields[0].code == "WORKSPACE_REGISTRY_PATH_REQUIRED"`; percorso relativo → `..._NOT_ABSOLUTE`; percorso inesistente → `..._MISSING`; directory senza `.archetipo/config.yaml` → `WORKSPACE_REGISTRY_NOT_A_WORKSPACE`. Verifica anche che `fields[0].field == "path"` e che il corpo abbia `error`, `code` e `hint`.
+      7. `TestRemoveWorkspaceLeavesFilesUntouched` (AC-4): registra un workspace; raccogli l'inventario ricorsivo della sua directory; `DELETE /api/workspaces/{id}` risponde `204` con corpo vuoto; l'elenco successivo non lo contiene; l'inventario è identico e `.archetipo/config.yaml` è ancora leggibile.
+      8. `TestRemoveUnknownWorkspace`: `DELETE /api/workspaces/does-not-exist` risponde `404` con `code` valorizzato.
+      9. `TestCreateWorkspaceRegistersIt` (AC-1): riusa lo scenario di creazione riuscita già presente in `workspace_test.go`; dopo il `201`, `reg.List()` contiene una voce con il percorso creato, e `GET /api/workspaces` la elenca.
+      10. `TestCreateWorkspaceSurvivesAnUnavailableRegistry` (AC-5): metti `srv.registry = nil`; la creazione risponde comunque `201` e il corpo ha `registryWarning` non vuoto.
+      11. `TestRegisterWorkspaceRecordsTheServedRoot` (AC-1): `srv.RegisterWorkspace()` restituisce `nil` e lascia in `reg.List()` una voce con `Path == filepath.Clean(cfg.ProjectRoot)`. Con `srv.registry = nil` restituisce un errore non nil, e con `cfg.ProjectRoot` vuoto restituisce `nil` senza scrivere.
+      12. Esegui `gofmt -l cli/internal/web`.
+
+      ## Verify
+
+      - Esegui da `cli/`: `go test ./internal/web/... -run 'Workspace' -v`
+      - Expect: tutti i test nuovi passano, insieme a quelli di US-044 già presenti in `workspace_test.go`.
+      - Esegui da `cli/`: `go test ./internal/web/...`
+      - Expect: l'intero package verde.
+      - Esegui da `cli/`: `gofmt -l . && go vet ./...`
+      - Expect: nessun output, nessun errore.
+
+      ## Done
+
+      - [ ] AC-1 — test che provano la registrazione automatica alla creazione e all'apertura (`RegisterWorkspace`).
+      - [ ] AC-2 — un test verifica su ogni elemento dell'elenco `name`, `path` assoluto e `lastOpenedAt` non zero.
+      - [ ] AC-3 — un test rinomina una directory registrata e verifica che la voce sia **ancora presente** con `reachable: false` e `status: "missing"`.
+      - [ ] AC-4 — un test confronta l'inventario del workspace prima e dopo `DELETE` e li trova identici; l'id ignoto risponde `404`.
+      - [ ] AC-5 — un test prova che con registro indisponibile la creazione resta `201` con `registryWarning` e la lista risponde `200` con elenco vuoto.
+      - [ ] Nessun test scrive nella directory di stato reale: tutti usano `&workspace.Registry{Dir: t.TempDir()}`.
+      - [ ] `go test ./internal/web/...` verde da `cli/`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Modale «Workspaces» nel viewer — elenco, stato e rimozione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Dal viewer si apre un elenco dei workspace conosciuti con nome, percorso e ultimo accesso, si aggiunge un workspace esistente sul disco e si rimuove una voce.
+
+      ## Read
+
+      - `cli/internal/web/assets/index.html` righe ~60-70 (i pulsanti dell'header, fra cui `#new-workspace-btn`) e righe ~349-436 (il modale `#new-workspace-modal`): struttura, classi e forma dei campi da riusare.
+      - `cli/internal/web/assets/app.js` righe ~3083-3245 — la sezione `---- New workspace ----`: apertura del modale, `apiGet`/`apiPost`, `renderFieldErrors`, `clearWorkspaceErrors`, `showToast`. La sezione nuova le sta accanto e segue lo stesso stile.
+      - `cli/internal/web/assets/app.js` righe ~1235-1250 — `confirmAndDeleteSpec`: il modello per la conferma di una rimozione.
+      - `cli/internal/web/assets/app.js` righe ~2032-2036 — `formatExecutionTime`: la resa di una data già usata dal viewer.
+      - `cli/internal/web/assets/app.js` righe ~2855-2890 — `apiGet`, `apiPost`, `apiDelete` e come propagano `err.fields`.
+      - `cli/internal/web/assets/app.css` — le classi `modal-root`, `modal`, `modal-header`, `field`, `field-error`, `field-hint`, `status-msg`, `primary-btn`, `ghost-btn`, `code-slot`, `form-notice`.
+
+      ## Change
+
+      - `cli/internal/web/assets/index.html` — un pulsante `#workspaces-btn` nell'header subito dopo `#new-workspace-btn`, e un modale `#workspaces-modal` accanto a `#new-workspace-modal`.
+      - `cli/internal/web/assets/app.js` — una sezione `---- Known workspaces ----`.
+      - `cli/internal/web/assets/app.css` — solo le classi nuove che servono all'elenco (riga, badge di stato); non ridefinire classi esistenti.
+      - Non obiettivo: aprire un workspace dall'elenco (fuori ambito), rinominare una voce, ordinare o filtrare l'elenco lato client (l'ordine arriva dal server), toccare la logica del modale `New workspace`.
+
+      ## Steps
+
+      1. **HTML — pulsante.** Aggiungi in header, con la stessa forma di `#new-workspace-btn`, un `<button id="workspaces-btn" type="button" class="ghost-btn">` con un'icona SVG inline (stile a 14×14, `stroke="currentColor"`, `stroke-width="1.2"`) e `<span>Workspaces</span>`.
+      2. **HTML — modale.** Aggiungi `<div id="workspaces-modal" class="modal-root hidden" role="dialog" aria-modal="true" aria-labelledby="workspaces-title">` contenente:
+         - un `modal-header` con titolo `Known workspaces`, occhiello `workspaces` e pulsante `#workspaces-modal-close` identico a quello del modale di US-044;
+         - `<div id="workspaces-list"></div>` per le righe;
+         - `<p id="workspaces-empty" class="form-notice hidden">No workspace has been recorded yet. Create one, or add an existing one below.</p>`;
+         - un `<form id="workspaces-add-form" class="form-grid" novalidate>` con un campo `full` `path` (`placeholder="/absolute/path/to/an/existing/workspace"`, `field-hint` che dice che la directory deve contenere `.archetipo/config.yaml`, `span.field-error[data-error-for="path"]`), un `button[type=submit]#workspaces-add-submit.primary-btn` con testo `Add workspace`, e `<span class="status-msg" id="workspaces-status" aria-live="polite"></span>`.
+      3. **JS — riferimenti.** Nel blocco iniziale di `document.getElementById` (righe ~55-80) aggiungi i riferimenti ai nuovi id.
+      4. **JS — apertura.** `async function openWorkspaces()`: rimuove `hidden` dal modale, azzera il form e gli errori, svuota lo stato e chiama `loadWorkspaces()`.
+      5. **JS — caricamento.** `async function loadWorkspaces()`: `apiGet("/api/workspaces")`; su errore scrive il messaggio in `#workspaces-status` con classe `status-msg err` e lascia l'elenco vuoto — non lancia; su successo chiama `renderWorkspaces(view.workspaces || [])`.
+      6. **JS — resa.** `function renderWorkspaces(items)`: svuota `#workspaces-list`; se `items.length === 0` mostra `#workspaces-empty` e termina; altrimenti, per ciascun elemento, costruisce una riga con:
+         - il nome, e accanto un badge `current` quando `item.current` è vero;
+         - il percorso in un `<code>`;
+         - `Last opened: ${formatExecutionTime(item.lastOpenedAt)}`;
+         - un badge di stato: quando `item.reachable` è vero, `reachable`; altrimenti un badge di errore con l'etichetta presa da una mappa `{missing: "not found", not_a_directory: "not a directory", not_readable: "not readable", not_a_workspace: "not an ARchetipo workspace"}` e, per uno stato sconosciuto, il valore grezzo di `item.status`;
+         - un `<button class="ghost-btn" data-remove="<id>">Remove</button>`.
+         Costruisci i nodi con `document.createElement` e `textContent`, oppure con `escapeHtml` se usi l'innerHTML come fa il resto del file: un percorso arriva dall'utente e non deve mai finire in HTML non sanificato.
+      7. **JS — rimozione.** `async function removeWorkspace(id, name)`: `window.confirm("Remove <name> from the known workspaces? The workspace directory and its files on disk are not touched.")`; se confermato, `apiDelete(\`/api/workspaces/${encodeURIComponent(id)}\`)`, poi `showToast("Removed from the known workspaces", "ok")` e `loadWorkspaces()`. Su errore, messaggio in `#workspaces-status` con classe `err`. Il testo della conferma deve dire esplicitamente che i file non vengono toccati (AC-4).
+      8. **JS — aggiunta.** `async function onAddWorkspace(e)`: `preventDefault`, pulisce gli errori di campo, `apiPost("/api/workspaces", {path: <valore trimmato>})`; su successo azzera il campo, mostra `showToast(\`${res.name} added\`, "ok")` e ricarica l'elenco; su errore con `Array.isArray(err.fields)` usa `renderFieldErrors(workspacesAddForm, workspacesStatus, err.fields)`, altrimenti scrive il messaggio in `#workspaces-status`.
+      9. **JS — chiusura ed eventi.** `closeWorkspaces()` rimette `hidden`; aggancia il click del pulsante header, del pulsante di chiusura, il `submit` del form e una delega sul click di `#workspaces-list` che intercetta `[data-remove]`. Se il file ha già una gestione centralizzata di `Escape` o del click sullo sfondo per i modali, aggancia il nuovo modale a quella invece di duplicarla.
+      10. **CSS.** Aggiungi le sole classi nuove (per esempio `.workspace-row`, `.workspace-row-main`, `.workspace-badge`, `.workspace-badge.warn`) nello stile delle esistenti, con le variabili di colore già in uso nel file. Nessuna regola esistente va modificata.
+      11. Verifica a mano nel browser: `cd cli && go run ./cmd/archetipo view --no-open --port 8099` dal root del repository, poi apri `http://127.0.0.1:8099`, apri il modale, aggiungi il repository stesso come workspace esistente, osserva la riga e rimuovila.
+
+      ## Verify
+
+      - Esegui da `cli/`: `gofmt -l . && go build ./... && go test ./internal/web/...`
+      - Expect: nessun output da `gofmt`, build pulita, package `web` verde (gli asset sono embedded: una modifica al frontend deve comunque lasciare verde il package).
+      - Esegui dal root del repository: `node --check cli/internal/web/assets/app.js`
+      - Expect: nessun errore di sintassi.
+      - Verifica manuale nel browser come al passo 11.
+      - Expect: il modale si apre, elenca almeno il workspace corrente marcato `current`, l'aggiunta di un percorso relativo mostra l'errore sotto il campo `path`, e il `Remove` chiede conferma nominando i file non toccati.
+
+      ## Done
+
+      - [ ] AC-2 — ogni riga dell'elenco mostra nome, percorso e ultimo accesso reso in forma leggibile.
+      - [ ] AC-3 — una voce non raggiungibile resta in elenco con un badge che ne dà il motivo, e non è nascosta né filtrata.
+      - [ ] AC-4 — la conferma di rimozione dichiara esplicitamente che i file sul disco non vengono toccati, e la rimozione chiama solo `DELETE /api/workspaces/{id}`.
+      - [ ] Il form di aggiunta rende i rifiuti sotto il campo `path` con `renderFieldErrors`.
+      - [ ] Il frontend non contiene alcun elenco di stati codificato come verità: rende `item.status` con una mappa di etichette e un fallback sul valore grezzo.
+      - [ ] Percorsi e nomi arrivano nel DOM via `textContent` o `escapeHtml`.
+      - [ ] `go build ./...`, `go test ./internal/web/...` e `node --check` puliti.
+
+      ## Blockers
+
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Smoke e2e del registro dei workspace, sulla traccia della dimostrazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Objective
+
+      La dimostrazione scritta nella storia è eseguita da capo a fondo contro una CLI costruita da sorgente e un viewer reale, con le asserzioni fatte sul contratto HTTP e sul filesystem.
+
+      ## Read
+
+      - `test/e2e/create-workspace-view-smoke.mjs` — è il modello **diretto**: `parseArgs`, `createRunDir`, `buildCLI`, `runCommand`, `startViewServer`, `apiJSON`, `postExpectingStatus`, `listRecursive`, `assertEqual`, `stopProcess`, e il modo in cui l'esito viene riassunto. Copiane la struttura, non reinventarla.
+      - `package.json` — la sezione `scripts` e la convenzione di nome `test:view-*-smoke`.
+      - `AGENTS.md`, sezione «E2E tests» — le regole della sandbox e il fatto che `test/workspaces/*` è ignorato e non va committato.
+      - `cli/internal/workspace/registry.go` — `EnvStateDir` e la forma del file `workspaces.json`.
+
+      ## Change
+
+      - **Nuovo** `test/e2e/known-workspaces-view-smoke.mjs`.
+      - `package.json` — una riga nuova in `scripts`: `"test:view-workspaces-smoke": "node ./test/e2e/known-workspaces-view-smoke.mjs"`.
+      - Non obiettivo: modificare `create-workspace-view-smoke.mjs`, toccare `test/e2e/run.yaml`, introdurre un framework browser.
+
+      ## Steps
+
+      1. Copia lo scheletro di `create-workspace-view-smoke.mjs`: intestazione con la spiegazione di cosa è reale, `main()` con `runDir`/`sandboxDir`/`targetsDir`, `try/finally` che ferma il viewer, e l'elenco `verified` stampato alla fine.
+      2. **Isolamento del registro.** Calcola `stateDir = path.join(runDir, "state")` e passa `ARCHETIPO_STATE_DIR: stateDir` nell'ambiente sia di `runCommand` sia di `startViewServer` (estendi `cliEnv`, e adatta `startViewServer` perché accetti l'ambiente). Senza questo lo smoke scriverebbe nel registro reale della macchina: è un requisito, non un dettaglio.
+      3. Costruisci la CLI e inizializza la sandbox con `archetipo init --tool pi --connector file --yes`, come fa lo smoke di US-044. Poi avvia il viewer sulla sandbox.
+      4. **AC-5 (registro assente).** Prima di ogni cosa verifica che `stateDir/workspaces.json` **non** esista e che `GET /api/workspaces` risponda comunque `200`; poi verifica che `GET /api/board` risponda `200`, cioè che il viewer sia operativo.
+      5. **AC-1 (apertura).** L'avvio del viewer ha registrato la sandbox: `GET /api/workspaces` contiene una voce con `path` uguale al percorso reale della sandbox (confronta con `fs.realpath` su entrambi i lati, perché su macOS `/var` è un link simbolico a `/private/var`) e `current === true`.
+      6. **AC-1 (creazione).** `POST /api/workspace` con `{dir: <targets/creato>, connector: "file", tools: ["pi"], paths, worktree}` attesa `201`; poi `GET /api/workspaces` contiene **due** voci, e quella nuova ha `current === false`.
+      7. **AC-2.** Su entrambe le voci verifica: `name` uguale al base name della directory; `path` assoluto e uguale a quello atteso; `lastOpenedAt` parsabile come data valida e non zero. Registra `AC-2 — l'elenco riporta nome, percorso e ultimo accesso`.
+      8. **Aggiunta di un workspace esistente.** Crea un terzo workspace con `archetipo init` in `targets/esistente` (una directory che il viewer non ha mai visto), poi `POST /api/workspaces` con `{path: <quella directory>}` attesa `201`; l'elenco passa a **tre** voci. Verifica anche che una `POST` con `{"path": "relativo"}` risponda `400` con `fields[0].field === "path"` e `fields[0].code === "WORKSPACE_REGISTRY_PATH_NOT_ABSOLUTE"`.
+      9. **AC-3.** `fs.rename` della directory del workspace creato al passo 6 verso un nome nuovo; poi `GET /api/workspaces` ha ancora **tre** voci, e quella rinominata ha `reachable === false` e `status === "missing"`. Registra `AC-3 — un workspace non più raggiungibile è segnalato, non rimosso`.
+      10. **AC-4.** Prendi `before = await listRecursive(<directory del workspace "esistente">)`; `DELETE /api/workspaces/{id}` di quella voce attesa `204`; l'elenco scende a **due** voci senza quell'id; `listRecursive` della stessa directory è identico a `before` (confronto con `assertSameList`), e `.archetipo/config.yaml` è ancora leggibile. Registra `AC-4 — la rimozione dal registro non tocca i file sul disco`.
+      11. **AC-5 (registro corrotto).** Scrivi `not json` in `stateDir/workspaces.json`; verifica che `GET /api/board` risponda ancora `200` e che `GET /api/workspaces` risponda `200` con elenco vuoto; poi `POST /api/workspaces` con un percorso valido risponde `201`, e `JSON.parse` del file di registro riesce con `schema === 1` e una voce. Registra `AC-5 — un registro assente o illeggibile non blocca nulla e si ricrea alla prima scrittura`.
+      12. Stampa l'elenco `verified` e chiudi con exit `0`; l'`catch` finale stampa `FAIL: <messaggio>` ed esce con `1`, come lo smoke di US-044.
+      13. Aggiungi lo script a `package.json` e verifica che il file JSON resti valido.
+
+      ## Verify
+
+      - Esegui dal root del repository: `npm run test:view-workspaces-smoke`
+      - Expect: exit `0` e l'elenco delle righe `AC-1`…`AC-5` verificate. La baseline non ha smoke rossi, quindi questo deve passare senza eccezioni tollerate.
+      - Esegui dal root del repository: `npm run test:view-workspace-smoke`
+      - Expect: exit `0` — lo smoke di US-044 non regredisce, cioè la creazione continua a comportarsi come prima e il nuovo `registryWarning` non ne rompe le asserzioni.
+      - Esegui dal root del repository: `git status --porcelain test/workspaces`
+      - Expect: nessun file da committare (le run degli smoke sono ignorate).
+
+      ## Done
+
+      - [ ] AC-1 — lo smoke prova che il workspace servito dal viewer e quello creato dalla UI entrano entrambi nel registro, che vive in `ARCHETIPO_STATE_DIR` e non dentro i workspace.
+      - [ ] AC-2 — lo smoke verifica nome, percorso e `lastOpenedAt` su ogni voce elencata.
+      - [ ] AC-3 — dopo la rinomina della directory l'elenco ha ancora lo stesso numero di voci e quella rinominata riporta `reachable: false`, `status: "missing"`.
+      - [ ] AC-4 — l'inventario ricorsivo su disco prima e dopo la `DELETE` è identico.
+      - [ ] AC-5 — con registro assente e poi corrotto il viewer resta operativo, e la prima scrittura successiva rigenera un file valido.
+      - [ ] Lo smoke passa `ARCHETIPO_STATE_DIR` a ogni processo che avvia, e non scrive nella directory di stato reale.
+      - [ ] `package.json` espone `test:view-workspaces-smoke` e resta JSON valido.
+      - [ ] `npm run test:view-workspaces-smoke` e `npm run test:view-workspace-smoke` escono `0`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Gate finale — controlli completi e richiesta di review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+    body: |-
+      ## Objective
+
+      L'intera suite che questo repository considera vincolante è verde sull'incremento completo, e la storia passa in review solo dopo che ogni task risulta `DONE`.
+
+      ## Read
+
+      - `AGENTS.md`, sezione «Rules for CLI changes» — l'elenco esatto dei controlli pre-consegna, che è il contratto a cui questo gate risponde.
+      - La sezione `## Baseline` del piano — è il metro di paragone: nessun comando era rosso, quindi ogni comando qui deve essere verde, e `golangci-lint` era assente e va installato.
+
+      ## Change
+
+      - Nessuna modifica di codice è prevista da questo task. Se un controllo fallisce, correggi il file responsabile con la modifica minima e rilancia l'intero elenco da capo — non dichiarare il gate superato su un elenco parziale.
+
+      ## Steps
+
+      1. Se `golangci-lint` non è nel `PATH`, installalo: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`.
+      2. Esegui, da `cli/` e in quest'ordine, i cinque controlli di `AGENTS.md`: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`, `golangci-lint run --timeout 5m ./...`.
+      3. Esegui, dal root del repository, gli smoke rilevanti: `npm run test:view-workspaces-smoke` e `npm run test:view-workspace-smoke`.
+      4. Verifica che nessun artefatto di test sia finito nell'albero: `git status --porcelain` non deve elencare nulla sotto `test/workspaces/` né `test/e2e/.bin/`.
+      5. Verifica che l'incremento non abbia toccato i file estranei elencati nella baseline: `git status --porcelain cli/internal/execution` deve mostrare solo le modifiche preesistenti (`arcipelago/events.go`, `claude/`, `codex/`, `localrun/events.go`), nessuna nuova.
+      6. Marca questo task come `DONE`.
+      7. Da `/Users/stefanoleli/Project/Archetipo`, esegui `archetipo spec show US-045` e leggi `data.tasks`: ogni task deve risultare `DONE`.
+      8. Solo quando nessun task è rimasto `TODO`, richiedi la review con `archetipo spec review US-045`.
+
+      ## Verify
+
+      - Esegui da `cli/`: `gofmt -l .`
+      - Expect: nessun output.
+      - Esegui da `cli/`: `go vet ./...`
+      - Expect: nessun errore.
+      - Esegui da `cli/`: `go build ./...`
+      - Expect: compilazione pulita.
+      - Esegui da `cli/`: `go test ./...`
+      - Expect: tutti i package verdi, compresi `internal/workspace`, `internal/web` e `internal/cli`.
+      - Esegui da `cli/`: `golangci-lint run --timeout 5m ./...`
+      - Expect: `0 issues`.
+      - Esegui dal root: `npm run test:view-workspaces-smoke && npm run test:view-workspace-smoke`
+      - Expect: entrambi exit `0`.
+      - Esegui da `/Users/stefanoleli/Project/Archetipo`: `archetipo spec show US-045`
+      - Expect: nessun task con `status` diverso da `DONE`.
+
+      ## Done
+
+      - [ ] I cinque controlli di `AGENTS.md` sono stati eseguiti da `cli/` e sono tutti verdi, `golangci-lint` compreso.
+      - [ ] `npm run test:view-workspaces-smoke` e `npm run test:view-workspace-smoke` escono `0`.
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5 — ogni criterio ha almeno una verifica verde nella suite appena eseguita, ai livelli dichiarati nella mappa delle evidenze.
+      - [ ] Nessun file toccato dall'incremento introduce diagnostiche di compilatore o linter rispetto alla baseline registrata.
+      - [ ] `git status --porcelain` non elenca artefatti sotto `test/workspaces/` o `test/e2e/.bin/`.
+      - [ ] Questo task è stato marcato `DONE`, `archetipo spec show US-045` è stato rieseguito, nessun task è rimasto `TODO`, e solo dopo è stata invocata `archetipo spec review US-045`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-10

@@ -1,0 +1,866 @@
+schema: archetipo/plan/v2
+spec_code: US-042
+body: |-
+  ## Soluzione tecnica
+
+  ### Intento
+
+  Affiancare alla creazione manuale di una spec (US-031, `POST /api/spec` più la modale `new-spec-modal`) una **creazione assistita**: l'agente pone domande nella UI, propone una spec completa, la persona la rivede e la modifica nel form che già esiste, e solo una conferma esplicita la scrive nel backlog. Un annullamento non lascia traccia e non consuma il codice progressivo.
+
+  ### Decisione di fondo: la proposta non è una scrittura
+
+  L'intera soluzione poggia su una separazione: **la run propone, la conferma scrive**. La run assistita è un'azione di workspace che non tocca il connettore; l'unica scrittura resta `POST /api/spec`, la rotta già consegnata e già validata. Da questa scelta discendono direttamente tre criteri di accettazione:
+
+  - AC-3 è soddisfatto perché la proposta viene versata nel form manuale esistente, che è già interamente modificabile;
+  - AC-4 è soddisfatto perché la persistenza avviene solo sul submit di quel form;
+  - AC-5 è soddisfatto perché `nextSpecCode` (in `cli/internal/web/spec_create.go`) deriva il codice dal backlog persistito **dentro** `handleCreateSpec`: se nessuna spec viene scritta, nessun codice viene consumato. Non esiste un contatore da reintegrare.
+
+  L'alternativa scartata era una rotta dedicata che persistesse una bozza (`.archetipo/drafts/`), sul modello di `spec review-dossier`. È stata scartata perché introdurrebbe un artefatto persistente da governare (ciclo di vita, pulizia, conflitti fra bozze) per ottenere esattamente la garanzia che il record di esecuzione già offre gratis: il `result.payload` di un'esecuzione è già persistito, già ri-leggibile dopo un reload e già esposto da `GET /api/execution/{id}`.
+
+  ### Il rischio che questa scelta apre, e come è chiuso
+
+  Se la run non deve scrivere, occorre che *non abbia scritto*. L'agente è un processo locale con accesso al workspace: nulla gli impedisce fisicamente di invocare `archetipo spec add`. La verifica d'effetto di questa azione è quindi **invertita** rispetto a inception e backlog: là un successo si conferma perché un artefatto è comparso, qui si conferma perché il backlog è rimasto quello di prima.
+
+  Concretamente, in `handleRunWorkspaceAction`:
+
+  - prima di far partire la run si cattura l'elenco dei codici di spec presenti (`ReadExistingBacklog().Codes`), esattamente dove oggi si catturano `existedBefore` e `backlogExistedBefore` e per la stessa ragione: letto dopo, descriverebbe già ciò che la run ha fatto;
+  - nella `Confirmation`, per `ActionSpecDraft`, si chiama `execution.ConfirmSpecDraft`, che degrada il record a `FAILED` con codice `UNCONFIRMED_EFFECT` se sono comparsi codici nuovi e poi rimuove quei codici attraverso `connector.SpecDeleter`.
+
+  La rimozione vale sia per il successo degradato sia per il fallimento vero (timeout, cancellazione dell'operatore): in entrambi i casi ciò che la run ha scritto senza averne titolo torna indietro, e il codice progressivo con esso. È lo stesso principio di `DiscardPartialPRD`/`DiscardPartialBacklog`, con la differenza che qui non si scarta *tutto* l'artefatto — il backlog preesistente appartiene al workspace — ma solo il delta prodotto dalla run.
+
+  `VerifyActionEffect` riceve un `case ActionSpecDraft` esplicito che restituisce `nil`, con il commento che spiega perché: ciò che va confermato per questa azione richiede lo scatto *precedente* alla run, che quella funzione per firma non possiede, e resta quindi al chiamante che tiene il connettore. Lasciarlo cadere nel `default` sarebbe stato equivalente in comportamento e muto sul motivo.
+
+  ### Azione, capability, Template
+
+  - `cli/internal/execution/types.go`: `ActionSpecDraft ActionID = "spec-draft"` e `CapabilityWorkspaceSpecDraft Capability = "workspace.spec_draft"`, aggiunte a `RequiredCapability` e ad `ActionScope` come `ScopeWorkspace`. La distinzione azione/capability resta quella già documentata nel file: chi chiama nomina l'azione, il provider dichiara la capability.
+  - `cli/internal/template/template.go`: la `Fabbrica del software` dichiara una terza `WorkspaceAction`, `{ID: "spec-draft", Label: "Proponi una spec", Skill: "archetipo-spec"}`. La skill è `archetipo-spec` perché è la skill che sa scrivere una spec conforme al backlog; il fatto che qui non persista è una condizione del prompt, non una skill diversa.
+  - `WorkspaceAction` non ha campo `Statuses`, e va bene: come già scritto nel suo commento, l'ammissibilità di un'azione di workspace dipende da un fatto che il processo non conosce e che il server stabilisce.
+
+  ### Ammissibilità (`offers` / `reasonFor` / `workspaceRemedy`)
+
+  In `cli/internal/web/workspace_execution.go`, `spec-draft` è offerta quando il workspace **ha già un backlog**, perché una spec deve essere archiviata sotto un'epica esistente — la stessa precondizione che oggi disabilita il pulsante `New spec` nel frontend. Le ragioni, nell'ordine in cui contano:
+
+  1. backlog illeggibile → si riporta l'errore (`backlogUnreadable`);
+  2. nessun backlog → `"this workspace has no backlog yet: generate it before adding a spec"`, con rimedio `"generate the initial backlog first, then come back to add a spec"`;
+  3. altrimenti offerta, e la metà provider/concorrenza è quella condivisa da `reasonFor`.
+
+  Il PRD non entra in questa decisione: un backlog esiste solo dopo un PRD, quindi la condizione sul backlog lo implica già, e aggiungere un controllo sul PRD produrrebbe due messaggi per lo stesso fatto.
+
+  ### Provider
+
+  La capability è dichiarata dal solo provider `claude`, come già accade per `workspace.inception` e `workspace.backlog`: è l'unico provider che tiene conversazioni su artefatti di workspace, e `codex`/`arcipelago` restano su `spec.*`. Un provider che non la dichiara viene rifiutato da `Service.preflight` prima che qualunque record sia creato.
+
+  `cli/internal/execution/claude/specdraft.go` replica la forma di `backlog.go`: `ensureSkill` sulla skill spec già installata, sessione conversazionale (`openSession(..., true)`), ciclo `converse` con accettore `AcceptSpecDraftReceipt`, `failSpecDraft` con le quattro cause tenute distinte, e `resultForSpecDraft` per il payload. Restano funzioni separate anziché una parametrizzata su artefatto/prompt/ricevuta/diagnostica per la ragione già scritta in `backlog.go`: ciò che cambia fra le due è ogni parola di ogni diagnostica, e ciò che è davvero condiviso — il ciclo di conversazione — è già condiviso in `converse`.
+
+  Il prompt (`buildSpecDraftPrompt` in `prompt.go`) è l'unico dei prompt di questo pacchetto che **vieta** una persistenza, e per la stessa ragione per cui `buildReviewPrompt` vieta le transizioni: il modo di fallire di cui si ha paura è un agente che finisce il lavoro con zelo. Dice quindi, esplicitamente, di non invocare `archetipo spec add` e di non scrivere nel backlog, chiede una domanda per messaggio, e chiude su una riga di ricevuta unica.
+
+  ### Ricevuta
+
+  `cli/internal/execution/specdraftreceipt.go`, sul modello di `backlogreceipt.go`:
+
+  ```json
+  {"artifact":"spec_draft","status":"PROPOSED","title":"…","epic_code":"EP-005","priority":"MEDIUM","points":5,"scope":"MVP","blocked_by":["US-001"],"body":"…"}
+  ```
+
+  `ProposedStatus = "PROPOSED"` è una costante condivisa nel pacchetto `execution`, accanto a `WrittenStatus`, così il prompt che la chiede e il gate che la accetta non possono divergere. `AcceptSpecDraftReceipt` accetta solo `artifact == "spec_draft"`, `status == PROPOSED`, `title`, `epic_code` e `body` non vuoti dopo trim. Le due modalità di fallimento restano distinguibili come per le altre ricevute: nessuna ricevuta significa un agente che non ha mai chiuso la conversazione, una ricevuta che non dichiara una proposta significa un agente che l'ha chiusa senza proporre nulla.
+
+  Il corpo markdown viaggia su una sola riga con `\n` come escape JSON. È una richiesta esplicita del prompt e non un'assunzione: `parseTrailingReceipt` legge l'ultima riga che porta tutte le chiavi attese e non pone limiti di lunghezza.
+
+  La ricevuta è condizione necessaria e mai sufficiente, come le altre: dice che cosa l'agente propone, non che il workspace lo accetti. La validazione strutturale della spec resta di `POST /api/spec`, che già la esegue con `validation.ValidateSpecs` e risponde con `fields[]`.
+
+  ### Payload e trasporto verso il browser
+
+  `resultForSpecDraft` produce il payload consueto — `command`, `model`, `exit_code`, `result_summary`, `turns`, `duration_ms` — più un campo `spec_draft` con i campi proposti. Nessuno stream entra nel record, e `result_summary` resta la sola ricevuta ri-serializzata dal valore tipizzato.
+
+  Il browser legge la proposta da `record.result.payload.spec_draft` su `GET /api/execution/{id}`, che è già la rotta che il pannello di esecuzione consulta e che `renderExecution` già tratta come oggetto JSON annidato (`formatExecutionPayload`). Nessuna rotta nuova, e una proposta ritrovabile dopo un reload perché il record è persistito.
+
+  ### Frontend
+
+  `cli/internal/web/assets/index.html` — la modale `new-spec-modal` acquisisce, sopra il form, una barra a due ingressi (`Compila a mano` / `Proponi con l'agente`, AC-1) e una sezione assistita nascosta con i tre contenitori che il trio pannelli richiede: `spec-draft-actions`, `spec-draft-execution`, `spec-draft-run`.
+
+  `cli/internal/web/assets/app.js`:
+
+  - `SPEC_DRAFT_ACTION = "spec-draft"` è l'unica costante di processo del frontend, e ha esattamente due usi: `loadWorkspaceActions` esclude quell'id dal pannello della modale PRD, `openSpecDraft` include solo quell'id nella modale nuova spec. Il resto — se l'azione sia offerta, se sia eseguibile, perché no — resta un verdetto del server letto da `offered`, `runnable` e `unavailable_reason`;
+  - `openSpecDraft` monta il trio con `mountExecutionPanels({context: SPEC_DRAFT_CONTEXT, startURL: "/api/workspace/execution", …, settle: settleSpecDraft})` e riprende l'eventuale esecuzione in corso con `resumeExecution`, così una conversazione lasciata aperta si ritrova invece di partirne una seconda;
+  - la conversazione e la risposta dell'operatore usano il pannello run già esistente (`bindRunPanel`, `renderRunComposer`, `POST /api/execution/{id}/run/messages`): AC-2 non richiede codice nuovo di dialogo, solo un punto di montaggio;
+  - `settleSpecDraft(record)`: su `SUCCEEDED` legge `record.result.payload.spec_draft`, riempie titolo, epica, priorità, punti, scope, blocked_by e l'editor markdown, riporta la modale in modalità form con un avviso `"Proposta dall'agente — rivedi, modifica e conferma"` (AC-3), e **non** invia nulla. Su `FAILED` resta in modalità assistita mostrando la ragione;
+  - l'epica proposta viene selezionata solo se presente fra le opzioni che il form già offre (le epiche del backlog): una `epic_code` sconosciuta lascia il select sul segnaposto e scrive il messaggio nello slot d'errore del campo, perché il form non deve mai offrire un valore che il backlog non conosce;
+  - `closeNewSpec` con una run assistita attiva chiede `POST /api/execution/{id}/run/cancel` e smonta il pannello (AC-5). Il rollback lato server è la garanzia vera; la cancellazione è ciò che la rende immediata invece di attendere il timeout.
+
+  `cli/internal/web/assets/app.css` riceve solo le regole della barra a due ingressi e della sezione assistita, riusando le classi già esistenti di pannelli e chip.
+
+  ### Rinuncia motivata all'e2e su browser
+
+  Nessun framework browser è presente in questo repository e la spec non ne giustifica l'introduzione. Ogni criterio è dimostrabile a un livello che attraversa comunque i confini reali:
+
+  - AC-1, AC-4, AC-5 attraversano rotta HTTP, connettore e filesystem: sono provati da test Go sul `web.Server` reale servito da `httptest`, con un provider finto registrato;
+  - AC-2 e AC-3 attraversano in più il protocollo del processo agente: sono provati dallo smoke `test:view-spec-draft-smoke`, che usa il viewer reale, il provider `claude` reale e il suo client stream-json reale, con solo il binario dell'agente finto (`test/e2e/support/fake-claude.mjs`, pilotato frame per frame).
+
+  Ciò che un e2e browser aggiungerebbe sopra questi due livelli è la sola resa DOM, che non è dove risiede il rischio di questa spec.
+
+  `Dimostrazione` è filmabile: è un percorso interamente osservabile nella UI. La registrazione resta di competenza di `archetipo-review`.
+
+  ### Fuori ambito, esplicitamente
+
+  Il form manuale non è toccato nella sua logica di invio; la modifica assistita di una spec esistente non è prevista; la pianificazione automatica della spec creata non è prevista. `codex` e `arcipelago` non dichiarano la nuova capability.
+
+  ### Wiki
+
+  `data.wiki.enabled` è `false` in questo workspace: nessun lavoro Wiki, nessun `wiki_impact`, nessun task Wiki. Le decisioni architetturali di questa spec — proposta senza scrittura, verifica d'effetto invertita, rollback del solo delta — sono registrate qui sopra, che è il loro unico luogo.
+
+  ## Baseline
+
+  Rilevata da `AGENTS.md` (sezione *Rules for CLI changes*) e dai comandi di `package.json`. Eseguita in `cli/` prima di progettare i task, sul working tree pulito a `HEAD = 40d30ce`:
+
+  | Comando | Esito registrato |
+  |---|---|
+  | `gofmt -l .` | nessun output |
+  | `go build ./...` | compila |
+  | `go vet ./...` | nessun problema |
+  | `go test ./...` | 1520 test passati in 28 pacchetti |
+  | `PATH="$(go env GOPATH)/bin:$PATH" golangci-lint run --timeout 5m ./...` | 0 issue |
+
+  Nessun comando di baseline è rosso: ogni `Verify` di questo piano può quindi pretendere il verde pieno, e un fallimento durante l'implementazione è sempre un difetto introdotto, mai una condizione preesistente.
+
+  Prerequisiti d'ambiente, distinti dai fallimenti di codice:
+
+  - Go è installato (i comandi sopra girano).
+  - `golangci-lint` deve essere sul `PATH` derivato da `go env GOPATH`. Se manca: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`.
+  - Node.js è richiesto solo dagli smoke `test:*-smoke`, che costruiscono da soli il binario Go in `test/e2e/.bin/`. Nessuna credenziale e nessun traffico fuori da `127.0.0.1`.
+  - Gli smoke sono saltati su Windows, dove lo shebang POSIX dei fake non si applica.
+
+  I file che questo piano tocca non presentano diagnostica preesistente di compilatore o linter, quindi nessun task deve includere una bonifica locale e nessun task può lasciarne di nuova.
+
+  ## Mappa delle evidenze di accettazione
+
+  Per ogni criterio: il livello di test, l'oracolo osservabile, lo stato di partenza e il task che produce l'evidenza. Nessun criterio è provato da un doppio che nasconda il componente responsabile dell'esito.
+
+  | AC | Livello | Oracolo osservabile | Fixture / stato di partenza | Task |
+  |---|---|---|---|---|
+  | AC-1 — accanto alla creazione manuale la UI offre quella assistita | integrazione HTTP sul `web.Server` reale | `GET /api/workspace/actions` elenca l'azione `spec-draft` con `offered: true` e `runnable: true` in un workspace con backlog; con backlog assente la stessa azione è `offered: false` e porta la ragione non vuota | sandbox `filefs` con backlog di due epiche e tre spec; seconda sandbox senza backlog | TASK-10 |
+  | AC-1 (processo) | unità | `template.Default().WorkspaceActions` contiene `spec-draft` con label e skill dichiarate, e `RequiredCapability("spec-draft")` risponde `workspace.spec_draft` con scope `workspace` | registro built-in | TASK-02 |
+  | AC-2 — l'agente pone domande nella UI e la persona risponde prima della proposta | smoke e2e con viewer, provider `claude` e client stream-json reali, solo il binario agente finto | un frame `assistant` seguito da un `result` senza ricevuta diventa un evento `text` su `GET /api/execution/{id}/run` mentre il record resta `RUNNING`; la risposta inviata a `POST /api/execution/{id}/run/messages` raggiunge il processo come frame `user`, è assente dal corpo `202`, ed entra nella conversazione **una sola volta** e solo dopo che il processo la ri-emette | sandbox `archetipo init --tool claude` con backlog, provider di default `claude` puntato su `fake-claude.mjs` | TASK-13 |
+  | AC-3 — la spec proposta è mostrata per intero e modificabile prima della persistenza | smoke e2e (trasporto) + unità (contratto) | alla chiusura sulla riga di ricevuta, `GET /api/execution/{id}` espone `result.payload.spec_draft` con **tutti** i campi del form — `title`, `epic_code`, `priority`, `points`, `scope`, `blocked_by`, `body` — e il backlog è ancora quello di prima; `AcceptSpecDraftReceipt` rifiuta una ricevuta priva di `title`, `epic_code` o `body` | come AC-2 | TASK-13, TASK-04 |
+  | AC-4 — la spec è scritta solo dopo conferma esplicita | integrazione HTTP + smoke e2e | dopo la chiusura `SUCCEEDED` della run, `GET /api/board` non contiene alcuna spec nuova e `.archetipo/specs/` è invariata; solo il successivo `POST /api/spec` con il corpo proposto crea la card, che `GET /api/board` restituisce in `TODO` | sandbox con backlog; run di proposta conclusa | TASK-10, TASK-13 |
+  | AC-5 — l'annullamento non crea spec e non consuma il codice progressivo | integrazione HTTP sul `web.Server` reale, con provider finto che *scrive davvero* una spec e poi fallisce | il record chiude `FAILED`, l'elenco dei codici del backlog è identico a quello catturato prima della run, la spec scritta dalla run non esiste più su disco, e un `POST /api/spec` successivo riceve **lo stesso** codice che avrebbe ricevuto prima della run | sandbox con backlog il cui `last_code` è noto | TASK-10 |
+  | AC-5 (successo degradato) | integrazione HTTP | un provider finto che scrive una spec e poi dichiara successo produce un record `FAILED` con `error.code = "UNCONFIRMED_EFFECT"`, e la spec scritta è rimossa | come sopra | TASK-10 |
+
+  Note sugli oracoli, per evitare deleghe a proxy:
+
+  - «nessuna spec è stata creata» non è provato dall'assenza di una card nella UI ma dall'elenco dei codici letto dal connettore e dal contenuto di `.archetipo/specs/`;
+  - «il codice progressivo non è stato consumato» non è provato dall'invarianza di un contatore — non ne esiste uno — ma dal codice che una creazione reale riceve *dopo* l'annullamento;
+  - «la persona può rispondere prima della proposta» non è provato da una chiamata riuscita a `run/messages` ma dal fatto che il processo agente riceve davvero il frame `user` (il fake lo riporta al server di controllo) e che il messaggio entra nella storia una sola volta e solo alla ri-emissione;
+  - la verifica d'effetto invertita è provata con un provider che compie davvero la scrittura vietata, non con un doppio che la simula: è l'unico modo perché il rollback sia esercitato sul connettore vero.
+
+  ## Strategia di test
+
+  Tre livelli, ciascuno con un confine reale che gli altri non attraversano.
+
+  **Unità di pacchetto (`go test ./...`).** Ricevuta (`specdraftreceipt_test.go`), verifica d'effetto e rollback (`effect_test.go`), azione/capability/scope (`types_test.go`), Template (`template_test.go`), provider claude (`claude/specdraft_test.go` con `Starter` finto e nessun processo reale). Qui si prova ciò che è deterministico e privo di I/O: forma della ricevuta, regola di accettazione, classificazione dei quattro modi di fallire, contenuto del prompt.
+
+  **Integrazione HTTP (`cli/internal/web`).** Il `web.Server` reale servito da `httptest`, il connettore `filefs` reale su una directory temporanea, un provider finto registrato nel registry. È il livello che prova AC-1, AC-4 e AC-5, perché sono affermazioni su ciò che il workspace contiene dopo una run — e il connettore vero è l'unico che può risponderne. Il provider finto è finto solo nel *lavoro*: quando il test vuole esercitare il rollback, quel provider esegue una scrittura reale attraverso il connettore reale.
+
+  **Smoke e2e (`test/e2e/spec-draft-from-view-smoke.mjs`).** Viewer reale, provider `claude` reale, client stream-json reale, sessione locale e run follower reali; finto è solo il binario dell'agente. È il livello che prova AC-2 e AC-3, perché la domanda dell'agente, la risposta dell'operatore e il trasporto della proposta passano tutti dal protocollo del processo, che nessun test Go del viewer attraversa. Lo smoke non contiene alcuna attesa arbitraria: ogni attesa interroga una rotta del viewer o il server di controllo del fake, e il fake non progredisce mai da solo.
+
+  **Regressione.** La suite Go completa più `npm run test:view-execution-smoke` (l'elenco dei provider e delle loro capability cambia con questa spec) e `npm run test:view-backlog-smoke` (condivide `workspace_execution.go`, `converse` e il pannello azioni del PRD, che questa spec modifica).
+
+  **Doppio che non nasconde l'oracolo.** Nessun test prova un criterio contro un mock del componente che ne è responsabile: la verifica d'effetto è provata contro il connettore vero, la conversazione contro il client di protocollo vero, la validazione della spec confermata contro `POST /api/spec` vera.
+
+  ## Note di contesto
+
+  - Precedenti diretti da leggere prima di scrivere: `cli/internal/execution/claude/backlog.go` e `cli/internal/execution/backlogreceipt.go` (forma dell'azione conversazionale e della ricevuta), `cli/internal/web/workspace_execution.go` (ammissibilità, guardia di concorrenza, conferma e rollback), `test/e2e/backlog-from-view-smoke.mjs` (forma dello smoke).
+  - La modale nuova spec e la sua rotta di scrittura restano quelle di US-031: `cli/internal/web/spec_create.go` non va modificato, ed è deliberato — è ciò che rende AC-4 e AC-5 conseguenze del codice già in esercizio anziché nuove promesse.
+  - Il gate Wiki è `false` in questo workspace: nessuna pagina, nessun `wiki_impact`, nessun comando `archetipo wiki`.
+tasks:
+  - id: TASK-01
+    title: Dichiarare l'azione spec-draft, la sua capability e il suo scope
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      L'azione `spec-draft` esiste come azione di workspace del dominio esecuzione, con la sua capability e il suo scope, ed è offerta dal Template `fabbrica-del-software`.
+
+      ## Read
+
+      - `cli/internal/execution/types.go` — il blocco di costanti `ActionID`/`Capability`, `RequiredCapability`, `ActionScope`, e il commento che spiega perché azione e capability restano distinte.
+      - `cli/internal/template/template.go` — `WorkspaceAction`, il suo commento sull'assenza di `Statuses`, e il blocco `WorkspaceActions` di `Builtin()`.
+
+      ## Change
+
+      - `cli/internal/execution/types.go` — aggiungere `ActionSpecDraft ActionID = "spec-draft"` e `CapabilityWorkspaceSpecDraft Capability = "workspace.spec_draft"`; estendere `RequiredCapability` e `ActionScope` (scope `ScopeWorkspace`).
+      - `cli/internal/template/template.go` — aggiungere in coda a `WorkspaceActions` la voce `{ID: "spec-draft", Label: "Proponi una spec", Skill: "archetipo-spec"}`.
+
+      Non-goal: non toccare `Actions` (le azioni su spec), non aggiungere campi a `WorkspaceAction`, non toccare `Skills`.
+
+      ## Steps
+
+      1. In `types.go`, dichiarare la costante d'azione accanto ad `ActionBacklog` e la costante di capability accanto a `CapabilityWorkspaceBacklog`, con un commento di documentazione sulla capability che dica che cosa significa: il provider sa proporre una spec conforme al backlog **senza scriverla**, e che la scrittura non fa parte della capability.
+      2. Estendere lo `switch` di `RequiredCapability` con `case ActionSpecDraft: return CapabilityWorkspaceSpecDraft, nil`.
+      3. Estendere lo `switch` di `ActionScope` aggiungendo `ActionSpecDraft` al `case` che restituisce `ScopeWorkspace`.
+      4. In `template.go`, aggiungere la `WorkspaceAction` in coda alla lista, dopo `backlog`, mantenendo l'ordine di dichiarazione (è l'ordine in cui il client disegna).
+
+      ## Verify
+
+      - Run: `cd cli && go build ./... && go vet ./...`
+      - Expect: compila senza errori e senza segnalazioni, come da baseline.
+
+      ## Done
+
+      - [ ] `RequiredCapability(execution.ActionSpecDraft)` restituisce `execution.CapabilityWorkspaceSpecDraft` senza errore.
+      - [ ] `ActionScope(execution.ActionSpecDraft)` restituisce `execution.ScopeWorkspace` senza errore.
+      - [ ] `template.Default().WorkspaceActions` contiene una voce con `ID == "spec-draft"`, label non vuota e `Skill == "archetipo-spec"` — AC-1 (metà processo).
+      - [ ] Nessuna diagnostica nuova di compilatore o linter nei due file toccati.
+
+      ## Blockers
+
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test di azione, capability, scope e Template per spec-draft
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      La dichiarazione dell'azione è verificata dove è definita: mappatura azione→capability, scope, e presenza nel Template built-in.
+
+      ## Read
+
+      - `cli/internal/execution/types_test.go` — i test esistenti su `RequiredCapability` e `ActionScope` e la loro forma tabellare.
+      - `cli/internal/template/template_test.go` — i test esistenti sulle `WorkspaceActions` di `Builtin()`.
+
+      ## Change
+
+      - `cli/internal/execution/types_test.go` — estendere i casi esistenti con `spec-draft` anziché aggiungere una funzione di test parallela.
+      - `cli/internal/template/template_test.go` — estendere l'asserzione sulle `WorkspaceActions` del Template built-in.
+
+      Non-goal: non riscrivere i test esistenti in una forma diversa, non introdurre helper nuovi se quelli presenti bastano.
+
+      ## Steps
+
+      1. Aggiungere ai casi tabellari di `RequiredCapability` la coppia `spec-draft` → `workspace.spec_draft`.
+      2. Aggiungere ai casi di `ActionScope` la coppia `spec-draft` → `workspace`.
+      3. Nel test del Template, asserire che le tre `WorkspaceActions` attese siano presenti nell'ordine di dichiarazione — `inception`, `backlog`, `spec-draft` — ciascuna con label non vuota e skill attesa. Asserire l'ordine, non la sola presenza: è l'ordine in cui il client disegna i chip.
+      4. Verificare che `clone()` continui a staccare la slice: la voce nuova non deve essere condivisa con il registro (il test esistente sul clone copre già la slice; estenderlo solo se non tocca `WorkspaceActions`).
+
+      ## Verify
+
+      - Run: `cd cli && go test ./internal/execution/... ./internal/template/...`
+      - Expect: tutti i test dei due pacchetti passano, inclusi i nuovi casi.
+
+      ## Done
+
+      - [ ] `RequiredCapability` e `ActionScope` sono verificati per `spec-draft` — AC-1.
+      - [ ] Il Template built-in è verificato dichiarare `spec-draft` con la sua label e la skill `archetipo-spec`, nell'ordine atteso — AC-1.
+      - [ ] I due pacchetti sono verdi.
+
+      ## Blockers
+
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Ricevuta condivisa della spec proposta
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Esiste un solo contratto, condiviso da ogni provider, per la riga JSON con cui un agente chiude una run di proposta, e una sola regola che dice quando quella riga è accettabile.
+
+      ## Read
+
+      - `cli/internal/execution/backlogreceipt.go` — struttura, campi di riconoscimento, separazione fra `Parse*` e `Accept*`, e il commento che spiega perché la ricevuta vive qui e non in un pacchetto provider.
+      - `cli/internal/execution/planreceipt.go` — `parseTrailingReceipt`, `WrittenStatus`, `PlannedStatus`, `ReviewStatus` e il punto in cui sono dichiarate.
+
+      ## Change
+
+      - Nuovo file `cli/internal/execution/specdraftreceipt.go`.
+      - `cli/internal/execution/planreceipt.go` (o il file che ospita le costanti di stato condivise) — aggiungere `ProposedStatus = "PROPOSED"` accanto alle altre.
+
+      Non-goal: nessuna validazione strutturale della spec proposta (è di `validation.ValidateSpecs`, invocata da `POST /api/spec`); nessuna lettura del connettore da questo file.
+
+      ## Steps
+
+      1. Dichiarare `ProposedStatus = "PROPOSED"` accanto alle costanti di stato già condivise, con un commento che dica che è lo stato di una ricevuta che **non** dichiara una scrittura.
+      2. In `specdraftreceipt.go` dichiarare `const specDraftArtifact = "spec_draft"` e `var specDraftReceiptFields = []string{"artifact", "status", "title", "epic_code", "body"}` — le chiavi che distinguono questa riga da un qualunque altro JSON che l'agente abbia stampato.
+      3. Dichiarare `SpecDraftReceipt` con i campi e i tag JSON: `Artifact`, `Status`, `Title`, `EpicCode` (`epic_code`), `Priority`, `Points` (`int`), `Scope`, `BlockedBy` (`[]string`, `blocked_by`), `Body`. Documentare che i campi oltre ad artifact e status sono **la proposta**, non un'affermazione su ciò che il workspace contiene.
+      4. `ParseSpecDraftReceipt(output string) (SpecDraftReceipt, error)` — delega a `parseTrailingReceipt[SpecDraftReceipt]` con i campi di riconoscimento; errore parlante quando nessuna riga li porta tutti.
+      5. `AcceptSpecDraftReceipt(output string) (SpecDraftReceipt, error)` — parsa e poi applica la regola: `Artifact == specDraftArtifact`, `Status == ProposedStatus`, e `Title`, `EpicCode`, `Body` non vuoti dopo `strings.TrimSpace`. Tenere i due modi di fallire distinguibili come nelle ricevute esistenti: «nessuna ricevuta» e «una ricevuta che non dichiara una proposta» sono due diagnosi diverse.
+      6. Documentare, con la stessa formula usata dalle altre ricevute, che accettare la ricevuta è condizione necessaria e mai sufficiente.
+
+      ## Verify
+
+      - Run: `cd cli && go build ./... && go vet ./... && gofmt -l internal/execution`
+      - Expect: compila, nessuna segnalazione, nessun file non formattato.
+
+      ## Done
+
+      - [ ] `AcceptSpecDraftReceipt` accetta una riga `spec_draft`/`PROPOSED` con titolo, epica e corpo valorizzati e restituisce tutti i campi della proposta — AC-3.
+      - [ ] Rifiuta con errore distinto un output senza alcuna riga di ricevuta e una ricevuta di altro artefatto, di altro stato, o priva di `title`, `epic_code` o `body`.
+      - [ ] Il file non importa il pacchetto `connector` e non legge il filesystem.
+
+      ## Blockers
+
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test della ricevuta della spec proposta
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      La regola di accettazione della ricevuta è verificata su tutti i suoi modi di riuscire e di fallire, incluso il corpo markdown multiriga trasportato su una sola riga JSON.
+
+      ## Read
+
+      - `cli/internal/execution/backlogreceipt_test.go` — la forma dei casi e il modo in cui distinguono «nessuna ricevuta» da «ricevuta inaccettabile».
+      - `cli/internal/execution/specdraftreceipt.go` — appena scritto.
+
+      ## Change
+
+      - Nuovo file `cli/internal/execution/specdraftreceipt_test.go`.
+
+      Non-goal: non testare la validazione strutturale della spec, che non appartiene a questo file.
+
+      ## Steps
+
+      1. Caso nominale: un output con prosa, poi la riga di ricevuta completa. Asserire ogni campo restituito, `blocked_by` incluso quando presente e quando assente (slice vuota o nil, coerente con quanto la struttura produce).
+      2. Caso del corpo markdown: `body` contiene `\n` escapati e caratteri markdown (backtick, `#`, `-`). Asserire che il valore restituito riporti le vere andate a capo, così che il trasporto su una riga sia provato e non assunto — AC-3.
+      3. Caso «ultima riga vince»: due righe di ricevuta, l'ultima è quella restituita (stesso comportamento a ritroso delle altre ricevute).
+      4. Casi di rifiuto, ciascuno con la propria asserzione sull'errore: nessuna riga di ricevuta; `artifact` diverso; `status` diverso da `PROPOSED`; `title`, `epic_code` o `body` vuoti o di soli spazi.
+      5. Caso JSON malformato sull'ultima riga: deve leggersi come «nessuna ricevuta», non come panico.
+
+      ## Verify
+
+      - Run: `cd cli && go test ./internal/execution/ -run 'SpecDraft'`
+      - Expect: tutti i casi passano.
+
+      ## Done
+
+      - [ ] Ogni campo della proposta è verificato tornare indietro intatto, corpo markdown multiriga compreso — AC-3.
+      - [ ] I due modi di fallire restano distinguibili nei messaggi d'errore asseriti.
+      - [ ] Nessun caso lascia un `t.Skip` o un TODO.
+
+      ## Blockers
+
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Verifica d'effetto invertita e rollback del delta di una run di proposta
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Una run di proposta è confermata solo se il backlog è rimasto quello di prima, e qualunque spec essa abbia scritto viene rimossa.
+
+      ## Read
+
+      - `cli/internal/execution/effect.go` — `VerifyActionEffect` e il suo `switch`, `backlogEffect`, `BacklogStateReader`, `DiscardPartialBacklog`, `discardPartial`, `appendErrorNote`, `UnconfirmedEffectError`, e i commenti che spiegano perché le interfacce sono dichiarate come interfacce del consumatore.
+      - `cli/internal/connector/capabilities.go` — `SpecDeleter` e la sua firma.
+      - `cli/internal/domain` — `BacklogSummary.Codes`, `WriteResult`.
+
+      ## Change
+
+      - `cli/internal/execution/effect.go` — aggiungere l'interfaccia consumatore `SpecDeleter`, la funzione `ConfirmSpecDraft`, e un `case ActionSpecDraft` esplicito in `VerifyActionEffect`.
+
+      Non-goal: non aggiungere metodi al `Connector`; non importare `connector` da questo pacchetto; non toccare `backlogEffect`, `DiscardPartialPRD` né `DiscardPartialBacklog`.
+
+      ## Steps
+
+      1. Dichiarare `SpecDeleter` come interfaccia del consumatore, accanto a `BacklogDiscarder`, con la sola firma `DeleteSpec(ctx context.Context, code string) (domain.WriteResult, error)`, e il commento che dice perché è dichiarata qui e non importata.
+      2. In `VerifyActionEffect` aggiungere `case ActionSpecDraft: return nil` con un commento che spiega la ragione: ciò che va confermato per questa azione è che **nulla** sia comparso, e stabilirlo richiede lo scatto precedente alla run, che questa funzione per firma non possiede. Resta quindi al chiamante che tiene il connettore, in `ConfirmSpecDraft`. Lasciarlo cadere nel `default` sarebbe equivalente in comportamento e muto sul motivo.
+      3. Scrivere `ConfirmSpecDraft(ctx context.Context, reader BacklogStateReader, deleter SpecDeleter, codesBefore []string, outcome *Execution)`, senza valore di ritorno, per la stessa ragione documentata su `Confirmation`: il chiamante sta per scrivere `outcome` e non ha nessuno a cui riportare, quindi mutare `outcome` è l'unico canale.
+      4. Corpo di `ConfirmSpecDraft`, nell'ordine:
+         a. se `outcome` è nil, uscire;
+         b. leggere il backlog corrente. Un `iox.CodePreconditionMissing` significa «nessun backlog»: elenco di codici vuoto, non un errore — la stessa lettura che fa `backlogEffect`. Un errore diverso, su un `outcome` `SUCCEEDED`, è una conferma impossibile: degradare a `FAILED` con `UNCONFIRMED_EFFECT` e uscire; su un `outcome` già `FAILED`, annotare che il rollback non è stato possibile e uscire, senza mai sostituire la ragione originale;
+         c. calcolare i codici comparsi: presenti ora, assenti in `codesBefore` (confronto su codici normalizzati con `strings.TrimSpace`, insieme costruito una sola volta);
+         d. se `outcome.Status == StatusSucceeded` e sono comparsi codici, degradare a `FAILED` con `Code: "UNCONFIRMED_EFFECT"` e un messaggio che nomina i codici, riusando la stessa formula delle altre conferme («the execution reported success but the connector does not confirm it: …») e spostando l'eventuale `Result.ExternalID` dentro l'errore, poiché `Result` ed `Error` sono mutuamente esclusivi sul record;
+         e. se `outcome.Status == StatusFailed` (compreso il caso appena degradato) e sono comparsi codici, cancellarli uno per uno con `deleter` — `deleter` nil è tollerato e rende il passo un no-op, come per gli altri rollback — e annotare l'esito con `appendErrorNote`: quali codici sono stati rimossi, oppure quali non è stato possibile rimuovere e perché. La nota è **sempre** aggiunta alla ragione esistente, mai sostituita.
+      5. Non toccare alcun codice presente in `codesBefore`: ciò che il workspace aveva prima della run appartiene al workspace, non alla run. È la stessa condizione portante di `discardPartial`, qui applicata per codice anziché per artefatto intero.
+
+      ## Verify
+
+      - Run: `cd cli && go build ./... && go vet ./... && go test ./internal/execution/`
+      - Expect: compila, nessuna segnalazione, i test esistenti del pacchetto restano verdi.
+
+      ## Done
+
+      - [ ] Una run di proposta che non ha scritto nulla lascia `outcome` intatto — AC-4.
+      - [ ] Una run che dichiara successo dopo aver scritto una spec chiude `FAILED` con `error.code == "UNCONFIRMED_EFFECT"` e il codice della spec nominato nel messaggio — AC-5.
+      - [ ] Le spec comparse durante la run sono rimosse via `SpecDeleter`; quelle preesistenti non sono mai toccate — AC-5.
+      - [ ] La ragione originale di un fallimento non è mai sostituita da una nota di rollback.
+      - [ ] `VerifyActionEffect` porta un `case ActionSpecDraft` esplicito e commentato.
+
+      ## Blockers
+
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test della verifica d'effetto invertita e del rollback
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Le due garanzie di AC-5 sono verificate al livello che le implementa: un successo che ha scritto viene degradato, e il delta scritto viene rimosso senza toccare il preesistente.
+
+      ## Read
+
+      - `cli/internal/execution/effect_test.go` — i doppi già presenti per `SpecStateReader` e `BacklogStateReader` e la forma dei casi di `DiscardPartialBacklog`.
+      - `cli/internal/execution/effect.go` — `ConfirmSpecDraft`, appena scritta.
+
+      ## Change
+
+      - `cli/internal/execution/effect_test.go` — aggiungere i casi di `ConfirmSpecDraft` e il caso `VerifyActionEffect` per `ActionSpecDraft`, riusando i doppi esistenti ed estendendoli con un `SpecDeleter` finto che registra i codici cancellati.
+
+      Non-goal: nessun filesystem, nessun connettore reale a questo livello — è coperto in TASK-10.
+
+      ## Steps
+
+      1. `VerifyActionEffect` con `ActionSpecDraft` su un record `SUCCEEDED` restituisce `nil` e non muta il record: la conferma di questa azione non passa da lì.
+      2. Caso nominale: `codesBefore` uguale ai codici presenti dopo. Il record resta `SUCCEEDED`, il deleter finto non riceve alcuna chiamata.
+      3. Caso «successo che ha scritto»: dopo la run compare `US-901`. Asserire `StatusFailed`, `error.code == "UNCONFIRMED_EFFECT"`, il codice nominato nel messaggio, `Result` azzerato, e che il deleter finto abbia ricevuto **esattamente** `US-901`.
+      4. Caso «fallimento che ha scritto» (la run cancellata di AC-5): record già `FAILED` con la sua ragione, comparso `US-901`. Asserire che `US-901` sia cancellato, che la ragione originale sia ancora presente nel messaggio e che la nota di rollback vi sia stata **aggiunta**.
+      5. Caso «fallimento che non ha scritto»: nessun codice comparso, nessuna cancellazione, messaggio invariato.
+      6. Caso «più codici comparsi»: tutti cancellati, nessuno dei preesistenti toccato.
+      7. Caso `deleter` nil: nessun panico, il record non guadagna una nota di rimozione.
+      8. Caso «cancellazione che fallisce»: la nota dice che non è stato possibile rimuovere e nomina il codice, e la ragione originale resta.
+      9. Caso «backlog illeggibile»: errore diverso da `CodePreconditionMissing` su un record `SUCCEEDED` → degradato con `UNCONFIRMED_EFFECT`; su un record già `FAILED` → ragione originale intatta con nota aggiunta.
+      10. Caso «backlog assente» (`CodePreconditionMissing`): letto come elenco vuoto, nessun errore.
+
+      ## Verify
+
+      - Run: `cd cli && go test ./internal/execution/`
+      - Expect: pacchetto verde, nuovi casi compresi.
+
+      ## Done
+
+      - [ ] Un successo che ha scritto è degradato e il delta rimosso — AC-5.
+      - [ ] Un fallimento che ha scritto è ripulito senza perdere la sua ragione — AC-5.
+      - [ ] Nessun caso cancella una spec presente in `codesBefore` — AC-5.
+      - [ ] `deleter` nil e cancellazione fallita sono entrambi coperti.
+
+      ## Blockers
+
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Il provider claude conduce la conversazione di proposta
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      Il provider `claude` dichiara `workspace.spec_draft`, apre una conversazione multi-turno che chiede all'agente di **proporre senza scrivere**, e chiude sulla ricevuta portando la proposta nel payload dell'esecuzione.
+
+      ## Read
+
+      - `cli/internal/execution/claude/backlog.go` — `executeBacklog`, `failBacklog`, `resultForBacklog`: la forma da replicare e le ragioni scritte nei suoi commenti.
+      - `cli/internal/execution/claude/inception.go` — `converse`, `drainTurns`, i tre sentinelle `errTurnFailed`/`errProcessGone`/`errRunTerminated`.
+      - `cli/internal/execution/claude/provider.go` — `Capabilities`, il fork su `req.Action` in `Execute`, `prepare`, `openSession`, `shutdown`, `ensureSkill`, le costanti `*SkillRelPath`.
+      - `cli/internal/execution/claude/prompt.go` — `buildBacklogPrompt` e `buildReviewPrompt` (quest'ultimo è il precedente di un prompt che *vieta* qualcosa).
+
+      ## Change
+
+      - `cli/internal/execution/claude/prompt.go` — aggiungere `buildSpecDraftPrompt(req execution.Request) string`.
+      - Nuovo file `cli/internal/execution/claude/specdraft.go` — `executeSpecDraft`, `failSpecDraft`, `resultForSpecDraft`.
+      - `cli/internal/execution/claude/provider.go` — aggiungere la capability a `Capabilities` e il ramo `ActionSpecDraft` in `Execute`.
+
+      Non-goal: non toccare `codex` né `arcipelago`; non generalizzare `converse`; non introdurre una costante di percorso skill nuova — la skill invocata è `archetipo-spec`, già coperta da `backlogSkillRelPath`.
+
+      ## Steps
+
+      1. In `Capabilities`, aggiungere `execution.CapabilityWorkspaceSpecDraft` in coda alla lista. Non dichiarare `run.dialog`: resta derivata dalle interfacce implementate, come dice il commento esistente.
+      2. In `Execute`, aggiungere `if req.Action == execution.ActionSpecDraft { return p.executeSpecDraft(ctx, req, cfg, dir) }` accanto agli altri rami, prima del percorso di pianificazione.
+      3. Scrivere `buildSpecDraftPrompt`, puro e deterministico come gli altri (nessun timestamp, nessun valore casuale, nessuna lettura di ambiente o filesystem). Deve dire, in quest'ordine:
+         - lavora nella directory corrente, che è il workspace ARchetipo con CLI e skill installate;
+         - proponi **una sola** spec per il backlog di questo workspace invocando `/archetipo-spec`;
+         - divieto esplicito e motivato: non invocare `archetipo spec add`, non scrivere nel backlog e non creare alcun file di spec — la spec sarà scritta da una persona dopo averla rivista. È l'unico prompt di questo pacchetto che vieta una persistenza, e il divieto è ripetuto qui perché la modalità di fallimento temuta è un agente che finisce il lavoro con zelo;
+         - stai parlando con una persona in chat, una domanda per messaggio, e chiedi solo ciò che serve davvero per scrivere criteri di accettazione verificabili;
+         - l'epica deve essere una di quelle già presenti nel backlog, che l'agente legge da solo;
+         - chiudi con una sola riga JSON di ricevuta e nulla dopo, mostrando la forma esatta con `execution.ProposedStatus`;
+         - `body` è il corpo markdown completo della spec su una sola riga, con le andate a capo come `\n`;
+         - emetti la ricevuta solo quando la proposta è completa: è ciò che chiude la conversazione.
+      4. Scrivere `executeSpecDraft` sul modello di `executeBacklog`: `ensureSkill(dir, backlogSkillRelPath, "spec")`, `context.WithTimeout(ctx, cfg.Timeout)`, `openSession(..., buildSpecDraftPrompt(req), true)`, `converse` con accettore basato su `execution.AcceptSpecDraftReceipt`, poi `shutdown`, poi i tre esiti nell'ordine di `executeBacklog` (errore di conversazione, errore di wait, ri-parsing tipizzato della ricevuta), poi `live.session.Close(execution.RunClosed, "")` e `resultForSpecDraft`.
+      5. Scrivere `failSpecDraft` con le quattro cause tenute distinte come in `failBacklog` — scadenza, run fermata, turno fallito, processo uscito — e con ogni diagnostica che nomina **la proposta di spec** e mai il backlog, il PRD o la pianificazione.
+      6. Scrivere `resultForSpecDraft`: payload con `command`, `model`, `exit_code`, `result_summary` (la sola ricevuta ri-serializzata dal valore tipizzato, mai una fetta dell'output), `turns`, `duration_ms`, più un campo `spec_draft` che porta `title`, `epic_code`, `priority`, `points`, `scope`, `blocked_by`, `body`. Nessuno stream entra nel record.
+
+      ## Verify
+
+      - Run: `cd cli && go build ./... && go vet ./... && gofmt -l internal/execution/claude`
+      - Expect: compila, nessuna segnalazione, nessun file non formattato.
+
+      ## Done
+
+      - [ ] `Capabilities` include `workspace.spec_draft` — AC-1.
+      - [ ] `Execute` instrada `spec-draft` a `executeSpecDraft`.
+      - [ ] Il prompt vieta esplicitamente la scrittura nel backlog e chiede una domanda per messaggio — AC-2, AC-4.
+      - [ ] Il payload dell'esecuzione porta `spec_draft` con tutti i campi del form — AC-3.
+      - [ ] Nessuna diagnostica nuova nei file toccati.
+
+      ## Blockers
+
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Test del provider claude per la conversazione di proposta
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+
+      La conversazione di proposta è verificata senza alcun processo reale: invocazione, prompt, multi-turno, ricevuta, payload e i quattro modi di fallire.
+
+      ## Read
+
+      - `cli/internal/execution/claude/backlog_test.go` — i doppi `Starter`/`Process` già presenti e la forma dei casi conversazionali.
+      - `cli/internal/execution/claude/specdraft.go` e `prompt.go` — appena scritti.
+
+      ## Change
+
+      - Nuovo file `cli/internal/execution/claude/specdraft_test.go`, riusando i doppi esistenti del pacchetto anziché duplicarli.
+
+      Non-goal: nessun processo reale, nessuna dipendenza da Claude Code installato.
+
+      ## Steps
+
+      1. Caso nominale multi-turno: il fake emette un turno che termina **senza** ricevuta (la domanda dell'agente), il test invia un messaggio attraverso il dialogo della sessione, poi il fake emette il turno che chiude sulla ricevuta. Asserire che la run non sia terminata al primo turno — è la proprietà che rende AC-2 possibile — e che `turns` nel payload valga 2.
+      2. Asserire il payload: `spec_draft` porta tutti i campi della proposta, `result_summary` è la sola ricevuta ri-serializzata, e né stdout né stderr dell'agente compaiono da nessuna parte nel record — AC-3.
+      3. Asserire il prompt consegnato al processo: nomina `/archetipo-spec`, contiene il divieto esplicito di scrivere nel backlog e di invocare `archetipo spec add`, chiede una domanda per messaggio, e mostra la forma della ricevuta con lo stato `PROPOSED` — AC-2, AC-4.
+      4. Asserire l'invocazione: gli argomenti sono quelli di `buildArgs`, identici a quelli delle altre azioni conversazionali (il prompt viaggia nel protocollo, non come argomento).
+      5. Skill assente: senza `.claude/skills/archetipo-spec/SKILL.md` la run è rifiutata **prima** di avviare qualunque processo, e il messaggio nomina `archetipo init --tool claude`.
+      6. I quattro modi di fallire, uno per caso, asserendo che ciascuna diagnostica nomini la proposta di spec: scadenza del timeout; run fermata; turno chiuso con errore; processo uscito senza ricevuta.
+      7. Ricevuta di altro artefatto in chiusura: la run fallisce e non produce alcun payload.
+      8. Ricevuta pubblicata nell'istante in cui la scadenza scatta: è drenata e vale come successo, come già garantito per le altre azioni conversazionali.
+
+      ## Verify
+
+      - Run: `cd cli && go test ./internal/execution/claude/`
+      - Expect: pacchetto verde, nuovi casi compresi.
+
+      ## Done
+
+      - [ ] Un turno senza ricevuta non chiude la run e la conversazione prosegue dopo un messaggio dell'operatore — AC-2.
+      - [ ] Il payload espone la proposta completa e nessuno stream — AC-3.
+      - [ ] Il prompt vieta la scrittura nel backlog — AC-4.
+      - [ ] I quattro modi di fallire sono distinti e nominano la proposta di spec.
+      - [ ] Nessun test avvia un processo reale.
+
+      ## Blockers
+
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Il viewer offre, avvia e conferma l'azione di proposta
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-05
+    body: |-
+      ## Objective
+
+      `spec-draft` è offerta dal viewer quando il workspace ha un backlog, è avviabile una sola volta per volta, e chiude solo dopo che il server ha verificato che nulla è stato scritto, rimuovendo quel che eventualmente lo è stato.
+
+      ## Read
+
+      - `cli/internal/web/workspace_execution.go` — per intero: `handleGetWorkspaceActions`, `handleRunWorkspaceAction`, `guardSingleWorkspaceExecution`, `workspaceAvailability`, `reasonFor`, `offers`, `workspaceRemedy`, `backlogDiscarder`, e i commenti che spiegano perché `existedBefore` e `backlogExistedBefore` sono catturati prima della run.
+      - `cli/internal/execution/effect.go` — `ConfirmSpecDraft` e l'interfaccia `SpecDeleter`, appena scritte.
+      - `cli/internal/connector/capabilities.go` — `SpecDeleter`.
+
+      ## Change
+
+      - `cli/internal/web/workspace_execution.go` — estendere `offers`, `workspaceRemedy`, la cattura pre-run in `handleRunWorkspaceAction`, la closure `confirm`, e aggiungere un accessore `specDeleter(ws)` gemello di `backlogDiscarder`.
+
+      Non-goal: non toccare `spec_create.go`; non aggiungere rotte HTTP; non toccare `handlers.go`; non modificare `guardSingleWorkspaceExecution`, che già copre l'azione nuova senza sapere che esiste.
+
+      ## Steps
+
+      1. In `offers`, aggiungere `case execution.ActionSpecDraft`, nell'ordine in cui i fatti contano:
+         - `a.backlogUnreadable != ""` → riportarlo;
+         - `!a.hasBacklog` → `"this workspace has no backlog yet: generate it before adding a spec"`;
+         - altrimenti `""`.
+         Non controllare il PRD: un backlog esiste solo dopo un PRD, quindi la condizione sul backlog lo implica, e due controlli produrrebbero due messaggi per lo stesso fatto. Scriverlo come commento.
+      2. In `workspaceRemedy`, aggiungere il rimedio dell'azione: quando manca il backlog, `"generate the initial backlog first, then come back to add a spec"`. Mantenere la struttura per azione già presente, così che lo stesso fatto continui a produrre rimedi diversi per azioni diverse.
+      3. In `handleRunWorkspaceAction`, accanto a `existedBefore` e `backlogExistedBefore` e con lo stesso commento sul perché lo scatto va preso **ora**, catturare `specCodesBefore` dall'`availability` (i codici del backlog letti da `ReadExistingBacklog`). Per farlo, `workspaceAvailability` conserva `specCodes []string` accanto a `hasBacklog`, valorizzato nella stessa lettura: nessuna seconda lettura del backlog e nessuna finestra fra le due.
+      4. Nella closure `confirm`, aggiungere il ramo dell'azione:
+         ```go
+         case execution.ActionSpecDraft:
+             execution.ConfirmSpecDraft(confirmCtx, ws.conn, s.specDeleter(ws), specCodesBefore, outcome)
+         ```
+         Deve stare **dentro** lo stesso `switch` degli altri rollback e dopo `VerifyActionEffect`, che per questa azione restituisce `nil`: ogni azione riprende solo il proprio artefatto, con il proprio scatto.
+      5. Scrivere `specDeleter(ws *workspaceSession) execution.SpecDeleter`, gemello di `backlogDiscarder`: type assertion su `connector.SpecDeleter`, `nil` quando il connettore non la espone. `nil` è una risposta valida — saltare il rollback non è un fallimento — e `ConfirmSpecDraft` lo tratta come no-op.
+      6. Verificare che `handleGetWorkspaceActions` non richieda modifiche: itera sulle `WorkspaceActions` del Template e chiede `offers`/`reasonFor` per ciascuna, quindi la voce nuova appare da sola.
+
+      ## Verify
+
+      - Run: `cd cli && go build ./... && go vet ./... && go test ./internal/web/`
+      - Expect: compila, nessuna segnalazione, i test esistenti del pacchetto `web` restano verdi.
+
+      ## Done
+
+      - [ ] `GET /api/workspace/actions` espone `spec-draft` con `offered: true` in un workspace con backlog e `offered: false` con ragione non vuota senza backlog — AC-1.
+      - [ ] `POST /api/workspace/execution {"action":"spec-draft"}` è rifiutato con `409` e la stessa frase quando l'azione non è offerta, e con `409` quando una esecuzione di workspace è già in corso.
+      - [ ] La closure `confirm` invoca `ConfirmSpecDraft` con i codici catturati **prima** della run — AC-5.
+      - [ ] Un connettore privo di `SpecDeleter` non fa fallire la richiesta.
+      - [ ] `spec_create.go` non è modificato.
+
+      ## Blockers
+
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Test HTTP dell'azione di proposta sul viewer reale
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+
+      AC-1, AC-4 e AC-5 sono provati contro il `web.Server` reale e il connettore `filefs` reale: ciò che il workspace contiene dopo una run è letto dal connettore, non asserito.
+
+      ## Read
+
+      - `cli/internal/web/workspace_execution_test.go` — l'impianto esistente: costruzione del server, sandbox su directory temporanea, provider finto registrato nel registry, attesa su rotte anziché su sleep.
+      - `cli/internal/web/spec_create_test.go` — come i test esistenti asseriscono il codice assegnato da `POST /api/spec`.
+
+      ## Change
+
+      - `cli/internal/web/workspace_execution_test.go` — aggiungere i casi di `spec-draft`, riusando l'impianto esistente ed estendendo il provider finto perché possa, su richiesta del caso, **scrivere davvero** una spec attraverso il connettore prima di terminare.
+
+      Non-goal: nessun processo agente, nessun binario esterno, nessuna attesa arbitraria.
+
+      ## Steps
+
+      1. **AC-1, offerta.** Sandbox con backlog di due epiche e tre spec: `GET /api/workspace/actions` contiene `spec-draft` con `offered: true` e `runnable: true`, accanto alle altre azioni. Sandbox senza backlog: la stessa azione è `offered: false` con `unavailable_reason` non vuota, e `POST /api/workspace/execution {"action":"spec-draft"}` risponde `409` con **quella stessa frase**, senza scrivere alcun record sotto `.archetipo/executions/`.
+      2. **AC-4, la proposta non scrive.** Provider finto che restituisce un payload con `spec_draft` e non tocca il connettore. Asserire: il record chiude `SUCCEEDED`; `GET /api/board` restituisce esattamente le tre spec di partenza; il contenuto di `.archetipo/specs/` è invariato; `GET /api/execution/{id}` espone `result.payload.spec_draft` con tutti i campi. Poi `POST /api/spec` con quel corpo crea la card, che `GET /api/board` restituisce in `TODO` — la scrittura avviene solo alla conferma esplicita.
+      3. **AC-5, il codice non è consumato.** Letto `last_code` del backlog di partenza, eseguita una run che chiude `FAILED` senza aver scritto nulla, poi `POST /api/spec`: il codice assegnato è **lo stesso** che sarebbe stato assegnato prima della run. È l'oracolo reale del criterio, non l'invarianza di un contatore inesistente.
+      4. **AC-5, la run che ha scritto ed è fallita.** Provider finto che scrive davvero una spec attraverso il connettore e poi restituisce un errore. Asserire: record `FAILED`; la spec scritta non esiste più (né in `GET /api/board`, né in `.archetipo/specs/`); le tre spec preesistenti sono intatte; il messaggio d'errore porta ancora la ragione originale **e** la nota di rimozione; un `POST /api/spec` successivo riceve il codice di partenza.
+      5. **AC-5, la run che ha scritto e ha dichiarato successo.** Stesso provider, ma con esito di successo. Asserire: record `FAILED` con `error.code == "UNCONFIRMED_EFFECT"`, la spec scritta rimossa, le preesistenti intatte.
+      6. **Concorrenza.** Con una run di proposta in corso, un secondo `POST /api/workspace/execution` risponde `409` nominando l'esecuzione in corso, e sotto `.archetipo/executions/` esiste un solo record.
+      7. **Provider senza la capability.** Un provider di default che non dichiara `workspace.spec_draft` rende l'azione non `runnable`, con la ragione, e la pressione risponde con un errore che nomina la capability mancante senza creare record.
+
+      ## Verify
+
+      - Run: `cd cli && go test ./internal/web/`
+      - Expect: pacchetto verde, nuovi casi compresi.
+
+      ## Done
+
+      - [ ] L'azione è offerta con backlog e non offerta senza, con la stessa frase su `GET` e su `409` — AC-1.
+      - [ ] Una run di proposta conclusa lascia il backlog byte-identico, e solo `POST /api/spec` crea la card — AC-4.
+      - [ ] Dopo un annullamento il codice progressivo assegnato è quello di partenza — AC-5.
+      - [ ] Una spec scritta dalla run è rimossa, le preesistenti mai — AC-5.
+      - [ ] Nessun caso usa `time.Sleep` come sincronizzazione.
+
+      ## Blockers
+
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Ingresso assistito nella modale nuova spec
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+
+      Accanto alla creazione manuale la modale offre la creazione assistita: l'agente pone domande, la persona risponde, la proposta arriva nel form già esistente, modificabile, e nulla è scritto finché non si conferma.
+
+      ## Read
+
+      - `cli/internal/web/assets/index.html` — il blocco `new-spec-modal` (form, azioni, `new-spec-no-epics`) e il blocco `prd-inception` con i tre contenitori `inception-actions`/`inception-execution`/`inception-run`.
+      - `cli/internal/web/assets/app.js` — `openNewSpec`, `closeNewSpec`, `onCreateSpec`, `clearNewSpecErrors`, `renderFieldErrors`, `specBodyTemplate`; `mountExecutionPanels`, `unmountExecutionPanels`, `resumeExecution`, `settleExecution`, `renderSpecActions`, `startPanelAction`, `bindActionsPanel`, `bindRunPanel`, `loadWorkspaceActions`, `WORKSPACE_CONTEXT`.
+      - `cli/internal/web/assets/app.css` — le classi già esistenti di modale, chip azione, pannello esecuzione e pannello run.
+
+      ## Change
+
+      - `cli/internal/web/assets/index.html` — dentro `new-spec-modal`: una barra a due ingressi sopra il form e una sezione assistita nascosta con `spec-draft-actions`, `spec-draft-execution`, `spec-draft-run`, più uno slot d'avviso `spec-draft-notice`.
+      - `cli/internal/web/assets/app.js` — la logica descritta sotto.
+      - `cli/internal/web/assets/app.css` — solo le regole della barra e della sezione assistita, riusando le classi esistenti.
+
+      Non-goal: non modificare `onCreateSpec` nella sua logica di invio; non aggiungere una seconda rotta di scrittura; non introdurre regole di ammissibilità nel frontend oltre l'unica costante di id descritta al passo 1.
+
+      ## Steps
+
+      1. Dichiarare `const SPEC_DRAFT_ACTION = "spec-draft"` e `const SPEC_DRAFT_CONTEXT = "spec-draft"`. `SPEC_DRAFT_ACTION` ha esattamente due usi e nessun altro: `loadWorkspaceActions` **esclude** quell'id dal pannello della modale PRD, `openSpecDraft` include **solo** quell'id nella modale nuova spec. Commentare che tutto il resto — se l'azione sia offerta, se sia eseguibile e perché no — resta un verdetto del server, letto da `offered`, `runnable` e `unavailable_reason`.
+      2. In `index.html`, aggiungere in testa alla sezione della modale una barra con due pulsanti, `spec-draft-mode-manual` e `spec-draft-mode-assisted` (AC-1), e sotto il form la sezione `spec-draft-panel` (nascosta) con i tre contenitori e lo slot d'avviso. Riusare le classi dei contenitori del pannello PRD.
+      3. In `app.js`, chiamare `bindActionsPanel` e `bindRunPanel` sui contenitori nuovi accanto alle chiamate esistenti.
+      4. `openNewSpec` parte sempre in modalità manuale: la sezione assistita è nascosta, l'avviso vuoto. Nessun cambiamento al riempimento del select epiche né al template del corpo.
+      5. `enterAssistedMode()`: mostra la sezione assistita, nasconde il form, e chiama `openSpecDraft()`.
+      6. `openSpecDraft()`: legge `GET /api/workspace/actions`, tiene la sola azione con id `SPEC_DRAFT_ACTION`, monta il trio con `mountExecutionPanels({context: SPEC_DRAFT_CONTEXT, startURL: "/api/workspace/execution", actions, execution, run, settle: settleSpecDraft})`, disegna il chip con `renderSpecActions` (offerta ma non eseguibile resta un chip disabilitato con la sua ragione), e chiama `resumeExecution(view.execution, SPEC_DRAFT_CONTEXT)` così una conversazione lasciata aperta si ritrova invece di partirne una seconda. Se l'azione non è offerta, mostrare la ragione nello slot d'avviso e non montare nulla.
+      7. La conversazione e la risposta dell'operatore non richiedono codice nuovo: sono il pannello run già montato, con il suo composer e `POST /api/execution/{id}/run/messages` (AC-2).
+      8. `settleSpecDraft(record)`:
+         - su `FAILED`: restare in modalità assistita, con la ragione del record già disegnata dal pannello esecuzione;
+         - su `SUCCEEDED`: leggere `record.result && record.result.payload && record.result.payload.spec_draft`. Se manca, mostrare nell'avviso che la run è finita senza una proposta leggibile e restare in modalità assistita. Altrimenti riempire `title`, `priority`, `story_points`, `scope`, `blocked_by` (unendo l'array con `", "`) e l'editor markdown con `body`; selezionare `epic_code` **solo** se quel valore è fra le opzioni che il form già offre, altrimenti lasciare il segnaposto e scrivere il messaggio nello slot d'errore del campo epica — il form non deve mai offrire un'epica che il backlog non conosce; poi tornare in modalità manuale con l'avviso «Proposta dall'agente — rivedi, modifica e conferma» (AC-3). Non inviare nulla (AC-4).
+      9. `closeNewSpec`: se una run assistita è in corso (record non terminale nel contesto montato), inviare `POST /api/execution/{id}/run/cancel` senza attendere l'esito prima di chiudere, poi `unmountExecutionPanels(SPEC_DRAFT_CONTEXT)` e ripulire i tre contenitori e l'avviso. La garanzia vera di AC-5 è il rollback lato server; la cancellazione la rende immediata invece di attendere il timeout. La guardia `newSpecBusy` esistente resta invariata.
+      10. In `loadWorkspaceActions`, filtrare via `SPEC_DRAFT_ACTION` dalle azioni offerte nella modale PRD, con un commento che dice dove quell'azione è invece disegnata. Il caso «nessuna azione offerta e nessuna esecuzione» continua a nascondere il pannello PRD.
+      11. In `app.css`, aggiungere le sole regole della barra a due ingressi e della sezione assistita; nessuna nuova palette e nessuna duplicazione delle classi di pannello.
+
+      ## Verify
+
+      - Run: `cd cli && go build ./... && go test ./internal/web/`
+      - Expect: gli asset embedded compilano e il pacchetto `web` resta verde. La verifica di comportamento del frontend è lo smoke di TASK-12; qui si verifica solo che nulla di embedded si rompa.
+
+      ## Done
+
+      - [ ] La modale nuova spec offre entrambi gli ingressi, manuale e assistito — AC-1.
+      - [ ] La sezione assistita monta il pannello run e permette di rispondere alle domande dell'agente — AC-2.
+      - [ ] Una proposta riuscita riempie l'intero form e lo lascia modificabile, senza inviare nulla — AC-3, AC-4.
+      - [ ] Un'epica proposta ma sconosciuta non viene mai selezionata: il campo resta sul segnaposto con il messaggio.
+      - [ ] Chiudere la modale con una run in corso la cancella e smonta il pannello — AC-5.
+      - [ ] `SPEC_DRAFT_ACTION` compare esattamente nei due punti dichiarati e in nessun altro.
+
+      ## Blockers
+
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Smoke e2e della creazione assistita dalla UI
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-09
+      - TASK-11
+    body: |-
+      ## Objective
+
+      Il percorso completo — domanda dell'agente, risposta della persona, proposta, conferma, annullamento — è verificato contro viewer, provider e protocollo reali, con il solo binario dell'agente finto.
+
+      ## Read
+
+      - `test/e2e/backlog-from-view-smoke.mjs` — per intero: è il modello diretto di questo smoke (tre sandbox, server di controllo del fake, attese che interrogano rotte, report HTML).
+      - `test/e2e/support/fake-claude.mjs` — i frame che sa emettere e come li riporta al server di controllo.
+      - `AGENTS.md`, sezione *Standalone smoke tests* — la forma delle voci esistenti.
+
+      ## Change
+
+      - Nuovo file `test/e2e/spec-draft-from-view-smoke.mjs`.
+      - `package.json` — script `test:view-spec-draft-smoke`.
+      - `AGENTS.md` — una voce nella sezione *Standalone smoke tests*.
+
+      Non-goal: nessuna credenziale, nessun traffico fuori da `127.0.0.1`, nessuna attesa arbitraria, nessun framework browser.
+
+      ## Steps
+
+      1. Costruire la CLI una volta, poi preparare tre sandbox. Ciascuna: `archetipo init --tool claude` (è ciò che installa `.claude/skills/archetipo-spec/`, la skill che il prompt invoca e la cui assenza renderebbe la conversazione impossibile), un backlog con due epiche e tre spec, `archetipo view` su porta casuale con una variabile d'ambiente sentinella, e come default di workspace il provider `claude` **reale** puntato su `fake-claude.mjs`.
+      2. **Sandbox 1 — la conversazione e la proposta.** Verificare, nell'ordine:
+         - `GET /api/workspace/actions` offre `spec-draft` con `offered: true`, `runnable: true`, e nessuna esecuzione dietro;
+         - `POST /api/workspace/execution {"action":"spec-draft"}` risponde `201` con un record `RUNNING` il cui `spec_code` è vuoto, e consegna al processo un prompt che nomina `/archetipo-spec` e vieta la scrittura nel backlog;
+         - la domanda dell'agente — un frame `assistant` seguito da un `result` privo di ricevuta — diventa un evento `text` su `GET /api/execution/{id}/run` mentre il record resta `RUNNING`: un turno che finisce su una domanda non finisce una proposta (AC-2);
+         - la risposta inviata a `POST /api/execution/{id}/run/messages` raggiunge il processo come frame `user` (il fake lo riporta al server di controllo), è **assente** dal corpo `202`, è ancora assente finché il processo la trattiene, ed entra nella conversazione **esattamente una volta** quando il processo la ri-emette (AC-2);
+         - alla chiusura sulla riga di ricevuta `{"artifact":"spec_draft","status":"PROPOSED",...}` il record diventa `SUCCEEDED` e `GET /api/execution/{id}` espone `result.payload.spec_draft` con tutti i campi del form, corpo markdown multiriga compreso (AC-3);
+         - il backlog è ancora quello di partenza: `GET /api/board` restituisce tre spec e `.archetipo/specs/` è invariata (AC-4);
+         - solo il successivo `POST /api/spec` con il corpo proposto crea la card, restituita in `TODO` dal **medesimo** processo viewer, mai riavviato (AC-4).
+      3. **Sandbox 2 — l'annullamento.** Avviare la proposta, far scrivere al fake una spec attraverso la CLI del sandbox (`archetipo spec add`, comando dello smoke e mai del fake se il fake non può eseguirlo: in tal caso lo esegue lo smoke, come per il PRD dello smoke di inception), poi `POST /api/execution/{id}/run/cancel`. Verificare: il record chiude `FAILED` con ragione non vuota; la spec scritta non esiste più; le tre di partenza sono intatte; un `POST /api/spec` successivo riceve **lo stesso** codice che avrebbe ricevuto prima della run (AC-5).
+      4. **Sandbox 3 — il workspace senza backlog.** L'azione è offerta come `offered: false` con la sua ragione, `POST /api/workspace/execution` risponde `409` con quella stessa frase, non scrive alcun record sotto `.archetipo/executions/`, e la ricognizione ricorsiva del workspace è identica prima e dopo.
+      5. La sentinella non deve comparire in **alcuna** risposta del viewer né in `.archetipo/config.yaml`: asserirlo esplicitamente, come fanno gli smoke esistenti.
+      6. Il fake non progredisce mai da solo: ogni frame che emette è comandato dal server di controllo locale, e ogni frame che riceve è riportato indietro. Ogni attesa interroga una rotta del viewer o il server di controllo. Nessun `sleep`.
+      7. Scrivere `report.html` e `summary.json` nella directory di run, e saltare lo smoke su Windows, dove lo shebang POSIX del fake non si applica.
+      8. Aggiungere lo script npm e la voce in `AGENTS.md`, con lo stesso livello di dettaglio delle voci vicine e nominando esplicitamente ciò che è finto (solo il binario dell'agente) e ciò che è reale (viewer, connettore, provider claude, client stream-json, sessione locale, run follower, verifica d'effetto e rollback).
+
+      ## Verify
+
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && npm run test:view-spec-draft-smoke`
+      - Expect: tutti gli step riportati `pass` in `summary.json`; nessuno `skip` che non sia quello dichiarato per Windows.
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && npm run test:view-backlog-smoke && npm run test:view-execution-smoke`
+      - Expect: entrambi verdi — condividono `workspace_execution.go`, `converse` e l'elenco delle capability, che questa spec modifica.
+
+      ## Done
+
+      - [ ] La domanda dell'agente è visibile e la risposta della persona entra nella conversazione una sola volta, alla ri-emissione — AC-2.
+      - [ ] La proposta è leggibile per intero da `result.payload.spec_draft` — AC-3.
+      - [ ] Dopo la proposta il backlog è invariato; solo `POST /api/spec` crea la card — AC-4.
+      - [ ] Dopo l'annullamento nessuna spec resta e il codice progressivo è quello di partenza — AC-5.
+      - [ ] La sentinella non compare in alcuna risposta né in `config.yaml`.
+      - [ ] Lo script npm esiste e `AGENTS.md` descrive lo smoke.
+
+      ## Blockers
+
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Gate finale — controlli CI locali e prova che il piano è esaurito
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-06
+      - TASK-08
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+
+      L'intero incremento supera gli stessi controlli della CI, e nessun task del piano resta aperto quando la spec viene mandata in review.
+
+      ## Read
+
+      - `AGENTS.md`, sezione *Rules for CLI changes* — l'elenco esatto dei controlli da eseguire prima di consegnare.
+      - La sezione `Baseline` di questo piano — gli esiti attesi, tutti verdi.
+
+      ## Change
+
+      Nessuna modifica di codice è prevista da questo task. Se un controllo fallisce, la riparazione appartiene al task che ha introdotto il difetto: correggerlo lì e rieseguire questo gate.
+
+      ## Steps
+
+      1. Eseguire, in `cli/` e in quest'ordine:
+         - `gofmt -l .`
+         - `go vet ./...`
+         - `go build ./...`
+         - `go test ./...`
+         - `PATH="$(go env GOPATH)/bin:$PATH" golangci-lint run --timeout 5m ./...`
+      2. Eseguire, dalla radice del repository, gli smoke che questa spec introduce o su cui incide:
+         - `npm run test:view-spec-draft-smoke`
+         - `npm run test:view-backlog-smoke`
+         - `npm run test:view-execution-smoke`
+      3. Verificare che nessun file toccato dal piano abbia guadagnato diagnostica di compilatore o linter rispetto alla baseline registrata.
+      4. Verificare che nessun artefatto temporaneo resti nel working tree: nessuna directory di lavoro generata dagli smoke fuori dai percorsi già ignorati, nessun file di stato di run.
+      5. Marcare **questo** task come `DONE` con `archetipo task done US-042 TASK-13`.
+      6. Ricaricare la spec con `archetipo spec show US-042` da `data.project_root` e verificare che **nessun** task risulti ancora `TODO`.
+      7. Solo allora invocare `archetipo spec review US-042`. L'ordine è vincolante: controlli, gate a `DONE`, ricarica, verifica che nulla resti aperto, e infine richiesta di review.
+
+      ## Verify
+
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./... && PATH="$(go env GOPATH)/bin:$PATH" golangci-lint run --timeout 5m ./...`
+      - Expect: `gofmt` non stampa nulla, `vet` non segnala nulla, la build compila, l'intera suite passa (almeno i 1520 test della baseline, più i nuovi) e `golangci-lint` riporta 0 issue.
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && npm run test:view-spec-draft-smoke && npm run test:view-backlog-smoke && npm run test:view-execution-smoke`
+      - Expect: tutti gli step `pass`, salvo il salto dichiarato su Windows.
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && archetipo spec show US-042`
+      - Expect: nessun task con `status` `TODO`.
+
+      ## Done
+
+      - [ ] I cinque controlli CI locali sono verdi, con gli esiti almeno pari alla baseline registrata.
+      - [ ] I tre smoke sono verdi.
+      - [ ] Le evidenze di AC-1, AC-2, AC-3, AC-4 e AC-5 sono tutte prodotte da test che passano in questa esecuzione.
+      - [ ] `archetipo spec show US-042` non mostra alcun task `TODO` prima che la review sia richiesta.
+      - [ ] Il working tree non contiene artefatti temporanei.
+
+      ## Blockers
+
+      None.
+    ref: TASK-13

@@ -1,0 +1,737 @@
+schema: archetipo/plan/v2
+spec_code: US-043
+body: |-
+  # US-043: Conoscere lo stato del workspace e il passo successivo — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-08-20
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 — Esperienza operativa ARchetipo
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come persona che apre un workspace e non conosce il processo, voglio vedere a che punto è il workspace e quale sia il passo successivo raccomandato, così da procedere senza dover indovinare quale azione sia ammessa e perché.
+
+  **Criteri di accettazione**
+  - AC-1 — La UI dichiara lo stato del workspace in termini del processo dell'Archetipo installato.
+  - AC-2 — Per lo stato corrente è indicato il passo successivo raccomandato con l'azione che lo esegue.
+  - AC-3 — Il passo raccomandato è ricavato dall'Archetipo e dallo stato reale del workspace, non da regole scritte nel frontend.
+  - AC-4 — Un'azione non eseguibile nello stato corrente dichiara la condizione che la sblocca, invece di presentarsi inerte.
+  - AC-5 — Il passo raccomandato si aggiorna quando lo stato del workspace cambia, senza riavviare il viewer.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Il workspace sa già rispondere a «quali azioni posso fare adesso»: `GET /api/workspace/actions` calcola `offered`, `runnable` e `unavailable_reason` a partire dallo stato reale (PRD presente, backlog presente, esecuzione in corso, provider utilizzabile). Manca invece la domanda che la spec pone: «a che punto sono, e qual è il prossimo passo». Oggi quella risposta non esiste da nessuna parte, e le poche tracce che ci si avvicinano sono nascoste dentro la modale del PRD, che una persona che non conosce il processo non ha motivo di aprire.
+
+  L'approccio è aggiungere il concetto mancante dove appartiene — nell'Archetipo — e poi limitarsi a renderlo.
+
+  - **La sequenza dei passi diventa una dichiarazione dell'Archetipo.** `template.Template` acquisisce `Stages []Stage`, una lista ordinata in cui ogni stadio porta identità, etichetta, sintesi e l'azione che lo fa avanzare, con il suo `Scope` (`workspace` o `spec`). L'Archetipo `fabbrica-del-software` dichiara: `senza-prd` → azione workspace `inception`; `senza-backlog` → azione workspace `backlog`; `da-pianificare` → azione spec `plan`; `da-implementare` → azione spec `implement`; `da-rivedere` → azione spec `review`; `completo`, terminale, senza azione. È questa lista — non il server e tantomeno il browser — a dire quale sia l'ordine del processo (AC-3).
+  - **La condizione di ogni stadio è calcolata dal server sullo stato reale, non dichiarata nell'Archetipo.** Uno stadio con `Scope: "workspace"` vale quando l'azione che nomina è `offered` secondo `workspaceAvailability.offers`, la funzione che già oggi legge PRD e backlog dal connettore. Uno stadio con `Scope: "spec"` vale quando almeno una spec sta in uno degli stati che `template.Action.Statuses` ammette per quell'azione. Lo stadio corrente è il **primo** della lista la cui condizione vale; l'ultimo, terminale, vale sempre. È esattamente la divisione del lavoro che `WorkspaceAction` documenta già: il processo dice quali passi esistono e in che ordine, il server dice quale sia vero adesso.
+  - **Una rotta nuova, `GET /api/workspace/status`.** Risponde con l'Archetipo risolto, lo stadio corrente, il passo raccomandato (azione, etichetta, scope, spec bersaglio quando lo scope è `spec`, `runnable` e motivo) e l'elenco completo delle azioni workspace dichiarate, ciascuna con la propria condizione. È tenuta separata da `/api/workspace/actions` perché risponde a un'altra domanda e ha un'altra vita: `actions` serve il pannello di esecuzione della modale PRD, `status` serve la striscia sempre visibile della board.
+  - **La spec bersaglio è la prima carta della colonna.** Quando lo stadio è spec-scoped il server sceglie la spec seguendo lo stesso ordine con cui la board disegna le colonne (`connector.BoardOrderReader`, con fallback all'ordine di `FetchBacklogItems`). Così il passo raccomandato indica una carta che la persona vede in cima alla colonna, e non una scelta che sembra arbitraria.
+  - **`unlocked_by` accanto a `unavailable_reason` (AC-4).** `unavailable_reason` dice *perché* un'azione non parte; `workspaceRemedy` sa già dire *cosa la sblocca*, ma oggi quella frase esce solo dentro un 409 che nessuno legge finché non preme. Il campo `unlocked_by` la porta nel payload, e il rendering la mostra come testo visibile sotto la chip invece che come `title`: una chip spenta con un tooltip è precisamente l'azione «inerte» che AC-4 vieta. Poiché la resa delle chip è condivisa, il miglioramento vale sia per la striscia sia per le azioni di spec.
+  - **Il rendering della striscia è un modulo puro e isolato.** `cli/internal/web/assets/workspace-status.js` segue il modello già in casa di `task-markdown.js`: UMD, nessuna dipendenza dal DOM globale, funzione pura dal payload all'HTML. Serve a due cose insieme — rende la resa testabile in Node con `node --test` (unico modo, in questo repository, di avere un oracolo sul contenuto della UI senza introdurre un browser) e rende dimostrabile AC-3, perché un modulo che non conosce nomi di stadi né di azioni non può contenere regole di processo.
+  - **L'aggiornamento passa dal canale che esiste già (AC-5).** Il watcher del filesystem pubblica `board_changed` su SSE per ogni scrittura `.md`/`.yaml`: la comparsa di `docs/PRD.md` e quella di `.archetipo/backlog.yaml` lo attivano entrambe. `scheduleBoardReload` ricarica anche lo stato del workspace, e lo stesso fanno il tasto Refresh, `settleWorkspaceAction` e l'apertura di un altro workspace. Nessun polling nuovo, nessun riavvio.
+
+  ### Decisioni architetturali
+
+  **Dove vive la sequenza del processo.** La scelta è fra tre opzioni realmente praticabili: (a) una lista di stadi dichiarata nell'Archetipo; (b) una derivazione implicita nel server dall'ordine di `WorkspaceActions` più `Actions`; (c) una tabella nel frontend. La (c) è esclusa da AC-3 in modo esplicito. La (b) è allettante perché non aggiunge tipi, ma si rompe subito: `spec-draft` è `offered` per sempre una volta che esiste un backlog, quindi vincerebbe eternamente sul passo `plan`, e distinguerla richiederebbe comunque un campo nuovo (`advances`) — cioè la stessa spesa della (a) con meno chiarezza e nessuna etichetta leggibile da mostrare. La (a) costa un tipo e una lista, rende lo stadio nominabile e traducibile nelle parole del processo (che è il testo stesso di AC-1), e resta compatibile con EP-007: un Archetipo installato da un pacchetto dichiarerà i propri stadi come dichiara le proprie azioni. Compromesso accettato: aggiungere uno stadio richiede toccare l'Archetipo, e un test scritto per esteso lo rende una modifica deliberata — che è il comportamento voluto, non un costo.
+
+  La scelta non attraversa la soglia dell'ADR: non tocca modello dati persistente, sicurezza, confini di integrazione, topologia, semantica di consistenza o fallimento; `Stages` è un campo derivato, mai persistito in `config.yaml`, e la sua rimozione è reversibile senza migrazioni. Il gate Wiki di questo workspace è comunque disattivato, quindi la decisione resta registrata qui e in nessun altro posto.
+
+  **Rotta nuova invece di estendere `workspace/actions`.** Estendere la rotta esistente avrebbe risparmiato un handler, ma avrebbe legato la striscia della board al ciclo di vita del pannello di esecuzione della modale PRD, che monta timer e segue esecuzioni. Una rotta di sola lettura, chiamata a ogni `board_changed`, non deve trascinarsi quel peso. Il calcolo condiviso (`workspaceAvailability`, `providerAvailabilityFor`, `resolveTemplate`) resta uno solo: si duplica la domanda, non la logica.
+
+  **Nessun browser e2e.** Il repository non ha un'infrastruttura browser e ogni spec di viewer già consegnata (US-040, US-041, US-044, US-045, US-046) è dimostrata con uno smoke Node sul contratto HTTP reale, a PID del viewer costante. Introdurre Playwright per una striscia di stato sarebbe sproporzionato; la copertura del contenuto reso è ottenuta con il test di unità del modulo di rendering. Il dettaglio e la deroga sono nella sezione Strategia di test.
+
+  **Nessun mockup.** Il cambiamento aggiunge una striscia sopra le colonne riusando le chip di azione già disegnate in `app.css`; le ultime cinque spec di viewer non hanno prodotto mockup. La chiamata è al limite fra «nuovo componente» e «aggiunta contenuta»: è annotata qui perché possa essere ribaltata.
+
+  ---
+
+  ## Baseline
+
+  Misurata il 2026-08-20 su `sleli`, albero di lavoro pulito (unico file non tracciato: uno stato di autopilot).
+
+  | Verifica | Risultato prima dell'implementazione | Conseguenza per la pianificazione |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | nessun output | `Expect: nessun output` è legittimo in ogni task Go |
+  | `cd cli && go vet ./...` | nessun problema | idem |
+  | `cd cli && go build ./...` | compila | idem |
+  | `cd cli && go test ./internal/web/... ./internal/template/...` | 239 test passati in 2 pacchetti | i due pacchetti toccati sono verdi: ogni task Go può pretendere verde |
+  | `cd cli && go test ./...` | 1579 test passati in 28 pacchetti | la regressione completa è verde: il gate finale può pretendere verde |
+  | `node --test test/web/task-markdown.test.mjs` | 12 passati, 0 falliti (1 suite `SKIP` per `marked` assente) | il nuovo test di `test/web/` gira con lo stesso comando; lo `SKIP` preesistente non riguarda i file di questa spec |
+  | `golangci-lint run --timeout 5m ./...` | **non eseguibile in locale**: binario non installato | prerequisito d'ambiente, non un fallimento del codice |
+
+  **Prerequisito d'ambiente.** `golangci-lint` non è installato su questa macchina. Il comando deterministico per averlo è `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` (indicato da AGENTS.md). Il gate finale lo esegue se disponibile e, se l'installazione non è possibile, registra esplicitamente il salto invece di dichiarare verde qualcosa che non ha eseguito: la CI lo esegue comunque nel job `lint`.
+
+  **Diagnostica sui file toccati.** Nessuno dei file che il piano modifica presenta oggi diagnostica di compilatore o linter, quindi il piano non deve introdurne alcuna. `cli/internal/web/assets/app.js` e `app.css` non sono coperti da linter in CI: la disciplina applicabile è la coerenza con lo stile del file, non uno strumento.
+
+  **Nota sulla CI.** Gli smoke `test:view-*` non girano in CI (il job `test` esegue `go test ./...`, `npm run test:e2e:unit` e `npm run test:wiki-smoke`). Lo smoke di questa spec è quindi una verifica locale eseguita dall'implementatore, esattamente come per US-045 e US-046.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task che la produce |
+  |---|---|---|---|---|
+  | AC-1 | `template.Template` sintetico con la lista di stadi dell'Archetipo, più i quattro stati di workspace (senza PRD, con PRD e senza backlog, con backlog e spec TODO, tutto DONE) costruiti nel server di test di `internal/web` | unit Go | `GET /api/workspace/status` risponde con `stage.id`/`stage.label`/`stage.summary` **presi dall'Archetipo risolto** e con `template.id`/`template.version`; nei quattro stati escono rispettivamente `senza-prd`, `senza-backlog`, `da-pianificare`, `completo` | TASK-04 |
+  | AC-1 | payload di stato con etichette inventate (`stage.label = "ETICHETTA-X"`, `template.label = "ARCHETIPO-Y"`) | unit Node (`node --test`) | l'HTML prodotto da `renderWorkspaceStatus` contiene le stringhe `ETICHETTA-X` e `ARCHETIPO-Y`: la UI dichiara lo stato con le parole dell'Archetipo, non con parole proprie | TASK-06 |
+  | AC-2 | gli stessi quattro stati di AC-1 | unit Go | `next_step` è non nullo nei primi tre stati e nomina `action` = `inception` / `backlog` / `plan`, con `label` uguale a quella dichiarata dall'Archetipo; per lo scope `spec` `next_step.spec.code` è la prima spec della colonna secondo l'ordine di board; nello stato terminale `next_step` è `null` e `stage.id` è `completo` | TASK-04 |
+  | AC-2 | payload con `next_step` scope `workspace` e payload con `next_step` scope `spec` | unit Node | l'HTML contiene un controllo con `data-next-scope`/`data-next-action` uguali al payload e con l'etichetta dell'azione come testo; per lo scope `spec` contiene anche il codice della spec bersaglio | TASK-06 |
+  | AC-3 | funzione di derivazione invocata direttamente con **due** Archetipi sintetici che differiscono solo per l'ordine degli stadi, a stato di workspace identico | unit Go | i due Archetipi producono due `stage`/`next_step` diversi: la raccomandazione segue la dichiarazione dell'Archetipo e non una costante del server | TASK-04 |
+  | AC-3 | payload con `stage.id` e `next_step.action` inesistenti nell'Archetipo reale (`"stadio-inventato"`, `"azione-inventata"`) | unit Node | il renderer li mostra tali e quali senza fallire e senza sostituirli: non contiene alcuna tabella di stadi, azioni od ordini | TASK-06 |
+  | AC-3 | workspace reale su disco: vuoto → con `docs/PRD.md` → con `.archetipo/backlog.yaml` popolato | smoke Node su viewer reale | `GET /api/workspace/status` cambia `stage.id` e `next_step.action` da `senza-prd`/`inception` a `senza-backlog`/`backlog` a `da-pianificare`/`plan` **in conseguenza di scritture reali sul filesystem**, senza che nulla venga comunicato al viewer | TASK-09 |
+  | AC-4 | stato con backlog assente e provider di default non configurato | unit Go | ogni voce di `actions` con `runnable: false` ha `unlocked_by` non vuoto; per `backlog` senza PRD `unlocked_by` nomina l'inception, per `spec-draft` senza backlog nomina la generazione del backlog; `next_step.unlocked_by` è valorizzato quando `next_step.runnable` è `false` | TASK-04 |
+  | AC-4 | payload con un'azione `runnable: false` e `unlocked_by: "CONDIZIONE-Z"` | unit Node | l'HTML contiene `CONDIZIONE-Z` come **testo visibile** dentro un elemento dedicato (classe `action-chip-unlock`), non solo dentro un attributo `title`: l'assert esclude esplicitamente il caso in cui la stringa compaia unicamente in `title="…"` | TASK-06, TASK-08 |
+  | AC-5 | un solo processo viewer avviato su un workspace vuoto, PID catturato all'avvio | smoke Node su viewer reale | dopo ogni scrittura su disco lo stesso `view.child.pid` risponde con lo stato aggiornato entro il polling, e alla fine del percorso il PID è identico a quello iniziale; in più, un client `EventSource` collegato a `/api/board/stream` riceve un evento `board_changed` dopo la comparsa del PRD | TASK-09 |
+
+  Ogni criterio ha una evidenza e nessun doppio di test nasconde l'oracolo: il test Go interroga l'handler reale attraverso il `ServeMux` del server (nessun mock del connettore di stato), lo smoke interroga un viewer reale, e il test Node esercita esattamente il modulo che il browser carica via `<script src="/workspace-status.js">`.
+
+  ---
+
+  ## Strategia di test
+
+  Tre livelli, ciascuno con un oracolo che gli altri non possono dare.
+
+  - **Unit Go su `internal/template`** — la lista degli stadi dell'Archetipo è scritta per esteso nel test, come già fanno `processActions` e `processWorkspaceActions`: cambiare il processo deve rompere un test in modo esplicito. Si verifica anche la coerenza interna (ogni stadio nomina un'azione che l'Archetipo dichiara davvero, nella lista giusta per il suo scope; l'ultimo stadio è terminale) e il non-aliasing della slice, come per gli altri campi mutabili.
+  - **Unit Go su `internal/web`** — la derivazione è provata due volte, a due altezze diverse. La funzione pura di derivazione è chiamata direttamente con Archetipi sintetici: è l'unico modo di dimostrare AC-3 lato server, perché `template.Resolve` legge un registro globale con un solo Archetipo e non è iniettabile. L'handler è provato attraverso il `ServeMux` reale del server con i quattro stati di workspace, come fanno già `workspace_execution_test.go` e `workspaces_test.go`.
+  - **Unit Node su `test/web/`** — il modulo di rendering è caricato con lo stesso loader UMD già usato per `task-markdown.js` e riceve payload costruiti a mano, comprese etichette e identificatori inventati. È il livello che dimostra che la UI *dice* quello che il server manda (AC-1, AC-2, AC-4) e che *non sa* nulla del processo (AC-3).
+  - **Smoke Node end-to-end** — CLI compilata dai sorgenti, viewer reale, workspace reale, nessun server finto e nessuna attesa arbitraria: ogni attesa interroga una rotta. Percorre la Dimostrazione della spec nell'ordine in cui è scritta e verifica AC-5 con l'oracolo più duro disponibile, il PID costante del processo.
+
+  I doppi usati sono soltanto due, entrambi innocui rispetto agli oracoli: nel test Node non c'è browser (si asserisce sulla stringa HTML prodotta, che è esattamente ciò che il browser inserisce), e nello smoke il provider di esecuzione non è configurato — il che rende `next_step.runnable` falso e trasforma quella assenza in una verifica in più di AC-4, invece di nasconderla.
+
+  ### Deroga al browser e2e
+
+  **Motivo:** il percorso di accettazione non attraversa autenticazione, autorizzazione, navigazione fra schermate né integrazione esterna. Attraversa un confine server (le rotte HTTP) e la persistenza (PRD e backlog su disco), ed entrambi sono provati dallo smoke sul viewer reale con il contratto HTTP e il filesystem come oracoli. La parte restante è la resa di un payload in HTML, isolata di proposito in un modulo puro perché sia provabile in modo deterministico. Il repository non possiede alcuna infrastruttura browser e tutte le spec di viewer già accettate (US-040, US-041, US-044, US-045, US-046) usano questa stessa combinazione: introdurre Playwright per una striscia di stato non è proporzionato.
+
+  **Livello di evidenza usato al suo posto:** `node --test test/web/workspace-status.test.mjs` sul modulo che il browser carica realmente, più `node ./test/e2e/workspace-status-view-smoke.mjs` su viewer, CLI e workspace reali.
+
+  **Demo filmabile:** sì. La Dimostrazione è osservabile in un browser (apertura del workspace vuoto, lettura dello stato e del passo raccomandato, comparsa del PRD, ricarica, comparsa del backlog). La registrazione non appartiene a questa fase: la decide ed esegue `archetipo-review`. Da notare che `e2e.record_demo_video` è `false` nella configurazione di questo workspace.
+
+  ### Scenari smoke
+
+  | Scenario | Percorso |
+  |---|---|
+  | Workspace vuoto | Viewer avviato su un workspace inizializzato e senza PRD: `stage.id = senza-prd`, `next_step.action = inception`, `next_step.scope = workspace`; l'azione `backlog` è presente in `actions` con `runnable: false` e `unlocked_by` che nomina l'inception |
+  | Comparsa del PRD | Scritto `docs/PRD.md` sul disco, senza toccare il viewer: lo stato passa a `senza-backlog` / `backlog`; un `EventSource` collegato riceve `board_changed`; il PID non cambia |
+  | Comparsa del backlog | Scritto un backlog con almeno una spec in `TODO`: lo stato passa a `da-pianificare` / `plan` con `next_step.spec.code` uguale alla prima carta della colonna; il PID non cambia |
+  | Fine percorso | Confronto finale del PID con quello catturato all'avvio: identico |
+tasks:
+  - id: TASK-01
+    title: Dichiarare gli stadi del processo nell'Archetipo (template.Stage)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      `template.Template` dichiara la sequenza ordinata degli stadi del processo, e l'Archetipo `fabbrica-del-software` la popola.
+
+      ## Read
+      - `cli/internal/template/template.go` — tipi `Action`, `WorkspaceAction`, `Template`, il metodo `clone()`, la funzione `Builtin()` e il metodo `ActionsFor`. Nota come `Action.clone()` stacca la slice mutabile e come `Template.clone()` copia `Skills`, `Actions` e `WorkspaceActions`.
+      - `cli/internal/domain` — i valori `domain.StatusTodo`, `StatusPlanned`, `StatusInProgress`, `StatusReview`, `StatusDone`.
+
+      ## Change
+      - `cli/internal/template/template.go` — solo questo file. Aggiungere il tipo `Stage`, le costanti di scope, il campo `Stages` in `Template`, la copia in `clone()` e la lista di stadi dentro `Builtin()`.
+      - Non-goal: nessuna condizione, nessuna lettura di filesystem e nessun riferimento al connettore entra in questo pacchetto. Uno stadio dichiara *quale* azione lo fa avanzare, mai *quando* vale. Non modificare `Actions` né `WorkspaceActions`. Non toccare `cli/internal/config`: `Stages` non è mai persistito in `config.yaml`.
+
+      ## Steps
+      1. In `cli/internal/template/template.go` dichiarare due costanti esportate per lo scope:
+         `ScopeWorkspace = "workspace"` e `ScopeSpec = "spec"`.
+      2. Dichiarare il tipo:
+         ```go
+         type Stage struct {
+             ID      string `json:"id"`
+             Label   string `json:"label"`
+             Summary string `json:"summary"`
+             Scope   string `json:"scope"`
+             Action  string `json:"action"`
+         }
+         ```
+         Documentare con un commento che `Scope` e `Action` vuoti identificano lo stadio terminale, che deve essere l'ultimo della lista, e che la condizione di ciascuno stadio è responsabilità del chiamante — il pacchetto `template` non conosce lo stato di un workspace.
+      3. Aggiungere a `Template` il campo `Stages []Stage \`json:"stages"\`` con un commento che spiega che è la sequenza del processo, ordinata, e che il primo stadio la cui condizione vale è quello corrente.
+      4. In `Template.clone()` copiare `Stages` in una nuova slice, come già si fa per `WorkspaceActions` (`Stage` non ha campi mutabili, quindi basta `copy`).
+      5. In `Builtin()` popolare `Stages` nell'ordine esatto, con i testi in italiano coerenti con le etichette già presenti:
+         - `{ID: "senza-prd", Label: "Senza PRD", Summary: "Il workspace non ha ancora un PRD: il processo comincia dall'inception.", Scope: ScopeWorkspace, Action: "inception"}`
+         - `{ID: "senza-backlog", Label: "Senza backlog", Summary: "Il PRD c'è: il passo successivo è generare il backlog iniziale.", Scope: ScopeWorkspace, Action: "backlog"}`
+         - `{ID: "da-pianificare", Label: "Da pianificare", Summary: "Ci sono spec in TODO: il passo successivo è pianificarne una.", Scope: ScopeSpec, Action: "plan"}`
+         - `{ID: "da-implementare", Label: "Da implementare", Summary: "Ci sono spec pianificate o in corso: il passo successivo è implementarne una.", Scope: ScopeSpec, Action: "implement"}`
+         - `{ID: "da-rivedere", Label: "Da rivedere", Summary: "Ci sono spec in review: il passo successivo è rivederne una.", Scope: ScopeSpec, Action: "review"}`
+         - `{ID: "completo", Label: "Nessun passo in sospeso", Summary: "Nessuna spec attende un passo del processo: aggiungi una spec quando serve.", Scope: "", Action: ""}`
+      6. Eseguire `gofmt -w cli/internal/template/template.go`.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/Archetipo/cli`
+      - Run: `gofmt -l . && go vet ./internal/template/... && go build ./... && go test ./internal/template/...`
+      - Expect: `gofmt -l .` nessun output; `go vet` nessun problema; build pulita; i test del pacchetto `template` passano ancora (baseline verde, quindi verde qui). I test scritti per esteso in `template_test.go` non nominano `Stages`, quindi non falliscono per questa aggiunta.
+
+      ## Done
+      - [ ] `template.Stage`, `ScopeWorkspace`, `ScopeSpec` e `Template.Stages` esistono ed è documentato che il pacchetto non valuta condizioni.
+      - [ ] `Builtin()` dichiara i sei stadi nell'ordine indicato, con lo stadio terminale per ultimo.
+      - [ ] `Template.clone()` copia `Stages` in una slice distinta.
+      - [ ] AC-3 — la sequenza del processo è ora un dato dell'Archetipo, precondizione perché il passo raccomandato ne derivi.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test dell'Archetipo sugli stadi dichiarati e sulla loro coerenza
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Gli stadi dell'Archetipo sono verificati per esteso e non possono diventare incoerenti con le azioni dichiarate senza rompere un test.
+
+      ## Read
+      - `cli/internal/template/template_test.go` — in particolare `processActions`, `processWorkspaceActions`, `TestDefaultTemplateDeclaresItsWorkspaceActions`, `TestDefaultWorkspaceActionSkillsAreInstalled` e `TestDefaultWorkspaceActionsAreNotAliased`. Le nuove verifiche seguono esattamente questi modelli.
+      - `cli/internal/template/template.go` — la lista `Stages` scritta da TASK-01.
+
+      ## Change
+      - `cli/internal/template/template_test.go` — solo questo file. Aggiungere la variabile `processStages` e quattro test.
+      - Non-goal: non modificare i test esistenti, non aggiungere helper nel file di produzione.
+
+      ## Steps
+      1. Dichiarare `var processStages = []Stage{...}` scrivendo per esteso i sei stadi di TASK-01, con un commento che dice — come per `processActions` — che la lista è scritta per esteso perché cambiare il processo debba rompere questo test esplicitamente.
+      2. `TestDefaultTemplateDeclaresItsStages`: `reflect.DeepEqual(Default().Stages, processStages)`; inoltre, per ogni stadio non terminale, `ID`, `Label` e `Summary` non vuoti.
+      3. `TestStagesReferenceDeclaredActions`: costruire dai `Default().Actions` e `Default().WorkspaceActions` due insiemi di id; per ogni stadio con `Scope == ScopeWorkspace` pretendere che `Action` sia fra le workspace action, per ogni `Scope == ScopeSpec` che sia fra le action di spec; per lo stadio terminale pretendere `Action == ""`.
+      4. `TestTerminalStageIsLastAndUnique`: esattamente uno stadio ha `Scope == ""` ed è l'ultimo della slice.
+      5. `TestDefaultStagesAreNotAliased`: risolvere due volte dallo **stesso** registro (`registry := Builtin()`, due `registry.Resolve(DefaultID)`), scrivere `first.Stages[0].ID = "tampered"` e verificare che la seconda risoluzione riporti l'id originale. Il commento deve spiegare perché due `Default()` non proverebbero nulla, come già fa `TestDefaultActionsAreNotAliased`.
+      6. Eseguire `gofmt -w cli/internal/template/template_test.go`.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/Archetipo/cli`
+      - Run: `gofmt -l . && go test ./internal/template/... -count=1 -run 'Stage'`
+      - Expect: nessun output da `gofmt`; i quattro test nuovi passano.
+      - Run: `go test ./internal/template/... -count=1`
+      - Expect: tutti i test del pacchetto passano (baseline verde).
+
+      ## Done
+      - [ ] `processStages` è scritto per esteso e confrontato con `Default().Stages`.
+      - [ ] Un'azione nominata da uno stadio ma non dichiarata dall'Archetipo fa fallire `TestStagesReferenceDeclaredActions`.
+      - [ ] Lo stadio terminale è unico e ultimo, verificato.
+      - [ ] `Stages` non è aliasata attraverso il registro, verificato con due risoluzioni dello stesso registro.
+      - [ ] AC-3 — la dichiarazione dell'Archetipo è vincolata e non può divergere dalle sue azioni.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Derivare stadio e passo raccomandato sul server ed esporli su GET /api/workspace/status
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il server risponde a `GET /api/workspace/status` con lo stadio corrente, il passo raccomandato e le azioni workspace corredate della condizione che le sblocca, il tutto derivato dall'Archetipo e dallo stato reale del workspace.
+
+      ## Read
+      - `cli/internal/web/workspace_execution.go` — `workspaceActionView`, `workspaceAvailability`, `workspaceAvailability.offers`, `.reasonFor`, `workspaceRemedy`, `s.workspaceAvailability(ctx, ws)`. Sono il calcolo di stato che questa rotta riusa senza duplicare.
+      - `cli/internal/web/execution_run.go` — `providerAvailability`, `s.providerAvailabilityFor`, `s.actionAvailabilityFor`, `actionAvailability.reasonFor`, `s.resolveTemplate`, `s.decorateActions`.
+      - `cli/internal/web/handlers.go` — `handleGetBoard` (ordinamento con `connector.BoardOrderReader` e `boardLayout`), `templateView`, `s.readPlanForSpec`.
+      - `cli/internal/web/server.go` — `registerRoutes`.
+      - `cli/internal/template/template.go` — `Stage`, `Stages`, `ScopeWorkspace`, `ScopeSpec`, `ActionsFor`.
+
+      ## Change
+      - **Nuovo** `cli/internal/web/workspace_status.go` — viste JSON, derivazione, handler.
+      - `cli/internal/web/server.go` — registrare `GET /api/workspace/status`.
+      - `cli/internal/web/workspace_execution.go` — aggiungere il campo `UnlockedBy` a `workspaceActionView` e valorizzarlo in `handleGetWorkspaceActions`.
+      - `cli/internal/web/handlers.go` — estrarre l'ordinamento delle spec in un metodo riusabile, senza cambiare la risposta di `GET /api/board`.
+      - Non-goal: nessuna nuova rotta di scrittura, nessuna modifica a `POST /api/workspace/execution`, nessun campo rimosso o rinominato nelle viste esistenti (`workspace/actions` resta compatibile), nessuna modifica al watcher o al broker.
+
+      ## Steps
+      1. In `cli/internal/web/handlers.go` estrarre da `handleGetBoard` il metodo
+         `func (s *Server) specsInBoardOrder(ctx context.Context, ws *workspaceSession, specs []domain.Spec) []domain.Spec`:
+         legge `connector.BoardOrderReader` (ignorando l'errore, come oggi), emette prima le spec nominate dall'ordine di board che esistono davvero, poi le restanti nell'ordine di `FetchBacklogItems`. `handleGetBoard` chiama il metodo e poi distribuisce le spec nelle colonne di `boardLayout`: la risposta deve restare identica byte per byte, i test esistenti di `handlers_test.go` sono la rete.
+      2. In `workspace_execution.go` aggiungere a `workspaceActionView` il campo
+         `UnlockedBy string \`json:"unlocked_by,omitempty"\`` con un commento che chiarisce la distinzione: `UnavailableReason` dice *perché* l'azione non parte, `UnlockedBy` dice *cosa la sblocca*, ed è omesso quando l'azione è eseguibile. In `handleGetWorkspaceActions` valorizzarlo con `workspaceRemedy(availability, action.ID)` solo quando `reason != ""`.
+      3. Creare `cli/internal/web/workspace_status.go` con il commento di pacchetto-file che spiega la separazione da `workspace/actions`: quella rotta serve il pannello di esecuzione della modale PRD, questa risponde alla domanda «a che punto sono» ed è di sola lettura, richiamata a ogni `board_changed`.
+      4. Dichiarare le viste:
+         ```go
+         type stageView struct {
+             ID      string `json:"id"`
+             Label   string `json:"label"`
+             Summary string `json:"summary"`
+         }
+
+         type nextStepSpecView struct {
+             Code   string        `json:"code"`
+             Title  string        `json:"title"`
+             Status domain.Status `json:"status"`
+         }
+
+         type nextStepView struct {
+             Scope             string            `json:"scope"`
+             Action            string            `json:"action"`
+             Label             string            `json:"label"`
+             Skill             string            `json:"skill"`
+             Spec              *nextStepSpecView `json:"spec"`
+             Runnable          bool              `json:"runnable"`
+             UnavailableReason string            `json:"unavailable_reason,omitempty"`
+             UnlockedBy        string            `json:"unlocked_by,omitempty"`
+         }
+
+         type workspaceStatusView struct {
+             Template   templateView          `json:"template"`
+             Stage      stageView             `json:"stage"`
+             NextStep   *nextStepView         `json:"next_step"`
+             HasPRD     bool                  `json:"has_prd"`
+             HasBacklog bool                  `json:"has_backlog"`
+             Actions    []workspaceActionView `json:"actions"`
+         }
+         ```
+         `templateView` va esteso con `Label string \`json:"label"\`` in `handlers.go`: la striscia deve poter nominare l'Archetipo con le sue parole (AC-1). È un campo aggiunto, quindi compatibile con i consumatori esistenti; valorizzarlo anche nei punti che già costruiscono `templateView` (`handleGetSpec`, `handleGetWorkspaceActions`, e il costruttore in `execution_run.go` se presente).
+      5. Scrivere la derivazione come **funzione pura**, così che sia chiamabile da un test con Archetipi sintetici (è ciò che dimostra AC-3):
+         ```go
+         // stageInputs are the facts a stage condition is evaluated against. The
+         // template says which stages exist and in which order; these say which one
+         // is true right now.
+         type stageInputs struct {
+             offersWorkspaceAction func(actionID string) bool
+             specsInOrder          []domain.Spec
+         }
+
+         func resolveStage(tpl template.Template, in stageInputs) (template.Stage, *domain.Spec)
+         ```
+         Regole, nell'ordine della slice `tpl.Stages`:
+         - `Scope == template.ScopeWorkspace`: lo stadio vale se `in.offersWorkspaceAction(stage.Action)` è vero.
+         - `Scope == template.ScopeSpec`: lo stadio vale se esiste in `in.specsInOrder` almeno una spec il cui `Status` è ammesso dall'azione `stage.Action` secondo `tpl.Actions`; la spec restituita è la **prima** in quell'ordine.
+         - `Scope == ""`: vale sempre.
+         - Nessuno stadio valido (Archetipo senza terminale): restituire lo zero value e `nil`; il chiamante lo tratta come stadio sconosciuto, mai come panico.
+         Per la corrispondenza stato/azione usare le `Statuses` dichiarate in `tpl.Actions`, cercando l'azione per id; non riscrivere la tabella degli stati.
+      6. Scrivere l'handler `handleGetWorkspaceStatus`:
+         - `ws := s.session()`; `tpl, err := s.resolveTemplate(ws)`; su errore `writeError`.
+         - `availability := s.workspaceAvailability(ctx, ws)` — un solo calcolo per richiesta, come nelle altre rotte.
+         - `specs, err := ws.conn.FetchBacklogItems(ctx, "")`: un backlog assente arriva come `iox.CodePreconditionMissing` e va letto come «nessuna spec», non come errore (stesso trattamento che `workspaceAvailability` riserva a `ReadExistingBacklog`); qualsiasi altro errore è `writeError`. Poi `specs = s.specsInBoardOrder(ctx, ws, specs)`.
+         - `stage, targetSpec := resolveStage(tpl, stageInputs{offersWorkspaceAction: func(id string) bool { return availability.offers(id) == "" }, specsInOrder: specs})`.
+         - Costruire `NextStep`: `nil` quando `stage.Action == ""`. Per `ScopeWorkspace` prendere etichetta e skill dalla `WorkspaceAction` omonima, `Runnable = availability.reasonFor(stage.Action) == ""`, `UnavailableReason` quel motivo, `UnlockedBy = workspaceRemedy(availability, stage.Action)` quando non eseguibile. Per `ScopeSpec` prendere etichetta e skill dalla `Action` omonima, `Spec` dal `targetSpec`, e calcolare eseguibilità con `s.actionAvailabilityFor(ctx, ws, targetSpec.Code, planTaskCount).reasonFor(stage.Action)` dove `planTaskCount` viene da `s.readPlanForSpec(ctx, ws, targetSpec.Code)` (serve solo a `implement`, ma va letto perché la risposta sia vera anche lì); come `UnlockedBy` di un'azione di spec usare il motivo stesso quando è già una condizione azionabile, altrimenti la frase costante `"porta la spec in uno stato che ammette questa azione"`. Se `targetSpec` è `nil` mentre lo stadio è spec-scoped, trattare lo stadio come terminale (`NextStep = nil`): è una difesa contro un Archetipo incoerente, non un caso atteso.
+         - `Actions`: iterare `tpl.WorkspaceActions` esattamente come fa `handleGetWorkspaceActions`, popolando `Offered`, `Runnable`, `UnavailableReason` e `UnlockedBy`. La slice non deve mai essere `nil`.
+         - Rispondere `writeJSON(w, http.StatusOK, view)`.
+      7. Registrare la rotta in `server.go` accanto alle altre di workspace:
+         `s.mux.HandleFunc("GET /api/workspace/status", s.handleGetWorkspaceStatus)`.
+      8. `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/Archetipo/cli`
+      - Run: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/web/... ./internal/template/... -count=1`
+      - Expect: nessun output da `gofmt`; `go vet` nessun problema; build pulita; i 239 test dei due pacchetti passano ancora — in particolare quelli di `handlers_test.go` sull'ordinamento della board, che sono la rete dell'estrazione di `specsInBoardOrder`.
+
+      ## Done
+      - [ ] `GET /api/workspace/status` esiste e risponde `200` con `template`, `stage`, `next_step`, `has_prd`, `has_backlog`, `actions`.
+      - [ ] `resolveStage` è una funzione pura che prende l'Archetipo come parametro: nessuna costante di stadio o di ordine vive nel server.
+      - [ ] Ogni voce di `actions` non eseguibile porta `unlocked_by` non vuoto (AC-4).
+      - [ ] `GET /api/board` risponde esattamente come prima dell'estrazione.
+      - [ ] AC-1, AC-2, AC-3 — stadio corrente e passo raccomandato derivano dall'Archetipo risolto e dallo stato reale letto dal connettore.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test Go della derivazione e del contratto di GET /api/workspace/status
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      La derivazione di stadio e passo raccomandato è provata sia come funzione pura sull'Archetipo, sia come contratto HTTP sui quattro stati reali di un workspace.
+
+      ## Read
+      - `cli/internal/web/execution_run_test.go` — `newRunServerWith`, `newEmptyRunServer`, `seedRunSpecs`, e la disciplina di `t.Cleanup` sul dispatch.
+      - `cli/internal/web/execution_test.go` — `doJSON`, e come `seedRunSpecs` popola `US-901` (TODO) e `US-902` (PLANNED).
+      - `cli/internal/web/workspace_execution_test.go` — `workspaceActionsResponse` e `readWorkspaceActions`: il modello di decodifica «forma di rete scritta a mano, non la struct del server».
+      - `cli/internal/web/workspace_status.go` — `resolveStage`, `stageInputs`, `workspaceStatusView` da TASK-03.
+      - `cli/internal/web/workspace_execution.go` — come i test esistenti creano un workspace con e senza PRD (`connector.PRDWriter`/scrittura di `docs/PRD.md` sotto `cfg.ProjectRoot`).
+
+      ## Change
+      - **Nuovo** `cli/internal/web/workspace_status_test.go` — solo questo file.
+      - Non-goal: non modificare gli helper esistenti né i test già presenti; se serve un helper nuovo, dichiararlo in questo file.
+
+      ## Steps
+      1. Dichiarare `workspaceStatusResponse`, la forma di rete scritta a mano (`template{id,version,label}`, `stage{id,label,summary}`, `next_step` come puntatore con `scope`, `action`, `label`, `skill`, `spec{code,title,status}`, `runnable`, `unavailable_reason`, `unlocked_by`, poi `has_prd`, `has_backlog`, `actions[]` con `id`, `offered`, `runnable`, `unavailable_reason`, `unlocked_by`), più `readWorkspaceStatus(t, srv)` che fa `doJSON` su `GET /api/workspace/status`, pretende `200` e decodifica.
+      2. `TestWorkspaceStatusReportsTheStageOfAnEmptyWorkspace` — server da `newEmptyRunServer` senza PRD: `stage.id == "senza-prd"`, `stage.label` e `stage.summary` uguali a quelli dichiarati da `template.Default().Stages[0]` (letti dall'Archetipo, non riscritti come stringhe nel test: è ciò che prova AC-1), `template.id == template.FabbricaDelSoftware`, `next_step.scope == "workspace"`, `next_step.action == "inception"`, `next_step.label` uguale all'etichetta dichiarata, `has_prd == false`, `has_backlog == false`.
+      3. `TestWorkspaceStatusMovesToTheBacklogStageOnceThePRDExists` — scrivere un PRD non vuoto nel workspace, rileggere: `stage.id == "senza-backlog"`, `next_step.action == "backlog"`, `has_prd == true`.
+      4. `TestWorkspaceStatusRecommendsPlanningTheFirstSpec` — server con backlog seminato (`seedRunSpecs`) e PRD presente: `stage.id == "da-pianificare"`, `next_step.scope == "spec"`, `next_step.action == "plan"`, `next_step.spec.code == "US-901"` (la prima spec in TODO nell'ordine di board) e `next_step.spec.status == domain.StatusTodo`.
+      5. `TestWorkspaceStatusIsTerminalWhenNoSpecAwaitsAStep` — backlog con tutte le spec in `DONE` e PRD presente: `stage.id == "completo"` e `next_step == nil`. Costruire il backlog con `SaveInitialBacklog` e portare gli stati a `DONE` con le stesse API di connettore usate dagli altri test.
+      6. `TestWorkspaceStatusNamesWhatUnlocksEveryUnavailableAction` — su un workspace vuoto e senza provider di default: per **ogni** voce di `actions` con `runnable == false` pretendere `unlocked_by != ""`; in particolare la voce `backlog` deve avere un `unlocked_by` che nomina l'inception e la voce `spec-draft` uno che nomina la generazione del backlog. Verificare inoltre che `next_step.runnable == false` e `next_step.unlocked_by != ""` — nessun provider configurato è esattamente lo stato in cui una persona che apre il workspace per la prima volta si trova (AC-4).
+      7. `TestResolveStageFollowsTheArchetypeOrder` — chiamare `resolveStage` direttamente con due `template.Template` sintetici che differiscono **solo** per l'ordine di `Stages` (per esempio `da-rivedere` prima di `da-pianificare`), con `Actions` che dichiarano le stesse `Statuses` dell'Archetipo reale, lo stesso `stageInputs` e una lista di spec che contiene sia una spec in `TODO` sia una in `REVIEW`. Pretendere due stadi diversi. Aggiungere un caso con `offersWorkspaceAction` che risponde sempre `false` e nessuna spec: lo stadio risultante è quello terminale. Questo test è l'evidenza di AC-3 sul server.
+      8. `TestResolveStageSelectsTheFirstSpecInBoardOrder` — `stageInputs.specsInOrder` con due spec in `TODO` in un ordine dato: la spec restituita è la prima della slice, non quella con il codice minore.
+      9. `gofmt -w cli/internal/web/workspace_status_test.go`.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/Archetipo/cli`
+      - Run: `gofmt -l . && go test ./internal/web/... -count=1 -run 'WorkspaceStatus|ResolveStage' -v`
+      - Expect: tutti i test nuovi passano e i nomi elencati compaiono nell'output verboso.
+      - Run: `go test ./internal/web/... ./internal/template/... -count=1`
+      - Expect: verde (baseline 239 test verdi, più i nuovi).
+
+      ## Done
+      - [ ] AC-1 — un test pretende che `stage.id/label/summary` provengano da `template.Default().Stages` e non da stringhe riscritte nel test.
+      - [ ] AC-2 — i quattro stati producono `inception`, `backlog`, `plan` e nessun passo, con la spec bersaglio nominata per lo stadio spec-scoped.
+      - [ ] AC-3 — `TestResolveStageFollowsTheArchetypeOrder` dimostra che invertire l'ordine dichiarato dall'Archetipo cambia la raccomandazione a stato di workspace identico.
+      - [ ] AC-4 — ogni azione non eseguibile del payload ha `unlocked_by` non vuoto, verificato su tutte le voci e non su una sola.
+      - [ ] `go test ./internal/web/...` è verde.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Modulo di rendering puro workspace-status.js
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Esiste un modulo UMD che trasforma il payload di `/api/workspace/status` in HTML, senza conoscere alcun nome di stadio, di azione o di ordine del processo.
+
+      ## Read
+      - `cli/internal/web/assets/task-markdown.js` — l'intero file: è il modello UMD da replicare (IIFE, `module.exports` in Node, `window.<Nome>` nel browser, funzioni pure, commento d'intestazione che dichiara cosa il modulo fa e cosa non fa).
+      - `cli/internal/web/assets/app.js` — `escapeHtml` (per replicarne il comportamento) e `renderSpecActionChip` (per la classe `action-chip` e la forma della chip).
+      - `cli/internal/web/workspace_status.go` — la forma esatta del payload.
+
+      ## Change
+      - **Nuovo** `cli/internal/web/assets/workspace-status.js`.
+      - Non-goal: nessuna manipolazione del DOM, nessuna `fetch`, nessun accesso a `document` o `window` fuori dal blocco di export, nessuna tabella di stadi o azioni, nessuna stringa che descriva il processo. Ogni parola visibile sul processo deve provenire dal payload. Non toccare `app.js` in questo task.
+
+      ## Steps
+      1. Creare il file con l'intestazione di commento nello stile di `task-markdown.js`, dichiarando esplicitamente il vincolo: *il modulo è un renderer puro del payload; non contiene regole di processo, e un identificativo di stadio o di azione che non conosce viene reso tale e quale.*
+      2. Implementare una `escapeHtml` locale identica per comportamento a quella di `app.js` (`&`, `<`, `>`, `"`, `'`).
+      3. Esportare `renderWorkspaceStatus(view)` che restituisce una stringa HTML e non lancia mai su input parziale (`null`, `next_step` assente, `actions` assente):
+         - intestazione: `stage.label` in un elemento con classe `ws-status-stage`, `stage.summary` in `ws-status-summary`, e l'identità dell'Archetipo — `template.label` (con fallback su `template.id`) e `template.version` — in `ws-status-template`. Nessun testo aggiuntivo inventato dal modulo oltre alle etichette di contorno neutre.
+         - passo raccomandato: quando `view.next_step` è presente, un `<button type="button" class="ws-status-next" data-next-scope="…" data-next-action="…" data-next-spec="…">` il cui testo è `next_step.label`, seguito dal codice della spec bersaglio quando `next_step.spec` è presente. Quando `next_step.runnable` è falso il bottone è `disabled` e accanto compare `next_step.unlocked_by` (o `unavailable_reason` se il primo è vuoto) come **testo visibile** in un elemento di classe `ws-status-next-unlock`.
+         - quando `view.next_step` è assente: un elemento `ws-status-next-none` che contiene `stage.summary` e nessun bottone.
+         - azioni: per ogni voce di `view.actions`, una chip con classi `action-chip` più `ws-status-action`, il `label` come testo, `data-action-id` con l'id, e — quando `runnable` è falso — un elemento figlio di classe `action-chip-unlock` che contiene `unlocked_by` (o `unavailable_reason` se vuoto) come testo visibile. Una chip eseguibile è un `<button type="button">` con `data-action-id`; una non eseguibile è uno `<span>`.
+         - ogni valore proveniente dal payload passa da `escapeHtml`.
+      4. Esportare anche `nextStepTarget(view)`, funzione pura che restituisce `null` oppure `{scope, action, code}` dal `next_step`: è ciò che `app.js` userà per decidere dove navigare, e tenerla qui la rende testabile.
+      5. Blocco di export finale: `module.exports = { renderWorkspaceStatus, nextStepTarget, escapeHtml }` in Node, `window.WorkspaceStatus = { renderWorkspaceStatus, nextStepTarget }` nel browser.
+      6. Registrare il modulo in `cli/internal/web/assets/index.html` con `<script src="/workspace-status.js"></script>` **prima** di `/app.js`, accanto a `/task-markdown.js`.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/Archetipo`
+      - Run: `node -e "const m=require('./cli/internal/web/assets/workspace-status.js'); const h=m.renderWorkspaceStatus({template:{label:'T',version:'1'},stage:{id:'s',label:'L',summary:'S'},next_step:{scope:'workspace',action:'a',label:'A',runnable:false,unlocked_by:'U'},actions:[{id:'x',label:'X',runnable:false,unlocked_by:'W'}]}); if(!h.includes('L')||!h.includes('A')||!h.includes('U')||!h.includes('W')) throw new Error('rendering incompleto'); console.log('ok');"`
+      - Expect: stampa `ok` senza eccezioni.
+      - Run: `node -e "const m=require('./cli/internal/web/assets/workspace-status.js'); m.renderWorkspaceStatus(null); m.renderWorkspaceStatus({}); console.log('ok');"`
+      - Expect: stampa `ok`: un payload vuoto non fa lanciare il renderer.
+
+      ## Done
+      - [ ] `cli/internal/web/assets/workspace-status.js` esiste, è UMD e non tocca il DOM.
+      - [ ] Il file non contiene nessuna delle stringhe `senza-prd`, `senza-backlog`, `da-pianificare`, `da-implementare`, `da-rivedere`, `completo`, `inception`, `backlog`, `plan`, `implement`, `review` (AC-3): verificarlo con `grep`.
+      - [ ] `index.html` carica il modulo prima di `app.js`.
+      - [ ] AC-1, AC-2, AC-4 — etichetta di stadio, sintesi, identità dell'Archetipo, passo raccomandato e condizione di sblocco sono tutti resi come testo visibile.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test Node del renderer e script npm test:web
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Il contenuto reso dalla UI è verificato con oracoli sul testo visibile, e il renderer è dimostrato privo di regole di processo.
+
+      ## Read
+      - `test/web/task-markdown.test.mjs` — l'intero file: il loader UMD basato su `node:vm`, l'uso di `describe`/`it` di `node:test` e di `assert/strict`, e il modo in cui risolve il percorso dell'asset.
+      - `cli/internal/web/assets/workspace-status.js` — le funzioni esportate.
+      - `package.json` — la sezione `scripts`.
+
+      ## Change
+      - **Nuovo** `test/web/workspace-status.test.mjs`.
+      - `package.json` — aggiungere lo script `"test:web": "node --test test/web/"`.
+      - Non-goal: non modificare `test/web/task-markdown.test.mjs`, non introdurre dipendenze npm, non aggiungere il test alla CI in questo task.
+
+      ## Steps
+      1. Riusare lo stesso loader UMD di `task-markdown.test.mjs` per caricare `cli/internal/web/assets/workspace-status.js` (il modulo espone `module.exports`, quindi il ramo Node del loader basta).
+      2. `it("dichiara lo stadio con le parole dell'Archetipo")` — payload con `stage.label = "ETICHETTA-X"`, `stage.summary = "SINTESI-X"`, `template.label = "ARCHETIPO-Y"`, `template.version = "9.9.9"`: l'HTML contiene tutte e quattro le stringhe (AC-1).
+      3. `it("nomina il passo raccomandato e l'azione che lo esegue")` — due casi: `next_step` con `scope: "workspace"`, `action: "azione-inventata"`, `label: "ETICHETTA-AZIONE"`, `runnable: true` → l'HTML contiene `ETICHETTA-AZIONE`, `data-next-action="azione-inventata"` e `data-next-scope="workspace"`, e il bottone **non** è `disabled`; `next_step` con `scope: "spec"` e `spec: {code: "US-777", ...}` → l'HTML contiene anche `US-777` e `data-next-spec="US-777"` (AC-2).
+      4. `it("non contiene regole di processo")` — payload con `stage.id: "stadio-inventato"` e `next_step.action: "azione-inventata"`: il rendering non lancia e riporta entrambi tali e quali; in più, leggere il sorgente del modulo con `readFileSync` e pretendere che non contenga nessuno degli identificativi reali di stadio e azione (`senza-prd`, `senza-backlog`, `da-pianificare`, `da-implementare`, `da-rivedere`, `completo`, `"inception"`, `"backlog"`, `"plan"`, `"implement"`, `"review"`) (AC-3).
+      5. `it("mostra la condizione che sblocca ogni azione non eseguibile")` — payload con `actions: [{id:"a1", label:"A1", runnable:false, unlocked_by:"CONDIZIONE-Z"}, {id:"a2", label:"A2", runnable:true}]`:
+         - l'HTML contiene `CONDIZIONE-Z`;
+         - l'occorrenza **non** è solo dentro un attributo: rimuovere dall'HTML tutti gli attributi (`html.replace(/\s\w[\w-]*="[^"]*"/g, "")`) e pretendere che `CONDIZIONE-Z` sia ancora presente nel testo residuo. È l'assert che distingue una chip parlante da una chip inerte con tooltip (AC-4);
+         - la chip `a1` è uno `<span>` e la chip `a2` un `<button>`;
+         - un payload con `runnable:false` e solo `unavailable_reason` valorizzato mostra comunque quella frase come testo visibile.
+      6. `it("non lancia su payload parziali")` — `null`, `{}`, `{actions: []}`, `{next_step: null}` restituiscono tutti una stringa.
+      7. `it("neutralizza l'HTML che arriva dal payload")` — un `stage.label` contenente `<img src=x onerror=1>` esce con `&lt;` e non come tag.
+      8. `it("nextStepTarget riporta il bersaglio del passo")` — `null` quando `next_step` manca; `{scope, action, code}` corretti quando c'è, con `code` `null` per lo scope workspace.
+      9. In `package.json` aggiungere `"test:web": "node --test test/web/"`.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/Archetipo`
+      - Run: `node --test test/web/workspace-status.test.mjs`
+      - Expect: tutti i test passano, `fail 0`.
+      - Run: `npm run test:web`
+      - Expect: esegue sia `task-markdown.test.mjs` sia `workspace-status.test.mjs`; `fail 0`. La suite `renderTaskMarkdown with real marked` resta `SKIP` come nella baseline: è preesistente e non riguarda questa spec.
+
+      ## Done
+      - [ ] AC-1 — un test pretende etichetta di stadio, sintesi e identità dell'Archetipo nel testo reso.
+      - [ ] AC-2 — un test pretende etichetta, scope, azione e spec bersaglio del passo raccomandato nel testo reso.
+      - [ ] AC-3 — un test dimostra che il renderer riporta identificativi che non conosce e che il suo sorgente non contiene alcun identificativo reale del processo.
+      - [ ] AC-4 — un test pretende la condizione di sblocco come testo visibile, con l'assert che esclude la sola presenza in attributo.
+      - [ ] `npm run test:web` esiste ed è verde.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Striscia di stato del workspace sulla board, con aggiornamento dal canale SSE esistente
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Chi apre il viewer legge, sopra le colonne e senza aprire nulla, a che punto è il workspace e qual è il passo successivo raccomandato, e quel testo si aggiorna da solo quando lo stato cambia.
+
+      ## Read
+      - `cli/internal/web/assets/index.html` — la sezione `<header class="topbar">…</header>` seguita da `<main id="board">`, e i tag `<script>` in fondo.
+      - `cli/internal/web/assets/app.js` — la zona di boot (`loadBoard(); loadMockups(); connectBoardStream();`), `scheduleBoardReload`, `connectBoardStream`, `refreshBtn.addEventListener("click", loadBoard)`, il gestore del tasto `r`, `openEditor`, `openPRD`, `settleWorkspaceAction`, `showToast`, `apiGet`.
+      - `cli/internal/web/assets/app.css` — le regole di `.topbar`, `.board`, `.action-chip` e le variabili di tema (per riusare colori e spaziature esistenti anziché inventarne).
+      - `cli/internal/web/assets/workspace-status.js` — `renderWorkspaceStatus`, `nextStepTarget`.
+
+      ## Change
+      - `cli/internal/web/assets/index.html` — inserire la sezione della striscia fra `</header>` e `<main id="board">`.
+      - `cli/internal/web/assets/app.css` — stili della striscia.
+      - `cli/internal/web/assets/app.js` — caricamento, resa, navigazione e agganci di aggiornamento.
+      - Non-goal: nessuna nuova chiamata di rete oltre a `GET /api/workspace/status`; nessun polling nuovo (il canale è l'SSE già attivo); nessuna regola di processo in `app.js` — quale sia il passo e cosa lo sblocchi arriva sempre dal payload; il pannello di esecuzione della modale PRD resta dov'è e non viene duplicato nella striscia.
+
+      ## Steps
+      1. In `index.html`, fra `</header>` e `<main id="board">`, inserire:
+         ```html
+         <section id="workspace-status" class="workspace-status hidden" aria-live="polite"></section>
+         ```
+         La sezione è vuota: il contenuto è prodotto interamente da `renderWorkspaceStatus`.
+      2. In `app.js`, accanto alle altre costanti di elemento in cima, aggiungere `const workspaceStatusEl = document.getElementById("workspace-status");`.
+      3. Scrivere `async function loadWorkspaceStatus()`:
+         - `const view = await apiGet("/api/workspace/status")` dentro `try`;
+         - in caso di successo: `workspaceStatusEl.innerHTML = window.WorkspaceStatus.renderWorkspaceStatus(view)`, `workspaceStatusEl.classList.remove("hidden")`, e memorizzare l'ultimo payload in una variabile di modulo `workspaceStatusSnapshot` (serve alla navigazione, che deve leggere il payload e non il DOM);
+         - in caso di errore: `workspaceStatusEl.classList.add("hidden")` e `workspaceStatusEl.innerHTML = ""`, senza toast. La striscia è un'aggiunta alla board, non una precondizione: un viewer che non sa rispondere non deve impedire di lavorare. Aggiungere un commento che dice esattamente questo, nello stile di `loadWorkspaceActions`.
+      4. Navigazione: registrare **un solo** listener delegato su `workspaceStatusEl` (`click`), che ignora i click fuori da `.ws-status-next`. Sul bottone del passo raccomandato leggere `nextStepTarget(workspaceStatusSnapshot)`:
+         - `scope === "spec"` e `code` presente → `openEditor(code)`;
+         - `scope === "workspace"` → `openPRD()`, che è dove il pannello di esecuzione delle azioni di workspace è già montato;
+         - altrimenti nessuna azione.
+         Un commento deve dire perché la striscia non avvia l'esecuzione da sé: esiste un solo percorso di dispatch, quello del pannello, e duplicarlo significherebbe duplicare anche la garanzia «una pressione, una esecuzione».
+      5. Le chip di `actions` nella striscia non sono cliccabili: sono informative. Il listener delegato non deve reagirvi.
+      6. Agganci di aggiornamento — nessuno nuovo, tutti su percorsi esistenti:
+         - boot: chiamare `loadWorkspaceStatus()` accanto a `loadBoard()`;
+         - `scheduleBoardReload`: dopo `loadBoard()`, chiamare anche `loadWorkspaceStatus()`, dentro la stessa guardia che salta il ricarico a modale aperta;
+         - `refreshBtn.addEventListener("click", …)` e il tasto `r`: sostituire il riferimento diretto a `loadBoard` con una funzione `refreshBoardAndStatus()` che invoca entrambe;
+         - `settleWorkspaceAction`: dopo `loadWorkspaceActions()`, chiamare `loadWorkspaceStatus()`;
+         - dopo un `move` di board andato a buon fine e dopo la creazione o l'eliminazione di una spec (i punti che già chiamano `loadBoard()` a seguito di una scrittura): chiamare anche `loadWorkspaceStatus()`.
+         `openWorkspace` non richiede nulla: ricostruisce la pagina con `window.location.reload()`.
+      7. In `app.css` aggiungere le regole della striscia, usando le variabili di tema già definite nel file e nessun colore letterale nuovo:
+         - `.workspace-status` — contenitore a tutta larghezza sopra la board, con lo stesso padding orizzontale di `.board`, bordo inferiore sottile, e `display: flex` con `flex-wrap: wrap` e `gap`;
+         - `.ws-status-stage` — l'etichetta di stadio in evidenza; `.ws-status-summary` — testo secondario; `.ws-status-template` — identità dell'Archetipo, piccola e attenuata;
+         - `.ws-status-next` — bottone nello stile di `.primary-btn`/`.ghost-btn` già presenti, con lo stato `:disabled` visibilmente inerte ma **accompagnato** dal testo di `.ws-status-next-unlock`;
+         - `.ws-status-next-unlock`, `.action-chip-unlock` — testo piccolo, visibile, con contrasto sufficiente in entrambi i temi (`data-theme="light"` e `data-theme="dark"`);
+         - `.workspace-status.hidden` deve restare nascosta: verificare che la classe `hidden` globale del file la copra.
+      8. Verificare a occhio la striscia in entrambi i temi avviando il viewer (vedi Verify) e commutando con il tasto `T`.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/Archetipo`
+      - Run: `cd cli && go build -o /tmp/archetipo-us043 ./cmd/archetipo`
+      - Expect: build pulita (gli asset sono `embed`, quindi la build è ciò che li impacchetta).
+      - Run: creare un workspace temporaneo e avviare il viewer (`init` opera sulla directory corrente e `ARCHETIPO_DATA_DIR` deve puntare alla radice del repository, come fa `test/e2e/run.mjs`):
+        ```bash
+        WS=$(mktemp -d)
+        (cd "$WS" && ARCHETIPO_DATA_DIR=/Users/stefanoleli/Project/Archetipo /tmp/archetipo-us043 init --tool claude --connector file --yes)
+        (cd "$WS" && /tmp/archetipo-us043 view --no-open --host 127.0.0.1 --port 8143 &)
+        sleep 2 && curl -s http://127.0.0.1:8143/api/workspace/status
+        ```
+      - Expect: il JSON riporta `stage.id` `senza-prd` e `next_step.action` `inception`.
+      - Run: `curl -s http://127.0.0.1:8143/workspace-status.js | head -3` e `curl -s http://127.0.0.1:8143/ | grep -c 'id="workspace-status"'`
+      - Expect: il modulo è servito dal binario e la pagina contiene la sezione (`1`).
+      - Verifica manuale: aprire `http://127.0.0.1:8143` nel browser; la striscia è visibile sopra le colonne e riporta stadio, sintesi, Archetipo e passo raccomandato; scrivere `docs/PRD.md` nel workspace da un altro terminale e osservare, **senza ricaricare la pagina e senza riavviare il viewer**, che il passo raccomandato diventa la generazione del backlog (AC-5). Chiudere il viewer al termine.
+      - Run: `cd cli && gofmt -l . && go build ./... && go test ./internal/web/... -count=1`
+      - Expect: nessun output da `gofmt`, build pulita, test verdi.
+
+      ## Done
+      - [ ] La striscia è visibile sulla board all'apertura del viewer, senza aprire alcuna modale.
+      - [ ] AC-1, AC-2 — stadio, sintesi, Archetipo e passo raccomandato sono leggibili; il bottone del passo porta alla modale PRD per un'azione di workspace e alla spec bersaglio per un'azione di spec.
+      - [ ] AC-3 — `app.js` non contiene alcun identificativo di stadio né alcuna regola di ordine: verificarlo con `grep -n 'senza-prd\|senza-backlog\|da-pianificare\|da-implementare\|da-rivedere' cli/internal/web/assets/app.js`, che non deve dare risultati.
+      - [ ] AC-5 — la comparsa del PRD sul disco aggiorna la striscia senza ricaricare la pagina e senza riavviare il viewer, verificato a mano; l'aggiornamento passa dall'SSE già esistente e non da un polling nuovo.
+      - [ ] La striscia è leggibile sia in tema chiaro sia in tema scuro.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Condizione di sblocco visibile sulle chip di azione anche nel pannello di esecuzione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Un'azione non eseguibile dichiara come testo visibile la condizione che la sblocca, ovunque le chip di azione siano disegnate — non solo nella striscia di stato.
+
+      ## Read
+      - `cli/internal/web/assets/app.js` — `renderSpecActions` e `renderSpecActionChip`: oggi una chip non eseguibile è uno `<span>` con il motivo dentro l'attributo `title`, quindi leggibile solo passandoci sopra il mouse.
+      - `cli/internal/web/assets/app.css` — `.action-chip`, `.action-chip-label`, `.action-chip-id`, e la classe `.action-chip-unlock` introdotta da TASK-07.
+      - `cli/internal/web/workspace_status.go` e `cli/internal/web/workspace_execution.go` — il campo `unlocked_by`, presente nelle azioni di workspace.
+      - `cli/internal/web/execution_run.go` — `specActionView`: le azioni di spec espongono `unavailable_reason` ma non `unlocked_by`.
+
+      ## Change
+      - `cli/internal/web/assets/app.js` — `renderSpecActionChip`.
+      - `cli/internal/web/assets/app.css` — completare `.action-chip-unlock` per il contesto delle chip in modale.
+      - Non-goal: **non** aggiungere `unlocked_by` a `specActionView` in questo task; per un'azione di spec il testo visibile è `unavailable_reason`, che è già una frase che nomina cosa fare («pianificala prima di implementarla», «configura un provider di default»). Non modificare `renderSpecActions` nella scelta di quali azioni disegnare: cosa è offerto resta un verdetto del server.
+
+      ## Steps
+      1. In `renderSpecActionChip`, per il ramo non eseguibile, comporre la frase come `action.unlocked_by || action.unavailable_reason || ""` e, quando non è vuota, aggiungerla dentro la chip come `<span class="action-chip-unlock">…</span>`, passata da `escapeHtml`.
+      2. Mantenere l'attributo `title` con la stessa frase: il tooltip resta utile, ma non è più l'unico posto in cui la frase esiste.
+      3. Il ramo eseguibile resta invariato: nessun elemento `action-chip-unlock` su una chip che si può premere.
+      4. In `app.css` verificare che `.action-chip` non tronchi il testo aggiunto: se la chip è a riga singola, passare a `flex-direction: column` con `align-items: flex-start` quando contiene `.action-chip-unlock`, oppure usare una regola dedicata `.action-chip:has(.action-chip-unlock)`. Controllare l'effetto sia nella modale di spec sia nella striscia.
+      5. Aggiungere un commento sopra `renderSpecActionChip` che dichiara il vincolo: una chip spenta deve dire cosa la sblocca, perché una chip spenta e muta è esattamente l'azione inerte che la spec vieta.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/Archetipo`
+      - Run: `grep -n "action-chip-unlock" cli/internal/web/assets/app.js cli/internal/web/assets/app.css cli/internal/web/assets/workspace-status.js`
+      - Expect: la classe compare in tutti e tre i file.
+      - Run: `cd cli && go build ./... && go test ./internal/web/... -count=1`
+      - Expect: build pulita, test verdi.
+      - Verifica manuale: con il viewer avviato come in TASK-07, su un workspace **senza provider di default configurato**, aprire una spec in TODO e osservare che la chip `Pianifica` è spenta e mostra sotto l'etichetta la frase che dice cosa configurare; aprire la modale PRD e osservare lo stesso comportamento sulle azioni di workspace.
+
+      ## Done
+      - [ ] AC-4 — ogni chip non eseguibile mostra la propria condizione come testo visibile dentro la chip, non solo come `title`, sia nella striscia sia nelle modali.
+      - [ ] Una chip eseguibile non porta alcun testo di sblocco.
+      - [ ] Il testo aggiunto non rompe il layout delle chip in nessuno dei due contesti né in nessuno dei due temi.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Smoke end-to-end della Dimostrazione su viewer reale, a PID costante
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-07
+    body: |-
+      ## Objective
+      La Dimostrazione della spec è percorsa su un viewer reale, e l'aggiornamento del passo raccomandato è provato senza mai riavviare il processo.
+
+      ## Read
+      - `test/e2e/open-workspace-view-smoke.mjs` — l'intero file: `parseArgs`, `createRunDir`, `buildCLI`, `startViewServer`, `waitForHTTP`, `apiJSON`, `postExpectingStatus`, `assertEqual`, e la disciplina «nessuna attesa arbitraria, ogni attesa interroga una rotta» e «il PID non cambia mai».
+      - `test/e2e/backlog-from-view-smoke.mjs` — come crea un workspace con PRD e come semina un backlog reale attraverso la CLI.
+      - `package.json` — la sezione `scripts` e la convenzione di nome `test:view-*-smoke`.
+      - `cli/internal/web/workspace_status.go` — la forma del payload da asserire.
+
+      ## Change
+      - **Nuovo** `test/e2e/workspace-status-view-smoke.mjs`.
+      - `package.json` — aggiungere `"test:view-workspace-status-smoke": "node ./test/e2e/workspace-status-view-smoke.mjs"`.
+      - Non-goal: nessun agente AI coinvolto (lo scenario non esegue alcuna azione: scrive artefatti sul disco e osserva); nessuna aggiunta a `test/e2e/run.yaml`; nessuna modifica agli smoke esistenti; niente `sleep` fissi come oracolo — solo polling su rotte, con timeout.
+
+      ## Steps
+      1. Copiare la struttura di `open-workspace-view-smoke.mjs`: intestazione di commento che nomina la spec e la Dimostrazione, `main()`, run directory sotto `test/workspaces/workspace-status-view-smoke/runs/<timestamp>/sandbox`, `ARCHETIPO_DATA_DIR` alla radice del repository, `ARCHETIPO_STATE_DIR` dentro la run directory, `buildCLI`, e chiusura del viewer in `finally`.
+      2. Creare **un** workspace reale con `archetipo init --tool claude --connector file --yes`, senza PRD e senza backlog. Avviare il viewer con `startViewServer` e catturare `pidBefore = view.child.pid`.
+      3. **Stato 1 — workspace vuoto.** `GET /api/workspace/status`:
+         - `stage.id === "senza-prd"`;
+         - `next_step.scope === "workspace"` e `next_step.action === "inception"`;
+         - `has_prd === false`, `has_backlog === false`;
+         - per **ogni** voce di `actions` con `runnable === false`, `unlocked_by` è una stringa non vuota; la voce `backlog` esiste ed è fra queste (AC-4).
+      4. **Canale di aggiornamento.** Aprire una connessione a `${view.url}/api/board/stream` con `fetch` e lettura incrementale del corpo (`res.body`), raccogliendo le righe ricevute in un buffer. Non usare `EventSource`, che in Node richiede una versione recente: leggere il testo dello stream basta e rende l'asserzione esplicita.
+      5. **Stato 2 — comparsa del PRD.** Scrivere `docs/PRD.md` con contenuto non vuoto direttamente sul filesystem, senza toccare il viewer. Poi:
+         - attendere in polling (`waitFor`, con timeout esplicito e messaggio di fallimento parlante) che `GET /api/workspace/status` riporti `stage.id === "senza-backlog"` e `next_step.action === "backlog"`;
+         - pretendere che il buffer dello stream contenga `board_changed` (il watcher ha notificato i client collegati: è il meccanismo su cui AC-5 poggia);
+         - pretendere `view.child.pid === pidBefore`.
+      6. **Stato 3 — comparsa del backlog.** Seminare un backlog reale con almeno due spec in `TODO`, usando lo stesso percorso di `backlog-from-view-smoke.mjs` (scrittura di `.archetipo/backlog.yaml` e dei file di spec, oppure i comandi CLI che quel file già usa). Poi:
+         - attendere che lo stato riporti `stage.id === "da-pianificare"`, `next_step.scope === "spec"`, `next_step.action === "plan"`;
+         - pretendere che `next_step.spec.code` sia uguale al codice della **prima** carta della colonna `todo` letta da `GET /api/board`, e non a un codice scelto dal test: è l'oracolo che lega la raccomandazione a ciò che la persona vede;
+         - pretendere `next_step.spec.status === "TODO"`;
+         - pretendere `view.child.pid === pidBefore`.
+      7. **Chiusura.** Confrontare un'ultima volta `view.child.pid` con `pidBefore` e stampare l'elenco dei criteri verificati (`verified`), come fanno gli altri smoke. Terminare il viewer e chiudere lo stream nel `finally`.
+      8. Aggiungere lo script in `package.json`.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/Archetipo`
+      - Run: `npm run test:view-workspace-status-smoke`
+      - Expect: esce con codice `0`; l'output elenca i tre stati attraversati e conferma il PID costante. Un fallimento deve nominare lo stato atteso e quello ricevuto, mai limitarsi a un timeout muto.
+      - Run: `git status --short test/workspaces`
+      - Expect: nessun file tracciato aggiunto (`test/workspaces/*` è ignorato, come dichiarato in AGENTS.md).
+
+      ## Done
+      - [ ] AC-3 — il passo raccomandato cambia in conseguenza di scritture reali sul filesystem, senza che nulla venga comunicato al viewer.
+      - [ ] AC-5 — i tre stati sono osservati sullo stesso processo, con il PID confrontato dopo ogni transizione e alla fine, e lo stream ha emesso `board_changed`.
+      - [ ] AC-2 — la spec bersaglio del passo raccomandato coincide con la prima carta della colonna TODO letta da `GET /api/board`.
+      - [ ] AC-4 — ogni azione non eseguibile del payload reale porta la propria condizione di sblocco.
+      - [ ] Lo smoke è invocabile con `npm run test:view-workspace-status-smoke` e non lascia file tracciati.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Gate finale — verifiche complete e passaggio in review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+    body: |-
+      ## Objective
+      L'intero incremento è verificato con i controlli che il repository si fida di eseguire, e la spec entra in review solo dopo che ogni task risulta `DONE`.
+
+      ## Read
+      - `AGENTS.md` — la sezione «Before delivering changes»: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`, `golangci-lint run --timeout 5m ./...`.
+      - `.github/workflows/ci.yml` — i job `lint` e `test`, per sapere cosa la CI eseguirà comunque.
+      - La sezione **Baseline** del piano — nessun comando qui può pretendere verde dove la baseline era rossa; tutti i comandi Go erano verdi, quindi tutti devono restare verdi.
+
+      ## Change
+      - Nessuna modifica al codice. Se una verifica fallisce, la correzione appartiene al task che ha introdotto il difetto: tornare lì, correggere, e rieseguire questo gate da capo.
+
+      ## Steps
+      1. Eseguire i controlli Go, nell'ordine, con working directory `/Users/stefanoleli/Project/Archetipo/cli`:
+         - `gofmt -l .`
+         - `go vet ./...`
+         - `go build ./...`
+         - `go test ./... -count=1`
+      2. Eseguire il linter. Se `golangci-lint` non è disponibile, installarlo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` e riprovare; se l'installazione non è possibile in questo ambiente, **registrare esplicitamente il salto** nella nota di completamento invece di dichiarare verde un comando non eseguito.
+      3. Eseguire le verifiche JavaScript, con working directory `/Users/stefanoleli/Project/Archetipo`:
+         - `npm run test:web`
+         - `npm run test:view-workspace-status-smoke`
+      4. Rieseguire la verifica di assenza di regole di processo nel frontend:
+         `grep -n 'senza-prd\|senza-backlog\|da-pianificare\|da-implementare\|da-rivedere\|completo' cli/internal/web/assets/app.js cli/internal/web/assets/workspace-status.js` — nessun risultato (AC-3).
+      5. Verificare che i file toccati non abbiano lasciato diagnostica nuova: `gofmt -l .` vuoto e `go vet ./...` pulito coprono i file Go; per gli asset la disciplina è la coerenza di stile, verificata in revisione.
+      6. Verificare che l'albero non contenga artefatti di test: `git status --short` non deve mostrare file dentro `test/workspaces/` o `cli/dist/` come tracciati.
+      7. Marcare **questo** task come `DONE`.
+      8. Da `/Users/stefanoleli/Project/Archetipo` eseguire `archetipo spec show US-043` e verificare che **nessun** task risulti `TODO`.
+      9. Solo allora eseguire `archetipo spec review US-043`.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/Archetipo/cli`
+      - Run: `gofmt -l . && go vet ./... && go build ./... && go test ./... -count=1`
+      - Expect: `gofmt` nessun output; `go vet` nessun problema; build pulita; **tutti** i test passano (baseline: 1579 test in 28 pacchetti, più quelli aggiunti da TASK-02, TASK-04).
+      - Run: `golangci-lint run --timeout 5m ./...`
+      - Expect: `0 issues`; oppure, se il binario non è installabile in questo ambiente, il salto è registrato per iscritto e la CI resta l'esecutore.
+      - Working directory: `/Users/stefanoleli/Project/Archetipo`
+      - Run: `npm run test:web`
+      - Expect: `fail 0`.
+      - Run: `npm run test:view-workspace-status-smoke`
+      - Expect: uscita con codice `0`.
+      - Run: `archetipo spec show US-043`
+      - Expect: ogni task del piano ha `status: DONE`.
+
+      ## Done
+      - [ ] `gofmt`, `go vet`, `go build`, `go test ./...` sono verdi, coerentemente con la baseline.
+      - [ ] `golangci-lint` è verde, oppure il suo salto è registrato con la ragione.
+      - [ ] `npm run test:web` e `npm run test:view-workspace-status-smoke` sono verdi.
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5 — le evidenze della Mappa delle evidenze di accettazione sono state rieseguite tutte in questa sessione, non solo nei task che le hanno introdotte.
+      - [ ] Nessun artefatto di test è tracciato in Git.
+      - [ ] Questo task è marcato `DONE`, `archetipo spec show US-043` non riporta alcun task `TODO`, e solo dopo è stato eseguito `archetipo spec review US-043`.
+
+      ## Blockers
+      None.
+    ref: TASK-10

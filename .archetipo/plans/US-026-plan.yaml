@@ -1,0 +1,801 @@
+schema: archetipo/plan/v2
+spec_code: US-026
+body: |-
+  # US-026: Inizializzare un workspace con il Template Fabbrica del software — Piano di implementazione
+
+  **Prodotto da:** Team di pianificazione ARchetipo
+  **Data:** 2026-08-16
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-004 — Workspace predisposti ai Template
+  **Priorità:** MEDIUM | **Punti:** 3
+
+  **User Story**
+  Come utilizzatore che avvia un workspace ARchetipo, voglio inizializzarlo con il Template Fabbrica del software, così da ricevere il processo e le skill attuali senza configurarle singolarmente.
+
+  **Criteri di accettazione**
+  - AC-1 — L'inizializzazione con il Template Fabbrica del software rende disponibili le skill previste dal processo corrente.
+  - AC-2 — Il workspace conserva identificativo e versione del Template selezionato.
+  - AC-3 — L'inizializzazione senza selezione esplicita produce il comportamento attuale della Fabbrica del software.
+  - AC-4 — Un identificativo di Template sconosciuto viene rifiutato senza lasciare un'inizializzazione parziale.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Oggi il processo installato da `archetipo init` è implicito: la lista delle skill è la variabile `allSkills` in `cli/internal/cli/init_project_cmd.go` e gli stati del workflow vivono soltanto nel `config.yaml` impacchettato. US-026 rende quel processo un oggetto dichiarato e nominabile — il **Template** — senza cambiare il comportamento di default.
+
+  - **Nuovo package `cli/internal/template`.** Definisce il tipo `Template` (`ID`, `Version`, `Label`, `Skills`, `Statuses`) e un `Registry` con `Register`/`Resolve`/`IDs`, modellato sul `Registry` già esistente in `cli/internal/execution/provider.go` (stessa forma di `RegistryError`, stessa semantica di risoluzione per ID). Il registry builtin contiene un solo Template, `fabbrica-del-software`, la cui lista di skill è esattamente quella oggi in `allSkills` e i cui stati sono le costanti canoniche di `cli/internal/domain`. La versione è una costante del package (`1.0.0`), **non** `version.Version`: quest'ultima vale `dev` nei build locali e non identificherebbe il processo.
+  - **Il Template diventa la sorgente unica delle skill.** `allSkills` in `init_project_cmd.go` è ricavata da `template.Default().Skills`, così `uninstall` e `doctor` continuano a funzionare senza modifiche mentre il Template resta l'unico posto in cui la lista è scritta.
+  - **Persistenza in `.archetipo/config.yaml`.** Un nuovo blocco di primo livello `template:` con `id` e `version`. `cli/internal/config` guadagna `TemplateConfig` e il campo `Config.Template`, riempito da `applyDefaults()` con il Template di default quando il blocco manca: un workspace inizializzato prima di US-026 continua quindi a risolvere come Fabbrica del software.
+  - **`archetipo init --template <id>`.** Il flag è opzionale; assente significa `template.DefaultID`. La risoluzione è la **prima** operazione di `runInitProject`, prima di qualunque `MkdirAll`, copia di skill o scrittura di config: un ID sconosciuto esce con `E_INVALID_INPUT` quando nessuna scrittura è ancora avvenuta, che è la forma in cui AC-4 è verificabile.
+  - **Scrittura del blocco a livello di stringa, non di nodo YAML.** `writeConfig` continua a copiare il `config.yaml` impacchettato e a riscrivere la riga `connector:` con `setConnectorField`. Il blocco `template:` viene aggiunto al file impacchettato e riscritto con lo stesso approccio testuale (`setTemplateFields`), con un ramo di append quando la chiave manca. Un round-trip `yaml.Node` sull'intero file — la tecnica usata da `UpdateDefaultProvider` — riformatterebbe indentazione e righe vuote del config generato, cioè un cambiamento osservabile del comportamento attuale che AC-3 vieta.
+  - **Rilettura via `config show`.** Il comando passa da `withConnector` a `withConnectorCfg` e restituisce una struct che incorpora `domain.SetupInfo` e aggiunge `template`. Le skill leggono già da qui ogni metadato di workspace, quindi il Template diventa osservabile per programma senza un comando nuovo e senza toccare i quattro connector.
+
+  ### Decisioni architetturali
+
+  Il Template è una policy trasversale: US-027 vi appoggerà le azioni ammesse per stato, quindi la forma scelta ora vincola una seconda spec. Le alternative valutate:
+
+  1. **Etichetta di sola configurazione** — scrivere `template.id`/`template.version` in `config.yaml` e lasciare le skill in `allSkills`. Minima, ma il Template non definirebbe nulla: US-027 dovrebbe reintrodurre il concetto da capo.
+  2. **Definizione registrata in-process (scelta)** — un package `template` che possiede skill e stati, con un registry per ID. Riusa il pattern già accettato per i provider di esecuzione, mantiene un solo punto di verità per la lista di skill e offre a US-027 un posto naturale dove aggiungere le azioni.
+  3. **Template come directory di asset su disco** — un Template descritto da file distribuiti nel pacchetto. Più estensibile, ma introduce un formato, un caricatore e una superficie di errore che il perimetro MVP esclude esplicitamente (niente secondo Template, niente marketplace, niente ereditarietà).
+
+  Compromesso accettato dall'opzione 2: aggiungere un Template richiede una release della CLI. È coerente con il fuori ambito della spec e reversibile verso l'opzione 3 senza cambiare il contratto persistito. La decisione è registrata in `decisions/workspace-process-template`.
+
+  ---
+
+  ## Baseline
+
+  Misurata su `sleli` a `8890e54`, con l'unica modifica non committata già presente in `.archetipo/config.yaml` (blocco commentato `execution.default_provider`).
+
+  | Controllo | Risultato prima dell'implementazione | Conseguenza per la pianificazione |
+  |---|---|---|
+  | `cd cli && go test ./...` | Verde — 684 test superati in 23 package | Ogni task può dichiarare `Expect: passes`; il gate finale confronta il totale, che deve solo crescere |
+  | `cd cli && gofmt -l .` | Verde — output vuoto | I file toccati devono restare formattati; il gate ripete il comando e pretende output vuoto |
+  | `cd cli && go vet ./...` | Verde — nessuna diagnostica | Nessun file toccato parte degradato: non è ammesso aggiungere diagnostiche |
+  | `cd cli && go build ./...` | Verde | Idem |
+  | `npm run test:e2e:unit` (dal root) | Verde — 50 test superati | Il blocco `template:` aggiunto a `.archetipo/config.yaml` non ha accoppiamenti di schema lato Node (`scripts/build-npm.mjs` e `scripts/install-dev.mjs` copiano il file senza interpretarlo), ma il gate lo riesegue perché il file è un asset impacchettato |
+  | `cd cli && golangci-lint run --timeout 5m ./...` | **Non eseguibile in locale**: `command not found` | Prerequisito d'ambiente, non un fallimento del codice. Il lint gira in CI; nessun task lo elenca in `## Verify` e il gate finale non lo pretende |
+
+  Prerequisiti d'ambiente distinti dai fallimenti di codice: Go secondo `cli/go.mod` e Node con le dipendenze del `package-lock.json` sono presenti; `golangci-lint` non lo è. I test CLI che esercitano `init` richiedono `ARCHETIPO_DATA_DIR` puntato alla root del repository — l'helper `repoDataDir(t)` in `cli/internal/cli/cli_test.go` lo risolve già.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task che lo produce |
+  |---|---|---|---|---|
+  | AC-1 | Progetto vuoto creato da `newProject(t)`, `ARCHETIPO_DATA_DIR` sulla root del repo | Integrazione CLI (`cli/internal/cli/cli_test.go`, binario reale via `runCLI`) | Dopo `init --tool claude --connector file --template fabbrica-del-software --yes`, esiste `.claude/skills/<skill>/SKILL.md` per **tutte** le 8 skill di `template.Default().Skills`, confrontate contro la lista del Template e non contro una costante ricopiata nel test | TASK-07 |
+  | AC-2 | Stesso progetto, subito dopo l'`init` di AC-1 | Integrazione CLI + unit di config | `.archetipo/config.yaml` contiene `template:` con `id: fabbrica-del-software` e `version` uguale a `template.Default().Version`; `archetipo config show` restituisce `data.template.id` e `data.template.version` con gli stessi valori | TASK-07 |
+  | AC-3 | Progetto vuoto, `init` **senza** `--template` | Integrazione CLI | L'insieme di skill installate, il `connector:` scritto e il blocco `workflow.statuses` del config prodotto sono identici a quelli dell'`init` con `--template fabbrica-del-software` esplicito; un workspace il cui `config.yaml` non ha alcun blocco `template:` risolve comunque `template.id = fabbrica-del-software` in `config show` | TASK-04, TASK-07 |
+  | AC-4 | Progetto vuoto, mai inizializzato | Integrazione CLI | `init --template inesistente --tool claude --connector file --yes` esce con envelope `E_INVALID_INPUT`, exit code 2, e **dopo** il comando non esistono né `.claude/skills/` né `.archetipo/config.yaml` | TASK-07 |
+
+  Ogni criterio è provato attraverso il binario reale: `runCLI` esegue la CLI compilata, quindi nessun test double nasconde l'oracolo. AC-4 asserisce l'assenza di file sul filesystem, non solo il codice d'errore, perché è l'assenza a rendere vera la parte "senza lasciare un'inizializzazione parziale".
+
+  ---
+
+  ## Strategia di test
+
+  La verifica segue i tre livelli già presenti nel repository, senza introdurne di nuovi.
+
+  - **Unit di package `template`** (`cli/internal/template/template_test.go`): risoluzione per ID, errore tipizzato su ID sconosciuto, ID vuoto trattato come default, e contenuto del Template builtin — le 8 skill attese e gli stati canonici. Il test sulla lista di skill è l'unico posto in cui la lista è ripetuta per esteso: è deliberato, perché è il contratto che AC-1 verifica.
+  - **Unit di package `config`** (`cli/internal/config/config_test.go`): `Default()` porta il Template di default; un config senza blocco `template:` lo riceve da `applyDefaults()`; un config con `id`/`version` espliciti li conserva senza sovrascriverli. Questo è il livello che prova la metà di AC-3 relativa ai workspace preesistenti.
+  - **Integrazione CLI** (`cli/internal/cli/cli_test.go`): quattro scenari che esercitano il binario reale attraverso `runCLI`, uno per criterio di accettazione, come da mappa delle evidenze. Il file ha già `TestInit_Cursor` e `TestDoctor_PassesAfterInit` come modelli di riferimento per `newProject(t)`, `t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))` e `decodeError`.
+
+  Regressione mirata: `go test ./...` da `cli` copre anche `uninstall` e `doctor`, che dopo il cambio leggono la lista di skill dal Template. Se la derivazione fosse sbagliata, `TestDoctor_PassesAfterInit` fallirebbe — è la rete di sicurezza del refactoring di `allSkills`.
+
+  ### Rinuncia agli E2E di browser
+
+  **Motivo:** la spec non ha alcuna superficie browser. L'intero percorso di accettazione è un comando di terminale che scrive file e stampa un envelope JSON; il confine attraversato è filesystem + CLI, non rete o UI. I test di integrazione CLI eseguono il binario compilato in una sandbox reale, quindi provano lo stesso percorso che percorrerebbe un revisore, con l'oracolo pienamente visibile.
+  **Livello di evidenza usato al suo posto:** i test Go di `cli/internal/cli`, che invocano la CLI reale e ispezionano il filesystem risultante.
+  **Video dimostrativo:** la `Dimostrazione` è filmabile come sessione di terminale. La decisione di registrarla o saltarla appartiene ad `archetipo-review`, non a questa fase.
+
+  ---
+
+  ## Wiki Impact
+
+  ```yaml
+  wiki_impact:
+    read: [overview, architecture/context-map, engineering/code-map, operations/development, decisions/execution-provider-boundary]
+    update: [engineering/code-map, architecture/context-map, operations/development]
+    create: [decisions/workspace-process-template]
+  ```
+
+  `archetipo wiki affected` sui path attesi ha restituito cinque candidate. La decisione ragionata su ciascuna:
+
+  - **`engineering/code-map`** — richiesto. Nasce un package `cli/internal/template` che non compare in nessuna riga della tabella responsabilità/codice, e il boundary `cli` deve elencare anche la nuova decisione. La pagina sarebbe fattualmente incompleta senza l'aggiornamento.
+  - **`architecture/context-map`** — richiesto. La relazione «quali skill possiede un workspace» smette di essere implicita nella CLI e diventa proprietà di un Template dichiarato: è esattamente il tipo di confine che la sezione `contexts` descrive.
+  - **`operations/development`** — richiesto. La pagina documenta ciò che la CLI legge da `.archetipo/config.yaml` sezione per sezione (oggi fino a `execution.default_provider`); il nuovo blocco `template:` e il flag `init --template` appartengono a quella conoscenza operativa.
+  - **`overview`** — candidata di sola riconferma. Il suo `README.md` tracciato cambia, ma scopo, attori, stack e perimetro ispezionato restano veri: il Template non aggiunge un attore, non cambia lo stack e non sposta i boundary che `wiki inspect` restituisce. Nessun reset, nessuna modifica; la riconferma spetta alla review di accettazione.
+  - **`decisions/execution-provider-boundary`** — candidata di sola riconferma. È co-citata solo perché `cli/internal/config/config.go` è tra le sue evidenze, ma nessuna sua affermazione — separazione fra provider e connector, verifica fail-closed della capability, record durevole — è toccata dal blocco `template:`.
+
+  La creazione di `decisions/workspace-process-template` è motivata nella sezione «Decisioni architetturali»: la scelta fra etichetta di configurazione, definizione registrata in-process e Template come asset su disco fissa un contratto persistito e la superficie su cui US-027 costruirà le azioni. Nessuna ADR esistente viene superata.
+
+  ---
+
+  _Piano generato da ARchetipo Planning — 2026-08-16_
+tasks:
+  - id: TASK-01
+    title: Creare il package cli/internal/template con il Template Fabbrica del software e il suo registry
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      Esiste un package `cli/internal/template` che dichiara il tipo `Template`, un registry per ID e il Template builtin `fabbrica-del-software`, con la lista di skill e gli stati del workflow oggi impliciti nella CLI.
+
+      ## Read
+
+      - `cli/internal/execution/provider.go` — `Registry`, `NewRegistry`, `Register`, `Resolve` e `RegistryError`: sono il pattern da riprodurre (stessa forma dell'errore tipizzato, stessa semantica di risoluzione per ID, stesso uso di `strings.TrimSpace`).
+      - `cli/internal/cli/init_project_cmd.go` — la variabile `allSkills` (righe ~42-51): è la lista esatta da spostare nel Template, nello stesso ordine.
+      - `cli/internal/domain/types.go` — le costanti `StatusTodo`, `StatusPlanned`, `StatusInProgress`, `StatusReview`, `StatusDone` e il tipo `StatusLabels`.
+
+      ## Change
+
+      - **Nuovo file** `cli/internal/template/template.go`.
+
+      Non-goal: questo task non tocca `cli/internal/config`, non tocca la CLI e non aggiunge comandi. Il package non deve importare `cli/internal/config` — la dipendenza va nella direzione opposta e un import qui creerebbe un ciclo. L'unico import interno ammesso è `cli/internal/domain`.
+
+      ## Steps
+
+      1. Crea `cli/internal/template/template.go` con un commento di package che spiega che un Template è il processo che dà forma a un workspace ARchetipo: quali skill installa e quali stati usa il suo workflow.
+      2. Dichiara le costanti:
+         - `FabbricaDelSoftware = "fabbrica-del-software"` — identificativo del Template builtin;
+         - `DefaultID = FabbricaDelSoftware` — Template selezionato quando l'utente non ne sceglie uno;
+         - una costante non esportata `fabbricaVersion = "1.0.0"`. Commenta esplicitamente perché **non** si usa `version.Version`: quel valore è `dev` nei build locali e identifica la CLI, non il processo.
+      3. Dichiara `type Template struct` con i campi esportati `ID`, `Version`, `Label` (string), `Skills` ([]string) e `Statuses` (`domain.StatusLabels`), tutti con tag `json` in snake_case coerenti con il resto del repository.
+      4. Dichiara `type RegistryError struct { TemplateID string; Reason string }` con `Error() string` che rende `process template %q %s`, e con `TemplateID` vuoto reso senza le virgolette vuote (segui la forma di `execution.RegistryError`).
+      5. Dichiara `type Registry struct` con la mappa dei Template e l'ordine di registrazione, più `NewRegistry() *Registry`, `Register(Template) error` (rifiuta ID vuoto e ID duplicato), `Resolve(id string) (Template, error)` (ID vuoto e ID non registrato sono entrambi `*RegistryError`) e `IDs() []string` che restituisce gli ID in ordine di registrazione.
+      6. Dichiara `Builtin() *Registry`, che costruisce un registry contenente il solo Template `fabbrica-del-software`: `Label` `"Fabbrica del software"`, `Version` `fabbricaVersion`, `Skills` con le otto skill nell'ordine di `allSkills`, `Statuses` costruito dalle costanti di `domain`. La registrazione di un unico Template statico non può fallire: scarta l'errore con `_ =` e commenta il motivo, come fa `defaultExecutionRegistry` in `cli/internal/cli/root.go`.
+      7. Dichiara le funzioni di comodo di package `Default() Template` e `Resolve(id string) (Template, error)`, entrambe appoggiate a `Builtin()`. `Resolve` con ID vuoto restituisce `Default()` senza errore: è la forma in cui «nessuna selezione esplicita» diventa il Template di default.
+      8. Restituisci copie difensive dello slice `Skills` da `Default`, `Resolve` e `Registry.Resolve`, così un chiamante che modifica lo slice non altera il registry.
+
+      ## Verify
+
+      - Run (da `cli`): `gofmt -l . && go build ./... && go vet ./internal/template/...`
+      - Expect: `gofmt -l .` non stampa nulla, build e vet terminano senza output. Coerente con la baseline, che è verde su tutti e tre.
+
+      ## Done
+
+      - [ ] `cli/internal/template/template.go` esiste e compila.
+      - [ ] `template.Default()` restituisce ID `fabbrica-del-software`, `Version` non vuota e le otto skill `archetipo-*` nello stesso ordine di `allSkills`.
+      - [ ] `template.Resolve("")` restituisce il Template di default senza errore; `template.Resolve("inesistente")` restituisce un `*RegistryError`. Fondamento di AC-1, AC-3 e AC-4, verificati in TASK-02 e TASK-07.
+      - [ ] Il package non importa `cli/internal/config`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Coprire con unit test il registry e il contenuto del Template builtin
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Il package `template` ha unit test che provano la risoluzione per ID, il rifiuto tipizzato di un ID sconosciuto e il contenuto esatto del Template `fabbrica-del-software`.
+
+      ## Read
+
+      - `cli/internal/template/template.go` — la superficie prodotta da TASK-01.
+      - `cli/internal/execution/provider_test.go` — stile dei test di registry già in uso (table test, `errors.As` sull'errore tipizzato).
+
+      ## Change
+
+      - **Nuovo file** `cli/internal/template/template_test.go`, package `template` (test interno, come `provider_test.go`).
+
+      Non-goal: nessun test qui tocca la CLI o il filesystem.
+
+      ## Steps
+
+      1. `TestDefaultTemplateDeclaresTheCurrentProcess`: asserisce che `Default().ID` è `fabbrica-del-software`, che `Version` non è vuota e che `Skills` è esattamente la slice attesa — scrivi le otto skill per esteso nel test (`archetipo-autopilot`, `archetipo-design`, `archetipo-implement`, `archetipo-inception`, `archetipo-plan`, `archetipo-review`, `archetipo-spec`, `archetipo-wiki`), perché è il contratto che AC-1 verifica e va rotto esplicitamente se qualcuno cambia il processo.
+      2. `TestDefaultTemplateCarriesCanonicalStatuses`: asserisce che `Default().Statuses` è uguale a `domain.StatusLabels` costruito dalle costanti canoniche.
+      3. `TestResolveEmptyIDReturnsDefault`: `Resolve("")` non restituisce errore e rende lo stesso ID di `Default()`.
+      4. `TestResolveUnknownIDFailsWithRegistryError`: `Resolve("inesistente")` restituisce errore; `errors.As` verso `*RegistryError` ha successo e `TemplateID` vale `"inesistente"`.
+      5. `TestRegistryRejectsEmptyAndDuplicateIDs`: su un `NewRegistry()`, registrare un Template con ID vuoto fallisce, registrare due volte lo stesso ID fallisce alla seconda.
+      6. `TestDefaultSkillsAreNotAliased`: modifica lo slice restituito da `Default().Skills` e verifica che una seconda chiamata a `Default()` restituisca ancora la lista originale.
+
+      ## Verify
+
+      - Run (da `cli`): `go test ./internal/template/...`
+      - Expect: tutti i test passano. La baseline è verde, quindi non c'è alcun fallimento preesistente da tollerare.
+
+      ## Done
+
+      - [ ] `go test ./internal/template/...` passa.
+      - [ ] L'oracolo di AC-1 (lista completa e ordinata delle skill del processo) è asserito per valore, non tramite `len()`.
+      - [ ] L'oracolo di AC-4 al livello del registry (errore tipizzato su ID sconosciuto) è asserito con `errors.As`, non confrontando il testo del messaggio.
+
+      ## Blockers
+
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Modellare il blocco template in cli/internal/config con il default della Fabbrica del software
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      `.archetipo/config.yaml` ammette un blocco di primo livello `template:` con `id` e `version`, e un workspace che non lo dichiara risolve comunque il Template di default.
+
+      ## Read
+
+      - `cli/internal/config/config.go` — la struct `Config` e i suoi tag (righe ~39-71), `Default()` (righe ~107-136) e `applyDefaults()` (righe ~526-573). `ExecutionConfig`/`DefaultProviderConfig` sono il modello di riferimento per una sezione opzionale.
+      - `cli/internal/template/template.go` — `Default()`, `DefaultID`.
+
+      ## Change
+
+      - `cli/internal/config/config.go` — aggiungere il tipo `TemplateConfig`, il campo `Template` su `Config`, il default in `Default()` e il riempimento in `applyDefaults()`.
+
+      Non-goal: **non** aggiungere validazione dell'ID in `Config.validate()`. Il rifiuto di un Template sconosciuto appartiene all'inizializzazione (TASK-05); validarlo anche in `Load` renderebbe illeggibile un config scritto da una CLI più recente, che non è un comportamento richiesto da questa spec. Non toccare `Save()`, `SaveRaw` o `UpdateDefaultProvider`.
+
+      ## Steps
+
+      1. Dichiara accanto a `ExecutionConfig`:
+         ```go
+         // TemplateConfig records which process Template shaped this workspace.
+         type TemplateConfig struct {
+             ID      string `yaml:"id" json:"id"`
+             Version string `yaml:"version" json:"version"`
+         }
+         ```
+         Documenta nel commento che `id` seleziona il processo (skill e stati del workflow) e `version` registra la revisione installata.
+      2. Aggiungi a `Config` il campo `Template TemplateConfig` con tag `yaml:"template,omitempty" json:"template,omitempty"`, posizionato accanto a `Execution`.
+      3. In `Default()`, popola `Template` con `TemplateConfig{ID: template.DefaultID, Version: template.Default().Version}`.
+      4. In `applyDefaults()`, riempi `c.Template.ID` e `c.Template.Version` dai valori di `d` quando sono vuoti — stesso schema delle altre chiavi. Riempi i due campi **indipendentemente**: un config che dichiara solo `id` deve ricevere la versione di default senza perdere l'ID scritto dall'utente.
+      5. Aggiungi l'import di `cli/internal/template`. Verifica che non nasca un ciclo: `template` importa solo `cli/internal/domain`.
+
+      ## Verify
+
+      - Run (da `cli`): `gofmt -l . && go build ./... && go test ./internal/config/...`
+      - Expect: nessun output da `gofmt`, build pulita, i test di config esistenti continuano a passare. La baseline è verde su tutti.
+
+      ## Done
+
+      - [ ] `config.Default().Template.ID` vale `fabbrica-del-software` e `Version` è non vuota.
+      - [ ] Un config YAML privo di `template:` produce comunque `Template.ID` e `Template.Version` valorizzati dopo `Load` — metà di AC-3, asserita in TASK-04.
+      - [ ] Un config con `template.id` esplicito conserva quel valore. Fondamento di AC-2.
+      - [ ] `go build ./...` non riporta cicli di import.
+
+      ## Blockers
+
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Coprire con unit test la risoluzione del blocco template nella configurazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      I test di `cli/internal/config` provano che il Template è valorizzato sia quando il config lo dichiara sia quando lo omette, e che un valore esplicito non viene sovrascritto.
+
+      ## Read
+
+      - `cli/internal/config/config_test.go` — come i test esistenti creano un progetto temporaneo, scrivono `.archetipo/config.yaml` e chiamano `Load`/`LoadExact`. Riusa quegli helper invece di crearne di nuovi.
+      - `cli/internal/config/config.go` — il campo e i default introdotti da TASK-03.
+
+      ## Change
+
+      - `cli/internal/config/config_test.go` — aggiungere i casi di test in coda, seguendo lo stile del file.
+
+      Non-goal: nessun nuovo helper di test se quelli presenti bastano; nessuna asserzione sul contenuto del file impacchettato (è responsabilità di TASK-07).
+
+      ## Steps
+
+      1. `TestLoadWithoutTemplateBlockResolvesDefaultTemplate`: scrivi un `config.yaml` minimo senza `template:`, carica e asserisci `cfg.Template.ID == template.DefaultID` e `cfg.Template.Version == template.Default().Version`.
+      2. `TestLoadKeepsExplicitTemplateSelection`: scrivi un `config.yaml` con `template:\n  id: fabbrica-del-software\n  version: "9.9.9"`, carica e asserisci che entrambi i valori sopravvivono immutati.
+      3. `TestLoadFillsMissingTemplateVersionOnly`: scrivi un `config.yaml` con il solo `template.id`, carica e asserisci che l'ID è conservato e la versione è quella di default — è il caso che il riempimento indipendente di TASK-03 rende vero.
+      4. `TestDefaultConfigCarriesDefaultTemplate`: asserisci direttamente su `config.Default()`.
+
+      ## Verify
+
+      - Run (da `cli`): `go test ./internal/config/...`
+      - Expect: tutti i test del package passano, inclusi quelli preesistenti. La baseline del package è verde.
+
+      ## Done
+
+      - [ ] AC-3 è provato al livello della configurazione: un workspace privo di blocco `template:` risolve la Fabbrica del software.
+      - [ ] AC-2 è provato al livello della configurazione: `id` e `version` dichiarati sopravvivono al ciclo di caricamento.
+      - [ ] `go test ./internal/config/...` passa.
+
+      ## Blockers
+
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Aggiungere archetipo init --template con rifiuto anticipato e scrittura del blocco nel config
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Objective
+
+      `archetipo init` accetta `--template <id>`, installa le skill dichiarate dal Template risolto, scrive `template.id` e `template.version` nel `config.yaml` del workspace, e rifiuta un ID sconosciuto prima di creare o scrivere qualunque file.
+
+      ## Read
+
+      - `cli/internal/cli/init_project_cmd.go` — `newInitProjectCmd`, `runInitProject`, `installRuntimeAssets`, `writeConfig` e `setConnectorField`. `setConnectorField` è il modello testuale da imitare per il nuovo blocco.
+      - `.archetipo/config.yaml` (root del repository) — è sia la configurazione viva di questo progetto sia l'asset impacchettato che `writeConfig` copia; `scripts/build-npm.mjs` e `scripts/install-dev.mjs` lo copiano verbatim in `runtime/config.yaml`.
+      - `cli/internal/cli/uninstall_cmd.go` e `cli/internal/cli/doctor_cmd.go` — gli altri due consumatori di `allSkills`.
+
+      ## Change
+
+      - `cli/internal/cli/init_project_cmd.go` — flag `--template`, risoluzione anticipata, installazione dalle skill del Template, `writeConfig` che scrive il blocco, nuovo helper `setTemplateFields`, `allSkills` derivata dal Template di default.
+      - `.archetipo/config.yaml` — aggiungere il blocco `template:` con i valori del Template di default e un commento che ne spiega il ruolo.
+
+      Non-goal: **non** eseguire un round-trip `yaml.Node` sull'intero file di configurazione (la tecnica di `UpdateDefaultProvider`): riformatterebbe indentazione e righe vuote del config prodotto, che è un cambiamento osservabile del comportamento attuale vietato da AC-3. Non modificare `uninstall_cmd.go` né `doctor_cmd.go`: continuano a leggere `allSkills`. Non aggiungere comandi nuovi.
+
+      ## Steps
+
+      1. In `.archetipo/config.yaml`, subito dopo il blocco `workflow:`, aggiungi:
+         ```yaml
+         # Process Template installed in this workspace. `id` selects the process —
+         # which skills are installed and which workflow statuses it uses — and
+         # `version` records the revision that `archetipo init` wrote here.
+         template:
+           id: fabbrica-del-software
+           version: "1.0.0"
+         ```
+         La versione deve coincidere con `template.Default().Version`.
+      2. In `init_project_cmd.go`, sostituisci il letterale `allSkills` con `var allSkills = template.Default().Skills`, mantenendo il nome della variabile perché `uninstall` e `doctor` la usano. Aggiungi un commento che indica il package `template` come unica sorgente di verità della lista.
+      3. Registra il flag: `cmd.Flags().StringVar(&templateFlag, "template", "", "Process Template id (default: "+template.DefaultID+")")`. Passalo a `runInitProject`.
+      4. In `runInitProject`, risolvi il Template come **primissima** istruzione, prima di `discoverDataDir`:
+         ```go
+         tpl, err := template.Resolve(strings.TrimSpace(templateFlag))
+         if err != nil {
+             return iox.NewInvalidInput("unknown template: "+templateFlag, "valid: "+strings.Join(template.Builtin().IDs(), ", "), err)
+         }
+         ```
+         Nessuna mutazione del filesystem deve precederla: è la proprietà che rende vero AC-4.
+      5. Nel ciclo di copia delle skill, itera su `tpl.Skills` invece che su `allSkills`.
+      6. Estendi la firma di `installRuntimeAssets` e `writeConfig` con il Template risolto e, dopo `setConnectorField`, applica `setTemplateFields(body, tpl.ID, tpl.Version)`.
+      7. Implementa `setTemplateFields(body, id, version string) string` accanto a `setConnectorField`, con la stessa disciplina testuale:
+         - individua una riga `template:` in colonna 0; se esiste, sostituisci il valore delle sole righe figlie `id:` e `version:` all'interno di quel blocco indentato, fermandoti alla prima riga successiva non indentata e non vuota; scrivi la versione fra doppi apici;
+         - se la chiave non esiste (asset impacchettato più vecchio), accoda in fondo un blocco `template:` completo, preceduto da una riga vuota.
+      8. Dopo la riga `✓ .archetipo/config.yaml (connector: …)`, stampa `  ✓ template: <Label> (<ID> <Version>)`, così la selezione è visibile anche senza aprire il file.
+      9. Se il config esiste già e l'utente rifiuta la sovrascrittura, non scrivere neppure il blocco `template:`: il ramo «config left unchanged» deve restare davvero senza effetti.
+
+      ## Verify
+
+      - Run (da `cli`): `gofmt -l . && go build ./... && go vet ./... && go test ./internal/cli/...`
+      - Expect: `gofmt` senza output; build e vet puliti; i test CLI esistenti — inclusi `TestInit_Cursor` e `TestDoctor_PassesAfterInit`, che dipendono dalla derivazione di `allSkills` — continuano a passare. La baseline è verde su tutti.
+
+      ## Done
+
+      - [ ] AC-1 — `init --template fabbrica-del-software` installa le otto skill dichiarate dal Template.
+      - [ ] AC-2 — il `config.yaml` prodotto contiene `template.id` e `template.version` valorizzati dal Template risolto.
+      - [ ] AC-3 — `init` senza `--template` percorre lo stesso codice con `template.Default()`, e il config prodotto resta per il resto identico a quello di oggi (nessuna riformattazione YAML).
+      - [ ] AC-4 — un `--template` sconosciuto restituisce `E_INVALID_INPUT` con l'elenco degli ID validi nell'hint, prima di qualunque `MkdirAll`, copia o scrittura.
+      - [ ] `go test ./internal/cli/...` passa.
+
+      ## Blockers
+
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Esporre il Template del workspace nell'envelope di archetipo config show
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      `archetipo config show` restituisce, accanto ai metadati di setup già presenti, il Template del workspace con `id` e `version`.
+
+      ## Read
+
+      - `cli/internal/cli/config_cmd.go` — l'intero file: `newConfigShowCmd` usa oggi `withConnector`.
+      - `cli/internal/cli/runner.go` — `withConnectorCfg`, che passa anche la `config.Config` alla callback ed è già usata da `execution run`.
+      - `cli/internal/domain/types.go` — `SetupInfo` (righe ~142-152).
+
+      ## Change
+
+      - `cli/internal/cli/config_cmd.go` — passaggio a `withConnectorCfg` e nuova struct di payload.
+
+      Non-goal: **non** aggiungere un campo `Template` a `domain.SetupInfo`. Sarebbe una modifica a quattro connector (filefs, github, jira, inmemory) per un dato che non dipende dal connector. Non cambiare la stringa `kind` dell'envelope, che resta `setup`, e non rimuovere né rinominare alcun campo esistente: le skill leggono già `data.connector`, `data.project_root`, `data.paths`, `data.workflow` e `data.file`.
+
+      ## Steps
+
+      1. Dichiara in `config_cmd.go`:
+         ```go
+         // setupResult is the `config show` payload: the connector's SetupInfo plus the
+         // workspace Template, which is connector-independent and therefore assembled
+         // here rather than inside each connector.
+         type setupResult struct {
+             domain.SetupInfo
+             Template config.TemplateConfig `json:"template"`
+         }
+         ```
+         L'embedding inlinea i campi JSON di `SetupInfo`, quindi l'envelope resta retrocompatibile e guadagna il solo `template`.
+      2. Converti `newConfigShowCmd` a `withConnectorCfg`; nella callback chiama `c.InitializeConnector(ctx)` e restituisci `setupResult{SetupInfo: info, Template: cfg.Template}`.
+      3. Aggiorna gli import (`config`, `domain`).
+
+      ## Verify
+
+      - Run (da `cli`): `gofmt -l . && go build ./... && go test ./internal/cli/...`
+      - Expect: nessun output da `gofmt`, build pulita, test CLI esistenti verdi. Alcuni test decodificano l'envelope `setup`: un campo aggiuntivo non li rompe, perché `decodeOK` legge in `map[string]any`.
+
+      ## Done
+
+      - [ ] `archetipo config show` emette `data.template.id` e `data.template.version`, con `kind` ancora `setup`.
+      - [ ] Tutti i campi già presenti nell'envelope `setup` sono invariati.
+      - [ ] Su un workspace senza blocco `template:`, l'envelope riporta comunque `fabbrica-del-software` (default risolto in TASK-03). Oracolo di lettura per AC-2 e AC-3, asserito in TASK-07.
+      - [ ] `go test ./internal/cli/...` passa.
+
+      ## Blockers
+
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Scrivere i test di integrazione CLI per i quattro criteri di accettazione dell'inizializzazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+
+      Quattro test di integrazione eseguono la CLI reale e provano, uno per criterio, l'installazione con Template esplicito, la persistenza di ID e versione, l'equivalenza dell'inizializzazione senza selezione e il rifiuto senza effetti di un ID sconosciuto.
+
+      ## Read
+
+      - `cli/internal/cli/cli_test.go` — `TestInit_Cursor` (righe ~1606-1623) e `TestDoctor_PassesAfterInit` (righe ~1530-1550) come modelli: `newProject(t)`, `t.Setenv("ARCHETIPO_DATA_DIR", repoDataDir(t))`, `runCLI`, `decodeOK`, `decodeError`.
+      - `cli/internal/template/template.go` — per confrontare le skill installate contro `template.Default().Skills`.
+
+      ## Change
+
+      - `cli/internal/cli/cli_test.go` — aggiungere i quattro test accanto a `TestInit_Cursor`.
+
+      Non-goal: non riscrivere i test di init esistenti; non introdurre fake o doppi — questi test devono esercitare il binario reale, altrimenti l'oracolo di AC-4 (assenza di file) non significa nulla.
+
+      ## Steps
+
+      1. `TestInit_FabbricaDelSoftwareTemplateInstallsProcessSkills` (AC-1): `newProject(t)`, `ARCHETIPO_DATA_DIR`, poi `init --tool claude --connector file --template fabbrica-del-software --yes`. Itera su `template.Default().Skills` e asserisci che `.claude/skills/<skill>/SKILL.md` esiste per ciascuna. Asserisci anche che lo stdout nomina il Template.
+      2. `TestInit_RecordsTemplateIdentityAndVersion` (AC-2): dopo lo stesso `init`, leggi `.archetipo/config.yaml` e asserisci che contiene `id: fabbrica-del-software` e la versione di `template.Default().Version` sotto una chiave `template:`. Poi esegui `config show`, decodifica l'envelope e asserisci che `data.template.id` e `data.template.version` valgono gli stessi valori.
+      3. `TestInit_WithoutTemplateMatchesFabbricaDelSoftware` (AC-3): esegui due inizializzazioni in due progetti distinti — una senza `--template`, una con `--template fabbrica-del-software` — e confronta i due risultati: stesso insieme di skill installate e stesso contenuto di `.archetipo/config.yaml`. Aggiungi il caso del workspace legacy: scrivi a mano un `config.yaml` senza blocco `template:` ed esegui `config show`, asserendo `data.template.id == "fabbrica-del-software"`.
+      4. `TestInit_UnknownTemplateLeavesNoPartialWorkspace` (AC-4): su un progetto vuoto esegui `init --tool claude --connector file --template inesistente --yes`. Asserisci con `decodeError` il codice `iox.CodeInvalidInput` e l'exit code 2; poi asserisci con `os.Stat` che **non** esistono `.claude/skills`, `.archetipo/config.yaml` e `.archetipo/shared-runtime.md`. L'assenza dei file è l'oracolo: senza di essa il test proverebbe solo il codice d'errore, non «senza lasciare un'inizializzazione parziale».
+      5. Confronta i valori attesi contro `template.Default()` dove possibile, non contro letterali duplicati — la lista per esteso vive già in `template_test.go` (TASK-02) e non va ricopiata qui.
+
+      ## Verify
+
+      - Run (da `cli`): `go test ./internal/cli/... -run 'TestInit' -v`
+      - Expect: i quattro nuovi test passano insieme a `TestInit_Cursor`. La baseline del package è verde.
+
+      ## Done
+
+      - [ ] AC-1 — le otto skill del processo risultano presenti sul filesystem dopo l'init con Template esplicito.
+      - [ ] AC-2 — ID e versione sono leggibili sia dal `config.yaml` sia dall'envelope di `config show`.
+      - [ ] AC-3 — init senza selezione produce skill e configurazione identiche all'init con la Fabbrica del software esplicita, e un workspace privo del blocco risolve comunque quel Template.
+      - [ ] AC-4 — l'ID sconosciuto produce `E_INVALID_INPUT` con exit code 2 e nessun file creato.
+      - [ ] `go test ./internal/cli/...` passa per intero.
+
+      ## Blockers
+
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Documentare il flag --template e il blocco template nei due README
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+
+      I README inglese e italiano descrivono la selezione del Template all'inizializzazione, il blocco `template:` della configurazione e il campo restituito da `config show`.
+
+      ## Read
+
+      - `README.md` — la sezione «2. Initialize a project» (righe ~60-76) e la riga `archetipo init` della tabella dei comandi (riga ~169).
+      - `README.it.md` — le sezioni corrispondenti (righe ~58-70 e ~165), per mantenere i due file allineati.
+
+      ## Change
+
+      - `README.md` e `README.it.md` — sezione di inizializzazione e riga di tabella del comando `init`.
+
+      Non-goal: non riscrivere altre sezioni, non documentare Template futuri, marketplace o ereditarietà (fuori ambito esplicito della spec). Non toccare `AGENTS.md`.
+
+      ## Steps
+
+      1. Nella sezione di inizializzazione di `README.md`, aggiungi l'esempio non interattivo con il Template e una frase che spieghi: il Template determina quali skill vengono installate e quali stati usa il workflow; omettere `--template` seleziona `fabbrica-del-software`, che è il processo attuale.
+      2. Aggiungi all'elenco di ciò che `archetipo init` crea la menzione del blocco `template:` in `.archetipo/config.yaml`, con `id` e `version`.
+      3. Aggiorna la riga `archetipo init` della tabella dei comandi citando `[--template <id>]`.
+      4. Aggiungi una riga alla descrizione di `archetipo config show` (o alla prosa che segue la tabella) indicando che l'envelope riporta anche il Template del workspace.
+      5. Replica le stesse modifiche in `README.it.md`, in italiano e con la stessa struttura.
+
+      ## Verify
+
+      - Run (dal root): `git diff --stat README.md README.it.md`
+      - Expect: entrambi i file compaiono modificati con un numero di righe comparabile; nessun altro file nel diff di questo task.
+
+      ## Done
+
+      - [ ] `README.md` e `README.it.md` documentano `--template`, il valore di default e il blocco `template:`.
+      - [ ] Le due versioni linguistiche restano allineate nella struttura.
+      - [ ] Nessuna promessa di funzionalità fuori ambito (secondo Template, marketplace, aggiornamento automatico, ereditarietà).
+
+      ## Blockers
+
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Creare la decisione Wiki decisions/workspace-process-template
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+
+      Esiste la pagina `decisions/workspace-process-template` di tipo `decision`, in stato `generated`, che registra perché il processo di un workspace è una definizione registrata in-process e non un'etichetta di configurazione né un asset su disco.
+
+      ## Read
+
+      - `docs/wiki/decisions/execution-provider-boundary.md` — struttura di riferimento: frontmatter (`type`, `title`, `description`, `status`, `decision_status`, `sources` con `path`/`role`), marker `<!-- archetipo:wiki section=… -->` per `context`, `decision`, `alternatives`, `consequences`, `verification`, e link relativi ai file sorgente nella sezione di verifica.
+      - La sezione «Decisioni architetturali» del corpo del piano — contesto, opzione scelta, alternative e compromesso accettato provengono da lì, non dalla forma finale del codice.
+
+      ## Change
+
+      - **Nuovo file** `docs/wiki/decisions/workspace-process-template.md`.
+
+      Non-goal: non modificare altre pagine Wiki in questo task; non superare né toccare `decisions/execution-provider-boundary`, che resta accurata. Non ricostruire la motivazione a partire dal codice scritto: le alternative valutate sono quelle del piano.
+
+      ## Steps
+
+      1. Scrivi il frontmatter con `type: decision`, `title: Template di processo del workspace`, una `description` di una riga, `status: generated`, `decision_status: accepted` e **nessun blocco `review`** — la pagina è nuova e l'approvazione spetta alla review di accettazione.
+      2. Elenca in `sources` le evidenze reali con il loro ruolo: `cli/internal/template/template.go` (implementation), `cli/internal/template/template_test.go` (verification), `cli/internal/config/config.go` (implementation), `cli/internal/cli/init_project_cmd.go` (implementation), `cli/internal/cli/cli_test.go` (verification), `.archetipo/config.yaml` (workspace-config-template).
+      3. `## Contesto` — il processo installato da `archetipo init` era implicito: una lista di skill in una variabile della CLI e stati che vivevano solo nel file di configurazione impacchettato. Un workspace non poteva dichiarare quale processo stesse usando, né una seconda spec poteva appoggiarvisi.
+      4. `## Decisione` — il Template è una definizione registrata in-process che possiede ID, versione, etichetta, lista di skill e stati del workflow; è risolto per ID da un registry modellato su quello dei provider di esecuzione; il workspace ne conserva ID e versione in `.archetipo/config.yaml` sotto `template:`; l'assenza del blocco risolve il Template di default; la risoluzione precede qualunque scrittura, così un ID sconosciuto non lascia un'inizializzazione parziale; la lettura passa dall'envelope di `config show`, connector-independent, e non da `domain.SetupInfo`.
+      5. `## Alternative` — le tre opzioni del piano, ciascuna con il motivo dello scarto: etichetta di sola configurazione (il Template non definirebbe nulla e US-027 dovrebbe reintrodurre il concetto), Template come directory di asset su disco (formato, caricatore e superficie d'errore fuori dal perimetro MVP), campo su `domain.SetupInfo` per la rilettura (obbligherebbe quattro connector a trasportare un dato che non dipende dal connector).
+      6. `## Conseguenze` — un solo punto di verità per le skill del processo, che `uninstall` e `doctor` continuano a leggere; una superficie pronta per le azioni di US-027; il contratto persistito `template.id`/`template.version` è retrocompatibile perché risolto per default; il costo è che aggiungere un Template richiede una release della CLI, ed è reversibile verso i Template su disco senza cambiare ciò che è persistito.
+      7. `## Verifica` — collega i file reali con link relativi nello stile della pagina di riferimento (`../../../cli/internal/template/template.go` e simili) e indica quali test provano cosa.
+      8. Rigenera la navigazione: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo catalog`.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status decisions/workspace-process-template`
+      - Expect: envelope di successo con `state: generated` per la pagina.
+
+      ## Done
+
+      - [ ] `docs/wiki/decisions/workspace-process-template.md` esiste con `type: decision` e `decision_status: accepted`.
+      - [ ] Tutti e cinque i marker di sezione (`context`, `decision`, `alternatives`, `consequences`, `verification`) sono presenti e valorizzati.
+      - [ ] `sources` cita evidenze che esistono davvero nel repository.
+      - [ ] La pagina riporta `state: generated` in `archetipo wiki status`, senza blocco `review`.
+      - [ ] `docs/wiki/index.md` elenca la nuova pagina dopo `wiki catalog`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Aggiornare la pagina Wiki engineering/code-map con la capacità Template di workspace
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-06
+      - TASK-09
+    body: |-
+      ## Objective
+
+      `engineering/code-map` descrive il package `cli/internal/template`, la scrittura e rilettura del blocco `template:` e collega la nuova decisione, restando in stato `generated`.
+
+      ## Read
+
+      - `docs/wiki/engineering/code-map.md` — la tabella «Responsabilita e codice», la sezione «Codice condiviso» e il blocco `coverage` del frontmatter.
+      - Il diff prodotto dai task precedenti, per citare percorsi ed entry point esatti.
+
+      ## Change
+
+      - `docs/wiki/engineering/code-map.md` — frontmatter (`sources`, `coverage`) e corpo.
+
+      Non-goal: non modificare la sezione «Elementi non mappati come capability» se non emergono nuove capability scoperte; non toccare a mano il blocco `review` — usa `archetipo wiki reset`.
+
+      ## Steps
+
+      1. **Prima di qualunque modifica**, esegui: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo reset engineering/code-map`.
+      2. Aggiungi una riga alla tabella «Responsabilita e codice» per la responsabilità «Template di processo del workspace»: entry point `cli/internal/cli/init_project_cmd.go` (flag `--template`, risoluzione anticipata, `setTemplateFields`) e `cli/internal/cli/config_cmd.go` (envelope `setup` esteso); logica e dati `cli/internal/template` (tipo, registry, Template builtin) e `cli/internal/config` (`TemplateConfig` e default); integrazioni `.archetipo/config.yaml` e le directory skill dei tool; verifica `template_test.go`, `config_test.go` e i test di init in `cli_test.go`; concetto Wiki il link alla nuova decisione `/decisions/workspace-process-template.md`.
+      3. In «Codice condiviso», annota che `cli/internal/template` è la sorgente unica della lista di skill del processo, letta anche da `uninstall` e `doctor` tramite `allSkills`.
+      4. Nel frontmatter, aggiungi a `sources` `cli/internal/template/template.go` con ruolo `implementation` e `cli/internal/template/template_test.go` con ruolo `verification`.
+      5. Nel blocco `coverage`, aggiungi `decisions/workspace-process-template` alle `pages` del boundary `cli`. I boundary restituiti da `wiki inspect` non cambiano: nessun boundary va aggiunto o rimosso.
+      6. Aggiorna la sezione «Copertura deterministica» perché l'elenco in prosa rispecchi il boundary `cli` così modificato.
+      7. Rigenera la navigazione: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo catalog`.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status engineering/code-map`
+      - Expect: `state: generated`. Uno stato `stale` significa che la pagina è stata modificata senza il reset iniziale: esegui il reset — è idempotente e ripara lo stato dopo la modifica esattamente come lo avrebbe preparato prima — e ricontrolla.
+
+      ## Done
+
+      - [ ] La tabella copre la capacità Template con entry point, logica, integrazioni e verifica reali.
+      - [ ] `sources` include il nuovo package e il suo test.
+      - [ ] `coverage` del boundary `cli` elenca anche `decisions/workspace-process-template`.
+      - [ ] La pagina riporta `state: generated` in `archetipo wiki status`.
+      - [ ] Il blocco `review` non è stato modificato a mano: lo stato è stato riportato a `generated` con `archetipo wiki reset`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Aggiornare la pagina Wiki architecture/context-map con il Template come proprietario del processo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-09
+    body: |-
+      ## Objective
+
+      `architecture/context-map` descrive che l'insieme di skill e gli stati di un workspace sono proprietà di un Template dichiarato e non più impliciti nella CLI, restando in stato `generated`.
+
+      ## Read
+
+      - `docs/wiki/architecture/context-map.md` — le sezioni `contexts`, `relationships` e `shared`, e i `sources` del frontmatter.
+      - `docs/wiki/decisions/workspace-process-template.md` — la decisione da citare, prodotta da TASK-09.
+
+      ## Change
+
+      - `docs/wiki/architecture/context-map.md` — frontmatter (`sources`) e corpo (sezioni `contexts`, `relationships`, `shared`).
+
+      Non-goal: non promuovere il Template a bounded context — la sezione «Confini non ancora risolti» dichiara esplicitamente che questa mappa non fa quel salto, e la spec non fornisce la governance semantica per farlo. Non riscrivere la sezione sulla dipendenza esterna verso l'hub ARcipelago. Non toccare a mano il blocco `review`.
+
+      ## Steps
+
+      1. **Prima di qualunque modifica**, esegui: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo reset architecture/context-map`.
+      2. Nella sezione «Contesti osservati», estendi il punto «Workflow dell'agente» (o aggiungine uno adiacente) chiarendo che quali skill un workspace possiede, e quali stati usa il suo workflow, sono ora dichiarati da un Template risolto per ID all'inizializzazione, e non più impliciti in una costante della CLI.
+      3. Nella sezione «Relazioni», aggiungi una frase: la CLI risolve il Template prima di scrivere qualunque cosa e ne conserva ID e versione nella configurazione del workspace, che le skill rileggono dall'envelope di `config show`. Collega la decisione con `[Template di processo del workspace](/decisions/workspace-process-template.md)`.
+      4. Nella sezione «Infrastruttura condivisa», annota che `.archetipo/config.yaml` porta anche il blocco `template:`.
+      5. Nel frontmatter, aggiungi a `sources` `cli/internal/template/template.go` con ruolo `process-definition` e `cli/internal/cli/init_project_cmd.go` con ruolo `workspace-bootstrap`.
+      6. Rigenera la navigazione: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo catalog`.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status architecture/context-map`
+      - Expect: `state: generated`. Uno stato `stale` significa modifica senza reset iniziale: esegui il reset — è idempotente e ripara lo stato dopo la modifica esattamente come lo avrebbe preparato prima — e ricontrolla.
+
+      ## Done
+
+      - [ ] La sezione `contexts` afferma che il processo del workspace è dichiarato da un Template.
+      - [ ] La sezione `relationships` collega la decisione `decisions/workspace-process-template`.
+      - [ ] `sources` include il package `template` e il comando di inizializzazione.
+      - [ ] La pagina riporta `state: generated` in `archetipo wiki status`.
+      - [ ] Il blocco `review` non è stato modificato a mano: lo stato è stato riportato a `generated` con `archetipo wiki reset`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Aggiornare la pagina Wiki operations/development con il blocco template e il flag di init
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-08
+    body: |-
+      ## Objective
+
+      `operations/development` documenta il blocco `template:` di `.archetipo/config.yaml` e la selezione del Template all'inizializzazione, restando in stato `generated`.
+
+      ## Read
+
+      - `docs/wiki/operations/development.md` — il secondo paragrafo di «Prerequisiti e runtime locale», che elenca ciò che la CLI legge dalla configurazione (oggi fino a `execution.default_provider`), e la sezione «Vincoli operativi».
+      - `.archetipo/config.yaml` — il blocco `template:` aggiunto da TASK-05, che è anche l'evidenza tracciata di questa pagina con ruolo `workspace-config-template`.
+
+      ## Change
+
+      - `docs/wiki/operations/development.md` — corpo (paragrafo di configurazione e, se pertinente, vincoli operativi).
+
+      Non-goal: non riscrivere le sezioni «Build e controlli», «Packaging e release» e la CI, che restano accurate. Non toccare a mano il blocco `review`.
+
+      ## Steps
+
+      1. **Prima di qualunque modifica**, esegui: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo reset operations/development`.
+      2. Nel paragrafo che descrive ciò che la CLI legge dalla configurazione, aggiungi che `template:` conserva ID e versione del Template di processo installato nel workspace, che `archetipo init --template <id>` lo seleziona, che omettere il flag seleziona `fabbrica-del-software`, e che un ID sconosciuto viene rifiutato prima di scrivere qualunque file.
+      3. Aggiungi un vincolo operativo, se coerente con la sezione: il Template è risolto in-process dal binario, quindi introdurne uno nuovo richiede una release della CLI; il blocco assente da un workspace preesistente risolve comunque la Fabbrica del software.
+      4. Verifica che il `sources` esistente sia ancora corretto: `.archetipo/config.yaml` è già tracciato, non serve aggiungerlo.
+      5. Rigenera la navigazione: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo catalog`.
+
+      ## Verify
+
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status operations/development`
+      - Expect: `state: generated`. Uno stato `stale` significa modifica senza reset iniziale: esegui il reset — è idempotente e ripara lo stato dopo la modifica esattamente come lo avrebbe preparato prima — e ricontrolla.
+
+      ## Done
+
+      - [ ] Il paragrafo di configurazione descrive il blocco `template:` e il flag `--template`.
+      - [ ] Il default implicito e il rifiuto anticipato dell'ID sconosciuto sono dichiarati.
+      - [ ] La pagina riporta `state: generated` in `archetipo wiki status`.
+      - [ ] Il blocco `review` non è stato modificato a mano: lo stato è stato riportato a `generated` con `archetipo wiki reset`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Gate finale — suite completa, stato Wiki e verifica che nessun task resti TODO
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+
+      L'intera consegna è verificata con i controlli esatti registrati nella baseline, lo stato Wiki richiesto è dimostrato, e la spec risulta pronta per la review solo dopo che ogni task è `DONE`.
+
+      ## Read
+
+      - La sezione «Baseline» del corpo del piano — i comandi qui sotto sono quelli, non altri dedotti dalle convenzioni del progetto.
+      - Il diff completo della spec, per il controllo di aderenza al piano.
+
+      ## Change
+
+      - Nessuna modifica di codice attesa. Se un controllo fallisce, la correzione appartiene al task che l'ha causato, non a questo gate.
+
+      Non-goal: **non** eseguire `golangci-lint run`: non è installato su questa macchina, la baseline lo registra come prerequisito d'ambiente mancante e gira in CI. Non eseguire `npm run test:e2e` (scenari completi con sandbox), che questa spec non tocca.
+
+      ## Steps
+
+      1. Da `cli`: `gofmt -l .` — l'output deve essere vuoto.
+      2. Da `cli`: `go vet ./...` e `go build ./...` — nessuna diagnostica.
+      3. Da `cli`: `go test ./...` — verde; il numero di test deve essere maggiore dei 684 della baseline, perché TASK-02, TASK-04 e TASK-07 ne hanno aggiunti.
+      4. Dal root: `npm run test:e2e:unit` — verde, 50 test o più.
+      5. Dal root: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo catalog`, poi `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`. Ripara ogni errore, finding forte e warning di copertura causato da questa spec. Non riportare a `generated` una pagina di sola riconferma accurata per far sparire `WIKI_EVIDENCE_CHANGED`, e non invocare `wiki reconfirm`: la riconferma spetta alla review di accettazione.
+      6. Dal root, prova lo stato invece di assumerlo:
+         `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status --require-generated decisions/workspace-process-template engineering/code-map architecture/context-map operations/development`
+         Deve restituire `ok: true`. Se nomina una pagina come `reviewed`, `stale` o `evidence-changed`, eseguila attraverso `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo reset <page-id>` e ripeti il controllo. Una pagina `attention` è invece un'issue da risolvere nel contenuto, non un caso di reset.
+      7. Controllo di deriva rispetto al piano: confronta il diff finale con i quattro criteri di accettazione, con il corpo del piano e con il contratto di ogni task. Ogni lavoro pianificato mancante va completato prima della review; ogni deviazione deliberata va riportata nel riepilogo di completamento.
+      8. Marca questo task come completato: `archetipo task done US-026 TASK-13` da `/Users/stefanoleli/Project/ARchetipo`.
+      9. Ricarica la spec: `archetipo spec show US-026` da `/Users/stefanoleli/Project/ARchetipo`. Solo se **nessun** task risulta ancora `TODO` è ammesso richiedere la review con `archetipo spec review US-026`.
+
+      ## Verify
+
+      - Run (da `cli`): `gofmt -l . && go vet ./... && go build ./... && go test ./...`
+      - Run (dal root): `npm run test:e2e:unit`
+      - Run (dal root): `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap` e `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status --require-generated decisions/workspace-process-template engineering/code-map architecture/context-map operations/development`
+      - Expect: tutti verdi, coerentemente con la baseline; `data.ok: true` per la validazione Wiki e `ok: true` per il controllo delle pagine richieste.
+
+      ## Done
+
+      - [ ] AC-1, AC-2, AC-3 e AC-4 sono provati dai test di TASK-07, eseguiti dentro la suite completa.
+      - [ ] `gofmt`, `go vet`, `go build` e `go test ./...` sono verdi da `cli`; il totale dei test Go supera 684.
+      - [ ] `npm run test:e2e:unit` è verde.
+      - [ ] `wiki validate --profile bootstrap` restituisce `data.ok: true`.
+      - [ ] `wiki status --require-generated` restituisce `ok: true` per tutte e quattro le pagine richieste.
+      - [ ] `archetipo spec show US-026` non mostra alcun task in `TODO`; solo allora la spec può passare in REVIEW.
+
+      ## Blockers
+
+      None.
+    ref: TASK-13

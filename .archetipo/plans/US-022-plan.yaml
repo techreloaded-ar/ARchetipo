@@ -1,0 +1,662 @@
+schema: archetipo/plan/v2
+spec_code: US-022
+body: "# US-022: Pubblicare processi aziendali personalizzati — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-26\n\n---\n\n## Spec\n\n**Epica:** EP-003 — Governance e scala post-MVP\n**Priorità:** MEDIUM | **Punti:** 5\n\n**Storia utente**\nCome process owner, voglio definire e pubblicare un processo con attività umane, Session Run, Workflow Run e gate, così da governare cicli aziendali oltre l'Inception predefinita.\n\n**Criteri di accettazione**\n- AC-1 — Un process owner può comporre una bozza usando i tipi di attività supportati.\n- AC-2 — Una definizione incompleta non può essere pubblicata.\n- AC-3 — La pubblicazione produce una versione immutabile e avviabile.\n- AC-4 — Una nuova versione non modifica le istanze già avviate.\n- AC-5 — Ogni transizione automatica indica quale Workflow Run è autorizzata a produrla.\n\n---\n\n## Soluzione tecnica\n\nLa slice generalizza il catalogo di processo già esistente in Control Product (oggi limitato alla sola chiave `inception`) in un catalogo multi-definizione con bozze modificabili e pubblicazioni append-only, senza introdurre un motore di avanzamento delle attività. Il version pinning che soddisfa AC-4 esiste già (`process_instances.definition_version_id` + proiezione dalla versione fissata): la slice lo estende alle definizioni personalizzate invece di reinventarlo.\n\n- **Bozza mutabile, pubblicazione immutabile.** `process_definition_drafts` è una tabella Organization-scoped modificabile in place; `process_definition_versions` resta append-only con trigger. La pubblicazione è l'unico ponte fra le due: valida fail-closed la struttura della bozza, calcola `version = max(version per definition_key) + 1` sotto lock del catalogo e inserisce una riga nuova. Modificare una bozza dopo la pubblicazione non tocca nessuna versione pubblicata (AC-3, AC-4).\n- **Contratto di struttura generalizzato.** `process-domain.ts` smette di essere specifico dell'Inception: i simboli `Inception*` diventano `ProcessDefinition*` e ogni attività dichiara un `kind` fra `human`, `session_run` e `workflow_run` (AC-1). Le strutture legacy con `schemaVersion: 1` (la riga Inception v1 seminata dalla migrazione 006, che il trigger append-only rende non riscrivibile) restano valide e vengono **normalizzate** a `kind: \"human\"` e `automation: null`; le strutture nuove usano `schemaVersion: 2` e devono dichiarare `kind` esplicito. Un solo percorso di validazione, nessuna riscrittura di righe append-only, nessun doppio ramo di proiezione.\n- **Autorità della transizione automatica (AC-5).** Un'attività `workflow_run` richiede un blocco `automation` non nullo con `workflowId`, `workflowVersion` e `transition.toActivityKey`; un'attività `human` o `session_run` deve avere `automation: null`. La definizione pubblicata è quindi l'unica fonte che dichiara *quale* Workflow Run è autorizzata a produrre un avanzamento, coerentemente con `decisions/governed-run-modes` (\"l'applicazione della transizione appartiene a Product/Control\"). La proiezione dell'istanza espone `automaticTransitions` per rendere la dichiarazione osservabile senza eseguirla: nessuna transizione viene applicata da questa slice.\n- **Validazione che raccoglie i problemi.** Il validatore attuale lancia al primo errore. Per rendere utile il pannello di validazione della UI e per provare AC-2 con evidenza leggibile, il dominio espone `collectProcessDefinitionIssues(value): { ok: true, structure } | { ok: false, issues }` e mantiene `validateProcessDefinitionStructure` come wrapper che lancia — i chiamanti esistenti (`process-service`, `cockpit-service`) non cambiano semantica.\n- **Avvio esteso in modo additivo.** `GET /api/projects/:projectId/process` continua a restituire `availableDefinition` (ultima Inception pubblicata) e aggiunge `availableDefinitions`: l'ultima versione pubblicata per ogni `definition_key`. `POST` accetta qualsiasi `definitionVersionId` che sia l'ultima versione pubblicata della propria chiave; una versione superata resta `409`. I contratti e i test esistenti restano verdi.\n- **Superficie amministrativa nuova.** Rotta `/product/processes` con catalogo, bozze e designer; comandi di scrittura riservati a `admin` con audit, letture aperte a membership attiva, come per le altre risorse Product.\n\n### Decisioni architetturali\n\nNessun nuovo ADR. La scelta non apre un'alternativa nuova: applica due decisioni già accettate. La pubblicazione append-only con pinning è già `decisions/project-process-run-model`; l'autorità della transizione dichiarata da una definizione versionata e mai auto-attribuita dall'input è già `decisions/governed-run-modes`, che rinvia esplicitamente a Product/Control l'applicazione della transizione. Entrambe le pagine vanno estese dopo l'accettazione (vedi Wiki Impact) per registrare che il catalogo non è più mono-definizione e che l'autorità della transizione automatica è ora dichiarata nel catalogo Control oltre che nella definizione locale del progetto.\n\nUnica alternativa realmente valutata e scartata: **riscrivere la struttura Inception v1 seminata portandola a `schemaVersion: 2`** dentro la migrazione, disabilitando temporaneamente il trigger append-only. Scartata perché cambierebbe retroattivamente il contenuto di una versione pubblicata a cui sono già fissate istanze — esattamente ciò che AC-4 e l'invariante append-only vietano — in cambio di un risparmio di poche righe di normalizzazione.\n\n---\n\n## Baseline\n\nComandi eseguiti in `/Users/stefanoleli/Project/Archetipo` prima dell'implementazione.\n\n| Check | Risultato prima dell'implementazione | Conseguenza sulla pianificazione |\n|---|---|---|\n| `npm --prefix control run typecheck` | passa, nessun output | ogni task che tocca TypeScript deve mantenerlo verde; è la rete che protegge il rename dei simboli `Inception*` |\n| `npm --prefix control run lint` | passa, 0 issue | i file modificati non devono introdurre diagnostiche ESLint |\n| `cd control && npx vitest run src/modules/product/process-domain.test.ts` | passa, 15 test | il file va esteso, non riscritto: i casi legacy restano verdi |\n| `cd control && npx vitest run test/integration/project-process.test.ts` | passa, 6 test | prerequisito d'ambiente: Docker attivo (fixture PostgreSQL `test/fixtures/postgres.ts`) |\n| `cd control && npx vitest run --environment jsdom test/web/project.test.tsx` | passa, 34 test | la pagina Project va estesa senza rompere le region accessibili già asserite |\n\nPrerequisiti d'ambiente, distinti dai fallimenti di codice:\n\n- I test `control/test/integration/**` avviano un PostgreSQL reale via `startPostgresFixture`: serve un daemon Docker in esecuzione. Un fallimento di avvio della fixture è un problema d'ambiente, non una regressione del codice.\n- Il browser e2e richiede `npm run build:control` e i browser Playwright installati (`npx playwright install chromium`). Non è coperto dalla baseline sopra e va eseguito solo nel task che lo introduce e nel gate finale.\n\nNessun comando di baseline è rosso: ogni task può dichiarare `Expect: passa` senza eccezioni.\n\n---\n\n## Mappa dell'evidenza di accettazione\n\n| Criterio | Stato iniziale / fixture | Layer di test | Oracolo osservabile | Task che produce l'evidenza |\n|---|---|---|---|---|\n| AC-1 | organizzazione con admin, nessuna bozza | integration HTTP + React + e2e browser | una bozza creata con tre attività di `kind` `human`, `session_run` e `workflow_run` viene riletta da `GET /api/product/processes` con gli stessi `kind`; nel designer i tre tipi sono selezionabili e l'attività salvata mostra il proprio tipo | TASK-06, TASK-10, TASK-13, TASK-14 |\n| AC-2 | bozza con `initialActivityKey` inesistente e un'attività `workflow_run` senza `automation` | integration service + integration HTTP + e2e browser | `POST /api/product/processes/drafts/:id/publish` risponde `422 process_draft_invalid` con almeno due `issues` e `select count(*) from process_definition_versions where definition_key = 'delivery-review'` resta `0`; nella UI il pulsante \"Pubblica versione\" è `disabled` e il pannello elenca i problemi | TASK-08, TASK-10, TASK-13, TASK-14 |\n| AC-3 | bozza valida della chiave `delivery-review` | integration service + integration HTTP + e2e browser | la pubblicazione risponde `201` con `version: 1` e `status: \"published\"`; un `update process_definition_versions set structure = ...` sulla riga creata solleva SQLSTATE `55000`; `POST /api/projects/:projectId/process` con quel `definitionVersionId` crea un'istanza `active` fissata a quella versione | TASK-08, TASK-07, TASK-14 |\n| AC-4 | Project con istanza avviata su `delivery-review` v1 | integration service + e2e browser | snapshot dell'istanza (`id`, `definitionVersionId`, `definitionVersion`, `currentActivityKey`, titoli delle attività proiettate, `nextGate`, `updatedAt`) identico byte a byte prima della pubblicazione di v2, dopo la pubblicazione e dopo il reload della pagina Project, mentre il catalogo espone v2 come disponibile | TASK-08, TASK-14 |\n| AC-5 | definizione con attività `produce-prd` di tipo `workflow_run` | unit dominio + integration service + React + e2e browser | l'attività pubblicata espone `automation: { workflowId: \"inception\", workflowVersion: \"1.0.0\", transition: { toActivityKey: \"review-prd\" } }`, la proiezione dell'istanza espone la stessa coppia in `automaticTransitions`, la UI mostra il testo `inception@1.0.0`; una `human` con `automation` non nulla e una `workflow_run` con `automation: null` sono entrambe rifiutate con issue dedicate | TASK-02, TASK-08, TASK-13, TASK-14 |\n\nOgni oracolo resta osservabile attraverso i test double scelti: i test integration usano PostgreSQL reale e nessun mock del repository; i test React montano la pagina reale con un `ControlApi` stub che restituisce payload conformi al contratto, quindi la resa dell'autorizzazione e lo stato `disabled` del pulsante sono asseriti sul componente responsabile, non su una chiamata simulata.\n\n---\n\n## Strategia di test\n\nLa strategia segue la stratificazione già usata dal modulo Product: contratto di dominio in unit, invarianti di persistenza e transazioni in integration su PostgreSQL reale, confine pubblico in integration HTTP, resa e accessibilità in test React, e un solo percorso browser che attraversa OIDC, Fastify, PostgreSQL e UI.\n\n- Il dominio è l'unico posto che decide validità: i test unit coprono i tre `kind`, la presenza/assenza obbligatoria di `automation`, la coerenza dei riferimenti gate già esistente, la raccolta di problemi multipli e la normalizzazione delle strutture legacy `schemaVersion: 1`.\n- Le prove di immutabilità sono fatte contro il database, non contro il servizio: un `UPDATE` diretto sulla riga pubblicata deve sollevare l'eccezione del trigger.\n- Le prove di non-avanzamento (AC-4) confrontano uno snapshot completo dell'istanza prima e dopo, come già fanno `project-process.test.ts` e `control-project-process.spec.ts`; il piano riusa quel pattern invece di introdurne uno nuovo.\n- I fallimenti di pubblicazione devono essere provati come non mutanti: dopo un `422` il conteggio delle righe della chiave interessata resta invariato.\n\n### Test E2E — simulazione utente\n\n**Framework:** Playwright (`@playwright/test`, già in uso; `npm run test:control:e2e` esegue `test/e2e/control-*.spec.ts`)\n**Video demo:** atteso — la spec è filmabile (registrato più avanti da `archetipo-review`, non durante l'implementazione)\n\n| Scenario | Descrizione del flusso utente |\n|---|---|\n| Composizione e validazione bloccante | L'admin accede, apre `/product/processes`, crea una bozza `delivery-review`, aggiunge un'attività umana, una Session Run e una Workflow Run, lascia l'autorizzazione della Workflow Run vuota, prova a pubblicare e osserva il pulsante disabilitato e i problemi elencati; nessuna versione compare in catalogo |\n| Pubblicazione e avvio | L'admin completa l'autorizzazione `inception@1.0.0 → review-prd`, pubblica la v1, conferma nel dialog append-only, apre un Project, sceglie `delivery-review` fra le definizioni disponibili, avvia l'istanza e legge la sequenza prevista con tipo di ogni attività, gate e workflow autorizzato |\n| Nuova versione senza migrazione | L'admin torna al designer, modifica la bozza, pubblica la v2, torna sul Project, ricarica la pagina e osserva che l'istanza resta sulla v1 con le stesse attività e lo stesso gate, mentre il catalogo mostra v2 come disponibile |\n\n---\n\n## Wiki Impact\n\n```yaml\nwiki_impact:\n  read:\n    - decisions/project-process-run-model\n    - decisions/governed-run-modes\n    - domains/product-process-management\n    - domains/delivery-workflow\n  update_after_acceptance:\n    - decisions/project-process-run-model\n    - decisions/governed-run-modes\n    - domains/product-process-management\n    - engineering/code-map\n  create: []\n```\n\n---\n\n> \U0001F3A8 I mockup di questa spec sono disponibili in `docs/mockups/US-022/`\n\n_Piano generato con ARchetipo Planning — 2026-07-26_\n"
+tasks:
+  - id: TASK-01
+    title: Generalizzare il contratto di dominio della definizione di processo
+    type: Impl
+    status: TODO
+    body: |-
+      ## Objective
+      `control/src/modules/product/process-domain.ts` valida una definizione di processo generica con attività tipizzate e autorizzazione della transizione automatica, e sa raccogliere più problemi invece di lanciare al primo.
+
+      ## Read
+      - `control/src/modules/product/process-domain.ts` — `requireClosedObject`, `requireText`, `validateActivity`, `validateGate`, `validateInceptionDefinitionStructure`
+      - `control/src/modules/product/process-service.ts` righe 1-60 — come i tipi `Inception*` e `validateInceptionDefinitionStructure` vengono consumati
+      - `control/src/modules/product/cockpit-domain.ts` righe 1-100 e `cockpit-service.ts` riga 121 — gli altri consumatori dei tipi
+      - `control/migrations/006_process_inception.sql` righe 30-113 — la struttura legacy `schemaVersion: 1` che deve restare valida
+
+      ## Change
+      - `control/src/modules/product/process-domain.ts`: rinominare i simboli esportati `InceptionActivity` → `ProcessActivity`, `InceptionGate` → `ProcessGate`, `InceptionNextStep` → `ProcessNextStep`, `InceptionDefinitionStructure` → `ProcessDefinitionStructure`, `InceptionDefinitionValidationError` → `ProcessDefinitionValidationError`, `validateInceptionDefinitionStructure` → `validateProcessDefinitionStructure`. Conservare `INCEPTION_DEFINITION_KEY` (è la chiave della definizione seminata, non il nome del contratto).
+      - Stessi file, solo aggiornamento degli import/riferimenti: `control/src/modules/product/process-service.ts`, `process-repository.ts`, `cockpit-domain.ts`, `cockpit-service.ts`, `cockpit-domain.test.ts`, `control/test/integration/project-process.test.ts`, `project-process-http.test.ts`, `migrations.test.ts`.
+      - Non goal: nessuna modifica a repository, servizi, HTTP o migrazioni in questo task; nessun alias deprecato lasciato indietro.
+
+      ## Steps
+      1. Applicare il rename dei simboli in `process-domain.ts` e propagarlo ai file elencati sopra guidandosi con il type checker.
+      2. Aggiungere `PROCESS_STRUCTURE_VERSION = 2` accanto a `INCEPTION_STRUCTURE_VERSION = 1` e accettare in `schemaVersion` entrambi i valori.
+      3. Estendere il tipo attività con `kind: "human" | "session_run" | "workflow_run"` e `automation: ProcessAutomation | null`, dove `ProcessAutomation = { workflowId: string; workflowVersion: string; transition: { toActivityKey: string | null } }`.
+      4. Introdurre un helper `requireClosedObject(value, field, requiredFields, optionalFields)` che accetta campi opzionali assenti: per `schemaVersion: 1` i campi `kind` e `automation` sono opzionali e vengono normalizzati a `"human"` e `null`; per `schemaVersion: 2` sono obbligatori su ogni attività.
+      5. Validare `automation`: obbligatoria e non nulla se `kind === "workflow_run"`, obbligatoriamente `null` altrimenti. `workflowId` segue `KEY_PATTERN` con massimo 80 caratteri, `workflowVersion` segue `/^\\d+\\.\\d+\\.\\d+$/`, `transition.toActivityKey` è `null` oppure la chiave di un'attività esistente e successiva nell'ordine della lista.
+      6. Aggiungere `collectProcessDefinitionIssues(value): { ok: true; structure: ProcessDefinitionStructure } | { ok: false; issues: string[] }` che esegue le stesse regole accumulando i messaggi invece di interrompersi; riscrivere `validateProcessDefinitionStructure` come wrapper che lancia `ProcessDefinitionValidationError` con il primo problema quando `ok` è `false`, così i chiamanti attuali non cambiano comportamento.
+      7. Verificare che la normalizzazione produca sempre `kind` e `automation` valorizzati nel risultato, anche partendo da una struttura `schemaVersion: 1`.
+
+      ## Verify
+      - Eseguire dalla radice del repository: `npm --prefix control run typecheck`
+      - Attesa: passa senza output, come nella baseline.
+      - Eseguire: `npm --prefix control run lint`
+      - Attesa: passa con 0 issue.
+      - Eseguire: `cd control && npx vitest run src/modules/product/process-domain.test.ts src/modules/product/cockpit-domain.test.ts`
+      - Attesa: tutti i test verdi dopo il solo aggiornamento dei nomi importati (nessuna asserzione di comportamento cambiata in questo task).
+
+      ## Done
+      - [ ] AC-1 — il tipo attività ammette e distingue `human`, `session_run` e `workflow_run`.
+      - [ ] AC-5 — `automation` è obbligatoria per `workflow_run` e vietata per gli altri tipi, con `workflowId`, `workflowVersion` e `transition.toActivityKey` validati.
+      - [ ] `collectProcessDefinitionIssues` restituisce più di un problema per una struttura con più difetti.
+      - [ ] La struttura Inception `schemaVersion: 1` seminata dalla migrazione 006 continua a validare e viene normalizzata a `kind: "human"`.
+      - [ ] Typecheck e lint verdi.
+
+      ## Blockers
+      None.
+  - id: TASK-02
+    title: Coprire con test unit i tipi di attività e l'autorizzazione della transizione
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      `control/src/modules/product/process-domain.test.ts` prova le regole nuove del contratto: tipi di attività, autorizzazione obbligatoria, raccolta di problemi multipli e compatibilità legacy.
+
+      ## Read
+      - `control/src/modules/product/process-domain.test.ts` — `validDefinition()` e lo stile delle asserzioni esistenti
+      - `control/src/modules/product/process-domain.ts` — le regole introdotte in TASK-01
+
+      ## Change
+      - `control/src/modules/product/process-domain.test.ts`: aggiungere i casi nuovi accanto a quelli esistenti, senza rimuovere né indebolire i 15 test già presenti.
+      - Non goal: nessuna modifica al codice di produzione; se un test rivela un difetto, correggerlo in `process-domain.ts` e annotarlo qui.
+
+      ## Steps
+      1. Aggiungere una factory `validV2Definition()` che produce una struttura `schemaVersion: 2` con un'attività `human`, una `session_run`, una `workflow_run` autorizzata e un gate collegato.
+      2. Asserire che `validateProcessDefinitionStructure(validV2Definition())` restituisca la struttura normalizzata con i tre `kind` attesi e l'`automation` intatta.
+      3. Asserire il rifiuto di: `workflow_run` con `automation: null`; `human` con `automation` non nulla; `workflowVersion` non conforme a `X.Y.Z`; `transition.toActivityKey` che punta a un'attività inesistente; `transition.toActivityKey` che punta all'attività stessa o a una precedente.
+      4. Asserire che `collectProcessDefinitionIssues` su una struttura con `initialActivityKey` inesistente **e** una `workflow_run` senza `automation` restituisca `ok: false` con `issues.length >= 2`.
+      5. Asserire che la struttura Inception `schemaVersion: 1` (copiata dal seed della migrazione 006) validi e restituisca ogni attività con `kind: "human"` e `automation: null`.
+
+      ## Verify
+      - Eseguire: `cd control && npx vitest run src/modules/product/process-domain.test.ts`
+      - Attesa: tutti i test verdi, numero di test superiore ai 15 della baseline.
+      - Eseguire dalla radice: `npm --prefix control run lint`
+      - Attesa: 0 issue.
+
+      ## Done
+      - [ ] AC-1 — esiste un test verde che accetta una definizione con tutti e tre i tipi di attività supportati.
+      - [ ] AC-5 — esistono test verdi che rifiutano `workflow_run` priva di autorizzazione e `human` con autorizzazione, e che asseriscono i valori esatti di `workflowId`/`workflowVersion`/`transition.toActivityKey` sulla struttura accettata.
+      - [ ] Esiste un test verde che dimostra la raccolta di almeno due problemi distinti da una singola struttura invalida.
+      - [ ] Esiste un test verde sulla compatibilità della struttura legacy `schemaVersion: 1`.
+
+      ## Blockers
+      None.
+  - id: TASK-03
+    title: Aggiungere la migrazione del catalogo di processo e le tabelle Kysely
+    type: Impl
+    status: TODO
+    body: |-
+      ## Objective
+      Il database ammette definizioni con chiave diversa da `inception`, conserva l'autore della pubblicazione e possiede una tabella di bozze modificabili.
+
+      ## Read
+      - `control/migrations/006_process_inception.sql` — vincoli, indice parziale e trigger append-only attuali
+      - `control/migrations/009_prd_review_gate.sql` — stile di `ALTER TABLE ... DROP CONSTRAINT ... ADD CONSTRAINT` e dei trigger append-only
+      - `control/src/modules/identity/repository.ts` righe 300-380 — tabelle Kysely e `ControlDatabase`
+      - `control/src/server/migrate.ts` (o l'equivalente che elenca le migrazioni) — come vengono scoperte e applicate
+
+      ## Change
+      - Nuovo file `control/migrations/013_process_catalog.sql`.
+      - `control/src/modules/identity/repository.ts`: aggiornare `ProcessDefinitionVersionsTable`, aggiungere `ProcessDefinitionDraftsTable` e registrarla in `ControlDatabase`.
+      - Non goal: nessuna riscrittura della riga Inception v1 seminata; nessuna modifica a `process_instances`.
+
+      ## Steps
+      1. In `013_process_catalog.sql`, rilassare la chiave: `ALTER TABLE process_definition_versions DROP CONSTRAINT process_definition_versions_definition_key_check`, poi aggiungere un check di forma `definition_key ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$' AND length(definition_key) BETWEEN 1 AND 80`. Verificare il nome reale del vincolo generato dalla 006 con `\\d process_definition_versions` prima di scriverlo.
+      2. Creare `process_definition_drafts`: `id uuid PRIMARY KEY DEFAULT gen_random_uuid()`, `organization_id uuid NOT NULL REFERENCES organizations(id)`, `definition_key text NOT NULL` con lo stesso check di forma, `name text NOT NULL` con lunghezza 1..160, `structure jsonb NOT NULL` con `jsonb_typeof(structure) = 'object' AND octet_length(structure::text) <= 65536`, `created_by_identity_id uuid NOT NULL`, `created_by_email text NOT NULL` con lo stesso check email usato dalla 009, `created_at`/`updated_at timestamptz NOT NULL DEFAULT now()`, vincoli `UNIQUE (organization_id, id)` e `UNIQUE (organization_id, definition_key)`.
+      3. Aggiungere a `process_definition_versions` le colonne di provenienza, tutte nullable perché la riga seminata non ha autore: `published_by_identity_id uuid`, `published_by_email text` con check email applicato solo quando non nullo, `published_from_draft_id uuid REFERENCES process_definition_drafts(id)`.
+      4. Non aggiungere alcun trigger alle bozze: sono deliberatamente mutabili. Lasciare intatto il trigger `process_definition_versions_append_only`.
+      5. Aggiungere l'indice `process_definition_drafts_organization_idx ON process_definition_drafts (organization_id, updated_at DESC, id)`.
+      6. Aggiornare `ProcessDefinitionVersionsTable` con le tre colonne nuove e con `definition_key: string` al posto del literal `"inception"`; aggiungere `ProcessDefinitionDraftsTable` e la voce `process_definition_drafts` in `ControlDatabase`.
+
+      ## Verify
+      - Eseguire: `npm --prefix control run typecheck`
+      - Attesa: passa senza output.
+      - Eseguire: `cd control && npx vitest run test/integration/migrations.test.ts`
+      - Attesa: verde (le asserzioni esistenti sul seed Inception e sui trigger restano valide). Richiede un daemon Docker attivo per la fixture PostgreSQL.
+
+      ## Done
+      - [ ] AC-1 — il database ammette una `definition_key` diversa da `inception` e una bozza modificabile.
+      - [ ] AC-3 — `process_definition_versions` conserva il trigger append-only e registra autore e bozza di origine della pubblicazione.
+      - [ ] La riga Inception v1 seminata dalla 006 non viene modificata dalla migrazione.
+      - [ ] `ControlDatabase` espone `process_definition_drafts` e il typecheck è verde.
+
+      ## Blockers
+      None.
+  - id: TASK-04
+    title: Verificare schema, immutabilità e mutabilità delle bozze
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      `control/test/integration/migrations.test.ts` prova che le versioni pubblicate restano append-only con la chiave rilassata e che le bozze sono invece aggiornabili.
+
+      ## Read
+      - `control/test/integration/migrations.test.ts` — asserzioni esistenti su `process_definition_versions`, seed Inception e trigger
+      - `control/migrations/013_process_catalog.sql` — vincoli introdotti in TASK-03
+
+      ## Change
+      - `control/test/integration/migrations.test.ts`: aggiungere le asserzioni nuove accanto a quelle esistenti.
+      - Non goal: nessuna modifica alle migrazioni; se un'asserzione fallisce, correggere la 013.
+
+      ## Steps
+      1. Asserire che l'inserimento di una riga `process_definition_versions` con `definition_key = 'delivery-review'` e `version = 1` riesca, e che una seconda riga con la stessa coppia chiave/versione violi `process_definition_versions_key_version`.
+      2. Asserire che un `update process_definition_versions set structure = '{}'::jsonb where definition_key = 'delivery-review'` fallisca con SQLSTATE `55000`.
+      3. Asserire che una `definition_key` malformata (per esempio `'Delivery Review'`) violi il check di forma.
+      4. Asserire che l'inserimento di una bozza riesca, che un `update process_definition_drafts set name = ...` riesca (le bozze sono mutabili) e che una seconda bozza con la stessa `(organization_id, definition_key)` violi il vincolo univoco.
+      5. Asserire che la riga Inception v1 (`id = '00000000-0000-4000-8000-000000000001'`) esista ancora con `version = 1` e la struttura originale, e che `published_by_identity_id` sia `NULL`.
+
+      ## Verify
+      - Eseguire: `cd control && npx vitest run test/integration/migrations.test.ts`
+      - Attesa: verde, numero di test superiore alla baseline. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-3 — esiste un test verde che dimostra il rifiuto SQLSTATE `55000` di un `UPDATE` su una versione pubblicata di una definizione personalizzata.
+      - [ ] AC-1 — esiste un test verde che dimostra la creazione e l'aggiornamento di una bozza.
+      - [ ] AC-4 — esiste un test verde che dimostra che la riga Inception v1 e la sua struttura non sono state alterate dalla migrazione 013.
+
+      ## Blockers
+      None.
+  - id: TASK-05
+    title: Estendere i repository a catalogo multi-definizione e bozze
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Objective
+      La persistenza sa leggere l'ultima versione pubblicata per ogni chiave, inserire una versione nuova con numero incrementale e gestire il ciclo di vita delle bozze.
+
+      ## Read
+      - `control/src/modules/product/process-repository.ts` — `findAvailableDefinition`, `findDefinitionById`, `lockDefinitionCatalog`, `transaction`
+      - `control/src/modules/product/process-input-repository.ts` — stile di un repository Product recente
+      - `control/src/modules/identity/repository.ts` — `DatabaseClient` e le tabelle aggiornate in TASK-03
+
+      ## Change
+      - `control/src/modules/product/process-repository.ts`: aggiungere `findAvailableDefinitions()` che restituisce l'ultima versione `published` per ciascuna `definition_key`; parametrizzare `findAvailableDefinition(definitionKey = INCEPTION_DEFINITION_KEY)`; rimuovere il filtro fisso su `inception` da `findDefinitionById`.
+      - Nuovo file `control/src/modules/product/process-catalog-repository.ts`: bozze (list/find/create/update) e pubblicazione (`findMaxVersion`, `insertVersion`), con `transaction` e `lockDefinitionCatalog` riusati dallo stesso pattern.
+      - Non goal: nessuna logica di validazione o di autorizzazione in questo task.
+
+      ## Steps
+      1. In `process-repository.ts`, sostituire il `.where("definition_key", "=", INCEPTION_DEFINITION_KEY)` di `findDefinitionById` con la sola condizione su `id` e `status = 'published'`, così l'avvio può fissare qualsiasi definizione pubblicata.
+      2. Aggiungere `findAvailableDefinitions(): Promise<StoredProcessDefinitionVersion[]>` con `distinct on (definition_key) ... order by definition_key, version desc, published_at desc, id`, mantenendo l'ordinamento deterministico già usato da `findAvailableDefinition`.
+      3. Parametrizzare `findAvailableDefinition(definitionKey)` mantenendo `INCEPTION_DEFINITION_KEY` come default, così i chiamanti esistenti non cambiano.
+      4. In `process-catalog-repository.ts`, definire `StoredProcessDefinitionDraft` e le mappature riga→oggetto in camelCase, coerenti con lo stile di `process-repository.ts`.
+      5. Implementare `listDrafts(organizationId)`, `findDraft(organizationId, draftId)`, `createDraft(input)`, `updateDraft(input)` con `updated_at = now()`, `listVersions(definitionKey)` e `findMaxVersion(definitionKey)`.
+      6. Implementare `insertVersion({ definitionKey, version, structure, publishedByIdentityId, publishedByEmail, publishedFromDraftId })` che restituisce la riga inserita.
+      7. Esporre `transaction` e `lockDefinitionCatalog` anche da questo repository, riusando lo stesso `lock table process_definition_versions in share mode` per serializzare il calcolo del numero di versione.
+
+      ## Verify
+      - Eseguire: `npm --prefix control run typecheck`
+      - Attesa: passa senza output.
+      - Eseguire: `npm --prefix control run lint`
+      - Attesa: 0 issue.
+      - Eseguire: `cd control && npx vitest run test/integration/project-process.test.ts`
+      - Attesa: i 6 test della baseline restano verdi (la parametrizzazione è retrocompatibile). Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-1 — il repository sa creare, leggere e aggiornare una bozza.
+      - [ ] AC-3 — il repository sa calcolare il prossimo numero di versione per una chiave sotto lock del catalogo e inserire la riga pubblicata.
+      - [ ] `findAvailableDefinitions` restituisce una sola riga per `definition_key`, quella con la versione più alta.
+      - [ ] I test integration esistenti su Inception restano verdi.
+
+      ## Blockers
+      None.
+  - id: TASK-06
+    title: Implementare il servizio di catalogo con pubblicazione fail-closed
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-02
+      - TASK-05
+    body: |-
+      ## Objective
+      `ProcessCatalogService` gestisce le bozze, ne espone la validazione e pubblica una versione immutabile solo quando la struttura è completa.
+
+      ## Read
+      - `control/src/modules/product/process-service.ts` — pattern transazionale, lock e classi d'errore del modulo
+      - `control/src/modules/product/process-input-service.ts` — pattern di comando Product con precondizioni fail-closed
+      - `control/src/modules/product/process-domain.ts` — `collectProcessDefinitionIssues` da TASK-01
+      - `control/src/modules/product/process-catalog-repository.ts` — API da TASK-05
+
+      ## Change
+      - Nuovo file `control/src/modules/product/process-catalog-service.ts`.
+      - Non goal: nessun confine HTTP, nessuna decisione di ruolo (appartengono a TASK-08).
+
+      ## Steps
+      1. Definire le classi d'errore `ProcessDraftNotFoundError`, `ProcessDraftConflictError` e `ProcessDraftInvalidError` (quest'ultima con `issues: string[]`), seguendo lo stile delle classi in `process-service.ts`.
+      2. Implementare `listCatalog(organizationId)` che restituisce `{ definitions, drafts }`, dove ogni definizione porta le versioni pubblicate della propria chiave in ordine di versione decrescente e ogni bozza porta `validation: { ok, issues }` calcolata con `collectProcessDefinitionIssues`.
+      3. Implementare `createDraft({ organizationId, definitionKey, name, structure, actorIdentityId, actorEmail })`: rifiutare con `ProcessDraftConflictError` se esiste già una bozza per la stessa chiave nell'organizzazione; persistere la struttura così com'è, senza validarla — una bozza può essere incompleta per costruzione.
+      4. Implementare `updateDraft({ organizationId, draftId, name, structure })` con `ProcessDraftNotFoundError` quando la bozza non appartiene all'organizzazione.
+      5. Implementare `publishDraft({ organizationId, draftId, actorIdentityId, actorEmail })` dentro una transazione: acquisire `lockDefinitionCatalog`, rileggere la bozza, chiamare `collectProcessDefinitionIssues` e, se `ok` è `false`, lanciare `ProcessDraftInvalidError` con tutte le issue **prima di qualunque scrittura**, così la transazione non lascia righe.
+      6. Sul percorso valido, calcolare `version = (findMaxVersion(definitionKey) ?? 0) + 1` e inserire la versione con la struttura **normalizzata** restituita dal dominio, l'attore e `publishedFromDraftId`.
+      7. Restituire la versione pubblicata come `ProcessDefinitionVersion` (struttura già validata), senza toccare bozza e istanze: la bozza resta modificabile e nessuna `process_instances` viene aggiornata.
+
+      ## Verify
+      - Eseguire: `npm --prefix control run typecheck`
+      - Attesa: passa senza output.
+      - Eseguire: `npm --prefix control run lint`
+      - Attesa: 0 issue.
+
+      ## Done
+      - [ ] AC-1 — `createDraft` accetta e rilegge una bozza con attività `human`, `session_run` e `workflow_run`.
+      - [ ] AC-2 — `publishDraft` su una bozza incompleta lancia `ProcessDraftInvalidError` con tutte le issue e non esegue alcun `insert`.
+      - [ ] AC-3 — `publishDraft` su una bozza valida inserisce una versione con numero incrementale sotto lock del catalogo.
+      - [ ] AC-5 — la struttura pubblicata conserva `automation` con `workflowId`, `workflowVersion` e `transition.toActivityKey` delle attività `workflow_run`.
+      - [ ] Typecheck e lint verdi.
+
+      ## Blockers
+      None.
+  - id: TASK-07
+    title: Estendere avvio e proiezione dell'istanza alle definizioni personalizzate
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Un Project può avviare un'istanza su qualsiasi definizione pubblicata e la proiezione rende osservabili tipo di attività e transizioni automatiche autorizzate.
+
+      ## Read
+      - `control/src/modules/product/process-service.ts` — `getCockpit`, `start`, `projectInstance`
+      - `control/src/modules/product/process-http.ts` — `requireStartBody` e mappatura errori
+      - `control/src/modules/product/process-repository.ts` — `findAvailableDefinitions` da TASK-05
+
+      ## Change
+      - `control/src/modules/product/process-service.ts`: aggiungere `availableDefinitions` a `ProcessCockpit`, estendere `projectInstance` con `automaticTransitions`, generalizzare la regola di conflitto di versione.
+      - `control/src/modules/product/process-http.ts`: nessun cambio di payload; solo propagazione del campo nuovo.
+      - Non goal: non rimuovere `availableDefinition` dalla risposta — i consumatori e i test esistenti dipendono da quel campo; non implementare alcun avanzamento di attività.
+
+      ## Steps
+      1. Aggiungere `availableDefinitions: ProcessDefinitionVersion[]` a `ProcessCockpit`, popolato da `findAvailableDefinitions()`, mantenendo `availableDefinition` come l'ultima Inception pubblicata per retrocompatibilità.
+      2. In `start`, sostituire il confronto `input.definitionVersionId !== availableDefinition.id` con: rileggere la definizione richiesta per id; `404` se non esiste; `409` se non è l'ultima versione pubblicata della propria `definition_key`.
+      3. Mantenere invariata la regola di conflitto sull'istanza esistente: stessa versione → replay `created: false`; versione diversa → `ProcessInstanceConflictError`.
+      4. In `projectInstance`, esporre su ogni attività proiettata `kind` e `automation` e aggiungere `automaticTransitions: { activityKey, workflowId, workflowVersion, toActivityKey }[]`, derivato dalle sole attività `workflow_run` della versione **fissata**.
+      5. Verificare che `nextGate` e `nextStep` continuino a essere calcolati dalla versione fissata e non dal catalogo corrente: è l'invariante che regge AC-4.
+      6. Aggiornare `control/src/web/api/client.ts` con i tipi corrispondenti: `ProcessActivity.kind`, `ProcessActivity.automation`, `ProcessDefinitionVersion.definitionKey: string`, `ProcessDefinitionVersion.structure.schemaVersion: 1 | 2`, `ProcessCockpit.availableDefinitions`, `ProcessInstance.automaticTransitions`.
+
+      ## Verify
+      - Eseguire: `npm --prefix control run typecheck`
+      - Attesa: passa senza output.
+      - Eseguire: `cd control && npx vitest run test/integration/project-process.test.ts test/integration/project-process-http.test.ts test/integration/project-cockpit.test.ts`
+      - Attesa: verdi; `project-process.test.ts` mantiene i 6 test della baseline grazie alla natura additiva del cambiamento. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-3 — un'istanza può essere avviata su una definizione pubblicata con chiave diversa da `inception`.
+      - [ ] AC-4 — `nextStep`, `nextGate` e le attività proiettate continuano a derivare dalla versione fissata nell'istanza.
+      - [ ] AC-5 — la proiezione dell'istanza espone `automaticTransitions` con la coppia workflow/versione autorizzata per ogni attività `workflow_run`.
+      - [ ] Typecheck verde e test integration del processo verdi.
+
+      ## Blockers
+      None.
+  - id: TASK-08
+    title: Provare in integration pubblicazione, rifiuto non mutante e pinning
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Un test integration su PostgreSQL reale prova AC-2, AC-3, AC-4 e AC-5 al livello del servizio.
+
+      ## Read
+      - `control/test/integration/project-process.test.ts` — fixture PostgreSQL, creazione organizzazione/Project e pattern di snapshot dell'istanza usato per il version pinning
+      - `control/src/modules/product/process-catalog-service.ts` — API da TASK-06
+
+      ## Change
+      - Nuovo file `control/test/integration/process-catalog.test.ts`.
+      - Non goal: nessuna asserzione sul confine HTTP (è TASK-10).
+
+      ## Steps
+      1. Riusare `startPostgresFixture` e gli helper di creazione organizzazione/Project nello stesso stile di `project-process.test.ts`.
+      2. Creare una bozza `delivery-review` con un'attività `human`, una `session_run`, una `workflow_run` autorizzata `inception@1.0.0 → review-prd` e un gate collegato; rileggerla da `listCatalog` e asserire i tre `kind` e il contenuto esatto di `automation`.
+      3. Rendere la bozza incompleta (`initialActivityKey` inesistente e `automation: null` sulla `workflow_run`), chiamare `publishDraft` e asserire `ProcessDraftInvalidError` con `issues.length >= 2`; poi asserire con una query diretta che `select count(*) from process_definition_versions where definition_key = 'delivery-review'` valga `0`.
+      4. Correggere la bozza, pubblicare e asserire `version === 1` e `status === 'published'`; poi asserire che un `update process_definition_versions set structure = '{}'::jsonb where id = <versione>` fallisca con SQLSTATE `55000`.
+      5. Avviare una Process Instance del Project su quella versione tramite `ProcessService.start` e catturare uno snapshot completo (`id`, `definitionVersionId`, `definitionVersion`, `currentActivityKey`, titoli e `kind` delle attività proiettate, `nextGate`, `updatedAt`).
+      6. Modificare la bozza, pubblicare la v2 e asserire che `findAvailableDefinitions` esponga v2 mentre lo snapshot dell'istanza riletto da `getCockpit` è identico a quello del passo 5.
+      7. Asserire che due `publishDraft` concorrenti sulla stessa bozza producano numeri di versione distinti e nessun duplicato `(definition_key, version)`.
+
+      ## Verify
+      - Eseguire: `cd control && npx vitest run test/integration/process-catalog.test.ts test/integration/project-process.test.ts`
+      - Attesa: entrambi i file verdi; `project-process.test.ts` mantiene i 6 test della baseline. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-2 — test verde: pubblicazione rifiutata con più issue e conteggio righe della chiave invariato a `0`.
+      - [ ] AC-3 — test verde: versione 1 pubblicata, `UPDATE` diretto rifiutato con `55000`, istanza avviabile su quella versione.
+      - [ ] AC-4 — test verde: snapshot dell'istanza identico prima e dopo la pubblicazione della v2, con v2 disponibile in catalogo.
+      - [ ] AC-5 — test verde: la definizione pubblicata e la proiezione dell'istanza espongono `workflowId`, `workflowVersion` e `transition.toActivityKey` dell'attività `workflow_run`.
+
+      ## Blockers
+      None.
+  - id: TASK-09
+    title: Esporre il confine HTTP del catalogo di processo
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Il catalogo, le bozze e la pubblicazione sono raggiungibili via HTTP con payload chiusi, ruolo `admin` sulle scritture e audit.
+
+      ## Read
+      - `control/src/modules/product/process-http.ts` — `requireUuid`, payload chiuso, mappatura degli errori
+      - `control/src/modules/product/process-input-http.ts` — pattern admin + audit su un comando Product
+      - `control/src/modules/identity/policy.ts` — `requireActiveMembership`, `requireRole`
+      - `control/src/server/app.ts` righe 240-300 — composizione del modulo Product
+
+      ## Change
+      - Nuovo file `control/src/modules/product/process-catalog-http.ts`.
+      - `control/src/server/app.ts`: istanziare `ProcessCatalogService` e registrare le rotte dentro il blocco `if (productEnabled)`; aggiungere `/product/processes` all'elenco delle rotte statiche servite quando `productEnabled` è vero.
+      - Non goal: nessuna modifica alle rotte `/api/projects/:projectId/process` (è TASK-07).
+
+      ## Steps
+      1. Registrare `GET /api/product/processes` con `requireActiveMembership`, che restituisce `{ definitions, drafts }`.
+      2. Registrare `POST /api/product/processes/drafts` con `requireRole("admin", ...)` e corpo chiuso `{ definitionKey, name, structure }`; rifiutare con `400 invalid_request` qualunque campo aggiuntivo, esattamente come fa `requireStartBody`.
+      3. Registrare `PUT /api/product/processes/drafts/:draftId` con `requireRole("admin", ...)` e corpo chiuso `{ name, structure }`.
+      4. Registrare `POST /api/product/processes/drafts/:draftId/publish` con `requireRole("admin", ...)` e corpo chiuso `{}`; rispondere `201` con la versione creata.
+      5. Mappare gli errori: `ProcessDraftNotFoundError` → `404 process_draft_not_found`; `ProcessDraftConflictError` → `409 process_draft_conflict`; `ProcessDraftInvalidError` → `422 process_draft_invalid` con `issues` nel corpo della risposta.
+      6. Derivare `organizationId`, `actorIdentityId` e `actorEmail` esclusivamente dalla membership: il client non può inviarli.
+      7. Registrare un evento di audit per creazione, aggiornamento e pubblicazione, riusando lo stesso `AuditService` già passato agli altri registrar Product.
+
+      ## Verify
+      - Eseguire: `npm --prefix control run typecheck`
+      - Attesa: passa senza output.
+      - Eseguire: `npm --prefix control run lint`
+      - Attesa: 0 issue.
+      - Eseguire: `cd control && npx vitest run test/integration/http-authz.test.ts test/integration/module-product-disabled.test.ts`
+      - Attesa: verdi; le rotte nuove restano assenti quando il modulo Product è disabilitato. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-1 — le rotte di creazione e aggiornamento bozza sono registrate e accettano solo il payload chiuso previsto.
+      - [ ] AC-2 — la pubblicazione di una bozza incompleta risponde `422 process_draft_invalid` con l'elenco delle issue.
+      - [ ] AC-3 — la pubblicazione valida risponde `201` con la versione creata.
+      - [ ] Le rotte del catalogo non esistono quando il modulo Product è disabilitato.
+      - [ ] Typecheck e lint verdi.
+
+      ## Blockers
+      None.
+  - id: TASK-10
+    title: Provare in integration il contratto HTTP del catalogo
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      Un test integration prova autenticazione, ruoli, payload chiusi, codici pubblici e assenza di mutazioni sui fallimenti del catalogo.
+
+      ## Read
+      - `control/test/integration/project-process-http.test.ts` — bootstrap app Fastify, sessioni admin/collaborator e stile delle asserzioni
+      - `control/test/integration/process-input-promotion-http.test.ts` — asserzioni su ruolo negato e audit correlato
+      - `control/src/modules/product/process-catalog-http.ts` — rotte da TASK-09
+
+      ## Change
+      - Nuovo file `control/test/integration/process-catalog-http.test.ts`.
+      - Non goal: nessuna asserzione sulla UI.
+
+      ## Steps
+      1. Asserire `401` senza sessione su `GET /api/product/processes`.
+      2. Asserire che un `collaborator` riceva `403 forbidden` su creazione, aggiornamento e pubblicazione, e che l'evento di audit corrispondente abbia `outcome: "denied"`.
+      3. Asserire che un corpo con un campo extra su `POST /api/product/processes/drafts` produca `400 invalid_request` e non crei alcuna bozza.
+      4. Come admin, creare una bozza con i tre `kind`, rileggerla da `GET /api/product/processes` e asserire i `kind` e il blocco `automation` esatti.
+      5. Pubblicare una bozza incompleta e asserire `422 process_draft_invalid` con `issues.length >= 2`; poi rileggere `GET /api/product/processes` e asserire che la definizione non ha alcuna versione pubblicata.
+      6. Correggere e pubblicare: asserire `201`, `version: 1` e la presenza dell'autore server-derived nella risposta; asserire che `organizationId` inviato dal client venga ignorato.
+      7. Asserire che una seconda bozza con la stessa `definitionKey` produca `409 process_draft_conflict`.
+
+      ## Verify
+      - Eseguire: `cd control && npx vitest run test/integration/process-catalog-http.test.ts`
+      - Attesa: verde. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-1 — test verde: la bozza creata via HTTP viene riletta con i tre tipi di attività supportati.
+      - [ ] AC-2 — test verde: `422` con issue multiple e nessuna versione pubblicata dopo il rifiuto.
+      - [ ] AC-3 — test verde: `201` con `version: 1` e attore derivato dal server.
+      - [ ] AC-5 — test verde: il blocco `automation` sopravvive al round-trip HTTP con `workflowId` e `workflowVersion` esatti.
+
+      ## Blockers
+      None.
+  - id: TASK-11
+    title: Realizzare la pagina Catalogo processi con il designer di bozze
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-09
+      - TASK-07
+    body: |-
+      ## Objective
+      La rotta `/product/processes` permette a un admin di comporre una bozza con i tre tipi di attività, vedere i problemi bloccanti e pubblicare una versione.
+
+      ## Read
+      - `docs/mockups/US-022/index.html`, `docs/mockups/US-022/shared.css` e `docs/mockups/US-022/README.md` — le cinque scene di riferimento: Catalogo, Bozze, Designer, Pubblica, Avvia istanza
+      - `control/src/web/pages/agent-profiles.tsx` — pagina admin con elenco, form di creazione e stati accessibili
+      - `control/src/web/router.tsx` — tipo `Route`, `normalizeRoute`, montaggio delle pagine
+      - `control/src/web/layouts/control-shell.tsx` — voci di navigazione e `active`
+      - `control/src/web/styles.css` — token e classi esistenti
+
+      ## Change
+      - Nuovo file `control/src/web/pages/processes.tsx`.
+      - `control/src/web/router.tsx`: aggiungere `/product/processes` a `Route`, a `normalizeRoute` (solo quando `productEnabled`) e al montaggio; estendere `active` con `"processes"`.
+      - `control/src/web/layouts/control-shell.tsx`: aggiungere la voce di navigazione "Processi" nel gruppo Product e il valore `"processes"` in `ControlShellProps["active"]`.
+      - `control/src/web/api/client.ts`: aggiungere `getProcessCatalog`, `createProcessDraft`, `updateProcessDraft`, `publishProcessDraft`.
+      - `control/src/web/styles.css`: solo le classi nuove necessarie al designer.
+      - Non goal: nessuna modifica alla pagina Project (è TASK-12).
+
+      ## Steps
+      1. Aggiungere i quattro metodi al client seguendo lo stile di `startProcess` (riga ~944), con i percorsi `/api/product/processes` e `/api/product/processes/drafts[...]`.
+      2. Costruire la sezione catalogo: una card per `definitionKey` con la versione disponibile, `publishedAt`, autore, badge "immutabile" e storico versioni espandibile, come nella scena Catalogo del mockup.
+      3. Costruire la sezione bozze: nome, chiave, ultimo aggiornamento e stato di validazione ("valida" oppure "incompleta" con il numero di problemi).
+      4. Costruire il designer: metadati della bozza, lista ordinata di attività con selettore di tipo fra `human`, `session_run` e `workflow_run`, campo gate opzionale e titolo del gate.
+      5. Rendere il blocco di autorizzazione visibile solo per le attività `workflow_run`, con i campi `workflowId`, `workflowVersion` e attività di destinazione, e mostrare la sintesi `workflowId@workflowVersion → toActivityKey` accanto all'attività. Usare il colore dedicato definito nel mockup.
+      6. Rendere il pannello di validazione: elencare le `issues` restituite dal server e tenere il pulsante "Pubblica versione" `disabled` finché `validation.ok` è `false`.
+      7. Implementare il dialog di conferma della pubblicazione con il testo append-only e il numero di versione previsto; dopo il `201`, mostrare il banner con la nota esplicita che le istanze già avviate restano sulla versione precedente.
+      8. Nascondere i comandi di scrittura ai non-admin (prop `isAdmin`, come in `AgentProfilesPage`) e usare `aria-label` sulle region e `aria-live="polite"` sugli stati, coerentemente con le altre pagine.
+      9. Aggiungere `/product/processes` all'elenco delle rotte statiche in `control/src/server/app.ts` se non è già stato fatto in TASK-09.
+
+      ## Verify
+      - Eseguire: `npm --prefix control run typecheck`
+      - Attesa: passa senza output.
+      - Eseguire: `npm --prefix control run lint`
+      - Attesa: 0 issue.
+      - Eseguire: `npm run build:control`
+      - Attesa: build server e web completate senza errori.
+
+      ## Done
+      - [ ] AC-1 — il designer consente di aggiungere attività dei tre tipi supportati e di salvarle nella bozza.
+      - [ ] AC-2 — il pulsante "Pubblica versione" è disabilitato e i problemi sono elencati finché la bozza è incompleta.
+      - [ ] AC-3 — la pubblicazione richiede una conferma esplicita e mostra la versione creata come immutabile.
+      - [ ] AC-5 — l'autorizzazione della transizione automatica è un blocco obbligatorio e visibile per le attività `workflow_run`.
+      - [ ] La pagina implementa le scene dei mockup in `docs/mockups/US-022/` ed è raggiungibile da `/product/processes`.
+
+      ## Blockers
+      None.
+  - id: TASK-12
+    title: Mostrare scelta della definizione e sequenza prevista nel Project
+    type: Impl
+    status: TODO
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Objective
+      La pagina Project consente di scegliere fra le definizioni disponibili e mostra la sequenza prevista dell'istanza avviata con tipo di attività, gate e workflow autorizzato.
+
+      ## Read
+      - `control/src/web/pages/project.tsx` — la sezione che oggi consuma `ProcessCockpit` e la board in sola lettura (intorno alle righe 130-160)
+      - `docs/mockups/US-022/index.html` — scena "Avvia istanza"
+      - `control/src/web/api/client.ts` — tipi aggiornati in TASK-07
+
+      ## Change
+      - `control/src/web/pages/project.tsx`: selettore della definizione e sezione della sequenza prevista.
+      - Non goal: nessuna modifica alla board del cockpit, al gate PRD o alle sezioni Session/Workflow Run.
+
+      ## Steps
+      1. Sostituire l'uso implicito della sola Inception con un selettore alimentato da `cockpit.availableDefinitions`, mostrato solo quando non esiste ancora un'istanza; se c'è una sola definizione disponibile, preselezionarla.
+      2. Passare il `definitionVersionId` scelto a `startProcess`, mantenendo invariata la gestione degli errori esistente.
+      3. Aggiungere una region "Sequenza prevista" che elenca le attività della versione fissata in ordine, ciascuna con etichetta del tipo (`Attività umana`, `Session Run`, `Workflow Run`) e l'eventuale gate collegato.
+      4. Per le attività `workflow_run`, mostrare la transizione automatica autorizzata nella forma `workflowId@workflowVersion → toActivityKey`, leggendola da `instance.automaticTransitions`.
+      5. Mostrare in modo distinto la versione disponibile e la versione fissata, riusando l'etichetta già presente ("Definizione fissata v{n}") e aggiungendo la nota quando le due differiscono.
+      6. Mantenere invariate le region accessibili già asserite da `control/test/web/project.test.tsx`.
+
+      ## Verify
+      - Eseguire: `cd control && npx vitest run --environment jsdom test/web/project.test.tsx`
+      - Attesa: i 34 test della baseline restano verdi.
+      - Eseguire: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Attesa: entrambi passano senza output e con 0 issue.
+
+      ## Done
+      - [ ] AC-3 — dal Project è possibile scegliere e avviare una definizione pubblicata diversa da Inception.
+      - [ ] AC-4 — la pagina distingue visivamente versione disponibile e versione fissata dell'istanza.
+      - [ ] AC-5 — la sequenza prevista mostra, per ogni attività `workflow_run`, il workflow e la versione autorizzati a produrre la transizione.
+      - [ ] I test React esistenti della pagina Project restano verdi.
+
+      ## Blockers
+      None.
+  - id: TASK-13
+    title: Coprire con test React designer, validazione bloccante e autorizzazione
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-12
+    body: |-
+      ## Objective
+      I test React provano che la UI compone i tre tipi di attività, blocca la pubblicazione di una bozza incompleta e rende visibile il workflow autorizzato.
+
+      ## Read
+      - `control/test/web/agent-profiles.test.tsx` — stub di `ControlApi` e pattern di asserzione con Testing Library
+      - `control/test/web/project.test.tsx` — asserzioni sulle region accessibili della pagina Project
+      - `control/src/web/pages/processes.tsx` — componente da TASK-11
+
+      ## Change
+      - Nuovo file `control/test/web/processes.test.tsx`.
+      - `control/test/web/project.test.tsx`: aggiungere i casi per il selettore di definizione e la sequenza prevista.
+      - Non goal: nessuna modifica al codice di produzione; se un test rivela un difetto, correggerlo nella pagina.
+
+      ## Steps
+      1. Montare `ProcessesPage` con uno stub `ControlApi` che restituisce una bozza con `validation: { ok: false, issues: [...] }`; asserire che il pulsante "Pubblica versione" abbia l'attributo `disabled` e che ogni issue sia visibile nel pannello.
+      2. Con una bozza `validation.ok = true`, asserire che il pulsante sia abilitato, che il click apra il dialog di conferma e che solo la conferma invochi `publishProcessDraft` una sola volta.
+      3. Asserire che l'annullamento del dialog non produca alcuna chiamata a `publishProcessDraft`.
+      4. Asserire che il designer mostri i tre tipi di attività selezionabili e che il blocco di autorizzazione compaia solo per l'attività `workflow_run`, con il testo `inception@1.0.0` visibile.
+      5. Asserire che un utente non admin non veda i comandi di scrittura ma continui a leggere il catalogo.
+      6. In `project.test.tsx`, asserire che con due definizioni disponibili il selettore le elenchi entrambe, che `startProcess` riceva il `definitionVersionId` scelto e che la sequenza prevista mostri il tipo di ogni attività e la transizione automatica autorizzata.
+
+      ## Verify
+      - Eseguire: `cd control && npx vitest run --environment jsdom test/web/processes.test.tsx test/web/project.test.tsx`
+      - Attesa: entrambi i file verdi; `project.test.tsx` conserva i 34 test della baseline oltre a quelli nuovi.
+
+      ## Done
+      - [ ] AC-1 — test verde: i tre tipi di attività sono selezionabili nel designer.
+      - [ ] AC-2 — test verde: con `validation.ok = false` il pulsante di pubblicazione è `disabled` e le issue sono visibili all'utente.
+      - [ ] AC-3 — test verde: la pubblicazione avviene solo dopo conferma esplicita e una sola volta.
+      - [ ] AC-5 — test verde: il blocco di autorizzazione con `inception@1.0.0` è reso solo per le attività `workflow_run`.
+
+      ## Blockers
+      None.
+  - id: TASK-14
+    title: Provare il percorso utente completo con un e2e browser
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-08
+      - TASK-10
+      - TASK-13
+    body: |-
+      ## Objective
+      Un solo scenario Playwright attraversa browser, Fastify e PostgreSQL e dimostra composizione, rifiuto della pubblicazione incompleta, pubblicazione, avvio e invarianza dell'istanza dopo la v2.
+
+      ## Read
+      - `test/e2e/control-project-process.spec.ts` — fixture Control, login OIDC, `processInstanceSnapshot`, `publishInceptionV2` e stile delle asserzioni di pinning
+      - `test/e2e/control-project-prd-review.spec.ts` — pattern per un flusso admin con dialog di conferma
+      - `docs/mockups/US-022/README.md` — percorso dimostrativo di riferimento
+
+      ## Change
+      - Nuovo file `test/e2e/control-project-process-catalog.spec.ts` (il glob `test/e2e/control-*.spec.ts` di `npm run test:control:e2e` lo raccoglie automaticamente).
+      - Non goal: nessuna modifica agli spec e2e esistenti.
+
+      ## Steps
+      1. Riusare la fixture Control esistente ed estenderla con uno snapshot PostgreSQL del catalogo (`select definition_key, version, id from process_definition_versions order by definition_key, version`).
+      2. Accedere come admin, aprire `/product/processes`, creare la bozza `delivery-review` e comporre un'attività umana, una Session Run e una Workflow Run con gate collegato.
+      3. Lasciare vuota l'autorizzazione della Workflow Run, tentare la pubblicazione e asserire che il pulsante sia disabilitato e che i problemi siano visibili; asserire con lo snapshot che nessuna riga `delivery-review` esista nel database.
+      4. Completare l'autorizzazione `inception@1.0.0 → review-prd`, pubblicare, confermare nel dialog e asserire che il catalogo mostri la v1 con badge di immutabilità.
+      5. Creare un Project, scegliere `delivery-review` fra le definizioni disponibili, avviare l'istanza e asserire che la sequenza prevista mostri i tre tipi di attività, il gate e il testo `inception@1.0.0`.
+      6. Catturare `processInstanceSnapshot(projectId)`, tornare al designer, modificare la bozza, pubblicare la v2 e asserire che il catalogo esponga v2.
+      7. Tornare sul Project, ricaricare la pagina e asserire che lo snapshot dell'istanza sia identico a quello del passo 6 e che la UI continui a mostrare la versione fissata v1 accanto alla disponibile v2.
+
+      ## Verify
+      - Eseguire dalla radice: `npm run build:control && npx playwright test test/e2e/control-project-process-catalog.spec.ts`
+      - Attesa: scenario verde. Prerequisiti d'ambiente: Docker attivo e browser Playwright installati (`npx playwright install chromium` se assenti).
+
+      ## Done
+      - [ ] AC-1 — lo scenario compone nel browser una bozza con i tre tipi di attività supportati.
+      - [ ] AC-2 — lo scenario dimostra che la pubblicazione è bloccata e che il database non contiene alcuna versione della chiave dopo il tentativo.
+      - [ ] AC-3 — lo scenario pubblica la v1 e avvia un'istanza su quella versione dal Project.
+      - [ ] AC-4 — lo scenario dimostra che dopo la pubblicazione della v2 e un reload lo snapshot dell'istanza è identico e la versione fissata resta v1.
+      - [ ] AC-5 — lo scenario osserva nella UI il workflow autorizzato `inception@1.0.0` per l'attività `workflow_run`.
+
+      ## Blockers
+      None.
+  - id: TASK-15
+    title: 'Gate finale: eseguire le verifiche complete e chiudere la spec'
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-07
+      - TASK-11
+      - TASK-12
+      - TASK-13
+      - TASK-14
+    body: |-
+      ## Objective
+      L'intero incremento è verificato con le stesse verifiche della baseline più le suite di regressione rilevanti, e la spec può passare a review solo con tutti i task `DONE`.
+
+      ## Read
+      - `AGENTS.md` sezione "Before delivering changes" — checks attesi dal repository
+      - `package.json` alla radice — script `typecheck:control`, `lint:control`, `test:control`, `test:control:e2e`
+
+      ## Change
+      - Nessuna modifica di codice. Se un check è rosso, correggere il difetto nei file già toccati dal piano e rieseguire.
+
+      ## Steps
+      1. Eseguire i check statici e le suite unit/integration/React.
+      2. Eseguire lo scenario browser introdotto da TASK-14.
+      3. Confermare che nessun file modificato dal piano introduca diagnostiche del compilatore o del linter rispetto alla baseline (typecheck e lint erano entrambi verdi).
+      4. Marcare questo task come `DONE`.
+      5. Ricaricare la spec e confermare che nessun task sia rimasto `TODO`.
+      6. Solo a quel punto richiedere la review.
+
+      ## Verify
+      - Eseguire dalla radice del repository: `npm run typecheck:control`
+      - Attesa: passa senza output (uguale alla baseline).
+      - Eseguire: `npm run lint:control`
+      - Attesa: 0 issue (uguale alla baseline).
+      - Eseguire: `npm run test:control`
+      - Attesa: tutte le suite verdi, comprese `test/integration/**` e `test/web/**`. Richiede Docker attivo.
+      - Eseguire: `npm run build:control && npx playwright test test/e2e/control-project-process-catalog.spec.ts test/e2e/control-project-process.spec.ts test/e2e/control-project-cockpit.spec.ts`
+      - Attesa: i tre scenari verdi; i due esistenti dimostrano l'assenza di regressioni su processo e cockpit.
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `archetipo spec show US-022`
+      - Attesa: ogni task nel campo `tasks` ha `status: "DONE"`.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5 — tutte le prove elencate nella mappa dell'evidenza di accettazione sono verdi nella stessa esecuzione.
+      - [ ] `npm run typecheck:control` e `npm run lint:control` sono verdi come nella baseline.
+      - [ ] `npm run test:control` è verde.
+      - [ ] Lo scenario browser US-022 e i due scenari di processo esistenti sono verdi.
+      - [ ] Questo task è marcato `DONE` e `archetipo spec show US-022` non riporta più alcun task `TODO` prima della richiesta di review.
+
+      ## Blockers
+      None.

@@ -1,0 +1,337 @@
+schema: archetipo/plan/v2
+spec_code: US-033
+body: "# US-033: Pianificare con Claude come provider locale — Piano di implementazione\n\n**Prodotto da:** ARchetipo Planning Team  \n**Data:** 2026-08-18\n\n---\n\n## Spec\n\n**Epic:** EP-006 — Esecuzione locale e ciclo di delivery  \n**Priorità:** MEDIUM | **Punti:** 5\n\n**User Story**  \nCome utilizzatore che dispone di Claude Code sulla macchina del workspace, voglio selezionarlo come provider locale per pianificare una spec, così da usare lo stesso flusso gestito disponibile con ARcipelago e Codex.\n\n**Criteri di accettazione**\n\n- AC-1 — ARchetipo rende selezionabile Claude come provider quando il runtime richiesto è disponibile.\n- AC-2 — Una pianificazione riuscita tramite Claude produce un piano valido e porta la spec a `PLANNED`.\n- AC-3 — L'esecuzione registra provider, stato e risultato senza salvare credenziali o contenuti di autenticazione.\n- AC-4 — Claude assente, non autenticato o terminato con errore produce una diagnostica esplicita e lascia la spec fuori da `PLANNED`.\n- AC-5 — L'uso diretto delle skill ARchetipo dentro Claude continua a funzionare senza richiedere il provider locale.\n\n**Fuori ambito:** installazione automatica di Claude Code, scelta automatica del modello, implementazione e review tramite provider.\n\n---\n\n## Soluzione tecnica\n\nClaude viene aggiunto come terza implementazione di `execution.Provider`, parallela a Codex e distinta da esso, riusando senza modifiche i contratti condivisi per capability, disponibilità, ricevuta di piano, persistenza dell'esecuzione e conferma dell'effetto sul connector.\n\n- Un nuovo pacchetto `cli/internal/execution/claude/` espone l'id `claude`, la sola capability `spec.plan`, configurazione non segreta e un `Runner` iniettabile. Il processo viene risolto ed eseguito nella working directory corrente al momento di `Execute`, dopo `exec.LookPath`, `claude --version` e la verifica di `.claude/skills/archetipo-plan/SKILL.md`.\n- Il prompt deterministico chiede `/archetipo-plan <US-CODE>` e la ricevuta condivisa. L'invocazione mantiene `--print` come subcomando non interattivo fisso; i default intermedi sono `--no-session-persistence --permission-mode auto`, verificati contro Claude Code 2.1.234. `print_args` può sostituire soltanto tali argomenti intermedi e `model` aggiunge `--model <valore>` senza scegliere un modello automaticamente.\n- Claude conserva e usa autonomamente la propria autenticazione. ARchetipo non legge token, file di sessione o stato auth; non salva stdout/stderr integrali. Il risultato contiene soltanto comando, modello, exit code, durata, ricevuta normalizzata e numero di task; una diagnostica di errore può includere solo la coda troncata di stderr.\n- `execution.AcceptPlanReceipt` resta il primo gate di successo e `execution.VerifyActionEffect`/`ConfirmActionEffect` rilegge il connector prima di chiudere l'esecuzione come riuscita. Il provider non riceve mai il connector e quindi non può avanzare autonomamente la spec.\n- `defaultExecutionRegistry` registra Claude dopo ARcipelago e Codex, preservando l'ordine esistente. Il viewer e il pannello Execution sono già provider-agnostici: la nuova card, la disponibilità e i campi configurabili derivano dal registry e da `ConfigDescriber`, senza modifiche a layout o asset.\n\n### Semantica dei fallimenti\n\nLa selezione preventiva e l'esecuzione vengono tenute distinte. Un runtime assente o non avviabile resta visibile ma non selezionabile, con una diagnostica esplicita; una run avviata dopo un probe riuscito che poi fallisce per autenticazione, timeout, exit non-zero, ricevuta invalida o effetto non confermato produce invece un record `FAILED` interrogabile e lascia la spec invariata. Questa distinzione soddisfa AC-1 e la dimostrazione senza cambiare la semantica generica del viewer per gli altri provider.\n\n### Decisioni architetturali\n\nNon viene estratto un generico provider di processi locali: Codex e Claude hanno CLI, argomenti e diagnostiche differenti, mentre le astrazioni realmente condivise esistono già in `cli/internal/execution`. Non è richiesto un nuovo ADR: la soluzione segue il confine provider già stabilito, non modifica modello persistente, topologia o policy cross-cutting; `--permission-mode auto` delega a Claude la policy locale ed è una scelta reversibile del singolo provider. La manutenzione automatica della Wiki è disabilitata dalla configurazione, quindi il piano non legge né modifica pagine Wiki.\n\n---\n\n## Baseline\n\nComandi eseguiti nella working directory `/Users/stefanoleli/Project/Archetipo`; per i comandi Go è stato impostato `GOCACHE=/private/tmp/archetipo-us033-go-cache` perché il sandbox non può leggere la cache utente.\n\n| Controllo | Esito prima dell'implementazione | Conseguenza sul piano |\n|---|---|---|\n| `cd cli && gofmt -l .` | nessun output | ogni task Go richiede nessun file fuori formato |\n| `cd cli && GOCACHE=/private/tmp/archetipo-us033-go-cache go vet ./...` | nessun errore | il gate pretende vet verde con cache scrivibile |\n| `cd cli && GOCACHE=/private/tmp/archetipo-us033-go-cache go build ./...` | compilazione pulita | il gate pretende build verde |\n| `cd cli && GOCACHE=/private/tmp/archetipo-us033-go-cache go test ./internal/execution/codex -count=1` | PASS | il precedente provider locale è verde e non deve regredire |\n| `cd cli && GOCACHE=/private/tmp/archetipo-us033-go-cache go test ./internal/cli -run 'Codex\\|ExecutionProvider' -count=1` | PASS | registry, configurazione e modalità diretta esistenti sono una baseline verde |\n| `cd cli && GOCACHE=/private/tmp/archetipo-us033-go-cache go test ./internal/web -run 'ExecutionProvider\\|UnavailableProvider\\|SpecAction' -count=1` | PASS | il contratto provider-agnostico del viewer è verde |\n| `cd cli && GOCACHE=/private/tmp/archetipo-us033-go-cache go test ./internal/execution/... ./internal/cli ./internal/web` | fallisce per limiti dell'ambiente: `httptest` non può aprire `[::1]:0`; i pacchetti eseguiti senza listener risultano verdi | in un ambiente CI normale il gate esegue le suite complete; in questo sandbox va registrato lo stesso confine senza dichiararlo un difetto di codice |\n| `npm run test:view-execution-smoke` | non arriva allo smoke: la build usa la cache Go utente non accessibile dal sandbox | il gate lo esegue in un ambiente standard; qui il fallimento resta un prerequisito d'ambiente noto |\n| `golangci-lint run --timeout 5m ./...` | `golangci-lint` non installato | installare con il comando previsto da `AGENTS.md` prima del gate oppure dichiarare esplicitamente il controllo non eseguito |\n| `claude --version` | `2.1.234 (Claude Code)` | la sintassi prevista è verificata contro il runtime locale |\n| `claude -p --help` | supporta `--print`, `--no-session-persistence`, `--permission-mode auto`, `--model` | questi diventano i default e i campi configurabili testati; nessun test CI dipende dall'autenticazione reale |\n\n### Prerequisiti e stato locale\n\n- Go e Node.js sono presenti; i test che aprono listener e gli smoke richiedono un ambiente non limitato dal sandbox corrente.\n- Claude Code è installato, ma l'autenticazione reale non è un prerequisito dei test: runner e filesystem temporanei rendono ogni scenario deterministico e privo di credenziali.\n- Il worktree contiene modifiche utente non committate sotto `cli/internal/execution/codex/`; i task Claude devono preservarle e non riscrivere il provider Codex salvo una correzione strettamente necessaria e concordata.\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |\n|---|---|---|---|---|\n| AC-1 | root CLI reale e provider Claude con comando finto disponibile o assente | unit Go + integrazione CLI + smoke HTTP | registry e `GET /api/execution/providers` espongono `id: claude`, capability `spec.plan`, campi non segreti e `available`; quando il probe fallisce compare un motivo non vuoto e la card non è selezionabile | TASK-02, TASK-05, TASK-06 |\n| AC-2 | connector file temporaneo, spec `US-001` in `TODO`, runner finto che persiste davvero un piano e poi emette la ricevuta | integrazione CLI | `execution run US-001 plan` termina `SUCCEEDED`; una nuova `spec show US-001` legge `PLANNED`, corpo piano non vuoto e almeno un task dal connector | TASK-05 |\n| AC-3 | runner finto che stampa una sentinella di autenticazione su stdout/stderr | unit provider + integrazione CLI su record persistito + smoke HTTP | il file `.archetipo/executions/<id>.json` conserva provider, stato e risultato minimo ma non contiene la sentinella; config e risposta HTTP non espongono campi auth/token/secret | TASK-04, TASK-05, TASK-06 |\n| AC-4 | comando assente; probe fallito; skill assente; run non autenticata/non-zero; timeout; ricevuta invalida; ricevuta valida senza piano | unit provider + integrazione CLI | diagnostica nomina comando e causa; ogni run avviata finisce `FAILED` e resta interrogabile; `spec show` rimane `TODO` senza task. Il runtime già indisponibile viene invece bloccato preventivamente con motivo esplicito e senza falso avanzamento | TASK-04, TASK-05 |\n| AC-5 | workspace inizializzato con `init --tool claude --connector file --yes` e nessun provider predefinito | integrazione CLI | `.claude/skills/archetipo-plan/SKILL.md` esiste; la configurazione non richiede `execution.default_provider`; una persistenza diretta con `spec plan` porta la spec a `PLANNED` | TASK-05 |\n\nGli oracoli non si fidano del solo output del processo: AC-2 e AC-4 rileggono sempre il connector, mentre AC-3 legge il record su disco e usa una sentinella realmente presente negli stream del runner finto.\n\n---\n\n## Strategia di test\n\nLa strategia replica il precedente Codex soltanto dove il contratto è uguale e testa separatamente la semantica della CLI Claude.\n\n- **Unit del pacchetto Claude:** parsing/default della configurazione, campi descritti, costruzione pura degli argomenti e del prompt, probe `--version`, skill marker, timeout, classificazione degli exit code, troncamento Unicode-safe, ricevute valide e invalide e payload senza stream.\n- **Integrazione CLI con connector reale:** runner finto e workspace temporaneo attraversano servizio, store, conferma dell'effetto e connector file. Il successo persiste davvero il piano; i fallimenti producono record leggibili e lasciano invariata la spec.\n- **Regressione viewer/API:** il browser non conosce `claude`; lo smoke HTTP prova che il provider registrato viene presentato tramite i contratti generici, con disponibilità coerente e nessun campo credenziale.\n- **Modalità diretta:** un test inizializza Claude come tool e pianifica tramite il connector senza configurare o invocare un execution provider.\n- **Runtime reale:** non viene invocato in CI, perché installazione e autenticazione sono prerequisiti esterni. La dimostrazione è filmabile: il revisore può scegliere Claude, avviare `Pianifica`, osservare piano/stato/esecuzione e ripetere con una configurazione fallente. La configurazione corrente disabilita la registrazione automatica del video; `archetipo-review` decide e documenta il record o lo skip.\n\n### Rinuncia all'E2E browser\n\n**Motivo:** la storia non introduce pagina, route o componente UI nuovi; lista provider, selezione, avvio azione e dettaglio esecuzione sono già attraversati dagli smoke HTTP e dai test Go del viewer. Il comportamento specifico nuovo è nel processo locale e nel connector, dove un browser aggiungerebbe fragilità senza rendere più osservabile alcun AC.\n\n**Livello di evidenza usato:** unit Go, integrazione CLI/connector reale, integrazione viewer e smoke Node HTTP su `127.0.0.1`. Non viene introdotto un framework browser.\n\n---\n\n_Piano generato tramite ARchetipo Planning — 2026-08-18_"
+tasks:
+  - id: TASK-01
+    title: Definire configurazione, prompt e runner del provider Claude
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Il nuovo pacchetto Claude dispone di una configurazione non segreta, un'invocazione non interattiva deterministica e un seam di processo testabile.
+
+      ## Read
+      - `cli/internal/execution/codex/config.go` — validazione, default e descrizione dei campi del precedente locale.
+      - `cli/internal/execution/codex/prompt.go` — prompt di pianificazione e costruzione degli argomenti.
+      - `cli/internal/execution/codex/runner.go` — contratto e implementazione del runner.
+      - `cli/internal/execution/provider.go` — `ConfigDescriber` e `ConfigurationError`.
+      - `test/e2e/run.yaml` — invocazione Claude già usata dal repository.
+
+      ## Change
+      - Creare `cli/internal/execution/claude/config.go`, `prompt.go` e `runner.go`.
+      - Accettare soltanto `command`, `model`, `print_args`, `timeout_seconds`; nessuna credenziale o path di sessione.
+      - Non modificare i file locali già cambiati sotto `cli/internal/execution/codex/`.
+
+      ## Steps
+      1. Definire `ProviderID = "claude"`, comando predefinito `claude`, timeout 3600 secondi con range 1–86400 e argomenti intermedi predefiniti `--no-session-persistence --permission-mode auto`.
+      2. Validare chiavi, tipi, path del comando, argomenti non vuoti e timeout con errori ancorati al campo; `ValidateConfig` non deve interrogare macchina o autenticazione.
+      3. Esporre quattro `ConfigField` non segreti; spiegare che `print_args` sostituisce i default intermedi e può essere usato per policy locali differenti.
+      4. Costruire un prompt semanticamente uguale a Codex che invoca `/archetipo-plan <spec>` e richiede la ricevuta condivisa come ultima riga.
+      5. Costruire gli argomenti come `--print <print_args...> [--model <m>] <prompt>`, mantenendo `--print` e il prompt non sostituibili.
+      6. Implementare `Runner`/`execRunner` con working directory, stream separati ed exit code distinti dagli errori di spawn.
+
+      ## Verify
+      - Eseguire da `cli/`: `GOCACHE=/private/tmp/archetipo-us033-go-cache gofmt -l ./internal/execution/claude && GOCACHE=/private/tmp/archetipo-us033-go-cache go test ./internal/execution/claude`
+      - Expect: nessun output da `gofmt`; il pacchetto compila anche prima dei test dedicati.
+
+      ## Done
+      - [ ] AC-1 — la configurazione presentabile contiene solo i quattro campi non segreti previsti.
+      - [ ] AC-2 — prompt e argomenti avviano Claude in modalità print con accesso al workflow di pianificazione.
+      - [ ] AC-3 — nessun campo o tipo introduce credenziali/sessioni nella configurazione ARchetipo.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Testare configurazione, prompt e runner Claude
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      I contratti di configurazione e invocazione Claude sono provati senza eseguire o autenticare il runtime reale.
+
+      ## Read
+      - `cli/internal/execution/claude/config.go` — parser e campi prodotti da TASK-01.
+      - `cli/internal/execution/claude/prompt.go` — argomenti e ricevuta richiesta.
+      - `cli/internal/execution/codex/config_test.go`, `provider_test.go` — matrici e runner finto da adattare, non copiare ciecamente.
+
+      ## Change
+      - Creare `cli/internal/execution/claude/config_test.go` e i test focalizzati di prompt/runner in `provider_test.go` o file `_test.go` dedicati.
+      - Non invocare `claude` reale e non dipendere dalla home dell'utente.
+
+      ## Steps
+      1. Coprire default, ogni campo valido, chiavi sconosciute, tipi errati, comando vuoto/path relativo, `print_args` vuoto e timeout fuori range/non intero.
+      2. Asserire i nomi esatti dei campi e rifiutare per test qualsiasi campo il cui nome suggerisca token, secret, password, credential o auth.
+      3. Asserire l'ordine esatto degli argomenti con default, override `print_args`, modello presente/assente e prompt ultimo.
+      4. Asserire che il prompt nomini la spec, `/archetipo-plan`, persistenza, `PLANNED` e la ricevuta JSON condivisa.
+      5. Verificare con un helper process cross-platform che il runner separi stdout/stderr ed exit non-zero senza script shell.
+
+      ## Verify
+      - Eseguire da `cli/`: `GOCACHE=/private/tmp/archetipo-us033-go-cache go test ./internal/execution/claude -run 'Config|Args|Prompt|Runner' -count=1 -v`
+      - Expect: tutti i casi passano senza processi Claude reali.
+
+      ## Done
+      - [ ] AC-1 — test provano id, capability prevista dal package e configurazione selezionabile priva di segreti.
+      - [ ] AC-2 — test provano che l'invocazione chiede esattamente la pianificazione e la ricevuta di chiusura.
+      - [ ] AC-3 — test falliscono se compare un campo credenziale o se gli stream vengono confusi.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Implementare disponibilità ed esecuzione del provider Claude
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Claude implementa `execution.Provider` e `AvailabilityReporter`, esegue una pianificazione locale e restituisce soltanto un risultato minimo verificabile.
+
+      ## Read
+      - `cli/internal/execution/claude/config.go`, `prompt.go`, `runner.go` — contratti di TASK-01.
+      - `cli/internal/execution/codex/provider.go` — sequenza probe/skill/run/receipt e bounded diagnostics.
+      - `cli/internal/execution/availability.go` — interfaccia opzionale.
+      - `cli/internal/execution/planreceipt.go` — unica policy di ricevuta ammessa.
+      - `cli/internal/execution/effect.go` — conferma connector che resta fuori dal provider.
+
+      ## Change
+      - Creare `cli/internal/execution/claude/provider.go`.
+      - Il provider non importa connector, non legge auth e non persiste stdout/stderr.
+      - Non estrarre un generico provider locale né modificare il contratto `execution.Provider`.
+
+      ## Steps
+      1. Implementare `ID`, `Capabilities` con sola `spec.plan` e `ValidateConfig` delegata al parser puro.
+      2. Implementare `Available`: `exec.LookPath`, working directory risolta al momento della chiamata, `claude --version` con timeout di 10 secondi e diagnostiche distinte per assente, non avviabile e exit non-zero.
+      3. Prima della run verificare `.claude/skills/archetipo-plan/SKILL.md` e indicare `archetipo init --tool claude` come rimedio quando manca.
+      4. Eseguire con timeout configurato; classificare spawn, cancellazione/timeout ed exit non-zero includendo soltanto stderr troncato a 512 byte su boundary UTF-8.
+      5. Accettare il successo solo tramite `execution.AcceptPlanReceipt(stdout, req.SpecCode)`.
+      6. Restituire payload JSON con soli `command`, `model`, `exit_code`, `result_summary`, `plan_tasks`, `duration_ms`; normalizzare `result_summary` dalla ricevuta parsata.
+
+      ## Verify
+      - Eseguire da `cli/`: `GOCACHE=/private/tmp/archetipo-us033-go-cache gofmt -l ./internal/execution/claude && GOCACHE=/private/tmp/archetipo-us033-go-cache go test ./internal/execution/claude`
+      - Expect: nessun output da `gofmt`; pacchetto verde.
+
+      ## Done
+      - [ ] AC-1 — availability distingue runtime utilizzabile e indisponibile con motivo esplicito.
+      - [ ] AC-2 — una ricevuta valida produce un risultato candidato alla conferma connector.
+      - [ ] AC-3 — il risultato non contiene stream, credenziali o materiale di sessione.
+      - [ ] AC-4 — ogni fallimento ritorna un errore esplicito senza dichiarare successo.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Testare successo, indisponibilità e fallimenti del provider Claude
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Ogni esito del processo Claude è classificato deterministicamente e nessun output sensibile entra nel risultato persistibile.
+
+      ## Read
+      - `cli/internal/execution/claude/provider.go` — flusso completo di TASK-03.
+      - `cli/internal/execution/codex/provider_test.go` — matrice di precedenti per probe, skill, ricevuta e sanitizzazione.
+      - `cli/internal/execution/planreceipt_test.go` — errori condivisi già coperti.
+
+      ## Change
+      - Estendere `cli/internal/execution/claude/provider_test.go` e gli eventuali file test creati da TASK-02.
+      - Usare runner/working directory/clock iniettabili e directory temporanee; nessun accesso a Claude o credenziali reali.
+
+      ## Steps
+      1. Provare id, capability, working directory risolta a runtime, probe `--version` e skill marker Claude.
+      2. Provare happy path con output rumoroso più ricevuta valida; asserire task count, durata e campi esatti del payload.
+      3. Coprire comando assente, spawn fallito, probe non-zero, skill mancante, timeout/cancellazione, exit non-zero con messaggio non autenticato e stderr vuoto.
+      4. Coprire ricevuta assente, altra spec, status errato, zero task e JSON malformato.
+      5. Inserire una sentinella auth in stdout/stderr e asserire che payload e riepilogo non la contengano; verificare troncamento Unicode-safe della sola diagnostica ammessa.
+
+      ## Verify
+      - Eseguire da `cli/`: `GOCACHE=/private/tmp/archetipo-us033-go-cache go test ./internal/execution/claude -count=1 -v`
+      - Expect: tutti i percorsi passano; nessun test usa il binario Claude reale.
+
+      ## Done
+      - [ ] AC-2 — il solo happy path con ricevuta valida restituisce task e risultato coerenti.
+      - [ ] AC-3 — una sentinella realmente stampata non compare nel payload persistibile.
+      - [ ] AC-4 — ogni causa richiesta produce una diagnostica distinta e nessun falso successo.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Registrare Claude nel root CLI
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Il binario reale rende Claude disponibile al servizio di esecuzione e al viewer senza alterare provider e azioni esistenti.
+
+      ## Read
+      - `cli/internal/cli/root.go` — costruzione e ordine del registry reale.
+      - `cli/internal/web/execution.go` — vista generica dei provider.
+      - `cli/internal/web/execution_run.go` — availability e azioni provider-agnostiche.
+      - `cli/internal/cli/init_project_cmd.go` — mapping Claude già esistente verso `.claude/skills`.
+
+      ## Change
+      - Modificare `cli/internal/cli/root.go` per importare e registrare `claude.New(claude.Options{})` dopo Codex.
+      - Non modificare asset UI o handler generici salvo che un test dimostri un difetto reale del contratto esistente.
+
+      ## Steps
+      1. Aggiungere l'import del package Claude.
+      2. Appendere la registrazione dopo ARcipelago e Codex, preservando l'ordine storico delle card.
+      3. Verificare che il root CLI continui a costruire il registry prima del `-C` e che il provider risolva la cwd solo durante probe/run.
+      4. Compilare e verificare i test focalizzati del registry e del viewer.
+
+      ## Verify
+      - Eseguire da `cli/`: `GOCACHE=/private/tmp/archetipo-us033-go-cache go test ./internal/cli -run 'ProviderIsRegisteredInRealRoot|ExecutionProvider' -count=1 && GOCACHE=/private/tmp/archetipo-us033-go-cache go test ./internal/web -run 'ExecutionProvider|UnavailableProvider|SpecAction' -count=1`
+      - Expect: registry e contratti generici verdi; ordine ARcipelago, Codex, Claude.
+
+      ## Done
+      - [ ] AC-1 — il root reale risolve `claude` con capability `spec.plan` e lo espone al viewer.
+      - [ ] AC-4 — il controllo generico di disponibilità può rendere Claude non selezionabile con motivo.
+      - [ ] Nessuna regressione modifica ordine o comportamento di ARcipelago e Codex.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Integrare i test CLI di pianificazione Claude e modalità diretta
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Il percorso CLI completo prova piano persistito, record sanitizzato, fallimenti interrogabili e indipendenza della modalità diretta.
+
+      ## Read
+      - `cli/internal/cli/execution_codex_test.go` — fixture connector reale, runner finto e oracoli di US-032.
+      - `cli/internal/cli/execution_cmd.go` — dispatch, store ed envelope.
+      - `cli/internal/execution/effect.go` — demozione `UNCONFIRMED_EFFECT`.
+      - `cli/internal/cli/init_project_cmd.go` — installazione skill Claude.
+
+      ## Change
+      - Creare `cli/internal/cli/execution_claude_test.go`.
+      - Non invocare il vero Claude e non modificare i test Codex esistenti.
+
+      ## Steps
+      1. Costruire una fixture temporanea con connector file, spec `US-001` in `TODO`, skill Claude marker, provider con runner finto e configurazione default selezionata via CLI.
+      2. Happy path: il runner persiste davvero un payload valido via `spec plan`, poi emette la ricevuta; asserire record `SUCCEEDED`, provider `claude`, spec riletta `PLANNED`, plan body non vuoto e task count coerente.
+      3. Sanitizzazione: stampare una sentinella auth negli stream; leggere il file record e l'envelope e asserire assenza della sentinella, presenza soltanto dei metadati previsti.
+      4. Fallimenti separati: probe/runtime indisponibile, non autenticato/exit non-zero, ricevuta mancante e ricevuta valida senza piano. Asserire record `FAILED` interrogabile con codice/motivo e spec riletta ancora `TODO` senza task.
+      5. Registry/config: provare che il root reale accetta una config Claude valida, rifiuta per campo una config invalida e conserva il default precedente.
+      6. Modalità diretta: `init --tool claude --connector file --yes`, marker `.claude/skills/archetipo-plan/SKILL.md`, nessun default provider e `spec plan` diretto che porta la spec a `PLANNED`.
+
+      ## Verify
+      - Eseguire da `cli/`: `GOCACHE=/private/tmp/archetipo-us033-go-cache go test ./internal/cli -run Claude -count=1 -v`
+      - Expect: tutti gli scenari passano e rileggono il connector/record reale.
+
+      ## Done
+      - [ ] AC-1 — Claude è configurabile e registrato nel root reale.
+      - [ ] AC-2 — il successo è provato da `spec show`, non dalla sola ricevuta.
+      - [ ] AC-3 — record ed envelope non contengono la sentinella auth.
+      - [ ] AC-4 — i fallimenti producono record `FAILED` e lasciano la spec `TODO` senza piano.
+      - [ ] AC-5 — `init --tool claude` e pianificazione diretta funzionano senza provider configurato.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Estendere lo smoke HTTP del pannello Execution a Claude
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Il contratto osservato dal browser include Claude con capability, disponibilità e configurazione non segreta, senza dipendere da un runtime autenticato.
+
+      ## Read
+      - `test/e2e/execution-config-view-smoke.mjs` — asserzioni già presenti per ARcipelago e Codex.
+      - `AGENTS.md` — descrizione dello smoke `npm run test:view-execution-smoke`.
+      - `cli/internal/web/execution.go` — forma JSON della lista provider.
+
+      ## Change
+      - Estendere `test/e2e/execution-config-view-smoke.mjs` con asserzioni Claude.
+      - Aggiornare la sola voce pertinente in `AGENTS.md` perché descriva il contratto verificato.
+      - Non cambiare `PATH`, non richiedere login Claude e non indebolire le asserzioni dei provider esistenti.
+
+      ## Steps
+      1. Cercare il provider `claude` e asserire label, capability `spec.plan` e booleano `available`.
+      2. Asserire i nomi esatti `command`, `model`, `print_args`, `timeout_seconds` e l'assenza di nomi che suggeriscano credenziali.
+      3. Quando `available` è falso, richiedere `unavailable_reason` non vuoto; quando è vero, non assumere alcun modello o stato auth.
+      4. Conservare il controllo globale che nessuna sentinella segreta compaia nelle risposte.
+      5. Aggiornare `AGENTS.md` e lanciare lo smoke insieme alla regressione del percorso plan esistente.
+
+      ## Verify
+      - Eseguire dalla radice: `npm run test:view-execution-smoke && npm run test:view-plan-smoke`
+      - Expect: entrambi stampano PASS in un ambiente che consente build cache e listener localhost. Nel sandbox limitato, riportare il boundary già registrato in Baseline senza chiamarlo verde.
+
+      ## Done
+      - [ ] AC-1 — lo smoke fallisce se Claude sparisce, perde `spec.plan` o ha disponibilità incoerente.
+      - [ ] AC-3 — lo smoke fallisce se compare un campo credenziale o una sentinella segreta.
+      - [ ] AC-4 — un Claude indisponibile espone un motivo esplicito senza falso stato disponibile.
+      - [ ] `AGENTS.md` descrive fedelmente lo smoke esteso.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Gate finale di verifica di US-033
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Tutti gli AC hanno evidenza verde, i controlli CI non regrediscono e la review viene richiesta soltanto dopo che ogni task è `DONE`.
+
+      ## Read
+      - `AGENTS.md` — controlli CI obbligatori e smoke pertinenti.
+      - La sezione Baseline del piano US-033 — confini d'ambiente e aspettative legittime.
+      - `cli/internal/cli/execution_claude_test.go` e `test/e2e/execution-config-view-smoke.mjs` — evidenze finali AC-1…AC-5.
+
+      ## Change
+      - Nessuna modifica attesa. Ogni difetto va corretto nel task che lo ha introdotto e il gate va rieseguito dall'inizio.
+
+      ## Steps
+      1. Da `cli/`, eseguire `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`.
+      2. Se manca, installare `golangci-lint` con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`; poi eseguire `golangci-lint run --timeout 5m ./...`.
+      3. Dalla radice, eseguire `npm run test:view-execution-smoke` e `npm run test:view-plan-smoke`.
+      4. Eseguire la dimostrazione manuale: con Claude disponibile e configurato, avviare `Pianifica` e osservare record riuscito, piano valido e `PLANNED`; con un comando Claude finto che supera il probe ma fallisce la run, osservare record `FAILED`, diagnostica e spec non avanzata.
+      5. Verificare `git diff --check` e che le modifiche utente preesistenti sotto `cli/internal/execution/codex/` non siano state sovrascritte.
+      6. Marcare il gate `DONE` con `archetipo task done US-033 TASK-08` dalla radice progetto.
+      7. Eseguire `archetipo spec show US-033` dalla radice progetto e confermare che nessun task resti `TODO`.
+      8. Solo dopo i passaggi precedenti, eseguire `archetipo spec review US-033`.
+
+      ## Verify
+      - Eseguire da `cli/`: `gofmt -l . && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Expect: nessun output da `gofmt`, nessun errore da vet/build, zero test falliti e zero issue lint. Un limite ambientale va dichiarato esplicitamente, mai registrato come verde.
+      - Eseguire dalla radice: `npm run test:view-execution-smoke && npm run test:view-plan-smoke && git diff --check`
+      - Expect: entrambi gli smoke PASS e nessun errore whitespace.
+      - Eseguire dalla radice: `archetipo spec show US-033`
+      - Expect: dopo aver marcato il gate, ogni task è `DONE` prima della richiesta di review.
+
+      ## Done
+      - [ ] AC-1 — Claude è registrato e selezionabile solo quando disponibile.
+      - [ ] AC-2 — una run riuscita persiste un piano valido e porta la spec a `PLANNED`.
+      - [ ] AC-3 — record, config e API non salvano credenziali o contenuti auth.
+      - [ ] AC-4 — fallimenti e indisponibilità hanno diagnostica esplicita e nessun falso avanzamento.
+      - [ ] AC-5 — la modalità diretta Claude resta funzionante senza execution provider.
+      - [ ] Nessun file modificato introduce diagnostici di compilatore/linter rispetto alla baseline.
+      - [ ] `archetipo spec show US-033` non riporta task `TODO` prima di `spec review`.
+
+      ## Blockers
+      None.
+    ref: TASK-08

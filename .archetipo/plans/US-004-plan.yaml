@@ -1,0 +1,311 @@
+schema: archetipo/plan/v2
+spec_code: US-004
+body: "# US-004: Eseguire una Session Run locale governata — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-23\n\n---\n\n## Spec\n\n**Epica:** EP-001 — ARchetipo Agent locale e Run Protocol\n**Priorità:** HIGH | **Punti:** 5\n\n**Storia utente**\nCome sviluppatore, voglio affidare ad Agent un obiettivo libero entro policy esplicite, così da esplorare e lavorare senza trasformare automaticamente il risultato in avanzamento di processo.\n\n**Criteri di accettazione**\n- AC-1 — Un utente può avviare una Session Run con testo libero e profilo di modello scelto.\n- AC-2 — Le azioni della Run rispettano le conferme previste dalla policy attiva.\n- AC-3 — La conclusione di una Session Run non avanza automaticamente un processo governato.\n- AC-4 — Stato, azioni principali ed esito della Run sono consultabili dopo la chiusura.\n\n---\n\n## Soluzione tecnica\n\nIntrodurre nel package Agent una vertical slice locale di `Session Run`, costruita sopra l'adapter Pi same-process già consegnato da US-003 e separata dalle transizioni del Core. Il comando `archetipo-agent run --profile <id> --goal <testo>` crea un record immutabilmente identificato, seleziona il profilo prima del primo prompt e avvia `InteractiveMode` con l'obiettivo come `initialMessage`; `archetipo-agent runs show <run-id>` legge il journal concluso senza riaprire la sessione Pi.\n\n- Estendere il contratto allow-list di `.pi/archetipo-agent.json` con una `sessionPolicy` esplicita per tool: `allow`, `confirm` o `deny`. La policy MVP opera a granularità di tool: lettura e modifiche locali possono essere `allow`, `bash` può essere `confirm`, e tool sconosciuti sono `deny`; non si tenta una classificazione euristica dei comandi shell.\n- Applicare la policy in un'estensione Pi inline sul callback pubblico `tool_call`, prima dell'esecuzione. `confirm` usa `ctx.ui.confirm`; rifiuto o assenza di UI restituiscono `{block:true}`. Gli eventi `tool_result`, `agent_end` e `agent_settled` alimentano il journal con soli metadati redatti.\n- Conservare i record fuori dal repository, sotto l'agent directory Pi in uno spazio ARchetipo indicizzato da un hash stabile del root canonico. Ogni record contiene run id, modalità `session`, obiettivo, profilo pubblico, policy id/versione, stato, timestamp, session id, azioni principali con decisione/esito e outcome finale; non contiene input/output grezzi dei tool, credenziali o header.\n- Rendere le scritture del journal atomiche e monotone (`created` → `running` → `completed|failed|cancelled`). Un rifiuto è un'azione tracciata e bloccata, non un errore che elimina la Run.\n- Non invocare comandi `archetipo spec ...`, connector o mutazioni di `.archetipo/` durante una Session Run. L'E2E fotografa backlog/spec e artefatti approvati prima e dopo la chiusura per dimostrare questa barriera.\n\n### Decisioni architetturali\n\nLa scelta di intercettare deterministicamente `tool_call` prima dell'esecuzione, anziché descrivere i permessi nel system prompt, riguarda il modello di sicurezza ma chiarisce una decisione già esistente: `decisions/governed-run-modes`. La pagina sarà aggiornata con il contratto MVP a granularità di tool, il comportamento fail-closed senza UI, le alternative (prompt-only e classificazione euristica del comando) e le evidenze. Non serve un nuovo ADR: la modalità `session`, l'assenza di avanzamento implicito e la policy deterministica sono già la decisione accettata; anche `decisions/project-process-run-model` e `decisions/pi-sdk-adapter` vengono aggiornate con l'evidenza implementativa.\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |\n|---|---|---|\n| `npm run test:agent` | PASS: 34 test, 8 suite, 0 failure | Ogni task Agent mantiene questa suite verde e aggiunge test focalizzati per i nuovi moduli. |\n| `npm run test:agent-session-smoke` | PASS: profilo, persistenza multiprocesso, atomicità auth e redazione verificate | Il nuovo smoke Run estende la prova reale senza indebolire il contratto sessione di US-003. |\n| `find agent test/e2e test/npm -name '*.mjs' -type f -exec node --check {} \\;` | PASS, nessuna diagnostica | Ogni nuovo `.mjs` deve restare privo di errori di parsing. |\n\nPrerequisiti ambiente: Node.js >=22.19, dipendenze installate con `npm ci --ignore-scripts`, Go disponibile per costruire il Core usato dagli smoke e Python 3 con PTY sui sistemi POSIX per lo smoke interattivo. Nessun browser framework è richiesto.\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Progetto inizializzato, due profili deterministici e provider locale | E2E multiprocesso con PTY | Il comando accetta obiettivo libero e `--profile build`; output e record mostrano lo stesso obiettivo, profilo e run id prima dell'esecuzione | TASK-05 |\n| AC-2 | Policy con read/edit/write `allow`, bash `confirm`; provider deterministico richiede un'azione bash | Contract extension + E2E PTY | Compare una conferma con conseguenza esplicita; il revisore risponde no; il tool non viene eseguito e il journal contiene decisione `denied`/esito `blocked` | TASK-03, TASK-05 |\n| AC-3 | Copia byte-per-byte di backlog, spec e artefatti approvati prima della Run | E2E multiprocesso | Dopo la chiusura gli hash e lo stato Core coincidono con il pre-run; nessun comando di transizione è stato invocato | TASK-05 |\n| AC-4 | Run chiusa dopo almeno un'azione consentita e una negata | Unit persistence + E2E CLI | `archetipo-agent runs show <id>` dopo un nuovo processo restituisce stato terminale, azioni principali, decisioni ed esito coerenti con il journal | TASK-02, TASK-05 |\n\nI test non simulano via mock il confine responsabile dell'approvazione: lo smoke guida la vera TUI Pi tramite PTY e osserva il blocco prima dell'esecuzione. Le unit isolano filesystem e SDK soltanto per errori, redazione e transizioni del journal.\n\n## Strategia di test\n\n- Unit test table-driven per schema policy, default fail-closed, selezione profilo, transizioni valide del journal, scrittura atomica e redazione di input sensibili.\n- Contract test dell'estensione contro gli eventi pubblici Pi `tool_call`, `tool_result`, `agent_end` e `agent_settled`, verificando allow/confirm/deny, rifiuto, assenza UI e correlazione tramite `toolCallId`.\n- Smoke multiprocesso con provider deterministico e PTY: avvio con obiettivo/profilo, azione consentita, richiesta sensibile negata, chiusura, ispezione da secondo processo e snapshot invariato del Core.\n- Regressione completa Agent, packaging, smoke di installazione/sessione/interazione, parsing Node e controlli Go prescritti dal repository.\n\n### E2E terminale — Simulazione utente\n\n**Framework:** harness Node.js + Python PTY già adottato da `test/e2e/agent-session-smoke.mjs`\n**Video demo:** filmabile; l'eventuale registrazione appartiene ad `archetipo-review`.\n\n| Scenario | Flusso utente |\n|---|---|\n| Session Run negata in sicurezza | Avvia `run` con obiettivo e profilo, osserva id/stato, lascia eseguire una lettura, nega il prompt per bash, chiude e consulta il riepilogo persistito. |\n| Separazione dal processo | Cattura stato e hash degli artefatti Core, conclude la Run, rilegge gli stessi elementi e verifica che non siano cambiati. |\n\n### Esclusione browser E2E\n\n**Motivo:** la superficie di US-004 è una TUI locale, non una pagina browser. L'interazione attraversa comunque process boundary, persistenza e conferma, quindi richiede E2E PTY reale anziché component test o browser automation.\n**Livello di evidenza alternativo:** smoke terminale multiprocesso con `InteractiveMode` reale e provider HTTP deterministico.\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [decisions/governed-run-modes, decisions/project-process-run-model, domains/delivery-workflow]\n  update_after_acceptance: [decisions/governed-run-modes, decisions/project-process-run-model, decisions/pi-sdk-adapter, engineering/code-map]\n  create: []\n```\n\n> \U0001F3A8 I mockup per questa spec sono disponibili in `docs/mockups/US-004/`.\n\n_Piano generato tramite ARchetipo Planning — 2026-07-23_"
+tasks:
+  - id: TASK-01
+    title: Definire e validare la policy locale delle Session Run
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Rendere disponibile una policy di tool esplicita, allow-list e fail-closed per ogni Session Run locale.
+
+      ## Read
+      - `agent/src/model-profiles.mjs` — parser allow-list di `.pi/archetipo-agent.json`
+      - `agent/test/model-profiles.test.mjs` — fixture e invarianti del contratto configurazione
+      - `agent/README.md` — formato pubblico dei profili e confine dei segreti
+      - `docs/wiki/decisions/governed-run-modes.md` — requisiti della policy governata
+
+      ## Change
+      - `agent/src/agent-config.mjs` — nuovo loader unico per `modelProfiles` e `sessionPolicy`, con errori redatti e oggetti immutabili
+      - `agent/src/model-profiles.mjs` — mantenere compatibile l'API esistente delegando al loader unico, senza duplicare parsing
+      - `agent/test/agent-config.test.mjs` e `agent/test/model-profiles.test.mjs` — casi validi/invalidi e regressione
+      - Non aggiungere credenziali, pattern shell euristici, policy remote, budget o RBAC
+
+      ## Steps
+      1. Definire `sessionPolicy` con id/versione, mappa `tools` i cui valori sono `allow|confirm|deny` e `unknown: deny` obbligatorio.
+      2. Validare root e campi annidati con allow-list, stringhe non vuote, valori azione ammessi e assenza di campi sensibili; congelare profondamente il risultato.
+      3. Conservare la compatibilità dei progetti che hanno solo `modelProfiles`, ma rifiutare l'avvio `run` quando manca una policy esplicita.
+      4. Coprire lettura/modifica consentite, bash in conferma, tool sconosciuto negato e messaggi di errore che non riflettono valori sensibili.
+
+      ## Verify
+      - Run: `node --test agent/test/agent-config.test.mjs agent/test/model-profiles.test.mjs`
+      - Run: `node --check agent/src/agent-config.mjs agent/src/model-profiles.mjs`
+      - Expect: tutti i test passano e i file non hanno diagnostiche di parsing.
+
+      ## Done
+      - [ ] AC-2 — La policy attiva produce decisioni deterministiche `allow`, `confirm` e `deny`, con default sconosciuto fail-closed.
+      - [ ] AC-1 — La configurazione mantiene profili selezionabili insieme alla policy senza esporre segreti.
+
+      ## Blockers
+      US-003 deve aver consegnato il contratto dei profili; è attualmente in REVIEW.
+    ref: TASK-01
+  - id: TASK-02
+    title: Persistire il lifecycle e il journal redatto delle Run
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Creare un archivio locale atomico che renda ogni Session Run consultabile dopo la chiusura senza scrivere nel repository o salvare contenuti sensibili dei tool.
+
+      ## Read
+      - `agent/src/pi-adapter.mjs` — session id/file e lifecycle runtime
+      - `agent/src/project-context.mjs` — root canonico del progetto
+      - `agent/test/pi-adapter.test.mjs` — fixture filesystem e aspettative di persistenza
+      - `node_modules/@earendil-works/pi-coding-agent/docs/session-format.md` — confine del transcript posseduto da Pi
+
+      ## Change
+      - `agent/src/run-store.mjs` — modello record, id, namespace per hash del root, transizioni monotone e salvataggio JSON atomico sotto l'agent directory Pi
+      - `agent/test/run-store.test.mjs` — creazione, aggiornamento, riapertura multiprocesso simulata, errori e redazione
+      - Non duplicare il transcript Pi, non salvare input/output grezzi, environment, header o credenziali; non scrivere sotto `.archetipo/` o nel connector Core
+
+      ## Steps
+      1. Definire lo schema pubblico della Run: id, mode `session`, goal, profilo pubblico, policy id/versione, session id, stato, timestamp, azioni redatte e outcome.
+      2. Generare id non prevedibili e un namespace stabile dal root canonico senza incorporare il path in chiaro nel nome file.
+      3. Implementare transizioni `created` → `running` → `completed|failed|cancelled` e append idempotente delle azioni correlate da `toolCallId`.
+      4. Scrivere tramite file temporaneo nello stesso directory, rename atomico e permessi user-only dove supportati; validare i dati letti.
+      5. Testare che marker sensibili presenti negli input non compaiano nei byte persistiti.
+
+      ## Verify
+      - Run: `node --test agent/test/run-store.test.mjs`
+      - Run: `node --check agent/src/run-store.mjs`
+      - Expect: stato e azioni sopravvivono alla riapertura, transizioni illegali sono rifiutate e il sentinel sensibile è assente dal journal.
+
+      ## Done
+      - [ ] AC-4 — Una Run terminale può essere riletta con stato, azioni principali ed esito.
+      - [ ] AC-3 — Il journal vive fuori dal repository e non modifica stato o artefatti del Core.
+
+      ## Blockers
+      TASK-01 definisce i metadati pubblici della policy da registrare.
+    ref: TASK-02
+  - id: TASK-03
+    title: Applicare la policy prima dell'esecuzione dei tool Pi
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Objective
+      Bloccare o confermare ogni tool call secondo la policy attiva prima che Pi esegua l'azione e registrare la decisione nel journal.
+
+      ## Read
+      - `agent/src/profile-selector-extension.mjs` — pattern di estensione Pi inline e binding della sessione
+      - `agent/src/pi-adapter.mjs` — `extensionFactories` e runtime same-process
+      - `node_modules/@earendil-works/pi-coding-agent/docs/extensions.md` — `tool_call`, `tool_result`, `ctx.ui.confirm` e lifecycle
+      - `node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts` — contratto `ToolCallEventResult`
+
+      ## Change
+      - `agent/src/run-governance-extension.mjs` — estensione inline per allow/confirm/deny, prompt accessibile e journaling correlato
+      - `agent/src/pi-adapter.mjs` — comporre l'estensione solo durante una Session Run e passarle policy/store senza alterare la sessione interattiva ordinaria
+      - `agent/test/run-governance-extension.test.mjs` e `agent/test/pi-adapter.test.mjs` — contract test degli eventi e regressione adapter
+      - Non affidare enforcement al system prompt; non eseguire un tool negato; non registrare command line o payload grezzi
+
+      ## Steps
+      1. Intercettare `tool_call`, risolvere l'azione dalla policy e creare un sommario sicuro basato su tool/categoria, non sul payload completo.
+      2. Per `allow`, registrare la decisione e lasciare proseguire; per `deny`, restituire subito `{block:true}`; per `confirm`, mostrare titolo, conseguenza, opzioni e possibilità di annullamento.
+      3. Trattare rifiuto, dialog dismiss e contesto senza UI come blocco fail-closed con ragione non sensibile.
+      4. Correlare `tool_result` al `toolCallId` per registrare `succeeded|failed`; chiudere il record su `agent_settled`/uscita controllata e preservarlo su errore.
+      5. Verificare che un handler successivo o l'esecutore non venga invocato quando la policy blocca.
+
+      ## Verify
+      - Run: `node --test agent/test/run-governance-extension.test.mjs agent/test/pi-adapter.test.mjs`
+      - Run: `node --check agent/src/run-governance-extension.mjs agent/src/pi-adapter.mjs`
+      - Expect: allow prosegue, confirm-negato e deny bloccano prima dell'esecuzione, assenza UI è fail-closed e gli eventi journal restano redatti.
+
+      ## Done
+      - [ ] AC-2 — La conferma prevista dalla policy è visibile e una risposta negativa impedisce l'azione sensibile.
+      - [ ] AC-4 — La decisione negata e il relativo esito `blocked` restano tra le azioni principali consultabili.
+
+      ## Blockers
+      TASK-01 fornisce la policy validata e TASK-02 il journal.
+    ref: TASK-03
+  - id: TASK-04
+    title: Esporre avvio e consultazione della Session Run nella CLI
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Objective
+      Consentire all'utente di avviare una Session Run con obiettivo/profilo espliciti e consultarne il riepilogo dopo la chiusura.
+
+      ## Read
+      - `docs/mockups/US-004/` — riferimento per gerarchia di stato, prompt di conferma e riepilogo
+      - `agent/src/cli.mjs` e `agent/bin/archetipo-agent.js` — parsing e delega corrente
+      - `agent/src/pi-adapter.mjs` — selezione profilo e `InteractiveMode`
+      - `agent/src/startup-presenter.mjs` — output pubblico redatto
+      - `agent/test/cli.test.mjs` — codici uscita, immutabilità e dipendenze iniettate
+
+      ## Change
+      - `agent/src/cli.mjs` — supportare `run --profile <id> --goal <testo>` e `runs show <run-id>` mantenendo `archetipo-agent` e `--version` compatibili
+      - `agent/src/pi-adapter.mjs` — selezionare il profilo richiesto prima del prompt e passare il goal come `InteractiveMode.initialMessage`
+      - `agent/src/run-presenter.mjs` — presentazione testuale accessibile di id, goal, profilo, stato, azioni ed esito
+      - `agent/test/cli.test.mjs`, `agent/test/pi-adapter.test.mjs`, `agent/test/run-presenter.test.mjs` — parsing, avvio, ispezione ed errori
+      - `agent/README.md` — uso, policy, storage e limiti MVP
+      - Non implementare promozione, workflow tipizzati, Runner, Control o comandi Core impliciti
+
+      ## Steps
+      1. Introdurre un parser esplicito senza shell evaluation, con errori per goal vuoto, profilo sconosciuto, policy assente e run id inesistente.
+      2. Creare il record prima di caricare il modello, marcare `running` solo dopo la selezione autenticata e passare il goal come messaggio iniziale della TUI.
+      3. Comporre profile selector e governance extension nello stesso resource loader; mantenere il profilo scelto visibile nel banner Run.
+      4. Garantire cleanup singolo e stato terminale coerente su successo, Ctrl-D/cancellazione ed errore runtime.
+      5. Implementare `runs show` come lettura locale senza avviare Pi né mutare il record; rendere stato e decisioni leggibili senza dipendere solo dal colore.
+
+      ## Verify
+      - Run: `node --test agent/test/cli.test.mjs agent/test/pi-adapter.test.mjs agent/test/run-presenter.test.mjs`
+      - Run: `node --check agent/src/cli.mjs agent/src/pi-adapter.mjs agent/src/run-presenter.mjs`
+      - Expect: il goal e il profilo arrivano una sola volta alla TUI, gli errori hanno exit code stabile, la consultazione non muta il record e la modalità interattiva precedente resta compatibile.
+
+      ## Done
+      - [ ] AC-1 — `run` avvia la TUI con testo libero e profilo scelto, mostrando entrambi con il run id.
+      - [ ] AC-4 — `runs show` rende consultabili stato terminale, azioni principali ed esito in un nuovo processo.
+      - [ ] AC-3 — La CLI Run non invoca alcuna transizione o connector del Core.
+
+      ## Blockers
+      TASK-02 e TASK-03 devono fornire storage e governance; il mockup `docs/mockups/US-004/` deve essere disponibile prima dell'implementazione della presentazione.
+    ref: TASK-04
+  - id: TASK-05
+    title: Provare end-to-end una Run con azione sensibile negata
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Dimostrare in un processo reale che avvio, policy, rifiuto, persistenza e separazione dal workflow Core soddisfano l'intera spec.
+
+      ## Read
+      - `test/e2e/agent-session-smoke.mjs` — provider HTTP deterministico, staging package e driver PTY
+      - `test/e2e/agent-interactive-smoke.mjs` — bootstrap Core e confine CLI
+      - `test/e2e/fixtures/plan/` — artefatti Core semplici da fotografare
+      - `package.json` e `.github/workflows/ci.yml` — registrazione della suite Agent
+
+      ## Change
+      - `test/e2e/agent-run-smoke.mjs` — smoke multiprocesso della Session Run
+      - `package.json` — script `test:agent-run-smoke`
+      - `.github/workflows/ci.yml` — eseguire il nuovo smoke nel job Agent
+      - Non contattare provider esterni, non richiedere credenziali reali e non rendere il test dipendente da timing non osservabile
+
+      ## Steps
+      1. Costruire il Core, inizializzare un sandbox e configurare due profili, policy read/edit/write allow e bash confirm, provider deterministico e un artefatto sensibile sentinel.
+      2. Salvare hash byte-per-byte di backlog, spec e artefatti approvati prima della Run.
+      3. Guidare la vera TUI via PTY: avviare con goal/profilo, osservare id/stato, consentire una lettura e negare il prompt per bash.
+      4. Chiudere la Run, avviare un secondo processo `runs show`, verificare stato terminale, azione consentita, decisione denied/blocked ed esito.
+      5. Provare che il comando sensibile non ha prodotto il sentinel e che hash/stato del Core sono invariati; cercare una credential sentinel in stdout, stderr, sessione Pi e journal.
+      6. Rendere il test idempotente e con cleanup dei processi/server anche su errore.
+
+      ## Verify
+      - Run: `npm run test:agent-run-smoke`
+      - Run: `npm run test:agent-session-smoke`
+      - Expect: il nuovo smoke prova tutti gli oracoli AC-1..AC-4, il vecchio smoke resta verde e nessun sentinel sensibile compare o viene eseguito.
+
+      ## Done
+      - [ ] AC-1 — Il PTY osserva goal, profilo e run id della Session Run reale.
+      - [ ] AC-2 — Il PTY nega la conferma e il test prova che il comando non è stato eseguito.
+      - [ ] AC-3 — Hash e stati degli artefatti Core restano identici prima/dopo.
+      - [ ] AC-4 — Un secondo processo consulta stato, azioni ed esito persistiti.
+
+      ## Blockers
+      TASK-04 deve esporre il flusso CLI completo.
+    ref: TASK-05
+  - id: TASK-06
+    title: Allineare documentazione e Wiki alla Run governata
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Documentare il contratto implementato della Session Run, la barriera rispetto al processo e le evidenze repository senza introdurre una nuova decisione duplicata.
+
+      ## Read
+      - `docs/wiki/decisions/governed-run-modes.md` — decisione primaria da chiarire
+      - `docs/wiki/decisions/project-process-run-model.md` — distinzione Run/processo
+      - `docs/wiki/decisions/pi-sdk-adapter.md` — confine same-process ed estensioni
+      - `docs/wiki/engineering/code-map.md` — mappa della capability Agent
+      - `agent/README.md` — istruzioni operative consegnate da TASK-04
+
+      ## Change
+      - `docs/wiki/decisions/governed-run-modes.md` — policy a granularità tool, fail-closed, alternative e prove
+      - `docs/wiki/decisions/project-process-run-model.md` — prima evidenza locale di Session Run senza avanzamento
+      - `docs/wiki/decisions/pi-sdk-adapter.md` — governance extension, journal separato e contract test
+      - `docs/wiki/engineering/code-map.md` — nuovi file, storage e smoke
+      - Non approvare le pagine; lasciarle `generated` per il gate umano
+
+      ## Steps
+      1. Aggiungere alle fonti i file effettivamente implementati e i test che provano ogni affermazione.
+      2. Preservare tutti i marker di sezione richiesti e aggiornare contesto, decisione/conseguenze e verifica senza riscrivere la storia non toccata.
+      3. Dichiarare il limite MVP: policy per tool, nessuna euristica shell, nessuna promozione o orchestrazione remota.
+      4. Collegare il mockup solo come riferimento UX, non come evidenza del comportamento runtime.
+      5. Validare struttura e coverage della Wiki.
+
+      ## Verify
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run: `git diff --check -- docs/wiki agent/README.md`
+      - Expect: validazione con `data.ok=true`, nessun errore whitespace e tutte le pagine modificate restano `status: generated` con fonti esistenti.
+
+      ## Done
+      - [ ] AC-2 — La decisione documenta enforcement pre-tool e rifiuto fail-closed con evidenza test.
+      - [ ] AC-3 — Il modello documenta che una Session Run conclusa non avanza un Process Instance.
+      - [ ] AC-4 — La mappa del codice localizza journal, presenter e smoke di consultazione.
+
+      ## Blockers
+      TASK-05 deve fornire i percorsi e gli oracoli E2E definitivi.
+    ref: TASK-06
+  - id: TASK-07
+    title: Eseguire il gate finale della Session Run
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Confermare con controlli focalizzati e di regressione che US-004 soddisfa tutti i criteri senza degradare Agent, packaging, Core o Wiki.
+
+      ## Read
+      - `AGENTS.md` — controlli CI obbligatori
+      - `package.json` — suite Agent, packaging e smoke
+      - `.github/workflows/ci.yml` — gate distribuiti
+      - `.archetipo/specs/US-004.yaml` — criteri e stato dei task
+      - Tutti i file modificati dai TASK-01..TASK-06 — diagnostica e scope finale
+
+      ## Change
+      - Solo correzioni strettamente necessarie nei file modificati dai TASK-01..TASK-06 quando un controllo fallisce; non ampliare a promozione, workflow tipizzati, Runner, Control, policy remote o classificazione shell euristica
+      - `docs/test-results/` — riepilogo di comandi, esiti e ambiente se previsto dal flusso di implementazione
+
+      ## Steps
+      1. Eseguire unit/contract Agent, packaging e tutti gli smoke Agent, incluso `test:agent-run-smoke`.
+      2. Eseguire `node --check` su tutti i `.mjs` Agent/test e correggere ogni diagnostica introdotta.
+      3. Eseguire i controlli Go completi prescritti dal repository per provare che il Core non regredisce.
+      4. Eseguire validazione Wiki e `git diff --check`; verificare che mockup, README e documentazione siano coerenti con lo scope.
+      5. Marcare `TASK-07` come `DONE` soltanto dopo tutti gli esiti verdi.
+      6. Da `/Users/stefanoleli/Project/ARchetipo`, eseguire `archetipo spec show US-004` e confermare che nessun task sia `TODO`; soltanto allora è consentito eseguire `archetipo spec review US-004`.
+
+      ## Verify
+      - Run: `npm run test:agent && npm run test:agent-packaging && npm run test:agent-interactive-smoke && npm run test:agent-session-smoke && npm run test:agent-run-smoke && npm run test:agent-install-smoke`
+      - Run: `find agent test/e2e test/npm -name '*.mjs' -type f -exec node --check {} \;`
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run: `git diff --check`
+      - Run after marking this gate DONE: `archetipo spec show US-004`
+      - Expect: tutti i comandi terminano 0, `gofmt -l .` non produce output, golangci-lint riporta 0 issue, Wiki ha `data.ok=true`, lo smoke Run prova AC-1..AC-4 e lo spec ricaricato non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — Suite e smoke confermano avvio con obiettivo libero e profilo scelto.
+      - [ ] AC-2 — Contract ed E2E confermano prompt, rifiuto e blocco prima dell'esecuzione.
+      - [ ] AC-3 — E2E conferma che nessun processo o artefatto approvato cambia stato.
+      - [ ] AC-4 — Unit ed E2E confermano journal e consultazione multiprocesso.
+      - [ ] Il gate è marcato `DONE` e `archetipo spec show US-004` conferma tutti i task `DONE` prima della richiesta di review.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04, TASK-05 e TASK-06 devono essere completati.
+    ref: TASK-07

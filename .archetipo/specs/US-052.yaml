@@ -1,0 +1,46 @@
+schema: archetipo/spec/v2
+code: US-052
+title: Riconoscere il workspace aperto senza aprire una finestra
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: MEDIUM
+points: 2
+status: DONE
+blocked_by:
+  - US-051
+scope: MVP
+body: |-
+  #### US-052: Riconoscere il workspace aperto senza aprire una finestra
+
+  **Epic:** EP-008 | **Priorità:** MEDIUM | **Punti:** 2 | **Stato:** TODO
+  **Bloccata da:** US-051
+
+  **User Story**
+  Come utilizzatore di ARchetipo che tiene aperti più workspace in schede diverse,
+  voglio riconoscere a colpo d'occhio su quale workspace sto lavorando,
+  così da non affidare un'azione al workspace sbagliato credendo di essere nell'altro.
+
+  **Dimostrazione**
+  Il revisore apre un workspace e osserva il suo nome sempre presente nell'interfaccia, senza aprire alcuna finestra, e lo stesso nome nel titolo della scheda del browser. Apre una seconda scheda su un altro workspace e osserva che le due schede sono distinguibili dal solo titolo. Passa quindi a un altro workspace conosciuto dall'indicatore stesso e osserva nome e titolo aggiornarsi senza ricaricare la pagina.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Il nome del workspace aperto è visibile nell'interfaccia in ogni momento, senza aprire finestre, e il suo percorso completo è consultabile da lì.
+  - [ ] AC-2 — Il titolo della scheda del browser nomina il workspace aperto, così due schede su workspace diversi sono distinguibili dal solo titolo.
+  - [ ] AC-3 — Aprendo un altro workspace, il nome mostrato e il titolo della scheda diventano quelli del nuovo workspace senza ricaricare la pagina.
+  - [ ] AC-4 — Dall'indicatore del workspace aperto si raggiungono i workspace conosciuti e se ne apre un altro.
+  - [ ] AC-5 — Quando nessun workspace è aperto, l'indicatore lo dichiara invece di mostrare un nome.
+
+  **Fuori ambito**
+  La shell a due colonne con elenco laterale permanente dei workspace, la conversazione affiancata alla board, l'elenco delle run in corso e ogni modifica al comportamento di apertura di un workspace.
+history:
+  - status: TODO
+    at: "2026-08-21T16:59:02Z"
+  - status: PLANNED
+    at: "2026-08-21T22:27:46Z"
+  - status: IN PROGRESS
+    at: "2026-08-21T22:28:50Z"
+  - status: REVIEW
+    at: "2026-08-21T22:36:23Z"
+  - status: DONE
+    at: "2026-08-21T22:38:42Z"

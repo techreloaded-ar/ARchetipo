@@ -1,0 +1,619 @@
+schema: archetipo/plan/v2
+spec_code: US-046
+body: |-
+  # US-046: Aprire un workspace dalla home senza riavviare il viewer — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-08-20
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-008 — Workspace gestiti dalla UI
+  **Priorità:** HIGH | **Punti:** 5
+  **Bloccata da:** US-045 (DONE)
+
+  **User Story**
+  Come persona che segue più workspace nella stessa giornata, voglio passare da un workspace all'altro dalla home della UI, così da non chiudere e riavviare il viewer per ogni cambio di contesto.
+
+  **Criteri di accettazione**
+  - AC-1 — Dalla home si apre un workspace del registro e la UI mostra la board di quel workspace.
+  - AC-2 — Il cambio di workspace ricarica configurazione, backlog e azioni ammesse del workspace aperto, senza riavviare il processo del viewer.
+  - AC-3 — Dopo il cambio nessun dato del workspace precedente resta visibile nella board o nelle azioni.
+  - AC-4 — Un workspace non più leggibile dichiara il motivo e lascia attivo e utilizzabile il workspace precedente.
+  - AC-5 — L'apertura di un workspace ne aggiorna l'ultimo accesso nel registro.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Oggi `web.Server` è legato a un solo workspace per costruzione: `NewServer` risolve una volta per tutte `cfg`, il connettore, l'`execution.Store`, l'`execution.Service`, la directory dei mockup e la radice osservata dal watcher, e le tiene in campi letti direttamente dagli handler (`s.conn`, `s.cfg`, `s.store`, `s.service`, `s.mockupsDir`). Cambiare workspace a caldo significa sostituire tutte quelle dipendenze mentre altre richieste HTTP le stanno leggendo: farlo mutando i campi in place sarebbe una data race garantita.
+
+  L'approccio è quindi introdurre una **sessione di workspace** — un valore immutabile che raccoglie tutto ciò che dipende dalla radice del progetto — e far sì che il server ne tenga esattamente una alla volta, sostituibile atomicamente.
+
+  - **`workspaceSession` (nuovo `cli/internal/web/session.go`)** raccoglie `cfg`, `conn`, `store`, `service`, `mockupsDir`, `watchRoot`, più le due strutture che governano il lavoro in corso di *quel* workspace: il `dispatchGroup` delle esecuzioni e i `runFollowers`. Il registro dei provider di esecuzione (`s.registry`), il `Broker` SSE e il registro dei workspace conosciuti (`s.workspaces`) restano invece sul `Server`: non dipendono dalla radice del progetto e i client SSE devono sopravvivere al cambio.
+  - **Accesso sotto lock.** Il `Server` guadagna `mu sync.RWMutex` e `cur *workspaceSession`, con un unico accessor `session() *workspaceSession`. Ogni handler inizia con `ws := s.session()` e usa `ws.conn`, `ws.cfg`, … : la sessione è letta una sola volta per richiesta, quindi una richiesta non può mai leggere metà workspace vecchio e metà nuovo. La migrazione è meccanica (`s.conn` → `ws.conn`) su `handlers.go`, `config.go`, `review.go`, `spec_create.go`, `execution.go`, `execution_run.go`, `run_routes.go`, `workspace_execution.go`, `workspaces.go`.
+  - **Ciclo di vita.** `session.start(ctx, broker)` lega il `dispatchGroup` a un contesto figlio proprio e avvia il watcher su `watchRoot`; `session.stop(timeout)` cancella quel contesto, attende il drenaggio con lo stesso `dispatchDrainTimeout` di oggi, ferma il watcher e chiude i follower. `Server.Run` avvia la sessione iniziale e la ferma all'uscita, preservando la semantica attuale di shutdown.
+  - **Costruisci-poi-sostituisci.** `Server.SwitchWorkspace(root)` costruisce e avvia la nuova sessione **prima** di toccare `cur`. Qualsiasi errore (directory sparita, non leggibile, `.archetipo/config.yaml` assente o invalido, connettore rifiutato) ritorna un errore codificato e lascia la sessione precedente esattamente dov'era: è ciò che rende AC-4 vero per costruzione anziché per gestione dell'errore. Solo a scambio avvenuto la vecchia sessione viene fermata, e `broker.Publish()` sveglia i client collegati.
+  - **Rotta `POST /api/workspaces/{id}/open`.** Risolve la voce dal registro (404 se l'id non esiste), la sonda con `workspace.Probe` per poter dichiarare un motivo specifico (`missing`, `not_readable`, `not_a_directory`, `not_a_workspace`) invece di un errore di caricamento generico, chiama `SwitchWorkspace` e, solo dopo lo scambio riuscito, esegue `registry.Touch(path)` per AC-5. Un `Touch` fallito è un avviso nella risposta, non un rollback: il workspace è già aperto.
+  - **Mockup serviti dinamicamente.** Oggi `/mockups/` è registrata una sola volta su una `http.Dir` fissa; diventa un handler che risolve `s.session().mockupsDir` a ogni richiesta, altrimenti dopo il cambio la UI continuerebbe a servire i mockup del workspace precedente (AC-3).
+  - **Frontend.** Ogni riga della modale «Known workspaces» guadagna un pulsante **Open**, disabilitato per la voce corrente e per le voci non raggiungibili. Al successo il documento viene ricaricato (`window.location.reload()`).
+  - **Coerenza di `archetipo view list`.** Il comando registra `ProjectRoot` in `viewreg` all'avvio. Dopo un cambio quel valore sarebbe falso, quindi il server espone un hook `OnWorkspaceSwitch func(root string)` che `view_cmd.go` usa per riregistrare la voce con la nuova radice.
+
+  ### Decisioni architetturali
+
+  **1. Sostituzione atomica di una sessione immutabile, invece di mutare i campi del server.**
+  Contesto: gli handler leggono `s.conn`/`s.cfg`/`s.store` in qualsiasi momento, anche concorrentemente al cambio. Alternative valutate: (a) proteggere ogni singolo campo con il proprio mutex — molte prese di lock per richiesta e nessuna garanzia che una richiesta veda un workspace coerente; (b) fermare il server HTTP e ricrearlo — semanticamente è un riavvio del viewer, che è esattamente ciò che la storia vieta; (c) sessione immutabile scambiata sotto `RWMutex`, letta una sola volta per richiesta. Scelta: (c). Compromesso: una richiesta lunga iniziata prima del cambio termina sul workspace vecchio; è accettabile e coerente con il fuori-ambito «esecuzioni in corso che sopravvivono al cambio».
+
+  **2. Le esecuzioni in corso non sopravvivono al cambio.**
+  Contesto: `dispatchGroup` e `runFollowers` puntano a esecuzioni del workspace lasciato. Alternative: tenerli sul `Server` e lasciarli girare, oppure legarli alla sessione e chiuderli. Scelta: legarli alla sessione, perché lo store su cui scrivono è quello del workspace precedente; una dispatch orfana scriverebbe in `.archetipo/executions/` di un progetto che il viewer non serve più. La cancellazione chiude il record come `FAILED` con motivo, che è la stessa strada già percorsa allo shutdown. Il fuori-ambito della storia lo autorizza esplicitamente.
+
+  **3. Il client si ricarica invece di azzerare lo stato in memoria.**
+  Contesto: `app.js` è un modulo di ~3800 righe con stato a livello di modulo (board, drawer della spec, pannelli di esecuzione, cache di configurazione e mockup). Alternative: (a) una `resetWorkspaceState()` che azzera ogni cache e rilancia la sequenza di caricamento — enumerare le cache è esattamente il tipo di elenco che invecchia male, e una cache dimenticata è un residuo del workspace precedente visibile in UI, cioè una violazione di AC-3; (b) ricaricare il documento. Scelta: (b). Il processo del viewer, il suo server HTTP, il registro dei workspace e lo store delle esecuzioni non vengono toccati: viene ricostruito solo il documento, quindi AC-2 («senza riavviare il processo del viewer») resta soddisfatto e AC-3 è vero per costruzione. Compromesso: un lampo di ricaricamento della pagina al cambio, accettabile per un'azione esplicita e rara.
+
+  **4. `Probe` prima di `LoadExact`.**
+  `config.LoadExact` risale l'albero delle directory: su una directory che non è un workspace troverebbe la configurazione di un genitore e aprirebbe silenziosamente il progetto sbagliato. Sondare prima con `workspace.Probe` (che richiede `.archetipo/config.yaml` in *quella* directory) è ciò che rende il motivo dichiarato di AC-4 corretto anziché fortunato. L'ordine è vincolante e va protetto da un test.
+
+  ---
+
+  ## Baseline
+
+  Tutti i comandi sono stati eseguiti in `/Users/stefanoleli/Project/Archetipo` prima di pianificare.
+
+  | Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | nessun output (pulito) | ogni task che tocca file Go lo rilancia e pretende ancora nessun output |
+  | `cd cli && go vet ./...` | nessun problema | verificabile con `Expect: passes` |
+  | `cd cli && go build ./...` | compila pulito | verificabile con `Expect: passes` |
+  | `cd cli && go test ./internal/web/... ./internal/workspace/...` | ok (entrambi i pacchetti) | è il controllo focalizzato di quasi tutti i task |
+  | `cd cli && go test ./...` | 1338 test passati in 28 pacchetti | il gate finale pretende ancora verde su tutto |
+  | `golangci-lint run --timeout 5m ./...` | **non eseguibile: binario non installato** | prerequisito d'ambiente, non un fallimento del codice. Chi implementa esegue prima `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` (vedi AGENTS.md) e poi il lint; se l'installazione non è possibile in ambiente offline, lo dichiara nel gate finale invece di dichiarare il lint verde |
+  | `npm run test:view-workspaces-smoke` | non eseguito in fase di pianificazione (avvia un viewer reale e costruisce la CLI da sorgente) | è lo smoke di US-045 e resta il riferimento strutturale per il nuovo smoke; il gate finale lo esegue insieme al nuovo |
+
+  Nessun file toccato dal piano parte con diagnostiche del compilatore o del vet: la base è pulita, quindi ogni nuova diagnostica introdotta è un difetto del task che la introduce.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | due workspace A e B inizializzati con `archetipo init`, backlog diversi, registro con entrambe le voci; viewer avviato su A | e2e HTTP (`test/e2e/open-workspace-view-smoke.mjs`) + test Go di rotta | `POST /api/workspaces/{idB}/open` risponde 200 e `GET /api/board` elenca esattamente i codici spec di B | TASK-08, TASK-11 |
+  | AC-2 | come sopra, con `paths` e provider di default diversi tra A e B | e2e HTTP + test Go di rotta | dopo l'apertura `GET /api/config` riporta il percorso e i valori di B, `GET /api/board` il backlog di B e `GET /api/workspace/actions` le azioni calcolate su PRD/backlog di B; il PID del processo del viewer è lo stesso prima e dopo | TASK-08, TASK-11 |
+  | AC-3 | A ha una spec `US-A01` e un PRD, B non li ha | e2e HTTP + test Go di rotta | dopo l'apertura `GET /api/spec/US-A01` risponde 404, `GET /api/board` non contiene nessun codice di A, `GET /api/mockups` non elenca i mockup di A e `GET /api/workspace/actions` riflette lo stato di B; lato client il documento è ricostruito da zero (nessuna cache sopravvive al reload) | TASK-08, TASK-10, TASK-11 |
+  | AC-4 | viewer su A, workspace B reso illeggibile (directory rinominata o `.archetipo/` rimosso) | e2e HTTP + test Go su `SwitchWorkspace` | `POST /api/workspaces/{idB}/open` risponde 4xx con un `error` che nomina il motivo sondato; subito dopo `GET /api/board` serve ancora il backlog di A e `GET /api/config` ancora il percorso di A | TASK-06, TASK-08, TASK-11 |
+  | AC-5 | registro con `lastOpenedAt` di B più vecchio di quello di A | e2e HTTP + test Go di rotta | dopo un'apertura riuscita `GET /api/workspaces` riporta per B un `lastOpenedAt` maggiore del valore precedente e B in testa alla lista; il file `workspaces.json` sul disco lo conferma | TASK-08, TASK-11 |
+
+  ---
+
+  ## Strategia di test
+
+  Il rischio di questa storia non è il singolo handler ma la sostituzione di dipendenze condivise mentre il server serve richieste: la strategia mette il peso lì.
+
+  - **Refactor invariante prima di tutto.** L'estrazione della sessione non deve cambiare alcun comportamento: la suite esistente di `internal/web` è l'oracolo, e va tenuta verde senza riscriverla (TASK-01/02).
+  - **Ciclo di vita provato, non dedotto.** Fermare una sessione deve cancellare il watcher e drenare le dispatch entro `dispatchDrainTimeout`; lo shutdown del server non deve regredire (TASK-04).
+  - **Fallimento provato dal lato dell'osservatore.** AC-4 non si dimostra con «`SwitchWorkspace` ha ritornato errore» ma con «dopo l'errore il server serve ancora A»: i test asseriscono sulle rotte, non sul valore di ritorno (TASK-06, TASK-08).
+  - **Concorrenza.** Un test con `-race` che scambia workspace mentre richieste `/api/board` sono in volo protegge la decisione architetturale n.1; senza di esso il lock è una convenzione e non un invariante (TASK-06).
+  - **Nessun mock del connettore dove l'oracolo è il backlog.** I test di rotta usano workspace reali su directory temporanee con connettore `file`: un connettore finto renderebbe invisibile proprio ciò che AC-1 e AC-3 affermano.
+
+  ### Test E2E — simulazione utente
+
+  **Framework:** nessun framework browser nel repository; il pattern consolidato per il viewer sono gli smoke Node su contratto HTTP (`test/e2e/*-view-smoke.mjs`, dieci script, tutti registrati come script npm).
+  **Video dimostrativo:** la storia è filmabile, ma la registrazione è responsabilità di `archetipo-review`, non dell'implementazione.
+
+  | Scenario | Flusso |
+  |---|---|
+  | Cambio di contesto | Il viewer parte su A. Si legge la board di A. Si apre B dal registro. Si rileggono board, configurazione e azioni: sono di B. Il PID del viewer non è cambiato. |
+  | Nessun residuo | Dopo l'apertura di B si chiede una spec che esiste solo in A: 404. La board non contiene nessun codice di A. |
+  | Apertura rifiutata | Si rende illeggibile la directory di B, si tenta l'apertura: la risposta dichiara il motivo, e A resta servito e utilizzabile. |
+  | Ultimo accesso | Si confrontano i `lastOpenedAt` del registro prima e dopo l'apertura riuscita. |
+
+  ### Rinuncia agli E2E su browser
+
+  **Motivo:** il repository non ha alcun framework browser e non ne ha mai avuto uno — `archetipo e2e ensure` (`cli/internal/e2e/`) è una funzionalità che la CLI offre ai *progetti target*, non al proprio repository, che verifica il viewer con smoke Node sul contratto HTTP. Il confine di rotta e di server che questa storia attraversa è quindi coperto al livello che il repository considera autorevole, ed è il livello dove vive l'intero rischio della storia (sostituzione di sessione lato server). Introdurre Playwright per una singola storia contraddirebbe la convenzione del repository senza aggiungere evidenza sugli AC.
+  **Livello di evidenza usato al suo posto:** test Go di rotta su `internal/web` con workspace reali su directory temporanee, più lo smoke HTTP `test/e2e/open-workspace-view-smoke.mjs` che ricalca la dimostrazione della storia. L'unica parte non coperta da questi livelli è il pulsante «Open» e il ricaricamento del documento: è deliberatamente ridotta a poche righe senza logica di stato (decisione architetturale n.3), proprio perché non c'è un livello che la possa provare.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-08-20_
+tasks:
+  - id: TASK-01
+    title: Estrarre workspaceSession e far leggere agli handler una sola sessione per richiesta
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Tutto lo stato del server che dipende dalla radice del progetto vive in un unico valore `workspaceSession`, letto dagli handler attraverso un accessor protetto da lock, senza alcun cambiamento di comportamento osservabile.
+
+      ## Read
+      - `cli/internal/web/server.go` — struct `Server`, `NewServer`, `resolveWatchRoot`, `registerRoutes` (registrazione di `/mockups/`), `Run`.
+      - `cli/internal/web/execution_run.go` — `dispatchGroup` (righe 25-110) e tutti gli usi di `s.store`, `s.service`, `s.conn`, `s.cfg`, `s.dispatch`.
+      - `cli/internal/web/run_follow.go` — `runFollowers` e `newRunFollowers`.
+      - `cli/internal/web/handlers.go`, `config.go`, `review.go`, `spec_create.go`, `execution.go`, `run_routes.go`, `workspace_execution.go`, `workspaces.go` — ogni riferimento a `s.conn`, `s.cfg`, `s.store`, `s.service`, `s.dispatch`, `s.mockupsDir`.
+
+      ## Change
+      - Nuovo file `cli/internal/web/session.go`: tipo `workspaceSession` con campi non esportati `cfg config.Config`, `conn connector.Connector`, `store execution.Store`, `service *execution.Service`, `mockupsDir string`, `watchRoot string`, `dispatch *dispatchGroup`, `followers *runFollowers`; costruttore `newWorkspaceSession(cfg config.Config, providers *execution.Registry) (*workspaceSession, error)` che replica esattamente la logica oggi in `NewServer` (store da `execution.NewFileStore`, service solo se `providers != nil`, `mockupsDir` da `cfg.AbsPath(cfg.Paths.Mockups)`, `watchRoot` da `resolveWatchRoot`).
+      - `cli/internal/web/server.go`: `Server` perde `conn`, `cfg`, `store`, `service`, `mockupsDir`, `watchRoot`, `dispatch`, `followers` e guadagna `mu sync.RWMutex` e `cur *workspaceSession`; aggiungi `func (s *Server) session() *workspaceSession` che legge `cur` sotto `RLock`. `NewServer` costruisce la sessione iniziale con `newWorkspaceSession` e la assegna a `cur`. Restano sul `Server`: `registry`, `broker`, `workspaces`, `mux`, `httpSrv`.
+      - Negli altri file del pacchetto: sostituisci ogni `s.X` migrato con `ws.X`, aggiungendo `ws := s.session()` come prima istruzione della funzione che lo usa.
+      - `registerRoutes`: registra `/mockups/` **sempre** e non più condizionatamente, con un handler che a ogni richiesta legge `dir := s.session().mockupsDir`, risponde 404 se vuoto e altrimenti delega a `http.StripPrefix("/mockups/", http.FileServer(http.Dir(dir)))`.
+      - Non-goal: nessuna nuova rotta, nessun cambio di ciclo di vita (il watcher e il binding delle dispatch restano dove sono oggi, in `Run`), nessun cambiamento di risposta HTTP.
+
+      ## Steps
+      1. Crea `session.go` con il tipo e il costruttore, spostandoci la logica di costruzione presa da `NewServer` senza modificarla.
+      2. Sposta `resolveWatchRoot` in `session.go` se aiuta la coesione, oppure lasciala in `server.go` e chiamala dal costruttore.
+      3. Snellisci `Server` e `NewServer`; aggiungi `mu`, `cur` e `session()`.
+      4. In `Run`, sostituisci `s.dispatch`/`s.followers`/`s.watchRoot`/`s.broker` con la sessione corrente (`ws := s.session()`), mantenendo identici l'ordine delle operazioni e i timeout.
+      5. Migra gli handler file per file; per ogni funzione toccata una sola chiamata a `s.session()` all'inizio.
+      6. Sostituisci la registrazione statica di `/mockups/` con l'handler dinamico.
+      7. Adegua i test esistenti solo dove costruiscono un `Server` a mano toccando i campi rimossi; non modificare le asserzioni.
+
+      ## Verify
+      - Esegui da `cli/`: `gofmt -l .` — Expect: nessun output.
+      - Esegui da `cli/`: `go build ./... && go vet ./...` — Expect: passes (baseline pulita).
+      - Esegui da `cli/`: `go test ./internal/web/...` — Expect: passes, con le stesse asserzioni di prima del refactor.
+
+      ## Done
+      - [ ] Nessun handler legge più un campo di workspace direttamente da `Server`: `grep -n 's\.conn\|s\.cfg\|s\.store\|s\.service\|s\.mockupsDir\|s\.dispatch' cli/internal/web/*.go` non restituisce righe nei file non di test.
+      - [ ] `GET /mockups/...` continua a servire i file della directory configurata, risolta a ogni richiesta.
+      - [ ] La suite `internal/web` è verde senza che nessuna asserzione preesistente sia stata riscritta o rimossa.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test di invarianza del refactor di sessione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Provare che la sessione costruita dal server descrive lo stesso workspace di prima e che le rotte che dipendono da essa — inclusa `/mockups/`, ora dinamica — rispondono come prima del refactor.
+
+      ## Read
+      - `cli/internal/web/handlers_test.go` — helper di costruzione del server usati dalla suite (come si crea un workspace temporaneo e un connettore `file`).
+      - `cli/internal/web/session.go` — campi di `workspaceSession` e firma di `newWorkspaceSession`.
+      - `cli/internal/web/handlers.go` — `handleListMockups`, per non duplicare ciò che già copre.
+
+      ## Change
+      - Nuovo file `cli/internal/web/session_test.go`, oppure nuovi test nel file di test più vicino se la suite ha già un punto naturale.
+      - Non-goal: non riscrivere test esistenti, non introdurre mock del connettore.
+
+      ## Steps
+      1. Test `TestNewServerBuildsSessionForConfiguredWorkspace`: costruisci un server su una directory temporanea con `.archetipo/config.yaml` e connettore `file`; asserisci che `s.session().cfg.ProjectRoot` è quella directory, che `conn` e `store` non sono nil e che `mockupsDir` e `watchRoot` puntano dentro la stessa radice.
+      2. Test `TestMockupsRouteResolvesThroughSession`: scrivi un file dentro `paths.mockups` del workspace, chiedi `GET /mockups/<file>` attraverso il mux del server e asserisci 200 con il contenuto atteso; poi chiedi un file inesistente e asserisci 404.
+      3. Test `TestSessionWithoutProviderRegistryHasNoService`: costruisci il server con `registry == nil` e asserisci che `session().service` è nil e che `service != nil` quando il registro c'è — è l'invariante che oggi evita il panic sulla rotta di run.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/web/... -run 'Session|Mockups' -v` — Expect: passes, i tre test presenti nell'output.
+      - Esegui da `cli/`: `go test ./internal/web/...` — Expect: passes.
+
+      ## Done
+      - [ ] I tre test esistono, falliscono se si rimette a `Server` un campo di workspace o si ricongela `/mockups/` su una directory fissa, e passano sull'implementazione di TASK-01.
+      - [ ] Nessun test preesistente è stato modificato nelle sue asserzioni.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Ciclo di vita della sessione — avvio e arresto di watcher, dispatch e follower
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Una sessione di workspace si avvia e si ferma come unità: fermarla cancella il proprio watcher, drena le proprie dispatch e chiude i propri follower, senza toccare il server HTTP né il broker SSE.
+
+      ## Read
+      - `cli/internal/web/server.go` — `Run`, in particolare il blocco che crea `dispatchCtx`/`cancelDispatch`, il `defer` che attende `dispatchDrainTimeout`, l'avvio del watcher e i due rami dello `select` che chiudono broker e follower.
+      - `cli/internal/web/watcher.go` — `NewWatcher(root, broker)` e `(*Watcher).Run(ctx)`.
+      - `cli/internal/web/execution_run.go` — `(*dispatchGroup).bind`, `run`, `wait`.
+      - `cli/internal/web/run_follow.go` — `closeAll` sui follower.
+
+      ## Change
+      - `cli/internal/web/session.go`: aggiungi a `workspaceSession` i campi non esportati `cancel context.CancelFunc` e `stopped bool` (o equivalente), più i metodi:
+        - `func (ws *workspaceSession) start(parent context.Context, broker *Broker)` — deriva un contesto figlio con `context.WithCancel(context.WithoutCancel(parent))`, lo passa a `ws.dispatch.bind`, e se `ws.watchRoot != ""` avvia il watcher su quel contesto (un errore di creazione del watcher resta non fatale, esattamente come oggi).
+        - `func (ws *workspaceSession) stop(drain time.Duration)` — idempotente: cancella il contesto, attende `ws.dispatch.wait(drain)`, chiude `ws.followers.closeAll()`.
+      - `cli/internal/web/server.go`: `Run` chiama `s.session().start(ctx, s.broker)` al posto del blocco odierno e `stop(dispatchDrainTimeout)` nel `defer`; i due rami dello `select` chiudono il broker come oggi ma delegano alla sessione la chiusura dei follower.
+      - Non-goal: nessun cambiamento al `Broker` (resta di proprietà del `Server` e non viene chiuso dalla sessione), nessuna nuova rotta, nessun cambiamento ai valori dei timeout.
+
+      ## Steps
+      1. Sposta la derivazione del contesto di dispatch dentro `start`, mantenendo `context.WithoutCancel` — è ciò che oggi fa sopravvivere una dispatch alla richiesta che l'ha avviata.
+      2. Sposta l'avvio del watcher dentro `start`, legandolo al contesto della sessione e non più a quello del server: è la differenza che permetterà di fermare il watcher del workspace lasciato senza fermare il server.
+      3. Implementa `stop` idempotente (protezione con `sync.Once` o flag sotto mutex) e mantieni l'ordine cancella → drena → chiudi follower.
+      4. Riscrivi `Run` per delegare, verificando che ordine e timeout dello shutdown restino identici.
+
+      ## Verify
+      - Esegui da `cli/`: `gofmt -l . && go vet ./... && go build ./...` — Expect: passes.
+      - Esegui da `cli/`: `go test ./internal/web/...` — Expect: passes.
+
+      ## Done
+      - [ ] `Run` non crea più direttamente né il contesto di dispatch né il watcher: entrambi nascono in `workspaceSession.start`.
+      - [ ] `stop` chiamata due volte non va in panic e non blocca.
+      - [ ] Lo shutdown del server continua a chiudere broker e follower e a drenare entro `dispatchDrainTimeout`.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test del ciclo di vita della sessione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Provare che fermare una sessione cancella davvero il lavoro in corso di quella sessione, che l'operazione è idempotente e che lo shutdown del server non è regredito.
+
+      ## Read
+      - `cli/internal/web/session.go` — `start` e `stop`.
+      - `cli/internal/web/execution_run.go` — `(*dispatchGroup).run` e `wait`, per sapere cosa osservare.
+      - test esistenti che avviano `Server.Run` su una porta effimera (cerca `Run(ctx` in `cli/internal/web/*_test.go`) e riusane il pattern invece di inventarne uno nuovo.
+
+      ## Change
+      - `cli/internal/web/session_test.go` (o il file di test creato in TASK-02): nuovi test.
+      - Non-goal: nessun test che dipenda da uno `sleep` arbitrario; usa canali e `select` con timeout.
+
+      ## Steps
+      1. Test `TestSessionStopCancelsDispatch`: avvia una sessione, lancia con `dispatch.run` una funzione che segnala su un canale quando il proprio contesto è `Done`, chiama `stop` e asserisci di ricevere il segnale entro un timeout esplicito.
+      2. Test `TestSessionStopIsIdempotent`: due chiamate consecutive a `stop` ritornano entrambe senza panic e senza bloccare oltre il timeout del test.
+      3. Test `TestServerShutdownStopsSession`: avvia `Server.Run` su `127.0.0.1:0`, verifica che risponda a `GET /api/board`, cancella il contesto e asserisci che `Run` ritorna nil e che la sessione risulta fermata (dispatch drenate).
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/web/... -run 'SessionStop|ServerShutdown' -race -v` — Expect: passes, nessun report del race detector.
+      - Esegui da `cli/`: `go test ./internal/web/...` — Expect: passes.
+
+      ## Done
+      - [ ] I tre test esistono e falliscono se `stop` smette di cancellare il contesto di dispatch o se lo shutdown smette di fermare la sessione.
+      - [ ] `-race` è pulito.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Server.SwitchWorkspace — costruisci, avvia, scambia, ferma la precedente
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Il server può sostituire a caldo il workspace servito: a scambio riuscito ogni rotta risponde sul nuovo workspace, e a fronte di qualsiasi errore la sessione precedente resta attiva e utilizzabile.
+
+      ## Read
+      - `cli/internal/web/session.go` — `newWorkspaceSession`, `start`, `stop`.
+      - `cli/internal/web/server.go` — `Server`, `session()`, `dispatchDrainTimeout`, il contesto usato da `Run`.
+      - `cli/internal/config/config.go` — `LoadExact` (righe 278-294) e `RelativePath`; nota che `LoadExact` risale l'albero delle directory.
+      - `cli/internal/workspace/registry.go` — `Probe`, `Status` e le costanti di stato.
+      - `cli/internal/connector/registry.go` — `connector.New(cfg)`.
+      - `cli/internal/iox` — costruttori `NewInvalidInput`, `NewPrecondition`, `NewNotFound`, `NewInternal`, per scegliere il codice d'errore corretto.
+
+      ## Change
+      - `cli/internal/web/session.go` o nuovo `cli/internal/web/switch.go`:
+        - `func (s *Server) SwitchWorkspace(root string) error` — esportata perché `view_cmd.go` ne aggancerà l'esito.
+        - un hook `OnWorkspaceSwitch func(root string)` come campo del `Server`, invocato dopo uno scambio riuscito; nil è il caso normale nei test.
+      - `cli/internal/web/server.go`: memorizza il contesto padre usato da `Run` (campo `baseCtx context.Context` impostato in `Run`) così che una sessione creata dopo l'avvio possa essere avviata sullo stesso albero di contesti; finché `Run` non è partito usa `context.Background()`.
+      - Non-goal: nessuna rotta HTTP in questo task, nessun accesso al registro dei workspace conosciuti (lo fa TASK-07), nessuna migrazione delle esecuzioni in corso da un workspace all'altro (fuori ambito della storia).
+
+      ## Steps
+      1. Normalizza `root` con `filepath.Abs` + `filepath.Clean` e rifiuta la stringa vuota con `iox.NewInvalidInput`.
+      2. Sonda la directory con `workspace.Probe(workspace.Entry{Path: root})`; se lo stato non è `StatusReachable`, ritorna un errore codificato il cui messaggio nomina il motivo sondato (`missing`, `not_readable`, `not_a_directory`, `not_a_workspace`). Questo passo precede il caricamento della configurazione e l'ordine è vincolante: `LoadExact` risalirebbe l'albero e aprirebbe la configurazione di un genitore.
+      3. Se la radice normalizzata coincide con `s.session().cfg.ProjectRoot`, ritorna nil senza ricostruire nulla (riaprire il workspace corrente non è un errore e non deve interrompere il lavoro in corso).
+      4. Carica la configurazione con `config.LoadExact(root)`, forza `cfg.ProjectRoot = root` e costruisci il connettore con `connector.New(cfg)`; qualunque errore qui esce con `iox.NewInvalidInput` e nomina il file di configurazione.
+      5. Costruisci la nuova sessione con `newWorkspaceSession(cfg, s.registry)` e avviala con `start(s.baseCtx, s.broker)`. Fino a questo punto `s.cur` non è stato toccato.
+      6. Sotto `s.mu.Lock()` scambia `s.cur` con la nuova sessione e tieni il riferimento alla precedente; rilascia il lock **prima** di fermare quella precedente, perché `stop` attende il drenaggio e non deve bloccare gli handler.
+      7. Ferma la sessione precedente con `stop(dispatchDrainTimeout)`, chiama `s.broker.Publish()` per svegliare i client SSE e, se presente, invoca `OnWorkspaceSwitch(root)`.
+
+      ## Verify
+      - Esegui da `cli/`: `gofmt -l . && go vet ./... && go build ./...` — Expect: passes.
+      - Esegui da `cli/`: `go test ./internal/web/...` — Expect: passes (nessun test nuovo ancora, la suite esistente non deve regredire).
+
+      ## Done
+      - [ ] `SwitchWorkspace` non modifica `s.cur` su nessun percorso di errore: la sostituzione avviene in un solo punto, dopo che la nuova sessione è stata costruita e avviata (AC-4).
+      - [ ] Il `Probe` precede il caricamento della configurazione e il motivo sondato compare nel messaggio d'errore.
+      - [ ] `stop` della sessione precedente avviene fuori dal lock.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test di SwitchWorkspace — successo, rifiuti dichiarati e concorrenza
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Provare che dopo uno scambio riuscito il server serve il nuovo workspace, che ogni rifiuto lascia il precedente attivo e utilizzabile, e che lo scambio è sicuro sotto richieste concorrenti.
+
+      ## Read
+      - `cli/internal/web/switch.go` (o `session.go`) — `SwitchWorkspace`.
+      - `cli/internal/web/handlers_test.go` — come la suite crea un workspace temporaneo con `.archetipo/config.yaml` e un backlog, e come esegue richieste contro il mux.
+      - `cli/internal/workspace/registry.go` — `Probe`, per costruire i casi di irraggiungibilità.
+
+      ## Change
+      - `cli/internal/web/switch_test.go` (nuovo).
+      - Non-goal: nessun mock del connettore — i workspace dei test sono reali su `t.TempDir()` con connettore `file`, perché l'oracolo è il contenuto del backlog servito.
+
+      ## Steps
+      1. Helper di test che crea un workspace su `t.TempDir()` con `.archetipo/config.yaml` e un backlog contenente un codice spec riconoscibile (per esempio `US-A01` per A e `US-B01` per B).
+      2. Test `TestSwitchWorkspaceServesNewBacklog`: server su A, `GET /api/board` contiene `US-A01`; `SwitchWorkspace(B)`; `GET /api/board` contiene `US-B01` e **non** `US-A01`; `GET /api/spec/US-A01` risponde 404; `GET /api/config` riporta il percorso di configurazione di B (AC-1, AC-2, AC-3).
+      3. Test `TestSwitchWorkspaceRejectsUnreachable`, tabellare sui casi: directory inesistente, percorso che è un file, directory esistente senza `.archetipo/config.yaml`. Per ciascuno: `SwitchWorkspace` ritorna errore, il messaggio nomina il motivo, e subito dopo `GET /api/board` serve ancora `US-A01` e `GET /api/config` ancora il percorso di A (AC-4).
+      4. Test `TestSwitchWorkspaceRejectsInvalidConfig`: workspace con `.archetipo/config.yaml` sintatticamente rotto; errore dichiarato e A ancora servito.
+      5. Test `TestSwitchWorkspaceToSameRootIsNoop`: `SwitchWorkspace` sulla radice corrente ritorna nil e la sessione resta la stessa istanza.
+      6. Test `TestSwitchWorkspaceUnderConcurrentRequests`: avvia N goroutine che chiedono `GET /api/board` in ciclo, esegui uno scambio A→B→A mentre girano, ferma le goroutine e asserisci che ogni risposta è stata 200 e che nessuna board mescola codici di A e di B nella stessa risposta.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/web/... -run SwitchWorkspace -race -v` — Expect: passes, tutti i sottotest presenti, nessun report del race detector.
+      - Esegui da `cli/`: `go test ./internal/web/...` — Expect: passes.
+
+      ## Done
+      - [ ] AC-1 — un test asserisce che dopo lo scambio la board servita è quella del nuovo workspace.
+      - [ ] AC-2 — lo stesso test asserisce che anche `/api/config` riflette il nuovo workspace, sullo stesso processo di test (nessun riavvio).
+      - [ ] AC-3 — un test asserisce l'assenza dei codici del workspace precedente nella board e il 404 sulla sua spec.
+      - [ ] AC-4 — i casi di irraggiungibilità e di configurazione invalida asseriscono sia il motivo dichiarato sia che A resta servito.
+      - [ ] Il test concorrente fallisce se l'accesso alla sessione smette di passare per il lock.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Rotta POST /api/workspaces/{id}/open con aggiornamento dell'ultimo accesso
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Il browser può aprire un workspace del registro con una sola chiamata, ricevendo in risposta il workspace ora servito oppure il motivo per cui non è stato aperto, e l'apertura riuscita aggiorna l'ultimo accesso nel registro.
+
+      ## Read
+      - `cli/internal/web/workspaces.go` — `workspaceEntryView`, `workspaceViews`, `handleListWorkspaces`, `handleRemoveWorkspace`, `registryUnavailable`; è lo stile di risposta e di errore da riusare.
+      - `cli/internal/web/server.go` — `registerRoutes`, per il punto in cui registrare la nuova rotta.
+      - `cli/internal/workspace/registry.go` — `Get`, `ErrEntryNotFound`, `Touch`, `Probe`.
+      - `cli/internal/web/switch.go` — firma ed errori di `SwitchWorkspace`.
+
+      ## Change
+      - `cli/internal/web/server.go`: registra `s.mux.HandleFunc("POST /api/workspaces/{id}/open", s.handleOpenWorkspace)` accanto alle altre rotte `/api/workspaces`.
+      - `cli/internal/web/workspaces.go`: nuovo `handleOpenWorkspace`, più un tipo di risposta `openWorkspaceView` che incorpora `workspaceEntryView` e aggiunge `registryWarning string \`json:"registryWarning,omitempty"\`` (stessa forma già usata da `createWorkspaceView`).
+      - Non-goal: la rotta non crea workspace, non aggiunge voci al registro e non tocca file dentro il workspace.
+
+      ## Steps
+      1. Leggi `id` da `r.PathValue("id")`; vuoto ⇒ `iox.NewInvalidInput`. Registro nil ⇒ `registryUnavailable()`.
+      2. `entry, err := s.workspaces.Get(id)`; su `workspace.ErrEntryNotFound` rispondi `iox.NewNotFound("no known workspace with that id", "reload the list", err)`.
+      3. Chiama `s.SwitchWorkspace(entry.Path)`. In errore, rispondi con `writeError` **senza** toccare il registro: la voce resta com'è e il workspace precedente resta servito (AC-4).
+      4. Solo dopo il successo chiama `s.workspaces.Touch(entry.Path)` (AC-5). Un fallimento diventa `registryWarning` nella risposta 200, mai un rollback dello scambio.
+      5. Rispondi 200 con la vista della voce ricalcolata da `s.workspaceViews`, così che `current` risulti true per il workspace appena aperto e i campi siano gli stessi che `GET /api/workspaces` restituisce.
+
+      ## Verify
+      - Esegui da `cli/`: `gofmt -l . && go vet ./... && go build ./...` — Expect: passes.
+      - Esegui da `cli/`: `go test ./internal/web/...` — Expect: passes.
+
+      ## Done
+      - [ ] La rotta esiste ed è registrata; `curl -X POST` su un id sconosciuto risponde 404 con un errore leggibile.
+      - [ ] `Touch` è chiamato solo sul percorso di successo (AC-5) e mai su quello di errore.
+      - [ ] La risposta di successo riporta `current: true` per il workspace aperto.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Test del contratto HTTP di apertura di un workspace
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Provare sul contratto HTTP che aprire un workspace dal registro cambia board, configurazione e azioni ammesse, non lascia dati del precedente, dichiara i propri rifiuti e aggiorna l'ultimo accesso.
+
+      ## Read
+      - `cli/internal/web/workspaces_test.go` — come la suite di US-045 monta un registro su una directory temporanea (variabile `workspace.EnvStateDir`) e interroga `/api/workspaces`.
+      - `cli/internal/web/switch_test.go` — helper dei workspace A e B introdotti in TASK-06, da riusare senza duplicarli.
+      - `cli/internal/web/workspace_execution.go` — `handleGetWorkspaceActions` e `workspaceAvailability`, per sapere quale campo della risposta cambia tra un workspace con PRD/backlog e uno senza.
+
+      ## Change
+      - `cli/internal/web/workspaces_test.go` (estensione) — nuovi test per la rotta di apertura.
+      - Non-goal: nessuna asserzione sul frontend; nessun mock del registro.
+
+      ## Steps
+      1. Prepara A (con PRD e backlog contenente `US-A01`) e B (senza PRD, backlog con `US-B01`), registra entrambi nel registro temporaneo e avvia il server su A.
+      2. Test `TestOpenWorkspaceSwitchesBoardConfigAndActions`: `POST /api/workspaces/{idB}/open` ⇒ 200 con `current: true` e il percorso di B; poi `GET /api/board` contiene `US-B01` e non `US-A01`, `GET /api/config` riporta il percorso di configurazione di B, `GET /api/workspace/actions` riflette lo stato di B (l'azione di inception è offerta perché B non ha PRD, mentre su A non lo era) (AC-1, AC-2, AC-3).
+      3. Test `TestOpenWorkspaceUpdatesLastOpened`: leggi `lastOpenedAt` di B da `GET /api/workspaces`, apri B, rileggi e asserisci che il valore è aumentato e che B è ora in testa alla lista; verifica anche il contenuto di `workspaces.json` sul disco (AC-5).
+      4. Test `TestOpenWorkspaceUnknownID`: id inesistente ⇒ 404 e board di A invariata.
+      5. Test `TestOpenWorkspaceUnreachableKeepsPreviousActive`: rendi B irraggiungibile (rinomina la directory oppure rimuovi `.archetipo/`), apri B ⇒ 4xx con un `error` che nomina il motivo; poi `GET /api/board` serve ancora `US-A01`, `GET /api/config` ancora A e `POST /api/spec` su A funziona ancora — cioè il workspace precedente non è solo leggibile ma utilizzabile (AC-4).
+      6. Test `TestOpenWorkspaceDoesNotTouchRegistryOnFailure`: dopo il tentativo fallito, il `lastOpenedAt` di B nel registro è invariato.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/web/... -run OpenWorkspace -race -v` — Expect: passes, tutti i test presenti.
+      - Esegui da `cli/`: `go test ./internal/web/... ./internal/workspace/...` — Expect: passes.
+
+      ## Done
+      - [ ] AC-1 — asserzione sulla board del workspace aperto.
+      - [ ] AC-2 — asserzioni su board, configurazione e azioni ammesse nello stesso processo di test.
+      - [ ] AC-3 — asserzione che i codici e le spec di A non sono più raggiungibili.
+      - [ ] AC-4 — asserzione sul motivo dichiarato e su A ancora servito **e scrivibile**.
+      - [ ] AC-5 — asserzione sull'ultimo accesso, sia via HTTP sia sul file del registro; e asserzione che un'apertura fallita non lo modifica.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Allineare la voce di `archetipo view list` al workspace aperto
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Dopo un cambio di workspace, `archetipo view list` mostra la radice del progetto effettivamente servita invece di quella con cui il viewer era partito.
+
+      ## Read
+      - `cli/internal/cli/view_cmd.go` — `onReady`, la chiamata a `viewreg.Register` e il `defer viewreg.Remove(port)`.
+      - `cli/internal/viewreg/` — firma di `Register` e forma di `Entry`.
+      - `cli/internal/web/switch.go` — il campo hook `OnWorkspaceSwitch` introdotto in TASK-05.
+
+      ## Change
+      - `cli/internal/cli/view_cmd.go`: prima di `srv.Run`, assegna `srv.OnWorkspaceSwitch = func(root string) { ... }` che ri-registra la voce `viewreg.Entry` con lo stesso PID, host e porta e `ProjectRoot: root`, riportando un eventuale errore su `s.err` con la stessa formulazione già usata per la registrazione iniziale.
+      - Non-goal: nessun cambiamento al pacchetto `viewreg`, nessuna nuova opzione della CLI.
+
+      ## Steps
+      1. Estrai in `view_cmd.go` una piccola funzione che costruisce e registra la `viewreg.Entry` a partire da una radice, e usala sia in `onReady` sia nell'hook, così che le due registrazioni non possano divergere.
+      2. Assegna l'hook sul server prima di `srv.Run`.
+      3. Mantieni il comportamento non fatale: un errore di registrazione è una riga su stderr, mai un motivo per rifiutare lo scambio.
+
+      ## Verify
+      - Esegui da `cli/`: `gofmt -l . && go vet ./... && go build ./...` — Expect: passes.
+      - Esegui da `cli/`: `go test ./internal/cli/... ./internal/web/...` — Expect: passes.
+
+      ## Done
+      - [ ] L'hook è assegnato prima dell'avvio e usa lo stesso costruttore di voce della registrazione iniziale.
+      - [ ] Un fallimento di registrazione non altera l'esito dell'apertura del workspace.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Pulsante «Open» nella modale dei workspace e ricostruzione del documento
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Dalla modale «Known workspaces» si apre un workspace raggiungibile con un click; al successo il documento viene ricostruito da zero sul nuovo workspace, e un rifiuto è mostrato nella modale lasciando la UI corrente utilizzabile.
+
+      ## Read
+      - `cli/internal/web/assets/app.js` — sezione `// ---- Known workspaces` (circa righe 3274-3450): `openWorkspaces`, `loadWorkspaces`, `renderWorkspaces`, `workspaceRow`, `workspaceStatusBadge`, `removeWorkspace`, e il listener delegato su `workspacesList` che oggi intercetta `[data-remove]`.
+      - `cli/internal/web/assets/app.js` — `apiPost`, `parseResponse`, `showToast`.
+      - `cli/internal/web/assets/app.css` — classi `.workspace-row`, `.workspace-badge`, `.ghost-btn`, `.primary-btn`, per riusare lo stile esistente e non inventarne uno nuovo.
+
+      ## Change
+      - `cli/internal/web/assets/app.js`: in `workspaceRow` aggiungi un pulsante «Open» con `dataset.open = item.id` e `dataset.openName`, posto prima del pulsante «Remove»; disabilitalo quando `item.current` è true (con `title` che spiega che è già il workspace aperto) o quando `item.reachable` è false (con `title` che riporta l'etichetta di stato già calcolata). Estendi il listener delegato per intercettare `[data-open]` e aggiungi `openWorkspace(id, name)`.
+      - `cli/internal/web/assets/app.css`: solo se serve una regola di spaziatura per i due pulsanti affiancati nella riga.
+      - Non-goal: nessun azzeramento manuale dello stato applicativo (decisione architetturale n.3 del piano); nessuna modifica ad `index.html`; nessuna interpolazione di nomi o percorsi in markup — la riga continua a costruirsi con `createElement`/`textContent`.
+
+      ## Steps
+      1. `openWorkspace(id, name)`: disabilita i pulsanti della modale e scrive uno stato di attesa in `workspacesStatus`, poi `await apiPost(\`/api/workspaces/${encodeURIComponent(id)}/open\`, {})`.
+      2. Al successo: se la risposta porta `registryWarning`, mostralo con `showToast(..., "warn")` e attendi un istante perché sia leggibile; quindi ricostruisci il documento con `window.location.reload()`.
+      3. In errore: riabilita i pulsanti, scrivi `workspacesStatus.textContent = \`Open failed: ${err.message || err}\`` con `className = "status-msg err"` e **non** ricaricare — la UI del workspace precedente resta quella che era (AC-4).
+      4. Verifica a mano il flusso: `cd cli && go run ./cmd/archetipo view --no-open` in un workspace, apri la modale, apri un altro workspace registrato e osserva la board cambiare; poi rinomina la directory del secondo e ritenta, osservando il motivo nella modale.
+
+      ## Verify
+      - Esegui da `cli/`: `go build ./...` — Expect: passes (gli asset sono embedded, quindi la build li include).
+      - Esegui da `cli/`: `go test ./internal/web/...` — Expect: passes.
+      - Verifica manuale del flusso descritto al passo 4 — Expect: la board cambia senza riavviare il processo, e il tentativo fallito lascia la board precedente intatta mostrando il motivo.
+
+      ## Done
+      - [ ] AC-1 — dalla lista dei workspace un click su «Open» porta la UI sulla board del workspace scelto.
+      - [ ] AC-3 — dopo l'apertura il documento è ricostruito, quindi nessuna cache o pannello del workspace precedente resta sullo schermo.
+      - [ ] AC-4 — un'apertura rifiutata mostra il motivo nella modale e lascia la UI corrente operativa.
+      - [ ] Il pulsante è disabilitato per la voce corrente e per le voci non raggiungibili, con un `title` che ne dà il motivo.
+      - [ ] Nessun nome o percorso di workspace finisce in markup interpolato.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Smoke e2e dell'apertura di un workspace, sulla traccia della dimostrazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+      - TASK-10
+    body: |-
+      ## Objective
+      Uno smoke end-to-end contro un viewer reale ripercorre la dimostrazione della storia: due workspace, cambio di contesto, rifiuto dichiarato con il precedente ancora utilizzabile, ultimo accesso aggiornato — tutto sullo stesso processo.
+
+      ## Read
+      - `test/e2e/known-workspaces-view-smoke.mjs` — lo smoke di US-045: `startViewServer`, `apiJSON`, `runCommand`, `buildCLI`, la gestione di `ARCHETIPO_STATE_DIR` e la struttura `runDir/sandbox|targets|state`. È il modello da seguire, non da reinventare.
+      - `package.json` — sezione `scripts`, per la convenzione di nome degli script di smoke del viewer.
+      - `AGENTS.md` — sezione «E2E tests», per le regole su directory di run e artefatti da non committare.
+
+      ## Change
+      - Nuovo `test/e2e/open-workspace-view-smoke.mjs`.
+      - `package.json`: nuovo script `"test:view-open-workspace-smoke": "node ./test/e2e/open-workspace-view-smoke.mjs"`.
+      - Non-goal: nessun framework browser, nessun `sleep` arbitrario (ogni attesa interroga una rotta del viewer), nessuna scrittura fuori dalla directory di run.
+
+      ## Steps
+      1. Costruisci la CLI da sorgente e prepara due workspace, A e B, con `archetipo init` e backlog diversi (`archetipo spec add --file`), con `ARCHETIPO_STATE_DIR` dentro la directory di run.
+      2. Avvia il viewer su A e registra B nel registro con `POST /api/workspaces`. Cattura il PID del processo del viewer.
+      3. AC-1/AC-2: leggi `/api/board` (codici di A), `/api/config` (percorso di A) e `/api/workspace/actions`; esegui `POST /api/workspaces/{idB}/open`; rileggi le tre rotte e asserisci che riportano B. Asserisci che il PID del viewer è invariato e che il processo è ancora vivo.
+      4. AC-3: asserisci che `/api/board` non contiene alcun codice di A e che `GET /api/spec/{codice di A}` risponde 404.
+      5. AC-5: confronta `lastOpenedAt` di B prima e dopo l'apertura, sia via `/api/workspaces` sia leggendo `state/workspaces.json`.
+      6. AC-4: a questo punto il workspace attivo è B, quindi il workspace da rendere irraggiungibile è **A** (rinomina la directory di A). Esegui `POST /api/workspaces/{idA}/open` e asserisci una risposta di errore il cui corpo nomina il motivo. Poi asserisci che `/api/board` serve ancora i codici di B, che `/api/config` riporta ancora B e che una scrittura reale su B (`POST /api/spec`) riesce: il workspace precedente è utilizzabile e non solo leggibile. Asserisci infine che il `lastOpenedAt` di A nel registro non è cambiato.
+      7. Ferma il viewer e stampa l'elenco delle asserzioni verificate, come fa lo smoke di US-045.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo`: `npm run test:view-open-workspace-smoke` — Expect: exit 0 e ogni asserzione AC-1…AC-5 stampata come verificata.
+      - Esegui da `/Users/stefanoleli/Project/Archetipo`: `npm run test:view-workspaces-smoke` — Expect: exit 0, lo smoke di US-045 non è regredito.
+
+      ## Done
+      - [ ] AC-1 — lo smoke asserisce che dopo l'apertura la board servita è quella del workspace scelto.
+      - [ ] AC-2 — lo smoke asserisce configurazione, backlog e azioni ammesse del nuovo workspace **e** che il PID del viewer non è cambiato.
+      - [ ] AC-3 — lo smoke asserisce l'assenza dei codici del workspace precedente e il 404 sulla sua spec.
+      - [ ] AC-4 — lo smoke asserisce il motivo dichiarato e che il workspace precedente resta scrivibile.
+      - [ ] AC-5 — lo smoke asserisce l'ultimo accesso aggiornato, anche sul file del registro.
+      - [ ] Lo script è registrato in `package.json` e non lascia artefatti fuori da `test/workspaces/`.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Gate finale — controlli completi e richiesta di review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+    body: |-
+      ## Objective
+      L'intero incremento è verificato con i controlli che il repository considera autorevoli, e la spec passa in review solo dopo che ogni task risulta `DONE`.
+
+      ## Read
+      - `AGENTS.md` — sezione «Rules for CLI changes», l'elenco dei controlli da eseguire prima di consegnare.
+      - `.archetipo/plans/US-046-plan.yaml` — sezione «Baseline» del piano, per confrontare i risultati con quelli registrati prima dell'implementazione.
+
+      ## Change
+      - Nessuna modifica di codice prevista. Se un controllo fallisce, correggi il difetto nel task che lo ha introdotto e rilancia il gate: non aggirare un controllo e non silenziare un test.
+
+      ## Steps
+      1. Se `golangci-lint` non è installato, eseguilo prima: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`.
+      2. Esegui i controlli Go nell'ordine dell'elenco sotto, da `cli/`.
+      3. Esegui gli smoke del viewer coinvolti dalla radice del repository.
+      4. Marca questo task `DONE`.
+      5. Ricarica la spec da `/Users/stefanoleli/Project/Archetipo` con `archetipo spec show US-046` e verifica che nessun task sia rimasto `TODO`.
+      6. Solo allora esegui `archetipo spec review US-046` da `/Users/stefanoleli/Project/Archetipo`.
+
+      ## Verify
+      - Esegui da `cli/`: `gofmt -l .` — Expect: nessun output (baseline: pulito).
+      - Esegui da `cli/`: `go vet ./...` — Expect: nessun problema (baseline: nessun problema).
+      - Esegui da `cli/`: `go build ./...` — Expect: passes (baseline: passes).
+      - Esegui da `cli/`: `go test ./...` — Expect: passes, con almeno i 1338 test della baseline più quelli aggiunti dai task 02, 04, 06 e 08.
+      - Esegui da `cli/`: `go test ./internal/web/... -race` — Expect: passes, nessun report del race detector.
+      - Esegui da `cli/`: `golangci-lint run --timeout 5m ./...` — Expect: 0 issues. La baseline non ha potuto eseguirlo perché il binario non era installato: se anche dopo il passo 1 non è disponibile (ambiente offline), dichiaralo esplicitamente nel resoconto invece di riportare il lint come verde.
+      - Esegui da `/Users/stefanoleli/Project/Archetipo`: `npm run test:view-open-workspace-smoke` — Expect: exit 0.
+      - Esegui da `/Users/stefanoleli/Project/Archetipo`: `npm run test:view-workspaces-smoke` — Expect: exit 0 (nessuna regressione su US-045).
+      - Esegui da `/Users/stefanoleli/Project/Archetipo`: `archetipo spec show US-046` — Expect: ogni task in stato `DONE`.
+
+      ## Done
+      - [ ] Tutti i comandi sopra sono stati eseguiti e il loro esito corrisponde all'attesa dichiarata, oppure lo scostamento è motivato per iscritto.
+      - [ ] Nessun file toccato dall'incremento introduce diagnostiche di `vet` o del linter rispetto alla baseline registrata.
+      - [ ] AC-1, AC-2, AC-3, AC-4 e AC-5 hanno tutti almeno un'asserzione verde nei task 06, 08 e 11.
+      - [ ] `archetipo spec show US-046` non riporta alcun task `TODO` prima della richiesta di review.
+      - [ ] `archetipo spec review US-046` è stato eseguito solo dopo il controllo precedente.
+
+      ## Blockers
+      None.
+    ref: TASK-12

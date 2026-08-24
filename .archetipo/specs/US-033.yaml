@@ -1,0 +1,50 @@
+schema: archetipo/spec/v2
+code: US-033
+title: Pianificare con Claude come provider locale
+epic:
+  code: EP-006
+  title: Esecuzione locale e ciclo di delivery
+priority: MEDIUM
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-033: Pianificare con Claude come provider locale
+
+  **Epic:** EP-006 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come utilizzatore che dispone di Claude Code sulla macchina del workspace,
+  voglio selezionarlo come provider locale per pianificare una spec,
+  così da usare lo stesso flusso gestito disponibile con ARcipelago e Codex.
+
+  **Dimostrazione**
+  Partendo da Claude Code disponibile e autenticato, da una spec `TODO` e dal provider locale selezionato, il revisore avvia `Pianifica` e osserva un'esecuzione ARchetipo collegata a Claude, un piano valido e la spec `PLANNED`. Con Claude assente o non utilizzabile osserva una diagnostica esplicita, un'esecuzione fallita interrogabile e nessun avanzamento falso della spec.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — ARchetipo rende selezionabile Claude come provider quando il runtime richiesto è disponibile.
+  - [ ] AC-2 — Una pianificazione riuscita tramite Claude produce un piano valido e porta la spec a `PLANNED`.
+  - [ ] AC-3 — L'esecuzione registra provider, stato e risultato senza salvare credenziali o contenuti di autenticazione.
+  - [ ] AC-4 — Claude assente, non autenticato o terminato con errore produce una diagnostica esplicita e lascia la spec fuori da `PLANNED`.
+  - [ ] AC-5 — L'uso diretto delle skill ARchetipo dentro Claude continua a funzionare senza richiedere il provider locale.
+
+  **Fuori ambito**
+  Installazione automatica di Claude Code, scelta automatica del modello, implementazione e review tramite provider.
+
+  ## Contesto Wiki
+  - `overview`
+  - `decisions/execution-provider-boundary`
+  - `engineering/code-map`
+  - `operations/development`
+history:
+  - status: TODO
+    at: "2026-08-16T22:52:57Z"
+  - status: PLANNED
+    at: "2026-08-18T15:36:00Z"
+  - status: IN PROGRESS
+    at: "2026-08-18T22:45:24Z"
+  - status: REVIEW
+    at: "2026-08-18T23:12:07Z"
+  - status: DONE
+    at: "2026-08-18T23:14:32Z"

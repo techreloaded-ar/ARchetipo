@@ -1,0 +1,45 @@
+schema: archetipo/spec/v2
+code: US-055
+title: Lavorare su una spec senza perdere di vista conversazione e board
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: HIGH
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-055: Lavorare su una spec senza perdere di vista conversazione e board
+
+  **Epic:** EP-008 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come utilizzatore di ARchetipo che segue più spec insieme,
+  voglio leggere e modificare una spec mentre parlo con l'agente e continuo a vedere dove sta il lavoro,
+  così da non dover chiudere quello che sto guardando ogni volta che voglio dire una cosa.
+
+  **Dimostrazione**
+  Partendo da un workspace con più spec e una run in corso, il revisore apre una spec e osserva che criteri, piano e differenze sono leggibili insieme alla conversazione, senza aprire e chiudere finestre. Torna alla board e osserva che la conversazione resta disponibile e non ha perso la sua storia. Osserva infine che una run che attende una sua risposta è segnalata anche mentre sta guardando un'altra spec, e la raggiunge da quella segnalazione.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Aprendo una spec, i suoi contenuti e la conversazione a essa collegata sono consultabili contemporaneamente, senza aprire e chiudere finestre sovrapposte.
+  - [ ] AC-2 — Tornando alla board, la conversazione resta disponibile e conserva la sua storia.
+  - [ ] AC-3 — Le run in corso nel workspace aperto sono elencate con il loro stato, e da lì si raggiunge la conversazione di ciascuna.
+  - [ ] AC-4 — Una run che attende una risposta del revisore è segnalata anche quando il revisore sta guardando altro, e la segnalazione porta alla decisione da prendere.
+  - [ ] AC-5 — Le operazioni già possibili su una spec — modificarla, salvarla, avviarne le azioni, deciderne la review — restano tutte disponibili.
+  - [ ] AC-6 — In una finestra stretta i contenuti restano leggibili e raggiungibili, uno alla volta.
+
+  **Fuori ambito**
+  La conversazione libera sul workspace e l'avvio delle azioni dalla conversazione, i suggerimenti sul passo successivo, e ogni cambiamento al contenuto delle spec o alle regole del processo: qui cambia solo dove le cose stanno.
+history:
+  - status: TODO
+    at: "2026-08-21T17:16:17Z"
+  - status: PLANNED
+    at: "2026-08-21T21:24:14Z"
+  - status: IN PROGRESS
+    at: "2026-08-21T21:32:53Z"
+  - status: REVIEW
+    at: "2026-08-21T22:09:53Z"
+  - status: DONE
+    at: "2026-08-21T22:15:16Z"

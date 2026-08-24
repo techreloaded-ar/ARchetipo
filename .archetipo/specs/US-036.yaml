@@ -1,0 +1,42 @@
+schema: archetipo/spec/v2
+code: US-036
+title: Installare un Archetipo da un pacchetto
+epic:
+  code: EP-007
+  title: Archetipi installabili
+priority: LOW
+points: 5
+status: TODO
+scope: GROWTH
+body: |-
+  #### US-036: Installare un Archetipo da un pacchetto
+
+  **Epic:** EP-007 | **Priorità:** LOW | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come amministratore di un'installazione ARchetipo,
+  voglio installare un Archetipo identificato e versionato da un pacchetto,
+  così da aggiungere nuovi processi senza modificare o ricompilare il prodotto principale.
+
+  **Dimostrazione**
+  Partendo da un'installazione che contiene soltanto `fabbrica-del-software`, il revisore installa un pacchetto valido e osserva il nuovo Archetipo nel catalogo con identità, versione, skill, stati e azioni dichiarate. Tentando di installare un pacchetto malformato o incompatibile osserva una diagnostica precisa e ritrova invariato il catalogo precedente.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Un pacchetto valido rende disponibile un Archetipo con identificativo e versione non ambigui.
+  - [ ] AC-2 — Il catalogo espone per l'Archetipo installato skill, stati e azioni dichiarate senza eseguirne codice durante la sola consultazione.
+  - [ ] AC-3 — Un pacchetto con contratto non valido viene rifiutato indicando il campo o la compatibilità mancante.
+  - [ ] AC-4 — Il rifiuto o l'interruzione dell'installazione conserva invariato il catalogo precedentemente valido.
+  - [ ] AC-5 — L'Archetipo incorporato `fabbrica-del-software` continua a essere disponibile anche senza pacchetti aggiuntivi.
+
+  **Fuori ambito**
+  Marketplace pubblico, ricerca remota, acquisti, aggiornamento automatico, ereditarietà tra Archetipi ed esecuzione di migrazioni arbitrarie fornite dal pacchetto.
+
+  ## Contesto Wiki
+  - `architecture/context-map`
+  - `decisions/workspace-process-template`
+  - `engineering/code-map`
+  - `operations/development`
+history:
+  - status: TODO
+    at: "2026-08-16T22:53:34Z"

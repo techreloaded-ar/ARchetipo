@@ -1,0 +1,52 @@
+schema: archetipo/spec/v2
+code: US-034
+title: Implementare una spec tramite un provider
+epic:
+  code: EP-006
+  title: Esecuzione locale e ciclo di delivery
+priority: MEDIUM
+points: 5
+status: DONE
+blocked_by:
+  - US-032
+scope: MVP
+body: |-
+  #### US-034: Implementare una spec tramite un provider
+
+  **Epic:** EP-006 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** US-032
+
+  **User Story**
+  Come utilizzatore di un workspace con una spec pianificata,
+  voglio avviare `Implementa` tramite un provider compatibile,
+  così da eseguire il piano con lo stesso modello di esecuzione gestita usato per la pianificazione.
+
+  **Dimostrazione**
+  Partendo da una spec `PLANNED` con piano valido e da un provider che dichiara la capability richiesta, il revisore avvia `Implementa`, osserva la spec passare a `IN PROGRESS` e infine a `REVIEW` con codice, test ed esito consultabili. Con un provider incompatibile l'avvio viene rifiutato; con un errore durante il lavoro la spec non passa a `REVIEW` e l'esecuzione conserva il motivo.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — L'azione `Implementa` è disponibile soltanto per una spec in uno stato ammesso dal Template.
+  - [ ] AC-2 — Un provider privo della capability di implementazione viene rifiutato prima di creare effetti sul repository o sullo stato della spec.
+  - [ ] AC-3 — All'avvio accettato la spec passa a `IN PROGRESS` e l'esecuzione identifica provider e piano di partenza.
+  - [ ] AC-4 — Al successo la spec raggiunge `REVIEW` e l'esecuzione espone un riepilogo verificabile di codice e test prodotti.
+  - [ ] AC-5 — Al fallimento la spec resta fuori da `REVIEW` e l'esecuzione conserva un errore interrogabile.
+
+  **Fuori ambito**
+  Verdetto umano di review, merge automatico, esecuzione parallela della stessa spec e fallback automatico tra provider.
+
+  ## Contesto Wiki
+  - `architecture/context-map`
+  - `decisions/execution-provider-boundary`
+  - `decisions/workspace-process-template`
+  - `engineering/code-map`
+history:
+  - status: TODO
+    at: "2026-08-16T22:52:57Z"
+  - status: PLANNED
+    at: "2026-08-20T01:55:04Z"
+  - status: IN PROGRESS
+    at: "2026-08-20T01:56:15Z"
+  - status: REVIEW
+    at: "2026-08-20T02:16:20Z"
+  - status: DONE
+    at: "2026-08-20T02:18:35Z"

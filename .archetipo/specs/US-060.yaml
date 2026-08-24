@@ -1,0 +1,47 @@
+schema: archetipo/spec/v2
+code: US-060
+title: Seguire una run e rispondere alle sue richieste dentro la conversazione
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: HIGH
+points: 5
+status: DONE
+blocked_by:
+  - US-057
+scope: MVP
+body: |-
+  #### US-060: Seguire una run e rispondere alle sue richieste dentro la conversazione
+
+  **Epic:** EP-008 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** US-057
+
+  **User Story**
+  Come utilizzatore di ARchetipo che ha avviato un passo del processo,
+  voglio vedere la run e le sue richieste dentro la conversazione che le ha chieste,
+  così da non dover sorvegliare un elenco a parte per accorgermi che l'agente aspetta una mia risposta.
+
+  **Dimostrazione**
+  Partendo da una conversazione in cui il revisore avvia un'azione del processo, osserva che la run compare nel flusso della conversazione, nel punto in cui è stata chiesta, e che il suo avanzamento si aggiorna lì mentre procede. Quando la run chiede di eseguire un comando che richiede consenso, il revisore osserva la richiesta nello stesso flusso, con il comando in chiaro; chiede all'agente perché serve, ottiene risposta e solo dopo concede o nega, osservando che la run riprende o si ferma di conseguenza. Passa a un'altra conversazione mentre la run prosegue e osserva di essere avvisato che una run attende una risposta, e da quell'avviso raggiunge il punto esatto in cui l'attesa si trova.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Una run avviata da una conversazione compare nel flusso di quella conversazione, nel punto in cui è stata chiesta.
+  - [ ] AC-2 — L'avanzamento e l'esito della run si aggiornano dentro quel flusso mentre la run procede, senza che il revisore debba aprire un elenco separato.
+  - [ ] AC-3 — Una richiesta di consenso della run compare nel flusso con il comando in chiaro, e la run resta ferma finché il revisore non risponde.
+  - [ ] AC-4 — Concedendo il consenso la run riprende; negandolo la run si ferma e il rifiuto resta leggibile nella conversazione.
+  - [ ] AC-5 — Mentre una run è ferma in attesa, il revisore può scrivere all'agente nella stessa conversazione e riceverne risposta.
+  - [ ] AC-6 — Da un'altra vista o da un'altra conversazione, il revisore è avvisato che una run attende una risposta e da quell'avviso raggiunge la conversazione e il punto in cui l'attesa si trova.
+
+  **Fuori ambito**
+  La chiusura o l'annullamento di run avviate fuori da una conversazione, la modifica di ciò che una run esegue, e le notifiche fuori dall'applicazione. Non cambia il comportamento degli agenti né il contenuto dei log: cambia dove il revisore li incontra.
+history:
+  - status: TODO
+    at: "2026-08-22T11:31:53Z"
+  - status: PLANNED
+    at: "2026-08-22T13:53:40Z"
+  - status: IN PROGRESS
+    at: "2026-08-22T13:54:49Z"
+  - status: REVIEW
+    at: "2026-08-22T15:02:26Z"
+  - status: DONE
+    at: "2026-08-22T15:04:49Z"

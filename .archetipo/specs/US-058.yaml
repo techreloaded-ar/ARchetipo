@@ -1,0 +1,48 @@
+schema: archetipo/spec/v2
+code: US-058
+title: Ritrovare le conversazioni passate del workspace
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: HIGH
+points: 5
+status: DONE
+blocked_by:
+  - US-057
+scope: MVP
+body: |-
+  #### US-058: Ritrovare le conversazioni passate del workspace
+
+  **Epic:** EP-008 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** US-057
+
+  **User Story**
+  Come utilizzatore di ARchetipo che torna su un progetto dopo qualche giorno,
+  voglio ritrovare le conversazioni già avute su questo workspace, elencate e riapribili,
+  così da non dover ricostruire a memoria cosa ci siamo detti e perché una spec è fatta così.
+
+  **Dimostrazione**
+  Partendo da un workspace su cui si sono già svolte alcune conversazioni — alcune nate da una spec, altre no — il revisore osserva accanto alla conversazione l'elenco di quelle passate, ciascuna con un titolo riconoscibile, il momento dell'ultimo messaggio e, quando esiste, il codice della spec a cui è legata. Ne apre una di ieri e osserva che i messaggi sono quelli di allora. Vi scrive un nuovo messaggio e osserva che la risposta arriva da una conversazione nuova, dichiarata come tale, che ha ricevuto la conversazione di ieri come contesto. Chiude ARchetipo, lo riapre e osserva che l'elenco è ancora lì. Apre infine un altro workspace e osserva che l'elenco mostra le conversazioni di quest'ultimo e nessuna di quelle del primo.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Le conversazioni di un workspace sopravvivono alla chiusura di ARchetipo e sono elencate alla riapertura.
+  - [ ] AC-2 — L'elenco mostra per ogni conversazione un titolo, il momento dell'ultimo messaggio e, quando la conversazione è nata da una spec, il codice di quella spec.
+  - [ ] AC-3 — Aprendo una conversazione passata, i suoi messaggi sono mostrati per intero e nell'ordine in cui si sono svolti.
+  - [ ] AC-4 — Scrivendo in una conversazione passata, l'agente risponde in una conversazione nuova che riceve quella passata come contesto, e la pagina dichiara che si tratta di una ripresa.
+  - [ ] AC-5 — Il revisore può avviare una conversazione nuova non legata ad alcuna spec, e questa compare nell'elenco distinta da quelle legate a una spec.
+  - [ ] AC-6 — Cambiando workspace, l'elenco mostra solo le conversazioni del workspace aperto.
+  - [ ] AC-7 — Su un workspace senza alcuna conversazione passata, l'elenco dichiara che non ce ne sono e offre di avviarne una.
+
+  **Fuori ambito**
+  Ricerca a testo pieno dentro le conversazioni, rinomina manuale del titolo, archiviazione o cancellazione di un thread, ripresa della sessione originale dell'agente con la sua memoria, e più conversazioni vive nello stesso momento.
+history:
+  - status: TODO
+    at: "2026-08-22T11:31:53Z"
+  - status: PLANNED
+    at: "2026-08-22T12:49:20Z"
+  - status: IN PROGRESS
+    at: "2026-08-22T12:50:53Z"
+  - status: REVIEW
+    at: "2026-08-22T13:30:39Z"
+  - status: DONE
+    at: "2026-08-22T13:35:24Z"

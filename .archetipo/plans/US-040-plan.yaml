@@ -1,0 +1,782 @@
+schema: archetipo/plan/v2
+spec_code: US-040
+body: |-
+  # US-040: Avviare l'inception dalla UI e ottenere il PRD — Piano di implementazione
+
+  **Prodotto da:** ARchetipo Planning Team
+  **Data:** 2026-08-20
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 — Esperienza operativa ARchetipo
+  **Priorità:** HIGH | **Punti:** 5
+
+  **User Story**
+  Come persona che apre un workspace appena inizializzato, voglio avviare l'inception dalla UI e rispondere alle domande dell'agente, così da ottenere il PRD senza conoscere le skill né uscire dal viewer.
+
+  **Criteri di accettazione**
+  - AC-1 — Un workspace privo di PRD offre l'azione di inception a livello di workspace.
+  - AC-2 — Le domande dell'agente compaiono nella UI e la risposta della persona prosegue la stessa conversazione.
+  - AC-3 — Al termine con esito positivo il PRD è persistito nel percorso configurato ed è leggibile dalla UI senza riavviare il viewer.
+  - AC-4 — Una run interrotta o fallita lascia il workspace senza PRD e ne dichiara il motivo.
+  - AC-5 — Con un PRD già presente l'azione non è offerta come prima inception e nessun documento esistente viene sovrascritto implicitamente.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Il viewer sa già avviare un'azione su una spec, seguirne l'esecuzione e dialogare con la run locale che la produce (US-032/US-033/US-038/US-039). US-040 non inventa un secondo meccanismo: estende **lo stesso** apparato a un'azione che non ha una spec come oggetto ma il workspace intero, e sblocca la sola cosa che l'inception richiede e la pianificazione no — una conversazione a più turni.
+
+  Le quattro estensioni, dal basso verso l'alto:
+
+  - **L'azione dichiara il proprio ambito.** `execution` acquisisce `ActionInception` con la capability `workspace.inception` e una funzione `ActionScope(action)` che dice se un'azione è *spec-scoped* o *workspace-scoped*. Il record di esecuzione resta identico: un'esecuzione di workspace ha semplicemente `spec_code` vuoto, e `FileStore.ListBySpec(ctx, "")` la ritrova già oggi senza toccare lo store. `Service.StartWorkspace` è `Start` senza la spec, sopra lo stesso `start()`: una seconda pipeline sarebbe libera di divergere sulle regole (validazione config, record RUNNING prima della risposta, continuation unica) che qui devono restare una sola.
+  - **La conversazione a più turni.** Oggi `claude.Execute` attende il primo `TurnDone()` e chiude il processo: è corretto per un piano (un turno, poi la ricevuta) ed è esattamente ciò che rende impossibile un'inception, che finisce il turno *per fare una domanda*. La `streamSession` acquisisce quindi una modalità **conversazionale**: la fine di un turno pubblica un esito su un canale `turns` invece di terminare la sessione, `Send` riarma un nuovo turno anziché rifiutare, e la run vive finché non arriva la ricevuta, finché il processo non muore, o finché l'operatore non annulla. La modalità single-turn resta intatta e continua a servire `spec.plan`: nessun comportamento esistente cambia.
+  - **La ricevuta e la conferma dell'effetto.** Il provider non può leggere il connettore — è il confine che impedisce a una run fallita di muovere lo stato — quindi la fine della conversazione è dichiarata dall'agente con una riga JSON, `PRDReceipt`, gemella di `PlanReceipt`. La ricevuta è condizione necessaria e mai sufficiente: `VerifyInceptionEffect`, un livello sopra, rilegge il PRD dal connettore prima della scrittura terminale del record, esattamente come `VerifyActionEffect` fa per il piano.
+  - **La garanzia "nessun PRD parziale".** L'azione è offerta solo a workspace privo di PRD (AC-1/AC-5) e il `POST` la rifiuta con `409` se un PRD esiste: nessun documento può essere sovrascritto implicitamente. Se la run fallisce o viene interrotta dopo che l'agente ha già scritto un PRD incompleto, il documento nato dentro quella run viene rimosso attraverso una nuova capability opzionale del connettore, `PRDDiscarder` — la stessa forma di `SpecDeleter` e `PRDReader` già presenti. È il calco della garanzia "nessun workspace parziale" di US-044: una prima inception o riesce interamente o non lascia traccia (AC-4).
+
+  Sopra, il `template` dichiara le azioni di workspace accanto a quelle di spec, il viewer espone `GET /api/workspace/actions` e `POST /api/workspace/execution` con le stesse regole di disponibilità già usate per le spec (provider di default, runtime disponibile, capability dichiarata, nessuna esecuzione in corso), e il frontend riusa il pannello run rendendolo parametrico sul contenitore e sul contesto invece di duplicarne le settecento righe.
+
+  ### Decisioni architetturali
+
+  **1. Un'esecuzione di workspace è un record con `spec_code` vuoto, non un nuovo tipo di record.**
+  Alternative valutate: (a) un secondo store/record `WorkspaceExecution`; (b) un campo `scope` esplicito nel record; (c) `spec_code` vuoto con l'ambito derivato dall'azione. Scelta (c). (a) duplicherebbe rotte di polling, follower della run e regole di chiusura per un solo caso d'uso. (b) è tentante ma ridondante: l'azione determina già l'ambito in modo totale, e un campo derivabile è un campo che può contraddire ciò da cui deriva. Il costo di (c) è che `ListBySpec("")` diventa la lettura delle esecuzioni di workspace: viene documentato nel codice e coperto da test, non lasciato all'intuizione. Verifica: test unitario che dimostra che un'esecuzione di workspace non compare in nessun elenco di spec e viceversa.
+
+  **2. La conversazione multi-turno è una modalità della sessione, non un cambio di comportamento globale.**
+  Alternative: (a) rendere ogni sessione locale multi-turno; (b) una modalità esplicita scelta all'apertura. Scelta (b). (a) cambierebbe silenziosamente il significato di `spec.plan`: oggi un piano che finisce il turno senza ricevuta è un fallimento immediato con diagnostica, mentre in modalità conversazionale resterebbe appeso fino al timeout — un'ora di attesa al posto di un errore. La modalità esplicita costa un parametro e mantiene le due semantiche leggibili una accanto all'altra. Verifica: i test esistenti del percorso `spec.plan` restano verdi senza modifiche.
+
+  **3. L'inception è dichiarata dal solo provider `claude` in questa spec.**
+  Alternative: (a) claude + codex insieme; (b) solo claude, codex in una spec successiva; (c) un provider "locale" parametrico unico. (b) è la scelta. Il multi-turno è un fatto di protocollo, e i due protocolli lo esprimono in modo diverso (`app-server`/JSON-RPC contro stream-json NDJSON): farli insieme raddoppia il rischio in una spec che è già una fetta verticale completa. (c) è esplicitamente esclusa dall'architettura vigente, che tiene i due provider come implementazioni sorelle e non come un provider parametrizzato. Conseguenza esplicita e voluta: con codex o arcipelago come default, l'azione compare **non eseguibile** con il motivo standard "il provider non dichiara la capability `workspace.inception`" — lo stesso meccanismo che il viewer usa già per ogni azione non supportata. La spec non nomina alcun provider, e la dimostrazione avviene con `claude` come default del workspace.
+
+  **4. Il rollback del PRD parziale passa da una capability opzionale del connettore.**
+  Alternative: (a) cancellare il file dal layer web leggendo `paths.prd`; (b) `PRDDiscarder` sul connettore; (c) nessun rollback, confidando che l'agente scriva il PRD solo alla fine. (a) violerebbe il confine che rende il connettore l'unico proprietario della persistenza. (c) rende AC-4 una speranza invece di una garanzia. (b) costa un metodo su `filefs` ed è coerente con `SpecDeleter`. La rimozione è limitata al caso in cui il PRD **non esisteva** all'avvio della run e la run è finita male: nessun documento preesistente viene mai toccato, il che è anche metà di AC-5.
+
+  ---
+
+  ## Baseline
+
+  Comandi eseguiti da `/Users/stefanoleli/Project/Archetipo` prima di scrivere il piano.
+
+  | Verifica | Esito prima dell'implementazione | Conseguenza sul piano |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | nessun output (pulito) | ogni task che tocca Go la ripete; un file formattato male è un difetto introdotto, non preesistente |
+  | `cd cli && go vet ./...` | pulito, 0 segnalazioni | `Expect: pulito` è legittimo su tutti i task Go |
+  | `cd cli && go build ./...` | compila senza errori | idem |
+  | `cd cli && go test ./...` | **1187 test passati su 28 package**, 0 falliti | ogni task Go verifica il proprio package e il gate finale ripete l'intera suite: la soglia è "nessun nuovo fallimento e nessun test perso" |
+  | `golangci-lint run --timeout 5m ./...` | **non eseguibile: il binario non è installato su questa macchina** | prerequisito d'ambiente, non un difetto del codice. Il gate finale lo installa con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` e poi lo esegue; è la stessa verifica che gira in CI |
+  | `npm run test:view-local-run-smoke` | non rieseguito in baseline (costa una build del CLI e due sandbox) | lo smoke esistente non viene modificato; il nuovo smoke di US-040 è additivo e viene eseguito nel gate finale |
+
+  Prerequisiti d'ambiente, distinti dai fallimenti di codice:
+
+  - toolchain Go presente e funzionante (le tre verifiche sopra girano);
+  - Node.js v25.8.1 presente (serve agli smoke `test/e2e/*.mjs` e ai fake agent);
+  - `golangci-lint` **assente**: va installato prima del gate finale con il comando sopra;
+  - nessun credenziale e nessun accesso di rete richiesto: i fake agent parlano su `127.0.0.1`.
+
+  I file toccati dal piano non hanno oggi diagnostiche locali (vet e build sono puliti): nessun task ha licenza di aggiungerne.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato iniziale / fixture | Livello | Oracolo osservabile | Task che la produce |
+  |---|---|---|---|---|
+  | AC-1 | workspace inizializzato, `docs/PRD.md` assente, provider di default `claude` disponibile | integrazione (test Go sul server) + smoke e2e HTTP | `GET /api/workspace/actions` risponde `200` con un'azione `id:"inception"` e `runnable:true`; con provider assente o senza capability la stessa azione è `runnable:false` con `unavailable_reason` non vuoto | TASK-12, TASK-14 |
+  | AC-2 | esecuzione di inception avviata, fake Claude che emette un `assistant`+`result` con una domanda | unit (provider) + smoke e2e HTTP | il provider: dopo il primo `result` la sessione resta `ACTIVE` e `Execute` non è ritornato; lo smoke: la history contiene l'evento `text` con la domanda, `POST /run/messages` fa arrivare al processo una `user` frame con quel testo esatto, il testo compare **una sola volta** come `user_message` solo dopo il replay, e il turno successivo aggiunge un nuovo evento `text` | TASK-09, TASK-14 |
+  | AC-3 | conversazione conclusa, il fake emette la ricevuta `{"artifact":"prd","status":"WRITTEN",...}` dopo che lo smoke ha scritto `docs/PRD.md` | smoke e2e HTTP + filesystem | il record diventa `SUCCEEDED`; `docs/PRD.md` esiste sul disco con il contenuto atteso; `GET /api/prd` restituisce quel contenuto **sullo stesso processo viewer**, senza riavvio | TASK-14 |
+  | AC-4 | inception in corso, nessun PRD all'avvio, il fake ha già scritto un `docs/PRD.md` incompleto | unit (conferma effetto + rollback) + smoke e2e HTTP | unit: un record demoto a `FAILED` porta `error.message` con il motivo e `DiscardPRD` è stato invocato; smoke: dopo `POST /run/cancel` e la fine del processo il record è `FAILED` con `error.message` non vuoto, `docs/PRD.md` **non esiste** e `GET /api/prd` restituisce `body: ""` | TASK-06, TASK-14 |
+  | AC-5 | workspace con `docs/PRD.md` preesistente e non vuoto | integrazione (test Go) + smoke e2e HTTP | `GET /api/workspace/actions` riporta `inception` con `runnable:false` e motivo che nomina il PRD già presente; `POST /api/workspace/execution` risponde `409`; il byte-per-byte di `docs/PRD.md` è identico prima e dopo, e nessun record di esecuzione è stato creato | TASK-12, TASK-14 |
+
+  Ogni oracolo resta osservabile attraverso i doppi scelti: l'unico elemento finto negli smoke è il binario dell'agente, mentre viewer, connettore, provider, client di protocollo, sessione locale e run follower sono quelli reali. La verifica dell'effetto non è mai delegata alla ricevuta: AC-3 e AC-4 sono asseriti sul filesystem e sulla rotta `GET /api/prd`, mai sul payload del provider.
+
+  ---
+
+  ## Strategia di test
+
+  Tre livelli, ciascuno con una domanda diversa.
+
+  - **Unit Go, dentro `execution` e `execution/claude`**: le regole che non hanno bisogno di un processo. L'ambito di un'azione, l'avvio di un'esecuzione senza spec, l'accettazione della ricevuta, la demozione di un successo non confermato, il rollback del PRD parziale, e — attraverso il seam `localrun.Starter` — l'intera conversazione multi-turno senza che Claude sia installato.
+  - **Integrazione sul server web**: le rotte nuove con un connettore reale su directory temporanea e una registry di provider costruita nel test, come già fanno `execution_test.go` e `execution_run_test.go`. È qui che AC-1 e AC-5 diventano un contratto HTTP e non una convinzione.
+  - **Smoke e2e HTTP end-to-end (`test/e2e/inception-from-view-smoke.mjs`)**: il viewer reale, il connettore reale, il provider `claude` reale puntato su `test/e2e/support/fake-claude.mjs`, e la conversazione guidata frame per frame dal test. Nessuna attesa arbitraria: ogni sleep è una poll su una rotta del viewer o sul control server del fake.
+
+  Una sonda dal vivo (`//go:build liveprobe`) copre l'unica affermazione che nessun fake può dimostrare: che il binario Claude reale accetti una `user` frame **dopo** un `result` e apra un nuovo turno. Va rilanciata a mano a ogni aggiornamento di Claude Code, come le sonde già presenti nel package.
+
+  ### Test E2E — Simulazione utente
+
+  **Framework:** harness Node.js locale del repository (`test/e2e/*.mjs`), che pilota il viewer reale via HTTP; nessun framework browser è presente nel repository per il viewer.
+  **Video dimostrativo:** atteso — la spec è filmabile (l'operatore avvia l'inception, legge le domande, risponde, apre il PRD). La registrazione è responsabilità di `archetipo-review`, non dell'implementazione.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Prima inception completa | Workspace senza PRD → l'azione di inception è offerta → l'operatore la avvia → legge la domanda dell'agente nella timeline → risponde → l'agente conclude e scrive il PRD → il PRD è leggibile dalla UI senza riavvio |
+  | Inception interrotta | Workspace senza PRD → inception avviata → l'agente ha già scritto un PRD incompleto → l'operatore annulla → il workspace è di nuovo senza PRD e il record dichiara il motivo |
+  | Workspace già dotato di PRD | Workspace con PRD → l'azione non è eseguibile e ne è dichiarato il motivo → un tentativo diretto sulla rotta è rifiutato → il documento esistente è intatto |
+
+  ### Deroga al browser E2E
+
+  **Motivo:** il percorso di accettazione attraversa il confine rotta/server e la persistenza, quindi la deroga non nega il rischio: lo sposta sul livello dove il repository lo prova davvero. Per il viewer non esiste alcun harness browser (nessun Playwright, nessun test DOM); `archetipo e2e ensure` serve i workspace generati dal processo, non l'applicazione web di questo repository. Introdurre e mantenere un framework browser è un intervento sproporzionato e fuori dall'ambito di questa spec, ed è la stessa scelta fatta da ogni spec di viewer precedente (US-028, US-038, US-044).
+  **Livello di evidenza usato al suo posto:** gli smoke HTTP deterministici di `test/e2e/`, che guidano il **viewer reale** e asseriscono gli oracoli di AC-1..AC-5 su risposte HTTP e sul filesystem. Conseguenza dichiarata apertamente: il rendering di `app.js` (la sezione inception nel modale PRD e il pannello di conversazione riusato) non ha un oracolo automatico e resta coperto dalla dimostrazione umana in `archetipo-review` — che per questa spec è filmabile ed è la ragione per cui il video è atteso.
+tasks:
+  - id: TASK-01
+    title: Dichiarare l'azione inception, la capability workspace.inception e l'ambito di un'azione
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      `execution` conosce l'azione `inception`, la capability `workspace.inception` e sa dire, per ogni azione, se il suo oggetto è una spec o il workspace.
+
+      ## Read
+      - `cli/internal/execution/types.go` — `ActionID`, `Capability`, le costanti `ActionPlan`/`CapabilitySpecPlan`, `RequiredCapability` e `ActionError`.
+      - `cli/internal/execution/provider.go` — `NormalizeCapabilities` e `Supports`, per capire come una capability viene confrontata.
+      - `cli/internal/execution/types_test.go` se presente, altrimenti `cli/internal/execution/provider_test.go` — stile delle asserzioni del package.
+
+      ## Change
+      - `cli/internal/execution/types.go`:
+        - aggiungere `ActionInception ActionID = "inception"` e `CapabilityWorkspaceInception Capability = "workspace.inception"`;
+        - aggiungere il tipo `Scope string` con `ScopeSpec Scope = "spec"` e `ScopeWorkspace Scope = "workspace"`;
+        - aggiungere `func ActionScope(action ActionID) (Scope, error)`, che ritorna `ScopeSpec` per `ActionPlan`, `ScopeWorkspace` per `ActionInception` e `*ActionError` per qualsiasi altra;
+        - estendere `RequiredCapability` con il caso `ActionInception -> CapabilityWorkspaceInception`.
+      - Non-goal: nessuna modifica a `Execution`, allo `Store` o al `Service` in questo task; nessun campo `scope` sul record — l'ambito si deriva dall'azione ed è quella la decisione presa nel piano.
+
+      ## Steps
+      1. Aggiungere le due costanti accanto a quelle esistenti, con un commento che dice che una capability è ciò che il provider dichiara e un'azione ciò che il chiamante chiede.
+      2. Definire `Scope`, le due costanti e `ActionScope`, con un commento che spiega perché l'ambito è derivato dall'azione e non memorizzato sul record.
+      3. Estendere lo `switch` di `RequiredCapability`, mantenendo il `default` che restituisce `*ActionError`.
+      4. Verificare che nessun `switch` esaustivo altrove nel package si rompa (`go build ./...`).
+
+      ## Verify
+      - Eseguire da `cli/`: `go build ./... && go vet ./internal/execution/... && go test ./internal/execution/`
+      - Expect: build e vet puliti; la suite del package resta verde come in baseline (nessun test perso, nessun nuovo fallimento).
+
+      ## Done
+      - [ ] `ActionInception` e `CapabilityWorkspaceInception` esistono e `RequiredCapability(ActionInception)` restituisce la seconda senza errore.
+      - [ ] `ActionScope` distingue le due azioni note e rifiuta un'azione sconosciuta con `*ActionError`.
+      - [ ] Nessun comportamento esistente di `ActionPlan` è cambiato (AC-1 dipende da questa base, ma nessun AC è ancora dimostrabile qui).
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Avviare un'esecuzione di workspace con Service.StartWorkspace
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il `Service` sa avviare un'azione che non ha una spec come oggetto, riusando la stessa pipeline di `Start`.
+
+      ## Read
+      - `cli/internal/execution/service.go` — `Start`, `run`, `start` e la `Continuation`; in particolare la guardia `spec code is required` e la costruzione del record `started`.
+      - `cli/internal/execution/types.go` — `Execution` e `Request` (dopo TASK-01).
+      - `cli/internal/execution/file_store.go` — `ListBySpec`, per confermare che un record con `SpecCode` vuoto è già selezionabile passando `""`.
+
+      ## Change
+      - `cli/internal/execution/service.go`:
+        - in `start`, sostituire la guardia incondizionata sul codice spec con una guardia dipendente dall'ambito: `ScopeSpec` continua a richiedere `spec.Code` non vuoto, `ScopeWorkspace` richiede che `spec.Code` sia vuoto (un'azione di workspace con una spec addosso è un errore del chiamante, non un'esecuzione più permissiva);
+        - aggiungere `func (s *Service) StartWorkspace(ctx context.Context, action ActionID, providerID string, providerConfig map[string]any, confirm Confirmation) (Execution, Continuation, error)`, che chiama `s.start` con una `domain.Spec` zero.
+      - `cli/internal/execution/file_store.go`: aggiungere alla doc di `ListBySpec` la frase che `""` seleziona le esecuzioni di workspace, che è la lettura usata dal viewer.
+      - Non-goal: nessuna variante idempotente (`RunIdempotent`) per il workspace; nessuna modifica alla `Continuation`.
+
+      ## Steps
+      1. Estrarre la validazione dell'oggetto in una piccola funzione locale che prende azione e codice spec e restituisce l'errore, così le due regole stanno una accanto all'altra.
+      2. Implementare `StartWorkspace` come sottile wrapper di `start`, con un commento che dice perché non duplica la pipeline.
+      3. Aggiornare la documentazione di `ListBySpec`.
+      4. Ricompilare e rieseguire la suite del package.
+
+      ## Verify
+      - Eseguire da `cli/`: `gofmt -l . && go build ./... && go test ./internal/execution/`
+      - Expect: `gofmt` nessun output; build pulita; suite del package verde (baseline: nessun fallimento).
+
+      ## Done
+      - [ ] `StartWorkspace` crea un record `RUNNING` con `spec_code` vuoto e restituisce una continuation invocabile una sola volta.
+      - [ ] `Start` su un'azione spec-scoped rifiuta ancora un codice spec vuoto, e `StartWorkspace` rifiuta un'azione spec-scoped.
+      - [ ] Nessun test esistente del package è stato modificato per passare.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Test unitari su ambito dell'azione e avvio di un'esecuzione di workspace
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      L'ambito delle azioni e l'isolamento fra esecuzioni di spec e di workspace sono dimostrati, non supposti.
+
+      ## Read
+      - `cli/internal/execution/service_test.go` — helper esistenti (store finto, id generator, clock) da riusare senza reinventarli.
+      - `cli/internal/execution/file_store_test.go` — come vengono create le directory temporanee.
+      - `cli/internal/execution/provider_test.go` — provider finto da riusare per dichiarare capability.
+
+      ## Change
+      - `cli/internal/execution/service_test.go`: aggiungere i casi su `StartWorkspace`.
+      - `cli/internal/execution/file_store_test.go`: aggiungere il caso di isolamento degli elenchi.
+      - Non-goal: nessun test sul provider claude qui (TASK-09), nessun test HTTP qui (TASK-12).
+
+      ## Steps
+      1. Test: `ActionScope` restituisce `ScopeSpec` per `plan`, `ScopeWorkspace` per `inception` e un `*ActionError` per un'azione inventata; `RequiredCapability(ActionInception)` è `workspace.inception`.
+      2. Test: `StartWorkspace` con un provider che dichiara `workspace.inception` crea un record persistito con `spec_code` vuoto, `action: "inception"`, stato `RUNNING`; la continuation lo chiude `SUCCEEDED` con il payload del provider.
+      3. Test: `StartWorkspace` con un provider che **non** dichiara la capability fallisce con `*CapabilityError` e **non** crea alcun record (contare i file nello store).
+      4. Test: `Start` (spec-scoped) con `ActionInception` è rifiutato, e `StartWorkspace` con `ActionPlan` è rifiutato.
+      5. Test di isolamento su `FileStore`: scritti un record di spec `US-901` e uno di workspace, `ListBySpec(ctx, "US-901")` restituisce solo il primo e `ListBySpec(ctx, "")` solo il secondo.
+
+      ## Verify
+      - Eseguire da `cli/`: `go test ./internal/execution/ -run 'Workspace|Scope|ListBySpec' -v` e poi `go test ./internal/execution/`
+      - Expect: i nuovi test passano; il package resta verde.
+
+      ## Done
+      - [ ] Un'esecuzione di workspace non compare mai nell'elenco di una spec e viceversa, dimostrato su store reale su disco temporaneo.
+      - [ ] Un provider privo della capability non lascia alcun record dietro di sé.
+      - [ ] Nessun `AC-N` è ancora chiuso da questo task: è la base su cui poggiano AC-1 e AC-4.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Definire la ricevuta di inception condivisa fra i provider
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Esiste una sola regola, condivisa da qualunque provider di inception, per riconoscere la riga con cui l'agente dichiara di aver scritto il PRD.
+
+      ## Read
+      - `cli/internal/execution/planreceipt.go` — `PlanReceipt`, `ParsePlanReceipt`, `AcceptPlanReceipt`, `hasPlanReceiptFields` e i commenti che spiegano perché si scandisce all'indietro e perché la policy è separata dal parsing.
+      - `cli/internal/execution/planreceipt_test.go` — tabella dei casi da rispecchiare.
+      - `skills/archetipo-inception/SKILL.md` — sezione "Output Boundaries": il PRD è persistito con `archetipo prd write`, il che è ciò che la ricevuta dichiara di aver fatto.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/prdreceipt.go`:
+        - `const WrittenStatus = "WRITTEN"`;
+        - `type PRDReceipt struct { Artifact string; Status string; Path string }` con i tag JSON `artifact`, `status`, `path`;
+        - `ParsePRDReceipt(output string) (PRDReceipt, error)` e `AcceptPRDReceipt(output string) (PRDReceipt, error)`.
+      - Non-goal: nessuna lettura del connettore o del filesystem qui — la ricevuta è una dichiarazione dell'agente e la sua conferma vive in TASK-05.
+
+      ## Steps
+      1. Rifattorizzare la scansione all'indietro di `ParsePlanReceipt` in una funzione condivisa che prende l'insieme dei campi obbligatori, oppure duplicarla con un commento esplicito se il refactor rendesse meno leggibile la ricevuta di piano; scegliere il refactor solo se non cambia il comportamento di `ParsePlanReceipt` (i suoi test devono restare invariati).
+      2. Implementare `ParsePRDReceipt` sui campi obbligatori `artifact`, `status`, `path`.
+      3. Implementare `AcceptPRDReceipt`: accetta solo `artifact == "prd"`, `status == WrittenStatus` e `path` non vuoto dopo trim; tenere distinti i due messaggi d'errore "nessuna ricevuta" e "la ricevuta non dichiara un PRD scritto", per la stessa ragione documentata su `AcceptPlanReceipt`.
+      4. Documentare nel file che il `path` è informativo — l'autorità su dove sta il PRD resta la configurazione letta dal connettore.
+
+      ## Verify
+      - Eseguire da `cli/`: `gofmt -l . && go build ./... && go test ./internal/execution/ -run Receipt -v`
+      - Expect: `gofmt` nessun output; i test esistenti su `PlanReceipt` passano invariati.
+
+      ## Done
+      - [ ] Una ricevuta valida in ultima riga viene accettata anche se seguita da righe non JSON e preceduta da altri oggetti JSON.
+      - [ ] Una ricevuta con `status` diverso, `artifact` diverso o `path` vuoto viene rifiutata con un messaggio distinguibile da "nessuna ricevuta".
+      - [ ] I test di `PlanReceipt` sono invariati (nessuna regressione sul percorso `spec.plan`).
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Confermare l'effetto dell'inception e scartare un PRD parziale
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Un'inception è un successo solo se il connettore mostra davvero un PRD, e una run finita male non lascia il PRD che aveva iniziato a scrivere.
+
+      ## Read
+      - `cli/internal/execution/effect.go` — `SpecStateReader`, `ConfirmActionEffect`, `VerifyActionEffect`, `planEffect`, `UnconfirmedEffectError` e i commenti su *perché* la verifica avviene dentro la scrittura terminale.
+      - `cli/internal/connector/capabilities.go` — `PRDReader` e lo stile delle capability opzionali.
+      - `cli/internal/connector/filefs/connector.go` — `SavePRD` e `ReadPRD` (riga ~177 e ~198), per il modo in cui il percorso è risolto con `c.cfg.AbsPath(c.cfg.Paths.PRD)`.
+      - `cli/internal/connector/connector.go` — l'interfaccia stabile, che **non** va estesa.
+
+      ## Change
+      - `cli/internal/connector/capabilities.go`: aggiungere `PRDDiscarder` con `DiscardPRD(ctx context.Context) (bool, error)`, dove il bool dice se un documento c'era ed è stato rimosso.
+      - `cli/internal/connector/filefs/connector.go`: implementare `DiscardPRD` rimuovendo il file in `c.cfg.AbsPath(c.cfg.Paths.PRD)`; un file assente restituisce `(false, nil)` e non è un errore.
+      - `cli/internal/execution/effect.go`:
+        - aggiungere `PRDStateReader` con `ReadPRD(ctx context.Context) (string, error)` (interfaccia del consumatore, come `SpecStateReader`: questo package non importa `connector`);
+        - aggiungere `PRDDiscarder` con la stessa firma della capability, sempre come interfaccia locale;
+        - estendere `VerifyActionEffect` con il caso `ActionInception`, delegando a `inceptionEffect(ctx, reader)` che fallisce se `ReadPRD` erra o se il corpo è vuoto dopo trim;
+        - aggiungere `DiscardPartialPRD(ctx context.Context, discarder PRDDiscarder, existedBefore bool, outcome *Execution)`, che non fa nulla se `existedBefore` è vero o se `outcome.Status` non è `StatusFailed`, e che altrimenti scarta il PRD e annota nell'`error.message` che il documento parziale è stato rimosso.
+      - Non-goal: nessuna chiamata a `archetipo validate prd` da qui — l'esistenza di un PRD non vuoto è la condizione di questo confine; la validazione strutturale resta responsabilità della skill.
+
+      ## Steps
+      1. Definire la capability sul connettore e implementarla su `filefs`, con `os.Remove` e la tolleranza a `os.ErrNotExist`.
+      2. Aggiungere le due interfacce di consumatore in `effect.go`, con il commento che spiega perché `execution` non importa `connector`.
+      3. Estendere lo switch di `VerifyActionEffect` sull'azione, mantenendo intatto il ramo `ActionPlan`.
+      4. Implementare `DiscardPartialPRD` in modo che un errore di rimozione non nasconda il motivo originale del fallimento: si aggiunge al messaggio, non lo sostituisce.
+      5. Documentare che la rimozione è limitata al caso "il PRD non esisteva prima e la run è finita male", perché è metà di AC-5 oltre che AC-4.
+
+      ## Verify
+      - Eseguire da `cli/`: `gofmt -l . && go build ./... && go vet ./... && go test ./internal/execution/ ./internal/connector/...`
+      - Expect: tutto pulito; le suite dei due package restano verdi.
+
+      ## Done
+      - [ ] Un successo dichiarato dal provider con PRD assente o vuoto viene riscritto `FAILED` con codice `UNCONFIRMED_EFFECT` e un motivo leggibile (AC-3 lato negativo, AC-4).
+      - [ ] `DiscardPRD` su un percorso senza file risponde `(false, nil)`.
+      - [ ] Un PRD preesistente non viene mai rimosso, qualunque sia l'esito della run (AC-5).
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test unitari su ricevuta PRD, conferma dell'effetto e rollback
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Le due garanzie che AC-3 e AC-4 poggiano sul codice — "successo solo con PRD leggibile" e "niente PRD dopo una run fallita" — sono dimostrate a livello unitario.
+
+      ## Read
+      - `cli/internal/execution/effect_test.go` — i lettori finti già usati per `planEffect` e lo stile delle asserzioni sulla demozione.
+      - `cli/internal/execution/planreceipt_test.go` — tabella dei casi della ricevuta.
+      - `cli/internal/connector/filefs/` — i test esistenti del connettore, per riusare l'inizializzazione del workspace temporaneo.
+
+      ## Change
+      - Nuovo `cli/internal/execution/prdreceipt_test.go`.
+      - `cli/internal/execution/effect_test.go`: casi su `VerifyActionEffect` per `ActionInception` e su `DiscardPartialPRD`.
+      - Test del connettore `filefs` per `DiscardPRD`.
+      - Non-goal: nessun mock che nasconda il file reale nel test di `filefs` — lì si asserisce sul filesystem.
+
+      ## Steps
+      1. Ricevuta: casi di accettazione (riga finale valida, riga valida seguita da testo non JSON, oggetti JSON estranei prima) e di rifiuto (nessuna riga, `status` diverso, `artifact` diverso, `path` vuoto); asserire che i due messaggi d'errore restano distinguibili.
+      2. `VerifyActionEffect` con `ActionInception`: un outcome `SUCCEEDED` con lettore che restituisce un PRD non vuoto resta `SUCCEEDED`; con corpo vuoto o solo spazi diventa `FAILED` con `error.code == "UNCONFIRMED_EFFECT"`; con lettore che erra diventa `FAILED` e il messaggio riporta la causa.
+      3. `DiscardPartialPRD`: con `existedBefore=false` e outcome `FAILED`, il discarder finto viene invocato una volta e il messaggio d'errore finale contiene sia il motivo originale sia la nota della rimozione; con `existedBefore=true` **non** viene invocato; con outcome `SUCCEEDED` **non** viene invocato.
+      4. `filefs.DiscardPRD`: scritto un PRD con `SavePRD`, `DiscardPRD` restituisce `(true, nil)` e il file non esiste più; una seconda invocazione restituisce `(false, nil)`.
+
+      ## Verify
+      - Eseguire da `cli/`: `go test ./internal/execution/ ./internal/connector/filefs/ -v -run 'PRD|Inception|Discard'` e poi `go test ./...`
+      - Expect: nuovi test verdi; suite completa allineata alla baseline (1187 test più i nuovi, 0 fallimenti).
+
+      ## Done
+      - [ ] AC-3 (lato negativo): un successo senza PRD leggibile non resta un successo, dimostrato sul record risultante.
+      - [ ] AC-4: un fallimento con PRD nato dentro la run lascia il workspace senza PRD, dimostrato sul filesystem per `filefs` e sul discarder per la regola.
+      - [ ] AC-5 (metà): un PRD preesistente non viene mai rimosso.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Rendere la sessione Claude capace di più turni in modalità conversazionale
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Una sessione Claude aperta in modalità conversazionale sopravvive alla fine di un turno, pubblica l'esito di ogni turno e riparte quando l'operatore risponde.
+
+      ## Read
+      - `cli/internal/execution/claude/streamjson.go` — `streamSession`, `consume`, `start`, `Send`, `Interrupt`, `endTurn`, `Completed`, `TurnDone`, `Gone`, `FinalMessage`.
+      - `cli/internal/execution/claude/translate.go` — il ramo `frameResult` di `project`, che è l'unico punto in cui un turno finisce per decisione del processo.
+      - `cli/internal/execution/localrun/session.go` — `Session.Close` e l'invariante "lo stato è osservato, mai dedotto".
+      - `cli/internal/execution/claude/streamjson_test.go` e `runner_test.go` — il seam `localrun.Starter`/`Process` con cui si guida un processo finto.
+
+      ## Change
+      - `cli/internal/execution/claude/streamjson.go`:
+        - `newStreamSession(process, session, conversational bool)`: un campo `conversational` sulla struct;
+        - sostituire `turnOnce sync.Once` + `turnDone chan struct{}` con un `turnDone` protetto da mutex, riarmabile: `TurnDone()` restituisce il canale corrente, `endTurn()` chiude quello corrente una sola volta, `armTurn()` ne installa uno nuovo;
+        - aggiungere `turns chan TurnOutcome` (bufferizzato, es. 64) con `TurnOutcome{Completed bool, Final string}`, pubblicato in modo non bloccante a ogni fine turno; aggiungere `Turns() <-chan TurnOutcome`;
+        - `Send`: in modalità single-turn il comportamento resta identico (rifiuto `RunRefusedNotActive` a turno concluso); in modalità conversazionale rifiuta solo se il processo è andato (`gone` chiuso) e altrimenti riarma il turno **prima** di scrivere la user frame;
+        - `Interrupt`: in modalità conversazionale, quando nessun turno è in corso, chiude lo standard input del processo (fine della sessione) e restituisce `nil`, documentando che la fine della run resta osservata dalla chiusura del processo e non dedotta dal comando; con un turno in corso il `control_request` attuale resta invariato.
+      - `cli/internal/execution/claude/provider.go`: `newStreamSession(...)` per `spec.plan` passa `false`, così il percorso esistente è letteralmente lo stesso di prima.
+      - Non-goal: nessuna modifica a `codex`; nessuna modifica a `localrun.Session`; nessun nuovo stato terminale dedotto da un comando.
+
+      ## Steps
+      1. Introdurre `conversational` e il canale `turns`; pubblicare l'esito nel ramo `frameResult` di `translate.go`, subito dopo aver aggiornato `completed`/`finalMessage`.
+      2. Riarmare il canale di turno: `endTurn` chiude, `armTurn` ricrea, entrambe sotto lo stesso mutex che già protegge `completed`; `consume` continua a chiamare `endTurn` in `defer` alla fine dell'output.
+      3. Adeguare `Send` con la biforcazione fra le due modalità, con un commento che dice perché la modalità è esplicita (decisione 2 del piano).
+      4. Adeguare `Interrupt` per il caso "nessun turno in corso" in modalità conversazionale.
+      5. Rieseguire i test del package per confermare che il percorso `spec.plan` non si è mosso.
+
+      ## Verify
+      - Eseguire da `cli/`: `gofmt -l . && go build ./... && go vet ./internal/execution/... && go test ./internal/execution/claude/`
+      - Expect: `gofmt` nessun output; suite del package claude verde **senza modifiche ai test esistenti** — se un test esistente deve cambiare per passare, il comportamento single-turn è stato alterato e va ripristinato.
+
+      ## Done
+      - [ ] In modalità single-turn nulla è cambiato: i test preesistenti passano invariati.
+      - [ ] In modalità conversazionale un `result` non termina la sessione e `Send` apre un nuovo turno (base di AC-2).
+      - [ ] `Interrupt` fra due turni chiude la sessione senza inventare uno stato terminale (base di AC-4).
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Dispacciare l'azione inception al provider claude
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-04
+    body: |-
+      ## Objective
+      Il provider `claude` dichiara `workspace.inception` ed esegue l'inception come conversazione, chiudendosi solo su ricevuta, morte del processo, annullamento o timeout.
+
+      ## Read
+      - `cli/internal/execution/claude/provider.go` — `Capabilities`, `Execute`, `shutdown`, `ensurePlanSkill`, `resultFor`, `diagnosticSuffix`.
+      - `cli/internal/execution/claude/prompt.go` — `buildPrompt` e `buildArgs`, e il commento sul perché il prompt è una funzione pura della richiesta.
+      - `cli/internal/execution/claude/config.go` — `settings`, `defaultTimeout` (3600s) e i campi di configurazione dichiarati.
+      - `skills/archetipo-inception/SKILL.md` — cosa la skill fa davvero (`archetipo prd write`, `archetipo validate prd`) e come si chiama.
+
+      ## Change
+      - `cli/internal/execution/claude/provider.go`:
+        - `Capabilities` restituisce `[]Capability{CapabilitySpecPlan, CapabilityWorkspaceInception}`;
+        - `Execute` biforca sull'azione: `ActionPlan` mantiene **letteralmente** il flusso attuale; `ActionInception` chiama un nuovo `executeInception(ctx, req, cfg, dir)`;
+        - `executeInception`: verifica disponibilità del runtime, verifica che la skill di inception sia installata (`.claude/skills/archetipo-inception/SKILL.md`), registra la sessione, avvia il processo con `newStreamSession(..., true)`, invia il prompt, aggancia il dialogo e poi cicla su `client.Turns()`, `client.Gone()` e `runCtx.Done()`;
+        - la ricevuta è cercata a ogni fine turno con `execution.AcceptPRDReceipt(outcome.Final)`: presente → successo; assente su un turno concluso senza errore → si resta in attesa della risposta dell'operatore; turno chiuso con errore o processo morto → fallimento con il motivo;
+        - `resultForInception` produce un payload con `command`, `model`, `exit_code`, `result_summary` (la sola ricevuta ri-serializzata), `prd_path`, `turns`, `duration_ms`; nessuno stream dell'agente entra nel record.
+      - `cli/internal/execution/claude/prompt.go`: `buildInceptionPrompt(req)`, funzione pura, che chiede di invocare `/archetipo-inception`, di **fare le domande una alla volta e attendere la risposta**, di persistere il PRD con `archetipo prd write` come prescrive la skill e di chiudere con la sola riga `{"artifact":"prd","status":"WRITTEN","path":"<percorso configurato>"}` solo dopo che il PRD è persistito.
+      - Generalizzare `ensurePlanSkill` in `ensureSkill(dir, relPath, tool)` mantenendo la stessa diagnostica che nomina `archetipo init --tool claude`.
+      - Non-goal: nessuna modifica ai flag di `buildArgs` (sono già quelli che rendono possibile il dialogo); nessuna capability aggiunta a `codex` o `arcipelago`.
+
+      ## Steps
+      1. Estendere `Capabilities` e generalizzare il controllo della skill installata.
+      2. Estrarre da `Execute` la parte comune (config, dir, disponibilità, avvio processo, handshake) in un helper, per non duplicare l'apertura di sessione fra le due azioni.
+      3. Implementare il ciclo dei turni con i tre canali, badando che il timeout resti quello configurato (`cfg.Timeout`) e che allo scadere il messaggio nomini l'inception e non la pianificazione.
+      4. Implementare il prompt e il payload di risultato.
+      5. Verificare che `buildPrompt` per il piano sia rimasto identico byte per byte.
+
+      ## Verify
+      - Eseguire da `cli/`: `gofmt -l . && go build ./... && go vet ./... && go test ./internal/execution/...`
+      - Expect: tutto pulito; i test esistenti del provider passano invariati.
+
+      ## Done
+      - [ ] `claude` dichiara `workspace.inception` accanto a `spec.plan`, e `DeclaredCapabilities` continua ad aggiungere `run.dialog` (AC-1, AC-2).
+      - [ ] Un turno concluso senza ricevuta non chiude l'esecuzione (AC-2).
+      - [ ] Una ricevuta valida chiude l'esecuzione con successo e un payload privo di stream dell'agente (AC-3).
+      - [ ] Timeout, morte del processo e annullamento producono un fallimento con motivo esplicito e distinguibile (AC-4).
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Test del provider claude sulla conversazione di inception
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      La conversazione a più turni, la sua chiusura per ricevuta e i suoi tre modi di fallire sono dimostrati senza che Claude Code sia installato.
+
+      ## Read
+      - `cli/internal/execution/claude/provider_test.go` e `runner_test.go` — lo `Starter`/`Process` finto già presente e come si pilotano le sue linee.
+      - `cli/internal/execution/claude/streamjson_test.go` — come si costruiscono le frame `system/init`, `assistant`, `user`, `result`.
+      - `cli/internal/execution/claude/live_probe_test.go` — struttura delle sonde dal vivo e loro gating con `//go:build liveprobe`.
+
+      ## Change
+      - `cli/internal/execution/claude/provider_test.go` (o un nuovo `inception_test.go` nello stesso package).
+      - `cli/internal/execution/claude/live_probe_test.go`: aggiungere `TestLiveClaudeMultiTurn`.
+      - Non-goal: nessun test che asserisca solo "il prompt contiene la parola inception" al posto del comportamento; nessuna sostituzione della sessione con un doppio che nasconda il protocollo.
+
+      ## Steps
+      1. Conversazione completa: il processo finto emette `system/init`, un `assistant` con la domanda e un `result` senza errore. Asserire che `Execute` **non** è ancora ritornato, che la sessione risulta `ACTIVE` sul registry e che la history contiene l'evento `text` con la domanda.
+      2. Risposta dell'operatore: inviare il messaggio con `SendRunMessage` sul collaboratore; asserire che il processo finto ha ricevuto una `user` frame con quel testo esatto e che **nessun** evento è stato scritto localmente prima del replay; far riemettere al finto la `user` frame e asserire che l'evento `user_message` compare una sola volta.
+      3. Chiusura per ricevuta: secondo `assistant` + `result` il cui campo `result` è la riga di ricevuta valida; asserire che `Execute` ritorna senza errore, che il payload contiene `result_summary` con la ricevuta e `prd_path`, e che lo stdout dell'agente non compare nel payload.
+      4. Turno concluso con `is_error: true`: `Execute` ritorna errore, la sessione è chiusa `CRASHED` e il messaggio nomina l'inception.
+      5. Processo che muore fra due turni: `Execute` ritorna errore con la diagnostica di stderr troncata.
+      6. Timeout: `timeout_seconds` piccolo e nessun `result`; `Execute` ritorna un errore che nomina la durata configurata.
+      7. Annullamento fra due turni: `CancelRun` dopo un `result`; asserire che nessuno stato terminale è dedotto dal comando e che la run finisce quando il processo finisce.
+      8. Sonda dal vivo `TestLiveClaudeMultiTurn` (build tag `liveprobe`, `t.Skip` senza `LIVE_WORKSPACE`): apre una sessione reale, attende un `result`, invia una seconda `user` frame e asserisce che ne arriva un secondo — l'unica affermazione che nessun fake può dimostrare.
+
+      ## Verify
+      - Eseguire da `cli/`: `go test ./internal/execution/claude/ -v` e poi `go test ./...`
+      - Expect: nuovi test verdi, suite completa senza nuovi fallimenti rispetto alla baseline. La sonda dal vivo non gira (build tag) e non deve influire.
+      - Compilare comunque la sonda: `go vet -tags liveprobe ./internal/execution/claude/` → pulito.
+
+      ## Done
+      - [ ] AC-2 a livello di provider: dopo la prima risposta dell'agente la sessione resta aperta, il messaggio raggiunge il processo e diventa history solo quando il processo lo riemette — asserito sulle frame realmente scambiate, non su un mock del dialogo.
+      - [ ] AC-3 a livello di provider: solo una ricevuta valida chiude l'esecuzione con successo.
+      - [ ] AC-4 a livello di provider: i quattro modi di finire male producono errori distinti e nessuno di essi dichiara un successo.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Dichiarare le azioni di workspace nel Template di processo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il processo "fabbrica del software" dichiara l'inception come azione del workspace, accanto alle tre azioni che dichiara sulle spec.
+
+      ## Read
+      - `cli/internal/template/template.go` — `Action`, `Template`, `ActionsFor`, `clone`, il registry e `Default()`.
+      - `cli/internal/template/template_test.go` — `processActions` e `processSkills` scritti per esteso, e il perché: cambiare il processo deve rompere un test esplicitamente.
+
+      ## Change
+      - `cli/internal/template/template.go`:
+        - aggiungere `type WorkspaceAction struct { ID string; Label string; Skill string }` con i tag JSON `id`, `label`, `skill`;
+        - aggiungere `WorkspaceActions []WorkspaceAction` a `Template` (tag `workspace_actions`);
+        - dichiarare nel Template predefinito `{ID: "inception", Label: "Avvia inception", Skill: "archetipo-inception"}`;
+        - garantire che il registry restituisca una copia della slice, come già fa per `Skills` e `Actions`.
+      - `cli/internal/template/template_test.go`: aggiungere `processWorkspaceActions` scritto per esteso e il test di non-aliasing corrispondente.
+      - Non-goal: nessuna condizione sullo stato del workspace qui — se un'azione sia eseguibile ora è un verdetto del server (TASK-11), non una proprietà del processo. Nessun campo `Statuses`: un workspace non ha uno stato di workflow.
+
+      ## Steps
+      1. Definire il tipo e il campo, con un commento che spiega la differenza fra un'azione su una spec (ammessa in certi stati) e un'azione sul workspace (ammessa in base a una condizione che il processo non conosce).
+      2. Dichiarare l'azione nel Template predefinito.
+      3. Aggiungere la copia difensiva e i test di contratto e non-aliasing.
+
+      ## Verify
+      - Eseguire da `cli/`: `gofmt -l . && go test ./internal/template/ -v`
+      - Expect: `gofmt` nessun output; il package è verde e i nuovi test descrivono esattamente l'azione dichiarata.
+
+      ## Done
+      - [ ] `Default().WorkspaceActions` contiene esattamente l'azione `inception` con etichetta e skill dichiarate (AC-1).
+      - [ ] Modificare la slice restituita non raggiunge il registry.
+      - [ ] Le azioni di spec e i loro test sono invariati.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Esporre le rotte di workspace del viewer per l'inception
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-10
+      - TASK-05
+      - TASK-02
+    body: |-
+      ## Objective
+      Il viewer dice quali azioni il workspace ammette adesso e ne avvia una, con le stesse regole di rifiuto già usate per le azioni di spec.
+
+      ## Read
+      - `cli/internal/web/execution_run.go` — `handleRunSpecAction`, `guardSingleExecution`, `actionAvailabilityFor`, `reasonFor`, `decorateActions`, `latestExecution`, `mapExecutionStartError`, `supportedActions`, `dispatchGroup`.
+      - `cli/internal/web/server.go` — `registerRoutes` e la costruzione di `store`/`service`/`dispatch`/`followers`.
+      - `cli/internal/web/handlers.go` — `handleGetPRD`, `specDetailView`, `writeError` e la mappa codice→status HTTP.
+      - `cli/internal/web/config.go` — `readConfigState`, usato per rileggere il provider di default da disco.
+      - `cli/internal/connector/capabilities.go` — `PRDReader` e la nuova `PRDDiscarder`.
+
+      ## Change
+      - Nuovo file `cli/internal/web/workspace_execution.go` (i file `workspace.go`/`execution_run.go` restano quelli che sono):
+        - `GET /api/workspace/actions` → `{ "template": {...}, "has_prd": bool, "actions": [ {id,label,skill,runnable,unavailable_reason} ], "execution": <ultimo record di workspace o null> }`;
+        - `POST /api/workspace/execution` con corpo `{"action":"inception"}` → `201` con il record avviato.
+      - `cli/internal/web/server.go`: registrare le due rotte.
+      - Regole di disponibilità, riusando quelle esistenti e aggiungendone **una** sola nuova: azione sconosciuta al processo → `400`; PRD già presente e non vuoto → `409` con motivo che nomina il documento esistente; nessun provider registrato / nessun default configurato / runtime non utilizzabile / capability non dichiarata / esecuzione di workspace già in corso → gli stessi messaggi e status di `reasonFor`.
+      - La conferma dell'effetto viaggia nella `Confirmation` passata a `StartWorkspace`, prima della scrittura terminale: `execution.VerifyActionEffect` per l'esito e `execution.DiscardPartialPRD` con l'`existedBefore` catturato **prima** dell'avvio; il discarder è il connettore quando implementa `PRDDiscarder`, altrimenti il rollback è saltato senza far fallire nulla.
+      - Dopo la fine del dispatch, `defer s.broker.Publish()` come già fa la rotta di spec, così ogni client si riallinea.
+      - Non-goal: nessuna rotta di dialogo nuova — `GET/POST /api/execution/{id}/run*` funzionano già per id e non conoscono le spec; nessuna modifica alle rotte di spec.
+
+      ## Steps
+      1. Estrarre da `actionAvailabilityFor` la parte che riguarda provider e default in un helper condiviso, così le due rotte non si rispondono in due modi diversi sulla stessa configurazione.
+      2. Implementare la lettura del PRD via `connector.PRDReader`; un connettore che non lo espone rende l'azione non eseguibile con il motivo, non un errore 500.
+      3. Implementare `GET`, riusando `latestExecution(ctx, "")` per l'ultima esecuzione di workspace.
+      4. Implementare `POST`: validazione azione → ammissibilità nel processo → PRD assente → provider utilizzabile → riserva in `dispatchGroup` con chiave `""` → `StartWorkspace` → risposta `201` → dispatch in background con rilascio della riserva.
+      5. Verificare che l'errore di configurazione del provider sia reso con `writeProviderConfigError`, come nella rotta di spec.
+
+      ## Verify
+      - Eseguire da `cli/`: `gofmt -l . && go build ./... && go vet ./... && go test ./internal/web/`
+      - Expect: tutto pulito; la suite web resta verde (i test nuovi arrivano in TASK-12).
+
+      ## Done
+      - [ ] `GET /api/workspace/actions` su workspace senza PRD e con provider utilizzabile riporta `inception` con `runnable:true` (AC-1).
+      - [ ] `POST` su workspace con PRD risponde `409` e non crea record né tocca il documento (AC-5).
+      - [ ] Un fallimento del dispatch chiude il record `FAILED` con motivo e scarta il PRD nato dentro la run (AC-4).
+      - [ ] Due pressioni ravvicinate producono una sola esecuzione: la seconda riceve `409` che nomina quella in corso.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Test di integrazione sulle rotte di workspace del viewer
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Objective
+      AC-1 e AC-5 diventano un contratto HTTP asserito sul server reale, non una convinzione sul frontend.
+
+      ## Read
+      - `cli/internal/web/execution_test.go` — costruzione del server con connettore reale su directory temporanea, registry di provider e provider finti; helper di richiesta/risposta.
+      - `cli/internal/web/execution_run_test.go` — come si asserisce un dispatch asincrono senza sleep arbitrari.
+      - `cli/internal/web/handlers_test.go` — asserzioni sulle rotte del PRD.
+
+      ## Change
+      - Nuovo `cli/internal/web/workspace_execution_test.go`.
+      - Non-goal: nessun test che sostituisca il connettore con un mock del PRD — il PRD si scrive e si legge sul filesystem temporaneo, perché è esattamente ciò che AC-3 e AC-5 riguardano.
+
+      ## Steps
+      1. Workspace senza PRD, provider finto che dichiara `workspace.inception` e risulta disponibile: `GET /api/workspace/actions` risponde `200` con `has_prd:false` e l'azione `inception` `runnable:true`, `unavailable_reason` assente.
+      2. Stesso workspace, provider che **non** dichiara la capability: l'azione è `runnable:false` e il motivo nomina la capability mancante; `POST` risponde `409`.
+      3. Nessun provider di default configurato: `runnable:false` con il motivo che invita a sceglierne uno; `POST` risponde `409`.
+      4. Workspace **con** `docs/PRD.md` non vuoto: `runnable:false` con motivo che nomina il PRD esistente; `POST` risponde `409`; leggere il file prima e dopo e asserire che i byte sono identici e che la directory delle esecuzioni non contiene alcun record nuovo (AC-5).
+      5. Avvio riuscito: `POST` risponde `201` con un record `RUNNING` e `spec_code` vuoto; il provider finto scrive un PRD e restituisce una ricevuta valida; attendendo (poll su `GET /api/execution/{id}`) il record diventa `SUCCEEDED` e `GET /api/prd` restituisce il contenuto scritto (AC-1, AC-3).
+      6. Avvio con provider che fallisce dopo aver scritto un PRD parziale: il record diventa `FAILED` con `error.message` non vuoto e `GET /api/prd` restituisce `body: ""` (AC-4).
+      7. Due `POST` ravvicinati: il secondo risponde `409` nominando l'esecuzione in corso, e nella directory delle esecuzioni esiste un solo record.
+
+      ## Verify
+      - Eseguire da `cli/`: `go test ./internal/web/ -v -run Workspace` e poi `go test ./...`
+      - Expect: nuovi test verdi; suite completa senza nuovi fallimenti rispetto alla baseline.
+
+      ## Done
+      - [ ] AC-1: l'azione è offerta ed eseguibile su un workspace privo di PRD, asserito sul corpo della risposta HTTP.
+      - [ ] AC-3: dopo un'esecuzione riuscita `GET /api/prd` restituisce il documento sullo **stesso** processo server, senza riavvio.
+      - [ ] AC-4: dopo un'esecuzione fallita non esiste PRD e il record ne dichiara il motivo.
+      - [ ] AC-5: con un PRD presente l'azione non è eseguibile, la rotta rifiuta e il documento è byte-identico.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Offrire l'inception nel modale PRD riusando il pannello di conversazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Objective
+      Chi apre il PRD di un workspace vuoto trova l'azione di inception, vede le domande dell'agente, risponde, e alla fine legge il PRD senza riavviare il viewer.
+
+      ## Read
+      - `cli/internal/web/assets/app.js` — sezioni "Spec actions" (righe ~1735-1766), "Spec execution" (~1768-1967), "Remote run" (~1969-2698) e "PRD & Mockups" (~3275-3339); in particolare `renderSpecActionChip`, `renderExecution`, `resumeRun`, `startRunPolling`, `renderRun`, `openPRD`, `fillPrdView` e ogni guardia `currentSpecCode !== code`.
+      - `cli/internal/web/assets/index.html` — il modale `#prd-modal` (righe ~226-252) e i contenitori `#story-actions`, `#story-execution`, `#story-run` (righe ~115-117).
+      - `cli/internal/web/assets/app.css` — classi `action-chip*`, `execution-panel*`, `run-*` già esistenti, da riusare senza inventarne di nuove.
+
+      ## Change
+      - `cli/internal/web/assets/index.html`: dentro `#prd-modal`, sopra `#prd-view`, una sezione `#prd-inception` con `#inception-actions`, `#inception-execution`, `#inception-run`.
+      - `cli/internal/web/assets/app.js`:
+        - rendere parametrici i tre pannelli: il contenitore su cui scrivono e il **contesto** su cui si fermano. Sostituire le guardie `currentSpecCode !== code` con il confronto su un unico token di contesto (`spec:US-XXX` oppure `workspace:inception`) e i riferimenti diretti a `storyActions`/`storyExecution`/`storyRun` con variabili impostate al montaggio del pannello;
+        - `openPRD` chiama `GET /api/workspace/actions`, e quando `has_prd` è falso monta i pannelli sui contenitori di `#prd-inception`, disegna il chip dell'azione (riusando `renderSpecActionChip`) e riprende un'eventuale esecuzione già in corso (`resumeExecution`/`resumeRun`) esattamente come fa `openEditor` per una spec;
+        - premere il chip fa `POST /api/workspace/execution` e poi segue esecuzione e run con le funzioni esistenti;
+        - alla chiusura con successo dell'esecuzione, ricaricare `GET /api/prd`, ridisegnare il corpo del PRD e nascondere la sezione inception (AC-3);
+        - chiudere il modale PRD ferma entrambi i timer, come fa `closeModal` per una spec;
+        - quando `has_prd` è vero, la sezione inception non viene disegnata affatto (AC-5).
+      - Non-goal: nessuna riscrittura della logica di timeline, cursore, seam, approvazioni o rifiuti — è la stessa; nessuna duplicazione del pannello run; nessuna nuova regola di stile.
+
+      ## Steps
+      1. Introdurre il token di contesto e le variabili di contenitore, e sostituire meccanicamente le guardie: prima questo, senza aggiungere funzionalità, verificando che la conversazione su una spec continui a funzionare identica.
+      2. Aggiungere il markup della sezione inception e le costanti degli elementi.
+      3. Collegare `openPRD` alla nuova rotta e montare i pannelli.
+      4. Collegare il click del chip alla rotta di avvio e la conclusione al ricaricamento del PRD.
+      5. Verificare a mano con il viewer: `cd cli && go run ./cmd/archetipo view` in un workspace di prova senza PRD, con `claude` come provider di default.
+
+      ## Verify
+      - Eseguire da `cli/`: `go build ./...` (gli asset sono embedded: una modifica non compilabile del markup si vede qui) e `go test ./internal/web/`
+      - Prova manuale: aprire il viewer su un workspace senza PRD; il pulsante PRD mostra l'azione di inception; su un workspace con PRD la sezione non compare.
+      - Expect: build e suite verdi; le due prove manuali si comportano come descritto.
+
+      ## Done
+      - [ ] AC-1: su workspace senza PRD il modale PRD offre l'azione; su workspace con PRD non la offre (AC-5).
+      - [ ] AC-2: le domande dell'agente compaiono nella timeline e il campo di risposta invia il messaggio nella stessa conversazione, con lo stato "in attesa" finché il processo non lo riemette.
+      - [ ] AC-3: alla conclusione positiva il corpo del PRD compare nel modale senza riavviare il viewer.
+      - [ ] La conversazione su una spec è rimasta identica: nessun test web esistente è stato modificato.
+
+      ## Blockers
+      None.
+    ref: TASK-13
+  - id: TASK-14
+    title: Smoke end-to-end dell'inception dalla UI con il fake Claude
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-13
+      - TASK-12
+      - TASK-09
+    body: |-
+      ## Objective
+      I cinque criteri sono provati end-to-end contro il viewer reale, con l'unico elemento finto che è il binario dell'agente.
+
+      ## Read
+      - `test/e2e/local-run-view-smoke.mjs` — struttura completa: build del CLI, sandbox, avvio del viewer su porta casuale, control server del fake, poll senza sleep arbitrari, raccolta dei corpi di risposta per la verifica del sentinel.
+      - `test/e2e/support/fake-claude.mjs` — protocollo e control server: `/next` per i comandi, `/received` per ciò che il processo ha letto.
+      - `test/e2e/plan-from-view-smoke.mjs` — come si salva il provider di default del workspace via API e come si attende un record terminale.
+      - `AGENTS.md` — sezione "Standalone smoke tests", che va aggiornata.
+
+      ## Change
+      - Nuovo `test/e2e/inception-from-view-smoke.mjs`.
+      - `package.json`: script `test:view-inception-smoke`.
+      - `AGENTS.md`: una voce nella lista degli smoke, con la stessa densità delle altre.
+      - Non-goal: nessuna modifica a `local-run-view-smoke.mjs` o a `fake-claude.mjs` se non strettamente necessaria; nessun credenziale; nessun traffico fuori da `127.0.0.1`; nessuno sleep arbitrario.
+
+      ## Steps
+      1. Sandbox: `archetipo init --tool claude --connector file --yes`, nessun PRD, provider di default `claude` puntato su `test/e2e/support/fake-claude.mjs` con un `timeout_seconds` generoso, e una variabile d'ambiente sentinella che rappresenta il materiale di sessione dell'agente.
+      2. AC-1: `GET /api/workspace/actions` → `has_prd:false`, azione `inception` `runnable:true`.
+      3. Avvio: `POST /api/workspace/execution {"action":"inception"}` → `201`; asserire che il fake ha ricevuto il prompt e che il prompt nomina `/archetipo-inception`.
+      4. AC-2, prima metà: far emettere al fake `system/init`, un `assistant` con la domanda e un `result` senza errore; attendere via poll che `GET /api/execution/{id}/run` esponga l'evento `text` con la domanda e che il record sia ancora `RUNNING`.
+      5. AC-2, seconda metà: `POST /api/execution/{id}/run/messages` con la risposta; asserire che il control server riporta una `user` frame con quel testo esatto, che il corpo del `202` **non** contiene ancora quel testo, e che dopo il replay del fake l'evento `user_message` compare **una sola volta** (rileggendo con `after_id=0`).
+      6. AC-3: il fake scrive `docs/PRD.md` nella sandbox (attraverso un comando dello smoke, non del processo) e poi emette `assistant` + `result` la cui `result` è la riga di ricevuta; attendere il record `SUCCEEDED`; asserire il contenuto del file sul disco e che `GET /api/prd` restituisca lo stesso contenuto **sullo stesso processo viewer**.
+      7. AC-4: seconda sandbox pulita; avviare l'inception, far emettere una domanda, scrivere un `docs/PRD.md` parziale, poi `POST /api/execution/{id}/run/cancel` e far terminare il fake; attendere il record `FAILED`, asserire `error.message` non vuoto, che `docs/PRD.md` non esiste e che `GET /api/prd` restituisce `body: ""`.
+      8. AC-5: terza sandbox con un `docs/PRD.md` preesistente; `GET /api/workspace/actions` → `runnable:false` con motivo; `POST /api/workspace/execution` → `409`; il file è byte-identico prima e dopo e nessun record esiste in `.archetipo/executions/`.
+      9. Verifica trasversale: il sentinel non compare in nessun corpo di risposta del viewer né in `.archetipo/config.yaml`.
+      10. Report HTML/`summary.json` nella run directory, come gli smoke esistenti; aggiornare `AGENTS.md`.
+
+      ## Verify
+      - Eseguire dalla radice del repository: `npm run test:view-inception-smoke`
+      - Expect: tutti i passi verdi. Su Windows lo smoke è saltato con motivo esplicito, come `test:view-local-run-smoke`, perché lo shebang POSIX del fake non si applica.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5 hanno ciascuno almeno un'asserzione in questo file, ognuna su un effetto osservabile (risposta HTTP o filesystem) e mai sulla dichiarazione del provider.
+      - [ ] Nessuno sleep arbitrario: ogni attesa è un poll su una rotta del viewer o sul control server.
+      - [ ] `AGENTS.md` descrive il nuovo smoke e `package.json` lo espone.
+
+      ## Blockers
+      None.
+    ref: TASK-14
+  - id: TASK-15
+    title: Gate finale — verifiche complete e richiesta di revisione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+      - TASK-13
+      - TASK-14
+    body: |-
+      ## Objective
+      L'incremento passa esattamente le verifiche che il repository considera vincolanti, e la spec va in revisione solo quando nessun task è rimasto aperto.
+
+      ## Read
+      - `AGENTS.md`, sezione "Rules for CLI changes" — l'elenco dei cinque comandi che la CI esegue.
+      - `package.json` — gli script di smoke disponibili.
+      - Il piano di questa spec — la sezione Baseline, che dice quali comandi erano verdi prima e quale prerequisito d'ambiente manca.
+
+      ## Change
+      - Nessuna modifica di codice attesa. Se una verifica fallisce, la correzione va fatta nel task che ha introdotto il difetto e questo gate va rieseguito da capo.
+
+      ## Steps
+      1. Se `golangci-lint` non è installato: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` (prerequisito d'ambiente registrato nella baseline, non un difetto del codice).
+      2. Eseguire, da `cli/`, nell'ordine: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`, `golangci-lint run --timeout 5m ./...`.
+      3. Eseguire, dalla radice: `npm run test:view-inception-smoke`.
+      4. Eseguire, dalla radice, gli smoke del viewer che questo lavoro poteva toccare: `npm run test:view-local-run-smoke` e `npm run test:view-execution-smoke`.
+      5. Solo dopo che tutte le verifiche sono verdi, marcare questo task `DONE` con `archetipo task done US-040 TASK-15` da `/Users/stefanoleli/Project/Archetipo`.
+      6. Rileggere la spec: `archetipo spec show US-040` da `/Users/stefanoleli/Project/Archetipo`, e confermare che **nessun** task risulta `TODO`.
+      7. Solo allora richiedere la revisione: `archetipo spec review US-040`.
+
+      ## Verify
+      - `cd cli && gofmt -l .` → nessun output.
+      - `cd cli && go vet ./...` → nessun errore.
+      - `cd cli && go build ./...` → compila.
+      - `cd cli && go test ./...` → tutti i test passano; il numero totale è **maggiore** della baseline di 1187 (i test nuovi ci sono davvero) e i fallimenti sono zero.
+      - `cd cli && golangci-lint run --timeout 5m ./...` → 0 segnalazioni.
+      - `npm run test:view-inception-smoke` → verde (o saltato con motivo esplicito su Windows).
+      - `npm run test:view-local-run-smoke` e `npm run test:view-execution-smoke` → verdi, a dimostrazione che le rotte e i pannelli riusati non sono regrediti.
+      - `archetipo spec show US-040` → nessun task in `TODO`.
+
+      ## Done
+      - [ ] I cinque comandi di CI sono verdi e i tre smoke del viewer passano.
+      - [ ] Nessun file toccato dal piano introduce diagnostiche di compilatore o linter rispetto alla baseline registrata.
+      - [ ] AC-1..AC-5 hanno tutti almeno un'evidenza automatica eseguita in questo gate, secondo la mappa delle evidenze del piano.
+      - [ ] `archetipo spec show US-040` dimostra che ogni task è `DONE` **prima** che `archetipo spec review US-040` venga invocato.
+
+      ## Blockers
+      None.
+    ref: TASK-15

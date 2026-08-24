@@ -1,0 +1,429 @@
+schema: archetipo/plan/v2
+spec_code: US-015
+body: "# US-015: Promuovere esplicitamente un risultato esplorativo — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-25\n\n---\n\n## Specifica\n\n**Epica:** EP-002 — Inception governata in ARchetipo Control\n**Priorità:** HIGH | **Punti:** 3\n\n**Storia utente**\nCome product lead, voglio selezionare e promuovere il risultato di una Session Run nel processo, così da distinguere chiaramente l'esplorazione libera dall'input governato del workflow successivo.\n\n**Criteri di accettazione**\n- AC-1 — Solo un utente autorizzato può promuovere un risultato di Session.\n- AC-2 — La promozione richiede una conferma esplicita prima di modificare il processo.\n- AC-3 — L'input promosso conserva il riferimento alla Session e all'autore della promozione.\n- AC-4 — L'annullamento della conferma non crea input di processo.\n\n---\n\n## Soluzione tecnica\n\nAggiungere a Control Product un confine di promozione esplicito e idempotente che trasforma il risultato completo di una Session Run conclusa in un input governato della Process Instance corrente, senza avanzare attività o gate e senza attribuire autorità alla Run.\n\n- Introdurre `process_inputs` come record Product append-only collegato a Organization, Project, Process Instance e `remote_runs`. Il record conserva uno snapshot validato di esito e decisioni aperte, `source_run_id`, identità ed email dell'autore e timestamp; un vincolo univoco per Session rende sicuri retry e doppio submit senza creare input duplicati.\n- Esporre `POST /api/projects/:projectId/session-runs/:runId/promotion` con schema chiuso `{confirmed: true}`. Nell'MVP il ruolo autorizzato è `admin`, l'unico ruolo Product lead disponibile nel modello corrente; il server deriva Organization, attore e provenienza dalla membership e dalla Run, rifiuta collaboratori, Session non concluse/prive di risultato, contesti senza Process Instance o divergenti e non accetta authority dal client.\n- Il servizio esegue controllo della Session e inserimento dell'input in una transazione, registra audit allowed/denied e restituisce lo stesso record a un replay autorizzato. La promozione crea soltanto un input consumabile dal workflow successivo: non cambia `process_instances.status`, `current_activity_key`, attività o gate.\n- Estendere il dettaglio Session nella pagina Project con un'azione disponibile solo all'amministratore, un dialog modale accessibile che mostra risultato e provenienza e due esiti distinti: annulla chiude senza chiamata API; conferma invia il comando esplicito e rende consultabile l'input con Session e autore.\n\n### Decisioni architetturali\n\nNon serve un nuovo ADR. `decisions/governed-run-modes` stabilisce già che una Session non possiede autorità e che il risultato deve essere promosso esplicitamente; `decisions/project-process-run-model` stabilisce la separazione fra Run e Process Instance e richiede provenienza verificabile. Il piano aggiorna queste decisioni con il dettaglio persistente scelto: record Product append-only con snapshot limitato e riferimento autorevole alla Run, preferito sia al solo link dinamico (che renderebbe l'input dipendente dalla proiezione Operations) sia alla copia dell'intera timeline (che duplicherebbe dati non necessari). L'unicità per Session privilegia retry idempotenti rispetto a promozioni multiple ambigue; la fusione di Session resta fuori ambito.\n\n---\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza sul piano |\n|---|---|---|\n| `npm --prefix control exec vitest run test/integration/project-session-run.test.ts test/integration/project-session-run-http.test.ts` | Verde: 2 file, 5 test | I test di promozione si aggiungono mantenendo verdi composizione, scope e lettura della Session. |\n| `npm --prefix control run test:web -- project` | Verde: 5 file, 30 test | Dialog, autorizzazione e provenienza devono essere provati senza regredire la pagina Project. |\n| `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build` | Verde | Tutti i file nuovi o modificati devono restare senza diagnostiche e il bundle deve compilare. |\n| `npx playwright test test/e2e/control-project-session-run.spec.ts` | Verde: 2 scenari | Il nuovo percorso browser estende questa prova end-to-end e mantiene verdi gli scenari US-014. |\n\n**Prerequisiti ambiente:** Node.js >= 22.19, dipendenze root/Control installate, Docker disponibile per PostgreSQL e browser Playwright già installato. Le migrazioni sono applicate in ordine numerico dall'harness esistente; non serve inizializzare un nuovo framework.\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Organization con admin e collaboratore attivi, Project con Process Instance e Session completata | Integration HTTP + component + browser E2E | Il collaboratore riceve `403 forbidden`, non vede un'azione attivabile e il conteggio degli input resta invariato; l'admin può aprire la conferma e ottenere `201` | TASK-02, TASK-03, TASK-04 |\n| AC-2 | Admin sul dettaglio di una Session completata non ancora promossa | Integration HTTP + component + browser E2E | Prima della conferma non esiste alcun input; il dialog nomina Session ed esito e soltanto il pulsante di conferma invia `{confirmed:true}` al confine di promozione | TASK-02, TASK-03, TASK-04 |\n| AC-3 | Session completata con outcome e decisioni, membership admin identificata | Integration PostgreSQL/HTTP + component + browser E2E | API, database e pagina mostrano lo stesso `sourceRunId`, `promotedByIdentityId`, email autore, snapshot dell'esito e Process Instance di destinazione anche dopo reload | TASK-01, TASK-02, TASK-03, TASK-04 |\n| AC-4 | Seconda Session completata e dialog di promozione aperto | Component + browser E2E | Se il revisore sceglie “Annulla”, non parte alcuna POST, il dialog si chiude e il numero/insieme degli input prima e dopo resta identico | TASK-03, TASK-04 |\n\n---\n\n## Strategia di test\n\n- Integration PostgreSQL sul contratto append-only, scope Organization/Project, provenienza, snapshot, unicità per Session, retry idempotente e assenza di mutazioni su `process_instances`.\n- Integration HTTP con identità reale derivata dalla membership: admin allowed, collaborator denied con audit, body chiuso, Session non completata o senza contesto rifiutata e nessun input parziale.\n- Component test React sul dialog accessibile, focus, riepilogo, azioni per ruolo, cancel senza chiamata e conferma/provenienza visibile; il fake API resta al confine HTTP e non nasconde il comportamento responsabile degli AC UI.\n- Browser E2E necessario: il percorso attraversa autenticazione/autorizzazione, dialog browser, Fastify, transazione PostgreSQL, relazione Operations–Product, reload e audit. I test di componente non possono provare da soli AC-1..AC-4.\n\n### Test E2E — Simulazione utente\n\n**Framework:** Playwright esistente\n**Video demo:** previsto; la registrazione appartiene ad `archetipo-review`.\n\n| Scenario | Flusso utente |\n|---|---|\n| Promozione governata | L'admin apre un Project con Session conclusa, seleziona il risultato, apre il dialog, verifica Session/esito/decisioni, conferma e osserva l'input con provenienza e autore dopo reload, mentre attività e gate restano invariati. |\n| Annullamento senza effetti | Su una seconda Session conclusa l'admin apre il dialog, annulla e confronta API/database/UI prima e dopo: nessun nuovo input e nessuna mutazione di processo. |\n| Ruolo non autorizzato | Il collaboratore consulta lo stesso risultato senza azione attivabile; una POST diretta riceve `403`, produce audit denied e non crea input. |\n\n---\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [decisions/governed-run-modes, decisions/project-process-run-model, domains/delivery-workflow]\n  update_after_acceptance: [decisions/governed-run-modes, decisions/project-process-run-model, decisions/control-foundation, domains/product-process-management, domains/project-and-workspace, domains/identity-and-policy, engineering/code-map, overview, references/prd]\n  create: []\n```\n\n> \U0001F3A8 I mockup per questa specifica sono disponibili in `docs/mockups/US-015/`\n\n_Piano generato tramite ARchetipo Planning — 2026-07-25_\n\n---\n\n## Rework — riconciliazione Wiki dopo review\n\nIl feedback di review non riapre il comportamento applicativo né i criteri AC-1..AC-4, già coperti dai task completati. Le modifiche a `control/src/modules/product/session-run-service.ts` e `control/src/modules/product/session-run-http.ts` hanno però invalidato le revisioni di evidenza di `architecture/context-map` e `decisions/remote-run-assignment-lease`.\n\nLa correzione aggiorna la mappa dei contesti con il confine di promozione esplicito: Operations resta owner della Session e del risultato, Product rilegge quel risultato e materializza un Process Input append-only, Identity & Policy autorizza e identifica il promotore. L'ADR del lease conserva la decisione accettata e chiarisce che lettura e promozione post-completion non modificano assignment, deadline, accept CAS, fencing o politica di redispatch.\n\n**Baseline rework:** `git diff --check` è verde. US-014 è `DONE`. Il catalogo corrente segnala entrambe le pagine come `stale` con il finding già riportato dal reviewer `WIKI_EVIDENCE_CHANGED`; i task richiedono di lasciarle `generated`, senza metadata `review` e senza finding prima della nuova review. Non sono previsti cambi a codice, schema, API o UI, quindi i mockup e la classificazione browser E2E del piano originale restano invariati.\n"
+tasks:
+  - id: TASK-01
+    title: Persisti l'input promosso con provenienza immutabile
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Rendere persistibile un solo input di processo per Session completata, con snapshot del risultato, Process Instance di destinazione e autore derivato dal server.
+
+      ## Read
+      - `control/migrations/005_remote_runs.sql` — identità, scope e lifecycle di `remote_runs`.
+      - `control/migrations/006_process_inception.sql` — chiavi e invarianti di `process_instances`.
+      - `control/src/modules/identity/repository.ts` — tipi Kysely e convenzioni delle tabelle.
+      - `control/src/modules/product/process-repository.ts` — transazioni e scope Product esistenti.
+      - `control/test/integration/project-session-run.test.ts` — fixture PostgreSQL e oracoli Session correnti.
+
+      ## Change
+      - `control/migrations/007_process_inputs.sql` — aggiungere `process_inputs` con FK Organization/Project/Process Instance/Run, snapshot JSONB limitato, autore, timestamp e unicità per `source_run_id`; non aggiungere transizioni o stato workflow.
+      - `control/src/modules/identity/repository.ts` — tipizzare la nuova tabella senza indebolire i tipi esistenti.
+      - `control/src/modules/product/process-input-domain.ts` — definire e validare il contratto pubblico dell'input promosso.
+      - `control/src/modules/product/process-input-repository.ts` — implementare lookup e create idempotente, sempre scope Organization/Project.
+      - `control/test/integration/process-input-promotion.test.ts` — provare persistenza, provenienza, unicità, isolamento e processo invariato.
+
+      ## Steps
+      1. Definire un payload chiuso versione 1 contenente `outcome` e `openDecisions`, con gli stessi limiti del risultato Session e senza copiare dialogo o timeline.
+      2. Creare la migrazione con riferimenti compositi che impediscano relazioni cross-Organization/cross-Project e un vincolo univoco per Session sorgente.
+      3. Implementare il repository in modo che un retry della stessa Session rilegga lo stesso input e non inserisca duplicati.
+      4. Verificare in test che l'inserimento conservi Run, Process Instance, identity/email autore e snapshot, e non aggiorni alcuna colonna di `process_instances`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/process-input-promotion.test.ts`
+      - Expect: tutti i casi passano su PostgreSQL 17, incluso retry idempotente, isolamento cross-scope e snapshot del processo invariato.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: nessuna diagnostica nei file nuovi o modificati.
+
+      ## Done
+      - [ ] AC-3 — il record persistito espone Session sorgente, Process Instance, identità/email autore e snapshot del risultato rileggibili.
+      - [ ] AC-3 — il retry autorizzato restituisce lo stesso input senza duplicare provenienza.
+      - [ ] AC-2 — nessuna scrittura avviene senza una chiamata esplicita al repository di promozione.
+
+      ## Blockers
+      US-014 deve restare `DONE`; la sua Session completata e il relativo risultato sono il prerequisito autorevole.
+    ref: TASK-01
+  - id: TASK-02
+    title: Applica autorizzazione e conferma nel confine Product
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Esporre un comando HTTP amministratore-only che promuove atomicamente una Session completata, deriva provenienza e attore dal server e registra audit consentito o negato.
+
+      ## Read
+      - `control/src/modules/product/session-run-service.ts` — lookup Project-scoped della Session e risultato autorevole.
+      - `control/src/modules/product/session-run-http.ts` — schema chiuso, membership e mapping errori.
+      - `control/src/modules/identity/policy.ts` — `requireActiveMembership` e `requireRole`.
+      - `control/src/modules/audit/service.ts` — redazione e contratto audit.
+      - `control/src/server/app.ts` — composition root Product/Operations.
+      - `control/test/integration/project-session-run-http.test.ts` — fixture Fastify e autorità server-derived.
+
+      ## Change
+      - `control/src/modules/product/process-input-service.ts` — coordinare Session, cockpit, repository e audit in una transazione logica; accettare solo Session `completed` con risultato e Process Instance coerente con lo snapshot.
+      - `control/src/modules/product/process-input-http.ts` — aggiungere `POST /api/projects/:projectId/session-runs/:runId/promotion` con body esatto `{confirmed:true}`, ruolo `admin`, errori pubblici stabili e risposta `201`/`200` per replay.
+      - `control/src/server/app.ts` — comporre e registrare servizio e route con le dipendenze esistenti.
+      - `control/src/web/api/client.ts` — aggiungere tipi/error message e metodo di promozione senza permettere al client di fornire Organization o autore.
+      - `control/test/integration/process-input-promotion.test.ts` — estendere la prova service/database per precondizioni e audit.
+      - `control/test/integration/process-input-promotion-http.test.ts` — provare admin, collaboratore, body chiuso, replay, Session non promuovibile e scope.
+
+      ## Steps
+      1. Risolvere la Session tramite `ProjectSessionRunService.get` e rileggere il cockpit corrente prima di costruire l'input.
+      2. Rifiutare fail-closed Run non completate, risultato assente, processo assente o `instanceId` divergente; non creare record parziali.
+      3. Derivare `organizationId`, `promotedByIdentityId` ed email dalla membership autenticata e applicare `requireRole("admin")` prima della mutazione.
+      4. Trattare `{confirmed:true}` come comando esplicito; rifiutare `false`, campi extra e authority client-supplied.
+      5. Registrare audit allowed sul record restituito e denied sul ruolo insufficiente con correlazione e soli identificatori non sensibili.
+      6. Restituire `201` alla prima creazione e `200` al replay idempotente, senza avanzare Process Instance.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/process-input-promotion.test.ts test/integration/process-input-promotion-http.test.ts test/integration/project-session-run-http.test.ts`
+      - Expect: admin e replay producono un solo input; collaboratore, body non confermato e precondizioni invalide non producono input e restituiscono i codici previsti.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: nessuna diagnostica nei confini Product, server e client modificati.
+
+      ## Done
+      - [ ] AC-1 — il collaboratore riceve `403 forbidden`, l'admin autenticato può promuovere e l'audit distingue denied/allowed.
+      - [ ] AC-2 — il server accetta soltanto il comando chiuso `{confirmed:true}` prima di scrivere.
+      - [ ] AC-3 — la risposta deriva e restituisce Session e autore senza fidarsi del body.
+      - [ ] AC-4 — richieste non confermate o rifiutate lasciano invariato l'insieme degli input.
+
+      ## Blockers
+      Dipende dal contratto persistente e dal repository di TASK-01.
+    ref: TASK-02
+  - id: TASK-03
+    title: Aggiungi il dialog di promozione accessibile al Project
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Consentire all'admin di selezionare un risultato concluso, annullare senza effetti oppure confermare la promozione e rileggere provenienza e autore nella pagina Project.
+
+      ## Read
+      - `docs/mockups/US-015/` — stati, gerarchia e comportamento approvati per selezione, conferma, annullamento ed esito.
+      - `docs/mockups/US-014/` — continuità visiva con la Session esplorativa.
+      - `control/src/web/pages/project.tsx` — dettaglio Session, polling e prova processo invariato.
+      - `control/src/web/api/client.ts` — nuovo metodo e tipi di input di processo.
+      - `control/test/web/project.test.tsx` — fixture per ruolo, Session conclusa e oracoli accessibili.
+      - `control/src/web/styles.css` — pattern responsive, focus e dialog esistenti.
+
+      ## Change
+      - `control/src/web/pages/project.tsx` — aggiungere azione admin-only, dialog modale con focus gestito, riepilogo Session/esito/decisioni, cancel locale, confirm asincrono e pannello provenienza.
+      - `control/src/web/styles.css` — implementare gli stati del mockup mantenendo contrasto, responsive layout e focus visibile; non ristrutturare sezioni Project estranee.
+      - `control/src/web/api/client.ts` — usare il comando `{confirmed:true}` e rileggere il contratto restituito.
+      - `control/test/web/project.test.tsx` — aggiungere test deterministici per ruolo, dialog, cancel, confirm, error focus, provenienza e reload simulato.
+
+      ## Steps
+      1. Mostrare l'azione soltanto quando la Session selezionata è `completed`, possiede risultato e non risulta già promossa; per collaboratori rendere la provenienza consultabile ma non l'azione.
+      2. Aprire un dialog semantico con titolo, descrizione, Session ID, outcome, decisioni e avviso che verrà creato un input governato senza avanzare il processo.
+      3. Portare il focus nel dialog, intrappolarlo secondo il pattern accessibile e restituirlo al trigger alla chiusura.
+      4. Su “Annulla” chiudere senza invocare `promoteProjectSessionResult`; su “Conferma promozione” inviare una sola richiesta e disabilitare il doppio submit.
+      5. Dopo successo mostrare input ID, Session sorgente e autore, mantenendo visibile la prova di Process Instance invariata anche dopo rilettura.
+      6. Gestire gli errori nel dialog/pannello con `role=alert` e focus senza perdere il risultato selezionato.
+
+      ## Verify
+      - Run: `npm --prefix control run test:web -- project`
+      - Expect: la suite resta verde e gli oracoli provano assenza della chiamata su cancel, chiamata unica su confirm, ruolo admin e provenienza visibile.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build`
+      - Expect: zero diagnostiche e bundle web compilato.
+
+      ## Done
+      - [ ] AC-1 — il collaboratore non dispone di un controllo di promozione attivabile; l'admin sì.
+      - [ ] AC-2 — il dialog espone conseguenze e provenienza prima che la conferma invochi l'API.
+      - [ ] AC-3 — dopo successo la pagina mostra Session e autore restituiti dal server.
+      - [ ] AC-4 — “Annulla” chiude il dialog, ripristina il focus e lascia a zero le chiamate di promozione.
+
+      ## Blockers
+      Dipende dall'API di TASK-02 e dai mockup verificati in `docs/mockups/US-015/`.
+    ref: TASK-03
+  - id: TASK-04
+    title: Dimostra la promozione e l'annullamento nel browser
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Provare attraverso il sistema reale che solo l'admin conferma una promozione persistita con provenienza e che cancel o ruolo insufficiente non creano input.
+
+      ## Read
+      - `test/e2e/control-project-session-run.spec.ts` — fixture US-014, Runner, completion, reload e snapshot processo.
+      - `test/e2e/control-fixture.mjs` — login, membership, database probe e lifecycle PostgreSQL.
+      - `test/e2e/control-organization.spec.ts` — creazione/invito di ruoli differenti.
+      - `control/test/integration/process-input-promotion.test.ts` — forma autorevole del record e query di verifica.
+
+      ## Change
+      - `test/e2e/control-project-session-promotion.spec.ts` — aggiungere scenari Playwright completi per conferma, annullamento e autorizzazione.
+      - `test/e2e/control-fixture.mjs` — aggiungere soltanto probe idempotenti necessari a contare/rileggere input e audit; non bypassare la UI nel percorso positivo o nel cancel.
+      - `playwright.config.ts` — modificare solo se serve includere il nuovo file secondo il pattern già configurato.
+
+      ## Steps
+      1. Preparare Project, Process Instance, Agent Profile, Runner e due Session concluse con risultati distinti riusando l'harness US-014.
+      2. Come admin, aprire la prima Session, verificare contenuto del dialog, confermare e attendere la risposta/persistenza.
+      3. Assertare in UI/API/database lo stesso input ID, `sourceRunId`, Process Instance e autore dopo reload; confrontare attività e gate prima/dopo.
+      4. Aprire la seconda Session, aprire il dialog e annullare; confrontare conteggio e insieme degli input prima/dopo e verificare assenza di POST.
+      5. Come collaboratore, verificare assenza del trigger e inviare una richiesta diretta per provare `403`, audit denied e nessun inserimento.
+
+      ## Verify
+      - Run: `npx playwright test test/e2e/control-project-session-run.spec.ts test/e2e/control-project-session-promotion.spec.ts`
+      - Expect: gli scenari US-014 e US-015 passano; la conferma crea un solo input con provenienza, cancel e collaboratore non ne creano, il processo resta invariato.
+
+      ## Done
+      - [ ] AC-1 — browser e API provano admin allowed e collaborator denied senza input parziale.
+      - [ ] AC-2 — l'input non esiste prima del click esplicito di conferma e compare dopo una sola POST.
+      - [ ] AC-3 — Session e autore coincidono tra database, API e UI anche dopo reload.
+      - [ ] AC-4 — il secondo dialog annullato non cambia ID o conteggio degli input.
+
+      ## Blockers
+      Dipende dal flusso UI completato in TASK-03 e da un ambiente Docker/Playwright operativo.
+    ref: TASK-04
+  - id: TASK-05
+    title: Riconcilia la Wiki con il nuovo confine di promozione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Aggiornare la conoscenza viva affinché ownership, autorità, provenienza e prove della promozione siano rintracciabili dal modello Product–Operations al codice.
+
+      ## Read
+      - `docs/wiki/decisions/governed-run-modes.md` — autorità separata e promozione esplicita.
+      - `docs/wiki/decisions/project-process-run-model.md` — relazioni Project, Process Instance e Run.
+      - `docs/wiki/decisions/control-foundation.md` — modular monolith e composition root.
+      - `docs/wiki/domains/product-process-management.md` — ownership Product Process.
+      - `docs/wiki/domains/project-and-workspace.md` — Project cockpit e Session.
+      - `docs/wiki/domains/identity-and-policy.md` — membership, ruolo e audit.
+      - `docs/wiki/engineering/code-map.md`, `docs/wiki/overview.md`, `docs/wiki/references/prd.md` — navigazione e stato consegnato.
+
+      ## Change
+      - Aggiornare esclusivamente le pagine elencate in `wiki_impact.update_after_acceptance` che risultano affette da `archetipo wiki affected`, lasciandole `generated` con fonti puntuali verso migrazione, servizio, HTTP, UI e test US-015.
+      - Non creare un nuovo ADR: estendere le sezioni context/decision/consequences/verification dei due ADR esistenti con input append-only, idempotenza, ruolo admin e assenza di avanzamento.
+
+      ## Steps
+      1. Eseguire `archetipo wiki affected --project-root /Users/stefanoleli/Project/ARchetipo --base-ref HEAD` dopo le modifiche applicative e riconciliare ogni pagina segnalata pertinente.
+      2. Documentare Product come owner dell'input promosso, Operations come owner della Session sorgente e Identity/Policy come owner di ruolo e attore.
+      3. Collegare migrazione, repository/service/HTTP, pagina Project, test integration e Playwright come evidenza, senza descrivere capacità future come già consegnate.
+      4. Aggiornare `references/prd` con US-015 consegnata e lasciare Workflow Run/PRD/gate successivi come capacità prospettiche.
+      5. Validare struttura e copertura Wiki senza approvare pagine: l'approvazione resta al gate umano di review.
+
+      ## Verify
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Expect: `data.ok=true`; nessun finding error e nessun warning di evidenza cambiata per le pagine in scope US-015.
+      - Run: `git diff --check`
+      - Expect: nessun errore di whitespace nei Markdown modificati.
+
+      ## Done
+      - [ ] AC-1 — la Wiki attribuisce autorizzazione e audit alla membership admin server-derived.
+      - [ ] AC-2 — gli ADR descrivono il comando esplicito come unico confine di scrittura.
+      - [ ] AC-3 — code map e domini collegano input, Session e autore alle fonti implementate.
+      - [ ] AC-4 — la verifica documentata include cancel senza input e processo invariato.
+
+      ## Blockers
+      Dipende dalle evidenze applicative e browser di TASK-01, TASK-02, TASK-03 e TASK-04.
+    ref: TASK-05
+  - id: TASK-06
+    title: Esegui il gate finale di regressione e workflow
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Chiudere l'implementazione solo quando tutte le evidenze AC-1..AC-4, le regressioni Control e la Wiki sono verdi e nessun task resta `TODO`.
+
+      ## Read
+      - `.archetipo/plans/US-015-plan.yaml` — comandi e dipendenze del piano persistito.
+      - `control/package.json` — script canonici di test, typecheck, lint e build.
+      - `playwright.config.ts` — configurazione browser corrente.
+      - `.archetipo/shared-runtime.md` — ordine task/review e directory dei comandi connector.
+
+      ## Change
+      - Nessun file applicativo previsto; correggere soltanto regressioni direttamente causate da US-015 nei file già in scope dei task precedenti.
+      - Non richiedere review finché questo task non è marcato `DONE` e `archetipo spec show US-015` non prova che ogni task è `DONE`.
+
+      ## Steps
+      1. Eseguire i test integration di Session e promozione.
+      2. Eseguire la suite web mirata, typecheck, lint e build Control.
+      3. Eseguire insieme gli scenari Playwright US-014 e US-015.
+      4. Validare Wiki e whitespace diff.
+      5. Se ogni controllo è verde, marcare `TASK-06` `DONE` dal project root.
+      6. Eseguire `archetipo spec show US-015` da `/Users/stefanoleli/Project/ARchetipo` e verificare che nessun task, incluso il gate, sia `TODO`; soltanto allora è consentito `archetipo spec review US-015`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/project-session-run.test.ts test/integration/project-session-run-http.test.ts test/integration/process-input-promotion.test.ts test/integration/process-input-promotion-http.test.ts`
+      - Expect: tutti i test integration passano senza failure.
+      - Run: `npm --prefix control run test:web -- project && npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build`
+      - Expect: suite web verde, zero diagnostiche e build riuscita.
+      - Run: `npx playwright test test/e2e/control-project-session-run.spec.ts test/e2e/control-project-session-promotion.spec.ts`
+      - Expect: tutti gli scenari browser passano, inclusa regressione US-014.
+      - Run: `archetipo wiki validate --profile bootstrap && git diff --check`
+      - Expect: `data.ok=true`, nessun finding error e diff senza errori whitespace.
+      - Run after marking this gate DONE: `archetipo spec show US-015`
+      - Expect: ogni task da TASK-01 a TASK-06 ha stato `DONE`; solo allora la spec può entrare in review.
+
+      ## Done
+      - [ ] AC-1 — il gate include prova integration/browser dell'autorizzazione admin e del diniego collaboratore.
+      - [ ] AC-2 — il gate include prova component/browser della conferma esplicita.
+      - [ ] AC-3 — il gate include prova PostgreSQL/API/UI della provenienza dopo reload.
+      - [ ] AC-4 — il gate include prova che cancel non invia POST e non crea input.
+      - [ ] Workflow — dopo aver marcato questo gate `DONE`, `archetipo spec show US-015` non mostra task `TODO` prima della richiesta di review.
+
+      ## Blockers
+      Dipende dal completamento di TASK-01, TASK-02, TASK-03, TASK-04 e TASK-05.
+    ref: TASK-06
+  - id: TASK-07
+    title: Riconcilia la mappa dei contesti con la promozione esplicita
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Rendere `architecture/context-map` coerente con il confine di promozione consegnato da US-015, eliminando il finding `WIKI_EVIDENCE_CHANGED` segnalato in review a `docs/wiki/architecture/context-map.md:69`.
+
+      ## Read
+      - `docs/wiki/architecture/context-map.md` — fonti, ownership e relazione Product–Operations correnti, con particolare attenzione alle righe vicine all'anchor 69.
+      - `control/src/modules/product/session-run-service.ts` — composizione e lettura Product-scoped della Session Operations.
+      - `control/src/modules/product/session-run-http.ts` — boundary HTTP della Session e derivazione del contesto.
+      - `control/src/modules/product/process-input-service.ts` — coordinamento della promozione e provenienza server-derived.
+      - `control/src/modules/product/process-input-http.ts` — comando esplicito e autorizzazione della promozione.
+      - `control/test/integration/process-input-promotion-http.test.ts` e `test/e2e/control-project-session-promotion.spec.ts` — evidenze di confine, policy e processo invariato.
+
+      ## Change
+      - `docs/wiki/architecture/context-map.md` — impostare `status: generated`, rimuovere il precedente blocco `review`, aggiornare le fonti puntuali e descrivere la relazione corrente: Operations possiede Session e risultato; Product legge la Session e crea il Process Input append-only; Identity & Policy autorizza e identifica il promotore.
+      - Non modificare altre pagine Wiki, codice applicativo o la classificazione dei bounded context; non descrivere Workflow Run o consumo dell'input come capacità già consegnate.
+
+      ## Steps
+      1. Sostituire la revisione di evidenza invalidata con fonti US-015 verso servizio/API di promozione e test integration/E2E, conservando le fonti Session ancora autorevoli.
+      2. Integrare nella sezione Relazioni il flusso unidirezionale Operations → Product: risultato completato letto con scope Project, snapshot limitato promosso in Product e nessun avanzamento automatico della Process Instance.
+      3. Attribuire autorizzazione e identità del promotore a Identity & Policy senza trasferire ownership del Process Input.
+      4. Verificare che la pagina resti aderente allo stato osservato, sia `generated`, non contenga metadata `review` e non introduca relazioni future come presenti.
+
+      ## Verify
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Expect: `data.ok=true` e nessun finding per `architecture/context-map`, incluso `WIKI_EVIDENCE_CHANGED`.
+      - Run: `archetipo wiki status`
+      - Expect: `architecture/context-map` risulta `generated` e non `stale`.
+      - Run: `git diff --check -- docs/wiki/architecture/context-map.md`
+      - Expect: nessun errore di whitespace nel file modificato.
+
+      ## Done
+      - [ ] AC-1 — la mappa attribuisce il gate autorizzativo alla membership admin server-derived.
+      - [ ] AC-3 — la relazione Product–Operations conserva Session sorgente, input promosso e autore nei rispettivi confini di ownership.
+      - [ ] Rework — il commento `docs/wiki/architecture/context-map.md:69` è risolto con fonti aggiornate, stato `generated` e nessun finding.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Riconcilia l'ADR del lease con lettura e promozione post-completion
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Riconciliare `decisions/remote-run-assignment-lease` con le evidenze Session modificate da US-015, eliminando il finding `WIKI_EVIDENCE_CHANGED` segnalato in review a `docs/wiki/decisions/remote-run-assignment-lease.md:14` senza cambiare la decisione accettata sul lease.
+
+      ## Read
+      - `docs/wiki/decisions/remote-run-assignment-lease.md` — decisione, conseguenze, verifica e fonti correnti, con particolare attenzione all'anchor 14.
+      - `control/src/modules/operations/run-service.ts` e `control/src/modules/operations/assignment-expiry.ts` — lifecycle, accept CAS, scadenza e fencing autorevoli.
+      - `control/src/modules/product/session-run-service.ts` — delega della Session e lettura del risultato completato.
+      - `control/src/modules/product/process-input-service.ts` — promozione post-completion e assenza di mutazioni Operations.
+      - `control/test/integration/process-input-promotion.test.ts` e `test/e2e/control-project-session-promotion.spec.ts` — prove di processo invariato e provenienza.
+
+      ## Change
+      - `docs/wiki/decisions/remote-run-assignment-lease.md` — impostare `status: generated`, rimuovere il precedente blocco `review`, aggiornare puntualmente le fonti e chiarire in Decisione, Conseguenze e Verifica che consultazione e promozione di una Session completata non modificano assignment, deadline, accept CAS, fencing, terminalità o redispatch.
+      - Conservare `decision_status: accepted`, alternative e scelta originaria; non trasformare l'ADR in una decisione sulla promozione e non creare un nuovo ADR.
+
+      ## Steps
+      1. Verificare nel codice che la promozione rilegga una Run già completata e non invochi comandi di assignment, accept, expiry o stato Operations.
+      2. Aggiornare le fonti verso il boundary di promozione e le prove pertinenti, mantenendo le evidenze del lease che restano autorevoli.
+      3. Aggiungere una precisazione circoscritta: il Process Input Product referenzia la Run e ne snapshotta outcome/decisioni dopo completion, mentre il contratto di lease resta invariato.
+      4. Collegare nella sezione Verifica i test che provano processo invariato e nessuna seconda offerta o modifica del lifecycle.
+      5. Confermare stato `generated`, assenza di metadata `review` e nessun finding sulla pagina.
+
+      ## Verify
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Expect: `data.ok=true` e nessun finding per `decisions/remote-run-assignment-lease`, incluso `WIKI_EVIDENCE_CHANGED`.
+      - Run: `archetipo wiki status`
+      - Expect: `decisions/remote-run-assignment-lease` risulta `generated` e non `stale`, con `decision_status: accepted` invariato.
+      - Run: `git diff --check -- docs/wiki/decisions/remote-run-assignment-lease.md`
+      - Expect: nessun errore di whitespace nel file modificato.
+
+      ## Done
+      - [ ] AC-2 — l'ADR chiarisce che la promozione è un comando Product distinto e non una conseguenza del lifecycle o del lease Operations.
+      - [ ] AC-3 — l'ADR collega la Run sorgente all'input promosso senza alterare assignment, fencing o ownership Operations.
+      - [ ] Rework — il commento `docs/wiki/decisions/remote-run-assignment-lease.md:14` è risolto con fonti aggiornate, stato `generated` e nessun finding.
+
+      ## Blockers
+      Dipende dalla relazione di confine resa esplicita in TASK-07.
+    ref: TASK-08
+  - id: TASK-09
+    title: Esegui il gate finale del rework Wiki
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Objective
+      Consentire una nuova review soltanto quando entrambe le pagine contestate sono riconciliate, la Wiki è valida e ogni task preservato o aggiunto risulta `DONE`.
+
+      ## Read
+      - `.archetipo/plans/US-015-plan.yaml` — task preservati, feedback di rework e ordine del gate.
+      - `docs/wiki/architecture/context-map.md` — risultato di TASK-07.
+      - `docs/wiki/decisions/remote-run-assignment-lease.md` — risultato di TASK-08.
+      - `docs/wiki/index.md` — stato catalogato delle due pagine.
+      - `.archetipo/shared-runtime.md` — ordine task/review e project root dei comandi connector.
+
+      ## Change
+      - Nessun cambiamento funzionale previsto; correggere soltanto difetti Wiki direttamente causati da TASK-07 o TASK-08.
+      - Non approvare pagine Wiki e non richiedere review finché questo gate non è `DONE` e il successivo `archetipo spec show US-015` non prova che nessun task è `TODO`.
+
+      ## Steps
+      1. Eseguire la validazione Wiki completa e verificare che le due pagine non abbiano finding né stato `stale`.
+      2. Eseguire il controllo whitespace sui due Markdown e sull'intero diff US-015.
+      3. Controllare che entrambe le pagine siano `generated`, senza metadata `review`, e che l'ADR conservi `decision_status: accepted`.
+      4. Verificare che il diff sia limitato alle riconciliazioni richieste e non alteri codice o contratti applicativi nel rework.
+      5. Se tutti i controlli sono verdi, marcare `TASK-09` `DONE` dal project root.
+      6. Eseguire `archetipo spec show US-015` da `/Users/stefanoleli/Project/ARchetipo`, confermare che ogni task da TASK-01 a TASK-09 sia `DONE` e soltanto allora richiedere `archetipo spec review US-015`.
+
+      ## Verify
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Expect: `data.ok=true`, nessun finding error e nessun `WIKI_EVIDENCE_CHANGED` per `architecture/context-map` o `decisions/remote-run-assignment-lease`.
+      - Run: `archetipo wiki status`
+      - Expect: entrambe le pagine risultano `generated` e non `stale`; l'ADR resta `accepted`.
+      - Run: `git diff --check -- docs/wiki/architecture/context-map.md docs/wiki/decisions/remote-run-assignment-lease.md && git diff --check`
+      - Expect: nessun errore di whitespace nei file modificati o nel diff complessivo.
+      - Run after marking this gate DONE: `archetipo spec show US-015`
+      - Expect: ogni task da TASK-01 a TASK-09 ha stato `DONE`; solo allora la spec può entrare in review.
+
+      ## Done
+      - [ ] AC-1 — la conoscenza riconciliata mantiene esplicita l'autorizzazione admin server-derived.
+      - [ ] AC-2 — la Wiki mantiene la conferma/promozione separata dal lifecycle di lease.
+      - [ ] AC-3 — provenienza, ownership Product–Operations e autore sono coerenti nelle due pagine.
+      - [ ] AC-4 — il rework non introduce mutazioni applicative e conserva l'evidenza già completata dell'annullamento senza input.
+      - [ ] Workflow — dopo aver marcato questo gate `DONE`, `archetipo spec show US-015` non mostra task `TODO` prima della nuova richiesta di review.
+
+      ## Blockers
+      Dipende dal completamento di TASK-07 e TASK-08; i task originali TASK-01..TASK-06 devono restare `DONE`.
+    ref: TASK-09

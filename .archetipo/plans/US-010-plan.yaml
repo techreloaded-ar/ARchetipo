@@ -1,0 +1,648 @@
+schema: archetipo/plan/v2
+spec_code: US-010
+body: "# US-010: Registrare e revocare un Runner remoto — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-24\n\n---\n\n## Specifica\n\n**Epica:** EP-002 — Inception governata in ARchetipo Control\n**Priorità:** HIGH | **Punti:** 5\n\n**Storia utente**\nCome platform engineer, voglio associare a Control un Runner che si connette dall'ambiente remoto, così da eseguire agenti senza esporre direttamente la macchina o il container a connessioni in ingresso.\n\n**Criteri di accettazione**\n- AC-1 — Un amministratore può creare credenziali monouso per associare un Runner.\n- AC-2 — Un Runner associato appare con identità, capacità e stato di connessione.\n- AC-3 — La connessione del Runner è iniziata dall'ambiente remoto verso Control.\n- AC-4 — Un Runner revocato non può ricevere nuove Run.\n- AC-5 — Un tentativo successivo alla revoca è visibile nell'audit.\n\n## Soluzione tecnica\n\nEstendere il modular monolith Control con un modulo Operations proprietario di enrollment, machine identity, capacità, stato e revoca dei Runner; aggiungere un package Node separato `runner/` che apre esclusivamente una connessione autenticata in uscita verso Control. La slice riusa il Run Protocol applicativo v1 senza esporre Pi RPC e limita l'esecuzione a un guard di dispatch verificabile: scheduling, lease, spool, recovery, pool e autoscaling restano fuori ambito.\n\n- `control/migrations/003_runner_operations.sql` conserva Runner, hash delle credenziali di enrollment e machine credential, capacità normalizzate, stato/revoca e ultimo contatto. Un token di enrollment casuale a 256 bit scade dopo 10 minuti, viene mostrato una sola volta e memorizzato soltanto come hash; il redeem atomico lo consuma e restituisce una sola volta una machine credential ruotabile, salvata dal Runner con permessi `0600`.\n- Le API amministrative applicano `requireRole(\"admin\")` per creare enrollment e revocare; lista e dettaglio derivano l'Organization dalla membership. Capacità e heartbeat arrivano soltanto dalla machine identity autenticata, sono validati con schema chiuso e limiti di dimensione e non possono essere impostati dal browser.\n- Control espone un endpoint HTTPS/WebSocket autenticato; il Runner non apre porte applicative e inizia la connessione verso l'URL configurato. Lo stato `online` richiede una sessione autenticata viva e un heartbeat recente; `lastSeenAt` è persistito, mentre una disconnessione o heartbeat scaduto rende il Runner `offline` senza cancellarne identità o capacità.\n- La revoca è transazionale: marca la machine identity, chiude la sessione attiva e fa fallire sia il guard di dispatch di nuovi comandi `run.start` sia ogni handshake successivo. Un tentativo post-revoca appende `runner.connect` con outcome `denied`, target Runner, reason `revoked` e correlation id; token, machine secret e payload sensibili non entrano nell'audit.\n- La UI aggiunge `/operations/runners` seguendo `docs/mockups/US-010/`: generazione enrollment con segreto visibile una sola volta, lista accessibile di identità/capacità/stato/ultimo contatto, conferma di revoca e collegamento all'evento audit correlato.\n\n### Decisioni architetturali\n\nLa scelta supera la soglia ADR perché definisce confine di integrazione remoto, autenticazione macchina, revoca e semantica di connessione. Creare `decisions/outbound-runner-transport`: scegliere HTTPS per enrollment e un WebSocket TLS outbound persistente per autenticazione, heartbeat e futuri comandi Run, con envelope versionati e correlation id. Rispetto al long polling, il WebSocket riduce latenza e duplicazione per eventi bidirezionali e permette di invalidare subito una sessione revocata; rispetto a porte inbound, SSH o Pi RPC remoto, mantiene chiuso l'ambiente edge e conserva il Run Protocol applicativo indipendente dal trasporto. Il costo è una gestione esplicita di heartbeat, timeout, backpressure e reconnect; questa storia non promette replay, lease o recovery e deve rifiutare capability/protocol version incompatibili prima di registrare il Runner online.\n\nLa machine credential bearer su TLS viene conservata solo come hash in Control e come file `0600` nel Runner, è distinta dal token di enrollment monouso e viene invalidata dalla revoca. mTLS è una valida alternativa futura ma viene rinviata perché richiederebbe bootstrap e rotazione PKI non necessari alla prima installazione self-hosted; chiavi statiche condivise sono respinte perché non consentono identità e revoca per Runner. Aggiornare le decisioni esistenti senza cambiare l'autorità del Run Protocol v1.\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |\n|---|---|---|\n| `test ! -d runner` | PASS: il package Runner non esiste | TASK-04 crea package, configurazione, container e confine outbound senza modificare gli internals dell'Agent. |\n| `node --test agent/test/run-protocol.test.mjs agent/test/run-executor.test.mjs agent/test/run-protocol-runtime.test.mjs` | PASS: 9 test, 0 failure | Il trasporto remoto deve riusare envelope e porta pubblici senza cambiare la semantica applicativa. |\n| `npm run test:agent-protocol-smoke` | PASS: entrambe le modalità, quattro comandi e rifiuto major incompatibile verificati | Le nuove prove Runner-Control si aggiungono allo smoke locale e non lo sostituiscono. |\n| `npm run typecheck:control && npm run lint:control` | PASS: nessuna diagnostica | Ogni file Operations/UI modificato deve restare privo di diagnostiche. |\n| `npm run test:control` | PASS: 11 file/37 test server e 2 file/7 test web | I test nuovi devono preservare tutte le slice Identity, Audit e Product. |\n| `cd cli && test -z \"$(gofmt -l .)\" && go vet ./... && go build ./... && go test ./...` | PASS | Il gate finale mantiene verde il Core anche se la storia modifica soltanto package Node. |\n\nPrerequisiti ambiente: Node.js >=22.19 (presente v25.8.1), npm (presente 11.17.0), Docker con daemon e rete container (CLI presente 29.5.2), PostgreSQL 17 e browser Playwright già usati dalle fixture Control. `golangci-lint` non è installato nel baseline: prima del gate eseguire `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`, poi il lint richiesto dalla CI.\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Organization inizializzata, sessione admin e nessun Runner | Integration DB/API + browser E2E | L'admin genera un enrollment con expiry e segreto restituito una sola volta; il primo redeem crea una machine identity e replay/scadenza restituiscono un errore senza una seconda identità | TASK-02, TASK-06, TASK-07 |\n| AC-2 | Runner container configurato con enrollment valido e capability fixture | Contract/container + browser E2E | La pagina mostra runner id/nome, OS, executor/toolchain, stato `Online` e `lastSeenAt` aggiornato dal heartbeat autenticato; dopo stop mostra `Offline` conservando identità e capacità | TASK-05, TASK-06, TASK-07 |\n| AC-3 | Reti separate con la sola URL Control configurata nel container Runner | E2E container | Il Runner non ascolta porte applicative e Control osserva una sessione nata dal client remoto verso l'endpoint TLS/WebSocket | TASK-05, TASK-07 |\n| AC-4 | Runner online e guard di dispatch capace di inviare un envelope `run.start` compatibile | Integration transport + E2E container/browser | Dopo revoca la sessione viene chiusa, un nuovo dispatch restituisce `runner_revoked` e il Runner non riceve alcun comando; un reconnect con la vecchia credential è negato | TASK-05, TASK-06, TASK-07 |\n| AC-5 | Runner revocato tenta un nuovo handshake con correlation id noto | Integration audit + browser E2E | Audit mostra esattamente un evento `runner.connect`, outcome `denied`, reason `revoked`, target Runner e la correlazione nota, senza token o secret | TASK-02, TASK-05, TASK-06, TASK-07 |\n\nI test usano credenziali reali generate e hashate e attraversano il middleware machine auth; i double non sostituiscono persistenza, revoca, session registry o audit responsabili degli esiti.\n\n## Strategia di test\n\n- Unit test per schema capability, scadenza/consumo token, redazione, stato derivato da heartbeat e compatibilità degli envelope.\n- Integration test su PostgreSQL 17 reale per consume atomico concorrente, hash-only, revoca, ultimo contatto, audit e isolamento Organization; test Fastify per policy admin, errori pubblici e machine auth.\n- Contract test bidirezionali tra server Control e client Runner per handshake, heartbeat, versione incompatibile, disconnect e guard `run.start`, riusando le fixture pubbliche del Run Protocol v1 senza importare adapter Pi.\n- Browser E2E Playwright obbligatorio: il percorso attraversa OIDC, route React, API, PostgreSQL, processo/container Runner, WebSocket e audit. La fixture esistente viene estesa con risorse nominate e cleanup idempotente.\n- E2E container con rete dedicata per provare la direzione outbound e l'assenza di listener Runner; TLS è terminato da Control/test proxy con CA deterministica, senza disabilitare la verifica certificato.\n- Gate finale con typecheck/lint/build/test Runner e Control, E2E focalizzato, regressioni Agent/Run Protocol e tutti i controlli Go richiesti dal repository.\n\n### E2E browser — Simulazione utente\n\n**Framework:** Playwright già configurato nel repository.\n**Video demo:** filmabile; `archetipo-review` potrà registrare il percorso enrollment → Runner online → revoca → reconnect negato → audit.\n\n| Scenario | Flusso utente |\n|---|---|\n| Pairing e presenza | Login OIDC admin, apertura Runner, generazione enrollment, avvio del container con il segreto, attesa dello stato Online e verifica di identità, capacità e ultimo contatto. |\n| Revoca fail-closed | Revoca con conferma, tentativo di dispatch e reconnect con la vecchia credential, verifica che nessun comando raggiunga il Runner e apertura dell'audit sull'evento denied correlato. |\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [decisions/four-layer-product-architecture, decisions/control-foundation, decisions/run-protocol, architecture/context-map, operations/development]\n  update_after_acceptance: [decisions/four-layer-product-architecture, decisions/control-foundation, decisions/run-protocol, architecture/context-map, engineering/code-map, operations/development]\n  create: [decisions/outbound-runner-transport, domains/fleet-and-run-management]\n```\n\n> \U0001F3A8 Mockup per questa specifica disponibili in `docs/mockups/US-010/`.\n\n_Piano generato tramite ARchetipo Planning — 2026-07-24_\n\n## Rework — affidabilità del gate e allineamento della conoscenza\n\nLa review cumulativa ha prodotto quattro feedback, ciascuno trasformato in un Fix indipendente:\n\n1. rendere deterministico il bootstrap PostgreSQL dello smoke Runner-Control, oggi esposto a una finestra tra `pg_isready` e la prima connessione host della migrazione;\n2. aggiornare `decisions/source-of-truth-transition` distinguendo le slice Project/Workspace e dispatch Runner già implementate dalle proiezioni di delivery, riconciliazione e connector `control` ancora futuri;\n3. aggiornare `references/prd` separando esplicitamente intenzione del PRD e stato osservato, con evidenze correnti per Core, Agent, Control e Runner;\n4. persistere risultati riproducibili e redatti per i gate US-008..US-010 e per la review cumulativa.\n\nIl rework non cambia API, schema, protocollo o decisioni architetturali del prodotto. Le pagine Wiki restano `generated` fino al gate umano; i Fix aggiornano conoscenza ed evidenze, non sintetizzano metadata di approvazione.\n\n### Baseline mirata del rework\n\n| Controllo | Risultato | Conseguenza |\n|---|---|---|\n| `npm run build:control && npm run build:runner` | PASS | Gli artefatti dello smoke compilano prima del fix. |\n| Cinque esecuzioni consecutive di `node test/e2e/runner-control-smoke.mjs` | PASS 5/5 nel baseline corrente; la review ha osservato 1 fallimento su 4 con `Connection terminated unexpectedly` | Il finding è intermittente e richiede retry bounded della migrazione, non un singolo rerun verde. |\n| `node --check test/e2e/runner-control-smoke.mjs` | PASS | Il file ancorato non ha errori sintattici preesistenti. |\n| `npm run typecheck:control && npm run lint:control` | PASS | I confini Control sono privi di diagnostiche. |\n| `docs/wiki/decisions/source-of-truth-transition.md:70` | FAIL documentale: dichiara non esistenti Project e dispatch remoto | La verifica deve citare le implementazioni correnti e confinare il futuro alle proiezioni complete, riconciliazione e connector `control`. |\n| `docs/wiki/references/prd.md:12` | FAIL documentale: soltanto Core è dichiarato sostenuto da evidenze | La reference deve separare intenzione e stato osservato per le slice US-001..US-010. |\n| `find docs/test-results -maxdepth 2 -type f` | FAIL di evidenza: directory assente | I gate eseguiti devono produrre riepiloghi persistenti, riproducibili e privi di secret/ID temporanei. |\n\n`test/e2e/control-fixture.mjs` fornisce il precedente repository per il retry selettivo: fino a 60 tentativi con intervallo 500 ms soltanto per `57P03`, `ECONNREFUSED` e `Connection terminated unexpectedly`, preservando l'ultimo errore come causa. Errori SQL, schema o configurazione non transitori devono continuare a fallire subito.\n\n### Mappa delle evidenze di rework\n\n| Feedback | Evidenza richiesta | Task |\n|---|---|---|\n| Bootstrap PostgreSQL | Dieci bootstrap indipendenti, tutti con gli oracoli JSON AC-1..AC-5 invariati e senza risorse Docker residue | TASK-09, TASK-13 |\n| Source of truth | Testo corrente con link/evidenze Project–Workspace e Runner dispatch; affermazioni future limitate a connector/proiezioni/riconciliazione | TASK-10, TASK-13 |\n| Reference PRD | Separazione esplicita tra intento e stato osservato, con evidenze Core/Agent/Control/Runner e senza presentare US-011+ come realizzate | TASK-11, TASK-13 |\n| Risultati persistenti | Riepiloghi US-008, US-009, US-010 e cumulativo con comandi, esiti, conteggi e revisione/commit, senza secret o identificativi effimeri | TASK-12, TASK-13 |\n\n### Impatto Wiki aggiuntivo del rework\n\n```yaml\nwiki_impact:\n  update_after_acceptance: [decisions/source-of-truth-transition, references/prd]\n```\n"
+tasks:
+  - id: TASK-01
+    title: Persistire enrollment, machine identity e stato Runner
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Rendere PostgreSQL l'autorità transazionale per enrollment monouso, identità Runner, capacità, ultimo contatto e revoca.
+
+      ## Read
+      - `control/migrations/001_identity_policy.sql` — ownership Organization, identità e invarianti audit
+      - `control/migrations/002_project_workspace.sql` — convenzioni di migrazione, UUID, timestamp e vincoli
+      - `control/src/modules/audit/service.ts` e `repository.ts` — append redatto e correlazione
+      - `docs/wiki/decisions/control-foundation.md` — confine modular monolith e dati Control
+
+      ## Change
+      - `control/migrations/003_runner_operations.sql` — tabelle enrollment e Runner, hash credential, capacità JSON validate, revoca, last seen e indici
+      - `control/src/modules/operations/domain.ts` — tipi chiusi per enrollment, capability, stato e machine identity
+      - `control/src/modules/operations/repository.ts` — create/consume/revoke/touch/list organization-scoped
+      - `control/src/modules/operations/service.ts` — token casuali, hash, consume atomico, stato derivato e audit
+      - Non persistere token o machine secret in chiaro; non introdurre pool, scheduling, lease, spool o Kubernetes
+
+      ## Steps
+      1. Aggiungere una migrazione successiva a `002` con enrollment legato all'Organization, expiry, consumed timestamp e digest univoco; modellare Runner con identity UUID, credential digest, capability versionate, last seen e revoked timestamp.
+      2. Generare token e machine credential con almeno 256 bit di entropia; restituirli una sola volta e confrontare soltanto digest constant-time.
+      3. Consumare l'enrollment sotto transazione e lock in modo che richieste concorrenti creino una sola identità; replay e token scaduto non producono side effect.
+      4. Validare capacità con schema chiuso e limiti espliciti per OS, architettura, executor, toolchain, modelli e concurrency; mantenere identità/capacità dopo offline o revoca.
+      5. Rendere la revoca idempotente e appendere audit amministrativo senza dati sensibili; predisporre l'append machine denied usato dal trasporto.
+
+      ## Verify
+      - Run: `npm --prefix control run db:migrate:test && npm --prefix control run test:integration -- runner-operations`
+      - Run: `npm run typecheck:control && npm run lint:control`
+      - Expect: migrazioni 001→003 sono ripetibili, un solo consume concorrente crea il Runner, il database contiene soltanto digest e i file modificati non hanno diagnostiche.
+
+      ## Done
+      - [ ] AC-1 — Un enrollment ha expiry, segreto one-shot e consume atomico senza seconda identità su replay.
+      - [ ] AC-2 — Identità, capacità e last seen sono persistiti e sempre confinati all'Organization.
+      - [ ] AC-5 — Il servizio può registrare un deny machine correlato senza includere credenziali.
+
+      ## Blockers
+      US-008 è in REVIEW e fornisce Organization, policy e audit richiesti.
+    ref: TASK-01
+  - id: TASK-02
+    title: Provare invarianti e redazione del dominio Operations
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Fornire evidenza automatica che enrollment, capacità, revoca e audit rispettino gli invarianti anche sotto concorrenza e input ostili.
+
+      ## Read
+      - `control/test/fixtures/postgres.ts` — fixture PostgreSQL 17 e lifecycle risorse
+      - `control/test/integration/identity-policy.test.ts` — pattern di concorrenza, transazioni e audit
+      - `control/src/modules/operations/domain.ts`, `repository.ts`, `service.ts` — contratti di TASK-01
+
+      ## Change
+      - `control/test/integration/runner-operations.test.ts` — consume concorrente, expiry/replay, capability, last seen, revoke e audit
+      - `control/test/integration/migrations.test.ts` — ordine/checksum e upgrade fino a `003_runner_operations.sql`
+      - Non usare database in-memory o asserzioni su sole chiamate mock per gli esiti di accettazione
+
+      ## Steps
+      1. Creare fixture Organization e enrollment con clock controllabile; lanciare due consume concorrenti dello stesso token e asserire un solo Runner.
+      2. Verificare che token scaduti, replay, capability sconosciute/sovradimensionate e ownership errata falliscano senza mutazioni.
+      3. Interrogare direttamente PostgreSQL per provare assenza dei segreti in chiaro, persistenza di identità/capacità e monotonicità di last seen.
+      4. Revocare due volte e provare esito stabile; appendere un tentativo machine negato e asserire action, target, reason e correlation redatti.
+
+      ## Verify
+      - Run: `npm --prefix control run test:integration -- runner-operations migrations`
+      - Expect: gli oracoli attraversano PostgreSQL reale; un solo consume riesce, segreti/replay non persistono e l'evento denied contiene soltanto metadati consentiti.
+
+      ## Done
+      - [ ] AC-1 — Il test osserva un'unica identità dopo consume concorrente e nessuna identità dopo expiry/replay.
+      - [ ] AC-2 — Il test legge identità, capacità e last seen conservati dal repository reale.
+      - [ ] AC-5 — Il test legge dall'audit il deny post-revoca correlato e prova l'assenza di token/secret.
+
+      ## Blockers
+      TASK-01 fornisce schema e servizi Operations.
+    ref: TASK-02
+  - id: TASK-03
+    title: Esporre il trasporto outbound autenticato in Control
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Objective
+      Accettare connessioni Runner iniziate dall'esterno, mantenere presenza/heartbeat e bloccare immediatamente sessioni o nuovi comandi dopo revoca.
+
+      ## Read
+      - `agent/src/run-protocol.mjs` e `agent/src/run-executor.mjs` — envelope applicativi pubblici e porta transport-neutral
+      - `agent/test/run-protocol-compatibility.mjs` — kit di compatibilità riusabile
+      - `control/src/server/app.ts` — composition root, error envelope e correlation id
+      - `control/src/modules/identity/policy.ts` — pattern fail-closed e audit
+      - `docs/wiki/decisions/run-protocol.md` — confini esclusi dalla decisione applicativa v1
+
+      ## Change
+      - `control/src/modules/operations/machine-auth.ts` — autenticazione digest, versione e rifiuti redatti
+      - `control/src/modules/operations/connection-registry.ts` — sessione unica, heartbeat, disconnect e guard dispatch
+      - `control/src/modules/operations/transport.ts` — endpoint HTTPS/WebSocket e envelope chiusi di hello/heartbeat/command
+      - `control/src/server/app.ts` e `control/package*.json` — composizione e dipendenza WebSocket fissata
+      - `docs/wiki/decisions/outbound-runner-transport.md` — ADR con context, decision, alternatives, consequences e verification markers
+      - Non esporre Pi RPC, non creare listener sul Runner, non promettere lease/replay/recovery e non accettare identity dal payload non autenticato
+
+      ## Steps
+      1. Definire handshake versionato con runner id, credential, capability version e correlation; autenticare prima di registrare presenza o mutare last seen.
+      2. Gestire una sessione autorevole per Runner, heartbeat limitato e timeout deterministico; una sostituzione di connessione chiude quella vecchia senza duplicare presenza.
+      3. Implementare `dispatchRunStart` sopra il registry: rileggere lo stato non revocato prima di inviare un envelope Run Protocol valido e restituire errori chiusi per offline/revoked/incompatible.
+      4. Su revoca chiudere la sessione attiva; su handshake successivo negare prima della presenza e appendere `runner.connect` denied con correlation.
+      5. Scrivere l'ADR con fonti repository, scelta WebSocket outbound, alternativa long polling/mTLS/inbound e limiti espliciti della slice.
+
+      ## Verify
+      - Run: `npm --prefix control run test:integration -- runner-transport`
+      - Run: `npm run typecheck:control && npm run lint:control`
+      - Expect: solo un handshake autenticato rende online il Runner, heartbeat aggiorna last seen, revoke chiude la sessione e nessun `run.start` viene inviato dopo il deny.
+
+      ## Done
+      - [ ] AC-2 — Il registry espone stato online/offline e last seen derivati da una sessione autenticata.
+      - [ ] AC-3 — L'unico endpoint applicativo è accettato da un client outbound; nessuna connessione Control→Runner è richiesta.
+      - [ ] AC-4 — Revoke chiude la sessione e il guard di dispatch restituisce `runner_revoked` prima dell'invio.
+      - [ ] AC-5 — Reconnect revocato produce un deny audit correlato.
+
+      ## Blockers
+      TASK-01 e TASK-02 stabiliscono machine identity, revoca e invarianti persistenti.
+    ref: TASK-03
+  - id: TASK-04
+    title: Creare il package e il container ARchetipo Runner
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Fornire un Runner installabile che effettua enrollment, conserva la machine credential in sicurezza e mantiene soltanto una connessione outbound verso Control.
+
+      ## Read
+      - `agent/package.json` e `agent/src/run-protocol-runtime.mjs` — baseline Node, export pubblici e composition senza internals
+      - `agent/src/run-protocol.mjs` — validazione degli envelope `run.start`
+      - `scripts/build-npm.mjs`, `scripts/publish-npm.mjs` e `test/npm/agent-packaging.test.mjs` — convenzioni package e release
+      - `control/compose.yaml` e `control/Dockerfile` — hardening container self-hosted esistente
+
+      ## Change
+      - `runner/package.json`, `runner/package-lock.json`, `runner/tsconfig.json`, `runner/eslint.config.js` — package Node >=22.19 con versioni fissate
+      - `runner/src/config.ts`, `enrollment.ts`, `credential-store.ts`, `capabilities.ts`, `control-client.ts`, `cli.ts` — bootstrap e client outbound
+      - `runner/Dockerfile` e `runner/README.md` — immagine non-root, filesystem read-only salvo volume credential e nessuna porta pubblicata
+      - `package.json` — alias espliciti build/test/typecheck/lint Runner
+      - `scripts/build-npm.mjs`, `scripts/publish-npm.mjs` e `test/npm/runner-packaging.test.mjs` — packaging opzionale senza rendere Runner dipendenza del Core
+      - Non implementare scheduler, pool, autoscaling, lease, spool o adapter Kubernetes; non importare moduli privati Agent
+
+      ## Steps
+      1. Validare URL HTTPS Control, CA, enrollment token e directory credential; rifiutare TLS disabilitato o secret da argv/log.
+      2. Raccogliere capability consentite in forma deterministica, riscattare una volta l'enrollment e scrivere atomicamente la credential con mode `0600`.
+      3. Aprire il WebSocket dal Runner, inviare hello/capability e heartbeat con jitter limitato; applicare reconnect con backoff bounded e interrompere su risposta revoked.
+      4. Validare gli envelope Run Protocol prima di consegnarli a una porta executor; per US-010 usare un probe executor che registra soltanto ricezione/non-ricezione senza avviare una Run reale.
+      5. Costruire immagine OCI non-root senza `EXPOSE`, aggiungere health locale di processo non in ascolto e integrare package/release mantenendo Core e Agent opzionali.
+
+      ## Verify
+      - Run: `npm install --prefix runner && npm run typecheck:runner && npm run lint:runner && npm run test:runner && npm run build:runner`
+      - Run: `npm run test:runner-packaging && npm run test:agent-packaging`
+      - Expect: il Runner compila senza diagnostiche, non stampa credenziali, salva mode 0600, non ascolta porte e il packaging non rende Agent/Runner requisiti del Core.
+
+      ## Done
+      - [ ] AC-2 — Il client dichiara identità e capacità validate e mantiene heartbeat autenticati.
+      - [ ] AC-3 — Processo e container aprono soltanto la connessione verso Control e non pubblicano listener applicativi.
+      - [ ] AC-4 — Una risposta revoked arresta reconnect/dispatch e nessun comando viene consegnato al probe executor.
+
+      ## Blockers
+      TASK-03 definisce il contratto di trasporto e l'endpoint Control.
+    ref: TASK-04
+  - id: TASK-05
+    title: Verificare il contratto Runner-Control e la revoca fail-closed
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Provare attraverso processi e rete reali direzione outbound, presenza, heartbeat e impossibilità di ricevere nuovi comandi dopo revoca.
+
+      ## Read
+      - `test/e2e/agent-protocol-smoke.mjs` — fixture Run Protocol e oracoli di compatibilità
+      - `test/e2e/control-fixture.mjs` — PostgreSQL, Control e cleanup nominato
+      - `playwright.config.ts` — timeout, output e configurazione E2E
+      - `control/src/modules/operations/transport.ts` e `runner/src/control-client.ts` — due estremi produttivi
+
+      ## Change
+      - `runner/test/control-client.test.ts` — enrollment, credential store, heartbeat, reconnect e redazione
+      - `control/test/integration/runner-transport.test.ts` — machine auth, registry, dispatch guard e audit
+      - `test/e2e/runner-control-smoke.mjs` — container/rete/TLS, capability, stop/reconnect/revoke e probe executor
+      - `package.json` — script `test:runner-control` deterministico
+      - Non sostituire socket, database, revocation service o machine auth con mock negli scenari AC-2..AC-5
+
+      ## Steps
+      1. Avviare PostgreSQL 17, Control con certificato/CA deterministici e un container Runner su rete nominata senza porte pubblicate.
+      2. Riscattare l'enrollment e attendere heartbeat; asserire da API/database identità, capability, online e last seen.
+      3. Fermare il processo e superare il timeout con clock controllato per osservare offline senza perdita di dati; riavviare con la credential e osservare online.
+      4. Inviare un `run.start` probe prima della revoca e provarne la ricezione; revocare, tentare un secondo dispatch e asserire errore `runner_revoked` e zero nuovi envelope lato Runner.
+      5. Tentare reconnect con correlation nota, asserire chiusura/deny e leggere l'evento audit redatto; ispezionare il container per provare assenza di socket in ascolto.
+
+      ## Verify
+      - Run: `npm run test:runner-control`
+      - Run: `npm run test:agent-protocol-smoke`
+      - Expect: lo smoke produce evidenza JSON con outbound=true, online/offline, capability, lastSeen, pre-revoke delivery=1, post-revoke delivery=0 e audit denied correlato; lo smoke Agent resta verde.
+
+      ## Done
+      - [ ] AC-2 — Lo smoke osserva identità, capacità, stato e ultimo contatto attraverso API/database reali.
+      - [ ] AC-3 — L'ispezione di rete prova che il Runner non ascolta e che la sessione nasce dal suo container.
+      - [ ] AC-4 — Dopo revoca il contatore probe non aumenta e dispatch/reconnect falliscono.
+      - [ ] AC-5 — L'audit contiene il singolo tentativo post-revoca con correlation attesa e nessun secret.
+
+      ## Blockers
+      TASK-03 e TASK-04 forniscono server e client produttivi; Docker deve essere disponibile.
+    ref: TASK-05
+  - id: TASK-06
+    title: Esporre amministrazione Runner in API e UI Control
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Objective
+      Consentire all'amministratore di generare l'enrollment, osservare presenza/capacità e revocare un Runner dalla UI accessibile di Control.
+
+      ## Read
+      - `docs/mockups/US-010/` — gerarchia, copy, stati e interazioni da implementare
+      - `control/src/modules/product/http.ts` — errori pubblici, membership e organization scope
+      - `control/src/web/api/client.ts`, `router.tsx`, `layouts/control-shell.tsx` — tipi API, routing e navigazione
+      - `control/src/web/pages/audit.tsx` — rappresentazione audit e correlazione
+      - `control/test/web/project.test.tsx` — pattern component integration senza nascondere gli oracoli
+
+      ## Change
+      - `control/src/modules/operations/http.ts` — API admin enrollment/list/detail/revoke e endpoint machine compose
+      - `control/src/server/app.ts` — registrazione route Operations
+      - `control/src/web/api/client.ts` — tipi e chiamate Runner con error mapping redatto
+      - `control/src/web/router.tsx`, `layouts/control-shell.tsx`, `pages/runners.tsx`, `styles.css` — route `/operations/runners`, navigazione, enrollment one-shot, stato/capability/last seen e revoke dialog
+      - `control/test/integration/runner-http.test.ts` e `control/test/web/runners.test.tsx` — policy, contract e oracoli UI
+      - Non mostrare token dopo la chiusura del dialog, non affidare revoca/stato al solo client e non modificare le regole visuali fuori dal perimetro del mockup
+
+      ## Steps
+      1. Esporre create enrollment e revoke soltanto a `admin`; derivare Organization dalla membership e restituire errori chiusi per token scaduto/usato e Runner revoked.
+      2. Esporre lista/detail ai membri attivi con identity, capability, stato derivato e last seen, senza credential digest o metadata sensibili.
+      3. Aggiungere la sezione Runner alla shell e implementare gli stati empty, enrollment one-shot con copy/download sicuro, connecting/online/offline/revoked e conferma distruttiva accessibile.
+      4. Dopo revoca aggiornare la scheda senza optimistic success prematuro; mostrare la correlazione del deny e consentire navigazione/ricerca nell'Audit senza duplicare il registro.
+      5. Testare focus, label, annunci live e stato non espresso dal solo colore; usare API fake soltanto nei component test, mentre policy/persistenza restano coperte dall'integration test reale.
+
+      ## Verify
+      - Run: `npm --prefix control run test:integration -- runner-http && npm --prefix control run test:web -- runners`
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control`
+      - Expect: collaborator riceve 403 su create/revoke, admin vede il secret una volta, la UI rende tutti gli stati/capability e i file modificati compilano senza diagnostiche.
+
+      ## Done
+      - [ ] AC-1 — L'admin ottiene credenziale ed expiry una volta; replay e collaborator non possono crearla.
+      - [ ] AC-2 — La pagina rende identità, capacità, Online/Offline/Revocato e ultimo contatto con testo accessibile.
+      - [ ] AC-4 — La conferma revoca aggiorna lo stato autorevole e non dichiara successo se il server rifiuta.
+      - [ ] AC-5 — Il deny post-revoca è raggiungibile in Audit tramite correlation senza esporre credential.
+
+      ## Blockers
+      TASK-01 fornisce il dominio e TASK-03 il registry; usare i mockup completati in `docs/mockups/US-010/`.
+    ref: TASK-06
+  - id: TASK-07
+    title: Provare il percorso amministratore–Runner–audit nel browser
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Fornire evidenza E2E filmabile dei cinque criteri attraversando OIDC, UI, API, PostgreSQL, container Runner e trasporto reale.
+
+      ## Read
+      - `test/e2e/control-organization.spec.ts` e `control-project.spec.ts` — login, bootstrap e stile degli oracoli Playwright
+      - `test/e2e/control-fixture.mjs` — lifecycle PostgreSQL/OIDC/Control
+      - `test/e2e/runner-control-smoke.mjs` — container, CA e probe di TASK-05
+      - `docs/mockups/US-010/` — percorso visuale e copy atteso
+
+      ## Change
+      - `test/e2e/control-fixture.mjs` — helper Runner/CA/revoca, query audit e cleanup idempotente di risorse nominate
+      - `test/e2e/control-runner.spec.ts` — pairing, online/capability, outbound, revoke, no dispatch e audit
+      - `playwright.config.ts` — solo eventuali timeout/progetto necessari al container, senza indebolire retry o video
+      - Non usare richieste API dirette al posto delle azioni admin UI salvo setup tecnico della fixture; non asserire AC-4 dalla sola etichetta Revocato
+
+      ## Steps
+      1. Bootstrap Control via OIDC come admin, aprire Runner e generare l'enrollment dalla UI provando la visibilità one-shot.
+      2. Avviare il container con token e CA, attendere la card Online e asserire identity, capability e last seen; provare dalla fixture la direzione della socket.
+      3. Revocare dal dialog UI e attendere la chiusura della sessione; tentare dispatch e reconnect con la vecchia credential e asserire zero nuovi comandi nel probe.
+      4. Aprire Audit, filtrare per correlation e asserire action `runner.connect`, esito Negato, reason revoked e target corretto senza segreti.
+      5. Rendere il test seriale e ripetibile, raccogliere trace/video soltanto secondo config e ripulire container, rete, CA e database anche su failure.
+
+      ## Verify
+      - Run: `npm run build:control && npx playwright test test/e2e/control-runner.spec.ts`
+      - Expect: lo scenario passa con oracoli visibili per AC-1..AC-5, il Runner non riceve il secondo comando e l'audit mostra il deny correlato.
+
+      ## Done
+      - [ ] AC-1 — Playwright osserva enrollment one-shot creato dall'admin.
+      - [ ] AC-2 — Playwright osserva identità, capability, Online e last seen prodotti dal Runner reale.
+      - [ ] AC-3 — La fixture prova socket iniziata dal container e nessun listener applicativo Runner.
+      - [ ] AC-4 — Il probe osserva zero comandi dopo revoca, non soltanto una label UI.
+      - [ ] AC-5 — Playwright osserva l'evento audit denied con correlation e senza secret.
+
+      ## Blockers
+      TASK-02, TASK-05 e TASK-06 devono rendere disponibili persistenza, client/server, UI e fixture.
+    ref: TASK-07
+  - id: TASK-08
+    title: Eseguire il gate finale e provare tutte le task completate
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Chiudere US-010 soltanto con tutti gli AC verificati, nessuna regressione e nessuna task ancora TODO.
+
+      ## Read
+      - `.github/workflows/ci.yml` e `AGENTS.md` — gate repository autorevoli
+      - `package.json`, `runner/package.json`, `control/package.json` — script effettivi introdotti o estesi
+      - `.archetipo/plans/US-010-plan.yaml` — acceptance map e dipendenze da verificare
+      - Risultati di TASK-02, TASK-05 e TASK-07 — evidenze focalizzate
+
+      ## Change
+      - Solo correzioni minime nei file già in scope se un gate rivela una regressione; non ampliare la storia
+      - Artefatti temporanei, report Playwright, container e reti devono essere rimossi o restare ignorati
+
+      ## Steps
+      1. Eseguire typecheck, lint, build e test Runner e Control; quindi smoke Runner-Control, E2E browser focalizzato e regressioni Agent/Run Protocol.
+      2. Eseguire in `cli/` gofmt, vet, build, test e golangci-lint; installare il prerequisito mancante con il comando deterministico se necessario.
+      3. Verificare `git status` e assenza di credential, token, CA private, report o risorse container non previste; controllare che Wiki/ADR contengano fonti e marker richiesti.
+      4. Marcare TASK-08 DONE con `archetipo task done US-010 TASK-08` dal project root.
+      5. Ricaricare con `archetipo spec show US-010` dal project root e confermare che ogni TASK-01..TASK-08 sia DONE; soltanto allora è consentito `archetipo spec review US-010`.
+
+      ## Verify
+      - Run: `npm run typecheck:runner && npm run lint:runner && npm run build:runner && npm run test:runner && npm run test:runner-packaging`
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control && npm run test:control`
+      - Run: `npm run test:runner-control && npx playwright test test/e2e/control-runner.spec.ts && npm run test:agent && npm run test:agent-protocol-smoke`
+      - Run in `cli/`: `test -z "$(gofmt -l .)" && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run from project root after marking this gate DONE: `archetipo spec show US-010`
+      - Expect: tutti i comandi passano, nessuna credenziale o risorsa temporanea resta, l'envelope mostra TASK-01..TASK-08 tutte DONE e nessuna task TODO prima della review.
+
+      ## Done
+      - [ ] AC-1 — Le prove domain/API/browser dell'enrollment monouso sono verdi.
+      - [ ] AC-2 — Le prove contract/browser di identità, capacità, stato e last seen sono verdi.
+      - [ ] AC-3 — Lo smoke container prova la sola connessione outbound.
+      - [ ] AC-4 — Le prove transport/browser mostrano zero dispatch post-revoca.
+      - [ ] AC-5 — Le prove integration/browser mostrano il deny audit correlato e redatto.
+      - [ ] `archetipo spec show US-010` non contiene task TODO dopo che TASK-08 è stata marcata DONE; solo allora si può richiedere review.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06 e TASK-07 devono essere DONE.
+    ref: TASK-08
+  - id: TASK-09
+    title: Rendere deterministico il bootstrap PostgreSQL Runner-Control
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Eliminare la finestra intermittente tra readiness del container PostgreSQL e migrazione host senza mascherare errori non transitori.
+
+      ## Read
+      - `test/e2e/runner-control-smoke.mjs:166` — feedback ancorato, `pg_isready`, porta pubblicata e migrazione immediata
+      - `test/e2e/control-fixture.mjs:323` — `waitForPostgres` e `runMigrationsWhenReady`, precedente repository
+      - `control/src/server/migrate.ts` — comando e failure boundary della migrazione
+
+      ## Change
+      - `test/e2e/runner-control-smoke.mjs` — helper bounded per la migrazione e sostituzione dell'invocazione one-shot
+      - Non cambiare migrazioni, schema, codice Control/Runner, timeout degli oracoli applicativi o classificazione degli errori non transitori
+
+      ## Steps
+      1. Incapsulare `node dist/server/server/migrate.js` in un helper che preservi l'ultimo errore e ritenti al massimo 60 volte con intervallo di 500 ms.
+      2. Ammettere al retry soltanto diagnostiche contenenti `57P03`, `ECONNREFUSED` o `Connection terminated unexpectedly`, leggendo `stderr` in modo sicuro.
+      3. Rilanciare immediatamente ogni errore estraneo all'allowlist, così SQL o configurazione difettosi non diventano timeout.
+      4. All'esaurimento del budget, fallire con un messaggio specifico e l'ultimo errore come `cause`.
+      5. Mantenere `pg_isready` come diagnostica del container, ma usare il completamento della migrazione come prova autorevole che la connessione host è accettata.
+
+      ## Verify
+      - Run: `node --check test/e2e/runner-control-smoke.mjs`
+      - Run: `npm run build:control && npm run build:runner && node test/e2e/runner-control-smoke.mjs`
+      - Expect: sintassi valida e smoke verde con JSON invariato; gli errori transitori sono ritentati entro il limite, quelli non transitori falliscono subito.
+
+      ## Done
+      - [ ] AC-1 — Enrollment e consume usano un PostgreSQL realmente pronto alla migrazione.
+      - [ ] AC-2 — Identità, capacità, stato e last seen restano osservati.
+      - [ ] AC-3 — Outbound e zero porte pubblicate restano osservati.
+      - [ ] AC-4 — Gli oracoli pre/post revoca restano 1 e 0 consegne.
+      - [ ] AC-5 — Reconnect negato e audit redatto restano osservati.
+      - [ ] Il feedback a `test/e2e/runner-control-smoke.mjs:166` è risolto con retry selettivo e bounded.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Allineare la decisione sulla transizione delle fonti autorevoli
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-06
+    body: |-
+      ## Objective
+      Descrivere correttamente quali slice Control/Runner sono implementate e quali parti della transizione delle fonti autorevoli restano future.
+
+      ## Read
+      - `docs/wiki/decisions/source-of-truth-transition.md:1` — intero ADR, con feedback ancorato alla verifica a riga 70
+      - `control/src/modules/product/` — evidenze Project e Workspace Control
+      - `control/src/modules/operations/connection-registry.ts` e `transport.ts` — evidenze del dispatch Runner
+      - `test/e2e/control-project.spec.ts` e `test/e2e/runner-control-smoke.mjs` — prove osservabili correnti
+      - `docs/wiki/decisions/run-protocol.md` — confine applicativo già accettato
+
+      ## Change
+      - `docs/wiki/decisions/source-of-truth-transition.md` — aggiornare verifica e formulazioni di stato corrente/futuro con evidenze e link repository
+      - Conservare contesto, scelta, alternative, conseguenze positive/negative e lifecycle dell'ADR; non dichiarare implementato il connector `control`, le proiezioni complete di delivery o la loro riconciliazione
+
+      ## Steps
+      1. Sostituire l'affermazione obsoleta che Project e dispatch remoto non esistono con lo stato osservato delle slice US-009 e US-010.
+      2. Citare i moduli e i test che provano Project–Workspace e dispatch Runner, distinguendo implementazione corrente da visione completa.
+      3. Dichiarare ancora futuri connector `control`, proiezioni di delivery complete, freshness/reconciliation e relativo E2E.
+      4. Verificare che alternative e conseguenze restino coerenti con l'adozione progressiva e che la pagina mantenga `status: generated` fino alla review.
+
+      ## Verify
+      - Run: `rg -n "Project|Workspace|dispatch|connector .control.|proiezioni|riconciliazione" docs/wiki/decisions/source-of-truth-transition.md`
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`
+      - Expect: la verifica cita implementazioni e test correnti, limita esplicitamente il futuro e la Wiki resta strutturalmente valida senza approvare la pagina.
+
+      ## Done
+      - [ ] AC-2 — La decisione riconosce la presenza osservabile del modello Project–Workspace in Control.
+      - [ ] AC-3 — La decisione riconosce il trasporto/dispatch outbound Runner implementato.
+      - [ ] AC-4 — Il guard di dispatch post-revoca è incluso nelle evidenze correnti senza estendere lo scope a scheduling o delivery completi.
+      - [ ] Il feedback a `docs/wiki/decisions/source-of-truth-transition.md:70` è risolto e le capacità future restano esplicite.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Separare intenzione PRD e stato implementato osservato
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-06
+    body: |-
+      ## Objective
+      Correggere la reference PRD affinché preservi l'intento originale e descriva separatamente le evidenze implementate di Core, Agent, Control e Runner per US-001..US-010.
+
+      ## Read
+      - `docs/wiki/references/prd.md:1` — frontmatter, introduzione ancorata a riga 12 e PRD incorporato
+      - `docs/PRD.md` — fonte originale che non deve essere riscritta dalla reference
+      - `docs/wiki/overview.md`, `engineering/code-map.md` e `operations/development.md` — stato osservato e fonti correnti
+      - `agent/`, `control/`, `runner/` e `test/e2e/` — confini ed evidenze US-001..US-010
+
+      ## Change
+      - `docs/wiki/references/prd.md` — sostituire l'introduzione obsoleta con sezioni chiare “intenzione dichiarata” e “stato osservato”
+      - Non alterare il testo del PRD incorporato, non presentare US-011+ come implementate e non aggiungere metadata di review
+
+      ## Steps
+      1. Preservare il PRD sottostante come documento di intenzione e dichiararne esplicitamente la natura normativa/prospettica.
+      2. Aggiungere un riepilogo osservato che colleghi Core, Agent, Control Product/Operations e Runner alle slice US-001..US-010 e alle rispettive fonti/test.
+      3. Separare capacità implementate, slice parziali e direzioni future, evitando formule assolute non sostenute dal repository.
+      4. Conservare frontmatter e `status: generated` per il successivo gate umano.
+
+      ## Verify
+      - Run: `rg -n "intenzione|stato osservato|Core|Agent|Control|Runner|US-001|US-010" docs/wiki/references/prd.md`
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`
+      - Expect: la reference distingue intento e realtà implementata, cita evidenze per i quattro layer, non modifica il PRD originale e la Wiki resta valida.
+
+      ## Done
+      - [ ] AC-1 — Le API/admin Control sono riconosciute come evidenza implementata senza riscrivere l'intento PRD.
+      - [ ] AC-2 — Runner e Control Operations sono descritti come slice osservate con fonti verificabili.
+      - [ ] AC-3 — La connessione outbound Runner è distinta dalla visione futura più ampia.
+      - [ ] AC-4 — La revoca implementata è distinta dalle capacità future di scheduling/recovery.
+      - [ ] AC-5 — L'audit post-revoca è incluso tra le evidenze correnti.
+      - [ ] Il feedback a `docs/wiki/references/prd.md:12` è risolto.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Persistire i risultati redatti di US-008..US-010 e della review cumulativa
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      Creare evidenze riproducibili, versionate e prive di dati sensibili per i gate Control/Runner di US-008..US-010 e per la review cumulativa.
+
+      ## Read
+      - `package.json`, `control/package.json` e `runner/package.json` — comandi autorevoli di test/build/lint
+      - `test/e2e/control-organization.spec.ts`, `control-project.spec.ts`, `control-runner.spec.ts` — scenari US-008..US-010
+      - `test/e2e/runner-control-smoke.mjs` — JSON runtime contenente identificativi temporanei da non persistere
+      - `.gitignore` e `docs/test-results/` — policy e destinazione delle evidenze
+
+      ## Change
+      - `docs/test-results/US-008/control-organization-summary.md` — comandi, conteggi ed esito redatto
+      - `docs/test-results/US-009/control-project-summary.md` — comandi, conteggi ed esito redatto
+      - `docs/test-results/US-010/runner-control-summary.md` — prove ripetute, oracoli aggregati ed esito redatto
+      - `docs/test-results/review-US-001-US-010.md` — matrice cumulativa di gate/esiti e finding risolti
+      - Non persistere password, token, machine credential, chiavi private, URL con credenziali, UUID/correlation id temporanei o log grezzi
+
+      ## Steps
+      1. Eseguire typecheck, lint, build e test Control; eseguire i test Organization e Project per le slice US-008/US-009.
+      2. Eseguire build/test Runner, smoke Runner-Control dieci volte e Playwright Runner per US-010.
+      3. Eseguire i gate cumulativi Agent/Core già richiesti dalla review e registrare soltanto comando, revisione Git, prerequisiti, conteggio, durata aggregata ed exit status.
+      4. Normalizzare gli oracoli Runner in chiavi booleane/conteggi aggregati, eliminando identità, correlation id e valori generati.
+      5. Scrivere i quattro riepiloghi Markdown con data ISO, ambiente minimo riproducibile e collegamenti ai test sorgente.
+
+      ## Verify
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control && npm run test:control`
+      - Run: `npx playwright test test/e2e/control-organization.spec.ts test/e2e/control-project.spec.ts test/e2e/control-runner.spec.ts`
+      - Run: `npm run typecheck:runner && npm run lint:runner && npm run build:runner && npm run test:runner && for attempt in 1 2 3 4 5 6 7 8 9 10; do node test/e2e/runner-control-smoke.mjs || exit $?; done`
+      - Run: `test -s docs/test-results/US-008/control-organization-summary.md && test -s docs/test-results/US-009/control-project-summary.md && test -s docs/test-results/US-010/runner-control-summary.md && test -s docs/test-results/review-US-001-US-010.md`
+      - Expect: tutti i gate passano, i quattro file sono presenti e contengono risultati riproducibili senza identificativi effimeri o secret.
+
+      ## Done
+      - [ ] AC-1 — Il riepilogo Control documenta il gate amministrativo/enrollment.
+      - [ ] AC-2 — I riepiloghi documentano Organization, Project/Workspace e presenza Runner.
+      - [ ] AC-3 — US-010 registra l'oracolo outbound/zero porte in forma aggregata.
+      - [ ] AC-4 — US-010 registra una consegna pre-revoca e zero post-revoca per ogni iterazione.
+      - [ ] AC-5 — US-010 registra reconnect denied/audit redatto senza correlation id reali.
+      - [ ] Il feedback generale sui risultati persistenti US-008..US-010 e review cumulativa è risolto.
+
+      ## Blockers
+      TASK-09 deve stabilizzare lo smoke prima della raccolta ripetuta.
+    ref: TASK-12
+  - id: TASK-13
+    title: Validare Wiki ed evidenze del rework
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+      Provare che i quattro feedback siano risolti insieme, senza regressioni Wiki, affermazioni obsolete, dati sensibili o perdita degli oracoli AC-1..AC-5.
+
+      ## Read
+      - `docs/wiki/decisions/source-of-truth-transition.md` e `docs/wiki/references/prd.md` — pagine corrette
+      - `docs/wiki/index.md` — catalogo e stato delle pagine
+      - `docs/test-results/US-008/`, `US-009/`, `US-010/` e `review-US-001-US-010.md` — evidenze persistenti
+      - `test/e2e/runner-control-smoke.mjs` — retry e oracoli produttori
+
+      ## Change
+      - Solo correzioni puntuali nelle due pagine Wiki o nei quattro riepiloghi se la validazione rivela omissioni; non modificare metadata di approvazione, fonti prodotto o test per far passare il controllo
+
+      ## Steps
+      1. Eseguire `wiki status` e `wiki validate --profile bootstrap`; richiedere assenza di errori, issue e capability non mappate.
+      2. Cercare e rifiutare le due affermazioni obsolete (“Project … dispatch remoto … non esistono” e “Soltanto ARchetipo Core…”).
+      3. Verificare nelle due pagine link/fonti correnti e distinzione esplicita tra implementato e futuro.
+      4. Verificare presenza, completezza e riproducibilità dei quattro riepiloghi.
+      5. Cercare pattern sensibili e identificativi effimeri nei risultati; il test fallisce se trova credenziali, chiavi, URL autenticati, UUID o correlation id reali.
+      6. Rieseguire uno smoke Runner-Control e confrontare le chiavi dell'oracolo con il riepilogo aggregato.
+
+      ## Verify
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status && archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`
+      - Run: `! rg -n "Project, proiezioni Control, dispatch remoto.*non esistono|Soltanto ARchetipo Core è oggi sostenuto" docs/wiki/decisions/source-of-truth-transition.md docs/wiki/references/prd.md`
+      - Run: `rg -n "connector .control.|proiezioni|riconciliazione|intenzione|stato osservato|Agent|Control|Runner" docs/wiki/decisions/source-of-truth-transition.md docs/wiki/references/prd.md`
+      - Run: `test -s docs/test-results/US-008/control-organization-summary.md && test -s docs/test-results/US-009/control-project-summary.md && test -s docs/test-results/US-010/runner-control-summary.md && test -s docs/test-results/review-US-001-US-010.md`
+      - Run: `! rg -n "(BEGIN .*PRIVATE KEY|postgresql://[^[:space:]]+:[^[:space:]@]+@|machineCredential|correlationId|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})" docs/test-results`
+      - Expect: Wiki valida, vecchie affermazioni assenti, confini futuri espliciti, evidenze presenti/redatte e smoke ancora coerente con AC-1..AC-5.
+
+      ## Done
+      - [ ] AC-1 — Evidenze persistenti e Wiki descrivono enrollment/admin corrente.
+      - [ ] AC-2 — Project/Workspace e stato Runner sono documentati con fonti reali.
+      - [ ] AC-3 — Outbound Runner è corrente, connector Control/proiezioni complete restano futuri.
+      - [ ] AC-4 — Revoca e zero dispatch post-revoca restano verificati.
+      - [ ] AC-5 — Audit denied è documentato senza identificativi o segreti.
+      - [ ] Tutti e quattro i feedback hanno una prova automatica o un controllo riproducibile.
+
+      ## Blockers
+      TASK-09, TASK-10, TASK-11 e TASK-12 devono essere DONE.
+    ref: TASK-13
+  - id: TASK-14
+    title: Eseguire il gate finale del rework US-010
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+      - TASK-13
+    body: |-
+      ## Objective
+      Riportare US-010 in review soltanto con bootstrap stabile, conoscenza corrente, evidenze persistenti/redatte, regressioni verdi e nessuna task TODO.
+
+      ## Read
+      - `.github/workflows/ci.yml` e `AGENTS.md` — gate autorevoli
+      - `.archetipo/plans/US-010-plan.yaml` — piano storico e rework
+      - `test/e2e/runner-control-smoke.mjs` — fix PostgreSQL
+      - `docs/wiki/decisions/source-of-truth-transition.md`, `docs/wiki/references/prd.md` e `docs/test-results/` — dossier da accettare
+
+      ## Change
+      - Solo correzioni minime nei file già in scope di TASK-09..TASK-13 se un gate rivela una regressione
+      - Non ampliare API, schema o protocollo; non approvare pagine Wiki e non lasciare artefatti temporanei o risorse Docker
+
+      ## Steps
+      1. Eseguire typecheck, lint, build e test Runner/Control; eseguire cinque smoke Runner-Control aggiuntivi e i tre E2E browser US-008..US-010.
+      2. Eseguire regressioni Agent/Run Protocol e tutti i gate Go richiesti da AGENTS.md.
+      3. Rieseguire `wiki status`, `wiki validate --profile bootstrap` e i controlli di redazione/presenza evidenze di TASK-13.
+      4. Verificare `git status`, assenza di secret, report temporanei, container e reti residue.
+      5. Marcare TASK-14 DONE con `archetipo task done US-010 TASK-14` dal project root.
+      6. Ricaricare `archetipo spec show US-010`, confermare TASK-01..TASK-14 tutte DONE e nessuna TODO; soltanto allora eseguire `archetipo spec review US-010`.
+
+      ## Verify
+      - Run: `npm run typecheck:runner && npm run lint:runner && npm run build:runner && npm run test:runner && npm run test:runner-packaging`
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control && npm run test:control`
+      - Run: `for attempt in 1 2 3 4 5; do node test/e2e/runner-control-smoke.mjs || exit $?; done && npx playwright test test/e2e/control-organization.spec.ts test/e2e/control-project.spec.ts test/e2e/control-runner.spec.ts && npm run test:agent && npm run test:agent-protocol-smoke`
+      - Run in `cli/`: `test -z "$(gofmt -l .)" && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status && archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`
+      - Run from project root after marking this gate DONE: `archetipo spec show US-010`
+      - Expect: tutti i controlli passano, Wiki/evidenze sono pronte al dossier umano, nessuna risorsa temporanea resta e l'envelope mostra TASK-01..TASK-14 DONE senza TODO.
+
+      ## Done
+      - [ ] AC-1 — Enrollment monouso e bootstrap database sono verdi.
+      - [ ] AC-2 — Identità, capacità, stato Runner e Project/Workspace sono verdi e documentati.
+      - [ ] AC-3 — La connessione outbound resta provata e correttamente descritta.
+      - [ ] AC-4 — Revoca e zero dispatch successivi restano fail-closed.
+      - [ ] AC-5 — Tentativo post-revoca e audit redatto restano verificati.
+      - [ ] I quattro feedback sono risolti e le pagine/evidenze sono pronte al gate umano.
+      - [ ] `archetipo spec show US-010` non contiene task TODO dopo TASK-14 DONE; solo allora si può richiedere review.
+
+      ## Blockers
+      TASK-09, TASK-10, TASK-11, TASK-12 e TASK-13 devono essere DONE; TASK-01..TASK-08 restano preservate come DONE.
+    ref: TASK-14

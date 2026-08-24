@@ -1,0 +1,44 @@
+schema: archetipo/spec/v2
+code: US-044
+title: Creare e inizializzare un workspace dalla UI
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: HIGH
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-044: Creare e inizializzare un workspace dalla UI
+
+  **Epic:** EP-008 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come persona che comincia un nuovo lavoro,
+  voglio creare e inizializzare un workspace dalla UI scegliendone i parametri,
+  così da ottenere un workspace pronto senza eseguire l'inizializzazione da riga di comando.
+
+  **Dimostrazione**
+  Partendo dalla UI, il revisore indica la directory di destinazione, sceglie connector, tool, percorsi e impostazioni di worktree, conferma e ottiene un workspace inizializzato con configurazione e skill al loro posto, sul processo incorporato. Indicando una directory già inizializzata o non scrivibile osserva il rifiuto prima che venga scritto un solo file. Interrompendo un'inizializzazione osserva che non resta alcun workspace parziale.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — La UI raccoglie destinazione, connector, tool, percorsi e impostazioni di worktree e crea il workspace inizializzato.
+  - [ ] AC-2 — Le scelte offerte sono quelle che l'inizializzazione accetta davvero, senza duplicare l'elenco nel frontend.
+  - [ ] AC-3 — Una destinazione non valida, non scrivibile o già inizializzata è rifiutata indicando il motivo, prima di scrivere qualsiasi file.
+  - [ ] AC-4 — Un'inizializzazione fallita o interrotta non lascia un workspace parzialmente creato.
+  - [ ] AC-5 — Il workspace creato risulta inizializzato sul processo incorporato, con identità e versione persistite, senza che la UI richieda una scelta.
+
+  **Fuori ambito**
+  Scelta fra processi diversi da quello incorporato, apertura del workspace appena creato nella stessa sessione, registro dei workspace conosciuti, importazione di un workspace esistente e modifica dei parametri dopo l'inizializzazione.
+history:
+  - status: TODO
+    at: "2026-08-19T11:03:29Z"
+  - status: PLANNED
+    at: "2026-08-19T13:14:36Z"
+  - status: IN PROGRESS
+    at: "2026-08-19T13:14:49Z"
+  - status: REVIEW
+    at: "2026-08-19T13:33:43Z"
+  - status: DONE
+    at: "2026-08-19T13:34:22Z"

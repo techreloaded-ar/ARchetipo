@@ -1,0 +1,60 @@
+schema: archetipo/spec/v2
+code: US-023
+title: Eseguire un'azione ARchetipo tramite un provider intercambiabile
+epic:
+  code: EP-003
+  title: Esecuzione gestita e portabile
+priority: HIGH
+points: 3
+status: DONE
+scope: MVP
+body: |
+  #### US-023: Eseguire un'azione ARchetipo tramite un provider intercambiabile
+
+  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come utilizzatore di ARchetipo,
+  voglio affidare un'azione a un provider di esecuzione selezionato,
+  così da usare lo stesso processo indipendentemente dal sistema che esegue l'agente.
+
+  **Dimostrazione**
+  Partendo da una spec `TODO` e da un provider di prova disponibile, il revisore avvia l'azione di pianificazione e osserva una nuova esecuzione collegata alla spec, il provider selezionato e il risultato restituito. Il revisore provoca poi un errore del provider e osserva l'esecuzione terminare come fallita senza modificare lo stato della spec.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Avviando un'azione supportata, ARchetipo crea una sola esecuzione collegata alla spec e identifica il provider scelto.
+  - [ ] AC-2 — Quando il provider completa l'azione, l'esecuzione espone il risultato ricevuto.
+  - [ ] AC-3 — Quando il provider fallisce, l'esecuzione espone l'errore e la spec conserva lo stato precedente all'avvio.
+  - [ ] AC-4 — Un provider che non supporta l'azione viene rifiutato con un messaggio che nomina la capability mancante.
+
+  **Fuori ambito**
+  Interfaccia web, provider ARcipelago reale, esecuzione parallela e distribuzione delle skill.
+
+  ## Contesto Wiki
+  Nessuna Wiki canonica è ancora presente nel repository; il comportamento corrente è stato verificato nel README e nel codice della CLI.
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - Completare il bootstrap della Wiki canonica prima della nuova review: creare le pagine obbligatorie `architecture/context-map`, `engineering/code-map`, `operations/development` e `overview` con evidenze reali e copertura coerente, quindi eseguire `archetipo wiki --project-root . validate --profile bootstrap` fino a ottenere `data.ok: true`. La decisione `decisions/execution-provider-boundary` è pronta, ma i quattro finding `WIKI_BOOTSTRAP_PAGE_MISSING` bloccano l'approvazione congiunta di incremento e conoscenza.
+history:
+  - status: TODO
+    at: "2026-08-14T23:13:08Z"
+  - status: PLANNED
+    at: "2026-08-15T08:13:48Z"
+  - status: IN PROGRESS
+    at: "2026-08-15T19:40:21Z"
+  - status: REVIEW
+    at: "2026-08-15T19:53:08Z"
+  - status: TODO
+    at: "2026-08-15T19:55:29Z"
+  - status: PLANNED
+    at: "2026-08-15T20:00:50Z"
+  - status: IN PROGRESS
+    at: "2026-08-15T20:01:58Z"
+  - status: REVIEW
+    at: "2026-08-15T20:18:56Z"
+  - status: DONE
+    at: "2026-08-15T20:23:26Z"

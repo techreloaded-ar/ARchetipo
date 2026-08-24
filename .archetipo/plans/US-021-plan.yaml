@@ -1,0 +1,746 @@
+schema: archetipo/plan/v2
+spec_code: US-021
+body: |-
+  # US-021: Migrare un Project al connector Control — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-07-26
+
+  ---
+
+  ## Specifica
+
+  **Epica:** EP-003 — Governance e scala post-MVP
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **Storia utente**
+  Come amministratore di progetto, voglio migrare esplicitamente la gestione degli artefatti delivery dal connettore corrente a Control, così da cambiare sistema di verità senza dual write o perdita di provenienza.
+
+  **Criteri di accettazione**
+  - AC-1 — La migrazione dichiara sorgente, destinazione, perimetro e conteggio atteso.
+  - AC-2 — Il cutover è impedito quando la verifica degli artefatti non passa.
+  - AC-3 — Dopo il cutover esiste un solo sistema autorevole per ogni tipo migrato.
+  - AC-4 — Gli artefatti migrati conservano origine, versione e collegamento al Project.
+  - AC-5 — Prima della conferma la procedura può essere annullata senza cambiare l'autorità della sorgente.
+
+  **Fuori ambito**
+  Migrazione bidirezionale continua e supporto simultaneo di due fonti autorevoli.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Control acquisisce una **procedura di migrazione della fonte di verità** posseduta dal modulo Product, articolata in momenti separati e reversibili fino alla conferma: *dichiarazione* → *acquisizione degli artefatti* → *verifica* → *cutover*, con *annullamento* disponibile in ogni stato non terminale. L'autorità sul singolo tipo di artefatto di delivery diventa un dato esplicito e a riga unica per Project: prima del cutover vale `core` con il connector dichiarato, dopo il cutover vale `control`. Questa è la lettura letterale della [decisione sulla fonte di verità](/decisions/source-of-truth-transition.md), che rinvia al post-MVP «una procedura di migrazione» e vieta il dual write.
+
+  - **Perimetro dell'incremento.** La spec chiede il *cambio di sistema di verità* per un Project e lo dimostra osservando gli artefatti in Control con origine e versione. L'incremento realizza quindi la procedura e il registro di autorità dentro Control. **Non** costruisce il client Go del connector `control` in `cli/internal/connector/`: nessun criterio di accettazione e nessun passo del `Dimostra` osserva la CLI parlare con Control, e includerlo raddoppierebbe l'ambito senza aggiungere evidenza. Il piano lascia però il posto esatto in cui quel client si innesterà: il registro di autorità è la risposta alla domanda «chi possiede questo tipo di artefatto per questo Project». L'assunzione è registrata nelle note.
+
+  - **Chi porta i byte.** Control è un servizio remoto e non può leggere da sé il checkout di un connector `file` né le issue di un connector `github`. Gli artefatti vengono quindi **acquisiti in modo esplicito** dall'amministratore (o dal suo tooling) come manifesto JSON già normalizzato: un elemento per il PRD e un elemento per ogni spec del backlog, ciascuno con riferimento sorgente, versione sorgente, digest dichiarato e contenuto. Control non impara i formati dei connector Core (nessuna dipendenza YAML, nessun parser di backlog): riceve elementi tipizzati e conta, ricalcola e confronta. Questo mantiene il confine del modulo dove già sta e rende la verifica deterministica.
+
+  - **Modello dati** (`control/migrations/012_delivery_source_migration.sql`).
+    - `project_delivery_authority(organization_id, project_id, artifact_type, system, source_connector_kind, migration_id, updated_at)` con **chiave primaria `(organization_id, project_id, artifact_type)`**: l'unicità dell'autorità per tipo migrato è un invariante di schema, non una convenzione applicativa. Un vincolo di forma impone `system = 'core'` con connector valorizzato e `migration_id` nullo, oppure `system = 'control'` con `migration_id` valorizzato.
+    - `delivery_migrations(id, organization_id, project_id, source_connector_kind, source_locator, target_system, scope_types, expected_counts, status, declared_by_identity_id, declared_by_email, created_at, updated_at)`. `target_system` è vincolato a `'control'`, `scope_types` è un sottoinsieme non vuoto di `{prd, backlog}`, `status` appartiene a `declared | verified | verification_failed | completed | aborted`. Un indice univoco parziale ammette **una sola migrazione non terminale per Project**: il fuori ambito «due fonti autorevoli simultanee» diventa impossibile per costruzione.
+    - `delivery_migration_artifacts(id, organization_id, project_id, migration_id, artifact_type, source_ref, source_version, content_digest, content, captured_at)`, append-only via trigger come `prd_review_artifacts`, con unicità `(migration_id, artifact_type, source_ref)`. `source_ref` e `source_version` sono l'origine (dove stava e a quale revisione), `content_digest` è la versione dell'artefatto: insieme soddisfano AC-4, mentre il collegamento al Project è la chiave composita verso `projects`.
+    - `delivery_migration_verifications(id, organization_id, project_id, migration_id, outcome, findings, checked_at)`, append-only: ogni tentativo di verifica resta nella storia, anche quello fallito che ha impedito il cutover.
+
+  - **Contratto applicativo** (`/api/projects/:projectId/delivery-migration`). `POST` dichiara la migrazione (sorgente, perimetro, conteggi attesi); `POST .../:migrationId/artifacts` acquisisce gli elementi; `POST .../:migrationId/verification` esegue la verifica; `POST .../:migrationId/cutover` conferma; `POST .../:migrationId/abort` annulla; `GET` restituisce autorità corrente, migrazione attiva o ultima conclusa, elenco degli artefatti acquisiti (senza corpi) e storia delle verifiche. Le mutazioni richiedono il ruolo `admin` attraverso `requireRole` e producono un evento di audit, coerentemente con il verdetto PRD e la promozione del Process Input; la lettura richiede membership attiva.
+
+  - **Verifica.** Una funzione pura confronta il perimetro dichiarato con quanto acquisito e produce finding tipizzati: `missing_type` (un tipo del perimetro senza elementi), `unexpected_type` (elemento fuori perimetro), `count_mismatch` (conteggio acquisito diverso dal conteggio atteso per quel tipo), `digest_mismatch` (SHA-256 ricalcolato sul contenuto diverso dal digest dichiarato). Il ricalcolo avviene lato servizio, mai fidandosi del digest inviato. L'esito è `passed` solo con zero finding.
+
+  - **Cutover e assenza di dual write.** Il cutover è una transazione con lock sulla migrazione: richiede stato `verified` **e** ultima verifica `passed`, altrimenti risponde `409`. Promuove le righe di autorità dei tipi in perimetro a `system = 'control'` con il riferimento alla migrazione e porta la migrazione a `completed`. Da quel momento il write path Core verso Control per quel Project deve essere rifiutato: `RemoteRunService.uploadReviewArtifact`, unico ingresso di artefatti prodotti dal Core, consulta una **porta di autorità** iniettata da `app.ts` (`attachDeliveryAuthority`, come già avviene per il dispatcher) e rifiuta con `review_artifact_delivery_migrated`. La porta è un'astrazione, non un import diretto della repository Product: Operations resta componibile senza Product, e con Product disabilitato la porta semplicemente non viene collegata.
+
+  - **Annullamento.** `abort` è ammesso da `declared`, `verification_failed` e `verified`, cioè in ogni momento **prima** della conferma, e non tocca alcuna riga di autorità: la sorgente resta autorevole e scrivibile esattamente come prima. Da `completed` e `aborted` non si torna indietro: la reversione del cutover è migrazione bidirezionale, esplicitamente fuori ambito.
+
+  - **Superficie utente.** Un pannello «Migrazione della fonte di verità» sulla pagina Project mostra l'autorità per tipo, la migrazione corrente con sorgente, destinazione, perimetro e conteggi attesi contro acquisiti, l'esito dell'ultima verifica con i suoi finding, e gli artefatti migrati con origine e versione. Le azioni sono `Verifica artefatti`, `Conferma cutover` — disabilitata finché la verifica non è passata e protetta da una conferma esplicita come già fa la promozione del risultato di sessione — e `Annulla migrazione`. Il pannello vive in un file proprio, `control/src/web/pages/project-delivery-migration.tsx`, invece di crescere ulteriormente i 2 660 righe di `project.tsx`.
+
+  ### Decisioni architetturali
+
+  La scelta supera la soglia ADR: cambia il modello dati persistente, sposta un confine di ownership fra sistemi e fissa una policy trasversale sul divieto di dual write. **Non nasce però un nuovo ADR:** la decisione esiste già ed è `decisions/source-of-truth-transition`, che dichiara l'ownership MVP e rinvia esplicitamente al «futuro connector `control`» e alla «procedura di migrazione». Questo incremento la *estende* con il meccanismo concreto, quindi va aggiornata quella pagina — sezioni Decisione, Conseguenze e Verifica — con l'evidenza reale. Creare un secondo ADR sullo stesso oggetto frammenterebbe la ricerca per tipo e lascerebbe due pagine in disaccordo potenziale.
+
+  Alternative valutate e respinte:
+
+  - **Copia eseguita da un Runner con Workflow Run dedicata.** Sarebbe il percorso «giusto» quando esisterà il connector `control`, ma qui costerebbe una Workflow Definition versionata, un contratto di trasporto e un ciclo di assignment per ottenere gli stessi artefatti, senza rendere più forte alcun criterio di accettazione. Rinviata.
+  - **Autorità implicita dedotta dalla presenza di artefatti in Control.** Respinta: renderebbe il cutover un effetto collaterale dell'acquisizione, quindi non annullabile e non verificabile prima della conferma. AC-2 e AC-5 diventerebbero indimostrabili.
+  - **Un solo interruttore booleano sul Project.** Respinta: la spec parla di «ogni tipo migrato» e il perimetro è dichiarato per tipo; un booleano impedirebbe una migrazione parziale e renderebbe l'invariante di AC-3 non esprimibile nello schema.
+  - **Dual write temporaneo con riconciliazione.** Respinta dal fuori ambito della spec e già respinta dall'ADR esistente.
+  - **Verifica delegata al client con Control che si fida del digest ricevuto.** Respinta: la verifica sarebbe una dichiarazione, non un controllo. Il digest viene ricalcolato server-side sul contenuto persistito.
+
+  Costi accettati: gli artefatti migrati vivono in tabelle proprie e Control non espone ancora un write path di delivery per essi — dopo il cutover il Project è autorevole in Control ma le scritture successive arriveranno solo con il client connector. È una conseguenza da registrare nell'ADR, non un difetto: è esattamente il confine che la spec pone.
+
+  ---
+
+  ## Baseline
+
+  Tutti i comandi sono stati eseguiti da `/Users/stefanoleli/Project/Archetipo` prima della pianificazione, su albero pulito.
+
+  | Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `npm run typecheck:control` | Passa (exit 0) | Nessuna diagnostica preesistente da tollerare: ogni file toccato deve restare pulito. |
+  | `npm run lint:control` | Passa (exit 0) | Idem per ESLint. |
+  | `npx vitest run src` (in `control/`) | Passa — 99 test | Rete di sicurezza per i moduli di dominio unitari. |
+  | `npm --prefix control run test:web` | Passa — 6 file, 56 test | Base per i nuovi test di componente. Vedi la nota sulla flakiness qui sotto. |
+  | `npm --prefix control run test:integration` | Passa — 28 file, 107 test (≈68 s) | Regressione di riferimento per migrazione, repository, servizi e API. Richiede Docker. |
+  | `npm run test:control:e2e` | **Rosso preesistente:** 20 passati, 1 fallito (1.8 min) | Vedi il confine di fallimento qui sotto. Nessun task può promettere il verde sull'intera suite E2E. |
+  | `archetipo wiki validate --profile bootstrap` | `data.ok: true`, 23 pagine, nessun finding | Il task Wiki deve conservare questo esito. |
+
+  **Confine di fallimento E2E già presente.** Fallisce soltanto `test/e2e/control-project-workflow-inception.spec.ts:341` («AC-1..AC-5: completa e recupera Inception senza artefatti concorrenti»), all'asserzione di riga 405 `expect(completed.projection).toMatchObject({ projectId, runId, processInputId })`, con `completed.projection` uguale a `undefined`; il fallimento si ripete identico al retry. È lo stesso rosso registrato dalla baseline di US-020 e non appartiene a questa spec. L'implementatore deve verificare che dopo le proprie modifiche il fallimento resti **esattamente questo** — stesso file, stesso test, stessa asserzione — e che nessuno scenario oggi verde diventi rosso.
+
+  **Flakiness nota nei test web.** Su una delle tre esecuzioni di baseline è fallito `control/test/web/project.test.tsx`, test «annulla con Escape, ripristina il focus e blocca il doppio submit approval», su una query di ruolo dentro il dialogo (riga ≈1426); le due esecuzioni successive sono state verdi (56/56). È instabilità preesistente legata al focus nel dialogo, non un difetto introdotto qui: se ricompare, va riconosciuta come tale e non «corretta» modificando il pannello di migrazione.
+
+  **Forma dei comandi E2E.** `test:control:e2e` è `npm run build:control && playwright test test/e2e/control-*.spec.ts`: gli argomenti passati con `--` si **aggiungono** al pattern e non filtrano. Per un singolo scenario usare `npm run build:control && npx playwright test test/e2e/<file>.spec.ts`.
+
+  **Prerequisiti d'ambiente (distinti dai difetti di codice):** Docker in esecuzione per `test:integration` e per gli scenari `test/e2e/control-*.spec.ts` (PostgreSQL 17 in container); browser Playwright installati per gli E2E. La suite E2E completa impiega circa due minuti.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task produttore |
+  |---|---|---|---|---|
+  | AC-1 | Input di dichiarazione validi e malformati | unit | Il parser restituisce sorgente, perimetro e conteggi normalizzati; rifiuta perimetro vuoto, tipo sconosciuto, connector non ammesso, conteggio negativo o non intero | TASK-03 |
+  | AC-1 | Project esistente, nessuna migrazione attiva | integration | `POST /api/projects/:id/delivery-migration` risponde `201` e la riga `delivery_migrations` contiene `source_connector_kind`, `source_locator`, `target_system = 'control'`, `scope_types` e `expected_counts` come dichiarati; `GET` li ripresenta | TASK-08 |
+  | AC-1 | Migrazione dichiarata dal browser | e2e browser | Il pannello mostra sorgente `file` con locator, destinazione `Control`, perimetro `PRD, Backlog` e i conteggi attesi accanto a quelli acquisiti | TASK-11 |
+  | AC-2 | Perimetro con conteggio atteso 3 e 2 elementi acquisiti, più un digest non corrispondente | unit | La funzione di verifica restituisce `failed` con finding `count_mismatch` e `digest_mismatch` che nominano tipo e riferimento sorgente | TASK-03 |
+  | AC-2 | Migrazione con artefatti incoerenti | integration | `POST .../verification` risponde `200` con `outcome: "failed"`, la migrazione passa a `verification_failed`, e `POST .../cutover` risponde `409 delivery_migration_verification_required` lasciando `project_delivery_authority` invariata su `core` | TASK-08 |
+  | AC-2 | Verifica fallita dal browser | e2e browser | Il pannello mostra l'esito fallito con i finding e il pulsante `Conferma cutover` resta disabilitato; l'autorità mostrata resta `Core · file` per entrambi i tipi | TASK-11 |
+  | AC-3 | Migrazione verificata e confermata | integration | Dopo il cutover esiste **una sola** riga `project_delivery_authority` per tipo con `system = 'control'`; una seconda dichiarazione sugli stessi tipi risponde `409 delivery_migration_conflict` | TASK-08 |
+  | AC-3 | Run con assignment valido che carica una fotografia PRD, prima e dopo il cutover | integration | Prima del cutover `uploadReviewArtifact` persiste l'artefatto; dopo il cutover la stessa chiamata fallisce con `review_artifact_delivery_migrated` e nessuna nuova riga `prd_review_artifacts` viene creata | TASK-08 |
+  | AC-3 | Cutover eseguito dal browser | e2e browser | Il pannello mostra `Control` come unico sistema autorevole per PRD e Backlog, senza alcuna riga residua che indichi il connector precedente come autorevole | TASK-11 |
+  | AC-4 | Artefatti acquisiti e migrazione completata | integration | Ogni riga `delivery_migration_artifacts` conserva `source_ref`, `source_version`, `content_digest` ricalcolato e `project_id`; `GET` li restituisce con la stessa provenienza dopo il cutover | TASK-08 |
+  | AC-4 | Cutover completato dal browser | e2e browser | L'elenco degli artefatti migrati mostra per ogni elemento tipo, riferimento sorgente, versione sorgente e digest, ed è raggiunto dalla pagina del Project a cui appartengono | TASK-11 |
+  | AC-5 | Migrazione dichiarata e verificata, non confermata | integration | `POST .../abort` risponde `200`, la migrazione passa a `aborted`, tutte le righe di autorità restano `core` con il connector dichiarato e una nuova dichiarazione è di nuovo ammessa | TASK-08 |
+  | AC-5 | Annullamento dal browser prima della conferma | e2e browser | Dopo `Annulla migrazione` il pannello mostra la migrazione annullata, l'autorità ancora `Core · file` e la possibilità di dichiararne una nuova | TASK-11 |
+  | AC-2, AC-5 | Pannello con verifica fallita, passata e migrazione annullata | component | `Conferma cutover` è disabilitato senza verifica passata e abilitato dopo; `Annulla migrazione` è offerto in ogni stato non terminale e non compare dopo il cutover | TASK-10 |
+
+  ---
+
+  ## Strategia di test
+
+  La verifica sale dal contratto puro fino al percorso umano, tenendo separati i due assi della spec: *la procedura* (dichiarazione, verifica, annullamento) e *il cambio di autorità* (cutover, unicità, assenza di dual write).
+
+  - **Unit** sul dominio: parsing degli input e regole di verifica sono funzioni pure e sono l'unico livello dove ogni combinazione di finding è enumerabile a costo nullo. Nessun doppio nasconde l'oracolo perché non c'è I/O.
+  - **Integration** su PostgreSQL 17 reale con Fastify reale, perché le proprietà che contano — unicità dell'autorità per tipo, indice parziale sulla migrazione attiva, append-only, atomicità del cutover — sono garantite dallo schema e sarebbero invisibili con una repository finta. Il divieto di dual write viene provato invocando il **vero** percorso di ingest `RemoteRunService.uploadReviewArtifact` con Run e assignment seminati, non un mock: un mock che «non viene chiamato» non proverebbe che la scrittura è impedita.
+  - **Component** sul pannello con `ControlApi` sostituito da un doppio: il doppio sostituisce solo il trasporto HTTP, mentre pannello, stato dei pulsanti e dialogo di conferma restano i componenti reali responsabili dell'esito osservato.
+  - **E2E browser obbligatorio.** Il percorso di accettazione attraversa confine di rotta e server, autenticazione OIDC, persistenza, ruolo amministrativo e navigazione: nessun livello inferiore può provare che un revisore *esegue* la procedura, vede il cutover impedito e poi lo conferma. Si riusa il framework già presente (`@playwright/test`, `playwright.config.ts`, `test/e2e/control-fixture.mjs`) senza introdurne di nuovi.
+
+  **Limite noto della fixture E2E.** `fixture.seedPrdReviewVersion` scrive direttamente sul database con Kysely e **non** attraversa l'endpoint autenticato a macchina: non può quindi provare né che il write path Core sia scrivibile né che sia bloccato. L'evidenza sull'assenza di dual write appartiene per questo al livello di integrazione, dove il percorso reale è invocabile; l'E2E prova ciò che il revisore osserva, cioè quale sistema è dichiarato autorevole.
+
+  ### Test E2E — simulazione utente
+
+  **Framework:** `@playwright/test` con `test/e2e/control-fixture.mjs` (Control reale, PostgreSQL 17 in Docker, issuer OIDC deterministico)
+  **Video dimostrativo:** atteso — la spec è filmabile; la registrazione è responsabilità di `archetipo-review`, non dell'implementazione
+
+  | Scenario | Descrizione del flusso utente |
+  |---|---|
+  | Cutover impedito e annullato | L'amministratore apre il Project, dichiara la migrazione da connector `file` verso Control con perimetro PRD e Backlog e conteggi attesi, acquisisce un insieme incoerente di artefatti, avvia la verifica e osserva l'esito fallito con i finding; tenta il cutover e lo trova impedito; annulla la migrazione e verifica che l'autorità resti sul connector precedente. |
+  | Cutover confermato con provenienza | Lo stesso amministratore dichiara una nuova migrazione, acquisisce l'insieme corretto, verifica con esito positivo, conferma il cutover dal dialogo e osserva Control come unico sistema autorevole per PRD e Backlog e l'elenco degli artefatti migrati con origine e versione. |
+
+  ---
+
+  ## Impatto Wiki
+
+  ```yaml
+  wiki_impact:
+    read:
+      - decisions/source-of-truth-transition
+      - architecture/context-map
+      - domains/delivery-workflow
+      - domains/project-and-workspace
+      - decisions/project-process-run-model
+      - decisions/module-adoption-gating
+    update_after_acceptance:
+      - decisions/source-of-truth-transition
+      - architecture/context-map
+      - domains/delivery-workflow
+      - domains/project-and-workspace
+      - engineering/code-map
+    create: []
+  ```
+
+  ---
+
+  ## Note e assunzioni
+
+  - **Confine con il connector `control` del Core.** Il piano realizza la procedura e il registro di autorità dentro Control, non il client Go che, dopo il cutover, farà leggere e scrivere la CLI verso Control. Il `Dimostra` della spec osserva gli artefatti «in Control», non la CLI: l'assunzione è che il cambio di ownership sia l'incremento richiesto e che il client sia una spec successiva. Se il prodotto intendeva anche il client, l'ambito reale supera nettamente i 5 punti e va rivisto prima dell'implementazione.
+  - **Chi fornisce gli artefatti.** L'acquisizione è un comando amministrativo esplicito con manifesto normalizzato: Control non legge il connector sorgente. Il tooling che estrae PRD e backlog dal connector Core resta esterno a questa spec; per la verifica E2E il manifesto è costruito dallo scenario.
+  - **Tipi in perimetro.** `prd` e `backlog` coprono ciò che il `Dimostra` osserva. Piani e task non entrano nel perimetro: non compaiono nella spec e allargarli moltiplicherebbe elementi e vincoli senza aggiungere evidenza. Il tipo è un valore vincolato nello schema, quindi estenderlo in futuro è una migrazione additiva.
+  - **Limiti dimensionali.** Contenuto del singolo artefatto ≤ 512 KiB (stesso limite già adottato per la fotografia PRD) e ≤ 500 elementi per migrazione: sono confini espliciti contro payload non delimitati, non stime di prodotto.
+  - **Mockup.** Non generati. Il pannello è una nuova sezione all'interno di una pagina esistente, costruita con gli stessi pattern già presenti (intestazione, `dl` di stato, dialogo di conferma) e con il design system già definito in `styles.css`; il repository non contiene mockup per nessuna delle slice Control precedenti. La scelta è dichiarata perché il revisore possa smentirla.
+
+  _Piano generato da ARchetipo Planning — 2026-07-26_
+tasks:
+  - id: TASK-01
+    title: Introdurre lo schema di migrazione e autorità della fonte di verità
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Lo schema Control persiste migrazioni della fonte di verità, artefatti acquisiti, verifiche e autorità di delivery per Project e tipo.
+
+      ## Read
+      - `control/migrations/009_prd_review_gate.sql` — convenzioni per tabelle append-only, trigger di rifiuto mutazione, vincoli compositi `(organization_id, project_id, id)` e FK verso `memberships`
+      - `control/migrations/002_project_workspace.sql` — vincoli univoci su `projects` usati come bersaglio delle FK composite
+      - `control/migrations/011_optional_project_runs.sql` — stile e numerazione dell'ultima migrazione
+      - `control/src/modules/identity/repository.ts` — tipi tabella Kysely e mappa `ControlDatabase`
+      - `control/test/integration/migrations.test.ts` — come le migrazioni vengono applicate in test
+
+      ## Change
+      - `control/migrations/012_delivery_source_migration.sql` — nuovo file
+      - `control/src/modules/identity/repository.ts` — quattro nuovi tipi tabella e relative voci in `ControlDatabase`
+      - Non modificare tabelle esistenti: questa migrazione è puramente additiva
+
+      ## Steps
+      1. Creare `delivery_migrations` con: `id uuid primary key default gen_random_uuid()`, `organization_id uuid not null`, `project_id uuid not null`, `source_connector_kind text not null check (source_connector_kind in ('file','github','jira'))`, `source_locator text not null check (length(btrim(source_locator)) between 1 and 2000)`, `target_system text not null default 'control' check (target_system = 'control')`, `scope_types text[] not null check (cardinality(scope_types) between 1 and 2 and scope_types <@ array['prd','backlog'])`, `expected_counts jsonb not null`, `status text not null default 'declared' check (status in ('declared','verified','verification_failed','completed','aborted'))`, `declared_by_identity_id uuid not null`, `declared_by_email text not null` con lo stesso check di forma usato in `prd_review_verdicts`, `created_at`/`updated_at timestamptz not null default now()`.
+      2. Aggiungere a `delivery_migrations`: `constraint delivery_migrations_project_identity unique (organization_id, project_id, id)`; FK `(organization_id, project_id)` verso `projects (organization_id, id)`; FK `(organization_id, declared_by_identity_id, declared_by_email)` verso `memberships (organization_id, identity_id, email)`; e `create unique index delivery_migrations_active_project_idx on delivery_migrations (organization_id, project_id) where status in ('declared','verified','verification_failed')`.
+      3. Creare `delivery_migration_artifacts` con `id`, `organization_id`, `project_id`, `migration_id`, `artifact_type text not null check (artifact_type in ('prd','backlog'))`, `source_ref text not null check (length(btrim(source_ref)) between 1 and 2000)`, `source_version text not null check (length(btrim(source_version)) between 1 and 256)`, `content_digest text not null check (content_digest ~ '^[0-9a-f]{64}$')`, `content text not null check (length(btrim(content)) > 0 and octet_length(content) <= 524288)`, `captured_at timestamptz not null default now()`; unicità `(migration_id, artifact_type, source_ref)`; FK composita `(organization_id, project_id, migration_id)` verso `delivery_migrations (organization_id, project_id, id)`; trigger `before update or delete` che solleva `'delivery migration artifacts are append-only'` con `ERRCODE = '55000'`, sul modello di `reject_prd_review_artifact_mutation`.
+      4. Creare `delivery_migration_verifications` con `id`, `organization_id`, `project_id`, `migration_id`, `outcome text not null check (outcome in ('passed','failed'))`, `findings jsonb not null`, `checked_at timestamptz not null default now()`, la stessa FK composita verso `delivery_migrations` e il proprio trigger append-only. Aggiungere un indice `(organization_id, project_id, migration_id, checked_at desc, id)` per il recupero dell'ultima verifica.
+      5. Creare `project_delivery_authority` con `organization_id uuid not null`, `project_id uuid not null`, `artifact_type text not null check (artifact_type in ('prd','backlog'))`, `system text not null check (system in ('core','control'))`, `source_connector_kind text check (source_connector_kind in ('file','github','jira'))`, `migration_id uuid`, `updated_at timestamptz not null default now()`, `primary key (organization_id, project_id, artifact_type)`, FK `(organization_id, project_id)` verso `projects (organization_id, id)`, FK composita `(organization_id, project_id, migration_id)` verso `delivery_migrations (organization_id, project_id, id)`, e `constraint project_delivery_authority_shape check ((system = 'core' and source_connector_kind is not null and migration_id is null) or (system = 'control' and migration_id is not null))`. Commentare nel file che la primary key è ciò che rende impossibile più di un sistema autorevole per tipo.
+      6. In `control/src/modules/identity/repository.ts` aggiungere i tipi `DeliveryMigrationsTable`, `DeliveryMigrationArtifactsTable`, `DeliveryMigrationVerificationsTable` e `ProjectDeliveryAuthorityTable` seguendo le convenzioni già presenti (`Generated<string>` per gli id, `Timestamp`/`UpdatedTimestamp` per le date, `unknown` o tipi propri per le colonne `jsonb`, `string[]` per `scope_types`) e registrarli in `ControlDatabase` con i nomi tabella esatti.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run typecheck:control && npm --prefix control run test:integration`
+      - Expect: typecheck verde; suite di integrazione verde con almeno i 107 test della baseline, a conferma che la migrazione additiva si applica su un database migrato da zero senza rompere alcun percorso esistente. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-3 — `project_delivery_authority` ha chiave primaria `(organization_id, project_id, artifact_type)`, quindi ammette un solo sistema autorevole per tipo migrato
+      - [ ] AC-4 — `delivery_migration_artifacts` conserva `source_ref`, `source_version`, `content_digest` e il collegamento al Project, ed è append-only
+      - [ ] Un indice univoco parziale impedisce due migrazioni non terminali sullo stesso Project
+      - [ ] `ControlDatabase` espone le quattro nuove tabelle tipizzate
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Definire il dominio della migrazione e le regole di verifica
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il dominio della migrazione valida gli input della procedura e decide l'esito della verifica come funzione pura.
+
+      ## Read
+      - `control/src/modules/product/prd-review-domain.ts` — helper `closedObject`, `boundedText`, `reference`, stile degli errori di validazione e limite `PRD_REVIEW_MARKDOWN_MAX_BYTES`
+      - `control/src/modules/product/process-input-domain.ts` — forma di uno snapshot tipizzato persistito come `jsonb`
+      - `control/src/modules/product/domain.ts` — `ProductValidationError` e convenzioni di normalizzazione del testo
+
+      ## Change
+      - `control/src/modules/product/delivery-migration-domain.ts` — nuovo file
+      - Non introdurre dipendenze esterne: nessun parser YAML, nessuna libreria di validazione
+
+      ## Steps
+      1. Dichiarare le costanti `DELIVERY_ARTIFACT_TYPES = ["prd", "backlog"] as const`, `DELIVERY_SOURCE_CONNECTORS = ["file", "github", "jira"] as const`, `DELIVERY_ARTIFACT_MAX_BYTES = 512 * 1024`, `DELIVERY_MIGRATION_MAX_ARTIFACTS = 500`, e i tipi `DeliveryArtifactType` e `DeliverySourceConnector` derivati.
+      2. Definire `DeliveryMigrationValidationError extends Error` e riprodurre localmente gli helper di validazione a oggetto chiuso già usati in `prd-review-domain.ts` (non esportarli dal modulo PRD: restano due contratti indipendenti).
+      3. Scrivere `parseDeliveryMigrationDeclaration(value: unknown): DeliveryMigrationDeclaration` dove `DeliveryMigrationDeclaration = { source: { connector: DeliverySourceConnector; locator: string }; scope: DeliveryArtifactType[]; expectedCounts: Record<DeliveryArtifactType, number> }`. Regole: `scope` non vuoto, senza duplicati, ordinato in modo stabile secondo `DELIVERY_ARTIFACT_TYPES`; `expectedCounts` ha una chiave per ogni tipo in `scope` e nessuna chiave fuori da `scope`; ogni conteggio è un intero `>= 0` e `<= DELIVERY_MIGRATION_MAX_ARTIFACTS`; `locator` è testo delimitato non vuoto fino a 2000 caratteri.
+      4. Scrivere `parseDeliveryMigrationArtifacts(value: unknown): DeliveryMigrationArtifactInput[]` dove ogni elemento è `{ type: DeliveryArtifactType; sourceRef: string; sourceVersion: string; digest: string; content: string }`. Regole: array non vuoto e con al più `DELIVERY_MIGRATION_MAX_ARTIFACTS` elementi; `digest` conforme a `/^[0-9a-f]{64}$/`; `content` non vuoto e `Buffer.byteLength(content, "utf8") <= DELIVERY_ARTIFACT_MAX_BYTES`; `sourceRef` e `sourceVersion` testo delimitato; nessuna coppia `(type, sourceRef)` duplicata dentro la stessa richiesta.
+      5. Definire il tipo `DeliveryMigrationFinding = { code: "missing_type" | "unexpected_type" | "count_mismatch" | "digest_mismatch"; artifactType: DeliveryArtifactType; sourceRef?: string; expected?: number | string; actual?: number | string }` e scrivere `verifyDeliveryMigration(input: { scope: DeliveryArtifactType[]; expectedCounts: Record<string, number>; artifacts: { type: DeliveryArtifactType; sourceRef: string; declaredDigest: string; contentDigest: string }[] }): { outcome: "passed" | "failed"; findings: DeliveryMigrationFinding[] }`.
+      6. Implementare le regole di verifica in ordine deterministico: per ogni tipo del perimetro senza alcun artefatto emettere `missing_type`; per ogni artefatto di tipo fuori perimetro emettere `unexpected_type`; per ogni tipo del perimetro con conteggio diverso da quello atteso emettere `count_mismatch` con `expected` e `actual`; per ogni artefatto con `declaredDigest !== contentDigest` emettere `digest_mismatch` con `sourceRef`, `expected` (dichiarato) e `actual` (ricalcolato). L'esito è `passed` se e solo se `findings` è vuoto.
+      7. Non calcolare digest in questo modulo: la funzione riceve il digest già ricalcolato, così resta pura e testabile senza I/O.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run typecheck:control && npm run lint:control`
+      - Expect: entrambi passano, come nella baseline registrata
+
+      ## Done
+      - [ ] AC-1 — la dichiarazione è normalizzata e validata su sorgente, perimetro e conteggi attesi, con rifiuto esplicito degli input incoerenti
+      - [ ] AC-2 — `verifyDeliveryMigration` restituisce `failed` con finding tipizzati per conteggio e digest non corrispondenti
+      - [ ] Il modulo non esegue I/O e non dipende da formati dei connector Core
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Coprire con unit test dichiarazione e verifica
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      I test unitari provano il contratto di dichiarazione e ogni esito della verifica, incluso il caso che deve impedire il cutover.
+
+      ## Read
+      - `control/src/modules/product/prd-review-domain.test.ts` — struttura dei casi, uso di `expect(...).toThrow` per gli errori di validazione
+      - `control/src/modules/product/process-domain.test.ts` — stile delle asserzioni su strutture restituite
+      - `control/src/modules/product/delivery-migration-domain.ts` — contratto introdotto da TASK-02
+
+      ## Change
+      - `control/src/modules/product/delivery-migration-domain.test.ts` — nuovo file
+      - Non modificare il dominio in questo task, salvo correggere un difetto che i test rivelano nel codice di TASK-02
+
+      ## Steps
+      1. Caso positivo di dichiarazione: perimetro `["backlog", "prd"]` con conteggi attesi coerenti restituisce `scope` ordinato secondo `DELIVERY_ARTIFACT_TYPES`, connector e locator normalizzati.
+      2. Casi negativi di dichiarazione, uno per regola: perimetro vuoto, tipo sconosciuto, connector non ammesso, chiave di `expectedCounts` fuori perimetro, tipo del perimetro senza conteggio, conteggio negativo, conteggio non intero, locator vuoto. Ognuno deve lanciare `DeliveryMigrationValidationError`.
+      3. Casi di `parseDeliveryMigrationArtifacts`: elenco valido accettato; digest non esadecimale a 64 caratteri rifiutato; contenuto vuoto rifiutato; contenuto oltre `DELIVERY_ARTIFACT_MAX_BYTES` rifiutato; coppia `(type, sourceRef)` duplicata rifiutata; elenco oltre `DELIVERY_MIGRATION_MAX_ARTIFACTS` rifiutato.
+      4. Verifica passata: perimetro `prd` con conteggio 1 e `backlog` con conteggio 3, quattro artefatti con `declaredDigest === contentDigest` produce `{ outcome: "passed", findings: [] }`.
+      5. Verifica fallita per conteggio: due soli artefatti `backlog` contro conteggio atteso 3 produce `failed` con un finding `count_mismatch` che riporta `artifactType: "backlog"`, `expected: 3`, `actual: 2`.
+      6. Verifica fallita per digest: un artefatto con `contentDigest` diverso dal dichiarato produce un finding `digest_mismatch` che nomina il proprio `sourceRef` e riporta entrambi i valori.
+      7. Verifica fallita per perimetro: tipo dichiarato senza artefatti produce `missing_type`; artefatto di tipo fuori perimetro produce `unexpected_type`. Asserire anche il caso combinato in cui più finding coesistono e l'esito resta `failed`.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo/control`: `npx vitest run src/modules/product/delivery-migration-domain.test.ts`
+      - Expect: tutti i casi passano; nessuna regressione sugli altri test unitari, verificabile con `npx vitest run src` che deve restare verde con almeno i 99 test della baseline
+
+      ## Done
+      - [ ] AC-1 — ogni regola di validazione della dichiarazione ha un caso positivo e un caso negativo
+      - [ ] AC-2 — l'esito `failed` è provato per conteggio, digest e perimetro, con finding che nominano tipo e riferimento sorgente
+      - [ ] I test non usano doppi: il dominio è puro e viene invocato direttamente
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Persistere migrazioni, artefatti, verifiche e autorità
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Objective
+      Una repository Product persiste migrazioni, artefatti, verifiche e autorità con transazione, lock e letture ordinate.
+
+      ## Read
+      - `control/src/modules/product/prd-review-repository.ts` — `transaction`, `lockProjectReview` con `pg_advisory_xact_lock`, inserimenti append-only e letture composite
+      - `control/src/modules/product/repository.ts` — stile di mapping riga→dominio e uso di `DatabaseClient`
+      - `control/src/modules/product/process-input-repository.ts` — inserimento con snapshot `jsonb` e lettura per Project
+      - `control/src/modules/identity/repository.ts` — tipi tabella introdotti da TASK-01
+
+      ## Change
+      - `control/src/modules/product/delivery-migration-repository.ts` — nuovo file
+      - Non toccare le repository esistenti
+
+      ## Steps
+      1. Definire i tipi di lettura `StoredDeliveryMigration`, `StoredDeliveryMigrationArtifact`, `StoredDeliveryVerification` e `StoredDeliveryAuthority` con nomi di campo in camelCase, mappati dalle colonne snake_case.
+      2. Implementare `transaction(callback)` con lo stesso schema difensivo delle altre repository (`if (!("transaction" in this.database)) return callback(this)`).
+      3. Implementare `lockProjectMigration(organizationId, projectId)` con `pg_advisory_xact_lock(hashtextextended('delivery-migration:' || projectId, 0))`, così dichiarazione, verifica e cutover concorrenti sullo stesso Project si serializzano.
+      4. Implementare `projectExists(organizationId, projectId)`, `findActiveMigration(organizationId, projectId)` — stato in `('declared','verified','verification_failed')` — e `findMigration(organizationId, projectId, migrationId)`.
+      5. Implementare `insertMigration(input)` che scrive sorgente, locator, perimetro, conteggi attesi, attore e stato `declared`, e `updateMigrationStatus({ organizationId, projectId, migrationId, from, to, now })` che applica l'aggiornamento **solo** quando lo stato corrente è uno di quelli in `from`, restituendo `false` altrimenti: la guardia di stato vive nella clausola `where`, non solo nel servizio.
+      6. Implementare `insertArtifacts(input)` con inserimento multiplo in una sola istruzione e `listArtifacts(organizationId, projectId, migrationId)` ordinata per `artifact_type`, `source_ref`; prevedere `listArtifactsWithoutContent` per le letture pubbliche, così i corpi non entrano nelle risposte di elenco.
+      7. Implementare `insertVerification({ ..., outcome, findings })` e `latestVerification(organizationId, projectId, migrationId)` ordinata per `checked_at desc, id desc`.
+      8. Implementare `upsertCoreAuthority({ organizationId, projectId, artifactTypes, connectorKind, now })` con `on conflict (organization_id, project_id, artifact_type) do nothing` — dichiarare una migrazione non deve mai modificare un'autorità esistente — e `listAuthority(organizationId, projectId)`.
+      9. Implementare `promoteAuthorityToControl({ organizationId, projectId, artifactTypes, migrationId, now })` che aggiorna le righe dei tipi indicati impostando `system = 'control'`, `source_connector_kind = null`, `migration_id` e `updated_at`, restituendo il numero di righe aggiornate perché il servizio possa rifiutare un cutover parziale.
+      10. Implementare `findAuthorityForType(organizationId, projectId, artifactType)` come lettura puntuale: è quella che servirà la porta di autorità consultata dal write path Core.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run typecheck:control && npm run lint:control`
+      - Expect: entrambi passano, come nella baseline registrata
+
+      ## Done
+      - [ ] AC-3 — `promoteAuthorityToControl` aggiorna le righe esistenti e segnala quante ne ha toccate, senza inserirne di nuove
+      - [ ] AC-5 — `upsertCoreAuthority` non sovrascrive mai un'autorità già presente
+      - [ ] Le transizioni di stato della migrazione sono guardate nella clausola `where` dell'aggiornamento
+      - [ ] Le letture pubbliche possono escludere i contenuti degli artefatti
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Orchestrare dichiarazione, verifica, cutover e annullamento
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Un servizio Product esegue dichiarazione, acquisizione, verifica, cutover e annullamento con le precondizioni della spec.
+
+      ## Read
+      - `control/src/modules/product/prd-review-service.ts` — transazione con lock, guardie di precondizione, errori tipizzati e forma del risultato `{ ..., changed }`
+      - `control/src/modules/product/process-input-service.ts` — composizione servizio→repository e uso dell'identità dell'attore
+      - `control/src/modules/product/delivery-migration-domain.ts` e `delivery-migration-repository.ts` — contratti introdotti da TASK-02 e TASK-04
+
+      ## Change
+      - `control/src/modules/product/delivery-migration-service.ts` — nuovo file
+      - Non modificare dominio e repository, salvo difetti rivelati qui
+
+      ## Steps
+      1. Dichiarare gli errori `DeliveryMigrationProjectNotFoundError`, `DeliveryMigrationNotFoundError`, `DeliveryMigrationConflictError`, `DeliveryMigrationStateError` e `DeliveryMigrationVerificationRequiredError`, ciascuno con un messaggio che è il codice pubblico (`delivery_migration_*`), come fa `prd-review-service.ts`.
+      2. Implementare `declare(input)`: in transazione, lock sul Project, verifica esistenza del Project, rifiuta con `DeliveryMigrationConflictError` se esiste già una migrazione non terminale **oppure** se un tipo del perimetro ha già `system = 'control'` (una migrazione non si ripete: il ritorno indietro è fuori ambito); poi `upsertCoreAuthority` per i tipi del perimetro con il connector dichiarato e `insertMigration` con stato `declared`.
+      3. Implementare `stageArtifacts(input)`: ammessa solo con stato `declared` o `verification_failed`, altrimenti `DeliveryMigrationStateError`. Per ogni artefatto ricalcolare `createHash("sha256").update(content, "utf8").digest("hex")` e persistere quel valore in `content_digest`, conservando il digest dichiarato solo per il confronto in verifica: la riga persistita non deve mai contenere un digest non verificato.
+      4. Implementare `verify(input)`: carica gli artefatti della migrazione, invoca `verifyDeliveryMigration` con `declaredDigest` e `contentDigest`, appende la verifica con esito e finding, e porta la migrazione a `verified` o `verification_failed` con `updateMigrationStatus` guardato. Restituisce esito e finding.
+      5. Implementare `cutover(input)`: in transazione con lock, ricarica la migrazione, richiede stato `verified` **e** ultima verifica con `outcome === "passed"`, altrimenti `DeliveryMigrationVerificationRequiredError`; invoca `promoteAuthorityToControl` e fallisce se il numero di righe aggiornate è diverso dalla cardinalità del perimetro; porta la migrazione a `completed`. Rendere l'operazione idempotente: una seconda chiamata su una migrazione già `completed` restituisce lo stesso stato senza errore e con `changed: false`.
+      6. Implementare `abort(input)`: ammesso da `declared`, `verification_failed` e `verified`; porta la migrazione a `aborted` senza toccare alcuna riga di autorità. Da `completed` risponde `DeliveryMigrationStateError`.
+      7. Implementare `get(organizationId, projectId)`: restituisce `{ authority, migration, artifacts, verifications }` dove `authority` elenca una voce per tipo con `system`, `connector` e `migrationId`, `artifacts` usa la lettura senza contenuti, e `migration` è quella attiva oppure, in sua assenza, l'ultima conclusa. Il Project inesistente produce `DeliveryMigrationProjectNotFoundError`.
+      8. Esporre una porta `deliveryAuthorityPort()` che restituisce un oggetto con `isControlOwned(organizationId, projectId, artifactType): Promise<boolean>` implementato su `findAuthorityForType`: è il solo punto di contatto che Operations avrà con questo modulo.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run typecheck:control && npm run lint:control`
+      - Expect: entrambi passano, come nella baseline registrata
+
+      ## Done
+      - [ ] AC-1 — `declare` persiste sorgente, destinazione, perimetro e conteggi attesi e rifiuta una seconda migrazione concorrente
+      - [ ] AC-2 — `cutover` fallisce con `delivery_migration_verification_required` quando l'ultima verifica non è passata
+      - [ ] AC-3 — `cutover` promuove esattamente i tipi del perimetro e fallisce se non li aggiorna tutti
+      - [ ] AC-4 — `stageArtifacts` persiste il digest ricalcolato e conserva riferimento e versione sorgente
+      - [ ] AC-5 — `abort` è ammesso in ogni stato precedente alla conferma e non modifica alcuna riga di autorità
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Esporre la procedura come API Product autorizzata e tracciata
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      La procedura di migrazione è esposta come API Product autorizzata e tracciata nell'audit, composta solo a modulo Product abilitato.
+
+      ## Read
+      - `control/src/modules/product/prd-review-http.ts` — `requireUuid`, `requireActiveMembership`, `requireRole` con azione e target, mappatura errori→`PublicHttpError`, `audit.append` dopo il successo
+      - `control/src/modules/product/process-input-http.ts` — comando amministrativo con conferma esplicita e metadati di audit
+      - `control/src/server/app.ts` — blocco `if (productEnabled)` e ordine di costruzione di service e registrar, `runService.attachDispatcher`
+      - `control/src/modules/operations/run-service.ts` — punto in cui il servizio Run accetta collaboratori dopo la costruzione
+
+      ## Change
+      - `control/src/modules/product/delivery-migration-http.ts` — nuovo file
+      - `control/src/server/app.ts` — costruzione del servizio, registrazione delle rotte dentro il blocco Product e collegamento della porta di autorità al servizio Run
+      - Non registrare nulla fuori dal blocco `if (productEnabled)`: la migrazione è una funzione Product
+
+      ## Steps
+      1. Scrivere `registerDeliveryMigrationHttp(app, service, audit)` con sei rotte sotto `/api/projects/:projectId/delivery-migration`: `GET` (lettura), `POST` (dichiarazione), `POST /:migrationId/artifacts`, `POST /:migrationId/verification`, `POST /:migrationId/cutover`, `POST /:migrationId/abort`.
+      2. La `GET` richiede `requireActiveMembership`; le cinque `POST` usano `preHandler: requireRole("admin", audit, "project.delivery_migration.<azione>", (request) => …projectId ?? "unknown")` con azioni `declare`, `stage`, `verify`, `cutover`, `abort`.
+      3. Validare `projectId` e `migrationId` come UUID con lo stesso helper già usato in `prd-review-http.ts`; il corpo delle richieste passa per i parser di dominio, non per controlli inline.
+      4. Mappare gli errori: `DeliveryMigrationValidationError` → `400 invalid_request`; `DeliveryMigrationProjectNotFoundError` → `404 project_not_found`; `DeliveryMigrationNotFoundError` → `404 delivery_migration_not_found`; `DeliveryMigrationConflictError` → `409 delivery_migration_conflict`; `DeliveryMigrationStateError` → `409 delivery_migration_state_invalid`; `DeliveryMigrationVerificationRequiredError` → `409 delivery_migration_verification_required`.
+      5. Appendere un evento di audit dopo ogni comando riuscito che ha prodotto un cambiamento, con `action` `project.delivery_migration.declare|stage|verify|cutover|abort`, `target` uguale all'id della migrazione e metadati non sensibili: sorgente, perimetro, conteggi, esito della verifica. Non includere mai i contenuti degli artefatti nei metadati.
+      6. In `app.ts`, dentro `if (productEnabled)`, costruire `const deliveryMigrations = new DeliveryMigrationService(new DeliveryMigrationRepository(database));`, registrare `registerDeliveryMigrationHttp(app, deliveryMigrations, audit)` e collegare la porta con `runService.attachDeliveryAuthority(deliveryMigrations.deliveryAuthorityPort())`.
+      7. Aggiungere a `RemoteRunService` il metodo `attachDeliveryAuthority(port)` che memorizza la porta in un campo opzionale, con la stessa forma di `attachDispatcher`; in questo task il metodo si limita a conservarla, l'uso appartiene a TASK-07.
+      8. Verificare che con `CONTROL_MODULE_PRODUCT=disabled` nulla di quanto sopra venga costruito e che la porta resti scollegata, così `control/test/integration/module-product-disabled.test.ts` continui a passare senza modifiche.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run typecheck:control && npm run lint:control && npm --prefix control run test:integration`
+      - Expect: typecheck e lint verdi; suite di integrazione verde con almeno i 107 test della baseline, incluso `module-product-disabled`. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-1 — la dichiarazione è accettata via `POST` e rileggibile via `GET` con sorgente, destinazione, perimetro e conteggi
+      - [ ] AC-2 — il cutover senza verifica passata risponde `409 delivery_migration_verification_required`
+      - [ ] AC-5 — l'annullamento è esposto come comando distinto e disponibile prima della conferma
+      - [ ] Tutti i comandi richiedono il ruolo `admin` e producono un evento di audit senza contenuti di artefatti
+      - [ ] Con Product disabilitato nessuna rotta di migrazione è registrata
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Rifiutare il write path Core dopo il cutover
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Dopo il cutover del PRD, il write path Core verso Control è rifiutato per quel Project, senza dual write.
+
+      ## Read
+      - `control/src/modules/operations/run-service.ts` — `uploadReviewArtifact` (righe ≈473-540): risoluzione della Run, ricalcolo del digest, `parsePrdReviewArtifactInput`, salvataggio transazionale, ed errori `ReviewArtifactUploadRejectedError` / `ReviewArtifactConflictError`
+      - `control/src/modules/operations/artifact-snapshot-http.ts` — mappatura degli errori su `401`, `409`, `422` e codice restituito al Runner
+      - `control/src/modules/product/delivery-migration-service.ts` — porta `isControlOwned` introdotta da TASK-05
+      - `control/test/integration/remote-run-transport.test.ts` — come vengono seminati Run, assignment e fencing token per invocare il percorso reale
+
+      ## Change
+      - `control/src/modules/operations/run-service.ts` — uso della porta di autorità dentro `uploadReviewArtifact`
+      - Non introdurre in `run-service.ts` alcun import da `modules/product/` oltre a quelli già presenti: la porta arriva per iniezione ed è tipizzata localmente
+      - Non modificare `artifact-snapshot-http.ts`: la mappatura `422` esistente copre già il nuovo codice
+
+      ## Steps
+      1. Dichiarare in `run-service.ts` il tipo locale `DeliveryAuthorityPort = { isControlOwned: (organizationId: string, projectId: string, artifactType: "prd") => Promise<boolean> }` e il campo privato opzionale valorizzato da `attachDeliveryAuthority` (introdotto da TASK-06).
+      2. In `uploadReviewArtifact`, subito dopo aver risolto la Run e prima di qualsiasi scrittura, se la porta è collegata e la Run ha un `projectId`, interrogare `isControlOwned(run.organizationId, run.projectId, "prd")`.
+      3. Quando la risposta è `true`, lanciare `new ReviewArtifactUploadRejectedError("review_artifact_delivery_migrated")`, così l'endpoint risponde `422` con quel codice e nessuna riga `prd_review_artifacts` viene creata.
+      4. Quando la porta non è collegata — installazione con Product disabilitato — il comportamento resta esattamente quello odierno: nessuna query aggiuntiva, nessun cambiamento di percorso.
+      5. Verificare che il controllo preceda il ricalcolo del digest e la transazione: il rifiuto deve costare una sola lettura e non deve poter lasciare stato parziale.
+      6. Non estendere il divieto ad altri percorsi in questo task: `backlog` non ha oggi un write path Core verso Control, quindi non esiste nulla da bloccare; annotarlo con un commento accanto al controllo perché l'estensione futura sia ovvia.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run typecheck:control && npm run lint:control && npm --prefix control run test:integration`
+      - Expect: typecheck e lint verdi; suite di integrazione verde con almeno i 107 test della baseline — in particolare `remote-run-transport` e `remote-workflow-run-transport` restano verdi perché senza cutover la porta risponde `false`. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-3 — dopo il cutover del tipo `prd` l'unico ingresso di artefatti prodotti dal Core viene rifiutato con `review_artifact_delivery_migrated`
+      - [ ] Prima del cutover il percorso resta invariato e i test di trasporto esistenti non cambiano comportamento
+      - [ ] Operations non importa la repository Product: dipende solo dalla porta iniettata
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Verificare in integrazione procedura, autorità e assenza di dual write
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Su PostgreSQL reale, l'intera procedura è provata: dichiarazione, cutover impedito, annullamento, cutover confermato, unicità dell'autorità e divieto di dual write.
+
+      ## Read
+      - `control/test/integration/project-prd-review-http.test.ts` — costruzione dell'app, sessione amministrativa autenticata, chiamate HTTP e asserzioni su codici e corpo
+      - `control/test/integration/remote-run-transport.test.ts` — semina di Runner, Run, assignment e fencing token per invocare `uploadReviewArtifact` sul percorso reale
+      - `control/test/fixtures/postgres.ts` — `startPostgresFixture`, `migrate`, disciplina di `truncate` in `beforeEach`
+      - `control/src/modules/product/delivery-migration-http.ts` — contratto introdotto da TASK-06
+
+      ## Change
+      - `control/test/integration/project-delivery-migration.test.ts` — nuovo file per la procedura via API
+      - `control/test/integration/delivery-migration-authority.test.ts` — nuovo file per l'autorità e il divieto di dual write sul percorso Operations
+      - Non modificare i test esistenti
+
+      ## Steps
+      1. Nel primo file, seminare Organization, membership admin attiva e un Project; costruire l'app con Product abilitato e una sessione admin, come fa `project-prd-review-http.test.ts`. Aggiungere `delivery_migration_verifications, delivery_migration_artifacts, delivery_migrations, project_delivery_authority` all'elenco di `truncate`.
+      2. AC-1: `POST /api/projects/:id/delivery-migration` con sorgente `{ connector: "file", locator: "docs/PRD.md" }`, perimetro `["prd","backlog"]` e conteggi `{ prd: 1, backlog: 3 }` risponde `201`; asserire sulla riga persistita `source_connector_kind`, `source_locator`, `target_system = 'control'`, `scope_types` e `expected_counts`, e che `GET` li ripresenti insieme all'autorità `core` per entrambi i tipi.
+      3. AC-2: acquisire un insieme incoerente (un solo artefatto `backlog` contro 3 attesi e un digest dichiarato errato per il PRD); `POST .../verification` risponde `200` con `outcome: "failed"` e finding `count_mismatch` e `digest_mismatch`; la migrazione risulta `verification_failed`; `POST .../cutover` risponde `409 delivery_migration_verification_required`; leggere `project_delivery_authority` e asserire che entrambe le righe sono ancora `system = 'core'` con `source_connector_kind = 'file'`.
+      4. AC-5: `POST .../abort` risponde `200`, lo stato diventa `aborted`, le righe di autorità restano identiche a prima (confrontare l'intero insieme di righe prima e dopo) e una nuova dichiarazione è di nuovo accettata con `201`.
+      5. AC-1, AC-4: acquisire l'insieme corretto (1 PRD + 3 spec di backlog con digest coerenti); asserire che ogni riga `delivery_migration_artifacts` conserva `source_ref`, `source_version`, `project_id` e un `content_digest` uguale allo SHA-256 ricalcolato sul contenuto, e che una `UPDATE` diretta su quella tabella viene rifiutata dal trigger append-only.
+      6. AC-2, AC-3: `POST .../verification` risponde `passed`; `POST .../cutover` risponde `200`; asserire che esiste esattamente una riga di autorità per tipo, entrambe con `system = 'control'` e `migration_id` valorizzato; una seconda `POST` di dichiarazione risponde `409 delivery_migration_conflict`; una seconda `POST .../cutover` è idempotente e non crea righe aggiuntive.
+      7. Aggiungere un caso di autorizzazione: con una sessione `collaborator` attiva, ogni comando risponde `403` e l'audit contiene il diniego, mentre la `GET` resta consentita.
+      8. Nel secondo file, seminare Project, Process Instance, Runner, Run `workflow` con assignment accettato e fencing token, come in `remote-run-transport.test.ts`; costruire `RemoteRunService` collegando la porta reale del `DeliveryMigrationService`.
+      9. AC-3 (prima del cutover): invocare `uploadReviewArtifact` con contenuto e digest coerenti e asserire che la riga `prd_review_artifacts` viene creata.
+      10. AC-3 (dopo il cutover): eseguire la procedura completa fino a `completed` per il tipo `prd`, poi invocare di nuovo `uploadReviewArtifact` su una seconda Run valida e asserire che fallisce con `review_artifact_delivery_migrated` e che il conteggio di `prd_review_artifacts` è invariato. Non sostituire il servizio con un doppio: l'oracolo è la scrittura che non avviene.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm --prefix control run test:integration`
+      - Expect: suite verde con i due nuovi file eseguiti e nessuna regressione rispetto ai 28 file / 107 test della baseline. Richiede Docker attivo.
+
+      ## Done
+      - [ ] AC-1 — la migrazione dichiarata è persistita e rileggibile con sorgente, destinazione, perimetro e conteggi attesi
+      - [ ] AC-2 — la verifica fallita blocca il cutover con `409` e lascia l'autorità sulla sorgente
+      - [ ] AC-3 — dopo il cutover esiste una sola riga di autorità per tipo, su `control`, e il write path Core è rifiutato senza creare artefatti
+      - [ ] AC-4 — origine, versione sorgente, digest ricalcolato e collegamento al Project sono verificati sulle righe persistite e la tabella è append-only
+      - [ ] AC-5 — l'annullamento prima della conferma lascia l'insieme delle righe di autorità identico e riapre la procedura
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Offrire il pannello di migrazione sulla pagina Project
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      La pagina Project offre un pannello che mostra l'autorità corrente e consente di verificare, confermare o annullare la migrazione.
+
+      ## Read
+      - `control/src/web/api/client.ts` — tipo `ControlApi`, helper `request`, forma dei metodi Project (righe ≈676-760 e ≈918-940)
+      - `control/src/web/pages/project.tsx` — `CockpitPanel` come esempio di pannello con `aria-label`, `form-status` e `role="alert"`; il dialogo di promozione come esempio di conferma esplicita con gestione del focus; il punto di composizione dentro `ProjectPage`
+      - `control/src/web/styles.css` — classi già disponibili (`process-section-head`, `prd-evidence`, `denial-card`, `overline`) da riusare senza inventarne di nuove ove possibile
+      - `control/src/modules/product/delivery-migration-http.ts` — contratto delle risposte
+
+      ## Change
+      - `control/src/web/api/client.ts` — tipi `DeliveryMigrationState`, `DeliveryMigrationArtifact`, `DeliveryMigrationVerification` e sei metodi: `getProjectDeliveryMigration`, `declareProjectDeliveryMigration`, `stageProjectDeliveryMigrationArtifacts`, `verifyProjectDeliveryMigration`, `cutoverProjectDeliveryMigration`, `abortProjectDeliveryMigration`
+      - `control/src/web/pages/project-delivery-migration.tsx` — nuovo file con `DeliveryMigrationPanel`
+      - `control/src/web/pages/project.tsx` — import e composizione del pannello
+      - `control/src/web/styles.css` — solo le regole necessarie al nuovo pannello
+      - Non spostare né riscrivere i pannelli esistenti di `project.tsx`
+
+      ## Steps
+      1. In `client.ts` aggiungere i tipi di lettura corrispondenti alla risposta `GET`: `authority: { artifactType: "prd" | "backlog"; system: "core" | "control"; connector: "file" | "github" | "jira" | null; migrationId: string | null; updatedAt: string }[]`, `migration` con sorgente, perimetro, conteggi attesi, stato e date, `artifacts` senza contenuto e `verifications` con esito e finding.
+      2. Implementare i sei metodi con l'helper `request` esistente, seguendo la forma già usata da `getProjectPrdReviews` e `decideProjectPrdReview`; nessun metodo deve inviare o ricevere il contenuto degli artefatti tranne `stageProjectDeliveryMigrationArtifacts`, che li invia.
+      3. Creare `DeliveryMigrationPanel({ api, projectId, isAdmin })` con `<section aria-label="Migrazione della fonte di verità">`, che carica lo stato all'apertura e lo ricarica dopo ogni comando.
+      4. Rendere l'intestazione con sorgente (connector e locator), destinazione `Control`, perimetro e stato della migrazione, e una lista di definizione con l'autorità corrente per tipo nella forma `PRD — Core · file` oppure `PRD — Control`, così che il sistema autorevole sia leggibile senza interpretazione.
+      5. Rendere i conteggi attesi accanto a quelli acquisiti per ogni tipo del perimetro, e l'esito dell'ultima verifica con i suoi finding elencati in modo leggibile (codice, tipo, riferimento sorgente, atteso, effettivo).
+      6. Offrire ad `isAdmin` i pulsanti `Verifica artefatti`, `Conferma cutover` e `Annulla migrazione`. `Conferma cutover` è `disabled` finché lo stato della migrazione non è `verified` con ultima verifica `passed`, e apre un dialogo di conferma modellato su quello della promozione, con titolo esplicito, focus iniziale sull'intestazione, chiusura con `Escape` e blocco del doppio submit.
+      7. Dopo il cutover rendere l'elenco degli artefatti migrati con tipo, riferimento sorgente, versione sorgente e digest abbreviato tramite l'helper `shortDigest` già presente in `project.tsx` — estrarlo in un modulo condiviso oppure duplicarlo localmente se l'estrazione tocca troppo codice esistente, dichiarando la scelta nel commento.
+      8. Nascondere i comandi quando la migrazione è `completed` o `aborted`, mostrando in quel caso soltanto lo stato finale; mostrare gli errori HTTP nel consueto `role="alert"` con il messaggio del server.
+      9. In `ProjectPage` importare e rendere il pannello dopo la sezione di review PRD, passando `api`, `projectId` e `isAdmin`, senza modificare gli altri stati della pagina.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run typecheck:control && npm run lint:control && npm --prefix control run test:web`
+      - Expect: typecheck e lint verdi; i 56 test web della baseline restano verdi, eventualmente adattati al nuovo doppio richiesto dalla pagina Project. Se ricompare il fallimento intermittente su «annulla con Escape…» in `project.test.tsx`, rieseguire e riconoscerlo come la flakiness registrata in baseline invece di modificarlo.
+
+      ## Done
+      - [ ] AC-1 — il pannello mostra sorgente, destinazione, perimetro e conteggi attesi contro acquisiti
+      - [ ] AC-2 — `Conferma cutover` resta disabilitato finché la verifica non è passata e i finding sono visibili
+      - [ ] AC-3 — l'autorità corrente per tipo è mostrata con un solo sistema per riga
+      - [ ] AC-4 — gli artefatti migrati sono elencati con origine e versione
+      - [ ] AC-5 — `Annulla migrazione` è offerto in ogni stato precedente alla conferma
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Verificare a livello di componente il pannello di migrazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      I test di componente provano che il pannello riflette lo stato della migrazione e governa correttamente i comandi disponibili.
+
+      ## Read
+      - `control/test/web/project.test.tsx` — costruzione del doppio di `ControlApi`, montaggio del router, query accessibili e asserzioni sui dialoghi
+      - `control/test/web/module-product-disabled.test.tsx` — esempio di file di test focalizzato su una sola proprietà dell'interfaccia
+      - `control/src/web/pages/project-delivery-migration.tsx` — comportamento introdotto da TASK-09
+
+      ## Change
+      - `control/test/web/project-delivery-migration.test.tsx` — nuovo file
+      - Non introdurre nuovi helper di montaggio: riusare quelli già presenti nei test web
+
+      ## Steps
+      1. Costruire un doppio di `ControlApi` la cui `getProjectDeliveryMigration` restituisce uno stato con autorità `core · file` per `prd` e `backlog`, migrazione `declared` con conteggi attesi `{ prd: 1, backlog: 3 }` e due artefatti acquisiti; montare la pagina Project come amministratore.
+      2. Asserire AC-1: il pannello mostra sorgente, locator, destinazione `Control`, perimetro e i conteggi attesi accanto a quelli acquisiti.
+      3. Asserire AC-2 con stato `verification_failed` e finding `count_mismatch` e `digest_mismatch`: i finding sono visibili con tipo e riferimento sorgente e il pulsante `Conferma cutover` risulta disabilitato.
+      4. Asserire il complemento con stato `verified` e ultima verifica `passed`: il pulsante è abilitato; il click apre il dialogo di conferma e solo la conferma esplicita invoca `cutoverProjectDeliveryMigration` una sola volta, anche premendo due volte in rapida successione.
+      5. Asserire AC-5: con stato `declared` e con stato `verification_failed` il pulsante `Annulla migrazione` è presente e invoca `abortProjectDeliveryMigration`; con stato `completed` non è più reso.
+      6. Asserire AC-3 e AC-4: con migrazione `completed` il pannello mostra `Control` come sistema autorevole per entrambi i tipi e l'elenco degli artefatti migrati con tipo, riferimento sorgente, versione sorgente e digest.
+      7. Asserire che un utente non amministratore vede lo stato ma nessun pulsante di comando.
+      8. Verificare che il doppio sostituisca solo il trasporto: pannello, dialogo e logica di abilitazione restano i componenti reali, altrimenti gli oracoli di AC-2 e AC-5 non sarebbero osservabili.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm --prefix control run test:web`
+      - Expect: tutti i test web passano, inclusi i nuovi casi; nessuna regressione rispetto ai 56 della baseline, salvo la flakiness già registrata su «annulla con Escape…» in `project.test.tsx`, che va rieseguita e non modificata
+
+      ## Done
+      - [ ] AC-1 — sorgente, destinazione, perimetro e conteggi sono verificati sul DOM reso
+      - [ ] AC-2 — l'abilitazione del cutover dipende dall'esito della verifica ed è provata nei due sensi
+      - [ ] AC-3, AC-4 — dopo il cutover il pannello mostra un solo sistema autorevole per tipo e gli artefatti con origine e versione
+      - [ ] AC-5 — l'annullamento è disponibile prima della conferma e assente dopo
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Dimostrare con test browser cutover impedito e cutover confermato
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+      - TASK-10
+    body: |-
+      ## Objective
+      Uno scenario Playwright prova dal browser il cutover impedito, l'annullamento e il cutover confermato con provenienza visibile.
+
+      ## Read
+      - `test/e2e/control-project-cockpit.spec.ts` — login amministratore, creazione di Project, Workspace, Process e Agent Profile via `page.request`, disciplina `beforeAll`/`reset`/`stop({ failed })`
+      - `test/e2e/control-project-prd-review.spec.ts` — interazione con un dialogo di conferma e asserzioni su regioni con `aria-label`
+      - `test/e2e/control-fixture.mjs` — `startControlFixture`, `reset`, `issuer.selectUser`, `stop`
+      - `playwright.config.ts` — elenco `testMatch`
+
+      ## Change
+      - `test/e2e/control-project-delivery-migration.spec.ts` — nuovo file
+      - `playwright.config.ts` — aggiungere il nuovo file a `testMatch`
+      - Non modificare `control-fixture.mjs`: lo scenario non richiede nuovi helper, perché dichiarazione e acquisizione passano dalla sessione amministrativa già autenticata con `page.request`
+
+      ## Steps
+      1. Riprodurre il login amministratore e la creazione di Project e Workspace come in `control-project-cockpit.spec.ts`; il processo Inception non è necessario alla migrazione, quindi crearlo solo se serve alla resa della pagina.
+      2. Primo test — cutover impedito e annullato: dichiarare con `page.request.post` la migrazione da `{ connector: "file", locator: "docs/PRD.md" }` con perimetro `["prd","backlog"]` e conteggi `{ prd: 1, backlog: 3 }`; acquisire un insieme incoerente (2 spec invece di 3 e un digest dichiarato errato).
+      3. Aprire `/projects/:projectId`, individuare la regione `Migrazione della fonte di verità` e asserire AC-1 sul testo reso: connector `file`, locator, destinazione `Control`, perimetro e conteggi attesi contro acquisiti.
+      4. Premere `Verifica artefatti` e asserire AC-2: compare l'esito fallito con i finding; il pulsante `Conferma cutover` è disabilitato; l'autorità mostrata resta `Core · file` per entrambi i tipi. Inviare anche un `POST` diretto al cutover con `page.request` e asserire lo stato `409`, perché la disabilitazione del pulsante non è da sola una prova lato server.
+      5. Premere `Annulla migrazione` e asserire AC-5: il pannello mostra la migrazione annullata e l'autorità ancora `Core · file`.
+      6. Secondo test — cutover confermato: dichiarare una nuova migrazione (accettata perché la precedente è terminale), acquisire l'insieme corretto con digest coerenti calcolati nello scenario con `createHash("sha256")`, premere `Verifica artefatti` e asserire l'esito positivo.
+      7. Premere `Conferma cutover`, confermare nel dialogo e asserire AC-3 e AC-4: l'autorità mostra `Control` per `prd` e `backlog` senza alcuna riga che indichi ancora il connector precedente come autorevole, e l'elenco degli artefatti migrati riporta per ciascuno tipo, riferimento sorgente, versione sorgente e digest.
+      8. Chiudere con la disciplina `stop({ failed })` già usata dagli altri scenari, senza lasciare container residui, e aggiungere il file a `testMatch` in `playwright.config.ts` mantenendo l'ordine alfabetico del gruppo `control-project-*`.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `npm run build:control && npx playwright test test/e2e/control-project-delivery-migration.spec.ts`
+      - Expect: entrambi i test dello scenario passano. Richiede Docker attivo e browser Playwright installati. Se l'ambiente non consente l'esecuzione, dichiararlo esplicitamente come non eseguito invece di riportarlo verde.
+
+      ## Done
+      - [ ] AC-1 — il pannello mostra sorgente, destinazione, perimetro e conteggi attesi come dichiarati
+      - [ ] AC-2 — con verifica fallita il cutover è impedito sia nell'interfaccia sia lato server (`409`)
+      - [ ] AC-3 — dopo la conferma l'interfaccia mostra `Control` come unico sistema autorevole per entrambi i tipi
+      - [ ] AC-4 — gli artefatti migrati sono osservabili con origine e versione dalla pagina del Project
+      - [ ] AC-5 — l'annullamento prima della conferma lascia l'autorità sulla sorgente e riapre la procedura
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Aggiornare la Wiki sulla transizione della fonte di verità
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      La Wiki registra il meccanismo di transizione della fonte di verità dentro la decisione che già lo aveva rinviato.
+
+      ## Read
+      - `docs/wiki/decisions/source-of-truth-transition.md` — frontmatter, `sources`, marcatori `<!-- archetipo:wiki section=... -->` e prosa delle sezioni Decisione, Alternative, Conseguenze, Verifica
+      - `docs/wiki/architecture/context-map.md` — sezioni Relazioni e Incertezze, dove il connector `control` è oggi descritto come futuro
+      - `docs/wiki/domains/delivery-workflow.md` — sezioni Ownership e Invarianti
+      - `docs/wiki/domains/project-and-workspace.md` e `docs/wiki/engineering/code-map.md` — punti da allineare ai nuovi moduli
+      - `docs/wiki/index.md` — formato delle voci, rigenerato da comando e non a mano
+
+      ## Change
+      - `docs/wiki/decisions/source-of-truth-transition.md`, `docs/wiki/architecture/context-map.md`, `docs/wiki/domains/delivery-workflow.md`, `docs/wiki/domains/project-and-workspace.md`, `docs/wiki/engineering/code-map.md`
+      - `docs/wiki/index.md` — solo tramite `archetipo wiki catalog`
+      - Non creare una nuova pagina `type: decision`: la decisione esiste ed è quella aggiornata qui
+      - Non promuovere alcuna pagina a `reviewed`: l'approvazione appartiene a `archetipo-review`
+
+      ## Steps
+      1. Eseguire `archetipo wiki affected` da `/Users/stefanoleli/Project/Archetipo` per individuare le pagine toccate dalle modifiche di codice e confrontare l'esito con l'elenco previsto sopra; riportare a `status: generated` le pagine modificate.
+      2. In `source-of-truth-transition.md` aggiungere alla sezione Decisione il meccanismo introdotto da US-021: dichiarazione con sorgente, destinazione, perimetro e conteggi attesi; verifica server-side con ricalcolo dei digest; cutover ammesso solo dopo una verifica passata; autorità a riga unica per Project e tipo; annullamento disponibile fino alla conferma; rifiuto del write path Core dopo il cutover.
+      3. Aggiungere alla sezione Alternative le opzioni respinte dal piano che non vi compaiono già: copia eseguita da un Runner con Workflow dedicata, autorità implicita dedotta dalla presenza di artefatti, interruttore booleano unico sul Project, verifica delegata al client.
+      4. Aggiungere alle Conseguenze il costo accettato: dopo il cutover Control è autorevole ma non espone ancora un write path di delivery per gli artefatti migrati, che arriverà con il client connector `control` del Core; la migrazione è unidirezionale per costruzione.
+      5. Aggiornare la sezione Verifica citando l'evidenza reale e aggiungere ai `sources` i percorsi effettivamente prodotti: `control/migrations/012_delivery_source_migration.sql`, `control/src/modules/product/delivery-migration-service.ts`, `control/src/modules/product/delivery-migration-http.ts`, `control/src/modules/operations/run-service.ts`, `control/test/integration/project-delivery-migration.test.ts`, `control/test/integration/delivery-migration-authority.test.ts`, `test/e2e/control-project-delivery-migration.spec.ts`, ciascuno con un `role` descrittivo.
+      6. In `context-map.md` correggere le affermazioni ora superate: il passaggio da riferimenti a ownership centrale non è più soltanto futuro, esiste come procedura esplicita; precisare che il client connector `control` del Core resta invece non implementato, così l'incertezza non viene cancellata ma ristretta.
+      7. In `delivery-workflow.md` registrare nella sezione Ownership che, per un Project migrato, l'autorità sui tipi in perimetro appartiene a Control, e nelle Invarianti che dopo il cutover l'ingest di artefatti prodotti dal Core è rifiutato.
+      8. Allineare `project-and-workspace.md` (il Project acquisisce un registro di autorità di delivery) e `engineering/code-map.md` (nuovi moduli e nuove tabelle), quindi eseguire `archetipo wiki catalog` per rigenerare `index.md`.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `archetipo wiki validate --profile bootstrap`
+      - Expect: envelope `kind: "validation_result"` con `data.ok: true` e nessun finding di severità `error`, come nella baseline (23 pagine, nessun finding)
+
+      ## Done
+      - [ ] `decisions/source-of-truth-transition` descrive il meccanismo di migrazione con fonti verificabili nel repository ed è tornata a `status: generated`
+      - [ ] `architecture/context-map` distingue ciò che ora esiste (procedura e autorità) da ciò che resta futuro (client connector `control` del Core)
+      - [ ] `domains/delivery-workflow` registra ownership e invariante dopo il cutover
+      - [ ] `docs/wiki/index.md` è rigenerato da `archetipo wiki catalog` e la validazione resta `ok`
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Eseguire il cancello finale di verifica della spec
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-08
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+      L'incremento è verificato end to end e la spec può essere proposta alla review solo con ogni task completato.
+
+      ## Read
+      - La sezione Baseline di questo piano, per confrontare ogni risultato con lo stato iniziale registrato
+      - `package.json` alla radice — script `typecheck:control`, `lint:control`, `test:control`, `test:control:e2e`
+      - `control/package.json` — script `test:web`, `test:integration`
+
+      ## Change
+      - Nessuna modifica di codice attesa. Se un controllo fallisce, correggere il difetto nel file responsabile e rieseguire l'intera sequenza dall'inizio
+
+      ## Steps
+      1. Eseguire da `/Users/stefanoleli/Project/Archetipo`, nell'ordine: `npm run typecheck:control`, `npm run lint:control`, `npx --prefix control vitest run src` (oppure `cd control && npx vitest run src`), `npm --prefix control run test:web`, `npm --prefix control run test:integration`.
+      2. Eseguire l'intera suite browser con `npm run test:control:e2e`. Non usare `--` per filtrare: gli argomenti si aggiungono al pattern e non lo restringono.
+      3. Confrontare i risultati con la baseline. Nessun controllo verde in baseline può essere rosso ora; nessun file modificato dal piano può presentare diagnostiche di compilatore o linter. Sulla suite E2E la baseline è 20 passati e 1 fallito: l'unico fallimento ammesso resta `test/e2e/control-project-workflow-inception.spec.ts:341`, all'asserzione di riga 405 con `completed.projection` `undefined`. Qualsiasi altro fallimento è una regressione da correggere prima di proseguire. Il fallimento intermittente noto su `control/test/web/project.test.tsx` («annulla con Escape…») va riconosciuto rieseguendo la suite, non modificando il codice.
+      4. Eseguire `archetipo wiki validate --profile bootstrap` e verificare `data.ok: true`.
+      5. Marcare questo task come `DONE`.
+      6. Ricaricare la spec eseguendo `archetipo spec show US-021` da `/Users/stefanoleli/Project/Archetipo` e verificare che nessun task risulti ancora `TODO`.
+      7. Solo dopo che il passo 6 conferma l'assenza di task aperti, invocare `archetipo spec review US-021`.
+
+      ## Verify
+      - Run: `npm run typecheck:control && npm run lint:control && npm --prefix control run test:web && npm --prefix control run test:integration`
+      - Expect: tutti passano, con almeno i 56 test web e i 107 test di integrazione della baseline più i casi aggiunti
+      - Run: `npm run test:control:e2e`
+      - Expect: `control-project-delivery-migration.spec.ts` passa e il conteggio complessivo migliora la baseline degli scenari aggiunti, con l'unico fallimento residuo ammesso in `control-project-workflow-inception.spec.ts:341`; se l'ambiente non dispone di Docker o dei browser Playwright, riportarlo come non eseguito e non come verde
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Expect: `data.ok: true` senza finding di severità `error`
+      - Run: `archetipo spec show US-021`
+      - Expect: l'envelope mostra tutti i task in stato `DONE`
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5 — le evidenze della mappa di accettazione sono state prodotte ed eseguite ai livelli dichiarati
+      - [ ] Nessun controllo verde in baseline è diventato rosso e i file modificati non introducono diagnostiche
+      - [ ] La validazione Wiki resta `ok`
+      - [ ] `archetipo spec show US-021` prova che nessun task è rimasto `TODO` prima della richiesta di review
+
+      ## Blockers
+      None.
+    ref: TASK-13

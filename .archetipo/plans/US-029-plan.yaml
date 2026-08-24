@@ -1,0 +1,658 @@
+schema: archetipo/plan/v2
+spec_code: US-029
+body: |-
+  # US-029: Pianificare una spec dalla UI — Piano di implementazione
+
+  **Generato da:** Team di pianificazione ARchetipo
+  **Data:** 17 agosto 2026
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 — Esperienza operativa ARchetipo
+  **Priorità:** HIGH | **Punti:** 5 | **Bloccata da:** US-028 (DONE)
+
+  **User Story**
+  Come utilizzatore di ARchetipo, voglio avviare la pianificazione di una spec `TODO` dalla UI e seguirne l'esito, così da ottenere un piano tramite il provider del workspace senza aprire un coding agent o la console del provider.
+
+  **Criteri di accettazione**
+  - AC-1 — Premendo `Pianifica`, la UI crea una sola esecuzione collegata alla spec e al provider predefinito.
+  - AC-2 — Durante il lavoro la UI mostra uno stato non terminale senza bloccare la navigazione del workspace.
+  - AC-3 — Al successo la UI mostra il risultato, il piano persistito e la spec nello stato `PLANNED`.
+  - AC-4 — Al fallimento la UI mostra il motivo e la spec resta fuori dallo stato `PLANNED`.
+  - AC-5 — Dopo un reload la UI ritrova l'esecuzione e il suo esito senza avviarne una seconda.
+
+  **Fuori ambito:** implementazione, review, selezione automatica di un provider alternativo e più esecuzioni concorrenti sulla stessa spec.
+
+  ---
+
+  ## Soluzione tecnica
+
+  US-028 ha portato nella UI il *cosa si può fare* (azioni ammesse dal Template) e il *con chi* (provider predefinito del workspace). Questa storia aggiunge il *fallo*: l'azione `plan` diventa eseguibile dal dettaglio della spec, e l'esecuzione già modellata dal package `execution` viene esposta al browser. Nessuna regola di processo e nessuna conoscenza del provider entrano in JavaScript: il frontend disegna ciò che il server calcola.
+
+  - **Dispatch asincrono, record sincrono.** Il provider ARcipelago attende il completamento remoto in polling (fino a `timeout_seconds`, default 3600): una `POST` che restituisce solo a lavoro finito renderebbe AC-2 irrealizzabile. `execution.Service` viene quindi scomposto in due fasi — `Start` crea e persiste il record `RUNNING` e restituisce la *continuazione* che dispaccia al provider e chiude il record — e `Run`/`RunIdempotent` vengono riespressi sopra `Start`, così esiste un solo cammino di codice e il comportamento della CLI non cambia. L'handler HTTP esegue `Start`, risponde `201` con il record `RUNNING` (che porta già `id` e `provider_id`), e lascia la continuazione a una goroutine del server.
+  - **Ciclo di vita della goroutine.** Il contesto della richiesta muore con la risposta, quindi la continuazione gira su un contesto proprio del server, creato in `NewServer` e cancellato allo spegnimento; il server attende le esecuzioni in corso per una finestra limitata. Poiché l'aggiornamento finale del record usa già `context.WithoutCancel`, uno spegnimento chiude il record come `FAILED` con la causa "interrotta" invece di lasciarlo `RUNNING` per sempre. Resta un solo caso di record orfano — l'uccisione violenta del processo — che è la stessa proprietà che ha oggi `archetipo execution run`.
+  - **Una sola esecuzione per spec (AC-1).** L'unicità è imposta dal server, non dal bottone: una mappa in memoria dei dispatch in corso, protetta da mutex, più il controllo del record persistito più recente della spec. Se una delle due condizioni indica un'esecuzione non terminale, la `POST` risponde `409` nominando l'esecuzione esistente invece di crearne una seconda. Un doppio click, due schede aperte o un reload seguito da un secondo click convergono quindi sullo stesso record.
+  - **Ritrovare l'esecuzione dopo un reload (AC-5).** Lo store sa oggi solo leggere per id, quindi il browser non potrebbe ritrovare nulla dopo un reload. `execution.Store` acquisisce `ListBySpec`, e `FileStore` la realizza leggendo `.archetipo/executions/`, filtrando per `spec_code` e ordinando dal più recente; un record illeggibile fa fallire la lettura nominando il file, invece di far sparire in silenzio la storia di una spec. `GET /api/spec/{code}` porta quindi l'ultima esecuzione della spec nel campo `execution` (`null` quando non ce n'è nessuna): il reload ritrova stato ed esito senza che il frontend debba ricordare alcun id, e `GET /api/execution/{id}` serve il polling durante il lavoro.
+  - **Verifica dell'effetto condivisa fra CLI e viewer.** Il provider può solo esibire una ricevuta scritta dall'agente remoto; è la CLI che oggi la confronta con lo stato del connector e riscrive il record come `FAILED` con codice `UNCONFIRMED_EFFECT` quando la spec non è davvero `PLANNED` con almeno un task. Duplicare quella regola nel livello web significherebbe farla divergere: viene quindi estratta in `execution.ConfirmActionEffect`, che dipende da una interfaccia minima di lettura della spec (nessuna dipendenza nuova verso `connector`) e restituisce un errore tipizzato che ciascun chiamante rende con il proprio suggerimento. Il viewer non può così mostrare `SUCCEEDED` su una spec rimasta `TODO`.
+  - **Azioni eseguibili dichiarate dal server.** Il dettaglio della spec continua a restituire le azioni ammesse dal Template; ognuna acquisisce `runnable` e `unavailable_reason`. Un'azione è eseguibile quando ha una capability corrispondente (`execution.RequiredCapability`), il workspace ha un provider predefinito registrato che dichiara quella capability e nessuna esecuzione della spec è in corso. `implement` e `review` restano quindi chip informative senza che il browser sappia perché, e il motivo mostrato in tooltip arriva dal server.
+  - **Frontend.** Il chip di un'azione eseguibile diventa un bottone; premendolo la UI chiama la `POST`, mostra il pannello di esecuzione con lo stato non terminale e avvia il polling di `GET /api/execution/{id}` ogni 2 secondi. Il modale resta chiudibile e la board navigabile: il polling è legato alla spec aperta e viene fermato alla chiusura. Alla transizione terminale la UI ricarica il dettaglio (piano, stato della spec, azioni ricalcolate) e la board in caso di successo, oppure mostra `error.message` in caso di fallimento. All'apertura del dettaglio, un'esecuzione non terminale già presente nel payload fa riprendere il polling senza avviare nulla.
+
+  ### Decisioni architetturali
+
+  Nessuna scelta supera la soglia ADR. Il confine tra ARchetipo e il provider di esecuzione è già deciso e accettato (`decisions/execution-provider-boundary`) e qui viene soltanto consumato da un secondo chiamante interno; la proprietà remota del piano è già decisa (`decisions/remote-plan-ownership`) e resta invariata, perché il viewer continua a non scrivere il piano. Le due alternative reali valutate sono state scartate per ragioni note: (a) rendere sincrona la `POST` e tenere il browser in attesa del completamento remoto — scartata perché contraddice AC-2 e legherebbe l'esito a un timeout HTTP; (b) far generare al browser una chiave di idempotenza per garantire l'unicità — scartata perché sposta nel client una garanzia che il server può dare in modo deterministico, e non protegge da due schede diverse. La Wiki automatica è disattivata (`wiki.enabled: false`), quindi questo incremento non produce né aggiorna pagine Wiki.
+
+  ---
+
+  ## Baseline
+
+  Misurata prima della pianificazione, dalla radice del repository.
+
+  | Verifica | Esito prima dell'implementazione | Conseguenza sul piano |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | nessun output | ogni task che tocca Go resta formattato; atteso `nessun output` |
+  | `cd cli && go vet ./...` | nessun problema | atteso `passes` anche dopo |
+  | `cd cli && go build ./...` | compila | atteso `passes` anche dopo |
+  | `cd cli && go test ./...` | 763 test verdi in 24 package | atteso `passes`; i nuovi test si aggiungono, e gli unici test esistenti da adeguare sono i chiamanti che implementano `execution.Store` (`spyStore` in `cli/internal/execution/service_test.go`) |
+  | `golangci-lint run --timeout 5m ./...` | 0 issues | atteso `0 issues`; il binario non era installato ed è stato installato con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` (prerequisito d'ambiente, non un difetto del codice: se manca, installarlo prima del gate) |
+  | `npm run test:view-execution-smoke` | PASS (AC-1..AC-5 di US-028 verdi su `archetipo view` reale) | è la regressione della slice precedente sulle stesse rotte: va rieseguita nel gate finale |
+  | `npm run test:view-delete-smoke` | non eseguita in baseline | non toccata da questo incremento; non richiesta nel gate |
+
+  Prerequisiti d'ambiente: Go e Node già presenti; nessun servizio esterno è necessario, perché lo smoke di questa storia usa un hub ARcipelago finto servito in locale da Node e nessun test contatta la rete.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task che la produce |
+  |---|---|---|---|---|
+  | AC-1 | workspace file con spec `US-901` in `TODO`, provider predefinito persistito, provider di prova registrato che resta in esecuzione finché il test non lo sblocca | integrazione Go (httptest, connector filefs reale) + smoke Node su `archetipo view` reale | la prima `POST /api/spec/US-901/execution` risponde `201` con `status: "RUNNING"`, `spec_code: "US-901"` e `provider_id` uguale al default persistito; una seconda `POST` immediata risponde `409` nominando quell'`id`; in `.archetipo/executions/` esiste **un solo** file di record per la spec | TASK-07, TASK-09, TASK-11 |
+  | AC-2 | esecuzione avviata e ancora non sbloccata | integrazione Go + smoke Node + verifica manuale nel browser | mentre il provider è bloccato, `GET /api/execution/{id}` risponde `200` con `status: "RUNNING"` e `completed_at` assente, e nello stesso intervallo `GET /api/board` e `GET /api/spec/US-902` rispondono `200` (il server non è bloccato dal dispatch); nel browser il pannello mostra lo stato non terminale, il modale si chiude e la board resta navigabile | TASK-07, TASK-09, TASK-11, TASK-13 |
+  | AC-3 | provider di prova che persiste un piano tramite il connector e poi restituisce un payload valido; nello smoke, hub finto che esegue `archetipo spec plan` prima di dichiarare `completed` con la ricevuta | integrazione Go + smoke Node | alla fine del polling `GET /api/execution/{id}` ha `status: "SUCCEEDED"`, `result.payload` non vuoto e `completed_at` valorizzato; `GET /api/spec/US-901` restituisce `spec.status == "PLANNED"`, `tasks` non vuoto, `plan_body` non vuoto e `actions` ricalcolate (nessuna azione `plan`) | TASK-07, TASK-08, TASK-09, TASK-10, TASK-11 |
+  | AC-4 | (a) provider che fallisce il dispatch; (b) provider che dichiara successo senza aver prodotto alcun piano; nello smoke, hub finto che chiude il task `failed` | integrazione Go + smoke Node | in (a) il record è `FAILED` con `error.message` non vuoto; in (b) il record è `FAILED` con `error.code == "UNCONFIRMED_EFFECT"`; in entrambi i casi `GET /api/spec/US-901` restituisce ancora `spec.status == "TODO"` con `tasks` vuoto, e la `POST` successiva è di nuovo ammessa | TASK-05, TASK-07, TASK-09, TASK-11 |
+  | AC-5 | esecuzione già arrivata a esito terminale sul filesystem | integrazione Go (nuovo server sullo stesso project root, che simula il reload lato client e la ripartenza del viewer) + smoke Node | `GET /api/spec/US-901` servita dal nuovo server porta `execution.id` uguale al record esistente con il suo stato terminale; il numero di file in `.archetipo/executions/` è invariato dopo il reload e nessuna `POST` viene emessa dal caricamento del dettaglio | TASK-03, TASK-08, TASK-09, TASK-10, TASK-11 |
+
+  Questa è una mappa di accettazione, non un riassunto dei task. Nessun doppio nasconde l'oracolo: il connector è quello reale su filesystem temporaneo, la persistenza del record è quella reale di `FileStore`, la verifica dell'effetto è quella reale usata dalla CLI, e nello smoke Node il provider ARcipelago è quello vero — è l'hub a essere finto, non il provider.
+
+  ---
+
+  ## Strategia di test
+
+  Il rischio è concentrato in tre punti: la concorrenza (una sola esecuzione per spec, una goroutine che sopravvive alla risposta HTTP), l'onestà dell'esito mostrato (mai `SUCCEEDED` su una spec non pianificata) e la ritrovabilità dopo un reload. Il rendering è sottile; la coreografia no.
+
+  - Test unitari nel package `execution` per la scomposizione in due fasi (il record esiste ed è `RUNNING` prima che il provider venga invocato), per `ListBySpec` (filtro, ordinamento dal più recente, directory assente, record illeggibile che fallisce nominando il file) e per `ConfirmActionEffect` estratta (spec non `PLANNED`, spec `PLANNED` senza task, riscrittura del record con `UNCONFIRMED_EFFECT` conservando l'identificativo remoto).
+  - Test di integrazione HTTP in `cli/internal/web` con connector filefs reale su directory temporanea e provider di prova registrati in un registry costruito dal test: un provider che si blocca su un canale (per osservare lo stato non terminale in modo deterministico, senza `sleep`), uno che pianifica davvero tramite il connector, uno che fallisce e uno che mente. Gli stessi test verificano il conteggio dei file in `.archetipo/executions/` e la ripartenza del server sullo stesso project root.
+  - Uno smoke Node end-to-end (`npm run test:view-plan-smoke`) che avvia `archetipo view` reale contro un hub ARcipelago finto servito in locale, come già fanno `test:view-execution-smoke` e `test:view-delete-smoke`. L'hub finto esegue davvero `archetipo spec plan` prima di dichiarare `completed`, quindi il percorso attraversa il provider vero, la ricevuta vera, la verifica dell'effetto vera e la persistenza vera; una seconda spec chiude il percorso di fallimento.
+  - Nessun test asserisce un proxy: "l'esecuzione è partita" è provata dal record persistito e dal suo `provider_id`, non dal codice di risposta; "la spec è pianificata" è provata dal dettaglio della spec, non dal payload del provider.
+
+  ### Rinuncia agli E2E di browser
+
+  **Motivo:** il repository non possiede alcun framework di browser E2E per il proprio viewer (`archetipo e2e` genera Playwright nei progetti *ospiti*, non qui) e la convenzione consolidata per la UI locale — stabilita e accettata in US-028 — è lo smoke Node sull'API HTTP del server reale. Introdurre Playwright solo per questa slice aggiungerebbe infrastruttura che nessun criterio di accettazione richiede.
+  **Livello di evidenza usato al suo posto:** smoke Node sul server reale con connector file e hub finto, che copre l'intero percorso di accettazione AC-1..AC-5 alle stesse rotte che il browser chiama, più una verifica manuale guidata nel browser eseguita nel gate finale (TASK-13) che osserva il bottone, lo stato non terminale con modale chiudibile e board navigabile, l'esito di successo con piano e spec `PLANNED`, l'esito di fallimento con il motivo, e il ritrovamento dopo un reload della pagina. La dimostrazione è filmabile: l'eventuale video è responsabilità di `archetipo-review`, non dell'implementazione.
+
+  ---
+
+  ## Impatto Wiki
+
+  ```yaml
+  wiki_impact:
+    read: []
+    update: []
+    create: []
+  ```
+
+  La Wiki automatica è disattivata nel workspace (`wiki.enabled: false` in `.archetipo/config.yaml`), quindi il flusso standard non legge né mantiene pagine per questa spec. Le pagine citate nel campo `Contesto Wiki` della spec sono state trattate come riferimenti di lettura del confine già deciso, non come contratto di documentazione.
+
+  ---
+
+  _Piano generato da ARchetipo Planning — 17 agosto 2026_
+tasks:
+  - id: TASK-01
+    title: Scomporre execution.Service in avvio del record e continuazione del dispatch
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      `execution.Service` sa creare e persistere il record `RUNNING` restituendo la continuazione che dispaccia al provider e chiude il record, senza cambiare il comportamento osservabile di `Run` e `RunIdempotent`.
+
+      ## Read
+      - `cli/internal/execution/service.go` — `Run`, `RunIdempotent`, il metodo privato `run` e l'ordine esatto delle sue fasi (capability, resolve, validate, id, create, execute, update).
+      - `cli/internal/execution/types.go` — `Execution`, `Request`, `Result`, `ExecutionError`, `RemoteError`.
+      - `cli/internal/execution/store.go` — `Store` e `StoreError`.
+
+      ## Change
+      - `cli/internal/execution/service.go` — introdurre il tipo `Continuation func(context.Context) (Execution, error)` e il metodo esportato `Start(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any) (Execution, Continuation, error)`; riesprimere `Run` e `RunIdempotent` sopra la stessa implementazione.
+      - Non duplicare le fasi: deve restare **un solo** cammino che valida, crea, dispaccia e aggiorna. Una seconda copia della logica è il difetto che questo task esiste per evitare.
+      - Non cambiare le firme di `Run`, `RunIdempotent`, `NewService`, né i messaggi d'errore esistenti: la CLI e i suoi test dipendono da entrambi.
+      - Non introdurre goroutine in questo package: l'asincronia è una scelta del chiamante.
+
+      ## Steps
+      1. Rinominare/rifattorizzare il metodo privato `run` in `start(ctx, spec, action, providerID, providerConfig, requestID, resolveID)` che esegue tutte le fasi fino a `store.Create` compreso e restituisce `(Execution, Continuation, error)`; la continuazione contiene esattamente il codice odierno da `provider.Execute` fino a `store.Update`, incluso l'uso di `context.WithoutCancel(ctx)` per l'aggiornamento finale.
+      2. Far sì che la continuazione riceva il contesto come parametro (quello del chiamante asincrono) e catturi provider, request e record creato dalla chiusura.
+      3. Riscrivere `Run` come `start(...)` seguito dall'invocazione immediata della continuazione con lo stesso contesto, preservando i valori di ritorno attuali.
+      4. Riscrivere `RunIdempotent` allo stesso modo, mantenendo intatta la gestione di `StoreNotFound`, `StoreAlreadyExist` e il flag `reused`.
+      5. Aggiungere `Start` come metodo esportato che chiama `start` con `requestID` vuoto e `s.newID` come generatore, documentando che il record è già persistito quando `Start` ritorna e che il chiamante **deve** invocare la continuazione, altrimenti il record resta `RUNNING`.
+      6. Documentare nella doc del metodo che un errore restituito da `Start` significa che nessun record è stato creato.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/execution/... ./internal/cli/...`
+      - Expect: nessun output da `gofmt`, build e vet puliti, test dei due package verdi come nella baseline (763 test complessivi verdi).
+
+      ## Done
+      - [ ] `Start` restituisce un record già persistito con `Status == StatusRunning` e una continuazione non nil.
+      - [ ] `Run` e `RunIdempotent` non duplicano le fasi e non cambiano comportamento: i test esistenti di `execution` e `cli` passano senza modifiche.
+      - [ ] AC-1 — il record che la UI riceverà porta già `id`, `spec_code` e `provider_id` prima che il provider venga contattato.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Coprire con test l'avvio in due fasi del servizio di esecuzione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Un test fallisce se `Start` contatta il provider prima di aver persistito il record, se la continuazione non chiude il record, oppure se `Run` cambia comportamento rispetto alla baseline.
+
+      ## Read
+      - `cli/internal/execution/service_test.go` — `spyStore`, `testProvider`, `newTestService` e lo stile dei casi esistenti.
+      - `cli/internal/execution/service.go` — `Start` e la continuazione introdotte da TASK-01.
+
+      ## Change
+      - `cli/internal/execution/service_test.go` — aggiungere i casi su `Start`; non modificare i test esistenti, che sono la prova di non regressione di `Run` e `RunIdempotent`.
+
+      ## Steps
+      1. Test: con un provider la cui `Execute` si blocca su un canale, `Start` ritorna prima che `Execute` sia stata invocata, e lo store contiene già il record con `Status == StatusRunning`, `SpecStatusBefore` valorizzato e `CompletedAt` nil.
+      2. Test: invocando la continuazione dopo aver sbloccato il provider, lo store contiene il record `SUCCEEDED` con `Result` non nil e `CompletedAt` valorizzato, e il valore restituito coincide con quello persistito.
+      3. Test: con un provider che restituisce errore, la continuazione produce un record `FAILED` con `Error.Code == "PROVIDER_ERROR"`; con un `RemoteError`, `Error.ExternalID` è conservato.
+      4. Test: quando la validazione della configurazione o la risoluzione del provider falliscono, `Start` restituisce errore e **nessun** record viene creato (`spyStore` non registra alcuna `Create`).
+      5. Test: una continuazione invocata con un contesto già cancellato chiude comunque il record (l'aggiornamento usa `context.WithoutCancel`), così un record non resta `RUNNING` dopo uno spegnimento.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/... -run 'Start|Run|Idempotent' -count=1`
+      - Expect: tutti i test verdi; rimuovendo temporaneamente la `store.Create` prima del dispatch il caso del punto 1 fallisce (verifica che l'oracolo sia reale).
+
+      ## Done
+      - [ ] AC-1 — esiste un test che prova che il record è persistito e `RUNNING` prima che il provider venga invocato.
+      - [ ] AC-2 — esiste un test che osserva lo stato non terminale mentre il provider è ancora in corso, senza attese temporali.
+      - [ ] AC-4 — esiste un test che prova la chiusura `FAILED` con motivo e la conservazione dell'identificativo remoto.
+      - [ ] I test esistenti del package sono invariati e verdi.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Rendere ritrovabili le esecuzioni di una spec nello store
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Lo store sa elencare le esecuzioni di una spec dalla più recente, così un client che non conserva alcun identificativo può ritrovare l'esecuzione dopo un reload.
+
+      ## Read
+      - `cli/internal/execution/store.go` — `Store`, `StoreError`, `StoreErrorKind`.
+      - `cli/internal/execution/file_store.go` — `NewFileStore`, `path`, `encode`, `Create`, `Update`, `Get` e il formato dei file `.archetipo/executions/<id>.json`.
+      - `cli/internal/execution/types.go` — `Execution` (`SpecCode`, `CreatedAt`, `Status`).
+
+      ## Change
+      - `cli/internal/execution/store.go` — aggiungere al contratto `ListBySpec(ctx context.Context, specCode string) ([]Execution, error)`.
+      - `cli/internal/execution/file_store.go` — implementare `ListBySpec`.
+      - `cli/internal/execution/service_test.go` — aggiungere il metodo a `spyStore` (adeguamento obbligatorio del solo doppio esistente).
+      - Non cambiare il formato dei record né il nome della directory: i file già scritti dalla CLI devono restare leggibili.
+      - Non aggiungere indici o cache: il numero di record locali è piccolo e una cache introdurrebbe uno stato da invalidare.
+
+      ## Steps
+      1. Dichiarare `ListBySpec` in `Store` documentando l'ordine (dal più recente per `CreatedAt`, con l'`ID` come criterio deterministico a parità di istante) e che l'assenza di esecuzioni è uno slice vuoto, mai un errore.
+      2. In `FileStore.ListBySpec`, rispettare `ctx.Err()` come fanno gli altri metodi, poi leggere la directory: se non esiste, restituire uno slice vuoto non nil.
+      3. Considerare solo le voci non-directory con estensione `.json`, ignorando i file temporanei `.execution-*.tmp` che `Update` può lasciare.
+      4. Decodificare ogni file; un file illeggibile o non decodificabile produce un errore che **nomina il file**, invece di essere saltato in silenzio: una storia amputata sarebbe indistinguibile da un'assenza.
+      5. Filtrare per `SpecCode` uguale al parametro (confronto esatto, dopo `strings.TrimSpace` sul parametro) e ordinare come documentato al punto 1.
+      6. Aggiungere a `spyStore` una implementazione coerente con la documentazione, in modo che i test esistenti continuino a compilare.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/execution/... ./internal/cli/...`
+      - Expect: nessun output da `gofmt`, build e vet puliti, test verdi.
+
+      ## Done
+      - [ ] AC-5 — `ListBySpec` restituisce le esecuzioni della spec dalla più recente e uno slice vuoto quando non ce ne sono.
+      - [ ] Un record illeggibile produce un errore che nomina il file, non un elenco parziale.
+      - [ ] Il package compila con tutti i suoi doppi di test aggiornati.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Coprire con test l'elenco delle esecuzioni per spec
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Un test fallisce se l'elenco delle esecuzioni di una spec perde l'ordine, include altre spec, nasconde un record corrotto o tratta l'assenza di record come un errore.
+
+      ## Read
+      - `cli/internal/execution/file_store_test.go` — stile dei test esistenti su `FileStore` e costruzione della directory temporanea.
+      - `cli/internal/execution/file_store.go` — `ListBySpec` introdotta da TASK-03.
+
+      ## Change
+      - `cli/internal/execution/file_store_test.go` — aggiungere i casi su `ListBySpec`; non modificare i test esistenti.
+
+      ## Steps
+      1. Test: creando tre record per `US-001` con `CreatedAt` crescenti e uno per `US-002`, `ListBySpec(ctx, "US-001")` restituisce esattamente i tre record della prima spec, dal più recente al meno recente.
+      2. Test: su un project root senza directory `.archetipo/executions/`, `ListBySpec` restituisce uno slice vuoto non nil e nessun errore.
+      3. Test: scrivendo un file `.json` con contenuto non decodificabile nella directory, `ListBySpec` restituisce un errore il cui messaggio contiene il nome di quel file, e non un elenco parziale.
+      4. Test: un file con estensione diversa da `.json` e un temporaneo `.execution-*.tmp` presenti nella directory non compaiono nel risultato e non provocano errori.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/... -run 'ListBySpec' -count=1 && go test ./internal/execution/... -count=1`
+      - Expect: i nuovi casi verdi e l'intero package verde.
+
+      ## Done
+      - [ ] AC-5 — l'ordinamento dal più recente e il filtro per spec sono coperti da test.
+      - [ ] Il fallimento su record corrotto nomina il file ed è coperto da test.
+      - [ ] Nessun test esistente è stato modificato.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Estrarre in execution la verifica dell'effetto di un'azione, oggi solo nella CLI
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      La regola che declassa a `FAILED` un'esecuzione dichiarata riuscita ma non confermata dal connector vive in un solo posto, riusabile dal viewer senza duplicarla e senza far dipendere `execution` dal package `connector`.
+
+      ## Read
+      - `cli/internal/cli/execution_cmd.go` — `confirmActionEffect` (righe ~208-250) e `planEffect` (righe ~252-271), inclusi il testo esatto del messaggio, il codice `UNCONFIRMED_EFFECT`, lo spostamento dell'`ExternalID` da `Result` a `Error` e la `store.Update` con `context.WithoutCancel`.
+      - `cli/internal/cli/execution_arcipelago_test.go` — il caso che asserisce `record.Error.Code == "UNCONFIRMED_EFFECT"` e `record.Error.ExternalID == "task-remote-1"`.
+      - `cli/internal/connector/…` — le firme di `ReadSpecDetail` e `ReadSpecTasks` da riprodurre nell'interfaccia minima.
+      - `cli/internal/iox/iox.go` — `NewPrecondition` e i codici, per preservare l'envelope della CLI.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/effect.go` — interfaccia minima `SpecStateReader { ReadSpecDetail(context.Context, string) (domain.Spec, error); ReadSpecTasks(context.Context, string) ([]domain.Task, error) }`, tipo `UnconfirmedEffectError{ExecutionID, Message string}` e funzione `ConfirmActionEffect(ctx context.Context, reader SpecStateReader, store Store, action ActionID, specCode string, outcome *Execution) error`.
+      - `cli/internal/cli/execution_cmd.go` — rimuovere `confirmActionEffect` e `planEffect`, delegare a `execution.ConfirmActionEffect` e mappare `*execution.UnconfirmedEffectError` su `iox.NewPrecondition` con **esattamente** il messaggio odierno (`"execution "+id+": "+message`) e l'hint odierno (`"inspect the remote run, then retry with a new --request-id once the cause is fixed"`).
+      - Non importare `connector` né `iox` dentro `execution`: il package resta indipendente e restituisce un errore tipizzato che il chiamante rende con il proprio suggerimento.
+      - Non cambiare il codice `UNCONFIRMED_EFFECT`, il messaggio del record, né la semantica: `Result` e `Error` restano mutuamente esclusivi e l'identificativo remoto migra nell'errore.
+
+      ## Steps
+      1. Creare `effect.go` con l'interfaccia minima e verificare, compilando, che `connector.Connector` la soddisfi già (nessun adattatore).
+      2. Spostare `planEffect` come funzione non esportata del package `execution`, invariata nel comportamento e nei messaggi.
+      3. Spostare il corpo di `confirmActionEffect` in `ConfirmActionEffect`, sostituendo il ritorno `iox.NewPrecondition` con `&UnconfirmedEffectError{ExecutionID: outcome.ID, Message: message}` e conservando il ritorno d'errore quando `store.Update` fallisce (avvolto in un errore che nomina l'operazione, mappato dal chiamante).
+      4. Nella CLI, chiamare la nuova funzione e tradurre i due errori possibili negli stessi envelope di oggi: `UnconfirmedEffectError` → `E_PRECONDITION` con messaggio e hint invariati; fallimento della `store.Update` → `iox.NewInternal("recording the unconfirmed execution "+id, err)`.
+      5. Documentare in `effect.go` perché la verifica non può stare nel provider (il confine dell'esecuzione non tocca il connector) e perché non può stare nel livello web (divergerebbe dalla CLI).
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/execution/... ./internal/cli/... -count=1`
+      - Expect: nessun output da `gofmt`, build e vet puliti, e in particolare i test esistenti di `internal/cli` verdi **senza modifiche**, prova che l'envelope non è cambiato.
+
+      ## Done
+      - [ ] AC-4 — `execution.ConfirmActionEffect` esiste, è l'unica implementazione della regola, e la CLI la usa.
+      - [ ] Il record non confermato conserva `error.code == "UNCONFIRMED_EFFECT"` e l'identificativo remoto.
+      - [ ] `cli/internal/cli/execution_arcipelago_test.go` passa invariato.
+      - [ ] `execution` non importa `connector` né `iox`.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Coprire con test la verifica dell'effetto estratta
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Un test nel package `execution` fallisce se una dichiarazione di successo non confermata dal connector passa come riuscita, o se la riscrittura del record perde motivo o identificativo remoto.
+
+      ## Read
+      - `cli/internal/execution/effect.go` — `ConfirmActionEffect`, `SpecStateReader`, `UnconfirmedEffectError`.
+      - `cli/internal/execution/service_test.go` — `spyStore` e lo stile dei doppi del package.
+      - `cli/internal/domain` — `Spec`, `Task`, `StatusTodo`, `StatusPlanned`.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/effect_test.go` — doppio di lettura della spec configurabile (stato, task, errori) e i casi elencati sotto.
+      - Non toccare i test della CLI: la loro invarianza è già l'oracolo di non regressione dell'envelope.
+
+      ## Steps
+      1. Test: azione `plan`, record `SUCCEEDED`, spec riletta `PLANNED` con un task ⇒ nessun errore e record invariato nello store.
+      2. Test: spec riletta ancora `TODO` ⇒ errore `*UnconfirmedEffectError` che nomina l'esecuzione, e record persistito `FAILED` con `Error.Code == "UNCONFIRMED_EFFECT"`, `Result` azzerato e `Error.ExternalID` uguale all'`ExternalID` che stava nel risultato.
+      3. Test: spec `PLANNED` ma senza task ⇒ stesso trattamento del punto 2, con motivo che nomina l'assenza di task.
+      4. Test: record già `FAILED`, oppure azione diversa da `plan` ⇒ la funzione non rilegge nulla e non modifica il record.
+      5. Test: fallimento della rilettura della spec ⇒ l'errore non viene inghiottito e il record risulta comunque non confermato.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/... -run 'ConfirmActionEffect' -count=1 && go test ./... -count=1`
+      - Expect: i nuovi casi verdi e l'intera suite `cli` verde (763 test o più, nessuno rosso).
+
+      ## Done
+      - [ ] AC-4 — un successo non confermato è provato diventare `FAILED` con motivo leggibile, a livello di package `execution`.
+      - [ ] `Result` e `Error` restano mutuamente esclusivi nel record riscritto.
+      - [ ] Nessun test preesistente modificato.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Avviare dal viewer una sola esecuzione per spec, senza bloccare la risposta
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Objective
+      `POST /api/spec/{code}/execution` avvia l'azione con il provider predefinito del workspace, risponde subito con il record `RUNNING` e garantisce che una seconda richiesta sulla stessa spec non crei una seconda esecuzione.
+
+      ## Read
+      - `cli/internal/web/server.go` — `Server`, `NewServer`, `registerRoutes`, `Run` e la gestione dello spegnimento.
+      - `cli/internal/web/execution.go` — `handleListExecutionProviders`, `handleSaveDefaultExecutionProvider`, `writeProviderConfigError` e la lettura del default con `readConfigState(s.cfg.ProjectRoot)`.
+      - `cli/internal/web/handlers.go` — `handleGetSpec`, `writeJSON`, `decodeJSON`, `writeError` e la mappa codice → stato HTTP.
+      - `cli/internal/cli/execution_cmd.go` — `newExecutionRunCmd`: è la sequenza di riferimento (default provider → `ReadSpecDetail` → service → conferma dell'effetto).
+      - `cli/internal/template/template.go` — `Resolve`, `ActionsFor`, `Action`.
+
+      ## Change
+      - `cli/internal/web/server.go` — il `Server` acquisisce lo store (`execution.NewFileStore(cfg.ProjectRoot)`), il `*execution.Service`, un contesto proprio con la sua `cancel`, un `sync.WaitGroup` per i dispatch e una mappa `map[string]string` (spec → id in corso) protetta da mutex; registrare la nuova rotta; allo spegnimento cancellare il contesto e attendere i dispatch per una finestra limitata (5 secondi) prima di uscire.
+      - Nuovo file `cli/internal/web/execution_run.go` — `handleRunSpecAction` e le funzioni di supporto.
+      - Non cambiare la firma di `NewServer`: store e service si costruiscono da `cfg.ProjectRoot` e dal registry già ricevuto, così `newViewCmd` e i test esistenti restano invariati.
+      - Non usare il contesto della richiesta per il dispatch: muore con la risposta e chiuderebbe ogni esecuzione appena avviata.
+      - Non far scrivere al viewer il piano o lo stato della spec: la scrittura resta dell'agente remoto, il viewer verifica soltanto.
+
+      ## Steps
+      1. In `NewServer`, creare lo store con `execution.NewFileStore(cfg.ProjectRoot)` e il service con `execution.NewService(registry, store, execution.RandomID, time.Now)`; un registry nil produce un service assente e la rotta risponde `409` con "nessun provider registrato", mai un panic.
+      2. Creare in `NewServer` il contesto di base (`context.WithCancel(context.Background())`) e conservarne la `cancel`; in `Run`, nel ramo di spegnimento, chiamarla e attendere il `WaitGroup` con una finestra di 5 secondi prima del ritorno.
+      3. Registrare `POST /api/spec/{code}/execution` in `registerRoutes`.
+      4. Nell'handler: decodificare `{"action":"plan"}`; azione vuota o sconosciuta ⇒ `iox.NewInvalidInput` (400) che nomina le azioni supportate.
+      5. Leggere la spec con `s.conn.ReadSpecDetail`, risolvere il Template con `template.Resolve(s.cfg.Template.ID)` e rifiutare con `iox.NewConflict` (409) un'azione non ammessa da `ActionsFor(spec.Status)`, nominando lo stato corrente.
+      6. Leggere il provider predefinito **da disco** con `readConfigState(s.cfg.ProjectRoot)` (può essere cambiato dopo l'avvio del viewer): assente o vuoto ⇒ `iox.NewConflict` (409) con hint che rimanda al pannello Execution della configurazione.
+      7. Applicare la guardia di unicità sotto mutex: se la mappa dei dispatch in corso contiene la spec, oppure se `store.ListBySpec` restituisce come record più recente un `RUNNING`, rispondere `409` nominando l'`id` dell'esecuzione esistente e, per il caso persistito, indicando nell'hint come uscirne (attendere o rimuovere il record); altrimenti prenotare la spec nella mappa prima di rilasciare il lock.
+      8. Chiamare `service.Start(...)` con la spec, l'azione, l'id e la configurazione del provider predefinito; su errore liberare la prenotazione e mappare con le stesse regole della CLI (`RegistryError`, `CapabilityError`, `ConfigurationError` → 409/400 con il campo colpevole, riusando `writeProviderConfigError` dove pertinente).
+      9. Rispondere `201` con il record restituito da `Start`, poi lanciare la goroutine: `WaitGroup.Add(1)`, `defer` che libera la prenotazione e `Done`, invocazione della continuazione con il contesto di base e, al successo, `execution.ConfirmActionEffect(ctx, s.conn, store, action, code, &outcome)` per declassare un successo non confermato; l'esito è già persistito dallo store, quindi la goroutine non risponde a nessuno e non deve propagare errori altrove.
+      10. Al termine del dispatch chiamare `s.broker.Publish()`, così la board dei client connessi si riallinea anche quando il connector non produce eventi di filesystem osservati dal watcher.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/web/... ./internal/cli/... -count=1`
+      - Expect: nessun output da `gofmt`, build e vet puliti, test dei due package verdi (i test web esistenti costruiscono il server con la firma invariata).
+
+      ## Done
+      - [ ] AC-1 — la prima `POST` risponde `201` con un record `RUNNING` che porta `spec_code` e il `provider_id` del default persistito; una seconda `POST` durante il lavoro risponde `409` nominando l'esecuzione esistente e non crea un secondo record.
+      - [ ] AC-2 — la `POST` ritorna senza attendere il provider e il server continua a servire le altre rotte durante il dispatch.
+      - [ ] AC-4 — un dispatch fallito o un successo non confermato lasciano il record `FAILED` con il motivo e la spec fuori da `PLANNED`.
+      - [ ] Un'azione non ammessa nello stato corrente o l'assenza di provider predefinito producono `409` con messaggio esplicito, non un avvio.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Esporre stato dell'esecuzione ed eseguibilità delle azioni nelle letture del viewer
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Il browser può seguire un'esecuzione in corso e ritrovarne l'esito dopo un reload senza conservare alcun identificativo, e sa quali azioni può davvero avviare senza conoscere né il processo né i provider.
+
+      ## Read
+      - `cli/internal/web/handlers.go` — `specDetailView`, `handleGetSpec`, `readPlanForSpec`.
+      - `cli/internal/web/execution.go` — le view già definite e la convenzione di serializzazione (liste mai `null`).
+      - `cli/internal/execution/provider.go` — `Registry.Resolve`, `Supports`, `NormalizeCapabilities`.
+      - `cli/internal/execution/types.go` — `RequiredCapability`, `ExecutionStatus`, `Execution`.
+
+      ## Change
+      - `cli/internal/web/handlers.go` — `specDetailView` acquisisce `execution *execution.Execution` (`null` quando la spec non ne ha nessuna) e `Actions` diventa una lista di view che incorpora `template.Action` aggiungendo `runnable bool` e `unavailable_reason string`.
+      - `cli/internal/web/execution_run.go` (o `execution.go`) — `handleGetExecution` per `GET /api/execution/{id}` e la funzione che calcola l'eseguibilità di un'azione.
+      - `cli/internal/web/server.go` — registrare `GET /api/execution/{id}`.
+      - Incorporare `template.Action` per valore (embedding), così i campi `id`, `label`, `skill`, `statuses` restano nella stessa posizione del payload e il contratto di US-028 non si rompe.
+      - Non inserire in JavaScript alcuna regola su quali azioni siano eseguibili: `runnable` è calcolato dal server.
+
+      ## Steps
+      1. In `handleGetSpec`, dopo aver letto la spec, chiamare `store.ListBySpec(ctx, code)` e mettere il primo elemento (il più recente) nel campo `execution`, `null` se l'elenco è vuoto; un errore di lettura è un errore della richiesta, non un'assenza silenziosa.
+      2. Calcolare l'eseguibilità per ciascuna azione ammessa: capability mancante (`RequiredCapability` in errore) ⇒ `runnable: false` con motivo "questa azione non è ancora avviabile dal viewer"; nessun provider predefinito ⇒ motivo che rimanda alla configurazione; provider non registrato o privo della capability ⇒ motivo che nomina provider e capability; esecuzione della spec in corso ⇒ motivo che nomina l'esecuzione. Tutti i testi in inglese, come il resto della UI del viewer.
+      3. `unavailable_reason` è omesso (`omitempty`) quando l'azione è eseguibile, così un client non mostra mai un motivo per un'azione disponibile.
+      4. Implementare `handleGetExecution`: id vuoto ⇒ 400; `StoreNotFound` ⇒ 404; altrimenti `200` con il record. È la rotta del polling, quindi non deve toccare né il connector né il provider.
+      5. Verificare che il payload del record esponga già, con i tag esistenti, `status`, `created_at`, `completed_at`, `result` ed `error` (con `code`, `message`, `external_id`): sono i campi che la UI mostra e nessuno di essi contiene segreti.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/web/... -count=1`
+      - Expect: nessun output da `gofmt`, build e vet puliti, test verdi.
+
+      ## Done
+      - [ ] AC-3 — dopo un successo, `GET /api/spec/{code}` restituisce insieme `spec.status == "PLANNED"`, il piano e l'esecuzione `SUCCEEDED`.
+      - [ ] AC-5 — `GET /api/spec/{code}` porta sempre l'ultima esecuzione della spec, così un client appena caricato la ritrova senza conservare id.
+      - [ ] `GET /api/execution/{id}` restituisce il record o `404`, senza contattare il provider.
+      - [ ] Le azioni conservano `id` e `label` nella posizione attuale e aggiungono `runnable` con l'eventuale motivo.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Coprire con test di integrazione HTTP l'intero percorso di accettazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Un test di integrazione sul server web fallisce se una pressione produce più di un'esecuzione, se lo stato non terminale non è osservabile, se un esito viene mostrato senza essere vero, o se un reload perde l'esecuzione.
+
+      ## Read
+      - `cli/internal/web/handlers_test.go` e `cli/internal/web/execution_test.go` — costruzione del server con connector filefs su directory temporanea, registry di prova e helper di richiesta già disponibili.
+      - `cli/internal/execution/provider.go` — l'interfaccia `Provider` da implementare nei doppi.
+      - `cli/internal/web/execution_run.go` — l'handler introdotto da TASK-07.
+
+      ## Change
+      - `cli/internal/web/execution_run_test.go` (nuovo) — i casi elencati sotto, con provider di prova definiti localmente.
+      - Non usare attese temporali per osservare lo stato `RUNNING`: il provider di prova si blocca su un canale che il test sblocca quando vuole.
+      - Non falsificare il connector: la spec, il piano e lo stato devono essere quelli reali scritti attraverso il connector filefs.
+
+      ## Steps
+      1. Fixture comune: project root temporaneo inizializzato con connector file, spec `US-901` in `TODO` e `US-902` in `TODO`, `execution.default_provider` persistito sul provider di prova registrato nel registry passato al server.
+      2. AC-1: provider bloccante; prima `POST /api/spec/US-901/execution` con `{"action":"plan"}` ⇒ `201`, `status: "RUNNING"`, `spec_code: "US-901"`, `provider_id` uguale al default; seconda `POST` immediata ⇒ `409` il cui corpo nomina l'id della prima; contare i file in `.archetipo/executions/` ⇒ esattamente uno.
+      3. AC-2: mentre il provider è bloccato, `GET /api/execution/{id}` ⇒ `200` con `status: "RUNNING"` e `completed_at` assente; nella stessa finestra `GET /api/board` e `GET /api/spec/US-902` ⇒ `200` (il server non è bloccato). Sbloccare poi il provider e attendere il record terminale con un'attesa attiva limitata.
+      4. AC-3: provider che, dentro `Execute`, persiste un piano per `US-901` attraverso il connector e restituisce un payload JSON valido ⇒ record finale `SUCCEEDED` con `result.payload` non vuoto; `GET /api/spec/US-901` ⇒ `spec.status == "PLANNED"`, `tasks` non vuoto, `plan_body` non vuoto e nessuna azione `plan` fra quelle ammesse.
+      5. AC-4a: provider che restituisce errore ⇒ record `FAILED` con `error.message` non vuoto e `GET /api/spec/US-901` ancora `TODO` con `tasks` vuoto; una `POST` successiva è ammessa (`201`), prova che il fallimento non blocca la spec per sempre.
+      6. AC-4b: provider che restituisce un payload valido **senza** aver pianificato ⇒ record `FAILED` con `error.code == "UNCONFIRMED_EFFECT"` e spec ancora `TODO`.
+      7. AC-5: dopo un esito terminale, costruire un **nuovo** server sullo stesso project root e chiamare `GET /api/spec/US-901` ⇒ il campo `execution` porta lo stesso `id` con lo stato terminale; il numero di file record è invariato.
+      8. Casi di rifiuto: azione sconosciuta ⇒ `400`; azione `implement` su una spec `TODO` ⇒ `409`; nessun provider predefinito configurato ⇒ `409` con messaggio che rimanda alla configurazione, e nessun record creato.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/web/... -count=1 && go test ./... -count=1`
+      - Expect: tutti i casi verdi e l'intera suite verde; nessun test esistente modificato.
+
+      ## Done
+      - [ ] AC-1 — una sola esecuzione per pressione, provata contando i record persistiti.
+      - [ ] AC-2 — stato non terminale osservabile mentre il server continua a servire altre rotte.
+      - [ ] AC-3 — successo provato dal dettaglio della spec (`PLANNED` con piano), non dal payload del provider.
+      - [ ] AC-4 — fallimento e successo non confermato provati con la spec ancora fuori da `PLANNED`.
+      - [ ] AC-5 — un server nuovo sullo stesso project root ritrova l'esecuzione senza crearne un'altra.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Avviare e seguire l'esecuzione dal dettaglio della spec nel browser
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Dal dettaglio di una spec l'utente preme l'azione eseguibile, vede lo stato non terminale mentre lavora, e ottiene alla fine il piano con la spec `PLANNED` oppure il motivo del fallimento — anche riaprendo la pagina.
+
+      ## Read
+      - `cli/internal/web/assets/app.js` — `openEditor` (~riga 473), `renderSpecActions` (~riga 1534), `apiGet`/`apiPost`, `showToast`, `loadBoard`, la chiusura del modale e il ciclo di vita di `currentSpecCode`.
+      - `cli/internal/web/assets/index.html` — il contenitore `#story-actions` dentro `.story-view-actions`.
+      - `cli/internal/web/assets/app.css` — le classi `.action-chip`, `.action-chip-label`, `.action-chip-id`, `.status-msg` e le convenzioni di stato (`ok`, `err`).
+
+      ## Change
+      - `cli/internal/web/assets/index.html` — aggiungere accanto a `#story-actions` un contenitore `#story-execution` per il pannello di esecuzione.
+      - `cli/internal/web/assets/app.js` — rendere il chip eseguibile un `<button>`, avviare l'azione, gestire il polling e il rendering dell'esito, riprendere lo stato all'apertura del dettaglio, fermare il polling alla chiusura del modale o al cambio di spec.
+      - `cli/internal/web/assets/app.css` — stili per il bottone azione, il pannello di esecuzione e i tre stati (in corso, riuscito, fallito).
+      - Non introdurre in JavaScript alcuna regola su stati della spec, azioni ammesse o provider: si usano soltanto `runnable`, `unavailable_reason`, `label`, `id` e i campi del record.
+      - Non lasciare timer attivi dopo la chiusura del modale: un polling orfano continuerebbe a chiamare il server per una spec non più visibile.
+
+      ## Steps
+      1. Estendere `renderSpecActions(actions)`: un'azione con `runnable: true` diventa `<button class="action-chip action-chip-run" data-action-id="…">` con etichetta e identificativo; un'azione non eseguibile resta la chip odierna, con `title` uguale a `unavailable_reason` quando presente.
+      2. Aggiungere `startSpecAction(actionID)`: disabilita il bottone, chiama `POST /api/spec/{code}/execution` con `{action}`, in caso di errore mostra il messaggio del server con `showToast` e riabilita il bottone; in caso di successo passa il record a `renderExecution` e avvia il polling.
+      3. Aggiungere `renderExecution(record)` che disegna in `#story-execution`: stato non terminale con etichetta "in corso" e identificativo dell'esecuzione; `SUCCEEDED` con l'esito; `FAILED` con `error.message` (e `error.code` quando presente). Nessun record ⇒ pannello vuoto.
+      4. Aggiungere il polling: `setInterval` ogni 2000 ms su `GET /api/execution/{id}`, con la guardia che la spec aperta sia ancora la stessa; alla transizione terminale fermare il timer, ricaricare il dettaglio con `openEditor(code)` — che ridisegna piano, stato, azioni ed esecuzione — e chiamare `loadBoard()` in caso di successo.
+      5. In `openEditor`, dopo aver ricevuto il dettaglio, chiamare `renderExecution(detail.execution)` e, se lo stato è non terminale, riprendere il polling: è ciò che rende il reload equivalente alla sessione precedente senza avviare nulla.
+      6. Fermare il polling nella chiusura del modale e all'inizio di `openEditor`, in modo che aprire un'altra spec non lasci il timer precedente attivo; il modale resta chiudibile e la board interattiva durante tutto il lavoro.
+      7. Aggiungere gli stili in `app.css` riusando i colori già definiti per gli stati, senza introdurre una nuova palette.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go test ./internal/web/... -count=1`, poi avviare `cd cli && go run ./cmd/archetipo view --no-open --port 0 -C <workspace di prova>` e osservare il dettaglio di una spec `TODO`.
+      - Expect: build e test verdi; nel browser il bottone dell'azione `plan` è presente quando il provider predefinito è configurato, l'apertura di una spec senza esecuzioni non mostra alcun pannello, e la console del browser non riporta errori.
+
+      ## Done
+      - [ ] AC-1 — il bottone avvia una sola esecuzione e resta disabilitato finché la risposta non arriva.
+      - [ ] AC-2 — durante il lavoro il pannello mostra lo stato non terminale, il modale si chiude e la board resta navigabile.
+      - [ ] AC-3 — al successo il dettaglio mostra piano e spec `PLANNED` senza intervento dell'utente.
+      - [ ] AC-4 — al fallimento il pannello mostra il motivo restituito dal server.
+      - [ ] AC-5 — riaprendo la pagina il pannello mostra l'esecuzione e il suo esito, e nessuna nuova esecuzione viene avviata dal caricamento.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Smoke Node end-to-end su archetipo view con hub ARcipelago finto
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+      Uno smoke eseguibile senza credenziali percorre l'intera dimostrazione della spec su `archetipo view` reale e sul provider ARcipelago reale, con il solo hub sostituito da un server locale.
+
+      ## Read
+      - `test/e2e/execution-config-view-smoke.mjs` — struttura da riusare: build della CLI, `init`, `spec add`, avvio del viewer su porta 0, helper `apiJSON`/`expectStatus`/`stopProcess`, argomenti `--workspace-root` e `--cleanup`.
+      - `cli/internal/execution/arcipelago/client.go` — rotte `/api/external/tasks` e `/api/external/tasks/by-reference`, forma di `createTaskRequest`, envelope `{"task":{"id","status","resultSummary"}}`, stati terminali `completed`/`failed`/`cancelled`.
+      - `cli/internal/execution/arcipelago/prompt.go` — la ricevuta attesa `{"spec_code":"…","status":"PLANNED","tasks":N}` come ultima riga di `resultSummary`.
+      - `cli/internal/execution/arcipelago/config.go` — chiavi accettate e limiti: `poll_interval_seconds` minimo 1, `timeout_seconds` minimo 1.
+      - `package.json` — convenzione degli script di smoke.
+
+      ## Change
+      - Nuovo file `test/e2e/plan-from-view-smoke.mjs`.
+      - `package.json` — nuovo script `test:view-plan-smoke`.
+      - Nessuna modifica al codice Go in questo task: se lo smoke rivela un difetto, si corregge il task che lo ha introdotto.
+      - Nessuna chiamata di rete verso host esterni: l'hub finto ascolta su `127.0.0.1`.
+
+      ## Steps
+      1. Costruire la CLI in `test/e2e/.bin/` e preparare un sandbox con `init --tool pi --connector file --yes`, poi `spec add` di `US-901` (percorso di successo) e `US-902` (percorso di fallimento), entrambe in `TODO`.
+      2. Avviare un hub finto Node su porta effimera che: accetta `POST /api/external/tasks` restituendo `201` con un id di task; risponde a `GET /api/external/tasks/{id}` con lo stato corrente; per `US-901` esegue davvero `archetipo spec plan US-901 --file <payload>` nel sandbox e solo dopo dichiara `completed` con la ricevuta corretta; per `US-902` dichiara `failed` con un `resultSummary` riconoscibile.
+      3. Salvare il provider predefinito via API (`PUT /api/execution/provider/default`) con `base_url` dell'hub finto, `workspace_id`, `poll_interval_seconds: 1` e `timeout_seconds: 30`; esportare `ARCIPELAGO_TOKEN` con un valore sentinella nell'ambiente del viewer.
+      4. AC-1: `POST /api/spec/US-901/execution` ⇒ `201` con `status: "RUNNING"` e `provider_id: "arcipelago"`; una seconda `POST` immediata ⇒ `409`; contare i file in `.archetipo/executions/` ⇒ uno solo per la spec.
+      5. AC-2: prima che l'hub dichiari `completed`, `GET /api/execution/{id}` ⇒ `RUNNING`, e nella stessa finestra `GET /api/board` ⇒ `200`.
+      6. AC-3: attendere l'esito con polling limitato ⇒ record `SUCCEEDED`; `GET /api/spec/US-901` ⇒ `spec.status == "PLANNED"`, `tasks` non vuoto, `plan_body` non vuoto e campo `execution` con lo stesso id.
+      7. AC-4: eseguire lo stesso percorso su `US-902` ⇒ record `FAILED` con `error.message` che riporta la causa remota, e `GET /api/spec/US-902` ancora `TODO`.
+      8. AC-5: richiamare `GET /api/spec/US-901` (equivalente del reload lato client) ⇒ stesso `execution.id` con lo stato terminale, e conteggio dei file record invariato; nessuna nuova `POST` è stata emessa.
+      9. Verificare che nessuna risposta del viewer contenga il valore sentinella del token, come già fa lo smoke di US-028.
+      10. Chiudere hub e viewer nel blocco `finally`, e stampare un riepilogo per criterio come negli smoke esistenti.
+
+      ## Verify
+      - Run: `npm run test:view-plan-smoke`
+      - Expect: `PASS` con una riga per ciascun criterio da AC-1 a AC-5; nessuna variabile d'ambiente esterna richiesta e nessuna connessione fuori da `127.0.0.1`.
+
+      ## Done
+      - [ ] AC-1..AC-5 — ogni criterio ha una riga di verifica esplicita nello smoke, con oracoli letti dalle rotte HTTP e dai file persistiti.
+      - [ ] Lo smoke usa il provider ARcipelago reale e la ricevuta reale; solo l'hub è finto.
+      - [ ] Lo script `test:view-plan-smoke` esiste in `package.json` e passa da radice del repository.
+      - [ ] Nessun segreto compare nelle risposte del viewer.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Documentare in AGENTS.md il nuovo smoke e la rotta di avvio dell'esecuzione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Objective
+      Chi lavora nel repository trova documentato, dove già cerca, il nuovo smoke standalone e cosa verifica.
+
+      ## Read
+      - `AGENTS.md` — sezione "Standalone smoke tests" (voci `test:view-delete-smoke`, `test:view-execution-smoke`, `test:wiki-smoke`) e la regola finale della sezione E2E che impone di aggiornarla quando la semantica cambia.
+      - `package.json` — lo script aggiunto da TASK-11.
+
+      ## Change
+      - `AGENTS.md` — una voce per `npm run test:view-plan-smoke` nell'elenco degli smoke standalone.
+      - Non riscrivere né riordinare le voci esistenti; non aggiungere sezioni nuove.
+
+      ## Steps
+      1. Aggiungere la voce dopo `test:view-execution-smoke`, con lo stesso registro delle altre: cosa costruisce, cosa avvia (viewer reale più hub ARcipelago finto in locale), cosa verifica (avvio singolo dell'azione `plan`, stato non terminale osservabile, successo con spec `PLANNED` e piano leggibile, fallimento con spec non pianificata, ritrovamento dopo un reload) e che non richiede credenziali.
+      2. Rileggere la frase finale della sezione E2E e verificare che nulla di quanto scritto contraddica la semantica del runner principale, che questo incremento non cambia.
+
+      ## Verify
+      - Run: `grep -n "test:view-plan-smoke" AGENTS.md package.json`
+      - Expect: la stringa compare in entrambi i file, con lo script eseguibile da radice.
+
+      ## Done
+      - [ ] AGENTS.md descrive il nuovo smoke accanto agli altri, senza modificarne le voci esistenti.
+      - [ ] Il nome dello script nel documento coincide con quello in `package.json`.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Gate finale — verifiche complete e prova manuale nel browser
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+      L'incremento è verificato per intero con i controlli che il repository si fida, e la dimostrazione della spec è stata osservata davvero in un browser prima di chiedere la review.
+
+      ## Read
+      - `AGENTS.md` — sezione "Before delivering changes" con l'elenco esatto dei controlli CI da eseguire in locale.
+      - La sezione **Baseline** del corpo di questo piano — è il riferimento con cui confrontare ogni esito.
+
+      ## Change
+      - Nessuna modifica di codice. Se un controllo fallisce, la correzione appartiene al task che ha introdotto il difetto e questo gate viene rieseguito da capo.
+
+      ## Steps
+      1. Eseguire, dalla directory `cli`: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...` e `golangci-lint run --timeout 5m ./...` (se il binario manca: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`).
+      2. Eseguire da radice `npm run test:view-plan-smoke` e `npm run test:view-execution-smoke`: il secondo è la regressione della slice precedente sulle stesse rotte.
+      3. Prova manuale nel browser su un workspace di prova con provider predefinito configurato e hub raggiungibile (va bene l'hub finto dello smoke): aprire una spec `TODO`, premere `Pianifica`, verificare che il pannello mostri lo stato non terminale, chiudere il modale e navigare la board mentre il lavoro prosegue, riaprire il dettaglio e verificare piano e spec `PLANNED`; ripetere su una spec il cui hub fallisce e verificare motivo mostrato e spec ancora `TODO`; ricaricare la pagina con `F5` e verificare che l'esecuzione e il suo esito siano ancora mostrati e che nessuna nuova esecuzione compaia in `.archetipo/executions/`.
+      4. Verificare che nessun file toccato dall'incremento abbia introdotto segnalazioni di vet o lint rispetto alla baseline.
+      5. Marcare `DONE` questo task, poi rileggere la spec con `archetipo spec show US-029` eseguito da `data.project_root` e verificare che **nessun** task risulti ancora `TODO`.
+      6. Solo dopo quella verifica, richiedere la review con `archetipo spec review US-029`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`, poi da radice `npm run test:view-plan-smoke && npm run test:view-execution-smoke`, infine `archetipo spec show US-029`.
+      - Expect: nessun output da `gofmt`; vet, build e lint puliti (`0 issues`); tutti i test Go verdi (almeno i 763 della baseline, più i nuovi); entrambi gli smoke `PASS`; `spec show` non riporta alcun task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — una pressione produce una sola esecuzione, verificata sia dai test sia dal conteggio dei record nella prova manuale.
+      - [ ] AC-2 — stato non terminale osservato nel browser con modale chiudibile e board navigabile.
+      - [ ] AC-3 — successo osservato nel browser con piano visibile e spec `PLANNED`.
+      - [ ] AC-4 — fallimento osservato nel browser con motivo mostrato e spec ancora `TODO`.
+      - [ ] AC-5 — dopo un reload della pagina l'esecuzione e il suo esito sono ancora mostrati, senza una seconda esecuzione.
+      - [ ] Tutti i controlli della baseline sono verdi e nessun file toccato introduce nuove diagnostiche.
+      - [ ] `archetipo spec show US-029` non riporta task `TODO` prima di `archetipo spec review US-029`.
+
+      ## Blockers
+      None.
+    ref: TASK-13

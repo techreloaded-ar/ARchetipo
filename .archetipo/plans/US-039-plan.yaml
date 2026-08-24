@@ -1,0 +1,616 @@
+schema: archetipo/plan/v2
+spec_code: US-039
+body: |-
+  ## Soluzione tecnica
+
+  US-038 ha già scritto la parte difficile: le regole di una run locale — storia ordinata con cursore, messaggio che diventa storia solo quando il processo lo ri-emette, cancellazione che non deduce mai uno stato terminale, rifiuti tipizzati — vivono in `cli/internal/execution/localrun` e non appartengono a nessun provider. Questa storia non le riscrive per Claude: le riusa, e aggiunge soltanto le due cose che sono davvero di Claude, esattamente come dice il package doc di `localrun/session.go` — come si avvia il suo processo e come gli si parla.
+
+  ### La superficie reale di Claude Code per una sessione viva
+
+  Il dialogo richiede un processo che accetti un messaggio *mentre lavora*. Claude Code lo offre in una sola forma, verificata con sonde dirette sul binario installato (Claude Code 2.1.235):
+
+  ```text
+  claude --print --input-format stream-json --output-format stream-json --verbose \
+         --replay-user-messages --no-session-persistence --permission-mode <mode> [--model <m>]
+  ```
+
+  NDJSON su stdin e stdout, un frame per riga. Ciò che le sonde hanno stabilito, e che il piano dà per certo:
+
+  - **Steering.** Un frame `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"…"}]}}` scritto su stdin mentre il turno è in corso viene raccolto e cambia il comportamento dell'agente. È l'equivalente di `turn/steer` di Codex.
+  - **Ri-emissione.** Con `--replay-user-messages` il processo rimanda su stdout il messaggio dell'operatore come frame `user` con `isReplay: true`. È letteralmente la regola di `localrun`: la storia riceve il messaggio quando il processo lo ri-emette, mai prima. Senza quel flag il messaggio non tornerebbe mai indietro e la timeline di Claude divergerebbe da quella di Codex — il flag non è un dettaglio di comodo, è ciò che rende Claude conforme alla regola comune.
+  - **Interruzione.** `{"type":"control_request","request_id":"…","request":{"subtype":"interrupt"}}` riceve un `control_response` con `subtype: "success"` e correlazione su `request_id`. Durante un turno attivo interrompe l'uso di tool in corso; il turno si chiude poi con `result` di sottotipo `error_during_execution`. Su un turno già finito risponde comunque `success`: nessuna informazione di stato viene dedotta da questa risposta, coerentemente con `CancelRun`, che non scrive mai stato su nessun percorso.
+  - **Frame di uscita.** `system` (sottotipo `init` e altri), `assistant` (blocchi `text`, `thinking`, `tool_use`), `user` (blocchi `tool_result` con `is_error`, oppure `text` quando è il replay), `result` (con `subtype`, `is_error` e `result` che contiene il testo finale), `control_response`, `rate_limit_event`.
+  - **Chiusura.** Chiuso stdin il processo esce `0`; dopo un'interruzione esce `1`. Nessuno dei due valori viene usato per dedurre lo stato di una run che il processo non ha dichiarato conclusa.
+
+  ### Cosa cambia, in quattro punti
+
+  **1. Il vocabolario neutro degli eventi sale in `localrun`.** Oggi `user_message`, `text`, `thinking`, `tool_start`, `tool_end`, `tool_error`, `turn_end`, `error` sono costanti private del package `codex`. Sono una regola comune del dialogo — un chiamante non deve poter capire *dove* è girata una run guardando i kind dei suoi eventi — e AC-3 vieta di duplicarle. Diventano costanti esportate di `localrun`, usate da entrambi i provider. Non è un'astrazione nuova: è lo spostamento di otto costanti nel package che già possiede la semantica a cui appartengono.
+
+  **2. Un client NDJSON in `cli/internal/execution/claude`.** Due file, in parallelo esatto a `codex/appserver.go` + `codex/translate.go`:
+
+  - `streamjson.go` — `streamSession` sopra `localrun.Process`: un solo lettore di righe, decodifica dei frame, correlazione delle `control_request` per `request_id`, fine turno sul frame `result`, e l'implementazione di `localrun.Dialogue` (`Send` scrive il frame user, `Interrupt` scrive la control request e attende la risposta). Nessun handshake da inventare: il protocollo non ne ha, e l'attesa del frame `system`/`init` prende il posto che in Codex ha `initialize` — è ciò che dimostra che il processo è vivo prima che il dialogo venga agganciato alla sessione.
+  - `translate.go` — la proiezione dei frame in `execution.RunEvent`, con la stessa disciplina di Codex: **il ramo di default non scarta mai**. Un frame che questa build non conosce diventa comunque un evento, con il suo `type` come kind e il payload intatto in `Raw`. Solo un insieme enumerato di frame è dichiarato rumore (`rate_limit_event`, `system`/`thinking_tokens`), perché è noto non portare storia.
+
+  **3. Il provider Claude diventa una sessione viva.** `claude.Provider` incorpora `*localrun.Collaborator` — così i sette metodi di `execution.RunCollaborator` arrivano implementati una volta sola — acquisisce lo `Starter` come seam verso il sistema operativo, e `Execute` segue lo stesso ordine già consegnato per Codex: registrare la sessione **prima** di avviare il processo (la run è seguibile dall'istante in cui può produrre storia), avviare, consumare, agganciare il dialogo, attendere la fine del turno, spegnere, accettare la ricevuta. `Capabilities()` continua a dichiarare solo `spec.plan`: `run.dialog` è derivata da `DeclaredCapabilities` a partire dall'interfaccia realmente implementata, quindi AC-1 è soddisfatto senza che una sola costante venga dichiarata a mano.
+
+  **4. `print_args` esce dalla configurazione, `permission_mode` prende il suo posto.** I flag di sessione non sono più opzionali: sostituirli romperebbe il protocollo su cui il dialogo si regge, e un campo che può solo rompere le cose non è una scelta offerta all'utente. È la stessa mossa che US-038 ha fatto su Codex, dove `exec_args` è stato rimosso e sostituito da `sandbox`. Resta la sola scelta di policy che ha senso esporre — la modalità di permessi locale — con un insieme chiuso di valori accettati dalla CLI di Claude e `auto` come default, cioè il comportamento odierno. La configurazione di Claude diventa quindi `command`, `model`, `permission_mode`, `timeout_seconds`.
+
+  ### Il confine sulle credenziali
+
+  Non cambia e non va allentato: Claude autentica sé stesso, e nessuna credenziale né alcun percorso al suo materiale di sessione entra in `settings`, in `.archetipo/config.yaml` o in una risposta del viewer. Il payload dell'esecuzione continua a portare sei campi e nessuno stream. AC-4 è verificato con la stessa tecnica già usata per Codex: una sentinella messa nell'ambiente del viewer e cercata in ogni risposta e nel file di configurazione.
+
+  ### Decisioni prese qui, per non lasciarle all'implementazione
+
+  - **`Completed()` è vero solo su un frame `result` con `is_error: false`.** Un turno interrotto produce `result` con `is_error: true` e non può portare un piano.
+  - **`FinalMessage()` è il campo `result` del frame finale**, con fallback all'ultimo blocco `text` di un frame `assistant`. Il campo esiste ed è esattamente il testo finale dell'agente; il fallback copre un frame finale che non lo portasse.
+  - **`Seq` parte da 1 e avanza a ogni frame `result`.** Un messaggio dell'operatore riusa il seq corrente — è precisamente ciò che il commento di `RunEvent` descrive e la ragione per cui `Seq` non è un cursore.
+  - **Nessuna approvazione.** Una sessione locale gira con la policy di permessi decisa in configurazione e non si ferma a chiedere: `ReadRunApprovals` risponde `[]` e `RespondRunApproval` rifiuta con `unsupported`, per costruzione, dal `Collaborator` condiviso.
+  - **Nessuna interfaccia parallela.** `RunCollaborator` viene esteso nel senso della roadmap (un secondo provider la implementa), non affiancato.
+
+  ### Nota sulle decisioni architetturali
+
+  La scelta fra alternative reali c'è stata — protocollo NDJSON di Claude Code contro un secondo canale inventato, e `permission_mode` contro il mantenimento di `print_args` — ma nessuna delle due sposta modello dati, modello di sicurezza, confine di integrazione, topologia o semantica di fallimento oltre ciò che US-038 ha già fissato: sono l'applicazione di una decisione già presa a un secondo provider. La Wiki automatica è inoltre disattivata in questo repository (`wiki.enabled: false`), quindi il piano non contiene lavoro Wiki di alcun tipo.
+
+  ## Baseline
+
+  Eseguita da `cli/` prima di pianificare, sul working tree pulito di `sleli` (`b4f5472`):
+
+  | Comando | Esito osservato |
+  |---|---|
+  | `gofmt -l .` | nessun output |
+  | `go build ./...` | successo |
+  | `go vet ./...` | nessun rilievo |
+  | `go test ./...` | 1164 test passati in 28 package |
+
+  Nessun comando è rosso in partenza: ogni `Verify` del piano può quindi promettere verde senza riserve. `golangci-lint run --timeout 5m ./...` fa parte del gate finale come richiede `AGENTS.md`.
+
+  Prerequisiti d'ambiente per gli smoke: Node e Go installati (il runner costruisce da sorgente in `test/e2e/.bin/archetipo`). Nessuna credenziale: i binari degli agenti sono finti e tutto il traffico resta su `127.0.0.1`. Il live probe è dietro build tag e non gira mai nella suite normale.
+
+  ## Mappa delle evidenze di accettazione
+
+  | AC | Livello | Oracolo osservabile | Stato di partenza | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 — Claude dichiara la capacità di dialogo | Go + e2e HTTP | `GET /api/execution/providers` espone per `claude` sia `spec.plan` sia `run.dialog`, e la capacità è derivata: `Capabilities()` continua a restituire il solo `spec.plan` | sandbox inizializzato, provider registrati | TASK-07, TASK-09, TASK-10 |
+  | AC-2 — Storia, messaggio, cancellazione e rifiuti si comportano come per Codex | e2e HTTP con binario finto | **Lo stesso copione** `local-run-view-smoke.mjs`, parametrizzato, gira su `codex` e su `claude` e asserisce gli stessi fatti: storia `1..4` con kind `text, tool_start, tool_end, text`, `after_id` che restituisce solo il nuovo, messaggio assente dal `202` e presente **una sola volta** dopo la ri-emissione, cancel che lascia la run `ACTIVE` finché il processo resiste, sei comandi rifiutati (`404` e `409 run_not_active`) che lasciano la proiezione byte-identica | sandbox con una spec `TODO` e il finto binario come provider predefinito | TASK-08, TASK-09 |
+  | AC-3 — Le regole comuni restano definite una sola volta | Go | `TestLocalProvidersRefuseTheSameWay` costruisce `codex.New` e `claude.New` e verifica che gli stessi comandi producano gli **stessi** `RunRefusalReason`; i kind neutri sono costanti di `localrun` usate da entrambi (il compilatore è l'oracolo: non esistono più costanti di kind nei provider); `var _ execution.RunCollaborator = (*claude.Provider)(nil)` è soddisfatto dal `Collaborator` incorporato, non da sette metodi riscritti | — | TASK-01, TASK-05, TASK-07 |
+  | AC-4 — Nessuna credenziale o materiale di sessione esposto | e2e HTTP + filesystem | La sentinella posta nell'ambiente del viewer non compare in nessuna risposta delle rotte esercitate né in `.archetipo/config.yaml`; nessun `ConfigField` di `claude` chiede una credenziale | viewer avviato con la variabile sentinella | TASK-09, TASK-10 |
+
+  ## Strategia di test
+
+  Tre livelli, ciascuno con un compito che gli altri non possono svolgere.
+
+  **Unità Go sul client di protocollo** (`streamjson_test.go`, sul modello di `codex/appserver_test.go`): un finto `localrun.Process` descrive una conversazione intera senza una macchina che abbia Claude installato. Copre la traduzione di ogni frame, il fatto che un frame ignoto diventi comunque un evento, l'ordine di arrivo, lo steering che attende la ri-emissione, l'interruzione che non chiude la sessione, la fine del turno sia per `result` sia per morte del processo.
+
+  **Unità Go sul provider e sui contratti** (`provider_test.go`, `config_test.go`, `execution_claude_test.go`, `web/execution_test.go`): argomenti di avvio, sessione registrata prima che l'agente lavori, configurazione con `permission_mode`, capacità dichiarate. Più il test cross-provider che è l'oracolo diretto di AC-3.
+
+  **Smoke e2e HTTP, senza credenziali** (`local-run-view-smoke.mjs` parametrizzato + `test/e2e/support/fake-claude.mjs`): è il livello che AC-2 richiede, perché la prova chiesta è che *lo stesso copione di revisione* dia risultati equivalenti sui due provider. Un test di unità non potrebbe dimostrarlo: attraversa il confine HTTP, il follower lato server, la proiezione e il file di configurazione. Il finto binario parla il protocollo reale e non progredisce mai da solo — ogni notifica è comandata dal control server già esistente — quindi non c'è alcuna attesa arbitraria.
+
+  **Waiver e2e browser.** Nessuna interfaccia nuova viene introdotta: la UI di dialogo consegnata da US-031 e US-038 consuma rotte che non cambiano di forma. Le asserzioni sono quindi al livello HTTP, che è dove i comportamenti di questa storia sono osservabili; aprire un browser proverebbe meno, non di più.
+
+  **Sonda dal vivo** (`live_probe_test.go` dietro build tag `liveprobe`, come per Codex): non gira in CI e non è un criterio di accettazione. Esiste perché il protocollo è stato stabilito osservando un binario reale, e una sonda riproducibile è il modo per accorgersi che una versione futura di Claude Code lo ha cambiato.
+
+  **Filmabilità.** La `Dimostrazione` della spec è ripetibile dalla UI ed è filmabile; la decisione finale di registrare o saltare resta di `archetipo-review`.
+tasks:
+  - id: TASK-01
+    title: Il vocabolario neutro degli eventi di run diventa di localrun
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Le otto costanti che nominano i kind neutri di un evento di run sono definite una sola volta, in `localrun`, e usate dal provider Codex; nessun provider dichiara più un kind proprio.
+
+      ## Read
+      - `cli/internal/execution/codex/appserver.go` — il blocco `const` con `kindUserMessage, kindText, kindThinking, kindToolStart, kindToolEnd, kindToolError, kindTurnEnd, kindError` e il commento che ne spiega la neutralità.
+      - `cli/internal/execution/codex/translate.go` — tutti i punti d'uso di quelle costanti.
+      - `cli/internal/execution/localrun/session.go` — dove vive `RunEvent` lato sessione e lo stile di documentazione del package.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/localrun/events.go`: costanti esportate `KindUserMessage`, `KindText`, `KindThinking`, `KindToolStart`, `KindToolEnd`, `KindToolError`, `KindTurnEnd`, `KindError` con gli stessi identici valori stringa di oggi (`"user_message"`, `"text"`, `"thinking"`, `"tool_start"`, `"tool_end"`, `"tool_error"`, `"turn_end"`, `"error"`), più un commento che dica perché stanno qui: un chiamante non deve poter dedurre dove è girata una run dai kind dei suoi eventi, e una costante ripetuta in ogni provider è una costante che prima o poi diverge.
+      - `cli/internal/execution/codex/appserver.go`: rimuovere il blocco `const` dei kind.
+      - `cli/internal/execution/codex/translate.go` e ogni altro punto d'uso: usare `localrun.Kind*`.
+      - Non goal: **nessun cambiamento di valore stringa**. I kind sono già osservati da `local-run-view-smoke.mjs` e da `codex/appserver_test.go`; questa è una rilocazione, non una rinomina.
+
+      ## Steps
+      1. Creare `events.go` con le costanti e il commento.
+      2. Cancellare il blocco `const` dei kind da `appserver.go`.
+      3. Sostituire i riferimenti in `translate.go` (e in `appserver.go` se ne restano) con `localrun.Kind*`.
+      4. Aggiornare `cli/internal/execution/codex/appserver_test.go` dove nomina le costanti private, usando le nuove esportate.
+      5. `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go test ./internal/execution/... `
+      - Expect: compila e i test dei package `localrun` e `codex` passano invariati; nessun test è stato riscritto nella sostanza, solo il nome delle costanti che referenzia.
+      - Run: `cd cli && grep -rn '"tool_start"\|"turn_end"\|"user_message"' internal/execution --include=*.go | grep -v _test.go | grep -v localrun/events.go`
+      - Expect: nessun risultato — i letterali esistono in un solo file non di test.
+
+      ## Done
+      - [ ] AC-3 — I kind neutri sono definiti una sola volta, in `localrun`, e il provider Codex li consuma.
+      - [ ] Nessun valore stringa è cambiato e la suite `./internal/execution/...` resta verde.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: La configurazione di Claude offre permission_mode al posto di print_args
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      La configurazione non secreta del provider `claude` è `command`, `model`, `permission_mode`, `timeout_seconds`; i flag che reggono il protocollo di sessione non sono più sostituibili dall'utente.
+
+      ## Read
+      - `cli/internal/execution/claude/config.go` — `settings`, `knownConfigKeys`, `defaultPrintArgs`, `ConfigFields`, `parseConfig` e i parser per campo.
+      - `cli/internal/execution/codex/config.go` — `parseSandbox` e `sandboxModes`: il modello esatto di un campo a insieme chiuso di valori, compreso il testo di aiuto.
+      - `cli/internal/execution/claude/config_test.go` — in particolare il test che verifica che l'aiuto di `print_args` citi i default reali.
+
+      ## Change
+      - `cli/internal/execution/claude/config.go`:
+        - `settings` porta `PermissionMode string` al posto di `PrintArgs []string`;
+        - `knownConfigKeys` diventa `command, model, permission_mode, timeout_seconds`;
+        - `defaultPrintArgs` sparisce, sostituito da `permissionModes = []string{"acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"}` e `defaultPermissionMode = "auto"` (i valori sono quelli accettati da `claude --permission-mode`, verificati su Claude Code 2.1.235);
+        - `parsePermissionMode` rifiuta un valore fuori insieme con un `execution.ConfigurationError` che nomina il campo `permission_mode` ed elenca i valori ammessi, sullo stampo esatto di `parseSandbox`;
+        - `ConfigFields()` espone `permission_mode` con `Type: "text"`, il default e l'elenco dei valori nell'aiuto.
+      - Non goal: nessuna chiave che chieda una credenziale, un percorso a materiale di sessione o un token; nessuna chiave per gli argomenti di sessione.
+
+      ## Steps
+      1. Sostituire `defaultPrintArgs` con `permissionModes` e `defaultPermissionMode`.
+      2. Cambiare `settings`, `knownConfigKeys` e `parseConfig` di conseguenza.
+      3. Scrivere `parsePermissionMode` seguendo `parseSandbox`: valore assente o vuoto → default; valore non stringa → errore sul campo; valore fuori insieme → errore che elenca l'insieme.
+      4. Riscrivere il `ConfigField` di `print_args` come quello di `permission_mode`, con l'aiuto che cita `defaultPermissionMode` e i valori ammessi dalla stessa variabile che il parser usa, così prosa e codice non possono divergere.
+      5. Aggiornare `config_test.go`: i casi su `print_args` diventano casi su `permission_mode` (default applicato, valore valido accettato, valore ignoto rifiutato nominando il campo, chiave sconosciuta ancora rifiutata) e il test sull'aiuto verifica che citi i valori reali.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/claude/...`
+      - Expect: verde. In particolare un `permission_mode` fuori insieme produce un `*execution.ConfigurationError` con `Field == "permission_mode"`.
+      - Run: `cd cli && grep -rn "print_args" . --include=*.go`
+      - Expect: nessun risultato.
+
+      ## Done
+      - [ ] La configurazione di `claude` accetta esattamente quattro chiavi e nessuna chiede una credenziale.
+      - [ ] AC-4 — Nessun campo introdotto porta credenziali o materiale di sessione.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Client NDJSON della sessione viva di Claude in streamjson.go
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Un `streamSession` avvia il dialogo su un `localrun.Process`, consuma i frame NDJSON di Claude Code, correla le control request e implementa `localrun.Dialogue`.
+
+      ## Read
+      - `cli/internal/execution/codex/appserver.go` — l'intero file è il modello strutturale: `consume`, `settle`, `call`, `notify`, `start`, `Send`, `Interrupt`, `classify`, `endTurn`, `Completed`, `TurnDone`, `Gone`, `FinalMessage`, e `var _ localrun.Dialogue`.
+      - `cli/internal/execution/localrun/process.go` — `Process` (`Send([]byte) error`, `Lines() <-chan []byte`, `Signal`, `Wait`, `Close`) e `MaxCapturedOutput`.
+      - `cli/internal/execution/localrun/session.go` — `Session.Append`, `Session.Close`, `Dialogue`, `RawOf`.
+      - `cli/internal/execution/run.go` — `RunCommandError`, i cinque `RunRefusalReason`.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/claude/streamjson.go`.
+      - Non goal: nessuna traduzione di frame in eventi qui — quella è TASK-04, in `translate.go`. Nessun `time.Sleep`. Nessuna scrittura di stato della sessione al di fuori della fine osservata del turno.
+
+      ## Steps
+      1. Definire i tipi di frame minimi che il client interpreta, lasciando intatto il resto: `frame{Type, Subtype string; Message json.RawMessage; Result string; IsError bool; IsReplay bool; Response json.RawMessage}` e la forma di `control_response` (`{"response":{"subtype":"success|error","request_id":"…"}}`).
+      2. `streamSession` con: `process localrun.Process`, `session *localrun.Session`, un mutex, `seq int`, `completed bool`, `finalMessage string`, `lastAssistantText string`, `pending map[string]chan controlOutcome` per le control request, e i canali `turnDone` e `gone`.
+      3. `newStreamSession(process, session) *streamSession` e `var _ localrun.Dialogue = (*streamSession)(nil)`.
+      4. `consume()`: unico lettore di `process.Lines()`; ogni riga viene decodificata come JSON — una riga malformata viene saltata senza fermare il consumo, come fa Codex; un `control_response` viene consegnato al canale correlato da `request_id` e non entra nella storia; ogni altro frame va a `project` (TASK-04). Alla chiusura del canale delle righe: chiudere `gone`, e chiudere `turnDone` se il turno non era già finito, perché un processo morto è una fine del turno tanto quanto un frame `result`.
+      5. `start(ctx context.Context, prompt string) error`: scrive il primo frame user con il prompt, poi attende il primo frame `system` di sottotipo `init` (oppure la morte del processo, oppure la fine del contesto). Il ritorno è un errore parlante quando il processo muore o il contesto scade prima dell'`init`: è l'equivalente dell'handshake di Codex e ciò che impedisce di agganciare un dialogo a un processo che non c'è.
+      6. `Send(ctx, text)`: serializza `{"type":"user","message":{"role":"user","content":[{"type":"text","text":text}]}}` e lo scrive con `process.Send`. **Non scrive nulla nella storia**: la ri-emissione arriva dal processo grazie a `--replay-user-messages`. Se il turno è già finito, rifiutare con `execution.RunCommandError{Reason: execution.RunRefusedNotActive}`; un errore di scrittura resta un fault, non una refusal.
+      7. `Interrupt(ctx)`: genera un `request_id` univoco per sessione (contatore interno, non un timestamp), registra un canale in `pending`, scrive `{"type":"control_request","request_id":…,"request":{"subtype":"interrupt"}}` e attende la risposta correlata o la fine del contesto. `subtype: "error"` diventa un `RunCommandError` con reason `unsupported`; l'attesa scaduta è un fault. **Non scrive stato**, su nessun percorso.
+      8. `endTurn()` (idempotente con `sync.Once`), `Completed() bool` (vero solo se è arrivato un `result` con `is_error: false`), `TurnDone() <-chan struct{}`, `Gone() <-chan struct{}`, `FinalMessage() string` (il campo `result` del frame finale; se vuoto, l'ultimo blocco `text` di un frame `assistant`).
+      9. `gofmt -w` e commenti nello stile del package: spiegare *perché*, non ripetere il codice.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go vet ./internal/execution/claude/...`
+      - Expect: compila senza rilievi; l'asserzione `var _ localrun.Dialogue = (*streamSession)(nil)` è soddisfatta.
+      - La verifica di comportamento è TASK-06, che descrive conversazioni intere con un finto `Process`.
+
+      ## Done
+      - [ ] `streamSession` implementa `localrun.Dialogue` e non riscrive alcuna regola già presente in `localrun`.
+      - [ ] AC-2 — `Send` non scrive storia e `Interrupt` non scrive stato.
+      - [ ] AC-3 — Il file contiene solo protocollo Claude: nessuna regola di storia, cursore o rifiuto è duplicata qui.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Traduzione dei frame di Claude in eventi neutri, senza scartare l'ignoto
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Ogni frame che porta storia diventa un `execution.RunEvent` con un kind neutro; un frame sconosciuto diventa comunque un evento e non viene mai perso.
+
+      ## Read
+      - `cli/internal/execution/codex/translate.go` — `project`, `append`, `startedItem`, `completedItem`, e soprattutto il commento sul ramo di default.
+      - `cli/internal/execution/localrun/events.go` — le costanti `Kind*` create da TASK-01.
+      - `cli/internal/execution/localrun/session.go` — `RawOf` e la firma di `Append`.
+      - `cli/internal/execution/run.go` — il commento di `RunEvent` su `Seq` e sul perché non è un cursore.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/claude/translate.go` con `(*streamSession) project(f frame, raw json.RawMessage)` e l'helper `append(kind, text, tool string, raw json.RawMessage)`.
+      - Non goal: nessuna interpretazione dei campi di costo, uso token o rate limit; nessun filtro sul contenuto degli eventi.
+
+      ## Steps
+      1. Enumerare esplicitamente il rumore, con un commento che dica perché ciascuno non porta storia: `rate_limit_event` (contatori) e `system` di sottotipo `thinking_tokens` (contatore incrementale). Tutto il resto passa.
+      2. `assistant`: per ogni blocco di `message.content`, nell'ordine, produrre un evento — `text` → `localrun.KindText` con il testo; `thinking` → `localrun.KindThinking`; `tool_use` → `localrun.KindToolStart` con `Tool` uguale al campo `name`. Memorizzare l'ultimo testo assistente per `FinalMessage()`.
+      3. `user`: se il primo blocco è `tool_result` → `localrun.KindToolEnd`, oppure `localrun.KindToolError` quando `is_error` è vero, con `Text` uguale al contenuto reso testo e `Tool` risolto dalla mappa `tool_use_id → nome` popolata al passo 2 (una mappa limitata al turno, non una cache che cresce senza fine). Se il blocco è `text` → `localrun.KindUserMessage`: è la ri-emissione del messaggio dell'operatore, ed è l'unico modo in cui un messaggio entra nella storia.
+      4. `result`: registrare `completed` (vero solo se `is_error` è falso), `finalMessage`, emettere `localrun.KindTurnEnd` e chiamare `endTurn()`. Incrementare `seq` dopo l'evento, così il turno successivo parte da un seq nuovo.
+      5. `system` (sottotipi diversi da `thinking_tokens`) e qualunque altro tipo: ramo di default che emette un evento con `Kind` uguale al `type` del frame (o `type/subtype` quando il sottotipo esiste) e il payload intatto in `Raw`. Scrivere il commento che spiega perché: una traduzione che scarta ciò che non conosce perde storia il giorno in cui Claude Code aggiunge un frame.
+      6. Ogni evento porta il `seq` corrente e `Raw: localrun.RawOf(raw)`, cioè la riga originale, non una sua ricostruzione.
+      7. `gofmt -w`.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go vet ./internal/execution/claude/...`
+      - Expect: compila senza rilievi.
+      - La verifica di comportamento — un frame ignoto che diventa evento, l'ordine, i kind — è TASK-06.
+
+      ## Done
+      - [ ] AC-2 — I kind prodotti sono gli stessi che il provider Codex produce per gli stessi momenti di una run.
+      - [ ] AC-3 — I kind vengono da `localrun`; il package `claude` non ne definisce nessuno.
+      - [ ] Un frame sconosciuto produce un evento con il payload intatto in `Raw`.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Il provider Claude esegue su una sessione viva e diventa collaborativo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      `claude.Provider` incorpora `*localrun.Collaborator`, avvia la pianificazione come sessione viva NDJSON e resta seguibile e comandabile per tutta la durata del lavoro.
+
+      ## Read
+      - `cli/internal/execution/codex/provider.go` — `Provider` con il collaborator incorporato, `Options` con lo `Starter`, l'ordine esatto di `Execute`, `shutdown` con `shutdownGrace`, le asserzioni `var _`.
+      - `cli/internal/execution/claude/provider.go` — l'attuale `Execute` one-shot, `Available`, `ensurePlanSkill`, `resultFor`, `diagnosticSuffix`, `truncate`, `maxCapturedOutput`.
+      - `cli/internal/execution/claude/prompt.go` — `buildPrompt` e `buildArgs`.
+      - `cli/internal/execution/localrun/collaborator.go` — cosa arriva gratis dall'incorporamento.
+
+      ## Change
+      - `cli/internal/execution/claude/provider.go`:
+        - `Provider` incorpora `*localrun.Collaborator` e acquisisce `starter localrun.Starter`; `Options` acquisisce `Starter`; `New` lo default-a `localrun.ExecStarter{}`;
+        - aggiungere `var _ execution.RunCollaborator = (*Provider)(nil)`;
+        - `Capabilities()` **resta** `[]execution.Capability{execution.CapabilitySpecPlan}`: `run.dialog` è derivata da `execution.DeclaredCapabilities` e dichiararla a mano sarebbe il difetto che quel codice esiste per impedire;
+        - `Execute` riscritto sull'ordine di Codex;
+        - `shutdown(process localrun.Process) (int, string, error)` identico nella semantica a quello di Codex, con `shutdownGrace = 5 * time.Second`;
+        - `maxCapturedOutput` locale sostituito da `localrun.MaxCapturedOutput`;
+        - `Runner` resta, e serve solo il probe `--version`: `Available` non cambia.
+      - `cli/internal/execution/claude/prompt.go`: `buildArgs(cfg settings) []string` non riceve più il prompt e produce `--print --input-format stream-json --output-format stream-json --verbose --replay-user-messages --no-session-persistence --permission-mode <cfg.PermissionMode>`, più `--model <cfg.Model>` quando il modello è configurato. Il prompt viaggia nel protocollo, non negli argomenti.
+      - Non goal: nessun cambiamento a `buildPrompt`, alla ricevuta o al payload a sei campi; `ensurePlanSkill` e il suo percorso `.claude/skills/...` restano com'erano.
+
+      ## Steps
+      1. Aggiornare `buildArgs` e il suo commento: spiegare che ogni flag di sessione è obbligatorio perché il dialogo si regge sul protocollo, e che `--replay-user-messages` è ciò che rende la ri-emissione del messaggio possibile.
+      2. In `Execute`, prima di avviare: `parseConfig`, `workingDir`, `Available`, `ensurePlanSkill` — nell'ordine attuale, che è già quello giusto.
+      3. Creare la sessione con `localrun.NewSession(req.ExecutionID, p.now)` e registrarla con `p.Registry().Register(session)` **prima** di `starter.Start`, così la run è seguibile dall'istante in cui può produrre storia.
+      4. Avviare il processo con `p.starter.Start(runCtx, dir, cfg.Command, buildArgs(cfg))`; su errore chiudere la sessione `RunCrashed` con la causa e restituire un errore che nomina il comando.
+      5. Costruire `newStreamSession(process, session)`, lanciare `go client.consume()`, chiamare `client.start(runCtx, buildPrompt(req))`; su errore spegnere il processo, chiudere la sessione `RunCrashed` e restituire.
+      6. Solo dopo, `session.AttachDialogue(client)`: prima che il turno esista non c'è nulla da guidare, e un comando che arriva prima viene rifiutato come transitorio dal `Collaborator`.
+      7. Attendere `client.TurnDone()` o `runCtx.Done()`, poi `p.shutdown(process)`.
+      8. Classificare l'esito con la stessa scala di Codex: contesto scaduto → `RunCrashed` e messaggio sul timeout; `Wait` fallito → `RunCrashed`; turno non dichiarato completo con uscita diversa da zero → `RunCrashed` con il codice di uscita e la coda di stderr; altrimenti `execution.AcceptPlanReceipt(client.FinalMessage(), req.SpecCode)` e, in caso di ricevuta assente, `RunCrashed` con un messaggio che dice che la sessione è finita senza un piano.
+      9. In caso di successo `session.Close(execution.RunClosed, "")` e `p.resultFor(...)` invariato.
+      10. `gofmt -w`.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go vet ./...`
+      - Expect: compila senza rilievi; le tre asserzioni `var _ execution.Provider / AvailabilityReporter / RunCollaborator` sono soddisfatte.
+      - Run: `cd cli && go test ./internal/execution/... ./internal/web/...`
+      - Expect: i test esistenti che ancora descrivono il comportamento one-shot falliscono qui ed è atteso: TASK-07 li riscrive. Nessun altro package deve regredire.
+
+      ## Done
+      - [ ] AC-1 — Il provider implementa `execution.RunCollaborator` tramite il collaborator incorporato, quindi `DeclaredCapabilities` gli attribuisce `run.dialog` senza che nessuna costante sia dichiarata a mano.
+      - [ ] AC-3 — I sette metodi della collaborazione non sono riscritti in questo package.
+      - [ ] La sessione è registrata prima dell'avvio del processo.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test del client di sessione con un processo finto che descrive conversazioni intere
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Il comportamento del client NDJSON è verificato senza una macchina che abbia Claude Code installato, con lo stesso metodo già usato per il client di Codex.
+
+      ## Read
+      - `cli/internal/execution/codex/appserver_test.go` — il finto `localrun.Process` e gli undici casi: sono il copione da tradurre sul protocollo di Claude.
+      - `cli/internal/execution/localrun/collaborator_test.go` — `fakeDialogue` e le asserzioni sui rifiuti.
+      - `cli/internal/execution/claude/streamjson.go` e `translate.go` — le firme reali prodotte da TASK-03 e TASK-04.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/claude/streamjson_test.go`.
+      - Non goal: nessun processo reale, nessuna rete, nessun `time.Sleep` come sincronizzazione — le attese usano canali o `require`-loop su condizioni, come nei test di Codex.
+
+      ## Steps
+      1. Scrivere un finto `localrun.Process` che espone un canale di righe pilotato dal test, cattura ciò che gli viene scritto e può essere chiuso a comando.
+      2. Caso: `start` scrive il primo frame user con il prompt e ritorna solo dopo il frame `system`/`init`; se il processo muore prima, ritorna un errore che nomina la causa.
+      3. Caso: una conversazione completa — `assistant` con `text`, `assistant` con `tool_use`, `user` con `tool_result`, `assistant` con `text`, `result` — produce esattamente cinque eventi nell'ordine di arrivo, con i kind `text, tool_start, tool_end, text, turn_end` e i nomi di tool corretti.
+      4. Caso: `user` con `tool_result` e `is_error: true` produce `tool_error`.
+      5. Caso: un frame di tipo mai visto produce comunque un evento, con il tipo come kind e la riga originale in `Raw`.
+      6. Caso: `rate_limit_event` e `system`/`thinking_tokens` non producono eventi.
+      7. Caso: `Send` scrive sul processo il frame user corretto e **non** aggiunge nulla alla storia; l'evento `user_message` compare solo quando il test fa ri-emettere al processo il frame `user` con `isReplay: true`, e compare una sola volta.
+      8. Caso: `Interrupt` scrive la control request, e un `control_response` di sottotipo `success` correlato per `request_id` la conclude; la sessione resta attiva e nessun evento di stato viene scritto. Un `subtype: "error"` produce un `*execution.RunCommandError`.
+      9. Caso: `Completed()` è falso quando `result` porta `is_error: true`, vero quando lo porta falso; `FinalMessage()` restituisce il campo `result` e, quando è vuoto, l'ultimo testo assistente.
+      10. Caso: la chiusura del canale delle righe chiude `TurnDone()` anche senza frame `result` — un processo morto è una fine del turno.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/claude/... -run 'Stream|Dialogue|Translate|Interrupt|Send' -count=1`
+      - Expect: verde, tutti i casi sopra presenti e passanti.
+      - Run: `cd cli && go test ./internal/execution/... -race -count=1`
+      - Expect: verde e nessun data race — il client ha un solo lettore e una mappa di richieste correlate sotto lock.
+
+      ## Done
+      - [ ] AC-2 — Storia ordinata, messaggio che entra in storia solo alla ri-emissione, interruzione che non chiude la sessione: ciascuno ha un caso con un'asserzione osservabile, non un mock verificato.
+      - [ ] AC-3 — Nessun test qui riafferma una regola che `localrun/collaborator_test.go` già copre.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: I contratti del provider e la capacità dichiarata, verificati in Go
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      La suite Go afferma che Claude dichiara `run.dialog`, che la sessione è registrata prima che l'agente lavori, che gli argomenti di avvio sono quelli del protocollo, e che i due provider locali rifiutano allo stesso modo.
+
+      ## Read
+      - `cli/internal/execution/claude/provider_test.go` — i diciassette casi attuali, in particolare quelli che descrivono l'esecuzione one-shot e `TestBuildArgsKeepsPrintFirstAndThePromptLast`.
+      - `cli/internal/execution/codex/provider_test.go` — `TestExecuteRegistersTheRunBeforeTheAgentWorks` e `TestBuildArgsStartsTheStdioAppServer`.
+      - `cli/internal/web/execution_test.go` — `TestListExecutionProvidersDeclaresTheDialogueCapability`.
+      - `cli/internal/cli/execution_claude_test.go` — l'asserzione su `args[0] == "--print"`.
+      - `cli/internal/execution/run_test.go` — `TestDeclaredCapabilitiesDerivesTheDialogueFromTheInterface`.
+
+      ## Change
+      - `cli/internal/execution/claude/provider_test.go`: i casi che descrivono il one-shot vengono riscritti sulla sessione viva, usando un finto `Starter`.
+      - `cli/internal/cli/execution_claude_test.go`: l'asserzione sugli argomenti diventa quella del protocollo.
+      - `cli/internal/web/execution_test.go`: il caso sulla capacità di dialogo copre anche `claude`.
+      - Nuovo file `cli/internal/execution/local_dialogue_test.go`, package `execution_test`, con il caso cross-provider.
+      - Non goal: non duplicare in `claude` i casi che `localrun` già copre.
+
+      ## Steps
+      1. Riscrivere i casi di `provider_test.go` che presuppongono `runner.Run` per l'esecuzione: ora l'esecuzione passa dallo `Starter`, e il `Runner` serve solo il probe `--version`. Conservare invariati i casi su `Available`, `ensurePlanSkill`, `ValidateConfig` e sul payload a sei campi.
+      2. Aggiungere `TestExecuteRegistersTheRunBeforeTheAgentWorks` per Claude: durante il lavoro dell'agente finto, `ResolveRun` sull'esecuzione trova già la run e `ReadRun` la riporta `ACTIVE`.
+      3. Aggiungere `TestBuildArgsStartsTheStreamingSession`: gli argomenti contengono, nell'ordine atteso, `--print`, `--input-format stream-json`, `--output-format stream-json`, `--replay-user-messages`, `--permission-mode` con il valore configurato, e **non** contengono il prompt.
+      4. Aggiungere `TestProviderDeclaresTheDialogueThroughTheInterface`: `execution.RunCollaboratorFor(claude.New(...))` trova la capacità e `execution.DeclaredCapabilities` restituisce `spec.plan` e `run.dialog`, mentre `Capabilities()` da solo restituisce il solo `spec.plan`.
+      5. Scrivere `TestLocalProvidersRefuseTheSameWay` in `local_dialogue_test.go`: per ciascuno dei due provider locali, gli stessi tre comandi su una run inesistente producono `not_found`, un messaggio vuoto produce `unsupported`, una risposta ad approvazione produce `unsupported`. Le reason attese sono scritte una volta e confrontate per entrambi, così una divergenza futura fallisce qui.
+      6. Estendere il caso di `web/execution_test.go` perché la tabella dei provider attesi includa `claude` con entrambe le capacità.
+      7. Aggiornare `cli/internal/cli/execution_claude_test.go` all'invocazione reale.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/... ./internal/web/... ./internal/cli/... -count=1`
+      - Expect: verde.
+      - Run: `cd cli && go test ./internal/web/... -run DialogueCapability -v -count=1`
+      - Expect: il caso passa e la sua tabella nomina esplicitamente `claude`.
+
+      ## Done
+      - [ ] AC-1 — Un test afferma che `claude` espone `run.dialog` e che la capacità è derivata, non dichiarata.
+      - [ ] AC-3 — `TestLocalProvidersRefuseTheSameWay` confronta i due provider sulle stesse reason.
+      - [ ] Nessun test residuo descrive l'esecuzione one-shot di Claude.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Finto binario Claude che parla il protocollo reale su stdio
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Uno smoke può descrivere una sessione Claude intera senza credenziali, con un binario finto che parla NDJSON e non progredisce mai da solo.
+
+      ## Read
+      - `test/e2e/support/fake-codex.mjs` — il file intero: gestione di `--version`, requisito della variabile di controllo, lettura di stdin con `readline`, segnalazione al control server, `pump()` che chiede comandi, uscita alla chiusura di stdin.
+      - `test/e2e/local-run-view-smoke.mjs` — `startControlServer()` e il vocabolario dei comandi (`emit`, `exit`, `received`, `waitFor`).
+
+      ## Change
+      - Nuovo file `test/e2e/support/fake-claude.mjs`, eseguibile, con shebang node.
+      - Non goal: nessuna rete oltre `127.0.0.1`, nessuna dipendenza esterna, nessun avanzamento autonomo — ogni frame emesso è comandato dal control server.
+
+      ## Steps
+      1. `--version` stampa una versione finta e esce `0`, così il probe di disponibilità del provider è soddisfatto.
+      2. Senza la variabile d'ambiente di controllo (sul modello di `FAKE_CODEX_CONTROL`, quindi `FAKE_CLAUDE_CONTROL`), uscire con codice `2`: un finto che gira senza guida sarebbe un test che non controlla nulla.
+      3. Leggere stdin riga per riga. Ogni riga è un frame JSON: riportarlo al control server come `{kind:"received", frame}` — così lo smoke può asserire *cosa* ha ricevuto il processo, non solo cosa ha risposto.
+      4. Un `control_request` di sottotipo `interrupt` riceve immediatamente il `control_response` correlato per `request_id`; ciò che accade poi al turno lo decide lo smoke, con un comando `emit`.
+      5. `pump()` interroga il control server e obbedisce ai comandi: `emit` scrive una riga JSON su stdout, `exit` termina con il codice indicato.
+      6. Alla chiusura di stdin, uscire `0`, come fa il binario reale.
+      7. Verificare che il file sia eseguibile (`chmod +x`) e che non richieda argomenti oltre quelli che il provider passa.
+
+      ## Verify
+      - Run: `node test/e2e/support/fake-claude.mjs --version`
+      - Expect: stampa una versione ed esce `0`.
+      - Run: `node test/e2e/support/fake-claude.mjs < /dev/null; echo $?`
+      - Expect: `2`, perché la variabile di controllo non è impostata.
+
+      ## Done
+      - [ ] Il finto parla il protocollo reale, riporta ogni frame ricevuto e non emette nulla di propria iniziativa.
+      - [ ] Non serve alcuna credenziale.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Lo stesso copione di revisione gira su Codex e su Claude
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      `local-run-view-smoke.mjs` diventa parametrico sul provider locale ed esegue le stesse asserzioni, nello stesso ordine, per `codex` e per `claude`.
+
+      ## Read
+      - `test/e2e/local-run-view-smoke.mjs` — l'intero file: `main()`, `createRunDir`, `buildCLI`, l'inizializzazione del sandbox, `startControlServer`, `startViewServer` e i sei blocchi di asserzione.
+      - `test/e2e/support/fake-claude.mjs` — il finto appena scritto.
+      - `package.json` — la riga `test:view-local-run-smoke`.
+      - `AGENTS.md` — il paragrafo che descrive quello smoke.
+
+      ## Change
+      - `test/e2e/local-run-view-smoke.mjs`: estrarre una descrizione di provider e far girare il corpo del copione una volta per ciascuna.
+      - `package.json`: lo script esistente esegue entrambi i provider; accettare `--provider <id>` per eseguirne uno solo.
+      - `AGENTS.md`: aggiornare la descrizione dello smoke e i campi di configurazione attesi per `claude`.
+      - Non goal: **non duplicare il file**. Un secondo copione sarebbe esattamente ciò che AC-2 chiede di evitare — la prova richiesta è che *lo stesso* copione dia risultati equivalenti.
+
+      ## Steps
+      1. Definire una costante con una voce per provider: identificativo, `--tool` da passare a `archetipo init`, percorso del finto binario, variabile d'ambiente di controllo, nome della variabile sentinella e insieme atteso dei campi di configurazione.
+      2. Spostare il corpo del copione in una funzione che riceve una di quelle voci e la directory di run, e non contiene più alcun nome di provider scritto a mano.
+      3. Far girare la funzione per entrambe le voci, ciascuna nel proprio sandbox, e riportare l'esito per provider nel riassunto finale.
+      4. Verificare che le asserzioni restino quelle di oggi, senza indebolimenti: capacità dichiarate e campi di configurazione; una sola esecuzione avviata; storia `1..4` con kind `text, tool_start, tool_end, text`; `after_id` che restituisce solo il nuovo; messaggio assente dal corpo del `202`, consegnato al processo e presente una sola volta dopo la ri-emissione; cancel che lascia la run `ACTIVE` mentre il processo resiste; sei comandi rifiutati con `404` e `409 run_not_active` che lasciano la proiezione byte-identica; sentinella assente da ogni risposta e da `.archetipo/config.yaml`.
+      5. Il frame che ciascun finto riceve per il messaggio è diverso — `turn/steer` per Codex, frame `user` per Claude — quindi quella singola asserzione va parametrizzata come predicato nella voce del provider, non trasformata in un controllo più debole.
+      6. Aggiungere il supporto a `--provider` e documentarlo nell'aiuto dello script.
+      7. Aggiornare `AGENTS.md`: lo smoke copre due provider locali; per `claude` i campi sono `command`, `model`, `permission_mode`, `timeout_seconds`.
+
+      ## Verify
+      - Run: `npm run test:view-local-run-smoke`
+      - Expect: entrambi i provider passano; il report finale nomina esplicitamente `codex` e `claude`.
+      - Run: `npm run test:view-local-run-smoke -- --provider claude`
+      - Expect: gira il solo Claude e passa.
+      - Expect (osservazione, non comando): nessuna attesa arbitraria è stata introdotta — ogni attesa resta un poll su una rotta del viewer o sul control server.
+
+      ## Done
+      - [ ] AC-2 — Lo stesso copione, non riscritto, produce risultati equivalenti sui due provider.
+      - [ ] AC-1 — Fra le asserzioni c'è la presenza di `run.dialog` fra le capacità di `claude`.
+      - [ ] AC-4 — La sentinella non compare in alcuna risposta né in `.archetipo/config.yaml`.
+      - [ ] `AGENTS.md` descrive lo smoke come è davvero.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Lo smoke di configurazione riflette i campi e le capacità reali di Claude
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      `execution-config-view-smoke.mjs` afferma per `claude` i quattro campi reali e le due capacità reali, senza che nessun campo chieda una credenziale.
+
+      ## Read
+      - `test/e2e/execution-config-view-smoke.mjs` — il blocco che verifica i provider, in particolare le righe che elencano i campi di `claude`.
+      - `AGENTS.md` — il paragrafo che descrive quello smoke, che cita i campi provider per provider.
+
+      ## Change
+      - `test/e2e/execution-config-view-smoke.mjs`: per `claude`, capacità attese `spec.plan` e `run.dialog`, campi attesi esattamente `command`, `model`, `permission_mode`, `timeout_seconds`.
+      - `AGENTS.md`: stesso aggiornamento nella descrizione.
+      - Non goal: non toccare le asserzioni su `arcipelago` e `codex`, né quelle sulla disponibilità osservata invece che pretesa.
+
+      ## Steps
+      1. Aggiornare l'insieme atteso di campi e capacità per `claude`.
+      2. Verificare che resti l'asserzione che nessun campo di alcun provider ha un nome che chiede una credenziale.
+      3. Aggiornare il paragrafo corrispondente di `AGENTS.md`.
+
+      ## Verify
+      - Run: `npm run test:view-execution-smoke`
+      - Expect: verde, con `claude` che dichiara entrambe le capacità.
+
+      ## Done
+      - [ ] AC-1 — La capacità di dialogo di Claude è affermata anche da questo smoke.
+      - [ ] AC-4 — Nessun campo di configurazione chiede una credenziale.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Sonda dal vivo contro il binario Claude installato, dietro build tag
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+      Esiste un modo riproducibile di verificare che il protocollo assunto dal provider sia ancora quello che Claude Code parla davvero, senza che quella verifica entri mai nella suite ordinaria.
+
+      ## Read
+      - `cli/internal/execution/codex/live_probe_test.go` — il build tag, le variabili d'ambiente che lo guidano (`LIVE_WORKSPACE`, `LIVE_SPEC`), lo skip esplicito quando mancano e ciò che la sonda afferma.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/claude/live_probe_test.go`, con lo stesso build tag `liveprobe`.
+      - Non goal: nessuna esecuzione in CI, nessun criterio di accettazione appoggiato a questo file, nessun uso di credenziali del repository.
+
+      ## Steps
+      1. Riprodurre la struttura del file di Codex: build tag, skip quando le variabili d'ambiente che nominano workspace e spec non sono impostate, timeout generoso.
+      2. La sonda avvia il provider reale su un workspace reale e afferma i fatti su cui il piano si regge: il processo emette `system`/`init`; la storia contiene almeno un evento `text`; un messaggio inviato durante il turno ricompare come `user_message` una sola volta; una control request di interruzione riceve un `control_response` di successo.
+      3. Documentare in testa al file come si esegue e perché esiste, nominando la versione di Claude Code su cui il protocollo è stato osservato.
+
+      ## Verify
+      - Run: `cd cli && go vet -tags liveprobe ./internal/execution/claude/...`
+      - Expect: compila senza rilievi.
+      - Run: `cd cli && go test ./internal/execution/claude/... -count=1`
+      - Expect: verde e la sonda **non** viene eseguita, perché il tag non è attivo.
+
+      ## Done
+      - [ ] La sonda esiste, è documentata e non gira mai per sbaglio.
+      - [ ] Nessun criterio di accettazione dipende dalla sua esecuzione.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Gate finale — verifica completa e richiesta di review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+    body: |-
+      ## Objective
+      L'intero incremento supera i controlli che questo repository considera vincolanti, e la review viene richiesta solo dopo che il backlog conferma che nessun task è rimasto aperto.
+
+      ## Read
+      - `AGENTS.md` — la lista dei controlli da eseguire prima di consegnare.
+      - `docs/ROADMAP-MANAGED-ORCHESTRATION.md` — il paragrafo "Come si lavora", che elenca gli smoke della UI.
+
+      ## Change
+      - Nessuna modifica al codice, salvo le riparazioni che i controlli rendessero necessarie.
+
+      ## Steps
+      1. Da `cli/`, nell'ordine: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`, `golangci-lint run --timeout 5m ./...`.
+      2. Dal root: `npm run test:view-local-run-smoke`, `npm run test:view-execution-smoke`, `npm run test:view-plan-smoke`, `npm run test:view-run-smoke`.
+      3. Riparare ogni fallimento nel task che lo ha causato, non con una correzione locale qui.
+      4. Verificare che nessun file toccato dal piano abbia introdotto rilievi di compilatore o linter rispetto alla baseline registrata, che era interamente verde.
+      5. Marcare questo task `DONE`.
+      6. Rileggere la spec con `archetipo spec show US-039` da `data.project_root` e verificare che **nessun** task risulti `TODO`.
+      7. Solo allora, `archetipo spec review US-039`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Expect: `gofmt` senza output, nessun rilievo di `vet`, build pulita, tutti i test verdi (almeno i 1164 della baseline, più quelli aggiunti), `0 issues` dal linter.
+      - Run: `npm run test:view-local-run-smoke && npm run test:view-execution-smoke && npm run test:view-plan-smoke && npm run test:view-run-smoke`
+      - Expect: tutti e quattro passano.
+      - Run: `archetipo spec show US-039`
+      - Expect: ogni task è `DONE`.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4 — Ogni criterio ha la sua evidenza eseguita e verde, come da mappa delle evidenze.
+      - [ ] I controlli di `AGENTS.md` sono tutti verdi e nessuno è stato saltato.
+      - [ ] `archetipo spec show` conferma zero task aperti prima della richiesta di review.
+
+      ## Blockers
+      None.
+    ref: TASK-12

@@ -1,0 +1,364 @@
+schema: archetipo/plan/v2
+spec_code: US-024
+body: "# US-024: Configurare il provider predefinito del workspace — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team  \n**Data:** 2026-08-15\n\n---\n\n## Spec\n\n**Epica:** EP-003 — Esecuzione gestita e portabile  \n**Priorità:** HIGH | **Punti:** 3\n\n**Storia utente**  \nCome responsabile di un workspace ARchetipo, voglio scegliere e verificare il provider di esecuzione predefinito, così che le azioni del workspace vengano affidate al sistema previsto senza selezioni ripetitive.\n\n**Criteri di accettazione**\n\n- AC-1 — Il workspace conserva l'identificativo e la configurazione non segreta del provider predefinito selezionato.\n- AC-2 — Una nuova azione senza override usa il provider predefinito del workspace.\n- AC-3 — Una configurazione non valida viene rifiutata con un messaggio che identifica il campo errato.\n- AC-4 — Il rifiuto di una nuova configurazione conserva l'ultimo provider valido del workspace.\n\n---\n\n## Soluzione tecnica\n\nLa slice estende il confine execution introdotto da US-023 con una selezione di workspace esplicita, validata e persistita atomicamente. La superficie pubblica sarà `archetipo execution provider set-default <id> --file <path>` per validare e salvare la selezione e `archetipo execution provider show-default` per rileggerla; `archetipo execution run US-XXX plan` userà tale selezione quando `--provider` non è presente.\n\n- **Schema di configurazione.** `config.Config` acquisisce `execution.default_provider.id` e `execution.default_provider.config`. `config` è una mappa YAML/JSON di soli valori non segreti e viene inoltrata al provider come dati opachi; token e credenziali continuano a provenire dall'ambiente o da meccanismi futuri, non da `.archetipo/config.yaml`. L'assenza dell'intera selezione resta valida per compatibilità, ma un comando `run` senza override restituisce `E_PRECONDITION` con indicazione di configurare il default.\n- **Validazione provider-owned.** L'interfaccia `execution.Provider` acquisisce `ValidateConfig(context.Context, map[string]any) error`. Gli errori di configurazione usano un tipo strutturato con campo e motivo; la CLI rende il campo come `execution.default_provider.id` per un provider non registrato oppure `execution.default_provider.config.<campo>` per un valore rifiutato. La validazione avviene sia prima della persistenza sia prima del dispatch, così modifiche manuali invalide falliscono chiuse.\n- **Persistenza atomica e conservativa.** Un helper del package `config` aggiorna soltanto il nodo `execution.default_provider`, preserva commenti e sezioni non correlate, valida il documento risultante e lo sostituisce tramite file temporaneo e rename. La CLI risolve e valida il provider prima di invocare l'helper; pertanto provider sconosciuti, payload malformati o campi invalidi non scrivono nulla. Un errore di scrittura lascia intatto il file precedente e segue le stesse regole di backup già usate da `SaveRaw`.\n- **Risoluzione senza ambiguità.** Se `--provider <id>` è presente, il comando conserva il comportamento US-023 e usa quell'ID con configurazione vuota, senza consultare il default. Se l'override manca, usa ID e configurazione persistiti, li valida e li inoltra nel `Request` del provider; il record `Execution` continua a esporre `provider_id` ma non duplica la configurazione del workspace. Non esistono selezione automatica, fallback o retry.\n- **Contratto dei payload.** Il file passato a `set-default` contiene direttamente un mapping JSON o YAML di configurazione non segreta; un mapping vuoto è valido se il provider lo accetta. La selezione salvata e `show-default` espongono la stessa struttura, consentendo una verifica deterministica senza stampare segreti.\n- **Compatibilità.** I provider fake esistenti accettano configurazione vuota; i test già introdotti da US-023 continuano a esercitare l'override esplicito. Nessun provider di produzione viene aggiunto in questa storia: il provider ARcipelago appartiene a US-025.\n\n### Decisioni architetturali\n\nLa scelta chiarisce ed estende `decisions/execution-provider-boundary`, che dichiarava esplicitamente il provider predefinito fuori dalla prima slice. Persistenza del default, validazione provider-owned e precedenza dell'override incidono sul confine di integrazione e sulle failure semantics, ma non costituiscono una decisione separata: restano nello stesso modello di registry iniettabile, provider separato dai connector e dispatch fail-closed.\n\nAlternative valutate: validare soltanto durante `run`, scartata perché consentirebbe di persistere configurazioni già note come invalide; inserire schema e validatori specifici nel package `config`, scartata perché legherebbe il core ai provider futuri; affidarsi esclusivamente all'editing manuale YAML, scartata perché non garantirebbe la conservazione atomica dell'ultima configurazione valida. L'ADR esistente sarà aggiornato dopo l'implementazione con la precedenza override/default, la validazione prima di scrittura e dispatch e il divieto di segreti persistiti.\n\n---\n\n## Baseline\n\nComandi eseguiti in `/Users/stefanoleli/Project/ARchetipo` prima dell'implementazione.\n\n| Check | Risultato prima dell'implementazione | Conseguenza sulla pianificazione |\n|---|---|---|\n| `cd cli && gofmt -l .` | passa, nessun file elencato | ogni task Go deve mantenere la formattazione canonica |\n| `cd cli && go test ./internal/config ./internal/execution ./internal/cli -count=1` | passa, i tre package sono verdi | i task interleaveranno test focalizzati sui tre confini |\n| `cd cli && go vet ./internal/config ./internal/execution ./internal/cli` | passa, nessuna diagnostica | ogni file modificato deve restare privo di diagnostiche vet |\n| `cd cli && go build ./...` | passa, nessun output | le estensioni di config, provider e CLI devono compilare nell'intero modulo |\n| `cd cli && go test ./... -count=1` | passa, tutti i package sono verdi | il gate finale può richiedere la regressione Go completa senza eccezioni |\n| `npm run test:e2e:unit` | passa, 50 test su 50 | il gate preserva l'harness Node e le regole Wiki |\n| `cd cli && golangci-lint run --timeout 5m ./...` | non eseguito: `golangci-lint` non è installato | il gate esegue il lint se disponibile oppure registra esplicitamente il prerequisito mancante |\n\nPrerequisiti d'ambiente, distinti dai fallimenti di codice:\n\n- Go 1.26 e Node.js con dipendenze installate sono disponibili.\n- `golangci-lint` non è installato; il comando deterministico indicato da `AGENTS.md` è `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`.\n- I test useranno provider fake iniettati, directory temporanee e connector file reale; non richiedono rete, credenziali, browser o servizi esterni.\n\nNessun check di codice della baseline è rosso.\n\n---\n\n## Mappa dell'evidenza di accettazione\n\n| Criterio | Stato iniziale / fixture | Layer di test | Oracolo osservabile | Task che produce l'evidenza |\n|---|---|---|---|---|\n| AC-1 | workspace temporaneo con config senza `execution`, registry con fake `fake-valid`, payload `{endpoint: https://runner.test}` | integrazione config + CLI in-process | dopo `set-default`, `.archetipo/config.yaml` e `show-default` contengono `id: fake-valid` e lo stesso `config.endpoint`, mentre le sezioni e i commenti preesistenti restano presenti | TASK-02, TASK-04 |\n| AC-2 | selezione valida già persistita, spec file-connector `US-001` in `TODO`, invocazione `execution run US-001 plan` senza `--provider` | integrazione CLI con service/store reali e provider spy | l'envelope e il record hanno `provider_id: fake-valid`; lo spy riceve esattamente una chiamata e osserva `ProviderConfig.endpoint` uguale al valore persistito | TASK-05, TASK-06 |\n| AC-3 | config valida persistita, tentativo `set-default fake-valid --file invalid.yaml` con campo `endpoint` rifiutato dal fake | integrazione CLI in-process | exit non zero ed envelope `E_INVALID_INPUT` nominano letteralmente `execution.default_provider.config.endpoint`; nessun dispatch avviene | TASK-01, TASK-04 |\n| AC-4 | snapshot byte-for-byte della config contenente il default valido, seguito dal tentativo invalido di AC-3 e da `show-default` | integrazione persistenza + CLI | dopo il rifiuto il file è byte-for-byte identico allo snapshot e `show-default` restituisce ancora `fake-valid` con il precedente endpoint | TASK-02, TASK-04 |\n\nI test double sostituiscono soltanto il provider esterno: parsing del payload, registry, validazione, modifica YAML, scrittura atomica, ricaricamento config, risoluzione CLI, service e file store restano reali. L'uso automatico è provato sulla richiesta ricevuta e sul record persistito, non dedotto dalla sola assenza dell'opzione CLI.\n\n---\n\n## Strategia di test\n\nLa strategia separa gli invarianti di configurazione dalla prova del percorso pubblico e mantiene verdi i contratti espliciti di US-023.\n\n- I test `config` coprono default assente, round-trip `id`/mappa annidata, aggiornamento node-preserving, backup, sostituzione atomica e file invariato su documento o scrittura non valida.\n- I test `execution` coprono validazione provider-owned, errore strutturato con field path e inoltro di una copia deterministica della configurazione nel `Request`; i fake esistenti dichiarano esplicitamente l'accettazione della mappa vuota.\n- I test CLI coprono `set-default`, `show-default`, provider sconosciuto, payload non-mapping, campo rifiutato, configurazione precedente intatta, default mancante e config modificata manualmente ma invalida.\n- I test del dispatch confrontano due percorsi: senza override usa ID e config del workspace; con `--provider` prevale l'ID esplicito e usa configurazione vuota, preservando i test US-023.\n- Non sono necessari browser E2E o mockup: la superficie è esclusivamente CLI e filesystem. La dimostrazione è filmabile come sessione terminale, ma la review può provarla integralmente con envelope JSON e test deterministici; nessun video browser è atteso.\n\n---\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [architecture/context-map, decisions/execution-provider-boundary, engineering/code-map, operations/development]\n  update_after_acceptance: [decisions/execution-provider-boundary, engineering/code-map, operations/development]\n  create: []\n```\n\nLa decisione esistente viene estesa con configurazione e precedenza del default; code map e operazioni documentano i nuovi punti di ingresso e lo schema non segreto. Nessuna nuova decisione supera una soglia distinta e non viene creata alcuna pagina.\n\n---\n\n_Piano generato tramite ARchetipo Planning — 2026-08-15_"
+tasks:
+  - id: TASK-01
+    title: Estendere il contratto provider con configurazione validabile
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Il confine `execution.Provider` valida una mappa di configurazione non segreta e consegna al provider selezionato la configurazione risolta dal workspace con errori che identificano il campo.
+
+      ## Read
+      - `cli/internal/execution/provider.go` — interfaccia `Provider`, `Registry` e `RegistryError`
+      - `cli/internal/execution/types.go` — `Request`, `Execution` e contratti JSON
+      - `cli/internal/execution/service.go` — ordine capability/create/dispatch
+      - `cli/internal/execution/provider_test.go` e `cli/internal/execution/service_test.go` — fake e invarianti US-023 da preservare
+
+      ## Change
+      - `cli/internal/execution/provider.go` — aggiungere `ValidateConfig`, il tipo di errore strutturato con `Field` e `Reason` e helper di normalizzazione/copia strettamente necessari.
+      - `cli/internal/execution/types.go` — aggiungere a `Request` la configurazione provider non segreta con tag JSON `omitempty`; non aggiungerla a `Execution`.
+      - `cli/internal/execution/service.go` — accettare la configurazione risolta, validarla prima di creare il record e inoltrarla una sola volta al provider.
+      - `cli/internal/execution/provider_test.go` e `cli/internal/execution/service_test.go` — adeguare i fake esistenti senza ridurre le asserzioni US-023.
+      - Non introdurre provider di produzione, fallback, segreti, retry o dipendenze dal package `config`.
+
+      ## Steps
+      1. Estendere `Provider` con `ValidateConfig(context.Context, map[string]any) error`; il provider resta proprietario dello schema.
+      2. Definire `ConfigurationError` con campo relativo non vuoto e motivo; preservare la causa con `Unwrap` quando presente.
+      3. Aggiungere `ProviderConfig map[string]any` a `Request` e creare una copia della mappa prima di consegnarla al provider, così il chiamante non può mutare la configurazione durante il lifecycle.
+      4. Modificare `Service.Run` per ricevere la config, invocare `ValidateConfig` dopo registry e capability ma prima di generare ID o creare record, quindi costruire `Request` con la config validata.
+      5. Fare accettare ai fake esistenti una mappa vuota e mantenere identici status, result/error e numero di create/update/dispatch di US-023.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution -count=1`
+      - Expect: tutti i test execution passano; un campo invalido produce `ConfigurationError` prima di ID, create e dispatch.
+      - Run: `cd cli && go vet ./internal/execution`
+      - Expect: nessuna diagnostica.
+
+      ## Done
+      - [ ] AC-2 — il `Request` del provider può osservare la configurazione validata scelta dal workspace.
+      - [ ] AC-3 — un provider può rifiutare `endpoint` con un errore strutturato che conserva quel field path.
+      - [ ] AC-4 — la validazione avviene prima di qualsiasi effetto execution.
+      - [ ] I test di lifecycle e override di US-023 restano verdi.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Persistire atomicamente la selezione predefinita nel config workspace
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il package `config` rappresenta e salva `execution.default_provider` senza perdere sezioni o commenti e senza alterare il file quando l'aggiornamento non è valido.
+
+      ## Read
+      - `cli/internal/config/config.go` — `Config`, `Default`, `parseRaw`, `RenderFull`, `SaveRaw` e helper `yaml.Node`
+      - `cli/internal/config/config_test.go` — test di default, render, backup e preservazione su errore
+      - `.archetipo/config.yaml` — template canonico da non modificare in questo task
+
+      ## Change
+      - `cli/internal/config/config.go` — aggiungere `ExecutionConfig`, `DefaultProviderConfig` e un helper pubblico mirato che aggiorna atomicamente `execution.default_provider`.
+      - `cli/internal/config/config_test.go` — aggiungere test di parsing, rendering, preservazione node-level, backup e failure atomicity.
+      - Non validare provider specifici nel package `config`; non salvare credenziali, env value o stato runtime execution.
+
+      ## Steps
+      1. Modellare `execution.default_provider.id` e `execution.default_provider.config` con tag YAML/JSON e zero value che rende opzionale l'intera sezione.
+      2. Verificare che `Load`, `LoadForTarget` e `RenderFull` preservino mapping annidati di scalari, liste e oggetti senza inventare un default ID.
+      3. Implementare l'upsert del solo nodo `execution.default_provider`, preservando ordine, commenti e sezioni non correlate del documento esistente.
+      4. Validare il documento candidato con `ValidateRaw`, scrivere in un file temporaneo nello stesso directory, creare il backup secondo la convenzione `SaveRaw` e sostituire con rename solo dopo ogni controllo riuscito.
+      5. Provare byte-for-byte che errori prima del rename lasciano il file precedente invariato e che un salvataggio riuscito è rileggibile da `Load`.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/config -count=1`
+      - Expect: tutti i test config passano, inclusi round-trip e conservazione atomica dell'ultima selezione.
+      - Run: `cd cli && go vet ./internal/config`
+      - Expect: nessuna diagnostica.
+
+      ## Done
+      - [ ] AC-1 — ID e configurazione non segreta sono rileggibili dal config workspace dopo il salvataggio.
+      - [ ] AC-4 — un aggiornamento fallito lascia il file precedente byte-for-byte invariato.
+      - [ ] Configurazioni senza `execution` continuano a caricarsi senza un provider implicito.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Aggiungere i comandi per impostare e verificare il default
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Objective
+      La CLI consente di validare, salvare e rileggere il provider predefinito tramite comandi deterministici e envelope JSON.
+
+      ## Read
+      - `cli/internal/cli/execution_cmd.go` — gruppo `execution`, dependency injection e mapping errori
+      - `cli/internal/cli/root.go` — composizione delle dipendenze execution
+      - `cli/internal/cli/config_cmd.go` — convenzione degli envelope di configurazione
+      - `cli/internal/cli/execution_cmd_internal_test.go` — harness CLI in-process e registry fake
+      - `cli/internal/config/config.go` — selezione e helper atomico introdotti da TASK-02
+
+      ## Change
+      - `cli/internal/cli/execution_cmd.go` — aggiungere il sottogruppo `provider` con `set-default <id> --file <path>` e `show-default`; mappare errori su field path pubblico.
+      - `cli/internal/cli/root.go` — riusare lo stesso registry iniettabile senza stato globale aggiuntivo.
+      - Non aggiungere prompt interattivi, provider di produzione o output che esponga variabili d'ambiente.
+
+      ## Steps
+      1. Fare leggere a `set-default` un mapping JSON o YAML dal file indicato; rifiutare file assente, payload malformato o valore root non-mapping con `E_INVALID_INPUT`.
+      2. Risolvere l'ID nel registry; per ID assente/sconosciuto restituire un errore che nomina `execution.default_provider.id`.
+      3. Chiamare `ValidateConfig`; rendere un `ConfigurationError{Field: "endpoint"}` come field pubblico `execution.default_provider.config.endpoint` e non chiamare la persistenza sul failure path.
+      4. Solo dopo la validazione, invocare l'helper atomico di TASK-02 e restituire envelope `kind: "execution_provider"` con ID e config salvati.
+      5. Implementare `show-default` ricaricando il config dal workspace; se assente restituire `E_PRECONDITION`, altrimenti emettere lo stesso contratto `execution_provider`.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/cli -run 'TestExecutionProvider' -count=1`
+      - Expect: i nuovi comandi compilano e i test aggiunti da TASK-04 possono essere inizialmente assenti; nessuna regressione nei test già rinominati con quel prefisso.
+      - Run: `cd cli && go vet ./internal/cli`
+      - Expect: nessuna diagnostica.
+
+      ## Done
+      - [ ] AC-1 — `set-default` persiste e `show-default` espone la stessa selezione.
+      - [ ] AC-3 — ogni errore di configurazione nomina il field path pubblico errato.
+      - [ ] AC-4 — i failure path terminano prima dell'helper di scrittura.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Provare selezione, validazione e rollback dal confine CLI
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Test CLI in-process provano che una selezione valida è verificabile e che tentativi invalidi identificano il campo senza sostituire l'ultima configurazione valida.
+
+      ## Read
+      - `cli/internal/cli/execution_cmd_internal_test.go` — helper `runExecutionRoot`, seed spec e decode envelope
+      - `cli/internal/cli/execution_cmd.go` — comandi provider introdotti da TASK-03
+      - `cli/internal/config/config.go` e `cli/internal/config/config_test.go` — contratto di persistenza atomica
+
+      ## Change
+      - `cli/internal/cli/execution_cmd_internal_test.go` — aggiungere provider fake configurabile, decoder `execution_provider` e scenari AC-1/AC-3/AC-4.
+      - Non mockare filesystem, parser YAML, registry, comando Cobra o helper di persistenza; usare `t.TempDir()`.
+
+      ## Steps
+      1. Creare un config con commento e sezione non correlata, impostare `fake-valid` con `endpoint: https://runner.test` e verificare file ricaricato più envelope `show-default`.
+      2. Provare provider sconosciuto e payload root non-mapping, asserendo exit/code e campo `execution.default_provider.id` o `execution.default_provider.config`.
+      3. Fare rifiutare dal fake un endpoint invalido con `ConfigurationError{Field: "endpoint"}` e asserire che stderr contiene `execution.default_provider.config.endpoint`.
+      4. Fotografare i byte del file dopo la selezione valida, eseguire il tentativo invalido, confrontare i byte e rileggere `show-default` per provare la conservazione del valore precedente.
+      5. Provare `show-default` su workspace senza selezione e verificare `E_PRECONDITION` senza creazione implicita di config.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/cli -run 'TestExecutionProvider' -count=1`
+      - Expect: tutti gli scenari passano; il test AC-4 confronta il file byte-for-byte e il valore riletto.
+      - Run: `cd cli && go test ./internal/config ./internal/execution ./internal/cli -count=1`
+      - Expect: i tre package restano verdi.
+
+      ## Done
+      - [ ] AC-1 — il test osserva ID e config identici su file e `show-default`.
+      - [ ] AC-3 — il test osserva `E_INVALID_INPUT` e il path esatto del campo rifiutato.
+      - [ ] AC-4 — il test prova file invariato e precedente default ancora leggibile.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Risolvere automaticamente il default durante execution run
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Objective
+      `execution run` usa ID e configurazione predefiniti quando manca l'override e mantiene la precedenza esplicita di `--provider`.
+
+      ## Read
+      - `cli/internal/cli/execution_cmd.go` — parsing corrente che rende `--provider` obbligatorio
+      - `cli/internal/execution/service.go` — firma e ordine di validazione introdotti da TASK-01
+      - `cli/internal/config/config.go` — forma `execution.default_provider`
+      - `cli/internal/cli/execution_cmd_internal_test.go` — prove US-023 di success, failure e capability
+
+      ## Change
+      - `cli/internal/cli/execution_cmd.go` — rendere `--provider` opzionale e risolvere esplicitamente override oppure default.
+      - Aggiornare help e hint nello stesso file per documentare precedenza e comando di configurazione.
+      - Non modificare il record `Execution`, la semantica exit `0` del provider failure o lo stato della spec.
+
+      ## Steps
+      1. Conservare validazione di spec code e action, ma non rifiutare più l'assenza di `--provider` prima di caricare il config.
+      2. Se l'opzione è presente, trim dell'ID e configurazione vuota; non leggere né validare il default per quel dispatch.
+      3. Se l'opzione manca, richiedere una selezione completa nel config e produrre `E_PRECONDITION` con hint `execution provider set-default` quando assente.
+      4. Risolvere l'ID configurato nel registry e validare nuovamente la config tramite il service prima di creare l'execution, così editing manuale invalido fallisce chiuso con field path.
+      5. Passare ID e config risolti al service; lasciare che capability, lifecycle e persistenza seguano il contratto US-023 invariato.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/cli -run 'TestExecutionRun' -count=1`
+      - Expect: i test esistenti con override restano verdi e il comando senza default restituisce la precondition prevista.
+      - Run: `cd cli && go vet ./internal/cli ./internal/execution`
+      - Expect: nessuna diagnostica.
+
+      ## Done
+      - [ ] AC-2 — l'assenza di override seleziona esattamente ID e config del workspace.
+      - [ ] AC-3 — una config manualmente invalida è rifiutata prima della creazione execution con field path esplicito.
+      - [ ] `--provider` continua a prevalere e non eredita accidentalmente la config del default.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Verificare dispatch automatico e precedenza dell'override
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Test di integrazione CLI provano l'uso automatico del provider configurato e impediscono regressioni nel percorso con override esplicito.
+
+      ## Read
+      - `cli/internal/cli/execution_cmd_internal_test.go` — test success/failure/capability US-023 e test provider TASK-04
+      - `cli/internal/execution/service_test.go` — spy su request, create e dispatch
+      - `cli/internal/cli/execution_cmd.go` — algoritmo override/default di TASK-05
+
+      ## Change
+      - `cli/internal/cli/execution_cmd_internal_test.go` — aggiungere scenari senza override, con override concorrente e config manualmente corrotta semanticamente.
+      - `cli/internal/execution/service_test.go` — aggiungere l'oracolo sulla configurazione ricevuta senza duplicare test CLI.
+      - Non sostituire connector file, service o store con mock nei test di accettazione.
+
+      ## Steps
+      1. Persistire `fake-default` con endpoint valido, eseguire `execution run US-001 plan` senza flag e asserire provider ID su envelope, file execution e provider spy.
+      2. Asserire che lo spy riceve esattamente una chiamata e la mappa `ProviderConfig` con l'endpoint persistito.
+      3. Configurare un default e invocare con `--provider fake-override`; asserire che soltanto l'override viene chiamato e riceve mappa vuota.
+      4. Modificare manualmente il campo endpoint dopo una selezione valida, avviare senza override e asserire errore col field path, zero nuovi record e zero dispatch.
+      5. Rieseguire gli scenari US-023 di provider failure e capability mancante per confermare outcome e precondition invariati.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution ./internal/cli -run 'Test(Service|Execution)' -count=1`
+      - Expect: default, override e regressioni US-023 passano; l'oracolo AC-2 osserva request e record reali.
+      - Run: `cd cli && go test ./internal/config ./internal/execution ./internal/cli -count=1`
+      - Expect: tutti i test focalizzati sono verdi.
+
+      ## Done
+      - [ ] AC-2 — il test senza override prova ID configurato, config inoltrata e singolo dispatch.
+      - [ ] AC-3 — il test di editing manuale invalido prova field path, zero record e zero chiamate.
+      - [ ] La precedenza dell'override e tutti gli outcome US-023 restano coperti.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Documentare configurazione e aggiornare la conoscenza Wiki
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-06
+    body: |-
+      ## Objective
+      Template, guide e Wiki descrivono in modo coerente schema non segreto, comandi, precedenza override/default e validazione atomica.
+
+      ## Read
+      - `.archetipo/config.yaml` — template distribuito della configurazione
+      - `README.md`, `README.it.md` e `cli/README.md` — riferimento dei comandi e configurazione
+      - `docs/wiki/decisions/execution-provider-boundary.md` — ADR accettato da estendere
+      - `docs/wiki/engineering/code-map.md` — ownership fisica execution/config
+      - `docs/wiki/operations/development.md` — vincoli operativi e segreti
+      - `.archetipo/shared-runtime.md` — regole Wiki per pagine reviewed modificate
+
+      ## Change
+      - `.archetipo/config.yaml`, `README.md`, `README.it.md`, `cli/README.md` — esempi e help documentale per `execution.default_provider` e i nuovi comandi.
+      - `docs/wiki/decisions/execution-provider-boundary.md` — estendere decisione, alternative, conseguenze, verifica e sources con la selezione predefinita.
+      - `docs/wiki/engineering/code-map.md` e `docs/wiki/operations/development.md` — aggiornare ownership e regole non-secret.
+      - Non documentare provider ARcipelago, fallback, selezione automatica o storage di token.
+
+      ## Steps
+      1. Aggiungere al template un blocco `execution.default_provider` commentato con ID e config non segreta, specificando che credenziali e token non vanno nel file.
+      2. Aggiornare i tre README con sintassi `set-default`, `show-default`, `run` senza flag e regola di precedenza di `--provider`.
+      3. Estendere l'ADR esistente senza cambiarne l'ID: validazione provider-owned prima di write/dispatch, upsert atomico e override esplicito prevalente.
+      4. Aggiornare code map e operations con i file effettivi e il confine tra config versionabile e segreti esterni.
+      5. Eseguire `archetipo wiki --project-root . reset` sulle tre pagine Wiki modificate e rigenerare il catalogo, lasciandole `generated` per l'approvazione in review.
+
+      ## Verify
+      - Run: `archetipo wiki --project-root . validate --profile bootstrap`
+      - Expect: `kind: validation_result`, `data.ok: true` e nessun errore strutturale.
+      - Run: `archetipo wiki --project-root . status`
+      - Expect: le tre pagine modificate sono `generated`, senza issue; le pagine non modificate conservano il proprio stato.
+      - Run: `rg -n 'set-default|default_provider|non-secret|non segret' .archetipo/config.yaml README.md README.it.md cli/README.md docs/wiki`
+      - Expect: comando, schema e vincolo sui segreti sono rintracciabili nella documentazione pertinente.
+
+      ## Done
+      - [ ] AC-1 — lo schema persistito e il suo contenuto non segreto sono documentati nel template e nei README.
+      - [ ] AC-2 — documentazione e ADR esplicitano default automatico e precedenza di `--provider`.
+      - [ ] AC-3 — ADR e reference descrivono field path e doppia validazione.
+      - [ ] AC-4 — ADR documenta la sostituzione atomica e la conservazione dell'ultima selezione valida.
+      - [ ] Le pagine Wiki modificate sono strutturalmente valide e pronte per approvazione.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Eseguire il gate finale di accettazione e regressione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      L'intero incremento supera le prove focalizzate, i gate Go/Node/Wiki e il controllo workflow prima di poter richiedere review.
+
+      ## Read
+      - `AGENTS.md` — controlli locali richiesti prima della consegna
+      - `.github/workflows/ci.yml` — suite CI rilevanti
+      - `cli/internal/config/config_test.go`, `cli/internal/execution/*_test.go`, `cli/internal/cli/execution_cmd_internal_test.go` — evidenza AC-1..AC-4
+      - `.archetipo/shared-runtime.md` — gate Wiki e ordine di transizione task/spec
+
+      ## Change
+      - Nessun file di produzione previsto. Correggere soltanto regressioni direttamente causate dai task US-024 nei file già in scope; non ampliare il perimetro.
+
+      ## Steps
+      1. Eseguire i test focalizzati config/execution/CLI e confermare gli oracoli AC-1..AC-4.
+      2. Eseguire formattazione, vet, build e regressione Go completa senza cache.
+      3. Eseguire `npm run test:e2e:unit` e i gate Wiki di validazione e stato.
+      4. Eseguire `golangci-lint` se disponibile; se assente, registrare esplicitamente il prerequisito come nella baseline e non confonderlo con un fallimento di codice.
+      5. Solo dopo tutti i check, marcare `TASK-08` `DONE` con `archetipo task done US-024 TASK-08`, poi eseguire `archetipo spec show US-024` da `/Users/stefanoleli/Project/ARchetipo`.
+      6. Confermare che nessun task sia `TODO`; soltanto allora è consentito `archetipo spec review US-024`.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/config ./internal/execution ./internal/cli -count=1`
+      - Expect: tutti i package focalizzati passano e contengono gli oracoli AC-1..AC-4.
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./... -count=1`
+      - Expect: `gofmt` non elenca file e tutti gli altri comandi terminano senza errori.
+      - Run: `npm run test:e2e:unit`
+      - Expect: 50 test baseline più eventuali test aggiunti passano, zero failure.
+      - Run: `archetipo wiki --project-root . validate --profile bootstrap && archetipo wiki --project-root . status`
+      - Expect: validazione `data.ok: true`; pagine Wiki richieste per US-024 `generated` senza issue e pronte all'approvazione.
+      - Run: `if command -v golangci-lint >/dev/null 2>&1; then (cd cli && golangci-lint run --timeout 5m ./...); else echo 'SKIP: golangci-lint not installed; install with go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest'; fi`
+      - Expect: zero issue se installato; altrimenti solo lo skip esplicito già delimitato dalla baseline.
+      - Run: `archetipo spec show US-024` dopo aver marcato questo gate `DONE`
+      - Expect: stato `IN PROGRESS` o successivo e ogni task `DONE`; nessun `TODO` prima di `spec review`.
+
+      ## Done
+      - [ ] AC-1 — il gate include il round-trip persistito e verificabile di ID/config.
+      - [ ] AC-2 — il gate include il dispatch senza override con ID/config osservati dal provider.
+      - [ ] AC-3 — il gate include il rifiuto con field path esatto e zero effetti execution.
+      - [ ] AC-4 — il gate include il confronto byte-for-byte e la rilettura dell'ultimo default valido.
+      - [ ] Tutti i controlli applicabili sono verdi, il gate è `DONE` e `archetipo spec show US-024` non riporta task `TODO`.
+
+      ## Blockers
+      None.
+    ref: TASK-08

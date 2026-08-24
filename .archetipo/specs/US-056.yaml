@@ -1,0 +1,46 @@
+schema: archetipo/spec/v2
+code: US-056
+title: Vedere il passo successivo suggerito mentre si lavora
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: MEDIUM
+points: 3
+status: DONE
+blocked_by:
+  - US-055
+scope: MVP
+body: |-
+  #### US-056: Vedere il passo successivo suggerito mentre si lavora
+
+  **Epic:** EP-008 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccata da:** US-055
+
+  **User Story**
+  Come utilizzatore di ARchetipo che non conosce a memoria il processo,
+  voglio avere sempre sott'occhio cosa conviene fare adesso in questo workspace,
+  così da non dover indovinare quale sia il passo successivo né cercarlo altrove.
+
+  **Dimostrazione**
+  Partendo da un workspace appena inizializzato, il revisore osserva il passo suggerito accanto al lavoro e lo avvia da lì, ottenendo la stessa azione che otterrebbe avviandola dalla board. Completato quel passo, osserva il suggerimento cambiare da sé nel passo successivo, senza ricaricare la pagina. Il revisore osserva poi un passo non ancora disponibile presentato insieme alla condizione che lo sblocca, e verifica che non è avviabile.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Il passo suggerito per il workspace aperto è visibile mentre il revisore lavora, senza aprire finestre.
+  - [ ] AC-2 — Il passo suggerito è avviabile da dove è mostrato, e produce la stessa azione che produrrebbe avviato dalla board.
+  - [ ] AC-3 — Quando lo stato del workspace cambia, il passo suggerito si aggiorna senza ricaricare la pagina.
+  - [ ] AC-4 — Un passo non disponibile è mostrato insieme alla condizione che lo sblocca, con le parole dichiarate dal processo, e non è avviabile.
+  - [ ] AC-5 — Quando nessun workspace è aperto, nessun passo viene suggerito.
+
+  **Fuori ambito**
+  Qualsiasi regola di processo scritta nell'interfaccia: i passi, il loro ordine e le loro condizioni restano quelli dichiarati dal processo. Restano fuori anche la conversazione libera, l'avvio delle azioni dalla conversazione e la disposizione generale dell'area di lavoro.
+history:
+  - status: TODO
+    at: "2026-08-21T17:16:17Z"
+  - status: PLANNED
+    at: "2026-08-21T22:49:33Z"
+  - status: IN PROGRESS
+    at: "2026-08-21T22:50:28Z"
+  - status: REVIEW
+    at: "2026-08-21T23:11:48Z"
+  - status: DONE
+    at: "2026-08-21T23:15:29Z"

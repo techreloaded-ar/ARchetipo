@@ -1,0 +1,746 @@
+schema: archetipo/plan/v2
+spec_code: US-055
+body: |-
+  # Soluzione tecnica
+
+  ## Punto di partenza
+
+  Il viewer (`archetipo view`) serve una SPA a file statici da `cli/internal/web/assets/`: `index.html` (711 righe), `app.js` (~4.870 righe, una IIFE unica) e `app.css` (~4.750 righe), più moduli UMD **puri** — senza DOM e senza rete — che rendono un payload in una stringa HTML (`conversation.js`, `workspace-status.js`, `workspace-home.js`, `task-markdown.js`, `provider-fields.js`) e che sono l'unico livello dove il frontend viene testato con `node --test` (`test/web/*.test.mjs`).
+
+  Oggi la pagina è una pila verticale: `header.topbar`, `#workspace-status`, `#workspace-conversation`, `#workspace-home`, `main#board`, `footer.hint-bar`. Il dettaglio della spec è `#modal-root`, una finestra sovrapposta (`position: fixed; inset: 0` con backdrop sfocato, `z-index: 100`) che copre tutto il resto. Da qui i tre problemi che la spec descrive:
+
+  - aprire una spec **nasconde** la conversazione, che sta sotto il backdrop (AC-1 non è soddisfatto);
+  - la conversazione non è distrutta dalla chiusura del modale — vive in una sezione montata una volta sola — ma è impaginata sopra la board e le contende lo spazio verticale (AC-2 è vero solo per caso, e va reso vero per costruzione);
+  - **non esiste** alcun elenco delle run del workspace: `Store` espone soltanto `ListBySpec`, e nessuna rotta risponde «quali run sono in corso» (AC-3 e AC-4 non hanno oggi nessuna sorgente dati).
+
+  ## Forma della soluzione
+
+  ### 1. Shell a due colonne, dettaglio spec agganciato
+
+  `index.html` acquista un contenitore `#workspace-shell` con due aree: la **colonna primaria**, che ospita alternativamente `main#board` oppure il dettaglio della spec, e una **rail laterale permanente** `aside#workspace-rail` che contiene l'elenco delle run e, sotto, la sezione `#workspace-conversation` già esistente.
+
+  Il dettaglio della spec **non viene riscritto**: l'elemento `#modal-root` con tutto il suo contenuto (tab Story/Plan/Review, form, tabelle task, toolbar di review, pannelli azioni/esecuzione/run) viene spostato dentro la colonna primaria e cambia solo *classe e posizionamento* — da `.modal-root`/`.modal` sovrapposti a `.spec-pane` agganciato. Tutti gli `id` restano identici, quindi ogni handler, ogni form, ogni editor EasyMDE e tutta la logica di review continuano a funzionare senza modifiche: è ciò che rende AC-5 vero per costruzione invece che per verifica capillare. `#modal-root` conserva anche la classe `.hidden` (`display:none` globale), che è il meccanismo con cui `openEditor`/`closeModal` già lo mostrano e lo nascondono.
+
+  Motivazione della scelta, con l'alternativa scartata: si poteva rendere il modale *non modale* (togliere il backdrop e ancorarlo a sinistra lasciandolo `position: fixed`). Sarebbe stato meno lavoro di CSS, ma lascia due strati sovrapposti che si contendono lo scroll e non dà nessun posto stabile alla rail in finestra stretta; soprattutto non elimina la sovrapposizione che AC-1 nomina esplicitamente. La shell agganciata sposta il problema una volta sola nel layout invece di ripararlo in ogni pannello.
+
+  Restano finestre sovrapposte, e correttamente, le altre modali (PRD, metriche, config, nuova spec, nuovo workspace, workspace conosciuti): sono compiti brevi e chiusi, non il lavoro su una spec, e la spec le lascia fuori.
+
+  ### 2. Le run del workspace: una lettura nuova sul server
+
+  Serve una rotta che oggi non c'è: `GET /api/workspace/runs`, registrata con `handleWorkspace` come tutte le rotte che presuppongono un workspace aperto. Risponde con l'elenco delle run **non terminali** del workspace aperto, ciascuna con id di esecuzione, ambito (`spec` con il suo codice, oppure `workspace`), azione, stato, istante di avvio e — questo è il punto — `awaiting_response` con la decisione pendente quando ce n'è una.
+
+  Due conseguenze tecniche, entrambe deliberate:
+
+  **a) `Store` acquista `List`.** `execution.Store` espone solo `ListBySpec`, che filtra per un codice esatto e non ammette caratteri jolly (una stringa vuota *seleziona* le run di ambito workspace, non tutte). L'enumerazione arriva quindi da un metodo nuovo `List(ctx) ([]Execution, error)`, con lo stesso ordinamento deterministico di `ListBySpec` (più recenti prima, id a rompere la parità) e la stessa disciplina sugli errori: un record illeggibile fa fallire la lettura invece di essere saltato in silenzio, perché una storia troncata è indistinguibile da una assente. `FileStore.ListBySpec` viene riscritto sopra la stessa scansione, così esiste un solo posto che legge la directory dei record. L'unico altro implementatore dell'interfaccia è `spyStore` in `cli/internal/execution/service_test.go`, che va esteso.
+
+  **b) L'attesa di una risposta si vede solo se qualcuno sta seguendo la run.** Le approvazioni pendenti non stanno nel record persistito: vivono nella proiezione lato server (`runFollower`), che le rilegge a intervalli perché lo stream di eventi non porta nessun frame di approvazione. Un follower nasce però solo quando il browser chiama `GET /api/execution/{id}/run` — cioè solo quando il pannello di quella run è aperto. Se la rotta nuova si limitasse a leggere i record, una run che attende risposta mentre il revisore guarda un'altra spec resterebbe invisibile: esattamente il caso che AC-4 descrive.
+
+  La rotta nuova **riusa `resolveRunTarget`** per ogni esecuzione attiva. È la funzione che già risolve record → provider → run remota e che, come ultimo passo, chiama `ws.followers.ensure(...)`: chiamarla significa attaccare (o ritrovare) il follower e poterne leggere le approvazioni pendenti. L'alternativa — far interrogare al browser la rotta `run` di ogni esecuzione una per una — è stata scartata: moltiplicherebbe le richieste per il numero di run, metterebbe nel frontend la regola di quali run vanno seguite, e comunque passerebbe dalla stessa `resolveRunTarget`. Il costo della scelta va detto: il viewer tiene uno stream verso il provider per ogni run attiva del workspace aperto finché quella run è attiva. È lo stesso costo che il viewer paga già quando il pannello è aperto, e i follower restano legati alla sessione del workspace (`workspaceSession.followers`), quindi un cambio di workspace li chiude tutti come già fa oggi.
+
+  Un fallimento nel risolvere una singola run **non fa fallire l'elenco**: quella voce viene resa con lo stato che il record dichiara e senza segnalazione di attesa, perché «non ho potuto chiedere» non è «non c'è nessuna decisione da prendere». La ragione del provider viaggia come nota della voce, mai come errore HTTP.
+
+  ### 3. Frontend: due moduli puri nuovi, nessuna regola di processo
+
+  Coerentemente con la disciplina del repository (`npm run test:web` è il livello dove si asserisce che «il frontend non contiene regole di processo»), la parte disegnabile e decidibile della UI va in due moduli UMD puri e testabili, e `app.js` si limita a montarne l'output:
+
+  - `assets/workspace-runs.js` — `renderWorkspaceRuns(view, opts)`: disegna l'elenco delle run della rail a partire dal payload della rotta nuova. Non conosce nessun id di azione né nessun ordinamento di processo: etichette e stati sono quelli che riceve, e un'azione mai vista viene resa così com'è. Espone anche il conteggio delle run in attesa, che è ciò che alimenta l'indicatore sempre visibile in topbar.
+  - `assets/workspace-layout.js` — `resolveLayout({ specOpen, narrow, railFocus })`: funzione pura che restituisce quali riquadri sono visibili e quale controllo di ritorno mostrare. È qui che AC-6 diventa asseribile senza browser: in modalità stretta la funzione dichiara **un solo riquadro visibile per volta** e il commutatore che raggiunge gli altri; in modalità larga dichiara colonna primaria e rail entrambe visibili. `app.js` applica il risultato come classi sulla shell, e il CSS non decide nulla da solo.
+
+  `app.js` cambia in punti mirati:
+
+  - `openEditor(code)` mostra il riquadro spec e nasconde la board nella colonna primaria; `closeModal()` (che resta il nome della funzione, per non toccare i suoi otto punti di chiamata) torna alla board. Nessuna delle due tocca la rail: è ciò che rende AC-2 vero per costruzione — la conversazione non viene mai smontata né ricaricata quando si apre o si chiude una spec.
+  - la rail acquista un ciclo di lettura di `GET /api/workspace/runs`, con la stessa disciplina già usata da conversazione e run (timer che non si sovrappone, cursore/stato che sopravvive a una lettura fallita, resa dopo N fallimenti consecutivi).
+  - l'indicatore di attesa in topbar è alimentato dallo stesso payload e, premuto, porta alla decisione: per una run di spec apre la spec corrispondente (che monta e riprende quella run col suo pannello approvazioni già esistente), per una run di ambito workspace apre il pannello dove quella run vive.
+  - **trappola da non mancare**: `scheduleBoardReload()` oggi salta il ricaricamento finché `#modal-root` non è `hidden`, per non buttare via le modifiche in corso. Con il dettaglio agganciato quel test diventa permanentemente vero quando una spec è aperta e congelerebbe la board. La guardia va ristretta a «un form di modifica è aperto» (`#story-form` o `#plan-form` visibili), lasciando invariate le guardie delle altre modali.
+  - il tasto `Esc` e il bottone di chiusura tornano alla board invece di chiudere una finestra.
+
+  ### 4. Note su cosa la spec non tocca
+
+  Nessuna regola di processo si sposta nel frontend, nessun contenuto di spec cambia, nessuna azione nuova viene offerta: cambia dove le cose stanno. La conversazione resta **una sola** per workspace, montata in un solo posto (la rail): un pannello ripetuto accanto alla board e accanto alla spec sarebbero due viste della stessa cosa, ed è la ragione per cui `#workspace-conversation` era già montato una volta sola.
+
+  Nessuna scelta qui supera la soglia di un ADR — il Wiki è comunque disattivato in questo workspace (`wiki.enabled: false`), quindi le due decisioni che contano (riquadro agganciato invece di finestra; follower attaccato lato server per rendere visibile l'attesa) sono registrate qui sopra con contesto, alternativa scartata e costo, e in nessun altro posto.
+
+  # Baseline
+
+  Misurata prima della pianificazione, dalla radice del repository (`/Users/stefanoleli/Project/ARchetipo`, nessun worktree: `worktree.enabled: false`).
+
+  | Comando | Directory | Esito osservato |
+  |---|---|---|
+  | `gofmt -l .` | `cli/` | nessun output (tutto formattato) |
+  | `go vet ./...` | `cli/` | nessun errore |
+  | `go build ./...` | `cli/` | compila pulito |
+  | `go test ./...` | `cli/` | verde — 1844 test in 28 package |
+  | `npm run test:web` | radice | verde — 80 test, 15 suite, 0 fail |
+
+  Nessun comando di baseline è rosso: ogni task può quindi promettere il verde, e nessuna verifica di questo piano deve accontentarsi di un confine «nessun fallimento nuovo».
+
+  **Prerequisiti d'ambiente**
+
+  - Go è richiesto (il modulo sta in `cli/`); Node è richiesto per `test:web` e per gli smoke di `test/e2e/`.
+  - `golangci-lint` **non è installato** su questa macchina: `command -v golangci-lint` non trova nulla. CI lo esegue (`golangci-lint run --timeout 5m ./...`, atteso 0 issue). Chi implementa lo installa con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` e lo esegue, oppure — se l'installazione non è possibile — dichiara esplicitamente nel gate finale che quel controllo non è stato eseguito localmente, senza fingerlo verde.
+  - Gli smoke `test/e2e/*-view-smoke.mjs` costruiscono da soli il binario Go, non richiedono credenziali e non generano traffico fuori da `127.0.0.1`. Le loro directory di lavoro (`test/workspaces/*`) sono ignorate da Git e non vanno committate.
+  - Nessun servizio esterno, nessun database, nessun client generato: l'unico setup è `go` + `node` presenti nel `PATH`.
+
+  **Diagnostica preesistente sui file toccati**: nessuna. `gofmt`, `vet` e `build` sono puliti su tutto `cli/`, quindi ogni file toccato da questo piano parte senza diagnostica locale e non deve acquisirne.
+
+  # Mappa delle evidenze di accettazione
+
+  | AC | Livello | Oracolo osservabile | Stato di partenza / fixture | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 — spec e conversazione consultabili insieme | struttura degli asset serviti + funzione pura | Lo smoke chiede `GET /index.html` al viewer reale e asserisce che `#modal-root` cade dentro la colonna primaria di `#workspace-shell` e `#workspace-conversation` dentro `<aside id="workspace-rail">`, che nessuno dei due è annidato nell'altro, e che in `app.css` la regola del riquadro spec non è più un sovrapposto (`position: fixed` + backdrop) — la regola di `.modal-root` resta invece intatta per le altre finestre. In più `resolveLayout({ specOpen: true, narrow: false })` dichiara visibili **insieme** colonna primaria e rail. | Sandbox `archetipo init`, viewer avviato, un backlog con almeno una spec | TASK-07, TASK-08, TASK-09, TASK-11 |
+  | AC-2 — tornando alla board la conversazione resta con la sua storia | funzione pura + smoke HTTP | `resolveLayout` restituisce la rail visibile sia con `specOpen: true` sia con `specOpen: false`, cioè la rail non dipende dallo stato della colonna primaria. Lo smoke apre una conversazione sul viewer reale, produce eventi, e verifica che `GET /api/workspace/conversation?after_id=0` restituisca lo stesso id di conversazione e la stessa storia dopo l'apertura e la chiusura del riquadro spec — che sul server è la stessa lettura di prima, sullo **stesso PID** del viewer, mai riavviato. | Sandbox con provider `claude` finto (`test/e2e/support/fake-claude.mjs`) e una conversazione aperta | TASK-08, TASK-09, TASK-10, TASK-11 |
+  | AC-3 — le run in corso sono elencate con il loro stato e da lì si raggiunge la conversazione di ciascuna | rotta HTTP + renderer puro | `GET /api/workspace/runs` elenca **entrambe** le run avviate (una di spec, una di ambito workspace) con il loro stato e non elenca quella terminale; ogni voce porta l'id di esecuzione e il bersaglio (`spec` col codice, oppure `workspace` con l'azione) da cui la UI raggiunge quella run. `renderWorkspaceRuns` disegna, per un payload di due voci, i due codici e i due stati come **testo visibile** e un attributo di bersaglio per voce. | Fake hub ARcipelago che tiene due run attive e una chiusa | TASK-04, TASK-06, TASK-11 |
+  | AC-4 — una run che attende una risposta è segnalata anche guardando altro, e la segnalazione porta alla decisione | rotta HTTP + renderer puro | Con l'approvazione aperta sul fake hub e **senza che il browser abbia mai chiamato** `GET /api/execution/{id}/run` per quella esecuzione, `GET /api/workspace/runs` marca quella voce `awaiting_response` e ne nomina la decisione pendente; le altre voci non sono marcate. `renderWorkspaceRuns` rende quella voce con il contrassegno di attesa e dichiara `awaiting: 1`, che è ciò che accende l'indicatore sempre visibile; il bersaglio della voce è quello che porta alla decisione. | Fake hub con una approvazione pendente su una sola delle due run | TASK-04, TASK-06, TASK-11 |
+  | AC-5 — restano disponibili tutte le operazioni già possibili su una spec | invarianza degli id + suite esistente | Il riquadro spec conserva **tutti** gli `id` del dettaglio odierno: lo smoke asserisce la presenza in `index.html` di `story-form`, `plan-form`, `story-edit-btn`, `story-delete-btn`, `story-actions`, `story-execution`, `story-run`, `review-tab`, `review-approve-btn`, `review-request-btn`, `review-integrate-btn`, e che i tre tab `data-tab="story|plan|review"` esistono ancora. Le rotte che quelle operazioni usano restano coperte dalla suite Go esistente, che deve restare verde. | Sandbox con una spec in `REVIEW` | TASK-08, TASK-10, TASK-11, TASK-12 |
+  | AC-6 — in finestra stretta i contenuti restano leggibili e raggiungibili, uno alla volta | funzione pura + CSS | `resolveLayout({ narrow: true, … })` dichiara **esattamente un** riquadro visibile per ogni combinazione di `specOpen` e `railFocus`, e nomina sempre il commutatore che raggiunge gli altri (nessuna combinazione lascia un contenuto irraggiungibile). Lo smoke verifica che `app.css` contenga la media query del punto di rottura dichiarato e che applichi la classe di modalità stretta alla shell. | — (funzione pura, nessuno stato) | TASK-07, TASK-08, TASK-09, TASK-11 |
+
+  # Strategia di test
+
+  Tre livelli, che sono quelli che il repository usa già per il viewer e non uno di più:
+
+  1. **Go, sul package `web` e `execution`** — `cli/internal/execution/file_store_test.go` per la nuova enumerazione dei record; `cli/internal/web/workspace_runs_test.go` per la rotta nuova, con il connettore in memoria e i fake di provider già usati da `execution_run_test.go`. È il livello che prova il contratto della rotta: cosa entra nell'elenco, cosa ne resta fuori, come viene marcata l'attesa, e che una run irrisolvibile degrada in una voce senza segnalazione invece che in un errore HTTP.
+  2. **Node su moduli puri** (`npm run test:web`) — `workspace-runs.js` e `workspace-layout.js`. Gli oracoli stanno sul **testo visibile** del markup reso (come già fa `test/web/workspace-status.test.mjs`, che spoglia gli attributi prima di asserire) e sul valore restituito dalla funzione di layout. È il livello che tiene fuori dal frontend le regole di processo: un'azione o uno stato mai visti devono essere resi così come arrivano.
+  3. **Smoke Node contro il viewer reale** (`test/e2e/workspace-runs-view-smoke.mjs`) — costruisce la CLI, avvia `archetipo view` su una porta casuale contro un fake hub ARcipelago (stesso schema di `test/e2e/run-from-view-smoke.mjs`, che è già l'unico posto dove esiste un'approvazione pendente pilotabile a comando). È il livello che prova AC-3 e AC-4 sul comportamento vero: solo il hub è finto, il viewer, il connettore, il provider, il suo consumatore SSE e il follower lato server sono quelli reali. Nessun `sleep` arbitrario: ogni attesa interroga una rotta del viewer con un timeout che nomina cosa si aspettava e cosa è arrivato.
+
+  **Il doppio non deve nascondere l'oracolo.** Il punto di AC-4 è che l'attesa si veda *senza che il pannello della run sia aperto*: lo smoke deve quindi asserire esplicitamente di **non aver mai chiamato** `GET /api/execution/{id}/run` per quella esecuzione prima di leggere l'elenco. Un test che aprisse prima il pannello proverebbe il contrario di quello che serve.
+
+  ## Rinuncia all'e2e da browser (motivata)
+
+  Questo repository **non ha alcun harness da browser**: nessun Playwright, nessun driver, nessuna dipendenza di questo tipo compare in `package.json` o negli script (le sole occorrenze di «playwright» stanno dentro le skill copiate nelle sandbox generate, cioè in progetti bersaglio, non qui). Il viewer è sempre stato accettato a due livelli: renderer puri sotto `node --test` e smoke HTTP contro il processo reale.
+
+  - AC-3, AC-4 e AC-5 non hanno bisogno di un browser: il primo e il secondo sono un contratto di rotta più un renderer puro, il terzo è l'invarianza degli identificatori più la suite esistente.
+  - AC-1, AC-2 e AC-6 sono i tre che un browser proverebbe meglio. Vengono provati qui con due oracoli complementari — la **struttura degli asset realmente serviti** (chi sta dentro chi, e che il riquadro spec non è più un sovrapposto) e una **funzione pura di layout** che decide la visibilità dei riquadri e che il CSS si limita ad applicare. Il rischio residuo va nominato per quello che è: nessuno di questi due oracoli prova il *pixel*, cioè che i due riquadri siano contemporaneamente leggibili a una data larghezza. Quel residuo è coperto dal gate umano — la `Dimostrazione` di questa spec è filmabile e la review lo osserverà sull'applicazione vera.
+  - Introdurre un framework da browser solo per questa spec significherebbe aggiungere al repository una dipendenza, una matrice CI e un livello di manutenzione che nessuna altra spec del viewer ha richiesto: sproporzionato rispetto al residuo appena descritto.
+
+  **`Demonstrates` è filmabile**: la dimostrazione si svolge interamente nel viewer (apri una spec, leggi la conversazione di fianco, torna alla board, osserva la segnalazione di una run in attesa). La decisione se registrarla resta di `archetipo-review`.
+
+  ## Note e assunzioni
+
+  - Il Wiki è disattivato (`wiki.enabled: false`): questo piano non prevede nessun lavoro di Wiki, nessuna pagina e nessun contratto `wiki_impact`.
+  - US-056 («passo successivo suggerito») è bloccata da questa spec e vivrà nella stessa rail: la shell va costruita lasciando alla rail un posto in cui una terza sezione possa essere aggiunta senza rifarla. Nulla di US-056 va implementato qui.
+  - US-052 (indicatore del workspace aperto in topbar) è indipendente e non ancora pianificata: questa spec non tocca la topbar se non per l'indicatore di attesa richiesto da AC-4.
+  - I mockup di riferimento, quando presenti, stanno in `docs/mockups/US-055/`; sono un riferimento visivo, non un contratto: in caso di divergenza valgono i criteri di accettazione.
+tasks:
+  - id: TASK-01
+    title: Enumerare tutti i record di esecuzione con Store.List
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      `execution.Store` sa elencare **tutte** le esecuzioni del workspace, non solo quelle di una spec, con lo stesso ordinamento e la stessa disciplina sugli errori di `ListBySpec`.
+
+      ## Read
+
+      - `cli/internal/execution/store.go` — l'interfaccia `Store` e il contratto documentato di `ListBySpec` (ordine, assenza come lista vuota).
+      - `cli/internal/execution/file_store.go` righe 120-175 — `ListBySpec`: scansione della directory, `json.Unmarshal` per record, fallimento esplicito su record illeggibile, ordinamento `CreatedAt` decrescente con `ID` a rompere la parità.
+      - `cli/internal/execution/service_test.go` righe 40-60 — `spyStore`, l'unico altro implementatore dell'interfaccia in tutto il repository.
+
+      ## Change
+
+      - `cli/internal/execution/store.go` — aggiungi al'interfaccia `List(ctx context.Context) ([]Execution, error)` con un commento che ne dichiara il contratto: tutti i record del workspace, più recenti prima con `ID` a rompere la parità, lista vuota (mai `nil`, mai errore) quando la directory non esiste, errore che **nomina il file** quando un record è illeggibile.
+      - `cli/internal/execution/file_store.go` — implementa `List` e riscrivi `ListBySpec` sopra una scansione condivisa (un `readAll` privato), così esiste un solo punto che legge la directory dei record. `ListBySpec` deve conservare esattamente il comportamento attuale, inclusa la regola per cui un `specCode` vuoto o di soli spazi seleziona le esecuzioni di ambito workspace e **non** funge da jolly.
+      - `cli/internal/execution/service_test.go` — estendi `spyStore` con `List`.
+
+      Non-goal: nessuna cache, nessun filtro per stato dentro lo store (chi chiama decide cosa è «in corso»), nessun cambiamento al formato dei record.
+
+      ## Steps
+
+      1. Aggiungi il metodo all'interfaccia con il commento di contratto.
+      2. Estrai da `ListBySpec` la scansione della directory in un metodo privato che restituisce tutti i record decodificati, preservando alla lettera il trattamento di `fs.ErrNotExist` (lista vuota), del file non-`.json` (ignorato), della directory annidata (ignorata) e del record illeggibile o non decodificabile (errore che nomina il file).
+      3. Estrai anche l'ordinamento in una funzione riusata dai due metodi.
+      4. Implementa `List` come scansione + ordinamento, senza filtro.
+      5. Riscrivi `ListBySpec` come scansione + filtro su `SpecCode` + ordinamento.
+      6. Aggiungi `List` a `spyStore` restituendo tutti i record che il fake tiene, nello stesso ordine di `ListBySpec`.
+
+      ## Verify
+
+      - Esegui da `cli/`: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/execution/...`
+      - Attesa: `gofmt` senza output, `vet` senza errori, build pulita, test del package `execution` verdi. La baseline è interamente verde, quindi qui non esistono fallimenti preesistenti da tollerare.
+
+      ## Done
+
+      - [ ] `Store` espone `List` e `FileStore` la implementa sopra la stessa scansione di `ListBySpec`.
+      - [ ] Tutti i test esistenti di `ListBySpec` in `cli/internal/execution/file_store_test.go` restano verdi senza essere modificati: è la prova che la riscrittura non ha cambiato il comportamento.
+      - [ ] `spyStore` compila e il package `execution` compila e passa.
+      - [ ] AC-3 — esiste la lettura da cui l'elenco delle run del workspace può essere costruito.
+
+      ## Blockers
+
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test di FileStore.List su ordine, assenza, record illeggibile e ambiti misti
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      `FileStore.List` è provato sui quattro casi che il suo contratto dichiara, e la prova che `ListBySpec` non è cambiato resta quella dei test esistenti.
+
+      ## Read
+
+      - `cli/internal/execution/file_store_test.go` righe 100-250 — i cinque test di `ListBySpec` e i loro helper: come vengono seminati i record, come viene reso illeggibile un file, come si assertisce l'ordine.
+      - `cli/internal/execution/file_store.go` — l'implementazione appena scritta.
+
+      ## Change
+
+      - `cli/internal/execution/file_store_test.go` — aggiungi i test di `List` accanto a quelli di `ListBySpec`, riusando gli helper già presenti nel file. Nessun altro file.
+
+      Non-goal: non riscrivere né rinominare i test di `ListBySpec` esistenti; la loro immutabilità è parte dell'evidenza.
+
+      ## Steps
+
+      1. `TestFileStoreListReturnsEveryRecordNewestFirst`: semina tre record con `CreatedAt` distinti — due di spec diverse e uno di ambito workspace (`SpecCode` vuoto) — e asserisci che `List` li restituisce tutti e tre, dal più recente al meno recente.
+      2. `TestFileStoreListBreaksTiesById`: due record con lo stesso `CreatedAt`, asserisci l'ordine deterministico per `ID` decrescente.
+      3. `TestFileStoreListTreatsAbsenceAsAnEmptyList`: nessuna directory dei record, asserisci lista vuota non-`nil` e nessun errore.
+      4. `TestFileStoreListFailsNamingTheUnreadableRecord`: un file `.json` con contenuto non decodificabile, asserisci errore che contiene il nome del file e nessun record restituito.
+      5. `TestFileStoreListIgnoresNonRecordFiles`: un file senza estensione `.json` e una sottodirectory, asserisci che non finiscono nel risultato.
+
+      ## Verify
+
+      - Esegui da `cli/`: `go test ./internal/execution/... -run 'FileStoreList' -v` e poi `go test ./internal/execution/...`
+      - Attesa: i cinque test nuovi passano ed eseguono davvero (l'output `-v` li nomina uno per uno); l'intero package resta verde.
+
+      ## Done
+
+      - [ ] I cinque casi del contratto sono coperti da un test ciascuno, con l'asserzione sull'esito osservabile (ordine, lista vuota, testo dell'errore) e non sulla forma dell'implementazione.
+      - [ ] I test preesistenti di `ListBySpec` sono immutati e verdi.
+      - [ ] AC-3 — l'enumerazione su cui poggia l'elenco delle run è verificata.
+
+      ## Blockers
+
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Rotta GET /api/workspace/runs con la segnalazione dell'attesa
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Il viewer risponde «quali run sono in corso in questo workspace, in che stato sono, e quale sta aspettando una risposta», attaccando da sé il follower necessario a saperlo.
+
+      ## Read
+
+      - `cli/internal/web/server.go` righe 224-275 — la tabella delle rotte e la differenza tra `handleWorkspace` (rotta che presuppone un workspace aperto) e `handleAlways`.
+      - `cli/internal/web/run_routes.go` righe 82-152 — `resolveRunTarget`: record → configurazione persistita → provider → `RunCollaborator` → `ResolveRun` → `ws.followers.ensure`. È la funzione da riusare, e le sue tre uscite (errore, «nessuna run ancora», follower) sono i tre casi da trattare.
+      - `cli/internal/web/run_routes.go` righe 14-80 — `runView`, `projectionView` e la forma con cui le approvazioni pendenti raggiungono già il browser.
+      - `cli/internal/web/run_follow.go` — `runFollower.snapshotView` e `applyApprovals`: da dove vengono le approvazioni pendenti e perché esistono solo finché un follower è attaccato.
+      - `cli/internal/execution/types.go` righe 130-200 — i campi di `Execution`, `ExecutionStatus` e `ActionScope(action)` che deriva l'ambito dall'azione.
+      - `cli/internal/web/workspace_execution.go` righe 1-40 e 300-370 — `workspaceExecutionKey` (la chiave con cui sono registrate le esecuzioni di ambito workspace) e come una esecuzione in corso viene già riconosciuta altrove.
+      - `cli/internal/web/session.go` — `workspaceSession`, e perché `store`, `followers` e `dispatch` appartengono alla sessione del workspace.
+
+      ## Change
+
+      - `cli/internal/web/workspace_runs.go` (nuovo) — la vista, l'handler e la logica di composizione.
+      - `cli/internal/web/server.go` — una riga: `s.handleWorkspace("GET /api/workspace/runs", s.handleGetWorkspaceRuns)`, accanto alle altre rotte di workspace.
+
+      Non-goal: nessun cambiamento a `resolveRunTarget`, a `runFollower`, alle rotte `run` esistenti o al formato dei record. Nessuna regola di processo nella risposta: azione e stato viaggiano come li dichiara il record.
+
+      ## Steps
+
+      1. Definisci la vista JSON: `{"runs":[…]}` dove ogni voce porta `id`, `scope` (`"spec"` o `"workspace"`, derivato con `execution.ActionScope`), `spec_code` (vuoto per l'ambito workspace), `action`, `status`, `created_at`, `awaiting_response` (booleano) e, quando l'attesa c'è, `pending` con id e titolo della decisione. Un `notice` opzionale per voce porta la ragione quando la run non ha potuto essere risolta. `runs` non è mai `nil`.
+      2. Nell'handler: leggi tutti i record con `ws.store.List`, tieni solo quelli **non terminali** (`Status == execution.StatusRunning`, coerente con il test già usato in `execution_run.go` e `workspace_execution.go`), conservando l'ordine dello store.
+      3. Per ciascuno chiama `s.resolveRunTarget(r.Context(), ws, record.ID)`. Tre esiti, tre trattamenti:
+         - follower ottenuto → leggi `snapshotView(0)` e ricava `awaiting_response` da `len(Approvals) > 0`, riportando la prima decisione pendente in `pending`;
+         - nessuna run ancora assegnata (follower `nil` con notice) → voce senza attesa, con il notice;
+         - errore → **non far fallire l'elenco**: voce senza attesa, con il messaggio dell'errore come notice. «Non ho potuto chiedere» non è «non c'è nessuna decisione da prendere», e la rotta lo deve dire.
+      4. Non chiamare `snapshotView` con un cursore diverso da `0` e non consumare eventi: questa rotta legge la proiezione, non la fa avanzare.
+      5. Registra la rotta in `server.go`.
+
+      ## Verify
+
+      - Esegui da `cli/`: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/web/...`
+      - Attesa: tutto verde. La baseline del package `web` è verde, quindi nessun fallimento è tollerato.
+
+      ## Done
+
+      - [ ] `GET /api/workspace/runs` è registrata come rotta di workspace e risponde `409` quando nessun workspace è aperto, come tutte le altre `handleWorkspace`.
+      - [ ] L'elenco contiene le sole esecuzioni non terminali, di spec e di workspace insieme, ciascuna con ambito, azione e stato.
+      - [ ] Una run con una decisione pendente è marcata `awaiting_response` **perché la rotta ha attaccato il follower da sé**, senza che il browser abbia mai aperto il pannello di quella run.
+      - [ ] Una run irrisolvibile produce una voce con notice e non un errore HTTP.
+      - [ ] AC-3, AC-4 — la sorgente dati di entrambe esiste ed è servita.
+
+      ## Blockers
+
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test Go della rotta delle run del workspace
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      Il contratto di `GET /api/workspace/runs` è provato sul comportamento: cosa entra nell'elenco, cosa ne resta fuori, come nasce la segnalazione dell'attesa, e che una run irrisolvibile degrada in una voce e non in un errore.
+
+      ## Read
+
+      - `cli/internal/web/execution_run_test.go` — come si costruisce un `Server` di test: connettore in memoria, registry di provider finti, `RunCollaborator` finto che restituisce approvazioni pendenti, semina dei record di esecuzione, helper di richiesta HTTP.
+      - `cli/internal/web/run_routes_test.go` — gli assert già usati sulle approvazioni pendenti e sui rifiuti del provider.
+      - `cli/internal/web/no_workspace_test.go` — come si asserisce che una rotta di workspace risponde `409` senza workspace aperto.
+      - `cli/internal/web/workspace_runs.go` — la vista appena scritta.
+
+      ## Change
+
+      - `cli/internal/web/workspace_runs_test.go` (nuovo). Nessun altro file.
+
+      Non-goal: nessun avvio di processo reale, nessuna rete fuori dal test server; il collaboratore della run è un doppio, come negli altri test del package.
+
+      ## Steps
+
+      1. `TestWorkspaceRunsListsRunningExecutionsOfBothScopes`: semina tre record — una `plan` su `US-901` in corso, una `inception` di ambito workspace in corso, una `plan` su `US-902` già `SUCCEEDED` — e asserisci che la risposta contiene le prime due con `scope`, `spec_code`, `action` e `status` attesi, e **non** la terza.
+      2. `TestWorkspaceRunsFlagsThePendingDecisionWithoutOpeningThePanel`: il collaboratore finto espone una approvazione pendente per una sola delle due run. Asserisci che quella voce ha `awaiting_response: true` e `pending` con id e titolo della decisione, e che l'altra ha `awaiting_response: false`. Il test **non deve mai** chiamare `GET /api/execution/{id}/run`: è l'oracolo di AC-4, e va scritto un commento che lo dice, perché è ciò che prova che il follower lo attacca la rotta.
+      3. `TestWorkspaceRunsKeepsListingWhenOneRunCannotBeResolved`: il collaboratore rifiuta la risoluzione di una delle due run (usa uno dei `RunRefusalReason` già disponibili). Asserisci `200`, due voci, quella rifiutata senza attesa e con un `notice` non vuoto.
+      4. `TestWorkspaceRunsAnswersEmptyListWhenNothingIsRunning`: nessun record in corso → `200` con `runs` array vuoto, mai `null`.
+      5. `TestWorkspaceRunsRefusedWithoutAnOpenWorkspace`: nessun workspace aperto → `409`, seguendo l'asserzione già usata in `no_workspace_test.go`.
+
+      ## Verify
+
+      - Esegui da `cli/`: `go test ./internal/web/... -run 'WorkspaceRuns' -v` e poi `go test ./internal/web/...`
+      - Attesa: i cinque test nuovi eseguono e passano (l'output `-v` li nomina), l'intero package `web` resta verde.
+
+      ## Done
+
+      - [ ] L'oracolo di AC-4 è l'assenza di chiamata alla rotta `run` prima della lettura dell'elenco, non solo la presenza del campo: un doppio che nascondesse chi attacca il follower renderebbe il test privo di valore.
+      - [ ] L'elenco distingue in corso da terminale e spec da workspace.
+      - [ ] Il fallimento di una run non fa fallire l'elenco.
+      - [ ] AC-3, AC-4 — provati al livello della rotta.
+
+      ## Blockers
+
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Renderer puro workspace-runs.js per l'elenco delle run della rail
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      Esiste un modulo UMD puro che, dal payload di `GET /api/workspace/runs`, produce il markup dell'elenco delle run e dichiara quante attendono una risposta.
+
+      ## Read
+
+      - `cli/internal/web/assets/workspace-status.js` — il modello da seguire alla lettera: intestazione che dichiara la purezza e l'assenza di regole di processo, `escapeHtml` interno, funzioni difensive su payload parziali, doppio export (`window.WorkspaceStatus` nel browser, `module.exports` in Node).
+      - `cli/internal/web/assets/conversation.js` — come un pannello con stato (badge, note, contenitore scorrevole) viene reso da un modulo puro.
+      - `cli/internal/web/assets/app.css` righe 4151-4200 — le classi `.conv-panel`, `.conv-head`, `.conv-badge`: la rail deve parlare la stessa lingua visiva.
+      - `cli/internal/web/workspace_runs.go` — la forma esatta del payload.
+
+      ## Change
+
+      - `cli/internal/web/assets/workspace-runs.js` (nuovo).
+      - `cli/internal/web/assets/index.html` — una riga `<script src="/workspace-runs.js"></script>` prima di `/app.js`, accanto agli altri moduli.
+
+      Non-goal: nessun `fetch`, nessun accesso al DOM, nessun `document` dentro il modulo; nessun id di azione, nessun ordine di stati e nessuna etichetta di processo scritta nel modulo — tutto ciò che riguarda il processo arriva dal payload.
+
+      ## Steps
+
+      1. Scrivi il modulo con la stessa struttura di `workspace-status.js`: IIFE, `escapeHtml`, helper difensivi (`arrayAt`, `objectAt`, `stringAt`) che non lanciano su payload parziali, export doppio.
+      2. Esporta `renderWorkspaceRuns(view, opts)` che restituisce una stringa HTML: intestazione della sezione, e per ogni voce una riga con il bersaglio leggibile (codice spec, oppure la parola dichiarata dal payload per l'ambito workspace), l'azione, lo stato e, quando `awaiting_response` è vero, un contrassegno di attesa che nomina la decisione pendente.
+      3. Ogni riga porta l'id di esecuzione, l'ambito e il codice spec in attributi `data-*`, che sono ciò da cui `app.js` deciderà dove navigare: il modulo non naviga e non decide.
+      4. Il caso senza run è uno stato reso, non una stringa vuota: una riga che dichiara che nel workspace non c'è nessuna run in corso.
+      5. Esporta `awaitingCount(view)` che restituisce il numero di voci in attesa: è ciò che alimenta l'indicatore sempre visibile, e vive qui perché è una proprietà del payload e non del DOM.
+      6. Ogni testo che arriva dal payload passa da `escapeHtml`; un'azione o uno stato mai visti vengono resi tali e quali, senza mappe né default.
+
+      ## Verify
+
+      - Esegui dalla radice: `node -e "const m=require('./cli/internal/web/assets/workspace-runs.js'); console.log(typeof m.renderWorkspaceRuns, typeof m.awaitingCount)"`
+      - Attesa: stampa `function function`, cioè il modulo si carica in Node senza DOM — la prova immediata che è puro.
+      - Poi: `npm run test:web` (ancora senza il test dedicato, che arriva in TASK-06): attesa 80 test verdi come da baseline, nessuna regressione degli altri moduli.
+
+      ## Done
+
+      - [ ] Il modulo si carica in Node senza `window` e senza `document`.
+      - [ ] `renderWorkspaceRuns` rende bersaglio, azione e stato di ogni voce come testo visibile, e il contrassegno di attesa solo per le voci marcate.
+      - [ ] `awaitingCount` restituisce il conteggio delle voci in attesa.
+      - [ ] Nessun id di azione e nessuna etichetta di processo compare nel sorgente del modulo.
+      - [ ] AC-3, AC-4 — l'elenco e la segnalazione sono disegnabili.
+
+      ## Blockers
+
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test Node del renderer delle run
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Il renderer dell'elenco run è provato sul testo che una persona legge, e sull'assenza di regole di processo al suo interno.
+
+      ## Read
+
+      - `test/web/workspace-status.test.mjs` — il caricatore UMD via `node:vm` (con `window: undefined`, così il modulo prende il ramo Node), l'helper `visibleText` che spoglia gli attributi prima di asserire, e la forma dei test con `describe`/`it` in italiano.
+      - `cli/internal/web/assets/workspace-runs.js` — il modulo da provare.
+
+      ## Change
+
+      - `test/web/workspace-runs.test.mjs` (nuovo). Nessun altro file: `npm run test:web` monta già `test/web/**/*.test.mjs`.
+
+      Non-goal: nessun DOM, nessuna dipendenza nuova.
+
+      ## Steps
+
+      1. Riusa il caricatore `node:vm` e l'helper `visibleText` dal test di `workspace-status`.
+      2. «elenca ogni run con il suo bersaglio, la sua azione e il suo stato»: payload con due voci (una di spec, una di workspace); asserisci che il codice spec, le due azioni e i due stati compaiono nel **testo visibile**.
+      3. «segnala la run che attende una risposta e solo quella»: payload con una voce marcata; asserisci che il contrassegno e il titolo della decisione compaiono nel testo visibile della sola voce marcata, e che `awaitingCount` restituisce `1`.
+      4. «porta a ogni run il suo bersaglio»: asserisci che ogni riga porta l'id di esecuzione e l'ambito negli attributi `data-*` (qui si asserisce **prima** di `visibleText`, perché è il markup a essere sotto esame).
+      5. «non contiene regole di processo»: passa un'azione e uno stato inventati e asserisci che compaiono tali e quali nel testo visibile; asserisci inoltre che il sorgente del modulo non nomina nessuna delle azioni reali (`plan`, `implement`, `review`, `inception`, `backlog`, `spec-draft`).
+      6. «senza run in corso lo dichiara»: payload con lista vuota → testo visibile non vuoto che dichiara l'assenza, `awaitingCount` `0`.
+      7. «non lancia su payload parziali»: `null`, `{}`, voci senza campi → nessuna eccezione.
+      8. «neutralizza l'HTML che arriva dal payload»: un titolo di decisione contenente `<script>` non deve produrre un tag nel markup.
+
+      ## Verify
+
+      - Esegui dalla radice: `npm run test:web`
+      - Attesa: gli 80 test della baseline più i nuovi, tutti verdi, 0 fail. Il conteggio delle suite deve essere cresciuto: una suite in più è la prova che il file nuovo viene davvero raccolto.
+
+      ## Done
+
+      - [ ] Gli oracoli stanno sul testo visibile, non sulla forma del modulo, tranne dove il markup stesso è l'oggetto (gli attributi di bersaglio).
+      - [ ] Il test dell'assenza di regole di processo verifica sia il rendering di identificatori mai visti sia l'assenza dei nomi delle azioni reali nel sorgente.
+      - [ ] AC-3, AC-4 — provati al livello del renderer.
+
+      ## Blockers
+
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Modulo puro workspace-layout.js che decide quali riquadri sono visibili
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      La visibilità dei riquadri della shell è decisa da una funzione pura, così «uno alla volta in finestra stretta» diventa una proprietà asseribile invece di un effetto del CSS.
+
+      ## Read
+
+      - `cli/internal/web/assets/workspace-status.js` — la struttura UMD da seguire (qui senza rendering: il modulo restituisce un oggetto, non markup).
+      - `cli/internal/web/assets/app.css` righe 1625-1700 e 2253-2300 — le media query esistenti (`960px`, `900px`, `600px`) e cosa già cambia a quelle larghezze: il punto di rottura della shell va scelto coerentemente con queste e dichiarato qui.
+
+      ## Change
+
+      - `cli/internal/web/assets/workspace-layout.js` (nuovo).
+      - `cli/internal/web/assets/index.html` — una riga `<script src="/workspace-layout.js"></script>` prima di `/app.js`.
+
+      Non-goal: nessun DOM, nessuna classe CSS applicata dal modulo (restituisce i nomi, non li scrive), nessuna conoscenza di cosa contengano i riquadri.
+
+      ## Steps
+
+      1. Esporta la costante del punto di rottura (`NARROW_MAX_WIDTH`), così CSS e JS non possono divergere su due numeri scritti in due posti: il CSS userà lo stesso valore nella sua media query e il test lo leggerà da qui.
+      2. Esporta `resolveLayout({ specOpen, narrow, railFocus })` che restituisce un oggetto con: quali riquadri sono visibili fra `board`, `spec` e `rail`; quale controllo di ritorno mostrare; e l'elenco dei commutatori che raggiungono i riquadri non visibili, ciascuno con il riquadro che raggiunge.
+      3. Regole, e nessuna oltre queste:
+         - larga (`narrow: false`): la rail è **sempre** visibile; la colonna primaria mostra `spec` se `specOpen`, altrimenti `board`. Rail e colonna primaria coesistono, ed è ciò che dice AC-1 e AC-2.
+         - stretta (`narrow: true`): è visibile **esattamente uno** fra `board`, `spec` e `rail`, scelto da `railFocus` e `specOpen`; i due non visibili sono entrambi raggiungibili dai commutatori restituiti.
+      4. Nessuna combinazione degli argomenti può restituire zero riquadri visibili, né lasciare un riquadro esistente senza commutatore in modalità stretta: sono le due invarianti che il test verificherà esaustivamente.
+      5. Export doppio (`window.WorkspaceLayout` e `module.exports`), come gli altri moduli.
+
+      ## Verify
+
+      - Esegui dalla radice: `node -e "const m=require('./cli/internal/web/assets/workspace-layout.js'); console.log(JSON.stringify(m.resolveLayout({specOpen:true,narrow:false})))"`
+      - Attesa: stampa un oggetto in cui la rail e il riquadro spec risultano entrambi visibili — la forma minima di AC-1, osservata prima ancora del CSS.
+
+      ## Done
+
+      - [ ] Il modulo si carica in Node, non tocca il DOM e non applica classi.
+      - [ ] In modalità larga rail e colonna primaria sono visibili insieme, con la spec aperta e con la board.
+      - [ ] In modalità stretta è visibile esattamente un riquadro e gli altri sono raggiungibili.
+      - [ ] Il punto di rottura è dichiarato una volta sola ed esportato.
+      - [ ] AC-1, AC-2, AC-6 — la decisione di visibilità è isolata e asseribile.
+
+      ## Blockers
+
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Shell a due colonne in index.html e app.css, con il dettaglio spec agganciato
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-07
+    body: |-
+      ## Objective
+
+      La pagina ha una colonna primaria che ospita board o dettaglio spec, e una rail laterale permanente con l'elenco delle run e la conversazione; il dettaglio spec non è più una finestra sovrapposta.
+
+      ## Read
+
+      - `cli/internal/web/assets/index.html` righe 86-120 — la pila attuale: `#workspace-status`, `#workspace-conversation`, `#workspace-home`, `main#board`, e i commenti che spiegano perché la conversazione è montata **una volta sola e in un posto solo**.
+      - `cli/internal/web/assets/index.html` righe 120-254 — l'intero dettaglio spec `#modal-root`: header, tab Story/Plan/Review, viste, form, tabella task, toolbar di review. È il blocco da spostare **senza toccarne il contenuto**.
+      - `cli/internal/web/assets/app.css` righe 634-660 (`.board`, `.column`), 996-1060 (`.modal-root`, `.modal`, animazioni), 503-635 (`.workspace-status`), 4151-4200 (`.workspace-conversation`, `.conv-panel`), 1625-1700 e 2253-2300 (media query esistenti).
+      - `cli/internal/web/assets/workspace-layout.js` — i nomi dei riquadri e delle classi che la funzione restituisce, e il punto di rottura da usare nella media query.
+
+      ## Change
+
+      - `cli/internal/web/assets/index.html` — introduci `#workspace-shell` con la colonna primaria (`#workspace-primary`, contenente `main#board` e il blocco del dettaglio spec) e `aside#workspace-rail` (contenente una nuova `<section id="workspace-runs">` e la `<section id="workspace-conversation">` **spostata qui invariata**). Sposta `#modal-root` dentro la colonna primaria cambiandone solo le classi (da `.modal-root`/`.modal` a `.spec-pane`), lasciando immutati **tutti** gli `id`, i `data-tab`, i `data-panel` e il contenuto. Aggiungi nell'header il contenitore dell'indicatore di attesa (`#runs-attention`) e, nella shell, i commutatori della modalità stretta. `#workspace-home` resta fuori dalla shell: quando nessun workspace è aperto la shell non si disegna.
+      - `cli/internal/web/assets/app.css` — regole della shell (griglia a due colonne, rail a larghezza fissa con scorrimento proprio), del riquadro spec agganciato, della sezione run, dell'indicatore in topbar, dei commutatori, e la media query al punto di rottura esportato da `workspace-layout.js` che passa la shell in modalità stretta.
+
+      Non-goal: **non toccare** la regola `.modal-root`/`.modal`, che serve ancora a PRD, metriche, config, nuova spec, nuovo workspace e workspace conosciuti; nessuna modifica ai testi del dettaglio spec; nessuna logica in `app.js` (arriva in TASK-10).
+
+      ## Steps
+
+      1. Sposta `#workspace-conversation` dentro `aside#workspace-rail`, aggiornando il commento che ne spiega l'unicità: continua a essere montata una volta sola, ora nella rail.
+      2. Crea `<section id="workspace-runs">`, vuota, sopra la conversazione nella rail. Lascia sotto la conversazione lo spazio per una terza sezione futura, senza aggiungerne una: US-056 la userà.
+      3. Sposta il blocco `#modal-root` dentro `#workspace-primary`, subito dopo `main#board`, cambiando `class="modal-root hidden"` in `class="spec-pane hidden"` e `class="modal"` in `class="spec-pane-body"`. Conserva `role`/`aria-*` adeguandoli a un riquadro (non è più un dialogo modale: `aria-modal` va rimosso, il riquadro resta etichettato dal suo titolo).
+      4. Scrivi le regole della shell: griglia a due colonne, rail con larghezza propria e scorrimento indipendente, colonna primaria che scorre per conto suo. Il riquadro spec eredita da qui: niente `position: fixed`, niente backdrop, niente `z-index` di sovrapposizione, niente animazione di ingresso da finestra.
+      5. Aggiungi le regole delle classi di modalità che `workspace-layout.js` dichiara, in modo che applicarle nasconda o mostri i riquadri: il CSS **applica** la decisione, non la prende.
+      6. Scrivi la media query al punto di rottura esportato dal modulo, usando lo stesso numero.
+      7. Stila la sezione run e l'indicatore di attesa coerentemente con il linguaggio visivo esistente (variabili di `:root`, badge come `.conv-badge`), verificando entrambi i temi (`data-theme` chiaro e scuro).
+      8. Se `docs/mockups/US-055/` esiste, usalo come riferimento visivo; in caso di divergenza valgono i criteri di accettazione e non il mockup.
+
+      ## Verify
+
+      - Esegui dalla radice: `node -e "const s=require('fs').readFileSync('cli/internal/web/assets/index.html','utf8'); const rail=s.slice(s.indexOf('id=\"workspace-rail\"')); const end=rail.indexOf('</aside>'); const inRail=rail.slice(0,end); console.log('conv in rail:', inRail.includes('id=\"workspace-conversation\"'), '| runs in rail:', inRail.includes('id=\"workspace-runs\"'), '| pane not in rail:', !inRail.includes('id=\"modal-root\"'));"`
+      - Attesa: `conv in rail: true | runs in rail: true | pane not in rail: true`.
+      - Esegui inoltre da `cli/`: `go build ./... && go test ./internal/web/...` — gli asset sono incorporati con `embed`, quindi un file mancante o un percorso sbagliato si vede qui.
+      - Attesa: build pulita e package `web` verde, come da baseline.
+
+      ## Done
+
+      - [ ] `#workspace-conversation` e `#workspace-runs` stanno dentro la rail; il dettaglio spec sta nella colonna primaria e non dentro la rail.
+      - [ ] `#modal-root` conserva tutti i suoi `id` interni e i suoi tre tab: nessuna operazione sulla spec è stata rimossa dal markup.
+      - [ ] La regola `.modal-root`/`.modal` è invariata e continua a valere per le altre finestre.
+      - [ ] Le classi di modalità e la media query usano il punto di rottura esportato da `workspace-layout.js`.
+      - [ ] AC-1, AC-2, AC-5, AC-6 — la struttura che li rende possibili è in pagina.
+
+      ## Blockers
+
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Test Node del modulo di layout, esaustivo sulle due invarianti
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Objective
+
+      Le due invarianti del layout — rail e colonna primaria insieme in finestra larga, un riquadro alla volta e tutti raggiungibili in finestra stretta — sono provate su tutte le combinazioni, non su un campione.
+
+      ## Read
+
+      - `test/web/workspace-status.test.mjs` — caricatore `node:vm` e stile dei test.
+      - `cli/internal/web/assets/workspace-layout.js` — la funzione da provare e la costante del punto di rottura.
+      - `cli/internal/web/assets/app.css` — la media query della shell scritta in TASK-08.
+
+      ## Change
+
+      - `test/web/workspace-layout.test.mjs` (nuovo). Nessun altro file.
+
+      ## Steps
+
+      1. Enumera tutte le combinazioni di `specOpen` (2 valori), `narrow` (2 valori) e `railFocus` (tutti i valori ammessi) e itera su di esse.
+      2. «in finestra larga la conversazione resta accanto al lavoro»: per ogni combinazione con `narrow: false`, asserisci che la rail è visibile **e** che è visibile uno fra board e spec — con `specOpen: true` la spec, con `specOpen: false` la board. È l'evidenza di AC-1 (spec e conversazione insieme) e di AC-2 (la rail non dipende dallo stato della colonna primaria).
+      3. «in finestra stretta si vede un contenuto alla volta»: per ogni combinazione con `narrow: true`, asserisci che il numero di riquadri visibili è esattamente `1`.
+      4. «in finestra stretta nulla resta irraggiungibile»: per ogni combinazione con `narrow: true`, asserisci che l'unione fra il riquadro visibile e i riquadri raggiunti dai commutatori restituiti copre tutti i riquadri esistenti in quello stato.
+      5. «nessuno stato è vuoto»: per ogni combinazione, almeno un riquadro visibile.
+      6. «il punto di rottura è dichiarato una volta sola»: leggi `cli/internal/web/assets/app.css` e asserisci che contiene una media query con esattamente il valore esportato dal modulo. È il test che impedisce a CSS e JS di divergere su due numeri scritti in due posti.
+
+      ## Verify
+
+      - Esegui dalla radice: `npm run test:web`
+      - Attesa: tutte le suite verdi, 0 fail, e il conteggio dei test cresciuto rispetto agli 80 della baseline.
+
+      ## Done
+
+      - [ ] Le invarianti sono verificate su tutte le combinazioni, per enumerazione e non per esempi scelti.
+      - [ ] Il punto di rottura di `app.css` e quello del modulo sono provati identici.
+      - [ ] AC-1, AC-2, AC-6 — provati al livello della decisione di layout.
+
+      ## Blockers
+
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Cablaggio in app.js — apertura in-place, rail delle run, indicatore di attesa
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+      - TASK-09
+    body: |-
+      ## Objective
+
+      Aprire e chiudere una spec cambia solo la colonna primaria; la rail legge le run del workspace e segnala chi attende una risposta, e la segnalazione porta alla decisione.
+
+      ## Read
+
+      - `cli/internal/web/assets/app.js` righe 886-935 (`openEditor`) e 1223-1234 (`closeModal`) — apertura e chiusura odierne del dettaglio, e il montaggio dei pannelli di esecuzione.
+      - `cli/internal/web/assets/app.js` righe 2122-2162 (`mountExecutionPanels`, `unmountExecutionPanels`, `specContext`) — **un solo** pannello di esecuzione è montato per volta: raggiungere la decisione di una run significa aprire il riquadro che la monta.
+      - `cli/internal/web/assets/app.js` righe 614-660 (`scheduleBoardReload`, `connectBoardStream`, `loadBoard`) — la guardia che oggi salta il ricaricamento finché `#modal-root` non è `hidden`.
+      - `cli/internal/web/assets/app.js` righe 500-600 — la scorciatoia da tastiera (`Esc`, `R`, `T`), `refreshBoardAndStatus`, `boot`, `enterNoWorkspaceMode`.
+      - `cli/internal/web/assets/app.js` righe 3388-3600 e 3737-3792 — la disciplina del ciclo di lettura della conversazione: timer che non si sovrappone, stato che sopravvive a una lettura fallita, resa dopo N fallimenti. La rail delle run la imita.
+      - `cli/internal/web/assets/app.js` righe 2864-2930 — `respondRunApproval` e `findRunApproval`: come una decisione pendente viene già presentata e risposta dentro un pannello run.
+
+      ## Change
+
+      - `cli/internal/web/assets/app.js` soltanto.
+
+      Non-goal: nessuna modifica alle rotte, ai form, agli editor, alla review o ai pannelli di esecuzione; nessuna regola di processo scritta qui (etichette e stati arrivano dal payload attraverso i moduli puri); nessun secondo pannello di conversazione.
+
+      ## Steps
+
+      1. Introduci lo stato della shell (`specOpen`, `narrow`, `railFocus`) e una funzione che chiama `WorkspaceLayout.resolveLayout` e **applica** il risultato come classi su `#workspace-shell`. `narrow` si aggiorna da un `matchMedia` costruito sul punto di rottura esportato dal modulo, così JS e CSS commutano insieme.
+      2. In `openEditor(code)`: al posto di `modal.classList.remove("hidden")`, porta `specOpen` a vero e riapplica il layout. Nient'altro cambia: montaggio dei pannelli, tab, caricamento del dettaglio e ripresa dell'esecuzione restano identici.
+      3. In `closeModal()`: porta `specOpen` a falso e riapplica il layout; il resto (smontaggio dei pannelli, azzeramento degli snapshot e della review) resta identico. Mantieni il nome della funzione: ha più punti di chiamata e rinominarla allargherebbe la modifica senza guadagno.
+      4. Collega il controllo di ritorno alla board e adegua il gestore di `Esc`: torna alla board quando il riquadro spec è aperto, senza toccare il comportamento di `Esc` sulle altre finestre, che restano modali.
+      5. **Correggi `scheduleBoardReload`**: sostituisci la guardia su `#modal-root` con una guardia su «un form di modifica è aperto» — cioè `#story-form` o `#plan-form` non `hidden`. Lascia invariate le guardie sulle altre modali. Senza questa correzione la board resterebbe congelata per tutto il tempo in cui una spec è aperta, perché il riquadro non è più `hidden`.
+      6. Aggiungi il ciclo di lettura della rail: `GET /api/workspace/runs` a intervallo, con timer che non si sovrappone, stato che sopravvive a una lettura fallita e resa dopo N fallimenti consecutivi (le stesse costanti e la stessa forma del ciclo della conversazione). Rendi la sezione con `WorkspaceRuns.renderWorkspaceRuns` e aggiorna l'indicatore in topbar con `WorkspaceRuns.awaitingCount`. Il ciclo parte al boot solo se un workspace è aperto e si ferma entrando in `enterNoWorkspaceMode`; `refreshBoardAndStatus` lo forza una volta, come già fa con la conversazione.
+      7. Navigazione dalla voce di run e dall'indicatore: leggi ambito e codice dagli attributi `data-*` della riga (il renderer non naviga). Per una run di spec chiama `openEditor(code)`, che monta e riprende quella run col suo pannello approvazioni esistente; per una run di ambito workspace apri il pannello in cui quella run vive. L'indicatore porta alla prima voce in attesa.
+      8. Verifica che la conversazione non venga né ricaricata né azzerata da nessuno dei passi precedenti: `resetConversationState` e `loadConversation` restano chiamati solo dove lo sono oggi (boot, cambio di workspace, refresh esplicito). È il punto che rende vero AC-2.
+
+      ## Verify
+
+      - Esegui dalla radice: `npm run test:web` — attesa: tutte le suite verdi (i moduli puri non sono toccati qui, ma una loro rottura accidentale si vedrebbe).
+      - Esegui da `cli/`: `gofmt -l . && go vet ./... && go build ./... && go test ./...` — attesa: tutto verde come da baseline.
+      - Esegui dalla radice: `node -e "const s=require('fs').readFileSync('cli/internal/web/assets/app.js','utf8'); const g=s.slice(s.indexOf('function scheduleBoardReload')); console.log('guardia su modal-root rimossa:', !g.slice(0, g.indexOf('connectBoardStream')).includes('modal.classList.contains'));"`
+      - Attesa: `guardia su modal-root rimossa: true`, cioè il ricaricamento della board non è più bloccato dal riquadro spec aperto.
+
+      ## Done
+
+      - [ ] Aprire e chiudere una spec cambia solo la colonna primaria: la rail e la conversazione non vengono mai smontate né ricaricate.
+      - [ ] La rail legge le run a intervallo con la stessa disciplina del ciclo della conversazione e non si sovrappone a se stessa.
+      - [ ] L'indicatore di attesa è aggiornato dallo stesso payload e porta alla decisione da prendere.
+      - [ ] La guardia di `scheduleBoardReload` protegge le modifiche in corso e non congela più la board.
+      - [ ] `Esc` e il controllo di ritorno riportano alla board.
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5, AC-6 — il comportamento è cablato.
+
+      ## Blockers
+
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Smoke contro il viewer reale — elenco run, attesa segnalata, struttura della shell
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-10
+    body: |-
+      ## Objective
+
+      Contro il viewer reale e un fake hub, l'elenco delle run e la segnalazione dell'attesa si osservano dal contratto HTTP, e la struttura della shell servita al browser si osserva dagli asset veri.
+
+      ## Read
+
+      - `test/e2e/run-from-view-smoke.mjs` (957 righe) — il modello da riusare per intero: costruzione della CLI, sandbox `archetipo init`, fake hub ARcipelago su `127.0.0.1` che apre e chiude approvazioni **a comando**, avvio di `archetipo view` su porta casuale con `ARCIPELAGO_TOKEN` sentinella, salvataggio del provider di default via `PUT /api/execution/provider/default`, helper di attesa che interrogano una rotta del viewer con timeout esplicito, scrittura di `report.html` e `summary.json`.
+      - `test/e2e/workspace-status-view-smoke.mjs` — come uno smoke asserisce che il PID del viewer non è cambiato fra due osservazioni.
+      - `package.json` — la forma degli script `test:view-*`.
+      - `AGENTS.md` sezione «Standalone smoke tests» — dove va descritto lo smoke nuovo.
+
+      ## Change
+
+      - `test/e2e/workspace-runs-view-smoke.mjs` (nuovo).
+      - `package.json` — uno script `test:view-workspace-runs-smoke`.
+      - `AGENTS.md` — una voce nell'elenco degli smoke, nello stile delle esistenti: cosa è finto, cosa è reale, quali fatti verifica.
+
+      Non-goal: nessuna dipendenza nuova, nessun browser, nessun `sleep` arbitrario, nessun traffico fuori da `127.0.0.1`, nessuna credenziale reale.
+
+      ## Steps
+
+      1. Avvia sandbox, fake hub e viewer come fa `run-from-view-smoke.mjs`. Semina un backlog con due spec e avvia due run — una di spec e una di ambito workspace — lasciandone chiudere una terza.
+      2. **AC-3**: leggi `GET /api/workspace/runs` e asserisci che elenca le due run attive con ambito, azione e stato, che non elenca quella terminale, e che ogni voce porta l'id di esecuzione da cui la run si raggiunge.
+      3. **AC-4**: fai aprire al hub una approvazione su **una sola** delle due run. **Senza mai aver chiamato** `GET /api/execution/{id}/run` per quella esecuzione — registra e asserisci esplicitamente questo fatto nello smoke, contando le richieste che gli fai — attendi (interrogando la rotta, non dormendo) che quella voce risulti `awaiting_response` con la decisione nominata, e asserisci che l'altra voce non lo è. Poi rispondi alla decisione attraverso la rotta esistente e asserisci che la voce smette di essere in attesa.
+      4. **AC-2**: apri una conversazione, produci eventi, leggi `GET /api/workspace/conversation?after_id=0`, e asserisci che una seconda lettura dopo aver esercitato le rotte del dettaglio spec restituisce lo stesso id di conversazione e la stessa storia, sullo **stesso PID** del viewer, asserito immutato.
+      5. **AC-1 e AC-5**: chiedi `GET /index.html` al viewer e asserisci sul documento realmente servito che, nella fetta compresa fra l'apertura e la chiusura di `<aside id="workspace-rail">`, compaiono `workspace-conversation` e `workspace-runs` e **non** `modal-root`; che `modal-root` compare invece dentro la colonna primaria della shell; e che sopravvivono tutti gli identificatori delle operazioni sulla spec: `story-form`, `plan-form`, `story-edit-btn`, `story-delete-btn`, `story-actions`, `story-execution`, `story-run`, `review-tab`, `review-approve-btn`, `review-request-btn`, `review-integrate-btn`, più i tre `data-tab` `story`/`plan`/`review`.
+      6. **AC-6**: chiedi `GET /app.css` e asserisci che contiene la media query al punto di rottura dichiarato e le classi di modalità stretta che il modulo di layout restituisce.
+      7. Scrivi `report.html` e `summary.json` nella directory della run, come gli altri smoke. Salta su Windows solo se lo smoke usa fake con shebang POSIX; se non ne usa, non aggiungere lo skip.
+
+      ## Verify
+
+      - Esegui dalla radice: `npm run test:view-workspace-runs-smoke`
+      - Attesa: esito verde con un passo nominato per ciascuno dei sei punti sopra; il report è scritto nella directory della run. Le directory generate sotto `test/workspaces/` non vanno committate.
+
+      ## Done
+
+      - [ ] AC-3 — le run in corso sono elencate con stato e ambito, e la terminale ne resta fuori.
+      - [ ] AC-4 — l'attesa è osservata **senza** che il pannello di quella run sia mai stato aperto, e lo smoke lo asserisce contando le proprie richieste, non affermandolo in un commento.
+      - [ ] AC-2 — la conversazione conserva id e storia sullo stesso PID del viewer, asserito immutato.
+      - [ ] AC-1, AC-5 — chi sta dentro chi nella shell servita, e la sopravvivenza di tutti gli identificatori delle operazioni sulla spec.
+      - [ ] AC-6 — il punto di rottura e le classi di modalità stretta sono negli asset serviti.
+      - [ ] Lo smoke non contiene attese a tempo fisso: ogni attesa interroga una rotta con un timeout che nomina cosa si aspettava e cosa è arrivato.
+
+      ## Blockers
+
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Gate finale — controlli completi e verifica che nessun task resti TODO
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+    body: |-
+      ## Objective
+
+      L'incremento supera esattamente i controlli che il repository esegue in CI, e la spec passa in review solo dopo che ogni task risulta `DONE`.
+
+      ## Read
+
+      - `AGENTS.md` sezione «Rules for CLI changes» — i cinque controlli da eseguire prima di consegnare.
+      - La sezione `Baseline` del corpo di questo piano — cosa era verde prima, e che `golangci-lint` non è installato su questa macchina.
+
+      ## Change
+
+      Nessuna modifica al codice. Se un controllo è rosso, la riparazione appartiene al task che ha introdotto il problema: torna là, correggi, e riesegui questo gate da capo.
+
+      ## Steps
+
+      1. Da `cli/`: `gofmt -l .` — nessun output.
+      2. Da `cli/`: `go vet ./...`
+      3. Da `cli/`: `go build ./...`
+      4. Da `cli/`: `go test ./...`
+      5. Da `cli/`: `golangci-lint run --timeout 5m ./...`. Non è installato: installalo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` ed eseguilo. Se l'installazione non è possibile in questo ambiente, **dichiaralo esplicitamente** nel resoconto invece di considerare il controllo superato.
+      6. Dalla radice: `npm run test:web`
+      7. Dalla radice: `npm run test:view-workspace-runs-smoke`
+      8. Verifica che nessun file toccato dal piano abbia acquisito diagnostica: la baseline era interamente pulita, quindi qualunque segnalazione di `vet`, `gofmt` o del linter su un file toccato è nuova e va risolta, non tollerata.
+      9. Marca questo task `DONE`.
+      10. Dalla radice del progetto (`/Users/stefanoleli/Project/ARchetipo`), esegui `archetipo spec show US-055` e verifica nell'envelope che **nessun** task sia rimasto `TODO`.
+      11. Solo a questo punto, e solo se il passo 10 è soddisfatto, richiedi la review con `archetipo spec review US-055`.
+
+      ## Verify
+
+      - `gofmt -l .` senza output; `go vet ./...`, `go build ./...`, `go test ./...` verdi; `golangci-lint run --timeout 5m ./...` con 0 issue (o la dichiarazione esplicita del passo 5).
+      - `npm run test:web` verde, con un numero di test superiore agli 80 della baseline.
+      - `npm run test:view-workspace-runs-smoke` verde.
+      - `archetipo spec show US-055` non elenca nessun task in stato `TODO`.
+
+      ## Done
+
+      - [ ] I cinque controlli Go della CI sono stati eseguiti e sono verdi (o l'unico non eseguibile è dichiarato).
+      - [ ] Le due suite Node sono verdi.
+      - [ ] Nessun file toccato ha acquisito diagnostica rispetto alla baseline.
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5, AC-6 — le evidenze della mappa di accettazione sono tutte prodotte e verdi.
+      - [ ] `archetipo spec show US-055` prova che ogni task è `DONE` **prima** che la review sia richiesta.
+
+      ## Blockers
+
+      None.
+    ref: TASK-12

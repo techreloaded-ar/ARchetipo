@@ -1,0 +1,45 @@
+schema: archetipo/spec/v2
+code: US-041
+title: Generare il backlog iniziale dalla UI
+epic:
+  code: EP-005
+  title: Esperienza operativa ARchetipo
+priority: HIGH
+points: 5
+status: DONE
+blocked_by:
+  - US-040
+scope: MVP
+body: |-
+  #### US-041: Generare il backlog iniziale dalla UI
+
+  **Epic:** EP-005 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** US-040
+
+  **User Story**
+  Come persona che ha appena ottenuto il PRD,
+  voglio generare il backlog iniziale dalla UI,
+  così da avere epiche e specifiche senza preparare payload né invocare la CLI.
+
+  **Dimostrazione**
+  Partendo da un workspace con PRD e senza backlog, il revisore avvia la generazione dalla UI, segue l'avanzamento e al termine ritrova la board popolata con le epiche e le specifiche prodotte, senza riavviare il viewer. Ripetendo la prova su un workspace che ha già un backlog, osserva che l'azione non è offerta come generazione iniziale. Forzando un fallimento osserva il backlog invariato e il motivo dichiarato.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Con un PRD presente e nessun backlog la UI offre la generazione del backlog iniziale.
+  - [ ] AC-2 — Al termine con esito positivo epiche e specifiche sono persistite e la board le mostra senza riavviare il viewer.
+  - [ ] AC-3 — Con un backlog già esistente l'azione di generazione iniziale non è offerta.
+  - [ ] AC-4 — Una run fallita o interrotta lascia il backlog nello stato precedente e ne dichiara il motivo.
+
+  **Fuori ambito**
+  Rigenerazione o sostituzione di un backlog esistente, modifica delle specifiche generate, pianificazione e priorità automatiche.
+history:
+  - status: TODO
+    at: "2026-08-19T11:03:29Z"
+  - status: PLANNED
+    at: "2026-08-19T23:42:00Z"
+  - status: IN PROGRESS
+    at: "2026-08-19T23:43:09Z"
+  - status: REVIEW
+    at: "2026-08-20T00:17:31Z"
+  - status: DONE
+    at: "2026-08-20T00:19:32Z"

@@ -1,0 +1,714 @@
+schema: archetipo/plan/v2
+spec_code: US-052
+body: |-
+  # US-052: Riconoscere il workspace aperto senza aprire una finestra — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-08-22
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-008 — Workspace gestiti dalla UI
+  **Priorità:** MEDIUM | **Punti:** 2
+  **Bloccata da:** US-051 (stato `DONE`, nessun rischio di precedenza)
+
+  **User Story**
+  Come utilizzatore di ARchetipo che tiene aperti più workspace in schede diverse, voglio riconoscere a colpo d'occhio su quale workspace sto lavorando, così da non affidare un'azione al workspace sbagliato credendo di essere nell'altro.
+
+  **Criteri di accettazione**
+
+  - AC-1 — Il nome del workspace aperto è visibile nell'interfaccia in ogni momento, senza aprire finestre, e il suo percorso completo è consultabile da lì.
+  - AC-2 — Il titolo della scheda del browser nomina il workspace aperto, così due schede su workspace diversi sono distinguibili dal solo titolo.
+  - AC-3 — Aprendo un altro workspace, il nome mostrato e il titolo della scheda diventano quelli del nuovo workspace senza ricaricare la pagina.
+  - AC-4 — Dall'indicatore del workspace aperto si raggiungono i workspace conosciuti e se ne apre un altro.
+  - AC-5 — Quando nessun workspace è aperto, l'indicatore lo dichiara invece di mostrare un nome.
+
+  **Fuori ambito**
+  La shell a due colonne con elenco laterale permanente dei workspace, la conversazione affiancata alla board, l'elenco delle run in corso e ogni modifica al comportamento di apertura di un workspace.
+
+  ---
+
+  ## Stato attuale del codice
+
+  - `cli/internal/web/workspaces.go` serve `GET /api/workspaces` con `workspaceListView{Workspaces, Open, CurrentPath}`. Il **nome** del workspace aperto oggi esiste solo dentro la voce di registro marcata `current: true`: se il registro è assente o illeggibile, le due branche di fallback rispondono `open: true` con lista vuota, e la pagina non ha modo di nominare il workspace che sta servendo.
+  - `cli/internal/web/assets/index.html` ha un `<title>` statico (`ARchetipo · Backlog Viewer`) e una topbar a tre celle (`.brand` | `.topbar-stats` | `.topbar-actions`). Nessun elemento nomina il workspace. `#workspaces-btn` porta `data-workspace-scoped`, quindi in home mode è nascosto.
+  - `cli/internal/web/assets/app.js` non tocca mai `document.title`. `boot()` interroga già `/api/workspaces` prima di disegnare qualsiasi cosa, `renderWorkspaces(view)` ha lo stesso payload in mano per la modale, e `connectBoardStream()` riceve un tick SSE a ogni cambiamento — **incluso lo switch di workspace**, perché `SwitchWorkspace` chiama `s.broker.Publish()` e il broker vive sul `Server`, non sulla sessione, quindi la connessione sopravvive allo switch.
+  - `enterNoWorkspaceMode()` sposta `#workspaces-add-form` **fuori** dalla modale e dentro la home: a workspace chiuso la modale dei workspace conosciuti è mutilata e non va aperta.
+
+  ## Soluzione tecnica
+
+  L'identità del workspace aperto smette di essere un dato deducibile dall'elenco e diventa un fatto dichiarato dal server, reso da un modulo puro e scritto sulla pagina in un punto solo.
+
+  ### 1. Il server dichiara nome e percorso del workspace aperto
+
+  `workspaceListView` guadagna un campo `CurrentName string \`json:"currentName"\``, riempito in **tutte e tre** le branche di `handleListWorkspaces` — anche quelle che ricadono sulla lista vuota. Un nuovo helper accanto a `openWorkspacePath()`:
+
+  ```go
+  // openWorkspaceIdentity is name and path of the open workspace, or two empty
+  // strings when none is. The name comes from the registry entry when there is
+  // one, because a directory renamed away must stay recognisable as "the one
+  // that was called this"; it falls back to the base name of the path, which is
+  // exactly what Touch would have recorded, so an unreadable registry costs the
+  // stored name and never the name itself.
+  func (s *Server) openWorkspaceIdentity() (name, path string)
+  ```
+
+  Regola: `path` = `openWorkspacePath()`; `name` = il `Name` della voce di registro il cui `filepath.Clean(Path)` coincide con `path`, altrimenti `filepath.Base(path)`. Con `path == ""` entrambi sono vuoti.
+
+  Nessuna rotta nuova: la home e l'indicatore fanno **una** domanda e ricevono **una** risposta, che è la stessa ragione per cui `Open` e `CurrentPath` vivono già sulla lista invece che su una rotta a parte. `openWorkspacePath()` resta e viene chiamato dal nuovo helper, così la condizione "nessuna sessione" continua a essere scritta una volta sola.
+
+  ### 2. Un modulo puro traduce il payload in identità
+
+  Nuovo `cli/internal/web/assets/workspace-identity.js`, stesso stampo di `workspace-home.js` e `workspace-layout.js`: nessun DOM, nessun `document`, nessun `fetch`, consumabile sia dal browser (`window.WorkspaceIdentity`) sia da Node (`module.exports`).
+
+  ```js
+  resolveWorkspaceIdentity(view) -> {
+    open: boolean,        // un workspace è aperto
+    name: string,         // "" quando nessuno è aperto
+    path: string,         // "" quando nessuno è aperto
+    label: string,        // ciò che si legge nella topbar
+    tooltip: string,      // il percorso completo, consultabile dall'indicatore
+    documentTitle: string,// il titolo della scheda
+    actionable: boolean   // l'indicatore porta ai workspace conosciuti
+  }
+  ```
+
+  Decisioni già prese, niente lasciato all'implementatore:
+
+  - **Aperto**: `label = name`, `tooltip = path`, `documentTitle = name + " · ARchetipo"`, `actionable = true`.
+  - **Chiuso**: `label = "No workspace open"`, `tooltip = ""`, `documentTitle = "No workspace · ARchetipo"`, `actionable = false`.
+  - **Payload parziale o assente** (`null`, `open: true` senza `currentName`): si ricade sul ramo chiuso invece di mostrare un nome vuoto — una pagina che non sa quale workspace serve lo dichiara, non finge.
+  - Il modulo restituisce **stringhe piane, mai HTML**: il chiamante le scrive con `textContent` e con l'attributo `title`, quindi non c'è escaping da sbagliare su un nome che viene dal disco dell'utente. È una differenza deliberata rispetto a `workspace-home.js`, che invece produce markup e per questo porta il proprio `escapeHtml`.
+  - Le stringhe dell'interfaccia restano in inglese, come tutte quelle già presenti in `index.html`, `app.js` e `workspace-home.js`.
+
+  ### 3. L'indicatore nella topbar
+
+  In `index.html`, dentro la cella `.brand` (che è un flex container: aggiungere un figlio non tocca la griglia a tre colonne della topbar), dopo `.brand-stack`:
+
+  ```html
+  <button id="workspace-indicator" type="button" class="workspace-indicator" aria-live="polite">
+      <span class="workspace-indicator-eyebrow">workspace</span>
+      <span class="workspace-indicator-name" id="workspace-indicator-name">—</span>
+  </button>
+  ```
+
+  L'elemento **non** porta `data-workspace-scoped`: è l'unico controllo della topbar che deve restare visibile anche a workspace chiuso, perché AC-5 gli chiede di dichiarare l'assenza. A workspace chiuso è `disabled` e porta la classe `is-empty`: AC-4 parla dell'indicatore **del workspace aperto**, e la modale dei workspace conosciuti in home mode è priva del proprio form (spostato nella home da `enterNoWorkspaceMode`), quindi aprirla lì sarebbe una finestra mutilata. La home resta la via per scegliere quando nessun workspace è aperto.
+
+  `#workspaces-btn` resta dov'è e come sta: è la voce di menù esplicita, l'indicatore è la scorciatoia che nomina. Rimuoverlo significherebbe toccare `workspacesBtn.addEventListener` e il resto del cablaggio esistente per un guadagno solo estetico.
+
+  CSS in `app.css`, accanto alle regole `.brand*`: `.workspace-indicator` come pill discreta (font mono, bordo `var(--rule)`, `max-width` con `text-overflow: ellipsis` perché un nome di directory può essere lungo), `.workspace-indicator[disabled]` in `var(--text-dim)` e `cursor: default`.
+
+  ### 4. Il cablaggio in `app.js`
+
+  Un solo punto scrive l'identità sulla pagina:
+
+  ```js
+  function applyWorkspaceIdentity(view) {
+    const id = WorkspaceIdentity.resolveWorkspaceIdentity(view);
+    workspaceIndicatorName.textContent = id.label;
+    workspaceIndicator.title = id.tooltip;      // il percorso completo, consultabile da lì
+    workspaceIndicator.disabled = !id.actionable;
+    workspaceIndicator.classList.toggle("is-empty", !id.open);
+    document.title = id.documentTitle;
+  }
+  ```
+
+  e una sola funzione che va a chiederla quando non ce l'ha già in mano:
+
+  ```js
+  async function refreshWorkspaceIdentity() {
+    try { applyWorkspaceIdentity(await apiGet("/api/workspaces")); } catch (_) { /* l'identità sullo schermo resta l'ultima conosciuta */ }
+  }
+  ```
+
+  Chiamanti (nessuna fetch in più dove il payload è già disponibile):
+
+  - `boot()`: `applyWorkspaceIdentity(view)` in **entrambi** i rami, e `applyWorkspaceIdentity(null)` nel `catch` — AC-1, AC-2, AC-5.
+  - `renderWorkspaces(view)` e il ramo di errore di `loadWorkspaces()`: il payload della modale è lo stesso.
+  - `openWorkspace()`: subito dopo il `POST .../open` riuscito, `applyWorkspaceIdentity({open: true, currentName: res.name, currentPath: res.path})` — l'indicatore e il titolo diventano quelli del nuovo workspace nell'istante della risposta, prima e indipendentemente da qualunque cosa faccia il resto della funzione.
+  - dentro il timer di `scheduleBoardReload()`, **prima** delle guardie sui form aperti: `refreshWorkspaceIdentity()`. È il tick SSE già esistente, quello che `SwitchWorkspace` pubblica: una pagina già caricata segue lo switch dal vivo, senza ricaricare. Sta prima delle guardie perché sapere quale workspace si sta guardando non è una modifica che possa distruggere un'edit in corso.
+  - `refreshBoardAndStatus()`: `refreshWorkspaceIdentity()` insieme alle altre domande che un refresh esplicito pone.
+  - click su `#workspace-indicator` → `openWorkspaces()`, la modale già esistente, che elenca i workspace conosciuti e ne apre uno con il flusso invariato — AC-4.
+
+  `index.html` carica `workspace-identity.js` con lo stesso `<script>` non-modulo degli altri helper, **prima** di `app.js`.
+
+  ### Nessun ADR
+
+  Nessuna scelta attraversa la soglia: il modello dati persistito non cambia (il registro dei workspace non viene toccato), il confine di integrazione non cambia (nessuna rotta nuova, un campo aggiunto a un payload esistente), e il pattern "modulo puro + cablaggio sottile in `app.js`" è già quello stabilito da `workspace-home.js`, `workspace-layout.js`, `workspace-status.js` e `workspace-runs.js`. Il piano segue un pattern esistente, non ne sceglie uno.
+
+  ### Assunzione registrata (ambiguità AC-3 / fuori ambito)
+
+  AC-3 chiede che nome e titolo diventino quelli del nuovo workspace **senza ricaricare la pagina**; il fuori ambito esclude **ogni modifica al comportamento di apertura di un workspace**. Oggi `openWorkspace()` chiude con `window.location.reload()`, scelta deliberata di US-051 documentata nel codice (le cache a livello di modulo — board, drawer, pannelli di esecuzione, config, mockup — verrebbero altrimenti azzerate da un elenco che invecchia male).
+
+  **Assunzione:** il fuori ambito prevale sul modo, AC-3 prevale sul risultato. Il `reload` resta esattamente dov'è e come sta; l'identità viene resa **reattiva** e non dipende più da un caricamento di pagina per essere corretta. In concreto, nome e titolo diventano quelli del nuovo workspace in due momenti che precedono e non richiedono alcun reload: alla risposta del `POST .../open` nella scheda che ha comandato lo switch, e al tick SSE in qualunque scheda già aperta su quel viewer. Se in accettazione questa lettura risultasse insufficiente, la rimozione del `reload` è un lavoro a sé — tocca il comportamento di apertura e va in una spec propria.
+
+  ---
+
+  ## Baseline
+
+  Misurata prima di progettare i task, in `/Users/stefanoleli/Project/Archetipo` (nessun worktree per questa spec: `workdir` coincide con `project_root`).
+
+  | Comando | Directory | Esito misurato |
+  |---|---|---|
+  | `gofmt -l .` | `cli/` | nessun output |
+  | `go vet ./...` | `cli/` | nessun errore |
+  | `go build ./...` | `cli/` | compila |
+  | `go test ./internal/web/...` | `cli/` | 382 test passati, 0 falliti |
+  | `npm run test:web` | radice | 97 test, 21 suite, 0 falliti |
+
+  Non ci sono fallimenti pre-esistenti: **ogni `Expect` dei task può dire "verde"**, e un rosso nuovo è sempre un difetto introdotto da questa spec.
+
+  ### Prerequisiti d'ambiente
+
+  - **Go** installato (il modulo è `cli/go.mod`). Già verificato in baseline.
+  - **Node** installato; `npm run test:web` usa il runner nativo `node --test "test/web/**/*.test.mjs"` — il glob raccoglie automaticamente il file nuovo, non serve registrare nulla in `package.json`.
+  - `golangci-lint` **non è installato** su questa macchina (`which golangci-lint` → non trovato). AGENTS.md lo elenca fra i controlli di CI; installarlo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` è opzionale e non è una precondizione di nessun task. Se disponibile, il gate finale lo esegue; se assente, il gate lo registra come non eseguito invece di fingere un verde.
+  - Nessun database, nessun client generato, nessun servizio esterno.
+
+  ### Diagnostica dei file toccati
+
+  I file modificati da questo piano (`cli/internal/web/workspaces.go`, `cli/internal/web/assets/index.html`, `app.css`, `app.js`) sono oggi puliti secondo `gofmt`/`go vet`; per gli asset non esiste un linter configurato nel repository. Nessuna pulizia pregressa da includere: nessun task deve lasciare diagnostica nuova sui file che tocca.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | AC | Livello | Oracolo osservabile | Stato di partenza / fixture | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | modulo puro | `resolveWorkspaceIdentity({open:true,currentName:"alfa",currentPath:"/tmp/x/alfa"})` → `label === "alfa"` **e** `tooltip === "/tmp/x/alfa"` (percorso completo, non troncato né ricalcolato) | payload letterale nel test | TASK-06 |
+  | AC-1 | contratto HTTP (Go) | `GET /api/workspaces` su un server che serve `corrente` → `currentName == "corrente"` e `currentPath` assoluto e uguale alla root servita | `newWorkspacesTestServer` + `seedWorkspace` + `reg.Touch` | TASK-02 |
+  | AC-1 | contratto HTTP (Go) | stesso server con registro **senza** la voce corrente → `currentName == filepath.Base(root)`, non vuoto: il nome non dipende dal registro | registro temporaneo vuoto | TASK-02 |
+  | AC-1 | contratto markup | `index.html` contiene `id="workspace-indicator"` **dentro** `<div class="brand">` e quell'elemento **non** contiene `data-workspace-scoped` | lettura del file asset | TASK-06 |
+  | AC-2 | modulo puro | `documentTitle` di due payload con nomi diversi → due stringhe **diverse**, ciascuna contenente il proprio `name`: due schede sono distinguibili dal solo titolo | due payload letterali | TASK-06 |
+  | AC-2 | contratto markup | `app.js` assegna `document.title` a partire da `resolveWorkspaceIdentity` (l'assegnazione esiste nel sorgente: oggi `document.title` non compare affatto) | lettura del file asset | TASK-06 |
+  | AC-3 | contratto HTTP (Go) | sullo **stesso** processo: `GET /api/workspaces` riporta `alfa`; `POST /api/workspaces/{id}/open` su `beta`; il `GET` successivo riporta `currentName == "beta"` e `currentPath` = root di beta, senza ricostruire il server | `realWorkspace` alfa/beta + registro temporaneo | TASK-02 |
+  | AC-3 | contratto HTTP (Go) | la risposta di `POST .../open` porta già `name`/`path` del nuovo workspace, cioè tutto ciò che serve ad aggiornare l'indicatore senza una seconda domanda | idem | TASK-02 |
+  | AC-3 | modulo puro | applicare `resolveWorkspaceIdentity` al payload del nuovo workspace produce label e title del nuovo workspace: la transizione è una funzione dello stato, non un effetto del caricamento | due payload in sequenza | TASK-06 |
+  | AC-3 | contratto markup | `app.js` chiama l'aggiornamento dell'identità dentro il timer di `scheduleBoardReload` (il tick SSE) e subito dopo il `POST .../open` riuscito | lettura del file asset | TASK-06 |
+  | AC-4 | contratto markup | `#workspace-indicator` è un `<button>` e in `app.js` il suo listener di `click` chiama `openWorkspaces` | lettura del file asset | TASK-06 |
+  | AC-4 | contratto HTTP (Go) | la modale raggiunta elenca i workspace conosciuti e ne apre un altro: coperto dal `GET /api/workspaces` + `POST .../open` di AC-3, sullo stesso processo | idem AC-3 | TASK-02 |
+  | AC-5 | modulo puro | `resolveWorkspaceIdentity({open:false,...})`, `(null)`, e `({open:true})` senza nome → `label === "No workspace open"`, `open === false`, `actionable === false`, `documentTitle` che dichiara l'assenza; `label` non è mai vuoto | tre payload letterali | TASK-06 |
+  | AC-5 | contratto HTTP (Go) | server-home (`NewHomeServer`): `GET /api/workspaces` → `open == false`, `currentPath == ""`, `currentName == ""` | `homeServer(t)` in `no_workspace_test.go` | TASK-02 |
+  | AC-5 | contratto markup | l'indicatore non è `data-workspace-scoped`, quindi la regola `body.no-workspace [data-workspace-scoped]{display:none}` di `app.css` non lo nasconde | lettura di `index.html` e `app.css` | TASK-06 |
+
+  Ogni AC ha almeno un oracolo che osserva l'esito dichiarato e non un suo sostituto: non si asserisce "esiste un file di test", non si asserisce "il modulo è stato chiamato", e il nome del workspace è sempre confrontato con un nome atteso, mai con "non vuoto" soltanto (l'unica eccezione è il fallback, dove "non vuoto" **è** la proprietà in gioco, ed è comunque confrontato con `filepath.Base`).
+
+  ## Strategia di test
+
+  Tre livelli, nessun doppio di test che nasconda l'oggetto della verifica:
+
+  1. **Modulo puro** (`node --test`, `test/web/workspace-identity.test.mjs`). Il modulo è caricato con lo stesso loader `node:vm` già usato da `workspace-layout.test.mjs` e `workspace-status.test.mjs`. Qui non c'è alcun mock: la funzione sotto test è l'unica responsabile di etichetta, tooltip e titolo, quindi asserire su ciò che restituisce è asserire su ciò che si legge sullo schermo.
+  2. **Contratto HTTP** (`go test ./internal/web/...`). Server reale, `httptest`, connettore reale sulle directory temporanee, registro dei workspace su `t.TempDir()`. Lo switch è quello vero (`POST /api/workspaces/{id}/open` → `SwitchWorkspace`) sullo stesso processo: è ciò che rende AC-3 un fatto e non una promessa.
+  3. **Contratto sul markup e sul cablaggio** (dentro lo stesso file `node --test`). `index.html`, `app.css` e `app.js` sono letti come testo e si asseriscono le proprietà che nessun test di modulo può vedere: dove sta l'indicatore, che non è workspace-scoped, che `document.title` viene scritto, che il click porta ai workspace conosciuti, che l'identità viene riaggiornata sul tick e dopo l'apertura. Leggere un asset da un test è un pattern già presente nel repository (`workspace-layout.test.mjs` legge `app.css`, `conversation.test.mjs` legge il sorgente dell'helper).
+
+  ### Waiver del browser e2e
+
+  **Nessun test e2e su browser viene introdotto, e nessun framework di browser viene installato.**
+
+  Il repository non ha oggi alcun framework di browser: i venti e più script in `test/e2e/*-view-smoke.mjs` guidano il viewer **reale** ma parlano solo HTTP, e non aprono mai una pagina. Introdurne uno per questa spec significherebbe farlo per una modifica che, sul lato osservabile dal browser, è presentazione: un elemento in più nella topbar, un attributo `title`, e `document.title`.
+
+  Perché i livelli scelti bastano a provare ogni AC toccato:
+
+  - Il **percorso attraversato** — quale workspace il server dichiara aperto, e come cambia dopo uno switch, sullo stesso processo — è esattamente ciò che i test Go osservano sul contratto HTTP reale (AC-1, AC-3, AC-4, AC-5).
+  - La **decisione presentazionale** — cosa si legge nella topbar e nella scheda — è interamente dentro il modulo puro, che non ha DOM: quello che restituisce è quello che viene scritto (AC-1, AC-2, AC-5).
+  - L'unico anello che nessuno dei due vede è il **cablaggio** in `app.js`/`index.html`; è coperto dalle asserzioni sul sorgente elencate nella mappa, che sono l'evidenza disponibile senza bootstrappare un browser.
+
+  Restano fuori dalla prova automatica l'aspetto visivo dell'indicatore e il fatto che il testo non venga troncato in modo illeggibile: sono giudizi umani, e appartengono alla review.
+
+  ### `Demonstrates`
+
+  La dimostrazione della spec **è filmabile**: si osservano un nome nella topbar, un titolo di scheda, due schede affiancate e un cambio dal vivo. La pianificazione registra solo l'aspettativa; la decisione di registrare o saltare il video appartiene a `archetipo-review`. Nota per chi la esegue: `record_demo_video` è oggi `false` nella configurazione del progetto.
+
+  ## Note e assunzioni
+
+  - **AC-3 e il `reload`**: assunzione registrata per esteso nella sezione "Soluzione tecnica". In sintesi: il `window.location.reload()` di `openWorkspace()` non viene toccato (fuori ambito), e l'identità viene resa reattiva così da essere corretta senza dipendere da un caricamento.
+  - **Nessun lavoro sulla Wiki**: `archetipo config show` riporta `wiki.enabled: false`. Nessuna pagina letta, nessun contratto `wiki_impact`, nessun task di Wiki.
+  - **Nessun mockup**: la spec non introduce pagine, rotte o componenti con layout proprio, e non ristruttura il layout di una pagina esistente — aggiunge un controllo alla topbar già disegnata.
+  - **Blocco US-051**: `DONE`. La home, il server senza workspace e la modale dei workspace conosciuti esistono e sono i presupposti su cui questo piano poggia.
+  - **Lingua**: i contenuti dell'interfaccia restano in inglese, come tutto il viewer esistente; i nomi dei test seguono l'italiano già usato in `test/web/`.
+tasks:
+  - id: TASK-01
+    title: Il server dichiara nome e percorso del workspace aperto su GET /api/workspaces
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      `GET /api/workspaces` risponde con `currentName`, il nome del workspace aperto, in ogni branca della risposta e anche quando il registro dei workspace conosciuti non è leggibile.
+
+      ## Read
+
+      - `cli/internal/web/workspaces.go` — `workspaceListView`, `handleListWorkspaces` (tre branche: registro nil, `List()` in errore, caso normale), `openWorkspacePath()`, `workspaceViews()`.
+      - `cli/internal/workspace/registry.go` — `Entry` (commento su `Name`: è memorizzato alla registrazione, non ricalcolato a ogni lettura), `Registry.List()`, `Touch()` alla riga in cui costruisce `Entry{... Name: filepath.Base(clean) ...}`.
+      - `cli/internal/web/server.go` — `Server.session()` e il campo `workspaces` (può essere `nil`: una macchina senza state directory scrivibile deve comunque avere un viewer funzionante).
+
+      ## Change
+
+      - `cli/internal/web/workspaces.go`, e nient'altro.
+        - Aggiungi a `workspaceListView` il campo `CurrentName string \`json:"currentName"\``.
+        - Aggiungi il metodo `func (s *Server) openWorkspaceIdentity() (name, path string)`.
+        - Riempi `CurrentName` in tutte e tre le branche di `handleListWorkspaces`.
+
+      Non-goal espliciti: nessuna rotta nuova; `openWorkspaceView` e `workspaceEntryView` non cambiano forma; il registro non viene scritto né riordinato; `workspaceViews` non viene toccato; nessun campo esistente viene rinominato o rimosso (il frontend attuale legge `open` e `currentPath` e deve continuare a funzionare).
+
+      ## Steps
+
+      1. In `workspaceListView` aggiungi `CurrentName string \`json:"currentName"\`` **dopo** `CurrentPath`, e aggiorna il commento del tipo con una frase che dica perché il nome sta qui: la pagina che deve nominare il workspace aperto fa una sola domanda e riceve una sola risposta.
+      2. Scrivi `openWorkspaceIdentity` subito sotto `openWorkspacePath`, con questo comportamento:
+         - `path := s.openWorkspacePath()`; se `path == ""` restituisci `"", ""`.
+         - se `s.workspaces != nil`, chiama `s.workspaces.List()`; ignorando l'errore, scorri le voci e, alla prima il cui `filepath.Clean(e.Path)` è uguale a `path`, restituisci `e.Name, path`.
+         - altrimenti restituisci `filepath.Base(path), path`.
+         - Commenta il fallback: il nome memorizzato è ciò che si perde quando il registro non si legge, mai il nome in sé — e `filepath.Base` è esattamente ciò che `Touch` avrebbe registrato.
+      3. In `handleListWorkspaces` sostituisci `path := s.openWorkspacePath()` con `name, path := s.openWorkspaceIdentity()` e aggiungi `CurrentName: name` a tutte e tre le `writeJSON`. Verifica di non averne dimenticata nessuna: sono tre e devono restare simmetriche.
+      4. Esegui `gofmt -w cli/internal/web/workspaces.go`.
+
+      ## Verify
+
+      - Esegui in `cli/`: `gofmt -l . && go vet ./... && go build ./...`
+      - Expect: `gofmt -l .` non stampa nulla, `go vet` e `go build` non riportano errori (baseline: tutti e tre verdi).
+      - Esegui in `cli/`: `go test ./internal/web/...`
+      - Expect: 0 fallimenti; il conteggio dei test passati non deve scendere sotto i 382 della baseline (i test di TASK-02 lo alzeranno).
+
+      ## Done
+
+      - [ ] `workspaceListView` porta `CurrentName` con tag JSON `currentName`.
+      - [ ] AC-1 — con un workspace aperto, `GET /api/workspaces` risponde con `currentName` non vuoto e `currentPath` assoluto, anche quando il registro è `nil` o illeggibile.
+      - [ ] AC-5 — senza workspace aperto, `currentName` è la stringa vuota, coerente con `open: false` e `currentPath: ""`.
+      - [ ] Nessuna rotta aggiunta e nessun campo esistente del payload cambiato.
+      - [ ] `gofmt`, `go vet`, `go build` e `go test ./internal/web/...` restano verdi.
+
+      ## Blockers
+
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test Go sull'identità dichiarata dal server, prima e dopo uno switch
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Il contratto HTTP prova, su un processo solo e con lo switch reale, che il server nomina il workspace aperto, che il nome cambia insieme al workspace, che sopravvive a un registro senza la voce corrente, e che senza workspace aperto non c'è nome da mostrare.
+
+      ## Read
+
+      - `cli/internal/web/workspaces_test.go` — `TestMain` (redirige `ARCHETIPO_STATE_DIR`), `newWorkspacesTestServer`, `seedWorkspace`, `listWorkspaces`, `TestListWorkspacesReportsNamePathAndLastOpened` (modello di asserzione sulle voci), `TestOpenWorkspaceSwitchesBoardConfigAndActions` (modello per lo switch via `POST .../open`).
+      - `cli/internal/web/switch_test.go` — `realWorkspace` (crea una directory che è davvero un workspace, con backlog reale) e `serverOn`.
+      - `cli/internal/web/no_workspace_test.go` — `homeServer(t)` e `TestHomeServerServesHomeRoutes`, che già decodifica in `workspaceListView` e asserisce su `Open` e `CurrentPath`.
+      - `cli/internal/web/workspaces.go` — la forma finale di `workspaceListView` e di `openWorkspaceIdentity` prodotta da TASK-01.
+
+      ## Change
+
+      - `cli/internal/web/workspaces_test.go` — aggiungi tre funzioni di test in coda al file. Puoi aggiungere un helper locale che decodifica la risposta in `workspaceListView` (il `listWorkspaces` esistente estrae solo `workspaces` e non va modificato, perché è usato da molti test).
+      - `cli/internal/web/no_workspace_test.go` — estendi `TestHomeServerServesHomeRoutes` con l'asserzione su `CurrentName`.
+
+      Non-goal: non modificare i test esistenti oltre a quell'unica asserzione aggiunta; non toccare codice di produzione (se serve un cambiamento, appartiene a TASK-01).
+
+      ## Steps
+
+      1. Aggiungi in `workspaces_test.go` un helper `listWorkspacesView(t *testing.T, srv *Server) workspaceListView` che fa la `GET /api/workspaces` su `srv.mux`, pretende 200 e decodifica il corpo in `workspaceListView`.
+      2. `TestListWorkspacesNamesTheOpenWorkspace`: `root := t.TempDir()`; `current := seedWorkspace(t, root, "corrente")`; `srv, reg := newWorkspacesTestServer(t, current)`; `reg.Touch(current)`. Asserisci `view.Open == true`, `view.CurrentName == "corrente"`, `view.CurrentPath == filepath.Clean(current)` e `filepath.IsAbs(view.CurrentPath)`.
+      3. `TestListWorkspacesNamesTheOpenWorkspaceWithoutARegistryEntry`: stesso setup **senza** `reg.Touch`, cioè con un registro leggibile ma vuoto. Asserisci `view.CurrentName == filepath.Base(filepath.Clean(current))` e che non sia vuoto. Ripeti l'asserzione dopo `srv.workspaces = nil` (registro indisponibile): il nome deve restare lo stesso. Commenta il perché: il nome del workspace aperto non può dipendere dalla leggibilità di un elenco che riguarda gli altri.
+      4. `TestOpenWorkspaceChangesTheDeclaredIdentity`: crea `alfa := realWorkspace(t, "alfa", "US-A01", false)` e `beta := realWorkspace(t, "beta", "US-B01", false)`; `srv, reg := newWorkspacesTestServer(t, alfa)`; registra entrambe con `reg.Touch`. Asserisci che l'identità iniziale è `alfa`. Poi `entry, _ := reg.Get(...)` per beta — oppure recupera l'id dalla lista — ed esegui `POST /api/workspaces/{id}/open` su `srv.mux`, pretendendo 200. Asserisci:
+         - la risposta dell'open porta già `name == "beta"` e `path` = root di beta (è ciò che permette all'indicatore di aggiornarsi senza una seconda domanda);
+         - una nuova `GET /api/workspaces` **sullo stesso `srv`**, senza ricostruirlo, riporta `CurrentName == "beta"` e `CurrentPath` = `filepath.Clean(beta)`;
+         - la voce di beta nella lista è `current: true` e quella di alfa `current: false`.
+         Scrivi nel commento della funzione che il fatto provato è AC-3: l'identità cambia sul processo già in piedi, non a un riavvio.
+      5. In `no_workspace_test.go`, dentro `TestHomeServerServesHomeRoutes`, subito dopo il controllo su `list.CurrentPath`, aggiungi il controllo `if list.CurrentName != "" { t.Errorf(...) }` con messaggio che nomina AC-5.
+      6. Esegui `gofmt -w` sui due file toccati.
+
+      ## Verify
+
+      - Esegui in `cli/`: `go test ./internal/web/... -run 'Workspace|Workspaces|HomeServer' -v`
+      - Expect: le tre funzioni nuove compaiono come `--- PASS` e nessun test della selezione fallisce.
+      - Esegui in `cli/`: `gofmt -l . && go vet ./... && go test ./internal/web/...`
+      - Expect: `gofmt` senza output, `go vet` senza errori, 0 fallimenti e un numero di test passati **maggiore** dei 382 della baseline.
+
+      ## Done
+
+      - [ ] AC-1 — un test prova che `currentName`/`currentPath` nominano il workspace servito, con percorso assoluto.
+      - [ ] AC-1 — un test prova che il nome sopravvive a un registro vuoto **e** a un registro indisponibile, ricadendo sul nome base del percorso.
+      - [ ] AC-3 — un test prova che dopo `POST /api/workspaces/{id}/open`, sullo stesso server, `currentName` e `currentPath` sono quelli del nuovo workspace.
+      - [ ] AC-4 — lo stesso test prova che l'elenco dei workspace conosciuti apre un altro workspace e che il `current` si sposta di conseguenza.
+      - [ ] AC-5 — `TestHomeServerServesHomeRoutes` prova che senza workspace aperto `currentName` è vuoto.
+      - [ ] `gofmt`, `go vet` e `go test ./internal/web/...` verdi, senza fallimenti nuovi rispetto alla baseline.
+
+      ## Blockers
+
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Modulo puro workspace-identity.js che traduce il payload in etichetta, tooltip e titolo
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      Esiste un modulo puro che, dato il payload di `GET /api/workspaces`, restituisce tutto ciò che serve a nominare il workspace aperto sullo schermo e nel titolo della scheda — e a dichiararne l'assenza.
+
+      ## Read
+
+      - `cli/internal/web/assets/workspace-layout.js` — la forma del modulo da imitare: IIFE, `"use strict"`, funzioni pure, esportazione doppia `module.exports` / `window.<Nome>` in coda.
+      - `cli/internal/web/assets/workspace-home.js` — come tratta un payload parziale (`entriesOf`) e perché lì serve `escapeHtml`: quel modulo produce markup, questo produce stringhe piane e non ne ha bisogno.
+      - `cli/internal/web/assets/workspace-status.js` — un altro esempio dello stesso stampo, più corto.
+      - `cli/internal/web/workspaces.go` — i campi del payload che il modulo consuma: `open`, `currentName`, `currentPath`.
+
+      ## Change
+
+      - Nuovo file `cli/internal/web/assets/workspace-identity.js`, e nient'altro in questo task.
+
+      Non-goal: nessun `document`, nessun `window` fuori dal blocco di esportazione, nessuna `fetch`, nessuna classe CSS applicata, nessun HTML prodotto. Il modulo non decide *dove* si scrive l'identità, solo *cosa* dice.
+
+      ## Steps
+
+      1. Crea il file con l'intestazione a commento nello stile degli altri moduli: che cosa risponde (una sola domanda: quale workspace è aperto e come si chiama), che è puro, e che restituisce **stringhe piane e mai HTML** perché il chiamante le scrive con `textContent` e con l'attributo `title` — così non c'è escaping da sbagliare su un nome che viene dal disco dell'utente.
+      2. Dichiara le costanti di testo in un punto solo, in inglese come tutto il viewer:
+         - `TITLE_SUFFIX = " · ARchetipo"`
+         - `EMPTY_LABEL = "No workspace open"`
+         - `EMPTY_TITLE = "No workspace" + TITLE_SUFFIX`
+      3. Scrivi `resolveWorkspaceIdentity(view)`:
+         - normalizza: `const value = view && typeof view === "object" ? view : {};`
+         - `const name = typeof value.currentName === "string" ? value.currentName.trim() : "";`
+         - `const path = typeof value.currentPath === "string" ? value.currentPath.trim() : "";`
+         - `const open = value.open === true && name !== "";`
+         - se `open`: `{open: true, name, path, label: name, tooltip: path, documentTitle: name + TITLE_SUFFIX, actionable: true}`
+         - altrimenti: `{open: false, name: "", path: "", label: EMPTY_LABEL, tooltip: "", documentTitle: EMPTY_TITLE, actionable: false}`
+         - Commenta la condizione `open`: un payload che si dichiara aperto ma non sa dire quale workspace serve viene trattato come chiuso, perché una pagina che non sa quale workspace sta guardando deve dirlo, non fingere un nome vuoto.
+      4. Esporta in coda `{ resolveWorkspaceIdentity, EMPTY_LABEL, EMPTY_TITLE, TITLE_SUFFIX }` con lo stesso doppio ramo `module.exports` / `window.WorkspaceIdentity` degli altri moduli.
+
+      ## Verify
+
+      - Esegui dalla radice: `node -e "const m=require('./cli/internal/web/assets/workspace-identity.js'); const a=m.resolveWorkspaceIdentity({open:true,currentName:'alfa',currentPath:'/tmp/alfa'}); const b=m.resolveWorkspaceIdentity(null); console.log(JSON.stringify([a,b]));"`
+      - Expect: stampa un array di due oggetti; il primo ha `label:"alfa"`, `tooltip:"/tmp/alfa"`, `documentTitle:"alfa · ARchetipo"`, `actionable:true`; il secondo ha `open:false`, `label:"No workspace open"`, `actionable:false`. Nessuna eccezione.
+      - Esegui dalla radice: `npm run test:web`
+      - Expect: 0 fallimenti (in questo task la suite è ancora quella della baseline: 97 test, 21 suite).
+
+      ## Done
+
+      - [ ] `cli/internal/web/assets/workspace-identity.js` esiste, è puro e si carica sia in Node sia nel browser.
+      - [ ] AC-1 — con un workspace aperto restituisce `label` uguale al nome e `tooltip` uguale al percorso completo.
+      - [ ] AC-2 — `documentTitle` contiene il nome del workspace, quindi due workspace diversi producono titoli diversi.
+      - [ ] AC-5 — senza workspace aperto, e su payload parziale o `null`, restituisce l'etichetta che dichiara l'assenza, `actionable: false`, e mai un'etichetta vuota.
+      - [ ] `npm run test:web` resta verde.
+
+      ## Blockers
+
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: L'indicatore del workspace nella topbar — markup e stile
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      La topbar contiene un indicatore del workspace, visibile in ogni momento — anche quando nessun workspace è aperto — e lo script del modulo puro è caricato dalla pagina.
+
+      ## Read
+
+      - `cli/internal/web/assets/index.html` — le prime ~35 righe: il `<title>` statico, e la topbar con `<div class="brand">` (che contiene `.brand-mark` e `.brand-stack`), `#topbar-stats` e `.topbar-actions`. Guarda anche `#workspaces-btn` e il suo `data-workspace-scoped`, e in coda al file i `<script>` che caricano gli helper.
+      - `cli/internal/web/assets/app.css` — le regole `.topbar` (griglia a tre colonne), `.brand`, `.brand-stack`, `.brand-name`, `.brand-sub` (righe ~150-215) e il blocco `body.no-workspace ... [data-workspace-scoped] { display: none !important; }` (righe ~4078-4083).
+
+      ## Change
+
+      - `cli/internal/web/assets/index.html`: aggiungi il bottone indicatore dentro `<div class="brand">`, e il `<script src="/workspace-identity.js"></script>` accanto agli altri helper, **prima** di `app.js`.
+      - `cli/internal/web/assets/app.css`: aggiungi le regole `.workspace-indicator*`.
+
+      Non-goal: non rimuovere né modificare `#workspaces-btn`; non toccare la griglia `.topbar`; non aggiungere un quarto figlio diretto alla topbar (romperebbe `grid-template-columns: auto 1fr auto`); non toccare il `<title>` statico, che resta il valore iniziale prima che `app.js` lo sostituisca; **non** mettere `data-workspace-scoped` sull'indicatore.
+
+      ## Steps
+
+      1. In `index.html`, dentro `<div class="brand">` e subito dopo la chiusura di `<div class="brand-stack">`, inserisci:
+
+         ```html
+         <!-- Chi sta guardando cosa (US-052). Vive nella cella del brand, che è un
+              flex container, così la griglia a tre colonne della topbar non cambia.
+              Deliberatamente privo di data-workspace-scoped: è l'unico controllo che
+              deve restare visibile anche senza workspace aperto, perché il suo lavoro
+              è dichiarare pure l'assenza. -->
+         <button id="workspace-indicator" type="button" class="workspace-indicator" aria-live="polite">
+             <span class="workspace-indicator-eyebrow">workspace</span>
+             <span class="workspace-indicator-name" id="workspace-indicator-name">—</span>
+         </button>
+         ```
+
+      2. Sempre in `index.html`, accanto agli altri `<script src="/workspace-*.js">`, aggiungi `<script src="/workspace-identity.js"></script>` in una posizione che precede il caricamento di `app.js`. Verifica leggendo la coda del file che l'ordine sia effettivamente quello.
+      3. In `app.css`, subito dopo le regole `.brand-sub`, aggiungi:
+         - `.workspace-indicator`: `display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px;` bordo `1px solid var(--rule)`, `border-radius: var(--radius)`, `padding: 4px 10px`, `background: transparent`, `max-width: 220px`, `cursor: pointer`, transizione su `border-color`/`background` con `var(--transition)`.
+         - `.workspace-indicator-eyebrow`: `font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--text-muted);`
+         - `.workspace-indicator-name`: `font-family: var(--font-mono); font-size: 12px; color: var(--text-strong); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;` — un nome di directory può essere lungo e non deve allargare la topbar.
+         - `.workspace-indicator:hover:not([disabled])`: `border-color: var(--accent); background: var(--surface-3);`
+         - `.workspace-indicator[disabled]`: `cursor: default; opacity: 0.7;` e `.workspace-indicator[disabled] .workspace-indicator-name { color: var(--text-muted); }`
+         Usa solo variabili CSS già definite nel file; se una di quelle citate non esiste, sostituiscila con la più vicina già in uso nelle regole `.brand*`/`.workspace-badge` invece di introdurne una nuova.
+      4. Apri il viewer una volta e guarda la topbar per confermare che nulla è andato a capo o fuori posto: dalla radice `go run ./cli/cmd/archetipo view` (oppure il binario già installato), poi chiudi. Questo passo è un controllo visivo, non un test.
+
+      ## Verify
+
+      - Esegui dalla radice: `node -e "const s=require('node:fs').readFileSync('cli/internal/web/assets/index.html','utf8'); const i=s.indexOf('id=\"workspace-indicator\"'), b=s.indexOf('class=\"brand\"'), t=s.indexOf('</header>'), a=s.indexOf('app.js'), w=s.indexOf('workspace-identity.js'); if(i<0)throw new Error('indicatore assente'); if(!(b<i&&i<t))throw new Error('indicatore fuori dal brand'); if(!(w>=0&&w<a))throw new Error('script non caricato prima di app.js'); console.log('ok');"`
+      - Expect: stampa `ok`.
+      - Esegui in `cli/`: `go build ./...`
+      - Expect: compila (gli asset sono embedded: un file nuovo deve entrare nel bundle senza modifiche a `assets.go`, che usa `embed` sull'intera directory).
+      - Esegui dalla radice: `npm run test:web`
+      - Expect: 0 fallimenti.
+
+      ## Done
+
+      - [ ] AC-1 — `#workspace-indicator` esiste dentro `<div class="brand">`, quindi è nella topbar e non dentro una finestra.
+      - [ ] AC-5 — l'indicatore **non** porta `data-workspace-scoped`, quindi la regola `body.no-workspace [data-workspace-scoped]` di `app.css` non lo nasconde.
+      - [ ] AC-4 — l'indicatore è un `<button>`, cioè un controllo attivabile (il suo comportamento è cablato in TASK-05).
+      - [ ] `workspace-identity.js` è caricato dalla pagina prima di `app.js`.
+      - [ ] `go build ./...` e `npm run test:web` restano verdi.
+
+      ## Blockers
+
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Cablaggio in app.js — l'identità scritta in un punto solo e tenuta viva
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+
+      L'indicatore e il titolo della scheda nominano il workspace aperto dal primo disegno della pagina, restano corretti quando il workspace cambia senza che la pagina venga ricaricata, e l'indicatore porta ai workspace conosciuti.
+
+      ## Read
+
+      - `cli/internal/web/assets/app.js`:
+        - righe ~95-125: il blocco delle `const ...= document.getElementById(...)`, incluse `workspacesBtn`, `workspacesModal`, `workspaceHomeEl`.
+        - righe ~485-500: il blocco dei listener, incluso `workspacesBtn.addEventListener("click", openWorkspaces)`.
+        - `refreshBoardAndStatus()` e `boot()` (righe ~560-635): `boot` interroga già `/api/workspaces` e ha il payload in mano in entrambi i rami; `enterNoWorkspaceMode()` sposta `#workspaces-add-form` dentro la home.
+        - `scheduleBoardReload()` e `connectBoardStream()` (righe ~938-970): il tick SSE e le guardie sui form aperti.
+        - `openWorkspaces()` / `closeWorkspaces()` (righe ~4704-4716).
+        - `loadWorkspaces()`, `renderWorkspaces(view)` e `openWorkspace(id, name)` (righe ~4725-4795): quest'ultima chiude con `window.location.reload()`.
+      - `cli/internal/web/assets/workspace-identity.js` — la firma di `resolveWorkspaceIdentity` prodotta da TASK-03.
+
+      ## Change
+
+      - `cli/internal/web/assets/app.js`, e nient'altro.
+
+      Non-goal, tassativi:
+
+      - **Non rimuovere e non spostare `window.location.reload()` in `openWorkspace()`.** Il comportamento di apertura di un workspace è dichiarato fuori ambito dalla spec, ed è una scelta deliberata di US-051 documentata nel codice.
+      - Non toccare `enterNoWorkspaceMode()`, `openWorkspaces()`, `closeWorkspaces()`, `loadBoard()`, né il flusso della modale.
+      - Non aggiungere una `fetch` dove il payload di `/api/workspaces` è già in mano.
+      - Non introdurre un timer, un polling o una seconda `EventSource`.
+
+      ## Steps
+
+      1. Accanto alle altre `const` di elementi, aggiungi `workspaceIndicator` (`#workspace-indicator`) e `workspaceIndicatorName` (`#workspace-indicator-name`).
+      2. Scrivi, vicino a `renderWorkspaceHomeView`, l'unico punto che scrive l'identità sulla pagina:
+
+         ```js
+         // Chi sta guardando cosa. È l'unico punto che scrive l'identità sulla
+         // pagina: etichetta, percorso completo e titolo della scheda escono tutti
+         // dalla stessa risposta, così non possono contraddirsi. Il testo è scritto
+         // con textContent e con l'attributo title: il nome viene dal disco
+         // dell'utente e non finisce mai dentro del markup.
+         function applyWorkspaceIdentity(view) {
+             const id = WorkspaceIdentity.resolveWorkspaceIdentity(view);
+             workspaceIndicatorName.textContent = id.label;
+             workspaceIndicator.title = id.tooltip;
+             workspaceIndicator.disabled = !id.actionable;
+             workspaceIndicator.classList.toggle("is-empty", !id.open);
+             document.title = id.documentTitle;
+         }
+         ```
+
+      3. Subito sotto, la versione che va a chiedere quando il payload non è già disponibile:
+
+         ```js
+         // Un fallimento non cambia ciò che si legge: l'identità sullo schermo resta
+         // l'ultima conosciuta, che è meglio di un'etichetta che si svuota da sola.
+         async function refreshWorkspaceIdentity() {
+             try { applyWorkspaceIdentity(await apiGet("/api/workspaces")); } catch (_) {}
+         }
+         ```
+
+      4. In `boot()`: `applyWorkspaceIdentity(null)` dentro il `catch` (prima di `renderWorkspaceHomeView`), e `applyWorkspaceIdentity(view)` **in entrambi i rami** — quello con workspace aperto e quello che entra in home mode. Scrivilo una volta sola subito dopo il `catch`, prima dell'`if (view && view.open)`, così i due rami non possono divergere.
+      5. In `renderWorkspaces(view)`: aggiungi `applyWorkspaceIdentity(view)`. Nel ramo di errore di `loadWorkspaces()`: aggiungi `refreshWorkspaceIdentity()` **no** — lì la chiamata è appena fallita; non fare nulla e lascia l'identità com'è.
+      6. In `openWorkspace(id, name)`, nel ramo di successo, **subito dopo** aver ricevuto `res` e **prima** di qualsiasi altra cosa (toast, attesa, reload):
+
+         ```js
+         // AC-3: nome e titolo diventano quelli del nuovo workspace qui, alla
+         // risposta dell'apertura — non a un caricamento di pagina. La risposta
+         // porta già nome e percorso, quindi non serve una seconda domanda.
+         applyWorkspaceIdentity({ open: true, currentName: res && res.name, currentPath: res && res.path });
+         ```
+
+      7. Dentro il `setTimeout` di `scheduleBoardReload()`, come **prima** istruzione del callback, prima di `clearTimeout`-related guards e prima di ogni `if (!...classList.contains("hidden")) return;`:
+
+         ```js
+         // Il tick arriva anche da uno switch di workspace: SwitchWorkspace pubblica
+         // sul broker, che vive sul server e non sulla sessione, quindi la
+         // connessione sopravvive al cambio. Sapere quale workspace si sta guardando
+         // non distrugge nessuna edit in corso, perciò sta prima delle guardie.
+         refreshWorkspaceIdentity();
+         ```
+
+      8. In `refreshBoardAndStatus()`, accanto alle altre chiamate, aggiungi `refreshWorkspaceIdentity()`.
+      9. Nel blocco dei listener aggiungi `workspaceIndicator.addEventListener("click", openWorkspaces);` — a workspace chiuso il bottone è `disabled` e il click non parte, che è esattamente quel che serve: in home mode la modale è priva del proprio form, spostato nella home da `enterNoWorkspaceMode`.
+      10. Rileggi il diff e conferma con `grep -n "location.reload" cli/internal/web/assets/app.js` che l'unica occorrenza è quella preesistente in `openWorkspace`.
+
+      ## Verify
+
+      - Esegui dalla radice: `grep -c "location.reload" cli/internal/web/assets/app.js`
+      - Expect: `1` — il comportamento di apertura non è stato toccato.
+      - Esegui dalla radice: `npm run test:web`
+      - Expect: 0 fallimenti.
+      - Esegui in `cli/`: `go build ./... && go test ./internal/web/...`
+      - Expect: compila, 0 fallimenti.
+      - Controllo manuale (non un test): avvia il viewer da dentro questo repository, verifica che la topbar mostri `Archetipo` e che il titolo della scheda lo nomini; apri la modale dall'indicatore e apri un altro workspace conosciuto.
+
+      ## Done
+
+      - [ ] AC-1 — al primo disegno la topbar mostra il nome del workspace aperto e il suo percorso completo è nel `title` dell'indicatore.
+      - [ ] AC-2 — `document.title` è scritto da `applyWorkspaceIdentity` e nomina il workspace aperto.
+      - [ ] AC-3 — l'identità è riapplicata alla risposta di `POST .../open` e a ogni tick SSE, senza dipendere da un caricamento di pagina.
+      - [ ] AC-4 — il click sull'indicatore apre la modale dei workspace conosciuti, dalla quale se ne apre un altro con il flusso invariato.
+      - [ ] AC-5 — senza workspace aperto l'indicatore dichiara l'assenza ed è `disabled`.
+      - [ ] `window.location.reload()` in `openWorkspace` è rimasto identico e unico.
+      - [ ] `npm run test:web`, `go build ./...` e `go test ./internal/web/...` verdi.
+
+      ## Blockers
+
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test del modulo dell'identità e del contratto su markup e cablaggio
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Un'unica suite prova cosa si legge nella topbar e nel titolo della scheda in ogni stato del payload, e prova sul sorgente degli asset le proprietà del cablaggio che nessun test di modulo può vedere.
+
+      ## Read
+
+      - `test/web/workspace-layout.test.mjs` — il loader `node:vm` che carica un modulo UMD del viewer senza browser, e il precedente di un test che legge `app.css` come testo per asserire una proprietà condivisa fra CSS e JS.
+      - `test/web/workspace-home.test.mjs` — lo stile dei nomi di test in italiano e le asserzioni sui payload parziali.
+      - `cli/internal/web/assets/workspace-identity.js` — la firma e le costanti esportate da TASK-03.
+      - `cli/internal/web/assets/index.html` e `app.js` — le forme esatte introdotte da TASK-04 e TASK-05, che questo test asserisce.
+
+      ## Change
+
+      - Nuovo file `test/web/workspace-identity.test.mjs`.
+
+      Non-goal: nessuna modifica a `package.json` (lo script `test:web` usa il glob `test/web/**/*.test.mjs` e raccoglie il file nuovo da sé); nessuna modifica al codice di produzione — se un'asserzione fallisce, la correzione appartiene al task che ha prodotto il file.
+
+      ## Steps
+
+      1. Crea il file con l'intestazione a commento nello stile degli altri: cosa verifica e quali AC.
+      2. Copia il loader `node:vm` da `workspace-layout.test.mjs` e carica `cli/internal/web/assets/workspace-identity.js`.
+      3. `describe("resolveWorkspaceIdentity")`, con almeno questi casi:
+         - **"nomina il workspace aperto e ne espone il percorso completo" (AC-1)**: payload `{open:true,currentName:"alfa",currentPath:"/tmp/targets/alfa"}` → `label === "alfa"`, `tooltip === "/tmp/targets/alfa"`, `open === true`, `actionable === true`. Asserisci l'uguaglianza esatta del tooltip col percorso di partenza: è "il percorso completo", non un suo prefisso.
+         - **"il titolo della scheda distingue due workspace diversi" (AC-2)**: due payload con `currentName` `"alfa"` e `"beta"` → i due `documentTitle` sono diversi, ciascuno **include** il proprio nome. Non asserire la stringa letterale del suffisso: asserisci la proprietà che la spec chiede.
+         - **"applicato al payload del nuovo workspace produce la nuova identità" (AC-3)**: chiamata sui due payload in sequenza, i risultati differiscono in `label`, `tooltip` e `documentTitle`. Commenta che questo è ciò che rende la transizione una funzione dello stato e non un effetto del caricamento.
+         - **"senza workspace aperto lo dichiara invece di mostrare un nome" (AC-5)**: `{open:false,workspaces:[]}` → `label === EMPTY_LABEL`, `open === false`, `actionable === false`, `tooltip === ""`, e `documentTitle === EMPTY_TITLE`.
+         - **"non lancia su payload parziali" (AC-5)**: `null`, `undefined`, `{}`, `{open:true}` (aperto ma senza nome), `{open:true,currentName:"   "}` → tutti ricadono sullo stato che dichiara l'assenza, e `label` non è **mai** la stringa vuota in nessuno dei casi enumerati.
+      4. `describe("l'indicatore nella pagina")`, leggendo `index.html`, `app.css` e `app.js` con `readFileSync`:
+         - **AC-1** — `index.html` contiene `id="workspace-indicator"`, e il suo indice cade fra quello di `class="brand"` e quello della prima chiusura `</header>`.
+         - **AC-5** — la sottostringa di `index.html` che va dall'apertura del tag `<button id="workspace-indicator"` alla sua prima `>` **non** contiene `data-workspace-scoped`; e `app.css` contiene ancora la regola `body.no-workspace` con `[data-workspace-scoped]`, cioè la regola che quell'assenza serve a evitare.
+         - **AC-2** — `app.js` contiene un'assegnazione a `document.title`. Commenta che prima di questa spec la stringa `document.title` non compariva affatto nel file, quindi l'asserzione ha un oracolo reale e non tautologico.
+         - **AC-4** — `app.js` contiene un listener di `click` su `workspaceIndicator` che chiama `openWorkspaces`.
+         - **AC-3** — `app.js` chiama `refreshWorkspaceIdentity` dentro `scheduleBoardReload`, e `applyWorkspaceIdentity` dentro `openWorkspace`. Verificalo isolando il corpo di ciascuna funzione dal sorgente (dalla riga della dichiarazione alla successiva dichiarazione di funzione al medesimo livello di indentazione) invece di cercare le due stringhe nell'intero file, che passerebbe anche se stessero altrove.
+         - **fuori ambito** — `app.js` contiene **esattamente una** occorrenza di `location.reload`, con messaggio che spieghi che il comportamento di apertura è dichiarato fuori ambito dalla spec.
+         - `index.html` carica `/workspace-identity.js` prima di `app.js`.
+
+      ## Verify
+
+      - Esegui dalla radice: `node --test test/web/workspace-identity.test.mjs`
+      - Expect: tutti i test `pass`, `fail 0`.
+      - Esegui dalla radice: `npm run test:web`
+      - Expect: `fail 0` e un numero di test **maggiore** dei 97 della baseline, con almeno una suite in più delle 21 di partenza.
+
+      ## Done
+
+      - [ ] AC-1 — un test prova etichetta uguale al nome e tooltip uguale al percorso completo, e un altro prova che l'indicatore sta nella topbar.
+      - [ ] AC-2 — un test prova che due workspace diversi producono titoli di scheda diversi, ciascuno contenente il proprio nome, e che `app.js` scrive `document.title`.
+      - [ ] AC-3 — un test prova la transizione di identità sul modulo e che il cablaggio la riapplica sul tick SSE e all'apertura.
+      - [ ] AC-4 — un test prova che il click sull'indicatore porta alla modale dei workspace conosciuti.
+      - [ ] AC-5 — un test prova che senza workspace aperto, e su ogni payload parziale enumerato, l'indicatore dichiara l'assenza e non mostra mai un'etichetta vuota.
+      - [ ] Un test protegge il fuori ambito: una sola occorrenza di `location.reload` in `app.js`.
+      - [ ] `npm run test:web` verde, con più test della baseline.
+
+      ## Blockers
+
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Gate finale — suite completa, controlli di CI e verifica dello stato dei task
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+
+      L'incremento passa esattamente i controlli che questo repository esegue in CI, non ne aggiunge nessun fallimento rispetto alla baseline, e la spec va in review solo dopo che ogni task risulta `DONE`.
+
+      ## Read
+
+      - `AGENTS.md`, sezione "Rules for CLI changes" — l'elenco dei controlli da eseguire prima di consegnare.
+      - La sezione **Baseline** del corpo del piano — gli esiti misurati che questi comandi devono riprodurre.
+
+      ## Change
+
+      - Nessuna modifica di codice. Se un controllo fallisce, la correzione appartiene al task che ha prodotto il file, non a questo gate.
+
+      Non-goal: non aggiustare qui i test altrui; non allargare l'elenco dei comandi; non eseguire `npm run test:e2e` (la suite e2e completa avvia agenti reali e non è un gate di questa spec).
+
+      ## Steps
+
+      Eseguili **in quest'ordine**, e registra l'esito di ciascuno.
+
+      1. In `cli/`: `gofmt -l .`
+      2. In `cli/`: `go vet ./...`
+      3. In `cli/`: `go build ./...`
+      4. In `cli/`: `go test ./...` — la suite Go completa, non solo il pacchetto `web`, perché questa spec aggiunge un campo a un payload e il repository ha una conformance suite fra connettori.
+      5. Dalla radice: `npm run test:web`
+      6. In `cli/`: `golangci-lint run --timeout 5m ./...` — **facoltativo**: sulla macchina di riferimento il binario non è installato. Se `which golangci-lint` non lo trova, registra "non eseguito: golangci-lint non installato" invece di dichiararlo verde; installarlo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` è consentito ma non richiesto.
+      7. Marca questo task `DONE`.
+      8. Dalla directory `/Users/stefanoleli/Project/Archetipo` (il project root), esegui `archetipo spec show US-052` e leggi `data.tasks`.
+      9. Solo se **nessun** task risulta `TODO`, richiedi la review con `archetipo spec review US-052`. Se anche uno solo è ancora `TODO`, non richiedere la review: completalo prima e ripeti dal passo 1.
+
+      ## Verify
+
+      - `gofmt -l .` in `cli/` — Expect: nessun output (baseline: nessun output).
+      - `go vet ./...` in `cli/` — Expect: nessun errore (baseline: nessun errore).
+      - `go build ./...` in `cli/` — Expect: compila (baseline: compila).
+      - `go test ./...` in `cli/` — Expect: 0 fallimenti; il pacchetto `internal/web` riporta più test passati dei 382 della baseline.
+      - `npm run test:web` dalla radice — Expect: `fail 0` e più di 97 test, più di 21 suite (baseline: 97 test, 21 suite, 0 fallimenti).
+      - `archetipo spec show US-052` dal project root — Expect: ogni voce di `data.tasks` ha `status: DONE`.
+
+      ## Done
+
+      - [ ] `gofmt`, `go vet` e `go build` riproducono la baseline: nessuna diagnostica nuova su nessuno dei file toccati.
+      - [ ] `go test ./...` è verde e il pacchetto `internal/web` ha più test della baseline.
+      - [ ] `npm run test:web` è verde e ha più test e più suite della baseline.
+      - [ ] L'esito di `golangci-lint` è registrato: verde, oppure esplicitamente "non eseguito perché non installato".
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5 — tutte le evidenze della mappa di accettazione sono passate dentro le due suite eseguite qui.
+      - [ ] `archetipo spec show US-052` prova che nessun task è rimasto `TODO`, **prima** che `archetipo spec review US-052` venga invocato.
+
+      ## Blockers
+
+      None.
+    ref: TASK-07

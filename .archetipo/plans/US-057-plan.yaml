@@ -1,0 +1,530 @@
+schema: archetipo/plan/v2
+spec_code: US-057
+body: "# US-057: Aprire il workspace sulla conversazione invece che sulla board — Piano di implementazione\n\n**Prodotto da:** Team di Pianificazione ARchetipo\n**Data:** 2026-08-22\n\n---\n\n## Spec\n\n**Epic:** EP-008 — Workspace gestiti dalla UI\n**Priorità:** HIGH | **Punti:** 5\n\n**User Story**\nCome utilizzatore di ARchetipo che lavora parlando con l'agente, voglio che aprendo un workspace la prima cosa davanti a me sia la conversazione, larga quanto la finestra, così da poter leggere e scrivere senza strizzare il dialogo in una colonna laterale.\n\n**Criteri di accettazione**\n- AC-1 — All'apertura di un workspace la conversazione è la vista mostrata per prima e occupa la colonna principale della finestra.\n- AC-2 — La board resta raggiungibile con un solo comando dalla schermata iniziale e, una volta aperta, mostra le stesse colonne e le stesse card che mostrava prima di questa spec.\n- AC-3 — Tornando dalla board alla conversazione, la conversazione conserva la sua storia e il testo non ancora inviato.\n- AC-4 — Il dettaglio di una spec è consultabile come vista della colonna principale, senza finestre sovrapposte che rendano inerte il resto della pagina.\n- AC-5 — Il totale delle spec e il numero di spec in corso restano leggibili dalla schermata iniziale, senza dover aprire la board.\n- AC-6 — In una finestra stretta la conversazione resta a piena larghezza e le altre viste vi si sovrappongono a richiesta, richiudendosi quando il revisore ne sceglie una.\n\n**Fuori ambito**\nStorico delle conversazioni passate, apertura di più conversazioni insieme, spostamento delle run dentro il flusso della conversazione. Non cambiano né il contenuto della board, né quello del dettaglio spec, né il modo in cui l'agente lavora.\n\n---\n\n## Soluzione tecnica\n\nUS-055 ha già tolto il dettaglio spec dalle finestre sovrapposte e ha introdotto una shell a due riquadri — colonna primaria (board oppure spec) più una rail laterale permanente che ospita `#workspace-runs` e `#workspace-conversation`. US-057 **non costruisce una shell nuova: ribalta la gerarchia di quella che c'è**. La conversazione smette di essere l'inquilino stretto della rail e diventa la vista di casa della colonna principale; board e dettaglio spec diventano viste che si richiamano nello stesso identico spazio.\n\nLa proprietà che rende vero tutto il resto è già nella struttura del codice e va conservata, non reinventata: **chi è sullo schermo lo decide un solo modulo puro**, `cli/internal/web/assets/workspace-layout.js`, e `app.js` non fa altro che scrivere le classi che quel modulo restituisce. Nessuna regola di visibilità è scritta due volte; nessun test deve guidare un browser per sapere che cosa si vedrebbe.\n\n- **Il modulo puro passa da tre booleani a una vista.** Oggi `resolveLayout({specOpen, narrow, railFocus})` risolve i riquadri `board | spec | rail`. Diventa `resolveLayout({view, specOpen, narrow})` con `PANES = [\"conversation\", \"board\", \"spec\"]` e `DEFAULT_VIEW = \"conversation\"`: uno stato vuoto — quello che la pagina ha appena bootata — risponde conversazione. È qui che AC-1 diventa vero per costruzione, non per l'ordine in cui `app.js` chiama le sue funzioni.\n- **In finestra larga la colonna primaria mostra esattamente una vista, a piena larghezza**, e le altre restano montate e nascoste dietro di essa. È ciò che rende AC-2 letterale (\"la board occupa lo stesso spazio in cui stava la conversazione\") e AC-3 gratuito: nascondere non è smontare, e la bozza del compositore vive in una variabile di modulo che nessun cambio di vista tocca.\n- **In finestra stretta la conversazione resta sempre visibile a piena larghezza** e la vista richiamata le si sovrappone come strato (`is-overlay`), invece di prenderne il posto. Il modulo espone anche il riduttore puro `nextViewAfterSelection(state, selection)`: scegliere una card dentro l'overlay della board porta all'overlay della spec, chiudere la spec riporta alla conversazione senza overlay. La regola di richiusura di AC-6 è così una funzione testabile, non un `if` sparso in `app.js`.\n- **Il commutatore di vista è permanente**, non più solo un ripiego per la finestra stretta: `#workspace-views` disegna le tre schede del mockup — Conversazione · Spec · Board — con la scheda Spec offerta solo quando una spec è aperta. Da qui AC-2 è \"un solo comando\" in senso stretto: un bottone sempre presente sulla schermata iniziale.\n- **La rail sparisce come luogo.** `<aside id=\"workspace-rail\">` viene rimosso; `#workspace-runs` diventa una striscia a piena larghezza dentro `#workspace-shell`, sopra `#workspace-primary`, quindi visibile in ogni vista senza rubare larghezza alla conversazione. Le run **non** entrano nel flusso della conversazione — è fuori ambito — e l'indicatore `#runs-attention` in topbar resta dov'è.\n- **I contatori restano in topbar.** `#topbar-stats` è già alimentato da `updateStats()` sulla lettura di `/api/board` che `boot()` esegue comunque all'apertura, anche quando la board non è il riquadro visibile: AC-5 è quindi soddisfatto togliendo l'unica regola che oggi lo contraddice, `\\.topbar-stats { display: none }` sotto i 900px. Il mockup conferma la scelta: nello stato E stretto i due contatori sono in topbar.\n- **Il dettaglio spec non cambia forma.** `#modal-root` è già un `role=\"region\"` dentro la colonna primaria, senza `aria-modal`, senza overlay e senza focus trap: AC-4 è in gran parte una **conservazione**, e il lavoro consiste nel non regredirla mentre la colonna primaria cambia inquilino, più l'aggiunta della scheda Spec al commutatore.\n- **`conversation.js`, `workspace-runs.js`, `renderBoard`/`renderCard` non vengono toccati.** I renderer sono già indipendenti dalla larghezza in cui vivono: allargare la conversazione è un fatto di CSS. Questo è ciò che tiene AC-2 vero sul contenuto (\"le stesse colonne e le stesse card\") senza doverlo dimostrare riga per riga.\n\n### Il nodo tecnico da non sbagliare: chi possiede la classe `hidden`\n\nOggi due proprietari scrivono la stessa classe sullo stesso elemento. `applyPaneState()` usa `hidden` per dire \"questo riquadro non ha nulla da mostrare in questo stato\", mentre `renderConversationPanel()` usa `hidden` sul medesimo `#workspace-conversation` per dire \"non ho ancora letto nulla dal server\". Finché la conversazione stava nella rail — sempre `present` — la collisione non si vedeva. Con la conversazione come vista di casa, quel corto circuito produrrebbe la schermata iniziale vuota al primo caricamento, cioè esattamente il fallimento di AC-1.\n\nLa soluzione è togliere il secondo proprietario, non aggiungere una guardia: `renderConversationPanel()` smette di poter nascondere il proprio riquadro e disegna sempre qualcosa — `conversation.js` ha già lo stato vuoto che invita ad aprire una conversazione, ed è già coperto da `test/web/conversation.test.mjs`. La visibilità resta di competenza esclusiva del layout.\n\n### Decisioni architetturali\n\nIl Wiki è disattivato per questo progetto (`data.wiki.enabled: false`), quindi le decisioni che meriterebbero una pagina sono registrate qui per intero.\n\n**Decisione 1 — La vista è uno stato dichiarato nel modulo puro, non l'assenza di altri stati.**\nContesto: si poteva ottenere \"la conversazione è la casa\" tenendo i booleani attuali e trattando la conversazione come il caso in cui né la board né la spec sono richieste. Alternative valutate: (a) aggiungere un booleano `boardOpen` accanto a `specOpen`; (b) sostituire i booleani con un'enumerazione `view`. Scelta: (b). Motivazione: con (a) lo spazio degli stati ammette combinazioni impossibili (board e spec entrambe aperte) e il test dovrebbe scegliere quali campionare invece di enumerarle tutte, che è esattamente la proprietà per cui il test attuale di `workspace-layout` esiste. Con (b) lo spazio resta finito e piccolo — 3 viste × 2 `specOpen` × 2 `narrow` — e ogni stato ammissibile è enumerabile. Compromesso: è un cambio incompatibile della firma del modulo, quindi il test esistente va riscritto invece che esteso. Verifica: il test enumera l'intero spazio e afferma che nessuno stato lascia la finestra vuota e che nessun riquadro presente è irraggiungibile.\n\n**Decisione 2 — La rail sparisce come contenitore e `#workspace-runs` diventa una striscia della shell.**\nContesto: AC-1 chiede la conversazione a piena larghezza; la rail oggi le toglie una colonna. Alternative: (a) tenere la rail con le sole run; (b) spostare le run dentro il flusso della conversazione; (c) striscia a piena larghezza sopra la colonna primaria. Scelta: (c). Motivazione: (a) contraddice \"larga quanto la finestra\"; (b) è esplicitamente fuori ambito in questa spec. Compromesso: la striscia consuma altezza verticale in ogni vista; è mitigato dal fatto che `workspace-runs.js` non disegna nulla quando non c'è nulla in volo, e che `#runs-attention` in topbar continua a segnalare l'attesa. Verifica: lo smoke `test:view-workspace-runs-smoke` continua a osservare l'attesa di una run senza aprirla.\n\n**Decisione 3 — Nessun framework di e2e da browser viene introdotto.** Vedi la deroga argomentata nella strategia di test.\n\n### Rischi e note\n\n- `test/e2e/workspace-runs-view-smoke.mjs` afferma oggi, come AC-1 di US-055, che `#workspace-conversation` e `#workspace-runs` stanno dentro `<aside id=\"workspace-rail\">`. Questa spec rende falsa quell'affermazione **di proposito**: aggiornare quello smoke è lavoro pianificato (TASK-09), non un test rotto da aggirare.\n- Nel workspace in cui la conversazione non è offerta (provider senza `workspace.converse`, per esempio `codex`) la schermata iniziale mostra la frase di rifiuto del server tramite il renderer esistente. La board deve restare raggiungibile con lo stesso comando: è un caso limite esplicitamente coperto da TASK-05 e TASK-08.\n\n---\n\n## Baseline\n\nMisurata il 2026-08-22 in `/Users/stefanoleli/Project/ARchetipo`, ad albero pulito lato codice (le uniche modifiche non committate sono in `docs/`).\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza per la pianificazione |\n|---|---|---|\n| `npm run test:web` | **VERDE** — 121 test, 28 suite, 0 fallimenti | È il livello su cui poggia quasi tutta l'evidenza di questa spec. Ogni task che tocca un modulo puro lo rilancia e deve restituire verde. |\n| `cd cli && gofmt -l .` | **VERDE** — nessun output | Nessun file Go viene modificato da questa spec; il controllo resta nel gate come rete. |\n| `cd cli && go build ./...` | **VERDE** — exit 0 | Gli asset sono `//go:embed assets`: un file rimosso o rinominato sotto `assets/` deve continuare a compilare ed essere servito. |\n| `cd cli && go vet ./...` | **VERDE** — exit 0 | Come sopra. |\n| `cd cli && go test ./...` | **VERDE** — 1859 test in 28 package | Nessun test Go legge gli id della shell (verificato: `workspace-rail`, `shell-pane`, `topbar-stats` non compaiono in alcun `.go`). Serve come regressione. |\n| `npm run test:view-workspace-runs-smoke` | **ROSSO PREESISTENTE** — tutte le righe `-> AC-1 … AC-6 ok` vengono stampate, poi lo script termina con `FAIL: the viewer echoed the credential in 1 response(s)` | Il confine è esatto e va rispettato alla lettera: **il fallimento è solo l'eco della credenziale**, e le asserzioni strutturali che questa spec deve aggiornare girano *prima* di esso e sono quindi osservabili. Nessun task può scrivere `Expect: passa` per questo comando. L'aspettativa ammessa è: ogni riga `-> AC-… ok` continua a essere stampata con il testo aggiornato, e l'ultima riga resta identica — `FAIL: the viewer echoed the credential in 1 response(s)`, con il conteggio **fermo a 1**. La perdita della credenziale è un difetto reale e fuori dall'ambito di US-057: non va né corretta qui né peggiorata. |\n\n**Prerequisiti d'ambiente** (distinti dai fallimenti di codice): Node.js e Go devono essere installati — gli script `test:view-*` compilano il binario Go in `test/e2e/.bin/archetipo` prima di partire. Nessuna credenziale è richiesta da alcuno dei comandi di questo piano: gli smoke usano un token sentinella e un hub finto su `127.0.0.1`. Su Windows lo smoke degli smoke locali è saltato per via dello shebang POSIX dei fake; non riguarda i comandi di questo piano.\n\n**Diagnostica preesistente sui file toccati**: nessuna. `app.js`, `app.css`, `index.html`, `workspace-layout.js` e i test in `test/web/` non producono oggi errori di lint o di compilazione (il progetto non ha un linter JS/CSS configurato in CI; il controllo che li copre è `npm run test:web`, verde).\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |\n|---|---|---|---|---|\n| AC-1 | Nessuno: `resolveLayout` è puro e si interroga a stato vuoto. Più il documento realmente servito da `archetipo view` in un sandbox con un workspace aperto. | Unit (modulo puro) + strutturale sulla sorgente + smoke HTTP sul viewer reale | `resolveLayout({})` — nessuna vista richiesta, cioè la pagina appena aperta — risponde `view: \"conversation\"` e `visible: [\"conversation\"]`, in finestra larga **e** stretta; e nel documento servito `<section id=\"workspace-conversation\">` è figlio di `#workspace-primary`, mentre `<aside id=\"workspace-rail\">` non compare più. | TASK-02, TASK-08, TASK-09 |\n| AC-2 | Sandbox con backlog di due spec servito dal viewer reale (fixture già esistente dello smoke delle run). | Unit (modulo puro) + smoke HTTP | In ogni stato in cui la board non è la vista visibile, `resolveLayout` restituisce **esattamente un** commutatore con `target: \"board\"` — quindi un solo comando. E il documento servito porta ancora `<main id=\"board\" class=\"board …\">` con l'invariato contratto di colonne e card: `renderBoard`/`renderCard` non compaiono nel diff. | TASK-02, TASK-09, TASK-10 |\n| AC-3 | Bozza non vuota passata al renderer; e il sorgente di `app.js` dopo la modifica. | Unit (renderer puro) + strutturale sulla sorgente | Il test già esistente «la bozza del compositore sopravvive alla resa» resta verde; **e** nessun percorso di cambio vista tocca lo stato della conversazione: il corpo di `setWorkspaceView`/`showShellPane` non contiene `conversationEl.innerHTML`, né `resetConversationState`, né un'assegnazione a `conversationDraft`, e `applyPaneState` non contiene la stringa `innerHTML` — scrive solo classi. Questo è l'oracolo diretto del fatto che tornare dalla board non ricostruisce nulla. | TASK-08, TASK-10 |\n| AC-4 | Il documento servito dal viewer reale. | Strutturale sulla sorgente + smoke HTTP | `#modal-root` è figlio di `#workspace-primary`, porta `role=\"region\"` e **non** porta `aria-modal`, non porta la classe `modal-root`, e non esiste in `app.css` alcuna regola che gli dia un fondale a copertura; i suoi 11 identificatori di operazione e le 3 schede `data-tab` sono ancora tutti presenti. Nessun elemento della pagina viene reso inerte: `inert` non compare nel sorgente. | TASK-08, TASK-09 |\n| AC-5 | Sandbox con backlog servito dal viewer reale, schermata iniziale (nessuna board aperta). | Strutturale sulla sorgente + smoke HTTP | `#topbar-stats` con `#stat-total` e `#stat-progress` è presente nel documento servito e **nessuna** regola di `app.css` lo nasconde a nessuna larghezza (la ricerca di una dichiarazione `display: none` applicata a `.topbar-stats` non trova nulla); e `boot()` chiama `loadBoard()` sul ramo del workspace aperto, cioè i contatori sono alimentati senza che la board sia la vista visibile. | TASK-08, TASK-09 |\n| AC-6 | Nessuno: enumerazione dell'intero spazio degli stati stretti. Più `app.css` realmente servito. | Unit (modulo puro) + smoke HTTP | Per **ogni** stato con `narrow: true`, `panes.conversation.visible === true`; ogni altro riquadro visibile in quello stato porta `overlay: true`; e `nextViewAfterSelection` applicato a una selezione dentro un overlay restituisce uno stato senza quell'overlay. `app.css` dichiara la media query alla larghezza esportata dal modulo e definisce ogni classe che il modulo restituisce per lo stato stretto, overlay compreso. | TASK-02, TASK-09 |\n\nLa mappa non duplica l'elenco dei task: dice, per ogni criterio, che cosa si guarda e dove. Nessun oracolo qui sopra è nascosto da un test double: gli unici finti dell'intera catena sono l'agente e l'hub degli smoke, e nessuno dei due partecipa alle asserzioni di questa spec.\n\n---\n\n## Strategia di test\n\nLa strategia è quella che il repository già usa per la shell del viewer, e non ne inventa una nuova: **ciò che si vede lo decide un modulo puro, quindi ciò che si vede si dimostra enumerando gli stati di quel modulo**, e ciò che il browser riceve si dimostra leggendo il documento che il viewer reale ha davvero servito.\n\n- **Enumerazione, non campionamento.** `test/web/workspace-layout.test.mjs` viene riscritto sul nuovo spazio degli stati (3 viste × 2 `specOpen` × 2 `narrow` = 12 stati, più le selezioni ammesse dal riduttore). Le asserzioni sono invarianti su *tutti* gli stati — nessuna finestra vuota, nessun riquadro presente irraggiungibile, nessun commutatore verso il riquadro già in vista — non esempi scelti a mano. È la ragione per cui questa spec non ha bisogno di un browser: una regola che vale sull'esempio scelto e cade sulla combinazione dimenticata sarebbe un difetto invisibile, e qui non ci sono combinazioni dimenticate.\n- **Asserzioni strutturali sulla sorgente** per i fatti che vivono in `app.js`, che è un IIFE gigante non caricabile in `node:vm`. Il precedente è `test/web/workspace-status-shell.test.mjs`, che afferma già oggi la parentela fra `#workspace-status` e `#workspace-shell` leggendo `index.html`, `app.css` e `app.js` come testo. Il nuovo `test/web/workspace-shell-home.test.mjs` fa lo stesso per la casa del workspace e per la conservazione della bozza.\n- **Smoke HTTP contro il viewer reale** per ciò che il browser riceve davvero: `test/e2e/workspace-runs-view-smoke.mjs` legge già `GET /index.html` e `GET /app.css` dal processo reale e afferma chi sta dentro chi. Le sue asserzioni di struttura vengono riportate alla forma nuova; il resto dello smoke — l'osservazione dell'attesa di una run senza aprirla, la conversazione che sopravvive alle letture del dettaglio spec — non cambia.\n- **Regressione sul contenuto invariato.** AC-2 promette che board e dettaglio spec mostrino esattamente ciò che mostravano prima. L'evidenza è duplice: gli smoke che esercitano quelle superfici via API (`test:view-delete-smoke`, `test:view-plan-smoke`) restano verdi, e `renderBoard`, `renderCard`, `openEditor` e i pannelli del dettaglio non compaiono nel diff se non per la riga che dichiara la vista.\n\n### Deroga all'e2e da browser\n\n**Motivo:** il percorso di accettazione di US-057 non attraversa alcun confine di rotta o di server, nessuna autenticazione, nessuna persistenza, nessuna integrazione esterna e nessuna navigazione fra schermate: è interamente uno spostamento di contenitori dentro una pagina già servita, deciso da una funzione pura di tre argomenti. Il repository **non ha oggi alcun framework di e2e da browser** — ogni smoke esistente è Node + HTTP + filesystem — e la regola del progetto è di non avviarne uno per un cambio locale di presentazione.\n\n**Livello di evidenza usato al suo posto:** l'enumerazione completa dello spazio degli stati di `workspace-layout.js` (`npm run test:web`), che è il decisore unico e totale di ciò che finisce sullo schermo, più le asserzioni strutturali sul documento e sul foglio di stile realmente serviti dal processo `archetipo view` (`npm run test:view-workspace-runs-smoke`). Ogni AC della mappa delle evidenze è coperto da almeno uno di questi due livelli, e nessuno dei due passa attraverso un doppio che nasconda l'oracolo.\n\n**Video dimostrativo:** la spec è filmabile (è un cambio visibile della schermata iniziale), ma `.archetipo/config.yaml` ha `e2e.record_demo_video: false`. La registrazione non è compito di questa fase: la decisione finale di registrare o saltare resta di `archetipo-review`.\n\n---\n\n> \U0001F3A8 I mockup di riferimento per questa spec **esistono già** e non ne vanno generati di nuovi: `docs/mockups/redesign-chat/` (`index.html`, `stato-a-conversazione.html`, `stato-d-board.html`, `stato-e-stretto.html`). Coprono più di US-057 — l'indice dei thread persistenti, la ricerca e le run dentro il flusso sono disegnate lì ma sono **fuori ambito** qui. Da quei file si prendono soltanto: la conversazione a piena larghezza nella colonna principale (stato A), le tre schede di vista `Conversazione · Spec · Board` in testa alla colonna (stati A e D), la board come vista secondaria nello stesso spazio (stato D), i due contatori in topbar anche in finestra stretta (stato E) e la sovrapposizione che si richiude alla scelta (stato E).\n\n_Piano generato con ARchetipo Planning — 2026-08-22_"
+tasks:
+  - id: TASK-01
+    title: workspace-layout.js decide una vista della colonna principale, con la conversazione come casa
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      `cli/internal/web/assets/workspace-layout.js` risolve quale vista occupa la colonna principale a partire da uno stato dichiarato `{view, specOpen, narrow}`, con `conversation` come vista predefinita, e restituisce anche il riduttore puro che chiude una sovrapposizione quando si sceglie qualcosa dentro di essa.
+
+      ## Read
+      - `cli/internal/web/assets/workspace-layout.js` — l'intero modulo: `NARROW_MAX_WIDTH`, `PANES`, `PANE_META`, `presentPanes`, `narrowVisiblePane`, `wideVisiblePanes`, `switcherFor`, `resolveLayout` e la forma dell'oggetto restituito.
+      - `test/web/workspace-layout.test.mjs` — per sapere quali proprietà del valore restituito sono già osservate (`visible`, `panes[*].visible`, `present`, `switchers`, `back`, `shellClass`) e non romperne la forma senza motivo.
+      - `cli/internal/web/assets/app.js` righe 680-815 — l'unico consumatore: `applyShellLayout`, `applyPaneState`, `renderShellSwitchers`, `showShellPane`.
+
+      ## Change
+      - `cli/internal/web/assets/workspace-layout.js` — solo questo file in questo task.
+      - Non goal: non toccare `app.js`, `index.html`, `app.css` né alcun test qui. Non introdurre DOM, `document`, `window` (fuori dal ramo UMD di export), `fetch` o applicazione di classi: il modulo resta puro e continua a esportare sia via `module.exports` sia via `window.WorkspaceLayout`.
+      - Non goal: non cambiare `NARROW_MAX_WIDTH`, che resta `900` e resta dichiarato qui e solo qui.
+
+      ## Steps
+      1. Sostituire `PANES = ["board", "spec", "rail"]` con `PANES = ["conversation", "board", "spec"]` — ordine di lettura: la casa per prima. Rimuovere `RAIL_FOCUS_VALUES` e ogni riferimento al riquadro `rail`.
+      2. Aggiungere ed esportare `VIEWS = ["conversation", "board", "spec"]` e `DEFAULT_VIEW = "conversation"`.
+      3. Aggiornare `PANE_META`: `conversation → { className: "shell-pane-conversation", label: "Conversazione" }`, `board → { className: "shell-pane-board", label: "Board" }`, `spec → { className: "shell-pane-spec", label: "Spec" }`. Le etichette sono quelle delle tre schede del mockup `docs/mockups/redesign-chat/stato-d-board.html`.
+      4. Aggiungere ed esportare `PANE_OVERLAY_CLASS = "is-overlay"` accanto a `PANE_VISIBLE_CLASS` / `PANE_HIDDEN_CLASS`.
+      5. Riscrivere `presentPanes(specOpen)`: `conversation` e `board` sono sempre presenti, `spec` solo quando `specOpen` è vero.
+      6. Riscrivere `resolveLayout(state)` con la firma `{view, specOpen, narrow}`:
+         - normalizzare la vista: un `view` assente, non stringa, non in `VIEWS`, oppure uguale a `"spec"` mentre `specOpen` è falso, ricade su `DEFAULT_VIEW`. La vista normalizzata è restituita come `view`.
+         - in finestra larga (`narrow` falso): `visible = [view]` — una sola vista, a piena larghezza — e nessun riquadro porta `overlay`.
+         - in finestra stretta: `conversation` è **sempre** visibile; se la vista normalizzata non è `conversation`, anche quel riquadro è visibile e porta `overlay: true`. `visible` elenca quindi uno o due riquadri, e la conversazione c'è sempre.
+         - `panes[p]` porta `{present, visible, overlay, className, stateClass}` dove `stateClass` resta `is-visible` / `is-hidden` e `overlay` è un booleano.
+         - `switchers`: uno per ogni vista presente **diversa dalla vista normalizzata**, prodotta da `switcherFor`, in entrambi i modi larga e stretta — il commutatore è permanente, non più solo un ripiego per la finestra stretta. Ogni voce porta `{target, className, label, view, specOpen}`, dove `view` è la vista che premerla produce e `specOpen` è lo stato di apertura spec implicato: `true` per il bersaglio `spec`, `false` per il bersaglio `board` (lasciare il dettaglio lo chiude), e il valore corrente per il bersaglio `conversation`, perché andare alla casa non chiude una spec aperta.
+         - `back`: resta non nullo quando `specOpen` è vero, ed è il commutatore verso `board`, con `specOpen: false` — è il controllo di chiusura del dettaglio.
+         - `shellClass`: invariato, `workspace-shell--wide` / `workspace-shell--narrow`.
+      7. Aggiungere la funzione pura `nextViewAfterSelection(state, selection)` ed esportarla. `selection` è una stringa fra `"spec"` (una card è stata scelta dentro la board), `"board"` (si è lasciato il dettaglio) e `"conversation"` (si è chiesta esplicitamente la casa). Restituisce il nuovo stato `{view, specOpen, narrow}`: scegliere `"spec"` porta `view: "spec"` e `specOpen: true`; scegliere `"board"` porta `view: "board"` e `specOpen: false`; scegliere `"conversation"` porta `view: "conversation"` lasciando `specOpen` com'era. Una `selection` sconosciuta restituisce lo stato invariato. È qui, e solo qui, che vive la regola di richiusura di AC-6: una sovrapposizione non sopravvive alla scelta fatta dentro di essa, perché la scelta cambia la vista.
+      8. Aggiornare il commento in testa al file: la shell ha una colonna principale che ospita una vista alla volta, la conversazione è la casa, e in finestra stretta le altre viste vi si sovrappongono. Il commento sul punto di rottura dichiarato una volta sola resta valido e va conservato.
+      9. Rimuovere dall'API esportata `RAIL_FOCUS_VALUES` e aggiungere `VIEWS`, `DEFAULT_VIEW`, `PANE_OVERLAY_CLASS`, `nextViewAfterSelection`.
+
+      ## Verify
+      - Eseguire dalla radice del repository: `node -e "const m=require('./cli/internal/web/assets/workspace-layout.js'); const l=m.resolveLayout({}); console.log(JSON.stringify({view:l.view, visible:l.visible, sw:l.switchers.map(s=>s.target)}));"`
+      - Expect: stampa `{"view":"conversation","visible":["conversation"],"sw":["board"]}` — a stato vuoto la casa è la conversazione e la board è a un solo comando.
+      - Eseguire: `node -e "const m=require('./cli/internal/web/assets/workspace-layout.js'); const l=m.resolveLayout({view:'board',narrow:true}); console.log(JSON.stringify({visible:l.visible, ov:l.panes.board.overlay, conv:l.panes.conversation.visible}));"`
+      - Expect: stampa `{"visible":["conversation","board"],"ov":true,"conv":true}` (l'ordine dentro `visible` è indifferente purché entrambi ci siano) — in finestra stretta la conversazione resta e la board le si sovrappone.
+      - `npm run test:web` fallirà su `workspace-layout.test.mjs`, che è ancora scritto sulla firma vecchia: è **atteso** ed è il lavoro di TASK-02. Nessun'altra suite deve peggiorare rispetto alla baseline (121 test verdi): il conteggio dei fallimenti deve provenire **solo** da `workspace-layout.test.mjs`.
+
+      ## Done
+      - [ ] AC-1 — `resolveLayout({})` risponde `view: "conversation"` con la sola conversazione visibile, in finestra larga e in finestra stretta.
+      - [ ] AC-2 — in ogni stato in cui la board non è la vista corrente il valore restituito contiene esattamente un commutatore con `target: "board"`.
+      - [ ] AC-6 — in ogni stato con `narrow: true` la conversazione è visibile, e ogni altro riquadro visibile porta `overlay: true`; `nextViewAfterSelection` esiste, è esportata ed è pura.
+      - [ ] Il modulo non contiene `document`, `fetch` né alcuna scrittura di classi su elementi; `NARROW_MAX_WIDTH` vale ancora `900` ed è dichiarato solo qui.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Riscrivere test/web/workspace-layout.test.mjs enumerando il nuovo spazio degli stati
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il test del modulo di layout enumera l'intero spazio degli stati nuovo e afferma le invarianti di AC-1, AC-2, AC-4 e AC-6 su tutti gli stati, non su esempi scelti.
+
+      ## Read
+      - `test/web/workspace-layout.test.mjs` — l'intero file: il caricatore `node:vm`, la costruzione di `STATES`, l'helper `visiblePanes` che incrocia `layout.visible` con i flag per riquadro, e il test del punto di rottura che rilegge `app.css`. Il caricatore e l'incrocio vanno conservati: sono la ragione per cui il test esercita il file davvero spedito.
+      - `cli/internal/web/assets/workspace-layout.js` — la firma e il valore restituito dopo TASK-01.
+
+      ## Change
+      - `test/web/workspace-layout.test.mjs` — riscritto.
+      - Non goal: non toccare `workspace-layout.js`. Se un'invariante non passa, il difetto è nel modulo e va corretto lì, non addolcito qui.
+      - Non goal: non introdurre `jsdom` né alcuna dipendenza — il test resta `node:test` + `node:assert/strict` + `node:vm`, come tutti i test in `test/web/`.
+
+      ## Steps
+      1. Conservare `loadWorkspaceLayout()` così com'è e destrutturare la nuova API: `resolveLayout`, `nextViewAfterSelection`, `NARROW_MAX_WIDTH`, `PANES`, `VIEWS`, `DEFAULT_VIEW`.
+      2. Costruire `STATES` enumerando `VIEWS × [false, true] (specOpen) × [false, true] (narrow)`, e affermare in un primo test che il conteggio è `VIEWS.length * 2 * 2`: i test successivi sono esaustivi solo se questo lo è.
+      3. Suite «la casa del workspace»: `resolveLayout({})`, `resolveLayout({view: undefined})`, `resolveLayout({view: "sconosciuta"})` e `resolveLayout({view: "spec", specOpen: false})` rispondono tutte `view === DEFAULT_VIEW === "conversation"` con la conversazione visibile — sia con `narrow: false` sia con `narrow: true`. (AC-1)
+      4. Suite «finestra larga»: per ogni stato con `narrow: false`, `visiblePanes(layout)` ha lunghezza 1 ed è esattamente `[layout.view]`, e nessun riquadro porta `overlay: true`. (AC-1, AC-2, AC-4: il dettaglio spec occupa la colonna, non ci si sovrappone.)
+      5. Suite «finestra stretta»: per ogni stato con `narrow: true`, `panes.conversation.visible` è vero; se `layout.view !== "conversation"` allora anche quel riquadro è visibile e porta `overlay: true`, e la conversazione **non** porta `overlay`. (AC-6)
+      6. Suite «nulla di irraggiungibile», su tutti gli stati: ogni `switcher.target` è in `PANES`; l'unione fra la vista corrente e i bersagli dei commutatori copre `layout.present`; nessun commutatore punta alla vista corrente; e non esistono due commutatori con lo stesso bersaglio — «un solo comando» significa anche un solo bottone. (AC-2)
+      7. Suite «ritorno al lavoro»: `back` è non nullo esattamente quando `specOpen` è vero, ha `target: "board"` e `specOpen: false`.
+      8. Suite «la scelta richiude la sovrapposizione», su `nextViewAfterSelection`: partendo da uno stato stretto con `view: "board"`, la selezione `"spec"` restituisce `{view: "spec", specOpen: true}` e `resolveLayout` su quel nuovo stato non mostra più la board; la selezione `"board"` da uno stato con `view: "spec"` restituisce `{view: "board", specOpen: false}`; la selezione `"conversation"` restituisce `view: "conversation"` lasciando `specOpen` invariato; una selezione sconosciuta restituisce uno stato che produce lo stesso layout di partenza. Affermare inoltre che, per ogni selezione ammessa, lo stato risultante non lascia mai due sovrapposizioni contemporanee: al più un riquadro con `overlay: true`. (AC-6)
+      9. Conservare invariata la suite «punto di rottura» che legge `app.css` e confronta il numero della media query con `NARROW_MAX_WIDTH`.
+      10. Scrivere i nomi dei test in italiano, come tutti gli altri in `test/web/`.
+
+      ## Verify
+      - Eseguire dalla radice: `node --test test/web/workspace-layout.test.mjs`
+      - Expect: tutte le suite passano, 0 fallimenti.
+      - Eseguire: `npm run test:web`
+      - Expect: 0 fallimenti e un totale di test **non inferiore** ai 121 della baseline (l'enumerazione più ampia può alzarlo; non deve abbassarlo).
+
+      ## Done
+      - [ ] AC-1 — un test afferma che lo stato vuoto e ogni vista non ammissibile ricadono sulla conversazione, in entrambe le larghezze.
+      - [ ] AC-2 — un test afferma, su tutti gli stati, che ogni riquadro presente e non corrente è raggiungibile con esattamente un commutatore.
+      - [ ] AC-4 — un test afferma che in finestra larga è visibile un solo riquadro e nessuno porta `overlay`.
+      - [ ] AC-6 — un test afferma, su tutti gli stati stretti, che la conversazione è visibile e che l'eventuale altra vista è una sovrapposizione; e che ogni selezione ammessa lascia al più una sovrapposizione.
+      - [ ] `node --test test/web/workspace-layout.test.mjs` è verde e `npm run test:web` è verde.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: index.html — la conversazione entra nella colonna principale e la rail laterale sparisce
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il documento servito dal viewer ha una colonna principale che ospita conversazione, board e dettaglio spec come tre viste sorelle, un commutatore di vista permanente, e nessun `<aside id="workspace-rail">`.
+
+      ## Read
+      - `cli/internal/web/assets/index.html` righe 116-300 — il blocco `#workspace-shell`: `#workspace-switchers`, `#workspace-primary`, `<main id="board">`, `#modal-root` con `.spec-pane-body` e le tre `data-tab`, `<aside id="workspace-rail">` con `#workspace-runs` e `#workspace-conversation`.
+      - `cli/internal/web/assets/index.html` righe 44-52 — `#topbar-stats` con `#stat-total`, `#stat-progress`, `#stat-done`.
+      - `docs/mockups/redesign-chat/stato-a-conversazione.html` righe 120-140 e `docs/mockups/redesign-chat/stato-d-board.html` righe 120-140 — la testa della colonna con le tre schede `.view-tab` `Conversazione · Spec · Board`, e la riga di sottotitolo. **Usare i mockup esistenti come riferimento; non generarne di nuovi.**
+
+      ## Change
+      - `cli/internal/web/assets/index.html` — solo questo file in questo task.
+      - Non goal: non toccare `app.js` né `app.css` qui, e non rinominare, rimuovere o riordinare **nessuno** degli identificatori interni al dettaglio spec (i 22 id con prefisso `story-`, `plan-`, `review-`, più `#modal-close`, `#story-editor-title`, `#tasks-tbody`) e nessuno dei tre valori `data-tab` `story` / `plan` / `review`. Il contenuto del dettaglio non cambia: cambia solo dove sta la colonna che lo contiene.
+      - Non goal: non toccare i sei veri dialoghi (`#prd-modal`, `#metrics-modal`, `#new-spec-modal`, `#new-workspace-modal`, `#workspaces-modal`, `#config-modal`), che restano fuori dalla shell.
+
+      ## Steps
+      1. Dentro `#workspace-shell`, prima di `#workspace-primary`, inserire la striscia delle run a piena larghezza: spostare qui `<section id="workspace-runs" class="workspace-runs" aria-live="polite" data-workspace-scoped></section>`, uscendo dalla rail. L'id, la classe e `aria-live` restano identici: `workspace-runs.js` e il suo test non devono accorgersene.
+      2. Sostituire `#workspace-switchers` con il commutatore di vista permanente: `<nav id="workspace-views" class="workspace-views" role="tablist" aria-label="Viste del workspace"></nav>`, sempre dentro `#workspace-shell` e sopra `#workspace-primary`. Il contenuto è disegnato da `app.js` dai `switchers` del modulo: il markup qui è un contenitore vuoto e non prende decisioni.
+      3. Dentro `#workspace-primary`, come **primo** figlio — prima di `<main id="board">` — montare la conversazione: `<section id="workspace-conversation" class="workspace-conversation shell-pane-conversation is-visible" aria-live="polite" data-workspace-scoped></section>`. Nota: nasce **senza** la classe `hidden`; è la casa, e la sua visibilità è d'ora in poi competenza esclusiva del layout.
+      4. Su `<main id="board" class="board shell-pane-board is-visible">` sostituire `is-visible` con `is-hidden`: all'apertura la board non è la vista mostrata.
+      5. Rimuovere l'elemento `<aside id="workspace-rail" …>` — apertura e chiusura — lasciando `#workspace-primary` come unico figlio strutturale della shell accanto alla striscia delle run e al commutatore.
+      6. Aggiornare i commenti HTML del blocco: la shell ha una colonna principale che ospita una vista alla volta; la conversazione è la casa del workspace; la board e il dettaglio spec sono viste che si richiamano nello stesso spazio; in finestra stretta la conversazione resta e le altre le si sovrappongono. Cancellare i commenti che descrivono la rail come luogo permanente, perché descrivono una struttura che non esiste più.
+      7. Verificare che il blocco `<script src>` in fondo al documento sia invariato: `workspace-layout.js` è già caricato prima di `app.js` e nessun file è stato aggiunto o tolto.
+
+      ## Verify
+      - Eseguire dalla radice: `node -e "const h=require('fs').readFileSync('cli/internal/web/assets/index.html','utf8'); const P=h.indexOf('id=\"workspace-primary\"'), C=h.indexOf('id=\"workspace-conversation\"'), B=h.indexOf('id=\"board\"'), M=h.indexOf('id=\"modal-root\"'), E=h.indexOf('</div>', h.indexOf('id=\"workspace-primary\"')); console.log(JSON.stringify({rail:h.includes('id=\"workspace-rail\"'), views:h.includes('id=\"workspace-views\"'), convInPrimary:C>P, boardInPrimary:B>P, specInPrimary:M>P}));"`
+      - Expect: stampa `{"rail":false,"views":true,"convInPrimary":true,"boardInPrimary":true,"specInPrimary":true}`.
+      - Eseguire: `cd cli && go build ./...`
+      - Expect: exit 0 — gli asset sono embeddati e il documento modificato deve continuare a compilare ed essere servito.
+      - Eseguire: `npm run test:web`
+      - Expect: `workspace-status-shell.test.mjs` resta verde (afferma che `#workspace-status` precede `#workspace-shell` come fratello: questa modifica non lo tocca). Fallimenti ammessi solo in `workspace-layout.test.mjs` se TASK-02 non è ancora chiuso.
+
+      ## Done
+      - [ ] AC-1 — `#workspace-conversation` è il primo figlio di `#workspace-primary` e nasce `is-visible`, senza classe `hidden`.
+      - [ ] AC-2 — `<main id="board">` è nella stessa colonna, nasce `is-hidden`, e il suo markup interno è invariato.
+      - [ ] AC-4 — `#modal-root` è ancora dentro `#workspace-primary` con `role="region"`, senza `aria-modal` e senza classe `modal-root`; i suoi 11 identificatori di operazione e le 3 schede `data-tab` sono tutti ancora presenti.
+      - [ ] AC-5 — `#topbar-stats` con `#stat-total` e `#stat-progress` è invariato in topbar.
+      - [ ] `<aside id="workspace-rail">` non esiste più nel documento e `#workspace-runs` è una striscia della shell.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: app.css — colonna unica a piena larghezza, schede di vista, sovrapposizione in finestra stretta
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Il foglio di stile disegna una colonna principale a piena larghezza che ospita una vista alla volta, le tre schede di vista, la sovrapposizione della finestra stretta, e smette di nascondere i contatori sotto i 900px.
+
+      ## Read
+      - `cli/internal/web/assets/app.css` righe 4790-5193 — la sezione della shell: `.workspace-shell`, `.workspace-primary`, `.workspace-rail`, `.shell-switchers`, `.shell-pane-*`, `.is-visible` / `.is-hidden`, `.spec-pane`, e la media query `@media (max-width: 900px)` finale.
+      - `cli/internal/web/assets/app.css` righe 2303-2327 — la media query preesistente che contiene `.topbar-stats { display: none; }`.
+      - `cli/internal/web/assets/workspace-layout.js` dopo TASK-01 — i nomi di classe che il modulo restituisce: `shell-pane-conversation`, `shell-pane-board`, `shell-pane-spec`, `is-visible`, `is-hidden`, `is-overlay`, `workspace-shell--wide`, `workspace-shell--narrow`.
+      - `docs/mockups/redesign-chat/shared.css` — le regole di `.shell`, `.main`, `.thread-head`, `.view-tab`, `.stream` e la media query a 900px, come riferimento visivo. **Riferimento, non da copiare integralmente: il mockup disegna anche l'indice dei thread, che è fuori ambito.**
+
+      ## Change
+      - `cli/internal/web/assets/app.css` — solo questo file in questo task.
+      - Non goal: non cambiare il numero `900`, che continua a venire da `NARROW_MAX_WIDTH` e deve restare l'unico numero condiviso fra CSS e JS — il test del punto di rottura lo rilegge.
+      - Non goal: non toccare le regole di `.board`, `.column`, `.card` e derivate: la board deve apparire identica a prima nello spazio che le viene dato.
+
+      ## Steps
+      1. `.workspace-shell`: da griglia a due colonne (colonna primaria + rail) a griglia a una colonna, con le righe `commutatore / striscia run / colonna primaria`. Rimuovere ogni regola che riservava larghezza alla rail.
+      2. Rimuovere tutte le regole di `.workspace-rail` e `.shell-pane-rail`, che non hanno più un elemento a cui applicarsi. Rimuovere anche `.shell-switchers` se il selettore non è più usato dopo la sostituzione con `#workspace-views`.
+      3. `.workspace-primary`: occupa il 100% della larghezza disponibile, con `min-width: 0` e `min-height: 0` perché contiene figli che scorrono per conto proprio; i suoi tre figli-vista sono sovrapposti nella stessa cella (`display: grid` con una sola area, oppure posizionamento equivalente), così che la vista visibile occupi esattamente lo spazio che occupava quella precedente — è la lettera di AC-2.
+      4. `.shell-pane-conversation`: piena larghezza e piena altezza della cella, con il flusso interno che scorre. La conversazione non si comprime mai: nessuna `max-width` sul riquadro.
+      5. `.is-visible` / `.is-hidden` sui riquadri della colonna: `is-hidden` toglie il riquadro dal disegno senza smontarlo — non usare regole che ne azzerino il contenuto; `is-visible` lo mostra.
+      6. `.workspace-views`: barra di schede in testa alla colonna, sul modello di `.view-tabs` del mockup. Stilare il bottone di vista (`.view-tab`) e lo stato corrente (`.view-tab.is-current`), riusando i token esistenti del tema — non introdurre colori nuovi hard-coded.
+      7. `#workspace-runs` come striscia: piena larghezza, sottile, e completamente collassata quando è vuota (`.workspace-runs:empty { display: none; }`), così che una schermata iniziale senza run in volo non ne paghi l'altezza.
+      8. Nella media query `@media (max-width: 900px)` finale, dichiarare lo stato stretto: la conversazione resta a piena larghezza, e un riquadro con `.is-overlay` è disegnato **sopra** di essa nella stessa cella — livello superiore, fondale opaco proprio, altezza piena — così che ciò che sta sotto resti montato e intatto. Aggiungere anche `.workspace-shell--narrow` e le classi `shell-pane-board` / `shell-pane-spec` in questo blocco, perché lo smoke afferma che il CSS servito stila ogni classe che il modulo restituisce per lo stato stretto.
+      9. Rimuovere `.topbar-stats { display: none; }` dalla media query a 900px e sostituirla con una forma compatta che resti leggibile (per esempio nascondendo solo `.stat-label` e `.stat-sep`, mai i numeri `#stat-total` e `#stat-progress`). Il mockup `docs/mockups/redesign-chat/stato-e-stretto.html` mostra i due contatori presenti in topbar anche in finestra stretta.
+      10. Rileggere il file cercando riferimenti residui a `workspace-rail` e `shell-pane-rail` e rimuoverli tutti: una regola orfana è un selettore che nessuno può più far corrispondere.
+
+      ## Verify
+      - Eseguire dalla radice: `node -e "const c=require('fs').readFileSync('cli/internal/web/assets/app.css','utf8'); const m=c.match(/@media\s*\(max-width:\s*(\d+)px\)\s*\{[^@]*?\.workspace-shell\b/); console.log(JSON.stringify({breakpoint:m&&Number(m[1]), rail:/\.workspace-rail|\.shell-pane-rail/.test(c), overlay:c.includes('is-overlay'), conv:c.includes('shell-pane-conversation'), statsHidden:/\.topbar-stats\s*\{[^}]*display:\s*none/.test(c)}));"`
+      - Expect: stampa `{"breakpoint":900,"rail":false,"overlay":true,"conv":true,"statsHidden":false}`.
+      - Eseguire: `node --test test/web/workspace-layout.test.mjs`
+      - Expect: verde — in particolare la suite «punto di rottura», che rilegge `app.css` e confronta il numero con `NARROW_MAX_WIDTH`.
+      - Eseguire: `cd cli && go build ./...`
+      - Expect: exit 0.
+
+      ## Done
+      - [ ] AC-1 — `.shell-pane-conversation` è definita e occupa piena larghezza e piena altezza della colonna principale, senza `max-width`.
+      - [ ] AC-2 — i tre riquadri della colonna condividono la stessa cella, quindi la board occupa lo spazio in cui stava la conversazione.
+      - [ ] AC-5 — nessuna regola di `app.css` applica `display: none` a `.topbar-stats` a nessuna larghezza.
+      - [ ] AC-6 — la media query a 900px definisce `.is-overlay` come strato sopra la conversazione, e stila `workspace-shell--narrow`, `shell-pane-board` e `shell-pane-spec`.
+      - [ ] Nessun selettore `.workspace-rail` o `.shell-pane-rail` resta nel file.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: app.js — lo stato della shell è una vista, e il commutatore la cambia senza smontare nulla
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Objective
+      `app.js` tiene una sola variabile di vista, la passa al modulo puro, applica le classi che riceve, disegna il commutatore permanente e applica il riduttore di selezione, senza mai smontare o ricostruire un riquadro che sta soltanto uscendo di vista.
+
+      ## Read
+      - `cli/internal/web/assets/app.js` righe 680-815 — l'intera sezione «Workspace shell layout»: `specOpen`, `railFocus`, `shellNarrow`, `shellNarrowQuery`, `applyPaneState`, `renderShellSwitchers`, `applyShellLayout`, `showShellPane` e il listener delegato sui commutatori.
+      - `cli/internal/web/assets/app.js` righe 10-30 — le costanti di elemento in testa al file: `shellSwitchersEl`, `boardEl`, `modal`, `workspaceRailEl`, `shellPrimaryEl`.
+      - `cli/internal/web/assets/app.js` righe 1322-1360 (`openEditor`) e 1665-1680 (`closeModal`) — i due punti che oggi scrivono `specOpen`.
+      - `cli/internal/web/assets/app.js` riga 331 — la scorciatoia `Escape`.
+      - `cli/internal/web/assets/app.js` righe 1227-1250 — `renderCard` e il `click` che chiama `openEditor(spec.code)`: è la «scelta dentro l'overlay» di AC-6.
+      - `cli/internal/web/assets/workspace-layout.js` dopo TASK-01 — la nuova firma e `nextViewAfterSelection`.
+
+      ## Change
+      - `cli/internal/web/assets/app.js` — solo questo file in questo task, e solo le sezioni elencate sopra.
+      - Non goal: non toccare `renderBoard`, `renderCard`, `loadBoard`, `updateStats`, `createBoardSortable` né alcun pannello del dettaglio spec. AC-2 promette che board e dettaglio mostrino ciò che mostravano prima; il modo per mantenerlo è non modificarli.
+      - Non goal: non scrivere in `app.js` alcuna regola su chi è visibile. Ogni decisione viene da `WorkspaceLayout`; qui si scrivono solo classi.
+
+      ## Steps
+      1. Sostituire le variabili `specOpen` e `railFocus` con `let shellView = WorkspaceLayout.DEFAULT_VIEW;` e conservare `let specOpen = false;` con il solo significato di «una spec è aperta nel pannello», che è ciò che il modulo chiede come secondo argomento e che `Escape` e `closeModal` già usano. `railFocus` sparisce.
+      2. Sostituire la costante `shellSwitchersEl` con `const shellViewsEl = document.getElementById("workspace-views");` e rimuovere `workspaceRailEl`, che non ha più elemento.
+      3. Aggiungere `const conversationPaneEl = document.getElementById("workspace-conversation");` nella stessa zona delle altre costanti di elemento (l'id è già letto più in basso come `conversationEl`: riusare quella costante se è dichiarata prima dell'uso, altrimenti dichiararne una qui e usare la stessa in entrambi i punti — non devono esistere due elementi diversi con lo stesso ruolo).
+      4. Estendere `applyPaneState(el, pane)` con la classe di sovrapposizione: `el.classList.toggle(WorkspaceLayout.PANE_OVERLAY_CLASS, pane.overlay === true)`. Il resto della funzione resta identico. **La funzione continua a scrivere solo classi: non deve contenere la stringa `innerHTML`.** È l'invariante che rende vero AC-3.
+      5. Riscrivere `applyShellLayout()`: risolvere `WorkspaceLayout.resolveLayout({view: shellView, specOpen, narrow: shellNarrow})`, riassegnare `shellView = layout.view` (il modulo normalizza, e la normalizzazione è l'unica autorità), scrivere `layout.shellClass` sulla shell e applicare `applyPaneState` ai tre riquadri: conversazione, board, `#modal-root`. Rimuovere la logica su `shellPrimaryEl` che nascondeva la colonna quando non mostrava nulla: con la conversazione dentro la colonna, la colonna ha sempre qualcosa da mostrare.
+      6. Rinominare `renderShellSwitchers` in `renderShellViews(switchers, current)` e disegnarla dentro `#workspace-views`: un bottone per ogni commutatore, più un bottone per la vista corrente marcato `is-current` e `aria-selected="true"`, così che le tre schede del mockup siano tutte visibili e la corrente sia riconoscibile. Ogni bottone porta `data-shell-view` con la vista che produce. Il contenitore non viene mai nascosto: il commutatore è permanente.
+      7. Riscrivere `showShellPane(target)` come `setShellView(view, opts)`: assegna `shellView`; quando la vista è `board`, se una spec era aperta chiama `closeModal()` (che a sua volta richiama `applyShellLayout`); altrimenti chiama `applyShellLayout()`. Nessun altro effetto.
+      8. Spostare il listener delegato dal vecchio contenitore a `shellViewsEl`, leggendo `data-shell-view`.
+      9. Applicare il riduttore alla scelta fatta dentro una vista: in `openEditor(code)` sostituire l'assegnazione diretta di `specOpen`/`railFocus` con `const next = WorkspaceLayout.nextViewAfterSelection({view: shellView, specOpen, narrow: shellNarrow}, "spec"); shellView = next.view; specOpen = next.specOpen; applyShellLayout();`. In `closeModal()` fare lo stesso con la selezione `"board"`. È così che, in finestra stretta, scegliere una card chiude la sovrapposizione della board e chiudere il dettaglio riporta alla vista sotto — la regola sta nel modulo e qui si applica soltanto.
+      10. Conservare il comportamento del bottone `#modal-close`: continua a chiamare `closeModal`, e `applyShellLayout` continua a riscriverne `aria-label` e `title` da `layout.back.label`.
+      11. Conservare invariata la gestione di `matchMedia` e `onShellWidthChange`.
+      12. Chiamare `applyShellLayout()` una volta a fine sezione, come oggi, così che la pagina nasca già sulla conversazione.
+      13. Rileggere l'intero `app.js` cercando `railFocus`, `workspaceRailEl`, `shellSwitchersEl` e `showShellPane` e aggiornare o rimuovere ogni occorrenza residua, comprese quelle nei commenti che descrivono la rail come luogo permanente.
+
+      ## Verify
+      - Eseguire dalla radice: `node --check cli/internal/web/assets/app.js`
+      - Expect: exit 0, nessun errore di sintassi.
+      - Eseguire: `node -e "const s=require('fs').readFileSync('cli/internal/web/assets/app.js','utf8'); console.log(JSON.stringify({rail:/railFocus|workspaceRailEl|shellSwitchersEl/.test(s), views:s.includes('workspace-views'), reducer:s.includes('nextViewAfterSelection')}));"`
+      - Expect: stampa `{"rail":false,"views":true,"reducer":true}`.
+      - Eseguire: `npm run test:web`
+      - Expect: 0 fallimenti.
+      - Eseguire: `cd cli && go build ./... && go test ./...`
+      - Expect: exit 0 e 1859 test verdi in 28 package, come da baseline.
+
+      ## Done
+      - [ ] AC-1 — `shellView` nasce a `WorkspaceLayout.DEFAULT_VIEW` e `applyShellLayout()` è chiamata all'inizializzazione: la pagina nasce sulla conversazione.
+      - [ ] AC-2 — `setShellView("board")` è raggiungibile da un bottone del commutatore permanente, e `renderBoard`/`renderCard`/`loadBoard` non compaiono nel diff.
+      - [ ] AC-3 — `applyPaneState` non contiene la stringa `innerHTML`, e nessun percorso di cambio vista chiama `resetConversationState` o assegna `conversationDraft`.
+      - [ ] AC-4 — `#modal-root` continua a essere mostrato solo per classe dentro la colonna principale; nessun codice gli aggiunge `aria-modal`, un fondale o `inert`.
+      - [ ] AC-6 — `openEditor` e `closeModal` passano per `nextViewAfterSelection`, e nessuna regola di sovrapposizione è scritta a mano in `app.js`.
+      - [ ] `node --check` è pulito, `npm run test:web` è verde e la suite Go è invariata.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Il pannello conversazione smette di nascondersi da solo e diventa la casa disegnata sempre
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      La visibilità di `#workspace-conversation` appartiene esclusivamente al layout: il pannello disegna sempre qualcosa — anche prima della prima lettura e anche quando la conversazione non è offerta — e non tocca mai la classe `hidden`.
+
+      ## Read
+      - `cli/internal/web/assets/app.js` righe 3837-3870 — le costanti e lo stato del pannello: `conversationEl`, `conversationView`, `conversationEvents`, `conversationDraft`, `conversationBusy`, `conversationCloseArmed`, `conversationRefusal`, `conversationLink`.
+      - `cli/internal/web/assets/app.js` righe 3955-3975 e 4000-4030 — `resetConversationState()` e il percorso che oggi svuota e nasconde il pannello.
+      - `cli/internal/web/assets/app.js` righe 4186-4245 — `renderConversationPanel()`, in particolare il ritorno anticipato `if (!conversationView) { innerHTML = ""; classList.add("hidden"); return; }`, il ripristino di `input.value = conversationDraft`, del caret e dello scorrimento.
+      - `cli/internal/web/assets/conversation.js` righe 336-440 — `renderConversation(view, draft, ui)` e i suoi rami: non offerta, nessuna conversazione aperta, attiva, conclusa.
+      - `test/web/conversation.test.mjs` — il caso «lo stato vuoto invita ad aprirne una» e il caso «la bozza del compositore sopravvive alla resa»: sono le due rese che questo task rende sempre raggiungibili.
+
+      ## Change
+      - `cli/internal/web/assets/app.js`, sezione «Workspace conversation» — solo i punti che scrivono `hidden` o svuotano `innerHTML` sul pannello.
+      - Non goal: **non modificare `cli/internal/web/assets/conversation.js`.** Il renderer ha già tutti i rami necessari, compreso lo stato vuoto; aggiungerne uno significherebbe duplicare una resa già testata.
+      - Non goal: non cambiare il ciclo di lettura (`CONVERSATION_POLL_MS`, il limite di fallimenti consecutivi, il cursore `conversationAfterID`) né la logica di accodamento degli eventi. La storia si conserva perché gli eventi si accodano e non si ricostruiscono, ed è già così.
+      - Non goal: non introdurre `localStorage` né alcuna persistenza della bozza. La bozza vive in `conversationDraft` e sopravvive perché nessuno smonta il pannello.
+
+      ## Steps
+      1. In `renderConversationPanel()` rimuovere il ritorno anticipato: quando `conversationView` è nullo, chiamare comunque `window.Conversation.renderConversation(null, conversationDraft, ui)` — il renderer risponde con lo stato che invita ad aprire una conversazione — invece di svuotare e nascondere.
+      2. Rimuovere da `renderConversationPanel()` la riga `conversationEl.classList.remove("hidden")`: nessuno aggiunge più quella classe, quindi nessuno deve toglierla.
+      3. In `resetConversationState()` e in ogni altro punto della sezione che chiama `conversationEl.classList.add("hidden")` o `conversationEl.innerHTML = ""`, sostituire con una nuova resa a stato azzerato: azzerare `conversationView`, `conversationEvents`, `conversationAfterID`, `conversationDraft`, `conversationRefusal`, `conversationLink` e poi chiamare `renderConversationPanel()`. Il pannello continua a mostrare qualcosa; ciò che mostra è la casa di un workspace senza conversazione. **Questo resta l'unico punto autorizzato ad azzerare `conversationDraft`, e viene raggiunto solo al cambio di workspace o alla sua chiusura — mai da un cambio di vista.**
+      4. Verificare che il pannello nascosto dal layout resti comunque aggiornato: il ciclo di lettura non deve fermarsi quando la vista corrente non è la conversazione, così che tornando alla casa la storia sia già quella corrente. Non aggiungere condizioni sulla vista dentro il ciclo.
+      5. Nel caso «conversazione non offerta» (workspace il cui provider non dichiara `workspace.converse`), verificare che la schermata iniziale mostri la frase di rifiuto del server tramite il ramo già esistente del renderer, e che il commutatore di vista resti disegnato: la board deve restare raggiungibile con lo stesso unico comando. Se il commutatore fosse condizionato alla disponibilità della conversazione, rimuovere quella condizione.
+      6. Rileggere la sezione cercando la stringa `"hidden"` applicata a `conversationEl` e confermare che non ne resta alcuna occorrenza.
+
+      ## Verify
+      - Eseguire dalla radice: `node -e "const s=require('fs').readFileSync('cli/internal/web/assets/app.js','utf8'); const i=s.indexOf('---- Workspace conversation'); const sec=s.slice(i); console.log(JSON.stringify({hidden:/conversationEl\.classList\.(add|remove)\(\s*\"hidden\"/.test(sec), blank:/conversationEl\.innerHTML\s*=\s*\"\"/.test(sec)}));"`
+      - Expect: stampa `{"hidden":false,"blank":false}` — il pannello non possiede più né la classe `hidden` né lo svuotamento.
+      - Eseguire: `node --check cli/internal/web/assets/app.js`
+      - Expect: exit 0.
+      - Eseguire: `node --test test/web/conversation.test.mjs`
+      - Expect: verde, compresi «lo stato vuoto invita ad aprirne una» e «la bozza del compositore sopravvive alla resa» — sono i due rami che ora vengono davvero usati dalla schermata iniziale.
+      - Eseguire: `npm run test:web`
+      - Expect: 0 fallimenti.
+
+      ## Done
+      - [ ] AC-1 — la schermata iniziale non è mai vuota: `renderConversationPanel()` disegna anche prima della prima lettura, e la classe `hidden` non viene più scritta su `#workspace-conversation` da nessuna parte.
+      - [ ] AC-3 — l'unico punto che azzera `conversationDraft` è il reset di workspace, raggiungibile solo dal cambio o dalla chiusura del workspace e mai da un cambio di vista; il ciclo di lettura non si ferma quando la conversazione non è la vista corrente, quindi la storia al ritorno è integra e aggiornata.
+      - [ ] AC-2 — nel workspace in cui la conversazione non è offerta il commutatore resta disegnato e la board resta raggiungibile con un solo comando.
+      - [ ] `node --test test/web/conversation.test.mjs` e `npm run test:web` sono verdi.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: La striscia delle run sopravvive alla rimozione della rail, indicatore in topbar compreso
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Objective
+      Ciò che il workspace sta eseguendo resta visibile in ogni vista, letto e disegnato esattamente come prima, senza che alcun riferimento al contenitore rimosso resti nel codice.
+
+      ## Read
+      - `cli/internal/web/assets/app.js` righe 820-935 — la sezione «Workspace runs rail»: `WORKSPACE_RUNS_POLL_MS`, `stopWorkspaceRunsPolling`, `resetWorkspaceRunsState`, `renderRunsAttention`, `renderWorkspaceRunsPanel`, `loadWorkspaceRuns`, `startWorkspaceRunsPolling`, `workspaceRunByID`.
+      - `cli/internal/web/assets/app.js` — la costante `workspaceRunsEl` e la costante `runsAttentionEl` in testa al file.
+      - `cli/internal/web/assets/workspace-runs.js` e `test/web/workspace-runs.test.mjs` — per confermare che il renderer e il suo test non dipendono dal contenitore.
+      - `cli/internal/web/assets/app.js` righe 592-645 — `boot()` ed `enterNoWorkspaceMode()`, che avviano e fermano la lettura delle run.
+
+      ## Change
+      - `cli/internal/web/assets/app.js` — solo i commenti e i riferimenti della sezione delle run che nominano la rail.
+      - Non goal: **non modificare `workspace-runs.js`.** Il renderer è puro e indipendente dal posto in cui il suo HTML finisce; toccarlo romperebbe un test che oggi è verde senza alcun guadagno.
+      - Non goal: non cambiare il periodo di lettura, il limite di fallimenti consecutivi, né la logica di `renderRunsAttention`. L'indicatore in topbar continua a contare dallo stesso payload che la striscia disegna: una lettura, una verità.
+      - Non goal: non spostare le run dentro il flusso della conversazione — è esplicitamente fuori ambito in questa spec.
+
+      ## Steps
+      1. Confermare che `workspaceRunsEl` continua a risolvere `#workspace-runs`, che dopo TASK-03 è la striscia della shell: nessun cambio di id, nessun cambio di costante.
+      2. Rinominare l'intestazione della sezione da «Workspace runs rail» a «Workspace runs strip» e riscrivere i commenti che descrivono una colonna laterale: la striscia sta sopra la colonna principale ed è visibile in ogni vista, quindi non c'è più bisogno di passare a un altro riquadro per sapere che cosa è in volo.
+      3. Aggiornare i commenti di `boot()` e `enterNoWorkspaceMode()` che nominano «la rail»: parlano ora della striscia.
+      4. Verificare che `resetWorkspaceRunsState()` continui a svuotare `#workspace-runs` con `innerHTML = ""`: qui lo svuotamento è corretto e va conservato — la striscia non è una vista, e una striscia vuota si collassa via CSS (`.workspace-runs:empty`, TASK-04). Non applicarle la disciplina del pannello conversazione.
+      5. Cercare in tutto `app.js` le occorrenze residue della parola `rail` e risolverle una per una: o descrivono la striscia, e vanno riscritte, o descrivono l'elemento rimosso, e vanno cancellate.
+
+      ## Verify
+      - Eseguire dalla radice: `node -e "const s=require('fs').readFileSync('cli/internal/web/assets/app.js','utf8'); const hits=(s.match(/rail/gi)||[]).length; console.log('rail occurrences:', hits);"`
+      - Expect: stampa `rail occurrences: 0`.
+      - Eseguire: `node --test test/web/workspace-runs.test.mjs`
+      - Expect: verde, invariato — il renderer non è stato toccato.
+      - Eseguire: `node --check cli/internal/web/assets/app.js` e `npm run test:web`
+      - Expect: exit 0 e 0 fallimenti.
+
+      ## Done
+      - [ ] AC-1 — la striscia delle run non toglie larghezza alla conversazione: `#workspace-runs` sta fuori da `#workspace-primary` e si collassa quando è vuota.
+      - [ ] `workspace-runs.js` e `test/web/workspace-runs.test.mjs` non compaiono nel diff.
+      - [ ] Nessuna occorrenza della parola `rail` resta in `app.js`, commenti compresi.
+      - [ ] `npm run test:web` è verde.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: test/web/workspace-shell-home.test.mjs — la casa del workspace e la bozza che sopravvive
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Un nuovo test di `test/web/` afferma sulla sorgente realmente spedita i fatti che vivono in `app.js`, `index.html` e `app.css` e che nessun modulo puro può dimostrare: la conversazione è la casa, i contatori restano leggibili, il dettaglio spec non è una finestra, e nessun cambio di vista tocca lo stato della conversazione.
+
+      ## Read
+      - `test/web/workspace-status-shell.test.mjs` — l'intero file. È il precedente da seguire: legge `index.html`, `app.css` e `app.js` come testo e afferma parentele e assenze. Riusarne lo stile, i nomi in italiano e il modo di risolvere i percorsi (`resolve(__dirname, "..", "..", "cli", "internal", "web", "assets")`).
+      - `cli/internal/web/assets/index.html`, `app.css`, `app.js` nello stato prodotto dai task precedenti.
+
+      ## Change
+      - `test/web/workspace-shell-home.test.mjs` — file nuovo.
+      - Non goal: non modificare alcun file sotto `cli/internal/web/assets/`. Se un'asserzione fallisce, il difetto è nell'implementazione e va corretto nel task che la possiede.
+      - Non goal: non introdurre `jsdom` né alcuna dipendenza. Il test resta `node:test` + `node:assert/strict` + lettura di file.
+      - Non goal: non duplicare ciò che `workspace-layout.test.mjs` già afferma sul modulo puro. Qui si afferma solo ciò che il modulo non può sapere.
+
+      ## Steps
+      1. Scrivere un helper `sectionOf(source, startMarker, endMarker)` che estrae il corpo di una funzione o di una sezione di `app.js` per nome, così che le asserzioni riguardino il percorso giusto e non l'intero file.
+      2. Suite «la conversazione è la casa» (AC-1): in `index.html`, l'indice di `id="workspace-conversation"` cade dopo quello di `id="workspace-primary"` e prima di quello di `id="board"`; la sezione della conversazione porta `is-visible` e **non** porta `hidden`; `<main id="board"` porta `is-hidden`; la stringa `id="workspace-rail"` non compare; `id="workspace-views"` compare.
+      3. Suite «la board è a un solo comando» (AC-2): `#workspace-views` è dichiarato una sola volta nel documento e non porta la classe `hidden`; in `app.js` esiste un listener delegato che legge `data-shell-view`, e non esiste più alcun riferimento a `data-shell-target`.
+      4. Suite «la bozza e la storia non si perdono» (AC-3), l'asserzione centrale del file:
+         - il corpo di `applyPaneState` non contiene la stringa `innerHTML`;
+         - il corpo di `setShellView` (e quello di `applyShellLayout`) non contiene `resetConversationState`, non contiene `conversationEl.innerHTML` e non contiene un'assegnazione a `conversationDraft`;
+         - in tutto `app.js` le assegnazioni a `conversationDraft` sono esattamente quelle attese: quella dell'evento `input` del compositore, quella dell'invio che la azzera dopo aver spedito, e quella del reset di workspace — nessuna nel percorso di cambio vista. Elencare i contesti attesi nel messaggio d'errore, così che una quarta assegnazione dica subito dov'è.
+      5. Suite «il dettaglio spec non è una finestra» (AC-4): in `index.html`, `id="modal-root"` cade dopo `id="workspace-primary"`; l'apertura del tag di `#modal-root` contiene `role="region"` e **non** contiene `aria-modal`; l'elemento non porta la classe `modal-root`; la stringa `inert` non compare in `app.js` se non dentro un commento; tutti e tre i valori `data-tab="story|plan|review"` sono presenti.
+      6. Suite «i contatori restano leggibili» (AC-5): `index.html` contiene `id="topbar-stats"`, `id="stat-total"` e `id="stat-progress"`; in `app.css` non esiste alcun blocco che applichi `display: none` a `.topbar-stats` (verificare con un'espressione che ammetta spazi e altre dichiarazioni nel blocco); e il corpo di `boot()` chiama `loadBoard()` sul ramo in cui il workspace è aperto — i contatori sono alimentati senza che la board sia la vista visibile.
+      7. Suite «lo stato stretto è stilato» (AC-6): `app.css` contiene la classe `is-overlay` all'interno della media query a 900px, e contiene `shell-pane-conversation`.
+      8. Ogni messaggio d'errore deve dire che cosa ci si aspettava e che cosa si è trovato, non solo che l'asserzione è fallita.
+
+      ## Verify
+      - Eseguire dalla radice: `node --test test/web/workspace-shell-home.test.mjs`
+      - Expect: tutte le suite passano, 0 fallimenti.
+      - Eseguire: `npm run test:web`
+      - Expect: 0 fallimenti e un totale di test superiore ai 121 della baseline, perché questo file ne aggiunge.
+      - Controprova dell'oracolo, da eseguire e poi annullare: introdurre temporaneamente `conversationEl.innerHTML = "";` dentro `setShellView` e rilanciare `node --test test/web/workspace-shell-home.test.mjs`.
+      - Expect: il test **fallisce**, nominando `setShellView`. Ripristinare subito il file e confermare che il test torna verde. Un oracolo che non fallisce quando il difetto c'è non è un oracolo.
+
+      ## Done
+      - [ ] AC-1 — un test afferma che `#workspace-conversation` è dentro `#workspace-primary`, nasce visibile, e che `<aside id="workspace-rail">` non esiste più.
+      - [ ] AC-2 — un test afferma che il commutatore di vista è unico, mai nascosto, e cablato su `data-shell-view`.
+      - [ ] AC-3 — un test afferma che `applyPaneState` scrive solo classi e che nessun percorso di cambio vista azzera o ricostruisce la conversazione; la controprova mostra che il test fallisce quando il difetto viene introdotto.
+      - [ ] AC-4 — un test afferma che `#modal-root` è una regione della colonna principale, senza `aria-modal`, senza classe di dialogo e con le tre schede intatte.
+      - [ ] AC-5 — un test afferma che nessuna regola nasconde `.topbar-stats` e che `boot()` legge la board sul ramo del workspace aperto.
+      - [ ] AC-6 — un test afferma che `is-overlay` è stilata nella media query a 900px.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Aggiornare lo smoke del viewer alla nuova shell servita
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      `test/e2e/workspace-runs-view-smoke.mjs` afferma sul documento e sul foglio di stile realmente serviti dal processo `archetipo view` la struttura nuova, e continua a osservare tutto ciò che osservava prima.
+
+      ## Read
+      - `test/e2e/workspace-runs-view-smoke.mjs` righe 365-500 — il blocco che legge `GET /index.html` e `GET /app.css`, la funzione `assertShellStructure(html)`, la lista `SPEC_TABS`, la lista degli 11 identificatori delle operazioni di spec, e il blocco che estrae dal modulo `workspace-layout.js` le classi da cercare nel CSS (`narrowClasses`).
+      - `test/e2e/workspace-runs-view-smoke.mjs` righe 380-400 — il controllo della credenziale che oggi fa fallire lo script: **non va toccato.**
+      - `cli/internal/web/assets/workspace-layout.js` dopo TASK-01 — i nomi di classe che il modulo restituisce ora.
+
+      ## Change
+      - `test/e2e/workspace-runs-view-smoke.mjs` — solo `assertShellStructure`, i testi dei messaggi `ok(...)` corrispondenti, e il calcolo di `narrowClasses`.
+      - Non goal: **non toccare il controllo della credenziale né il suo messaggio.** L'eco della credenziale è un difetto reale, preesistente e fuori dall'ambito di US-057: correggerlo qui allargherebbe la spec e nasconderebbe un problema che merita la sua.
+      - Non goal: non toccare le parti dello smoke che riguardano le run, l'approvazione, il conteggio delle richieste e la conversazione che sopravvive alle letture del dettaglio spec: quelle asserzioni restano valide parola per parola.
+      - Non goal: non allentare un'asserzione per farla passare. Se la struttura servita non corrisponde, il difetto è nell'implementazione.
+
+      ## Steps
+      1. Riscrivere `assertShellStructure(html)` sulla struttura nuova:
+         - `id="workspace-shell"` esiste; `id="workspace-primary"` esiste;
+         - `id="workspace-conversation"`, `id="board"` e `id="modal-root"` cadono tutti **dentro** `#workspace-primary`, cioè fra la sua apertura e la sua chiusura;
+         - `id="workspace-runs"` esiste ed è **fuori** da `#workspace-primary`, dentro `#workspace-shell`;
+         - `id="workspace-views"` esiste;
+         - `<aside id="workspace-rail"` **non** esiste: se compare, l'errore deve dire esplicitamente che la rail è stata rimossa da US-057 e che ritrovarla è una regressione;
+         - i 11 identificatori delle operazioni di spec e i 3 valori `data-tab` sono tutti ancora presenti — questa parte resta identica a com'è oggi.
+      2. Aggiornare i due messaggi `ok(...)` corrispondenti perché descrivano ciò che è stato davvero osservato: la conversazione, la board e il dettaglio spec nella stessa colonna principale, la striscia delle run fuori da essa, nessuna rail, e i 11 identificatori più le 3 schede intatti.
+      3. Aggiornare il riferimento agli AC nei messaggi: le righe che oggi dicono `AC-1` e `AC-5` di US-055 devono nominare gli AC di US-057 che stanno dimostrando — AC-1, AC-2 e AC-4 per la struttura, AC-5 per i contatori.
+      4. Aggiungere alla stessa funzione il controllo dei contatori (AC-5): `id="topbar-stats"`, `id="stat-total"` e `id="stat-progress"` sono presenti nel documento servito.
+      5. Nel blocco che verifica `app.css`, ricalcolare `narrowClasses` dal modulo aggiornato — deve ora includere `shell-pane-conversation` e `is-overlay` e non più `shell-pane-rail` — e affermare in aggiunta che il CSS servito **non** contiene una regola che applichi `display: none` a `.topbar-stats`.
+      6. Rileggere l'intero file cercando `workspace-rail` e `shell-pane-rail` e confermare che non ne resta alcuna occorrenza.
+
+      ## Verify
+      - Eseguire dalla radice: `npm run test:view-workspace-runs-smoke`
+      - Expect: **non** verde, e questo è il confine preso dalla baseline. Attesa esatta: tutte le righe `-> AC-… ok` vengono stampate, comprese quelle riscritte sulla struttura nuova; l'ultima riga resta esattamente `FAIL: the viewer echoed the credential in 1 response(s)`, con il conteggio ancora **1**. Un conteggio diverso da 1, o l'assenza di una qualsiasi riga `-> AC-… ok`, è una regressione introdotta da questa spec.
+      - Eseguire: `node -e "const s=require('fs').readFileSync('test/e2e/workspace-runs-view-smoke.mjs','utf8'); console.log(/workspace-rail|shell-pane-rail/.test(s));"`
+      - Expect: stampa `false`.
+
+      ## Done
+      - [ ] AC-1 — lo smoke afferma sul documento servito dal viewer reale che `#workspace-conversation` sta dentro `#workspace-primary` e che `<aside id="workspace-rail">` non esiste più.
+      - [ ] AC-2 — lo smoke afferma che `<main id="board">` è nella stessa colonna e che `#workspace-views` è servito.
+      - [ ] AC-4 — lo smoke afferma che `#modal-root` è dentro la colonna principale e che i 11 identificatori e le 3 schede sono intatti.
+      - [ ] AC-5 — lo smoke afferma che i contatori sono nel documento servito e che il CSS servito non li nasconde.
+      - [ ] AC-6 — lo smoke afferma che il CSS servito porta la media query alla larghezza esportata dal modulo e stila ogni classe dello stato stretto, `is-overlay` compresa.
+      - [ ] Il confine di fallimento è invariato rispetto alla baseline: un solo `FAIL`, quello dell'eco della credenziale, con conteggio 1.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Cancello finale — suite complete, confine di fallimento invariato, spec pronta per la review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+    body: |-
+      ## Objective
+      L'intero incremento è verificato con i controlli esatti che il repository si fida, il confine di fallimento è quello registrato nella baseline e non uno più largo, e la spec viene messa in review solo dopo che ogni task risulta `DONE`.
+
+      ## Read
+      - La sezione `## Baseline` del corpo di questo piano — è il metro di paragone di ogni comando qui sotto. Nessun comando va giudicato «verde» o «rosso» in astratto: va confrontato con la riga corrispondente.
+      - La sezione `## Mappa delle evidenze di accettazione` — per confermare, criterio per criterio, che l'evidenza promessa esiste davvero.
+
+      ## Change
+      - Nessun file di prodotto. Questo task esegue e verifica; se un controllo fallisce, la correzione appartiene al task che possiede il file, non a questo.
+
+      ## Steps
+      1. Eseguire, dalla radice del repository, i controlli mirati sui moduli puri e sulla struttura:
+         `node --test test/web/workspace-layout.test.mjs test/web/workspace-shell-home.test.mjs test/web/conversation.test.mjs test/web/workspace-runs.test.mjs test/web/workspace-status-shell.test.mjs`
+      2. Eseguire la suite web completa: `npm run test:web`.
+      3. Eseguire il controllo di sintassi sugli asset modificati: `node --check cli/internal/web/assets/app.js` e `node --check cli/internal/web/assets/workspace-layout.js`.
+      4. Eseguire i controlli Go, che coprono l'embedding e la servitura degli asset:
+         `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./...`
+      5. Eseguire lo smoke della shell servita: `npm run test:view-workspace-runs-smoke`.
+      6. Eseguire due smoke di regressione che esercitano board e dettaglio spec via API, a prova di AC-2: `npm run test:view-delete-smoke` e `npm run test:view-plan-smoke`.
+      7. Verificare che il diff dell'incremento non contenga `renderBoard`, `renderCard`, `loadBoard`, `workspace-runs.js` né `conversation.js`: `git diff --stat` e `git diff -- cli/internal/web/assets/conversation.js cli/internal/web/assets/workspace-runs.js` devono mostrare quei due file assenti dal diff.
+      8. Marcare **questo** task come `DONE` con `archetipo task done US-057 TASK-10`, eseguito da `/Users/stefanoleli/Project/ARchetipo`.
+      9. Rileggere la spec dalla radice del progetto: `archetipo spec show US-057`, sempre da `/Users/stefanoleli/Project/ARchetipo`. Contare i task e confermare che **nessuno** risulta `TODO`.
+      10. Solo allora, e solo se il conteggio è pulito, richiedere la review: `archetipo spec review US-057` da `/Users/stefanoleli/Project/ARchetipo`. Se anche un solo task è ancora `TODO`, fermarsi e riferirlo: la review non va richiesta.
+
+      ## Verify
+      - `node --test test/web/…` (passo 1) — Expect: 0 fallimenti.
+      - `npm run test:web` — Expect: 0 fallimenti, totale dei test **superiore** ai 121 della baseline (TASK-02 e TASK-08 ne aggiungono).
+      - `node --check …` — Expect: exit 0 su entrambi i file.
+      - `cd cli && gofmt -l .` — Expect: nessun output. `go vet ./...`, `go build ./...` — Expect: exit 0. `go test ./...` — Expect: 1859 test verdi in 28 package, come da baseline.
+      - `npm run test:view-workspace-runs-smoke` — Expect: **il confine esatto della baseline, non il verde.** Tutte le righe `-> AC-… ok` stampate, e come ultima riga esattamente `FAIL: the viewer echoed the credential in 1 response(s)` con conteggio `1`. Qualsiasi altra riga di errore, o una riga `-> AC-… ok` mancante, è un fallimento nuovo introdotto da questa spec e va corretto nel task che lo possiede.
+      - `npm run test:view-delete-smoke` e `npm run test:view-plan-smoke` — Expect: entrambi terminano con la riga di successo del proprio script, senza `FAIL`.
+      - `git diff -- cli/internal/web/assets/conversation.js cli/internal/web/assets/workspace-runs.js` — Expect: output vuoto.
+      - `archetipo spec show US-057` — Expect: envelope con 10 task, tutti in stato `DONE`.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-4, AC-6 — `node --test test/web/workspace-layout.test.mjs` è verde e la sua enumerazione copre l'intero spazio degli stati dichiarato dal modulo.
+      - [ ] AC-1, AC-3, AC-4, AC-5 — `node --test test/web/workspace-shell-home.test.mjs` è verde.
+      - [ ] AC-2 — `test:view-delete-smoke` e `test:view-plan-smoke` passano, e `conversation.js` e `workspace-runs.js` sono assenti dal diff.
+      - [ ] AC-1, AC-2, AC-4, AC-5, AC-6 — `test:view-workspace-runs-smoke` stampa ogni riga `-> AC-… ok` e fallisce **solo** sull'eco della credenziale, con conteggio 1, esattamente come nella baseline.
+      - [ ] I file modificati non aggiungono diagnostica: `node --check` pulito, `gofmt -l .` senza output, `go vet` e `go build` a exit 0.
+      - [ ] Ordine rispettato: controlli eseguiti → questo task marcato `DONE` → `archetipo spec show US-057` riletta → nessun task `TODO` → solo allora `archetipo spec review US-057`.
+
+      ## Blockers
+      None.
+    ref: TASK-10

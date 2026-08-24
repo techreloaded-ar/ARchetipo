@@ -1,0 +1,809 @@
+schema: archetipo/plan/v2
+spec_code: US-051
+body: |-
+  # US-051: Aprire ARchetipo senza essere dentro un workspace — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-08-21
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-008 — Workspace gestiti dalla UI
+  **Priorità:** HIGH | **Punti:** 5
+
+  **User Story**
+  Come utilizzatore di ARchetipo con più workspace, voglio avviare ARchetipo da una directory qualunque e scegliere lì quale workspace aprire, così da non dover raggiungere una cartella nel terminale prima di poter lavorare, e da non vedermi presentata la board di un workspace che non esiste.
+
+  **Criteri di accettazione**
+
+  - AC-1 — Avviato in una directory che non appartiene ad alcun workspace, ARchetipo apre la home dei workspace conosciuti, elencati con nome, percorso, ultimo accesso e raggiungibilità.
+  - AC-2 — Scegliendo dalla home un workspace raggiungibile, quel workspace diventa il workspace aperto e la sua board è disponibile senza riavviare il processo.
+  - AC-3 — Avviato all'interno di un workspace, ARchetipo apre quel workspace, senza passare dalla home.
+  - AC-4 — Una directory che non è un workspace non viene mai aggiunta all'elenco dei workspace conosciuti, e l'elenco resta invariato dopo un avvio fuori da un workspace.
+  - AC-5 — Finché nessun workspace è aperto, ogni funzione che presuppone un workspace dichiara che nessun workspace è aperto, invece di rispondere con contenuti vuoti o con quelli della directory di avvio.
+  - AC-6 — Dalla home restano disponibili le azioni già offerte sull'elenco dei workspace: aggiungerne uno esistente, crearne uno nuovo e dimenticarne uno; dimenticare rimuove solo la voce dall'elenco e non tocca la directory.
+
+  **Fuori ambito**
+  Presenza permanente dell'identità del workspace nell'interfaccia, shell a due colonne, conversazione affiancata alla board, e qualsiasi modifica al formato persistito dell'elenco dei workspace conosciuti.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Oggi il viewer non ha modo di **non** avere un workspace. `archetipo view` chiama `loadConfigFor`, che risolve `config.LoadExact`: quando nessun `.archetipo/config.yaml` esiste risalendo dalla cwd, la funzione restituisce i default *radicati sulla directory di avvio*. Da lì tutto il resto segue meccanicamente: `NewServer` costruisce una `workspaceSession` su quella directory, la board risponde vuota invece che rifiutare, e `srv.RegisterWorkspace()` iscrive la directory neutra nell'elenco dei workspace conosciuti. AC-1, AC-4 e AC-5 sono violati dallo stesso identico punto.
+
+  La soluzione introduce, in modo esplicito e verificabile, lo stato **"nessun workspace aperto"** e lo propaga ai tre strati che lo devono conoscere: il comando, il server, la pagina.
+
+  - **`Server.cur` diventa legittimamente nullo.** È già l'unico punto da cui si raggiunge tutto ciò che dipende dal project root (`session()`), quindi lo stato "nessun workspace" è esattamente `cur == nil` e non un flag parallelo che potrebbe divergere. Si aggiunge un costruttore dedicato `NewHomeServer(registry, addr)` invece di cambiare la firma di `NewServer`, che decine di test già usano.
+  - **Le rotte vengono classificate esplicitamente al momento della registrazione.** `registerRoutes` smette di chiamare `mux.HandleFunc` direttamente e usa due helper: `s.handleWorkspace(pattern, h)` per le rotte che presuppongono un workspace e `s.handleAlways(pattern, h)` per quelle di home. La prima avvolge l'handler in un gate che, con `session() == nil`, risponde `409` con `{"error":"no workspace is open","code":"E_CONFLICT","hint":…,"workspaceOpen":false}` **prima** di decodificare il corpo e prima di toccare il connettore. È il seme unico che rende AC-5 vero per costruzione: nessuno dei 40 `s.session()` sparsi nei handler va toccato, perché nessuno di essi è più raggiungibile con sessione nulla. La scelta di due helper invece di una lista di eccezioni è deliberata: una rotta nuova non può essere dimenticata, perché non esiste un modo "neutro" di registrarla.
+  - **Il campo `workspaceOpen` accanto al codice.** `writeError` mappa `iox.CodeConflict` su `409`, ma `E_CONFLICT` è già usato per altre cose (workspace irraggiungibile, run non attiva). Un booleano esplicito nel corpo permette a frontend e smoke di distinguere il rifiuto senza leggere la prosa, che resta libera di cambiare.
+  - **`GET /api/workspaces` risponde anche alla domanda "c'è un workspace aperto?"**, con `open` (booleano) e `currentPath` (stringa, vuota quando nessuno). Una sola chiamata dice al browser sia se disegnare la home sia cosa metterci dentro; `workspaceViews` con sessione nulla marca `current: false` su ogni voce invece di dereferenziare `ws.cfg`.
+  - **La decisione di avvio sta nel comando, non nel server.** Si esporta `config.FindRoot(startDir) (root string, found bool, err error)`, sottile involucro sull'attuale `find` non esportato, e `newViewCmd` la interroga sulla cwd: trovato → il percorso di oggi, invariato, `loadConfigFor` compresa la correzione nested-worktree (AC-3); non trovato → `NewHomeServer`, nessuna `RegisterWorkspace()`, voce `viewreg` con `ProjectRoot` vuoto e `archetipo view list` che stampa `(no workspace)` in quella colonna. Non chiamare `Touch` è ciò che rende AC-4 vero: l'unica scrittura possibile sul registro sparisce dal percorso di avvio.
+  - **Aprire dalla home riusa interamente US-046.** `swapSession` verifica già `if cur := s.session(); cur != nil`, e `previous.stop()` è già condizionale: partire da sessione nulla non è un caso speciale, è il caso degenere di quello esistente. `Run()` e l'handler `/mockups/` ricevono le due guardie mancanti (start/stop e `404`).
+  - **La home lato pagina è il pannello dei workspace conosciuti presentato come pagina.** `body.no-workspace` nasconde `#board`, `#workspace-status` e i bottoni della topbar marcati `data-workspace-scoped`; una nuova sezione `#workspace-home` viene riempita da un renderer puro `workspace-home.js`, nello stesso stile UMD di `workspace-status.js` e `provider-fields.js` (nessun DOM, nessuna fetch, restituisce una stringa HTML). Lo stesso renderer sostituisce i costruttori di nodi `renderWorkspaces`/`workspaceRow` dentro la modale, così esiste **una** resa dell'elenco e non due destinate a divergere; gli handler delegati esistenti su `data-open`/`data-remove` continuano a funzionare invariati, il che è ciò che rende AC-6 vero senza riscrivere alcuna azione.
+
+  ### Decisioni architetturali
+
+  Nessuna scelta di questa spec supera la soglia ADR: non cambia il modello dati persistito (il formato di `workspaces.json` è esplicitamente fuori ambito), non tocca il modello di sicurezza né la topologia, e non introduce una politica trasversale nuova — segue il seme già stabilito da US-045/US-046 (registro dei workspace, `SwitchWorkspace`, pannello riusabile). Le due scelte locali che avevano un'alternativa reale sono comunque registrate qui:
+
+  1. **Gate a livello di registrazione delle rotte** invece di una guardia dentro ciascun handler. L'alternativa (40 controlli `if ws == nil`) è stata scartata: è proporzionale al numero di handler, si degrada a ogni rotta nuova e non è verificabile in un solo test. Il gate è verificabile enumerando le rotte.
+  2. **Un solo renderer puro dell'elenco**, usato sia dalla home sia dalla modale, invece di una resa nuova solo per la home. L'alternativa lasciava due implementazioni della stessa lista, che è precisamente il modo in cui la home e la modale finirebbero per dire cose diverse sulla stessa voce.
+
+  ---
+
+  ## Baseline
+
+  Misurata su `/Users/stefanoleli/Project/Archetipo` prima di scrivere codice.
+
+  | Verifica | Risultato prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | nessun output (pulito) | ogni task Go che tocca file deve lasciarlo pulito; il gate finale lo rilegge |
+  | `cd cli && go vet ./...` | nessun problema | `Expect: passes` è lecito |
+  | `cd cli && go build ./...` | compila | `Expect: passes` è lecito |
+  | `cd cli && go test ./...` | 1695 test passati in 28 package | `Expect: passes`; nessun task può introdurre fallimenti |
+  | `npm run test:web` | 49 test passati, 0 falliti | `Expect: passes` |
+  | `golangci-lint run --timeout 5m ./...` | **non eseguibile: binario non installato** | prerequisito d'ambiente, non un fallimento del codice. Il gate finale lo esegue dopo `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`; se l'installazione non è possibile, il gate lo registra come saltato con la ragione e non lo dichiara verde |
+
+  Prerequisiti d'ambiente, distinti dai fallimenti di codice: Go installato (già verificato dalla build), Node installato (già verificato da `test:web`), `golangci-lint` da installare con il comando sopra. Gli smoke Node compilano il CLI da sorgente in `test/e2e/.bin/` e scrivono sotto `test/workspaces/`, entrambi ignorati da Git: nessun task deve committare quei percorsi.
+
+  Nessuno dei file toccati dal piano presenta diagnostiche preesistenti di compilatore o vet, quindi ogni file modificato deve restare privo di diagnostiche.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |
+  |---|---|---|---|---|
+  | AC-1 | viewer reale avviato con cwd in una directory neutra (nessun `.archetipo/config.yaml` risalendo fino alla radice), registro di stato con due workspace conosciuti di cui uno rinominato via | e2e smoke Node su HTTP + unit `test/web` sul renderer | `GET /api/workspaces` risponde `200` con `open:false`, `currentPath:""` e le due voci ciascuna con `name`, `path`, `lastOpenedAt` e `reachable`/`status` (uno `true`, uno `missing`); il testo HTML prodotto da `renderWorkspaceHome` contiene nome, percorso, "Last opened" con la data formattata e l'etichetta di raggiungibilità di ogni voce | TASK-11, TASK-12 |
+  | AC-2 | il viewer della riga sopra, PID catturato; workspace `beta` raggiungibile e conosciuto, con una spec `US-B01` che esiste solo lì | e2e smoke Node su HTTP | `POST /api/workspaces/{id}/open` risponde `200` con `current:true`; **lo stesso PID** risponde poi `GET /api/board` con `200` e la colonna che contiene esattamente `US-B01`, e `GET /api/workspaces` riporta `open:true` con `currentPath` = quella directory | TASK-12 |
+  | AC-3 | viewer reale avviato con cwd **dentro** `beta` | e2e smoke Node su HTTP | al primo `GET /api/workspaces` dopo `onReady`, `open` è già `true` e `currentPath` è `beta`: nessuna richiesta di apertura è mai stata inviata, e `GET /api/board` serve `US-B01` | TASK-12 |
+  | AC-4 | file `workspaces.json` con due voci, copiato byte a byte prima dell'avvio nella directory neutra | e2e smoke Node su filesystem | dopo l'avvio del viewer e dopo una `GET /api/workspaces`, il contenuto di `workspaces.json` è **identico byte a byte** alla copia, e nessuna voce ha come `path` la directory neutra | TASK-12 |
+  | AC-5 | server costruito con `NewHomeServer` (unit Go) e viewer reale nella directory neutra (smoke) | unit Go sui handler + e2e smoke Node | ogni rotta workspace-scoped (`/api/board`, `/api/board/stream`, `/api/metrics`, `/api/workspace/status`, `/api/workspace/actions`, `/api/prd`, `/api/config`, `/api/execution/providers`, `/api/spec/{code}`, `/api/workspace/execution`, …) risponde `409` con `workspaceOpen:false` e **nessun corpo di contenuto** — mai `200` con lista vuota; la stessa rotta risponde `200` sullo stesso server dopo l'apertura di un workspace | TASK-05, TASK-12 |
+  | AC-6 | home aperta senza workspace, un workspace esistente su disco non ancora conosciuto, e una voce conosciuta da dimenticare | e2e smoke Node su HTTP + filesystem, unit `test/web` sul renderer | `POST /api/workspaces` risponde `201` e la voce compare nell'elenco; `DELETE /api/workspaces/{id}` risponde `204`, la voce sparisce e il **listing ricorsivo della directory dimenticata è identico** prima e dopo; `POST /api/workspace` (creazione) risponde `201` e crea `.archetipo/config.yaml` nella nuova directory; il testo HTML della home espone per ogni voce i bottoni `data-open` e `data-remove`, con `data-open` disabilitato e motivato sulle voci irraggiungibili | TASK-11, TASK-12 |
+
+  Questa è una mappa di accettazione, non un riassunto dei task. Nessun doppio di test nasconde un oracolo: gli smoke non usano alcun server finto — il viewer, il connettore e il registro sono quelli reali, e l'unico elemento simulato altrove nel repository (il binario dell'agente) non entra in questa spec, perché nessun criterio riguarda l'esecuzione di una run.
+
+  ---
+
+  ## Strategia di test
+
+  Tre livelli, ciascuno scelto perché è il più basso che rende osservabile il criterio corrispondente, secondo le convenzioni già presenti nel repository.
+
+  - **Unit Go (`cli/internal/web`, `cli/internal/config`, `cli/internal/cli`).** Il gate delle rotte è verificato enumerando le rotte workspace-scoped su un server costruito con `NewHomeServer`: l'oracolo è `409` + `workspaceOpen:false` **e assenza di un corpo di contenuto**, perché "risponde vuoto" è esattamente ciò che AC-5 vieta e un test che si accontentasse dello status non lo escluderebbe. Un secondo test apre un workspace sullo stesso server e ricontrolla le stesse rotte a `200`: è ciò che impedisce al gate di diventare un rifiuto permanente.
+  - **Unit `test/web` (`node --test`).** `workspace-home.js` è un renderer puro nello stile di `workspace-status.js`: prende il payload di `GET /api/workspaces` e un formattatore di data iniettato, restituisce una stringa HTML. Gli oracoli sono sul **testo visibile** (nome, percorso, ultimo accesso, etichetta di raggiungibilità, bottoni delle azioni) e sull'escaping: nome e percorso vengono dal disco dell'utente e un `<` in un nome di cartella non deve poter diventare markup.
+  - **Smoke e2e Node (`test/e2e/no-workspace-view-smoke.mjs`).** È il livello dove i criteri sono davvero utente-visibili, perché soltanto qui esistono contemporaneamente il processo avviato in una directory neutra, il registro di stato su disco e il viewer reale. Senza credenziali, senza traffico fuori da `127.0.0.1`, senza server finti e senza sleep arbitrari: ogni attesa interroga una rotta del viewer con timeout esplicito che nomina cosa era atteso e cosa è arrivato, come gli smoke esistenti. Il PID catturato all'avvio e riletto dopo l'apertura è l'oracolo di "senza riavviare il processo"; il confronto byte a byte di `workspaces.json` è l'oracolo di AC-4; il listing ricorsivo della directory dimenticata è l'oracolo di "dimenticare non tocca la directory".
+
+  ### Rinuncia agli e2e da browser
+
+  **Motivo:** il repository non ospita alcun framework di e2e da browser per la propria interfaccia (`archetipo e2e ensure` installa Playwright nei *progetti bersaglio*, non qui), e introdurne uno per questa spec sarebbe un'infrastruttura nuova sproporzionata rispetto al cambiamento. Ogni criterio attraversa comunque un confine reale osservabile a un livello più basso: il confine processo/HTTP per AC-1..AC-6 lato server, e la funzione di resa pura per il testo che la home mostra. Ciò che resta non provato meccanicamente è soltanto la composizione visiva (che `#board` sia nascosto e `#workspace-home` visibile), che è verifica umana in review.
+
+  **Livello di evidenza usato al suo posto:** smoke Node deterministico sul viewer reale (contratto HTTP + filesystem) più test unitari `node --test` sul renderer puro.
+
+  ### Demo
+
+  `Dimostrazione` è filmabile: si vede un avvio da directory neutra, la home, la scelta di un workspace, la comparsa della board, il riavvio dentro un workspace e la verifica dell'elenco. La registrazione del video è responsabilità di `archetipo-review`, non dell'implementazione; qui si segnala soltanto l'aspettativa.
+tasks:
+  - id: TASK-01
+    title: Esporre config.FindRoot per sapere se una directory appartiene a un workspace
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      `config.FindRoot(startDir)` risponde, senza caricare nulla e senza applicare default, se risalendo da `startDir` esiste un `.archetipo/config.yaml` e quale directory lo contiene.
+
+      ## Read
+
+      - `cli/internal/config/config.go` — la funzione non esportata `find(start string) (root, cfg string, err error)` in fondo al file (circa riga 970) e i suoi due chiamanti `LoadExact` e `LoadForTarget`.
+
+      ## Change
+
+      - `cli/internal/config/config.go` — aggiungere **solo** la nuova funzione esportata `FindRoot`, subito sopra `find`. Non-obiettivi espliciti: non modificare `find`, non modificare `Load`/`LoadExact`/`LoadForTarget`, non cambiare alcun comportamento di default esistente.
+
+      ## Steps
+
+      1. Aggiungere in `cli/internal/config/config.go`:
+
+         ```go
+         // FindRoot reports whether startDir belongs to a workspace: it walks up the
+         // directory tree exactly as LoadExact does and returns the directory that
+         // contains .archetipo/config.yaml. It deliberately loads nothing and applies
+         // no defaults, because the caller needs to tell "no workspace here" apart
+         // from "a workspace with an empty configuration" — a distinction LoadExact
+         // erases by returning the defaults rooted at startDir.
+         func FindRoot(startDir string) (root string, found bool, err error) {
+             dir, cfgPath, err := find(startDir)
+             if err != nil {
+                 return "", false, err
+             }
+             if cfgPath == "" {
+                 return "", false, nil
+             }
+             return dir, true, nil
+         }
+         ```
+
+      2. Verificare che il commento sia in inglese come il resto del package.
+
+      ## Verify
+
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo/cli`:
+        - `gofmt -l .` — Expect: nessun output.
+        - `go build ./...` — Expect: compila senza output.
+        - `go vet ./config/... ./...` → in pratica `go vet ./...` — Expect: nessun problema (baseline: pulito).
+
+      ## Done
+
+      - [ ] `config.FindRoot` esiste, è esportata e non modifica il comportamento di alcuna funzione esistente.
+      - [ ] Precondizione per AC-1/AC-3: il comando `view` dispone di un modo per distinguere "directory neutra" da "dentro un workspace" senza dedurlo dai default.
+
+      ## Blockers
+
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test di config.FindRoot su directory neutra, radice e sottodirectory
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Provare che `FindRoot` distingue una directory neutra da una dentro un workspace, e che non inventa una radice dove non c'è configurazione.
+
+      ## Read
+
+      - `cli/internal/config/config_test.go` — gli helper già usati per creare un progetto temporaneo con `.archetipo/config.yaml` (riusarli invece di scriverne di nuovi).
+      - `cli/internal/config/config.go` — `FindRoot` appena aggiunta.
+
+      ## Change
+
+      - `cli/internal/config/config_test.go` — aggiungere `TestFindRoot`. Non-obiettivo: non toccare i test esistenti di `Load`/`LoadExact`.
+
+      ## Steps
+
+      1. Caso "dentro un workspace": creare in `t.TempDir()` una directory con `.archetipo/config.yaml`, chiamare `FindRoot` su quella directory. Asserire `found == true` e `root` uguale alla directory (confrontare con `filepath.EvalSymlinks` o realpath su entrambi i lati, perché su macOS `t.TempDir()` passa da `/var` → `/private/var`).
+      2. Caso "sottodirectory profonda": creare `sub/nested/` dentro lo stesso workspace e chiamare `FindRoot` su di essa. Asserire `found == true` e la stessa `root` del caso 1.
+      3. Caso "directory neutra": creare in `t.TempDir()` una directory **senza** alcun `.archetipo/` in sé né in alcun antenato dentro la temp dir. Asserire `found == false` e `root == ""`.
+         - Attenzione: `find` risale fino alla radice del filesystem. Il test non deve poter passare o fallire in base a ciò che esiste sopra `t.TempDir()` sulla macchina di chi lo esegue; se il caso 3 risultasse fragile, documentarlo asserendo che, quando `found` è `true`, `root` non è mai la directory neutra stessa.
+
+      ## Verify
+
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo/cli`:
+        - `go test ./internal/config/...` — Expect: passa, incluso `TestFindRoot`.
+        - `gofmt -l .` — Expect: nessun output.
+
+      ## Done
+
+      - [ ] Tre casi coperti: dentro, in profondità, fuori.
+      - [ ] Precondizione per AC-3 e AC-1: la decisione di avvio poggia su una funzione provata, non su un effetto collaterale dei default.
+
+      ## Blockers
+
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Rendere lecita l'assenza di workspace nel server (NewHomeServer e guardie su sessione nulla)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      Il `web.Server` può esistere e servire senza alcuna `workspaceSession`, senza panico in nessuno dei punti che oggi dereferenziano `session()` fuori dagli handler.
+
+      ## Read
+
+      - `cli/internal/web/server.go` — `Server`, `session()`, `NewServer`, `Run`, e l'handler `/mockups/` in fondo a `registerRoutes`.
+      - `cli/internal/web/workspaces.go` — `workspaceViews` (usa `ws.cfg.ProjectRoot`) e `RegisterWorkspace`.
+      - `cli/internal/web/switch.go` — `swapSession`: gestisce già `cur == nil` e `previous == nil`; **non va modificata**.
+
+      ## Change
+
+      - `cli/internal/web/server.go` — estrarre la costruzione comune e aggiungere `NewHomeServer`; guardie su sessione nulla in `Run` e nell'handler `/mockups/`; documentare su `session()` che può restituire `nil`.
+      - `cli/internal/web/workspaces.go` — `workspaceViews` e `RegisterWorkspace` tollerano `ws == nil`.
+      - Non-obiettivi: non cambiare la firma di `NewServer` (decine di test la usano), non toccare `switch.go`, non introdurre un flag booleano parallelo a `cur`.
+
+      ## Steps
+
+      1. In `server.go`, estrarre da `NewServer` un costruttore interno `newServer(session *workspaceSession, registry *execution.Registry, addr string) *Server` che monta `mux`, `broker`, `cur`, il registro dei workspace (`workspace.OpenRegistry()`, nil-tollerante), `registerRoutes()` e `httpSrv`. `NewServer` costruisce la sessione e lo chiama.
+      2. Aggiungere:
+
+         ```go
+         // NewHomeServer constructs a Server that is serving no workspace at all.
+         //
+         // It exists because "the process was started outside any workspace" is a
+         // legitimate state and not a degraded one: the alternative — a session
+         // rooted at the launch directory — is exactly what made the viewer serve
+         // the board of a project that does not exist. cur stays nil, and the routes
+         // that presuppose a workspace refuse instead of answering emptily.
+         func NewHomeServer(registry *execution.Registry, addr string) (*Server, error)
+         ```
+
+         che chiama `newServer(nil, registry, addr)`.
+      3. Aggiornare il commento di `session()`: restituisce `nil` quando nessun workspace è aperto; ogni chiamante fuori dagli handler gated deve gestirlo.
+      4. In `Run`: sostituire `s.session().start(ctx, s.broker)` e il `defer s.session().stop(...)` con letture in variabile e guardia `if ws := s.session(); ws != nil { ... }`. Nel `defer`, rileggere `s.session()` al momento dell'esecuzione (dopo uno switch la sessione da fermare è quella corrente, non quella iniziale).
+      5. Nell'handler `/mockups/`: `ws := s.session(); if ws == nil || ws.mockupsDir == "" { http.NotFound(w, r); return }`.
+      6. In `workspaces.go`, `workspaceViews(ws *workspaceSession, entries []workspace.Entry)`: se `ws == nil`, `current` vale `""` e ogni voce ha `Current: false`. Nessuna voce deve risultare corrente quando nessun workspace è aperto.
+      7. In `RegisterWorkspace`: `ws := s.session(); if ws == nil { return nil }` prima di leggere `ws.cfg` — nessun workspace aperto significa niente da registrare, mai un errore.
+
+      ## Verify
+
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo/cli`:
+        - `go build ./...` — Expect: compila.
+        - `go test ./internal/web/...` — Expect: passa interamente (baseline: verde); nessun test esistente deve cambiare comportamento, perché `NewServer` è invariata.
+        - `gofmt -l .` e `go vet ./...` — Expect: nessun output / nessun problema.
+
+      ## Done
+
+      - [ ] `NewHomeServer` esiste e restituisce un server con `cur == nil` che avvia e ferma senza panico.
+      - [ ] Nessun dereferenziamento di `session()` fuori dagli handler resta scoperto (`Run`, `/mockups/`, `workspaceViews`, `RegisterWorkspace`).
+      - [ ] Precondizione per AC-1, AC-4, AC-5.
+
+      ## Blockers
+
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Classificare esplicitamente le rotte e rifiutare con 409 quelle che presuppongono un workspace
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      Ogni rotta che presuppone un workspace risponde `409` con `workspaceOpen:false` quando nessun workspace è aperto, prima di decodificare il corpo e prima di toccare il connettore; le rotte della home restano servite.
+
+      ## Read
+
+      - `cli/internal/web/server.go` — `registerRoutes()` per intero: la lista delle 30+ rotte è il contratto da classificare.
+      - `cli/internal/web/handlers.go` — `writeJSON` e `writeError` (righe finali del file), per riusare la forma `{error, code, hint}`.
+      - `cli/internal/web/session.go` — `requireReachable`: stesso vocabolario di rifiuto (`iox.NewConflict`), da non duplicare in prosa diversa.
+
+      ## Change
+
+      - `cli/internal/web/server.go` — due helper di registrazione e il gate; riscrittura di `registerRoutes` in modo che **ogni** rotta passi per uno dei due.
+      - Non-obiettivi: non modificare alcun handler esistente (nessun `if ws == nil` dentro gli handler), non cambiare status o corpo di errori già esistenti, non toccare le rotte statiche `/`.
+
+      ## Steps
+
+      1. Aggiungere in `server.go`:
+
+         ```go
+         // handleWorkspace registers a route that presupposes an open workspace, and
+         // handleAlways one that does not. Every route goes through one of the two on
+         // purpose: with a plain mux.HandleFunc still available, a route added later
+         // would default to "unguarded" silently, and answering emptily instead of
+         // refusing is precisely the failure this gate exists to prevent.
+         func (s *Server) handleWorkspace(pattern string, h http.HandlerFunc)
+         func (s *Server) handleAlways(pattern string, h http.HandlerFunc)
+         ```
+
+      2. Il gate dentro `handleWorkspace`: se `s.session() == nil`, rispondere con
+
+         ```go
+         writeJSON(w, http.StatusConflict, map[string]any{
+             "error":         "no workspace is open",
+             "code":          iox.CodeConflict,
+             "hint":          "open a workspace from the home, or start ARchetipo inside one",
+             "workspaceOpen": false,
+         })
+         ```
+
+         e **non** chiamare l'handler. Il booleano esplicito esiste perché `E_CONFLICT` è già usato per altri rifiuti (workspace irraggiungibile, run non attiva) e il chiamante non deve distinguerli leggendo la prosa.
+      3. Registrare con `handleAlways` **soltanto** queste rotte, che non dipendono dal project root: `GET /api/workspaces`, `POST /api/workspaces`, `DELETE /api/workspaces/{id}`, `POST /api/workspaces/{id}/open`, `GET /api/workspace/options`, `POST /api/workspace`.
+      4. Registrare con `handleWorkspace` **tutte** le altre rotte `/api/...` attualmente presenti in `registerRoutes` (board, board/stream, metrics, spec/*, prd, execution/*, config/*, workspace/actions, workspace/status, workspace/execution, mockups). Il file server statico `/` e l'handler `/mockups/` restano registrati direttamente (quest'ultimo ha già la sua guardia da TASK-03).
+      5. Verificare a lettura che nessun `s.mux.HandleFunc("...api...` diretto sopravviva in `registerRoutes`.
+
+      ## Verify
+
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo/cli`:
+        - `go build ./...` — Expect: compila.
+        - `go test ./internal/web/...` — Expect: passa (i test esistenti costruiscono server con workspace, quindi il gate è trasparente per loro).
+        - `gofmt -l .` — Expect: nessun output.
+        - `grep -n 'mux.HandleFunc' internal/web/server.go` — Expect: solo le due occorrenze dentro gli helper, più `/mockups/` e lo static file server.
+
+      ## Done
+
+      - [ ] AC-5 — nessuna rotta workspace-scoped può rispondere con contenuti quando nessun workspace è aperto: il rifiuto avviene prima dell'handler.
+      - [ ] Le sei rotte della home sono servite anche senza workspace (precondizione di AC-1, AC-2, AC-6).
+      - [ ] Nessun handler esistente è stato modificato.
+
+      ## Blockers
+
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: GET /api/workspaces dichiara se un workspace è aperto e quale
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      Una sola chiamata a `GET /api/workspaces` dice sia se un workspace è aperto (`open`, `currentPath`) sia quali sono i workspace conosciuti, così la pagina non deve dedurlo dal fallimento di un'altra rotta.
+
+      ## Read
+
+      - `cli/internal/web/workspaces.go` — `workspaceListView`, `workspaceViews`, `handleListWorkspaces`, `handleOpenWorkspace` e `openWorkspaceView`.
+
+      ## Change
+
+      - `cli/internal/web/workspaces.go` — estendere `workspaceListView` con `Open bool \`json:"open"\`` e `CurrentPath string \`json:"currentPath"\``; popolarli in `handleListWorkspaces` in tutti e tre i rami (registro assente, lettura fallita, lettura riuscita).
+      - Non-obiettivi: non cambiare la forma delle voci (`workspaceEntryView` resta identica — il formato persistito e il contratto già consumato da US-045/046 non si toccano), non modificare `openWorkspaceView`.
+
+      ## Steps
+
+      1. Aggiungere i due campi a `workspaceListView`, documentando perché stanno sulla lista e non su una rotta nuova: la home fa una domanda sola ("cosa mostro?") e deve ricevere una risposta sola.
+      2. Introdurre un helper `func (s *Server) openWorkspacePath() string` che restituisce `""` con sessione nulla e `filepath.Clean(ws.cfg.ProjectRoot)` altrimenti, così i tre rami di `handleListWorkspaces` non replicano la condizione.
+      3. In tutti e tre i rami di `handleListWorkspaces`, costruire la risposta con `Open: path != ""` e `CurrentPath: path`. Il ramo "registro non disponibile" e il ramo "lettura fallita" devono comunque dichiarare `open` correttamente: un registro illeggibile non deve far credere alla pagina che nessun workspace sia aperto.
+      4. Verificare che `Workspaces` resti sempre una slice non-nil (il frontend itera senza controllare).
+
+      ## Verify
+
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo/cli`:
+        - `go build ./...` — Expect: compila.
+        - `go test ./internal/web/...` — Expect: passa (aggiornare le eventuali asserzioni esistenti sul corpo esatto di `/api/workspaces` in `workspaces_test.go`, se confrontano l'intero JSON).
+        - `gofmt -l .` — Expect: nessun output.
+
+      ## Done
+
+      - [ ] AC-1 (parte contratto) — con nessun workspace aperto la risposta è `200` con `open:false`, `currentPath:""` e le voci conosciute complete di nome, percorso, ultimo accesso e raggiungibilità.
+      - [ ] AC-3 (parte contratto) — avviato dentro un workspace, `open` è `true` e `currentPath` nomina quella directory.
+      - [ ] Nessuna voce risulta `current` quando nessun workspace è aperto.
+
+      ## Blockers
+
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test Go del gate — rifiuto senza workspace, servizio dopo l'apertura
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Provare che ogni rotta workspace-scoped rifiuta con `409` e `workspaceOpen:false` senza contenuti, che le rotte della home rispondono, e che le stesse rotte tornano a `200` dopo l'apertura di un workspace sullo stesso server.
+
+      ## Read
+
+      - `cli/internal/web/workspaces_test.go` e `cli/internal/web/switch_test.go` — come i test esistenti costruiscono un server, un connettore in-memory, un registro su `t.TempDir()` (`workspace.EnvStateDir`) e un workspace reale su disco. Riusare quegli helper, non scriverne di nuovi.
+      - `cli/internal/web/server.go` — la lista aggiornata di `registerRoutes` (è la fonte dell'elenco da enumerare).
+
+      ## Change
+
+      - Nuovo file `cli/internal/web/no_workspace_test.go`. Non-obiettivo: non modificare i test esistenti.
+
+      ## Steps
+
+      1. `TestHomeServerRefusesWorkspaceRoutes`: costruire un server con `NewHomeServer` e, per ogni voce di una tabella che elenca metodo+path delle rotte workspace-scoped (almeno: `GET /api/board`, `GET /api/board/stream`, `GET /api/metrics`, `GET /api/workspace/status`, `GET /api/workspace/actions`, `GET /api/prd`, `GET /api/config`, `GET /api/execution/providers`, `GET /api/execution/model-choice`, `GET /api/spec/US-001`, `POST /api/spec`, `POST /api/board/move`, `POST /api/workspace/execution`, `POST /api/spec/US-001/execution`, `GET /api/mockups`), inviare la richiesta con `httptest` e asserire:
+         - status `409`;
+         - il corpo decodificato ha `workspaceOpen == false` e `code == iox.CodeConflict`;
+         - il corpo **non** contiene alcuna chiave di contenuto: nessun `columns`, nessun `specs`, nessun `providers`, nessun `stage`. È l'oracolo che distingue "dichiara che nessun workspace è aperto" da "risponde vuoto", cioè esattamente AC-5.
+      2. `TestHomeServerServesHomeRoutes`: sullo stesso tipo di server, asserire `200` su `GET /api/workspaces` (con `open == false` e `currentPath == ""`) e su `GET /api/workspace/options`; asserire che `POST /api/workspaces` con un percorso valido risponde `201` e che `DELETE /api/workspaces/{id}` risponde `204`.
+      3. `TestOpenedWorkspaceRestoresRoutes`: sullo stesso server della home, chiamare `POST /api/workspaces/{id}/open` su un workspace reale creato nel test, poi rieseguire la tabella del punto 1 asserendo che le rotte non rispondono più `409` con `workspaceOpen:false`. Serve a impedire che il gate diventi un rifiuto permanente, ed è l'evidenza server-side di AC-2.
+      4. `TestRouteClassificationIsExhaustive` (guardia contro la rotta dimenticata): asserire che l'elenco delle rotte enumerate nella tabella del punto 1 più le sei rotte home copre tutte le stringhe `"/api/` presenti in `registerRoutes`. Implementarlo leggendo `server.go` con `os.ReadFile` e una regexp sulle stringhe di pattern registrate: è un test sul file sorgente, e va commentato come tale.
+
+      ## Verify
+
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo/cli`:
+        - `go test ./internal/web/ -run 'HomeServer|OpenedWorkspaceRestores|RouteClassification' -v` — Expect: tutti i sottotest passano.
+        - `go test ./internal/web/...` — Expect: passa interamente.
+        - `gofmt -l .` — Expect: nessun output.
+
+      ## Done
+
+      - [ ] AC-5 — ogni rotta workspace-scoped rifiuta dichiarando `workspaceOpen:false` e non restituisce contenuti.
+      - [ ] AC-2 (parte server) — dopo l'apertura, le stesse rotte servono di nuovo.
+      - [ ] Una rotta `/api/` non classificata fa fallire la suite.
+
+      ## Blockers
+
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Test Go dell'apertura a partire dalla home (nessun workspace aperto)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Provare che `SwitchWorkspace` partendo da nessun workspace apre davvero quello scelto, e che un'apertura rifiutata lascia il server nello stato di home invece di lasciarlo a metà.
+
+      ## Read
+
+      - `cli/internal/web/switch_test.go` — struttura dei test esistenti di switch: come costruiscono due workspace reali, come asseriscono quale board è servita.
+      - `cli/internal/web/switch.go` — `swapSession`: la sequenza probe → same-root → load → connector → session → swap; non va modificata, va provata nel caso `cur == nil`.
+
+      ## Change
+
+      - `cli/internal/web/switch_test.go` — aggiungere i test del caso "da nessun workspace". Non-obiettivo: non modificare i test esistenti.
+
+      ## Steps
+
+      1. `TestSwitchFromNoWorkspaceOpens`: server da `NewHomeServer`; asserire `s.session() == nil`; chiamare `SwitchWorkspace(dir)` su un workspace reale; asserire nil error, `s.session() != nil`, `ProjectRoot` corretto, e che `GET /api/board` risponda `200` con la spec che esiste solo in quel workspace (l'oracolo è il codice della spec, non l'assenza di errore).
+      2. `TestSwitchFromNoWorkspaceRefusedStaysHome`: dalla stessa home, chiamare `SwitchWorkspace` su (a) una directory inesistente e (b) una directory esistente ma priva di `.archetipo/config.yaml`. Per entrambe asserire: errore non nil con la ragione che nomina la causa, `s.session()` ancora `nil`, e `GET /api/workspaces` ancora `open:false`. È l'oracolo del fatto che un rifiuto non apre mai un workspace inventato sulla directory sbagliata.
+      3. `TestOpenWorkspaceRouteFromHomeTouchesRegistry`: attraverso `POST /api/workspaces/{id}/open` su un server di home, asserire `200`, `current:true` nella risposta e `lastOpenedAt` avanzato nel registro rispetto a prima. Serve a dimostrare che l'apertura *scelta* aggiorna il registro, in contrasto con l'avvio in directory neutra che non lo tocca (AC-4).
+
+      ## Verify
+
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo/cli`:
+        - `go test ./internal/web/ -run 'SwitchFromNoWorkspace|OpenWorkspaceRouteFromHome' -v` — Expect: passano.
+        - `go test ./internal/web/...` — Expect: passa interamente.
+        - `gofmt -l .` — Expect: nessun output.
+
+      ## Done
+
+      - [ ] AC-2 (parte server) — dalla home un workspace raggiungibile diventa il workspace aperto e la sua board è servita dallo stesso server, senza ricostruirlo.
+      - [ ] Un'apertura rifiutata lascia lo stato di home intatto.
+      - [ ] L'apertura scelta aggiorna `lastOpenedAt`, mentre l'avvio neutro non scrive nulla (contrasto verificato lato CLI in TASK-09 e lato utente in TASK-12).
+
+      ## Blockers
+
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: archetipo view sceglie fra home e workspace all'avvio, senza registrare la directory di lancio
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Objective
+
+      `archetipo view` avviato fuori da un workspace apre la home e non scrive nulla nell'elenco dei workspace conosciuti; avviato dentro un workspace si comporta esattamente come oggi.
+
+      ## Read
+
+      - `cli/internal/cli/view_cmd.go` — `newViewCmd` per intero (in particolare `loadConfigFor`, `connector.New`, `web.NewServer`, `registerViewer`, `onReady` con `srv.RegisterWorkspace()`), e `newViewListCmd` per la colonna `PROJECT`.
+      - `cli/internal/cli/runner.go` — `loadConfigFor` e `chdirRequested`: `-C` esegue già il cambio di directory, quindi la cwd è sempre il punto di partenza corretto.
+      - `cli/internal/web/server.go` — `NewHomeServer` da TASK-03.
+
+      ## Change
+
+      - `cli/internal/cli/view_cmd.go` — biforcazione all'avvio, messaggi su stderr, voce `viewreg` con root vuoto, testo `Long` aggiornato, colonna `PROJECT` di `view list`.
+      - Non-obiettivi: non toccare `loadConfigFor` né alcun altro comando; non aggiungere flag nuovi; non cambiare la scelta della porta né la registrazione del viewer nel caso con workspace.
+
+      ## Steps
+
+      1. In `RunE`, prima di caricare la configurazione: `cwd, err := os.Getwd()`, poi `root, found, err := config.FindRoot(cwd)`. Un errore di risalita resta un errore del comando.
+      2. Ramo `found == true` (comportamento odierno, invariato): `loadConfigFor(cmd)` — che applica anche la correzione nested-worktree — `connector.New(cfg)`, `web.NewServer(...)`. In `onReady` restano `registerViewer(cfg.ProjectRoot)` e `srv.RegisterWorkspace()`.
+      3. Ramo `found == false`: `web.NewHomeServer(registry, addr)`. In `onReady`:
+         - stampare su stderr, dopo la riga "ready", una riga esplicita del tipo `No workspace here: opening the known-workspaces home.` — l'avvio fuori da un workspace è una scelta, non un errore, e va detto;
+         - chiamare `registerViewer("")`;
+         - **non** chiamare `srv.RegisterWorkspace()`. Commentare il motivo sul posto: è l'unica scrittura possibile sul registro lungo il percorso di avvio, e ometterla è ciò che rende vero AC-4.
+      4. In entrambi i rami `srv.OnWorkspaceSwitch = registerViewer` resta invariato: aprendo un workspace dalla home la voce del viewer diventa veritiera senza riavvio (`handleOpenWorkspace` fa già il `Touch` del registro).
+      5. Il valore `root` restituito da `FindRoot` non viene usato per costruire nulla: serve solo alla decisione. Non introdurre un secondo percorso di caricamento a partire da esso.
+      6. In `newViewListCmd`, stampare `(no workspace)` quando `e.ProjectRoot` è vuoto, così la colonna non resta muta.
+      7. Aggiornare il testo `Long` del comando: `archetipo view` può essere avviato da qualunque directory; fuori da un workspace apre la home dei workspace conosciuti e non ne registra alcuno.
+
+      ## Verify
+
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo/cli`:
+        - `go build ./...` — Expect: compila.
+        - `go test ./internal/cli/...` — Expect: passa (baseline: verde).
+        - `gofmt -l .` e `go vet ./...` — Expect: nessun output / nessun problema.
+      - Prova manuale rapida (facoltativa ma consigliata, non sostituisce TASK-12): costruire il binario e avviarlo con `ARCHETIPO_STATE_DIR` puntato a una directory temporanea da una cartella neutra; verificare la riga su stderr e che `workspaces.json` non venga creato.
+
+      ## Done
+
+      - [ ] AC-3 — avviato dentro un workspace, il comando percorre il ramo odierno e apre quel workspace, senza passare dalla home.
+      - [ ] AC-1 (parte processo) — avviato in una directory neutra, il server è quello di home e dichiara la scelta su stderr.
+      - [ ] AC-4 — nel ramo home non esiste alcuna chiamata che scriva nel registro dei workspace conosciuti.
+      - [ ] `archetipo view list` mostra `(no workspace)` invece di una colonna vuota.
+
+      ## Blockers
+
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Test Go della decisione di avvio del comando view
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+
+      Provare, senza avviare un server HTTP, che il comando sceglie la home fuori da un workspace e il workspace dentro, e che `view list` rende leggibile una voce senza root.
+
+      ## Read
+
+      - `cli/internal/cli/view_cmd_internal_test.go` — stile dei test interni esistenti del comando (uso di `streams`, `t.TempDir()`, `t.Chdir` o equivalente).
+      - `cli/internal/cli/view_cmd.go` — la biforcazione introdotta in TASK-08.
+
+      ## Change
+
+      - `cli/internal/cli/view_cmd_internal_test.go` — aggiungere i test della decisione e della resa di `view list`.
+      - Se la decisione non è isolabile senza avviare il server, estrarla in TASK-08 in una funzione pura del tipo `func resolveViewTarget(cwd string) (root string, home bool, err error)` e provare quella. Preferire questa strada a un test che avvia un listener.
+
+      ## Steps
+
+      1. `TestResolveViewTargetOutsideWorkspace`: cwd in una `t.TempDir()` senza `.archetipo/`; asserire `home == true` e `root == ""`.
+      2. `TestResolveViewTargetInsideWorkspace`: cwd in una directory con `.archetipo/config.yaml`, e poi in una sua sottodirectory; asserire in entrambi i casi `home == false` e `root` uguale alla radice del workspace.
+      3. `TestViewListRendersMissingProjectRoot`: costruire una voce `viewreg.Entry` con `ProjectRoot: ""` (usando `viewreg.EnvRunDir` su `t.TempDir()`), eseguire il comando `view list` con `streams` catturati e asserire che l'output contiene `(no workspace)` e non una colonna vuota fra due separatori.
+
+      ## Verify
+
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo/cli`:
+        - `go test ./internal/cli/ -run 'ResolveViewTarget|ViewListRendersMissing' -v` — Expect: passano.
+        - `go test ./internal/cli/...` — Expect: passa interamente.
+        - `gofmt -l .` — Expect: nessun output.
+
+      ## Done
+
+      - [ ] AC-3 — la scelta "dentro un workspace" è provata anche da una sottodirectory profonda.
+      - [ ] AC-1 — la scelta "directory neutra" è provata.
+      - [ ] Una voce di viewer senza workspace resta leggibile in `view list`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Home dei workspace nella pagina — renderer puro workspace-home.js e modalità senza workspace
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Aperta senza workspace, la pagina mostra la home dei workspace conosciuti (nome, percorso, ultimo accesso, raggiungibilità) con le azioni apri / dimentica / aggiungi / crea, e nessuna board.
+
+      ## Read
+
+      - `cli/internal/web/assets/workspace-status.js` — forma UMD da imitare: nessun DOM, nessuna fetch, funzione che restituisce una stringa HTML, export `module.exports` in Node e `window.X` nel browser.
+      - `cli/internal/web/assets/app.js` — righe 94-103 (riferimenti DOM dei workspace), 470-487 (handler delegati su `data-open` / `data-remove`), 543-546 (avvio: `loadBoard`, `loadWorkspaceStatus`, `loadMockups`, `connectBoardStream`), 3881-4090 (`openWorkspaces`, `loadWorkspaces`, `renderWorkspaces`, `workspaceRow`, `workspaceStatusBadge`, `openWorkspace`, `removeWorkspace`) e `formatExecutionTime`.
+      - `cli/internal/web/assets/index.html` — righe 26-97 (topbar, `#workspace-status`, `#board`), 458-488 (modale `workspaces-modal`), 680-686 (tag `<script>`).
+      - `cli/internal/web/assets/app.css` — classi già esistenti `.workspace-row`, `.workspace-row-main`, `.workspace-row-head`, `.workspace-name`, `.workspace-badge`, `.workspace-badge.warn`, `.workspace-path`, `.workspace-meta`, `.workspace-row-actions`: la home le riusa, non ne inventa di nuove per le voci.
+
+      ## Change
+
+      - Nuovo `cli/internal/web/assets/workspace-home.js` — renderer puro.
+      - `cli/internal/web/assets/index.html` — sezione `#workspace-home`, attributo `data-workspace-scoped` sui bottoni della topbar che presuppongono un workspace, tag `<script src="/workspace-home.js">` prima di `app.js`.
+      - `cli/internal/web/assets/app.js` — avvio biforcato, modalità home, e sostituzione di `renderWorkspaces`/`workspaceRow`/`workspaceStatusBadge` con il renderer condiviso.
+      - `cli/internal/web/assets/app.css` — regole per `body.no-workspace` e per il contenitore della home.
+      - Non-obiettivi: non cambiare le rotte, non toccare la logica di `openWorkspace`/`removeWorkspace`/`addWorkspace` (le azioni di AC-6 devono restare quelle già provate da US-045/046), non introdurre dipendenze esterne.
+
+      ## Steps
+
+      1. Scrivere `workspace-home.js` come modulo UMD con:
+         - `escapeHtml` locale (nome e percorso vengono dal disco dell'utente: mai interpolati grezzi);
+         - `renderWorkspaceRows(view, opts)` che, dato il payload di `GET /api/workspaces` e `opts.formatTime` (funzione iniettata, così il modulo resta puro), restituisce la stringa HTML delle voci — per ciascuna: nome, badge `current` quando `current` è vero, badge di raggiungibilità (`reachable` oppure l'etichetta dello stato), percorso in `<code>`, riga `Last opened: …`, bottone `data-open` e bottone `data-remove`. Il bottone `data-open` è `disabled` con `title` motivato quando la voce è corrente, irraggiungibile o priva di `id`, con le stesse ragioni oggi presenti in `workspaceRow`;
+         - `renderWorkspaceHome(view, opts)` che avvolge le voci nell'intestazione della home e, con elenco vuoto, restituisce il messaggio "No workspace has been recorded yet…" già usato dalla modale;
+         - la mappa `WORKSPACE_STATUS_LABELS` si sposta qui, con lo stesso comportamento di fallback sul valore grezzo per uno stato sconosciuto;
+         - export `{ renderWorkspaceHome, renderWorkspaceRows, escapeHtml }` in Node, `window.WorkspaceHome` nel browser.
+      2. In `app.js`, sostituire `renderWorkspaces` con `workspacesList.innerHTML = WorkspaceHome.renderWorkspaceRows(view, { formatTime: formatExecutionTime })` ed eliminare `workspaceRow` e `workspaceStatusBadge`: una sola resa dell'elenco per home e modale. Gli handler delegati su `data-open`/`data-remove` restano invariati e funzionano perché i data-attribute sono identici.
+      3. In `index.html`, aggiungere `<section id="workspace-home" class="workspace-home hidden" aria-live="polite"></section>` subito prima di `<main id="board">`, e marcare con `data-workspace-scoped` i bottoni `metrics-btn`, `prd-btn`, `mockups-dropdown`, `new-spec-btn`, `workspaces-btn`, `config-btn`, `refresh-btn`. Restano sempre visibili il brand, `new-workspace-btn` e `theme-toggle`.
+      4. In `app.js`, sostituire le quattro chiamate di avvio (righe 543-546) con un `boot()` che:
+         - chiama `apiGet("/api/workspaces")`;
+         - se `view.open` è vero → esegue esattamente le quattro chiamate di oggi;
+         - se `view.open` è falso → `document.body.classList.add("no-workspace")`, rende la home con `WorkspaceHome.renderWorkspaceHome(view, …)` dentro `#workspace-home`, la mostra, e **non** chiama `loadBoard`, `loadWorkspaceStatus`, `loadMockups`, `connectBoardStream`;
+         - se la chiamata fallisce → mostra la home con un messaggio d'errore leggibile e nessuna board, perché una pagina che non sa quale workspace serve non deve disegnarne uno.
+      5. Delegare i click dentro `#workspace-home` agli stessi handler `openWorkspace` / `removeWorkspace` già usati dalla modale, e spostare/duplicare nel markup della home il form di aggiunta (`workspaces-add-form`) e un bottone che apre la modale "New workspace" esistente. Se il form è uno solo, riusarlo spostandolo nella home in modalità senza workspace, così esiste una sola implementazione di "aggiungi".
+      6. In `app.css`: `body.no-workspace #board`, `body.no-workspace #workspace-status`, `body.no-workspace [data-workspace-scoped]` → `display: none`; `.workspace-home` visibile e centrata riusando la larghezza e i colori già impiegati dalla modale, senza inventare una nuova identità visiva.
+      7. Dopo un'apertura riuscita `openWorkspace` fa già `window.location.reload()`: la pagina ricaricata trova `open:true` e disegna la board. Non aggiungere altro percorso di transizione.
+
+      ## Verify
+
+      - `npm run test:web` da `/Users/stefanoleli/Project/Archetipo` — Expect: passa (49 test di baseline; i nuovi arrivano con TASK-11).
+      - `cd cli && go build ./... && go test ./internal/web/...` — Expect: passa (gli asset sono embedded: un file mancante o un nome sbagliato emerge qui).
+      - Prova manuale: avviare `archetipo view` da una directory neutra con `ARCHETIPO_STATE_DIR` temporaneo e verificare a schermo che compaia la home, che non compaia la board e che i bottoni workspace-scoped siano assenti.
+
+      ## Done
+
+      - [ ] AC-1 — la home elenca i workspace conosciuti con nome, percorso, ultimo accesso e raggiungibilità, e nessuna board è mostrata.
+      - [ ] AC-6 — dalla home sono disponibili apri, dimentica, aggiungi un esistente e crea un nuovo workspace, con le stesse azioni già esistenti.
+      - [ ] AC-2 (parte pagina) — scegliendo un workspace raggiungibile la pagina si ricarica sullo stesso processo e mostra la board.
+      - [ ] Esiste **una** resa dell'elenco dei workspace, condivisa da home e modale.
+
+      ## Blockers
+
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Test node --test del renderer puro della home dei workspace
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+
+      Provare, sul testo visibile prodotto dal renderer, che ogni voce mostra nome, percorso, ultimo accesso e raggiungibilità, che le azioni sono offerte e motivate, e che un nome ostile non diventa markup.
+
+      ## Read
+
+      - `test/web/workspace-status.test.mjs` — caricatore VM del modulo UMD e disciplina degli oracoli (asserzioni sul testo visibile, non sulla forma del modulo). Riusarne il caricatore.
+      - `cli/internal/web/assets/workspace-home.js` — il modulo da provare.
+
+      ## Change
+
+      - Nuovo file `test/web/workspace-home.test.mjs`. Non-obiettivo: non modificare i test `test/web` esistenti.
+
+      ## Steps
+
+      1. Caricare il modulo con lo stesso schema VM di `workspace-status.test.mjs` (il modulo espone `module.exports` nel ramo Node).
+      2. AC-1 — payload con due voci, una `reachable:true` e una `status:"missing"`: asserire che l'HTML contiene il nome di entrambe, il percorso di entrambe, la stringa restituita dal `formatTime` iniettato per il rispettivo `lastOpenedAt`, l'etichetta `reachable` sulla prima e `not found` sulla seconda. L'oracolo è il testo visibile, non i nomi delle classi.
+      3. AC-6 — asserire che ogni voce espone un elemento con `data-open="<id>"` e uno con `data-remove="<id>"`, e che la voce irraggiungibile ha `data-open` con `disabled` e un `title` che ne dà la ragione. Asserire che la voce `current:true` ha il badge `current` e `data-open` disabilitato.
+      4. Stato sconosciuto: con `status:"something_new"` e `reachable:false`, asserire che il valore grezzo compare nel testo — un badge non deve sparire perché il frontend è più vecchio del server.
+      5. Elenco vuoto: asserire che `renderWorkspaceHome({workspaces: [], open: false})` contiene il messaggio "No workspace has been recorded yet" e nessuna riga di voce.
+      6. Escaping: voce con `name: '<img src=x onerror=1>'` e percorso contenente `"` e `&`; asserire che l'HTML non contiene `<img` e che contiene la forma sfuggita. È l'unica asserzione non sul testo visibile, e va commentata come tale.
+      7. Payload parziali: voce senza `id`, senza `lastOpenedAt`, `workspaces` assente del tutto — asserire che il renderer non lancia eccezioni e produce comunque una stringa.
+
+      ## Verify
+
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`:
+        - `node --test test/web/workspace-home.test.mjs` — Expect: tutti i test passano.
+        - `npm run test:web` — Expect: passa, con un totale superiore ai 49 di baseline.
+
+      ## Done
+
+      - [ ] AC-1 — nome, percorso, ultimo accesso e raggiungibilità di ogni voce sono nel testo che la home mostra.
+      - [ ] AC-6 — apri e dimentica sono offerti per ogni voce, e un'apertura impossibile è disabilitata con la sua ragione.
+      - [ ] Un nome di cartella ostile non produce markup eseguibile.
+
+      ## Blockers
+
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Smoke e2e — viewer avviato fuori da un workspace, home, apertura, e avvio dentro un workspace
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-07
+      - TASK-09
+      - TASK-11
+    body: |-
+      ## Objective
+
+      Percorrere la Dimostrazione della spec dall'inizio alla fine su un viewer reale, provando i sei criteri sul contratto HTTP e sul filesystem, senza credenziali, senza server finti e senza sleep arbitrari.
+
+      ## Read
+
+      - `test/e2e/open-workspace-view-smoke.mjs` — è il modello più vicino: costruisce il CLI, crea due workspace reali, avvia il viewer, usa `ARCHETIPO_STATE_DIR` dentro la run directory e cattura il PID. Riusarne struttura, helper (`buildCLI`, `createWorkspace`, `startViewServer`, `apiJSON`, `postExpectingStatus`, `assertEqual`, `createRunDir`, `parseArgs`) e la produzione di `report.html`/`summary.json`.
+      - `test/e2e/known-workspaces-view-smoke.mjs` — asserzioni già scritte su aggiunta e rimozione dall'elenco.
+      - `AGENTS.md` — sezione "Standalone smoke tests": va aggiornata quando se ne aggiunge uno.
+      - `package.json` — blocco `scripts`, per la convenzione dei nomi `test:view-*-smoke`.
+
+      ## Change
+
+      - Nuovo file `test/e2e/no-workspace-view-smoke.mjs`.
+      - `package.json` — nuovo script `"test:view-no-workspace-smoke": "node ./test/e2e/no-workspace-view-smoke.mjs"`.
+      - `AGENTS.md` — nuova voce nell'elenco degli standalone smoke test, nello stile delle esistenti (cosa è reale, cosa è simulato, quali oracoli, assenza di credenziali e di sleep).
+      - Non-obiettivi: non aggiungere scenari a `test/e2e/run.yaml` (questo smoke non usa agenti AI), non committare nulla sotto `test/workspaces/` o `test/e2e/.bin/`.
+
+      ## Steps
+
+      1. Preparare la run directory: `targets/` con due workspace reali `alfa` (spec `US-A01`) e `beta` (spec `US-B01`), `state/` per `ARCHETIPO_STATE_DIR`, e `neutral/` — una directory **non** workspace. Verificare esplicitamente che nessun antenato di `neutral/` dentro la run directory contenga `.archetipo/`.
+      2. Popolare il registro: registrare `alfa` e `beta` (via un viewer avviato dentro `alfa`, oppure via `POST /api/workspaces`), poi spegnerlo. Aggiungere una terza voce che punta a una directory poi rinominata via, così l'elenco contiene anche una voce irraggiungibile. Copiare `state/workspaces.json` in memoria come stringa: è la base del confronto di AC-4.
+      3. Avviare il viewer con cwd in `neutral/` e catturare il PID. Attendere la disponibilità interrogando `GET /api/workspaces` con timeout esplicito.
+      4. **AC-1**: asserire `open === false`, `currentPath === ""`, tre voci presenti, ciascuna con `name`, `path`, `lastOpenedAt` non vuoti e `reachable`/`status` coerenti (due raggiungibili, una `missing`); asserire che nessuna voce ha `current === true`.
+      5. **AC-5**: per ogni rotta workspace-scoped (`/api/board`, `/api/metrics`, `/api/workspace/status`, `/api/workspace/actions`, `/api/prd`, `/api/config`, `/api/execution/providers`, `/api/mockups`, `POST /api/workspace/execution`) asserire `409`, `workspaceOpen === false`, e assenza di chiavi di contenuto nel corpo (`columns`, `specs`, `providers`, `stage`, `content`).
+      6. **AC-4**: rileggere `state/workspaces.json` e asserire che è **identico byte a byte** alla copia del punto 2; asserire inoltre che nessuna voce ha come `path` la directory `neutral/` (confrontando con il suo realpath).
+      7. **AC-6**: creare su disco un terzo workspace `gamma` con `archetipo init`, poi `POST /api/workspaces {path: gamma}` → `201` e presenza nell'elenco; catturare il listing ricorsivo di `gamma`, chiamare `DELETE /api/workspaces/{id}` → `204`, asserire che la voce è sparita e che il listing ricorsivo di `gamma` è **identico** a prima; chiamare `POST /api/workspace` per creare un workspace `delta` altrove → `201` e presenza di `delta/.archetipo/config.yaml` su disco. Tutte queste chiamate avvengono mentre nessun workspace è aperto.
+      8. **AC-2**: `POST /api/workspaces/{id_beta}/open` → `200` con `current:true`; asserire che il PID del viewer è **lo stesso** del punto 3; asserire che `GET /api/board` risponde ora `200` con esattamente `US-B01` e senza `US-A01`; asserire che `GET /api/workspaces` riporta `open:true` e `currentPath` pari al realpath di `beta`; asserire che `lastOpenedAt` di `beta` è avanzato.
+      9. Spegnere il viewer e riavviarlo con cwd **dentro** `beta` (e una seconda volta dentro una sottodirectory di `beta`, per coprire la risalita). **AC-3**: al primo `GET /api/workspaces` dopo la disponibilità, asserire `open === true` e `currentPath` pari a `beta`, senza che alcuna richiesta di apertura sia mai stata inviata; asserire che `GET /api/board` serve `US-B01`.
+      10. Chiudere tutti i processi anche in caso di fallimento (`try/finally`, come negli smoke esistenti) e scrivere `report.html` e `summary.json` nella run directory.
+      11. Ogni attesa interroga una rotta del viewer con timeout esplicito che nomina cosa era atteso e cosa è arrivato: nessun `sleep` arbitrario.
+
+      ## Verify
+
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`:
+        - `npm run test:view-no-workspace-smoke` — Expect: esce con codice 0 e stampa i passi verificati; nessun passo classificato `skip` per credenziali (lo smoke non ne usa).
+        - `git status --porcelain` — Expect: nessun file sotto `test/workspaces/` o `test/e2e/.bin/` fra le modifiche da committare.
+      - Rieseguire lo smoke una seconda volta — Expect: passa di nuovo (deve essere idempotente rispetto alla propria run directory).
+
+      ## Done
+
+      - [ ] AC-1 — avvio in directory neutra: `open:false` e le voci complete di nome, percorso, ultimo accesso e raggiungibilità.
+      - [ ] AC-2 — apertura dalla home sullo **stesso PID**, con la board del workspace scelto.
+      - [ ] AC-3 — avvio dentro un workspace (anche da una sottodirectory): quel workspace è già aperto, senza passare dalla home.
+      - [ ] AC-4 — `workspaces.json` identico byte a byte dopo l'avvio neutro, e la directory neutra non compare fra le voci.
+      - [ ] AC-5 — ogni rotta workspace-scoped risponde `409` con `workspaceOpen:false` e nessun contenuto.
+      - [ ] AC-6 — aggiungi, crea e dimentica funzionano dalla home; la directory dimenticata è intatta.
+      - [ ] `AGENTS.md` e `package.json` descrivono il nuovo smoke.
+
+      ## Blockers
+
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Gate finale — verifiche complete e controllo dello stato dei task prima della review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+
+      Eseguire l'insieme esatto delle verifiche che questo repository si fida, provare che l'incremento non aggiunge alcun fallimento rispetto alla baseline registrata, e richiedere la review solo dopo aver verificato che nessun task è rimasto `TODO`.
+
+      ## Read
+
+      - `AGENTS.md` — sezione "Rules for CLI changes", blocco dei controlli da eseguire prima di consegnare.
+      - La sezione `## Baseline` del piano — i risultati misurati prima dell'implementazione.
+
+      ## Change
+
+      - Nessuna modifica di codice attesa. Se una verifica fallisce, la correzione appartiene al task che ha introdotto il fallimento: correggere lì e rieseguire questo gate.
+
+      ## Steps
+
+      1. Da `/Users/stefanoleli/Project/Archetipo/cli` eseguire, in quest'ordine, `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`.
+      2. Installare il linter se assente — `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` — e poi eseguire `golangci-lint run --timeout 5m ./...`. Se l'installazione non è possibile in questo ambiente, registrare esplicitamente il controllo come non eseguito e la ragione: non dichiararlo verde.
+      3. Da `/Users/stefanoleli/Project/Archetipo` eseguire `npm run test:web` e `npm run test:view-no-workspace-smoke`.
+      4. Eseguire gli smoke dei workspace già esistenti, che questa spec attraversa: `npm run test:view-workspaces-smoke` e `npm run test:view-open-workspace-smoke`. Sono la prova che US-045 e US-046 non hanno subito regressioni dal gate delle rotte e dal renderer condiviso.
+      5. Verificare con `git status --porcelain` che non risultino modifiche sotto `test/workspaces/` o `test/e2e/.bin/`.
+      6. Marcare **questo** task come `DONE` con `archetipo task done US-051 TASK-13` (o l'equivalente in uso).
+      7. Ricaricare la spec da `/Users/stefanoleli/Project/Archetipo` con `archetipo spec show US-051` e verificare che **nessun** task risulti `TODO`.
+      8. Solo a quel punto richiedere la review con `archetipo spec review US-051`. L'ordine è vincolante: verifiche, `DONE` del gate, rilettura della spec, review.
+
+      ## Verify
+
+      - `cd cli && gofmt -l .` — Expect: nessun output (baseline: pulito).
+      - `cd cli && go vet ./...` — Expect: nessun problema (baseline: pulito).
+      - `cd cli && go build ./...` — Expect: compila (baseline: compila).
+      - `cd cli && go test ./...` — Expect: passa; almeno 1695 test passati come in baseline, più quelli aggiunti da TASK-02, TASK-05, TASK-07 e TASK-09.
+      - `npm run test:web` — Expect: passa; più di 49 test, 0 falliti.
+      - `npm run test:view-no-workspace-smoke` — Expect: uscita 0.
+      - `npm run test:view-workspaces-smoke` e `npm run test:view-open-workspace-smoke` — Expect: uscita 0.
+      - `golangci-lint run --timeout 5m ./...` da `cli` — Expect: 0 problemi, oppure registrato come non eseguibile con la ragione (prerequisito d'ambiente noto dalla baseline, non un fallimento del codice).
+      - `archetipo spec show US-051` da `/Users/stefanoleli/Project/Archetipo` — Expect: nessun task in `TODO`.
+
+      ## Done
+
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5, AC-6 — ognuno coperto da almeno una verifica eseguita in questo gate, attraverso `go test ./...`, `npm run test:web` e `npm run test:view-no-workspace-smoke`.
+      - [ ] Nessun file modificato dal piano introduce diagnostiche di `gofmt`, `go vet` o del compilatore rispetto alla baseline.
+      - [ ] Gli smoke dei workspace preesistenti restano verdi: nessuna regressione su US-045 e US-046.
+      - [ ] `archetipo spec show US-051` non riporta alcun task `TODO` prima della richiesta di review.
+
+      ## Blockers
+
+      None.
+    ref: TASK-13

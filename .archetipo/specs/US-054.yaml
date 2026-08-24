@@ -1,0 +1,46 @@
+schema: archetipo/spec/v2
+code: US-054
+title: Avviare un'azione del processo dalla conversazione
+epic:
+  code: EP-006
+  title: Esecuzione locale e ciclo di delivery
+priority: HIGH
+points: 3
+status: DONE
+blocked_by:
+  - US-053
+scope: MVP
+body: |-
+  #### US-054: Avviare un'azione del processo dalla conversazione
+
+  **Epic:** EP-006 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccata da:** US-053
+
+  **User Story**
+  Come utilizzatore di ARchetipo,
+  voglio che chiedendo all'agente di fare una cosa concreta l'azione del processo parta davvero,
+  così da non dover tradurre a mano quello che ho appena detto in un pulsante da cercare altrove.
+
+  **Dimostrazione**
+  Partendo da una conversazione aperta su un workspace con una spec pianificabile, il revisore chiede all'agente di pianificare quella spec. Osserva che l'agente propone l'azione nominando spec e azione, e che nulla parte finché il revisore non conferma; dopo la conferma osserva l'esecuzione comparire e la spec transitare come farebbe avviandola dalla board. Il revisore chiede poi un'azione che lo stato corrente non consente e osserva che l'agente la dichiara non disponibile con la ragione data dal processo, senza crearne alcuna.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Quando la richiesta del revisore corrisponde a un'azione disponibile, l'agente la propone nominando l'azione e il suo bersaglio, e nessuna esecuzione parte prima della conferma esplicita del revisore.
+  - [ ] AC-2 — Dopo la conferma, l'azione produce la stessa esecuzione e la stessa transizione di stato che produrrebbe avviata dalla board.
+  - [ ] AC-3 — Un'azione che il processo non dichiara disponibile nello stato corrente non viene avviata, e la ragione riportata è quella dichiarata dal processo.
+  - [ ] AC-4 — Rifiutando la proposta, nessuna esecuzione viene creata, nessuna spec cambia stato e la conversazione prosegue.
+  - [ ] AC-5 — Avviata l'azione, il revisore raggiunge la run che ne è nata e la sua conversazione dall'esito della proposta.
+
+  **Fuori ambito**
+  Azioni non dichiarate dal processo, l'esecuzione automatica senza conferma, la disposizione della conversazione nell'interfaccia e i suggerimenti sul passo successivo.
+history:
+  - status: TODO
+    at: "2026-08-21T17:16:17Z"
+  - status: PLANNED
+    at: "2026-08-21T20:32:28Z"
+  - status: IN PROGRESS
+    at: "2026-08-21T20:33:34Z"
+  - status: REVIEW
+    at: "2026-08-21T21:04:51Z"
+  - status: DONE
+    at: "2026-08-21T21:09:30Z"

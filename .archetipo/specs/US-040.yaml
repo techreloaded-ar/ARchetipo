@@ -1,0 +1,44 @@
+schema: archetipo/spec/v2
+code: US-040
+title: Avviare l'inception dalla UI e ottenere il PRD
+epic:
+  code: EP-005
+  title: Esperienza operativa ARchetipo
+priority: HIGH
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-040: Avviare l'inception dalla UI e ottenere il PRD
+
+  **Epic:** EP-005 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come persona che apre un workspace appena inizializzato,
+  voglio avviare l'inception dalla UI e rispondere alle domande dell'agente,
+  così da ottenere il PRD senza conoscere le skill né uscire dal viewer.
+
+  **Dimostrazione**
+  Partendo da un workspace inizializzato e privo di PRD, il revisore avvia l'inception dalla UI, legge nella pagina le domande poste dall'agente, risponde e prosegue il dialogo fino alla conclusione; al termine apre il PRD dalla UI e lo ritrova nel percorso configurato. Ripetendo la prova e interrompendo la run a metà, osserva il workspace ancora senza PRD e il motivo dell'interruzione dichiarato.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Un workspace privo di PRD offre l'azione di inception a livello di workspace.
+  - [ ] AC-2 — Le domande dell'agente compaiono nella UI e la risposta della persona prosegue la stessa conversazione.
+  - [ ] AC-3 — Al termine con esito positivo il PRD è persistito nel percorso configurato ed è leggibile dalla UI senza riavviare il viewer.
+  - [ ] AC-4 — Una run interrotta o fallita lascia il workspace senza PRD e ne dichiara il motivo.
+  - [ ] AC-5 — Con un PRD già presente l'azione non è offerta come prima inception e nessun documento esistente viene sovrascritto implicitamente.
+
+  **Fuori ambito**
+  Generazione del backlog, modifica del PRD dalla UI, revisione o approvazione del documento prodotto e scelta del provider durante l'azione.
+history:
+  - status: TODO
+    at: "2026-08-19T11:03:29Z"
+  - status: PLANNED
+    at: "2026-08-19T22:40:17Z"
+  - status: IN PROGRESS
+    at: "2026-08-19T22:41:24Z"
+  - status: REVIEW
+    at: "2026-08-19T23:23:13Z"
+  - status: DONE
+    at: "2026-08-19T23:25:21Z"

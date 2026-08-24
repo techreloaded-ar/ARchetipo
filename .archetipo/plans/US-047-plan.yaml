@@ -1,0 +1,737 @@
+schema: archetipo/plan/v2
+spec_code: US-047
+body: |-
+  # US-047: Scegliere il modello da un elenco offerto dal provider — Piano di implementazione
+
+  **Prodotto da:** ARchetipo Planning Team
+  **Data:** 2026-08-20
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 — Esperienza operativa ARchetipo
+  **Priorità:** HIGH | **Punti:** 5 | **Bloccata da:** -
+
+  **User Story**
+  Come utilizzatore che configura l'esecuzione di un workspace dalla UI, voglio scegliere il modello da un elenco dichiarato dal provider installato invece di digitarne il nome, così da non dover conoscere a memoria gli identificatori e non scoprire un errore di battitura solo quando la run fallisce.
+
+  **Criteri di accettazione**
+  - AC-1 — La configurazione dell'esecuzione mostra l'elenco dei modelli dichiarati dal provider selezionato, ciascuno con l'identificatore da usare.
+  - AC-2 — L'elenco indica quale modello il provider usa come proprio predefinito.
+  - AC-3 — Un modello scelto dall'elenco e salvato compare nella configurazione del workspace e nel record della run successiva come modello usato.
+  - AC-4 — Quando l'elenco non è ottenibile, la UI ne mostra il motivo in chiaro e lascia digitare il modello a mano.
+  - AC-5 — Un modello già configurato ma assente dall'elenco corrente resta selezionato e contrassegnato come non elencato, e il salvataggio non lo cancella.
+  - AC-6 — Lasciare il modello vuoto resta possibile e la configurazione salvata non contiene alcun modello.
+
+  **Fuori ambito**
+  Opzioni collegate al modello, scelta valida per la singola run, cataloghi di modelli remoti o mantenuti da ARchetipo, e qualunque gestione di credenziali del provider.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Il campo `model` esiste già: ogni provider locale lo dichiara fra i propri `ConfigField` (`claude`: `command`, `model`, `permission_mode`, `timeout_seconds`; `codex`: `command`, `model`, `sandbox`, `timeout_seconds`) e il browser lo disegna oggi come una `<input type="text">` generata dalla descrizione del provider. Quello che manca non è un campo, è un **catalogo**: nessuno dichiara quali identificatori quel campo accetta. Il lavoro è quindi aggiungere una seconda dichiarazione opzionale del provider — l'elenco dei modelli — e farla arrivare fino al form senza che il browser impari il nome di un solo provider.
+
+  L'aggiunta ricalca esattamente i due precedenti già presenti nel package `execution`: `ConfigDescriber` (che descrive i campi) e `AvailabilityReporter` (che dichiara se il runtime è usabile). Entrambe sono interfacce **opzionali e separate da `Provider`**, con un helper che tratta il provider che non le implementa come un caso normale e non come un errore. Il catalogo dei modelli segue la stessa forma, per la stessa ragione: `Provider` è un contratto stabile e aggiungerci un metodo romperebbe ogni implementazione esistente per il comodo di un solo chiamante.
+
+  Punti chiave:
+
+  - **Contratto (`cli/internal/execution/models.go`, nuovo).** `ModelOption{ID, Label, Default}` è una voce del catalogo; `ModelLister` è l'interfaccia opzionale `Models(ctx, config) ([]ModelOption, error)`; `ListModels(ctx, provider, config) (models []ModelOption, declared bool, err error)` è l'helper simmetrico a `DescribeConfig`/`CheckAvailability`. `declared` distingue **"questo provider non ha un catalogo"** da **"il catalogo c'era e non si è potuto ottenere"**: sono due situazioni diverse e la UI le deve rendere in modo diverso (nel primo caso il campo di testo di sempre, senza alcun avviso; nel secondo il campo di testo **più** il motivo). Il provider riceve una copia della configurazione, come per la sonda di disponibilità, così l'interrogazione non può mutare la mappa del chiamante.
+  - **Il catalogo è agganciato a un campo, non al provider in astratto.** `execution.ModelFieldName = "model"` è l'unico posto in cui quel nome vive: il provider dichiara il catalogo per il proprio campo `model`, il viewer riporta nella vista `model_field` e il browser confronta `provider.model_field` con il nome del campo che sta disegnando. Il browser resta così ignorante di ogni provider, esattamente come oggi: non contiene la stringa `model` da nessuna parte, e un provider futuro che chiamasse diversamente il proprio campo continuerebbe a funzionare cambiando una costante Go.
+  - **Chi dichiara i modelli.** `claude` e `codex` dichiarano il proprio catalogo in un `models.go` dedicato, con la stessa disciplina già applicata a `permissionModes` in `claude/config.go`: elenco chiuso, scritto a mano, con in commento la versione della CLI su cui è stato verificato. `arcipelago` non lo dichiara — è un provider remoto il cui catalogo non è affare di questa storia — e resta con il campo di testo di oggi, senza avvisi.
+  - **Il catalogo vale solo se il runtime risponde.** Nel `handleListExecutionProviders` la sonda di disponibilità è già eseguita una volta per provider, con la configurazione persistita per il default e con `nil` per gli altri. Il catalogo si aggancia a quel risultato: runtime non usabile ⇒ `models_unavailable_reason` è **la diagnostica del provider stessa**, senza una seconda sonda e senza riscritture. È ciò che rende vera la dimostrazione della spec: un `command` inesistente rende il provider non disponibile con il suo messaggio (`the claude command "…" was not found on this machine: …`), e quel messaggio diventa senza mediazioni il motivo per cui l'elenco non c'è.
+  - **Invariante della vista.** Quando `model_field` è valorizzato, esattamente uno fra `models` (non vuoto) e `models_unavailable_reason` (non vuoto) è presente. Non esiste lo stato "nessun modello e nessuna spiegazione": sarebbe un elenco vuoto che il lettore non sa come interpretare. L'invariante è verificata da un test dedicato, non solo descritta qui.
+  - **Il form.** `renderProviderFields` in `app.js` esce da `app.js` e diventa un modulo puro `cli/internal/web/assets/provider-fields.js`, sullo stesso stampo di `workspace-status.js` e `task-markdown.js`: nessun DOM, nessuna fetch, prende la vista del provider più i valori correnti e restituisce una stringa HTML, esportata sia come `window.ProviderFields` (browser) sia via `module.exports` (Node). È questa estrazione che rende il reso verificabile con `node --test` sul **testo visibile**, che è ciò di cui parlano AC-1, AC-2, AC-4, AC-5 e AC-6.
+  - **Cosa disegna il campo con catalogo.** Una `<select>` con: una voce vuota per "predefinito del provider" (AC-6, e resta il valore inviato quando nessuno sceglie); una voce per ogni modello, etichettata con il proprio identificatore e marcata come predefinito del provider quando `default` è vero (AC-1, AC-2); e, solo quando il valore configurato non è nel catalogo, una voce aggiuntiva con quel valore, selezionata e marcata `non elencato` (AC-5). Senza catalogo ma con motivo, resta la `<input type="text">` di oggi con il motivo reso sotto il campo (AC-4). Senza catalogo e senza motivo, è esattamente l'HTML di oggi.
+  - **Il salvataggio non cambia.** `collectProviderConfig` legge `input.value.trim()` per nome del campo e salta i valori vuoti: un `<select>` risponde a `.value` come una `<input>`, quindi la scelta viaggia sul percorso già esistente e "vuoto significa nessun modello" resta vero senza una riga in più. L'unico adeguamento è `markProviderFieldError`, che cerca `label.querySelector("input")` e deve cercare anche una `select`, altrimenti l'evidenziazione di un campo rifiutato smetterebbe di funzionare proprio sul campo che questa storia cambia.
+  - **AC-3 è già cablato, e va dimostrato.** La configurazione persistita diventa `Request.ProviderConfig` in `execution/service.go`, e i provider locali riportano `model` nel payload del record (`claude/provider.go`, `implement.go`, `review.go`, …). Nessun codice nuovo serve: serve la prova che la catena salvataggio → run → record regge, e si ottiene con un test HTTP che salva un default con un modello, avvia l'azione su un provider stub che rilegge `request.ProviderConfig["model"]`, e osserva quel modello nel record letto da `GET /api/execution/{id}`.
+
+  ### Decisioni architetturali
+
+  Il gate Wiki del workspace è disattivato (`wiki.enabled: false`), quindi le decisioni che avrebbero meritato una pagina `type: decision` sono registrate qui per intero.
+
+  **Decisione 1 — da dove viene l'elenco dei modelli.**
+  *Contesto:* AC-1 chiede "l'elenco dei modelli dichiarati dal provider" e AC-4 chiede un motivo quando l'elenco non è ottenibile. Due sorgenti erano praticabili.
+  *Opzione A (scartata):* interrogare la CLI installata a ogni apertura del pannello, ricavando i modelli dal suo output. Né Claude Code né Codex espongono un comando stabile e leggibile a macchina che elenchi i modelli: si finirebbe a fare parsing dell'help, cioè a dipendere da una stringa di presentazione che cambia senza preavviso e che romperebbe il pannello a ogni aggiornamento della CLI. In più aggiungerebbe un secondo processo per provider a ogni `GET /api/execution/providers`, che è la chiamata che apre il pannello.
+  *Opzione B (scelta):* il catalogo è **dichiarato dal package del provider** — elenco chiuso, verificato contro una versione nominata della CLI in commento — ed è **offerto solo quando la sonda di disponibilità conferma che quel runtime risponde**. È esattamente la disciplina già adottata per `permissionModes`, che è pure un insieme chiuso di valori che la CLI accetta.
+  *Tradeoff:* un modello nuovo pubblicato dal fornitore non compare finché il catalogo non viene aggiornato. È il motivo per cui il campo resta **sempre** scrivibile a mano — AC-5 non è un caso limite, è la valvola di sfogo permanente di questa decisione — e per cui una voce configurata fuori catalogo non viene mai cancellata né rifiutata.
+  *Verifica:* test di unità sui cataloghi (identificatori non vuoti e unici, esattamente un predefinito); test HTTP che con provider non disponibile l'elenco manca e il motivo è la diagnostica del provider; test del renderer che un valore fuori catalogo resta selezionato e marcato.
+
+  **Decisione 2 — quale diagnostica diventa il motivo di AC-4.**
+  *Contesto:* quando l'elenco non c'è la UI deve dire perché, e la ragione dominante è un runtime che non risponde.
+  *Opzione A (scartata):* un messaggio scritto nel layer web ("elenco modelli non disponibile"). Dice al lettore che qualcosa non va e non gli dice nulla su cosa fare; e duplicherebbe in un secondo posto una spiegazione che il provider sa già dare meglio.
+  *Opzione B (scartata):* far interrogare il catalogo comunque e lasciare che sia il provider a fallire dentro `Models`. Significherebbe una seconda sonda del processo per provider a ogni apertura del pannello, per riottenere un'informazione che la richiesta ha già in mano.
+  *Opzione C (scelta):* quando la sonda di disponibilità ha già dato un motivo, quel motivo **è** il motivo dell'elenco mancante, inoltrato senza wrapping. `Models` viene interrogato solo su un runtime disponibile, e un suo errore (per esempio una configurazione illeggibile) diventa a sua volta il motivo, sempre testuale e sempre del provider.
+  *Tradeoff:* il motivo dell'elenco e il motivo della non disponibilità coincidono nel caso più comune, il che può sembrare ridondante nel pannello. È voluto: sono la stessa causa, e mostrarla accanto al campo che il lettore sta compilando è precisamente ciò che AC-4 chiede.
+  *Verifica:* test HTTP con provider stub non disponibile — `models` vuoto, `models_unavailable_reason` uguale carattere per carattere alla diagnostica del provider; test del renderer che quel testo è visibile e che il campo resta compilabile.
+
+  **Decisione 3 — dove vive il reso del campo.**
+  *Contesto:* AC-1, AC-2, AC-4, AC-5 e AC-6 parlano tutti di ciò che si vede nel form, cioè di una funzione che oggi vive dentro `app.js`, 4251 righe di modulo con DOM e fetch, non collaudabile fuori da un browser.
+  *Opzione A (scartata):* introdurre un framework di e2e browser (Playwright) per dimostrarli. Il repository non ne ha uno; l'unica cosa da provare è come si disegna un campo di un form, e US-040, US-041, US-043, US-044, US-045 e US-046 sono tutte state consegnate senza.
+  *Opzione B (scelta):* estrarre `renderProviderFields` in un modulo puro `assets/provider-fields.js` e collaudarlo con `node --test` sul testo visibile, com'è già stato fatto per `workspace-status.js`. `app.js` delega, gli asset sono serviti dal `FileServer` sull'FS embeddato (nessuna registrazione di rotta da aggiungere) e `index.html` guadagna un tag `<script>` accanto agli altri due moduli estratti.
+  *Tradeoff:* il cablaggio fra il modulo e il DOM (una riga di `innerHTML`) non è coperto da test. È lo stesso confine già accettato per gli altri due moduli estratti, e lo smoke HTTP sul viewer reale copre l'altra metà, il contratto servito.
+  *Verifica:* `test/web/provider-fields.test.mjs` con oracoli sul testo visibile; deroga al browser e2e motivata nella Strategia di test.
+
+  **Nessun ADR ulteriore.** Il resto è applicazione di pattern già stabiliti nel repository: interfaccia opzionale con helper, diagnostica del provider inoltrata senza riscritture, modulo di reso puro collaudato in Node.
+
+  ---
+
+  ## Baseline
+
+  Il workspace non usa i worktree (`worktree.enabled: false`), quindi `data.workdir` coincide con la radice del progetto `/Users/stefanoleli/Project/Archetipo`. I comandi Go si eseguono da `cli/`, quelli npm dalla radice. Tutti i comandi qui sotto sono stati eseguiti prima di scrivere il piano.
+
+  | Verifica | Esito prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | Nessun output (pulito) | Ogni task che tocca file Go verifica che resti senza output |
+  | `cd cli && go build ./...` | Compila (`BUILD_OK`) | Ogni task deve lasciare il build verde |
+  | `cd cli && go vet ./...` | Nessun problema (`VET_OK`) | Ogni task deve lasciare `go vet` pulito |
+  | `cd cli && go test ./internal/execution/... ./internal/web/...` | 865 test passati in 6 package | Nessun task può aggiungere fallimenti; i task di prodotto usano il sottoinsieme mirato |
+  | `npm run test:web` (`node --test "test/web/**/*.test.mjs"`) | 22 test passati, 0 falliti, 5 suite | Il nuovo `test/web/provider-fields.test.mjs` si aggiunge a questa suite, che deve restare interamente verde |
+  | `npm run test:view-execution-smoke -- --cleanup` | PASS (AC-1..AC-5 dello smoke, viewer reale su porta effimera) | È lo smoke che va esteso; deve restare PASS con le asserzioni nuove **e** con tutte quelle esistenti invariate |
+  | `golangci-lint run --timeout 5m ./...` | **Non eseguibile: `golangci-lint` non è installato su questa macchina** | Non è una verifica obbligatoria dei task. Il gate finale la esegue **solo se** il binario è presente, altrimenti registra esplicitamente che è stata saltata per prerequisito d'ambiente |
+
+  Prerequisiti d'ambiente, distinti dai fallimenti di codice: Go e Node sono installati e funzionanti; `golangci-lint` non lo è (installabile con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`, opzionale per questa storia). Nessun test di questo piano richiede un binario `claude` o `codex` reale: i provider locali sono esercitati attraverso il seam iniettabile `Runner`, come già fanno `claude/provider_test.go` e `codex/provider_test.go`, e lo smoke `execution-config-view-smoke` **osserva** la disponibilità invece di richiederla, quindi passa su una macchina con o senza le CLI installate.
+
+  Nessun file toccato da questo piano presenta diagnostiche preesistenti di compilatore, `vet` o `gofmt`.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | Vista provider con catalogo di tre modelli e runtime disponibile (`provider-fields.test.mjs`); provider stub con catalogo nel viewer reale (`execution_test.go`); `claude`/`codex` reali nel viewer avviato dallo smoke | Unità (renderer) + integrazione HTTP | Il testo visibile del campo Modello contiene una voce per ogni identificatore del catalogo; sul contratto HTTP `model_field` vale `model` e `models[].id` sono gli identificatori dichiarati, non vuoti e unici | TASK-09, TASK-07, TASK-11 |
+  | AC-2 | Catalogo con esattamente una voce `default: true` | Unità (renderer + cataloghi) + integrazione HTTP | La voce predefinita è resa con la dicitura `predefinito del provider` nel testo visibile; `models` contiene esattamente un elemento con `default: true` per `claude` e per `codex` | TASK-05, TASK-09, TASK-07 |
+  | AC-3 | Viewer reale con connettore in memoria, provider stub che rilegge `request.ProviderConfig["model"]`, default salvato via `PUT /api/execution/provider/default` con `model: "modello-scelto"` | Integrazione HTTP | Dopo il `PUT`, `GET /api/execution/providers` riporta `default.config.model == "modello-scelto"`; dopo `POST /api/spec/{code}/execution` il record letto da `GET /api/execution/{id}` porta nel payload lo stesso `"modello-scelto"` come modello usato | TASK-10 |
+  | AC-4 | Provider stub non disponibile con diagnostica nota; nel renderer, vista con `model_field` valorizzato, `models` vuoto e motivo presente | Unità (renderer) + integrazione HTTP | `models` è vuoto e `models_unavailable_reason` è **identico** alla diagnostica del provider; il testo visibile del campo contiene quella frase e il campo reso è una `input type="text"` che porta il valore precedente invariato | TASK-07, TASK-09 |
+  | AC-5 | Valore configurato `modello-fuori-catalogo` assente dal catalogo | Unità (renderer) + integrazione HTTP | Nel testo visibile compare la voce `modello-fuori-catalogo` marcata `non elencato` ed è quella selezionata; un `PUT` con quel valore risponde `200`, lo scrive in `.archetipo/config.yaml` e `GET /api/execution/providers` lo rilegge invariato | TASK-09, TASK-07, TASK-11 |
+  | AC-6 | Valore configurato assente (campo mai compilato) | Unità (renderer) + integrazione HTTP | Nel testo visibile è selezionata la voce vuota `predefinito del provider` e nessuna voce di modello risulta selezionata; un `PUT` senza `model` produce un `default.config` che **non contiene** la chiave `model` | TASK-09, TASK-07, TASK-11 |
+
+  Ogni oracolo è osservabile attraverso i doppi scelti: i provider stub sostituiscono soltanto la CLI esterna (che non è la responsabile di nessun criterio), mentre il server HTTP, il registro dei provider, la lettura/scrittura di `.archetipo/config.yaml` e il renderer del campo sono sempre quelli reali. In particolare AC-3 non è provato da "la configurazione è stata salvata" ma dal modello che ricompare nel record della run, e AC-4 non è provato dall'assenza dell'elenco ma dalla frase che il lettore vede.
+
+  ---
+
+  ## Strategia di test
+
+  La strategia segue i tre livelli che questo repository usa già per ogni storia di viewer, senza inventarne un quarto:
+
+  - **Unità Go sul contratto (`internal/execution`).** `ListModels` è collaudato come `DescribeConfig` e `CheckAvailability`: provider senza interfaccia (nessun catalogo, nessun errore), provider con catalogo (voci restituite, configurazione consegnata come copia), provider che fallisce (errore inoltrato senza wrapping). I cataloghi di `claude` e `codex` sono collaudati sugli **invarianti** — identificatori non vuoti, unici, esattamente un predefinito — e non su un elenco di nomi ricopiato dal sorgente, che sarebbe un test che non può fallire.
+  - **Integrazione HTTP Go (`internal/web`).** È il livello che attraversa davvero il confine di rotta: `GET /api/execution/providers` su un registro di provider stub controllati dal test, con connettore in memoria e `.archetipo/config.yaml` reale su `t.TempDir()`. Copre l'invariante della vista, la coincidenza fra motivo dell'elenco e diagnostica del provider, la persistenza di un modello fuori catalogo, l'assenza della chiave `model` quando il campo è vuoto, e la catena salvataggio → run → record di AC-3.
+  - **Unità Node sul reso (`test/web`).** `provider-fields.test.mjs` esercita il modulo puro estratto, con oracoli sul **testo visibile** dell'HTML prodotto (stessa tecnica di `workspace-status.test.mjs`), perché è il testo che i criteri descrivono. Include un caso di neutralizzazione dell'HTML che arriva dal payload: identificatori ed etichette dei modelli sono testo del provider e non devono poter rompere il form.
+  - **Smoke HTTP sul viewer reale (`test/e2e/execution-config-view-smoke.mjs`).** Estende lo smoke esistente — senza indebolire una sola asserzione già presente — con il contratto del catalogo osservato su un `archetipo view` vero, con i provider reali registrati: `model_field` presente per `claude` e `codex`, assente per `arcipelago`, e l'invariante `models` XOR `models_unavailable_reason`. Come per la disponibilità, lo smoke **osserva** invece di richiedere: deve passare su una macchina con le CLI installate e su una senza.
+
+  `AGENTS.md` documenta riga per riga cosa verifica ogni smoke; la riga di `test:view-execution-smoke` va allineata nella stessa storia, esattamente come è stato fatto in US-038 quando i campi di `codex` sono cambiati.
+
+  ### Deroga al browser e2e
+
+  **Motivo:** il repository non ha alcuna infrastruttura di e2e browser, e ogni spec di viewer già consegnata (US-040, US-041, US-043, US-044, US-045, US-046) è dimostrata con uno smoke Node sul contratto HTTP del viewer reale più test di unità sui moduli di reso estratti. Questa storia non introduce né una schermata né una rotta: cambia il modo in cui **un campo** di un form già esistente viene disegnato, a partire da due chiavi in più nella risposta di una rotta che esiste già. Introdurre Playwright per questo sarebbe sproporzionato, ed è precisamente il caso che le regole di pianificazione chiedono di non bootstrappare.
+
+  **Livello di evidenza usato al suo posto:** il confine di rotta e la persistenza sono attraversati per davvero dai test HTTP Go su `internal/web` (server, registro, connettore e file di configurazione reali) e dallo smoke Node contro un processo `archetipo view` reale, che coprono AC-1, AC-2, AC-3, AC-5 e AC-6 sul contratto; il reso del campo — cioè le parole che AC-1, AC-2, AC-4, AC-5 e AC-6 descrivono — è coperto dai test di unità sul modulo puro `provider-fields.js`, con oracoli sul testo visibile. L'unico frammento non coperto resta l'assegnazione `innerHTML` in `app.js`, lo stesso confine già accettato per `workspace-status.js` e `task-markdown.js`.
+
+  **Video dimostrativo:** la spec è filmabile (la `Dimostrazione` è un percorso interamente osservabile nel viewer), ma `e2e.record_demo_video` è `false` in questo workspace e la registrazione è comunque competenza di `archetipo-review`, non dell'implementazione.
+
+  ### Mockup
+
+  Nessun mockup. La storia non introduce una pagina, una rotta o un componente con un proprio layout, e non riorganizza il layout del pannello Execution: un campo già presente nel form passa da input libero a elenco con la possibilità di scrivere a mano. Rientra quindi nel caso "aggiunta contenuta a un form esistente", per cui i trigger di generazione non scattano.
+
+  ---
+
+  _Piano generato da ARchetipo Planning — 2026-08-20_
+tasks:
+  - id: TASK-01
+    title: Contratto del catalogo modelli in internal/execution (ModelOption, ModelLister, ListModels)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Il package `execution` espone un'interfaccia opzionale con cui un provider dichiara i modelli che accetta, e un helper che distingue "nessun catalogo dichiarato" da "catalogo non ottenibile".
+
+      ## Read
+      - `cli/internal/execution/provider.go` — `ConfigField`, `ConfigDescriber`, `DescribeConfig`, `CloneConfig`: è lo stampo esatto da ricalcare (interfaccia opzionale + helper che non ritorna mai `nil`).
+      - `cli/internal/execution/availability.go` — `AvailabilityReporter` e `CheckAvailability`: il secondo precedente, in particolare il commento sul perché l'interfaccia è separata da `Provider` e sul fatto che l'errore del provider viene inoltrato senza wrapping.
+      - `cli/internal/execution/claude/config.go` — il campo `model` fra i `ConfigField` di `claude`, per confermare che il nome della chiave di configurazione è esattamente `model`.
+
+      ## Change
+      - `cli/internal/execution/models.go` — file nuovo, unico file toccato da questo task.
+
+      Non-goal espliciti: non modificare `Provider`; non aggiungere metodi a `provider.go`; non implementare il catalogo per alcun provider (TASK-03/TASK-04); non toccare il package `web`.
+
+      ## Steps
+      1. Crea `cli/internal/execution/models.go` nel package `execution`.
+      2. Dichiara `const ModelFieldName = "model"`, con un commento che spieghi che è l'unico posto in cui vive il nome del campo di configurazione che un catalogo riempie, così provider e viewer non possono divergere.
+      3. Dichiara `type ModelOption struct` con `ID string \`json:"id"\``, `Label string \`json:"label,omitempty"\`` e `Default bool \`json:"default,omitempty"\``. Documenta che `ID` è l'identificatore da passare al runtime, `Label` è ciò che si legge quando differisce dall'identificatore, e `Default` marca il modello che il provider usa come proprio predefinito.
+      4. Dichiara `type ModelLister interface { Models(ctx context.Context, config map[string]any) ([]ModelOption, error) }`, con il commento che ne spiega l'opzionalità e la separazione da `Provider` sullo stesso registro di `ConfigDescriber` e `AvailabilityReporter`.
+      5. Dichiara `func ListModels(ctx context.Context, provider Provider, config map[string]any) ([]ModelOption, bool, error)`: se il provider non implementa `ModelLister`, ritorna `nil, false, nil`; altrimenti invoca `Models` con `CloneConfig(config)`, e in caso di errore ritorna `nil, true, err` **senza wrapping**. In caso di successo ritorna una copia detached della slice (mai `nil`: una slice vuota) più `true, nil`.
+      6. Documenta nel commento di `ListModels` che il secondo valore di ritorno esiste per tenere separati i due casi che la UI deve rendere in modo diverso: nessun catalogo dichiarato (campo di testo di sempre, nessun avviso) e catalogo non ottenibile (campo di testo più motivo).
+
+      ## Verify
+      - Da `cli/`: `gofmt -l .`
+      - Expect: nessun output.
+      - Da `cli/`: `go build ./... && go vet ./...`
+      - Expect: entrambi puliti, come nella baseline.
+      - Da `cli/`: `go test ./internal/execution/...`
+      - Expect: nessun fallimento nuovo rispetto ai 865 test verdi della baseline (questo task non aggiunge test propri: li aggiunge TASK-02).
+
+      ## Done
+      - [ ] `cli/internal/execution/models.go` esiste e dichiara `ModelFieldName`, `ModelOption`, `ModelLister` e `ListModels`.
+      - [ ] `ListModels` distingue i tre esiti (non dichiarato / dichiarato con errore / dichiarato con catalogo) e non ritorna mai una slice `nil` in caso di successo.
+      - [ ] L'errore del provider è inoltrato senza wrapping — è la precondizione perché AC-4 possa mostrare la diagnostica del provider testuale.
+      - [ ] `Provider` è invariato: nessun implementatore esistente è stato costretto a cambiare.
+      - [ ] `gofmt`, `go build`, `go vet` puliti.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test di unità di ListModels sui tre esiti del contratto
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      I tre esiti di `ListModels` sono verificati: provider senza catalogo, provider con catalogo, provider il cui catalogo fallisce.
+
+      ## Read
+      - `cli/internal/execution/models.go` — il contratto appena scritto.
+      - `cli/internal/execution/availability_test.go` — come sono scritti i test dell'helper gemello: provider fittizi minimi definiti nel test, nessuna dipendenza da un provider reale.
+      - `cli/internal/execution/provider_test.go` — le convenzioni di naming e di messaggio d'errore dei test di questo package.
+
+      ## Change
+      - `cli/internal/execution/models_test.go` — file nuovo, unico file toccato.
+
+      Non-goal: non collaudare qui i cataloghi di `claude` e `codex` (TASK-05); non toccare `models.go`.
+
+      ## Steps
+      1. Definisci nel test un provider minimo che implementa solo `Provider` (nessun `Models`) e un provider che implementa anche `ModelLister`, quest'ultimo registrando la configurazione ricevuta e restituendo un catalogo o un errore configurabili.
+      2. Test "un provider senza catalogo non ne dichiara uno": `ListModels` ritorna `declared == false`, `models` vuoto, `err == nil`.
+      3. Test "un catalogo dichiarato viene restituito": `declared == true`, gli identificatori attesi nell'ordine dichiarato, `err == nil`.
+      4. Test "la configurazione arriva come copia": muta la mappa restituita al provider dentro `Models` e verifica che la mappa passata dal chiamante sia invariata; verifica anche che il provider abbia ricevuto le chiavi attese.
+      5. Test "un catalogo che fallisce inoltra la diagnostica del provider": l'errore restituito da `ListModels` deve essere l'errore del provider — confrontalo con `errors.Is` su una sentinella, e verifica che `Error()` sia identico carattere per carattere, perché è quel testo che la UI mostrerà.
+      6. Test "il successo non restituisce mai una slice nil": un provider che ritorna `nil, nil` produce `models` non-nil di lunghezza zero e `declared == true`.
+
+      ## Verify
+      - Da `cli/`: `go test ./internal/execution/ -run TestListModels -v`
+      - Expect: tutti i casi passano.
+      - Da `cli/`: `gofmt -l . && go vet ./... && go test ./internal/execution/...`
+      - Expect: `gofmt` senza output, `vet` pulito, nessun fallimento (≥ 865 test complessivi con i nuovi in più, come da baseline).
+
+      ## Done
+      - [ ] `models_test.go` copre i tre esiti più la copia della configurazione e il caso `nil`.
+      - [ ] Il test sull'errore asserisce il testo esatto della diagnostica, non solo che un errore è avvenuto: è la garanzia su cui poggia AC-4.
+      - [ ] Nessun test esistente è stato modificato o indebolito.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Catalogo dei modelli dichiarato dal provider claude
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il provider `claude` dichiara il proprio catalogo di modelli, con esattamente una voce marcata come predefinito del provider.
+
+      ## Read
+      - `cli/internal/execution/claude/config.go` — in particolare `permissionModes` e il suo commento ("The list is closed on purpose… Verified against Claude Code 2.1.235"): è il precedente da ricalcare per un elenco chiuso scritto a mano; e il `ConfigField` `model`, il cui `Placeholder` è oggi `opus`.
+      - `cli/internal/execution/claude/provider.go` — la dichiarazione `var _ execution.ConfigDescriber = (*Provider)(nil)` in `config.go` e il tipo `Provider`, per sapere dove agganciare la nuova asserzione di interfaccia.
+      - `cli/internal/execution/models.go` — `ModelOption`, `ModelLister`, `ModelFieldName`.
+
+      ## Change
+      - `cli/internal/execution/claude/models.go` — file nuovo.
+
+      Non-goal: non toccare `config.go`, `provider.go` né alcun comportamento di esecuzione; non interrogare la CLI (il catalogo è dichiarato, non scoperto — vedi Decisione 1 del piano); non cambiare il `Placeholder` del campo `model`.
+
+      ## Steps
+      1. Crea `cli/internal/execution/claude/models.go` nel package `claude`.
+      2. Dichiara una variabile non esportata `models = []execution.ModelOption{...}` con gli alias di modello che Claude Code accetta su `--model`: `opus`, `sonnet`, `haiku`. Ogni voce porta `ID` uguale all'alias e `Label` uguale all'alias (l'identificatore **è** ciò che si legge, come richiede AC-1).
+      3. Marca `Default: true` sulla voce che Claude Code usa quando nessun `--model` è passato — cioè `sonnet` — e su nessun'altra. Se durante l'implementazione la documentazione della CLI installata dice altro, segui la documentazione e aggiorna di conseguenza l'atteso di TASK-05: l'invariante da rispettare è "esattamente una voce predefinita", non un nome particolare.
+      4. Aggiungi sopra la variabile un commento sullo stesso registro di `permissionModes`: l'elenco è chiuso di proposito, è dichiarato da questo package e non scoperto interrogando la CLI, e nomina la versione di Claude Code su cui è stato verificato. Aggiungi che il campo resta scrivibile a mano proprio perché un elenco dichiarato può restare indietro rispetto al fornitore.
+      5. Implementa `func (p *Provider) Models(_ context.Context, raw map[string]any) ([]execution.ModelOption, error)`: valida la configurazione con `parseConfig(raw)` e, in caso di errore, restituiscilo così com'è (una configurazione illeggibile è un motivo legittimo per cui l'elenco non è ottenibile); altrimenti restituisci una copia detached di `models`.
+      6. Aggiungi `var _ execution.ModelLister = (*Provider)(nil)` accanto all'asserzione già presente per `ConfigDescriber`.
+
+      ## Verify
+      - Da `cli/`: `gofmt -l . && go build ./... && go vet ./...`
+      - Expect: nessun output da `gofmt`, build e vet puliti.
+      - Da `cli/`: `go test ./internal/execution/claude/...`
+      - Expect: nessun fallimento nuovo rispetto alla baseline (i test del catalogo arrivano in TASK-05).
+
+      ## Done
+      - [ ] `claude` implementa `execution.ModelLister` e l'asserzione di interfaccia lo dimostra a tempo di compilazione.
+      - [ ] Il catalogo ha identificatori non vuoti e unici e **esattamente una** voce `Default: true` (AC-2).
+      - [ ] Il commento nomina la versione della CLI su cui l'elenco è stato verificato.
+      - [ ] `Models` restituisce una copia: mutare la slice restituita non altera il catalogo del package.
+      - [ ] Nessun comportamento di esecuzione di `claude` è cambiato.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Catalogo dei modelli dichiarato dal provider codex
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il provider `codex` dichiara il proprio catalogo di modelli, con esattamente una voce marcata come predefinito del provider.
+
+      ## Read
+      - `cli/internal/execution/claude/models.go` — il gemello appena scritto: forma, commento e implementazione di `Models` vanno tenuti simmetrici.
+      - `cli/internal/execution/codex/config.go` — `parseConfig`, il `ConfigField` `model` (oggi con `Placeholder` `gpt-5-codex`) e l'asserzione `var _ execution.ConfigDescriber = (*Provider)(nil)`.
+      - `cli/internal/execution/codex/appserver.go:230` — dove `cfg.Model` diventa il parametro `model` di `thread/start`: conferma che l'identificatore dichiarato è esattamente quello che il runtime riceve.
+
+      ## Change
+      - `cli/internal/execution/codex/models.go` — file nuovo.
+
+      Non-goal: non toccare `config.go`, `appserver.go` né il protocollo; non interrogare la CLI; non cambiare il `Placeholder` del campo `model`.
+
+      ## Steps
+      1. Crea `cli/internal/execution/codex/models.go` nel package `codex`.
+      2. Dichiara `models = []execution.ModelOption{...}` con gli identificatori che Codex accetta come `model` di `thread/start`: `gpt-5-codex` e `gpt-5`. `ID` e `Label` coincidono con l'identificatore.
+      3. Marca `Default: true` sulla sola voce che Codex usa quando nessun modello è passato — `gpt-5-codex`. Vale la stessa clausola di TASK-03: se la documentazione della CLI installata dice altro, seguila e allinea l'atteso di TASK-05; l'invariante è "esattamente una voce predefinita".
+      4. Aggiungi il commento sullo stesso registro di quello di `claude`: elenco chiuso, dichiarato e non scoperto, con la versione di Codex su cui è stato verificato, e la nota che il campo resta scrivibile a mano.
+      5. Implementa `func (p *Provider) Models(_ context.Context, raw map[string]any) ([]execution.ModelOption, error)` con la stessa forma di `claude`: `parseConfig(raw)`, errore inoltrato così com'è, altrimenti copia detached del catalogo.
+      6. Aggiungi `var _ execution.ModelLister = (*Provider)(nil)`.
+
+      ## Verify
+      - Da `cli/`: `gofmt -l . && go build ./... && go vet ./...`
+      - Expect: nessun output da `gofmt`, build e vet puliti.
+      - Da `cli/`: `go test ./internal/execution/codex/...`
+      - Expect: nessun fallimento nuovo rispetto alla baseline.
+
+      ## Done
+      - [ ] `codex` implementa `execution.ModelLister` con asserzione di interfaccia.
+      - [ ] Il catalogo ha identificatori non vuoti e unici e **esattamente una** voce `Default: true` (AC-2).
+      - [ ] Il commento nomina la versione della CLI su cui l'elenco è stato verificato.
+      - [ ] `arcipelago` resta volutamente privo di catalogo: nessun file di quel package è stato toccato.
+      - [ ] Nessun comportamento di esecuzione di `codex` è cambiato.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Test degli invarianti dei cataloghi di claude e codex
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      I cataloghi dei due provider locali rispettano gli invarianti su cui poggiano AC-1 e AC-2, e `arcipelago` resta senza catalogo.
+
+      ## Read
+      - `cli/internal/execution/claude/config_test.go:151` — `want := []string{"command", "model", "permission_mode", "timeout_seconds"}`: come questo package asserisce sui campi dichiarati.
+      - `cli/internal/execution/claude/models.go` e `cli/internal/execution/codex/models.go` — i cataloghi da collaudare.
+      - `cli/internal/execution/arcipelago/provider.go` — per confermare che non implementa `ModelLister`.
+
+      ## Change
+      - `cli/internal/execution/claude/models_test.go` — file nuovo.
+      - `cli/internal/execution/codex/models_test.go` — file nuovo.
+      - `cli/internal/execution/arcipelago/provider_test.go` — un solo test aggiunto in coda, nulla di esistente modificato.
+
+      Non-goal: non asserire su un elenco di nomi ricopiato dal sorgente (sarebbe un test che non può fallire); non introdurre dipendenze da un binario reale.
+
+      ## Steps
+      1. In `claude/models_test.go`, test "il catalogo rispetta i suoi invarianti": `Models` con configurazione vuota ritorna una slice non vuota; ogni `ID` è non vuoto e trimmed; gli `ID` sono unici; ogni voce ha un `Label` non vuoto; **esattamente una** voce ha `Default: true`.
+      2. Aggiungi il test "l'identificatore di esempio del campo model appartiene al catalogo": leggi il `Placeholder` del `ConfigField` chiamato `execution.ModelFieldName` da `ConfigFields()` e verifica che coincida con l'`ID` di una voce del catalogo. È ciò che impedisce a esempio e catalogo di divergere silenziosamente.
+      3. Aggiungi il test "una configurazione illeggibile è un motivo, non un panico": `Models` con `map[string]any{"model": true}` (tipo rifiutato da `parseConfig`) ritorna un errore non nil e nessun catalogo.
+      4. Aggiungi il test "il catalogo restituito è detached": muta la slice ottenuta da una prima chiamata e verifica che una seconda chiamata restituisca il catalogo integro.
+      5. Replica gli stessi quattro test in `codex/models_test.go` contro il provider `codex`.
+      6. In `arcipelago/provider_test.go` aggiungi il test "arcipelago non dichiara un catalogo di modelli": `execution.ListModels` sul provider ritorna `declared == false`, nessun errore e nessun modello.
+
+      ## Verify
+      - Da `cli/`: `go test ./internal/execution/claude/... ./internal/execution/codex/... ./internal/execution/arcipelago/... -v -run Model`
+      - Expect: tutti i casi passano.
+      - Da `cli/`: `gofmt -l . && go vet ./... && go test ./internal/execution/...`
+      - Expect: `gofmt` senza output, `vet` pulito, nessun fallimento.
+
+      ## Done
+      - [ ] AC-1 — per `claude` e per `codex` il catalogo è non vuoto e ogni voce porta l'identificatore da usare, non vuoto e unico.
+      - [ ] AC-2 — per entrambi i provider esattamente una voce è marcata come predefinito del provider, verificato per conteggio e non per nome.
+      - [ ] Esempio del campo `model` e catalogo non possono divergere senza far fallire un test.
+      - [ ] `arcipelago` è verificato come provider senza catalogo, così la sua assenza è una scelta collaudata e non una dimenticanza.
+      - [ ] Nessun test esistente è stato modificato o indebolito.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Il viewer espone il catalogo dei modelli in GET /api/execution/providers
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      La lista dei provider servita al browser porta, per un provider che dichiara un catalogo, o i modelli o il motivo per cui non sono ottenibili — mai entrambi, mai nessuno dei due.
+
+      ## Read
+      - `cli/internal/web/execution.go` — `executionProviderView` (campi `Available` / `UnavailableReason` e i loro commenti) e tutto `handleListExecutionProviders`, in particolare il ciclo sui provider: lettura del default persistito, `DeclaredCapabilities`, e la sonda `CheckAvailability` eseguita con la configurazione persistita **solo** per il provider di default.
+      - `cli/internal/execution/models.go` — `ListModels`, `ModelFieldName`.
+      - `cli/internal/execution/availability.go` — per confermare che un runtime inutilizzabile è un fatto da riportare, mai un errore HTTP.
+
+      ## Change
+      - `cli/internal/web/execution.go` — solo `executionProviderView` e il corpo del ciclo di `handleListExecutionProviders`.
+
+      Non-goal: non cambiare la semantica della sonda di disponibilità né chi viene sondato con quale configurazione; non aggiungere una seconda sonda del processo; non toccare `handleSaveDefaultExecutionProvider` (il salvataggio non cambia); non toccare le rotte.
+
+      ## Steps
+      1. Aggiungi a `executionProviderView` tre campi, con commenti che ne dichiarino il contratto:
+         - `ModelField string \`json:"model_field,omitempty"\`` — il nome del campo di configurazione che il catalogo riempie; vuoto quando il provider non dichiara alcun catalogo.
+         - `Models []execution.ModelOption \`json:"models,omitempty"\`` — le voci del catalogo.
+         - `ModelsUnavailableReason string \`json:"models_unavailable_reason,omitempty"\`` — perché il catalogo non è ottenibile, con le parole del provider.
+      2. Nel ciclo, dopo il calcolo di `reason` (la diagnostica di `CheckAvailability`), determina se il provider dichiara un catalogo con una type assertion su `execution.ModelLister`. Se non lo dichiara, lascia i tre campi a zero e non fare nulla d'altro.
+      3. Se lo dichiara, valorizza `ModelField` con `execution.ModelFieldName` e poi:
+         - se `reason != ""`, imposta `ModelsUnavailableReason = reason` e **non** invocare `ListModels`: il runtime che non risponde è già la risposta, e una seconda sonda sarebbe un processo in più a ogni apertura del pannello;
+         - altrimenti invoca `execution.ListModels(r.Context(), provider, providerConfig)` con la **stessa** `providerConfig` usata per la sonda, e su errore imposta `ModelsUnavailableReason = err.Error()`, su successo imposta `Models`.
+      4. Garantisci l'invariante prima di aggiungere la vista alla lista: se `ModelField` è valorizzato e `Models` è vuoto mentre `ModelsUnavailableReason` è vuoto, imposta un motivo esplicito e non vuoto ("il provider ha dichiarato un catalogo vuoto"). Nessuna combinazione deve poter arrivare al browser come elenco vuoto senza spiegazione.
+      5. Aggiorna il commento di `executionProviderView` per dire che nemmeno i campi nuovi possono portare un segreto: sono identificatori di modello e la diagnostica del provider.
+      6. Verifica che un errore del catalogo non diventi mai un `writeError`: la funzione deve continuare a rispondere `200` con la lista, come già fa per la disponibilità.
+
+      ## Verify
+      - Da `cli/`: `gofmt -l . && go build ./... && go vet ./...`
+      - Expect: nessun output da `gofmt`, build e vet puliti.
+      - Da `cli/`: `go test ./internal/web/... ./internal/execution/...`
+      - Expect: nessun fallimento; i test esistenti su `TestListExecutionProviders*` restano verdi, in particolare `TestListExecutionProvidersProbesOnlyTheDefaultWithThePersistedConfig`, che è l'oracolo del fatto che il numero di sonde per provider non è cambiato.
+
+      ## Done
+      - [ ] AC-1 — un provider con catalogo espone `model_field` e `models` con gli identificatori dichiarati.
+      - [ ] AC-2 — le voci del catalogo arrivano al client con il proprio flag `default` intatto.
+      - [ ] AC-4 — un provider con catalogo e runtime non usabile espone `models_unavailable_reason` **identico** alla diagnostica della sonda, e la richiesta risponde comunque `200`.
+      - [ ] Un provider senza catalogo (es. `arcipelago`) non porta alcuno dei tre campi nuovi sul filo.
+      - [ ] Il numero di sonde eseguite per provider è invariato rispetto a prima del task.
+      - [ ] `gofmt`, `go build`, `go vet` puliti.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Test HTTP del contratto del catalogo e della persistenza del modello scelto
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Il contratto servito dal viewer è verificato su un server reale: catalogo presente, motivo al posto del catalogo, modello fuori catalogo persistito, campo vuoto che non produce alcuna chiave `model`.
+
+      ## Read
+      - `cli/internal/web/execution_test.go` — `probeProvider` e `newProbeProvider` (righe ~325-355), `newProviderListServer` (~358), `providerViewByID`, `readProviders`, `doJSON`, e i test `TestListExecutionProvidersMarksASilentProviderAvailable` / `...ReportsAnUnavailableProviderWithItsReason`: sono lo stampo esatto dei casi nuovi.
+      - `cli/internal/web/execution_run_test.go:62-136` — `releasedProvider` e i costruttori di server, per capire quale stub usare.
+      - `cli/internal/web/execution.go` — la vista appena estesa.
+
+      ## Change
+      - `cli/internal/web/execution_test.go` — solo aggiunte in coda: un provider stub che dichiara un catalogo e i test nuovi.
+
+      Non-goal: non modificare né indebolire alcun test esistente; non collaudare qui il reso del form (TASK-09) né la catena verso il record della run (TASK-10).
+
+      ## Steps
+      1. Aggiungi un `catalogProvider` che estende `probeProvider` implementando `Models(ctx, config) ([]execution.ModelOption, error)`, con catalogo ed errore configurabili dal test e con registrazione della configurazione ricevuta.
+      2. Test AC-1/AC-2 "un provider con catalogo lo offre al pannello": `model_field` vale `execution.ModelFieldName`, `models` porta gli identificatori dichiarati nell'ordine dichiarato, esattamente uno ha `default: true`, e `models_unavailable_reason` è assente **anche sul filo** (asserisci che il JSON grezzo non contiene la stringa `models_unavailable_reason`, come già fa il test gemello per `unavailable_reason`).
+      3. Test AC-4 "un runtime che non risponde spiega perché l'elenco non c'è": provider con catalogo e `reason` non vuota — la risposta è `200`, `models` è vuoto, e `models_unavailable_reason` è **identico** alla diagnostica della sonda. Verifica inoltre che il provider non sia stato interrogato per il catalogo (il contatore delle chiamate a `Models` è zero): è l'oracolo del fatto che non è stata aggiunta una seconda sonda.
+      4. Test AC-4 (secondo ramo) "un catalogo che fallisce diventa un motivo": provider disponibile il cui `Models` ritorna un errore — `200`, `models` vuoto, motivo uguale al testo dell'errore.
+      5. Test "un provider senza catalogo non porta i campi nuovi": usa `releasedProvider("silent", nil)` e verifica che il JSON grezzo non contenga né `model_field` né `models` né `models_unavailable_reason`.
+      6. Test dell'invariante "catalogo o motivo, mai il vuoto muto": provider che dichiara `ModelLister` ma ritorna un catalogo vuoto senza errore — `models_unavailable_reason` è non vuoto.
+      7. Test AC-5 "un modello fuori catalogo viene salvato e riletto": costruisci il server con un `catalogProvider` registrato, esegui `PUT /api/execution/provider/default` con `config: {"model": "modello-fuori-catalogo"}`, attendi `200`, poi `GET /api/execution/providers` e verifica che `default.config["model"]` sia ancora `modello-fuori-catalogo` e che il catalogo restituito **non** lo contenga. Verifica anche che il valore sia presente nel `.archetipo/config.yaml` del `t.TempDir()` del server.
+      8. Test AC-6 "il campo vuoto non produce alcuna chiave model": `PUT` con `config` privo di `model`, poi `GET` — `default.config` non contiene la chiave `model`, e il file di configurazione non la contiene.
+
+      ## Verify
+      - Da `cli/`: `go test ./internal/web/ -run TestListExecutionProviders -v`
+      - Expect: i test nuovi e tutti quelli esistenti passano.
+      - Da `cli/`: `gofmt -l . && go vet ./... && go test ./internal/web/... ./internal/execution/...`
+      - Expect: `gofmt` senza output, `vet` pulito, nessun fallimento rispetto alla baseline.
+
+      ## Done
+      - [ ] AC-1 — un test prova che gli identificatori del catalogo raggiungono il client attraverso la rotta reale.
+      - [ ] AC-2 — un test prova che il flag di predefinito sopravvive alla serializzazione, per conteggio.
+      - [ ] AC-4 — due test provano che il motivo mostrato è la diagnostica del provider, testuale e non riscritta, e che la richiesta resta un `200`.
+      - [ ] AC-5 — un test prova che un modello fuori catalogo salvato riemerge invariato dalla configurazione persistita.
+      - [ ] AC-6 — un test prova che l'assenza del modello non scrive alcuna chiave `model`.
+      - [ ] Un test prova che nessun campo nuovo compare per un provider senza catalogo.
+      - [ ] Nessun test esistente modificato o indebolito.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Modulo puro provider-fields.js che disegna il campo Modello come elenco
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Il form di configurazione dell'esecuzione disegna il campo dichiarato come campo del catalogo come un elenco di modelli, restando compilabile a mano, e la funzione che lo disegna è un modulo puro collaudabile in Node.
+
+      ## Read
+      - `cli/internal/web/assets/app.js:1900-1960` circa — `renderProviderFields(provider, values)`, `collectProviderConfig(provider)` e `markProviderFieldError(name)`: sono le tre funzioni coinvolte, e solo la prima si sposta.
+      - `cli/internal/web/assets/workspace-status.js` — lo stampo del modulo puro: IIFE, `escapeHtml` interno, nessun DOM e nessuna fetch, doppia esportazione `window.WorkspaceStatus` (browser) e `module.exports` (Node).
+      - `cli/internal/web/assets/task-markdown.js` — il secondo precedente, per la forma dell'header di commento.
+      - `cli/internal/web/assets/index.html:677-682` — i tag `<script>` dei moduli estratti, e `cli/internal/web/server.go:213-216` — gli asset sono serviti dal `FileServer` sull'FS embeddato, quindi un file nuovo è servito senza registrare una rotta.
+      - `cli/internal/web/assets/app.css` — le classi già in uso nel form: `field full`, `field-required`, `field-help`, `field-error`, `connector-unavailable`.
+
+      ## Change
+      - `cli/internal/web/assets/provider-fields.js` — file nuovo con il renderer puro.
+      - `cli/internal/web/assets/app.js` — `renderProviderFields` delega al modulo; `markProviderFieldError` cerca anche una `select`.
+      - `cli/internal/web/assets/index.html` — un tag `<script src="/provider-fields.js"></script>` prima di `app.js`.
+      - `cli/internal/web/assets/app.css` — solo se serve una classe per la voce fuori catalogo o per il motivo; riusa le classi esistenti quando bastano.
+
+      Non-goal: non cambiare `collectProviderConfig` (una `<select>` risponde a `.value` come una `<input>`, e "vuoto significa nessun modello" deve restare vero senza righe in più); non cambiare `saveExecutionProvider`, `renderProviderGrid`, `selectProvider` né alcuna chiamata di rete; non introdurre alcun framework; non scrivere in nessun punto del browser la stringa letterale `model`.
+
+      ## Steps
+      1. Crea `cli/internal/web/assets/provider-fields.js` come IIFE sullo stampo di `workspace-status.js`, con `escapeHtml` interno e un header di commento che dichiari: modulo puro, nessun DOM, prende la vista del provider più i valori correnti e ritorna una stringa HTML, e non conosce il nome di nessun campo — il campo del catalogo è quello che la vista nomina in `model_field`.
+      2. Esporta `renderProviderFields(provider, values)`. Riporta dentro il modulo, **invariata**, la logica attuale: nessun provider ⇒ stringa vuota; nessun campo dichiarato ⇒ il paragrafo `This provider declares no configurable setting.`; altrimenti un `<label class="field full" data-provider-field="…">` per campo, con `field-required` e `field-help` come oggi.
+      3. Per ogni campo, calcola `isCatalogField = provider.model_field && provider.model_field === f.name`. Quando è falso, produci esattamente l'HTML di oggi (`<input type="text">` o `type="number"` per `integer`) — nessuna regressione per i campi non coinvolti né per i provider senza catalogo.
+      4. Quando `isCatalogField` è vero e `provider.models` è non vuoto, produci una `<select name="provider_{nome}">` con lo stesso `data-provider-field` sul label e:
+         - come prima voce `<option value="">` con l'etichetta che dichiara il predefinito del provider (è la voce selezionata quando il valore corrente è vuoto — AC-6);
+         - una `<option value="{m.id}">` per ogni modello, con testo `m.label || m.id` ed **esplicitamente** la dicitura di predefinito del provider accanto alla voce con `m.default` vero (AC-1, AC-2);
+         - quando il valore corrente è non vuoto e non compare fra gli `id` del catalogo, una `<option>` aggiuntiva con quel valore, **selezionata** e con la dicitura `non elencato` (AC-5);
+         - `selected` sulla voce corrispondente al valore corrente in tutti gli altri casi.
+      5. Quando `isCatalogField` è vero e il catalogo è assente ma `provider.models_unavailable_reason` è presente, produci l'`<input type="text">` di oggi con il valore corrente invariato, più il motivo reso sotto il campo come testo visibile, usando una classe già esistente per il testo di avviso (AC-4).
+      6. Neutralizza con `escapeHtml` ogni frammento che proviene dal payload — identificatori, etichette, motivo, valore corrente — perché sono testo del provider e non devono poter rompere il form.
+      7. Esporta il modulo come `window.ProviderFields` in browser e via `module.exports` in Node, con la stessa doppia forma degli altri due moduli.
+      8. In `app.js`, sostituisci il corpo di `renderProviderFields` con una delega al modulo (`executionFields.innerHTML = ProviderFields.renderProviderFields(provider, values)`), lasciando invariata la gestione del caso `!provider`.
+      9. In `app.js`, in `markProviderFieldError`, cambia `label.querySelector("input")` in `label.querySelector("input, select")` così che l'evidenziazione e il focus continuino a funzionare sul campo che questa storia trasforma.
+      10. In `index.html`, aggiungi `<script src="/provider-fields.js"></script>` accanto agli altri moduli estratti, **prima** di `app.js`.
+
+      ## Verify
+      - Da `cli/`: `go build ./... && go test ./internal/web/...`
+      - Expect: build verde e nessun fallimento (gli asset sono embeddati: un file nuovo deve compilare nell'embed senza modifiche a `assets.go`).
+      - Dalla radice: `node --check cli/internal/web/assets/provider-fields.js && node --check cli/internal/web/assets/app.js`
+      - Expect: nessun errore di sintassi.
+      - Dalla radice: `npm run test:web`
+      - Expect: i 22 test della baseline restano verdi (i test del modulo nuovo arrivano in TASK-09).
+
+      ## Done
+      - [ ] AC-1 — con un catalogo il campo è reso come elenco di voci, una per identificatore.
+      - [ ] AC-2 — la voce predefinita del provider è distinguibile dal solo testo visibile.
+      - [ ] AC-4 — senza catalogo ma con motivo, il campo resta una casella di testo con il valore precedente e il motivo leggibile accanto.
+      - [ ] AC-5 — un valore corrente fuori catalogo compare come voce selezionata e marcata come non elencata.
+      - [ ] AC-6 — la voce vuota esiste, è selezionata quando nessun modello è configurato e produce un valore vuoto, che `collectProviderConfig` continua a scartare senza modifiche.
+      - [ ] Un campo non del catalogo e un provider senza catalogo producono lo stesso HTML di prima del task.
+      - [ ] `markProviderFieldError` evidenzia e mette a fuoco anche una `select`.
+      - [ ] Il browser non contiene la stringa letterale del nome del campo: il campo del catalogo è individuato solo tramite `provider.model_field`.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Test del reso del campo Modello sul testo visibile
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Ciò che il lettore vede nel campo Modello è verificato in tutti gli stati che i criteri descrivono: elenco, predefinito, motivo, valore fuori catalogo, campo vuoto.
+
+      ## Read
+      - `test/web/workspace-status.test.mjs` — l'intero file: caricamento del modulo con `createContext`/`runInContext`, l'helper `visibleText(html)`, e la scelta dichiarata di asserire sul testo visibile e non sulla forma del modulo. È lo stampo da riusare integralmente.
+      - `cli/internal/web/assets/provider-fields.js` — il modulo da collaudare.
+      - `package.json` — lo script `test:web` esegue già `node --test "test/web/**/*.test.mjs"`, quindi un file nuovo in quella cartella entra nella suite senza modifiche.
+
+      ## Change
+      - `test/web/provider-fields.test.mjs` — file nuovo, unico file toccato.
+
+      Non-goal: non asserire sulla struttura HTML (nomi di tag, ordine degli attributi) quando l'oracolo può essere il testo visibile; non modificare `package.json`; non introdurre dipendenze npm.
+
+      ## Steps
+      1. Copia da `workspace-status.test.mjs` il caricamento del modulo asset con `vm` e l'helper `visibleText`, adattandoli a `cli/internal/web/assets/provider-fields.js` e a `ProviderFields`.
+      2. Test AC-1 "l'elenco mostra ogni modello dichiarato": vista con `model_field: "model"` e tre modelli; il testo visibile contiene tutti e tre gli identificatori.
+      3. Test AC-2 "il predefinito del provider è indicato": la voce con `default: true` è resa con una dicitura di predefinito, e le altre no — asserisci che la dicitura compare **una sola volta** accanto a un modello, così un reso che marcasse tutte le voci fallirebbe.
+      4. Test AC-6 "senza valore configurato è selezionata la voce vuota": con `values` privo del campo, la voce vuota risulta selezionata e nessun identificatore di modello lo è; il valore che il form invierebbe è la stringa vuota.
+      5. Test AC-5 "un valore fuori catalogo resta selezionato e marcato": con `values: { model: "modello-fuori-catalogo" }` e un catalogo che non lo contiene, il testo visibile contiene quel valore accompagnato dalla dicitura `non elencato`, ed è quella la voce selezionata; le voci del catalogo restano tutte presenti.
+      6. Test "un valore in catalogo è la voce selezionata": con `values: { model: <id del catalogo> }`, quella voce è selezionata e **non** compare alcuna dicitura di voce non elencata.
+      7. Test AC-4 "senza catalogo la UI dice perché e lascia scrivere": vista con `model_field` valorizzato, `models` vuoto e `models_unavailable_reason` con una frase nota; il testo visibile contiene quella frase, il campo reso porta il valore corrente invariato ed è una casella di testo (nessuna voce di elenco è resa).
+      8. Test "un provider senza catalogo è reso come prima": vista senza `model_field`; l'HTML del campo `model` è una casella di testo e non compare alcuna dicitura di predefinito o di voce non elencata.
+      9. Test "gli altri campi non sono toccati": una vista con `command`, `model`, `permission_mode` e `timeout_seconds` rende quattro campi, con il campo intero come input numerico, e le etichette e i testi d'aiuto dichiarati dal provider compaiono tutti.
+      10. Test "l'HTML che arriva dal payload è neutralizzato": un identificatore, un'etichetta, un motivo e un valore corrente contenenti `<script>` e virgolette non producono marcatura eseguibile e compaiono come testo.
+      11. Test "non lancia su payload parziali": `renderProviderFields(null, {})`, provider senza `config_fields`, `models` non-array, `values` `undefined` — nessuna eccezione.
+
+      ## Verify
+      - Dalla radice: `node --test test/web/provider-fields.test.mjs`
+      - Expect: tutti i casi passano.
+      - Dalla radice: `npm run test:web`
+      - Expect: i 22 test della baseline più quelli nuovi, 0 falliti.
+
+      ## Done
+      - [ ] AC-1 — un test prova che ogni identificatore dichiarato è visibile nel campo.
+      - [ ] AC-2 — un test prova che esattamente una voce è indicata come predefinito del provider.
+      - [ ] AC-4 — un test prova che il motivo è visibile e che il campo resta una casella di testo compilabile con il valore precedente.
+      - [ ] AC-5 — un test prova che il valore fuori catalogo è selezionato e marcato come non elencato.
+      - [ ] AC-6 — un test prova che senza modello configurato è selezionata la voce vuota e il valore inviato è vuoto.
+      - [ ] Gli oracoli sono sul testo visibile, non su tag o attributi, tranne dove è la selezione stessa a essere l'oggetto del criterio.
+      - [ ] Un caso copre la neutralizzazione dell'HTML proveniente dal payload.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Test della catena modello salvato → run → record della run
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      È provato che il modello scelto e salvato nella configurazione del workspace è lo stesso che il record della run successiva riporta come modello usato.
+
+      ## Read
+      - `cli/internal/web/execution_run_test.go:21-136` — `runTestProvider`, `releasedProvider`, `newRunServer`/`newRunServerWith`, e `TestRunSpecActionSuccessIsProvedByThePlannedSpec` (~341): è lo stampo del test che avvia un'azione e ne legge il record.
+      - `cli/internal/execution/service.go:238` — `request := Request{… ProviderConfig: CloneConfig(validatedConfig)}`: il punto in cui la configurazione persistita diventa la configurazione della run.
+      - `cli/internal/web/execution.go` — `handleSaveDefaultExecutionProvider`, cioè la scrittura che il test deve usare invece di seminare il default a mano.
+      - `cli/internal/web/server.go:180-181` — le rotte `POST /api/spec/{code}/execution` e `GET /api/execution/{id}`.
+      - `cli/internal/execution/claude/implement_test.go:130,150-160` — come i test dei provider locali asseriscono che `model` è nel payload del record: è la metà già coperta della catena.
+
+      ## Change
+      - `cli/internal/web/execution_run_test.go` — solo un test aggiunto in coda.
+
+      Non-goal: non modificare test esistenti; non usare un provider reale né un binario esterno; non toccare codice di produzione (questo task non deve richiederne: se ne richiedesse, è un difetto da segnalare invece che da aggirare).
+
+      ## Steps
+      1. Costruisci un server con un provider stub registrato che, dentro `Execute`, legge `request.ProviderConfig["model"]` e lo restituisce dentro il payload del `Result` (per esempio come chiave `model`), così com'è, senza valori di ripiego.
+      2. Salva il default **attraverso la rotta reale**: `PUT /api/execution/provider/default` con `{"id": "<stub>", "config": {"model": "modello-scelto"}}`. Verifica il `200`.
+      3. Rileggi `GET /api/execution/providers` e verifica che `default.config["model"]` sia `modello-scelto`: è la prima metà di AC-3, il modello che compare nella configurazione del workspace.
+      4. Avvia l'azione con `POST /api/spec/{code}/execution` sulla spec seminata dal costruttore di server, attendendo il completamento con lo stesso meccanismo dei test esistenti (nessuna attesa arbitraria).
+      5. Leggi il record con `GET /api/execution/{id}` e verifica che il payload del risultato porti `modello-scelto` come modello usato: è la seconda metà di AC-3.
+      6. Aggiungi al test un secondo caso, o un sotto-caso, in cui nessun modello è configurato: il provider riceve una `ProviderConfig` **senza** la chiave `model`, non una chiave vuota — è l'altra faccia di AC-6, cioè che "vuoto" non viaggia come valore.
+      7. Commenta nel test perché l'oracolo è il record e non il salvataggio: il criterio parla del modello usato dalla run, e un test che si fermasse alla configurazione salvata proverebbe qualcosa di più debole.
+
+      ## Verify
+      - Da `cli/`: `go test ./internal/web/ -run TestRunSpecAction -v`
+      - Expect: il test nuovo passa e tutti quelli esistenti restano verdi.
+      - Da `cli/`: `gofmt -l . && go vet ./... && go test ./internal/web/...`
+      - Expect: `gofmt` senza output, `vet` pulito, nessun fallimento.
+
+      ## Done
+      - [ ] AC-3 — un test prova che il modello salvato via HTTP compare nella configurazione riletta dal workspace.
+      - [ ] AC-3 — lo stesso test prova che quel modello raggiunge il record della run come modello usato, letto dalla rotta del record.
+      - [ ] AC-6 — un caso prova che senza modello configurato la chiave non arriva affatto alla run.
+      - [ ] Il doppio usato (lo stub del provider) sostituisce solo la CLI esterna: server, registro, configurazione su disco e servizio di esecuzione sono quelli reali.
+      - [ ] Nessun codice di produzione è stato modificato da questo task.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Smoke del viewer reale sul catalogo dei modelli e allineamento di AGENTS.md
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Su un `archetipo view` reale, con i provider reali registrati, il contratto del catalogo è osservato per `claude` e `codex` e assente per `arcipelago`, e la documentazione dello smoke dice quello che lo smoke verifica.
+
+      ## Read
+      - `test/e2e/execution-config-view-smoke.mjs` — l'intero file; in particolare il blocco `AC-1` (dai provider fino al controllo del sentinel del token) dove sono già asseriti campi, capacità e disponibilità di `arcipelago`, `codex` e `claude`, e il blocco `AC-2` che salva un default via `PUT` e lo rilegge.
+      - `AGENTS.md:162` — la riga che documenta `npm run test:view-execution-smoke`, da estendere.
+      - `cli/internal/web/execution.go` — i nomi esatti dei campi nuovi sul filo.
+
+      ## Change
+      - `test/e2e/execution-config-view-smoke.mjs` — solo aggiunte; nessuna asserzione esistente rimossa o indebolita.
+      - `AGENTS.md` — solo la riga dello smoke `test:view-execution-smoke`.
+
+      Non-goal: non rendere lo smoke dipendente dalla presenza di Claude Code o Codex sulla macchina (deve passare con e senza); non toccare `PATH`; non aggiungere credenziali né traffico fuori da `127.0.0.1`; non toccare gli altri smoke.
+
+      ## Steps
+      1. Nel blocco AC-1 dello smoke, dopo le asserzioni esistenti su `codex`, aggiungi il controllo del catalogo: `model_field` è presente e coincide con il nome di uno dei `config_fields` dichiarati; e vale l'invariante — o `models` è un array non vuoto in cui ogni voce ha un `id` non vuoto ed esattamente una ha `default: true`, **oppure** `models_unavailable_reason` è una stringa non vuota. Mai entrambi, mai nessuno dei due.
+      2. Ripeti lo stesso controllo per `claude`. Estrai la verifica in una funzione locale `assertModelCatalog(provider)` per non duplicarla, sullo stampo di `assertNoCredentialFields`.
+      3. Aggiungi l'asserzione complementare su `arcipelago`: non dichiara `model_field`, e di conseguenza non porta né `models` né `models_unavailable_reason`.
+      4. Aggiungi l'asserzione di riservatezza sui campi nuovi: il sentinel del token non compare nella risposta (il controllo globale esistente lo copre già; verifica che resti valido dopo l'estensione e non aggiungerne un secondo se ridondante).
+      5. Nel blocco AC-2, dopo il salvataggio esistente, aggiungi un salvataggio con un modello **fuori catalogo** su un provider locale e verifica che la rilettura lo riporti invariato — è AC-5 osservata sul viewer reale. Ripristina subito dopo il default di `arcipelago` usato dai blocchi successivi, così le asserzioni AC-3/AC-4/AC-5 dello smoke restano quelle di prima.
+      6. Aggiorna il messaggio `console.log` del blocco AC-1 perché nomini anche il catalogo dei modelli.
+      7. Aggiorna la riga 162 di `AGENTS.md` aggiungendo, con lo stesso registro della prosa esistente, che lo smoke verifica per ciascun provider locale il campo del catalogo e l'invariante elenco-oppure-motivo, che `arcipelago` non dichiara catalogo, e che il catalogo è **osservato** e non richiesto (lo smoke passa con o senza le CLI installate).
+
+      ## Verify
+      - Dalla radice: `npm run test:view-execution-smoke -- --cleanup`
+      - Expect: `PASS: execution-config view smoke test completed.` con tutti i blocchi da AC-1 ad AC-5 verdi, come nella baseline, più le asserzioni nuove.
+      - Dalla radice: `node --check test/e2e/execution-config-view-smoke.mjs`
+      - Expect: nessun errore di sintassi.
+
+      ## Done
+      - [ ] AC-1 — su un viewer reale, `claude` e `codex` dichiarano il campo del catalogo.
+      - [ ] AC-2 — quando l'elenco c'è, esattamente una voce è marcata come predefinito del provider.
+      - [ ] AC-4 — quando l'elenco non c'è, la risposta porta un motivo non vuoto: l'invariante è asserita, non solo descritta.
+      - [ ] AC-5 — un modello fuori catalogo salvato attraverso la rotta reale è riletto invariato.
+      - [ ] `arcipelago` è asserito come provider senza catalogo.
+      - [ ] Lo smoke passa indipendentemente dalla presenza delle CLI locali e nessuna asserzione preesistente è stata rimossa o indebolita.
+      - [ ] `AGENTS.md` descrive lo smoke com'è ora, senza divergenze.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Gate finale — verifiche complete e controllo dei task prima della review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+    body: |-
+      ## Objective
+      L'incremento supera esattamente le verifiche registrate nella baseline, senza aggiungere alcun fallimento, e la review viene richiesta solo con tutti i task chiusi.
+
+      ## Read
+      - La sezione `Baseline` del corpo del piano — è la lista chiusa delle verifiche da rieseguire e degli esiti attesi.
+      - La sezione `Mappa delle evidenze di accettazione` — per confermare che ogni `AC-N` ha un test che gira davvero in uno dei comandi qui sotto.
+
+      ## Change
+      Nessun file di prodotto. Questo task esegue verifiche e chiude la spec; se una verifica fallisce, la correzione appartiene al task che ha introdotto il problema, non a questo.
+
+      ## Steps
+      1. Da `cli/`, esegui in ordine: `gofmt -l .`, `go build ./...`, `go vet ./...`.
+      2. Da `cli/`, esegui la suite Go completa: `go test ./...`.
+      3. Dalla radice, esegui la suite del viewer: `npm run test:web`.
+      4. Dalla radice, esegui lo smoke sul viewer reale: `npm run test:view-execution-smoke -- --cleanup`.
+      5. Esegui `golangci-lint run --timeout 5m ./...` da `cli/` **solo se** il binario è presente (`command -v golangci-lint`). Se non lo è, registra esplicitamente che la verifica è stata saltata per prerequisito d'ambiente, come previsto dalla baseline: non è un fallimento e non va aggirata installando il tool senza necessità.
+      6. Verifica che i file modificati da questo piano non abbiano lasciato diagnostiche nuove: `gofmt -l .` senza output e `go vet ./...` pulito sono l'oracolo, e coincidono con la baseline registrata.
+      7. Marca questo task come `DONE`.
+      8. Da `/Users/stefanoleli/Project/Archetipo` (che è `data.project_root`), esegui `archetipo spec show US-047` e verifica nell'envelope che **nessun** task risulti `TODO`.
+      9. Solo dopo quel controllo, e solo se è passato, esegui `archetipo spec review US-047`. L'ordine è vincolante: eseguire le verifiche, marcare questo task `DONE`, rileggere la spec, confermare che nessun task è aperto, e solo allora chiedere la review.
+
+      ## Verify
+      - Da `cli/`: `gofmt -l .`
+      - Expect: nessun output (identico alla baseline).
+      - Da `cli/`: `go build ./... && go vet ./...`
+      - Expect: build e vet puliti (identico alla baseline).
+      - Da `cli/`: `go test ./...`
+      - Expect: nessun fallimento; il conteggio nei package `./internal/execution/...` e `./internal/web/...` è ≥ 865 (i 865 della baseline più i test aggiunti da TASK-02, TASK-05, TASK-07 e TASK-10).
+      - Dalla radice: `npm run test:web`
+      - Expect: 0 falliti; il totale è ≥ 22 (i 22 della baseline più i test di TASK-09).
+      - Dalla radice: `npm run test:view-execution-smoke -- --cleanup`
+      - Expect: `PASS: execution-config view smoke test completed.`
+      - Da `cli/`: `golangci-lint run --timeout 5m ./...`
+      - Expect: 0 problemi **se** il binario è installato; altrimenti verifica saltata e registrata come prerequisito d'ambiente mancante (la baseline documenta che non è installato su questa macchina).
+      - Da `/Users/stefanoleli/Project/Archetipo`: `archetipo spec show US-047`
+      - Expect: ogni task dell'envelope ha `status: DONE`.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-4, AC-5, AC-6 — i test di TASK-05, TASK-07, TASK-09 e TASK-11 girano dentro i comandi eseguiti qui e sono verdi.
+      - [ ] AC-3 — il test di TASK-10 gira dentro `go test ./...` ed è verde.
+      - [ ] `gofmt`, `go build`, `go vet` sono identici alla baseline: nessuna diagnostica nuova sui file toccati.
+      - [ ] `npm run test:web` e `npm run test:view-execution-smoke` sono verdi.
+      - [ ] `golangci-lint` è stato eseguito, oppure il salto è registrato esplicitamente come prerequisito d'ambiente.
+      - [ ] Questo task è `DONE` e `archetipo spec show US-047` non riporta alcun task `TODO`.
+      - [ ] `archetipo spec review US-047` è stato eseguito solo dopo quel controllo.
+
+      ## Blockers
+      None.
+    ref: TASK-12

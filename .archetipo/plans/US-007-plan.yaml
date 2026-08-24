@@ -1,0 +1,386 @@
+schema: archetipo/plan/v2
+spec_code: US-007
+body: |-
+  # US-007: Stabilizzare il contratto Agent indipendente da Pi — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-07-24
+
+  ---
+
+  ## Soluzione tecnica
+
+  Introdurre un Run Protocol pubblico, versionato e transport-neutral davanti al lifecycle già autorevole di `run-store`: comandi ed eventi ARchetipo descrivono le due modalità di Run senza importare, nominare o serializzare oggetti Pi. Il protocollo è una porta applicativa locale riutilizzabile in futuro da Runner e Control; in questa spec non sceglie un trasporto remoto e non aggiunge lease, reconnect o supporto simultaneo di più major.
+
+  - Definire in `agent/src/run-protocol.mjs` l'identità `archetipo/run` e la versione supportata, envelope chiusi per `run.start`, `run.input`, `run.cancel` e `run.status`, payload discriminati `session|workflow`, snapshot pubblici, eventi correlati e `RunProtocolError`. Ogni envelope porta versione, id del messaggio e correlazione; eventi e snapshot espongono soltanto dati ARchetipo redatti.
+  - Modellare gli eventi pubblici necessari a ricostruire l'esito osservabile: accettazione/avvio, cambio stato, richiesta e accettazione input, azione governata, output verificato, completamento, cancellazione ed errore. L'ordine è deterministico per singola Run e gli stati terminali restano `completed|failed|cancelled`; il protocollo non rende il journal un event store remoto né promette replay dopo disconnessione.
+  - Introdurre in `agent/src/run-executor.mjs` una porta strutturale minima per avvio, input, cancellazione e stato, con sink eventi. La validazione del protocollo precede la risoluzione e l'invocazione dell'executor: versione o schema non supportati producono `E_RUN_PROTOCOL_VERSION_UNSUPPORTED` o un errore di contratto identificabile senza creare journal, sessione o Run.
+  - Adattare la vertical slice first-party tramite `agent/src/pi-run-executor.mjs`, traducendo i record di `run-store`, gli ack di `run-control`, gli outcome di `workflow-runner` e le azioni dell'adapter in snapshot/eventi pubblici. I dettagli Pi rimangono confinati in `pi-adapter.mjs`, `pi-run-executor.mjs` e nelle extension interne; il contratto e la suite condivisa non li importano.
+  - Conservare le entrypoint CLI esistenti e il comportamento del Core. `cli.mjs` e `workflow-runner.mjs` compongono la porta pubblica senza cambiare grammatica, exit code, artefatti verificati, cancellazione o autorità di transizione. Il package esporta esplicitamente il contratto pubblico e documenta versione, compatibilità e limiti MVP.
+
+  ### Decisioni architetturali
+
+  La scelta attraversa la soglia ADR perché stabilisce un nuovo integration boundary condivisibile da Agent, Runner e Control e fissa failure semantics/version negotiation. Si sceglie un protocollo applicativo transport-neutral con envelope JSON e porta executor, rispetto a due alternative valide: esporre Pi RPC direttamente, che accoppierebbe Control al runtime e ai suoi tipi, oppure derivare implicitamente eventi dal journal locale, che confonderebbe persistenza interna e contratto remoto. La prima alternativa viola la sostituibilità; la seconda non offre validazione fail-fast né un confine esplicito per comandi ed eventi.
+
+  Creare `decisions/run-protocol` con contesto, opzione scelta, alternative, tradeoff, politica di compatibilità e prove repository. L'ADR chiarisce che v1 supporta una sola major e che trasporto, autenticazione, lease, replay/reconnect e idempotenza distribuita saranno decisioni successive. Aggiornare `decisions/pi-sdk-adapter` per rendere esplicita la traduzione al protocollo e `decisions/four-layer-product-architecture` per collocare la porta tra Agent e futuri Runner/Control.
+
+  ## Baseline
+
+  | Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `npm run test:agent` | PASS: 128 test, 17 suite, 0 failure | Il refactor del lifecycle e dell'adapter deve mantenere l'intera suite Agent verde. |
+  | `npm run test:cli` | PASS: tutti i package Go verdi | AC-5 richiede la stessa suite Core senza modifiche di comportamento. |
+  | `npm run test:agent-control-smoke && npm run test:agent-run-smoke && npm run test:agent-workflow-smoke` | PASS: input/cancel AC-1..AC-4, Session AC-1..AC-4 e Workflow AC-1..AC-4 | La nuova porta deve preservare i flussi reali e aggiungere evidenza protocollare, non sostituire gli smoke esistenti. |
+  | `find agent test/e2e -name '*.mjs' -type f -exec node --check {} \;` | PASS: nessuna diagnostica di parsing | Ogni nuovo modulo `.mjs` deve restare privo di errori di parsing. |
+
+  Prerequisiti ambiente: Node.js >=22.19, dipendenze installate con `npm ci --ignore-scripts`, Go come dichiarato in `cli/go.mod`, provider HTTP deterministico e Python 3 con PTY sui sistemi POSIX per gli smoke terminali. Non è richiesto un browser né un servizio remoto.
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |
+  |---|---|---|---|---|
+  | AC-1 | Fixture equivalenti di Session Run e Workflow Run con input correlato e cancellazione | Contract test table-driven | Gli stessi comandi pubblici avviano entrambe le modalità; `run.status` e gli eventi mostrano `running`, input richiesto/accettato e uno tra `completed|failed|cancelled` con correlazione stabile | TASK-01, TASK-02, TASK-03 |
+  | AC-2 | Executor in-memory che implementa soltanto la porta ARchetipo e non importa moduli Pi | Suite di compatibilità | La suite condivisa completa Session e Workflow, input e cancel con la stessa sequenza semantica e gli stessi snapshot terminali dell'executor first-party | TASK-02, TASK-03, TASK-05 |
+  | AC-3 | Import del solo entrypoint pubblico del protocollo e scansione dei suoi export/schema | Contract + packaging test | Il consumer costruisce comandi, valida eventi e gestisce errori usando soltanto nomi e forme ARchetipo; export, typedef/schema e fixture non contengono riferimenti o import Pi | TASK-01, TASK-04 |
+  | AC-4 | Envelope `run.start` e evento fixture con versione maggiore non supportata, executor strumentato con contatore start | Unit/contract test fail-fast | Il risultato contiene `E_RUN_PROTOCOL_VERSION_UNSUPPORTED`, il sink riceve un errore di compatibilità redatto e il contatore `start` resta zero senza record Run o sessione | TASK-01, TASK-02, TASK-05 |
+  | AC-5 | Checkout corrente e suite Go completa | Regressione Core | `npm run test:cli` termina con exit 0 e nessun comando, connector o comportamento Core viene modificato | TASK-04, TASK-07 |
+
+  ## Strategia di test
+
+  - Unit test table-driven di ogni comando, evento, stato e union discriminata, inclusi campi ignoti, correlazione, redazione, terminalità e versione incompatibile.
+  - Compatibility kit riusabile che riceve una factory `RunExecutor` e applica le stesse fixture Session/Workflow all'executor in-memory privo di Pi e all'adapter first-party; gli oracoli confrontano semantica pubblica e terminali, non oggetti interni del runtime.
+  - Contract test dell'adapter Pi con SDK fake per verificare la traduzione di avvio, input, cancel, azioni, output ed errori senza propagare eventi o nomi Pi.
+  - Integration test di CLI, workflow runner e package exports per mantenere grammatica e comportamento esistenti, provare l'import isolato del protocollo e lasciare Core indipendente.
+  - Smoke terminale deterministico che usa la vertical slice first-party reale, esegue il compatibility kit, rifiuta una versione non supportata prima dell'avvio e preserva gli smoke Session, Workflow e Control esistenti.
+
+  ### E2E terminale — Simulazione utente
+
+  **Framework:** harness Node.js, SDK Pi first-party con provider HTTP deterministico e doppio executor in-memory senza Pi.
+  **Video demo:** filmabile; `archetipo-review` può mostrare gli stessi eventi pubblici e terminali per i due executor, quindi il rifiuto della versione incompatibile.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Compatibilità delle due modalità | Esegue fixture Session e Workflow contro Agent first-party e doppio, invia input/cancel e confronta eventi pubblici e snapshot terminali. |
+  | Versione non supportata | Invia un envelope/evento con major non supportata, osserva `E_RUN_PROTOCOL_VERSION_UNSUPPORTED` e verifica che nessuna Run, sessione o chiamata executor sia stata creata. |
+
+  ### Esclusione browser E2E
+
+  La capacità è un contratto macchina e una porta executor senza superficie browser. Contract test, adapter integration e smoke terminale attraversano direttamente tutti i confini responsabili di AC-1..AC-5; un browser non aggiungerebbe un oracolo pertinente.
+
+  ## Impatto Wiki
+
+  ```yaml
+  wiki_impact:
+    read: [decisions/four-layer-product-architecture, decisions/pi-sdk-adapter, decisions/governed-run-modes, decisions/project-process-run-model, architecture/context-map, engineering/code-map, operations/development]
+    update_after_acceptance: [decisions/four-layer-product-architecture, decisions/pi-sdk-adapter, decisions/governed-run-modes, architecture/context-map, engineering/code-map, operations/development]
+    create: [decisions/run-protocol]
+  ```
+
+  I mockup non sono necessari: US-007 introduce un contratto pubblico headless e test di compatibilità, non una nuova pagina, un componente visuale autonomo o una ristrutturazione di layout.
+
+  _Piano generato tramite ARchetipo Planning — 2026-07-24_
+tasks:
+  - id: TASK-01
+    title: Definire envelope, stati ed errori del Run Protocol v1
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Pubblicare un contratto v1 chiuso e validabile per avvio, input, cancellazione, stato ed eventi di Session e Workflow Run, senza dipendenze o nomi Pi.
+
+      ## Read
+      - `agent/src/run-store.mjs` — modalità, lifecycle, interazioni, azioni, output e redazione autorevoli
+      - `agent/src/run-control.mjs` — semantica input/cancel ed errori correnti
+      - `agent/src/workflow-definition.mjs` — identità/versione workflow e input validato
+      - `docs/PRD.md` — FR-013, FR-014 e limiti del Run Protocol MVP
+
+      ## Change
+      - `agent/src/run-protocol.mjs` — identità/versione supportata, costanti, validator, envelope comando/evento, snapshot discriminati ed errori pubblici
+      - `agent/test/run-protocol.test.mjs` — matrice valida/invalida di comandi, eventi, stati, correlazione, redazione e compatibilità
+      - Non introdurre trasporto, autenticazione, lease, reconnect, replay o tipi provenienti dall'SDK Pi
+
+      ## Steps
+      1. Fissare nome protocollo e singola versione v1, distinguendo versione dell'envelope dalla versione del workflow.
+      2. Definire `run.start`, `run.input`, `run.cancel` e `run.status` con payload chiusi e start discriminato `session|workflow`.
+      3. Definire snapshot e tassonomia eventi per lifecycle, input, azioni, output, completamento, cancellazione ed errore, con id messaggio/run, correlazione, timestamp e dati redatti.
+      4. Implementare validazione fail-fast e `RunProtocolError` con codici stabili, incluso `E_RUN_PROTOCOL_VERSION_UNSUPPORTED`, senza riflettere payload sensibili.
+      5. Esportare forme e factory pubbliche che non richiedono import runtime-specifici e coprire campi ignoti, stato illegale e major non supportata.
+
+      ## Verify
+      - Run: `node --test agent/test/run-protocol.test.mjs`
+      - Run: `node --check agent/src/run-protocol.mjs agent/test/run-protocol.test.mjs`
+      - Expect: entrambe le modalità e tutti i comandi/eventi validi passano; envelope incompatibili falliscono con codice stabile e nessun export/schema contiene nomi Pi.
+
+      ## Done
+      - [ ] AC-1 — Il contratto copre start, input, cancel, status ed eventi per `session` e `workflow`.
+      - [ ] AC-3 — Il modulo pubblico è importabile e utilizzabile senza tipi, proprietà o import Pi.
+      - [ ] AC-4 — La versione non supportata produce `E_RUN_PROTOCOL_VERSION_UNSUPPORTED` con contenuto redatto.
+
+      ## Blockers
+      US-006 deve fornire lifecycle, input e cancellazione stabili; è in REVIEW e presente nel workdir.
+    ref: TASK-01
+  - id: TASK-02
+    title: Costruire la porta executor e il kit di compatibilità
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Eseguire il Run Protocol attraverso una porta strutturale sostituibile e provare l'intero contratto con un executor in-memory che non dipende da Pi.
+
+      ## Read
+      - `agent/src/run-protocol.mjs` e `agent/test/run-protocol.test.mjs` — forme e invarianti consegnate da TASK-01
+      - `agent/src/workflow-runner.mjs` — orchestration e terminalizzazione workflow correnti
+      - `agent/src/run-store.mjs` — single source of truth del lifecycle locale
+
+      ## Change
+      - `agent/src/run-executor.mjs` — porta `start/input/cancel/status`, dispatch validato e sink eventi
+      - `agent/test/run-protocol-compatibility.mjs` — kit riusabile con fixture Session/Workflow e oracoli pubblici
+      - `agent/test/run-executor.test.mjs` — executor in-memory senza import Pi, dispatch, ordering e failure semantics
+      - Non duplicare il lifecycle in una seconda macchina a stati né persistere un event store remoto
+
+      ## Steps
+      1. Definire la shape minima dell'executor e validarla al composition root, senza classi o tipi runtime-specifici.
+      2. Validare versione e schema prima di risolvere o invocare qualsiasi metodo executor; emettere l'errore compatibilità redatto e lasciare `start` a zero su mismatch.
+      3. Normalizzare risultati e sink in snapshot/eventi v1 con ordine deterministico per Run e terminali condivisi.
+      4. Creare un executor in-memory che implementa Session/Workflow, richiesta input, risposta, cancellazione e stato usando soltanto il contratto ARchetipo.
+      5. Estrarre un compatibility kit parametrico che provi gli stessi comandi, eventi e terminali per ogni factory executor.
+
+      ## Verify
+      - Run: `node --test agent/test/run-protocol.test.mjs agent/test/run-executor.test.mjs`
+      - Run: `node --check agent/src/run-executor.mjs agent/test/run-protocol-compatibility.mjs agent/test/run-executor.test.mjs`
+      - Expect: il doppio senza Pi supera tutte le fixture; start non viene invocato su versione invalida e ogni terminale/evento rispetta v1.
+
+      ## Done
+      - [ ] AC-1 — La porta esegue start, input, cancel e status per entrambe le modalità e produce gli eventi richiesti.
+      - [ ] AC-2 — Il compatibility kit passa integralmente con l'executor in-memory privo di Pi.
+      - [ ] AC-4 — Il contatore executor prova zero invocazioni e zero Run create per una versione non supportata.
+
+      ## Blockers
+      TASK-01 definisce gli envelope pubblici da dispatchare.
+    ref: TASK-02
+  - id: TASK-03
+    title: Adattare l'Agent first-party alla porta RunExecutor
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Objective
+      Tradurre la vertical slice Pi esistente nel Run Protocol v1 mantenendo Pi confinato dietro l'adapter e producendo la stessa semantica del doppio di compatibilità.
+
+      ## Read
+      - `agent/src/pi-adapter.mjs` — sessione, governance, interazioni, completion claim e lifecycle SDK
+      - `agent/src/run-store.mjs`, `agent/src/run-control.mjs` e `agent/src/workflow-runner.mjs` — stato, comandi e finalizzazione autorevoli
+      - `agent/test/pi-adapter.test.mjs`, `agent/test/run-control.test.mjs` e `agent/test/workflow-runner.test.mjs` — contratti e race correnti
+      - `agent/test/run-protocol-compatibility.mjs` — fixture condivise di TASK-02
+
+      ## Change
+      - `agent/src/pi-run-executor.mjs` — adapter first-party della porta con traduzione record/comandi/eventi
+      - `agent/src/pi-adapter.mjs` — esporre soltanto hook interni minimi necessari alla traduzione, senza cambiare API Pi usate
+      - Test dell'executor Pi e aggiornamenti mirati ai test adapter/runner esistenti
+      - Non esporre session object, stop reason, extension event, model object o altri nomi/tipi Pi nel contratto pubblico
+
+      ## Steps
+      1. Comporre store, control, workflow runner e Pi adapter dietro i quattro metodi della porta, riusando la macchina a stati esistente.
+      2. Tradurre creazione/avvio, azioni governate, input, cancel, output verificato ed errori in snapshot/eventi v1 correlati e redatti.
+      3. Garantire che Session e Workflow conservino terminalizzazione, completion claim e autorità correnti senza doppie transizioni.
+      4. Eseguire il compatibility kit con SDK fake first-party e confrontare gli oracoli semantici con il doppio, ignorando soltanto identificativi/timestamp generati.
+      5. Aggiungere negative test che intercettano ogni proprietà runtime-specifica negli eventi pubblici.
+
+      ## Verify
+      - Run: `node --test agent/test/pi-adapter.test.mjs agent/test/workflow-runner.test.mjs agent/test/run-control.test.mjs agent/test/pi-run-executor.test.mjs`
+      - Run: `node --check agent/src/pi-adapter.mjs agent/src/pi-run-executor.mjs`
+      - Expect: l'executor first-party supera il compatibility kit, preserva i race cancel/completion e nessun evento pubblico espone dettagli Pi.
+
+      ## Done
+      - [ ] AC-1 — Agent first-party offre tutti i comandi, stati ed eventi v1 per Session e Workflow.
+      - [ ] AC-2 — Le stesse fixture del doppio passano contro l'executor first-party con terminali semanticamente identici.
+      - [ ] AC-3 — Il confine pubblico contiene soltanto forme ARchetipo, mentre i dettagli Pi restano nei moduli adapter interni.
+
+      ## Blockers
+      TASK-01 e TASK-02 forniscono protocollo, porta e compatibility kit.
+    ref: TASK-03
+  - id: TASK-04
+    title: Integrare il protocollo nelle entrypoint e nel package pubblico
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Rendere il Run Protocol consumabile dal package e dalle entrypoint esistenti senza cambiare la CLI, gli artefatti workflow o il comportamento Core.
+
+      ## Read
+      - `agent/src/cli.mjs` — composition root di Session, Workflow, input, cancel e show
+      - `agent/src/workflow-runner.mjs` — preflight, verifica output e finalizzazione
+      - `agent/package.json` e `test/npm/agent-packaging.test.mjs` — export e contenuto del package
+      - `agent/README.md` — documentazione pubblica corrente
+
+      ## Change
+      - `agent/src/cli.mjs` e `agent/src/workflow-runner.mjs` — comporre il first-party executor mantenendo grammatica, exit code e comportamento osservabile
+      - `agent/package.json` — export esplicito del Run Protocol e della porta pubblica senza esportare moduli Pi interni
+      - `agent/README.md` e `test/npm/agent-packaging.test.mjs` — uso, versione, compatibilità, limiti e prova di import isolato
+      - Test CLI/runner mirati; non modificare `cli/` o rendere Agent una dipendenza del Core
+
+      ## Steps
+      1. Iniettare l'executor first-party nei flussi correnti lasciando preflight e store al loro confine autorevole.
+      2. Preservare gli output CLI esistenti e aggiungere soltanto superfici macchina esplicitamente documentate quando necessarie.
+      3. Esportare il contratto e la porta da subpath stabili; mantenere `pi-adapter` e `pi-run-executor` interni al package.
+      4. Testare l'import del solo subpath protocollo in un consumer isolato e verificare che non carichi il modulo SDK Pi.
+      5. Documentare v1, esempio Session/Workflow, input/cancel/status, errori, redazione e fuori ambito senza promettere trasporto remoto.
+
+      ## Verify
+      - Run: `node --test agent/test/cli.test.mjs agent/test/workflow-runner.test.mjs test/npm/agent-packaging.test.mjs`
+      - Run: `npm run test:cli`
+      - Expect: CLI e workflow mantengono i contratti esistenti, il package espone soltanto i subpath dichiarati e tutti i test Core restano verdi.
+
+      ## Done
+      - [ ] AC-1 — Le entrypoint first-party usano il contratto per entrambe le modalità senza perdere input, cancel, status o eventi.
+      - [ ] AC-3 — Un consumer importa protocollo/porta senza caricare o nominare Pi e i moduli runtime restano interni.
+      - [ ] AC-5 — La suite Core passa e `cli/` non acquisisce dipendenze o cambiamenti comportamentali Agent.
+
+      ## Blockers
+      TASK-03 consegna l'executor first-party compatibile.
+    ref: TASK-04
+  - id: TASK-05
+    title: Dimostrare la compatibilità end-to-end del Run Protocol
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Produrre evidenza ripetibile che Agent first-party e doppio senza Pi espongono gli stessi eventi e terminali e che una versione incompatibile non avvia alcuna Run.
+
+      ## Read
+      - `test/e2e/agent-run-smoke.mjs`, `agent-workflow-smoke.mjs` e `agent-control-smoke.mjs` — provider, fixture, PTY e oracoli correnti
+      - `agent/test/run-protocol-compatibility.mjs` — scenari condivisi
+      - `package.json` — convenzioni script smoke
+
+      ## Change
+      - `test/e2e/agent-protocol-smoke.mjs` — compatibilità Session/Workflow, input/cancel, eventi e versione non supportata
+      - `package.json` — script `test:agent-protocol-smoke`
+      - Non richiedere credenziali esterne, rete remota, browser, timing non bounded o accesso ai tipi Pi dal doppio
+
+      ## Steps
+      1. Preparare fixture deterministiche equivalenti per Session e Workflow e raccogliere gli envelope pubblici prodotti dai due executor.
+      2. Normalizzare soltanto id e timestamp non deterministici, quindi confrontare tipi evento, correlazioni, stati e terminali.
+      3. Eseguire input correlato e cancellazione per provare i comandi comuni e l'assenza di attività successiva al terminale.
+      4. Inviare comando ed evento con major non supportata a un executor strumentato; verificare codice compatibilità, evento errore redatto e zero start/journal/sessioni.
+      5. Rilanciare gli smoke Session, Workflow e Control esistenti per provare assenza di regressioni della vertical slice.
+
+      ## Verify
+      - Run: `npm run test:agent-protocol-smoke`
+      - Run: `npm run test:agent-control-smoke && npm run test:agent-run-smoke && npm run test:agent-workflow-smoke`
+      - Expect: lo smoke stampa evidenza AC-1..AC-4, i confronti semantici coincidono e la versione incompatibile lascia zero Run avviate.
+
+      ## Done
+      - [ ] AC-1 — Lo smoke attraversa start, input, cancel, status ed eventi di Session e Workflow.
+      - [ ] AC-2 — First-party e doppio senza Pi producono gli stessi eventi pubblici e gli stessi terminali.
+      - [ ] AC-4 — La major non supportata restituisce l'errore atteso senza invocare start né creare Run.
+
+      ## Blockers
+      TASK-02, TASK-03 e TASK-04 devono consegnare kit, executor e package integrato.
+    ref: TASK-05
+  - id: TASK-06
+    title: Registrare l'ADR e aggiornare la mappa del runtime
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Rendere espliciti nella Living Wiki il nuovo confine Run Protocol, la sostituibilità di Pi e le evidenze di repository senza anticipare Runner o Control.
+
+      ## Read
+      - `docs/wiki/decisions/four-layer-product-architecture.md` — collocazione dei layer
+      - `docs/wiki/decisions/pi-sdk-adapter.md` e `docs/wiki/decisions/governed-run-modes.md` — confine runtime e due modalità
+      - `docs/wiki/architecture/context-map.md`, `docs/wiki/engineering/code-map.md` e `docs/wiki/operations/development.md` — stato corrente, file e verifiche
+      - `skills/archetipo-wiki/references/wiki-contract.md` — frontmatter e marker obbligatori delle decisioni
+
+      ## Change
+      - `docs/wiki/decisions/run-protocol.md` — nuovo ADR generated con contesto, decisione, alternative, tradeoff, compatibilità ed evidenze
+      - Aggiornare le pagine dichiarate in `wiki_impact.update_after_acceptance` con protocollo, porta, adapter, test e limiti effettivamente consegnati
+      - Conservare link stabili, marker, fonti verificabili e stato `generated`; non documentare trasporto, lease o reconnect come implementati
+
+      ## Steps
+      1. Creare l'ADR `decisions/run-protocol` con `type: decision`, `decision_status: accepted` e tutti i marker richiesti dal contratto Wiki.
+      2. Documentare envelope transport-neutral e porta executor come scelta, confrontandoli con Pi RPC pubblico e derivazione implicita dal journal.
+      3. Registrare conseguenze: singola major v1, validazione pre-side-effect, redazione e traduzione Pi interna; elencare esplicitamente i limiti rinviati.
+      4. Aggiornare adapter, architettura, context/code map e operations con path e comandi di test reali.
+      5. Rigenerare catalogo e validare il profilo bootstrap senza approvare le pagine.
+
+      ## Verify
+      - Run: `archetipo wiki catalog && archetipo wiki validate --profile bootstrap`
+      - Run: `archetipo wiki search "Run Protocol"`
+      - Expect: validazione `data.ok=true`, la ricerca trova l'ADR e le pagine restano `generated` con fonti verso contratto, executor e test.
+
+      ## Done
+      - [ ] AC-1 — La Wiki descrive comandi, stati ed eventi comuni alle due modalità.
+      - [ ] AC-2 — L'ADR documenta la porta executor e la suite contro implementazioni sostituibili.
+      - [ ] AC-3 — Adapter e protocollo sono descritti come confini distinti senza tipi Pi nel contratto pubblico.
+      - [ ] AC-4 — L'ADR registra compatibilità fail-fast e il limite di una sola major supportata.
+
+      ## Blockers
+      TASK-01..TASK-05 devono fornire forme, adapter ed evidenze definitive.
+    ref: TASK-06
+  - id: TASK-07
+    title: Eseguire il gate finale di qualità e workflow
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Dimostrare AC-1..AC-5 senza regressioni Agent/Core, diagnostiche nei file modificati o task incompleti prima della review.
+
+      ## Read
+      - `AGENTS.md` — controlli CI Go obbligatori
+      - `package.json` — suite Agent, packaging e smoke disponibili
+      - `.archetipo/plans/US-007-plan.yaml` — criteri e comandi pianificati
+      - File modificati da TASK-01..TASK-06 — verificare parsing, lint e contratti locali
+
+      ## Change
+      - Nessuna modifica funzionale prevista; correggere soltanto difetti emersi dai controlli nei file già in scope e rieseguire il comando fallito
+      - Non richiedere review finché un controllo fallisce o un task resta TODO
+
+      ## Steps
+      1. Eseguire suite Agent, compatibility smoke, smoke Control/Session/Workflow, packaging e parsing Node.
+      2. Da `cli/`, eseguire `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...` e `golangci-lint run --timeout 5m ./...`.
+      3. Eseguire la validazione Wiki bootstrap e verificare che l'ADR/pagine previste siano presenti e generated.
+      4. Marcare TASK-07 `DONE` soltanto dopo tutti i controlli verdi.
+      5. Da `/Users/stefanoleli/Project/ARchetipo`, eseguire `archetipo spec show US-007`, confermare che nessun task sia `TODO` e solo allora richiedere review.
+
+      ## Verify
+      - Run: `npm run test:agent && npm run test:agent-protocol-smoke && npm run test:agent-control-smoke && npm run test:agent-run-smoke && npm run test:agent-workflow-smoke && npm run test:agent-packaging`
+      - Run: `find agent test/e2e test/npm -name '*.mjs' -type f -exec node --check {} \;`
+      - Run from `cli/`: `gofmt -l . && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run from project root after marking this task DONE: `archetipo spec show US-007`
+      - Expect: tutti i comandi hanno exit 0, `gofmt -l .` non produce output, Wiki ha `data.ok=true`, lo smoke evidenzia AC-1..AC-4, Core prova AC-5 e l'envelope spec non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — Suite e smoke provano il contratto completo per Session e Workflow.
+      - [ ] AC-2 — Il compatibility kit passa con first-party e doppio senza Pi.
+      - [ ] AC-3 — Export, schema, eventi e packaging non richiedono tipi o nomi Pi.
+      - [ ] AC-4 — Versione incompatibile è rifiutata prima di ogni start con codice identificabile.
+      - [ ] AC-5 — Tutti i controlli Core restano verdi senza modifiche di comportamento.
+      - [ ] Workflow — TASK-07 è `DONE`, `archetipo spec show US-007` non mostra task `TODO` e la review non è stata richiesta prima di questa prova.
+
+      ## Blockers
+      Tutti i task TASK-01..TASK-06 devono essere completati.
+    ref: TASK-07

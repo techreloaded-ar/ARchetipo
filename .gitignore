@@ -33,10 +33,7 @@ cli/archetipo
 .archetipo/bin/*
 .dev/
 
-.archetipo/stories/*
-.archetipo/specs/*
-.archetipo/plans/*
-.archetipo/backlog.yaml
+
 .archetipo/executions/*
 .archetipo/conversations/*
 

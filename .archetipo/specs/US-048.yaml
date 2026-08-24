@@ -1,0 +1,46 @@
+schema: archetipo/spec/v2
+code: US-048
+title: Configurare le opzioni che il provider dichiara per il modello scelto
+epic:
+  code: EP-005
+  title: Esperienza operativa ARchetipo
+priority: MEDIUM
+points: 3
+status: DONE
+blocked_by:
+  - US-047
+scope: MVP
+body: |-
+  #### US-048: Configurare le opzioni che il provider dichiara per il modello scelto
+
+  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccata da:** US-047
+
+  **User Story**
+  Come utilizzatore che ha scelto un modello per il workspace,
+  voglio impostare le opzioni che quel modello espone, come il livello di ragionamento,
+  così da governare costo e profondità delle run senza modificare file di configurazione a mano.
+
+  **Dimostrazione**
+  Partendo da un workspace con un modello scelto dall'elenco, il revisore apre la configurazione dell'esecuzione e osserva, sotto il modello, soltanto le opzioni che il provider dichiara per quel modello, con il valore predefinito indicato. Ne cambia una, salva e la ritrova invariata al rientro. Sceglie poi un modello che dichiara opzioni diverse e osserva che la sezione si aggiorna e che l'opzione non più applicabile non resta salvata. Infine sceglie un modello privo di opzioni e osserva un messaggio esplicito al posto di una sezione vuota.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — La configurazione mostra soltanto le opzioni che il provider dichiara per il modello attualmente scelto, con il rispettivo valore predefinito.
+  - [ ] AC-2 — Un'opzione impostata e salvata è riproposta invariata alla riapertura della configurazione.
+  - [ ] AC-3 — Cambiando modello, le opzioni mostrate diventano quelle del nuovo modello e quelle non più applicabili non restano nella configurazione salvata.
+  - [ ] AC-4 — Un valore rifiutato dal provider produce un errore che nomina l'opzione e lascia invariata la configurazione precedente.
+  - [ ] AC-5 — Un modello che non dichiara opzioni produce un messaggio esplicito invece di una sezione vuota.
+
+  **Fuori ambito**
+  Opzioni non collegate al modello, scelta valida per la singola run, e stima o esposizione dei costi di esecuzione.
+history:
+  - status: TODO
+    at: "2026-08-20T14:55:43Z"
+  - status: PLANNED
+    at: "2026-08-20T17:40:31Z"
+  - status: IN PROGRESS
+    at: "2026-08-20T17:41:23Z"
+  - status: REVIEW
+    at: "2026-08-20T17:53:45Z"
+  - status: DONE
+    at: "2026-08-20T17:55:34Z"

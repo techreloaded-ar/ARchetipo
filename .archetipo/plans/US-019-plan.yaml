@@ -1,0 +1,480 @@
+schema: archetipo/plan/v2
+spec_code: US-019
+body: "# US-019: Osservare e riconciliare le Run in Operations — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-26\n\n---\n\n## Specifica\n\n**Epica:** EP-002 — Inception governata in ARchetipo Control\n**Priorità:** HIGH | **Punti:** 5\n\n**Storia utente**\nCome operatore DevOps, voglio osservare timeline, log, consumo e riconnessioni delle Run remote, così da diagnosticare problemi senza perdere eventi o duplicare l'esecuzione.\n\n**Criteri di accettazione**\n- AC-1 — Operations mostra una timeline ordinata e correlata a Run, Runner e Agent Profile.\n- AC-2 — Log ed eventi consultabili non espongono segreti configurati.\n- AC-3 — Durata e consumo disponibile sono attribuiti alla Run.\n- AC-4 — Dopo una disconnessione gli eventi mancanti vengono riconciliati senza duplicati visibili.\n- AC-5 — La riconciliazione non avvia una seconda esecuzione della Run.\n\n---\n\n## Soluzione tecnica\n\nEstendere il lifecycle remoto consegnato da US-012 con un canale osservazionale affidabile e separato dal comando `run.start`: il Runner assegna a ogni delivery una sequenza monotona per assignment, conserva in un outbox limitato gli elementi non confermati e, dopo il reconnect, negozia con Control il cursore persistito prima di ritrasmettere soltanto il suffisso mancante. Control verifica machine identity, assignment e fencing, redige nuovamente il payload, persiste in modo idempotente tramite vincolo `(assignment_id, source_sequence)` e conferma soltanto dopo il commit. Il reconnect riprende esclusivamente il data plane e non può invocare di nuovo l'executor.\n\n- Introdurre nel trasporto Runner–Control envelope chiusi per `run.resume`, `run.resume.ack`, `run.delivery` e `run.delivery.ack`; una delivery contiene `runId`, `assignmentId`, fencing, `sourceSequence`, timestamp, tipo `protocol_event | log | usage | terminal` e payload limitato.\n- Aggiungere `remote_run_observations` con provenienza Run/assignment/Runner, sequenza sorgente, digest, timestamp sorgente/ricezione e payload redatto. Un conflitto sulla stessa sequenza con digest diverso fallisce chiuso; un replay identico restituisce ack senza nuova riga né nuova transizione.\n- Trattare la delivery terminale nella stessa transazione idempotente dell'osservazione: applicare al massimo una transizione autorevole e mantenere compatibilità con il `run.status` v1 esistente durante la migrazione.\n- Collegare l'event sink già presente nel Run Protocol dell'Agent e lo stdout/stderr del processo remoto a un collector Runner. Applicare redazione prima dell'outbox usando machine credential, fencing token e valori di environment con nomi sensibili; applicare la stessa redazione strutturale e per valore in Control prima della persistenza.\n- Calcolare la durata da `running.occurredAt` al terminale o all'istante corrente. Esporre consumo normalizzato solo quando una delivery `usage` lo fornisce; altrimenti restituire uno stato esplicito `unavailable`, senza inventare costo o token.\n- Estendere il dettaglio API con timeline lifecycle, stream Runner ordinato per `sourceSequence`, metadati di correlazione, stato connessione/ripresa e riepilogo durata/consumo. La pagina Operations usa i mockup di US-019 e mantiene gli oracoli testuali e accessibili.\n\n### Decisioni architetturali\n\nLa scelta tra replay con cursore persistito, streaming best-effort e una coda esterna modifica il confine d'integrazione e le failure semantics, quindi supera la soglia ADR. Per l'MVP si sceglie un outbox Runner limitato con ack dopo commit e deduplicazione PostgreSQL: offre recupero at-least-once con proiezione visibile exactly-once senza introdurre Kafka/NATS né un secondo scheduler. Il best-effort perderebbe eventi durante la disconnessione; una coda esterna aumenterebbe deployment e operatività oltre lo scope. La decisione sarà registrata in `decisions/remote-run-event-reconciliation` e chiarirà `decisions/run-protocol`, `decisions/outbound-runner-transport` e `decisions/remote-run-assignment-lease` senza cambiare la scelta di singola esecuzione/fencing.\n\nL'outbox in memoria copre la disconnessione di rete richiesta dalla specifica mentre il processo Runner resta vivo; il recupero dopo crash del Runner e la retention configurabile restano fuori ambito. L'outbox deve essere limitato per numero e byte, applicare backpressure e conservare sempre terminale e usage; il piano non promette exactly-once di trasporto, ma una sola rappresentazione persistita e visibile.\n\n---\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |\n|---|---|---|\n| `npm --prefix control exec vitest run -- src/modules/operations/run-domain.test.ts test/integration/remote-run-repository.test.ts test/integration/remote-run-transport.test.ts test/integration/remote-run-http.test.ts test/web/runs.test.tsx` | 4 file server e 13 test passano; `control/test/web/runs.test.tsx` fallisce in 2 test con `ReferenceError: document is not defined` perché il comando misto usa l'ambiente Node | I test server e web restano comandi distinti; nessun task dichiara verde questo comando misto senza `--environment jsdom` |\n| `npm --prefix control exec vitest run -- src/modules/operations/run-domain.test.ts test/integration/remote-run-repository.test.ts test/integration/remote-run-transport.test.ts test/integration/remote-run-http.test.ts` | 4 file, 13 test passati | Suite server focalizzata da estendere senza regressioni |\n| `npm --prefix control exec vitest run -- --environment jsdom test/web/runs.test.tsx` | 1 file, 2 test passati | Suite componente autorevole per gli stati locali della pagina |\n| `npm run typecheck:control && npm run lint:control && npm run build:control` | Passato; bundle web generato | Ogni modifica Control deve restare priva di diagnostiche |\n| `npm run typecheck:runner && npm run lint:runner && npm run build:runner` | Passato | Ogni modifica Runner deve restare priva di diagnostiche |\n| `npm --prefix runner test -- --test-name-pattern='waits for accept|applies cancellation|does not start'` | 15 test passati, inclusi deduplicazione, cancel e nessun avvio prima dell'ack | Conservare il conteggio executor e aggiungere replay/reconnect |\n| `npm run build:control && npx playwright test test/e2e/control-remote-run.spec.ts` | 4 scenari Chromium passati | Estendere la fixture esistente con disconnessione reale e oracoli osservabilità |\n\n**Prerequisiti ambiente:** Node >=22.19, dipendenze già installate in `control/` e `runner/`, PostgreSQL e Chromium Playwright disponibili tramite `test/e2e/control-fixture.mjs`. Il gate Go richiede `golangci-lint` v2; se assente usare `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`.\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Run attiva creata dalla fixture Control con Runner e Agent Profile noti | Integration + browser E2E | Il dettaglio mostra Run ID, Runner, Agent Profile e timeline/stream in ordine stabile con gli stessi identificativi dell'API | TASK-09 |\n| AC-2 | Delivery di log/evento contenente machine credential, fencing token e `ARC_TEST_SECRET` sia come campo sia dentro testo | Unit + integration + browser E2E | I valori sentinella non compaiono nell'outbox serializzato, nel database, nella risposta GET né nel DOM; al loro posto compare `[REDACTED]` | TASK-05, TASK-07, TASK-09 |\n| AC-3 | Clock controllato, Run in `running`, delivery usage opzionale e poi terminale | Integration + component + browser E2E | Durata aumenta/si fissa sulla Run; token/costo e valuta sono attribuiti alla Run quando presenti, altrimenti la UI mostra `Consumo non disponibile` | TASK-05, TASK-09 |\n| AC-4 | Runner reale controllabile, socket interrotto dopo N delivery, altre delivery prodotte offline e socket ripristinato | Runner integration + browser E2E | Dopo il reconnect l'API e il DOM contengono ogni `sourceSequence` una sola volta, in ordine, incluso il terminale corretto | TASK-07, TASK-09 |\n| AC-5 | Stessa fixture di reconnect con contatore dell'executor e consegne duplicate intenzionali | Runner integration + browser E2E | Il contatore executor resta 1, non arriva un secondo `run.start` e Control conserva una sola assignment/esecuzione | TASK-07, TASK-09 |\n\nI test non simulano via mock il confine responsabile degli esiti AC-4/AC-5: lo scenario browser attraversa WebSocket, Runner, servizio, PostgreSQL, API e React.\n\n---\n\n## Strategia di test\n\n- Unit test dei parser chiusi, limiti byte/numero, redazione per chiave e valore, cursore e conflitti di digest.\n- Integration test PostgreSQL per vincolo idempotente, ack-after-commit, isolamento Organization, fencing, durata e usage.\n- Test Runner con socket controllabile per disconnessione, outbox, replay dal cursore, ack perso, backpressure e singola invocazione executor.\n- Test componenti React in jsdom per ordinamento, correlazione, stato reconnect, log redatti e fallback consumo.\n- E2E Chromium con processo Runner reale/controllato per la dimostrazione completa; nessun nuovo framework.\n\n### Test E2E — Simulazione utente\n\n**Framework:** Playwright 1.61.1 con Chromium e `test/e2e/control-fixture.mjs`\n**Video demo:** filmabile; registrazione demandata ad `archetipo-review` dopo l'implementazione\n\n| Scenario | Flusso utente |\n|---|---|\n| Osservabilità correlata | L'operatore apre una Run attiva, verifica Run/Runner/Profile, timeline ordinata, log redatti, durata e consumo disponibile o fallback esplicito |\n| Reconnect e recupero | La fixture interrompe il WebSocket, produce eventi Runner offline, ripristina la connessione e l'operatore osserva il suffisso recuperato una volta sola e il terminale corretto |\n| Nessuna seconda esecuzione | Dopo replay, fixture e API provano una sola invocazione executor, una sola assignment e nessun nuovo `run.start` |\n\n---\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [architecture/context-map, decisions/source-of-truth-transition, operations/development, decisions/run-protocol, decisions/outbound-runner-transport, decisions/remote-run-assignment-lease]\n  update_after_acceptance: [architecture/context-map, operations/development, decisions/run-protocol, decisions/outbound-runner-transport, decisions/remote-run-assignment-lease]\n  create: [decisions/remote-run-event-reconciliation]\n```\n\n> \U0001F3A8 I mockup per questa specifica sono disponibili in `docs/mockups/US-019/`\n\n_Piano generato tramite ARchetipo Planning — 2026-07-26_"
+tasks:
+  - id: TASK-01
+    title: Definire il contratto di osservazioni e riconciliazione
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Definire envelope remoti chiusi e compatibili che separano ripresa osservazionale da avvio della Run.
+
+      ## Read
+      - `control/src/modules/operations/run-transport-contract.ts` — parser e tipi Runner→Control correnti.
+      - `runner/src/run-start-contract.ts` — mirror del contratto remoto e validazione chiusa.
+      - `agent/src/run-protocol.mjs` e `agent/src/run-executor.mjs` — eventi pubblici già prodotti dall'Agent.
+      - `control/src/modules/operations/run-domain.ts` — lifecycle, fencing e redazione correnti.
+
+      ## Change
+      - `control/src/modules/operations/run-transport-contract.ts` — aggiungere tipi/parser `run.resume`, `run.delivery` con sequenza sorgente e ack correlati, mantenendo accettazione del `run.status` v1.
+      - `runner/src/run-start-contract.ts` — mirror esatto dei messaggi Control e Runner.
+      - `control/src/modules/operations/run-domain.ts` — tipi osservazione/usage e redazione strutturale più redazione di valori sentinella.
+      - Nuovi file di contratto sotto `runner/src/` solo se necessari per evitare duplicazione; non cambiare il protocollo pubblico `archetipo/run` dell'Agent.
+
+      ## Steps
+      1. Definire campi obbligatori, enum `protocol_event | log | usage | terminal`, limiti di testo/payload e timestamp ISO.
+      2. Rendere `sourceSequence` intero positivo monotono per assignment e correlare sempre Run, assignment e fencing.
+      3. Definire `run.resume` con ultimo source sequence noto al Runner e ack con cursore contiguo persistito da Control.
+      4. Definire ack di delivery emesso soltanto dopo persistenza e codici fail-closed per schema, fencing o conflitto.
+      5. Conservare `run.start` come unico comando che può avviare l'executor; i messaggi resume/delivery non contengono comandi eseguibili.
+
+      ## Verify
+      - Run: `npm run typecheck:control && npm run typecheck:runner`
+      - Expect: i contratti compilano senza diagnostiche e i consumer esistenti di `run.status` restano validi.
+
+      ## Done
+      - [ ] AC-2 — il contratto limita payload e identifica i punti di redazione prima di ogni confine persistente.
+      - [ ] AC-4 — resume e delivery hanno cursore e sequenza sufficienti per replay idempotente.
+      - [ ] AC-5 — nessun envelope di riconciliazione può contenere o attivare `run.start`.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Persistire osservazioni e cursori in modo idempotente
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Fornire a Control una fonte persistente, Organization-scoped e deduplicata per timeline Runner, log e consumo della Run.
+
+      ## Read
+      - `control/migrations/005_remote_runs.sql` — schema Run, assignment ed eventi lifecycle.
+      - `control/src/modules/identity/repository.ts` — tipi Kysely del database.
+      - `control/src/modules/operations/run-repository.ts` — transazioni, lock e ordinamento correnti.
+      - `control/test/integration/remote-run-repository.test.ts` — fixture e prove di concorrenza esistenti.
+
+      ## Change
+      - `control/migrations/010_remote_run_observability.sql` — tabella osservazioni con FK Organization/Run/assignment/Runner, `source_sequence`, digest, tipo, timestamp sorgente/ricezione e payload limitato; indici e vincolo unico per assignment/sequenza.
+      - `control/src/modules/identity/repository.ts` — tipi Kysely della nuova tabella.
+      - `control/src/modules/operations/run-repository.ts` — insert idempotente, rilevazione conflitto digest, cursore contiguo, lista ordinata e riepilogo usage/durata.
+      - Non modificare la semantica o l'ordine di `remote_run_events`.
+
+      ## Steps
+      1. Creare la migration additive e aggiornare il tipo database.
+      2. Inserire una delivery con `ON CONFLICT` controllato: replay con stesso digest restituisce la riga, digest diverso fallisce chiuso.
+      3. Calcolare il cursore come massimo prefisso contiguo, non semplice `MAX`, così un gap non viene nascosto.
+      4. Ordinare le osservazioni per `source_sequence` e restituire metadati di correlazione senza fencing o credenziali.
+      5. Derivare durata da evento `running` a terminale/clock corrente e selezionare l'ultima usage cumulativa valida; usare `unavailable` quando assente.
+
+      ## Verify
+      - Run: `npm --prefix control run db:migrate:test && npm run typecheck:control`
+      - Expect: tutte le migration si applicano da zero e lo schema/repository compilano senza diagnostiche.
+
+      ## Done
+      - [ ] AC-1 — ogni osservazione è correlata a Organization, Run, assignment e Runner ed è ordinabile stabilmente.
+      - [ ] AC-3 — repository produce durata e consumo attribuiti alla sola Run.
+      - [ ] AC-4 — la chiave idempotente impedisce righe duplicate visibili e il cursore non supera gap.
+
+      ## Blockers
+      TASK-01.
+    ref: TASK-02
+  - id: TASK-03
+    title: Provare persistenza, redazione e metriche
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Produrre evidenza deterministica delle invarianti dati prima di collegare il trasporto reale.
+
+      ## Read
+      - `control/test/integration/remote-run-repository.test.ts` — setup PostgreSQL, lock e cleanup.
+      - `control/src/modules/operations/run-domain.test.ts` — stile unit per lifecycle e redazione.
+      - `control/migrations/010_remote_run_observability.sql` e repository prodotti da TASK-02.
+
+      ## Change
+      - `control/src/modules/operations/run-domain.test.ts` — casi redazione per chiave, valore annidato, testo, limiti e cicli.
+      - `control/test/integration/remote-run-repository.test.ts` — insert/replay/conflitto, gap, isolamento, ordinamento, duration e usage.
+      - Fixture PostgreSQL strettamente necessarie sotto `control/test/fixtures/`; cleanup idempotente.
+
+      ## Steps
+      1. Usare sentinelle per machine credential, fencing token e `ARC_TEST_SECRET` e provare che nessuna resta nel payload serializzato.
+      2. Inserire sequenze 1, 2, replay 2 e gap 4: aspettarsi due righe visibili, cursore 2 e conflitto per digest diverso.
+      3. Inserire 3 e verificare cursore 4 e ordinamento esatto 1..4.
+      4. Provare cross-Organization e assignment/fencing non correlati senza side effect.
+      5. Usare clock fisso per verificare durata live/terminale e usage presente/assente.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run -- src/modules/operations/run-domain.test.ts test/integration/remote-run-repository.test.ts`
+      - Expect: test verdi; query e serializzazioni non contengono le sentinelle e i conteggi non aumentano sui replay.
+
+      ## Done
+      - [ ] AC-2 — le sentinelle sono assenti prima e dopo la persistenza.
+      - [ ] AC-3 — gli oracoli provano durata e usage attribuiti alla Run corretta.
+      - [ ] AC-4 — replay, gap e conflitto hanno conteggi e cursori esatti.
+
+      ## Blockers
+      TASK-02.
+    ref: TASK-03
+  - id: TASK-04
+    title: Ingerire e riconciliare le delivery in Control
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Accettare osservazioni e terminali dal solo Runner assegnato, rispondendo con ack dopo commit e senza ripetere transizioni.
+
+      ## Read
+      - `control/src/modules/operations/transport.ts` — autenticazione WebSocket, heartbeat e dispatch correnti.
+      - `control/src/modules/operations/run-service.ts` — accept, status, fencing e transizioni.
+      - `control/src/modules/operations/connection-registry.ts` — presenza Runner e connessioni attive.
+      - `control/src/modules/operations/run-http.ts` — proiezione pubblica corrente.
+
+      ## Change
+      - `control/src/modules/operations/transport.ts` — routing resume/delivery, ack post-commit e rifiuto messaggi non correlati.
+      - `control/src/modules/operations/run-service.ts` — ingest transazionale, redazione defense-in-depth, terminale idempotente e cursor lookup.
+      - `control/src/modules/operations/connection-registry.ts` — esporre solo lo stato connessione necessario alla proiezione Run.
+      - `control/src/modules/operations/run-http.ts` — nessun dato sensibile; la proiezione completa viene finalizzata in TASK-08.
+
+      ## Steps
+      1. Validare machine identity dal socket e assignment/fencing dal repository per ogni resume/delivery.
+      2. Redigere payload e valori configurati prima di calcolare digest e persistere.
+      3. Per observation/log/usage inserire e poi inviare ack; per terminale inserire e applicare la transizione nella stessa transazione.
+      4. Su replay identico restituire lo stesso ack senza evento lifecycle o audit duplicato; su conflitto chiudere il messaggio in modo fail-closed.
+      5. Rispondere a resume con il prefisso contiguo persistito e non inviare mai un nuovo offer/start.
+      6. Mantenere `run.status` v1 durante la transizione e renderne il replay terminale idempotente.
+
+      ## Verify
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control`
+      - Expect: Control compila senza diagnostiche e il trasporto esistente resta registrato nel server.
+
+      ## Done
+      - [ ] AC-2 — nessun payload raggiunge repository/API prima della redazione Control.
+      - [ ] AC-4 — ack segue il commit e replay terminali/osservazioni non duplicano lo stato.
+      - [ ] AC-5 — il percorso resume non chiama dispatcher o creazione/assegnazione Run.
+
+      ## Blockers
+      TASK-03.
+    ref: TASK-04
+  - id: TASK-05
+    title: Verificare il confine Control di osservabilità
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Provare autenticazione, idempotenza, redazione, metriche e ack del trasporto Control con PostgreSQL reale.
+
+      ## Read
+      - `control/test/integration/remote-run-transport.test.ts` — WebSocket autenticato e fencing.
+      - `control/test/integration/remote-run-http.test.ts` — authz e contratto pubblico.
+      - `control/test/integration/runner-transport.test.ts` — lifecycle connessione Runner.
+      - `control/src/modules/operations/run-service.ts` e `transport.ts` — comportamento di TASK-04.
+
+      ## Change
+      - `control/test/integration/remote-run-transport.test.ts` — resume, ack perso, replay, gap, terminale e nessun redispatch.
+      - `control/test/integration/remote-run-http.test.ts` — isolamento, assenza sentinelle, duration/usage e payload pubblico.
+      - Fixture strettamente necessarie sotto `control/test/fixtures/`; non sostituire PostgreSQL o WebSocket con mock per gli oracoli principali.
+
+      ## Steps
+      1. Autenticare Runner e accettare una Run, poi inviare delivery 1..N con log, evento, usage e terminale.
+      2. Simulare ack perso e ritrasmettere: aspettarsi stesso ack, una riga per sequence e una transizione terminale.
+      3. Disconnettere/riautenticare, inviare resume e verificare il cursore restituito senza seconda offerta.
+      4. Inviare sentinelle sensibili e verificare assenza in query repository e GET HTTP.
+      5. Verificare Organization, Runner, Agent Profile, ordine, durata, usage presente e fallback assente.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run -- test/integration/remote-run-transport.test.ts test/integration/remote-run-http.test.ts`
+      - Expect: tutti i test passano; sentinelle assenti, conteggi persistenti stabili e nessun dispatch `run.start` durante resume.
+
+      ## Done
+      - [ ] AC-1 — risposta HTTP e repository espongono correlazione e ordine stabili.
+      - [ ] AC-2 — nessun segreto sentinella è presente in database o API.
+      - [ ] AC-3 — duration e usage/fallback sono esatti con clock controllato.
+      - [ ] AC-4 — ack perso e reconnect producono una sola rappresentazione.
+      - [ ] AC-5 — lo spy del dispatcher conta zero nuovi start nel percorso resume.
+
+      ## Blockers
+      TASK-04.
+    ref: TASK-05
+  - id: TASK-06
+    title: Implementare outbox e ripresa nel Runner
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-05
+    body: |-
+      ## Objective
+      Continuare una Run già accettata durante una disconnessione e consegnarne eventi/log/usage/terminale dopo il reconnect senza riavviarla.
+
+      ## Read
+      - `runner/src/control-client.ts` — map Run, reconnect, accept ack e status correnti.
+      - `runner/src/workspace-executor.ts` — processo Agent, stdout/stderr, abort e receipt.
+      - `agent/src/run-protocol-runtime.mjs` e `agent/src/run-executor.mjs` — event sink strutturato disponibile.
+      - `runner/src/config.ts` — credenziali e configurazione sicura.
+
+      ## Change
+      - `runner/src/control-client.ts` — outbox limitato per Run, source sequence, ack, resume e replay ordinato; l'esecuzione resta una sola.
+      - `runner/src/workspace-executor.ts` — streaming bounded di stdout/stderr e collegamento degli eventi Agent disponibili al callback osservazionale senza cambiare il receipt autorevole.
+      - `runner/src/config.ts` o nuovo modulo `runner/src/redaction.ts` — insieme sentinelle da machine credential/fencing ed environment con nomi sensibili, sostituzione prima dell'outbox.
+      - Non persistere credential/fencing in log e non introdurre restart automatico dell'executor.
+
+      ## Steps
+      1. Aggiungere al contesto executor un emitter osservazionale che assegna sequence nel client, non nel processo Agent.
+      2. Sostituire la cattura monolitica del processo con streaming controllato, righe limitate e backpressure; conservare maxBuffer/timeout equivalenti e receipt invariato.
+      3. Redigere campi e valori sensibili prima di accodare; troncare in modo esplicito quando si raggiungono limiti di entry/byte, senza eliminare terminale o ultima usage.
+      4. Tenere le delivery fino all'ack; al reconnect inviare resume, scartare il prefisso confermato e ritrasmettere il suffisso in ordine.
+      5. Continuare l'executor già attivo quando il socket cade; non richiamare `accept`, non ricreare RunState e non accettare un nuovo offer per lo stesso Run ID.
+      6. Accodare il terminale anche offline e rimuovere lo stato soltanto dopo ack terminale o eviction sicura successiva.
+
+      ## Verify
+      - Run: `npm run typecheck:runner && npm run lint:runner && npm run build:runner`
+      - Expect: Runner compila senza diagnostiche e non stampa credenziali nei percorsi di errore.
+
+      ## Done
+      - [ ] AC-2 — redazione avviene prima che log/eventi entrino nell'outbox.
+      - [ ] AC-4 — eventi prodotti offline restano disponibili per replay dal cursore.
+      - [ ] AC-5 — socket close/reconnect non richiama l'executor né `run.start`.
+
+      ## Blockers
+      TASK-01 e TASK-05.
+    ref: TASK-06
+  - id: TASK-07
+    title: Provare replay e singola esecuzione nel Runner
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Produrre evidenza di outbox, redazione, backpressure e riconciliazione del Runner con un executor controllabile.
+
+      ## Read
+      - `runner/test/control-client.test.mjs` — FakeSocket, deduplicazione e cancel correnti.
+      - `runner/test/workspace-executor.test.mjs` — processo/checkout/receipt e cleanup.
+      - `runner/src/control-client.ts` e `workspace-executor.ts` — implementazione di TASK-06.
+
+      ## Change
+      - `runner/test/control-client.test.mjs` — disconnessione durante esecuzione, delivery offline, resume cursor, ack perso, replay e terminale.
+      - `runner/test/workspace-executor.test.mjs` — streaming stdout/stderr, redazione e limiti senza alterare receipt/promozione.
+      - Fixture locali temporanee soltanto sotto le directory create dai test; cleanup sempre eseguito.
+
+      ## Steps
+      1. Avviare una Run una volta, interrompere il FakeSocket e produrre eventi/log mentre l'executor resta bloccato.
+      2. Collegare un nuovo socket, negoziare cursore parziale e verificare invio ordinato del solo suffisso.
+      3. Perdere un ack e ripetere una delivery, poi confermare che il client la elimina soltanto dopo ack.
+      4. Completare offline e verificare replay terminale e rilascio dello stato dopo ack.
+      5. Contare `executor.accept` e ogni `run.start`: devono restare rispettivamente 1 e quello iniziale.
+      6. Iniettare machine credential, fencing e environment secret e verificare che non compaiano nei frame inviati o negli errori.
+
+      ## Verify
+      - Run: `npm --prefix runner test`
+      - Expect: tutti i test Runner passano; il nuovo scenario osserva sequence ordinate, sentinelle assenti ed executor count uguale a 1.
+
+      ## Done
+      - [ ] AC-2 — frame e outbox osservati dai test non contengono sentinelle.
+      - [ ] AC-4 — il suffisso mancante e il terminale vengono inviati una sola volta per ack effettivo e in ordine.
+      - [ ] AC-5 — `executor.accept` resta 1 attraverso disconnessione e reconnect.
+
+      ## Blockers
+      TASK-06.
+    ref: TASK-07
+  - id: TASK-08
+    title: Estendere il dettaglio Operations della Run
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-07
+    body: |-
+      ## Objective
+      Rendere timeline, stream redatto, durata, consumo e stato di riconciliazione comprensibili e accessibili nel dettaglio Run.
+
+      ## Read
+      - `docs/mockups/US-019/` — layout e stati di osservabilità approvati per questa specifica.
+      - `docs/mockups/US-012/` — continuità visiva del lifecycle Run esistente.
+      - `control/src/modules/operations/run-http.ts` — proiezione pubblica.
+      - `control/src/web/api/client.ts` — tipi e metodi API.
+      - `control/src/web/pages/runs.tsx` e `control/src/web/styles.css` — pagina e design system correnti.
+      - `control/test/web/runs.test.tsx` — oracoli jsdom esistenti.
+
+      ## Change
+      - `control/src/modules/operations/run-service.ts` e `run-http.ts` — dettaglio redatto con observations, metrics, connection/reconciliation e correlazione.
+      - `control/src/web/api/client.ts` — tipi chiusi per timeline, log, usage e stato disponibilità.
+      - `control/src/web/pages/runs.tsx` — pannello osservabilità secondo mockup, ordine stabile e polling che non duplica righe.
+      - `control/src/web/styles.css` — stili responsive/accessibili limitati alla nuova superficie.
+      - Non aggiungere metriche di flotta, alerting o controlli retention.
+
+      ## Steps
+      1. Esporre solo dati Organization-scoped e redatti; omettere fencing, credential, policy e payload grezzi.
+      2. Mostrare header correlato con Run, Runner e Agent Profile, durata live/terminale e usage o `Consumo non disponibile`.
+      3. Rendere lifecycle e stream Runner ordinati con chiave stabile; aggiornamenti/polling sostituiscono la proiezione autorevole e non appendono duplicati locali.
+      4. Mostrare stato connessione e indicazione testuale di ripresa/riconciliazione senza affidarsi solo a colore o animazione.
+      5. Rendere log testuali selezionabili con livello, timestamp e marker `[REDACTED]`; applicare limiti di rendering.
+      6. Conservare focus, aria-live non rumoroso, contrasto e layout mobile del mockup.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run -- --environment jsdom test/web/runs.test.tsx`
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control`
+      - Expect: test componente e controlli qualità passano; ordine, fallback consumo, correlazione e redazione sono osservabili nel DOM.
+
+      ## Done
+      - [ ] AC-1 — il dettaglio mostra Run, Runner, Agent Profile e sequenze ordinate.
+      - [ ] AC-2 — valori sensibili non sono renderizzati e `[REDACTED]` resta visibile.
+      - [ ] AC-3 — durata e usage/fallback sono attribuiti alla Run selezionata.
+      - [ ] AC-4 — refresh e polling non producono duplicati visibili.
+
+      ## Blockers
+      TASK-05, TASK-07 e mockup presenti in `docs/mockups/US-019/`.
+    ref: TASK-08
+  - id: TASK-09
+    title: Dimostrare osservabilità e reconnect nel browser
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Attraversare UI, API, PostgreSQL, WebSocket e Runner controllato per provare tutti gli esiti visibili di US-019.
+
+      ## Read
+      - `test/e2e/control-remote-run.spec.ts` — lifecycle Run remoto e scenari browser correnti.
+      - `test/e2e/control-fixture.mjs` — Runner passivo, database, clock e conteggi delivery.
+      - `control/test/web/runs.test.tsx` — oracoli UI locali.
+      - `runner/test/control-client.test.mjs` — semantica replay già provata al bordo.
+
+      ## Change
+      - `test/e2e/control-remote-run-observability.spec.ts` — scenari Playwright dedicati a timeline, redazione, metriche e reconnect.
+      - `test/e2e/control-fixture.mjs` — helper idempotenti per Runner osservabile, interruzione/ripristino socket, produzione offline, usage e contatore executor/start.
+      - `control/test/web/runs.test.tsx` — eventuali casi di presentazione aggiuntivi senza sostituire l'E2E reale.
+      - Cleanup di processi, database e sentinelle anche in caso di fallimento.
+
+      ## Steps
+      1. Bootstrap Organization, Project, Agent Profile e Runner, creare una Run attiva e aprire Operations.
+      2. Produrre lifecycle, log ed evento con sentinelle e usage; verificare correlazione, ordine, durata, consumo e assenza sentinelle nel DOM/API.
+      3. Interrompere davvero il WebSocket dopo una sequence nota, produrre almeno due delivery e il terminale mentre offline.
+      4. Ripristinare la connessione e attendere resume/replay; verificare tutte le sequence una sola volta e stato terminale corretto.
+      5. Interrogare fixture/API per provare un solo executor, una sola assignment e nessun secondo `run.start`.
+      6. Ricaricare la pagina per provare che l'assenza duplicati deriva dalla persistenza, non dallo stato React.
+
+      ## Verify
+      - Run: `npm run build:control && npm run build:runner && npx playwright test test/e2e/control-remote-run-observability.spec.ts`
+      - Expect: Chromium passa; DOM/API mostrano sequence complete e uniche, sentinelle assenti, terminale corretto ed executor count 1.
+
+      ## Done
+      - [ ] AC-1 — browser mostra timeline correlata e ordinata con Run/Runner/Profile reali.
+      - [ ] AC-2 — machine credential, fencing e `ARC_TEST_SECRET` sono assenti da API e DOM.
+      - [ ] AC-3 — durata e usage/fallback sono visibili sulla Run corretta.
+      - [ ] AC-4 — gli eventi offline ricompaiono una volta sola anche dopo reload.
+      - [ ] AC-5 — fixture prova una sola invocazione executor e nessun secondo start.
+
+      ## Blockers
+      TASK-08.
+    ref: TASK-09
+  - id: TASK-10
+    title: Documentare la semantica di riconciliazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      Registrare nella Wiki la scelta di replay at-least-once con proiezione idempotente e il suo rapporto con singola esecuzione e fencing.
+
+      ## Read
+      - `docs/wiki/decisions/run-protocol.md` — contratto applicativo corrente.
+      - `docs/wiki/decisions/outbound-runner-transport.md` — confine WebSocket outbound.
+      - `docs/wiki/decisions/remote-run-assignment-lease.md` — singola offerta, fencing e no redispatch.
+      - `docs/wiki/architecture/context-map.md` e `docs/wiki/operations/development.md` — confini e flussi Operations.
+      - `.archetipo/plans/US-019-plan.yaml` — rationale e verifiche del piano persistito.
+
+      ## Change
+      - `docs/wiki/decisions/remote-run-event-reconciliation.md` — nuova ADR generated con marker `context`, `decision`, `alternatives`, `consequences`, `verification` e fonti repository.
+      - Non approvare pagine né modificare hash/review metadata; gli aggiornamenti delle pagine esistenti restano nel contratto `update_after_acceptance`.
+
+      ## Steps
+      1. Documentare disconnessione, ack perso, duplicati e rischio di doppia esecuzione.
+      2. Registrare outbox limitato Runner, source sequence, resume cursor, ack-after-commit, unique constraint e defense-in-depth redaction.
+      3. Confrontare streaming best-effort e broker esterno con tradeoff e ragioni MVP.
+      4. Dichiarare esplicitamente garanzia at-least-once di trasporto, exactly-once visibile per chiave idempotente e nessun recovery dopo crash/retention configurabile in questa specifica.
+      5. Collegare migration, service, transport, Runner, integration test ed E2E come evidenze; aggiornare i link delle decisioni e pagine indicate dall'impatto Wiki.
+
+      ## Verify
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Expect: `kind=validation_result`, `data.ok=true` e nessun errore strutturale; warning semplici vengono corretti.
+
+      ## Done
+      - [ ] AC-2 — ADR esplicita dove e con quali sentinelle avviene la redazione.
+      - [ ] AC-4 — ADR documenta replay, cursore, ack e deduplicazione.
+      - [ ] AC-5 — ADR distingue riconciliazione del data plane da dispatch/esecuzione.
+
+      ## Blockers
+      TASK-09.
+    ref: TASK-10
+  - id: TASK-11
+    title: Eseguire il gate finale di US-019
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+    body: |-
+      ## Objective
+      Confermare con la suite esatta che US-019 è completa, priva di regressioni e pronta alla review soltanto con ogni task DONE.
+
+      ## Read
+      - `.archetipo/plans/US-019-plan.yaml` — baseline, mappa evidenze e comandi vincolanti.
+      - Tutti i file modificati dai TASK-01..TASK-10 — diagnostiche, scope drift e segreti.
+      - `AGENTS.md` — controlli CI Go obbligatori.
+
+      ## Change
+      - Nessuna modifica funzionale prevista; correggere soltanto difetti direttamente emersi dai controlli nei file già in scope.
+      - `docs/test-results/US-019/review-summary.md` — registrare comandi, versioni, risultati e prove AC redatte e riproducibili.
+
+      ## Steps
+      1. Eseguire unit/integration/component test focalizzati per contratto, repository, trasporto, Runner e pagina.
+      2. Eseguire typecheck/lint/build e suite complete di Control e Runner.
+      3. Eseguire Playwright lifecycle esistente e osservabilità/reconnect, confermando gli oracoli AC-1..AC-5.
+      4. Eseguire i controlli Go richiesti dal repository, installando `golangci-lint` con il comando dichiarato solo se assente.
+      5. Validare la Wiki e registrare un riepilogo che non contenga credenziali, fencing, sentinelle o dati temporanei sensibili.
+      6. Marcare TASK-11 `DONE`, poi da `/Users/stefanoleli/Project/ARchetipo` eseguire `archetipo spec show US-019` e verificare zero task `TODO`; soltanto allora eseguire `archetipo spec review US-019`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run -- src/modules/operations/run-domain.test.ts test/integration/remote-run-repository.test.ts test/integration/remote-run-transport.test.ts test/integration/remote-run-http.test.ts`
+      - Run: `npm --prefix control exec vitest run -- --environment jsdom test/web/runs.test.tsx`
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control && npm run test:control`
+      - Run: `npm run typecheck:runner && npm run lint:runner && npm run build:runner && npm run test:runner`
+      - Run: `npx playwright test test/e2e/control-remote-run.spec.ts test/e2e/control-remote-run-observability.spec.ts`
+      - Run: `cd cli && test -z "$(gofmt -l .)" && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run after marking this task DONE: `archetipo spec show US-019`
+      - Expect: tutti i controlli passano; il riepilogo contiene evidenza AC-1..AC-5; l'ultimo envelope mostra 11 task `DONE` e zero `TODO` prima della richiesta di review.
+
+      ## Done
+      - [ ] AC-1 — suite integration/browser prova correlazione e ordine della timeline.
+      - [ ] AC-2 — suite prova assenza delle sentinelle in outbox, database, API e DOM.
+      - [ ] AC-3 — suite prova durata e consumo/fallback attribuiti alla Run.
+      - [ ] AC-4 — suite reconnect prova recupero completo senza duplicati anche dopo reload.
+      - [ ] AC-5 — suite prova executor count 1, singola assignment e nessun secondo start.
+      - [ ] Il gate è marcato DONE e `archetipo spec show US-019` mostra tutti i task DONE prima di `archetipo spec review US-019`.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06, TASK-07, TASK-08, TASK-09 e TASK-10.
+    ref: TASK-11

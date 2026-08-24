@@ -1,0 +1,43 @@
+schema: archetipo/spec/v2
+code: US-050
+title: Eseguire una run nel workspace aperto e non nella directory di lancio
+epic:
+  code: EP-006
+  title: Esecuzione locale e ciclo di delivery
+priority: HIGH
+points: 3
+status: DONE
+scope: MVP
+body: |-
+  #### US-050: Eseguire una run nel workspace aperto e non nella directory di lancio
+
+  **Epic:** EP-006 | **Priorità:** HIGH | **Punti:** 3 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come utilizzatore di ARchetipo che lavora su più workspace,
+  voglio che ogni run agisca sul workspace aperto nella UI,
+  così da non vedere un'azione modificare la cartella da cui ho lanciato il viewer invece di quella su cui sto lavorando.
+
+  **Dimostrazione**
+  Il revisore lancia il viewer da un workspace A, apre dalla UI un secondo workspace B, e avvia su una spec di B un'azione affidata a un provider locale. Osserva che il dialogo della run nomina B come directory di lavoro e che gli artefatti prodotti compaiono sotto B, mentre A resta invariato. Il revisore rinomina poi la directory di B e avvia una nuova azione: l'avvio è rifiutato con un messaggio che nomina la directory irraggiungibile, e nessuna run compare.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Un'azione avviata sul workspace aperto esegue nella project root di quel workspace, anche quando differisce dalla directory da cui il viewer è stato lanciato.
+  - [ ] AC-2 — Dopo l'apertura di un altro workspace, la prima azione avviata esegue nella project root del workspace appena aperto, senza riavviare il processo.
+  - [ ] AC-3 — Una run già in corso quando viene aperto un altro workspace continua a eseguire nella project root con cui è stata avviata.
+  - [ ] AC-4 — Se al momento dell'avvio la project root del workspace non è raggiungibile, l'azione è rifiutata con un messaggio che nomina la directory e nessuna esecuzione viene creata.
+
+  **Fuori ambito**
+  Il cambio di workspace dalla home quando nessuno è aperto, la presenza permanente dell'identità del workspace nell'interfaccia, la shell a due colonne con elenco laterale dei workspace e la conversazione affiancata alla board.
+history:
+  - status: TODO
+    at: "2026-08-21T16:59:02Z"
+  - status: PLANNED
+    at: "2026-08-21T17:31:26Z"
+  - status: IN PROGRESS
+    at: "2026-08-21T17:32:36Z"
+  - status: REVIEW
+    at: "2026-08-21T17:47:54Z"
+  - status: DONE
+    at: "2026-08-21T17:49:48Z"

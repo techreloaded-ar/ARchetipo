@@ -1,0 +1,545 @@
+schema: archetipo/plan/v2
+spec_code: US-028
+body: |
+  # US-028: Configurare l'esecuzione e vedere le azioni nella UI — Piano di implementazione
+
+  **Generato da:** Team di pianificazione ARchetipo
+  **Data:** 17 agosto 2026
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 — Esperienza operativa ARchetipo
+  **Priorità:** HIGH | **Punti:** 5
+
+  **User Story**
+  Come responsabile di un workspace ARchetipo, voglio configurare il provider predefinito e vedere le azioni ammesse per ogni spec nella UI, così da sapere quale attività posso avviare senza usare comandi CLI o conoscere i nomi interni delle skill.
+
+  **Criteri di accettazione**
+  - AC-1 — La UI elenca i provider registrati senza mostrare token o altri segreti.
+  - AC-2 — Salvando una configurazione valida, la UI mostra il provider come predefinito del workspace anche dopo un nuovo caricamento.
+  - AC-3 — Rifiutando una configurazione non valida, la UI identifica il campo errato e conserva il provider precedentemente valido.
+  - AC-4 — Il dettaglio di una spec mostra identificativo ed etichetta delle sole azioni ammesse dal Template nel suo stato corrente.
+  - AC-5 — Dopo un cambio di stato della spec, la UI ricalcola le azioni e rappresenta l'assenza di azioni con un elenco vuoto.
+
+  **Fuori ambito:** avvio dell'esecuzione, gestione dei segreti, installazione di provider e modifica grafica del Template.
+
+  ---
+
+  ## Soluzione tecnica
+
+  La UI non acquisisce conoscenza né del processo né dei provider: il server del viewer (`cli/internal/web`) espone i contratti già esistenti e il frontend si limita a renderizzarli.
+
+  - **Azioni della spec.** `GET /api/spec/{code}` aggiunge `template` e `actions`, calcolati con `template.Resolve(cfg.Template.ID)` + `Template.ActionsFor(spec.Status)`: le stesse due chiamate che realizzano `archetipo spec actions`. Il frontend disegna un chip per azione con etichetta e identificativo, senza alcuna regola di stato in JavaScript. Poiché il payload è ricalcolato a ogni apertura del dettaglio, un cambio di stato produce automaticamente l'elenco aggiornato, e uno stato senza azioni ammesse produce `[]` (mai `null`).
+  - **Elenco dei provider.** `execution.Registry` conserva l'ordine di registrazione e restituisce i provider registrati (come già fa `template.Registry`). Un nuovo endpoint `GET /api/execution/providers` restituisce, per ciascun provider, identificativo, etichetta, capability dichiarate e i campi configurabili; in coda restituisce il default del workspace attualmente persistito.
+  - **Campi configurabili dichiarati dal provider.** Il frontend non conosce le chiavi di ARcipelago. Il provider le dichiara tramite una nuova interfaccia opzionale `execution.ConfigDescriber` (`ConfigFields() []ConfigField`); un provider che non la implementa espone `config_fields: []` e la UI lo segnala invece di inventare un form. Nessun campo è un segreto: la credenziale resta fuori dalla configurazione e il provider ARcipelago dichiara soltanto il *nome* della variabile d'ambiente che la contiene (`token_env`).
+  - **Salvataggio del default.** `PUT /api/execution/provider/default` esegue la stessa sequenza del comando `execution provider set-default`: `Registry.Resolve` → `Provider.ValidateConfig` → `config.UpdateDefaultProvider`. Nessuna validazione viene riscritta nel livello web, e la scrittura resta chirurgica sul solo blocco `execution:` di `.archetipo/config.yaml`, preservando commenti e sezioni estranee. Un `execution.ConfigurationError` diventa `400` con il campo colpevole in `field`, così la UI può evidenziarlo; il file non viene toccato, quindi il default valido precedente sopravvive al rifiuto.
+  - **Regressione da chiudere nello stesso incremento.** Il salvataggio guidato della configurazione (`PUT /api/config` con payload strutturato) rigenera l'intero YAML da `buildGuidedConfig()`, che non conosce il blocco `execution`: oggi cancellerebbe silenziosamente il provider predefinito appena salvato, rendendo AC-2 falso alla prima modifica di un path. `decodeConfigPayload` riporta quindi il `execution.default_provider` corrente quando il payload strutturato non ne contiene uno.
+  - **Cablaggio.** `web.NewServer` riceve il `*execution.Registry`; `newViewCmd` lo prende dalle `executionDependencies` già costruite in `root.go`, che restano l'unico punto in cui i provider vengono registrati. Un registry assente produce un elenco vuoto, non un errore.
+
+  ### Decisioni architetturali
+
+  Nessuna scelta di questa storia supera la soglia ADR: il confine tra ARchetipo e il provider di esecuzione è già deciso e accettato (`decisions/execution-provider-boundary`), e qui viene soltanto consumato da un secondo chiamante interno. La sola alternativa reale valutata — descrivere i campi del form nel frontend invece che nel provider — è stata scartata perché duplicherebbe nella UI la conoscenza di un provider specifico, esattamente ciò che il confine di prodotto vieta. La Wiki automatica è disattivata (`wiki.enabled: false` in `.archetipo/config.yaml`), quindi questo incremento non produce né aggiorna pagine Wiki.
+
+  ---
+
+  ## Baseline
+
+  | Verifica | Esito prima dell'implementazione | Conseguenza sul piano |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | nessun output | ogni task che tocca Go resta formattato |
+  | `cd cli && go vet ./...` | nessun problema | atteso `passes` anche dopo |
+  | `cd cli && go build ./...` | compila | atteso `passes` anche dopo |
+  | `cd cli && go test ./...` | 750 test verdi in 24 package | atteso `passes`; i nuovi test si aggiungono senza modificare gli esistenti, salvo l'adeguamento obbligatorio dei chiamanti di `web.NewServer` |
+  | `golangci-lint run --timeout 5m ./...` | 0 issues | atteso `0 issues`; il binario non era installato ed è stato installato con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` (prerequisito d'ambiente, non un difetto del codice) |
+  | `npm run test:view-delete-smoke` | non eseguita in baseline (richiede build della CLI e porta libera) | il nuovo smoke replica lo stesso schema già in uso e viene eseguito nel gate finale |
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task che la produce |
+  |---|---|---|---|---|
+  | AC-1 | workspace file senza `execution.default_provider`, registry con il solo provider `arcipelago`, variabile `ARCIPELAGO_TOKEN` esportata con un valore riconoscibile | integrazione Go (httptest) + smoke Node sul server reale + verifica browser | `GET /api/execution/providers` → 200 con `providers[0].id == "arcipelago"`, etichetta non vuota, `config_fields` che elenca `base_url`, `workspace_id`, `token_env`; il corpo della risposta non contiene il valore del token né alcuna chiave marcata segreta | TASK-07, TASK-09, TASK-11 |
+  | AC-2 | come AC-1 | integrazione Go + smoke Node | `PUT /api/execution/provider/default` valido → 200; una `GET` successiva servita da un **nuovo** server sullo stesso project root restituisce `default.id == "arcipelago"` con la configurazione salvata, e `.archetipo/config.yaml` contiene `execution.default_provider` | TASK-07, TASK-09 |
+  | AC-3 | workspace con default valido già persistito | integrazione Go + smoke Node | `PUT` con `base_url: "non-un-url"` → 400 con `field == "base_url"` e messaggio che nomina il campo; il contenuto di `.archetipo/config.yaml` è invariato byte a byte e la `GET` successiva restituisce ancora il default valido precedente; inoltre `PUT /api/config` guidato senza blocco `execution` lascia il default intatto | TASK-07, TASK-09 |
+  | AC-4 | spec `US-901` in `TODO` e `US-902` in `PLANNED` | integrazione Go + smoke Node + verifica browser | `GET /api/spec/US-901` → `actions` uguale a `template.Default().ActionsFor(TODO)`, cioè un solo elemento con `id: "plan"` e `label: "Pianifica"`; `US-902` restituisce `id: "implement"`; nel browser il dettaglio mostra il chip `Pianifica` con l'identificativo `plan` | TASK-07, TASK-09, TASK-11 |
+  | AC-5 | `US-901` spostata a `DONE` con `POST /api/board/move` | integrazione Go + smoke Node + verifica browser | dopo lo spostamento `GET /api/spec/US-901` → `actions: []` (array vuoto serializzato come `[]`, non `null`) e nel browser il dettaglio mostra il messaggio di elenco vuoto al posto dei chip | TASK-07, TASK-09, TASK-11 |
+
+  ---
+
+  ## Strategia di test
+
+  Il rischio è concentrato nel contratto HTTP (validazione, persistenza, non regressione del salvataggio guidato) e nella corrispondenza fra azioni mostrate e azioni ammesse dal Template; il rendering è sottile e locale.
+
+  - Test unitari nel package `execution` per l'ordine e l'isolamento dell'elenco dei provider, e nel package `arcipelago` per la corrispondenza fra campi dichiarati e chiavi realmente accettate da `parseConfig` (un descrittore che diverge dal validatore è il difetto più insidioso di questo incremento).
+  - Test di integrazione HTTP in `cli/internal/web` con connector reale su filesystem temporaneo per AC-1..AC-5, verificando la persistenza leggendo il file di configurazione e ricreando il server.
+  - Uno smoke Node end-to-end (`npm run test:view-execution-smoke`) che avvia `archetipo view` reale, come già fa `test:view-delete-smoke`, e ripercorre l'intera dimostrazione della spec sul processo vero.
+  - Nessun mock nasconde l'oracolo: la validazione è quella reale del provider, la persistenza è quella reale di `config.UpdateDefaultProvider`, le azioni sono quelle reali del Template.
+
+  ### Rinuncia agli E2E di browser
+
+  **Motivo:** il repository non possiede alcun framework di browser E2E per il proprio viewer (`archetipo e2e` genera Playwright nei progetti *ospiti*, non qui) e la convenzione consolidata per la UI locale è lo smoke Node sull'API HTTP del server reale. Introdurre Playwright solo per questa slice aggiungerebbe infrastruttura non richiesta dai criteri di accettazione.
+  **Livello di evidenza usato al suo posto:** smoke Node sul server reale con connector file per tutto il percorso di accettazione (AC-1..AC-5), più una verifica manuale guidata nel browser eseguita nel gate finale (TASK-11) che osserva elenco provider, salvataggio, rifiuto con campo evidenziato, chip delle azioni ed elenco vuoto. La dimostrazione è filmabile: l'eventuale video è responsabilità di `archetipo-review`, non dell'implementazione.
+
+  ---
+
+  ## Impatto Wiki
+
+  ```yaml
+  wiki_impact:
+    read: []
+    update_after_acceptance: []
+    create: []
+  ```
+
+  La Wiki automatica è disattivata nel workspace (`wiki.enabled: false`), quindi il flusso standard non legge né mantiene pagine per questa spec.
+
+  ---
+
+  _Piano generato da ARchetipo Planning — 17 agosto 2026_
+tasks:
+  - id: TASK-01
+    title: Rendere elencabili i provider registrati ed esprimibili i loro campi di configurazione
+    type: Impl
+    status: DONE
+    body: |
+      ## Objective
+      Il registry dei provider di esecuzione sa elencare i provider registrati in ordine di registrazione e il package `execution` definisce come un provider dichiara i propri campi di configurazione non segreti.
+
+      ## Read
+      - `cli/internal/execution/provider.go` — `Provider`, `Registry`, `Register`, `Resolve`, `ConfigurationError`.
+      - `cli/internal/template/template.go` — `Registry` con `order []string` e `IDs()`: è il modello già accettato per un elenco stabile.
+      - `cli/internal/execution/types.go` — `Capability` e le costanti esistenti.
+
+      ## Change
+      - `cli/internal/execution/provider.go` — aggiungere il campo `order []string` a `Registry`, aggiornarlo in `Register`, aggiungere `List() []Provider` che restituisce i provider in ordine di registrazione; aggiungere il tipo `ConfigField` e l'interfaccia opzionale `ConfigDescriber`.
+      - Non modificare l'interfaccia `Provider`: aggiungere metodi obbligatori romperebbe il contratto stabile introdotto da US-023.
+      - Non toccare `Resolve`, `NormalizeCapabilities` né `Supports`.
+
+      ## Steps
+      1. Aggiungere `order []string` a `Registry` e appendere l'id in `Register` dopo l'inserimento nella mappa.
+      2. Aggiungere `func (r *Registry) List() []Provider` che restituisce un nuovo slice nell'ordine di `order`; su registry nil o non inizializzato restituire `nil`.
+      3. Definire `type ConfigField struct { Name, Label, Help, Placeholder string; Type string; Required bool }` con tag JSON in snake_case, documentando che `Type` vale `"text"` o `"integer"` e che nessun campo può veicolare un segreto: la configurazione contiene solo impostazioni non segrete.
+      4. Definire `type ConfigDescriber interface { ConfigFields() []ConfigField }` come interfaccia **opzionale**, con un commento che spiega perché non entra in `Provider`.
+      5. Aggiungere una funzione `DescribeConfig(p Provider) []ConfigField` che restituisce i campi quando il provider implementa `ConfigDescriber` e uno slice vuoto non-nil altrimenti, così i chiamanti non ripetono la type assertion e la serializzazione JSON produce sempre `[]`.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go vet ./...`
+      - Expect: compila senza errori e senza segnalazioni, come nella baseline.
+
+      ## Done
+      - [ ] `Registry.List()` restituisce i provider nell'ordine di registrazione e non consente di mutare lo stato interno del registry.
+      - [ ] `ConfigField`, `ConfigDescriber` e `DescribeConfig` esistono e `DescribeConfig` non restituisce mai `nil`.
+      - [ ] L'interfaccia `Provider` è invariata (abilita AC-1 senza rompere US-023).
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Dichiarare i campi di configurazione non segreti del provider ARcipelago
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |
+      ## Objective
+      Il provider `arcipelago` dichiara i propri campi configurabili, così la UI può costruire il form senza conoscere ARcipelago e senza mai chiedere una credenziale.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/config.go` — `knownConfigKeys`, `parseConfig`, i default `defaultTokenEnv`, `defaultPollInterval`, `defaultTimeout` e i limiti min/max.
+      - `cli/internal/execution/arcipelago/provider.go` — struttura del provider, `ID()`, `ValidateConfig`.
+
+      ## Change
+      - `cli/internal/execution/arcipelago/provider.go` (oppure `config.go`, accanto a `knownConfigKeys`) — implementare `ConfigFields() []execution.ConfigField`.
+      - Non introdurre alcun campo per il token: la credenziale resta nell'ambiente e la configurazione ne dichiara solo il nome (`token_env`).
+      - Non modificare `parseConfig` né i valori di default.
+
+      ## Steps
+      1. Implementare `ConfigFields()` sul tipo che già implementa `Provider`, restituendo esattamente cinque campi nell'ordine `base_url`, `workspace_id`, `token_env`, `poll_interval_seconds`, `timeout_seconds`.
+      2. Marcare `base_url` e `workspace_id` come `Required: true`; gli altri come opzionali, con `Help` che nomina il valore di default applicato quando il campo è vuoto (`ARCIPELAGO_TOKEN`, 5 secondi, 3600 secondi).
+      3. Usare `Type: "integer"` per i due campi in secondi e `Type: "text"` per gli altri; nel campo `Help` di `token_env` dichiarare esplicitamente che si tratta del **nome** della variabile d'ambiente che contiene il token e che il token non viene mai salvato nella configurazione.
+      4. Scrivere `Label` e `Help` in inglese, come il resto della UI del viewer, e usare `Name` identico alla chiave YAML accettata da `parseConfig`.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go vet ./...`
+      - Expect: compila senza errori e senza segnalazioni.
+
+      ## Done
+      - [ ] AC-1 — i campi dichiarati coincidono con `knownConfigKeys` e nessuno di essi accetta o espone un segreto.
+      - [ ] `token_env` è documentato come nome di variabile d'ambiente.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Coprire con test l'elenco dei provider e i campi dichiarati da ARcipelago
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |
+      ## Objective
+      Un test fallisce se l'elenco dei provider perde l'ordine o l'isolamento, e se i campi dichiarati divergono dalle chiavi che il provider accetta davvero.
+
+      ## Read
+      - `cli/internal/execution/provider_test.go` — stile dei test del registry e provider di prova già disponibili.
+      - `cli/internal/execution/arcipelago/config_test.go` — casi già coperti su `parseConfig`.
+
+      ## Change
+      - `cli/internal/execution/provider_test.go` — aggiungere i test su `List` e `DescribeConfig`.
+      - `cli/internal/execution/arcipelago/config_test.go` — aggiungere il test di coerenza fra campi dichiarati e chiavi accettate.
+      - Non modificare i test esistenti.
+
+      ## Steps
+      1. Test: registrando due provider di prova in un ordine noto, `List()` li restituisce in quell'ordine; mutare lo slice restituito non altera un successivo `List()`.
+      2. Test: `DescribeConfig` su un provider che non implementa `ConfigDescriber` restituisce uno slice vuoto non-nil.
+      3. Test in `arcipelago`: l'insieme dei `Name` dichiarati è esattamente l'insieme delle chiavi di `knownConfigKeys` (confronto in entrambe le direzioni, così una chiave nuova non resta senza campo e un campo inventato non passa).
+      4. Test in `arcipelago`: una configurazione costruita valorizzando solo i campi `Required` supera `ValidateConfig`, e nessun `Name` contiene le sottostringhe `token` senza il suffisso `_env` (guardia contro l'introduzione di un campo credenziale).
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/...`
+      - Expect: tutti i test del package passano, inclusi i nuovi.
+
+      ## Done
+      - [ ] AC-1 — un campo che non corrisponde a una chiave accettata, o una chiave senza campo, fa fallire la suite.
+      - [ ] L'ordine e l'isolamento di `List()` sono verificati.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Esporre elenco provider e salvataggio del default nell'API del viewer
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |
+      ## Objective
+      Il viewer espone i provider registrati e permette di salvare il provider predefinito del workspace riusando la validazione e la scrittura già esistenti.
+
+      ## Read
+      - `cli/internal/web/server.go` — `NewServer`, `registerRoutes`.
+      - `cli/internal/web/handlers.go` — `writeJSON`, `decodeJSON`, `writeError` e la mappatura dei codici `iox` in stati HTTP.
+      - `cli/internal/cli/execution_cmd.go` — `newExecutionProviderSetDefaultCmd` e `mapProviderConfigurationError`: la sequenza `Resolve` → `ValidateConfig` → `UpdateDefaultProvider` da riusare.
+      - `cli/internal/config/config.go` — `UpdateDefaultProvider`, `DefaultProviderConfig`, `ExecutionConfig`.
+      - `cli/internal/cli/view_cmd.go` e `cli/internal/cli/root.go` — cablaggio del comando `view` e costruzione di `executionDependencies`.
+
+      ## Change
+      - Nuovo file `cli/internal/web/execution.go` — handler `handleListExecutionProviders` e `handleSaveDefaultExecutionProvider` con le rispettive view JSON.
+      - `cli/internal/web/server.go` — campo `registry *execution.Registry` nel `Server`, nuovo parametro di `NewServer`, registrazione delle due rotte.
+      - `cli/internal/cli/view_cmd.go` — `newViewCmd` accetta il registry e lo passa a `web.NewServer`.
+      - `cli/internal/cli/root.go` — passare `deps.registry` a `newViewCmd`.
+      - `cli/internal/web/handlers_test.go` — adeguare `newTestServer` alla nuova firma (unica modifica ammessa ai test esistenti).
+      - Non duplicare nel package `web` alcuna regola di validazione dei provider.
+
+      ## Steps
+      1. Aggiungere `registry` al `Server` e il parametro corrispondente a `NewServer`; un registry `nil` è ammesso e produce un elenco vuoto.
+      2. Registrare `GET /api/execution/providers` e `PUT /api/execution/provider/default`.
+      3. `handleListExecutionProviders`: per ogni `p := range registry.List()` restituire `{id, label, capabilities, config_fields}` — `label` è l'id quando il provider non ne dichiara uno migliore, `capabilities` viene da `p.Capabilities(ctx)` normalizzate, `config_fields` da `execution.DescribeConfig(p)`; in coda `default` con `{id, config}` letti da `s.cfg` ricaricata dal disco (usare `readConfigState(s.cfg.ProjectRoot)` per riflettere l'ultimo salvataggio) oppure `null` quando non configurato. Serializzare sempre gli slice come `[]`.
+      4. `handleSaveDefaultExecutionProvider`: decodificare `{id, config}`, rifiutare id vuoto con `E_INVALID_INPUT`, risolvere il provider dal registry, invocare `ValidateConfig` con `execution.CloneConfig`, poi `config.UpdateDefaultProvider(s.cfg.ProjectRoot, ...)` e restituire `{id, config}` salvati.
+      5. Su `*execution.ConfigurationError` rispondere `400` con corpo `{error, code: "E_INVALID_INPUT", hint, field}` dove `field` è `configErr.Field`; su `*execution.RegistryError` rispondere `400` senza `field`. Non scrivere nulla su disco in nessuno dei due casi.
+      6. Non introdurre alcuna rotta per avviare un'esecuzione: è fuori ambito.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go vet ./... && go test ./internal/web/... ./internal/cli/...`
+      - Expect: compila e i test esistenti dei due package restano verdi dopo l'adeguamento della firma.
+
+      ## Done
+      - [ ] AC-1 — `GET /api/execution/providers` elenca i provider registrati con i loro campi e nessun segreto.
+      - [ ] AC-2 — `PUT /api/execution/provider/default` valido persiste il default in `.archetipo/config.yaml`.
+      - [ ] AC-3 — una configurazione non valida risponde `400` con `field` valorizzato e non scrive sul file.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Restituire nel dettaglio della spec le azioni ammesse dal Template
+    type: Impl
+    status: DONE
+    body: |
+      ## Objective
+      `GET /api/spec/{code}` restituisce le azioni che il Template del workspace ammette nello stato corrente della spec, calcolate dallo stesso codice che serve `archetipo spec actions`.
+
+      ## Read
+      - `cli/internal/web/handlers.go` — `specDetailView`, `handleGetSpec`.
+      - `cli/internal/cli/spec_cmd.go` (`newSpecActionsCmd`) — risoluzione del Template e mappatura dell'errore di Template sconosciuto.
+      - `cli/internal/template/template.go` — `Resolve`, `Template.ActionsFor`, `Action`.
+
+      ## Change
+      - `cli/internal/web/handlers.go` — estendere `specDetailView` con `Template` (id e version) e `Actions []template.Action`, popolati in `handleGetSpec`.
+      - Non aggiungere una rotta dedicata alle azioni: il dettaglio è già ricaricato a ogni apertura e questo è ciò che rende AC-5 vero per costruzione.
+      - Non filtrare né riordinare le azioni: l'ordine di dichiarazione del Template è il contratto.
+
+      ## Steps
+      1. In `handleGetSpec`, dopo aver letto la spec, risolvere il Template con `template.Resolve(s.cfg.Template.ID)`.
+      2. Su Template sconosciuto rispondere con `iox.NewInvalidInput` che nomina l'id e i Template validi, coerentemente con `spec actions`.
+      3. Valorizzare `Actions: tpl.ActionsFor(spec.Status)` — il metodo restituisce già uno slice non-nil, quindi uno stato senza azioni serializza `[]`.
+      4. Aggiungere `template` (`{id, version}`) alla view, come fa l'envelope di `spec actions`.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go test ./internal/web/...`
+      - Expect: compila e i test del package restano verdi.
+
+      ## Done
+      - [ ] AC-4 — il dettaglio espone identificativo ed etichetta delle sole azioni ammesse nello stato corrente.
+      - [ ] AC-5 — uno stato senza azioni produce `[]` e non `null`.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Preservare il provider predefinito quando la configurazione viene salvata dal form guidato
+    type: Impl
+    status: DONE
+    body: |
+      ## Objective
+      Un salvataggio guidato della configurazione non cancella più `execution.default_provider`, che il form non gestisce.
+
+      ## Read
+      - `cli/internal/web/config.go` — `decodeConfigPayload`, `handleSaveConfig`, `readConfigState`.
+      - `cli/internal/web/assets/app.js` — `buildGuidedConfig()`: l'oggetto inviato non contiene il blocco `execution`.
+      - `cli/internal/config/config.go` — `RenderFull` e `ExecutionConfig`.
+
+      ## Change
+      - `cli/internal/web/config.go` — in `decodeConfigPayload`, quando il payload è strutturato (`req.Config != nil`) e non porta `Execution.DefaultProvider`, riportare quello attualmente persistito prima di serializzare.
+      - Non toccare il ramo `raw`: lì l'utente sta scrivendo l'intero YAML e la sua omissione è intenzionale.
+
+      ## Steps
+      1. Rendere disponibile la configurazione corrente nel punto di decodifica (leggerla con `readConfigState(root)` oppure passarla dal chiamante), gestendo l'assenza del file.
+      2. Se `candidate.Execution.DefaultProvider == nil` e il corrente non lo è, copiarlo nel candidato prima di `config.RenderFull`.
+      3. Documentare con un commento che il form guidato non gestisce il provider e che senza questo riporto la scelta salvata dalla scheda Execution verrebbe persa al primo salvataggio di un path.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go test ./internal/web/...`
+      - Expect: compila e i test del package restano verdi.
+
+      ## Done
+      - [ ] AC-2 — il default sopravvive a un salvataggio guidato successivo.
+      - [ ] AC-3 — il ramo `raw` resta invariato nel comportamento.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Verificare i contratti HTTP di provider e azioni con test di integrazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |
+      ## Objective
+      I cinque criteri di accettazione sono provati al livello HTTP contro connector e persistenza reali, senza doppi che nascondano l'oracolo.
+
+      ## Read
+      - `cli/internal/web/handlers_test.go` — `newTestServer`, `seedSpecs`, uso di `httptest` e del connector `filefs` su directory temporanea.
+      - `cli/internal/web/config_test.go` — schema dei test sul salvataggio della configurazione.
+      - `cli/internal/execution/arcipelago/provider_test.go` — costruzione di un provider di prova.
+
+      ## Change
+      - Nuovo file `cli/internal/web/execution_test.go` con i test di questo task.
+      - `cli/internal/web/config_test.go` — aggiungere il test di non regressione sul salvataggio guidato.
+      - Non modificare gli assert dei test esistenti.
+
+      ## Steps
+      1. Predisporre un server con project root temporaneo, connector file e registry contenente il provider `arcipelago` reale.
+      2. Test AC-1: esportare `ARCIPELAGO_TOKEN` con un valore sentinella nel test (`t.Setenv`), chiamare `GET /api/execution/providers` e verificare id, etichetta non vuota, presenza dei cinque `config_fields` e assenza del valore sentinella in tutto il corpo della risposta.
+      3. Test AC-2: `PUT` con `base_url` e `workspace_id` validi → 200; rileggere `.archetipo/config.yaml` e verificare che contenga `execution:` con l'id salvato; costruire un **nuovo** `Server` sullo stesso root e verificare che `GET /api/execution/providers` restituisca quel default.
+      4. Test AC-3: partendo dal default valido salvato, catturare il contenuto del file, inviare `PUT` con `base_url: "non-un-url"`, verificare `400`, `field == "base_url"`, contenuto del file identico e default ancora valido nella `GET` successiva. Ripetere con una chiave sconosciuta e verificare che `field` la nomini.
+      5. Test AC-4: seminare `US-901` (`TODO`) e `US-902` (`PLANNED`); verificare che `GET /api/spec/US-901` restituisca esattamente `template.Default().ActionsFor(domain.StatusTodo)` (confronto struttura per struttura, non solo lunghezza) e che `US-902` esponga `implement`.
+      6. Test AC-5: spostare `US-901` a `DONE` con `POST /api/board/move`, rileggere il dettaglio e verificare che il JSON grezzo contenga `"actions":[]`.
+      7. Test di non regressione: salvato un default valido, inviare a `PUT /api/config` un payload strutturato che modifica un path e non contiene `execution`; verificare che il default sia ancora presente nella configurazione riletta.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/web/...`
+      - Expect: tutti i test del package passano, inclusi i nuovi.
+
+      ## Done
+      - [ ] AC-1 — nessun segreto nel corpo della risposta e provider elencati.
+      - [ ] AC-2 — persistenza provata rileggendo il file e ricreando il server.
+      - [ ] AC-3 — campo colpevole nominato e configurazione precedente intatta.
+      - [ ] AC-4 — azioni identiche a quelle del Template per lo stato corrente.
+      - [ ] AC-5 — elenco vuoto serializzato come `[]` dopo il cambio di stato.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Aggiungere alla UI la scheda di esecuzione e i chip delle azioni della spec
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |
+      ## Objective
+      Dal browser si sceglie il provider predefinito con un form generato dai campi dichiarati e, aprendo una spec, si vedono le azioni ammesse nel suo stato.
+
+      ## Read
+      - `cli/internal/web/assets/index.html` — struttura del modale di configurazione (`data-config-tab`, `data-config-panel`) e del pannello `data-panel="story"` con `story-view-meta`.
+      - `cli/internal/web/assets/app.js` — `configPanels`, `fillConfigForm`, `buildGuidedConfig`, `setConfigStatus`, `openEditor`, `fillSpecView`, `apiGet`/`apiPut`.
+      - `cli/internal/web/assets/app.css` — classi `config-*`, `meta-chip`, `status-msg`.
+
+      ## Change
+      - `cli/internal/web/assets/index.html` — nuova scheda `Execution` con il suo pannello (elenco provider, contenitore dei campi generati, pulsante di salvataggio, area messaggi) e nuovo contenitore `story-actions` nel pannello Story.
+      - `cli/internal/web/assets/app.js` — caricamento di `/api/execution/providers` all'apertura del modale di configurazione, rendering del form dai `config_fields`, salvataggio su `PUT /api/execution/provider/default`, evidenziazione del campo restituito in `field`, e rendering dei chip delle azioni in `openEditor`/`fillSpecView`.
+      - `cli/internal/web/assets/app.css` — solo le classi necessarie ai nuovi elementi, riusando le variabili e i pattern esistenti.
+      - Nessuna regola di processo e nessuna conoscenza di provider specifici in JavaScript: campi e azioni arrivano dal server.
+
+      ## Steps
+      1. HTML: aggiungere il pulsante di scheda `data-config-tab="execution"` e la sezione `data-config-panel="execution"` con: elenco dei provider (radio in card, stesso pattern di `config-connector-card`), `<div id="execution-fields">`, pulsante `Save provider`, `<span id="execution-status" class="status-msg">` e una nota fissa che i segreti restano nell'ambiente.
+      2. HTML: nel pannello Story aggiungere `<div id="story-actions" class="story-actions"></div>` sotto `story-view-meta`.
+      3. JS: `loadExecutionProviders()` chiama `apiGet("/api/execution/providers")`, disegna una card per provider (id + etichetta + capability) e preseleziona `default.id` quando presente; con elenco vuoto mostra un messaggio esplicito.
+      4. JS: `renderProviderFields(provider, values)` genera un input per ogni `config_fields` (numero per `integer`, testo altrimenti), con etichetta, segnaposto, testo di aiuto e marcatura dei campi obbligatori; con `config_fields` vuoto mostra la nota "questo provider non dichiara campi configurabili".
+      5. JS: al salvataggio inviare `{id, config}` includendo solo i campi valorizzati (i numerici convertiti in numero); in caso di `200` mostrare conferma, aggiornare il riepilogo laterale con il provider predefinito e **ricaricare** l'elenco dal server, così ciò che la UI mostra è ciò che è stato persistito.
+      6. JS: in caso di errore mostrare il messaggio e, quando la risposta contiene `field`, aggiungere la classe di errore all'input corrispondente e portarvi il focus; lasciare invariata la selezione precedente.
+      7. JS: in `openEditor`, dopo aver ricevuto il dettaglio, renderizzare in `story-actions` un chip per ogni azione con etichetta e identificativo (l'identificativo in stile monospaziato) e, con elenco vuoto, il testo "Nessuna azione disponibile in questo stato". I chip non sono cliccabili: l'avvio dell'esecuzione è fuori ambito.
+      8. Verificare che `apiPut` esista con la firma attesa e, se assente, riusare l'helper generico già presente per le chiamate JSON.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go test ./internal/web/...`
+      - Expect: compila (gli asset sono incorporati con `embed`) e i test del package restano verdi.
+      - Run: `cd cli && go run ./cmd/archetipo view --no-open --port 8099` in un workspace di prova, poi aprire `http://127.0.0.1:8099`
+      - Expect: la scheda Execution elenca il provider e il dettaglio di una spec mostra i chip; la verifica formale avviene in TASK-11.
+
+      ## Done
+      - [ ] AC-1 — l'elenco dei provider è visibile e non mostra alcun segreto.
+      - [ ] AC-2 — dopo il salvataggio l'interfaccia mostra il provider come predefinito, ricaricato dal server.
+      - [ ] AC-3 — il campo rifiutato è evidenziato e la selezione precedente resta intatta.
+      - [ ] AC-4 — il dettaglio mostra etichetta e identificativo delle azioni ammesse.
+      - [ ] AC-5 — con nessuna azione ammessa compare il testo di elenco vuoto.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Ripercorrere la dimostrazione della spec con uno smoke sul viewer reale
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-08
+    body: |
+      ## Objective
+      Un test eseguibile con un solo comando avvia `archetipo view` reale e ripercorre l'intera dimostrazione della spec sul processo vero.
+
+      ## Read
+      - `test/e2e/delete-story-view-smoke.mjs` — costruzione della CLI, sandbox, avvio del server, `waitForHTTP`, `apiJSON`, gestione dell'uscita e pulizia.
+      - `package.json` — schema degli script `test:*`.
+      - `AGENTS.md`, sezione "Standalone smoke tests" — formato delle voci da aggiornare.
+
+      ## Change
+      - Nuovo file `test/e2e/execution-config-view-smoke.mjs`.
+      - `package.json` — nuovo script `test:view-execution-smoke`.
+      - Non modificare lo smoke esistente.
+
+      ## Steps
+      1. Riusare la struttura dello smoke esistente: build della CLI in `test/e2e/.bin`, sandbox sotto `test/workspaces/execution-config-view-smoke/runs/<timestamp>`, `archetipo init --tool claude --connector file --yes`, seed di due spec (`US-901` in `TODO`, `US-902` in `PLANNED`) e avvio di `archetipo view --no-open` su porta libera.
+      2. Passo AC-1: `GET /api/execution/providers` elenca `arcipelago` con i suoi campi; il corpo non contiene il valore della variabile d'ambiente sentinella impostata per il processo del server.
+      3. Passo AC-2: `PUT /api/execution/provider/default` con configurazione valida → 200; verificare che `.archetipo/config.yaml` contenga il blocco `execution` e che una nuova `GET` restituisca il default.
+      4. Passo AC-3: `PUT` con `base_url` non valido → 400 con `field == "base_url"`; il file di configurazione è invariato e la `GET` restituisce ancora il default valido.
+      5. Passo AC-4: `GET /api/spec/US-901` espone l'azione `plan` con etichetta `Pianifica`; `US-902` espone `implement`.
+      6. Passo AC-5: `POST /api/board/move` porta `US-901` in `done`; la `GET` successiva restituisce `actions` vuoto.
+      7. Stampare un riepilogo dei passi e uscire con codice diverso da zero al primo fallimento; arrestare sempre il server nel blocco finale.
+
+      ## Verify
+      - Run: `npm run test:view-execution-smoke`
+      - Expect: tutti i passi riportano esito positivo e il processo esce con codice `0`.
+
+      ## Done
+      - [ ] AC-1..AC-5 — ogni criterio ha un passo dedicato che fallisce se il comportamento regredisce.
+      - [ ] Lo smoke non richiede credenziali e non lascia processi in esecuzione.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Documentare la configurazione dell'esecuzione dal viewer
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+      - TASK-09
+    body: |
+      ## Objective
+      Chi legge la documentazione sa che provider predefinito e azioni ammesse si vedono e si configurano anche dal viewer.
+
+      ## Read
+      - `README.it.md` — riga della tabella per `archetipo view` e righe di `execution provider`.
+      - `README.md` — le stesse righe in inglese.
+      - `AGENTS.md` — sezione "Standalone smoke tests".
+
+      ## Change
+      - `README.it.md` e `README.md` — estendere la riga di `archetipo view` menzionando la configurazione del provider predefinito e la visualizzazione delle azioni ammesse.
+      - `AGENTS.md` — aggiungere la voce del nuovo smoke test.
+      - Non riscrivere altre sezioni.
+
+      ## Steps
+      1. Aggiornare le due righe dei README mantenendo lo stile telegrafico della tabella e la simmetria fra le due lingue.
+      2. Aggiungere in `AGENTS.md` una voce `npm run test:view-execution-smoke` che descrive cosa verifica, coerente con le voci già presenti.
+
+      ## Verify
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && git diff --stat README.md README.it.md AGENTS.md`
+      - Expect: le tre modifiche compaiono e nessun altro file è toccato da questo task.
+
+      ## Done
+      - [ ] AC-1 — la documentazione nomina la configurazione del provider dal viewer.
+      - [ ] AC-4 — la documentazione nomina la visualizzazione delle azioni ammesse.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Gate finale — controlli CI, smoke e verifica visiva nel browser
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+    body: |
+      ## Objective
+      L'incremento supera gli stessi controlli della CI, lo smoke end-to-end e una verifica osservata nel browser, e la spec è pronta per la review.
+
+      ## Read
+      - `AGENTS.md`, sezione "Rules for CLI changes" — elenco esatto dei controlli da eseguire prima di consegnare.
+
+      ## Change
+      - Nessuna modifica di codice prevista: eventuali correzioni derivanti dai controlli restano circoscritte ai file già toccati dai task precedenti.
+
+      ## Steps
+      1. Eseguire in ordine i controlli della CI elencati sotto `Verify`.
+      2. Eseguire lo smoke `npm run test:view-execution-smoke`.
+      3. Verifica visiva: avviare `archetipo view --no-open` su un workspace di prova senza provider predefinito e osservare nel browser, nell'ordine: (a) la scheda Execution elenca il provider `arcipelago` con i suoi campi e nessun valore segreto; (b) salvando `base_url` e `workspace_id` validi compare la conferma e, ricaricando la pagina, il provider risulta ancora predefinito; (c) salvando `base_url: "non-un-url"` il messaggio nomina `base_url`, il campo è evidenziato e il provider precedente resta selezionato; (d) aprendo una spec `TODO` compare il chip `Pianifica` con identificativo `plan`; (e) spostando la spec in `DONE` e riaprendola compare il testo di elenco vuoto. Registrare l'esito dei cinque punti nella nota di review.
+      4. Marcare questo task `DONE` con `archetipo task done US-028 TASK-11` eseguito da `/Users/stefanoleli/Project/Archetipo`.
+      5. Rileggere la spec con `archetipo spec show US-028` da `/Users/stefanoleli/Project/Archetipo` e verificare che nessun task sia rimasto `TODO`.
+      6. Solo a quel punto richiedere la review con `archetipo spec review US-028`.
+
+      ## Verify
+      - Run: `cd /Users/stefanoleli/Project/Archetipo/cli && gofmt -l . && go vet ./... && go build ./... && go test ./...`
+      - Expect: `gofmt` non stampa nulla, `go vet` non segnala nulla, la build compila e tutti i test passano (baseline: 750 test verdi in 24 package, più i nuovi).
+      - Run: `cd /Users/stefanoleli/Project/Archetipo/cli && golangci-lint run --timeout 5m ./...`
+      - Expect: `0 issues`, come nella baseline.
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && npm run test:view-execution-smoke`
+      - Expect: uscita `0` con tutti i passi positivi.
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && npm run test:view-delete-smoke`
+      - Expect: uscita `0` — lo smoke preesistente del viewer non regredisce dopo il cambio di firma di `NewServer`.
+
+      ## Done
+      - [ ] AC-1..AC-5 — i cinque punti della verifica visiva sono stati osservati e riportati.
+      - [ ] Tutti i controlli della CI sono verdi e nessun file modificato introduce nuove segnalazioni rispetto alla baseline.
+      - [ ] `archetipo spec show US-028` non riporta task in `TODO` prima della richiesta di review.
+
+      ## Blockers
+      None.
+    ref: TASK-11

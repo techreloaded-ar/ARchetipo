@@ -1,0 +1,43 @@
+schema: archetipo/spec/v2
+code: US-037
+title: Inizializzare un workspace con un Archetipo installato
+epic:
+  code: EP-007
+  title: Archetipi installabili
+priority: LOW
+points: 5
+status: TODO
+blocked_by:
+  - US-036
+scope: GROWTH
+body: |-
+  #### US-037: Inizializzare un workspace con un Archetipo installato
+
+  **Epic:** EP-007 | **Priorità:** LOW | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** US-036
+
+  **User Story**
+  Come utilizzatore che crea un workspace,
+  voglio scegliere uno degli Archetipi installati,
+  così da ricevere automaticamente il processo e le capacità previste per il lavoro da svolgere.
+
+  **Dimostrazione**
+  Partendo da un catalogo con `fabbrica-del-software` e un secondo Archetipo installato, il revisore inizializza un workspace scegliendo il secondo e osserva identità e versione persistite, skill installate, stati e azioni coerenti con quel pacchetto. Scegliendo un identificativo assente o una versione incompatibile osserva il rifiuto prima di qualsiasi inizializzazione parziale; omettendo la scelta ottiene ancora `fabbrica-del-software`.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — L'inizializzazione consente di scegliere un Archetipo presente nel catalogo installato.
+  - [ ] AC-2 — Il workspace conserva identificativo, versione e provenienza dell'Archetipo selezionato.
+  - [ ] AC-3 — Il workspace riceve le skill, gli stati e le azioni dichiarate dalla versione selezionata.
+  - [ ] AC-4 — Un Archetipo assente o incompatibile viene rifiutato prima di lasciare file o skill parzialmente installati.
+  - [ ] AC-5 — Senza scelta esplicita, l'inizializzazione continua a usare `fabbrica-del-software` con comportamento compatibile.
+
+  **Fuori ambito**
+  Cambio di Archetipo su un workspace già attivo, migrazione automatica tra versioni, composizione di più Archetipi e sincronizzazione con un marketplace.
+
+  ## Contesto Wiki
+  - `architecture/context-map`
+  - `decisions/workspace-process-template`
+  - `engineering/code-map`
+history:
+  - status: TODO
+    at: "2026-08-16T22:53:34Z"

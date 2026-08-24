@@ -1,0 +1,45 @@
+schema: archetipo/spec/v2
+code: US-051
+title: Aprire ARchetipo senza essere dentro un workspace
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: HIGH
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-051: Aprire ARchetipo senza essere dentro un workspace
+
+  **Epic:** EP-008 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come utilizzatore di ARchetipo con più workspace,
+  voglio avviare ARchetipo da una directory qualunque e scegliere lì quale workspace aprire,
+  così da non dover raggiungere una cartella nel terminale prima di poter lavorare, e da non vedermi presentata la board di un workspace che non esiste.
+
+  **Dimostrazione**
+  Il revisore avvia ARchetipo da una directory che non appartiene ad alcun workspace. Osserva una home che elenca i workspace conosciuti con nome, percorso e ultimo accesso, e nessuna board. Sceglie un workspace raggiungibile e osserva comparire la sua board. Il revisore riavvia poi ARchetipo dall'interno di un workspace e osserva che quel workspace è aperto direttamente. Infine consulta l'elenco dei workspace conosciuti e verifica che la directory neutra da cui aveva avviato la prima volta non è stata aggiunta.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Avviato in una directory che non appartiene ad alcun workspace, ARchetipo apre la home dei workspace conosciuti, elencati con nome, percorso, ultimo accesso e raggiungibilità.
+  - [ ] AC-2 — Scegliendo dalla home un workspace raggiungibile, quel workspace diventa il workspace aperto e la sua board è disponibile senza riavviare il processo.
+  - [ ] AC-3 — Avviato all'interno di un workspace, ARchetipo apre quel workspace, senza passare dalla home.
+  - [ ] AC-4 — Una directory che non è un workspace non viene mai aggiunta all'elenco dei workspace conosciuti, e l'elenco resta invariato dopo un avvio fuori da un workspace.
+  - [ ] AC-5 — Finché nessun workspace è aperto, ogni funzione che presuppone un workspace dichiara che nessun workspace è aperto, invece di rispondere con contenuti vuoti o con quelli della directory di avvio.
+  - [ ] AC-6 — Dalla home restano disponibili le azioni già offerte sull'elenco dei workspace: aggiungerne uno esistente, crearne uno nuovo e dimenticarne uno; dimenticare rimuove solo la voce dall'elenco e non tocca la directory.
+
+  **Fuori ambito**
+  La presenza permanente dell'identità del workspace nell'interfaccia una volta che uno è aperto, la shell a due colonne con elenco laterale dei workspace, la conversazione affiancata alla board e qualsiasi modifica al formato dell'elenco dei workspace conosciuti già persistito.
+history:
+  - status: TODO
+    at: "2026-08-21T16:59:02Z"
+  - status: PLANNED
+    at: "2026-08-21T18:02:42Z"
+  - status: IN PROGRESS
+    at: "2026-08-21T18:03:47Z"
+  - status: REVIEW
+    at: "2026-08-21T18:33:15Z"
+  - status: DONE
+    at: "2026-08-21T18:36:23Z"

@@ -1,0 +1,468 @@
+schema: archetipo/plan/v2
+spec_code: US-011
+body: "# US-011: Definire un Agent Profile governato — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-24\n\n---\n\n## Specifica\n\n**Epica:** EP-002 — Inception governata in ARchetipo Control\n**Priorità:** HIGH | **Punti:** 3\n\n**Storia utente**\nCome platform engineer, voglio definire un profilo agente con modello, capacità e policy e associarlo a un Project, così da separare la configurazione logica dell'agente dal Runner che la esegue.\n\n**Criteri di accettazione**\n- AC-1 — Un amministratore può creare un Agent Profile con modello, capacità e policy.\n- AC-2 — Un Project può indicare quale Agent Profile usare per le proprie Run.\n- AC-3 — Agent Profile e Runner mantengono identità e ciclo di vita distinti.\n- AC-4 — Una configurazione priva di capacità obbligatoria viene rifiutata prima dell'uso.\n\n## Soluzione tecnica\n\nEstendere il modulo Operations del modular monolith Control con un aggregate `AgentProfile` riutilizzabile e organization-scoped, più una relazione esplicita e separata che seleziona il profilo corrente di un Project. Il profilo conserva soltanto configurazione logica non sensibile; non possiede, incorpora o riferisce un Runner. L'MVP consente una sola associazione corrente per Project e non introduce modifica, cancellazione, version history o routing dinamico.\n\nIl contratto v1 del profilo è chiuso e fail-closed:\n\n- `model` contiene `provider` e `model` come riferimenti non vuoti, mai credential, token o header;\n- `capabilities.version` vale `1`; `allowedSkills` è una lista non vuota e senza duplicati; `requiredRunner.executors` è una lista non vuota; `requiredRunner.toolchains` è una lista esplicita, anche vuota. La compatibilità effettiva e lo scheduling appartengono a US-012, ma questi requisiti rendono già deterministico il futuro confronto con `RunnerCapabilities`; il modello selezionato sarà confrontabile con `RunnerCapabilities.models` senza copiarlo nel Runner;\n- `policy.version` vale `1`; `tools` è una mappa non vuota con decisioni `allow|confirm|deny` e `unknown` deve essere `deny`, riusando la semantica fail-closed dell'Agent locale. La regola di approvazione dimostrata è una decisione `confirm`, non un secondo vocabolario di policy incompatibile.\n\n`agent_profiles` possiede UUID, Organization, nome, stato `active`, configurazione JSONB validata e timestamp. `project_agent_profile_assignments` possiede un'identità propria, `organization_id`, `project_id` univoco e `agent_profile_id`; foreign key e vincoli organization-scoped impediscono associazioni cross-Organization. Il replay della stessa associazione è idempotente; un secondo profilo diverso produce `409 agent_profile_assignment_conflict`, perché la sostituzione non è richiesta dalla storia. Nessuna foreign key collega profili e Runner: revoca, offline e cancellazione della connessione mutano soltanto il Runner.\n\nLe API amministrative `POST /api/operations/agent-profiles`, `GET /api/operations/agent-profiles`, `PUT /api/operations/projects/:projectId/agent-profile` e `GET /api/operations/projects/:projectId/agent-profile` derivano sempre l'Organization dalla membership server-side. Creazione e associazione richiedono ruolo `admin`; la lettura della configurazione effettiva è disponibile a una membership attiva. Payload incompleti o sconosciuti restituiscono `400 invalid_agent_profile` prima di qualsiasi persistenza o associazione. La composition root inietta repository, servizio e Audit esistenti senza introdurre un nuovo deployable.\n\nLa UI aggiunge una pagina Operations “Agent Profile” per creazione ed elenco e una sezione nel dettaglio Project per selezione e configurazione effettiva. Dopo il reload mostra separatamente ID/stato del profilo, provider/modello, skill consentite, requisiti Runner e regole di policy. Errori di validazione e conflitto sono annunciati con `role=alert` e focus; stati e identità non dipendono dal solo colore. I mockup di riferimento sono in `docs/mockups/US-011/`.\n\n### Decisioni architetturali\n\nNon si crea un nuovo ADR: `decisions/project-process-run-model` ha già accettato esplicitamente che Agent Profile e Runner siano concetti distinti e che configurazioni riutilizzabili non diventino agenti permanenti. La nuova persistenza chiarisce quella decisione con due aggregate, cicli di vita e timestamp indipendenti e nessun vincolo Profile→Runner; dopo l'accettazione la pagina decisionale viene aggiornata con schema, API e test. L'alternativa di copiare modello/policy/capacità nella riga Runner è respinta perché fonderebbe configurazione logica e capacità fisica, renderebbe la revoca distruttiva per la configurazione e impedirebbe il riuso tra Runner compatibili.\n\n## Assunzioni e confini\n\n- “Capacità obbligatoria” significa almeno una skill consentita e almeno un executor Runner richiesto, oltre allo schema/versione chiusi; toolchain richieste possono essere una lista vuota esplicita.\n- “Disattivare il Runner” usa la revoca già implementata da US-010. La disponibilità temporaneamente offline viene comunque mantenuta separata, ma il percorso di accettazione usa l'azione osservabile esistente.\n- Soltanto un admin crea e associa profili; i collaborator attivi possono leggere la configurazione effettiva del Project. Ruoli granulari restano fuori ambito.\n- US-009 e US-010 sono in `REVIEW`, con tutti i task `DONE`, ma non ancora accettate umanamente. L'implementazione di US-011 deve attendere il loro passaggio a `DONE`; eventuale rework può cambiare migrazioni `002/003`, contratti Project/Runner o fixture E2E.\n- Non rientrano in US-011: avvio/dispatch Run, verifica di compatibilità completa, editing/deactivation/versioning dei profili, sostituzione del profilo corrente, più profili per Project, secret provider, budget, rete, marketplace e routing multi-modello.\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |\n|---|---|---|\n| `npm --prefix control run typecheck` | PASS, nessuna diagnostica TypeScript | Ogni file Operations, Product, server e web toccato deve restare privo di diagnostiche. |\n| `npm --prefix control run lint` | PASS, nessuna diagnostica ESLint | Il gate finale richiede lint verde su tutto `control/src`. |\n| `npm --prefix control run build` | PASS, build server e Vite completate | Migrazione tipizzata, API, route React e bundle devono compilare nel deployable corrente. |\n| `npm --prefix control test` | PASS: 15 file/45 test non-web e 3 file/11 test web | Le suite Agent Profile si aggiungono mantenendo verdi tutti i 56 test correnti. |\n| `npm run test:control:e2e` | PASS: 5 scenari Chromium US-008/US-009/US-010 | Il nuovo scenario deve attraversare OIDC, API, PostgreSQL, UI e Runner reale senza degradare le cinque prove esistenti. |\n\nPrerequisiti ambiente: Node.js >=22.19, dipendenze npm installate, Docker con PostgreSQL 17 e Chromium Playwright disponibili. Playwright e la fixture Control esistono già, quindi non serve `archetipo e2e ensure`; la fixture deve applicare la nuova migrazione ordinata e troncare le nuove tabelle nella corretta dipendenza.\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Organization bootstrap, admin autenticato e zero profili | Unit dominio, integration PostgreSQL/API, component e browser E2E | `POST` restituisce `201` con UUID/stato/configurazione normalizzata; una sola riga organization-scoped esiste e la UI dopo reload mostra provider/modello, skill, executor richiesto e regola `confirm`; collaborator riceve `403` | TASK-01, TASK-02, TASK-03, TASK-04, TASK-06 |\n| AC-2 | Project reale senza associazione e profilo attivo nella stessa Organization | Integration PostgreSQL/API, component e browser E2E | Associazione restituisce Project, Profile e assignment con ID distinti; replay identico non duplica; `GET` e pagina ricaricata espongono lo stesso profilo effettivo; ID cross-Organization non vengono associati | TASK-01, TASK-02, TASK-03, TASK-05, TASK-06 |\n| AC-3 | Project associato al profilo e Runner reale online; snapshot di profilo, assignment e Runner | Integration schema/service e browser E2E | Dopo revoca il solo Runner è `revoked`; profilo `active`, configurazione, conteggio e assignment restano invariati e visibili; non esiste FK Profile→Runner e gli ID sono diversi | TASK-01, TASK-02, TASK-05, TASK-06 |\n| AC-4 | Admin e Project, zero profili/associazioni; payload senza skill o executor e policy non fail-closed | Unit dominio, integration API/DB e browser E2E | Risposta `400 invalid_agent_profile`, alert accessibile focalizzato e conteggi DB a zero; anche una configurazione corrotta predisposta dal test non può diventare effettiva | TASK-01, TASK-02, TASK-03, TASK-04, TASK-06 |\n\nI test di servizio e HTTP usano PostgreSQL e policy reali. I mock del client web sono ammessi soltanto per provare rendering, focus e interazioni; non sostituiscono gli oracoli di persistenza, authorization, separazione lifecycle o revoca Runner.\n\n## Strategia di test\n\n- Unit test di dominio per schema chiuso, normalizzazione/ordinamento deterministico, duplicati, liste obbligatorie, riferimenti modello, policy `allow|confirm|deny`, `unknown:deny`, limiti dimensionali e rifiuto di campi sensibili o inattesi.\n- Integration PostgreSQL 17 per migrazione `004`, ownership Organization, create/list, associazione idempotente one-current-profile, conflitto, isolamento cross-Organization, rollback e indipendenza dalle mutazioni Runner.\n- Contract/API Fastify con sessioni reali per `201/200/400/401/403/404/409`, derivazione Organization server-side, deny audit correlato e response body con Project/Profile/assignment separati.\n- Component integration React per form dinamico di skill/executor/toolchain/policy, lista profili, associazione dal Project, configurazione effettiva dopo reload e focus degli alert.\n- Browser E2E Playwright obbligatorio: la dimostrazione attraversa OIDC, route React, Fastify, PostgreSQL, Project, processo Runner outbound/WebSocket e revoca. Il flusso completo crea Project e Runner, crea/associa il profilo, fotografa la configurazione, revoca il Runner e verifica che profilo e associazione siano invariati. Un secondo flusso prova il rifiuto non mutante della configurazione incompleta.\n- La dimostrazione è filmabile. `e2e.record_demo_video` è attualmente `false`, quindi review deve registrare lo skip configurato; se l'opzione viene abilitata prima della review, il percorso completo è il copione video.\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [overview, architecture/context-map, decisions/project-process-run-model, domains/project-and-workspace, domains/fleet-and-run-management]\n  update_after_acceptance: [overview, architecture/context-map, decisions/project-process-run-model, decisions/control-foundation, domains/project-and-workspace, domains/fleet-and-run-management, engineering/code-map, operations/development]\n  create: []\n```\n\n> \U0001F3A8 Mockup per questa specifica disponibili in `docs/mockups/US-011/`.\n\n_Piano generato tramite ARchetipo Planning — 2026-07-24_\n\n## Rework — 2026-07-25\n\nLa review ha rilevato una race intermittente nel percorso browser AC-1/AC-2/AC-3: due esecuzioni consecutive hanno raggiunto il timeout di 180 secondi con la pagina Runner ancora a 0 online subito dopo l’enrollment. Il rework mantiene invariata la soluzione applicativa e concentra la correzione sulla readiness bounded del Runner reale specifico, sul refresh osservabile della UI e su diagnostica esplicita ma redatta. Richiede inoltre un riepilogo riproducibile sotto `docs/test-results/US-011/` con comandi ed esiti delle prove dominio/API, web ed E2E, privo di credential e identificativi temporanei. La baseline del 2026-07-25 è verde (`30/30` test dominio/API, `21/21` web, typecheck e lint senza diagnostiche, `2/2` scenari Playwright in 7,1 s), confermando che il difetto è intermittente; l’evidenza correttiva usa due ripetizioni complete (`4/4` casi) e non un semplice aumento del timeout. I blocker US-009 e US-010 sono ora entrambi `DONE`."
+tasks:
+  - id: TASK-01
+    title: Definire schema e contratto fail-closed dell’Agent Profile
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Materializzare Agent Profile e associazione Project come identità persistenti separate dal Runner, con uno schema v1 chiuso che rifiuta capacità obbligatorie mancanti.
+
+      ## Read
+      - `control/migrations/002_project_workspace.sql` — identità Project e vincoli Organization da riferire
+      - `control/migrations/003_runner_operations.sql` — identità e lifecycle Runner che non devono possedere il profilo
+      - `control/src/modules/operations/domain.ts` — `RunnerCapabilities` e validatori chiusi esistenti
+      - `control/src/modules/identity/repository.ts` — `ControlDatabase` e tipi tabella Kysely
+      - `agent/src/agent-config.mjs` — vocabolario policy `allow|confirm|deny` e `unknown:deny`
+      - `control/test/integration/migrations.test.ts` — oracolo schema corrente
+
+      ## Change
+      - `control/migrations/004_agent_profiles.sql` — tabelle `agent_profiles` e `project_agent_profile_assignments`, foreign key e vincoli Organization-scoped, senza FK verso `runners`
+      - `control/src/modules/operations/agent-profile-domain.ts` — tipi e validazione/normalizzazione del contratto v1
+      - `control/src/modules/identity/repository.ts` — tipi Kysely delle due nuove tabelle
+      - `control/test/integration/migrations.test.ts` — presenza e separazione del nuovo schema
+      - `control/src/modules/operations/agent-profile-domain.test.ts` — casi validi e fail-closed
+      - Non aggiungere secret, budget, rete, scheduling, modifica o cancellazione del profilo
+
+      ## Steps
+      1. Definire `agent_profiles` con UUID, Organization, nome, stato `active`, provider/modello, capacità JSONB, policy JSONB e timestamp; imporre unicità del nome normalizzato nell’Organization.
+      2. Definire `project_agent_profile_assignments` con UUID proprio, Organization, `project_id` univoco, `agent_profile_id` e timestamp; usare vincoli compositi per impedire associazioni cross-Organization.
+      3. Non aggiungere `runner_id` al profilo o all’associazione e non aggiungere `agent_profile_id` a `runners`.
+      4. Validare chiavi esatte, `capabilities.version=1`, `allowedSkills` non vuoto, `requiredRunner.executors` non vuoto, `requiredRunner.toolchains` esplicito, liste senza duplicati e limiti dimensionali.
+      5. Validare provider/modello non vuoti e non sensibili; validare `policy.version=1`, mappa `tools` non vuota con sole decisioni `allow|confirm|deny` e `unknown=deny`; produrre una forma ordinata deterministica.
+      6. Ampliare il test migrazioni senza modificare le migrazioni `001`–`003`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/operations/agent-profile-domain.test.ts`
+      - Run: `npm --prefix control run test:integration -- migrations`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: schema e validatori passano; payload senza skill/executor o con policy aperta falliscono; nessuna diagnostica nei file toccati.
+
+      ## Done
+      - [ ] AC-1 — Il profilo persistibile espone modello, capacità e policy in un contratto versionato e chiuso.
+      - [ ] AC-2 — L’associazione ha identità propria e riferisce Project e Profile distinti nella stessa Organization.
+      - [ ] AC-3 — Schema e tipi non contengono ownership o foreign key tra Agent Profile e Runner.
+      - [ ] AC-4 — Skill consentite ed executor richiesto sono obbligatori e la policy ignota è sempre `deny`.
+
+      ## Blockers
+      US-009 e US-010 devono essere accettate in `DONE`; entrambe sono attualmente in `REVIEW`.
+    ref: TASK-01
+  - id: TASK-02
+    title: Implementare persistenza e servizio di configurazione effettiva
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Creare e associare profili organization-scoped in modo transazionale e idempotente, preservandoli invariati durante il lifecycle Runner.
+
+      ## Read
+      - `control/src/modules/operations/agent-profile-domain.ts` e `control/migrations/004_agent_profiles.sql` — contratto e vincoli di TASK-01
+      - `control/src/modules/operations/repository.ts` e `service.ts` — pattern repository, transazioni, clock e Audit Operations
+      - `control/src/modules/product/repository.ts` — lookup Project organization-scoped
+      - `control/test/integration/project-workspace.test.ts` — isolamento e replay transazionale
+      - `control/test/integration/runner-operations.test.ts` — revoca Runner e oracoli di lifecycle
+
+      ## Change
+      - `control/src/modules/operations/agent-profile-repository.ts` — create/list/get/assign/effective-config organization-scoped
+      - `control/src/modules/operations/agent-profile-service.ts` — validazione, authorization-ready commands, idempotenza, errori dominio e audit success
+      - `control/test/integration/agent-profile.test.ts` — persistenza, conflitti, isolamento, configurazione corrotta e indipendenza dal Runner
+      - Non importare l’aggregate Runner nel profilo, non copiare configurazione sui Runner e non implementare compatibilità/dispatch di US-012
+
+      ## Steps
+      1. Creare il profilo soltanto dopo validazione completa, generando identità e Organization lato server e registrando un evento audit `agent_profile.create` senza dati sensibili.
+      2. Elencare e leggere profili nell’Organization attiva con mapping completo e stabile.
+      3. Associare un profilo attivo a un Project della stessa Organization in una transazione; restituire `{projectId, profile, assignment}` con identità separate.
+      4. Rendere il replay identico idempotente; rifiutare un profilo differente per Project con `AgentProfileAssignmentConflictError` senza mutazioni o duplicati.
+      5. Rileggere e rivalidare il profilo prima di renderlo configurazione effettiva, così una riga corrotta predisposta dal test viene rifiutata prima dell’uso.
+      6. Revocare un Runner reale nel test di integrazione e provare che profilo, assignment, timestamp e conteggi restano invariati.
+
+      ## Verify
+      - Run: `npm --prefix control run test:integration -- agent-profile`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: create/list/assign/replay e isolamento passano su PostgreSQL 17; conflitti e configurazioni corrotte non mutano dati; la revoca modifica soltanto il Runner.
+
+      ## Done
+      - [ ] AC-1 — L’admin application service crea un profilo autorevole e auditabile senza credential.
+      - [ ] AC-2 — Il Project risolve una sola configurazione effettiva con Profile e assignment separati.
+      - [ ] AC-3 — Revoca e stato Runner non aggiornano, eliminano o duplicano profilo e associazione.
+      - [ ] AC-4 — Una configurazione persistita non valida viene rifiutata prima di diventare effettiva.
+
+      ## Blockers
+      TASK-01 fornisce schema e validazione del contratto.
+    ref: TASK-02
+  - id: TASK-03
+    title: Esporre API amministrative e lettura Project del profilo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Esporre creazione, elenco, associazione e configurazione effettiva tramite API Fastify con ruolo e contratti errore stabili.
+
+      ## Read
+      - `control/src/modules/operations/agent-profile-service.ts` — command/query ed errori di TASK-02
+      - `control/src/modules/operations/http.ts` — convenzioni API Operations e mapping errori
+      - `control/src/modules/identity/policy.ts` — `requireActiveMembership` e `requireRole`
+      - `control/src/modules/product/http.ts` — parametri Project e response envelope
+      - `control/src/server/app.ts` — composition root corrente
+      - `control/test/integration/runner-http.test.ts` e `project-http.test.ts` — fixture sessione e authorization
+
+      ## Change
+      - `control/src/modules/operations/agent-profile-http.ts` — route create/list/assign/effective-config e mapping `400/404/409`
+      - `control/src/server/app.ts` — composizione repository/service e registrazione route
+      - `control/test/integration/agent-profile-http.test.ts` — contratti, ruoli, scope e assenza mutazioni
+      - Non accettare `organizationId`, ID generati, stato o credential dal client; non esporre un endpoint di dispatch Run
+
+      ## Steps
+      1. Implementare `POST /api/operations/agent-profiles` e `PUT /api/operations/projects/:projectId/agent-profile` per soli admin, derivando Organization e actor dalla sessione.
+      2. Implementare `GET /api/operations/agent-profiles` e `GET /api/operations/projects/:projectId/agent-profile` per membership attive.
+      3. Validare body con chiavi esatte e mappare ogni errore di schema a `400 invalid_agent_profile` prima della chiamata di persistenza.
+      4. Restituire `201` per create/nuova associazione, `200` per replay/list/read, `404` per Project/Profile fuori scope e `409 agent_profile_assignment_conflict` per seconda selezione incompatibile.
+      5. Provare `401` anonimo, `403` collaborator su mutazioni con deny audit correlato e lettura consentita al collaborator; provare che `organizationId` contraffatto non attraversa il contratto.
+
+      ## Verify
+      - Run: `npm --prefix control run test:integration -- agent-profile-http`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: status, error code, ruoli e response body sono esatti; i casi `400/403/404/409` non creano profili o associazioni.
+
+      ## Done
+      - [ ] AC-1 — Solo un admin autenticato crea un Agent Profile tramite il contratto pubblico.
+      - [ ] AC-2 — Associazione e lettura restituiscono Project, Profile e assignment separati e organization-scoped.
+      - [ ] AC-4 — Il payload privo di capacità obbligatorie riceve `400 invalid_agent_profile` prima di ogni uso o persistenza.
+
+      ## Blockers
+      TASK-02 fornisce servizio e semantica transazionale.
+    ref: TASK-03
+  - id: TASK-04
+    title: Creare la pagina Operations per gli Agent Profile
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Permettere a un admin di creare un profilo e a una membership attiva di consultarne configurazione e identità nella UI Control.
+
+      ## Read
+      - `docs/mockups/US-011/` — struttura visuale approvata per form, lista e stati
+      - `control/src/web/pages/runners.tsx` — pattern Operations, dialog, status e alert
+      - `control/src/web/api/client.ts` — tipi e request/error mapping
+      - `control/src/web/router.tsx` e `control/src/web/layouts/control-shell.tsx` — routing e navigazione
+      - `control/test/web/runners.test.tsx` — test component correnti
+
+      ## Change
+      - `control/src/web/api/client.ts` — tipi `AgentProfile`, capacità, policy e metodi create/list/associate/read
+      - `control/src/web/pages/agent-profiles.tsx` — form accessibile, lista e dettaglio configurazione
+      - `control/src/web/router.tsx` e `control/src/web/layouts/control-shell.tsx` — route `/operations/agent-profiles` e link Operations
+      - `control/src/web/styles.css` — sole regole necessarie coerenti con il design system corrente
+      - `control/test/web/agent-profiles.test.tsx` — creazione, rendering, permessi e validazione
+      - Non aggiungere editor avanzato, delete/deactivate/versioning, credential, marketplace o routing dinamico
+
+      ## Steps
+      1. Modellare campi per nome, provider, modello, skill consentite, executor richiesti, toolchain e righe policy tool→decisione; inviare sempre `unknown:deny` e versioni v1.
+      2. Nascondere/disabilitare la mutazione per collaborator mantenendo consultabile la lista; l’API resta autorità.
+      3. Dopo `201`, ricaricare/renderizzare il profilo autorevole con UUID, stato, modello, skill, requisiti Runner e almeno una regola `confirm` visibile.
+      4. Presentare validation e API error con `role=alert`, testo specifico e focus; non usare l’assenza di card come prova dell’errore.
+      5. Provare il submit valido e il payload inviato, il profilo dopo reload, il collaborator read-only e il rifiuto locale/server di skill o executor mancanti.
+
+      ## Verify
+      - Run: `npm --prefix control run test:web -- agent-profiles`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: il form invia il contratto v1 esatto; il profilo autorevole è visibile e gli errori hanno alert focalizzato senza aggiungere card.
+
+      ## Done
+      - [ ] AC-1 — L’admin crea e osserva modello, capacità, policy, UUID e stato del profilo.
+      - [ ] AC-4 — Skill/executor mancanti producono un errore accessibile e nessun profilo visibile come creato.
+
+      ## Blockers
+      TASK-03 espone il contratto HTTP; i mockup US-011 definiscono la gerarchia visuale.
+    ref: TASK-04
+  - id: TASK-05
+    title: Associare e mostrare la configurazione effettiva nel Project
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Consentire la selezione del profilo corrente nella pagina Project e mostrare la configurazione effettiva senza confonderla con il Runner.
+
+      ## Read
+      - `docs/mockups/US-011/` — sezione Project e configurazione effettiva
+      - `control/src/web/pages/project.tsx` — dettaglio Project/Workspace e stati correnti
+      - `control/src/web/api/client.ts` — API Agent Profile di TASK-04
+      - `control/test/web/project.test.tsx` — oracoli di identità separate e conflitto
+      - `control/src/web/pages/runners.tsx` — etichette/stato Runner da non riusare come identità profilo
+
+      ## Change
+      - `control/src/web/pages/project.tsx` — selezione admin, riepilogo read-only per membership e stato effettivo
+      - `control/test/web/project.test.tsx` — associazione, reload, replay/conflitto, collaborator e separazione dal Runner
+      - `control/src/web/styles.css` — soltanto layout della nuova sezione se non coperto da TASK-04
+      - Non mostrare il profilo come proprietà del Runner, non permettere sostituzione/edit/delete e non avviare Run
+
+      ## Steps
+      1. Caricare in parallelo dettaglio Project, lista profili e associazione effettiva, mantenendo errori indipendenti dal blocco Workspace.
+      2. Per admin senza associazione, offrire una select esplicita e una conferma; inviare soltanto `agentProfileId`.
+      3. Dopo associazione o reload, mostrare regioni nominate “Agent Profile effettivo” e “Requisiti Runner”, con ID/stato Profile, assignment ID, provider/modello, skill e policy.
+      4. Non mostrare `runnerId`, presenza o revoca come attributi del profilo; un cambiamento Runner non deve azzerare la sezione.
+      5. Provare associazione e replay, rendering dopo reload, errore conflitto focalizzato e vista read-only collaborator.
+
+      ## Verify
+      - Run: `npm --prefix control run test:web -- project`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: il Project conserva identità propria, mostra Profile/assignment separati e la configurazione resta visibile indipendentemente dallo stato Runner.
+
+      ## Done
+      - [ ] AC-2 — Un Project indica un solo profilo corrente e lo mostra come configurazione effettiva dopo reload.
+      - [ ] AC-3 — UI e tipi non presentano Agent Profile come Runner né ne derivano lo stato dal Runner.
+
+      ## Blockers
+      TASK-04 fornisce tipi/client UI e TASK-03 il contratto di associazione.
+    ref: TASK-05
+  - id: TASK-06
+    title: Dimostrare profilo governato e lifecycle indipendente nel browser
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Provare end-to-end che un profilo valido diventa effettivo nel Project, uno invalido è rifiutato e la revoca del Runner non lo modifica.
+
+      ## Read
+      - `test/e2e/control-project.spec.ts` — creazione Project e oracoli UI/DB
+      - `test/e2e/control-runner.spec.ts` — enrollment, Runner reale outbound e revoca
+      - `test/e2e/control-fixture.mjs` — migrazioni, reset, helper e snapshot PostgreSQL
+      - `playwright.config.ts` — configurazione Chromium e worker seriale
+      - `docs/mockups/US-011/` — nomi e percorso utente attesi
+
+      ## Change
+      - `test/e2e/control-agent-profile.spec.ts` — flusso accettazione completo e caso invalid config
+      - `test/e2e/control-fixture.mjs` — reset nuove tabelle, modello Runner compatibile e helper read-only per conteggi/snapshot
+      - Aggiornare eventuali aspettative esatte sulle tabelle/migrazioni solo dove richiesto dalla nuova migrazione
+      - Non simulare la revoca con un mock e non usare l’assenza di card come proxy per l’alert
+
+      ## Steps
+      1. Estendere la fixture perché applichi `004`, tronchi prima assignment/profile e possa osservare conteggio e snapshot senza mutare il sistema; dichiarare sul Runner un modello compatibile nel fixture.
+      2. Attraversare login OIDC/bootstrap, creare un Project reale, registrare e avviare un Runner outbound online.
+      3. Creare via UI un Agent Profile con skill consentita, executor richiesto e tool policy `confirm`; associare il profilo al Project e verificare dopo reload ID e configurazione effettiva.
+      4. Fotografare Profile/assignment/Runner, revocare il Runner dalla UI, attendere `revoked`, ricaricare Project e provare uguaglianza Profile/assignment, stato `active` e ID distinti.
+      5. In uno scenario isolato inviare una configurazione senza skill o executor, attendere `400 invalid_agent_profile`, verificare alert visibile/focalizzato e conteggi profili/assignment a zero.
+      6. Rendere il percorso idempotente e filmabile; non registrare video qui perché `archetipo-review` possiede la registrazione.
+
+      ## Verify
+      - Run: `npx playwright test test/e2e/control-agent-profile.spec.ts`
+      - Run: `npm run test:control:e2e`
+      - Expect: nuovo scenario e cinque scenari esistenti passano; revoca Runner lascia profilo/assignment invariati e il caso invalido non persiste dati.
+
+      ## Done
+      - [ ] AC-1 — Il browser mostra il profilo creato con modello, skill, requisiti e regola di approvazione.
+      - [ ] AC-2 — Il Project ricaricato mostra lo stesso Profile e assignment effettivi.
+      - [ ] AC-3 — Dopo revoca soltanto il Runner è `revoked`; Profile e associazione sono invariati e disponibili.
+      - [ ] AC-4 — Il percorso invalido mostra `invalid_agent_profile` e nessuna riga viene creata.
+
+      ## Blockers
+      TASK-03, TASK-04 e TASK-05 devono fornire API e UI; US-009/US-010 devono essere accettate senza rework incompatibile.
+    ref: TASK-06
+  - id: TASK-07
+    title: Eseguire il gate finale di qualità e accettazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Dimostrare che l’intera slice US-011 è verde, non degrada Control e ha tutti i task completati prima della review.
+
+      ## Read
+      - `control/package.json` e `package.json` — suite autorevoli scoperte nella baseline
+      - `control/src/modules/operations/agent-profile-domain.test.ts` — contratto fail-closed
+      - `control/test/integration/agent-profile.test.ts` e `agent-profile-http.test.ts` — persistenza/API
+      - `control/test/web/agent-profiles.test.tsx` e `project.test.tsx` — comportamento UI
+      - `test/e2e/control-agent-profile.spec.ts` — evidenza browser AC-1..AC-4
+      - `.archetipo/plans/US-011-plan.yaml` — piano e task da chiudere
+
+      ## Change
+      - Nessun file applicativo previsto; correggere soltanto regressioni introdotte da TASK-01..TASK-06 e aggiornare test/evidenze strettamente necessarie
+      - Non ampliare scope con dispatch Run, scheduling, editor profili o marketplace
+
+      ## Steps
+      1. Eseguire test dominio e integration focalizzati, quindi suite web focalizzate.
+      2. Eseguire typecheck, lint, build e intera suite Control; nessun file toccato può avere diagnostiche.
+      3. Eseguire Playwright focalizzato e poi tutti gli scenari Control, confrontando con la baseline di 5 scenari verdi.
+      4. Marcare `TASK-07` `DONE` soltanto dopo che tutti i comandi sono verdi.
+      5. Da `/Users/stefanoleli/Project/ARchetipo`, eseguire `archetipo spec show US-011` e confermare che nessun task, incluso questo gate, sia `TODO`; soltanto allora eseguire `archetipo spec review US-011`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/operations/agent-profile-domain.test.ts test/integration/agent-profile.test.ts test/integration/agent-profile-http.test.ts`
+      - Run: `npm --prefix control run test:web -- agent-profiles project`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build && npm --prefix control test`
+      - Run: `npx playwright test test/e2e/control-agent-profile.spec.ts && npm run test:control:e2e`
+      - Run from project root after marking this gate DONE: `archetipo spec show US-011`
+      - Expect: tutti i comandi passano, le 5 prove E2E baseline più US-011 sono verdi e l’envelope finale non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — Evidenza dominio/API/UI/browser verde per creazione amministrativa del profilo.
+      - [ ] AC-2 — Evidenza DB/API/UI/browser verde per associazione e configurazione effettiva del Project.
+      - [ ] AC-3 — Evidenza schema/integration/browser verde per identità e lifecycle Profile/Runner distinti.
+      - [ ] AC-4 — Evidenza unit/API/browser verde per rifiuto fail-closed senza mutazioni.
+      - [ ] Tutti i task US-011 sono `DONE` nell’ultimo `archetipo spec show US-011`; review non è stata richiesta prima di questa prova.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04, TASK-05 e TASK-06 devono essere completati.
+    ref: TASK-07
+  - id: TASK-08
+    title: Stabilizzare readiness e diagnostica del Runner reale in Playwright
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Rendere deterministica la prova browser AC-1/AC-2/AC-3 attendendo il Runner specifico fino allo stato online osservabile dalla UI, con timeout bounded e diagnostica utile quando l'avvio reale fallisce.
+
+      ## Read
+      - `test/e2e/control-agent-profile.spec.ts:192` — feedback di review sul timeout a 180 secondi e sulla pagina Runner con 0 online
+      - `test/e2e/control-agent-profile.spec.ts` — `startOutboundRunner`, suite seriale e oracoli AC-1..AC-4
+      - `test/e2e/control-fixture.mjs` — `waitUntil`, `startRunner`, `runnerView`, lifecycle Docker e helper log esistenti
+      - `test/e2e/control-runner.spec.ts` — percorso già stabile di enrollment, presenza e revoca del Runner reale
+      - `control/src/modules/operations/connection-registry.ts` e `control/src/modules/operations/service.ts` — definizione autorevole di sessione online e vista Runner
+
+      ## Change
+      - `test/e2e/control-fixture.mjs` — readiness riferita al Runner riscattato, timeout esplicito, cleanup e diagnostica redatta di registry, stato Control e log container/proxy
+      - `test/e2e/control-agent-profile.spec.ts` — attesa bounded della risposta/lista Runner aggiornata e del card specifico online prima della revoca; asserzioni che preservano entrambi gli scenari seriali
+      - Non aumentare semplicemente il timeout globale a oltre 180 secondi, non sostituire il Runner Docker con un fake e non indebolire gli oracoli Profile/assignment/lifecycle
+
+      ## Steps
+      1. Fare in modo che `startRunner` identifichi il Runner riscattato per enrollment/nome e attenda con deadline esplicita sia la connessione corrente nel registry sia `operations.get(..., true)` per quello stesso ID; non scegliere il primo ID globale disponibile.
+      2. Estrarre un helper di attesa bounded che, allo scadere, includa stato del processo/container, ID online redatti o conteggi, vista DB del Runner atteso e tail redatto dei log Runner/proxy; escludere token, credential, UUID completi, porte dinamiche e altri identificativi temporanei.
+      3. Garantire cleanup di container, network, image e directory anche quando build, avvio o readiness falliscono, senza cancellare la diagnostica prima che venga raccolta.
+      4. Nel test AC-1/AC-2/AC-3, dopo l'avvio reale forzare una lettura aggiornata della pagina/API Runner e attendere il card `edge-e2e-01` con stato `Online` entro una deadline locale; l'errore deve distinguere runner assente, offline e mancato refresh UI.
+      5. Mantenere il secondo scenario AC-4 indipendente e verificare la suite seriale completa in ripetizione, così un fallimento del primo non può essere confuso con una prova mai eseguita del secondo.
+
+      ## Verify
+      - Run: `npx playwright test test/e2e/control-agent-profile.spec.ts --project=chromium --repeat-each=2 --reporter=list`
+      - Run: `npm run typecheck:control && npm run lint:control`
+      - Expect: 4/4 esecuzioni verdi (entrambi gli scenari seriali per due ripetizioni), nessun timeout a 180 secondi e nessuna diagnostica TypeScript/ESLint nei file toccati; un test mirato del percorso di errore prova che la diagnostica è presente e redatta senza attendere 180 secondi.
+
+      ## Done
+      - [ ] AC-1 — La creazione browser del profilo parte soltanto dopo che il Runner reale specifico è osservabile online, senza race con enrollment o refresh della lista.
+      - [ ] AC-2 — Entrambe le ripetizioni raggiungono associazione e reload della configurazione effettiva del Project.
+      - [ ] AC-3 — Entrambe le ripetizioni osservano `online`, revoca e `revoked` sul medesimo Runner reale mantenendo invariati Profile e assignment.
+      - [ ] AC-4 — Lo scenario seriale di configurazione incompleta viene eseguito in entrambe le ripetizioni e resta verde.
+      - [ ] Il feedback `test/e2e/control-agent-profile.spec.ts:192` è coperto da readiness bounded e diagnostica esplicita, non da un timeout più permissivo.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Persistire il riepilogo riproducibile delle prove US-011
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Consegnare sotto `docs/test-results/US-011/` un riepilogo riproducibile e redatto delle prove dominio/API, web ed E2E rieseguite dopo la stabilizzazione.
+
+      ## Read
+      - `docs/test-results/US-009/control-project-summary.md` — struttura per contesto, gate e criteri osservati
+      - `docs/test-results/US-010/runner-control-summary.md` — redazione di identità, porte, secret e correlazioni generate
+      - `test/e2e/control-agent-profile.spec.ts` — nomi degli scenari e oracoli AC-1..AC-4
+      - `control/src/modules/operations/agent-profile-domain.test.ts`, `control/test/integration/agent-profile.test.ts`, `control/test/integration/agent-profile-http.test.ts` — prove dominio/API
+      - `control/test/web/agent-profiles.test.tsx` e `control/test/web/project.test.tsx` — prove web
+
+      ## Change
+      - `docs/test-results/US-011/agent-profile-rework-summary.md` — contesto non sensibile, prerequisiti, comandi esatti, exit code, conteggi/esiti, mappa AC e nota sulla ripetizione E2E
+      - Non includere credential, token, cookie, secret, URL temporanei, porte dinamiche, UUID/Organization ID/assignment ID generati, log grezzi o riferimenti a directory temporanee
+
+      ## Steps
+      1. Eseguire dopo TASK-08 i test focalizzati dominio/API, le suite web Agent Profile/Project e Playwright US-011 ripetuto due volte; annotare comando esatto, exit code e conteggi finali.
+      2. Registrare ambiente e prerequisiti soltanto in forma riproducibile e non identificante: versioni tool principali, disponibilità Docker/PostgreSQL 17/Chromium e checkout/branch quando stabile.
+      3. Collegare AC-1..AC-4 agli oracoli osservati, dichiarando esplicitamente che 4/4 casi Playwright rappresentano due scenari per due ripetizioni e che la revoca usa il Runner Docker reale.
+      4. Redigere ogni output: mantenere risultati aggregati e categorie diagnostiche, rimuovendo valori temporanei o sensibili; non copiare stdout/stderr grezzo.
+      5. Verificare che il documento sia autosufficiente per rieseguire le prove e coerente con i risultati effettivamente ottenuti, senza dichiarare verde un comando non eseguito o fallito.
+
+      ## Verify
+      - Run: `test -f docs/test-results/US-011/agent-profile-rework-summary.md && rg -n '^## (Contesto di esecuzione|Gate riproducibili|Criteri osservati)' docs/test-results/US-011/agent-profile-rework-summary.md`
+      - Run: `rg -n '(eyJ[A-Za-z0-9_-]+\.|bootstrapSecret|CONTROL_SESSION_SECRET|enrollmentToken|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})' docs/test-results/US-011/agent-profile-rework-summary.md`
+      - Expect: il primo comando trova le tre sezioni richieste; il secondo non produce output e termina con exit 1 perché non sono presenti token, nomi di secret o UUID temporanei.
+
+      ## Done
+      - [ ] AC-1 — Il riepilogo riporta esito e comando delle prove di creazione amministrativa dominio/API/web/browser.
+      - [ ] AC-2 — Il riepilogo riporta l'oracolo di associazione e configurazione effettiva dopo reload.
+      - [ ] AC-3 — Il riepilogo documenta la prova ripetuta del lifecycle distinto con Runner reale, senza esporne l'identità temporanea.
+      - [ ] AC-4 — Il riepilogo riporta il rifiuto non mutante della configurazione incompleta.
+      - [ ] Il feedback sulla persistenza delle evidenze è soddisfatto da un file riproducibile e redatto sotto `docs/test-results/US-011/`.
+
+      ## Blockers
+      TASK-08 deve rendere stabile la prova E2E prima di registrarne l'esito finale.
+    ref: TASK-09
+  - id: TASK-10
+    title: Eseguire il gate finale di rework US-011
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+    body: |-
+      ## Objective
+      Provare che i due feedback di rework sono risolti, che tutte le evidenze AC-1..AC-4 restano verdi e che nessun task US-011 è aperto prima di richiedere una nuova review.
+
+      ## Read
+      - `test/e2e/control-agent-profile.spec.ts` e `test/e2e/control-fixture.mjs` — fix readiness, diagnostica e due scenari seriali
+      - `docs/test-results/US-011/agent-profile-rework-summary.md` — evidenza redatta prodotta da TASK-09
+      - `control/package.json`, `package.json` e `playwright.config.ts` — comandi autorevoli e configurazione regression
+      - `.archetipo/plans/US-011-plan.yaml` — task preservati e task di rework da chiudere
+
+      ## Change
+      - Nessun file applicativo previsto; correggere soltanto regressioni causate da TASK-08/TASK-09 e aggiornare il riepilogo se un comando viene rieseguito
+      - Non ampliare scope con scheduling, compatibilità di US-012, editing profili o aumento indiscriminato dei timeout
+
+      ## Steps
+      1. Eseguire test dominio/API focalizzati e suite web focalizzate; poi typecheck, lint, build e intera suite Control.
+      2. Eseguire la suite Playwright US-011 con `--repeat-each=2` e verificare esplicitamente 4/4 casi, poi eseguire l'intera regression browser Control una volta.
+      3. Controllare struttura e redazione del riepilogo; aggiornarlo soltanto con risultati realmente osservati e comandi esatti.
+      4. Marcare `TASK-10` `DONE` soltanto quando tutti i controlli sono verdi e TASK-08/TASK-09 sono già `DONE`.
+      5. Da `/Users/stefanoleli/Project/ARchetipo`, eseguire `archetipo spec show US-011`, confermare che tutti i task preservati e aggiunti siano `DONE` e che nessun task sia `TODO`; soltanto allora eseguire `archetipo spec review US-011`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/operations/agent-profile-domain.test.ts test/integration/agent-profile.test.ts test/integration/agent-profile-http.test.ts`
+      - Run: `npm --prefix control run test:web -- agent-profiles project`
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control && npm run test:control`
+      - Run: `npx playwright test test/e2e/control-agent-profile.spec.ts --project=chromium --repeat-each=2 --reporter=list`
+      - Run: `npm run test:control:e2e`
+      - Run: `test -f docs/test-results/US-011/agent-profile-rework-summary.md && ! rg -n '(eyJ[A-Za-z0-9_-]+\.|bootstrapSecret|CONTROL_SESSION_SECRET|enrollmentToken|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})' docs/test-results/US-011/agent-profile-rework-summary.md`
+      - Run from project root after marking this gate DONE: `archetipo spec show US-011`
+      - Expect: controlli focalizzati e regression verdi, 4/4 casi US-011 ripetuti e tutti gli scenari Control verdi; il riepilogo esiste ed è redatto; l'envelope finale contiene 10 task `DONE` e nessun task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — Evidenza dominio/API/web e due ripetizioni browser verdi per la creazione del profilo.
+      - [ ] AC-2 — Due ripetizioni browser verdi per associazione e configurazione effettiva dopo reload.
+      - [ ] AC-3 — Due ripetizioni browser verdi provano online→revoked del Runner reale e invarianza di Profile/assignment.
+      - [ ] AC-4 — Due ripetizioni browser e le prove dominio/API confermano il rifiuto senza persistenza.
+      - [ ] I feedback su stabilità E2E e riepilogo riproducibile sono entrambi verificati e tutti i 10 task risultano `DONE` nell'ultimo `archetipo spec show US-011`.
+
+      ## Blockers
+      TASK-08 e TASK-09 devono essere completati; tutti i task preservati TASK-01..TASK-07 restano `DONE`.
+    ref: TASK-10

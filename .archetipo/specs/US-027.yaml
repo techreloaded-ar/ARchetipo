@@ -1,0 +1,48 @@
+schema: archetipo/spec/v2
+code: US-027
+title: Conoscere le azioni disponibili nel Template
+epic:
+  code: EP-004
+  title: Workspace predisposti ai Template
+priority: MEDIUM
+points: 3
+status: DONE
+blocked_by:
+  - US-026
+scope: MVP
+body: |-
+  #### US-027: Conoscere le azioni disponibili nel Template
+
+  **Epic:** EP-004 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccata da:** US-026
+
+  **User Story**
+  Come utilizzatore di un workspace ARchetipo,
+  voglio conoscere le azioni offerte dal Template per lo stato corrente di una spec,
+  così da scegliere il risultato desiderato senza conoscere il nome interno delle skill.
+
+  **Dimostrazione**
+  Partendo da un workspace con il Template Fabbrica del software e da una spec `TODO`, il revisore richiede le azioni disponibili e osserva `Pianifica` con il riferimento alla capacità necessaria. Il revisore porta la spec in uno stato differente e osserva un insieme di azioni coerente con il nuovo stato.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Il Template espone per ogni azione un identificativo stabile, un'etichetta utente e la skill associata.
+  - [ ] AC-2 — Per una spec `TODO`, ARchetipo restituisce soltanto le azioni ammesse in quello stato.
+  - [ ] AC-3 — Cambiando lo stato della spec, l'elenco delle azioni viene ricalcolato dal Template.
+  - [ ] AC-4 — L'assenza di azioni ammesse viene rappresentata come elenco vuoto e non come errore.
+
+  **Fuori ambito**
+  Editor grafico del processo, condizioni arbitrarie, automazioni temporali e transizioni tra più Template.
+
+  ## Contesto Wiki
+  Nessuna Wiki canonica è ancora presente nel repository; le azioni correnti corrispondono alle skill e agli stati descritti nel README.
+history:
+  - status: TODO
+    at: "2026-08-14T23:13:08Z"
+  - status: PLANNED
+    at: "2026-08-16T10:22:55Z"
+  - status: IN PROGRESS
+    at: "2026-08-16T10:25:19Z"
+  - status: REVIEW
+    at: "2026-08-16T11:11:29Z"
+  - status: DONE
+    at: "2026-08-16T11:34:11Z"

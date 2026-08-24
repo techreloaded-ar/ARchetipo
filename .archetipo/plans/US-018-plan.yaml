@@ -1,0 +1,286 @@
+schema: archetipo/plan/v2
+spec_code: US-018
+body: "# US-018: Seguire il Project dal Cockpit di prodotto — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-26\n\n---\n\n## Specifica\n\n**Epica:** EP-002 — Inception governata in ARchetipo Control\n**Priorità:** HIGH | **Punti:** 5\n\n**Storia utente**\nCome stakeholder aziendale, voglio vedere in un unico Cockpit obiettivo, processo, gate, artefatti e attività agentiche del Project, così da capire stato e prossimo passo senza conoscere Runner o dettagli del runtime.\n\n**Criteri di accettazione**\n- AC-1 — Il Cockpit mostra obiettivo, stato corrente e prossimo gate del Project.\n- AC-2 — Gli artefatti approvati sono raggiungibili con origine e versione.\n- AC-3 — Attività agentiche recenti mostrano almeno stato, durata e costo disponibile.\n- AC-4 — La board rappresenta attività e gate del processo con collegamenti alle entità sorgente.\n- AC-5 — Un aggiornamento ricevuto dal sistema sorgente si riflette senza creare una seconda entità autorevole.\n\n---\n\n## Soluzione tecnica\n\nAggiungere in Control Product una proiezione read-only, Project-scoped e ricostruita a ogni richiesta. Il servizio Cockpit compone il Project, la Process Instance con la definizione versionata già fissata, le occorrenze di rework, le fotografie PRD con verdetto `approved`, i receipt di origine e le Remote Run del Project. Non introduce tabelle Cockpit o board, non copia corpi di artefatti e non espone comandi di modifica.\n\n- Il contratto restituisce una testata con obiettivo, stato del processo, attività corrente e prossimo gate; una raccolta di artefatti approvati con `artifactVersionId`, locator, digest, connector, workflow/Run e versione; una timeline limitata di attività agentiche; una board ordinata secondo la definizione di processo.\n- Ogni card board contiene `source.kind`, `source.id` e un link interno stabile al dettaglio già autorevole. Attività e gate sono derivati dalla definizione fissata e dallo stato corrente; un'occorrenza di rework resta una proiezione della relativa entità append-only. La board non accetta POST/PATCH e il client non mantiene una copia modificabile.\n- Stato e durata delle attività agentiche derivano da `remote_runs` e dai timestamp/eventi autorevoli. Il costo è modellato come disponibilità esplicita: valore e valuta soltanto quando una sorgente affidabile li espone; nel contratto attuale, che non trasporta telemetria economica, la proiezione restituisce `cost: {available:false}` e l'interfaccia mostra “Non disponibile”, senza stimare prezzi dal profilo o inventare consumo.\n- Artefatti e card hanno deep link interni al dossier/versione PRD, alla Run e alla posizione nel processo. Il locator del connector resta origine consultabile, non viene dereferenziato o riscritto dal Cockpit.\n- L'endpoint è una query coerente per Organization/Project. Le prove aggiornano direttamente una sorgente autorevole e ripetono la GET/reload per dimostrare che stato, board e metriche cambiano senza nuove righe Cockpit o copie client.\n\n### Decisioni architetturali\n\nLa soluzione applica gli ADR esistenti `decisions/source-of-truth-transition` e `decisions/project-process-run-model`: la board è una proiezione e gli artefatti restano autorevoli nel connector Core, con le fotografie di review come sola evidenza immutabile. L'alternativa di materializzare snapshot Cockpit/board è respinta perché richiederebbe sincronizzazione e potrebbe divergere; una chiamata client a molti endpoint è respinta perché non offre una lettura coerente né un contratto unico per gli stakeholder. Questa scelta segue confini già accettati, non cambia modello persistente, sicurezza, deployment o semantica d'integrazione e quindi non supera la soglia per un nuovo ADR.\n\n---\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza sul piano |\n|---|---|---|\n| `npm --prefix control exec vitest run test/integration/project-process.test.ts test/integration/project-process-http.test.ts test/integration/project-prd-review.test.ts test/integration/project-prd-review-http.test.ts test/integration/remote-run-http.test.ts` | Verde: 5 file, 27 test | La proiezione deve riusare scope, version pinning, storia append-only e lifecycle Run senza regressioni. |\n| `npm --prefix control run test:web -- test/web/project.test.tsx` | Verde: 5 file, 46 test | I test UI devono usare lo script canonico con `jsdom` e mantenere accessibili gli attuali flussi Project. |\n| `npm --prefix control run typecheck` | Verde | Ogni DTO e componente modificato deve restare senza diagnostiche TypeScript. |\n| `npm --prefix control run lint` | Verde | I nuovi moduli e la pagina Project devono rispettare ESLint senza nuove eccezioni. |\n| `npm --prefix control run build` | Verde | Server e bundle web devono compilare con la nuova query e UI. |\n| `npm run build:control && npx playwright test test/e2e/control-project-process.spec.ts test/e2e/control-project-prd-review.spec.ts` | Verde: 3 scenari Chromium | Il nuovo E2E deve attraversare la stessa autenticazione, API e persistenza e preservare processo e gate PRD esistenti. |\n\n**Prerequisiti ambiente:** Node.js 22.19, dipendenze root e Control installate, Docker con PostgreSQL 17 per gli integration test e Chromium Playwright installato. Il repository non espone oggi telemetria di costo attendibile nelle Remote Run: l'assenza è parte del contratto osservabile, non un errore di setup.\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Project con Process Instance fissata su Inception e attività corrente nota | Integration service/HTTP + component + browser E2E | Testata e API mostrano esattamente `project.objective`, stato istanza, titolo attività corrente e titolo del prossimo gate dalla definizione fissata | TASK-01, TASK-02, TASK-03, TASK-04, TASK-05 |\n| AC-2 | Versione PRD A con fotografia, receipt e verdetto `approved` | Integration query + component + browser E2E | La sezione artefatti espone locator, connector, digest/versione, Workflow e Run e il link apre il dossier A; il Markdown non è duplicato nel payload Cockpit | TASK-01, TASK-02, TASK-03, TASK-04, TASK-05 |\n| AC-3 | Run recenti completed, running e failed con timestamp deterministici e senza telemetria economica | Integration query + component + browser E2E | Ogni riga mostra stato e durata calcolata; il costo mostra esplicitamente “Non disponibile” anziché `0` o una stima quando la sorgente non lo fornisce | TASK-01, TASK-02, TASK-03, TASK-04, TASK-05 |\n| AC-4 | Definizione Inception con attività/gate, istanza corrente e occorrenza rework | Integration projection + component + browser E2E | Board ordinata distingue attività e gate, marca completato/corrente/futuro e ogni card espone link e identità della sorgente corretta | TASK-01, TASK-03, TASK-04, TASK-05 |\n| AC-5 | Prima GET seguita da transizione/verdetto/evento scritto nella tabella autorevole | Integration PostgreSQL + browser reload | La seconda GET/reload cambia stato/card/durata usando gli stessi ID sorgente; conteggi DB provano zero tabelle o righe Cockpit/board e nessun write dalla GET | TASK-01, TASK-02, TASK-04, TASK-05 |\n\n---\n\n## Strategia di test\n\n- Test di dominio e integrazione PostgreSQL coprono ordine deterministico, scope Organization/Project, processo assente/completato/rework, limite delle Run recenti, durata per stati terminali e attivi e indisponibilità esplicita del costo.\n- Test HTTP verificano DTO chiuso, deep link, 401/404, isolamento tra Project, assenza di dettagli Runner/credential e snapshot DB invariato prima/dopo GET.\n- Test React usano il componente reale responsabile di testata, artefatti, attività e board; il client API può essere sostituito, ma gli oracoli osservano testo, link, ordine, stati accessibili e reload, non soltanto chiamate mock.\n- Browser E2E è obbligatorio: il percorso attraversa autenticazione, Project route, API aggregate, PostgreSQL, dossier PRD e navigazione verso Run; il test scrive un aggiornamento sorgente e verifica la nuova proiezione dopo reload. La demo è filmabile e la registrazione appartiene ad `archetipo-review`.\n\n### Test E2E — Simulazione utente\n\n**Framework:** Playwright esistente\n**Video demo:** previsto; sarà registrato da `archetipo-review`.\n\n| Scenario | Flusso utente |\n|---|---|\n| Comprendere il Project | L'admin apre il Cockpit dopo Inception, confronta obiettivo, stato, prossimo gate, PRD approvato, Run recenti e board con le API/DB sorgente; segue i link al dossier PRD e alla Run. |\n| Aggiornamento senza duplicazione | La fixture applica un nuovo evento/verdetto autorevole; l'utente ricarica e vede stato, durata e card aggiornati con gli stessi source ID, mentre snapshot DB e route confermano che nessuna entità Cockpit/board è stata creata. |\n\n---\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [overview, decisions/source-of-truth-transition, decisions/project-process-run-model]\n  update_after_acceptance: [domains/product-process-management, decisions/source-of-truth-transition, decisions/project-process-run-model, engineering/code-map, overview]\n  create: []\n```\n\n> \U0001F3A8 I mockup per questa specifica sono disponibili in `docs/mockups/US-018/`.\n\n_Piano generato tramite ARchetipo Planning — 2026-07-26_"
+tasks:
+  - id: TASK-01
+    title: Componi la proiezione autorevole del Cockpit
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Restituire una proiezione Project-scoped di obiettivo, processo, artefatti approvati, attività agentiche e board senza persistere copie Cockpit.
+
+      ## Read
+      - `control/src/modules/product/domain.ts` e `repository.ts` — Project e Workspace autorevoli.
+      - `control/src/modules/product/process-domain.ts`, `process-repository.ts` e `process-service.ts` — definizione fissata, posizione corrente e prossimo gate.
+      - `control/src/modules/product/prd-review-repository.ts` e `prd-review-service.ts` — versioni, verdetti e occorrenze di rework append-only.
+      - `control/src/modules/operations/run-domain.ts` e `run-repository.ts` — Remote Run, eventi e receipt.
+      - `control/migrations/005_remote_runs.sql`, `006_process_inception.sql`, `008_remote_workflow_runs.sql` e `009_prd_review_gate.sql` — fonti persistenti e vincoli.
+
+      ## Change
+      - `control/src/modules/product/cockpit-domain.ts` — DTO chiusi e funzioni pure per stato board, durata, cost availability e source reference.
+      - `control/src/modules/product/cockpit-repository.ts` — query read-only Organization/Project-scoped sulle fonti esistenti.
+      - `control/src/modules/product/cockpit-service.ts` — composizione ordinata e limitata della proiezione.
+      - `control/src/modules/product/cockpit-domain.test.ts` e `control/test/integration/project-cockpit.test.ts` — casi dominio, join, isolamento e zero write.
+      - Non aggiungere migrazioni, tabelle/materialized view, cache autorevole, stime economiche o mutazioni di processo.
+
+      ## Steps
+      1. Definire il DTO con `project`, `process`, `approvedArtifacts`, `recentAgentActivity` e `board`, usando discriminated union per card attività/gate e source kind/id/href.
+      2. Derivare stato corrente e prossimo gate dalla definizione fissata della Process Instance; gestire processo assente e completato senza inventare attività.
+      3. Selezionare soltanto fotografie PRD con verdetto `approved` e unire receipt, locator, connector, digest, Workflow/versione e Run; non includere il Markdown nel Cockpit.
+      4. Ordinare le Run del Project per recenza con limite fisso; calcolare durata tra evento `running`/creazione e evento terminale/istante corrente iniettato, senza durate negative.
+      5. Rendere il costo come `{available:false}` finché nessuna telemetria affidabile è presente; non derivarlo da prezzi del profilo, status o durata.
+      6. Proiettare attività e gate nell'ordine della definizione, includendo le occorrenze rework e linkando ogni card all'entità sorgente; non salvare card.
+      7. Confrontare snapshot DB prima/dopo query e aggiornare una fonte autorevole per provare che la seconda lettura riflette il nuovo stato con gli stessi ID.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/product/cockpit-domain.test.ts test/integration/project-cockpit.test.ts`
+      - Expect: proiezione completa e deterministica, isolation Project/Organization, durata corretta, costo indisponibile esplicito e zero scritture/copie.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: nessuna diagnostica nei nuovi moduli.
+
+      ## Done
+      - [ ] AC-1 — obiettivo, stato corrente e prossimo gate derivano dalle entità fissate.
+      - [ ] AC-2 — ogni artefatto approved espone origine e versione senza duplicarne il contenuto.
+      - [ ] AC-3 — ogni attività recente espone stato, durata e disponibilità costo non ambigua.
+      - [ ] AC-4 — ogni card ha ordine, stato e source reference verificabili.
+      - [ ] AC-5 — una nuova lettura riflette la sorgente aggiornata e nessuna entità Cockpit è persistita.
+
+      ## Blockers
+      US-017 deve restare `DONE` perché fornisce fotografie e verdetti PRD autorevoli.
+    ref: TASK-01
+  - id: TASK-02
+    title: Esponi il contratto HTTP read-only del Cockpit
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Esporre la proiezione Cockpit con una sola GET autenticata e fail-closed, senza dettagli runtime o route mutative della board.
+
+      ## Read
+      - `control/src/modules/product/process-http.ts` e `prd-review-http.ts` — validazione UUID, scope membership ed error mapping.
+      - `control/src/modules/operations/run-http.ts` — DTO pubblici delle Run e dati da non propagare.
+      - `control/src/server/app.ts` — composition root e registrazione route.
+      - `control/test/integration/project-process-http.test.ts` e `project-prd-review-http.test.ts` — fixture HTTP e isolamento.
+
+      ## Change
+      - `control/src/modules/product/cockpit-http.ts` — `GET /api/projects/:projectId/cockpit` e mapping pubblico chiuso.
+      - `control/src/server/app.ts` — comporre repository/service e registrare soltanto la GET.
+      - `control/test/integration/project-cockpit-http.test.ts` — contratto, auth, isolamento, deep link e assenza di side effect.
+      - Non esporre machine credential, fencing token, payload/session transcript, Agent Profile snapshot completo o Organization selezionabile dal client; non aggiungere POST/PATCH/DELETE per Cockpit o board.
+
+      ## Steps
+      1. Validare `projectId` come UUID e derivare Organization dalla membership attiva.
+      2. Serializzare date/durate/costo e source reference in un DTO JSON stabile, bounded e privo di proprietà interne.
+      3. Mappare Project mancante a 404 e fault inattesi all'envelope globale senza leaking di query o runtime.
+      4. Verificare che i link interni siano costruiti soltanto da ID già scope-validati e che locator/digest restino dati di provenienza.
+      5. Provare admin/collaborator autenticati, sessione assente, Project estraneo e UUID invalido; confrontare tutte le tabelle sorgente prima/dopo GET.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/project-cockpit-http.test.ts test/integration/project-cockpit.test.ts test/integration/http-authz.test.ts`
+      - Expect: la GET restituisce il DTO corretto nello scope, nega contesti invalidi e non scrive né espone dettagli Runner.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: route e composition root restano senza diagnostiche.
+
+      ## Done
+      - [ ] AC-1 — il contratto espone testata e posizione corrente complete.
+      - [ ] AC-2 — origine/versione e link dell'artefatto sono pubblici senza contenuto duplicato.
+      - [ ] AC-3 — stato, durata e cost availability sono serializzati senza ambiguità.
+      - [ ] AC-4 — le card includono source kind/id/href e nessun comando mutativo esiste.
+      - [ ] AC-5 — due GET attorno a un update sorgente restituiscono la nuova proiezione senza write Cockpit.
+
+      ## Blockers
+      Dipende dalla proiezione di TASK-01.
+    ref: TASK-02
+  - id: TASK-03
+    title: Integra Cockpit e board nella pagina Project
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Rendere lo stato del Project comprensibile in una vista unica, accessibile e navigabile, mantenendo board e artefatti rigorosamente read-only.
+
+      ## Read
+      - `docs/mockups/US-018/` — layout, gerarchia e stati approvati per il Cockpit.
+      - `docs/mockups/US-014/`, `docs/mockups/US-016/` e `docs/mockups/US-017/` — continuità visiva per processo, Run e dossier PRD.
+      - `control/src/web/pages/project.tsx` — pagina, pannelli e dialog esistenti.
+      - `control/src/web/api/client.ts` e `control/src/web/styles.css` — client DTO e design system.
+      - `control/src/web/router.tsx` — route Project e deep link disponibili.
+
+      ## Change
+      - `control/src/web/api/client.ts` — tipo/metodo `getProjectCockpit`.
+      - `control/src/web/pages/project.tsx` — testata Cockpit, artefatti approvati, timeline agentica e board read-only con deep link.
+      - `control/src/web/styles.css` — layout responsive, focus, contrasto e stati non basati sul solo colore.
+      - Aggiungere componenti sotto `control/src/web/` soltanto se riducono la complessità della pagina senza introdurre uno store duplicato.
+      - Non aggiungere drag-and-drop, edit inline, refresh ottimistico, dettagli Runner o prezzi stimati.
+
+      ## Steps
+      1. Caricare la singola proiezione Cockpit all'apertura/reload del Project e gestire loading, vuoto ed errore senza nascondere le altre funzioni Project.
+      2. Mostrare obiettivo, stato, attività corrente e prossimo gate con testo e icone accessibili.
+      3. Rendere gli artefatti approved con origine, versione/digest e link al dossier esatto; non copiare o renderizzare il Markdown nella card.
+      4. Mostrare le Run recenti con modalità, stato, durata formattata e costo; per `{available:false}` usare la dicitura “Non disponibile”, mai zero.
+      5. Renderizzare board in ordine di processo con card attività/gate, stato testuale e link all'entità sorgente; nessun controllo modifica o trascina card.
+      6. Supportare tastiera, focus visibile, heading hierarchy, live region per reload e layout mobile; ricaricare dal server dopo navigazioni/aggiornamenti rilevanti.
+
+      ## Verify
+      - Run: `npm --prefix control run test:web -- test/web/project.test.tsx`
+      - Expect: la pagina esistente resta verde e il Cockpit reale è renderizzabile con link e stati accessibili.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build`
+      - Expect: client, UI e bundle compilano senza diagnostiche.
+
+      ## Done
+      - [ ] AC-1 — la vista unica rende obiettivo, stato e prossimo gate immediatamente leggibili.
+      - [ ] AC-2 — gli artefatti approved sono raggiungibili con origine/versione visibili.
+      - [ ] AC-3 — timeline mostra stato, durata e costo/non disponibilità esplicita.
+      - [ ] AC-4 — board read-only distingue attività/gate e offre link sorgente.
+      - [ ] AC-5 — reload sostituisce la proiezione precedente con quella server senza copie modificabili.
+
+      ## Blockers
+      Dipende dall'API di TASK-02 e dai mockup US-018 generati durante la pianificazione.
+    ref: TASK-03
+  - id: TASK-04
+    title: Prova gli oracoli osservabili del Cockpit React
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Provare nel componente reale che Cockpit, artefatti, attività e board espongono gli outcome degli AC senza affidarsi a proxy o sole chiamate mock.
+
+      ## Read
+      - `control/test/web/project.test.tsx` — fixture API, accessibilità e interazioni Project esistenti.
+      - `control/src/web/pages/project.tsx` — componente responsabile degli outcome.
+      - `control/src/web/api/client.ts` — DTO di TASK-03.
+      - `docs/mockups/US-018/` — stati desktop/mobile e gerarchia informativa.
+
+      ## Change
+      - `control/test/web/project.test.tsx` — fixture e test per testata, artefatti, timeline, board, deep link, costo indisponibile, reload, errore e accessibilità.
+      - Non mockare il componente Cockpit o sostituire le card con placeholder; il mock è ammesso soltanto al confine HTTP.
+
+      ## Steps
+      1. Renderizzare un Project con istanza attiva, PRD approved, tre Run e definizione completa e confrontare testi/ID/link con il DTO.
+      2. Verificare stato e ordine della board tramite ruoli/nomi accessibili, non classi CSS o colore.
+      3. Verificare durata formattata e “Non disponibile” per costo assente, distinguendolo da `0`.
+      4. Seguire i link al dossier/Run con la semantica router prevista e confermare che nessun pulsante edit/drag sia presente.
+      5. Risolvere un secondo fetch con stato sorgente aggiornato e provare che reload cambia attività/gate/card senza duplicare righe.
+      6. Coprire processo assente/completato, nessun artefatto, nessuna Run, errore isolato e viewport stretta con contenuto ancora raggiungibile.
+
+      ## Verify
+      - Run: `npm --prefix control run test:web -- test/web/project.test.tsx`
+      - Expect: gli oracoli osservano direttamente AC-1..AC-5 nel DOM, inclusi link, ordine, reload e costo non disponibile.
+
+      ## Done
+      - [ ] AC-1 — heading e riepilogo mostrano valori esatti della sorgente.
+      - [ ] AC-2 — il link apre l'identità esatta dell'artefatto approved.
+      - [ ] AC-3 — stato/durata/costo sono distinguibili tramite testo accessibile.
+      - [ ] AC-4 — attività e gate sono ordinati e collegati alle source reference reali.
+      - [ ] AC-5 — il secondo payload sostituisce il primo senza card duplicate o mutazioni client.
+
+      ## Blockers
+      Dipende dall'interfaccia completa di TASK-03.
+    ref: TASK-04
+  - id: TASK-05
+    title: Dimostra il Cockpit end-to-end nel browser
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Dimostrare in Chromium che uno stakeholder comprende e naviga il Project e vede un aggiornamento autorevole senza duplicazione.
+
+      ## Read
+      - `test/e2e/control-fixture.mjs` — bootstrap OIDC, PostgreSQL e helper di snapshot.
+      - `test/e2e/control-project-process.spec.ts` — processo versionato e aggiornamenti sorgente.
+      - `test/e2e/control-project-prd-review.spec.ts` — fotografia/verdetto approved e navigazione dossier.
+      - `test/e2e/control-project-workflow-inception.spec.ts` — Remote Run e receipt reali.
+      - `playwright.config.ts` — elenco esplicito degli scenari Control.
+
+      ## Change
+      - `test/e2e/control-project-cockpit.spec.ts` — scenari completi Cockpit e source update.
+      - `test/e2e/control-fixture.mjs` — helper idempotenti per seed/snapshot soltanto dove non esistono già.
+      - `playwright.config.ts` — includere lo scenario Cockpit nel testMatch canonico.
+      - Non mockare API, DB, pagina Cockpit o componenti responsabili; non registrare video in implementazione.
+
+      ## Steps
+      1. Autenticare l'admin e preparare Project, Process Instance, versione PRD approved, Run recenti e board coerenti tramite fonti reali.
+      2. Aprire il Project e confrontare obiettivo, stato, prossimo gate, origine/versione PRD, stato/durata/costo e ordine card con API e snapshot PostgreSQL.
+      3. Seguire il link dell'artefatto al dossier esatto e quello di una Run al dettaglio, poi tornare al Cockpit mantenendo contesto.
+      4. Applicare tramite fixture un evento/verdetto autorevole che cambi posizione o metrica, ricaricare e verificare nuovo stato/card con gli stessi source ID.
+      5. Confrontare schema/conteggi prima/dopo GET e reload per provare che non esistono tabelle/righe Cockpit o board e che nessuna lettura muta le fonti.
+      6. Conservare gli scenari processo e PRD review come regressione; lasciare la registrazione demo a `archetipo-review`.
+
+      ## Verify
+      - Run: `npm run build:control && npx playwright test test/e2e/control-project-cockpit.spec.ts test/e2e/control-project-process.spec.ts test/e2e/control-project-prd-review.spec.ts`
+      - Expect: Chromium prova AC-1..AC-5 con oracoli UI/API/DB e le regressioni processo/PRD restano verdi.
+
+      ## Done
+      - [ ] AC-1 — il browser mostra obiettivo, stato e prossimo gate dalla Process Instance reale.
+      - [ ] AC-2 — il revisore raggiunge il dossier della versione approved corretta.
+      - [ ] AC-3 — Run reali mostrano stato, durata e costo non disponibile quando assente.
+      - [ ] AC-4 — card reali portano alle entità sorgente e non sono modificabili.
+      - [ ] AC-5 — l'update sorgente appare dopo reload senza nuove entità Cockpit/board.
+
+      ## Blockers
+      Dipende dai test component di TASK-04 e dalla UI completa di TASK-03.
+    ref: TASK-05
+  - id: TASK-06
+    title: Esegui il gate finale della specifica
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Chiudere US-018 con tutte le evidenze focalizzate, le regressioni Control e il workflow ARchetipo verificati.
+
+      ## Read
+      - Tutti i file modificati da TASK-01..TASK-05 — verificare scope e diagnostiche.
+      - `.archetipo/plans/US-018-plan.yaml` — comandi, baseline e oracoli del piano.
+      - `AGENTS.md` — gate CI obbligatori qualora venga toccato `cli/`.
+
+      ## Change
+      - Nessun cambiamento funzionale previsto; correggere soltanto difetti necessari a rendere verdi le verifiche US-018 senza ampliare lo scope.
+      - Salvare le evidenze richieste dal flusso di implementazione e aggiornare le pagine Wiki dichiarate nell'impatto; non richiedere review finché un task è `TODO`.
+
+      ## Steps
+      1. Eseguire test dominio, integration e HTTP focalizzati della proiezione.
+      2. Eseguire la suite web Project canonica e il Playwright Cockpit con regressioni processo/PRD.
+      3. Eseguire typecheck, lint, build Control e `git diff --check`; se cambia qualunque file sotto `cli/`, eseguire anche i cinque gate Go obbligatori da `cli/`.
+      4. Validare la Wiki secondo il flusso di implementazione e verificare che le pagine affected siano `generated`, non auto-approvate.
+      5. Da `/Users/stefanoleli/Project/ARchetipo`, marcare `TASK-06` `DONE`, poi eseguire `archetipo spec show US-018` e confermare TASK-01..TASK-06 tutte `DONE` e nessuna `TODO`.
+      6. Solo dopo questa rilettura è consentito eseguire `archetipo spec review US-018`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/product/cockpit-domain.test.ts test/integration/project-cockpit.test.ts test/integration/project-cockpit-http.test.ts`
+      - Expect: proiezione, scope, durata, cost availability, link e zero-write sono verdi.
+      - Run: `npm --prefix control run test:web -- test/web/project.test.tsx`
+      - Expect: Cockpit e regressioni UI Project passano nel componente reale.
+      - Run: `npm run build:control && npx playwright test test/e2e/control-project-cockpit.spec.ts test/e2e/control-project-process.spec.ts test/e2e/control-project-prd-review.spec.ts`
+      - Expect: AC-1..AC-5 e regressioni processo/PRD passano in Chromium.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build && git diff --check`
+      - Expect: zero diagnostiche, build verde e nessun errore whitespace.
+      - Run: `archetipo spec show US-018` dalla root dopo aver marcato questo gate `DONE`.
+      - Expect: ogni task è `DONE`; soltanto allora la spec può entrare in review.
+
+      ## Done
+      - [ ] AC-1 — test service/API/UI/browser provano testata e posizione del processo.
+      - [ ] AC-2 — test query/UI/browser provano origine, versione e navigazione artefatto.
+      - [ ] AC-3 — test dominio/UI/browser provano stato, durata e cost availability.
+      - [ ] AC-4 — test proiezione/UI/browser provano ordine, sorgenti e read-only board.
+      - [ ] AC-5 — test DB/browser provano aggiornamento riflesso e zero duplicazione.
+      - [ ] Workflow — dopo `task done`, `archetipo spec show US-018` non contiene task `TODO` prima di `spec review`.
+
+      ## Blockers
+      Dipende da TASK-01..TASK-05 completati.
+    ref: TASK-06

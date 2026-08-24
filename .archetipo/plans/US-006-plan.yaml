@@ -1,0 +1,697 @@
+schema: archetipo/plan/v2
+spec_code: US-006
+body: |
+  # US-006: Interagire e interrompere una Run in modo controllato — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-07-24
+
+  ---
+
+  ## Soluzione tecnica
+
+  Estendere la vertical slice locale delle Run con un canale di controllo multiprocesso, comune a modalità `session` e `workflow`, senza introdurre ancora il Run Protocol pubblico previsto da US-007. Il processo che esegue la Run resta l'unico writer del journal; processi CLI separati depositano comandi correlati in un inbox locale sotto lo stesso namespace opaco già usato da `run-store`, tramite file `0600` creati atomicamente. L'estensione Pi consuma i comandi, aggiorna il journal e guida le API pubbliche dell'SDK.
+
+  - Aggiungere a `run-store.mjs` una collezione `interactions` redatta. Una richiesta registra `requestId`, tipo, stato `waiting|answered|cancelled`, timestamp e digest della domanda; la risposta registra correlazione, timestamp e digest, mai il testo grezzo. Il lifecycle principale resta `created|running|completed|failed|cancelled`; la condizione di attesa è osservabile tramite un'interazione `waiting`, evitando una falsa transizione terminale o una macchina a stati oscillante.
+  - Introdurre `run-control.mjs` per l'inbox atomico. `submitInput` accetta una sola risposta per una richiesta aperta, `requestCancel` crea un marker idempotente e ogni comando controlla prima record e marker terminali. Gli errori espongono un envelope stabile con `schema`, `code`, `operation`, `runId`, `requestId` quando applicabile e `currentStatus`; non includono risposta, prompt, path o credenziali. Un input grezzo vive solo nel file transitorio user-only e viene cancellato dal processo Run subito dopo il consumo.
+  - Introdurre `run-interaction-extension.mjs`: il tool interno governato `archetipo_ask_human` crea una richiesta correlata, la rende visibile nel journal e attende una risposta o cancellazione; una risposta viene consegnata al tool e marcata `answered`, mentre il marker di cancellazione abortisce l'operazione tramite `ctx.abort()`, chiude le richieste pendenti e porta la Run a `cancelled`. Un watcher attivo durante l'esecuzione applica la cancellazione anche quando non esiste una richiesta pendente e interrompe ogni nuova azione prima del confine tool.
+  - Esporre nella CLI `runs input <run-id> --request <request-id> --value <testo>` e `runs cancel <run-id>`. `runs show` visualizza richieste e correlazioni senza mostrare valori grezzi. Gli errori dei soli comandi di controllo sono JSON strutturato su stderr con exit code stabile; la grammatica esistente resta compatibile.
+  - Comporre l'estensione per entrambe le modalità di Run nell'adapter Pi. `workflow-runner.mjs` deve preservare `cancelled` senza trasformarlo in `failed` e non deve verificare o associare output dopo la cancellazione. La governance esistente deve trattare il tool interno secondo la policy esplicita della Run; nessun bypass implicito della allow-list.
+
+  ### Decisioni architetturali
+
+  La scelta tra mutazione diretta multiprocesso del journal e inbox atomico incide sulle failure semantics e sull'audit. Si adotta l'inbox perché evita lost update tra CLI e processo Run, conserva un solo writer del record autorevole e permette di eliminare il payload grezzo dopo il consumo. Il polling locale bounded è accettabile per l'MVP workstation; socket, WebSocket, lease e reconnect appartengono a Runner/Control.
+
+  Non serve un nuovo ADR: la decisione estende `decisions/governed-run-modes` con input/cancellazione comuni alle due modalità e `decisions/pi-sdk-adapter` con l'uso di `abort()`/segnali pubblici. `decisions/project-process-run-model` viene aggiornato per chiarire che `cancelled` è un esito terminale distinto e non dichiara avanzamenti. Le alternative da registrare sono mutazione diretta del journal, sola interazione TUI in-process e riuso prematuro di Pi RPC.
+
+  ## Baseline
+
+  | Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `npm run test:agent` | PASS: 98 test, 14 suite, 0 failure | Le modifiche a store, CLI, adapter ed estensioni devono mantenere l'intera suite verde. |
+  | `node --test agent/test/run-store.test.mjs agent/test/pi-adapter.test.mjs agent/test/cli.test.mjs agent/test/run-governance-extension.test.mjs` | PASS: 50 test, 4 suite, 0 failure | I nuovi contratti si aggiungono ai confini già verificati senza degradare lifecycle o policy. |
+  | `find agent test/e2e -name '*.mjs' -type f -exec node --check {} \;` | PASS: nessuna diagnostica di parsing | Ogni nuovo file `.mjs` deve restare privo di errori di parsing. |
+  | `npm run test:agent-run-smoke` | PASS: AC-1..AC-4 di US-004 e redazione sentinel | Input/cancel non devono rompere Session Run, policy o separazione dal Core. |
+  | `npm run test:agent-workflow-smoke` | PASS: AC-1..AC-4 di US-005 e redazione sentinel | Cancellazione e input comuni non devono consentire output o transizioni non verificate. |
+
+  Prerequisiti ambiente: Node.js >=22.19, dipendenze installate con `npm ci --ignore-scripts`, provider HTTP deterministico e Python 3 con PTY sui sistemi POSIX per gli smoke terminali. Nessun browser framework è richiesto.
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |
+  |---|---|---|---|---|
+  | AC-1 | Session Run con provider deterministico che invoca `archetipo_ask_human` | Contract extension + E2E multiprocesso PTY | `runs show` espone un `requestId` in stato `waiting`; `runs input` con lo stesso id fa proseguire la Run e il journal conserva stato `answered` e digest correlati, senza testo grezzo | TASK-01, TASK-02, TASK-04, TASK-05 |
+  | AC-2 | Seconda Run attiva con risposta provider intenzionalmente sospesa | Integration lifecycle + E2E multiprocesso PTY | `runs cancel` produce `status=cancelled` ed `outcome.status=cancelled`, distinti da `failed`, e il processo termina in modo controllato | TASK-01, TASK-02, TASK-03, TASK-05 |
+  | AC-3 | Marker di cancellazione presente mentre una richiesta o tool call è pendente | Contract extension + E2E multiprocesso PTY | Dopo l'ack di cancellazione non compaiono nuove azioni, richieste, chiamate provider o artefatti; l'eventuale richiesta pendente diventa `cancelled` | TASK-02, TASK-03, TASK-05 |
+  | AC-4 | Run cancellata con journal e interazioni già presenti | Unit store/control + CLI integration + E2E multiprocesso | Un successivo `runs input` restituisce un envelope con codice stabile e stato `cancelled`; il confronto byte/semantico prova che cronologia, azioni e interazioni precedenti restano presenti e immutate | TASK-01, TASK-04, TASK-05 |
+
+  ## Strategia di test
+
+  - Unit test table-driven per schema delle interazioni, correlazione, idempotenza, permessi dei file, consumo singolo, redazione, marker di cancellazione e codici di errore.
+  - Contract test dell'estensione contro `registerTool`, `ctx.abort()`, `ctx.signal` e lifecycle Pi: risposta valida, risposta duplicata, cancellazione durante attesa, cancellazione durante streaming e assenza di nuove tool action dopo il terminale.
+  - Integration test di adapter, Session Run e Workflow Run per dimostrare che `cancelled` non viene convertito in `failed`, che dispose avviene una volta e che output/transizione workflow restano nulli dopo cancellazione.
+  - Smoke terminale reale multiprocesso: processo A esegue Pi, processo B osserva e risponde alla richiesta; seconda Run cancellata da processo B, seguita da input tardivo rifiutato e confronto della cronologia.
+  - Regressione completa Agent, smoke Session/Workflow esistenti, packaging, parsing Node e controlli Go prescritti dal repository nel gate finale.
+
+  ### E2E terminale — Simulazione utente
+
+  **Framework:** harness Node.js + provider HTTP deterministico + Python PTY già adottati dagli smoke Agent.
+  **Video demo:** filmabile; `archetipo-review` potrà registrare i due flussi terminali affiancati.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Risposta correlata | Avvia la Run, osserva `waiting` e `requestId` con `runs show`, invia la risposta da un secondo processo, osserva prosecuzione e interazione `answered` redatta. |
+  | Cancellazione terminale | Avvia una seconda Run, invia `runs cancel`, osserva `cancelled`, verifica assenza di altre azioni e prova un input tardivo ottenendo l'errore strutturato. |
+
+  ### Esclusione browser E2E
+
+  La superficie è CLI/TUI locale e non una pagina browser. Il confine responsabile attraversa processi, filesystem, SDK e persistenza; lo smoke PTY multiprocesso prova direttamente tutti gli esiti osservabili e rende il browser E2E non pertinente.
+
+  ## Impatto Wiki
+
+  ```yaml
+  wiki_impact:
+    read: [decisions/governed-run-modes, decisions/project-process-run-model, decisions/pi-sdk-adapter, architecture/context-map]
+    update_after_acceptance: [decisions/governed-run-modes, decisions/project-process-run-model, decisions/pi-sdk-adapter, architecture/context-map, engineering/code-map, operations/development]
+    create: []
+  ```
+
+  I mockup non sono necessari: US-006 aggiunge comandi e comportamento terminale, non una nuova pagina, un componente visuale autonomo o una ristrutturazione di layout.
+
+  _Piano generato tramite ARchetipo Planning — 2026-07-24_
+
+  ## Rework — 2026-07-24
+
+  La review complessiva ha richiesto tre correzioni: eliminare la race multiprocesso nella pubblicazione della risposta correlata, allineare `architecture/context-map` alle capacità Agent effettivamente implementate e persistere evidenze riproducibili dei gate Agent per US-001..US-007. La baseline di rework ha confermato il difetto: `node --test agent/test/run-control.test.mjs agent/test/run-interaction-extension.test.mjs` passa (12/12), il parsing di `agent/src/run-control.mjs` e dello smoke passa, e `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap` restituisce `data.ok=true`; invece una sequenza di cinque `npm run test:agent-control-smoke` si interrompe al secondo tentativo con `E_RUN_CONTROL_IO` durante `runs input`, mentre Run e richiesta sono ancora valide. La causa da correggere è il publish prematuro del percorso finale: il consumer può rinominare il file dopo `open('wx')` ma prima che il writer completi `fsync`, `close` e `chmod`.
+
+  L'intervento conserva l'inbox a single writer e non cambia il contratto pubblico: il writer prepara un file adiacente privato e completo, lo chiude prima della pubblicazione, quindi usa un'operazione atomica create-if-absent sul percorso finale; il consumer non deve mai osservare un file ancora in scrittura. Non nasce una nuova decisione architetturale: è una correzione locale che rende effettiva la failure semantics già descritta da `decisions/governed-run-modes` e `decisions/pi-sdk-adapter`.
+
+  ### Evidenze di accettazione interessate dal rework
+
+  - **AC-1:** lo stress multiprocesso ripete consegna correlata e prosecuzione senza `E_RUN_CONTROL_IO`; ogni iterazione conserva correlazione e redazione.
+  - **AC-4:** collisioni, input tardivi e failure reali continuano a produrre envelope strutturati senza perdere cronologia; i risultati persistiti riportano comando, ambiente essenziale, esito e conteggi senza segreti.
+  - **Conoscenza:** `docs/wiki/architecture/context-map.md` distingue le capacità Agent osservate (sessioni, profili, TUI, Session/Workflow Run, input e cancellazione) dalle sole estensioni future.
+tasks:
+  - id: TASK-01
+    title: Persistire richieste correlate e comandi di controllo atomici
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Rendere disponibili richieste di input, risposte correlate e cancellazione multiprocesso senza più writer concorrenti sul journal né payload grezzi persistenti.
+
+      ## Read
+      - `agent/src/run-store.mjs` — schema, lifecycle, scrittura atomica e codici `RunStoreError`
+      - `agent/test/run-store.test.mjs` — invarianti di transizione, redazione e riapertura
+      - `node_modules/@earendil-works/pi-coding-agent/docs/sdk.md` — abort, segnali e lifecycle pubblici
+
+      ## Change
+      - `agent/src/run-store.mjs` — aggiungere `interactions` redatte e metodi runtime per aprire/risolvere/annullare richieste senza modificare `actions`
+      - `agent/src/run-control.mjs` — inbox per-run con create-exclusive, permessi user-only, consumo singolo, marker cancel e `RunControlError` serializzabile
+      - `agent/test/run-store.test.mjs` e `agent/test/run-control.test.mjs` — schema, concorrenza, redazione, idempotenza ed errori
+      - Non persistere prompt o risposta grezzi nel journal; non permettere a processi esterni di mutare direttamente lo stato autorevole
+
+      ## Steps
+      1. Definire record di interazione con id sicuri, digest SHA-256, stato `waiting|answered|cancelled` e timestamp coerenti.
+      2. Consentire apertura solo su Run `running`, una sola risoluzione per id e chiusura di tutte le richieste pendenti durante la cancellazione.
+      3. Derivare l'inbox dallo stesso namespace opaco del progetto e creare response/cancel con `open(..., 'wx', 0o600)` e rename/cleanup sicuri.
+      4. Validare Run, richiesta e terminalità prima di accettare comandi; rendere cancellazione idempotente e input duplicato o tardivo un errore stabile.
+      5. Cancellare il file contenente il valore grezzo subito dopo il consumo e provare con un sentinel che journal ed errori non lo contengono.
+
+      ## Verify
+      - Run: `node --test agent/test/run-store.test.mjs agent/test/run-control.test.mjs`
+      - Run: `node --check agent/src/run-store.mjs agent/src/run-control.mjs`
+      - Expect: richieste e digest sopravvivono alla riapertura, il payload transitorio viene eliminato, i race sono rifiutati deterministicamente e nessun sentinel compare nel journal.
+
+      ## Done
+      - [ ] AC-1 — Una richiesta `waiting` accetta esattamente una risposta con lo stesso `requestId` e registra correlazione/digest.
+      - [ ] AC-2 — Il comando cancel è idempotente e rappresentabile come esito `cancelled`, non `failed`.
+      - [ ] AC-4 — Input tardivo, id sconosciuto e duplicato producono errori strutturati senza alterare cronologia o azioni.
+
+      ## Blockers
+      US-004 e US-005 forniscono store e lifecycle di entrambe le modalità; sono in REVIEW e presenti nel workdir.
+    ref: TASK-01
+  - id: TASK-02
+    title: Integrare input umano e cancellazione nel runtime Pi
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Permettere al modello di sospendersi su una richiesta umana e applicare una cancellazione esterna tramite sole API pubbliche Pi, bloccando attività successive.
+
+      ## Read
+      - `agent/src/run-governance-extension.mjs` — composizione eventi, terminalizzazione e confine pre-tool
+      - `agent/src/profile-selector-extension.mjs` — pattern delle extension factory inline
+      - `node_modules/@earendil-works/pi-coding-agent/docs/extensions.md` — `registerTool`, `ctx.abort()`, `ctx.signal` e shutdown
+      - `node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts` — firme pubbliche del contesto extension
+
+      ## Change
+      - `agent/src/run-interaction-extension.mjs` — tool `archetipo_ask_human`, watcher cancel e coordinamento con store/control
+      - `agent/src/run-governance-extension.mjs` — impedire nuove azioni quando il controllo segnala cancellazione, senza bypassare la policy del tool interno
+      - `agent/test/run-interaction-extension.test.mjs` e `agent/test/run-governance-extension.test.mjs` — contract test eventi, race e cleanup
+      - Non usare tipi privati Pi, busy wait, contenuti grezzi nel journal o un canale RPC prematuro
+
+      ## Steps
+      1. Registrare un tool con input minimo e id generato dal runtime; aprire l'interazione nel journal prima di attendere.
+      2. Attendere con polling bounded e AbortSignal una response correlata o il marker cancel, restituendo al modello il valore solo in memoria.
+      3. Su risposta, consumare/eliminare il payload e marcare l'interazione `answered` con digest; su cancel, marcare le richieste pendenti `cancelled`.
+      4. Durante `agent_start` sorvegliare il marker; quando appare, chiamare `ctx.abort()`, svuotare/impedire nuove azioni e richiedere shutdown controllato una sola volta.
+      5. Coordinare governance e interaction extension affinché il tool richieda `allow` esplicito nella policy e nessuna tool call venga registrata dopo il terminale.
+
+      ## Verify
+      - Run: `node --test agent/test/run-interaction-extension.test.mjs agent/test/run-governance-extension.test.mjs`
+      - Run: `node --check agent/src/run-interaction-extension.mjs agent/src/run-governance-extension.mjs`
+      - Expect: risposta correlata prosegue, cancel abortisce una volta, timer/listener sono rimossi e nessuna azione post-cancel raggiunge l'esecutore.
+
+      ## Done
+      - [ ] AC-1 — Il tool espone una richiesta `waiting`, riceve la risposta correlata e prosegue con quel valore.
+      - [ ] AC-2 — Il marker di cancellazione produce terminalizzazione `cancelled` usando `ctx.abort()`.
+      - [ ] AC-3 — Dopo l'ack di cancellazione tool call e richieste nuove sono bloccate.
+
+      ## Blockers
+      TASK-01 fornisce journal delle interazioni e inbox atomico.
+    ref: TASK-02
+  - id: TASK-03
+    title: Preservare il lifecycle cancellato in Session e Workflow Run
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Objective
+      Comporre il controllo in entrambe le modalità e garantire che una cancellazione non venga riclassificata come failure né finalizzi output workflow.
+
+      ## Read
+      - `agent/src/pi-adapter.mjs` — adapter, extension factory, InteractiveMode e PrintMode
+      - `agent/src/workflow-runner.mjs` — preflight, verifica output e terminalizzazione
+      - `agent/src/cli.mjs` — lifecycle corrente della Session Run
+      - `agent/test/pi-adapter.test.mjs`, `agent/test/workflow-runner.test.mjs` e `agent/test/cli.test.mjs` — contratti di dispose e failure
+
+      ## Change
+      - `agent/src/pi-adapter.mjs` — comporre interaction extension per `sessionRun` e `workflowRun`, restituire outcome controllato e disporre una volta
+      - `agent/src/workflow-runner.mjs` — short-circuit su `cancelled` prima della verifica artefatto e preservare outcome terminale
+      - `agent/src/cli.mjs` — non sovrascrivere un terminale già persistito dal controllo
+      - Test adapter, runner e CLI per cancellazione in attesa, streaming, pre-verifica e race con shutdown
+      - Non consentire output verificato o `transitionDeclaration` a una Workflow Run cancellata
+
+      ## Steps
+      1. Creare un solo control/interaction extension per Run e includerlo nelle factory insieme a selector e governance.
+      2. Propagare l'outcome `cancelled` dall'extension all'adapter senza convertirlo in eccezione runtime generica.
+      3. Rileggere il record prima di ogni terminalizzazione; rendere cleanup e transizione idempotenti nel race cancel/shutdown.
+      4. In workflow runner, se il record è cancellato, saltare `verifyWorkflowArtifact` e restituire il record terminale con output/dichiarazione nulli.
+      5. Coprire Session e Workflow con fake SDK che osserva abort, dispose, assenza di tool tardivi e nessuna verifica post-cancel.
+
+      ## Verify
+      - Run: `node --test agent/test/pi-adapter.test.mjs agent/test/workflow-runner.test.mjs agent/test/cli.test.mjs`
+      - Run: `node --check agent/src/pi-adapter.mjs agent/src/workflow-runner.mjs agent/src/cli.mjs`
+      - Expect: entrambe le modalità terminano `cancelled`, dispose avviene una volta e il workflow cancellato non associa output o autorità.
+
+      ## Done
+      - [ ] AC-2 — Session e Workflow Run espongono uno stato terminale `cancelled` distinto da `failed`.
+      - [ ] AC-3 — Il lifecycle impedisce verifica, output, transizioni e azioni dopo cancellazione.
+      - [ ] AC-4 — La cronologia precedente resta rileggibile anche nei race di shutdown.
+
+      ## Blockers
+      TASK-01 e TASK-02 definiscono controllo persistente ed extension runtime.
+    ref: TASK-03
+  - id: TASK-04
+    title: Esporre input, cancellazione e cronologia nella CLI
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Objective
+      Consentire a un operatore in un secondo processo di rispondere o cancellare una Run e ispezionare l'esito con errori strutturati e redatti.
+
+      ## Read
+      - `agent/src/cli.mjs` — grammatica, exit code e dependency injection
+      - `agent/src/run-presenter.mjs` — riepilogo mode-aware e redazione
+      - `agent/test/cli.test.mjs` e `agent/test/run-presenter.test.mjs` — output pubblico e immutabilità
+      - `agent/README.md` — uso pubblico di Session e Workflow Run
+
+      ## Change
+      - `agent/src/cli.mjs` — comandi `runs input` e `runs cancel`, validazione esplicita e serializzazione degli errori control
+      - `agent/src/run-presenter.mjs` — richieste waiting/answered/cancelled, request id e timestamp senza valori grezzi
+      - `agent/test/cli.test.mjs` e `agent/test/run-presenter.test.mjs` — parsing, successo, terminalità, redazione e codici uscita
+      - `agent/README.md` — flusso a due terminali, policy del tool interno e limiti MVP
+      - Non cambiare gli output dei comandi esistenti salvo l'aggiunta compatibile della sezione interazioni
+
+      ## Steps
+      1. Estendere il parser senza shell evaluation e rifiutare opzioni duplicate, vuote o ambigue prima di toccare il progetto.
+      2. Delegare input/cancel a `run-control`, stampare un ack con run/request id e non avviare Pi dal processo di controllo.
+      3. Per `RunControlError`, emettere una singola riga JSON con schema e campi sicuri; mappare invalid command, conflict/terminal e not found a exit code stabili.
+      4. Mostrare richieste e stato terminale in testo accessibile, senza affidarsi al colore e senza stampare prompt/risposta.
+      5. Documentare risposta correlata, cancellazione idempotente, input tardivo e storage transitorio.
+
+      ## Verify
+      - Run: `node --test agent/test/cli.test.mjs agent/test/run-presenter.test.mjs`
+      - Run: `node --check agent/src/cli.mjs agent/src/run-presenter.mjs`
+      - Expect: i comandi validi non caricano Pi, gli errori sono JSON parseable con codice stabile e nessun valore sensibile appare in stdout/stderr.
+
+      ## Done
+      - [ ] AC-1 — L'operatore vede il request id e invia una risposta correlata da un secondo processo.
+      - [ ] AC-2 — `runs cancel` conferma una cancellazione riconoscibile e idempotente.
+      - [ ] AC-4 — Un input dopo cancellazione restituisce errore strutturato preservando la cronologia mostrata da `runs show`.
+
+      ## Blockers
+      TASK-01 definisce API ed errori del control inbox; TASK-03 definisce l'outcome runtime.
+    ref: TASK-04
+  - id: TASK-05
+    title: Dimostrare input e cancellazione con uno smoke multiprocesso
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Provare i quattro criteri di accettazione attraverso processi CLI reali, Pi reale e un provider deterministico senza mockare store, adapter o filesystem control.
+
+      ## Read
+      - `test/e2e/agent-run-smoke.mjs` — provider locale, installazione fixture, PTY e sentinelle
+      - `test/e2e/agent-workflow-smoke.mjs` — lifecycle workflow e controllo artefatti
+      - `package.json` — convenzioni degli script smoke
+
+      ## Change
+      - `test/e2e/agent-control-smoke.mjs` — scenari input correlato, cancellazione e input tardivo
+      - `package.json` — script `test:agent-control-smoke`
+      - Non dipendere da credenziali esterne, timing non bounded o un server Control
+
+      ## Steps
+      1. Creare una fixture isolata con policy che consente `archetipo_ask_human` e provider deterministico che prima richiede input e poi produce una risposta osservabile.
+      2. Avviare la Run in PTY, interrogare `runs show` da un secondo processo finché appare `waiting`, estrarre il request id e inviare la risposta.
+      3. Verificare prosecuzione, stato `answered`, digest presente e sentinel della risposta assente da journal/output non autorizzato.
+      4. Avviare una seconda Run sospesa, inviare cancel, attendere `cancelled` e fotografare azioni/interazioni/provider/artifacts.
+      5. Inviare input tardivo, fare parse dell'envelope di errore e provare che snapshot e cronologia non sono cambiati e non esiste attività successiva.
+
+      ## Verify
+      - Run: `npm run test:agent-control-smoke`
+      - Run: `npm run test:agent-run-smoke && npm run test:agent-workflow-smoke`
+      - Expect: lo smoke stampa evidenza esplicita per AC-1..AC-4; gli smoke preesistenti restano verdi.
+
+      ## Done
+      - [ ] AC-1 — Lo smoke osserva richiesta waiting, risposta correlata e prosecuzione reale.
+      - [ ] AC-2 — Lo smoke osserva `cancelled` distinto da `failed`.
+      - [ ] AC-3 — Snapshot e contatori provano zero attività dopo cancellazione.
+      - [ ] AC-4 — L'input tardivo produce il codice strutturato atteso e la cronologia resta identica.
+
+      ## Blockers
+      TASK-02, TASK-03 e TASK-04 devono consegnare runtime e comandi pubblici.
+    ref: TASK-05
+  - id: TASK-06
+    title: Aggiornare le decisioni e la mappa del runtime Agent
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Allineare la Wiki living al canale di input/cancellazione consegnato, con rationale, alternative, conseguenze ed evidenze verificabili.
+
+      ## Read
+      - `docs/wiki/decisions/governed-run-modes.md` — modalità, policy e completion semantics
+      - `docs/wiki/decisions/project-process-run-model.md` — lifecycle della Run
+      - `docs/wiki/decisions/pi-sdk-adapter.md` — confine SDK pubblico
+      - `docs/wiki/architecture/context-map.md`, `docs/wiki/engineering/code-map.md` e `docs/wiki/operations/development.md` — collocazione e verifiche correnti
+
+      ## Change
+      - Aggiornare le sei pagine lette con fonti verso control inbox, extension, CLI e smoke
+      - Conservare frontmatter, marker di sezione, link stabili e stato `generated` fino alla review
+      - Non creare un nuovo ADR né promuovere Agent Runtime a bounded context osservato oltre l'evidenza disponibile
+
+      ## Steps
+      1. Documentare inbox a single writer, risposta grezza transitoria, stato waiting derivato e cancellazione terminale distinta.
+      2. Registrare alternative: journal multi-writer, TUI-only e Pi RPC anticipato, con tradeoff e limiti MVP.
+      3. Collegare `abort()`/signal pubblici dell'adapter e chiarire che una workflow cancellata non verifica output né dichiara transizioni.
+      4. Aggiornare code map e development con file, test e comando smoke esatti.
+      5. Eseguire validazione Wiki e riparare errori strutturali senza approvare le pagine.
+
+      ## Verify
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run: `archetipo wiki search "cancellazione"`
+      - Expect: validazione `data.ok=true`, le pagine restano `generated` e la ricerca trova decisioni ed evidenze di US-006.
+
+      ## Done
+      - [ ] AC-1 — La Wiki descrive correlazione, redazione e consegna dell'input.
+      - [ ] AC-2 — La Wiki definisce `cancelled` come terminale distinto.
+      - [ ] AC-3 — La Wiki documenta il confine che impedisce attività post-cancel.
+      - [ ] AC-4 — Decisioni ed evidenze descrivono errori strutturati e cronologia preservata.
+
+      ## Blockers
+      TASK-01..TASK-05 devono fornire evidenza di repository e test definitiva.
+    ref: TASK-06
+  - id: TASK-07
+    title: Eseguire il gate finale di qualità e workflow
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Dimostrare che US-006 soddisfa tutti i criteri senza regressioni Agent/Core e che ogni task è DONE prima della richiesta di review.
+
+      ## Read
+      - `AGENTS.md` — controlli CI Go obbligatori
+      - `package.json` — suite Agent, packaging e smoke disponibili
+      - `.archetipo/plans/US-006-plan.yaml` — comandi e criteri pianificati
+      - File modificati dai TASK-01..TASK-06 — verificare assenza di diagnostiche locali
+
+      ## Change
+      - Nessuna modifica funzionale prevista; correggere soltanto difetti emersi dai controlli nei file già in scope e rieseguire il comando fallito
+      - Non richiedere review finché un task resta TODO o una verifica richiesta fallisce
+
+      ## Steps
+      1. Eseguire suite Agent, smoke input/cancel, smoke Session/Workflow, packaging e parsing Node.
+      2. Da `cli/`, eseguire `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...` e `golangci-lint run --timeout 5m ./...`.
+      3. Eseguire `archetipo wiki validate --profile bootstrap` e verificare le pagine toccate.
+      4. Marcare TASK-07 `DONE` solo dopo tutti i controlli verdi.
+      5. Da `/Users/stefanoleli/Project/ARchetipo`, eseguire `archetipo spec show US-006`, confermare che nessun task sia TODO e solo allora invocare il passaggio a review.
+
+      ## Verify
+      - Run: `npm run test:agent && npm run test:agent-control-smoke && npm run test:agent-run-smoke && npm run test:agent-workflow-smoke && npm run test:agent-packaging`
+      - Run: `find agent test/e2e test/npm -name '*.mjs' -type f -exec node --check {} \;`
+      - Run from `cli/`: `gofmt -l . && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run from project root after marking this task DONE: `archetipo spec show US-006`
+      - Expect: tutti i comandi hanno exit 0, `gofmt -l .` non produce output, Wiki ha `data.ok=true`, AC-1..AC-4 sono evidenziati dallo smoke e l'envelope spec non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — Suite e smoke provano richiesta, correlazione, risposta e prosecuzione.
+      - [ ] AC-2 — Suite e smoke provano outcome terminale `cancelled` distinto.
+      - [ ] AC-3 — Suite e smoke provano assenza di attività post-cancel.
+      - [ ] AC-4 — Suite e smoke provano errore strutturato, redazione e cronologia preservata.
+      - [ ] Workflow — TASK-07 è `DONE`, `archetipo spec show US-006` non mostra task `TODO` e la review non è stata richiesta prima di questa prova.
+
+      ## Blockers
+      Tutti i task TASK-01..TASK-06 devono essere completati.
+    ref: TASK-07
+  - id: TASK-08
+    title: Pubblicare le risposte correlate solo dopo la scrittura completa
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Eliminare la race segnalata in `agent/src/run-control.mjs:84` affinché una risposta valida non possa fallire con `E_RUN_CONTROL_IO` quando il consumer la reclama durante la pubblicazione.
+
+      ## Read
+      - `agent/src/run-control.mjs` — `writeExclusive`, `createResponse`, `consumeResponse` e cleanup dei payload
+      - `agent/test/run-control.test.mjs` — conflitto tra writer, permessi, consumo e redazione
+      - `test/e2e/agent-control-smoke.mjs` — confine multiprocesso reale che ha riprodotto il difetto
+
+      ## Change
+      - `agent/src/run-control.mjs` — preparare il documento in un file temporaneo adiacente `0600`, completare write/fsync/close prima di pubblicarlo e usare una pubblicazione atomica create-if-absent che preservi `E_RUN_CONTROL_CONFLICT`
+      - `agent/test/run-control.test.mjs` — coprire pubblicazione completa, cleanup dei temporanei e failure I/O reali
+      - Non aggiungere retry ciechi, sleep, tolleranza di `E_RUN_CONTROL_IO` o mutazioni dirette del journal; non indebolire permessi e redazione
+
+      ## Steps
+      1. Separare preparazione privata e pubblicazione del payload: il percorso finale non deve esistere finché il descriptor non è sincronizzato, chiuso e con permessi `0600`.
+      2. Pubblicare nello stesso filesystem con un'operazione atomica che fallisca se il percorso finale esiste già; mappare solo la collisione a `false` e ogni altra failure a `E_RUN_CONTROL_IO`.
+      3. Rimuovere sempre il temporaneo privato dopo pubblicazione, collisione o errore, senza cancellare il payload finale appartenente a un altro writer.
+      4. Conservare il contratto di `createResponse` e `consumeResponse`, inclusi terminal decision race, redazione e consumo singolo.
+      5. Aggiungere test deterministici che rendano il consumer libero di reclamare il file appena pubblicato e provino che il writer non esegue operazioni post-publish sul percorso finale.
+
+      ## Verify
+      - Run: `node --test agent/test/run-control.test.mjs`
+      - Run: `node --check agent/src/run-control.mjs`
+      - Expect: tutti i test passano; il consumer vede soltanto documenti completi, i duplicati restano conflitti stabili e nessun temporaneo o valore sentinel sopravvive.
+
+      ## Done
+      - [ ] AC-1 — Una risposta correlata valida è accettata anche quando il processo Run la consuma immediatamente dopo la pubblicazione.
+      - [ ] AC-4 — Collisioni e failure I/O mantengono codici strutturati distinti senza modificare journal o cronologia.
+      - [ ] Review feedback — Il percorso finale non viene più toccato dal writer dopo essere diventato visibile al consumer.
+
+      ## Blockers
+      TASK-01 definisce il contratto esistente da preservare.
+    ref: TASK-08
+  - id: TASK-09
+    title: Stressare deterministicamente la consegna multiprocesso
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Trasformare la race intermittente in una regressione ripetibile che dimostri consegna e consumo multiprocesso affidabili.
+
+      ## Read
+      - `test/e2e/agent-control-smoke.mjs` — fixture, processi Run/control e asserzioni AC-1..AC-4
+      - `package.json` — script `test:agent-control-smoke`
+      - `agent/test/run-control.test.mjs` — oracoli di redazione e cleanup
+
+      ## Change
+      - `test/e2e/agent-control-smoke.mjs` — supportare un numero esplicito di iterazioni della consegna correlata senza duplicare l'intero scenario di cancellazione
+      - `package.json` — aggiungere uno script portabile `test:agent-control-stress` che esegua almeno 25 iterazioni
+      - Non mascherare failure con retry; ogni iterazione deve avere fixture isolata e fallire al primo envelope inatteso
+
+      ## Steps
+      1. Rendere configurabile dal processo Node il conteggio di iterazioni con default invariato per lo smoke ordinario e valore almeno 25 per lo stress.
+      2. Per ogni iterazione avviare processi distinti, attendere `waiting`, inviare una sola risposta e verificare ack, prosecuzione, stato `answered` e cleanup.
+      3. Verificare che nessuna iterazione emetta `E_RUN_CONTROL_IO`, perda la correlazione o lasci file `.tmp`/`.consuming`.
+      4. Conservare gli scenari cancellazione, input tardivo e redazione dello smoke ordinario.
+      5. Stampare un riepilogo machine-readable o stabile con iterazioni richieste/completate per l'evidenza persistibile.
+
+      ## Verify
+      - Run: `npm run test:agent-control-stress`
+      - Run: `npm run test:agent-control-smoke`
+      - Expect: almeno 25/25 consegne multiprocesso e lo smoke AC-1..AC-4 passano senza retry né `E_RUN_CONTROL_IO`.
+
+      ## Done
+      - [ ] AC-1 — Almeno 25 consegne reali consecutive espongono waiting, accettano la risposta correlata e proseguono.
+      - [ ] AC-4 — Ogni iterazione preserva redazione, cronologia e cleanup; nessuna failure intermittente viene ignorata.
+      - [ ] Review feedback — La prova ripetuta rende deterministico il confine che in baseline è fallito al secondo tentativo.
+
+      ## Blockers
+      TASK-08 deve pubblicare payload completi prima che il consumer possa reclamarli.
+    ref: TASK-09
+  - id: TASK-10
+    title: Allineare la mappa dei contesti alle capacità Agent osservate
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      Correggere il finding ancorato a `docs/wiki/architecture/context-map.md:60` separando le capacità Agent implementate dalle estensioni ancora future.
+
+      ## Read
+      - `docs/wiki/architecture/context-map.md` — sezioni Contexts, Relationships, Evidence e frontmatter
+      - `docs/wiki/overview.md`, `docs/wiki/engineering/code-map.md` e `docs/wiki/operations/development.md` — terminologia ed evidenze Agent correnti
+      - `agent/src/cli.mjs`, `agent/src/pi-adapter.mjs`, `agent/src/workflow-runner.mjs` e `agent/src/run-control.mjs` — capacità effettive
+      - `agent/test/` e `test/e2e/agent-*-smoke.mjs` — evidenze verificabili
+
+      ## Change
+      - `docs/wiki/architecture/context-map.md` — descrivere come osservati profili/sessione, TUI, Session/Workflow Run, input e cancellazione; mantenere come future soltanto capacità non sostenute dal repository
+      - Conservare ID, frontmatter, marker di sezione, link e `state: generated`; non promuovere automaticamente un candidate bounded context
+      - Non riscrivere pagine Wiki estranee né attribuire al runtime locale scheduling, fleet o policy enterprise non implementate
+
+      ## Steps
+      1. Sostituire l'affermazione che tutto Agent Runtime sia privo di evidenza con un elenco preciso delle capacità locali osservate.
+      2. Spostare tra le estensioni future soltanto elementi realmente non implementati, citando il confine Runner/Control dove pertinente.
+      3. Aggiornare Evidence e Relationships con percorsi di codice e test esatti, inclusa la regressione multiprocesso.
+      4. Verificare coerenza con overview, code map e development senza modificarle se già corrette.
+      5. Lasciare la pagina generated per l'approvazione congiunta in review.
+
+      ## Verify
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo search "Agent Runtime"`
+      - Expect: `data.ok=true`; la mappa non descrive sessioni, profili, TUI o Run locali come capacità prive di evidenza e resta `generated`.
+
+      ## Done
+      - [ ] AC-1 — La mappa cita l'interazione umana correlata e le evidenze del runtime locale.
+      - [ ] AC-2 — La mappa riconosce il lifecycle delle Run Agent, incluso `cancelled`.
+      - [ ] AC-3 — La mappa distingue controllo locale implementato e capacità distribuite future.
+      - [ ] Review feedback — L'affermazione obsoleta ancorata alla riga 60 è rimossa con evidenze concrete.
+
+      ## Blockers
+      TASK-09 deve fornire l'evidenza definitiva della consegna multiprocesso corretta.
+    ref: TASK-10
+  - id: TASK-11
+    title: Verificare coerenza e copertura della mappa Agent
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+      Provare che l'aggiornamento Wiki è strutturalmente valido, coerente con il codice e privo della classificazione obsoleta rilevata in review.
+
+      ## Read
+      - `docs/wiki/architecture/context-map.md` — contenuto aggiornato e sorgenti
+      - `docs/wiki/index.md` — catalogo e stato atteso
+      - `agent/src/` e `test/e2e/agent-*-smoke.mjs` — target delle citazioni
+
+      ## Change
+      - Nessuna modifica funzionale prevista; correggere solo link, sorgenti o formulazioni incoerenti in `docs/wiki/architecture/context-map.md`
+      - Non approvare la pagina: la review resta l'unico gate di accettazione della conoscenza
+
+      ## Steps
+      1. Eseguire validazione bootstrap e ricerca mirata delle espressioni Agent Runtime.
+      2. Controllare che ogni sorgente citata esista e sostenga la capacità associata.
+      3. Verificare che la pagina resti `generated`, senza issue e senza capability non mappate.
+      4. Verificare esplicitamente che il testo non collochi sessioni, profili, TUI e Run locali tra le estensioni non sostenute da codice.
+
+      ## Verify
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status`
+      - Expect: validazione `data.ok=true`, nessun finding per `architecture/context-map`, stato `generated` e sorgenti esistenti.
+
+      ## Done
+      - [ ] AC-1 — La correlazione input è rappresentata con evidenza di codice/test.
+      - [ ] AC-2 — Il terminale cancelled è rappresentato senza confonderlo con failed.
+      - [ ] AC-3 — Le capacità post-cancel e i confini futuri sono descritti coerentemente.
+      - [ ] Review feedback — Il dossier Wiki può classificare `architecture/context-map` come ready.
+
+      ## Blockers
+      TASK-10 deve completare l'allineamento della pagina.
+    ref: TASK-11
+  - id: TASK-12
+    title: Persistire i risultati riproducibili dei gate Agent
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-09
+      - TASK-11
+    body: |-
+      ## Objective
+      Soddisfare il feedback generale creando evidenze versionabili e redatte dei gate rieseguiti per US-001..US-007.
+
+      ## Read
+      - `docs/test-results/` — convenzione degli artefatti esistenti, se presente
+      - `.archetipo/specs/US-001.md` .. `.archetipo/specs/US-007.md` e relativi piani — criteri e comandi di verifica
+      - `package.json` — suite Agent, packaging e smoke ufficiali
+      - `AGENTS.md` — controlli Core richiesti prima della consegna
+
+      ## Change
+      - `docs/test-results/US-001/review-summary.md` .. `docs/test-results/US-007/review-summary.md` — riepiloghi con data, ambiente essenziale, commit/worktree, comandi esatti, exit status, conteggi e mapping AC/evidenza
+      - Facoltativo: un indice `docs/test-results/agent-review-summary.md` che colleghi i sette riepiloghi senza duplicarne il contenuto
+      - Non includere credenziali, path temporanei, payload umani grezzi, token, log completi o risultati non effettivamente eseguiti
+
+      ## Steps
+      1. Definire un formato Markdown uniforme e leggibile che distingua baseline, comandi rieseguiti, esiti e limitazioni.
+      2. Eseguire i gate Agent pertinenti e registrare soltanto risultati osservati, includendo il nuovo stress multiprocesso.
+      3. Associare ogni riepilogo agli AC della rispettiva storia e collegare i file/test che producono l'oracolo.
+      4. Redigere valori sensibili e normalizzare i dettagli temporanei non riproducibili.
+      5. Verificare che tutti e sette i percorsi esistano e che ogni comando documentato sia invocabile dalla root.
+
+      ## Verify
+      - Run: `for code in 001 002 003 004 005 006 007; do test -s "docs/test-results/US-$code/review-summary.md" || exit 1; done`
+      - Run: `rg -n "(token|api[_-]?key|password|secret)\s*[:=]\s*[^<[:space:]]+" docs/test-results/US-00{1,2,3,4,5,6,7}/review-summary.md`
+      - Expect: i sette riepiloghi sono non vuoti; la seconda verifica non trova credenziali o valori sensibili (exit 1 per nessun match è l'esito atteso).
+
+      ## Done
+      - [ ] AC-1 — L'evidenza US-006 registra comando e risultato dello stress della risposta correlata.
+      - [ ] AC-2 — L'evidenza US-006 registra l'oracolo del terminale cancelled.
+      - [ ] AC-3 — L'evidenza US-006 registra l'assenza di attività post-cancel.
+      - [ ] AC-4 — L'evidenza US-006 registra errori strutturati, cronologia preservata e redazione.
+      - [ ] Review feedback — US-001..US-007 hanno ciascuna un riepilogo riproducibile sotto `docs/test-results/<US-CODE>/`.
+
+      ## Blockers
+      TASK-09 e TASK-11 devono rendere definitive le evidenze tecniche e Wiki da registrare.
+    ref: TASK-12
+  - id: TASK-13
+    title: Validare completezza e redazione delle evidenze Agent
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-12
+    body: |-
+      ## Objective
+      Dimostrare che i sette riepiloghi persistiti sono completi, riproducibili e privi di dati sensibili o risultati inventati.
+
+      ## Read
+      - `docs/test-results/US-001/review-summary.md` .. `docs/test-results/US-007/review-summary.md`
+      - `package.json` e `AGENTS.md` — sorgenti autorevoli dei comandi
+      - Spec e piani US-001..US-007 — criteri da mappare
+
+      ## Change
+      - Correggere soltanto omissioni o redazione nei riepiloghi sotto `docs/test-results/US-001/` .. `US-007/`
+      - Non modificare codice prodotto né trasformare output falliti in PASS
+
+      ## Steps
+      1. Verificare presenza, intestazioni, comando, exit status, timestamp, ambiente e mapping AC in ogni file.
+      2. Confrontare i comandi documentati con gli script reali e indicare esplicitamente eventuali skip o prerequisiti.
+      3. Cercare sentinel, token, credenziali, directory temporanee e risposte umane grezze.
+      4. Rieseguire almeno il controllo di parsing/struttura delle evidenze e il gate US-006 appena corretto.
+      5. Confermare che i file siano versionabili e non ignorati.
+
+      ## Verify
+      - Run: `npm run test:agent-control-stress && npm run test:agent-control-smoke`
+      - Run: `git check-ignore -q docs/test-results/US-006/review-summary.md; test $? -eq 1`
+      - Run: `for code in 001 002 003 004 005 006 007; do rg -q "AC-" "docs/test-results/US-$code/review-summary.md" || exit 1; done`
+      - Expect: gate US-006 verde, i riepiloghi non sono ignorati e ciascuno contiene evidenze collegate agli AC senza segreti.
+
+      ## Done
+      - [ ] AC-1 — Il riepilogo US-006 riporta lo stress passato con conteggio osservabile.
+      - [ ] AC-4 — Le evidenze mantengono errori sicuri e non contengono risposte o credenziali.
+      - [ ] Review feedback — Tutti i sette riepiloghi sono completi e versionabili.
+
+      ## Blockers
+      TASK-12 deve creare e popolare i riepiloghi.
+    ref: TASK-13
+  - id: TASK-14
+    title: Eseguire il gate finale del rework US-006
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+      - TASK-13
+    body: |-
+      ## Objective
+      Chiudere il rework dimostrando che la race è eliminata, la Wiki è coerente, le evidenze sono persistite e nessuna regressione Agent/Core è stata introdotta.
+
+      ## Read
+      - `AGENTS.md` — gate CI Go obbligatori
+      - `package.json` — suite Agent, smoke e packaging
+      - `.archetipo/plans/US-006-plan.yaml` — task originali e rework
+      - File modificati da TASK-08..TASK-13 — diagnostiche, stato Wiki ed evidenze
+
+      ## Change
+      - Nessuna modifica funzionale prevista; correggere soltanto difetti emersi nei file già in scope e rieseguire il comando fallito
+      - Non richiedere review finché questo task non è DONE o un task preservato/aggiunto resta TODO
+
+      ## Steps
+      1. Eseguire unit/contract Agent, stress multiprocesso, smoke controllo/session/workflow, packaging e parsing Node.
+      2. Validare Wiki bootstrap e stato della pagina `architecture/context-map`.
+      3. Verificare presenza, tracciabilità e redazione dei riepiloghi US-001..US-007.
+      4. Da `cli/`, eseguire i cinque gate CI obbligatori senza saltare lint.
+      5. Marcare TASK-14 DONE, ricaricare US-006 da `data.project_root`, confermare zero task TODO e soltanto allora richiedere review.
+
+      ## Verify
+      - Run: `npm run test:agent && npm run test:agent-control-stress && npm run test:agent-control-smoke && npm run test:agent-run-smoke && npm run test:agent-workflow-smoke && npm run test:agent-packaging`
+      - Run: `find agent test/e2e test/npm -name '*.mjs' -type f -exec node --check {} \;`
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`
+      - Run from `cli/`: `gofmt -l . && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run from project root after marking this task DONE: `archetipo spec show US-006`
+      - Expect: tutti i comandi hanno exit 0, `gofmt -l .` non produce output, Wiki ha `data.ok=true`, i sette riepiloghi esistono, AC-1..AC-4 sono verdi e l'envelope spec non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — Unit e stress provano risposta correlata affidabile senza `E_RUN_CONTROL_IO`.
+      - [ ] AC-2 — Smoke conferma `cancelled` distinto da `failed`.
+      - [ ] AC-3 — Smoke conferma zero attività dopo cancellazione.
+      - [ ] AC-4 — Errori strutturati, cronologia, redazione e risultati persistiti sono verificati.
+      - [ ] Workflow — TASK-14 è DONE, `archetipo spec show US-006` non contiene task TODO e la review viene richiesta solo dopo questa prova.
+
+      ## Blockers
+      TASK-08..TASK-13 devono essere DONE; i task preservati TASK-01..TASK-07 restano DONE.
+    ref: TASK-14

@@ -1,0 +1,716 @@
+schema: archetipo/plan/v2
+spec_code: US-038
+body: |-
+  ## Soluzione tecnica
+
+  ### Il problema reale
+
+  Il provider `codex` gira oggi one-shot: `codex exec -s workspace-write --skip-git-repo-check <prompt>`, un processo che nasce, lavora e muore senza mai leggere altro dallo standard input. Su quella forma di invocazione il dialogo non è un flag mancante: non esiste alcun canale attraverso cui un messaggio possa raggiungere l'agente mentre lavora, e non esiste alcuno stream su cui la storia della run possa crescere.
+
+  La verifica sul binario installato (codex-cli 0.147.0) ha escluso le scorciatoie: `codex exec --json` emette bensì JSONL sullo stdout, ma resta one-shot e non accetta input successivo; il vecchio `codex proto` non esiste più. L'unica superficie che regge una sessione viva è **`codex app-server --listen stdio://`**: un server JSON-RPC su stdin/stdout, sondato dal vivo durante la pianificazione, che espone esattamente ciò che i criteri richiedono.
+
+  ### Il protocollo, verificato sul campo
+
+  La sequenza è stata eseguita realmente contro il binario installato e questi sono i fatti osservati, non lo schema letto:
+
+  1. `initialize` (con `clientInfo`) → risposta con `userAgent` e `codexHome`; poi la notifica `initialized`.
+  2. `thread/start` con `{cwd, sandbox: "workspace-write", approvalPolicy: "never", ephemeral: true}` → risposta il cui `result.thread.id` è l'identificativo del thread. `approvalPolicy: "never"` è ciò che rende la sessione non interattiva sul piano delle approvazioni: nessuna `ServerRequest` di approvazione arriva mai, e questo è il motivo per cui `ReadRunApprovals` risponde legittimamente con un elenco vuoto invece di fingere una capacità che il processo non esercita.
+  3. `turn/start` con `{threadId, input:[{type:"text",text:<prompt>}]}` → `result.turn.id`, il turno attivo.
+  4. Le notifiche del turno arrivano in ordine: `item/started` (`userMessage`), `item/started`/`item/completed` (`reasoning`), `item/agentMessage/delta` (uno per frammento di testo), `item/completed` (`agentMessage`, con il testo intero), `turn/completed`, `thread/status/changed`.
+  5. `turn/steer` con `{threadId, expectedTurnId, input}` consegna un messaggio al turno in corso; `turn/interrupt` con `{threadId, turnId}` lo interrompe.
+  6. Su un turno non più attivo, entrambe rispondono con un errore JSON-RPC `-32600` il cui messaggio è `no active turn to steer` / `no active turn to interrupt`. È il rifiuto del processo, non una deduzione locale.
+
+  Il punto decisivo per AC-3 è emerso dal sondaggio e non era prevedibile dallo schema: **il messaggio dell'operatore torna indietro come `item/started` di tipo `userMessage`**. La storia lo mostra perché il processo lo riemette, esattamente come accade con l'hub remoto; nulla viene scritto localmente al momento dell'invio.
+
+  ### Dove vive la semantica
+
+  `RunCollaborator` (`cli/internal/execution/run.go`) resta l'unica interfaccia: si estende l'implementazione, non il contratto. Le regole del dialogo — storia ordinata, cursore, rifiuti, stato mai dedotto — non appartengono però a Codex: apparterranno anche a Claude fra una storia. Vivono quindi una volta sola in un pacchetto nuovo, `cli/internal/execution/localrun`, che US-039 riuserà senza riscriverle.
+
+  `localrun` contiene tre cose e nient'altro:
+
+  - **`Session`** — la storia di una run locale. Assegna a ogni evento un `ID` monotono a partire da 1 (mai il `Seq`, per la ragione già scritta in `RunEvent`), conserva gli eventi in ordine di apparizione, notifica i sottoscrittori e conosce il proprio stato: `ACTIVE` finché il processo vive, `CLOSED` quando esce con successo, `CRASHED` quando esce male o non è stato possibile portarlo a termine. Lo stato **non è mai scritto da un comando**: solo l'osservazione della fine del processo lo cambia.
+  - **`Registry`** — la mappa `runID → *Session` di processo. Una sessione conclusa **resta registrata**: è ciò che rende leggibile la storia di una run finita e ciò che permette a un comando su run chiusa di essere rifiutato con un motivo invece che con un "non trovata".
+  - **`Collaborator`** — l'implementazione generica dei sette metodi di `RunCollaborator` sopra il registro. Un provider locale la incorpora e diventa collaborativo senza aggiungere una riga di semantica.
+
+  Il canale verso il processo è l'interfaccia minima `Dialogue { Send(ctx, text) error; Interrupt(ctx) error }`, implementata dal driver specifico del provider. È l'unico punto in cui Codex differisce da Claude.
+
+  ### Regole dei comandi, una volta sola
+
+  - `SendRunMessage`: messaggio vuoto → `RunRefusedUnsupported` prima di qualunque contatto col processo; run sconosciuta → `RunRefusedNotFound`; sessione non `ACTIVE` → `RunRefusedNotActive`; altrimenti `Dialogue.Send`, **senza scrivere nulla nella storia**. Un rifiuto del processo viene tradotto, non riscritto.
+  - `CancelRun`: stessi rifiuti, poi `Dialogue.Interrupt`. Dopo la chiamata `ReadRun` riporta ciò che la sessione osserva — che può benissimo essere ancora `ACTIVE`, perché l'interruzione è stata consegnata e non ancora agita. Nessun percorso di codice scrive uno stato terminale in risposta a un comando.
+  - `StreamRunEvents(afterID, sink)`: consegna prima gli eventi già in storia con `ID > afterID`, poi segue i nuovi dallo stesso punto, sotto lo stesso lock che assegna gli ID. È questa atomicità a rendere impossibile il duplicato dopo una riconnessione: fra replay e sottoscrizione non esiste una finestra in cui un evento possa passare due volte.
+  - `ResolveRun`: la run locale ha per identità l'id dell'esecuzione. Un'esecuzione senza sessione registrata risponde stringa vuota e nessun errore — assenza, non fallimento — che è già il caso che il viewer rende come "nessuna run".
+
+  ### Il driver Codex
+
+  `cli/internal/execution/codex/appserver.go` è il client JSON-RPC su stdio: scrive richieste e legge righe, correla le risposte per `id`, e traduce le notifiche in eventi neutri con la stessa tabella di intenti già usata dal provider remoto:
+
+  | notifica app-server | kind neutro |
+  |---|---|
+  | `item/started` / `item/completed` con item `userMessage` | `user_message` |
+  | `item/agentMessage/delta` | `text` |
+  | `item/reasoning/summaryTextDelta`, `item/reasoning/textDelta` | `thinking` |
+  | `item/started` con item `commandExecution` / `fileChange` / `mcpToolCall` | `tool_start` |
+  | `item/completed` degli stessi | `tool_end` |
+  | `turn/completed` | `turn_end` |
+  | qualunque altra notifica di `item/`, `turn/`, `thread/` | il nome del metodo |
+
+  L'ultima riga della tabella è la più importante: una notifica che questa build non conosce **produce comunque un evento**, con il metodo come kind e il payload intatto in `Raw`. Una traduzione che scarta ciò che non riconosce perde pezzi di storia il giorno in cui Codex aggiunge un tipo — e il pacchetto remoto ha già preso questa decisione, per la stessa ragione.
+
+  Il seam col sistema operativo diventa `localrun.Starter`/`localrun.Process`: avvia un comando, scrive righe sullo stdin, restituisce le righe dello stdout su un canale, attende l'uscita. Il `Runner` esistente **non viene toccato**: continua a servire la sonda di disponibilità (`codex --version`), che resta one-shot ed è giusto che lo sia.
+
+  `Execute` cambia forma ma non contratto: registra la sessione con `runID = req.ExecutionID`, esegue handshake, `thread/start` e `turn/start`, consuma le notifiche fino a `turn/completed` o alla scadenza del timeout, chiude la sessione con lo stato osservato, e accetta la ricevuta dal **testo dell'ultimo `agentMessage`** attraverso `execution.AcceptPlanReceipt` — la stessa porta condivisa di oggi, perché una ricevuta accettata qui e rifiutata altrove sarebbe un contratto che esiste due volte. Il payload del record resta identico nei suoi sei campi.
+
+  ### Configurazione: `exec_args` esce, `sandbox` entra
+
+  `exec_args` esiste per sostituire i flag intermedi di `codex exec`. Con l'invocazione `app-server` quei flag non esistono più: tenere la chiave significherebbe accettare un valore che non ha più alcun effetto, cioè mentire nel form di configurazione. Viene sostituita da `sandbox` (`read-only` | `workspace-write` | `danger-full-access`, default `workspace-write`), che è il parametro reale di `thread/start`. `command`, `model` e `timeout_seconds` restano invariati. Lo smoke `execution-config-view-smoke.mjs` e la riga corrispondente di `AGENTS.md` vanno allineati nella stessa storia, perché entrambi asseriscono l'elenco esatto dei campi.
+
+  ### Capacità dichiarata
+
+  AC-1 chiede che Codex **dichiari** il dialogo accanto alle capacità che già espone, e che un provider che non lo offre lo mostri assente. La dichiarazione non va scritta a mano in `Capabilities()`: una costante ripetuta in ogni provider è una costante che prima o poi diverge dall'interfaccia realmente implementata. Si aggiunge quindi `execution.CapabilityRunDialog = "run.dialog"` e un'unica funzione `execution.DeclaredCapabilities(ctx, provider)` che unisce le capacità dichiarate dal provider con `run.dialog` **quando e solo quando `RunCollaboratorFor` la trova**. La lista provider del viewer usa quella funzione; il frontend rende già `p.capabilities` così com'è (`app.js:1596`), quindi non richiede alcuna modifica. `arcipelago`, che implementa già l'interfaccia, guadagna la dichiarazione senza toccare il suo codice, e US-039 la guadagnerà nello stesso modo.
+
+  ### Confini che restano fermi
+
+  - Nessuna credenziale entra in gioco: Codex si autentica da sé, la configurazione contiene solo `command`, `model`, `sandbox`, `timeout_seconds`, e il payload dell'esecuzione conserva comando, modello, exit code, riga di ricevuta, numero di task e durata. Nessuno stream integrale finisce nel record, e `CODEX_HOME` non viene letto, copiato o registrato.
+  - Nessuna nuova rotta HTTP: le quattro rotte run di US-030 sono già provider-neutre e funzionano attraverso `RunCollaboratorFor`.
+  - Nessuna persistenza della conversazione oltre la vita del processo del viewer: è fuori ambito dichiarato della storia, e il registro è deliberatamente in memoria.
+
+  ### Decisione registrata (nessuna pagina Wiki: il gate è disattivato)
+
+  **Contesto.** Serve un canale conversazionale verso un agente locale, e la forma di invocazione attuale non ne ha uno.
+
+  **Opzioni valutate.** (a) `codex exec --json` con storia in streaming e nessun input successivo: costa poco, ma AC-3 diventa impossibile e la storia sarebbe a senso unico. (b) `codex app-server --listen stdio://`: sessione viva, messaggi, interruzione, storia; è sperimentale e il suo protocollo può cambiare. (c) Attendere un flag interattivo di `codex exec`: non esiste e non è annunciato.
+
+  **Scelta: (b).** È l'unica che soddisfa i criteri. Il costo — un protocollo sperimentale — è contenuto tenendo la traduzione tollerante (una notifica sconosciuta diventa comunque un evento) e verificando l'invocazione reale con una sonda dal vivo dietro build tag, esattamente come è già stato fatto per `defaultExecArgs` dopo l'incidente `--full-auto`.
+
+  **Verifica dell'intento.** Test unitari con un processo finto che parla il protocollo osservato; smoke end-to-end con un finto binario `codex` che lo parla davvero su stdio; sonda `liveprobe` contro il binario reale.
+
+
+  ## Baseline
+
+  Rilevata dagli strumenti che il repository dichiara in `AGENTS.md` ed eseguita da `cli/` prima di progettare i task.
+
+  | Comando | Esito osservato |
+  |---|---|
+  | `gofmt -l .` | nessun output |
+  | `go vet ./...` | nessun problema |
+  | `go build ./...` | compila |
+  | `go test ./...` | 1124 test passati in 27 pacchetti |
+  | `golangci-lint run --timeout 5m ./...` | 0 issues |
+
+  `golangci-lint` non è sul `PATH` ma è installato in `$(go env GOPATH)/bin/golangci-lint` (v2.12.2): invocarlo con il percorso esplicito, non reinstallarlo.
+
+  Prerequisiti d'ambiente, distinti dai fallimenti di codice:
+
+  - `codex` è installato (`codex-cli 0.147.0`, `/opt/homebrew/bin/codex`) e autenticato. Serve **solo** alla sonda `liveprobe`, che resta dietro build tag: nessun test della suite ordinaria lo invoca.
+  - Node è richiesto dallo smoke end-to-end, che costruisce la CLI da sorgente come gli altri smoke del repository.
+
+  Nessun comando della baseline è rosso, quindi ogni task può pretendere il verde pieno. Nessun file toccato dal piano parte con diagnostiche locali.
+
+
+  ## Mappa delle evidenze di accettazione
+
+  | AC | Livello | Oracolo osservabile | Stato di partenza | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 — Codex dichiara la capacità di dialogo, un provider che non la offre la mostra assente | unitario (`execution`, `web`) + smoke e2e | `GET /api/execution/providers` restituisce per `codex` `capabilities` contenente sia `spec.plan` sia `run.dialog`; un provider registrato che non implementa `RunCollaborator` non contiene `run.dialog` | viewer avviato su un workspace con i tre provider registrati | TASK-03, TASK-13 |
+  | AC-2 — Storia ordinata e riprendibile dallo stesso cursore, senza duplicati dopo una riconnessione | unitario (`localrun`) + smoke e2e | gli `ID` degli eventi sono strettamente crescenti da 1; `GET /api/execution/{id}/run?after_id=N` restituisce esattamente gli eventi con `ID > N`; due letture successive con il cursore restituito non ripetono alcun `ID`; uno stream chiuso e riaperto da `afterID` non riconsegna nulla di già visto | sessione locale con N eventi già emessi dal processo finto | TASK-05, TASK-06, TASK-13 |
+  | AC-3 — Il messaggio raggiunge il processo ed entra nella storia solo quando il processo lo riemette | unitario (`localrun`, `codex`) + smoke e2e | dopo `POST .../run/messages` il processo finto ha ricevuto sul proprio stdin un `turn/steer` con il testo esatto, e la storia restituita **non** contiene ancora il messaggio; solo dopo che il processo emette `item/started` di tipo `userMessage` la storia lo mostra con il testo esatto | run attiva con turno in corso | TASK-07, TASK-08, TASK-10, TASK-13 |
+  | AC-4 — La cancellazione riporta lo stato che il processo conferma, mai uno stato terminale derivato localmente | unitario (`localrun`) + smoke e2e | dopo `POST .../run/cancel` con processo finto che **non** esce, la risposta riporta `state: ACTIVE`; solo dopo l'uscita osservata del processo lo stato diventa terminale; nessun percorso di codice scrive lo stato in risposta a un comando (verificato da un test che cancella e rilegge senza far uscire il processo) | run attiva, processo finto che ignora l'interruzione | TASK-07, TASK-08, TASK-13 |
+  | AC-5 — Messaggio e cancellazione su run non attiva rifiutati con il motivo, storia invariata byte per byte | unitario (`localrun`) + smoke e2e | su sessione chiusa, `SendRunMessage` e `CancelRun` restituiscono `*RunCommandError` con `Reason = run_not_active`; le due rotte rispondono 409 con il motivo; la serializzazione JSON della storia prima e dopo i due tentativi è identica byte per byte | sessione chiusa dopo l'uscita del processo | TASK-07, TASK-08, TASK-13 |
+  | AC-6 — Nessuna credenziale né materiale di sessione di Codex nella configurazione o nelle risposte del viewer | unitario (`codex`) + smoke e2e | `ConfigFields()` espone esattamente `command`, `model`, `sandbox`, `timeout_seconds` e nessun nome che chieda un segreto; il payload dell'esecuzione contiene esattamente i sei campi previsti e nessuno stream; i corpi di tutte le risposte del viewer toccate dallo smoke non contengono né `CODEX_HOME`, né il percorso della home di sessione, né il sentinella d'ambiente iniettato | esecuzione completata con ricevuta valida | TASK-11, TASK-12, TASK-13 |
+
+  Nessun test double nasconde un oracolo: il processo finto sostituisce **il binario Codex**, non il codice sotto esame. Lo smoke end-to-end sostituisce anch'esso solo il binario, con uno script che parla davvero il protocollo su stdio — tutto il resto (CLI, viewer, provider, follower, rotte) è reale.
+
+
+  ## Strategia di test
+
+  Tre livelli, ciascuno con una responsabilità che gli altri non possono coprire.
+
+  **Unitario, sul seam di processo.** I test di `localrun` e di `codex` iniettano un `Starter` finto che restituisce un `Process` finto: il test scrive le righe di protocollo che vuole e legge ciò che il codice ha scritto sullo stdin. È il livello dove vivono l'ordinamento, il cursore, i rifiuti tipizzati e la tabella di traduzione, perché sono decisioni deterministiche che non hanno bisogno di un processo vero e che un processo vero renderebbe soltanto più lente e più fragili.
+
+  **Smoke end-to-end senza credenziali.** `test/e2e/local-run-view-smoke.mjs`, sul modello esplicito di `run-from-view-smoke.mjs`: costruisce la CLI da sorgente, inizializza un workspace, imposta come provider predefinito `codex` con `command` puntato a un **finto binario** — uno script Node che parla il protocollo app-server su stdio e non progredisce mai da solo — avvia `archetipo view` su una porta libera di `127.0.0.1`, e comanda ogni passaggio: emette gli eventi, li rilegge con il cursore, invia il messaggio e verifica che compaia **solo dopo** che il finto processo lo riemette, cancella con il processo che resiste, chiude il processo e ripete messaggio e cancellazione ottenendo due rifiuti motivati. Nessuna attesa arbitraria: ogni attesa interroga una rotta finché la proiezione riporta ciò che il finto processo è appena stato istruito a fare. È il livello che prova che le rotte, il follower e il provider stanno davvero insieme.
+
+  **Sonda dal vivo, dietro build tag.** `TestLiveCodexDialogue` (tag `liveprobe`) esegue contro il **binario reale** l'esatta sequenza usata in pianificazione: handshake, `thread/start`, `turn/start` con un prompt innocuo, e — se il turno è ancora attivo — `turn/steer` e `turn/interrupt`. Non tocca il backlog e non pianifica nulla, quindi costa una manciata di secondi e nessun effetto persistente. Esiste per la ragione documentata nel repository: ogni altro test passa attraverso un seam e sarebbe felicissimo di concordare su un metodo che Codex rifiuta, che è esattamente il modo in cui `--full-auto` è sopravvissuto a una review completa.
+
+  **Rinuncia motivata al browser e2e.** La storia non introduce né modifica alcuna superficie visuale: il pannello run esiste da US-030, la lista provider rende già `capabilities` senza modifiche, e ogni AC è osservabile sulle rotte HTTP che il browser stesso userebbe. Uno smoke sulle rotte prova gli stessi fatti in modo deterministico; avviare un framework di browser per questa storia aggiungerebbe infrastruttura senza aggiungere prova.
+
+  **Filmabilità.** La `Dimostrazione` è filmabile attraverso il pannello Execution e il pannello run del viewer. La decisione finale su registrare o saltare il video resta di `archetipo-review`.
+tasks:
+  - id: TASK-01
+    title: Dichiarare la capacità di dialogo derivandola dall'interfaccia implementata
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Il pacchetto `execution` espone una capacità `run.dialog` e un'unica funzione che la aggiunge alle capacità di un provider quando, e solo quando, quel provider implementa `RunCollaborator`.
+
+      ## Read
+      - `cli/internal/execution/types.go` — le costanti `ActionID`/`Capability` esistenti e come `CapabilitySpecPlan` è dichiarata.
+      - `cli/internal/execution/run.go` — `RunCollaborator` e `RunCollaboratorFor`, che è la sola fonte di verità sulla collaborazione.
+      - `cli/internal/execution/provider.go` — `NormalizeCapabilities` e `DescribeConfig`, il modello già usato per una capacità opzionale scoperta a runtime.
+
+      ## Change
+      - `cli/internal/execution/types.go` — aggiungere la costante `CapabilityRunDialog Capability = "run.dialog"` accanto a `CapabilitySpecPlan`.
+      - `cli/internal/execution/run.go` — aggiungere `DeclaredCapabilities(ctx context.Context, provider Provider) ([]Capability, error)`.
+      - Non goal: non modificare `Provider`, non aggiungere metodi a `RunCollaborator`, non toccare i `Capabilities()` dei singoli provider. La dichiarazione deve restare derivata, mai copiata.
+
+      ## Steps
+      1. Dichiarare `CapabilityRunDialog` con un commento che dica cosa significa: il provider espone una run osservabile e comandabile, non che sappia pianificare.
+      2. Implementare `DeclaredCapabilities`: chiamare `provider.Capabilities(ctx)`, propagare l'errore invariato, aggiungere `CapabilityRunDialog` se `RunCollaboratorFor(provider)` risponde `true`, restituire il risultato attraverso `NormalizeCapabilities` così che l'ordine sia stabile e i duplicati impossibili.
+      3. Restituire sempre una slice non nil, per la stessa ragione già scritta in `DescribeConfig`: un chiamante che serializza deve produrre `[]` e mai `null`.
+      4. Documentare nel commento perché la capacità è derivata e non dichiarata: una costante ripetuta in ogni provider diverge, prima o poi, dall'interfaccia realmente implementata.
+
+      ## Verify
+      - Run (da `cli/`): `go build ./... && go vet ./internal/execution/`
+      - Expect: compila senza errori e senza diagnostiche nuove.
+
+      ## Done
+      - [ ] `CapabilityRunDialog` esiste con valore `run.dialog`.
+      - [ ] `DeclaredCapabilities` deriva la capacità da `RunCollaboratorFor` e da nessun'altra fonte.
+      - [ ] AC-1 — la dichiarazione esiste in un solo punto del codice.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: La lista provider del viewer dichiara le capacità derivate
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      `GET /api/execution/providers` riporta per ogni provider le capacità derivate, così che il pannello Execution mostri il dialogo senza alcuna modifica al frontend.
+
+      ## Read
+      - `cli/internal/web/execution.go` — `handleListExecutionProviders`, in particolare il punto in cui chiama `provider.Capabilities(r.Context())` e normalizza.
+      - `cli/internal/web/assets/app.js:1596` — come il frontend rende `p.capabilities`: è già una join dell'array, quindi non richiede modifiche.
+
+      ## Change
+      - `cli/internal/web/execution.go` — sostituire la coppia `provider.Capabilities` + `NormalizeCapabilities` con `execution.DeclaredCapabilities`.
+      - Non goal: nessuna modifica a `app.js`, nessun campo nuovo nella view, nessuna nuova rotta.
+
+      ## Steps
+      1. Chiamare `execution.DeclaredCapabilities(r.Context(), provider)` e mantenere invariato il trattamento dell'errore già presente (`iox.NewInternal` con il nome del provider).
+      2. Rimuovere la normalizzazione locale ora ridondante, senza cambiare il contratto della view: `capabilities` resta un array mai nullo.
+      3. Verificare che nessun altro punto del pacchetto `web` chiami `provider.Capabilities` per costruire una view; se esiste, allinearlo alla stessa funzione.
+
+      ## Verify
+      - Run (da `cli/`): `go build ./... && go test ./internal/web/`
+      - Expect: compila e i test del pacchetto `web` restano verdi.
+
+      ## Done
+      - [ ] La rotta deriva le capacità da `DeclaredCapabilities`.
+      - [ ] AC-1 — nessuna riga di frontend è stata necessaria per mostrare la nuova capacità.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Provare la dichiarazione derivata nel pacchetto execution e nella lista provider del viewer
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Objective
+      È provato che un provider collaborativo dichiara `run.dialog` e che un provider che non lo è la mostra assente, sia nel pacchetto `execution` sia sulla rotta che il viewer espone.
+
+      ## Read
+      - `cli/internal/execution/run_test.go` — `collaboratingProvider` e `plainProvider` già presenti: sono i due casi che servono, non vanno reinventati.
+      - `cli/internal/web/execution_test.go` — come è costruito il server di test e come si legge `GET /api/execution/providers`.
+
+      ## Change
+      - `cli/internal/execution/run_test.go` — aggiungere i test di `DeclaredCapabilities`.
+      - `cli/internal/web/execution_test.go` — aggiungere il test sulla rotta.
+      - Non goal: non modificare le fixture esistenti oltre a ciò che serve per registrare due provider di natura diversa.
+
+      ## Steps
+      1. Test unitario: un provider che implementa `RunCollaborator` e dichiara `spec.plan` produce esattamente `["run.dialog","spec.plan"]` (ordine normalizzato).
+      2. Test unitario: un provider che non la implementa produce esattamente `["spec.plan"]` — asserire l'assenza esplicitamente, non solo la lunghezza.
+      3. Test unitario: un provider il cui `Capabilities` fallisce propaga l'errore invariato e non inventa una lista.
+      4. Test unitario: un provider collaborativo che dichiara zero capacità produce comunque `["run.dialog"]` e mai `nil`.
+      5. Test web: registrare due provider — uno collaborativo, uno no — e verificare sul JSON della rotta che il primo abbia `run.dialog` fra le `capabilities` e il secondo no.
+
+      ## Verify
+      - Run (da `cli/`): `go test ./internal/execution/ ./internal/web/`
+      - Expect: tutti i test passano, compresi i preesistenti dei due pacchetti.
+
+      ## Done
+      - [ ] AC-1 — un provider collaborativo dichiara `run.dialog` accanto alle capacità che già espone.
+      - [ ] AC-1 — un provider non collaborativo la espone come assente, asserito esplicitamente.
+      - [ ] L'errore di `Capabilities` resta un errore e non diventa una lista vuota.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Pacchetto localrun — sessione, storia con cursore e registro delle run locali
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Esiste un pacchetto che conosce la storia di una run locale: eventi ordinati con identificativo monotono, replay da un cursore, stato osservato e mai dedotto, e un registro che conserva anche le run concluse.
+
+      ## Read
+      - `cli/internal/execution/run.go` — `RunEvent` (e il commento che spiega perché il cursore è `ID` e non `Seq`), `RunSnapshot`, `RunState`.
+      - `cli/internal/execution/arcipelago/events.go` — come il provider remoto consuma uno stream e perché non riconnette da solo: la stessa divisione di responsabilità vale qui.
+      - `cli/internal/web/run_follow.go` — chi consuma `StreamRunEvents` e con quale cursore, per non progettare una semantica che il follower non può usare.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/localrun/session.go` — `Session`, con la storia e lo stato.
+      - Nuovo file `cli/internal/execution/localrun/registry.go` — `Registry`.
+      - Non goal: nessuna conoscenza di Codex, di JSON-RPC o di processi in questo file; nessuna persistenza su disco.
+
+      ## Steps
+      1. Definire `Session` con: `runID string`, `mu sync.Mutex`, `events []execution.RunEvent`, `state execution.RunState`, `err string`, `closedAt *time.Time`, `subscribers map[int]chan execution.RunEvent`, `now func() time.Time` iniettabile.
+      2. `NewSession(runID string, now func() time.Time) *Session` nasce in stato `RunActive` con storia vuota.
+      3. `Append(kind, text, tool string, raw json.RawMessage)`: sotto lock assegna `ID = len(events)+1` e `Seq` uguale al numero di turni già visti (o 0: il `Seq` non è un cursore e non deve fingersi tale), timestamp da `now()`, accoda e notifica i sottoscrittori senza bloccare su un canale pieno — un consumatore lento non deve poter fermare il processo.
+      4. `Close(state execution.RunState, reason string)`: sotto lock registra stato terminale, motivo e `closedAt` **una sola volta** (una seconda chiamata non sovrascrive la prima), poi chiude i canali dei sottoscrittori. È l'unico modo di uscire da `RunActive`.
+      5. `Snapshot() execution.RunSnapshot`: restituisce stato, motivo e `closedAt` correnti.
+      6. `Stream(ctx, afterID int64, sink func(execution.RunEvent) error) error`: **sotto lo stesso lock** copia gli eventi con `ID > afterID` e registra il sottoscrittore, poi rilascia il lock; consegna prima la copia, poi gli eventi che arrivano dal canale; termina quando il contesto è chiuso, quando la sessione chiude o quando `sink` restituisce un errore, che propaga invariato. L'atomicità fra copia e sottoscrizione è ciò che rende il duplicato impossibile.
+      7. `Events(afterID int64) []execution.RunEvent` per la lettura non in streaming.
+      8. `Registry`: `Register(session *Session)`, `Lookup(runID string) (*Session, bool)`, protetti da lock. Una sessione conclusa **non** viene rimossa: la storia di una run finita deve restare leggibile e un comando su di essa deve poter essere rifiutato con il motivo giusto.
+      9. Documentare in testa al file perché lo stato non è mai scritto da un comando: solo l'osservazione della fine del processo lo cambia.
+
+      ## Verify
+      - Run (da `cli/`): `go build ./... && go vet ./internal/execution/localrun/`
+      - Expect: compila senza diagnostiche.
+
+      ## Done
+      - [ ] Gli `ID` sono monotoni a partire da 1 e assegnati sotto lo stesso lock che serve il replay.
+      - [ ] `Close` è idempotente rispetto al primo stato registrato.
+      - [ ] Una sessione conclusa resta nel registro.
+      - [ ] AC-2 — la semantica di storia e cursore è definita in un solo pacchetto, riusabile da un secondo provider locale.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Provare ordine, cursore e assenza di duplicati della sessione locale
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      È provato che la storia di una sessione locale è ordinata, riprendibile dallo stesso cursore e priva di duplicati dopo una riconnessione, anche sotto concorrenza.
+
+      ## Read
+      - `cli/internal/execution/localrun/session.go` — appena scritto.
+      - `cli/internal/execution/arcipelago/run_test.go` — lo stile dei test del pacchetto gemello.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/localrun/session_test.go`.
+
+      ## Steps
+      1. Storia ordinata: dieci `Append` producono `ID` da 1 a 10, nell'ordine di apparizione, con i campi `kind`/`text`/`tool` esattamente quelli passati.
+      2. Cursore: `Events(4)` restituisce esattamente gli eventi 5..10; `Events(0)` li restituisce tutti; `Events(10)` restituisce una slice vuota e non nil.
+      3. Riconnessione senza duplicati: aprire uno `Stream` da 0, raccogliere i primi tre eventi, interrompere lo stream, riaprirlo da `afterID = 3` e verificare che gli `ID` raccolti nel secondo stream inizino da 4 e che l'unione non contenga alcun `ID` ripetuto.
+      4. Corsa fra replay e nuovo evento: avviare uno `Stream` mentre un'altra goroutine esegue `Append` in continuazione (con `-race`), e verificare che la sequenza degli `ID` osservati dal sink sia strettamente crescente e senza buchi rispetto al cursore iniziale.
+      5. Chiusura: dopo `Close(RunClosed, "")` lo `Stream` in corso termina, `Snapshot()` riporta `CLOSED` con `ClosedAt` valorizzato, e una seconda `Close(RunCrashed, "…")` non cambia lo stato registrato.
+      6. Consumatore lento: un sink che non legge non deve bloccare `Append` (verificato con un timeout esplicito nel test).
+
+      ## Verify
+      - Run (da `cli/`): `go test -race ./internal/execution/localrun/`
+      - Expect: tutti i test passano, nessun data race segnalato.
+
+      ## Done
+      - [ ] AC-2 — gli eventi sono ordinati e il cursore restituisce esattamente il complemento di ciò che è già stato visto.
+      - [ ] AC-2 — una riconnessione dallo stesso cursore non riconsegna alcun evento già visto, provato anche sotto `-race`.
+      - [ ] Uno stream lento non può fermare la produzione degli eventi.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Collaboratore generico delle run locali sopra il registro delle sessioni
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Un provider locale diventa collaborativo incorporando un tipo che implementa tutti e sette i metodi di `execution.RunCollaborator` sopra il registro delle sessioni, con i rifiuti tipizzati definiti una volta sola.
+
+      ## Read
+      - `cli/internal/execution/run.go` — i sette metodi, `RunCommandError` e le cinque ragioni di rifiuto.
+      - `cli/internal/execution/arcipelago/run.go` — come il provider remoto rifiuta, in particolare il messaggio vuoto respinto prima di qualunque contatto e il commento su `CancelRun` che vieta di dedurre lo stato terminale.
+      - `cli/internal/web/run_routes.go` — `mapRunRefusal`, per verificare che ogni ragione prodotta qui abbia già una resa HTTP.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/localrun/collaborator.go`.
+      - Non goal: nessuna conoscenza del protocollo di un provider specifico; nessuna scrittura nella storia da parte di un comando.
+
+      ## Steps
+      1. Definire `Dialogue interface { Send(ctx context.Context, text string) error; Interrupt(ctx context.Context) error }`: è l'unico punto in cui un provider concreto entra, e la sessione ne conserva un riferimento (aggiungere il campo a `Session` con un setter usato all'avvio).
+      2. Definire `Collaborator struct { registry *Registry }` con `NewCollaborator(*Registry) *Collaborator`.
+      3. `ResolveRun(ctx, exec, providerConfig)`: se il registro conosce `exec.ID` restituisce quell'id, altrimenti stringa vuota e `nil` — assenza, non fallimento, esattamente come già documentato nell'interfaccia.
+      4. `ReadRun(ctx, req)`: sessione sconosciuta → `RunCommandError{Reason: RunRefusedNotFound}`; altrimenti `Snapshot()`.
+      5. `ReadRunApprovals`: restituisce sempre una slice vuota non nil, con un commento che dice perché è una risposta e non una lacuna: la sessione locale gira con `approvalPolicy: never`, quindi il processo non chiede mai approvazioni.
+      6. `StreamRunEvents(ctx, req, afterID, sink)`: delega a `Session.Stream`, propagando l'errore del sink invariato; sessione sconosciuta → rifiuto `not_found`.
+      7. `SendRunMessage(ctx, req, message)`: nell'ordine — testo vuoto → `RunRefusedUnsupported` senza toccare il processo; sessione sconosciuta → `not_found`; sessione non `ACTIVE` → `run_not_active`; altrimenti `Dialogue.Send`. **Nessuna scrittura nella storia**, con il commento che spiega perché: il messaggio entra nella storia quando il processo lo riemette, e un comando che non scrive nulla non ha nulla da disfare quando viene rifiutato.
+      8. `RespondRunApproval`: rifiuto `RunRefusedUnsupported` motivato — una run locale non espone approvazioni.
+      9. `CancelRun(ctx, req)`: stessi rifiuti di `SendRunMessage`, poi `Dialogue.Interrupt`. Non scrive alcuno stato: il commento deve dirlo esplicitamente e il codice non deve avere alcun percorso che lo faccia.
+      10. Un errore restituito dal `Dialogue` che sia già un `*execution.RunCommandError` va propagato invariato; qualunque altro va avvolto senza diventare un rifiuto, perché nulla è stato deciso.
+
+      ## Verify
+      - Run (da `cli/`): `go build ./... && go vet ./internal/execution/localrun/`
+      - Expect: compila; l'asserzione di tipo `var _ execution.RunCollaborator = (*Collaborator)(nil)` fa fallire la build se un metodo manca o diverge.
+
+      ## Done
+      - [ ] Tutti e sette i metodi sono implementati e l'asserzione di interfaccia è presente.
+      - [ ] AC-3 — nessun percorso di `SendRunMessage` scrive nella storia.
+      - [ ] AC-4 — nessun percorso di `CancelRun` scrive uno stato.
+      - [ ] AC-5 — i rifiuti su run non attiva usano `run_not_active`, che `mapRunRefusal` rende già come 409 con motivo.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Provare consegna del messaggio, cancellazione non dedotta e rifiuti su run chiusa
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      È provato che un messaggio raggiunge il processo senza entrare nella storia, che la cancellazione non produce mai uno stato terminale locale, e che i comandi su una run non attiva sono rifiutati lasciando la storia identica.
+
+      ## Read
+      - `cli/internal/execution/localrun/collaborator.go` — appena scritto.
+      - `cli/internal/execution/run_test.go` — come si asserisce una ragione di rifiuto con `execution.RefusalOf`.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/localrun/collaborator_test.go`, con un `Dialogue` finto che registra ciò che riceve e può essere istruito a fallire.
+
+      ## Steps
+      1. Messaggio consegnato: su sessione attiva, `SendRunMessage` con un testo sentinella fa arrivare al `Dialogue` finto quel testo esatto **una sola volta**, e la storia serializzata prima e dopo è identica byte per byte.
+      2. Il messaggio entra in storia solo se riemesso: dopo l'invio, far chiamare `Append` alla sessione con kind `user_message` e il testo sentinella, e verificare che solo allora `Events(0)` lo contenga.
+      3. Messaggio vuoto e solo spazi: rifiutati con `unsupported`, senza che il `Dialogue` finto riceva alcunché.
+      4. Cancellazione non dedotta: su sessione attiva, `CancelRun` chiama `Interrupt` una volta e `ReadRun` continua a riportare `ACTIVE`; solo dopo una `Close` esplicita (che è ciò che farà l'osservazione dell'uscita del processo) lo stato diventa terminale.
+      5. Rifiuti su run chiusa: dopo `Close(RunClosed, "")`, `SendRunMessage` e `CancelRun` restituiscono `run_not_active` con un errore non vuoto, il `Dialogue` finto non riceve nulla, e il JSON della storia è **byte per byte** quello di prima dei due tentativi (confrontare le due serializzazioni, non le lunghezze).
+      6. Run sconosciuta: i quattro metodi che richiedono una sessione rispondono `not_found`.
+      7. `ResolveRun`: esecuzione con sessione registrata → id; esecuzione senza sessione → stringa vuota e `nil`.
+      8. `ReadRunApprovals`: slice vuota non nil, e mai un errore.
+
+      ## Verify
+      - Run (da `cli/`): `go test -race ./internal/execution/localrun/`
+      - Expect: tutti i test passano.
+
+      ## Done
+      - [ ] AC-3 — il messaggio raggiunge il processo e la storia resta invariata finché il processo non lo riemette.
+      - [ ] AC-4 — dopo la cancellazione lo stato riportato è quello osservato, mai uno stato terminale derivato dal comando.
+      - [ ] AC-5 — messaggio e cancellazione su run chiusa sono rifiutati con il motivo e la storia è identica byte per byte.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Seam di processo per una sessione locale viva
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Esiste un unico punto di contatto con il sistema operativo per un processo a sessione: si avvia, gli si scrivono righe sullo standard input, se ne leggono le righe di standard output, se ne osserva l'uscita — e un test può sostituirlo interamente.
+
+      ## Read
+      - `cli/internal/execution/codex/runner.go` — il seam one-shot esistente e la distinzione fra "non è partito" ed "è uscito male": qui va conservata.
+      - `cli/internal/execution/codex/provider.go` — come `Runner` è iniettato tramite `Options`, modello da replicare.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/localrun/process.go` — interfacce `Starter` e `Process` più l'implementazione reale su `os/exec`.
+      - Non goal: non modificare `codex.Runner`, che continua a servire la sonda `--version`.
+
+      ## Steps
+      1. Definire `Process interface { Send(line []byte) error; Lines() <-chan []byte; Signal() error; Wait() (exitCode int, stderr string, err error); Close() error }`.
+      2. Definire `Starter interface { Start(ctx context.Context, dir, name string, args []string) (Process, error) }`.
+      3. Implementare `execStarter`: `exec.CommandContext`, pipe su stdin e stdout, buffer limitato per lo stderr (riusare la stessa soglia di troncamento già definita in `codex`, senza duplicarne il valore in una seconda costante: esportarla o passarla come parametro).
+      4. `Lines()` è alimentata da una goroutine con `bufio.Scanner` e un limite esplicito per riga, per la stessa ragione già scritta in `arcipelago/events.go`: lo stream è illimitato per progetto, una singola riga non deve esserlo. Il canale viene chiuso quando lo stdout finisce.
+      5. `Send` scrive la riga terminata da `\n` sotto un lock: più chiamanti possono inviare, e due scritture interlacciate produrrebbero JSON corrotto.
+      6. `Signal()` invia l'interruzione al processo; `Close()` chiude lo stdin e rilascia le risorse; `Wait()` restituisce exit code e stderr catturato, con `-1` e un errore quando il processo non è mai partito.
+      7. Documentare che il seam non conosce alcun protocollo: parla righe, non messaggi.
+
+      ## Verify
+      - Run (da `cli/`): `go build ./... && go test ./internal/execution/localrun/`
+      - Expect: compila e i test esistenti del pacchetto restano verdi.
+
+      ## Done
+      - [ ] Il seam è iniettabile e nessun test della suite ordinaria avvia un processo reale.
+      - [ ] Una riga di lunghezza patologica non può esaurire la memoria.
+      - [ ] `Send` è sicuro rispetto a scritture concorrenti.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Client app-server di Codex e traduzione delle notifiche in eventi neutri
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-08
+    body: |-
+      ## Objective
+      Il provider Codex sa aprire una sessione `codex app-server` su stdio, tradurne le notifiche nella storia neutra della run, consegnare un messaggio al turno in corso e interromperlo.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/events.go` — `translateAgentEvent` e il ramo `default` che non scarta ciò che non riconosce: la stessa regola vale qui.
+      - `cli/internal/execution/codex/provider.go` — `Options`, `New`, e come i seam vengono riempiti con le implementazioni reali.
+      - Il piano corrente, sezione «Il protocollo, verificato sul campo»: la sequenza e i nomi dei metodi sono stati osservati su codex-cli 0.147.0 e non vanno reinventati leggendo lo schema.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/codex/appserver.go` — client JSON-RPC su stdio e traduzione.
+      - `cli/internal/execution/codex/provider.go` — aggiungere a `Options` il `Starter` e il `Registry` iniettabili, con i default reali.
+      - Non goal: nessuna gestione di approvazioni (la sessione gira con `approvalPolicy: "never"`), nessuna ripresa di una sessione chiusa, nessuna persistenza del thread.
+
+      ## Steps
+      1. Definire il client: scrive una richiesta per riga (`{"id":<n>,"method":...,"params":...}`), correla le risposte per `id` con una mappa di canali sotto lock, instrada le notifiche (messaggi senza `id`) al traduttore.
+      2. Handshake nell'ordine osservato: `initialize` con `clientInfo` (nome `archetipo`, versione della CLI), poi la notifica `initialized`, poi `thread/start` con `{cwd, sandbox, approvalPolicy:"never", ephemeral:true}` e `model` quando configurato. `threadId` si legge da `result.thread.id`.
+      3. `turn/start` con `{threadId, input:[{type:"text", text:<prompt>}]}`; `turnId` si legge da `result.turn.id` e va conservato: è il precondizionale di `turn/steer`.
+      4. Implementare `Dialogue`: `Send` → `turn/steer` con `{threadId, expectedTurnId, input}`; `Interrupt` → `turn/interrupt` con `{threadId, turnId}`.
+      5. Tradurre l'errore JSON-RPC del processo in rifiuto tipizzato: un errore il cui messaggio dichiara che non c'è un turno attivo (`no active turn to steer` / `no active turn to interrupt`, osservati) diventa `execution.RunCommandError{Reason: RunRefusedNotActive}`; qualunque altro errore del protocollo resta un errore, perché nulla è stato deciso. Isolare questa classificazione in una funzione con un commento che dica dove il messaggio è stato osservato, così che una futura versione di Codex si corregga in un punto solo.
+      6. Implementare `translateNotification(method string, params json.RawMessage) (kind, text, tool string)` secondo la tabella del piano, con il ramo `default` che restituisce il nome del metodo come kind, e `Raw` sempre valorizzato con i `params` originali.
+      7. Ogni notifica tradotta diventa un `Append` sulla sessione; la fine del turno (`turn/completed`) e l'uscita del processo chiudono la sessione con lo stato **osservato**.
+      8. Accumulare il testo dell'ultimo `agentMessage` (dalle `delta` e dal successivo `item/completed`) e restituirlo al chiamante: è ciò su cui `AcceptPlanReceipt` lavorerà.
+
+      ## Verify
+      - Run (da `cli/`): `go build ./... && go vet ./internal/execution/codex/`
+      - Expect: compila senza diagnostiche.
+
+      ## Done
+      - [ ] La sequenza di handshake è quella osservata sul binario reale.
+      - [ ] Una notifica sconosciuta produce comunque un evento con il metodo come kind e i `params` in `Raw`.
+      - [ ] AC-3 — `Send` usa `turn/steer` sul turno attivo.
+      - [ ] AC-4 — `Interrupt` usa `turn/interrupt` e non chiude la sessione da sé.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Provare handshake, traduzione e rifiuti del protocollo Codex con un processo finto
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      È provato, senza avviare Codex, che il client parla la sequenza osservata, traduce ogni notifica in un evento e trasforma il rifiuto del processo nella ragione tipizzata corretta.
+
+      ## Read
+      - `cli/internal/execution/codex/appserver.go` — appena scritto.
+      - `cli/internal/execution/codex/runner_test.go` — lo stile dei finti già presenti nel pacchetto.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/codex/appserver_test.go`, con un `Starter`/`Process` finto che raccoglie le righe scritte e restituisce quelle che il test decide.
+
+      ## Steps
+      1. Handshake: verificare che le prime righe scritte siano, nell'ordine, `initialize`, `initialized`, `thread/start` con `cwd` e `sandbox` attesi e `approvalPolicy: "never"`, poi `turn/start` con il prompt esatto prodotto da `buildPrompt`.
+      2. Modello: con `model` configurato la richiesta `thread/start` lo riporta; senza, il campo è assente e non una stringa vuota.
+      3. Traduzione, come tabella: per ciascuna riga della tabella del piano, una notifica in ingresso produce un evento con kind, testo e strumento attesi. Includere il caso `userMessage` (che è ciò che rende osservabile AC-3) e il caso `item/agentMessage/delta`.
+      4. Notifica sconosciuta: `thread/qualcosa/di/nuovo` produce comunque un evento il cui kind è il nome del metodo e i cui `Raw` sono i `params` originali. È il test che protegge dalla perdita silenziosa di storia.
+      5. Rifiuto tradotto: una risposta di errore `-32600` con messaggio `no active turn to steer` restituisce un `*execution.RunCommandError` con `Reason = run_not_active`; un errore di protocollo diverso **non** diventa un rifiuto.
+      6. Ordine: una sequenza di venti notifiche produce venti eventi con `ID` da 1 a 20 nello stesso ordine di arrivo.
+      7. Uscita del processo: quando il canale delle righe si chiude senza `turn/completed`, la sessione chiude in stato `CRASHED` con un motivo non vuoto; con `turn/completed` e uscita 0 chiude in `CLOSED`.
+
+      ## Verify
+      - Run (da `cli/`): `go test -race ./internal/execution/codex/`
+      - Expect: tutti i test passano, compresi i preesistenti del pacchetto.
+
+      ## Done
+      - [ ] AC-2 — venti notifiche producono venti eventi ordinati, senza duplicati.
+      - [ ] AC-3 — la notifica `userMessage` diventa un evento `user_message` con il testo esatto.
+      - [ ] AC-5 — il rifiuto del processo su turno concluso diventa `run_not_active` e nient'altro.
+      - [ ] Una notifica sconosciuta non viene mai scartata.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Execute di Codex guidato dalla sessione e configurazione allineata all'invocazione reale
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      Una pianificazione con provider Codex apre una sessione osservabile e comandabile per tutta la sua durata, e la configurazione del provider descrive l'invocazione che avviene davvero.
+
+      ## Read
+      - `cli/internal/execution/codex/provider.go` — `Execute` nella forma attuale: l'ordine dei controlli prima dello spawn, `ensurePlanSkill`, `AcceptPlanReceipt`, `resultFor`.
+      - `cli/internal/execution/codex/config.go` — `settings`, `knownConfigKeys`, `ConfigFields`, `parseExecArgs`.
+      - `cli/internal/execution/codex/prompt.go` — `buildPrompt` (invariato) e `buildArgs` (che diventa l'invocazione di `app-server`).
+      - `cli/internal/execution/planreceipt.go` — la porta di accettazione condivisa, che non va duplicata.
+
+      ## Change
+      - `cli/internal/execution/codex/provider.go` — `Execute` guida la sessione; registrare la sessione con `runID = req.ExecutionID` **prima** di far partire il turno.
+      - `cli/internal/execution/codex/prompt.go` — `buildArgs` produce `["app-server","--listen","stdio://"]`.
+      - `cli/internal/execution/codex/config.go` — sostituire `exec_args` con `sandbox`.
+      - Non goal: non toccare `buildPrompt`, non cambiare i sei campi del payload, non toccare `Available` né il `Runner` one-shot che la serve.
+
+      ## Steps
+      1. Configurazione: rimuovere `exec_args` da `knownConfigKeys`, da `settings` e da `ConfigFields`; aggiungere `sandbox` con valori ammessi `read-only`, `workspace-write`, `danger-full-access` e default `workspace-write`. Un valore fuori elenco è un `*execution.ConfigurationError` che nomina il campo. L'`Help` deve dire cosa cambia davvero: la pianificazione deve poter scrivere il piano, quindi `read-only` produrrà run che falliscono.
+      2. `buildArgs` diventa una funzione pura che restituisce gli argomenti dell'invocazione a sessione; il commento esistente sui flag di `codex exec` va sostituito, non lasciato a mentire.
+      3. `Execute`: mantenere invariato l'ordine dei controlli preliminari (config, working dir, `Available`, `ensurePlanSkill`) — tutto ciò che si può sapere prima di avviare si continua a sapere prima.
+      4. Creare la sessione, registrarla nel registro con `runID = req.ExecutionID`, collegarle il `Dialogue`, poi avviare processo, handshake e turno. Da questo momento la run è osservabile dalle rotte del viewer.
+      5. Attendere la fine del turno o la scadenza di `cfg.Timeout`; chiudere la sessione con lo stato osservato e il motivo, sempre, anche sui percorsi di errore (`defer`).
+      6. Accettare la ricevuta con `execution.AcceptPlanReceipt` sul testo dell'ultimo `agentMessage`; gli errori conservano la forma attuale dei messaggi diagnostici (comando, durata, spec, motivo) perché sono già ciò che l'operatore legge.
+      7. `resultFor` resta invariata nei sei campi; `exit_code` riporta l'uscita reale del processo.
+      8. Nessuno stream integrale entra nel record: continuano a viaggiare solo comando, modello, exit code, riga di ricevuta, numero di task e durata.
+
+      ## Verify
+      - Run (da `cli/`): `go build ./... && go test ./internal/execution/... && go vet ./...`
+      - Expect: compila; i test dei pacchetti di esecuzione passano (quelli di `codex` sulla configurazione andranno allineati nel task di test successivo, che dipende da questo).
+
+      ## Done
+      - [ ] La sessione è registrata prima che il turno parta, quindi la run è osservabile per tutta la sua durata.
+      - [ ] La sessione è chiusa su ogni percorso di uscita, con lo stato osservato.
+      - [ ] AC-6 — la configurazione espone esattamente `command`, `model`, `sandbox`, `timeout_seconds` e nessun campo che chieda un segreto.
+      - [ ] AC-6 — il payload dell'esecuzione conserva i sei campi e nessuno stream.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Provare esito, fallimento e assenza di credenziali dell'esecuzione Codex a sessione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Objective
+      È provato che una pianificazione a sessione produce lo stesso record verificabile di prima, che ogni fallimento resta un fallimento, e che nulla del materiale di autenticazione di Codex entra da nessuna parte.
+
+      ## Read
+      - `cli/internal/execution/codex/provider_test.go` e `config_test.go` — i test esistenti da allineare senza indebolirli.
+      - `cli/internal/execution/codex/provider.go` — la forma nuova di `Execute`.
+
+      ## Change
+      - `cli/internal/execution/codex/provider_test.go` — adattare i casi che assumevano l'invocazione one-shot e aggiungere i nuovi.
+      - `cli/internal/execution/codex/config_test.go` — sostituire i casi su `exec_args` con quelli su `sandbox`.
+
+      ## Steps
+      1. Successo: processo finto che emette le notifiche del turno e chiude con una ricevuta valida nell'ultimo `agentMessage` → `Result.Payload` con i sei campi, `plan_tasks` uguale al numero dichiarato e `result_summary` pari alla ricevuta rinormalizzata.
+      2. Ricevuta assente o per un'altra spec: `Execute` fallisce e il messaggio nomina il comando e la spec; nessun payload viene prodotto.
+      3. Processo che non parte: errore che distingue "non è stato possibile eseguirlo" da "è uscito male", come oggi.
+      4. Timeout: con un processo che non termina mai, `Execute` rientra entro il timeout configurato e la sessione risulta chiusa con motivo non vuoto.
+      5. Osservabilità durante la run: mentre `Execute` è in corso, il registro conosce già `runID = ExecutionID` e la storia cresce — asserito leggendo il registro da un'altra goroutine, senza attese arbitrarie (sincronizzazione sul processo finto).
+      6. Configurazione: i casi di rifiuto per campo restano, con `sandbox` al posto di `exec_args`; un valore fuori elenco nomina il campo `sandbox`; l'assenza applica `workspace-write`.
+      7. Nessun segreto: `ConfigFields()` restituisce esattamente `command`, `model`, `sandbox`, `timeout_seconds` (ordinati) con `Help` non vuoto; la serializzazione del payload non contiene né la home di Codex né alcuna variabile d'ambiente.
+
+      ## Verify
+      - Run (da `cli/`): `go test -race ./internal/execution/...`
+      - Expect: tutti i test passano.
+
+      ## Done
+      - [ ] AC-6 — nessuna credenziale e nessun percorso di sessione compare in configurazione o nel record.
+      - [ ] AC-2 — la storia è leggibile mentre l'esecuzione è ancora in corso.
+      - [ ] I fallimenti restano fallimenti e non producono un record di successo.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Smoke end-to-end del dialogo locale con un finto binario Codex, e sonda dal vivo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-07
+      - TASK-11
+    body: |-
+      ## Objective
+      Il copione della `Dimostrazione` è eseguibile senza credenziali contro il viewer reale, e l'invocazione reale del binario Codex è verificabile a comando.
+
+      ## Read
+      - `test/e2e/run-from-view-smoke.mjs` — il modello dichiarato dalla roadmap: hub finto locale, tutto il resto reale, nessuna attesa arbitraria, corpi delle risposte conservati per provare che il sentinella non è mai uscito.
+      - `test/e2e/execution-config-view-smoke.mjs:64` — l'elenco esatto dei campi di configurazione di codex, da allineare.
+      - `package.json` — come sono registrati gli script `test:view-*-smoke`.
+      - `AGENTS.md` — la riga che descrive `test:view-execution-smoke` e i campi di codex.
+      - `cli/internal/execution/codex/live_probe_test.go` — la forma e il commento di una sonda dietro build tag.
+
+      ## Change
+      - Nuovo file `test/e2e/local-run-view-smoke.mjs`.
+      - Nuovo file di supporto: il finto binario Codex (script Node eseguibile) che parla il protocollo app-server su stdio.
+      - `package.json` — nuovo script `test:view-local-run-smoke`.
+      - `test/e2e/execution-config-view-smoke.mjs` — l'elenco atteso diventa `command`, `model`, `sandbox`, `timeout_seconds`, e `capabilities` di codex deve contenere anche `run.dialog`.
+      - `AGENTS.md` — allineare la descrizione dei campi e citare il nuovo smoke.
+      - `cli/internal/execution/codex/live_probe_test.go` — aggiungere `TestLiveCodexDialogue`.
+      - Non goal: nessuna modifica al runner e2e generale, nessun nuovo scenario in `run.yaml`.
+
+      ## Steps
+      1. Finto binario: uno script Node che legge righe JSON-RPC dallo stdin e risponde come il binario reale — `initialize`, `thread/start`, `turn/start` — e che **non progredisce mai da solo**: emette una notifica solo quando lo smoke gliela chiede (attraverso un file di comando o una porta di controllo su `127.0.0.1`, coerente con lo stile dello smoke esistente). Deve saper riemettere un `userMessage` su `turn/steer`, rifiutare con `-32600` e il messaggio osservato quando il turno è concluso, e uscire su richiesta.
+      2. Lo smoke costruisce la CLI, inizializza il workspace, imposta il provider predefinito `codex` con `command` che punta al finto binario, avvia `archetipo view` su porta libera di `127.0.0.1`.
+      3. AC-1: `GET /api/execution/providers` mostra per `codex` sia `spec.plan` sia `run.dialog`.
+      4. Avvia la pianificazione dalla UI, poi legge `GET /api/execution/{id}/run` e verifica la storia in ordine; rilegge con `after_id` e verifica che non venga riconsegnato nulla di già visto (AC-2).
+      5. `POST .../run/messages` con un testo sentinella: il finto processo lo ha ricevuto, la storia **non** lo contiene; su comando il finto processo lo riemette e solo allora compare (AC-3).
+      6. `POST .../run/cancel` con il finto processo istruito a non uscire: la risposta riporta la run ancora attiva; poi lo si fa uscire e lo stato diventa terminale (AC-4).
+      7. Su run chiusa, ripetere messaggio e cancellazione: due 409 con motivo, e la storia identica prima e dopo (AC-5).
+      8. AC-6: nessun corpo di risposta del viewer contiene il sentinella d'ambiente iniettato né alcun percorso di sessione.
+      9. Sonda dal vivo `TestLiveCodexDialogue` (tag `liveprobe`, skip senza variabile d'ambiente): contro il binario reale esegue handshake, `thread/start`, `turn/start` con un prompt innocuo in una directory temporanea, e prova `turn/steer`/`turn/interrupt` finché il turno è attivo. Non tocca il backlog. Il commento deve dire perché esiste: ogni altro test passa da un seam e concorderebbe volentieri su un metodo che Codex rifiuta.
+
+      ## Verify
+      - Run (dal root): `npm run test:view-local-run-smoke` e `npm run test:view-execution-smoke`
+      - Expect: entrambi terminano con esito positivo su una macchina senza credenziali. Il primo non richiede Codex installato.
+      - Run (da `cli/`, facoltativa e a comando): `go test -tags liveprobe -run TestLiveCodexDialogue ./internal/execution/codex/`
+      - Expect: passa su una macchina con Codex installato e autenticato; è l'unica prova che i nomi dei metodi sono quelli veri.
+
+      ## Done
+      - [ ] AC-1..AC-6 sono tutti osservati dallo smoke sulle rotte reali del viewer.
+      - [ ] Lo smoke non contiene alcuna attesa arbitraria: ogni attesa interroga una rotta finché la proiezione riporta ciò che il finto processo è stato istruito a fare.
+      - [ ] `execution-config-view-smoke` e `AGENTS.md` sono allineati ai campi reali.
+      - [ ] La sonda dal vivo esiste, è dietro build tag ed è stata eseguita almeno una volta.
+
+      ## Blockers
+      None.
+    ref: TASK-13
+  - id: TASK-14
+    title: Gate finale — verifiche complete e spec pronta per la review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+      - TASK-07
+      - TASK-10
+      - TASK-12
+      - TASK-13
+    body: |-
+      ## Objective
+      L'intero incremento è verificato con i controlli che il repository dichiara, e la spec è richiesta in review solo dopo che nessun task è rimasto aperto.
+
+      ## Read
+      - `AGENTS.md`, sezione «Before delivering changes» — i cinque controlli obbligatori.
+      - La sezione «Baseline» di questo piano — i valori attesi, tutti verdi.
+
+      ## Change
+      - Nessuna modifica di codice prevista. Se un controllo fallisce, la correzione appartiene al task che ha introdotto il difetto.
+
+      ## Steps
+      1. Da `cli/`: `gofmt -l .` (deve stampare nulla).
+      2. Da `cli/`: `go vet ./...`.
+      3. Da `cli/`: `go build ./...`.
+      4. Da `cli/`: `go test ./...`.
+      5. Da `cli/`: `$(go env GOPATH)/bin/golangci-lint run --timeout 5m ./...`.
+      6. Dal root: `npm run test:view-local-run-smoke`, `npm run test:view-execution-smoke`, `npm run test:view-run-smoke`, `npm run test:view-plan-smoke` — gli ultimi due sono la prova che le rotte run e la pianificazione remota non hanno subito regressioni.
+      7. Segnare `DONE` questo task, poi ricaricare la spec con `archetipo spec show US-038` da `data.project_root` e verificare che **nessun** task risulti `TODO`.
+      8. Solo allora invocare `archetipo spec review US-038`.
+
+      ## Verify
+      - Run (da `cli/`): `gofmt -l . && go vet ./... && go build ./... && go test ./... && $(go env GOPATH)/bin/golangci-lint run --timeout 5m ./...`
+      - Expect: nessun file da formattare, nessun problema di vet, build pulita, tutti i test verdi (almeno i 1124 della baseline più quelli aggiunti), 0 issues di lint.
+      - Run (dal root): `npm run test:view-local-run-smoke && npm run test:view-execution-smoke && npm run test:view-run-smoke && npm run test:view-plan-smoke`
+      - Expect: quattro smoke con esito positivo.
+
+      ## Done
+      - [ ] I cinque controlli Go sono verdi, nessuno con un'eccezione dichiarata.
+      - [ ] I quattro smoke passano, senza credenziali.
+      - [ ] `archetipo spec show US-038` non riporta alcun task `TODO` prima della richiesta di review.
+      - [ ] AC-1..AC-6 hanno tutti almeno un'evidenza eseguita e verde.
+
+      ## Blockers
+      None.
+    ref: TASK-14

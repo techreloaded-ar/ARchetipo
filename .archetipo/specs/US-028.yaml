@@ -1,0 +1,50 @@
+schema: archetipo/spec/v2
+code: US-028
+title: Configurare l'esecuzione e vedere le azioni nella UI
+epic:
+  code: EP-005
+  title: Esperienza operativa ARchetipo
+priority: HIGH
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-028: Configurare l'esecuzione e vedere le azioni nella UI
+
+  **Epic:** EP-005 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come responsabile di un workspace ARchetipo,
+  voglio configurare il provider predefinito e vedere le azioni ammesse per ogni spec nella UI,
+  così da sapere quale attività posso avviare senza usare comandi CLI o conoscere i nomi interni delle skill.
+
+  **Dimostrazione**
+  Partendo da un workspace senza provider predefinito e da una spec `TODO`, il revisore apre la configurazione, seleziona ARcipelago, inserisce una configurazione valida e osserva il provider salvato senza credenziali esposte. Aprendo la spec osserva l'azione `Pianifica`; dopo un cambio di stato vede l'elenco ricalcolato. Inserendo una configurazione non valida osserva il campo errato e ritrova invariata l'ultima configurazione valida.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — La UI elenca i provider registrati senza mostrare token o altri segreti.
+  - [ ] AC-2 — Salvando una configurazione valida, la UI mostra il provider come predefinito del workspace anche dopo un nuovo caricamento.
+  - [ ] AC-3 — Rifiutando una configurazione non valida, la UI identifica il campo errato e conserva il provider precedentemente valido.
+  - [ ] AC-4 — Il dettaglio di una spec mostra identificativo ed etichetta delle sole azioni ammesse dal Template nel suo stato corrente.
+  - [ ] AC-5 — Dopo un cambio di stato della spec, la UI ricalcola le azioni e rappresenta l'assenza di azioni con un elenco vuoto.
+
+  **Fuori ambito**
+  Avvio dell'esecuzione, gestione dei segreti, installazione di provider e modifica grafica del Template.
+
+  ## Contesto Wiki
+  - `architecture/context-map`
+  - `decisions/execution-provider-boundary`
+  - `decisions/workspace-process-template`
+  - `engineering/code-map`
+history:
+  - status: TODO
+    at: "2026-08-16T22:51:59Z"
+  - status: PLANNED
+    at: "2026-08-17T07:46:18Z"
+  - status: IN PROGRESS
+    at: "2026-08-17T07:46:42Z"
+  - status: REVIEW
+    at: "2026-08-17T11:59:11Z"
+  - status: DONE
+    at: "2026-08-17T12:41:14Z"

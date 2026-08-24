@@ -1,0 +1,880 @@
+schema: archetipo/plan/v2
+spec_code: US-053
+body: |-
+  # US-053: Conversare con l'agente sul workspace aperto — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-08-21
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-006 — Esecuzione locale e ciclo di delivery
+  **Priorità:** HIGH | **Punti:** 5
+
+  **User Story**
+  Come utilizzatore di ARchetipo, voglio parlare con l'agente sul workspace aperto senza avviare un'azione del processo, così da fare brainstorming, chiedere del codice e capire dove sono prima di decidere cosa fare.
+
+  **Criteri di accettazione**
+  - AC-1 — Con un workspace aperto e un provider che dichiara la capacità di conversare, il revisore invia un messaggio e riceve la risposta dell'agente, che opera sulla project root del workspace aperto.
+  - AC-2 — Una conversazione non fa transitare alcuna spec e non compare come esecuzione di un'azione del processo.
+  - AC-3 — Ricaricando la pagina, la conversazione in corso e la sua storia sono ancora disponibili; se la storia mostrata è parziale, lo dichiara.
+  - AC-4 — Con un provider che non dichiara la capacità di conversare, la conversazione non è offerta e l'interfaccia ne dichiara la ragione nominando la capacità mancante.
+  - AC-5 — Aprendo un altro workspace, la conversazione mostrata è quella del workspace ora aperto e non quella del precedente.
+  - AC-6 — Il revisore può chiudere la conversazione, e da quel momento il provider non è più impegnato per essa.
+
+  **Fuori ambito**
+  L'avvio delle azioni del processo dalla conversazione, la disposizione della conversazione rispetto alla board e alla spec, i suggerimenti sul passo successivo, e ogni conversazione che non riguardi il workspace aperto.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Si introduce un concetto nuovo e deliberatamente **fuori dalla macchina delle esecuzioni**: la *conversazione*. È una sessione di agente locale, legata al workspace aperto, tenuta in memoria dal viewer e raggiungibile da quattro rotte HTTP dedicate. Non produce alcun record sotto `.archetipo/executions/`, non passa da `execution.Service`, non ha `ActionID` e non compare fra le azioni del processo: è questa separazione, e non una convenzione di presentazione, a garantire AC-2.
+
+  Quasi tutta la meccanica esiste già e viene riusata invariata. Il pacchetto `cli/internal/execution/localrun` implementa le regole di una run locale (storia senza duplicati, cursore, comandi, stato osservato e mai dedotto) su un `Registry` indicizzato per **run id**, e `localrun.Collaborator` espone i sette metodi di `execution.RunCollaborator`. Sei di quei metodi — `ReadRun`, `ReadRunApprovals`, `StreamRunEvents`, `SendRunMessage`, `RespondRunApproval`, `CancelRun` — prendono una `execution.RunRequest` che nomina soltanto un run id: non sanno nulla di record di esecuzione. L'unico che ne dipende è `ResolveRun`, che la conversazione semplicemente non usa. Una conversazione è quindi una sessione `localrun` registrata sotto un id proprio (`conv-…`), letta e comandata con le stesse regole di una run, ma senza record.
+
+  I punti chiave della soluzione:
+
+  - **Una capacità nuova e derivata.** `execution.CapabilityWorkspaceConverse = "workspace.converse"` è dichiarata da `DeclaredCapabilities` quando — e solo quando — il provider implementa davvero la nuova interfaccia opzionale `execution.Conversationalist`. È esattamente la regola già scritta per `run.dialog`: una capacità derivata dall'interfaccia non può mai promettere una conversazione che il provider non sa tenere. È questa capacità che la ragione di AC-4 nomina.
+  - **Un solo provider la implementa, per ora.** `claude` la implementa; `codex` no, esattamente come oggi non dichiara `workspace.inception`, `workspace.backlog` né `workspace.spec_draft`. L'asimmetria non è una svista: è il controesempio interno che rende AC-4 verificabile con un provider *disponibile* e non con uno rotto, distinzione che conta perché `providerAvailability.reasonFor` risponde prima sulla disponibilità del runtime e solo dopo sulla capacità.
+  - **Storia in memoria e finestra dichiarata.** `localrun.Session` guadagna una finestra di ritenzione opzionale. Le esecuzioni continuano a usare la sessione illimitata di oggi; la conversazione usa `NewBoundedSession`, che scarta gli eventi più vecchi e sa dire da quale id la storia comincia davvero. La proiezione HTTP espone `truncated` e una nota: è così che AC-3 dichiara una storia parziale invece di mostrarla come se fosse intera.
+  - **Il ricaricamento della pagina non tocca nulla.** La storia vive nel processo del viewer, non nel browser: ricaricare significa rileggere `GET /api/workspace/conversation?after_id=0` dallo stesso processo, che risponde con la conversazione ancora aperta e la sua storia (AC-3).
+  - **La conversazione appartiene al workspace.** Vive dentro `workspaceSession`, accanto a `dispatch` e `followers`, per la stessa ragione per cui vivono lì quelle due: la project root con cui è stata aperta è quella e non un'altra. `workspaceSession.stop()` la chiude, quindi aprire un altro workspace lascia il nuovo workspace senza conversazione e libera il provider da quella precedente (AC-5 e AC-6 sulla stessa meccanica).
+  - **La project root viaggia sulla richiesta.** `ConversationRequest.WorkingDir` è `ws.cfg.ProjectRoot`, come già fa `execution.Request.WorkingDir`: il provider è condiviso da ogni workspace che il processo serve, la directory in cui eseguire è un fatto del workspace che ha aperto la conversazione (AC-1).
+
+  ### Rotte
+
+  Tutte registrate con `handleWorkspace`, quindi rifiutate con `409 workspaceOpen:false` quando nessun workspace è aperto:
+
+  - `GET /api/workspace/conversation?after_id=<n>` — la proiezione: `available`, `unavailable_reason`, `provider_id`, la conversazione (o `null`), gli eventi dopo il cursore, `last_id`, `truncated`, `notice`.
+  - `POST /api/workspace/conversation` — apre l'unica conversazione del workspace; `201` con la proiezione.
+  - `POST /api/workspace/conversation/messages` — consegna un messaggio; `202` con la proiezione, che deliberatamente non contiene ancora il messaggio.
+  - `DELETE /api/workspace/conversation` — la chiude e libera il processo dell'agente.
+
+  ### Decisioni architetturali
+
+  Il Wiki automatico è disattivato (`wiki.enabled: false`), quindi le decisioni che varcano la soglia ADR sono registrate qui e in nessun altro posto.
+
+  **D1 — Una conversazione non è un'esecuzione.** *Contesto:* il viewer sa già avviare azioni conversazionali (inception, backlog, spec-draft) che sono esecuzioni con un record, un effetto atteso e una ricevuta. *Alternative:* (a) modellare la conversazione come una nuova `ActionID` con record, riusando `execution.Service`, le rotte `/api/execution/{id}/run` e il pannello esistente; (b) un concetto separato, in memoria, fuori dallo store. *Scelta:* (b). *Motivo:* AC-2 vieta esplicitamente che la conversazione compaia come esecuzione di un'azione del processo, e (a) la farebbe comparire ovunque un record compare — nella lista delle esecuzioni del workspace, nella guardia "una sola esecuzione per workspace", nella verifica dell'effetto. *Tradeoff:* la conversazione non sopravvive al riavvio del viewer, mentre un record persistito sopravviverebbe. È accettato: il processo dell'agente non sopravvive comunque al viewer, quindi un record persistito descriverebbe una conversazione che non esiste più — esattamente la bugia che `localrun.Registry` documenta di voler evitare. *Verifica:* lo smoke asserisce che `.archetipo/executions/` resta vuoto e che `GET /api/workspace/actions` continua a rispondere `execution: null`.
+
+  **D2 — Lasciare un workspace chiude la sua conversazione.** *Contesto:* il viewer è un processo solo che può cambiare workspace senza riavviarsi. *Alternative:* (a) tenere viva una conversazione per workspace, indicizzata per project root; (b) chiuderla quando si lascia il workspace. *Scelta:* (b). *Motivo:* il processo dell'agente è radicato in una directory e resta acceso finché qualcuno non lo chiude; (a) accumulerebbe processi vivi in proporzione ai workspace visitati, e AC-6 chiede proprio che chiudere liberi il provider. *Tradeoff:* tornare al workspace precedente non ritrova la conversazione. È accettato e dichiarato dall'interfaccia. *Verifica:* lo smoke apre un secondo workspace e osserva sia che la conversazione mostrata è quella del workspace ora aperto (AC-5), sia che il processo della precedente è finito (AC-6).
+
+  **D3 — La finestra di ritenzione vive in `localrun.Session`, non nel livello web.** *Contesto:* AC-3 chiede che una storia parziale sia dichiarata, quindi qualcosa deve poter diventare parziale. *Alternative:* (a) tagliare la storia nel livello web al momento della proiezione; (b) una finestra opzionale nella sessione, che sa quale id è il più vecchio ancora presente. *Scelta:* (b), con `NewSession` invariata e illimitata per le esecuzioni. *Motivo:* (a) obbligherebbe il livello web a inventare un cursore parallelo a quello della sessione, e un secondo cursore è esattamente il difetto che `RunEvent.ID` è documentato per evitare. *Tradeoff:* si tocca un tipo condiviso con le esecuzioni; mitigato mantenendo il comportamento identico a ritenzione zero e coprendolo con i test esistenti di `session_test.go`.
+
+  Nessun'altra scelta di questo piano varca la soglia: le rotte seguono il vocabolario già stabilito dalle rotte di run, e il pannello del browser riusa il linguaggio visivo del pannello di run esistente.
+
+  ---
+
+  ## Baseline
+
+  Misurata prima di pianificare, il 2026-08-21, sulla project root `/Users/stefanoleli/Project/Archetipo` (nessun worktree: `worktree.enabled: false`).
+
+  | Comando | Risultato prima dell'implementazione | Conseguenza sul piano |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | nessun output | ogni task che tocca Go la rimette in verde; `Expect: nessun output` è legittimo |
+  | `cd cli && go vet ./...` | passa, nessun problema | `Expect: passa` è legittimo |
+  | `cd cli && go build ./...` | compila pulito | `Expect: compila` è legittimo |
+  | `cd cli && go test ./...` | verde — 1778 test passati in 28 pacchetti | ogni task Go verifica il proprio pacchetto e il gate finale rilancia tutto: nessun nuovo fallimento ammesso |
+  | `npm run test:web` | verde — 61 test, 12 suite | il nuovo `test/web/conversation.test.mjs` entra nello stesso glob e nello stesso comando |
+  | `golangci-lint run --timeout 5m ./...` | **non eseguibile: `golangci-lint` non è installato su questa macchina** | prerequisito d'ambiente, non un fallimento del codice. Chi implementa lo installa con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` e poi lo esegue. Se resta non installabile, il gate finale lo registra come saltato con la ragione esatta e non lo dichiara verde |
+  | `npm run test:view-conversation-smoke` | **non esiste**: lo script non è ancora in `package.json` | lo crea TASK-13; prima di allora nessun task può usarlo come verifica |
+
+  Prerequisiti d'ambiente distinti dal codice: Go installato (lo smoke E2E compila la CLI in `test/e2e/.bin/archetipo`), Node.js installato, `golangci-lint` da installare come sopra. Gli smoke `test:view-*` non richiedono credenziali e non escono da `127.0.0.1`; sono saltati su Windows, dove lo shebang POSIX dei fake non si applica.
+
+  Nessun file toccato da questo piano ha diagnostiche preesistenti di compilatore: `go build ./...` e `go vet ./...` sono puliti su tutto il modulo.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | sandbox `archetipo init --tool claude`, provider `claude` di default puntato su `test/e2e/support/fake-claude.mjs`, viewer reale su porta casuale | e2e smoke (viewer reale, agente finto) | il report `argv` del fake dichiara `cwd` **uguale alla project root del workspace aperto**; il messaggio inviato a `POST /api/workspace/conversation/messages` arriva al processo come frame `user` (osservato dal control server) ed entra nella storia **una sola volta** solo dopo che il processo lo rimanda; il frame `assistant` emesso dal fake compare come evento `text` su `GET /api/workspace/conversation` | TASK-13 |
+  | AC-1 | fixture Go in `cli/internal/web`, provider finto che registra la `ConversationRequest` ricevuta | unit Go (rotte) | `ConversationRequest.WorkingDir` ricevuto dal provider è `ws.cfg.ProjectRoot`; l'apertura risponde `201` e la lettura successiva riporta gli eventi della sessione | TASK-10 |
+  | AC-2 | come AC-1 e-2-e | e2e smoke | dopo apertura, messaggio, risposta e chiusura: la directory `.archetipo/executions/` è **inesistente o vuota**; `GET /api/workspace/actions` risponde `execution: null`; il payload di `GET /api/board` è **byte-identico** a quello letto prima della conversazione (nessuna spec transita) | TASK-13 |
+  | AC-2 | fixture Go con `execution.Store` reale su directory temporanea | unit Go (rotte) | dopo l'apertura di una conversazione, `store.ListBySpec(ctx, "")` restituisce zero record e nessun file è comparso sotto `.archetipo/executions/` | TASK-10 |
+  | AC-3 | conversazione aperta con qualche turno già in storia | e2e smoke | un secondo `GET …?after_id=0` — la rilettura che il browser fa a ogni ricaricamento — restituisce **l'intera storia** dallo **stesso PID di viewer**, asserito invariato, con `truncated:false` | TASK-13 |
+  | AC-3 | sessione limitata con ritenzione N e N+k eventi accodati | unit Go (`localrun`) | `Events(0)` restituisce solo gli ultimi N, gli `ID` restano monotoni e non riusati, `FirstID()` è l'id del più vecchio ancora presente e `Dropped()` è k | TASK-04 |
+  | AC-3 | proiezione con `truncated:true` e nota | unit Node (renderer puro) | `renderConversation` produce nel markup la dichiarazione esplicita che la parte più vecchia della storia non è più mostrata | TASK-12 |
+  | AC-4 | sandbox con provider di default `codex` puntato su `test/e2e/support/fake-codex.mjs`, quindi **disponibile** ma privo della capacità | e2e smoke | `GET /api/workspace/conversation` risponde `200` con `available:false` e `unavailable_reason` che contiene letteralmente `workspace.converse`; `POST /api/workspace/conversation` risponde `409` con la **stessa** frase; nessun processo di agente viene avviato | TASK-13 |
+  | AC-4 | provider finto che non implementa `Conversationalist` | unit Go (rotte) | `available:false`, `unavailable_reason` contiene `"workspace.converse"`; `POST` risponde `409`; `execution.DeclaredCapabilities` non contiene la capacità | TASK-10, TASK-02 |
+  | AC-4 | proiezione con `available:false` e ragione | unit Node (renderer puro) | il markup mostra la ragione verbatim e **non** disegna il compositore | TASK-12 |
+  | AC-5 | due workspace reali `A` e `B`, viewer avviato in `A`, `B` registrato e aperto sullo stesso PID | e2e smoke | con una conversazione aperta in `A`, dopo `POST /api/workspaces/{B}/open` la `GET` risponde **senza conversazione** (`conversation: null`), e il `conversation.id` di `A` non ricompare mai; aprendo una conversazione in `B`, il `cwd` riportato dal nuovo processo è la project root di `B` | TASK-13 |
+  | AC-6 | conversazione aperta con storia | e2e smoke | `DELETE /api/workspace/conversation` risponde `200`; il processo finto **esce** (il control server smette di ricevere il suo polling e il suo `exit` è osservato); un `POST …/messages` successivo risponde `409`; la storia resta leggibile in sola lettura fino alla chiusura del pannello | TASK-13 |
+  | AC-6 | provider finto che conta le chiusure | unit Go (rotte) | `DELETE` invoca `CloseConversation` esattamente una volta con l'id aperto; una seconda `DELETE` risponde `409` e non invoca il provider una seconda volta; `workspaceSession.stop()` invoca anch'essa `CloseConversation` | TASK-10 |
+
+  La mappa è una mappa di accettazione, non un riassunto dei task: ogni criterio ha almeno un'evidenza al livello più basso che riesce a provarlo, e almeno una che attraversa il confine HTTP reale.
+
+  **Doppi di test e oracoli.** L'unico elemento finto degli smoke è il **binario dell'agente**: viewer, connector, provider `claude`, client stream-json, sessione locale e conversazione sono quelli veri. Nessun doppio nasconde un oracolo: `cwd` è quello che il processo dichiara di avere, non un campo del viewer; il messaggio è quello che il processo ha davvero ricevuto, riportato dal fake al control server; la chiusura è la fine del processo, non la risposta della rotta.
+
+  ---
+
+  ## Strategia di test
+
+  La strategia segue i tre livelli che questo repository usa già per il viewer, e ogni criterio è provato al livello più basso che riesce davvero a provarlo.
+
+  - **Unit Go, per pacchetto.** `execution` per la derivazione della capacità, `localrun` per la finestra di ritenzione e i suoi id, `claude` per l'apertura e la chiusura di una conversazione con uno `Starter` iniettato, `web` per le quattro rotte e per il ciclo di vita legato al workspace. È il livello che prova AC-2 e AC-4 senza processi né rete, e che prova AC-6 sul lato del provider.
+  - **Unit Node del renderer.** `test/web/conversation.test.mjs` esercita un modulo UMD puro, senza DOM e senza rete, esattamente come `workspace-status.test.mjs`. È il livello a cui si asserisce che *il frontend non contiene regole di processo*: il renderer mostra la ragione che riceve senza mai nominare da sé una capacità, e dichiara la storia parziale quando il payload lo dice.
+  - **Smoke E2E con viewer reale.** `test/e2e/conversation-view-smoke.mjs`, sul modello di `local-run-view-smoke.mjs`, `workspace-run-root-view-smoke.mjs` e `spec-draft-from-view-smoke.mjs`: viewer vero su porta casuale, provider vero puntato su un binario d'agente finto guidato frame per frame da un control server locale, nessuna credenziale, nessun traffico fuori da `127.0.0.1`, nessuna `sleep` arbitraria — ogni attesa interroga una rotta del viewer o il control server con un timeout che nomina cosa aspettava e cosa è arrivato. È il livello che prova AC-1, AC-3, AC-5 e AC-6 nella loro forma completa.
+
+  Regole che i test devono rispettare, ereditate dagli smoke esistenti:
+
+  - il materiale di sessione sentinella non deve mai comparire in una risposta del viewer né in `.archetipo/config.yaml`;
+  - il fake non progredisce mai da solo;
+  - ogni rifiuto (`404`, `409`) deve lasciare la proiezione **byte-identica**, asserito confrontando la lettura prima e dopo;
+  - lo smoke scrive `report.html` e `summary.json` nella propria run directory ed è saltato su Windows.
+
+  ### Rinuncia agli E2E di browser
+
+  **Ragione:** questo repository non ha, e questa spec non introduce, un framework di browser E2E per il viewer. Ogni comportamento del viewer — creazione workspace, esecuzioni, run locali, scelta del modello, root del workspace, inception, backlog, spec draft, stato del workspace — è provato con smoke che parlano l'API HTTP del viewer **reale** e osservano il filesystem e il processo dell'agente. Introdurre Playwright solo per questa spec significherebbe pianificare un secondo livello di verità per lo stesso confine, con oracoli più deboli di quelli già disponibili: il `cwd` che il processo dichiara, i frame che ha davvero ricevuto, i file che esistono o non esistono.
+
+  **Livello di evidenza usato al suo posto:** lo smoke E2E `conversation-view-smoke.mjs` per tutto ciò che attraversa il confine di rotta, di persistenza e di processo (AC-1, AC-2, AC-3, AC-5, AC-6, e la ragione dichiarata di AC-4); il test Node del renderer per ciò che è pura presentazione (la dichiarazione di storia parziale e la resa della ragione). Insieme coprono ogni `AC-N` senza che alcun doppio nasconda l'oracolo nominato.
+
+  **Video dimostrativo:** la `Dimostrazione` della spec è filmabile — è interamente una sequenza di gesti nell'interfaccia. La pianificazione si limita a segnalarlo: registrare o saltare il video è decisione di `archetipo-review`, e la configurazione del workspace ha oggi `e2e.record_demo_video: false`.
+
+  ---
+
+  ## Note di contesto
+
+  - Il Wiki automatico è disattivato per questo workspace (`wiki.enabled: false`): il piano non dichiara alcun `wiki_impact`, non prevede task di Wiki e non tocca lo stato di revisione di alcuna pagina esistente. Le decisioni architetturali che avrebbero meritato una pagina `type: decision` sono scritte per esteso nella soluzione tecnica.
+  - Nessun worktree: `worktree.enabled: false`, quindi tutto il lavoro avviene nella project root.
+  - La spec non ha bloccanti (`Bloccata da: -`).
+  - `docs/mockups/US-053/` contiene i mockup degli stati del pannello di conversazione, generati durante la pianificazione. Riguardano soltanto gli stati del pannello: la sua **disposizione** rispetto alla board e alla spec è esplicitamente fuori ambito e non va decisa qui.
+
+  ---
+
+  _Piano generato con ARchetipo Planning — 2026-08-21_
+tasks:
+  - id: TASK-01
+    title: Contratto della conversazione nel pacchetto execution e capacità workspace.converse derivata
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Il pacchetto `execution` espone il contratto opzionale che un provider implementa per tenere una conversazione, e `DeclaredCapabilities` dichiara `workspace.converse` quando — e solo quando — il provider lo implementa davvero.
+
+      ## Read
+      - `cli/internal/execution/types.go` — il blocco `const` delle `Capability`, in particolare i commenti di `CapabilityRunDialog` e `CapabilityWorkspaceSpecDraft`: sono il modello di come una capacità viene documentata qui.
+      - `cli/internal/execution/run.go` — `RunCollaborator`, `RunCollaboratorFor` e soprattutto `DeclaredCapabilities`: la regola "derivata, mai dichiarata a mano" è già scritta lì e va estesa, non riscritta.
+      - `cli/internal/execution/provider.go` — `ConfigDescriber` e `DescribeConfig`: la forma canonica di un'interfaccia opzionale separata da `Provider` con il suo helper di scoperta.
+      - `cli/internal/execution/types.go` — `Request.WorkingDir`: il commento spiega perché la directory viaggia sulla richiesta e non sul provider; `ConversationRequest` deve dire la stessa cosa.
+
+      ## Change
+      - `cli/internal/execution/types.go` — aggiungere la sola costante `CapabilityWorkspaceConverse Capability = "workspace.converse"` nel blocco `const` esistente, con un commento che dica: il provider sa tenere una conversazione libera sulla directory che gli viene indicata, senza azione di processo e senza produrre alcun artefatto; non è mai dichiarata a mano, si veda `DeclaredCapabilities`.
+      - `cli/internal/execution/conversation.go` — **file nuovo**: `ConversationRequest`, `Conversationalist`, `ConversationalistFor`.
+      - `cli/internal/execution/run.go` — in `DeclaredCapabilities`, accodare `CapabilityWorkspaceConverse` quando `ConversationalistFor(provider)` risponde `true`, con lo stesso identico schema già usato per `CapabilityRunDialog`.
+
+      Non-goal espliciti: **non** aggiungere una `ActionID` per la conversazione, **non** toccare `RequiredCapability`, **non** toccare `ActionScope`, **non** toccare `supportedActions()` in `cli/internal/web/execution_run.go`. Una conversazione non è un'azione del processo: aggiungerla lì la farebbe comparire fra le azioni ed è esattamente ciò che AC-2 vieta. Nessun provider viene modificato in questo task.
+
+      ## Steps
+      1. In `cli/internal/execution/types.go`, aggiungere `CapabilityWorkspaceConverse Capability = "workspace.converse"` accanto alle altre capacità, con il commento descritto sopra.
+      2. Creare `cli/internal/execution/conversation.go` con il commento di pacchetto/tipo e queste tre dichiarazioni:
+         - `type ConversationRequest struct { ConversationID string; WorkingDir string; ProviderConfig map[string]any }`, documentando che `ConversationID` è l'id sotto cui il provider registra la sessione (ed è quindi il run id con cui la conversazione verrà letta e comandata) e che `WorkingDir` è la project root del workspace aperto, fatto del workspace e non del provider.
+         - `type Conversationalist interface { OpenConversation(ctx context.Context, req ConversationRequest) error; CloseConversation(ctx context.Context, conversationID string) error }`, documentando che `OpenConversation` **non blocca**: avvia il processo, lo rende seguibile e ritorna, perché una conversazione non ha un esito da attendere; e che `CloseConversation` è idempotente e libera il processo dell'agente.
+         - `func ConversationalistFor(provider Provider) (Conversationalist, bool)`, che risponde `(nil, false)` su provider nil o non conversante, con lo stesso commento di `RunCollaboratorFor`.
+      3. In `DeclaredCapabilities` (`cli/internal/execution/run.go`), dopo il blocco che accoda `CapabilityRunDialog`, aggiungere il blocco gemello per `CapabilityWorkspaceConverse`; aggiornare il commento della funzione perché nomini entrambe le capacità derivate.
+      4. Eseguire `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Eseguire, con working directory `cli/`: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/execution/...`
+      - Expect: `gofmt -l .` non stampa nulla, `go vet` e `go build` passano, i test del pacchetto `execution` e dei suoi sottopacchetti passano — coerente con la baseline, che è verde su tutto il modulo.
+
+      ## Done
+      - [ ] `execution.CapabilityWorkspaceConverse` esiste con valore `"workspace.converse"`.
+      - [ ] `execution.Conversationalist` e `execution.ConversationalistFor` esistono e sono documentati.
+      - [ ] AC-4 — `DeclaredCapabilities` accoda `workspace.converse` per un provider che implementa `Conversationalist` e **non** la accoda per uno che non lo implementa; nessun provider la dichiara a mano.
+      - [ ] Nessuna `ActionID` nuova, `RequiredCapability` e `ActionScope` invariate (AC-2, per costruzione).
+      - [ ] Il modulo compila e i test del pacchetto restano verdi.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test unitari sulla derivazione della capacità workspace.converse
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Provare che `workspace.converse` compare fra le capacità dichiarate se e solo se il provider implementa `Conversationalist`, e che l'assenza dell'interfaccia produce un elenco senza quella capacità.
+
+      ## Read
+      - `cli/internal/execution/run_test.go` — i test esistenti su `DeclaredCapabilities` e i provider finti che usano: vanno riusati, non duplicati.
+      - `cli/internal/execution/provider_test.go` — lo stile dei provider finti minimi del pacchetto.
+      - `cli/internal/execution/conversation.go` — il contratto scritto da TASK-01.
+
+      ## Change
+      - `cli/internal/execution/run_test.go` (oppure `cli/internal/execution/conversation_test.go` se i provider finti necessari non sono riusabili da lì) — aggiungere i casi di test descritti sotto. Nessun file di produzione viene toccato.
+
+      Non-goal: non testare qui il provider `claude`, che non implementa ancora nulla; i provider di questo test sono finti e locali al pacchetto.
+
+      ## Steps
+      1. Definire un provider finto che implementa `execution.Provider` e `execution.Conversationalist` (i due metodi possono restituire `nil`), e uno che implementa solo `execution.Provider`.
+      2. Test "un provider che sa conversare dichiara workspace.converse": `DeclaredCapabilities` sul primo contiene `execution.CapabilityWorkspaceConverse`; l'elenco resta ordinato e senza duplicati (è `NormalizeCapabilities` a garantirlo, e il test lo osserva confrontando l'elenco intero).
+      3. Test "un provider che non sa conversare non la dichiara": `DeclaredCapabilities` sul secondo **non** contiene la capacità, e `execution.Supports(caps, execution.CapabilityWorkspaceConverse)` è `false`.
+      4. Test "la capacità non è mai dichiarata a mano": per ciascun provider finto, `provider.Capabilities(ctx)` non contiene la capacità, mentre `DeclaredCapabilities` la aggiunge solo nel primo caso.
+      5. Test "un provider che conversa e collabora dichiara entrambe le capacità derivate": `run.dialog` e `workspace.converse` compaiono insieme e restano indipendenti.
+      6. Test su `ConversationalistFor`: risponde `(nil, false)` su provider `nil` e su provider non conversante, `(x, true)` sul conversante.
+
+      ## Verify
+      - Eseguire, con working directory `cli/`: `go test ./internal/execution/ -run 'Capabilit|Conversation' -v`
+      - Expect: tutti i nuovi test passano; nessuno di essi è verde per assenza di asserzione (ogni test confronta un elenco o un booleano esplicito).
+      - Poi `go test ./internal/execution/...`
+      - Expect: passa, come nella baseline.
+
+      ## Done
+      - [ ] AC-4 — esiste un test che fallisce se `workspace.converse` venisse dichiarata da un provider che non implementa `Conversationalist`, e uno che fallisce se non venisse dichiarata da uno che lo implementa.
+      - [ ] L'oracolo è l'elenco restituito da `DeclaredCapabilities`, non il fatto che una funzione sia stata chiamata.
+      - [ ] `go test ./internal/execution/...` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Finestra di ritenzione opzionale nella sessione locale, con id monotoni e storia dichiaratamente parziale
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      `localrun.Session` sa tenere solo gli ultimi N eventi e sa dire da quale id la storia effettivamente comincia e quanti eventi ha scartato, restando **identica a oggi** quando nessun limite è imposto.
+
+      ## Read
+      - `cli/internal/execution/localrun/session.go` — `Session`, `NewSession`, `Append`, `Events`, `eventsAfterLocked`, `Stream`. Attenzione a `Append`, che oggi deriva l'id da `len(s.events)+1`: è esattamente la derivazione che una finestra romperebbe.
+      - `cli/internal/execution/localrun/session_test.go` — i test esistenti; devono restare verdi senza modifiche.
+      - `cli/internal/execution/run.go` — il commento di `RunEvent.ID`: `ID` è l'unico cursore ammissibile, monotono per run. La finestra non deve indebolirlo.
+
+      ## Change
+      - `cli/internal/execution/localrun/session.go` — aggiungere a `Session` i campi `nextID int64`, `retain int`, `dropped int64`; aggiungere il costruttore `NewBoundedSession(runID string, now func() time.Time, retain int) *Session`; modificare `Append` perché usi il contatore e potrà scartare in testa; aggiungere i metodi `FirstID() int64` e `Dropped() int64`.
+
+      Non-goal espliciti: **non** cambiare la firma né il comportamento di `NewSession`, che resta illimitata e serve tutte le esecuzioni; **non** toccare `Stream`, `Close`, `Snapshot`, `Active`, `AttachDialogue`; **non** rimuovere una sessione conclusa dal `Registry`. Nessun chiamante esistente viene modificato in questo task.
+
+      ## Steps
+      1. Sostituire in `Append` la derivazione `event.ID = int64(len(s.events)) + 1` con `s.nextID++; event.ID = s.nextID`. A ritenzione zero il risultato è numericamente identico a oggi: è questo che tiene verdi i test esistenti.
+      2. Dopo l'accodamento, se `s.retain > 0 && len(s.events) > s.retain`, scartare gli elementi in testa fino a rientrare nel limite e incrementare `s.dropped` di altrettanto. Documentare nel codice che si scarta **dopo** aver assegnato l'id e **dopo** aver pubblicato ai subscriber, così che un follower connesso non perda mai un evento che la storia ha già scartato.
+      3. Aggiungere `NewBoundedSession`, che è `NewSession` più il limite; documentare che `retain <= 0` significa illimitato e che il limite esiste per una sola ragione — poter dichiarare una storia parziale invece di mostrarla come se fosse intera.
+      4. Aggiungere `FirstID() int64`, che sotto lock restituisce l'`ID` del più vecchio evento ancora presente, e `0` quando la storia è vuota. Documentare che è il fatto con cui un chiamante decide se ciò che sta mostrando è parziale.
+      5. Aggiungere `Dropped() int64`, che restituisce quanti eventi sono stati scartati.
+      6. `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Eseguire, con working directory `cli/`: `go test ./internal/execution/localrun/... && go build ./... && gofmt -l .`
+      - Expect: i test esistenti di `localrun` passano **senza essere stati modificati**, il modulo compila, `gofmt -l .` non stampa nulla. La baseline era verde: nessun nuovo fallimento è ammesso.
+
+      ## Done
+      - [ ] `NewSession` e il comportamento di ogni chiamante esistente sono invariati; `session_test.go` è verde senza modifiche.
+      - [ ] AC-3 — una sessione limitata scarta i più vecchi, mantiene `ID` monotoni e mai riusati, e risponde con `FirstID()`/`Dropped()` a "da dove comincia davvero questa storia".
+      - [ ] `go build ./...` e `gofmt -l .` puliti.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test unitari sulla finestra di ritenzione della sessione locale
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Provare che la finestra scarta solo il passato, non rompe il cursore e rende osservabile la parzialità della storia — e che una sessione illimitata resta esattamente quella di prima.
+
+      ## Read
+      - `cli/internal/execution/localrun/session_test.go` — helper e stile dei test esistenti (orologio iniettato, accodamento, lettura per cursore).
+      - `cli/internal/execution/localrun/session.go` — `NewBoundedSession`, `FirstID`, `Dropped` scritti da TASK-03.
+
+      ## Change
+      - `cli/internal/execution/localrun/session_test.go` — aggiungere i casi descritti sotto. Nessun test esistente va modificato: se uno di essi dovesse cambiare per far passare i nuovi, la modifica di TASK-03 non è retrocompatibile e va corretta lì.
+
+      ## Steps
+      1. Test "una sessione illimitata tiene tutto": con `NewSession`, accodare 50 eventi e verificare che `Events(0)` ne restituisca 50, con `ID` da 1 a 50, `FirstID()` uguale a 1 e `Dropped()` uguale a 0.
+      2. Test "una sessione limitata tiene solo la coda": con `NewBoundedSession(runID, clock, 10)`, accodare 25 eventi; `Events(0)` ne restituisce 10, i loro `ID` sono 16..25 consecutivi, `FirstID()` è 16, `Dropped()` è 15.
+      3. Test "gli id non vengono riusati": dopo lo scarto, accodare un altro evento e verificare che il suo `ID` sia 26 e non 11 — un id riusato è la rottura del cursore che questo test esiste per impedire.
+      4. Test "il cursore continua a funzionare oltre la finestra": `Events(20)` restituisce esattamente gli eventi 21..25, senza duplicati e senza buchi.
+      5. Test "un cursore più vecchio della finestra è riconoscibile": con `afterID` uguale a 5 (già scartato), `FirstID()` è maggiore di `afterID+1` — è il confronto con cui il livello web dichiarerà la storia parziale.
+      6. Test "un follower connesso non perde un evento che la storia scarta": aprire uno `Stream`, accodare oltre il limite e verificare che il sink abbia ricevuto **tutti** gli eventi accodati dopo l'iscrizione, anche quelli che la storia ha poi scartato.
+
+      ## Verify
+      - Eseguire, con working directory `cli/`: `go test ./internal/execution/localrun/... -v`
+      - Expect: tutti i test del pacchetto passano, inclusi quelli preesistenti non modificati.
+
+      ## Done
+      - [ ] AC-3 — esistono test che falliscono se la finestra scartasse eventi recenti, riusasse un id, aprisse un buco nel cursore o rendesse indistinguibile una storia parziale da una intera.
+      - [ ] Nessun test preesistente di `localrun` è stato modificato.
+      - [ ] `go test ./internal/execution/localrun/...` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Il provider claude apre e chiude una conversazione sulla project root indicata
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Objective
+      `claude.Provider` implementa `execution.Conversationalist`: apre una sessione conversazionale non bloccante sulla directory ricevuta, registrata sotto l'id della conversazione, e la chiude liberando il processo.
+
+      ## Read
+      - `cli/internal/execution/claude/provider.go` — `Provider`, `New`, `prepare`, `openSession`, `shutdown`, `Capabilities` (e il suo commento sul perché `run.dialog` non è dichiarata a mano), `liveSession`.
+      - `cli/internal/execution/claude/inception.go` — `executeInception` e `converse`: la forma di una sessione conversazionale (`conversational = true`) e le tre sentinelle `errTurnFailed`, `errProcessGone`, `errRunTerminated`.
+      - `cli/internal/execution/claude/specdraft.go` — l'esempio più vicino: una conversazione che non deve scrivere nulla.
+      - `cli/internal/execution/claude/prompt.go` — `buildInceptionPrompt`, `buildSpecDraftPrompt`, `buildArgs`: forma dei prompt e costruzione degli argomenti.
+      - `cli/internal/execution/claude/config.go` — `settings`, `parseConfig`, `Timeout`.
+      - `cli/internal/execution/localrun/session.go` — `NewBoundedSession` (TASK-03), `AttachDialogue`, `Close`.
+      - `cli/internal/execution/localrun/collaborator.go` — perché registrare la sessione sotto l'id basta a renderla leggibile e comandabile senza alcun record di esecuzione.
+
+      ## Change
+      - `cli/internal/execution/claude/conversation.go` — **file nuovo**: `OpenConversation`, `CloseConversation`, il registro in memoria delle conversazioni vive del provider e la goroutine che ne osserva la fine.
+      - `cli/internal/execution/claude/prompt.go` — aggiungere `buildConversationPrompt()`.
+      - `cli/internal/execution/claude/provider.go` — aggiungere il campo del registro delle conversazioni a `Provider`, inizializzarlo in `New`, e aggiungere l'asserzione `var _ execution.Conversationalist = (*Provider)(nil)` accanto alle tre esistenti.
+
+      Non-goal espliciti: **non** aggiungere `CapabilityWorkspaceConverse` a `Capabilities()` — è derivata, e dichiararla a mano è la contraddizione che la derivazione esiste per impedire; **non** toccare `Execute` né alcuna delle funzioni `execute*`; **non** chiamare `ensureSkill`, perché una conversazione libera non invoca alcuna skill; **non** implementare nulla nel provider `codex`, che resta deliberatamente senza questa capacità.
+
+      ## Steps
+      1. In `provider.go`, aggiungere a `Provider` un campo `conversations` protetto da mutex: una mappa da id di conversazione a una struttura con `cancel context.CancelFunc`, `process localrun.Process` e `session *localrun.Session`. Inizializzarlo in `New`.
+      2. In `prompt.go`, scrivere `buildConversationPrompt() string`. Il prompt deve: presentare la conversazione come una conversazione sul workspace aperto nella directory di lavoro corrente; autorizzare esplicitamente a leggere il codice e i documenti per rispondere; **vietare esplicitamente** di avviare azioni del processo, di invocare le skill `archetipo-*`, di eseguire comandi `archetipo` che scrivono, e di modificare lo stato di qualunque spec. Documentare nel commento che il divieto nel prompt è una cortesia verso l'agente e **non** la garanzia di AC-2: la garanzia è che nessun record di esecuzione viene mai scritto, e vive un livello sopra.
+      3. In `conversation.go`, implementare `OpenConversation(ctx, req)`:
+         - `cfg, dir, err := p.prepare(ctx, execution.Request{WorkingDir: req.WorkingDir, ProviderConfig: req.ProviderConfig})` — riusa parsing della config, risoluzione della directory e sonda di disponibilità, con le stesse diagnostiche di sempre;
+         - rifiutare con un errore esplicito un `ConversationID` vuoto o già presente nel registro;
+         - derivare il contesto della conversazione da `context.WithoutCancel(ctx)` e poi `context.WithTimeout(…, cfg.Timeout)`, tenendo la `cancel`. **Questo è il punto critico**: il contesto della richiesta HTTP che apre la conversazione muore con la risposta, e una conversazione ancorata a esso morirebbe subito;
+         - aprire la sessione con `p.openSession(runCtx, execution.Request{ExecutionID: req.ConversationID, WorkingDir: dir, ProviderConfig: req.ProviderConfig}, cfg, dir, buildConversationPrompt(), true)`;
+         - **prima** di aprire, sostituire la sessione registrata da `openSession` con una limitata: se `openSession` non lo consente senza modificarla, aggiungere a `openSession` un ultimo parametro `retain int` passato a `localrun.NewBoundedSession` (con `0` da tutti i chiamanti esistenti, così il loro comportamento è invariato) e usare qui la costante `conversationRetainedEvents` definita in questo file;
+         - registrare `cancel`, `process` e `session` nella mappa e **ritornare senza attendere**;
+         - avviare una goroutine che attende `live.client.Gone()` oppure `runCtx.Done()`, poi esegue `p.shutdown(live.process)`, chiude la sessione con lo stato osservato (`RunClosed` quando è stata chiusa dall'operatore, `RunCrashed` con la ragione altrimenti) e rimuove l'id dalla mappa. Documentare che lo stato è **osservato e mai dedotto**, come già impone il commento di pacchetto di `localrun`.
+         - su qualunque fallimento prima del ritorno: chiudere la sessione, spegnere il processo, rimuovere dalla mappa e restituire l'errore, così che non resti mai una run registrata e `ACTIVE` che nessuno chiuderà.
+      4. Implementare `CloseConversation(ctx, conversationID)`: cerca l'id nel registro; se assente, ritorna `nil` (idempotente); altrimenti chiama `cancel()`, esegue `p.shutdown(process)`, chiude la sessione con `execution.RunClosed` e la ragione vuota, e rimuove l'id. Documentare che la rimozione dal registro **del provider** non toglie la sessione dal `localrun.Registry`: la storia di una conversazione conclusa resta leggibile, ed è la stessa ragione già scritta in `localrun/registry.go`.
+      5. `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Eseguire, con working directory `cli/`: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/execution/...`
+      - Expect: `gofmt -l .` senza output; `go vet` e `go build` passano; i test dei provider e di `localrun` restano verdi — in particolare `claude` e `codex`, i cui chiamanti di `openSession` non devono cambiare comportamento.
+
+      ## Done
+      - [ ] AC-1 — `OpenConversation` avvia il processo con `cmd.Dir` uguale a `req.WorkingDir` e ritorna senza attendere alcun esito.
+      - [ ] AC-4 — `execution.DeclaredCapabilities` su `claude.New(...)` contiene ora `workspace.converse`, e su `codex.New(...)` no; nessuna delle due la dichiara a mano in `Capabilities()`.
+      - [ ] AC-6 — `CloseConversation` spegne il processo, chiude la sessione e la rende non più comandabile; una seconda chiamata non fallisce e non spegne nulla.
+      - [ ] Un fallimento in apertura non lascia alcuna sessione registrata in stato `ACTIVE`.
+      - [ ] `go build ./...` e i test dei pacchetti provider restano verdi.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test unitari della conversazione del provider claude con Starter iniettato
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Provare, senza mai avviare Claude Code, che una conversazione si apre sulla directory richiesta, resta viva e seguibile finché non la si chiude, e che chiuderla libera il processo.
+
+      ## Read
+      - `cli/internal/execution/claude/provider_test.go` — costruzione del provider nei test, `Runner` e `Starter` finti già esistenti.
+      - `cli/internal/execution/claude/runner_test.go` e `cli/internal/execution/claude/streamjson_test.go` — come si pilota il protocollo stream-json in un test.
+      - `cli/internal/execution/claude/specdraft_test.go` — il test più vicino: una conversazione multi-turno guidata dai frame.
+      - `cli/internal/execution/claude/conversation.go` — l'implementazione di TASK-05.
+
+      ## Change
+      - `cli/internal/execution/claude/conversation_test.go` — **file nuovo**. Nessun file di produzione viene toccato.
+
+      Non-goal: non riscrivere i finti già esistenti nel pacchetto; se il `Starter` finto attuale non registra la directory, estenderlo minimamente **nel file di test dove è definito**, senza cambiarne il comportamento per i test esistenti.
+
+      ## Steps
+      1. Test "l'apertura avvia il processo nella directory richiesta e ritorna subito": `OpenConversation` con `WorkingDir` noto; asserire che lo `Starter` finto ha ricevuto esattamente quella `dir` e che la chiamata è ritornata **prima** che il processo emetta un solo frame (l'oracolo è che la chiamata ritorni con il fake ancora muto).
+      2. Test "la conversazione è immediatamente seguibile e comandabile": dopo l'apertura, `provider.ReadRun(ctx, execution.RunRequest{RunID: id})` riporta `ACTIVE`; un frame `assistant` emesso dal fake compare in `StreamRunEvents`/negli eventi della sessione come `text`; `SendRunMessage` consegna il testo al processo e **non** lo scrive nella storia — la storia lo contiene solo dopo che il processo lo rimanda come frame `user`.
+      3. Test "un turno che finisce non chiude la conversazione": far emettere al fake un `result` che chiude il turno; asserire che la sessione è ancora `ACTIVE` e che un messaggio successivo è ancora accettato. È la differenza con `runSingleTurn` e va provata esplicitamente.
+      4. Test "chiudere libera il processo": `CloseConversation` con l'id aperto; asserire che il processo finto ha ricevuto la chiusura del proprio input o il segnale, che `ReadRun` non riporta più `ACTIVE`, e che un `SendRunMessage` successivo è rifiutato con `execution.RunRefusedNotActive` (branch sulla `Reason`, mai sul messaggio).
+      5. Test "chiudere due volte non fallisce": la seconda `CloseConversation` restituisce `nil` e non tocca il processo.
+      6. Test "la morte del processo chiude la conversazione senza che nessuno la chiuda": far uscire il fake; attendere con un polling limitato che `ReadRun` non sia più `ACTIVE` e asserire che la ragione registrata non è vuota.
+      7. Test "un id già aperto è rifiutato": una seconda `OpenConversation` con lo stesso id restituisce errore e non avvia un secondo processo (l'oracolo è il numero di `Start` che lo `Starter` finto ha contato).
+      8. Test "un'apertura fallita non lascia una run appesa": far fallire lo `Starter`; asserire che nessuna sessione con quell'id è `ACTIVE` nel registro.
+
+      ## Verify
+      - Eseguire, con working directory `cli/`: `go test ./internal/execution/claude/... -race`
+      - Expect: tutti i test del pacchetto passano e il race detector non segnala nulla — la conversazione introduce una goroutine che scrive sulla sessione mentre le rotte la leggono, quindi `-race` è parte della verifica e non un extra.
+
+      ## Done
+      - [ ] AC-1 — un test fallisce se il processo venisse avviato in una directory diversa da quella richiesta, e uno se `OpenConversation` bloccasse fino alla fine della conversazione.
+      - [ ] AC-6 — un test fallisce se dopo la chiusura la conversazione restasse comandabile, e uno se una seconda chiusura errasse.
+      - [ ] Nessun test è verde per la sola chiamata di un doppio: gli oracoli sono la directory ricevuta dal processo, i frame che ha davvero letto, e lo stato osservato della sessione.
+      - [ ] `go test ./internal/execution/claude/... -race` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: La disponibilità del provider nel viewer legge le capacità dichiarate, non solo quelle auto-dichiarate
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      `providerAvailability` conosce anche le capacità **derivate**, così che la ragione per cui una conversazione non è offerta possa nominare `workspace.converse` con la stessa frase che il viewer usa già per ogni altra capacità mancante.
+
+      ## Read
+      - `cli/internal/web/execution_run.go` — `providerAvailability`, `providerAvailabilityFor` (la riga `capabilities, err := provider.Capabilities(ctx)`) e `providerAvailability.reasonFor`, che è la funzione che compone la frase "…does not declare the \"…\" capability".
+      - `cli/internal/web/execution.go` — `handleListExecutionProviders`, che già usa `execution.DeclaredCapabilities` e ne spiega il perché in un commento: le due letture devono smettere di divergere.
+      - `cli/internal/execution/run.go` — `DeclaredCapabilities` dopo TASK-01.
+
+      ## Change
+      - `cli/internal/web/execution_run.go` — in `providerAvailabilityFor`, sostituire `provider.Capabilities(ctx)` con `execution.DeclaredCapabilities(ctx, provider)`, aggiornando il commento perché dica che la disponibilità legge le capacità **dichiarate**, derivate incluse, esattamente come fa il pannello dei provider.
+
+      Non-goal espliciti: **non** cambiare l'ordine dei rami di `reasonFor` — runtime inutilizzabile prima, capacità mancante dopo — perché è quell'ordine a rendere la ragione di AC-4 leggibile solo su un provider davvero disponibile; **non** toccare `actionAvailability`, `workspaceAvailability`, `offers` né `workspaceRemedy`.
+
+      ## Steps
+      1. Applicare la sostituzione e aggiornare il commento della funzione.
+      2. Verificare per lettura che nessuna azione esistente richieda una capacità che la derivazione possa introdurre indebitamente: `RequiredCapability` mappa solo su capacità auto-dichiarate, quindi l'unico effetto della modifica è additivo. Annotarlo nel commento.
+      3. `gofmt -w` sul file toccato.
+
+      ## Verify
+      - Eseguire, con working directory `cli/`: `go test ./internal/web/... && go build ./... && gofmt -l .`
+      - Expect: l'intera suite di `web` resta verde — in particolare `execution_test.go`, `execution_implement_test.go`, `execution_review_test.go` e `workspace_execution_test.go`, che asseriscono le frasi di rifiuto per capacità mancante. Un fallimento qui significa che la derivazione ha cambiato una risposta esistente e va indagato, non aggirato modificando il test.
+
+      ## Done
+      - [ ] `providerAvailabilityFor` usa `execution.DeclaredCapabilities`.
+      - [ ] AC-4 — `providerAvailability.reasonFor(execution.CapabilityWorkspaceConverse)` produce, per un provider disponibile che non conversa, una frase che contiene letteralmente `workspace.converse`.
+      - [ ] Nessuna risposta esistente del viewer è cambiata: `go test ./internal/web/...` verde senza modifiche ai test esistenti.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: La conversazione vive nella sessione di workspace e si chiude quando il workspace si lascia
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      `workspaceSession` tiene al più una conversazione, quella del workspace che sta servendo, e la chiude quando la sessione si ferma — che sia per un cambio di workspace o per lo spegnimento del viewer.
+
+      ## Read
+      - `cli/internal/web/session.go` — `workspaceSession` per intero, in particolare il commento su cosa vive lì e cosa no, i campi `dispatch` e `followers`, e `stop()` con `ws.followers.closeAll()`.
+      - `cli/internal/web/switch.go` — `SwitchWorkspace`: dove la vecchia sessione viene fermata e la nuova installata.
+      - `cli/internal/web/server.go` — `Run` e il `defer` che ferma la sessione corrente.
+      - `cli/internal/execution/conversation.go` — il contratto scritto da TASK-01.
+
+      ## Change
+      - `cli/internal/web/conversation_state.go` — **file nuovo**: il tipo che tiene l'unica conversazione del workspace e le sue operazioni protette da mutex.
+      - `cli/internal/web/session.go` — aggiungere il campo alla struct, inizializzarlo in `newWorkspaceSession`, e chiuderlo dentro `stop()`.
+
+      Non-goal espliciti: **non** persistere nulla su disco; **non** indicizzare le conversazioni per project root tenendone più di una viva (decisione D2 del piano); **non** toccare `dispatch`, `followers`, `requireReachable` né il watcher.
+
+      ## Steps
+      1. In `conversation_state.go` definire `conversationState` con mutex e i campi: `id string`, `providerID string`, `provider execution.Conversationalist`, `collaborator execution.RunCollaborator`, `providerConfig map[string]any`, `workingDir string`, `openedAt time.Time`, `closed bool`. Documentare che il tipo tiene **una sola** conversazione perché il workspace ne ammette una sola.
+      2. Aggiungere i metodi: `open(...) error` che rifiuta se una è già aperta; `current() (snapshot, bool)` che restituisce una copia dei campi sotto lock, così che nessun chiamante legga uno stato a metà; `close(ctx) error` che invoca `CloseConversation` sul provider e svuota lo stato, idempotente.
+      3. In `session.go`, aggiungere il campo `conversation *conversationState` a `workspaceSession` e inizializzarlo in `newWorkspaceSession`. Aggiornare il commento della struct: la conversazione sta qui per la stessa ragione di `dispatch` e `followers` — è legata alla project root che questa sessione serve, e sopravvivere a un cambio di workspace significherebbe tenere acceso un processo radicato in una directory che il viewer non serve più.
+      4. In `stop()`, dopo `ws.dispatch.wait(drain)` e accanto a `ws.followers.closeAll()`, chiudere la conversazione con un contesto proprio e limitato (non quello della sessione, già cancellato). Documentare che è questo che libera il provider quando si cambia workspace.
+      5. `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Eseguire, con working directory `cli/`: `go test ./internal/web/... -race && go build ./... && gofmt -l .`
+      - Expect: la suite di `web` resta verde, incluso `switch_test.go`; il race detector non segnala nulla; `gofmt -l .` senza output.
+
+      ## Done
+      - [ ] `workspaceSession` ha un solo posto per la conversazione, e `stop()` la chiude.
+      - [ ] AC-5 — una sessione fermata non tiene più alcuna conversazione, quindi la sessione che la sostituisce ne ha zero.
+      - [ ] AC-6 — fermare la sessione invoca `CloseConversation` sul provider.
+      - [ ] Nessun comportamento esistente del viewer è cambiato: `go test ./internal/web/... -race` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Le quattro rotte HTTP della conversazione sul workspace aperto
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Objective
+      Il viewer offre, legge, alimenta e chiude la conversazione del workspace aperto attraverso quattro rotte, senza scrivere alcun record di esecuzione.
+
+      ## Read
+      - `cli/internal/web/run_routes.go` — `runView`, `projectionView`, `parseAfterID`, `mapRunRefusal`, `handleGetExecutionRun`, `handleSendRunMessage`, `handleCancelRun`: la conversazione riusa questo vocabolario, non ne inventa un altro.
+      - `cli/internal/web/workspace_execution.go` — `handleGetWorkspaceActions` e `handleRunWorkspaceAction`: ordine dei controlli (`requireReachable` per primo), forma dei rifiuti e uso di `s.broker.Publish()`.
+      - `cli/internal/web/server.go` — `registerRoutes`, `handleWorkspace`, `handleAlways`.
+      - `cli/internal/web/execution_run.go` — `providerAvailabilityFor` e `providerAvailability.reasonFor` dopo TASK-07.
+      - `cli/internal/web/conversation_state.go` — TASK-08.
+      - `cli/internal/execution/localrun/session.go` — `FirstID`, `Dropped` (TASK-03).
+      - `cli/internal/iox/iox.go` — `NewConflict`, `NewInvalidInput`, `NewNotFound`, `NewInternal`.
+
+      ## Change
+      - `cli/internal/web/conversation.go` — **file nuovo**: la vista, i quattro handler e la risoluzione del bersaglio.
+      - `cli/internal/web/server.go` — registrare le quattro rotte con `handleWorkspace`.
+
+      Non-goal espliciti: **non** creare alcun `execution.Execution`, **non** toccare `ws.store`, **non** toccare `ws.dispatch` né la guardia "una sola esecuzione per workspace" — sono queste tre omissioni, e non una convenzione di presentazione, a realizzare AC-2. **Non** aggiungere la conversazione a `GET /api/workspace/actions`. **Non** implementare le approvazioni: una sessione locale non ne chiede.
+
+      ## Steps
+      1. Definire in `conversation.go` la vista JSON:
+         - `available bool`, `unavailable_reason string,omitempty`, `provider_id string,omitempty`;
+         - `conversation *conversationSnapshotView` (o `null`) con `id`, `state`, `error,omitempty`, `working_dir`, `opened_at`;
+         - `events []execution.RunEvent` (mai `nil`), `last_id int64`, `truncated bool`, `notice string,omitempty`.
+         Documentare che `available` dice se **si può aprire** una conversazione, mentre `conversation` dice se **ce n'è una**: sono due domande diverse e il client deve poterle distinguere.
+      2. `GET /api/workspace/conversation`:
+         - leggere `after_id` con `parseAfterID` (rifiuto `400` invariato);
+         - calcolare la disponibilità con `s.providerAvailabilityFor(ctx, ws)` e `reasonFor(execution.CapabilityWorkspaceConverse)`, poi verificare che il provider risolto implementi davvero `execution.ConversationalistFor`; se non lo fa, la ragione è la stessa frase sulla capacità mancante — mai due frasi per lo stesso fatto;
+         - se non c'è conversazione aperta, rispondere `200` con `conversation: null` ed eventi vuoti;
+         - altrimenti leggere lo stato con `collaborator.ReadRun` e gli eventi con `collaborator.StreamRunEvents` limitato al backlog già presente (oppure con un accesso diretto alla sessione se la conversazione espone la propria `*localrun.Session`; scegliere la via che non apra un follower persistente, perché la conversazione non ha un hub remoto da seguire);
+         - calcolare `truncated` confrontando `FirstID()` con `after_id`: è parziale quando `FirstID() > after_id + 1`, e in quel caso comporre una `notice` che dica esplicitamente che la parte più vecchia della storia non è più mostrata, nominando quanti eventi sono stati scartati.
+      3. `POST /api/workspace/conversation`:
+         - `ws.requireReachable()` **per primo**, prima di decodificare qualunque corpo e prima di toccare il provider, con la stessa motivazione già scritta in `handleRunWorkspaceAction`;
+         - se una conversazione è già aperta, `409` che nomina il suo id;
+         - se la disponibilità dà una ragione, `409` con **quella** ragione e un rimedio che rimandi al pannello Execution della configurazione;
+         - generare l'id con lo stesso generatore usato per le esecuzioni (`execution.RandomID`), prefissato in modo da non poter mai collidere con un id di esecuzione;
+         - chiamare `provider.OpenConversation(ctx, execution.ConversationRequest{ConversationID: id, WorkingDir: ws.cfg.ProjectRoot, ProviderConfig: execution.CloneConfig(providerConfig)})`; su errore, non registrare nulla e rispondere `409` (configurazione o runtime) o `500` (fallimento interno) distinguendo con `errors.As` su `*execution.ConfigurationError`;
+         - registrare la conversazione in `ws.conversation` e rispondere `201` con la vista.
+      4. `POST /api/workspace/conversation/messages`: corpo `{"message": "..."}`; `400` se vuoto; `409` se non c'è conversazione aperta; consegnare con `collaborator.SendRunMessage` e rendere i rifiuti con `mapRunRefusal`; rispondere `202` con la proiezione, che **non contiene ancora il messaggio** — riprendere nel commento la ragione già scritta in `handleSendRunMessage`.
+      5. `DELETE /api/workspace/conversation`: `409` se non c'è nulla di aperto; altrimenti `ws.conversation.close(ctx)` e `200` con la vista finale, che mostra la conversazione non più attiva e la storia ancora leggibile.
+      6. In `server.go`, registrare con `handleWorkspace`: `GET /api/workspace/conversation`, `POST /api/workspace/conversation`, `POST /api/workspace/conversation/messages`, `DELETE /api/workspace/conversation`.
+      7. `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Eseguire, con working directory `cli/`: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/web/... -race`
+      - Expect: `gofmt -l .` senza output; `go vet` e `go build` passano; la suite `web` esistente resta verde (baseline verde, nessun nuovo fallimento ammesso). I test specifici delle nuove rotte arrivano con TASK-10.
+
+      ## Done
+      - [ ] AC-1 — `POST /api/workspace/conversation` passa al provider `WorkingDir` uguale a `ws.cfg.ProjectRoot`.
+      - [ ] AC-2 — nessun handler di questo file tocca `ws.store`, `ws.dispatch` o `execution.Service`; la conversazione non compare in `GET /api/workspace/actions`.
+      - [ ] AC-3 — la `GET` risponde con la conversazione aperta e la sua storia a partire da qualunque cursore, e dichiara `truncated` con una nota quando la storia mostrata è parziale.
+      - [ ] AC-4 — con un provider disponibile che non conversa, la `GET` risponde `200` con `available:false` e una ragione che nomina `workspace.converse`, e la `POST` risponde `409` con la stessa frase.
+      - [ ] AC-6 — la `DELETE` chiude la conversazione; un messaggio successivo è rifiutato.
+      - [ ] Le quattro rotte sono registrate con `handleWorkspace` e rispondono `409 workspaceOpen:false` senza workspace aperto.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Test Go delle rotte di conversazione, con provider finti conversante e non conversante
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      Provare al livello delle rotte che una conversazione non lascia traccia fra le esecuzioni, che è offerta solo da un provider che dichiara la capacità, e che chiuderla libera il provider.
+
+      ## Read
+      - `cli/internal/web/run_routes_test.go` — `newRunRoutesServer`, `fakeCollaborator`, `fakeStream`, gli helper `readRun`/`post`, `fingerprintOf`: la fixture di questo test si modella su di essa.
+      - `cli/internal/web/workspace_execution_test.go` — `readWorkspaceActions`, `startWorkspaceAction`, i provider finti e come si scrive `.archetipo/config.yaml` con un default provider nel test.
+      - `cli/internal/web/conversation.go` e `cli/internal/web/conversation_state.go` — l'implementazione da provare.
+
+      ## Change
+      - `cli/internal/web/conversation_test.go` — **file nuovo**, con la propria fixture e i propri provider finti. Nessun file di produzione viene toccato.
+
+      Non-goal: non usare qui il vero provider `claude` e non avviare processi; i provider di questo test sono finti e implementano `execution.Provider`, `execution.Conversationalist` e `execution.RunCollaborator` sopra un `localrun` reale o un collaboratore finto.
+
+      ## Steps
+      1. Costruire la fixture: server `web` su una project root temporanea con `.archetipo/config.yaml` che nomina come default un provider finto **conversante**, registrato nel `execution.Registry` del server.
+      2. Test "senza workspace aperto le quattro rotte rifiutano": su un `NewHomeServer`, ognuna risponde `409` con `workspaceOpen:false`.
+      3. Test "un provider che non conversa non offre la conversazione": con default un provider finto **disponibile** ma senza `Conversationalist`, `GET` risponde `200`, `available:false`, e `unavailable_reason` **contiene la stringa** `workspace.converse`; `POST` risponde `409` con la stessa frase; asserire anche che il provider non ha ricevuto alcuna apertura. (AC-4)
+      4. Test "aprire non scrive alcuna esecuzione": `POST` risponde `201`; poi `ws.store.ListBySpec(ctx, "")` è vuoto, la directory `.archetipo/executions/` non esiste o è vuota, e `GET /api/workspace/actions` risponde ancora `execution: null`. (AC-2)
+      5. Test "l'apertura passa la project root del workspace": il provider finto registra la `ConversationRequest` ricevuta; asserire `WorkingDir == ws.cfg.ProjectRoot`. (AC-1)
+      6. Test "una seconda apertura è rifiutata": `409` che nomina l'id della conversazione già aperta; il provider non riceve una seconda `OpenConversation`.
+      7. Test "la lettura riporta la storia dallo stesso server": accodare eventi sulla sessione del finto; `GET …?after_id=0` li restituisce tutti con `last_id` corretto e `truncated:false`; una seconda `GET` con lo stesso cursore restituisce gli stessi identici eventi — è l'oracolo del ricaricamento di pagina. (AC-3)
+      8. Test "una storia parziale è dichiarata": con una sessione limitata che ha scartato eventi, `GET …?after_id=<id già scartato>` risponde `truncated:true` con una `notice` non vuota. (AC-3)
+      9. Test "un messaggio entra nella storia solo quando il processo lo rimanda": `POST …/messages` risponde `202` e la proiezione del `202` **non** contiene il messaggio; solo dopo che il finto lo riemette compare, e una sola volta.
+      10. Test "chiudere invoca il provider una sola volta": `DELETE` risponde `200`, il finto conta esattamente una `CloseConversation` con l'id aperto; una seconda `DELETE` risponde `409` e il conteggio resta 1; un `POST …/messages` successivo risponde `409`. (AC-6)
+      11. Test "fermare la sessione chiude la conversazione": aprire, poi chiamare `ws.stop(...)` (o eseguire uno `SwitchWorkspace` verso un'altra root temporanea) e asserire che il finto ha ricevuto la chiusura e che la nuova sessione risponde `conversation: null`. (AC-5, AC-6)
+      12. Test "ogni rifiuto lascia la proiezione invariata": catturare la vista prima e dopo ciascuno dei rifiuti (`404`/`409`) e confrontarla byte per byte, come fa `TestRefusedCommandsLeaveTheProjectionUnchanged`.
+
+      ## Verify
+      - Eseguire, con working directory `cli/`: `go test ./internal/web/ -run Conversation -v -race`
+      - Expect: tutti i nuovi test passano, senza race.
+      - Poi `go test ./internal/web/... -race`
+      - Expect: l'intera suite `web` verde, come nella baseline.
+
+      ## Done
+      - [ ] AC-1 — esiste un test che fallisce se l'apertura non ricevesse la project root del workspace aperto.
+      - [ ] AC-2 — esiste un test che fallisce se aprire una conversazione producesse un record di esecuzione o la facesse comparire fra le azioni del workspace.
+      - [ ] AC-3 — esistono test che falliscono se la rilettura dallo stesso server perdesse la storia, o se una storia parziale non fosse dichiarata.
+      - [ ] AC-4 — esiste un test che fallisce se la ragione non nominasse `workspace.converse`.
+      - [ ] AC-5 e AC-6 — esistono test che falliscono se chiudere, o lasciare il workspace, non liberasse il provider.
+      - [ ] `go test ./internal/web/... -race` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Pannello di conversazione nel browser — renderer puro e cablaggio
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      Il viewer mostra la conversazione del workspace aperto: la si apre, le si scrive, la si legge mentre risponde, la si chiude — e quando non è offerta, dichiara la ragione che riceve dal server.
+
+      ## Read
+      - `docs/mockups/US-053/` — gli stati del pannello prodotti in fase di pianificazione: vuoto, conversazione, storia parziale, non offerta, chiusa. Sono il riferimento visivo di questo task.
+      - `cli/internal/web/assets/workspace-status.js` e `test/web/workspace-status.test.mjs` — la forma canonica di un renderer UMD puro di questo repository: nessun DOM, nessuna rete, HTML neutralizzato, **nessuna regola di processo dentro il frontend**.
+      - `cli/internal/web/assets/app.js` — `renderRun`, `bindRunPanel`, `applyRunView`, `startRunPolling`, `resetRunState`, `mountExecutionPanels`, e le costanti `EXECUTION_POLL_MS`, `RUN_POLL_FAILURE_LIMIT`: disciplina di polling, cursore, e sicurezza contro il contesto sbagliato.
+      - `cli/internal/web/assets/index.html` — dove sono montati `story-run`, `inception-run`, `spec-draft-run`.
+      - `cli/internal/web/assets/app.css` — le classi `run-*` e `.story-run`.
+
+      ## Change
+      - `cli/internal/web/assets/conversation.js` — **file nuovo**: modulo UMD puro che espone `window.Conversation.renderConversation(view, draft)` e restituisce una stringa HTML.
+      - `cli/internal/web/assets/index.html` — un contenitore per il pannello e l'inclusione dello script.
+      - `cli/internal/web/assets/app.js` — stato, polling, invio, chiusura e binding del pannello.
+      - `cli/internal/web/assets/app.css` — le classi del pannello, derivate da quelle di `run-*`.
+
+      Non-goal espliciti: **non** decidere la disposizione della conversazione rispetto alla board e alla spec — è fuori ambito nella spec, quindi il pannello va montato in un solo posto, coerente con i mockup, senza riorganizzare la pagina; **non** offrire azioni di processo dalla conversazione; **non** suggerire il passo successivo; **non** riusare le variabili globali `run*` di `app.js`, che appartengono al pannello di run e non devono essere condivise.
+
+      ## Steps
+      1. Scrivere `conversation.js` come renderer **puro**: riceve la vista della rotta e la bozza del compositore, restituisce HTML. Deve gestire e distinguere quattro casi:
+         - `available:false` → mostra `unavailable_reason` verbatim, **senza** compositore e senza bottone di apertura;
+         - `available:true` e `conversation:null` → stato vuoto con il bottone di apertura;
+         - conversazione attiva → intestazione con `working_dir`, la timeline degli eventi, il compositore, il bottone di chiusura; se `truncated` è vero, la dichiarazione di storia parziale **in testa alla timeline**, presa dalla `notice` ricevuta;
+         - conversazione non più attiva → timeline in sola lettura, compositore disabilitato, dichiarazione che l'agente non è più impegnato, e la possibilità di aprirne una nuova.
+         Neutralizzare ogni testo proveniente dal payload (riusare l'helper di escaping già presente nei moduli fratelli). Il modulo **non deve mai nominare da sé una capacità, un provider o un'azione**: mostra ciò che riceve.
+      2. In `index.html`, aggiungere il contenitore del pannello nella posizione indicata dai mockup e il tag `<script src="conversation.js"></script>` accanto agli altri moduli.
+      3. In `app.js`, aggiungere lo stato dedicato del pannello, con nomi propri e non condivisi con quelli di run: vista corrente, cursore `afterID`, elenco eventi, bozza, flag di comando in volo, contatore di letture fallite, flag di abbandono.
+      4. Implementare `loadConversation()` (GET con `after_id=0` all'avvio e a ogni riapertura del pannello), `startConversationPolling()` con la stessa disciplina di `startRunPolling` — tick non sovrapposti, resa dopo un numero massimo di letture fallite, e nota esplicita quando smette di riconnettersi — `openConversation()`, `sendConversationMessage()` e `closeConversation()` con conferma inline, modellata su `runCancelArmed`.
+      5. Bindare il contenitore una volta sola, come fa `bindRunPanel`: i controlli sono ridisegnati a ogni resa e non possono possedere i propri handler.
+      6. Al cambio di workspace nel browser (dove l'app già ricarica board e stato), azzerare lo stato del pannello e rileggere: la conversazione mostrata deve essere quella del workspace ora aperto (AC-5 lato client; il server la garantisce comunque).
+      7. Aggiungere in `app.css` le classi del pannello, riusando le variabili e le spaziature esistenti; non introdurre un nuovo linguaggio visivo.
+
+      ## Verify
+      - Eseguire, dalla radice del repository: `npm run test:web`
+      - Expect: verde, 61 test come nella baseline più quelli aggiunti da TASK-12 se già presenti; nessuna regressione nelle suite esistenti.
+      - Eseguire, con working directory `cli/`: `go build ./...`
+      - Expect: compila — gli asset sono `embed`ed, quindi un file mancante o un percorso sbagliato si vede qui.
+      - Controllo manuale, dalla radice: `node -e "require('./cli/internal/web/assets/conversation.js')"` oppure caricamento del modulo dal test di TASK-12.
+      - Expect: il modulo si carica senza toccare `document` né `fetch`.
+
+      ## Done
+      - [ ] AC-1 — dal pannello si apre una conversazione, si invia un messaggio e la risposta dell'agente compare progressivamente nella timeline.
+      - [ ] AC-3 — quando la vista dichiara `truncated`, il pannello mostra in testa alla timeline la dichiarazione che la storia è parziale.
+      - [ ] AC-4 — quando la vista dichiara `available:false`, il pannello mostra la ragione ricevuta e non offre il compositore.
+      - [ ] AC-6 — il pannello ha un comando di chiusura con conferma, e dopo la chiusura mostra la conversazione in sola lettura.
+      - [ ] `conversation.js` è un modulo puro: nessun DOM, nessuna rete, nessuna regola di processo, ogni testo del payload neutralizzato.
+      - [ ] `npm run test:web` verde e `go build ./...` pulito.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Test Node del renderer di conversazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Objective
+      Provare, senza browser e senza rete, che il pannello mostra la ragione che riceve, dichiara una storia parziale quando il payload lo dice, e non contiene regole di processo.
+
+      ## Read
+      - `test/web/workspace-status.test.mjs` — struttura, stile e, soprattutto, il test "non contiene regole di processo": è il modello da replicare.
+      - `test/web/provider-fields.test.mjs` — come si carica un modulo UMD degli asset da un test Node.
+      - `cli/internal/web/assets/conversation.js` — il modulo scritto da TASK-11.
+      - `package.json` — lo script `test:web` e il suo glob `test/web/**/*.test.mjs`: il nuovo file vi rientra senza modifiche.
+
+      ## Change
+      - `test/web/conversation.test.mjs` — **file nuovo**. Nessun altro file viene toccato: lo script npm esiste già e il glob copre il nuovo test.
+
+      ## Steps
+      1. Caricare il modulo come fanno i test fratelli e ottenere `renderConversation`.
+      2. Test "senza disponibilità mostra la ragione e non offre il compositore": vista con `available:false` e `unavailable_reason` contenente `workspace.converse`; il markup contiene quella frase e **non** contiene il compositore. (AC-4)
+      3. Test "il renderer non nomina da sé alcuna capacità né alcun provider": leggere il **sorgente** di `conversation.js` e asserire che non contiene le stringhe `workspace.converse`, `claude`, `codex`, `arcipelago` né alcun id di azione del processo — è lo stesso controllo che `workspace-status.test.mjs` fa sul proprio modulo.
+      4. Test "una storia parziale è dichiarata in testa alla timeline": vista con `truncated:true` e una `notice`; il markup contiene la nota, e la contiene **prima** del primo evento. (AC-3)
+      5. Test "una storia intera non dichiara nulla": con `truncated:false`, la nota non compare.
+      6. Test "una conversazione attiva mostra timeline, compositore e chiusura"; test "una conversazione non più attiva mostra la sola lettura e dichiara che l'agente non è più impegnato". (AC-6)
+      7. Test "stato vuoto": `available:true` con `conversation:null` mostra l'invito ad aprirne una.
+      8. Test "non lancia su payload parziali": viste con campi mancanti, `null`, array assenti — il renderer restituisce comunque una stringa.
+      9. Test "neutralizza l'HTML che arriva dal payload": un evento il cui testo contiene `<img src=x onerror=…>` e una `unavailable_reason` con un tag; il markup li contiene in forma escapata.
+      10. Test "la bozza del compositore sopravvive alla resa": passando una bozza, compare come valore del campo, escapata.
+
+      ## Verify
+      - Eseguire, dalla radice del repository: `npm run test:web`
+      - Expect: verde; il conteggio dei test è quello della baseline (61) più i nuovi; nessuna suite esistente fallisce.
+
+      ## Done
+      - [ ] AC-3 — un test fallisce se una storia parziale non fosse dichiarata, o se lo fosse quando non è parziale.
+      - [ ] AC-4 — un test fallisce se la ragione non fosse mostrata, o se il compositore fosse offerto senza disponibilità.
+      - [ ] AC-6 — un test fallisce se una conversazione chiusa restasse scrivibile nel markup.
+      - [ ] Esiste il test che fallisce se il frontend cominciasse a contenere regole di processo.
+      - [ ] `npm run test:web` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Smoke E2E della conversazione contro viewer reale e agente finto
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+      - TASK-11
+    body: |-
+      ## Objective
+      Dimostrare, con il viewer vero e un binario d'agente finto, che una conversazione parla sulla project root del workspace aperto, non produce alcuna esecuzione, sopravvive al ricaricamento, non è offerta da un provider che non la dichiara, non segue chi cambia workspace, e libera il provider quando la si chiude.
+
+      ## Read
+      - `test/e2e/local-run-view-smoke.mjs` — la struttura di riferimento: sandbox, viewer su porta casuale, provider vero puntato sul fake, control server, attese che interrogano una rotta.
+      - `test/e2e/workspace-run-root-view-smoke.mjs` — il pattern dei **due workspace** `A` e `B` aperti sullo stesso PID: è la base del caso AC-5.
+      - `test/e2e/spec-draft-from-view-smoke.mjs` — come si asserisce che qualcosa **non** è stato scritto e che il backlog è rimasto identico.
+      - `test/e2e/support/fake-claude.mjs` — i comandi `emit` / `write` / `exit` e i report `argv` (con `cwd`) e `received`.
+      - `test/e2e/support/fake-codex.mjs` — risponde `--version`: serve come provider **disponibile e senza** la capacità.
+      - `test/e2e/baseline.mjs` e `test/e2e/config.mjs` — costruzione della CLI, sandbox, report.
+      - `package.json` — la lista degli script `test:view-*`.
+
+      ## Change
+      - `test/e2e/conversation-view-smoke.mjs` — **file nuovo**.
+      - `package.json` — aggiungere lo script `"test:view-conversation-smoke": "node ./test/e2e/conversation-view-smoke.mjs"` accanto agli altri `test:view-*`.
+
+      Non-goal espliciti: **non** introdurre alcun framework di browser E2E (rinuncia motivata nella strategia di test del piano); **non** usare credenziali reali; **non** uscire da `127.0.0.1`; **non** usare alcuna `sleep` arbitraria — ogni attesa interroga una rotta del viewer o il control server con un timeout che nomina cosa aspettava e cosa è arrivato; **non** far progredire il fake da solo.
+
+      ## Steps
+      1. Costruire la CLI, creare tre sandbox reali, ciascuna con `archetipo init --tool claude` (o `--tool codex` dove serve), e avviare il viewer su porta casuale con una variabile sentinella di materiale di sessione nell'ambiente. Isolare il registro dei workspace con `ARCHETIPO_STATE_DIR` dentro la run directory.
+      2. **AC-4 — non offerta.** In una sandbox con default `codex` puntato su `fake-codex.mjs`: `GET /api/workspace/conversation` risponde `200`, `available:false`, `unavailable_reason` contenente letteralmente `workspace.converse`; `POST /api/workspace/conversation` risponde `409` con la stessa frase; il control server non registra alcun avvio di processo; la directory della sandbox ha un listing ricorsivo identico prima e dopo.
+      3. **AC-1 — la conversazione parla sulla project root aperta.** Nella sandbox `A` con default `claude` puntato su `fake-claude.mjs`: aprire con `POST`; asserire che il report `argv` del fake dichiara `cwd` **uguale alla project root di `A`** e che l'invocazione porta i flag di streaming; far emettere un frame `assistant` e verificare che compaia come evento `text` su `GET …?after_id=0`; inviare un messaggio con `POST …/messages`, asserire che il `202` **non** lo contiene, che il control server lo ha visto arrivare al processo come frame `user`, e che entra nella storia **una sola volta** solo dopo che il fake lo riemette.
+      4. **AC-2 — nessuna esecuzione.** Catturare `GET /api/board` e `GET /api/workspace/actions` **prima** di aprire la conversazione; dopo l'intero scambio, asserire: il payload della board è byte-identico, `GET /api/workspace/actions` risponde ancora `execution: null`, e `.archetipo/executions/` non esiste oppure è vuota.
+      5. **AC-3 — il ricaricamento ritrova la conversazione.** Rileggere `GET …?after_id=0` dallo **stesso** PID di viewer, asserito invariato: la conversazione è ancora aperta con la stessa `id` e la storia intera, `truncated:false`. Poi far emettere al fake più eventi di quanti la finestra ne ritenga e asserire che una lettura con un cursore ormai fuori finestra risponde `truncated:true` con una `notice` non vuota.
+      6. **AC-5 — la conversazione non segue chi cambia workspace.** Registrare la sandbox `B` con `POST /api/workspaces` e aprirla con `POST /api/workspaces/{id}/open` **sullo stesso PID**; asserire che `GET /api/workspace/conversation` risponde `conversation:null` e che l'`id` della conversazione di `A` non compare; aprire una conversazione in `B` e asserire che il `cwd` del nuovo processo è la project root di `B`.
+      7. **AC-6 — chiudere libera il provider.** Con una conversazione aperta, `DELETE /api/workspace/conversation` risponde `200`; asserire che il processo finto è **finito** (osservato dal control server: smette di chiedere comandi / segnala la propria uscita) entro un timeout esplicito; un `POST …/messages` successivo risponde `409`; una seconda `DELETE` risponde `409`; la lettura mostra ancora la storia. Asserire inoltre che la chiusura implicita di AC-5 ha terminato allo stesso modo il processo di `A`.
+      8. **Invarianti trasversali.** La sentinella non compare in alcuna risposta del viewer né in alcun `.archetipo/config.yaml`; ogni rifiuto (`404`/`409`) lascia la proiezione byte-identica, confrontata prima e dopo; lo smoke scrive `report.html` e `summary.json` nella propria run directory; è saltato su Windows con una ragione esplicita.
+      9. Aggiungere lo script in `package.json`.
+
+      ## Verify
+      - Eseguire, dalla radice del repository: `npm run test:view-conversation-smoke`
+      - Expect: verde, con `report.html` e `summary.json` prodotti. Prima di questo task lo script **non esiste**: è questo task a crearlo, quindi è la prima esecuzione possibile.
+      - Eseguire poi, come regressione sugli smoke fratelli che condividono i fake: `npm run test:view-local-run-smoke && npm run test:view-workspace-root-smoke`
+      - Expect: entrambi verdi. Se un fake è stato esteso, questi due sono ciò che prova che non è stato cambiato sotto ai piedi di chi lo usava già.
+
+      ## Done
+      - [ ] AC-1 — l'oracolo è il `cwd` che il processo dichiara e i frame che ha davvero ricevuto, non un campo del viewer.
+      - [ ] AC-2 — board byte-identica, `execution: null`, `.archetipo/executions/` vuota.
+      - [ ] AC-3 — la rilettura dallo stesso PID ritrova conversazione e storia; una storia fuori finestra è dichiarata `truncated` con una nota.
+      - [ ] AC-4 — con `codex` disponibile ma senza la capacità, la conversazione non è offerta e la ragione nomina `workspace.converse`.
+      - [ ] AC-5 — aprire `B` non mostra la conversazione di `A`, e una conversazione aperta in `B` parla nella root di `B`.
+      - [ ] AC-6 — la chiusura termina il processo dell'agente, e ogni comando successivo è rifiutato.
+      - [ ] Nessuna sleep arbitraria, nessuna credenziale, nessun traffico fuori da `127.0.0.1`, sentinella mai esposta.
+      - [ ] `npm run test:view-conversation-smoke` verde e i due smoke fratelli restano verdi.
+
+      ## Blockers
+      None.
+    ref: TASK-13
+  - id: TASK-14
+    title: Documentare la conversazione e il suo smoke in AGENTS.md
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-13
+    body: |-
+      ## Objective
+      `AGENTS.md` descrive lo smoke nuovo con lo stesso livello di dettaglio degli altri, così che chi arriva dopo sappia cosa prova e con quali oracoli.
+
+      ## Read
+      - `AGENTS.md` — la sezione **Standalone smoke tests**, in particolare le voci `test:view-local-run-smoke`, `test:view-workspace-root-smoke` e `test:view-spec-draft-smoke`: sono il registro di dettaglio da eguagliare, e la frase finale della sezione E2E chiede esplicitamente di aggiornarla quando la semantica cambia.
+      - `test/e2e/conversation-view-smoke.mjs` — ciò che lo smoke fa davvero: la voce deve descriverlo, non un'intenzione.
+      - `package.json` — il nome esatto dello script.
+
+      ## Change
+      - `AGENTS.md` — aggiungere una voce per `npm run test:view-conversation-smoke` nella lista **Standalone smoke tests**.
+
+      Non-goal espliciti: **non** riscrivere le voci esistenti; **non** documentare qui il protocollo delle rotte (le skill dichiarano solo i sottocomandi CLI che usano, e queste sono rotte del viewer, non sottocomandi); **non** creare nuovi file di documentazione.
+
+      ## Steps
+      1. Scrivere la voce nominando: che cosa costruisce (la CLI), quante sandbox usa e con quale `--tool`, quale binario è finto e quale no, e i sei fatti che asserisce, uno per criterio: la project root su cui il processo è avviato, l'assenza di record di esecuzione e la board invariata, la storia ritrovata dallo stesso PID e la parzialità dichiarata, la conversazione non offerta da un provider disponibile privo di `workspace.converse`, la conversazione che non segue il cambio di workspace, e la chiusura che termina il processo.
+      2. Chiudere la voce con le stesse garanzie che le altre dichiarano: nessuna credenziale, nessun traffico fuori da `127.0.0.1`, il fake che non progredisce da solo, nessuna sleep arbitraria, `report.html` e `summary.json`, saltato su Windows.
+      3. Rileggere la voce accanto a quella di `test:view-local-run-smoke` e verificare che non contraddica nulla di ciò che quella dichiara.
+
+      ## Verify
+      - Eseguire, dalla radice: `grep -n "test:view-conversation-smoke" AGENTS.md package.json`
+      - Expect: entrambi i file lo nominano, con lo stesso identico nome di script.
+      - Eseguire: `npm run test:view-conversation-smoke`
+      - Expect: verde — la documentazione descrive uno smoke che passa davvero.
+
+      ## Done
+      - [ ] AGENTS.md contiene la voce dello smoke, con i sei fatti asseriti e le garanzie trasversali.
+      - [ ] Il nome dello script in AGENTS.md coincide con quello in `package.json`.
+      - [ ] Nessuna voce esistente è stata alterata.
+
+      ## Blockers
+      None.
+    ref: TASK-14
+  - id: TASK-15
+    title: Gate finale — verifiche complete e controllo che nessun task resti TODO
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+      - TASK-13
+      - TASK-14
+    body: |-
+      ## Objective
+      Eseguire l'intera batteria di controlli che questo repository si fida di eseguire, provare che US-053 non ha introdotto alcun nuovo fallimento rispetto alla baseline, e verificare che ogni task del piano sia `DONE` prima di chiedere la revisione.
+
+      ## Read
+      - `AGENTS.md` — la sezione "Rules for CLI changes", che elenca i cinque controlli da eseguire prima di consegnare, e la sezione E2E per i comandi degli smoke.
+      - La sezione **Baseline** del corpo di questo piano: è il metro di paragone, e nessun comando può essere dichiarato verde se la baseline lo dava rosso.
+
+      ## Change
+      Nessuna modifica di codice. Se un controllo fallisce, la correzione appartiene al task che ha introdotto il fallimento: correggere lì e rieseguire questo gate, non aggirare il controllo qui.
+
+      ## Steps
+      1. Eseguire, con working directory `cli/`, nell'ordine:
+         - `gofmt -l .`
+         - `go vet ./...`
+         - `go build ./...`
+         - `go test ./... -race`
+         - `golangci-lint run --timeout 5m ./...` — installandolo prima con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` se manca, come dice AGENTS.md.
+      2. Eseguire, dalla radice del repository:
+         - `npm run test:web`
+         - `npm run test:view-conversation-smoke`
+         - `npm run test:view-local-run-smoke`
+         - `npm run test:view-workspace-root-smoke`
+         - `npm run test:view-execution-smoke`
+      3. Verificare che nessun file toccato da questo piano abbia diagnostiche di compilatore o di linter: `go build` e `golangci-lint` sopra sono la prova, e la baseline era pulita su tutto il modulo, quindi qualunque diagnostica su un file toccato è nuova e va rimossa.
+      4. Rileggere la mappa delle evidenze di accettazione del piano e verificare, criterio per criterio, che il test nominato esista davvero e sia stato eseguito in uno dei comandi di cui sopra.
+      5. Marcare **questo** task `DONE`.
+      6. Solo dopo, ricaricare la spec dalla project root `/Users/stefanoleli/Project/Archetipo`: `archetipo spec show US-053` e verificare che **nessun** task risulti `TODO`.
+      7. Solo se ogni task è `DONE`, chiedere la revisione con `archetipo spec review US-053`.
+
+      ## Verify
+      - `cd cli && gofmt -l .`
+      - Expect: nessun output (baseline: nessun output).
+      - `cd cli && go vet ./... && go build ./...`
+      - Expect: passano entrambi (baseline: passano).
+      - `cd cli && go test ./... -race`
+      - Expect: tutti i pacchetti verdi. La baseline era 1778 test verdi in 28 pacchetti senza `-race`; l'aspettativa è **nessun fallimento nuovo**, con un conteggio superiore per via dei test aggiunti.
+      - `cd cli && golangci-lint run --timeout 5m ./...`
+      - Expect: 0 issue. La baseline **non ha potuto eseguirlo** perché lo strumento non è installato su questa macchina: se dopo l'installazione riporta issue preesistenti su file che questo piano non tocca, registrarle come confine preesistente e provare che nessuna riguarda un file toccato da US-053. Non dichiarare verde un comando che non è stato eseguito.
+      - `npm run test:web`
+      - Expect: verde (baseline: 61 test, 12 suite, 0 fallimenti; ora di più).
+      - `npm run test:view-conversation-smoke && npm run test:view-local-run-smoke && npm run test:view-workspace-root-smoke && npm run test:view-execution-smoke`
+      - Expect: tutti verdi, ciascuno con il proprio `report.html` e `summary.json`. Su Windows sono saltati con ragione esplicita, e in quel caso il gate registra il salto invece di dichiararli verdi.
+      - `archetipo spec show US-053` da `/Users/stefanoleli/Project/Archetipo`
+      - Expect: ogni task in `DONE`, questo incluso.
+
+      ## Done
+      - [ ] I cinque controlli Go di AGENTS.md sono stati eseguiti e il loro esito è registrato, con la ragione esatta di qualunque salto.
+      - [ ] `npm run test:web` e i quattro smoke del viewer sono verdi.
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5, AC-6 — per ciascuno, il test nominato nella mappa delle evidenze esiste ed è stato eseguito in questa sessione di verifica.
+      - [ ] Nessun file toccato dal piano porta diagnostiche nuove di compilatore o linter.
+      - [ ] Questo task è `DONE`, `archetipo spec show US-053` non riporta alcun task `TODO`, e solo a quel punto è stata invocata `archetipo spec review US-053`.
+
+      ## Blockers
+      None.
+    ref: TASK-15

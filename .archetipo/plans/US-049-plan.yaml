@@ -1,0 +1,706 @@
+schema: archetipo/plan/v2
+spec_code: US-049
+body: |-
+  # US-049: Scegliere modello e opzioni per una singola run — Piano di implementazione
+
+  **Prodotto da:** Team di Pianificazione ARchetipo
+  **Data:** 2026-08-20
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 — Esperienza operativa ARchetipo
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come utilizzatore che avvia un'azione dalla UI, voglio poter usare per quella sola run un modello diverso da quello del workspace, così da alzare o abbassare la potenza su una singola attività senza riconfigurare il workspace e senza dimenticarmelo configurato.
+
+  **Criteri di accettazione**
+  - AC-1 — L'avvio di un'azione mostra il modello che sarà usato, ereditato dalla configurazione del workspace.
+  - AC-2 — È possibile scegliere per la sola run un altro modello dall'elenco dichiarato dal provider, insieme alle opzioni che quel modello dichiara.
+  - AC-3 — Il dettaglio della run riporta il modello e le opzioni effettivamente usati.
+  - AC-4 — Dopo una run avviata con una scelta diversa, la configurazione del workspace resta invariata.
+  - AC-5 — Una run avviata senza scelta esplicita usa il modello e le opzioni del workspace.
+  - AC-6 — Quando l'elenco non è disponibile, l'avvio procede con il modello configurato e la scelta per la singola run è mostrata come non disponibile, con il motivo.
+
+  **Fuori ambito**
+  Memorizzazione della scelta come nuovo default del workspace, scelta di un provider diverso per la singola run, e cambio di modello a run già avviata.
+
+  **Bloccata da:** US-048 — `DONE`. Il catalogo per modello (`execution.ModelOption.Options`, `ModelOptionField`, `ModelOptionChoice`), l'interfaccia `ModelLister`, i campi `model_field` / `models` / `models_unavailable_reason` della view e il renderer puro `provider-fields.js` esistono già e sono esattamente il materiale su cui questa spec lavora.
+
+  ---
+
+  ## Soluzione tecnica
+
+  La scelta per la singola run è **una sovrapposizione alla configurazione del workspace, calcolata al momento dell'avvio e mai scritta su disco**. Tutto il resto del percorso — preflight, record, dispatch, dialogo — è già parametrico sulla configurazione del provider (`Request.ProviderConfig`), quindi non serve nessun canale nuovo: basta che la configurazione che entra in `Service.Start` sia quella risultante dalla scelta, e che il record dica quale scelta è stata applicata.
+
+  - **La fusione vive nel dominio, non nella view.** Un nuovo file `cli/internal/execution/modelchoice.go` espone `ResolveModelChoice` (che cosa userebbe una run avviata adesso con questa configurazione) e `ApplyModelChoice` (la configurazione effettiva più la scelta registrata, dato un override). Entrambe interrogano il catalogo tramite `ListModels`, quindi non conoscono nessun provider e nessun nome di campo se non `execution.ModelFieldName`, già l'unico posto dove quel nome vive.
+  - **Le opzioni non applicabili vengono potate.** Quando arriva un override, la fusione rimuove dalla copia della configurazione **l'unione dei nomi di opzione dichiarati da tutte le voci del catalogo** e poi scrive soltanto quelle del modello scelto. È la stessa regola che US-048 ottiene nel form ridisegnando i controlli, portata sul server perché qui il form non c'è: senza potatura un `effort` configurato sul workspace finirebbe addosso a un modello che non lo dichiara, e il provider lo rifiuterebbe con un errore che nomina un campo che l'utente non ha toccato. Senza override non si pota nulla: la configurazione del workspace passa verbatim (AC-5).
+  - **Il record dice che cosa è stato usato.** `execution.Execution` acquista `ModelChoice *ModelChoice` con `model`, `options` e `source` (`workspace` o `run`). Viene valorizzato anche quando nessuno ha scelto niente, perché AC-3 chiede il modello *effettivamente usato* e "quello del workspace" è una risposta, non un'assenza. Un provider senza catalogo non ha modello da dichiarare e il campo resta assente (`omitempty`).
+  - **`Service.Start` non cambia firma.** La scelta arriva come `StartOption` variadico (`execution.WithModelChoice`), applicato al record **prima** di `store.Create`: il modello è quindi leggibile mentre la run è ancora `RUNNING`, che è il momento in cui qualcuno guarda il dettaglio. Un parametro obbligatorio in più avrebbe toccato ogni chiamante attuale — CLI compresa — per un dato che riguarda un solo chiamante.
+  - **Una rotta di sola lettura risponde alla domanda di AC-1.** `GET /api/execution/model-choice` restituisce provider, `model_field`, il modello effettivo con la sua `model_source`, le opzioni ereditate, il catalogo e — quando la scelta non è possibile — `available:false` con il motivo del provider. Il browser continua a non conoscere nessun provider: non deriva l'ereditarietà dalla configurazione, la legge.
+  - **Le due rotte di avvio accettano `model` e `model_options`.** `POST /api/spec/{code}/execution` e `POST /api/workspace/execution` li ricevono opzionali. Assenti, il comportamento è identico a oggi. Presenti, la fusione avviene **prima del preflight e prima di qualunque effetto**, così un modello inesistente o un'opzione fuori catalogo lascia la spec ferma e nessun record dietro di sé.
+  - **Il front-end riusa il renderer puro.** `provider-fields.js` guadagna `renderModelChoice(view, selection)` accanto a `renderProviderFields`: stesso escaping, stessa resa delle scelte, stessa disciplina — nessun id di provider, nessun nome di campo scritto nel modulo. `app.js` monta il controllo accanto ai chip d'azione dei tre pannelli esistenti e lo rimette sui valori ereditati dopo ogni avvio, che è ciò che rende la seconda run di AC-5 una conseguenza e non una promessa.
+
+  ### Decisioni architetturali
+
+  Il gate Wiki è `false` per questo workspace: le decisioni che superano la soglia sono registrate qui per intero, e in nessun altro posto.
+
+  **1. La scelta è una sovrapposizione effimera, non un secondo posto dove si configura un provider.**
+  *Contesto:* servono, per una singola run, un modello e delle opzioni diversi da quelli persistiti, senza toccare il file di configurazione (AC-4) e senza sopravvivere alla run (AC-5).
+  *Opzione scelta:* fondere l'override su una copia in memoria della configurazione del default e passarla a `Service.Start`; il file non viene mai riletto in scrittura lungo questo percorso.
+  *Alternative valutate:* (a) scrivere la scelta nel file, avviare, e ripristinare — rifiutata: una run interrotta o due run concorrenti lasciano il workspace configurato con la scelta di qualcun altro, che è esattamente il "dimenticarmelo configurato" che la storia vuole evitare; (b) un secondo blocco `execution.run_overrides` persistito — rifiutata: crea uno stato da invalidare e contraddice AC-4 alla lettera.
+  *Tradeoff accettato:* la scelta non sopravvive a un riavvio del viewer né al reload della pagina prima dell'avvio. È coerente con la storia, che la vuole valida per una sola run.
+  *Intento di verifica:* confronto byte a byte di `.archetipo/config.yaml` prima e dopo una run avviata con override, e `GET /api/execution/providers` che riporta il default invariato.
+
+  **2. Il modello effettivo è un verdetto del server, non un calcolo del browser.**
+  *Contesto:* AC-1 e AC-6 sono affermazioni su ciò che *sarà* usato e sul perché la scelta non è offerta; entrambe dipendono da regole di provider (un campo vuoto significa "sceglie il provider", una voce del catalogo può essere marcata come default, un provider può non dichiarare catalogo affatto).
+  *Opzione scelta:* una rotta dedicata di sola lettura che restituisce il modello effettivo, la sua provenienza e il motivo dell'indisponibilità.
+  *Alternative valutate:* (a) far derivare tutto al browser da `GET /api/execution/providers` — rifiutata: quella rotta sonda **ogni** provider registrato (un processo per provider a ogni apertura di una spec) e costringerebbe `app.js` a implementare la regola "vuoto significa il default del provider", cioè conoscenza di provider dentro il front-end, che questo viewer non ha mai avuto; (b) allegare il modello effettivo alla view delle azioni di spec e di workspace — rifiutata: sarebbe lo stesso dato duplicato in due payload diversi che possono divergere.
+  *Tradeoff accettato:* una richiesta HTTP in più all'apertura di un pannello.
+  *Intento di verifica:* test della rotta con un provider con catalogo, uno senza catalogo e uno con catalogo non ottenibile.
+
+  ---
+
+  ## Baseline
+
+  Misurata sotto `/Users/stefanoleli/Project/Archetipo` prima di scrivere qualunque riga.
+
+  | Comando | Risultato prima dell'implementazione | Conseguenza di pianificazione |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | Nessun output | Ogni task che tocca file Go lo rilancia: qualunque output è una regressione introdotta dal task. |
+  | `cd cli && go vet ./...` | Nessuna diagnostica | I file toccati non devono aggiungerne nessuna. |
+  | `cd cli && go build ./...` | Compila pulito | `Expect: passes` è legittimo in ogni task Go. |
+  | `cd cli && go test ./...` | 1649 test passati in 28 package | `Expect: passes` è legittimo; i task usano il sottoinsieme mirato `./internal/execution/... ./internal/web/...` e il gate finale l'intera suite. |
+  | `npm run test:web` | 41 test, 0 falliti | `Expect: passes`; il nuovo renderer va provato qui. |
+  | `golangci-lint run --timeout 5m ./...` | **Non eseguibile: binario non installato** | Prerequisito d'ambiente, non un fallimento del codice. Il gate finale lo installa con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` e poi lo esegue pretendendo 0 issue. |
+
+  Nessun file toccato da questo piano ha diagnostiche preesistenti: `gofmt`, `go vet` e `go build` sono tutti puliti, quindi ogni comando che i task promettono verde lo è già oggi.
+
+  Altri prerequisiti d'ambiente, separati dal codice: Go e Node installati (già verificati dalla baseline), e nessuna credenziale — tutti i test di questo piano girano in locale su `127.0.0.1` e con binari agente finti.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello | Oracolo osservabile | Task che lo produce |
+  |---|---|---|---|---|
+  | AC-1 | Sandbox con provider `claude` (binario finto) salvato come default con `model: sonnet` e `effort: high` | Integrazione HTTP (smoke) + unità (renderer) | `GET /api/execution/model-choice` risponde `model:"sonnet"`, `model_source:"workspace"`, `options:{"effort":"high"}`, `available:true`; il markup di `renderModelChoice` ha quella voce `selected` e mostra `effort=high` | TASK-12, TASK-10 |
+  | AC-2 | Stessa sandbox, catalogo `opus/sonnet/haiku` con l'opzione `effort` su opus e sonnet | Integrazione HTTP (smoke) | `POST /api/spec/US-901/execution {"action":"plan","model":"opus","model_options":{"effort":"low"}}` risponde `201` e il processo finto riceve `--model opus` e `--effort low` nel proprio `argv` | TASK-12 |
+  | AC-3 | La run appena avviata con override | Integrazione HTTP (smoke) + unità (Go) | `GET /api/execution/{id}` riporta `model_choice:{model:"opus",options:{"effort":"low"},source:"run"}` mentre il record è ancora `RUNNING` e dopo la chiusura | TASK-04, TASK-08, TASK-12 |
+  | AC-4 | `.archetipo/config.yaml` letto byte a byte prima dell'avvio con override | Integrazione HTTP (smoke) + unità (Go) | Il file è identico byte a byte dopo la run, e `GET /api/execution/providers` riporta `default.config` con `model:"sonnet"` e `effort:"high"` | TASK-08, TASK-12 |
+  | AC-5 | Dopo la run con override, seconda run senza `model` né `model_options` | Integrazione HTTP (smoke) | Il processo finto riceve `--model sonnet` e `--effort high`, e il record riporta `model_choice.source:"workspace"` con quegli stessi valori | TASK-08, TASK-12 |
+  | AC-6 | Provider stub registrato nel server di test in due varianti: senza catalogo, e con catalogo che fallisce restando disponibile | Integrazione HTTP (Go) + unità (renderer) | `GET /api/execution/model-choice` risponde `available:false` con il motivo testuale del provider; `POST .../execution` **senza** override risponde `201`; con override risponde `409` che riporta lo stesso motivo; il markup di `renderModelChoice` mostra il motivo e nessun `<select>` | TASK-06, TASK-08, TASK-10 |
+
+  Nessun oracolo passa attraverso un mock che nasconda il componente responsabile: il binario dell'agente è finto, ma viewer, connettore, provider, protocollo, sessione locale e follower sono quelli reali, e il modello «effettivamente usato» è letto dall'`argv` che il processo riceve, non dalla configurazione che il server crede di avergli passato.
+
+  **Perché AC-6 non è nello smoke.** Lo stato «runtime usabile ma catalogo non ottenibile» non è producibile con i due provider locali, i cui cataloghi sono statici e falliscono solo quando fallisce anche il parsing della configurazione — cioè quando l'avvio è comunque rifiutato. Il livello dove quello stato esiste è il server di test del package `web` con un provider stub, e lì la rotta e l'handler sotto test sono quelli veri.
+
+  ---
+
+  ## Strategia di test
+
+  La strategia segue la stratificazione che questo repository già usa per ogni spec del viewer: la regola pura si prova in unità, il contratto HTTP nel package `web` con provider reali o stub, e il percorso completo in uno smoke credential-free contro un binario agente finto guidato frame per frame.
+
+  - **Unità Go (`cli/internal/execution`)**: fusione e potatura delle opzioni, modello effettivo dedotto da configurazione vuota + marcatore di catalogo, rifiuti che nominano il campo esatto, e `WithModelChoice` che raggiunge il record `RUNNING` prima di `store.Create`.
+  - **Integrazione HTTP (`cli/internal/web`)**: la nuova rotta di lettura nelle tre situazioni (catalogo presente, provider senza catalogo, catalogo non ottenibile) e le due rotte di avvio con e senza override, incluso il rifiuto che lascia spec e filesystem intatti.
+  - **Unità browser (`test/web/provider-fields.test.mjs`)**: `renderModelChoice` è puro — niente DOM, niente fetch — quindi il markup di AC-1, AC-2 e AC-6 è verificabile senza browser, esattamente come già avviene per `renderProviderFields`.
+  - **Smoke end-to-end (`test/e2e/run-model-choice-view-smoke.mjs`)**: una sola sandbox, il viewer reale, `fake-claude.mjs` come binario agente, e l'`argv` che quel processo riceve come oracolo di «modello effettivamente usato». Nessun `sleep` arbitrario: ogni attesa interroga una rotta del viewer o il control server del finto.
+  - **Regressione**: `npm run test:view-local-run-smoke -- --provider claude` resta verde, perché prova che una run avviata senza override continua a comportarsi come prima, comandi di dialogo compresi.
+
+  ### Rinuncia all'E2E su browser
+
+  **Motivo:** questo repository non ha, e questa spec non giustifica, un framework di browser automation per il proprio viewer. Il percorso di accettazione attraversa il confine HTTP e il processo dell'agente, ed è lì che le sei affermazioni diventano vere o false: quale modello raggiunge il processo, che cosa risponde il server prima dell'avvio, che cosa resta scritto su disco. Le due affermazioni realmente visive — la voce selezionata e la frase di indisponibilità — sono prodotte da un modulo puro che restituisce una stringa HTML, e su quella stringa l'asserzione è diretta e deterministica.
+  **Livello di evidenza usato al suo posto:** smoke HTTP con processo agente reale-ma-finto (AC-1..AC-5) più test unitari del renderer puro (AC-1, AC-2, AC-6) e test di integrazione HTTP del package `web` (AC-3..AC-6).
+  **Video dimostrativo:** la dimostrazione della spec è filmabile (è un percorso interamente in UI). La decisione finale di registrarlo o saltarlo appartiene a `archetipo-review`, non a questa fase; qui viene solo segnalata l'aspettativa. La configurazione del workspace ha `e2e.record_demo_video: false`.
+
+  ---
+
+  _Piano generato da ARchetipo Planning — 2026-08-20_
+tasks:
+  - id: TASK-01
+    title: 'Dominio della scelta modello: ResolveModelChoice e ApplyModelChoice in cli/internal/execution/modelchoice.go'
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Il package `execution` sa dire, data una configurazione di provider, quale modello e quali opzioni una run userebbe, e sa fondere su quella configurazione una scelta valida per una sola run, potando le opzioni non applicabili.
+
+      ## Read
+      - `cli/internal/execution/models.go` — `ModelFieldName`, `ModelOption`, `ModelOptionField`, `ModelOptionChoice`, `ModelLister`, `ListModels`, `CloneModels`. Il contratto di `ListModels` (`declared bool` + errore) è la base delle tre situazioni da distinguere.
+      - `cli/internal/execution/provider.go` — `ConfigurationError` (campi `Field`/`Reason`) e `CloneConfig`.
+      - `cli/internal/execution/claude/models.go` — un catalogo reale: due modelli con l'opzione `effort`, uno senza opzioni. È il caso che la potatura deve gestire.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/modelchoice.go`.
+
+      Non-goal: non toccare `Provider`, `ModelLister`, né i provider concreti; non leggere né scrivere alcun file di configurazione; non introdurre nessun nome di campo di provider oltre a `ModelFieldName`.
+
+      ## Steps
+      1. Dichiara `type ModelChoice struct { Model string \`json:"model"\`; Options map[string]string \`json:"options,omitempty"\`; Source string \`json:"source"\` }` con le due costanti `ModelChoiceSourceWorkspace = "workspace"` e `ModelChoiceSourceRun = "run"`. Commenta che `Source` dice da dove viene la scelta, non che cosa è configurato.
+      2. Dichiara `type ModelResolution struct { Declared bool; Models []ModelOption; Reason string; Choice ModelChoice }`. `Declared` è falso quando il provider non implementa `ModelLister`; `Reason` è non vuoto quando il catalogo è dichiarato ma non ottenibile, e in quel caso `Models` è vuoto.
+      3. Implementa `ResolveModelChoice(ctx context.Context, provider Provider, config map[string]any) ModelResolution`: chiama `ListModels`; il modello effettivo è il valore di `config[ModelFieldName]` quando è una stringa non vuota, altrimenti l'`ID` della voce di catalogo con `Default: true`, altrimenti stringa vuota. Le `Options` sono i valori presenti in `config` per i soli nomi di opzione dichiarati dal modello effettivo, convertiti a stringa. `Source` è sempre `ModelChoiceSourceWorkspace`. La funzione non restituisce errore: un catalogo non ottenibile è un fatto da riportare, non un fallimento.
+      4. Implementa `declaredOptionNames(models []ModelOption) map[string]struct{}`, l'unione dei nomi di opzione di tutte le voci del catalogo. È la chiave della potatura.
+      5. Implementa `ApplyModelChoice(ctx context.Context, provider Provider, config map[string]any, model string, options map[string]string) (map[string]any, ModelChoice, error)`:
+         - se `model` è vuoto e `options` è vuota, restituisci `CloneConfig(config)`, la `Choice` di `ResolveModelChoice` e `nil`: nessun override, nessuna potatura;
+         - risolvi il catalogo; se non è dichiarato restituisci un `*ModelChoiceUnavailableError` con motivo `"provider " + provider.ID() + " declares no model catalog"`; se è dichiarato ma non ottenibile, lo stesso errore con il motivo del provider verbatim;
+         - se `model` non corrisponde ad alcun `ID` del catalogo, restituisci `&ConfigurationError{Field: ModelFieldName, Reason: "must be one of " + <id separati da ", ">}`;
+         - per ogni chiave di `options`: se non è un nome dichiarato dal modello scelto, `&ConfigurationError{Field: <nome>, Reason: "is not an option of model " + model}`; se il valore non è tra le `Choices` dichiarate, `&ConfigurationError{Field: <nome>, Reason: "must be one of " + <valori separati da ", ">}`;
+         - costruisci la configurazione effettiva: `CloneConfig(config)`, poi cancella **ogni** chiave in `declaredOptionNames`, poi imposta `ModelFieldName = model` e le opzioni richieste; restituisci `ModelChoice{Model: model, Options: <copia>, Source: ModelChoiceSourceRun}`.
+      6. Dichiara `type ModelChoiceUnavailableError struct{ Reason string }` con `Error() string` che restituisce `Reason`, così il chiamante HTTP può distinguere «scelta non possibile ora» (conflitto di stato) da «scelta sbagliata» (input non valido).
+      7. Ordina i nomi con `sort.Strings` prima di comporre qualunque messaggio che elenchi più di una chiave, così il messaggio è deterministico.
+      8. Esegui `gofmt` sul file appena scritto.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo/cli`: `gofmt -l . && go vet ./... && go build ./...`
+      - Expect: nessun output da `gofmt`, nessuna diagnostica da `go vet`, compilazione pulita — esattamente la baseline registrata.
+
+      ## Done
+      - [ ] `cli/internal/execution/modelchoice.go` esiste e compila, con `ModelChoice`, `ModelResolution`, `ResolveModelChoice`, `ApplyModelChoice` e `ModelChoiceUnavailableError` esportati.
+      - [ ] `ApplyModelChoice` senza override restituisce la configurazione verbatim (fondamento di AC-5).
+      - [ ] `ApplyModelChoice` con override cancella l'unione dei nomi di opzione del catalogo prima di scrivere quelle del modello scelto (fondamento di AC-2).
+      - [ ] Nessun identificativo di provider e nessun nome di campo diverso da `ModelFieldName` compare nel file.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test unitari della fusione e della risoluzione del modello
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Le quattro regole della fusione — ereditarietà, potatura, rifiuti che nominano il campo, catalogo non disponibile — sono provate su comportamento osservabile e non sulla forma del codice.
+
+      ## Read
+      - `cli/internal/execution/models_test.go` — stile dei provider stub già usati per `ListModels`; riusa lo stesso stub invece di scriverne un secondo.
+      - `cli/internal/execution/modelchoice.go` — le funzioni scritte da TASK-01.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/modelchoice_test.go`.
+
+      Non-goal: nessuna modifica al codice di produzione; se un test non passa, il difetto sta in TASK-01 e va corretto lì.
+
+      ## Steps
+      1. Definisci uno stub di provider con catalogo: `m1` con l'opzione `opt` (`Choices` `a`,`b` con `b` marcato `Default`), `m2` marcato `Default` senza opzioni.
+      2. `TestResolveModelChoiceInheritsConfiguredModel`: configurazione `{"model":"m1","opt":"a"}` → `Choice.Model == "m1"`, `Choice.Options == {"opt":"a"}`, `Source == "workspace"`, `Declared == true`, `Reason == ""`.
+      3. `TestResolveModelChoiceFallsBackToCatalogDefault`: configurazione vuota → `Choice.Model == "m2"` (la voce marcata) e `Options` vuota.
+      4. `TestResolveModelChoiceReportsUnobtainableCatalog`: stub il cui `Models` restituisce errore → `Declared == true`, `Models` vuoto, `Reason` uguale al testo dell'errore del provider, e nessun panic.
+      5. `TestResolveModelChoiceOnProviderWithoutCatalog`: provider che non implementa `ModelLister` → `Declared == false`.
+      6. `TestApplyModelChoiceWithoutOverrideKeepsConfigVerbatim`: configurazione `{"model":"m1","opt":"a","command":"x"}`, override vuoto → mappa restituita `reflect.DeepEqual` all'originale, `Choice.Source == "workspace"`, e la mappa originale non mutata.
+      7. `TestApplyModelChoicePrunesOptionsOfOtherModels`: configurazione `{"model":"m1","opt":"a","command":"x"}`, override `model:"m2"` senza opzioni → risultato `{"model":"m2","command":"x"}` esatto: la chiave `opt` **non** è presente. È l'asserzione che prova la potatura, e va scritta come confronto della mappa intera, non come presenza della sola chiave nuova.
+      8. `TestApplyModelChoiceSetsRequestedOptions`: override `model:"m1"`, `options:{"opt":"b"}` → risultato contiene `model:"m1"` e `opt:"b"`, `Choice.Source == "run"`, `Choice.Options == {"opt":"b"}`.
+      9. `TestApplyModelChoiceRejectsUnknownModel`, `...RejectsUndeclaredOption`, `...RejectsUnknownOptionValue`: ogni caso restituisce un `*execution.ConfigurationError` il cui `Field` è rispettivamente `"model"`, il nome dell'opzione e il nome dell'opzione; verifica il campo con `errors.As`, non il testo del messaggio.
+      10. `TestApplyModelChoiceRefusesWhenCatalogUnavailable`: provider senza catalogo e provider con catalogo che fallisce → in entrambi i casi `errors.As` su `*execution.ModelChoiceUnavailableError` e `Reason` non vuoto; nel secondo caso `Reason` contiene il testo del provider.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo/cli`: `go test ./internal/execution/ -run TestResolveModelChoice -run TestApplyModelChoice -count=1` e poi `go test ./internal/execution/... -count=1`
+      - Expect: entrambi passano; la seconda esecuzione copre anche i test preesistenti del package, verdi in baseline.
+
+      ## Done
+      - [ ] I dieci test esistono e passano.
+      - [ ] La potatura è asserita come uguaglianza della mappa intera, non come presenza di una chiave (evidenza di AC-2 e AC-5 al livello del dominio).
+      - [ ] Ogni rifiuto è asserito su `ConfigurationError.Field` tramite `errors.As` e mai sul testo del messaggio.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: 'Il record di esecuzione porta la scelta: campo ModelChoice e StartOption WithModelChoice'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Un'esecuzione persistita dichiara il modello e le opzioni con cui è stata avviata, leggibili già mentre è `RUNNING`.
+
+      ## Read
+      - `cli/internal/execution/types.go` — struct `Execution` e i suoi tag JSON.
+      - `cli/internal/execution/service.go` — `Start`, `StartWorkspace`, `Run`, `RunIdempotent` e la funzione privata `start`, dove il record `started` viene costruito e passato a `store.Create`.
+      - `cli/internal/execution/file_store.go` — come il record viene serializzato, per confermare che un campo nuovo con `omitempty` non rompe la lettura dei record esistenti.
+
+      ## Change
+      - `cli/internal/execution/types.go`: aggiungi a `Execution` il campo `ModelChoice *ModelChoice \`json:"model_choice,omitempty"\``.
+      - `cli/internal/execution/service.go`: aggiungi il tipo `StartOption func(*Execution)`, la funzione `WithModelChoice(choice ModelChoice) StartOption`, e il parametro variadico `opts ...StartOption` a `Start`, `StartWorkspace` e alla `start` privata.
+
+      Non-goal: non cambiare la firma di `Run` né di `RunIdempotent` (nessun chiamante ne ha bisogno); non far dipendere `start` dal catalogo — la scelta arriva già calcolata dal chiamante; non toccare `Request`.
+
+      ## Steps
+      1. Aggiungi il campo a `Execution` con un commento che dica perché esiste: è il modello *effettivamente usato*, ed è valorizzato anche quando nessuno ha scelto nulla, perché «quello del workspace» è una risposta e non un'assenza.
+      2. Dichiara `StartOption` e `WithModelChoice`, che copia in profondità la mappa `Options` prima di assegnarla, così il chiamante non condivide la mappa con il record.
+      3. Aggiungi `opts ...StartOption` a `start` e applicale al valore `started` **prima** della chiamata a `s.store.Create`. Commenta questa posizione: applicarle dopo renderebbe il modello invisibile finché la run non è finita, che è l'opposto di ciò che serve.
+      4. Propaga il variadico da `Start` e `StartWorkspace`; `run` continua a chiamare `start` senza opzioni.
+      5. Verifica che la continuazione non azzeri il campo: `execution := started` copia la struct, quindi il puntatore sopravvive alla scrittura terminale. Se un test lo smentisce, correggi qui.
+      6. Esegui `gofmt` sui file toccati.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo/cli`: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/execution/... -count=1`
+      - Expect: nessun output da `gofmt`, nessuna diagnostica, compilazione pulita e test verdi. Ogni chiamante attuale di `Start`/`StartWorkspace` continua a compilare senza modifiche: se così non fosse, il variadico è stato scritto male.
+
+      ## Done
+      - [ ] `Execution` ha `model_choice` con `omitempty`, e un record senza scelta serializza esattamente come prima.
+      - [ ] `WithModelChoice` applicata a `Start` compare sul record già alla creazione, prima del dispatch (fondamento di AC-3).
+      - [ ] Nessun chiamante esistente di `Start`, `StartWorkspace`, `Run` o `RunIdempotent` è stato modificato.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: 'Test del servizio: la scelta è leggibile mentre la run è RUNNING e sopravvive alla chiusura'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      La scelta registrata su un'esecuzione è osservabile dallo store nei due momenti che contano: quando la run è ancora aperta e dopo che è chiusa.
+
+      ## Read
+      - `cli/internal/execution/service_test.go` — come i test esistenti costruiscono `Service`, lo store in memoria e il provider finto; riusa quegli helper.
+      - `cli/internal/execution/store.go` — l'interfaccia `Store`, per leggere il record dopo `Start` e prima della continuazione.
+
+      ## Change
+      - `cli/internal/execution/service_test.go`: aggiungi i test nuovi in coda, senza toccare quelli esistenti.
+
+      Non-goal: nessuna modifica al codice di produzione.
+
+      ## Steps
+      1. `TestStartRecordsModelChoiceBeforeDispatch`: chiama `Start(..., WithModelChoice(ModelChoice{Model:"m1",Options:map[string]string{"opt":"b"},Source:ModelChoiceSourceRun}))`, **non** invocare ancora la continuazione, e leggi il record dallo store con `Get`: deve essere `RUNNING` e portare già `ModelChoice` con quei valori. È l'asserzione che prova AC-3 nel momento in cui qualcuno guarda il dettaglio di una run in corso.
+      2. Invoca poi la continuazione e rileggi: `ModelChoice` è identico e lo stato è terminale.
+      3. `TestStartWithoutModelChoiceLeavesRecordUnchanged`: senza opzioni, `ModelChoice` è `nil` e il JSON serializzato del record non contiene la chiave `model_choice` (asserisci su `json.Marshal` del record).
+      4. `TestWithModelChoiceCopiesOptions`: muta la mappa passata a `WithModelChoice` dopo la chiamata a `Start` e verifica che il record letto dallo store non cambi.
+      5. `TestStartWorkspaceRecordsModelChoice`: stessa asserzione del punto 1 sulla variante workspace-scoped, con `SpecCode` vuoto.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo/cli`: `go test ./internal/execution/... -count=1`
+      - Expect: passa, inclusi i test preesistenti verdi in baseline.
+
+      ## Done
+      - [ ] AC-3 — un record `RUNNING` letto dallo store riporta già modello e opzioni scelti.
+      - [ ] Un avvio senza scelta non introduce la chiave `model_choice` nel JSON persistito.
+      - [ ] La mappa delle opzioni del chiamante non è condivisa con il record.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Rotta di lettura GET /api/execution/model-choice
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il viewer risponde, prima di qualunque avvio, alla domanda «quale modello sarà usato, da dove viene, e quali alternative posso scegliere per questa sola run».
+
+      ## Read
+      - `cli/internal/web/execution.go` — `handleListExecutionProviders`, in particolare come legge il default da disco con `readConfigState` e come popola `model_field`, `models` e `models_unavailable_reason`. La nuova rotta usa le stesse fonti su un solo provider.
+      - `cli/internal/web/server.go` righe ~175-195 — la tabella delle rotte.
+      - `cli/internal/web/execution_run.go` righe ~204-236 — come il percorso di avvio risolve il provider di default e ne verifica la disponibilità: la rotta di lettura deve raccontare lo stesso stato.
+
+      ## Change
+      - `cli/internal/web/execution.go`: aggiungi la view `executionModelChoiceView` e l'handler `handleGetExecutionModelChoice`.
+      - `cli/internal/web/server.go`: registra `GET /api/execution/model-choice`.
+
+      Non-goal: non sondare gli altri provider registrati (la rotta riguarda solo il default del workspace); non restituire mai un errore HTTP per uno stato che è un fatto da riportare — un provider assente, non disponibile o senza catalogo si racconta con `available:false` e un motivo.
+
+      ## Steps
+      1. Definisci la view con i campi JSON: `provider_id`, `model_field`, `model`, `model_source`, `options` (`map[string]string`, `omitempty`), `models` (`[]execution.ModelOption`, `omitempty`), `available` (bool), `unavailable_reason` (string, `omitempty`).
+      2. Nell'handler: leggi la configurazione con `readConfigState`; se non c'è default provider, rispondi `200` con `available:false` e motivo `"execution.default_provider is not configured"`.
+      3. Risolvi il provider dal registry; se non è registrato, `available:false` con il motivo del registry.
+      4. Applica `execution.CheckAvailability` con la configurazione persistita; se fallisce, `available:false` con quel motivo, e non chiedere il catalogo — è la stessa economia già adottata in `handleListExecutionProviders`.
+      5. Chiama `execution.ResolveModelChoice`. Riempi `model`, `model_source` e `options` dalla `Choice`, e `model_field` con `execution.ModelFieldName` quando il catalogo è dichiarato.
+      6. `available` è vero solo quando il catalogo è dichiarato, ottenibile e non vuoto. Negli altri tre casi il motivo è, nell'ordine: `"provider <id> declares no model catalog"`, il testo del provider verbatim, `"the provider declared an empty model catalog"` — la stessa frase già usata da `handleListExecutionProviders`, estratta in una costante di package e riusata dalle due rotte invece di essere scritta due volte.
+      7. Anche con `available:false`, riempi comunque `model`, `model_source` e `options`: AC-6 dice che l'avvio resta possibile con il modello configurato, quindi quel modello va mostrato lo stesso.
+      8. Registra la rotta in `server.go` accanto alle altre due rotte `execution/`.
+      9. Esegui `gofmt` sui file toccati.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo/cli`: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/web/... -count=1`
+      - Expect: tutto verde come in baseline; i test del package `web` non conoscono ancora la rotta nuova e devono restare verdi comunque.
+
+      ## Done
+      - [ ] AC-1 — la rotta risponde con il modello ereditato dalla configurazione del workspace e ne dichiara la provenienza in `model_source`.
+      - [ ] AC-6 — nei tre casi di catalogo mancante, non ottenibile o vuoto la rotta risponde `200` con `available:false` e un motivo non vuoto, e riporta comunque il modello configurato.
+      - [ ] La frase sul catalogo vuoto esiste in un solo punto del package ed è usata da entrambe le rotte.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test HTTP della rotta di lettura nelle quattro situazioni
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      La rotta di lettura è provata contro il server HTTP reale, con provider stub che producono i quattro stati che il lettore deve poter distinguere.
+
+      ## Read
+      - `cli/internal/web/execution_test.go` — come i test montano il `Server`, registrano provider stub e persistono un default provider; riusa quegli helper invece di crearne di nuovi.
+      - `cli/internal/web/execution.go` — la view scritta da TASK-05, per asserire sui nomi JSON esatti.
+
+      ## Change
+      - Nuovo file `cli/internal/web/execution_model_choice_test.go`.
+
+      Non-goal: nessuna modifica al codice di produzione; nessun provider reale — questi test devono girare su una macchina senza Claude né Codex installati.
+
+      ## Steps
+      1. Definisci tre stub: `catalogProvider` (implementa `ModelLister` con `m1`+opzione `opt`, `m2` marcato default), `noCatalogProvider` (non implementa `ModelLister`), `brokenCatalogProvider` (implementa `ModelLister` restituendo un errore con un testo riconoscibile, e resta disponibile). Se il package ha già uno stub equivalente, estendilo invece di duplicarlo.
+      2. `TestModelChoiceInheritsWorkspaceModel`: default persistito `{"model":"m1","opt":"a"}` → `200`, `provider_id` corretto, `model:"m1"`, `model_source:"workspace"`, `options:{"opt":"a"}`, `available:true`, `models` con due voci e l'opzione `opt` dentro `m1`.
+      3. `TestModelChoiceFallsBackToCatalogDefault`: default persistito senza chiave `model` → `model:"m2"` e `model_source:"provider"`.
+      4. `TestModelChoiceOnProviderWithoutCatalog`: → `available:false`, `unavailable_reason` che nomina il provider, `models` assente, e `model` comunque valorizzato con quanto configurato.
+      5. `TestModelChoiceOnUnobtainableCatalog`: → `available:false` e `unavailable_reason` uguale al testo dell'errore dello stub.
+      6. `TestModelChoiceWithoutDefaultProvider`: nessun default persistito → `200` con `available:false` e il motivo che nomina `execution.default_provider`, **non** un `409` né un `500`.
+      7. Ogni asserzione legge il JSON decodificato in una `map[string]any` e controlla i nomi delle chiavi esatti: è quello il contratto che il browser consuma.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo/cli`: `go test ./internal/web/ -run TestModelChoice -count=1` e poi `go test ./internal/web/... -count=1`
+      - Expect: entrambi passano.
+
+      ## Done
+      - [ ] AC-1 — un test prova che la rotta riporta il modello del workspace con `model_source:"workspace"`.
+      - [ ] AC-6 — tre test provano i tre modi in cui la scelta non è disponibile, ciascuno con il proprio motivo e con il modello configurato comunque presente.
+      - [ ] I test passano su una macchina senza alcun runtime di agente installato.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Le due rotte di avvio accettano model e model_options per la singola run
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Objective
+      Un avvio può portare con sé un modello e delle opzioni valide per quella sola run: vengono validati prima di qualunque effetto, applicati al dispatch e scritti sul record, e la configurazione del workspace resta intatta.
+
+      ## Read
+      - `cli/internal/web/execution_run.go` righe ~128-330 — `runSpecActionReq`, `handleRunSpecAction`, il punto in cui legge `selection.Config`, la `Preflight`, `BeginActionEffect` e la chiamata a `ws.service.Start`.
+      - `cli/internal/web/workspace_execution.go` righe ~128-260 — `runWorkspaceActionReq`, `handleRunWorkspaceAction` e la sua chiamata a `StartWorkspace`.
+      - `cli/internal/web/execution.go` — `writeProviderConfigError`, che è già il renderer di un rifiuto che nomina il campo.
+      - `cli/internal/execution/modelchoice.go` — `ApplyModelChoice` e `ModelChoiceUnavailableError`.
+
+      ## Change
+      - `cli/internal/web/execution_run.go`: campi `Model string \`json:"model,omitempty"\`` e `ModelOptions map[string]string \`json:"model_options,omitempty"\`` su `runSpecActionReq`; fusione e passaggio della scelta a `Start`.
+      - `cli/internal/web/workspace_execution.go`: gli stessi due campi su `runWorkspaceActionReq` e lo stesso trattamento verso `StartWorkspace`.
+      - `cli/internal/web/execution.go` (o un nuovo helper nello stesso package): una funzione condivisa che, dati provider, configurazione persistita e richiesta, restituisce configurazione effettiva e `ModelChoice`, oppure scrive il rifiuto giusto.
+
+      Non-goal: nessuna scrittura su `.archetipo/config.yaml` lungo questo percorso — né diretta, né tramite `config.UpdateDefaultProvider`; nessun cambio alle rotte di dialogo (`run/messages`, `run/approvals`, `run/cancel`), che per i provider locali non usano affatto la configurazione e per i remoti riguardano una run già avviata.
+
+      ## Steps
+      1. Scrivi l'helper condiviso, per esempio `resolveRunModelChoice(ctx, provider, persisted map[string]any, model string, options map[string]string) (map[string]any, *execution.ModelChoice, error)`: delega a `execution.ApplyModelChoice` e restituisce sempre una `ModelChoice` non nulla quando il catalogo è dichiarato, anche nel caso senza override (`Source: "workspace"`), e `nil` quando il provider non dichiara catalogo **e** non è stato chiesto alcun override.
+      2. In `handleRunSpecAction`, subito **dopo** il controllo di disponibilità del provider e **prima** della `Preflight`, invoca l'helper con `selection.Config`. Commenta la posizione: è ciò che fa sì che un override sbagliato non muova la spec e non lasci alcun record.
+      3. Traduci i due errori in due risposte diverse: `*execution.ConfigurationError` → `writeProviderConfigError` (400 con `field`), `*execution.ModelChoiceUnavailableError` → `iox.NewConflict` con il motivo verbatim e il suggerimento di avviare senza scelta per usare il modello configurato. Sono due sbagli diversi e devono restare tali.
+      4. Passa la configurazione effettiva — non più `selection.Config` — sia a `Preflight` sia a `ws.service.Start`, e aggiungi `execution.WithModelChoice(*choice)` quando la scelta non è nulla.
+      5. Ripeti gli stessi quattro passi in `handleRunWorkspaceAction`, prima di `guardSingleWorkspaceExecution` e prima di `StartWorkspace`. Non duplicare la logica: entrambe le rotte chiamano lo stesso helper.
+      6. Verifica leggendo il codice che nessun ramo di questi due handler scriva la configurazione: la sola scrittura del file resta `handleSaveDefaultExecutionProvider`.
+      7. Esegui `gofmt` sui file toccati.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo/cli`: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/web/... ./internal/execution/... -count=1`
+      - Expect: tutto verde; i test esistenti delle due rotte di avvio passano invariati, perché una richiesta senza i due campi nuovi percorre esattamente il cammino di prima.
+
+      ## Done
+      - [ ] AC-2 — un avvio con `model` e `model_options` validi parte e il provider riceve la configurazione fusa.
+      - [ ] AC-4 — nessun ramo dei due handler scrive `.archetipo/config.yaml`.
+      - [ ] AC-5 — un avvio senza i due campi passa `selection.Config` invariata al dispatch.
+      - [ ] AC-6 — un override chiesto quando il catalogo non è disponibile è rifiutato con `409` e il motivo del provider, mentre l'avvio senza override resta accettato.
+      - [ ] Un modello o un valore di opzione non ammessi producono `400` con `field` che nomina la chiave esatta.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Test HTTP delle due rotte di avvio con e senza scelta per la singola run
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Le sei affermazioni sulla singola run sono provate al livello del contratto HTTP: che cosa riceve il provider, che cosa finisce sul record, che cosa resta sul disco, e come vengono rifiutate le richieste sbagliate.
+
+      ## Read
+      - `cli/internal/web/execution_test.go` — i test esistenti di `POST /api/spec/{code}/execution`: come catturano la `Request` che arriva al provider stub e come leggono il record.
+      - `cli/internal/web/workspace_execution_test.go` — l'equivalente workspace-scoped.
+      - `cli/internal/web/execution_model_choice_test.go` — gli stub di catalogo di TASK-06, da riusare.
+
+      ## Change
+      - `cli/internal/web/execution_model_choice_test.go`: aggiungi i test di avvio in coda a quelli di lettura, così stub e situazioni stanno in un file solo.
+
+      Non-goal: nessuna modifica al codice di produzione.
+
+      ## Steps
+      1. `TestRunSpecActionAppliesRunModelChoice`: default persistito `{"model":"m1","opt":"a"}`; `POST` con `{"action":"plan","model":"m2"}` → `201`; la `ProviderConfig` catturata dallo stub è **esattamente** `{"model":"m2"}` — la chiave `opt` non c'è, perché `m2` non la dichiara. Asserisci sulla mappa intera.
+      2. Nello stesso test, rileggi il record con `GET /api/execution/{id}`: `model_choice` è `{"model":"m2","source":"run"}` (AC-3).
+      3. `TestRunSpecActionLeavesWorkspaceConfigUntouched`: leggi `.archetipo/config.yaml` in `[]byte` prima del `POST` con override e riconfrontalo dopo; deve essere identico byte a byte, e `GET /api/execution/providers` deve riportare `default.config` con `model:"m1"` e `opt:"a"` (AC-4).
+      4. `TestRunSpecActionWithoutChoiceUsesWorkspaceConfig`: `POST` con il solo `action` → la `ProviderConfig` catturata è `{"model":"m1","opt":"a"}` e `model_choice.source` è `"workspace"` con quei valori (AC-5).
+      5. `TestRunSpecActionRejectsUnknownModel`: `POST` con `model:"nope"` → `400` con `field:"model"`; poi verifica che lo spec **non** sia stato mosso di stato, che `.archetipo/executions/` non contenga alcun record nuovo e che lo stub non abbia ricevuto alcuna `Request`. È l'asserzione che prova «nessuna traccia», e va scritta esplicitamente.
+      6. `TestRunSpecActionRejectsUnknownOptionValue`: `POST` con `model:"m1"`, `model_options:{"opt":"zzz"}` → `400` con `field:"opt"` e le stesse tre verifiche di assenza di traccia.
+      7. `TestRunSpecActionRefusesChoiceWithoutCatalog`: default su `noCatalogProvider`; `POST` con `model:"x"` → `409` con il motivo; `POST` senza override → `201` (AC-6).
+      8. `TestRunWorkspaceActionAppliesRunModelChoice`: la stessa asserzione del punto 1 su `POST /api/workspace/execution`, con `spec_code` vuoto sul record.
+      9. Ogni test che asserisce sulla `ProviderConfig` la confronta come mappa intera, mai per singola chiave: una chiave potata è visibile solo così.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo/cli`: `go test ./internal/web/... -count=1`
+      - Expect: passa, inclusi tutti i test preesistenti del package, verdi in baseline.
+
+      ## Done
+      - [ ] AC-2, AC-3, AC-4, AC-5, AC-6 hanno ciascuno almeno un test in questo file, e ognuno asserisce l'esito osservabile (config del provider, record, byte del file, codice HTTP e `field`) e non una chiamata avvenuta.
+      - [ ] I due rifiuti provano che spec, filesystem degli execution e provider restano intatti.
+      - [ ] Il caso workspace-scoped è coperto oltre a quello di spec.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: renderModelChoice nel renderer puro provider-fields.js
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Il markup del selettore per la singola run è prodotto da una funzione pura che non conosce alcun provider, alcun modello e alcun nome di campo.
+
+      ## Read
+      - `cli/internal/web/assets/provider-fields.js` — l'intero modulo: `escapeHtml`, `currentValue`, `catalogOf`, `renderModelSelect`, `renderModelOption`, `selectedModelOptions`, e il blocco di export che definisce `window.ProviderFields` in browser e `module.exports` in Node.
+      - `test/web/provider-fields.test.mjs` — come il modulo viene caricato e provato.
+
+      ## Change
+      - `cli/internal/web/assets/provider-fields.js`: aggiungi `renderModelChoice(view, selection)` ed esportala accanto a `renderProviderFields` in entrambi i rami di export.
+
+      Non-goal: non modificare il comportamento di `renderProviderFields` (è coperta da test esistenti che devono restare verdi); nessun `fetch`, nessun `document`, nessun accesso al DOM; nessuna stringa che nomini un provider o un modello.
+
+      ## Steps
+      1. Aggiungi in cima al modulo le due frasi visibili nuove, accanto a quelle esistenti: l'etichetta della sezione (`"Model for this run"`) e la frase che accompagna il modello ereditato (`"inherited from the workspace"`), usata quando `model_source` è `"workspace"`.
+      2. `renderModelChoice(view, selection)` accetta il payload di `GET /api/execution/model-choice` e la selezione corrente (`{model, options}`; assente significa «i valori ereditati»).
+      3. Quando `view.available` è falso: restituisci una riga con il modello effettivo (o la frase «il provider sceglie» già esistente quando è vuoto) e il `unavailable_reason` reso con la classe `field-warning` già usata dal modulo. Nessun `<select>` deve comparire — è l'evidenza visiva di AC-6.
+      4. Quando `view.available` è vero: riusa `renderModelSelect` per il catalogo, con `name="run_model"` e l'attributo `data-run-model`, e la voce corrispondente al modello corrente marcata `selected`; sotto, riusa `renderModelOption` per le opzioni del modello **selezionato**, con `name="run_option_<nome>"` e `data-run-option="<nome>"`.
+      5. Il valore corrente di ogni controllo viene da `selection` quando è presente, altrimenti da `view.model` / `view.options`. È questo che fa sì che riaprire il pannello riparta dai valori ereditati.
+      6. Se le due funzioni riusate hanno il prefisso `provider_` cablato nel `name`, estrai il prefisso a parametro invece di duplicare le funzioni: due copie quasi identiche del rendering di una scelta sono esattamente il modo in cui le due divergono.
+      7. Ogni testo che proviene dal payload passa da `escapeHtml`.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo`: `npm run test:web`
+      - Expect: 41 test passati, 0 falliti — la baseline, invariata: questo task aggiunge una funzione e non deve rompere quelle esistenti.
+
+      ## Done
+      - [ ] `renderModelChoice` è esportata in entrambi i rami di export ed è pura (nessun riferimento a `document`, `window` o `fetch` nel suo corpo).
+      - [ ] Il modulo continua a non contenere alcun id di provider, nome di modello o nome di campo di configurazione.
+      - [ ] I test esistenti di `renderProviderFields` passano invariati.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Test unitari di renderModelChoice
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      Il markup che il lettore vede prima di avviare è provato direttamente, senza browser: il modello ereditato, le opzioni del modello scelto, e il motivo quando la scelta non è disponibile.
+
+      ## Read
+      - `test/web/provider-fields.test.mjs` — struttura delle suite (`describe`/`it` di `node:test`), caricamento del modulo e stile delle asserzioni sul markup.
+
+      ## Change
+      - `test/web/provider-fields.test.mjs`: aggiungi una suite `renderModelChoice` in coda, senza toccare le suite esistenti.
+
+      Non-goal: nessuna modifica al modulo; se un'asserzione non passa, il difetto sta in TASK-09.
+
+      ## Steps
+      1. `mostra il modello ereditato dal workspace come voce selezionata`: view con `available:true`, `model:"m1"`, `model_source:"workspace"`, catalogo `m1`/`m2` → il markup contiene un `<option value="m1" selected>` e la frase che dichiara l'ereditarietà (AC-1).
+      2. `offre le opzioni del modello selezionato e non quelle degli altri`: `m1` dichiara `opt` con due scelte, `m2` nessuna → con `selection.model === "m1"` compare il controllo `data-run-option="opt"`; con `selection.model === "m2"` non compare, e compare invece la frase esplicita già usata dal modulo per un modello senza opzioni (AC-2).
+      3. `riporta il valore di opzione già scelto`: `selection.options = {opt:"b"}` → `<option value="b" selected>`.
+      4. `dichiara la scelta non disponibile con il motivo`: view con `available:false`, `unavailable_reason:"il catalogo non è ottenibile"`, `model:"m1"` → il markup contiene il motivo, contiene `m1` e **non** contiene alcun `<select`. Asserisci l'assenza del `<select`, non solo la presenza del motivo (AC-6).
+      5. `neutralizza l'HTML che arriva dal payload`: motivo ed etichette con `<script>` → l'output non contiene `<script`.
+      6. `non lancia su payload parziali`: `null`, `{}`, `{available:true}` senza `models` → restituisce una stringa senza sollevare eccezioni.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo`: `npm run test:web`
+      - Expect: le 41 asserzioni preesistenti più le nuove passano, 0 falliti.
+
+      ## Done
+      - [ ] AC-1 — un test prova che il modello ereditato è la voce selezionata e che l'ereditarietà è dichiarata a parole.
+      - [ ] AC-2 — un test prova che le opzioni mostrate sono quelle del modello selezionato e cambiano con esso.
+      - [ ] AC-6 — un test prova la presenza del motivo e l'assenza del selettore.
+      - [ ] Un test prova la neutralizzazione dell'HTML e uno la resistenza ai payload parziali.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Il pannello di avvio mostra e invia la scelta, e il dettaglio della run la riporta
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-07
+      - TASK-09
+    body: |-
+      ## Objective
+      Chi guarda una spec o il pannello di workspace vede prima dell'avvio quale modello sarà usato, può sceglierne un altro per quella sola run, e ritrova nel dettaglio della run il modello e le opzioni usati.
+
+      ## Read
+      - `cli/internal/web/assets/index.html` righe 121-123, 245-247, 313-315 — i tre gruppi di contenitori `*-actions` / `*-execution` / `*-run`.
+      - `cli/internal/web/assets/app.js`: `mountExecutionPanels` (~2032), `renderSpecActions` (~2066), `startPanelAction` (~2110), `renderExecution` (~2217), `bindActionsPanel` (~331), `collectProviderConfig` (~1934) e `cssEscape` — sono i cinque punti da toccare e il modello di codice da seguire.
+      - `cli/internal/web/assets/app.css` — le classi `field`, `field-help`, `field-warning`, `execution-meta`, da riusare senza inventarne di nuove dove possibile.
+
+      ## Change
+      - `cli/internal/web/assets/index.html`: un contenitore `<div class="story-model-choice" id="story-model-choice"></div>` **prima** di ciascuno dei tre `*-actions`.
+      - `cli/internal/web/assets/app.js`: riferimenti ai tre contenitori, parametro `modelChoice` in `mountExecutionPanels`, caricamento della scelta al mount, rendering tramite `ProviderFields.renderModelChoice`, invio dell'override in `startPanelAction`, ripristino dopo l'avvio, e la riga di modello in `renderExecution`.
+      - `cli/internal/web/assets/app.css`: se serve, una sola regola di spaziatura per il nuovo contenitore.
+
+      Non-goal: nessuna regola di provider in `app.js` — nessun id di provider, nessun nome di modello, nessuna deduzione di «vuoto significa il default»: quei fatti arrivano dalla rotta; non toccare la logica di polling della run.
+
+      ## Steps
+      1. In `index.html`, aggiungi i tre contenitori vuoti.
+      2. In `app.js`, aggiungi le `const` dei tre elementi accanto a quelle esistenti, e una variabile di modulo `panelModelChoice` (contenitore montato), `modelChoiceView` (payload dell'ultima lettura) e `modelChoiceSelection` (`null` quando nessuno ha toccato niente).
+      3. Estendi `mountExecutionPanels(mount)` con `mount.modelChoice`: assegna `panelModelChoice`, azzera `modelChoiceView` e `modelChoiceSelection`, svuota il contenitore. Aggiorna i quattro punti di chiamata (`openEditor` ~793, il mount del pannello PRD ~3331 e ~4083) passando il contenitore corrispondente.
+      4. Aggiungi `async function loadModelChoice(ctx)`: `apiGet("/api/execution/model-choice")`, scarta il risultato se `panelContext !== ctx`, salva in `modelChoiceView` e chiama `renderModelChoicePanel()`. Un errore di rete non è fatale: lascia il contenitore vuoto e non blocca i chip d'azione. Invocala da `openEditor` e dai due mount di workspace, dopo il mount.
+      5. `renderModelChoicePanel()` scrive `ProviderFields.renderModelChoice(modelChoiceView, modelChoiceSelection)` nel contenitore montato e vi collega, sul contenitore (non sui controlli, che vengono ridisegnati), un listener `change`: quando cambia `[data-run-model]` aggiorna `modelChoiceSelection.model`, azzera le opzioni non più dichiarate e ridisegna; quando cambia un `[data-run-option]` aggiorna la voce corrispondente.
+      6. In `startPanelAction`, componi il corpo del `POST`: parti da `{action: actionID}` e aggiungi `model` e `model_options` **solo se** `modelChoiceSelection` esiste e differisce dai valori ereditati (`modelChoiceView.model` e `modelChoiceView.options`). Un confronto, non un flag: è ciò che rende AC-5 una conseguenza della richiesta e non della memoria del client.
+      7. Dopo un avvio riuscito, riporta `modelChoiceSelection` a `null` e ridisegna: la run successiva riparte dai valori del workspace. Ricarica anche `loadModelChoice(ctx)` così i valori mostrati restano quelli persistiti.
+      8. In `renderExecution`, quando `record.model_choice` esiste aggiungi a `lines` la voce `model <id>` seguita dalle opzioni come `chiave=valore` separate da `, ` in ordine alfabetico, e — quando `source` è `"workspace"` — la parola che ne dichiara la provenienza. Passa ogni valore da `escapeHtml`.
+      9. Verifica a mano che il pannello del workspace e quello della bozza di spec mostrino il selettore e che lasciare la modale ne fermi il rendering come già avviene per gli altri pannelli.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo`: `npm run test:web`
+      - Expect: passa (la baseline più i test di TASK-10).
+      - Esegui da `/Users/stefanoleli/Project/Archetipo/cli`: `go build ./... && go test ./internal/web/... -count=1`
+      - Expect: passa; gli asset sono incorporati con `go:embed`, quindi la compilazione è ciò che prova che i file modificati sono ancora inclusi.
+
+      ## Done
+      - [ ] AC-1 — aprendo una spec il selettore mostra il modello ereditato prima di qualunque avvio.
+      - [ ] AC-2 — cambiando modello compaiono le opzioni di quel modello e scompaiono quelle del precedente.
+      - [ ] AC-3 — il pannello di esecuzione riporta modello e opzioni del record.
+      - [ ] AC-5 — dopo un avvio con scelta diversa il selettore torna ai valori del workspace e la richiesta successiva non porta alcun override.
+      - [ ] AC-6 — con la scelta non disponibile il pannello mostra il motivo, non mostra alcun selettore, e i chip d'azione restano premibili.
+      - [ ] `app.js` non contiene alcun identificativo di provider, modello o campo di configurazione introdotto da questo task.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Smoke end-to-end della scelta per la singola run contro il binario claude finto
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-11
+    body: |-
+      ## Objective
+      Il percorso completo — leggere il modello ereditato, avviare con una scelta diversa, vedere che cosa riceve davvero il processo, ritrovare la scelta sul record, verificare che il file di configurazione non si sia mosso e che la run successiva riparta dal workspace — è provato su una sandbox reale servita dal viewer reale.
+
+      ## Read
+      - `test/e2e/local-run-view-smoke.mjs` — l'intero script: costruzione del binario, `archetipo init --tool claude`, creazione della spec, avvio del viewer su porta casuale, salvataggio del provider di default puntato al finto, control server, `control.waitFor("argv")` e la produzione di `report.html` / `summary.json`. È il modello da seguire e da cui riusare gli helper copiandoli, non da importare (gli smoke di questo repository sono script indipendenti).
+      - `test/e2e/support/fake-claude.mjs` — quali eventi riporta al control server, in particolare `argv`, e come viene comandato frame per frame.
+      - `cli/internal/execution/claude/prompt.go` righe ~138-155 — `buildArgs`: `--model` e `--effort` compaiono solo quando i rispettivi valori non sono vuoti. È il motivo per cui l'`argv` è un oracolo esatto e non approssimato.
+      - `AGENTS.md`, sezione «Standalone smoke tests» — dove va descritto il nuovo comando.
+
+      ## Change
+      - Nuovo file `test/e2e/run-model-choice-view-smoke.mjs`.
+      - `package.json`: nuovo script `"test:view-run-model-smoke": "node ./test/e2e/run-model-choice-view-smoke.mjs"`.
+      - `AGENTS.md`: una voce nell'elenco degli smoke standalone.
+
+      Non-goal: nessuna modifica al viewer, al provider o ai fake; nessun `sleep` arbitrario; nessuna credenziale; nessun traffico fuori da `127.0.0.1`.
+
+      ## Steps
+      1. Costruisci il CLI in `test/e2e/.bin`, inizializza una sandbox sotto `test/workspaces/run-model-choice-view-smoke/runs/<timestamp>/sandbox` con `archetipo init --tool claude --connector file --yes`, e aggiungi una spec `US-901` in `TODO`.
+      2. Avvia `archetipo view` su porta casuale con una variabile d'ambiente sentinella di materiale di sessione, e salva come default del workspace il provider `claude` reale puntato a `test/e2e/support/fake-claude.mjs`, con `model: "sonnet"` e `effort: "high"` nella configurazione, via `PUT /api/execution/provider/default`.
+      3. **AC-1**: `GET /api/execution/model-choice` → `available:true`, `model:"sonnet"`, `model_source:"workspace"`, `options:{"effort":"high"}`, `model_field:"model"`, e un `models` che contiene `opus`, `sonnet` e `haiku` con l'opzione `effort` su `opus`.
+      4. Leggi `.archetipo/config.yaml` in un `Buffer` e tienilo da parte.
+      5. **AC-2 e AC-3**: `POST /api/spec/US-901/execution {"action":"plan","model":"opus","model_options":{"effort":"low"}}` → `201`. Attendi `control.waitFor("argv")` e verifica che l'`argv` contenga `--model opus` e `--effort low` come coppie flag/valore adiacenti, e che **non** contenga `sonnet` né `high`. Poi `GET /api/execution/{id}` mentre la run è ancora aperta → `model_choice` uguale a `{model:"opus",options:{effort:"low"},source:"run"}`.
+      6. Chiudi la run comandando al finto la fine del turno. La `plan` così terminata si chiude `FAILED` perché nessun piano è stato persistito: è atteso e va commentato nello script — l'oggetto di questo smoke è quale modello ha raggiunto il processo, non che il piano esista. Attendi lo stato terminale interrogando `GET /api/execution/{id}` finché non è terminale, e riverifica che `model_choice` sia sopravvissuto alla scrittura terminale.
+      7. **AC-4**: rileggi `.archetipo/config.yaml` e confrontalo byte a byte con il buffer del passo 4; poi `GET /api/execution/providers` e verifica che `default.config` porti ancora `model:"sonnet"` e `effort:"high"`.
+      8. **AC-5**: `POST /api/spec/US-901/execution {"action":"plan"}` senza altri campi → `201`; il nuovo `argv` porta `--model sonnet` e `--effort high`, e il record riporta `model_choice.source:"workspace"` con quei valori. Chiudi anche questa run.
+      9. Regressione del dialogo: su questa seconda run invia un messaggio con `POST /api/execution/{id}/run/messages` e verifica che raggiunga il processo come `user` frame e che entri nella cronologia solo quando il finto lo rieemette — una run avviata con override non deve aver rotto i comandi di run.
+      10. Verifica finale: la sentinella di materiale di sessione non compare in nessuna delle risposte del viewer raccolte durante l'esecuzione né in `.archetipo/config.yaml`.
+      11. Produci `report.html` e `summary.json` nella directory della run, come fanno gli altri smoke, e salta l'intero script su Windows, dove lo shebang POSIX del finto non si applica.
+      12. Aggiungi lo script a `package.json` e la voce descrittiva in `AGENTS.md`, dicendo che cosa prova e con quale oracolo.
+
+      ## Verify
+      - Esegui da `/Users/stefanoleli/Project/Archetipo`: `npm run test:view-run-model-smoke`
+      - Expect: passa (è uno smoke nuovo: non ha baseline, e il primo verde è la sua baseline). Su Windows deve terminare con esito «skipped» e un motivo esplicito.
+      - Esegui poi la regressione: `npm run test:view-local-run-smoke -- --provider claude`
+      - Expect: passa esattamente come prima delle modifiche.
+
+      ## Done
+      - [ ] AC-1 — lo smoke asserisce il modello ereditato e la sua provenienza prima di qualunque avvio.
+      - [ ] AC-2 — lo smoke asserisce `--model opus` e `--effort low` nell'`argv` che il processo riceve davvero.
+      - [ ] AC-3 — lo smoke legge `model_choice` dal record mentre la run è aperta e dopo la sua chiusura.
+      - [ ] AC-4 — lo smoke confronta `.archetipo/config.yaml` byte a byte prima e dopo.
+      - [ ] AC-5 — lo smoke asserisce `--model sonnet` e `--effort high` sulla seconda run avviata senza scelta.
+      - [ ] `package.json` e `AGENTS.md` descrivono il nuovo comando.
+      - [ ] Lo script non contiene alcun `sleep` arbitrario e non richiede credenziali.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: 'Gate finale: controlli completi e conferma che nessun task resti TODO'
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+      L'incremento è verificato con gli stessi controlli della CI e la spec è messa in review solo dopo che ogni task risulta `DONE` sul backlog.
+
+      ## Read
+      - `AGENTS.md`, sezione «Before delivering changes» — l'elenco esatto dei controlli che la CI esegue.
+      - La sezione «Baseline» del corpo di questo piano — i risultati registrati prima dell'implementazione, che sono il metro di ogni confronto.
+
+      ## Change
+      - Nessuna modifica al codice. Se un controllo fallisce, la correzione va fatta nel task che ha introdotto il problema e questo gate va rieseguito da capo.
+
+      Non-goal: non allargare l'ambito, non «sistemare» codice preesistente estraneo a questa spec, non saltare il controllo di lint perché il binario non era installato.
+
+      ## Steps
+      1. Se `golangci-lint` non è disponibile, installalo: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`. È un prerequisito d'ambiente registrato in baseline, non un fallimento del codice.
+      2. Esegui, in quest'ordine e da `/Users/stefanoleli/Project/Archetipo/cli`: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`, `golangci-lint run --timeout 5m ./...`.
+      3. Esegui da `/Users/stefanoleli/Project/Archetipo`: `npm run test:web`, `npm run test:view-run-model-smoke`, `npm run test:view-local-run-smoke -- --provider claude`, `npm run test:view-execution-smoke`.
+      4. Verifica che nessun file toccato dal piano abbia guadagnato diagnostiche rispetto alla baseline: `gofmt -l .` senza output e `go vet ./...` silenzioso sono la prova.
+      5. Verifica che nessun artefatto generato dagli smoke sia entrato nella working tree tracciata: `git status --porcelain` non deve elencare nulla sotto `test/workspaces/` né sotto `test/e2e/.bin/`.
+      6. Marca **questo** task come `DONE` con `archetipo task done US-049 TASK-13` eseguito da `/Users/stefanoleli/Project/Archetipo`.
+      7. Ricarica la spec con `archetipo spec show US-049` da `/Users/stefanoleli/Project/Archetipo` e verifica che **nessun** task risulti `TODO`.
+      8. Solo a quel punto esegui `archetipo spec review US-049` da `/Users/stefanoleli/Project/Archetipo`.
+
+      ## Verify
+      - `cd /Users/stefanoleli/Project/Archetipo/cli && gofmt -l . && go vet ./... && go build ./... && go test ./...`
+      - Expect: nessun output da `gofmt`, nessuna diagnostica, compilazione pulita, tutti i package verdi — almeno i 1649 test della baseline più quelli aggiunti.
+      - `cd /Users/stefanoleli/Project/Archetipo/cli && golangci-lint run --timeout 5m ./...`
+      - Expect: 0 issue.
+      - `cd /Users/stefanoleli/Project/Archetipo && npm run test:web && npm run test:view-run-model-smoke && npm run test:view-local-run-smoke -- --provider claude && npm run test:view-execution-smoke`
+      - Expect: tutti passano; su Windows i tre smoke che dipendono dai fake riportano «skipped» con motivo.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5, AC-6 — ogni criterio ha almeno un controllo verde in questa esecuzione, ai livelli dichiarati nella mappa delle evidenze.
+      - [ ] I cinque controlli Go della CI passano, `golangci-lint` incluso con 0 issue.
+      - [ ] `npm run test:web` e i tre smoke elencati passano.
+      - [ ] `git status --porcelain` non elenca artefatti generati dagli smoke.
+      - [ ] Questo task è `DONE`, `archetipo spec show US-049` non mostra alcun task `TODO`, e solo dopo questa verifica è stato eseguito `archetipo spec review US-049`.
+
+      ## Blockers
+      None.
+    ref: TASK-13

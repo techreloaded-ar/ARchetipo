@@ -1,0 +1,429 @@
+schema: archetipo/plan/v2
+spec_code: US-016
+body: "# US-016: Generare il PRD con una Workflow Run — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-25\n\n---\n\n## Specifica\n\n**Epica:** EP-002 — Inception governata in ARchetipo Control\n**Priorità:** HIGH | **Punti:** 5\n\n**Storia utente**\nCome product lead, voglio trasformare l'input promosso in un PRD tramite il workflow ARchetipo Inception, così da ottenere un artefatto verificato nel sistema di verità già configurato per il progetto.\n\n**Criteri di accettazione**\n- AC-1 — La Run mostra identificatore e versione del workflow Inception eseguito.\n- AC-2 — Il workflow usa l'input promosso e il contesto del Project dichiarato.\n- AC-3 — Il PRD prodotto supera la validazione prevista da ARchetipo Core.\n- AC-4 — Il PRD è persistito dal connettore Core configurato e collegato al Project.\n- AC-5 — Un fallimento di persistenza non crea due artefatti concorrenti.\n\n---\n\n## Soluzione tecnica\n\nEstendere la Run remota già governata affinché Control possa creare una Workflow Run Inception da un `process_input` promosso, Runner la esegua nel Workspace dichiarato tramite Agent e Core, e Control conservi soltanto una proiezione verificabile del PRD che resta autorevole nel connector Core.\n\n- Generalizzare il modello `remote_runs` da payload solo Session a un payload discriminato `session|workflow`. Per `workflow`, fissare server-side `inception@1.0.0`, il Process Input consumato, lo snapshot Project/Workspace/Process/Profile e una chiave d'intento. Un vincolo impedisce due Run attive per lo stesso input e workflow, mentre un tentativo fallito può essere recuperato.\n- Aggiungere una proiezione append-only del risultato Workflow: Run, Project, Process Input, workflow id/version, locator connector, digest e risultato della validazione Core. La proiezione non contiene il PRD e non lo riscrive; il connector configurato nel Workspace resta l'unica fonte autorevole.\n- Runner prepara in modo confinato il Workspace al ref dichiarato e avvia il comando headless first-party Agent. La definizione `inception@1.0.0` valida l'input promosso, invoca `archetipo-inception`, richiede `archetipo validate prd` con `data.ok=true` e produce un receipt JSON bounded. Solo il receipt verificato attraversa Runner → Control.\n- La persistenza usa il write path canonico `archetipo prd write`: file, GitHub o Jira applicano la loro semantica Core senza dual-write. Retry e completamenti ripetuti convergono sullo stesso locator canonico; Control applica un upsert idempotente per Run/locator e non espone una seconda azione finché un tentativo è attivo.\n- La pagina Project aggiunge, secondo i mockup US-016, un pannello Workflow Run collegato all'input promosso: avvio, stato, workflow/versione, contesto consumato, validazione, locator Core ed errore recuperabile. Il pannello non mostra il PRD come copia autorevole e non avanza il processo in questa specifica.\n\n### Decisioni architetturali\n\nNon serve un nuovo ADR: `decisions/governed-run-modes` ha già scelto Workflow Definition versionate e output verificati; `decisions/run-protocol` stabilisce il contratto applicativo indipendente dal runtime; `decisions/source-of-truth-transition` impone Runner → Agent → Core e vieta il dual-write; `decisions/remote-run-assignment-lease` governa assegnazione e fencing. Il piano aggiorna queste decisioni con la prima applicazione remota del percorso.\n\nLa scelta persistente è una proiezione Control minima del receipt, preferita sia alla copia del PRD in PostgreSQL, che violerebbe la fonte di verità, sia alla sola fiducia nello stato terminale della Run, che non proverebbe validazione e locator. Per il recovery si consentono nuovi tentativi solo dopo un terminale fallito, mantenendo un solo tentativo attivo per input/workflow e lo stesso locator Core: questa applicazione estende ADR esistenti e non introduce una nuova policy trasversale autonoma.\n\n---\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza sul piano |\n|---|---|---|\n| `npm run test:agent-workflow-smoke` | Verde: AC locali Workflow Run, output verificato, digest e assenza di artefatti concorrenti coperti | L'esecuzione remota deve riusare queste semantiche senza indebolire preflight e verifica. |\n| `npm --prefix control exec vitest run test/integration/process-input-promotion.test.ts test/integration/process-input-promotion-http.test.ts test/integration/remote-run-transport.test.ts src/modules/operations/run-transport-contract.test.ts` | Verde: 4 file, 12 test | I nuovi contratti preservano promozione append-only, lease, fencing e trasporto corrente. |\n| `npm --prefix runner test` | Verde: 8 test | Il vero executor Workflow sostituisce il probe mantenendo accept-ack, deduplica e cancellazione. |\n| `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build && npm --prefix runner run typecheck && npm --prefix runner run lint && npm --prefix runner run build` | Verde | Tutti i file Control/Runner modificati devono restare senza diagnostiche e compilare. |\n\n**Prerequisiti ambiente:** Node.js >= 22.19, Go e Git disponibili sul Runner, dipendenze root/Agent/Runner/Control installate, Docker/PostgreSQL 17 per integration test e browser Playwright già installato. Il Workspace di test deve contenere `.archetipo/config.yaml`, la definizione `.pi/workflows/inception/1.0.0.json` e il Core costruito o disponibile nel `PATH`.\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Project con Process Input promosso, Inception attiva, profilo e Runner compatibili | Integration HTTP/trasporto + browser E2E | API, offerta Runner e pannello mostrano esattamente `inception` e `1.0.0`, associati allo stesso Run ID | TASK-02, TASK-03, TASK-07 |\n| AC-2 | Input promosso con outcome/decisioni e snapshot Project/Workspace/Process | Contract + smoke reale + browser E2E | Il receipt registra gli ID/digest attesi e l'executor riceve valori server-derived coincidenti con Process Input e Project, senza authority client-supplied | TASK-02, TASK-04, TASK-06, TASK-07 |\n| AC-3 | Workspace fixture con connector file e definizione Inception reale | Agent/Core smoke + browser E2E | `archetipo validate prd` restituisce `kind=validation_result`, `data.ok=true`; solo allora la Run è `completed` e UI/API mostrano validazione verificata | TASK-04, TASK-06, TASK-07 |\n| AC-4 | Connector Core file configurato e Project collegato | Smoke reale + PostgreSQL/API/UI | Il PRD esiste al locator restituito dal connector, il receipt/digest e la proiezione Control puntano alla stessa Run/Project senza contenuto PRD duplicato in Control | TASK-01, TASK-04, TASK-06, TASK-07 |\n| AC-5 | Primo Workspace irraggiungibile e retry successivo sul medesimo input | Integration concorrenza + smoke + browser E2E | Il primo tentativo termina `failed` senza proiezione; doppio submit/replay non crea due Run attive e, dopo recovery, esistono un solo locator PRD e una sola proiezione verificata | TASK-01, TASK-02, TASK-06, TASK-07 |\n\n---\n\n## Strategia di test\n\n- Contract e integration test PostgreSQL sui payload discriminati, vincolo di singolo tentativo attivo, receipt bounded, proiezione append-only/idempotente e isolamento Organization/Project.\n- Test Agent/Runner sul preflight Workflow, checkout confinato, invocazione headless, propagazione di workflow/versione, Process Input e Project context, validazione Core, locator/digest e failure redatto.\n- Smoke reale con un Workspace temporaneo e connector file: esecuzione completa crea e valida il solo `docs/PRD.md`; Workspace non raggiungibile e retry/doppio completamento non producono un secondo PRD o una seconda proiezione.\n- Component test React sul pannello accessibile e sui suoi stati. Browser E2E è necessario perché gli AC attraversano autenticazione, Project, PostgreSQL, WebSocket, Runner, filesystem/Git Workspace, Agent, Core connector e reload; nessun mock deve nascondere il boundary responsabile della persistenza.\n\n### Test E2E — Simulazione utente\n\n**Framework:** Playwright esistente\n**Video demo:** previsto; la registrazione appartiene ad `archetipo-review`.\n\n| Scenario | Flusso utente |\n|---|---|\n| PRD verificato nel connector Core | L'admin apre un Project con input promosso, avvia Inception, osserva Run ID e `inception@1.0.0`, segue la progressione e infine vede validazione e locator; API, DB e filesystem del Workspace confermano un solo PRD associato alla stessa Run e Project. |\n| Recovery senza artefatti concorrenti | L'admin avvia con Workspace irraggiungibile, osserva un errore recuperabile senza proiezione o PRD, ripristina il Workspace e ritenta; doppio click/replay converge su un solo tentativo attivo e il successo finale lascia un solo locator e una sola proiezione. |\n\n---\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [decisions/source-of-truth-transition, decisions/governed-run-modes, decisions/run-protocol, decisions/remote-run-assignment-lease, decisions/project-process-run-model, domains/delivery-workflow, architecture/context-map]\n  update_after_acceptance: [decisions/source-of-truth-transition, decisions/governed-run-modes, decisions/run-protocol, decisions/remote-run-assignment-lease, decisions/project-process-run-model, decisions/control-foundation, domains/delivery-workflow, domains/fleet-and-run-management, domains/product-process-management, domains/project-and-workspace, architecture/context-map, engineering/code-map, overview, references/prd]\n  create: []\n```\n\n> \U0001F3A8 I mockup per questa specifica sono disponibili in `docs/mockups/US-016/`\n\n_Piano generato tramite ARchetipo Planning — 2026-07-25_"
+tasks:
+  - id: TASK-01
+    title: Generalizza la persistenza per Workflow Run e receipt Core
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Persistire Workflow Run remote e una sola proiezione verificata del PRD senza copiare l'artefatto autorevole in Control.
+
+      ## Read
+      - `control/migrations/005_remote_runs.sql` e `007_process_inputs.sql` — lifecycle Run, scope e input append-only.
+      - `control/src/modules/operations/run-domain.ts` e `run-repository.ts` — modello/persistenza Session correnti.
+      - `control/src/modules/identity/repository.ts` — tipi Kysely.
+      - `docs/wiki/decisions/source-of-truth-transition.md` — vincolo di ownership Core.
+
+      ## Change
+      - `control/migrations/008_remote_workflow_runs.sql` — generalizzare `session_payload` in payload Run discriminato, aggiungere relazione al Process Input/workflow e vincolo di un solo tentativo attivo; aggiungere proiezione receipt append-only e scoped.
+      - `control/src/modules/operations/run-domain.ts` — union chiusa `session|workflow` e receipt PRD bounded.
+      - `control/src/modules/operations/run-repository.ts` e `control/src/modules/identity/repository.ts` — mappare i nuovi campi e l'upsert idempotente della proiezione.
+      - `control/test/integration/migrations.test.ts` e un test integration Workflow dedicato — provare migrazione, scope, concorrenza e invarianti.
+      - Non persistere il Markdown PRD o credenziali connector in Control.
+
+      ## Steps
+      1. Migrare i record esistenti come `mode=session` senza perdere timeline o compatibilità.
+      2. Modellare per `workflow` source Process Input, `workflowId`, `workflowVersion`, snapshot di contesto e chiave d'intento server-derived.
+      3. Applicare un indice parziale che rifiuti due tentativi non terminali per la stessa Organization/Project/input/workflow.
+      4. Salvare il receipt soltanto per una Run completata e con locator/digest/validation conformi; rendere replay della stessa Run idempotente e update/delete impossibili.
+      5. Provare isolamento cross-Organization/Project e assenza del corpo PRD nelle tabelle.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/migrations.test.ts test/integration/remote-workflow-run.test.ts`
+      - Expect: migrazione e casi concorrenza/idempotenza passano; un solo tentativo attivo e una sola proiezione per Run/locator.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: nessuna diagnostica nei file modificati.
+
+      ## Done
+      - [ ] AC-1 — il record Workflow conserva id/versione immutabili.
+      - [ ] AC-4 — la proiezione collega receipt, Run, Process Input e Project senza contenuto PRD.
+      - [ ] AC-5 — concorrenza e replay non creano record attivi o proiezioni concorrenti.
+
+      ## Blockers
+      US-015 deve restare `DONE` e `process_inputs` disponibile.
+    ref: TASK-01
+  - id: TASK-02
+    title: Crea Inception dal Process Input nel confine Product
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Esporre un comando Project-scoped idempotente che avvia `inception@1.0.0` usando solo input promosso e contesto autorevole.
+
+      ## Read
+      - `control/src/modules/product/process-input-service.ts` e `process-input-repository.ts` — provenienza e lookup input.
+      - `control/src/modules/product/session-run-service.ts` e `session-run-http.ts` — composizione Project/Process/Profile e convenzioni HTTP.
+      - `control/src/modules/product/process-service.ts` — Process Cockpit/version pinning.
+      - `control/src/modules/identity/policy.ts` — membership e ruolo.
+
+      ## Change
+      - `control/src/modules/product/workflow-run-service.ts` — precondizioni, context snapshot e idempotency.
+      - `control/src/modules/product/workflow-run-http.ts` — `POST /api/projects/:projectId/workflow-runs/inception`, lista/dettaglio e mapping errori stabili.
+      - `control/src/server/app.ts` — composition root.
+      - `control/test/integration/project-workflow-run-http.test.ts` — authorization, authority server-derived, replay e recovery.
+      - Non accettare workflow/versione, Organization, locator, Process Input arbitrario o Profile dal client; il body contiene solo l'ID dell'input promosso selezionabile nel Project.
+
+      ## Steps
+      1. Richiedere membership attiva e ruolo `admin`, caricare Project/Workspace, Process Input appartenente all'istanza corrente e Agent Profile effettivo.
+      2. Fissare `inception@1.0.0` nel servizio e comporre input JSON con snapshot promosso e riferimenti Project/Workspace/Process.
+      3. Delegare a Operations la creazione della Run; su replay restituire il tentativo attivo/esistente invece di crearne un altro.
+      4. Dopo un terminale `failed`, consentire un nuovo tentativo correlato allo stesso intento senza alterare o cancellare il precedente.
+      5. Esporre stato, workflow ref, contesto, errore redatto e receipt/proiezione, mai credenziali o corpo PRD.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/project-workflow-run-http.test.ts test/integration/process-input-promotion-http.test.ts`
+      - Expect: admin avvia/replaya una sola Run, input estranei sono negati e il recovery dopo failure crea al massimo un nuovo tentativo terminalmente separato.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: nessuna diagnostica nei nuovi confini Product.
+
+      ## Done
+      - [ ] AC-1 — risposta e dettaglio espongono Run ID e `inception@1.0.0` server-derived.
+      - [ ] AC-2 — payload e snapshot coincidono con Process Input e Project correnti.
+      - [ ] AC-5 — doppio submit/replay converge e un failure resta recuperabile.
+
+      ## Blockers
+      Dipende dal modello e dai vincoli di TASK-01.
+    ref: TASK-02
+  - id: TASK-03
+    title: Trasporta e finalizza Workflow Run in Operations
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Objective
+      Dispatchare il comando Workflow al Runner e accettare il completamento solo con un receipt Inception verificato e correlato.
+
+      ## Read
+      - `control/src/modules/operations/run-service.ts` — scheduling, lease, eventi e terminali.
+      - `control/src/modules/operations/run-start-contract.ts` e `run-transport-contract.ts` — envelope v1.
+      - `control/src/modules/operations/transport.ts` e `connection-registry.ts` — fencing e dispatch.
+      - `control/test/integration/remote-run-transport.test.ts` — fixture trasporto reale.
+
+      ## Change
+      - `control/src/modules/operations/run-service.ts` — creazione Workflow discriminata e validazione terminal payload.
+      - `control/src/modules/operations/run-start-contract.ts` — payload Workflow bounded con context e input promosso.
+      - `control/src/modules/operations/run-transport-contract.ts` — receipt terminale tipizzato senza dati sensibili.
+      - `control/test/integration/remote-workflow-run-transport.test.ts` e test contratti — offerta, completion, failure, sequence e fencing.
+      - Non cambiare scadenza lease, accept CAS, fencing o redispatch automatico.
+
+      ## Steps
+      1. Selezionare un Runner compatibile con executor/toolchain dichiarati dal profilo e creare assignment con il lifecycle corrente.
+      2. Inviare `mode=workflow`, riferimento immutabile e input/context identici al record persistito.
+      3. Validare il receipt terminale: run/project/input/workflow devono coincidere, `validation.ok` deve essere true e locator/digest bounded.
+      4. In una transazione, appendere `completed` e proiezione; se receipt manca/non coincide, appendere `failed` senza proiezione.
+      5. Mantenere sequence, token, cancellazione e audit correnti; redigere errori Workspace/Core.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/operations/run-transport-contract.test.ts test/integration/remote-run-transport.test.ts test/integration/remote-workflow-run-transport.test.ts`
+      - Expect: workflow valido completa e proietta una volta; receipt invalido fallisce senza proiezione; fencing e sequence restano fail-closed.
+
+      ## Done
+      - [ ] AC-1 — offerta, record ed evento terminale condividono workflow id/versione.
+      - [ ] AC-2 — il Runner riceve lo snapshot server-derived persistito.
+      - [ ] AC-3 — solo `validation.ok=true` consente `completed`.
+      - [ ] AC-4 — receipt correlato genera una sola proiezione Project.
+
+      ## Blockers
+      TASK-01 definisce la persistenza e TASK-02 il comando Product.
+    ref: TASK-03
+  - id: TASK-04
+    title: Esegui Inception nel Workspace tramite Agent e Core
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Fornire al Runner un executor reale che prepara il Workspace, avvia la Workflow Definition Inception e restituisce un receipt soltanto dopo persistenza e validazione Core.
+
+      ## Read
+      - `runner/src/cli.ts`, `control-client.ts` e `run-start-contract.ts` — probe corrente, accept e cancel.
+      - `agent/src/workflow-definition.mjs`, `workflow-runner.mjs` e `cli.mjs` — preflight e output verificato.
+      - `skills/archetipo-inception/SKILL.md` — write path e validation gate Core.
+      - `cli/internal/cli/prd_cmd.go` e `validate_cmd.go` — envelope `prd write`/`validate prd`.
+      - `test/e2e/agent-workflow-smoke.mjs` — sicurezza artifact e failure correnti.
+
+      ## Change
+      - `runner/src/workspace-executor.ts` e `runner/src/cli.ts` — checkout confinato al ref, input temporaneo protetto, processo Agent headless, abort/cleanup e receipt.
+      - `runner/src/config.ts` e test — root Workspace esplicita e prerequisiti deterministici.
+      - `runner/src/control-client.ts` e `run-start-contract.ts` — propagare il risultato bounded e distinguere failure recuperabile.
+      - `.pi/workflows/inception/1.0.0.json` — schema input/output, policy e prompt che invoca la skill Inception/Core e produce il receipt.
+      - `agent/src/workflow-runner.mjs`/presentazione solo quanto necessario a restituire la proiezione sicura del receipt verificato; non esporre transcript, PRD o credenziali.
+      - Test Agent/Runner dedicati e packaging necessario a rendere disponibili Agent, Core e skill nel Runner.
+
+      ## Steps
+      1. Risolvere o clonare `canonicalRemote` sotto una root configurata, verificare confinamento e checkout esatto di `defaultRef`; un remoto irraggiungibile fallisce prima di Agent/Core.
+      2. Scrivere atomicamente l'input JSON nella directory runtime esclusa dal repository e avviare `archetipo-agent workflow run inception@1.0.0 --input <path>` con cwd Workspace.
+      3. Far eseguire alla definizione la skill Inception: `archetipo prd write`, poi `archetipo validate prd`; riparare secondo la skill e non produrre receipt finché `data.ok` non è true.
+      4. Produrre un receipt JSON chiuso con workflow, Run/Project/Input, connector kind, locator canonico, digest e validation; verificarlo col workflow output schema.
+      5. Restituire a Control solo il receipt bounded; su exit, checkout o Core failure riportare codice redatto, rimuovere input temporaneo e non dichiarare completion.
+      6. Conservare cancel/abort e impedire symlink/hard-link o path fuori Workspace secondo le guardie Agent esistenti.
+
+      ## Verify
+      - Run: `npm run test:agent-workflow-smoke && npm --prefix runner test`
+      - Expect: regressioni verdi; i nuovi test provano checkout confinato, workflow/versione, validation receipt, failure prima del receipt e cleanup.
+      - Run: `npm --prefix runner run typecheck && npm --prefix runner run lint && npm --prefix runner run build`
+      - Expect: nessuna diagnostica e package costruibile con l'executor reale.
+
+      ## Done
+      - [ ] AC-1 — l'Agent esegue esattamente `inception@1.0.0`.
+      - [ ] AC-2 — l'input validato contiene snapshot promosso e Project attesi.
+      - [ ] AC-3 — il receipt nasce solo dopo `validate prd` con `data.ok=true`.
+      - [ ] AC-4 — locator/digest provengono dal Core configurato nel Workspace.
+      - [ ] AC-5 — failure e cancel non producono receipt o output concorrenti.
+
+      ## Blockers
+      TASK-03 deve definire il payload remoto e il receipt accettato da Control.
+    ref: TASK-04
+  - id: TASK-05
+    title: Aggiungi il pannello Workflow Run al Project
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+    body: |-
+      ## Objective
+      Consentire all'admin di avviare, seguire e recuperare Inception dal Project mostrando provenienza e locator Core in modo accessibile.
+
+      ## Read
+      - `docs/mockups/US-016/` — riferimento vincolante per layout e stati.
+      - `control/src/web/pages/project.tsx` — input promosso, Session e Process Cockpit esistenti.
+      - `control/src/web/api/client.ts` — contratti client.
+      - `control/src/web/styles.css` e `control/test/web/project.test.tsx` — design system e oracoli accessibili.
+
+      ## Change
+      - `control/src/web/api/client.ts` — tipi/metodi Workflow Run e receipt.
+      - `control/src/web/pages/project.tsx` — pannello avvio/stato/timeline, workflow ref, input/context, validazione, locator ed errore recuperabile.
+      - `control/src/web/styles.css` — stili responsive coerenti col mockup.
+      - `control/test/web/project.test.tsx` — avvio, polling/reload, doppio click, failure/retry e locator.
+      - Non renderizzare una copia del PRD, non permettere workflow/versione manuali e non avanzare attività/gate.
+
+      ## Steps
+      1. Rendere l'azione disponibile solo all'admin quando esistono input promosso, Workspace, processo/profilo e nessun tentativo attivo.
+      2. Inviare solo il Process Input scelto; mostrare subito Run ID, `inception@1.0.0` e provenienza restituiti dal server.
+      3. Pollare/rileggere gli stati con regioni live accessibili e focus stabile; disabilitare submit durante un tentativo attivo.
+      4. Sul successo mostrare validation verified, connector e locator come riferimento, non contenuto autorevole.
+      5. Sul failure Workspace/Core mostrare correlazione e azione retry; il retry rilegge prima lo stato e non crea doppi intenti.
+      6. Dopo reload ricostruire Run e receipt dalla API.
+
+      ## Verify
+      - Run: `npm --prefix control run test:web -- project`
+      - Expect: i test osservano workflow/versione, context, stati, locator, doppio click e recovery; l'intera suite Project resta verde.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build`
+      - Expect: nessuna diagnostica e bundle compilato.
+
+      ## Done
+      - [ ] AC-1 — pannello mostra Run ID e `inception@1.0.0` prima e dopo reload.
+      - [ ] AC-2 — UI mostra Process Input e Project restituiti dal server.
+      - [ ] AC-3 — successo mostra validazione Core verificata.
+      - [ ] AC-4 — connector e locator sono consultabili dal Project.
+      - [ ] AC-5 — failure è recuperabile e doppio click non crea due tentativi attivi.
+
+      ## Blockers
+      TASK-02 espone le route; TASK-04 rende disponibile il completamento reale; i mockup US-016 devono esistere.
+    ref: TASK-05
+  - id: TASK-06
+    title: Prova Agent, Core e connector con uno smoke remoto
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Dimostrare senza browser che il percorso Control/Runner/Agent/Core produce un solo PRD validato e recupera un failure Workspace senza concorrenza.
+
+      ## Read
+      - `test/e2e/runner-control-smoke.mjs` — server TLS/Runner reale.
+      - `test/e2e/agent-workflow-smoke.mjs` e `validate-inception-smoke.mjs` — Workflow e PRD Core reali.
+      - `test/e2e/fixtures/inception/` — connector file e PRD validation fixture.
+
+      ## Change
+      - `test/e2e/runner-control-workflow-smoke.mjs` — harness reale Inception remota e recovery.
+      - Fixture temporanee sotto la directory test ignorata — Workspace raggiungibile/non raggiungibile e connector file.
+      - `package.json` — script deterministico per lo smoke.
+      - Non usare mock per Agent, Core CLI, connector file o filesystem del Workspace.
+
+      ## Steps
+      1. Costruire Core e preparare un Workspace con config, definition Inception e input promosso deterministico.
+      2. Avviare Control transport/Runner reale e consegnare il payload Workflow.
+      3. Attendere il terminale, verificare `docs/PRD.md`, marker PRD, `validate prd data.ok=true`, locator/digest e receipt correlato.
+      4. Eseguire il caso remoto irraggiungibile: terminale failed, zero receipt e zero PRD/proiezioni.
+      5. Ripristinare il remoto e inviare retry più replay concorrente; verificare una sola Run attiva per volta, un solo PRD canonico e una sola proiezione finale.
+      6. Verificare che segreti sentinel non compaiano in output, eventi, receipt o report.
+
+      ## Verify
+      - Run: `npm run test:runner-control-workflow`
+      - Expect: happy path e recovery passano attraversando Runner, Agent e Core reali; il conteggio finale è un PRD/locator/proiezione.
+
+      ## Done
+      - [ ] AC-1 — smoke correla `inception@1.0.0` alla Run remota.
+      - [ ] AC-2 — receipt prova gli stessi ID Project/Input dello start.
+      - [ ] AC-3 — Core valida il PRD con `data.ok=true`.
+      - [ ] AC-4 — il locator Core esiste ed è collegato al receipt.
+      - [ ] AC-5 — failure/retry/replay lasciano un solo artefatto canonico.
+
+      ## Blockers
+      TASK-01..TASK-04 devono fornire persistenza, trasporto ed executor.
+    ref: TASK-06
+  - id: TASK-07
+    title: Dimostra Inception end-to-end dal browser
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Provare gli AC-1..AC-5 dal Project attraverso UI, API, PostgreSQL, WebSocket, Runner, Agent e Core connector reali.
+
+      ## Read
+      - `test/e2e/control-project-session-promotion.spec.ts` — creazione input promosso e provenienza.
+      - `test/e2e/control-project-session-run.spec.ts` — lifecycle Run dal Project.
+      - `test/e2e/control-fixture.mjs` — Control, PostgreSQL e Runner fixture.
+      - `docs/mockups/US-016/` — flusso dimostrabile.
+
+      ## Change
+      - `test/e2e/control-project-workflow-inception.spec.ts` — scenari browser US-016.
+      - `test/e2e/control-fixture.mjs` — helper reali per Workspace/Core e query receipt, senza sostituire i boundary responsabili.
+      - Non mockare route Workflow, WebSocket, executor, Core validation o connector.
+
+      ## Steps
+      1. Preparare Organization, Project, Workspace, Inception attiva, Profile/Runner e un Process Input promosso via flusso US-015.
+      2. Dal pannello avviare Inception e osservare Run ID, `inception@1.0.0`, input e Project context.
+      3. Attendere completion e verificare UI/API/DB/Workspace: validation true, locator/digest, un solo PRD e proiezione; ricaricare e verificare persistenza della vista.
+      4. In un secondo Project configurare Workspace irraggiungibile, avviare e osservare failure recuperabile senza receipt/PRD.
+      5. Ripristinare il Workspace, attivare doppio submit/replay e ritentare; verificare un solo tentativo attivo e un solo artifact locator finale.
+      6. Confermare che Process Instance/attività/gate non avanzano in questa specifica.
+
+      ## Verify
+      - Run: `npx playwright test test/e2e/control-project-workflow-inception.spec.ts test/e2e/control-project-session-promotion.spec.ts`
+      - Expect: scenari success/recovery e regressione promozione sono verdi con oracoli UI, API, DB e filesystem concordi.
+
+      ## Done
+      - [ ] AC-1 — il revisore vede Run ID e workflow/versione reali.
+      - [ ] AC-2 — input promosso e Project context coincidono in UI/API/offerta.
+      - [ ] AC-3 — il revisore vede la validazione Core e il file supera il validator.
+      - [ ] AC-4 — locator connector e relazione Project sono osservabili dopo reload.
+      - [ ] AC-5 — failure e retry non producono due PRD o proiezioni.
+
+      ## Blockers
+      TASK-05 completa la UI e TASK-06 stabilizza il percorso reale senza browser.
+    ref: TASK-07
+  - id: TASK-08
+    title: Riconcilia la Wiki con la Workflow Run remota
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Aggiornare la conoscenza viva con ownership Core, receipt Control, confine Runner/Agent e semantica di recovery effettivamente implementati.
+
+      ## Read
+      - `docs/wiki/decisions/source-of-truth-transition.md`, `governed-run-modes.md`, `run-protocol.md`, `remote-run-assignment-lease.md` e `project-process-run-model.md` — decisioni accettate.
+      - `docs/wiki/domains/delivery-workflow.md`, `architecture/context-map.md` e `engineering/code-map.md` — capability e ownership.
+      - `.archetipo/shared-runtime.md` — lifecycle Wiki.
+
+      ## Change
+      - Pagine elencate in `wiki_impact.update_after_acceptance` — aggiornare solo affermazioni ed evidenze realmente cambiate, lasciandole `generated` per review.
+      - `docs/wiki/index.md` — rigenerare col catalogo.
+      - Non approvare pagine e non creare un nuovo ADR.
+
+      ## Steps
+      1. Eseguire `archetipo wiki affected --project-root /Users/stefanoleli/Project/ARchetipo --spec US-016` e includere ogni pagina impattata dalle evidenze modificate.
+      2. Documentare che Core connector possiede il PRD, Control conserva receipt/proiezione, Runner prepara il Workspace e Agent esegue la definizione versionata.
+      3. Chiarire singolo tentativo attivo, retry dopo failure, locator canonico e assenza di dual-write/avanzamento processo.
+      4. Aggiornare fonti a migration, service, executor e test reali; rimuovere finding risolvibili.
+      5. Eseguire `archetipo wiki catalog --project-root /Users/stefanoleli/Project/ARchetipo` e validare il profilo bootstrap.
+
+      ## Verify
+      - Run: `archetipo wiki validate --profile bootstrap --project-root /Users/stefanoleli/Project/ARchetipo`
+      - Expect: `kind=validation_result`, `data.ok=true`, nessun finding relativo alle pagine US-016.
+      - Run: `archetipo wiki status --project-root /Users/stefanoleli/Project/ARchetipo`
+      - Expect: pagine cambiate `generated`, non `stale`, senza metadata review.
+
+      ## Done
+      - [ ] AC-1 — Wiki identifica Workflow Definition e versione remote.
+      - [ ] AC-2 — contesto e provenienza input sono mappati sui confini corretti.
+      - [ ] AC-3 — validation gate Core è documentato con evidenza.
+      - [ ] AC-4 — ownership connector/proiezione Control è esplicita.
+      - [ ] AC-5 — recovery e idempotenza sono descritti senza promettere dual-write.
+
+      ## Blockers
+      TASK-01..TASK-07 devono rendere stabili codice e prove da citare.
+    ref: TASK-08
+  - id: TASK-09
+    title: Esegui il gate finale di qualità e accettazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Objective
+      Confermare che implementazione, regressioni, prove AC e Wiki siano verdi prima di consentire la review.
+
+      ## Read
+      - Tutti i file modificati da TASK-01..TASK-08 — scope finale e diagnostiche.
+      - `.archetipo/plans/US-016-plan.yaml` — comandi e mappa evidenze.
+      - `AGENTS.md` — gate CI obbligatori per modifiche CLI eventuali.
+
+      ## Change
+      - Nessun file applicativo; correggere solo difetti emersi dai comandi nel task responsabile prima di ripetere il gate.
+      - Salvare report generati soltanto nei path ignorati/configurati.
+
+      ## Steps
+      1. Eseguire focused test Control, Runner/Agent smoke, component e Playwright nell'ordine sotto.
+      2. Eseguire typecheck, lint e build Control/Runner e `git diff --check`.
+      3. Eseguire Wiki validate/status e verificare gli oracoli AC-1..AC-5 della mappa evidenze.
+      4. Se il Core Go è stato modificato, eseguire da `cli/`: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`, `golangci-lint run --timeout 5m ./...`; `gofmt -l` deve essere vuoto e ogni comando verde.
+      5. Solo dopo tutti i check verdi, marcare TASK-09 `DONE` con `archetipo task done US-016 TASK-09` dal project root.
+      6. Ricaricare `archetipo spec show US-016` dal project root, verificare che nessun task sia `TODO`; soltanto allora è consentito `archetipo spec review US-016`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/remote-workflow-run.test.ts test/integration/project-workflow-run-http.test.ts test/integration/remote-workflow-run-transport.test.ts test/integration/process-input-promotion-http.test.ts && npm --prefix control run test:web -- project`
+      - Expect: tutti i focused integration/component test passano.
+      - Run: `npm run test:agent-workflow-smoke && npm --prefix runner test && npm run test:runner-control-workflow`
+      - Expect: regressioni Agent/Runner e smoke reale passano.
+      - Run: `npx playwright test test/e2e/control-project-workflow-inception.spec.ts test/e2e/control-project-session-promotion.spec.ts`
+      - Expect: successo e recovery AC-1..AC-5 passano.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build && npm --prefix runner run typecheck && npm --prefix runner run lint && npm --prefix runner run build && git diff --check`
+      - Expect: zero diagnostiche/errori.
+      - Run: `archetipo wiki validate --profile bootstrap --project-root /Users/stefanoleli/Project/ARchetipo && archetipo wiki status --project-root /Users/stefanoleli/Project/ARchetipo`
+      - Expect: validation ok e pagine modificate generated/non-stale.
+      - Run: `archetipo spec show US-016`
+      - Expect: dopo aver marcato questo gate DONE, ogni task è `DONE`; nessun `TODO` prima della review.
+
+      ## Done
+      - [ ] AC-1 — suite finale prova Run ID e workflow/versione.
+      - [ ] AC-2 — suite finale prova input promosso e Project context.
+      - [ ] AC-3 — suite finale prova validation Core verde.
+      - [ ] AC-4 — suite finale prova locator/proiezione collegati.
+      - [ ] AC-5 — suite finale prova failure/recovery senza concorrenza.
+      - [ ] Workflow — gate marcato `DONE`, spec ricaricata e zero task `TODO` prima di `spec review`.
+
+      ## Blockers
+      Tutti i task TASK-01..TASK-08 devono essere completati.
+    ref: TASK-09

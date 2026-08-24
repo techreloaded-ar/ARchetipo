@@ -1,0 +1,752 @@
+schema: archetipo/plan/v2
+spec_code: US-031
+body: "# US-031: Creare una spec dalla UI — Piano di implementazione\n\n**Generato da:** Team di Planning ARchetipo\n**Data:** 2026-08-18\n\n---\n\n## Spec\n\n**Epic:** EP-005 — Esperienza operativa ARchetipo\n**Priorità:** MEDIUM | **Punti:** 3\n\n**User Story**\nCome membro di un team di prodotto, voglio creare una nuova spec dalla UI del workspace, così da inserire lavoro nel processo senza dover prima conversare con un coding agent o preparare un payload CLI.\n\n**Criteri di accettazione**\n- AC-1 — La UI consente di inserire i dati minimi richiesti per una nuova spec usando epiche e valori ammessi dal workspace.\n- AC-2 — Dopo la conferma compare una sola spec `TODO` con codice progressivo e contenuto rileggibile dal connector.\n- AC-3 — Dati non validi producono errori associati ai campi e non modificano il backlog.\n- AC-4 — Una ripetizione della stessa conferma non crea una seconda spec.\n\n**Fuori ambito**\nGenerazione AI della storia, creazione di un nuovo PRD, importazione massiva e modifica grafica delle epiche.\n\n---\n\n## Soluzione tecnica\n\nIl viewer acquisisce una sola nuova operazione di scrittura, `POST /api/spec`, che è l'unico punto in cui una spec nasce dalla UI. Il browser non inventa mai il codice, non decide mai la validità e non conosce mai il formato di persistenza: manda i campi del form, il server assegna il codice, valida con lo stesso validatore usato da `archetipo validate spec` e scrive tramite il connector configurato. È la stessa forma delle rotte già presenti (`PUT /api/spec/{code}`, `DELETE /api/spec/{code}`), quindi non introduce un nuovo stile di integrazione.\n\n- **Codice progressivo lato server.** Il codice non è un campo del form. Il server legge il backlog con `FetchBacklogItems(ctx, \"\")`, prende il massimo suffisso numerico dei codici `US-NNN` esistenti, incrementa e formatta con `US-%03d` (backlog vuoto → `US-001`). Ricavarlo dal backlog appena letto — e non da uno stato in memoria — lo rende corretto anche dopo modifiche fatte fuori dalla UI (CLI, agent, editor).\n- **Valori ammessi dal workspace.** L'epic non è testo libero: la richiesta porta `epic_code` e il server risolve titolo ed esistenza dalle epiche già presenti nel backlog; un codice sconosciuto è un errore di campo. Priorità e stato usano le costanti canoniche di `domain` (`HIGH|MEDIUM|LOW`, `StatusTodo`). Il form popola la `select` delle epiche dalle epiche che `GET /api/board` già restituisce, quindi la UI non ha una seconda fonte di verità.\n- **Validazione riusata, non riscritta.** Il payload viene composto in una `domain.Spec` e passato a `validation.ValidateSpecs`. Le finding di severità `error` vengono tradotte in errori per campo (`specs[0].title` → `title`, `specs[0].epic.code` → `epic_code`, `specs[0].body` → `body`, …) e restituite con HTTP 400 in un corpo `{error, code, hint, fields:[{field, code, message}]}`. La scrittura avviene **solo** dopo la validazione, quindi un payload non valido non tocca il backlog.\n- **Idempotenza persistita, non in memoria.** Prima di generare il codice il server cerca nel backlog una spec con la stessa identità di contenuto (stesso `epic_code` e stesso titolo normalizzato: trim, minuscole, spazi collassati). Se la trova, non scrive nulla e restituisce quella spec con `created:false`. Il browser aggiunge la difesa di superficie (pulsante disabilitato mentre la richiesta è in volo), ma la garanzia sta nel backlog, non nel client né in una cache di processo: sopravvive al reload della pagina e al riavvio del server.\n- **Scrittura tramite connector.** Backlog vuoto → `SaveInitialBacklog`; backlog esistente → `AppendSpecs`. È la stessa semantica create-or-append di `archetipo spec add`, applicata a una sola spec.\n- **Refresh della board.** Nessun meccanismo nuovo: la scrittura del backlog fa scattare il watcher già attivo, che pubblica `board_changed` sullo stream SSE. Il client ricarica comunque la board alla chiusura della modale, come fa già dopo il salvataggio di una spec.\n\n### Decisioni architetturali\n\n**Come si garantisce AC-4.** Due opzioni erano praticabile: (a) una chiave di idempotenza generata dal client e conservata in una mappa in memoria sul server; (b) identità di contenuto verificata sul backlog persistito. È stata scelta (b). La (a) è più generale ma la sua garanzia vive nella memoria del processo: un reload del browser genera una nuova chiave, un riavvio del viewer perde la mappa, e il caso reale da coprire — \"il revisore riconferma per sbaglio\" — torna a produrre un duplicato. La (b) è deterministica, testabile senza stato condiviso e vera anche quando la prima creazione è arrivata dalla CLI. Il costo è il caso limite di due spec volutamente omonime nella stessa epica, che il server rifiuta di duplicare restituendo quella esistente: la UI lo dice esplicitamente, e resta possibile crearla cambiando titolo o modificandola dopo. Nessuna delle due opzioni cambia il modello dati, i confini di integrazione o la topologia: la scelta è locale alla rotta e reversibile, quindi non supera la soglia ADR e non richiede una pagina di decisione. La Wiki è disattivata in questo workspace (`config show` non riporta `wiki.enabled`), quindi questa fase non produce alcun contratto Wiki.\n\n**Perché una rotta nuova e non `PUT /api/spec/{code}`.** La rotta di update esiste ed è una patch parziale su una spec esistente: usarla per la creazione significherebbe far scegliere il codice al browser, che è esattamente ciò che AC-2 vuole evitare. `POST /api/spec` senza codice nell'URL è la forma che rende il codice un risultato dell'operazione.\n\n---\n\n## Baseline\n\nMisurata il 2026-08-18 nella working copy corrente (che contiene già le modifiche non committate di US-029/US-030 su `cli/internal/web/` e `cli/internal/execution/`).\n\n| Verifica | Risultato prima dell'implementazione | Conseguenza sul piano |\n|---|---|---|\n| `cd cli && gofmt -l .` | nessun output | ogni task che tocca file Go la riesegue e deve continuare a non produrre output |\n| `cd cli && go vet ./...` | nessun problema | i file toccati non devono introdurre nuove diagnostiche |\n| `cd cli && go build ./...` | compila pulito | `Expect: passa` è legittimo |\n| `cd cli && go test ./...` | 915 test passati in 24 package | `Expect: passa` è legittimo; il gate finale confronta con questo numero come soglia minima |\n| `npm run test:view-delete-smoke` | PASS (costruisce la CLI, avvia `archetipo view`, guida l'API HTTP reale) | l'armatura smoke del viewer è sana: il nuovo smoke di US-031 ne clona la struttura |\n| `golangci-lint run --timeout 5m ./...` | **non eseguibile: binario non installato** | prerequisito d'ambiente, non un difetto del codice. Installazione deterministica: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`. Se dopo l'installazione il baseline risultasse già rosso, il gate finale richiede l'assenza di **nuovi** problemi sui file toccati, non zero problemi assoluti |\n| lint/test JavaScript | **nessuna toolchain configurata** (nessun `biome.json` nel repo, `npm test` esegue solo `test:cli`) | nessun comando di lint JS è disponibile: le modifiche a `app.js`/`app.css`/`index.html` sono verificate dallo smoke HTTP e dal controllo manuale sul viewer, non da un linter |\n\nPrerequisiti d'ambiente (distinti dai fallimenti di codice): Go installato (già verificato), Node ≥ 18 per gli smoke (`fetch` globale, già verificato), rete non necessaria.\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task che la produce |\n|---|---|---|---|---|\n| AC-1 | server `web` con connector `inmemory` popolato da `seedSpecs` (epiche EP-001) | integrazione HTTP (Go) | `POST /api/spec` con `epic_code:\"EP-999\"` risponde 400 con `fields[0].field == \"epic_code\"` e il backlog resta di 2 spec; con `epic_code:\"EP-001\"` la spec creata riporta `epic.title == \"F\"` risolto dal workspace, `priority` fra i valori canonici e `status == \"TODO\"` | TASK-04 |\n| AC-1 (superficie UI) | viewer aperto su un workspace con epiche | manuale/demo sui mockup | la modale \"New spec\" mostra la `select` Epic popolata SOLO con le epiche della board, Priority limitata a HIGH/MEDIUM/LOW, nessun campo \"code\" editabile, e il pulsante New spec è disabilitato quando la board non ha epiche | TASK-07 |\n| AC-2 | backlog file reale con `US-901`, `US-902` (smoke) | e2e HTTP (`archetipo view` reale + connector `file`) | dopo `POST /api/spec` la risposta ha `spec.code == \"US-903\"` e `spec.status == \"TODO\"`; `GET /api/board` mostra esattamente una card in più, nella colonna `todo`, con quel codice; `GET /api/spec/US-903` restituisce il body inviato; `archetipo spec show US-903` sullo stesso sandbox lo rilegge dal connector | TASK-08 |\n| AC-2 (progressione) | backlog vuoto e backlog con buchi nella numerazione | unit (Go) | `nextSpecCode(nil) == \"US-001\"`; `nextSpecCode([US-001, US-007, US-003]) == \"US-008\"` | TASK-02 |\n| AC-3 | backlog `inmemory` con 2 spec | integrazione HTTP (Go) | `POST /api/spec` con titolo vuoto e body senza `- [ ]` risponde 400, il corpo contiene `fields` con `title` e `body`, e `FetchBacklogItems` restituisce ancora esattamente le 2 spec iniziali (nessun codice consumato) | TASK-04 |\n| AC-3 (superficie UI) | modale aperta con dati incompleti | e2e HTTP + manuale/demo | lo smoke prova che la risposta 400 porta i nomi dei campi; la resa inline sotto ogni campo è verificata a video sul viewer, coerente con i mockup `docs/mockups/US-031/` | TASK-07, TASK-08 |\n| AC-4 | backlog reale con la spec appena creata | e2e HTTP (`archetipo view` reale) | ripetendo lo stesso `POST /api/spec` la risposta ha lo stesso `spec.code` e `created:false`; `GET /api/board` conta ancora una sola card con quel codice e il file di backlog contiene una sola voce | TASK-08 |\n| AC-4 (identità) | — | unit (Go) | `findExistingSpec` riconosce come identica una spec con titolo `\"  Creare  una Spec  \"` rispetto a `\"creare una spec\"` nella stessa epica, e come diversa la stessa stringa in un'epica differente | TASK-02 |\n\nLa mappa non usa doppi di test che nascondano l'oracolo: il connector `inmemory` è la vera implementazione del contratto connector (è nella conformance suite), e lo smoke gira contro il binario `archetipo` reale con il connector `file`, quindi la persistenza è osservata, non simulata.\n\n---\n\n## Strategia di test\n\nTre livelli, dal più stretto al più largo, coerenti con come sono già testate le altre rotte del viewer.\n\n- **Unit (Go)** su funzioni pure senza HTTP: generazione del codice progressivo, normalizzazione del titolo, riconoscimento del duplicato, mappatura `path` di validazione → nome di campo. Sono le regole che AC-2, AC-3 e AC-4 rendono osservabili, e qui sono verificabili sui casi limite (backlog vuoto, buchi di numerazione, codici non standard, titolo con spazi e maiuscole).\n- **Integrazione HTTP (Go)** con `httptest` e connector `inmemory`, esattamente come `handlers_test.go`: si esercita `srv.mux` sulla rotta reale e si osserva sia la risposta sia lo stato del backlog dopo la chiamata. È il livello che prova \"non modifica il backlog\" di AC-3, perché l'asserzione è sul connector, non sul codice di stato.\n- **E2E HTTP (Node)** con `archetipo view` reale e connector `file`, sul modello di `test/e2e/delete-story-view-smoke.mjs`: prova la catena completa rotta → connector → file YAML → riletura, incluso il caso di riconferma e il caso invalido.\n\n### Rinuncia agli E2E su browser\n\n**Motivo:** il repository non ha, e non ha mai avuto, un'armatura di test su browser per il proprio viewer: ogni funzionalità della UI (cancellazione spec, editing del piano, configurazione dell'esecuzione, run) è coperta da uno smoke HTTP sull'`archetipo view` reale più i test Go sugli handler. Il confine che AC-2, AC-3 e AC-4 attraversano — rotta, connector, persistenza, riletura — è interamente osservabile a quel livello, e lo smoke lo attraversa davvero end-to-end su file reali. Introdurre Playwright solo per questa spec da 3 punti significherebbe aggiungere una toolchain, un CI job e un formato di artefatti nuovi al repository, cioè una decisione infrastrutturale sproporzionata e non richiesta dalla spec.\n**Livello di evidenza usato al suo posto:** `cli/internal/web/spec_create_test.go` (unit + integrazione su `srv.mux`) e `test/e2e/create-spec-view-smoke.mjs` (viewer reale, connector `file`).\n**Residuo verificato a vista:** la sola parte non coperta automaticamente è la resa DOM del form (popolamento della `select`, errori inline sotto i campi, pulsante disabilitato durante l'invio). È verificata manualmente sul viewer contro i mockup di `docs/mockups/US-031/` ed è la parte filmabile della `Dimostrazione`.\n\n**Video di demo:** la `Dimostrazione` è filmabile (form → conferma → card TODO con codice → dati incompleti → riconferma). La registrazione è responsabilità di `archetipo-review`, non di questa fase.\n\n---\n\n> \U0001F3A8 I mockup di questa spec sono disponibili in `docs/mockups/US-031/` — stati: form iniziale, form compilato, errori di validazione, conferma e creazione.\n\n_Piano generato con ARchetipo Planning — 2026-08-18_\n\n---\n\n## Rework — ciclo 1\n\nFeedback di review del 2026-08-18. Tre rilievi, due dei quali sono lo stesso difetto visto da due punti diversi.\n\n### R-1 — `wiki validate --profile bootstrap` è rosso (blocco globale all'approvazione)\n\nVerificato: `archetipo wiki --project-root . validate --profile bootstrap` restituisce `ok: false` con un solo finding di severità `error`:\n\n```text\nWIKI_UNCOVERED_BOUNDARY  engineering/code-map  inspected boundary is not represented in coverage: docs\n```\n\n`archetipo wiki inspect` conferma la causa esatta indicata dal revisore: il boundary `docs` esiste con due file rappresentativi, `docs/mockups/US-030/app.js` e `docs/mockups/US-031/app.js`. I mockup introdotti da questa spec hanno reso `docs/` una `source` boundary agli occhi dell'ispezione, mentre la `coverage` di `engineering/code-map` elenca solo `.`, `cli`, `npm`, `scripts`, `skills`, `test` più la candidate `trip` marcata `excluded`.\n\nScelta di correzione: rappresentare `docs` come `status: excluded` con nota, non come `mapped`. `docs/` contiene il PRD, la Wiki stessa e i prototipi isolati di `archetipo-design`: è documentazione e materiale di prototipazione, non codice di prodotto distribuito, quindi nessuna pagina lo *descrive* come responsabilità del sistema. Un `mapped` verso `overview` sarebbe una copertura di comodo che afferma il falso. Il validatore ammette `excluded` per `kind: boundary` a condizione che sia presente una `note` non vuota (`cli/internal/wiki/wiki.go:316-319`), esattamente la forma già usata per la candidate `trip`.\n\nNota sul gate Wiki: `.archetipo/config.yaml` dichiara `wiki.enabled: false`, quindi il workflow standard non farebbe manutenzione Wiki automatica. Questo intervento non è manutenzione automatica: è la riparazione, richiesta esplicitamente in review, di un errore di validazione globale che blocca l'approvazione della spec. Non viene aperto alcun contratto `wiki_impact` e nessun'altra pagina viene toccata.\n\n### R-2 / R-3 — la fonte delle epiche non è la stessa per la UI e per la rotta\n\nLa premessa fattuale del revisore va corretta, ma la conclusione resta valida e il difetto è reale.\n\nStato verificato oggi:\n\n- `GET /api/board` costruisce `boardView{Epics: summary.Epics}` da `ReadExistingBacklog` (`cli/internal/web/handlers.go:66,71`);\n- ma `ReadExistingBacklog` **non** legge la lista `epics:` dichiarata in `.archetipo/backlog.yaml`: in tutti e tre i connector la deriva dalle spec presenti (`filefs/connector.go:144-165`, `inmemory/inmemory.go:121-141`, `github/connector.go:200-241`, `jira/connector.go:353-378`);\n- `resolveEpic` (`cli/internal/web/spec_create.go:210`) deriva anch'essa dalle spec, partendo da `FetchBacklogItems`.\n\nLe due fonti quindi **coincidono oggi**, e il messaggio `SPEC_EPIC_UNKNOWN` su un'epica offerta dalla UI non è riproducibile. Il difetto vero è un livello più sotto ed è più grave di quello descritto: **un'epica dichiarata nel backlog e priva di spec non esiste per nessuno dei due lati**. Non viene offerta dalla UI, non è risolvibile dalla rotta, e `normalizeBacklog` la cancella dal file alla prima scrittura (`filefs/store.go:385`, `doc.Epics = doc.Epics[:0]`). La prima spec di un'epica nuova non è creabile dalla UI — che è esattamente l'esito che il revisore ha previsto, per una causa diversa.\n\nCorrezione in due strati, nell'ordine:\n\n1. **Il connector `file` rende autorevole la lista dichiarata.** `ReadExistingBacklog` restituisce l'unione tra le epiche dichiarate in `backlog.yaml` e quelle derivate dalle spec, con il titolo dichiarato prevalente; `normalizeBacklog` conserva le dichiarate invece di azzerarle; `SaveInitialBacklog` semina il nuovo `backlogDoc` con le epiche già dichiarate nello store esistente, così la prima spec non fa sparire le altre epiche. Questo è coerente con il resto del connector, che già usa la lista dichiarata come fonte dei titoli d'epica quando idrata le spec (`readSpecDocs(backlog.Epics)`, `store.go:126,143-148`).\n2. **La rotta risolve l'epica dalla stessa chiamata della UI.** `handleCreateSpec` ottiene le epiche da `s.conn.ReadExistingBacklog` — la medesima chiamata che alimenta `/api/board` — e `resolveEpic` cambia firma da `([]domain.Spec, string)` a `([]domain.Epic, string)`. La coincidenza tra valori offerti e valori accettati diventa così una proprietà della costruzione, non una coincidenza che vale finché ogni epica ha almeno una spec. Resta invariata la regola che il titolo dell'epica viene dal workspace e mai dal client. `FetchBacklogItems` continua a servire per il codice progressivo e per il duplicato.\n\nConseguenza su R-3: con la lista dichiarata autorevole, il ramo `SaveInitialBacklog` di `handleCreateSpec:187` **diventa raggiungibile** — backlog con `epics:` dichiarate e nessuna spec. Il commento che lo dichiara \"defensive path, not reachable\" (`spec_create.go:147-151`) diventa falso e va riscritto, e il ramo va coperto da un test invece che documentato come irraggiungibile.\n\nI test di integrazione HTTP nuovi usano il connector `filefs` su una `t.TempDir()` anziché `inmemory`: lo stato \"epica dichiarata senza spec\" vive nel formato di persistenza, e `inmemory` non ha modo di rappresentarlo senza aggiungere una via di seeding che non serve al prodotto. Il connector `file` è anche quello con cui la funzionalità viene realmente usata.\n\n---\n\n## Baseline del ciclo di rework\n\nMisurata il 2026-08-18 su `/Users/stefanoleli/Project/Archetipo` (nessun worktree: `data.workdir` == `data.project_root`).\n\n| Verifica | Esito prima dell'intervento | Conseguenza sul piano |\n|---|---|---|\n| `cd cli && gofmt -l .` | nessun output | deve restare senza output |\n| `cd cli && go vet ./...` | nessun problema | deve restare pulito |\n| `cd cli && go build ./...` | compila | deve restare verde |\n| `cd cli && go test ./...` | tutti i pacchetti passano | deve restare verde: nessun nuovo fallimento ammesso |\n| `npm run test:view-create-smoke` | `PASS: create-spec view smoke test completed.` | deve restare `PASS` |\n| `archetipo wiki --project-root . validate --profile bootstrap` | **`ok: false`** — 1 finding `error` `WIKI_UNCOVERED_BOUNDARY` su `docs`, più 7 `WIKI_EVIDENCE_CHANGED` di severità `warning` | rosso noto, bersaglio di TASK-14. Il criterio d'uscita è *zero finding di severità `error`*, non `ok: true`: i 7 `WIKI_EVIDENCE_CHANGED` sono warning preesistenti su pagine `reviewed` la cui evidenza si è mossa, e la loro riconciliazione appartiene all'accettazione, non a questo piano |\n| `golangci-lint run --timeout 5m ./...` | **non eseguibile**: `golangci-lint` non è installato in questo ambiente | prerequisito d'ambiente, non un difetto del codice. Installazione: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`. Il gate finale lo esegue se disponibile e registra esplicitamente lo skip altrimenti |\n\nNessun file toccato dal piano parte con diagnostiche di compilatore o vet: `go vet ./...` e `go build ./...` sono verdi su tutto il modulo.\n\n---\n\n## Mappa di evidenza dell'accettazione — ciclo di rework\n\nI criteri toccati dal feedback sono AC-1 (valori ammessi dal workspace) e AC-2 (una sola spec `TODO` rileggibile dal connector). AC-3 e AC-4 non sono toccati e restano coperti dall'evidenza già prodotta nel ciclo precedente, ripetuta dal gate come regressione.\n\n| Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task che la produce |\n|---|---|---|---|---|\n| AC-1 | `t.TempDir()` con `.archetipo/backlog.yaml` che dichiara `EP-900` e `EP-901`, `EP-901` senza alcuna spec | integrazione HTTP (`net/http/httptest` + connector `filefs`) | `POST /api/spec` con `epic_code: EP-901` risponde `201`; la spec restituita porta `epic.code == \"EP-901\"` e `epic.title` uguale al titolo **dichiarato nel backlog**, non a quello inviato dal client. In più `GET /api/board` sullo stesso server elenca `EP-901` tra `epics`: offerta e accettazione provengono dalla stessa lista | TASK-13 |\n| AC-1 | store `filefs` con `epics:` dichiarate | unit Go | `ReadExistingBacklog` restituisce l'epica dichiarata e priva di spec; dopo `AppendSpecs` la riga `epics:` di `backlog.yaml` la contiene ancora | TASK-11 |\n| AC-2 | `t.TempDir()` con `epics:` dichiarate e **zero** spec | integrazione HTTP (`filefs`) | `POST /api/spec` risponde `201` con `created: true` e codice `US-001`; `GET /api/spec/US-001` rilegge titolo e corpo dal connector; `FetchBacklogItems` restituisce esattamente 1 spec in stato `TODO`; le altre epiche dichiarate sopravvivono in `backlog.yaml`. Questo è il ramo `SaveInitialBacklog` che il commento dichiarava irraggiungibile | TASK-13 |\n| AC-2, AC-3, AC-4 | sandbox reale del viewer con connector `file` | e2e (smoke Node) | `npm run test:view-create-smoke` stampa `PASS`: creazione, rifiuto del payload invalido senza scritture, doppia conferma senza duplicato | TASK-15 |\n| — (blocco all'approvazione, non un AC) | repository con `docs/mockups/` presente | validazione Wiki | `archetipo wiki --project-root . validate --profile bootstrap` non restituisce alcun finding di severità `error`; `engineering/code-map` risulta `state: generated` in `archetipo wiki status` | TASK-14 |\n\n---\n\n## Strategia di test del rework\n\nL'evidenza sta al livello più basso che rende osservabile l'esito, e il livello HTTP è quello dove il difetto vive davvero: la coincidenza tra ciò che `/api/board` offre e ciò che `POST /api/spec` accetta è una proprietà di due handler, non di una funzione pura.\n\n- Gli unit test sul connector `file` provano la persistenza della lista dichiarata: senza di essi il difetto tornerebbe alla prima riscrittura di `backlog.yaml`.\n- I test di integrazione HTTP girano su `filefs` e non su `inmemory`, perché è l'unico connector che sa rappresentare \"epica dichiarata senza spec\". Nessun doppio nasconde l'oracolo: il server è reale, il connector è reale, il file di backlog è reale.\n- Il test che copre il ramo `SaveInitialBacklog` asserisce l'esito osservabile (la spec riletta dal connector e le epiche superstiti), non il fatto che quel ramo sia stato eseguito.\n- I test già esistenti restano il contratto di regressione, in particolare `TestCreateSpecOnEmptyBacklog`: un workspace davvero vuoto — senza spec **e** senza epiche dichiarate — deve continuare a rifiutare con `400` sul campo `epic_code`. Il suo commento va aggiornato, la sua asserzione no.\n\n### Waiver E2E browser\n\nIl rework non introduce né modifica alcuna superficie visiva: `index.html`, `app.css` e `app.js` restano invariati. Cambia la fonte da cui il server ricava le epiche ammesse, e la `select` del form continua a leggere `boardSnapshot.epics` come prima. Gli AC toccati sono provati al livello HTTP, dove l'accordo tra le due rotte è direttamente osservabile, più lo smoke e2e già esistente sul viewer reale che ripercorre l'intero flusso utente. Aprire un browser non aggiungerebbe alcun oracolo che questi livelli non forniscano già.\n\n---\n\n## Wiki Impact\n\n```yaml\nwiki_impact:\n  read: []\n  update: []\n  create: []\n```\n\nVuoto per scelta: `wiki.enabled` è `false` in questo workspace, quindi non viene aperto alcun contratto di documentazione. TASK-14 non è un contratto Wiki, è la riparazione puntuale — richiesta in review — di un errore di validazione globale che impedisce l'approvazione.\n\n---\n\n_Rework pianificato via ARchetipo Planning — 2026-08-18_"
+tasks:
+  - id: TASK-01
+    title: Tipi e funzioni pure della creazione spec in cli/internal/web/spec_create.go
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Esiste un nuovo file `cli/internal/web/spec_create.go` che definisce il contratto JSON della creazione di una spec e le funzioni pure che assegnano il codice progressivo, riconoscono un duplicato e mappano una finding di validazione sul campo del form. Nessuna rotta è ancora registrata.
+
+      ## Read
+      - `cli/internal/domain/types.go` — `Spec`, `Epic`, `Priority`, `Status`, `StatusTodo`, `ValidationFinding` (campi `Code`, `Severity`, `Path`, `Message`, `Hint`).
+      - `cli/internal/validation/specplan.go` — `ValidateSpecs` e i `path` esatti che produce (`specs[0].code`, `.title`, `.epic.code`, `.priority`, `.points`, `.status`, `.body`).
+      - `cli/internal/validation/checks.go` — costanti `SeverityError` / `SeverityWarning`.
+      - `cli/internal/web/handlers.go` — stile dei tipi `*View` / `*Req` e delle funzioni helper del package.
+
+      ## Change
+      - Nuovo file `cli/internal/web/spec_create.go`. Non modificare altri file in questo task.
+      - Contenuto ammesso: solo tipi e funzioni pure. Nessun `http.Handler`, nessuna chiamata al connector, nessuna registrazione di rotta (arrivano in TASK-03).
+      - Non goal: non toccare `validation`, non aggiungere metodi al `Connector`, non modificare `writeError` in `handlers.go`.
+
+      ## Steps
+      1. Definisci `createSpecReq` con i tag JSON `title`, `epic_code`, `priority`, `points`, `scope`, `blocked_by`, `body` (`Points int`, `BlockedBy []string`, gli altri `string`).
+      2. Definisci `createSpecView` con `Spec domain.Spec` (`json:"spec"`) e `Created bool` (`json:"created"`): `created:false` significa "esisteva già, non ho scritto".
+      3. Definisci `fieldError` con `Field`, `Code`, `Message` (tag JSON `field`, `code`, `message`).
+      4. Scrivi `nextSpecCode(specs []domain.Spec) string`: prende il massimo suffisso numerico dei codici che iniziano per `US-`, incrementa di 1 e formatta con `fmt.Sprintf("US-%03d", n)`. Su slice vuota o senza codici `US-` riconoscibili restituisce `US-001`. Un codice con suffisso non numerico viene ignorato invece di far fallire.
+      5. Scrivi `normalizeSpecTitle(s string) string`: `strings.TrimSpace`, `strings.ToLower`, e collasso di ogni sequenza di spazi bianchi in un singolo spazio (`strings.Fields` + `strings.Join`).
+      6. Scrivi `findExistingSpec(specs []domain.Spec, epicCode, title string) (domain.Spec, bool)`: restituisce la prima spec con lo stesso `Epic.Code` e lo stesso titolo normalizzato. Confronto dell'epic code case-insensitive dopo trim.
+      7. Scrivi `createSpecFieldFor(path string) string`: toglie il prefisso `specs[0].` e traduce `epic.code` → `epic_code`, `title` → `title`, `priority` → `priority`, `points` → `points`, `body` → `body`, `scope` → `scope`, `blocked_by` → `blocked_by`. `code` e `status` (generati dal server, non dal form) restituiscono stringa vuota: sono errori di modulo, non di campo.
+      8. Scrivi `createSpecFieldErrors(findings []domain.ValidationFinding) []fieldError`: tiene solo le finding con `Severity == validation.SeverityError`, mappa il path con `createSpecFieldFor` e conserva `Code` e `Message`. Restituisce sempre uno slice non nil quando ci sono errori.
+      9. Documenta con un commento breve, in inglese come il resto del package, perché il duplicato è cercato sul backlog persistito e non su una cache in memoria.
+
+      ## Verify
+      - Esegui da `cli/`: `gofmt -l . && go vet ./... && go build ./...`
+      - Expect: `gofmt` non stampa nulla, `go vet` non riporta problemi, il build compila — coerente con la baseline, che è verde su tutte e tre.
+
+      ## Done
+      - [ ] `cli/internal/web/spec_create.go` esiste e compila, senza handler né rotte.
+      - [ ] `nextSpecCode`, `normalizeSpecTitle`, `findExistingSpec`, `createSpecFieldFor`, `createSpecFieldErrors` sono presenti e pure (nessun I/O, nessun contesto).
+      - [ ] AC-2 — la generazione del codice progressivo esiste come funzione dedicata e testabile.
+      - [ ] AC-4 — il riconoscimento del duplicato esiste come funzione dedicata e testabile.
+      - [ ] `gofmt -l .` non produce output sul package `web`.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Unit test delle regole pure di codice progressivo e duplicato
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      I casi limite di AC-2 e AC-4 sono provati sulle funzioni pure: codice progressivo su backlog vuoto, con buchi di numerazione e con codici anomali; duplicato riconosciuto per titolo normalizzato nella stessa epica e non riconosciuto in epica diversa.
+
+      ## Read
+      - `cli/internal/web/spec_create.go` — le firme scritte in TASK-01.
+      - `cli/internal/web/handlers_test.go` — stile dei test del package (table test, `t.Fatalf` con valore osservato).
+
+      ## Change
+      - Nuovo file `cli/internal/web/spec_create_test.go` (package `web`).
+      - Solo test sulle funzioni pure: niente `httptest` in questo task (arriva in TASK-04).
+
+      ## Steps
+      1. `TestNextSpecCode`: tabella con `nil` → `US-001`; `[US-001, US-002]` → `US-003`; `[US-001, US-007, US-003]` → `US-008` (buco nella numerazione: si prosegue dal massimo, non dal conteggio); `[US-0012]` → `US-013`; una spec con codice non `US-` (es. `EP-001` o `TASK-01`) viene ignorata e non fa fallire il calcolo.
+      2. `TestNormalizeSpecTitle`: `"  Creare  una Spec  "` e `"creare una spec"` producono la stessa stringa; titoli diversi restano diversi.
+      3. `TestFindExistingSpec`: backlog con `US-001` titolo `Creare una spec` in `EP-005`. Cercando `("EP-005", "  Creare  una Spec  ")` restituisce `US-001` e `true`; cercando `("EP-001", "Creare una spec")` restituisce `false`; cercando un titolo diverso nella stessa epica restituisce `false`.
+      4. `TestCreateSpecFieldFor`: `specs[0].title` → `title`; `specs[0].epic.code` → `epic_code`; `specs[0].body` → `body`; `specs[0].code` → `""`; `specs[0].status` → `""`.
+      5. `TestCreateSpecFieldErrors`: da un insieme di finding miste, solo quelle `error` compaiono nel risultato; una finding `warning` viene scartata; il `Code` della finding è preservato nel `fieldError`.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/web/ -run 'TestNextSpecCode|TestNormalizeSpecTitle|TestFindExistingSpec|TestCreateSpecField' -v`
+      - Expect: tutti i test elencati passano. La baseline del package `web` è verde, quindi qui non è ammesso alcun fallimento.
+
+      ## Done
+      - [ ] AC-2 — `nextSpecCode` è provata su backlog vuoto, contiguo, con buchi e con codici anomali.
+      - [ ] AC-4 — `findExistingSpec` è provata come identità su titolo normalizzato e come distinzione su epica diversa.
+      - [ ] AC-3 — la mappatura path → campo è provata, inclusi i path che non corrispondono ad alcun campo del form.
+      - [ ] `go test ./internal/web/` resta verde.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Rotta POST /api/spec che valida, assegna il codice e scrive tramite connector
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      `POST /api/spec` crea una spec `TODO` con codice progressivo assegnato dal server, rifiuta i payload non validi con errori per campo senza toccare il backlog, e su una riconferma identica restituisce la spec già esistente senza crearne una seconda.
+
+      ## Read
+      - `cli/internal/web/server.go` — blocco `registerRoutes`, dove vanno registrate le rotte.
+      - `cli/internal/web/handlers.go` — `handleUpdateSpec` e `handleDeleteSpec` (forma di un handler di scrittura), `decodeJSON`, `writeJSON`, `writeError`.
+      - `cli/internal/connector/connector.go` — `FetchBacklogItems`, `ReadExistingBacklog`, `SaveInitialBacklog`, `AppendSpecs`, `ReadSpecDetail`.
+      - `cli/internal/cli/spec_cmd.go` — `idempotentBacklogWrite`: la semantica create-or-append da replicare per una sola spec.
+      - `cli/internal/iox` — `NewInvalidInput`, `CodeInvalidInput` e la forma dei `CodedError`.
+
+      ## Change
+      - `cli/internal/web/spec_create.go`: aggiungi l'handler `handleCreateSpec` e l'helper `writeCreateSpecFieldErrors(w http.ResponseWriter, fields []fieldError)`.
+      - `cli/internal/web/server.go`: una sola riga in `registerRoutes`, `s.mux.HandleFunc("POST /api/spec", s.handleCreateSpec)`, accanto alle altre rotte spec.
+      - Non goal: non modificare `writeError` né altri handler esistenti; non aggiungere metodi all'interfaccia `Connector`; non introdurre stato in memoria sul `Server` per l'idempotenza.
+
+      ## Steps
+      1. In `handleCreateSpec` decodifica il corpo con `decodeJSON` (che già rifiuta i campi sconosciuti) in `createSpecReq`; su errore rispondi con `writeError`.
+      2. Leggi il backlog corrente con `s.conn.FetchBacklogItems(ctx, "")`. Un errore del connector è un errore della richiesta: `writeError` e ritorna. Uno stato `E_PRECONDITION` (backlog assente) va trattato come backlog vuoto, non come fallimento: intercetta il `*iox.CodedError` con `Code == iox.CodePreconditionMissing` e prosegui con slice vuota.
+      3. Risolvi l'epic: cerca fra le spec lette un `Epic` con lo stesso codice (trim, case-insensitive) di `req.EpicCode`. Se `req.EpicCode` è vuoto o non esiste, rispondi 400 con un solo `fieldError` su `epic_code` (codice `SPEC_EPIC_UNKNOWN`, messaggio che cita il codice ricevuto) e **non scrivere nulla**. L'epica risolta porta con sé il titolo del workspace: non usare mai un titolo inviato dal client.
+      4. Controlla il duplicato con `findExistingSpec(existing, req.EpicCode, req.Title)`. Se trovato, rispondi `200` con `createSpecView{Spec: trovata, Created: false}` e termina senza scrivere.
+      5. Componi la `domain.Spec`: `Code = nextSpecCode(existing)`, `Ref = Code`, `Title` (trimmato), `Epic` risolta, `Priority = domain.Priority(strings.ToUpper(strings.TrimSpace(req.Priority)))`, `Points`, `Scope`, `BlockedBy` (voci trimmate, vuote scartate), `Body`, `Status = domain.StatusTodo`.
+      6. Valida con `validation.ValidateSpecs("POST /api/spec", []domain.Spec{spec})`. Se `!result.OK`, converti le finding con `createSpecFieldErrors`, rispondi 400 con `writeCreateSpecFieldErrors` e ritorna **prima** di qualsiasi scrittura.
+      7. Scrivi: se `len(existing) == 0` usa `s.conn.SaveInitialBacklog(ctx, []domain.Spec{spec})`, altrimenti `s.conn.AppendSpecs(ctx, []domain.Spec{spec})`. Un errore di scrittura passa da `writeError`.
+      8. Rileggi la spec appena scritta con `s.conn.ReadSpecDetail(ctx, spec.Code)` e rispondi `201` con `createSpecView{Spec: riletta, Created: true}`. La riletura è il punto in cui il contenuto diventa "rileggibile dal connector" invece che solo "accettato".
+      9. `writeCreateSpecFieldErrors` scrive `http.StatusBadRequest` con il corpo `{"error":"...","code":"E_INVALID_INPUT","hint":"...","fields":[...]}`, riusando `writeJSON` e mantenendo le stesse chiavi `error`/`code`/`hint` degli altri errori del viewer, così il client esistente continua a mostrare il messaggio anche ignorando `fields`.
+
+      ## Verify
+      - Esegui da `cli/`: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/web/`
+      - Expect: `gofmt` senza output, `go vet` pulito, build ok, e i test del package `web` ancora tutti verdi (baseline verde: nessun fallimento è tollerato).
+
+      ## Done
+      - [ ] AC-1 — l'epic è risolta dalle epiche del workspace e un codice sconosciuto è un errore di campo su `epic_code`.
+      - [ ] AC-2 — la spec creata ha `status TODO`, un codice `US-NNN` progressivo assegnato dal server e viene restituita dopo una riletura dal connector.
+      - [ ] AC-3 — su payload non valido l'handler risponde 400 con `fields` e ritorna prima di ogni chiamata di scrittura al connector.
+      - [ ] AC-4 — su riconferma identica l'handler risponde con la spec esistente e `created:false`, senza chiamare `AppendSpecs`.
+      - [ ] La rotta `POST /api/spec` è registrata in `registerRoutes` e nessun altro handler è stato modificato.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test di integrazione HTTP della rotta POST /api/spec
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      La rotta è provata attraverso `srv.mux` con un connector reale (`inmemory`): codice progressivo e stato TODO, epica sconosciuta, payload non valido che lascia il backlog intatto, riconferma che non duplica, backlog vuoto che parte da `US-001`.
+
+      ## Read
+      - `cli/internal/web/handlers_test.go` — `newTestServer`, `seedSpecs`, il pattern `httptest.NewRequest` + `srv.mux.ServeHTTP`.
+      - `cli/internal/connector/inmemory/inmemory.go` — comportamento di `SaveInitialBacklog`, `AppendSpecs`, `FetchBacklogItems`.
+      - `cli/internal/web/spec_create.go` — le forme JSON di richiesta e risposta.
+
+      ## Change
+      - Estendi `cli/internal/web/spec_create_test.go` con i test di integrazione HTTP (non creare un terzo file).
+      - Non modificare `handlers_test.go`: se serve un helper, definiscilo nel nuovo file con un nome che non collida (`postSpec`, `validCreateBody`).
+
+      ## Steps
+      1. Aggiungi un helper `validCreateReq()` che restituisce una richiesta valida: `epic_code: "EP-001"`, `title: "Creare una spec"`, `priority: "MEDIUM"`, `points: 3`, e un body markdown che contiene sia una riga `Dimostrazione` sia almeno un `- [ ]` (il validatore li richiede entrambi).
+      2. `TestCreateSpecAssignsProgressiveCode`: `newTestServer` + `seedSpecs` (US-001, US-002). `POST /api/spec` con `validCreateReq()`. Asserisci: status `201`; `spec.code == "US-003"`; `spec.status == "TODO"`; `spec.epic.title == "F"` (titolo risolto dal workspace, non inviato dal client); `created == true`. Poi `GET /api/spec/US-003` restituisce `200` e il `spec.body` inviato — è l'oracolo "rileggibile dal connector" di AC-2.
+      3. `TestCreateSpecRejectsUnknownEpic`: stessa richiesta con `epic_code: "EP-999"`. Asserisci status `400`, presenza di un `fields` con `field == "epic_code"`, e che `conn.FetchBacklogItems(ctx, "")` restituisca ancora esattamente 2 spec.
+      4. `TestCreateSpecRejectsInvalidPayload`: richiesta con `title: ""` e un body privo di `- [ ]`. Asserisci status `400`; l'insieme dei `fields[].field` contiene `title` e `body`; il backlog ha ancora 2 spec; e una successiva creazione valida ottiene comunque `US-003` (il tentativo fallito non ha consumato il codice).
+      5. `TestCreateSpecIsIdempotentOnRepeat`: esegui due volte lo stesso `POST /api/spec` valido. Asserisci: la prima risposta ha `created == true`, la seconda `created == false` e lo **stesso** `spec.code`; `FetchBacklogItems` restituisce 3 spec in totale e una sola con quel codice. Ripeti la seconda chiamata con il titolo scritto `"  CREARE  una spec "`: deve comportarsi allo stesso modo (identità normalizzata).
+      6. `TestCreateSpecOnEmptyBacklog`: `newTestServer` **senza** `seedSpecs`. Poiché nessuna epica esiste, la richiesta con `epic_code: "EP-001"` deve rispondere `400` sul campo `epic_code` e lasciare il backlog vuoto — è il comportamento che la UI riflette disabilitando il pulsante. Documenta l'asserzione con un commento: il percorso `US-001` su backlog vuoto è coperto dallo unit test di `nextSpecCode` in TASK-02, perché la rotta non può crearlo senza un'epica del workspace.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/web/ -run TestCreateSpec -v` e poi `go test ./internal/web/`
+      - Expect: tutti i `TestCreateSpec*` passano e l'intero package `web` resta verde come nella baseline.
+
+      ## Done
+      - [ ] AC-1 — provato che l'epica è risolta dal workspace e che un codice sconosciuto è respinto sul campo `epic_code`.
+      - [ ] AC-2 — provato `US-003` progressivo, `status TODO` e riletura del body via `GET /api/spec/{code}`.
+      - [ ] AC-3 — provato 400 con `fields` su `title` e `body`, backlog invariato e codice non consumato.
+      - [ ] AC-4 — provato che la seconda conferma identica restituisce lo stesso codice, `created:false`, e non aggiunge una spec.
+      - [ ] `go test ./internal/web/` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Markup della modale "New spec" in index.html
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Il viewer ha un pulsante "New spec" nella topbar e una modale dedicata con il form di creazione, gli slot per gli errori per campo e i controlli di conferma/annullamento — markup soltanto, senza comportamento.
+
+      ## Read
+      - `cli/internal/web/assets/index.html` — blocco `topbar-actions` (pulsanti Metrics/PRD/Mockups/Config), la modale `#prd-modal` come modello di modale semplice, e il `#story-form` come modello di `form-grid` con `field`/`field full`.
+      - `docs/mockups/US-031/` — i mockup approvati per questa spec: struttura del form, ordine dei campi, posizione degli errori inline, stato "conferma in corso" e stato "nessuna epica disponibile".
+      - `cli/internal/web/assets/app.css` — classi già disponibili (`ghost-btn`, `primary-btn`, `modal-root`, `modal`, `modal-header`, `form-grid`, `field`, `status-msg`) da riusare invece di inventarne di nuove.
+
+      ## Change
+      - Solo `cli/internal/web/assets/index.html`.
+      - Aggiungi il pulsante `#new-spec-btn` in `topbar-actions` (prima di `#config-btn`), con la stessa forma degli altri `ghost-btn` (icona SVG inline + label).
+      - Aggiungi la modale `#new-spec-modal` con `class="modal-root hidden"`, `role="dialog"`, `aria-modal="true"`, `aria-labelledby`, header con titolo e `#new-spec-modal-close`.
+      - Non goal: nessun JavaScript, nessun CSS, nessuna modifica alla modale `#modal-root` esistente o alle sue tab.
+
+      ## Steps
+      1. Inserisci `#new-spec-btn` in `topbar-actions` con un'icona SVG 14×14 coerente con le altre (tratto `currentColor`, `stroke-width` 1.2) e la label `New spec`.
+      2. Crea la modale `#new-spec-modal` contenente un unico `<form id="new-spec-form" class="form-grid">`.
+      3. Campi, nell'ordine dei mockup: `title` (input text, `class="field full"`, `required`), `epic_code` (`select`, popolata a runtime, `class="field"`), `priority` (`select` con le sole opzioni `HIGH`/`MEDIUM`/`LOW`, default `MEDIUM`), `story_points` (input number, `min="1"`, `max="100"`, default `3`), `scope` (input text opzionale), `blocked_by` (input text opzionale, placeholder `US-002, US-003`), `body` (`textarea` `class="field full"` che verrà montata come editor markdown in TASK-07).
+      4. Sotto ogni campo aggiungi lo slot d'errore `<span class="field-error" data-error-for="<nome campo>"></span>`, vuoto e presente nel markup: il JS scriverà solo il testo, senza creare nodi.
+      5. In fondo al form aggiungi `<div class="form-actions full">` con il submit `#new-spec-submit` (`primary-btn`, label `Create spec`), il pulsante `#new-spec-cancel` (`ghost-btn`) e `<span class="status-msg" id="new-spec-status"></span>`.
+      6. Aggiungi sopra il form l'avviso `#new-spec-no-epics` (`hidden` di default) con il testo che spiega che il workspace non ha ancora epiche e che la spec va creata dopo aver definito il backlog.
+      7. Verifica a occhio che ogni `id` usato sia nuovo: nessuna collisione con gli id già presenti nel file.
+
+      ## Verify
+      - Esegui da `cli/`: `go build ./... && go run ./cmd/archetipo view --host 127.0.0.1 --port 0 --no-open` nella radice del repository, apri l'URL stampato e controlla che il pulsante "New spec" apra la modale con tutti i campi elencati.
+      - Expect: la pagina si carica senza errori in console; la modale è presente nel DOM e i campi corrispondono ai mockup. Gli asset sono embeddati, quindi una modifica a `index.html` richiede il rebuild del binario per essere vista: usare `go run` come sopra.
+
+      ## Done
+      - [ ] AC-1 — il form espone titolo, epic, priorità, punti e corpo, con Priority limitata ai tre valori canonici e nessun campo per il codice spec.
+      - [ ] Ogni campo ha uno slot `.field-error` con `data-error-for` corrispondente al nome del campo JSON.
+      - [ ] L'avviso `#new-spec-no-epics` esiste ed è `hidden` nel markup statico.
+      - [ ] Nessun id duplicato e nessuna modifica fuori da `index.html`.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Stili della modale di creazione e degli errori di campo in app.css
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      La modale "New spec", gli errori inline sotto i campi e lo stato disabilitato del pulsante di conferma hanno una resa coerente con il resto del viewer, in tema chiaro e scuro.
+
+      ## Read
+      - `cli/internal/web/assets/app.css` — i token di colore su `:root` e sul tema scuro, le regole di `.modal-root`, `.modal`, `.form-grid`, `.field`, `.status-msg`, `.primary-btn`, `.ghost-btn`.
+      - `docs/mockups/US-031/shared.css` (o l'equivalente prodotto dai mockup) — colori e spaziature dello stato d'errore approvato.
+
+      ## Change
+      - Solo `cli/internal/web/assets/app.css`, in coda alla sezione delle modali.
+      - Non goal: non ridefinire i token di colore globali, non modificare le regole esistenti di `.field` o `.status-msg`, non introdurre valori esadecimali dove esiste già un token.
+
+      ## Steps
+      1. Aggiungi `.field-error`: nascosto quando vuoto (`&:empty { display: none; }`), altrimenti blocco di testo piccolo nel colore d'errore già usato da `.status-msg.err`.
+      2. Aggiungi `.field.has-error input`, `.field.has-error select`, `.field.has-error textarea`: bordo nel colore d'errore, così il campo è individuabile anche senza leggere il messaggio.
+      3. Aggiungi la regola per `#new-spec-modal .modal` con la larghezza adeguata al form (allineata a quella della modale PRD) e lo scroll verticale interno.
+      4. Aggiungi lo stato `button[disabled]` per `#new-spec-submit` se il tema non lo copre già: opacità ridotta e `cursor: not-allowed`.
+      5. Aggiungi `#new-spec-no-epics` come banner informativo con lo stesso trattamento visivo degli avvisi già presenti.
+      6. Verifica che ogni colore introdotto abbia una definizione valida sia in tema chiaro sia in tema scuro; se usi un token nuovo, definiscilo in entrambi i blocchi accanto agli altri.
+
+      ## Verify
+      - Avvia il viewer da radice repository: `cd cli && go run ./cmd/archetipo view --host 127.0.0.1 --port 0 --no-open`; apri la modale, forza uno stato d'errore aggiungendo a mano la classe `has-error` da devtools e commuta il tema con il tasto `T`.
+      - Expect: gli errori sono leggibili in entrambi i temi, la modale non deborda dalla viewport, il submit disabilitato è visibilmente inerte.
+
+      ## Done
+      - [ ] AC-3 — l'errore di campo ha una resa visiva dedicata (testo + bordo) invece di essere solo un messaggio globale.
+      - [ ] Ogni nuovo colore è definito sia in tema chiaro sia in tema scuro.
+      - [ ] Nessuna regola CSS preesistente è stata modificata o rimossa.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Comportamento della modale di creazione in app.js
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Dalla UI si crea davvero una spec: la modale si apre con le epiche del workspace e un corpo precompilato, la conferma chiama `POST /api/spec` una sola volta, gli errori del server appaiono sotto i campi e il successo mostra la nuova card `TODO` con il codice assegnato.
+
+      ## Read
+      - `cli/internal/web/assets/app.js` — il blocco di costanti DOM in testa all'IIFE, la creazione degli editor `EasyMDE` (`specEditor`, `planEditor`, `prdEditor`), `openPRD`/`closePRD` come modello di ciclo di vita di una modale, `onSaveSpec` come modello di submit, `apiPost`, `parseResponse`, `showToast`, `loadBoard`, `openEditor`, `boardSnapshot`.
+      - `docs/mockups/US-031/` — sequenza degli stati da riprodurre: iniziale, compilato, errori di campo, invio in corso, spec creata.
+      - `cli/internal/web/spec_create.go` — le chiavi esatte della richiesta e della risposta (`epic_code`, `blocked_by`, `spec`, `created`, `fields`).
+
+      ## Change
+      - Solo `cli/internal/web/assets/app.js`, dentro l'IIFE esistente.
+      - Non goal: non riscrivere `parseResponse` né `apiPost`; non toccare il flusso di `openEditor`/`onSaveSpec`; non introdurre dipendenze esterne; non generare il codice spec lato client per nessun motivo.
+
+      ## Steps
+      1. In testa all'IIFE aggiungi le costanti DOM dei nuovi nodi (`newSpecBtn`, `newSpecModal`, `newSpecModalClose`, `newSpecForm`, `newSpecStatus`, `newSpecSubmit`, `newSpecCancel`, `newSpecNoEpics`) accanto alle altre.
+      2. Crea un quarto editor `EasyMDE` `newSpecEditor` su `newSpecForm.body`, con le stesse opzioni degli altri tre (stessa `editorToolbar`, `spellChecker:false`, `previewRender: marked.parse`).
+      3. Aggiungi lo stato locale `newSpecBusy = false`: è la sola difesa client contro il doppio invio, e non sostituisce la garanzia server.
+      4. `specBodyTemplate()`: restituisce lo scheletro markdown in italiano con le sezioni **User Story**, **Dimostrazione** e **Criteri di accettazione** con almeno una riga `- [ ] AC-1 — `. Serve a far nascere la spec già conforme al validatore, non a nascondere la validazione.
+      5. `openNewSpec()`: azzera form, errori e stato; imposta `priority` a `MEDIUM` e `story_points` a `3`; popola la `select` `epic_code` dalle epiche di `boardSnapshot` (`boardSnapshot.epics`), etichettandole `EP-XXX — Titolo`; se l'elenco è vuoto mostra `#new-spec-no-epics`, disabilita il submit e non apre l'editor; scrive `specBodyTemplate()` in `newSpecEditor`; toglie `hidden` alla modale e chiama `newSpecEditor.codemirror.refresh()` in un `setTimeout(…, 0)` come fanno le altre form.
+      6. `closeNewSpec()`: rimette `hidden`, azzera gli errori e `newSpecBusy`.
+      7. `clearNewSpecErrors()` e `showNewSpecErrors(fields)`: la seconda scrive il messaggio nello `span[data-error-for=…]` corrispondente e aggiunge `has-error` al `.field` genitore; un errore il cui `field` è vuoto finisce nel messaggio globale `#new-spec-status`. Usa `textContent`, mai `innerHTML`.
+      8. `onCreateSpec(e)`: `preventDefault`; se `newSpecBusy` esci subito; pulisci gli errori; imposta `newSpecBusy = true`, disabilita `#new-spec-submit` e scrivi `Creating…` nello status; costruisci il payload (`title`, `epic_code`, `priority`, `points` come intero, `scope`, `blocked_by` come array di codici trimmati, `body` da `newSpecEditor.value()`); chiama `apiPost("/api/spec", payload)`.
+      9. Esito positivo: chiudi la modale, `await loadBoard()`, mostra un toast che cita il codice restituito (`${res.spec.code} created` oppure, se `res.created === false`, un toast neutro che dice che la spec esisteva già), e apri `openEditor(res.spec.code)` così l'utente vede subito ciò che ha creato.
+      10. Esito negativo: leggi l'errore prodotto da `parseResponse` e, se porta con sé l'elenco `fields`, passalo a `showNewSpecErrors`; altrimenti scrivi il solo messaggio in `#new-spec-status` con la classe `err`. In entrambi i casi la modale resta aperta con i dati inseriti.
+      11. `parseResponse` oggi propaga `code`, `field` (singolare) e `hint` sull'`Error`. Aggiungi **una sola riga** additiva accanto a quelle — `if (data && Array.isArray(data.fields)) err.fields = data.fields;` — senza toccare il messaggio né le proprietà esistenti, così gli altri chiamanti restano invariati.
+      12. Registra gli handler accanto agli altri: click su `#new-spec-btn` → `openNewSpec`; click su `#new-spec-modal-close` e `#new-spec-cancel` → `closeNewSpec`; click sullo sfondo della modale → `closeNewSpec`; `Escape` → `closeNewSpec` quando la modale è visibile; `submit` del form → `onCreateSpec`.
+      13. In `scheduleBoardReload` aggiungi la modale di creazione fra quelle che sospendono il reload automatico, come già fanno `modal`, `prdModal` e `configModal`: un ricaricamento durante la compilazione perderebbe il testo inserito.
+      14. Reimposta `newSpecBusy` e riabilita il submit in un `finally`, così un errore non lascia il form bloccato.
+
+      ## Verify
+      - Avvia il viewer da un workspace con backlog: `cd cli && go run ./cmd/archetipo view --host 127.0.0.1 --port 0 --no-open`.
+      - Percorso da eseguire a mano: apri "New spec", compila titolo/epic/punti, conferma → compare una card `TODO` con il nuovo codice; riapri, invia con titolo vuoto → errore sotto il campo `title` e nessuna nuova card; ripeti la stessa conferma valida due volte → nessun duplicato.
+      - Expect: console del browser senza errori; il comportamento coincide con gli stati dei mockup `docs/mockups/US-031/`.
+
+      ## Done
+      - [ ] AC-1 — la `select` delle epiche contiene solo le epiche del workspace e la modale è inutilizzabile (con avviso) quando non ce ne sono.
+      - [ ] AC-2 — dopo la conferma la board mostra una sola nuova card `TODO` con il codice restituito dal server, e il codice non è mai calcolato lato client.
+      - [ ] AC-3 — gli errori del server compaiono sotto i campi corrispondenti e la modale resta aperta con i dati inseriti.
+      - [ ] AC-4 — il submit è disabilitato mentre la richiesta è in volo e una risposta `created:false` non aggiunge card.
+      - [ ] Nessuna scrittura in `innerHTML` con dati provenienti dal server in questo flusso.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Smoke e2e create-spec sul viewer reale con connector file
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-07
+    body: |-
+      ## Objective
+      Un nuovo smoke guida l'`archetipo view` reale su un workspace di file veri e prova la catena completa: creazione con codice progressivo e stato TODO, riletura dal connector, payload invalido che non tocca il backlog, riconferma che non duplica.
+
+      ## Read
+      - `test/e2e/delete-story-view-smoke.mjs` — struttura da clonare: `parseArgs`, `createRunDir`, `buildCLI`, `runCommand`, `startViewServer`, `waitForHTTP`, `apiJSON`, `stopProcess`, e la stampa finale `PASS: …`.
+      - `package.json` — blocco `scripts`, dove convivono gli altri `test:view-*-smoke`.
+      - `cli/internal/web/spec_create.go` — chiavi di richiesta e risposta della rotta.
+
+      ## Change
+      - Nuovo file `test/e2e/create-spec-view-smoke.mjs`.
+      - `package.json`: aggiungi lo script `"test:view-create-smoke": "node ./test/e2e/create-spec-view-smoke.mjs"` accanto agli altri `test:view-*`.
+      - `AGENTS.md`: non necessario, gli smoke del viewer non sono elencati fra gli scenari di `run.yaml`. Non modificarlo.
+      - Non goal: non aggiungere uno scenario in `test/e2e/run.yaml` (quello è il runner ad agent, non gli smoke HTTP); non modificare gli smoke esistenti.
+
+      ## Steps
+      1. Copia lo scheletro di `delete-story-view-smoke.mjs` cambiando `defaultWorkspaceRoot` in `test/workspaces/create-spec-view-smoke` e adattando `printHelp`.
+      2. `writeSpecsPayload`: semina due spec `US-901` e `US-902` nell'epica `EP-900` con un body valido (contiene `Dimostrazione` e almeno un `- [ ]`), poi `archetipo spec add --file …` nel sandbox.
+      3. Avvia il viewer con `startViewServer(sandboxDir)` e leggi `GET /api/board`: asserisci la presenza di `US-901`/`US-902` e cattura l'elenco delle epiche.
+      4. **AC-2** — `POST /api/spec` con `{epic_code:"EP-900", title:"Creare una spec dalla UI", priority:"MEDIUM", points:3, body:<markdown valido>}`. Asserisci: HTTP 201, `data.created === true`, `data.spec.code === "US-903"`, `data.spec.status === "TODO"`. Poi `GET /api/spec/US-903` e asserisci che `spec.body` sia esattamente il markdown inviato. Infine esegui `archetipo spec show US-903` nel sandbox con `runCommand` e asserisci che l'envelope contenga quel codice: è la prova che il contenuto è rileggibile **dal connector**, non solo dal server web.
+      5. **AC-2 (board)** — `GET /api/board`: la colonna `todo` contiene `US-903` e il totale delle card è cresciuto esattamente di uno.
+      6. **AC-3** — `POST /api/spec` con `title:""` e un body privo di `- [ ]`. Asserisci HTTP 400 (usa `fetch` diretto, non `apiJSON`, che lancia sui non-2xx: aggiungi un helper `postExpectingStatus`), che il corpo contenga `fields` con i nomi `title` e `body`, e che `GET /api/board` mostri lo stesso identico insieme di codici di prima. Verifica inoltre che il file di backlog nel sandbox non contenga alcun `US-904`.
+      7. **AC-4** — ripeti **due volte** la stessa `POST` valida del punto 4. Asserisci che la seconda risposta abbia `created === false` e lo stesso `spec.code`, che `GET /api/board` contenga una sola card `US-903`, e che il file di backlog contenga una sola occorrenza di `US-903`.
+      8. Chiudi il server nel `finally` con `stopProcess` e stampa il riepilogo `PASS: create-spec view smoke test completed.` con sandbox, URL e codice creato.
+      9. Registra lo script in `package.json`.
+
+      ## Verify
+      - Esegui da radice repository: `npm run test:view-create-smoke`
+      - Expect: termina con `PASS: create-spec view smoke test completed.` ed exit code 0. Il baseline dell'armatura smoke è verde (`npm run test:view-delete-smoke` passa), quindi un fallimento qui è un difetto di questa spec, non dell'ambiente.
+
+      ## Done
+      - [ ] AC-2 — provato su file reali: `US-903`, `TODO`, body riletto sia da `GET /api/spec/{code}` sia da `archetipo spec show`.
+      - [ ] AC-3 — provato 400 con `fields` e insieme dei codici del backlog invariato dopo il tentativo invalido.
+      - [ ] AC-4 — provata la riconferma: `created:false`, stesso codice, una sola occorrenza nel file di backlog.
+      - [ ] `package.json` espone `test:view-create-smoke` e lo script termina PASS.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Gate finale — verifiche complete e richiesta di review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Objective
+      L'intero incremento è verificato con i controlli che il repository considera vincolanti, nessun file toccato ha nuove diagnostiche, ogni task del piano risulta `DONE` e solo allora la spec viene mandata in review.
+
+      ## Read
+      - `AGENTS.md` — sezione "Rules for CLI changes": l'elenco esatto dei controlli che la CI esegue.
+      - Il blocco `Baseline` del corpo di questo piano: i risultati misurati prima dell'implementazione.
+
+      ## Change
+      - Nessuna modifica di codice. Se una verifica fallisce, il difetto va corretto nel task che lo ha introdotto e questo gate viene rieseguito da capo.
+
+      ## Steps
+      1. Da `cli/`, esegui in quest'ordine: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`.
+      2. Da radice repository, esegui `npm run test:view-create-smoke` e `npm run test:view-delete-smoke` (il secondo prova che la nuova rotta non ha rotto quella di cancellazione, che condivide server e watcher).
+      3. Lint Go: se `golangci-lint` non è installato, installalo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` e poi esegui `golangci-lint run --timeout 5m ./...` da `cli/`. La baseline non lo ha potuto misurare, quindi il criterio è: nessun problema segnalato sui file introdotti o modificati da questa spec (`cli/internal/web/spec_create.go`, `cli/internal/web/spec_create_test.go`, `cli/internal/web/server.go`). Problemi preesistenti su altri file non bloccano, ma vanno riportati nel messaggio di review.
+      4. Riesegui a mano il percorso della `Dimostrazione` sul viewer (`cd cli && go run ./cmd/archetipo view --host 127.0.0.1 --port 0 --no-open`): creazione riuscita con card `TODO` e codice progressivo, invio incompleto con errori sotto i campi e nessuna card nuova, riconferma senza duplicato. Annota l'esito: è la parte filmabile che `archetipo-review` registrerà.
+      5. Marca **questo** task come `DONE` con `archetipo task done US-031 TASK-09` eseguito da `/Users/stefanoleli/Project/Archetipo`.
+      6. Ricarica la spec con `archetipo spec show US-031` da `/Users/stefanoleli/Project/Archetipo` e verifica che **nessun** task risulti ancora `TODO`.
+      7. Solo se il punto 6 è soddisfatto, esegui `archetipo spec review US-031` da `/Users/stefanoleli/Project/Archetipo`, allegando un riepilogo che elenchi i comandi eseguiti e i loro esiti.
+
+      ## Verify
+      - Comandi: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./...`; poi da radice `npm run test:view-create-smoke && npm run test:view-delete-smoke`; poi `cd cli && golangci-lint run --timeout 5m ./...`.
+      - Expect: `gofmt` nessun output; `go vet` nessun problema; build pulito; `go test` almeno 915 test passati (la baseline) più quelli aggiunti da TASK-02 e TASK-04, con zero fallimenti; entrambi gli smoke terminano `PASS`; `golangci-lint` non riporta problemi sui file toccati da questa spec.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4 — ogni criterio ha la sua evidenza eseguita e verde secondo la Mappa delle evidenze di accettazione.
+      - [ ] `gofmt`, `go vet`, `go build`, `go test` verdi da `cli/`, senza regressioni rispetto ai 915 test della baseline.
+      - [ ] `npm run test:view-create-smoke` e `npm run test:view-delete-smoke` terminano PASS.
+      - [ ] `golangci-lint` eseguito, con zero problemi sui file introdotti o modificati da questa spec.
+      - [ ] Percorso della `Dimostrazione` ripercorso a mano sul viewer e annotato.
+      - [ ] `archetipo spec show US-031` non riporta più alcun task `TODO` **prima** di `archetipo spec review US-031`.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Il connector file rende autorevole la lista epics dichiarata nel backlog
+    type: Fix
+    status: DONE
+    body: |-
+      ## Objective
+
+      Nel connector `file`, un'epica dichiarata in `.archetipo/backlog.yaml` esiste per il workspace anche quando nessuna spec la referenzia: viene restituita da `ReadExistingBacklog` e sopravvive a ogni riscrittura del backlog.
+
+      Risponde al secondo e al terzo bullet di `## Rework Feedback`, che chiedono di risolvere l'epica dalla stessa fonte autorevole usata dalla UI. Questo task costruisce quella fonte; TASK-12 la collega alla rotta.
+
+      ## Read
+
+      - `cli/internal/connector/filefs/connector.go:138-167` — `ReadExistingBacklog`: oggi popola `out.Epics` solo da `seenEpics`, cioè dalle epiche delle spec presenti in `store.Backlog.Order`.
+      - `cli/internal/connector/filefs/connector.go:241-277` — `SaveInitialBacklog`: costruisce un `backlogDoc` nuovo con `Order: []string{}` e nessuna `Epics`, quindi perde le epiche già dichiarate nel file.
+      - `cli/internal/connector/filefs/store.go:25-30` — `backlogDoc`, campo `Epics []domain.Epic \`yaml:"epics,omitempty"\``.
+      - `cli/internal/connector/filefs/store.go:118-132` — `loadStore`: legge `backlog.Epics` dal file, le passa a `readSpecDocs` e poi chiama `normalizeBacklog`.
+      - `cli/internal/connector/filefs/store.go:134-149` — `readSpecDocs(epics)`: usa già la lista dichiarata come fonte dei titoli d'epica quando idrata le spec. È il precedente che rende coerente questo intervento.
+      - `cli/internal/connector/filefs/store.go:373-390` — `normalizeBacklog`: la riga `doc.Epics = doc.Epics[:0]` è il punto esatto in cui le epiche dichiarate vengono cancellate.
+      - `cli/internal/domain/types.go:307-314` — `BacklogSummary`, campo `Epics []Epic`.
+
+      ## Change
+
+      - `cli/internal/connector/filefs/store.go` — in `normalizeBacklog`: sostituire l'azzeramento con l'unione tra le epiche dichiarate in ingresso (`doc.Epics`) e quelle derivate dalle spec. A parità di `Code`, il titolo dichiarato prevale su quello derivato; le epiche derivate non ancora dichiarate vengono aggiunte. L'ordinamento finale per `Code` resta invariato, così il file renderizzato resta deterministico.
+      - `cli/internal/connector/filefs/connector.go` — in `ReadExistingBacklog`: seminare la mappa delle epiche con `store.Backlog.Epics` (saltando le voci con `Code` vuoto) prima di scorrere le spec, e far sì che una spec non sovrascriva il titolo dichiarato di un'epica già presente. `Codes`, `Titles` e `LastCode` non cambiano.
+      - `cli/internal/connector/filefs/connector.go` — in `SaveInitialBacklog`: quando `loadStore()` riesce, riportare `store.Backlog.Epics` dello store esistente nel `backlogDoc` costruito per il nuovo store, così la prima spec scritta non cancella le altre epiche dichiarate. Il ramo `E_PRECONDITION` (backlog assente) resta come oggi e parte senza epiche.
+
+      Non-goal — non fare in questo task:
+
+      - non toccare i connector `github`, `jira`, `inmemory`: derivano le epiche dalle spec e restano com'è;
+      - non toccare `cli/internal/web/`: la rotta è TASK-12;
+      - non cambiare `domain.BacklogSummary` né il formato YAML del backlog (nessun nuovo campo, nessun cambio di schema o `version`);
+      - non introdurre un ordinamento diverso da quello per `Code` già presente.
+
+      ## Steps
+
+      1. In `normalizeBacklog`, sostituire il blocco `doc.Epics = doc.Epics[:0]` + append della sola mappa derivata con: costruzione di una mappa `map[string]domain.Epic` seminata da `doc.Epics` (chiave `Code`, voci con `Code == ""` scartate), poi merge delle epiche derivate dalle spec aggiungendo solo i `Code` non ancora presenti; infine riscrittura di `doc.Epics` dalla mappa e `sort.Slice` per `Code` come già fatto oggi.
+      2. In `ReadExistingBacklog`, seminare `seenEpics` da `store.Backlog.Epics` prima del ciclo su `store.Backlog.Order`, e nel ciclo assegnare `seenEpics[spec.Epic.Code]` solo se la chiave non è già presente, così il titolo dichiarato vince.
+      3. In `SaveInitialBacklog`, catturare lo store caricato nel ramo `err == nil` (oggi è scartato dopo il controllo `len(store.Specs) > 0`) e usarne `Backlog.Epics` come valore iniziale del campo `Epics` del `backlogDoc` passato a `normalizeBacklog`. Copiare la slice, non condividerla.
+      4. Verificare che i tre punti restino coerenti fra loro: `loadStore` → `normalizeBacklog` non deve più perdere nulla, e un round-trip lettura/scrittura di un backlog con un'epica dichiarata e priva di spec deve restituire lo stesso `epics:`.
+      5. Eseguire `gofmt -w` sui due file modificati.
+
+      ## Verify
+
+      - Working directory: `cli/`
+      - Run: `gofmt -l .` — Expect: nessun output (baseline: nessun output).
+      - Run: `go build ./...` — Expect: compila senza errori (baseline: verde).
+      - Run: `go vet ./internal/connector/...` — Expect: nessun problema (baseline: verde su tutto il modulo).
+      - Run: `go test ./internal/connector/...` — Expect: tutti i pacchetti passano, conformance inclusa (baseline: verde). Nessun nuovo fallimento rispetto alla baseline è ammesso.
+
+      ## Done
+
+      - [ ] AC-1 — `ReadExistingBacklog` del connector `file` restituisce un'epica dichiarata in `backlog.yaml` anche quando nessuna spec la referenzia, con il titolo dichiarato.
+      - [ ] Una scrittura sul backlog (`AppendSpecs` o `SaveInitialBacklog`) non rimuove più dalle `epics:` un'epica dichiarata e priva di spec.
+      - [ ] `gofmt -l .` senza output, `go build ./...` e `go vet ./internal/connector/...` puliti, `go test ./internal/connector/...` verde: i file modificati non aggiungono diagnostiche rispetto alla baseline.
+
+      ## Blockers
+
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Unit test del connector file sulla persistenza delle epiche dichiarate
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+
+      Provare, al livello del connector `file`, che un'epica dichiarata e priva di spec è visibile e sopravvive alla scrittura del backlog — cioè che il difetto corretto in TASK-10 non può rientrare silenziosamente alla prima riscrittura di `backlog.yaml`.
+
+      ## Read
+
+      - `cli/internal/connector/filefs/filefs_test.go:15-30` — helper di costruzione del connector su `t.TempDir()` (`cfg.File.Backlog`, `cfg.ProjectRoot`): riusare esattamente quella forma, non inventarne una nuova.
+      - `cli/internal/connector/filefs/filefs_test.go:190-260` — esempi già presenti di test che scrivono con `SaveInitialBacklog` e rileggono lo store.
+      - `cli/internal/connector/filefs/connector.go` e `store.go` — le funzioni modificate da TASK-10.
+      - `cli/internal/domain/types.go:307-314` — `BacklogSummary`.
+
+      ## Change
+
+      - `cli/internal/connector/filefs/filefs_test.go` — aggiungere due funzioni di test. Nessun file di produzione va toccato in questo task.
+
+      Non-goal: non modificare i test esistenti, non toccare `cli/internal/web/`, non aggiungere helper esportati al package di produzione per rendere il test più comodo.
+
+      ## Steps
+
+      1. Aggiungere `TestReadExistingBacklogIncludesDeclaredEpics`: scrivere a mano un `.archetipo/backlog.yaml` nella `t.TempDir()` con `schema`/`version` correnti, una `epics:` che dichiara `EP-900` (con almeno una spec) ed `EP-901` (senza alcuna spec), e la `order:` con la sola spec di `EP-900`; scrivere il file spec corrispondente nella directory delle spec attesa dal connector (ricavare il layout da `loadStore`/`readSpecDocs`, non indovinarlo). Chiamare `ReadExistingBacklog` e asserire che `out.Epics` contiene sia `EP-900` sia `EP-901`, e che il titolo di `EP-901` è quello dichiarato.
+      2. Aggiungere `TestAppendSpecsPreservesDeclaredEpics`: partendo dallo stesso stato, chiamare `AppendSpecs` con una nuova spec su `EP-900`, poi rileggere il `backlog.yaml` dal disco e asserire che la sezione `epics:` contiene ancora `EP-901`. Asserire sul file riletto, non su un valore in memoria: è la riscrittura del file il punto in cui il difetto si manifestava.
+      3. In entrambi i test verificare anche il caso simmetrico che deve restare invariato: un'epica presente solo sulle spec e non dichiarata continua a comparire in `out.Epics`.
+      4. `gofmt -w` sul file di test.
+
+      ## Verify
+
+      - Working directory: `cli/`
+      - Run: `go test ./internal/connector/filefs/... -run 'DeclaredEpics' -v` — Expect: entrambi i test nuovi passano; su un albero senza le modifiche di TASK-10 fallirebbero, ed è questo che li rende evidenza e non decorazione.
+      - Run: `go test ./internal/connector/...` — Expect: verde, conformance inclusa (baseline: verde).
+      - Run: `gofmt -l .` — Expect: nessun output.
+
+      ## Done
+
+      - [ ] AC-1 — esiste un test che fallisce se `ReadExistingBacklog` smette di restituire un'epica dichiarata e priva di spec.
+      - [ ] Esiste un test che rilegge `backlog.yaml` dal disco dopo `AppendSpecs` e fallisce se la riscrittura cancella un'epica dichiarata.
+      - [ ] `go test ./internal/connector/...` verde e `gofmt -l .` senza output.
+
+      ## Blockers
+
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: POST /api/spec risolve l'epica dalla stessa chiamata che alimenta la UI
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+
+      `handleCreateSpec` accetta esattamente le epiche che `GET /api/board` offre alla `select` del form, perché entrambe le rotte le ricavano dalla stessa chiamata `ReadExistingBacklog`. La prima spec di un'epica dichiarata e ancora priva di spec diventa creabile dalla UI.
+
+      Risponde al secondo bullet di `## Rework Feedback` e rende falso — quindi da riscrivere — il commento citato dal terzo bullet.
+
+      ## Read
+
+      - `cli/internal/web/spec_create.go:128-205` — `handleCreateSpec`: oggi legge `FetchBacklogItems` e passa le spec a `resolveEpic`; il commento alle righe 147-151 dichiara il ramo `SaveInitialBacklog` "defensive path, not reachable".
+      - `cli/internal/web/spec_create.go:207-221` — `resolveEpic(specs []domain.Spec, code string) (domain.Epic, bool)`.
+      - `cli/internal/web/handlers.go:55-71` — la board: `s.conn.ReadExistingBacklog(ctx)` e `boardView{Epics: summary.Epics}`. È la fonte con cui allinearsi.
+      - `cli/internal/web/assets/app.js:2787-2792` — la `select` del form legge `boardSnapshot.epics`; conferma che il lato client non cambia.
+      - `cli/internal/connector/filefs/connector.go` — `ReadExistingBacklog` come modificata da TASK-10.
+      - `cli/internal/iox` — `CodePreconditionMissing`, già gestito nella rotta per il backlog assente.
+
+      ## Change
+
+      - `cli/internal/web/spec_create.go` — `resolveEpic` cambia firma in `resolveEpic(epics []domain.Epic, code string) (domain.Epic, bool)` e cerca per `Code` con lo stesso confronto case-insensitive e trimmato di oggi; il titolo continua a venire dal workspace.
+      - `cli/internal/web/spec_create.go` — `handleCreateSpec` aggiunge una chiamata a `s.conn.ReadExistingBacklog(ctx)` con la stessa tolleranza a `E_PRECONDITION` già applicata a `FetchBacklogItems` (backlog assente = workspace vuoto, non errore), e passa `summary.Epics` a `resolveEpic`. `FetchBacklogItems` resta e continua ad alimentare `nextSpecCode` e `findExistingSpec`.
+      - `cli/internal/web/spec_create.go:147-151` — riscrivere il commento: il ramo `SaveInitialBacklog` è raggiungibile quando il backlog dichiara epiche ma non contiene ancora spec, ed è coperto da un test (TASK-13). Nessun altro commento va toccato.
+
+      Non-goal — non fare in questo task:
+
+      - non modificare `cli/internal/web/assets/` (`index.html`, `app.css`, `app.js`): la UI resta identica, la `select` continua a leggere `boardSnapshot.epics`;
+      - non cambiare il codice d'errore `SPEC_EPIC_UNKNOWN`, il campo `epic_code`, lo status `400` né la forma di `writeCreateSpecFieldErrors`: il contratto d'errore verso il client resta invariato;
+      - non toccare l'ordine delle operazioni della rotta: la risoluzione dell'epica resta prima del controllo duplicato e prima della validazione;
+      - non consentire in nessun caso che il titolo dell'epica arrivi dal payload del client.
+
+      ## Steps
+
+      1. Cambiare la firma di `resolveEpic` in `([]domain.Epic, string)`, adattando il corpo: confronto su `strings.ToLower(strings.TrimSpace(epic.Code))`, ritorno `domain.Epic{}, false` su codice vuoto o non trovato.
+      2. In `handleCreateSpec`, dopo la lettura di `existing` via `FetchBacklogItems`, aggiungere la lettura del sommario: `summary, err := s.conn.ReadExistingBacklog(ctx)`; su errore, applicare lo stesso pattern `errors.As(&ce) && ce.Code == iox.CodePreconditionMissing` → sommario vuoto, altrimenti `writeError(w, err); return`.
+      3. Sostituire `resolveEpic(existing, req.EpicCode)` con `resolveEpic(summary.Epics, req.EpicCode)`.
+      4. Riscrivere il commento delle righe 147-151 in modo che descriva lo stato reale: un backlog assente resta un backlog vuoto, e il ramo `SaveInitialBacklog` è raggiungibile con epiche dichiarate e nessuna spec.
+      5. Aggiornare il commento di `TestCreateSpecOnEmptyBacklog` in `cli/internal/web/spec_create_test.go:322-330`, che oggi motiva il `400` con "an empty workspace has no epics": la motivazione corretta è che il workspace non ha né spec né epiche dichiarate. L'asserzione del test non cambia.
+      6. `gofmt -w` sui file modificati.
+
+      ## Verify
+
+      - Working directory: `cli/`
+      - Run: `gofmt -l .` — Expect: nessun output.
+      - Run: `go build ./...` — Expect: compila; la firma di `resolveEpic` non ha altri chiamanti oltre a `handleCreateSpec`, quindi un errore di compilazione qui segnala un chiamante non previsto da cercare.
+      - Run: `go vet ./internal/web/...` — Expect: nessun problema.
+      - Run: `go test ./internal/web/...` — Expect: verde, `TestCreateSpecRejectsUnknownEpic` e `TestCreateSpecOnEmptyBacklog` inclusi (baseline: verde). Nessun nuovo fallimento ammesso.
+
+      ## Done
+
+      - [ ] AC-1 — la rotta risolve l'epica da `ReadExistingBacklog`, la stessa chiamata che alimenta `GET /api/board`: i valori offerti dalla UI e quelli accettati dal server provengono per costruzione dalla stessa lista.
+      - [ ] Il titolo dell'epica continua a essere preso dal workspace e mai dal payload del client.
+      - [ ] Il commento su `SaveInitialBacklog` non dichiara più il ramo irraggiungibile, e il commento di `TestCreateSpecOnEmptyBacklog` descrive la causa reale del `400`.
+      - [ ] `gofmt -l .` senza output, `go vet ./internal/web/...` pulito, `go test ./internal/web/...` verde.
+
+      ## Blockers
+
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Test di integrazione HTTP su epica dichiarata senza spec e su backlog senza spec
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-12
+    body: |-
+      ## Objective
+
+      Provare al livello HTTP, con il connector `file` reale, che una spec è creabile su un'epica dichiarata nel backlog e priva di spec, e che il ramo `SaveInitialBacklog` — quello che il commento dichiarava irraggiungibile — è raggiunto e produce una spec rileggibile dal connector.
+
+      Chiude esplicitamente le due richieste di test del secondo e terzo bullet di `## Rework Feedback`.
+
+      ## Read
+
+      - `cli/internal/web/spec_create_test.go:122-165` — helper `validCreateReq`, `postSpec`, `decodeCreateView`, `decodeFieldErrors`: riusarli senza duplicarli.
+      - `cli/internal/web/spec_create_test.go:168-207` — `TestCreateSpecAssignsProgressiveCode`: modello dell'oracolo AC-2 (rilettura via `GET /api/spec/{code}`).
+      - `cli/internal/web/spec_create_test.go:322-344` — `TestCreateSpecOnEmptyBacklog`: il contratto di regressione che deve restare `400`.
+      - `cli/internal/web/handlers_test.go:24-44` — `newTestServer` e `seedSpecs`: usano `inmemory`, che **non** sa rappresentare un'epica dichiarata senza spec. Servono un server e un connector `filefs`.
+      - `cli/internal/connector/filefs/connector.go:28` — `filefs.New(cfg config.Config) *Connector`.
+      - `cli/internal/config/config.go:127-149` — `config.Default()`; va impostato `ProjectRoot` sulla `t.TempDir()`.
+      - `cli/internal/web/handlers.go:55-71` — `GET /api/board`, usata come seconda metà dell'oracolo AC-1.
+      - `cli/internal/connector/filefs/store.go:118-149` — layout su disco di `backlog.yaml` e delle spec, per scrivere una fixture corretta.
+
+      ## Change
+
+      - `cli/internal/web/spec_create_test.go` — aggiungere un helper locale che costruisce un `*Server` su un connector `filefs` in `t.TempDir()`, e due funzioni di test. Nessun file di produzione va toccato.
+
+      Non-goal: non modificare `newTestServer`/`seedSpecs` in `handlers_test.go` (altri test dipendono da `inmemory`), non aggiungere metodi di seeding al connector `inmemory`, non introdurre dipendenze nuove nel package.
+
+      ## Steps
+
+      1. Aggiungere un helper `newFileTestServer(t *testing.T) (*Server, *filefs.Connector, string)`: `dir := t.TempDir()`, `cfg := config.Default()`, `cfg.ProjectRoot = dir`, `conn := filefs.New(cfg)`, `srv, err := NewServer(conn, cfg, nil, "127.0.0.1:0")`. Restituire anche `dir` per poter scrivere e rileggere la fixture.
+      2. Aggiungere un helper che scrive la fixture di backlog: un `.archetipo/backlog.yaml` con `schema`/`version` correnti e una `epics:` che dichiara `EP-900` ed `EP-901`, con `order:` eventualmente vuota. Derivare il layout esatto da `loadStore`/`readSpecDocs`, non indovinarlo; se serve una spec, scriverne il file nella directory delle spec attesa dal connector.
+      3. Aggiungere `TestCreateSpecOnDeclaredEpicWithoutSpecs`: fixture con `EP-900` che ha già una spec ed `EP-901` dichiarata e senza spec. Prima asserire l'offerta: `GET /api/board` elenca `EP-901` tra `epics`. Poi `POST /api/spec` con `epic_code: "EP-901"` (e un `title` diverso da quelli presenti, per non incrociare il controllo duplicato) → `201`, `created: true`, `spec.epic.code == "EP-901"` e `spec.epic.title` uguale al titolo **dichiarato nel backlog**. Asserire esplicitamente che il titolo restituito non è quello eventualmente inviato nel payload.
+      4. Aggiungere `TestCreateSpecOnBacklogWithEpicsAndNoSpecs`: fixture con `epics:` che dichiara `EP-900` ed `EP-901` e **zero** spec. `POST /api/spec` su `EP-900` → `201`, `created: true`, `spec.code == "US-001"`. Poi gli oracoli: `GET /api/spec/US-001` rilegge titolo e corpo dal connector; `conn.FetchBacklogItems(ctx, "")` restituisce esattamente 1 spec in stato `TODO`; rileggendo `backlog.yaml` dal disco, `EP-901` è ancora dichiarata. Nel corpo del test, un commento breve deve dire che questo è il ramo `SaveInitialBacklog` di `handleCreateSpec`.
+      5. Verificare che `TestCreateSpecOnEmptyBacklog` continui a passare invariato: workspace senza spec **e** senza epiche dichiarate → `400` su `epic_code`, backlog invariato.
+      6. `gofmt -w` sul file di test.
+
+      ## Verify
+
+      - Working directory: `cli/`
+      - Run: `go test ./internal/web/... -run 'CreateSpec' -v` — Expect: i due test nuovi passano; `TestCreateSpecOnDeclaredEpicWithoutSpecs` fallirebbe su un albero senza TASK-10 e TASK-12, con `400` e `SPEC_EPIC_UNKNOWN` sul campo `epic_code`. Tutti i test `CreateSpec` preesistenti restano verdi, `TestCreateSpecOnEmptyBacklog` incluso.
+      - Run: `go test ./internal/web/...` — Expect: verde (baseline: verde).
+      - Run: `gofmt -l .` — Expect: nessun output.
+
+      ## Done
+
+      - [ ] AC-1 — un test di integrazione HTTP crea una spec su un'epica dichiarata nel backlog e priva di spec, e nello stesso test `GET /api/board` prova che quell'epica era davvero fra i valori offerti alla UI.
+      - [ ] AC-1 — il test asserisce che il titolo dell'epica restituito è quello dichiarato dal workspace, non quello inviato dal client.
+      - [ ] AC-2 — un test di integrazione HTTP copre il ramo `SaveInitialBacklog` (backlog con epiche dichiarate e nessuna spec): la spec creata è `US-001`, è in stato `TODO`, è rileggibile via `GET /api/spec/US-001`, il backlog ne contiene esattamente una e le altre epiche dichiarate sopravvivono.
+      - [ ] `TestCreateSpecOnEmptyBacklog` passa invariato: un workspace senza spec né epiche dichiarate continua a rifiutare con `400` su `epic_code`.
+      - [ ] `go test ./internal/web/...` verde e `gofmt -l .` senza output.
+
+      ## Blockers
+
+      None.
+    ref: TASK-13
+  - id: TASK-14
+    title: Rappresentare il boundary docs nella coverage di engineering/code-map
+    type: Fix
+    status: DONE
+    body: |-
+      ## Objective
+
+      `archetipo wiki --project-root . validate --profile bootstrap` non restituisce più alcun finding di severità `error`: il boundary `docs`, comparso perché `docs/mockups/` contiene file JavaScript, è rappresentato nella `coverage` di `engineering/code-map` e la sezione narrativa corrispondente lo descrive.
+
+      Risponde al primo bullet di `## Rework Feedback`, che è un blocco esplicito all'approvazione della spec.
+
+      ## Read
+
+      - `docs/wiki/engineering/code-map.md:31-68` — sezione `coverage` del frontmatter: boundary `.`, `cli`, `npm`, `scripts`, `skills`, `test` e la candidate `trip` marcata `excluded` con `note`. Quest'ultima è il modello formale da imitare.
+      - `docs/wiki/engineering/code-map.md:102-105` — sezione `<!-- archetipo:wiki section=coverage -->`, che oggi elenca i boundary uno per uno e afferma "Il frontmatter copre tutti i boundary restituiti dall'ultima ispezione".
+      - `cli/internal/wiki/wiki.go:296-322` — regole di validazione della coverage: `kind` ∈ {`boundary`, `capability`}; `status` ∈ {`mapped`, `partial`, `excluded`}; `mapped` richiede almeno un `page id`; `partial` e `excluded` richiedono una `note` non vuota.
+      - `cli/internal/wiki/wiki.go:512-535` — `WIKI_UNCOVERED_BOUNDARY`: la chiave confrontata è `"boundary:" + boundary.Path`.
+      - `.archetipo/shared-runtime.md`, sezione **Wiki page state transitions** — modificare una pagina `reviewed` la porta a `stale`; l'unica transizione verso `generated` è `archetipo wiki reset`.
+
+      Contesto già verificato in fase di planning, da non rifare: `archetipo wiki --project-root . inspect` restituisce il boundary `docs` di `kind: source` con 2 file, rappresentati da `docs/mockups/US-030/app.js` e `docs/mockups/US-031/app.js`; non esistono candidate oltre a `trip`.
+
+      ## Change
+
+      - `docs/wiki/engineering/code-map.md` — nel frontmatter `coverage`, aggiungere una voce `kind: boundary`, `path: docs`, `status: excluded` con una `note` che spieghi la ragione reale: `docs/` contiene il PRD, la Wiki stessa e i prototipi isolati prodotti da `archetipo-design` in `docs/mockups/`; è documentazione e materiale di prototipazione, non codice di prodotto distribuito, e l'ispezione lo classifica come `source` solo perché i mockup includono file JavaScript.
+      - `docs/wiki/engineering/code-map.md` — nella sezione `<!-- archetipo:wiki section=coverage -->`, aggiungere `docs` all'elenco narrativo con la stessa motivazione, così che il testo non contraddica il frontmatter.
+
+      Non-goal — non fare in questo task:
+
+      - non marcare `docs` come `mapped`: nessuna pagina della Wiki descrive `docs/` come responsabilità del sistema, e un `mapped` verso `overview` sarebbe una copertura di comodo che afferma il falso;
+      - non modificare nessun'altra pagina della Wiki, né `index.md` né `log.md` a mano (le rigenera la CLI);
+      - non modificare a mano il blocco `review:` del frontmatter: usare `archetipo wiki reset`;
+      - non toccare `docs/mockups/`, che è il materiale prodotto da questa spec e deve restare;
+      - non cercare di eliminare i 7 finding `WIKI_EVIDENCE_CHANGED`: sono warning preesistenti su pagine `reviewed` la cui evidenza si è mossa, e la loro riconciliazione appartiene all'accettazione.
+
+      ## Steps
+
+      1. Eseguire come primo passo, da `/Users/stefanoleli/Project/Archetipo`: `archetipo wiki --project-root /Users/stefanoleli/Project/Archetipo reset engineering/code-map`. Va fatto **prima** di modificare il file: la pagina è `reviewed`, e una modifica senza reset la porterebbe a `stale`.
+      2. Aggiungere la voce `docs` alla `coverage` del frontmatter, mantenendo l'ordinamento e lo stile YAML già presenti nel file (indentazione a 4 spazi sotto `coverage:`, come le voci esistenti).
+      3. Aggiornare la sezione narrativa `archetipo:wiki section=coverage` in modo che elenchi anche `docs` e ne dia la motivazione, coerentemente con la `note` del frontmatter.
+      4. Verificare con `archetipo wiki --project-root /Users/stefanoleli/Project/Archetipo status` che `engineering/code-map` riporti `state: generated`. Se riporta `stale`, il reset è stato saltato o è stato fatto un edit successivo: rieseguire `archetipo wiki reset engineering/code-map`, che è idempotente rispetto all'ordine.
+      5. Rieseguire la validazione e confrontarla con la baseline registrata.
+
+      ## Verify
+
+      - Working directory: `/Users/stefanoleli/Project/Archetipo`
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/Archetipo validate --profile bootstrap` — Expect: nessun finding con `"severity":"error"`. In particolare `WIKI_UNCOVERED_BOUNDARY` su `docs` è sparito, e non compaiono `WIKI_INVALID_COVERAGE` né `WIKI_UNKNOWN_COVERAGE`. I 7 finding `WIKI_EVIDENCE_CHANGED` di severità `warning` restano come nella baseline e `data.ok` resta `false` per causa loro: è atteso, il criterio d'uscita è zero `error`.
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/Archetipo status` — Expect: `engineering/code-map` con `state: generated`.
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/Archetipo inspect` — Expect: il boundary `docs` è ancora presente; serve a confermare che la copertura è stata allineata all'ispezione e non che l'ispezione è cambiata sotto.
+
+      ## Done
+
+      - [ ] `archetipo wiki validate --profile bootstrap` non restituisce alcun finding di severità `error`: il blocco globale all'approvazione della spec è rimosso.
+      - [ ] Il boundary `docs` è rappresentato in `coverage` come `excluded` con una `note` che ne dà la ragione, e la sezione narrativa `archetipo:wiki section=coverage` lo elenca coerentemente.
+      - [ ] `engineering/code-map` riporta `state: generated` in `archetipo wiki status`, ottenuto con `archetipo wiki reset` e non con una modifica manuale del blocco `review:`.
+      - [ ] Nessun'altra pagina Wiki è stata modificata.
+
+      ## Blockers
+
+      None.
+    ref: TASK-14
+  - id: TASK-15
+    title: Gate finale del rework — verifiche complete e richiesta di review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+      - TASK-11
+      - TASK-12
+      - TASK-13
+      - TASK-14
+    body: |-
+      ## Objective
+
+      Provare che il ciclo di rework ha chiuso tutti e tre i rilievi della review senza introdurre regressioni, e riportare la spec in review solo dopo che ogni task del piano risulta `DONE`.
+
+      ## Read
+
+      - `## Rework Feedback` nel corpo della spec (`archetipo spec show US-031`) — i tre bullet da chiudere.
+      - La sezione **Baseline del ciclo di rework** nel corpo di questo piano — le esatte aspettative con cui confrontare gli esiti.
+      - `AGENTS.md`, sezione "Rules for CLI changes" — l'elenco dei controlli che la CI esegue.
+
+      ## Change
+
+      Nessuna modifica di codice, di test o di documentazione. Se una verifica fallisce, la correzione appartiene al task che la produce, non a questo gate.
+
+      ## Steps
+
+      1. Eseguire, nell'ordine, i comandi della sezione **Verify** e confrontare ogni esito con la baseline registrata nel piano.
+      2. Se `golangci-lint` non è installato, installarlo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` ed eseguirlo. Se l'installazione non è possibile in questo ambiente, registrare esplicitamente lo skip e la ragione invece di dichiarare il controllo passato.
+      3. Verificare che i file modificati dal rework — `cli/internal/connector/filefs/connector.go`, `cli/internal/connector/filefs/store.go`, `cli/internal/connector/filefs/filefs_test.go`, `cli/internal/web/spec_create.go`, `cli/internal/web/spec_create_test.go`, `docs/wiki/engineering/code-map.md` — non aggiungano diagnostiche rispetto alla baseline: `gofmt -l .` senza output e `go vet ./...` pulito lo dimostrano per i file Go, `wiki validate` per la pagina Wiki.
+      4. Marcare questo task `DONE` con `archetipo task done US-031 TASK-15`, eseguito da `/Users/stefanoleli/Project/Archetipo`.
+      5. Ricaricare la spec con `archetipo spec show US-031` da `/Users/stefanoleli/Project/Archetipo` e verificare che **nessun** task risulti `TODO`: i 9 task portati dal ciclo precedente e i 6 del rework devono essere tutti `DONE`.
+      6. Solo a quel punto eseguire `archetipo spec review US-031` da `/Users/stefanoleli/Project/Archetipo`.
+
+      ## Verify
+
+      - Working directory: `cli/`
+        - Run: `gofmt -l .` — Expect: nessun output (baseline: nessun output).
+        - Run: `go vet ./...` — Expect: nessun problema (baseline: pulito).
+        - Run: `go build ./...` — Expect: compila (baseline: verde).
+        - Run: `go test ./...` — Expect: tutti i pacchetti passano (baseline: verde). Nessun nuovo fallimento è ammesso.
+        - Run: `golangci-lint run --timeout 5m ./...` — Expect: 0 issue. Baseline: **non eseguito**, binario assente. Se resta non installabile, registrare lo skip e la ragione; non scrivere che è passato.
+      - Working directory: `/Users/stefanoleli/Project/Archetipo`
+        - Run: `npm run test:view-create-smoke` — Expect: `PASS: create-spec view smoke test completed.` (baseline: `PASS`). Copre AC-2, AC-3 e AC-4 sul viewer reale con connector `file`.
+        - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/Archetipo validate --profile bootstrap` — Expect: nessun finding di severità `error`; i 7 `WIKI_EVIDENCE_CHANGED` di severità `warning` restano come nella baseline.
+        - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/Archetipo status` — Expect: `engineering/code-map` con `state: generated`.
+        - Run: `archetipo spec show US-031` — Expect: nessun task in stato `TODO`.
+
+      ## Done
+
+      - [ ] AC-1 — `go test ./internal/web/... -run CreateSpec` e `go test ./internal/connector/filefs/... -run DeclaredEpics` passano: un'epica dichiarata e priva di spec è offerta dalla board, accettata dalla rotta e sopravvive alla scrittura del backlog.
+      - [ ] AC-2 — il ramo `SaveInitialBacklog` è coperto da un test che rilegge la spec creata dal connector, e `npm run test:view-create-smoke` stampa `PASS`.
+      - [ ] AC-3 — lo smoke conferma che un payload invalido produce errori di campo senza modificare il backlog (regressione, invariata rispetto al ciclo precedente).
+      - [ ] AC-4 — lo smoke conferma che una conferma ripetuta non crea una seconda spec (regressione, invariata rispetto al ciclo precedente).
+      - [ ] Primo bullet di rework chiuso: `wiki validate --profile bootstrap` senza finding `error`, `engineering/code-map` in `state: generated`.
+      - [ ] Secondo e terzo bullet di rework chiusi: la rotta risolve l'epica dalla stessa fonte della UI, il commento sull'irraggiungibilità è stato sostituito e il ramo è coperto da un test.
+      - [ ] `gofmt -l .` senza output, `go vet ./...`, `go build ./...` e `go test ./...` verdi; `golangci-lint` a 0 issue oppure skip registrato con la ragione.
+      - [ ] Questo task è `DONE`, `archetipo spec show US-031` non mostra alcun task `TODO`, e solo dopo questa verifica è stato eseguito `archetipo spec review US-031`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-15

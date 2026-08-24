@@ -1,0 +1,627 @@
+schema: archetipo/plan/v2
+spec_code: US-027
+body: |-
+  # US-027: Conoscere le azioni disponibili nel Template — Piano di implementazione
+
+  **Prodotto da:** Team di pianificazione ARchetipo
+  **Data:** 2026-08-16
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-004 — Workspace predisposti ai Template
+  **Priorità:** MEDIUM | **Punti:** 3
+  **Bloccata da:** US-026 (già `DONE`: il package `cli/internal/template` e il blocco `template:` nella configurazione esistono e sono in `main`)
+
+  **User Story**
+  Come utilizzatore di un workspace ARchetipo, voglio conoscere le azioni offerte dal Template per lo stato corrente di una spec, così da scegliere il risultato desiderato senza conoscere il nome interno delle skill.
+
+  **Criteri di accettazione**
+  - AC-1 — Il Template espone per ogni azione un identificativo stabile, un'etichetta utente e la skill associata.
+  - AC-2 — Per una spec `TODO`, ARchetipo restituisce soltanto le azioni ammesse in quello stato.
+  - AC-3 — Cambiando lo stato della spec, l'elenco delle azioni viene ricalcolato dal Template.
+  - AC-4 — L'assenza di azioni ammesse viene rappresentata come elenco vuoto e non come errore.
+
+  **Fuori ambito**
+  Editor grafico del processo, condizioni arbitrarie, automazioni temporali e transizioni tra più Template.
+
+  ---
+
+  ## Soluzione tecnica
+
+  US-026 ha reso il processo un oggetto dichiarato: il Template possiede la lista delle skill e gli stati del workflow. US-027 lo estende da «quali skill e quali stati» a «quali azioni, e in quali stati sono ammesse», e aggiunge una sola superficie di lettura che combina lo stato reale di una spec con quella definizione. Il package `cli/internal/template` resta l'unico punto in cui il processo è scritto; la CLI non acquisisce alcuna regola di processo propria.
+
+  - **Tipo `template.Action`** in `cli/internal/template/template.go`: `ID` (identificativo stabile), `Label` (etichetta utente), `Skill` (skill che realizza l'azione), `Statuses []domain.Status` (stati in cui l'azione è ammessa). Il Template builtin `fabbrica-del-software` dichiara tre azioni, nell'ordine del processo: `plan` / «Pianifica» / `archetipo-plan` per `TODO`; `implement` / «Implementa» / `archetipo-implement` per `PLANNED` e `IN PROGRESS`; `review` / «Rivedi» / `archetipo-review` per `REVIEW`. `DONE` non dichiara azioni, ed è il caso reale che rende osservabile AC-4.
+  - **`Template.ActionsFor(status domain.Status) []Action`**: filtra in ordine di dichiarazione e restituisce sempre una slice non-nil, così l'elenco vuoto resta `[]` anche nel JSON dell'envelope e non diventa `null`. Uno stato sconosciuto o vuoto non è un errore: è uno stato senza azioni ammesse.
+  - **`clone()` estesa**: oggi stacca soltanto `Skills`. Deve staccare anche `Actions` e, dentro ogni azione, la slice `Statuses`; senza questo un chiamante che modifica il risultato raggiunge il registry, che è esattamente la proprietà già protetta per `Skills`.
+  - **`archetipo spec actions US-XXX`**: nuova foglia in `cli/internal/cli/spec_cmd.go`, registrata in `newSpecCmd`. Usa `withConnectorCfg` con kind `spec_actions`, legge la spec con `ReadSpecDetail` (una spec inesistente resta `E_PRECONDITION` del connector, invariato), risolve il Template con `template.Resolve(cfg.Template.ID)` e restituisce `{"spec":{"code","status"},"template":{"id","version"},"actions":[...]}`. Un id di Template sconosciuto nella configurazione diventa `E_INVALID_INPUT` con l'elenco degli id validi, con la stessa forma già usata in `init_project_cmd.go:74-81`.
+  - **Versione riportata**: quella del Template risolto, non quella persistita in `.archetipo/config.yaml`. Le azioni provengono dalla definizione risolta in-process, e la decisione accettata esclude qualunque riconciliazione fra versione persistita e versione del binario: riportare la persistita accanto ad azioni che non ne derivano sarebbe una falsa attribuzione. `config show` continua a riportare la selezione persistita, ed è lì che quel dato appartiene.
+  - **Confronto sugli stati canonici** `domain.Status` (`TODO`…`DONE`), non sulle etichette di `workflow.statuses`: il connector restituisce già lo stato canonico ed è lo stesso vocabolario che il Template porta in `Statuses` dopo US-026.
+
+  ### Decisioni architetturali
+
+  **Scelta 1 — Il vocabolario delle azioni del Template è proprio del package `template` e non riusa `execution.ActionID` / `execution.Capability`.**
+
+  - Alternativa valutata: tipizzare `Action.ID` come `execution.ActionID` e aggiungere all'azione la `Capability` richiesta. Riuserebbe un vocabolario esistente e sarebbe tecnicamente possibile (nessun ciclo di import: `execution` non importa `template`).
+  - Scartata perché `execution.RequiredCapability` conosce oggi soltanto `plan` e restituisce `*ActionError` per ogni altra azione: dichiarare `implement` e `review` in quel vocabolario prometterebbe un confine di esecuzione remota che nessun provider implementa. Il costo del riuso sarebbe un contratto falso su un confine di integrazione, non una duplicazione risparmiata.
+  - Trade-off accettato: due vocabolari coesistono, uno descrittivo del processo e uno dell'esecuzione remota. Il vincolo che li tiene allineati è che l'identificativo condiviso resta letteralmente `plan`, così `archetipo spec actions` e `archetipo execution run US-XXX plan` nominano la stessa azione.
+  - Questa scelta **estende** la decisione accettata `decisions/workspace-process-template`, che già prevedeva esplicitamente «le azioni ammesse per ciascuno stato di una spec» come funzionalità successiva. Non nasce un nuovo ADR: si aggiorna quello esistente (sezioni Decisione, Alternative, Conseguenze, Verifica). Nessuna nuova pagina `decisions/` è quindi in `wiki_impact.create`.
+
+  **Scelta 2 — La lettura è per spec (`spec actions US-XXX`), non per stato (`template actions --status`).**
+
+  AC-2 e AC-3 descrivono il ricalcolo al cambiare dello stato di una spec reale: la forma per spec rende quel ricalcolo osservabile senza che il chiamante conosca o dichiari lo stato, ed evita che una seconda sorgente di verità sullo stato entri nell'interfaccia. La forma per stato resta ottenibile in futuro senza rompere questa.
+
+  **Non-goal:** nessuna esecuzione delle azioni, nessun secondo Template, nessuna condizione oltre lo stato, nessuna modifica al vocabolario di `execution`, nessuna azione di ri-pianificazione offerta su `PLANNED` (`spec plan` resta idempotente, ma l'azione offerta dal processo per una spec pianificata è implementare).
+
+  ---
+
+  ## Baseline
+
+  Tutti i comandi sono stati eseguiti prima della pianificazione, da `/Users/stefanoleli/Project/ARchetipo` (i comandi Go dalla sottodirectory `cli/`), sul commit `aff2c2f`.
+
+  | Check | Risultato prima dell'implementazione | Conseguenza per la pianificazione |
+  |---|---|---|
+  | `cd cli && go build ./...` | passa | ogni task può promettere `Expect: compila senza errori` |
+  | `cd cli && go vet ./...` | passa, nessuna segnalazione | i file toccati non devono introdurre nuove segnalazioni |
+  | `gofmt -l cli` | nessun output | i file modificati devono restare formattati; il gate riesegue il comando |
+  | `cd cli && go test ./...` | verde: 709 test in 24 package | il gate finale può promettere verde pieno |
+  | `cd cli && go test ./internal/template/... -count=1` | `ok ... 0.460s` | check focalizzato dei task sul package `template` |
+  | `cd cli && go test ./internal/cli/... -count=1` | `ok ... 3.767s` | check focalizzato dei task sul comando CLI |
+  | `golangci-lint run --timeout 5m ./...` | **non eseguibile**: binario non installato in questo ambiente (`golangci-lint not found`) | prerequisito d'ambiente, non un fallimento del codice. Installazione: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` (richiede rete). Nessun task promette il verde di questo comando: il gate finale lo esegue se disponibile e altrimenti registra esplicitamente l'assenza. CI (`.github/workflows/ci.yml`, job `lint`) lo esegue comunque su ogni PR. |
+
+  Nessun file toccato dal piano presenta diagnostiche preesistenti di compilatore o vet: la baseline è pulita e il piano non ha alcun perimetro di fallimento da preservare.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | Template builtin risolto in-process (`template.Default()`), nessun filesystem | unit Go, package `template` | ogni elemento di `Default().Actions` ha `ID`, `Label` e `Skill` non vuoti; l'insieme atteso è esattamente `plan`/«Pianifica»/`archetipo-plan`, `implement`/«Implementa»/`archetipo-implement`, `review`/«Rivedi»/`archetipo-review`, confrontato con `reflect.DeepEqual` sulla lista completa | TASK-02 |
+  | AC-2 | workspace temporaneo (`t.Chdir(t.TempDir())`) con `US-001` in `TODO` creata da `spec add` | integrazione CLI (binario reale via `cli.Execute`) | `archetipo spec actions US-001` esce 0, envelope `kind = spec_actions`, `data.actions` contiene un solo elemento con `id=plan`, `label=Pianifica`, `skill=archetipo-plan`; nessun altro id compare | TASK-04 (unit di supporto su `ActionsFor(StatusTodo)` in TASK-02) |
+  | AC-3 | la stessa spec portata in `PLANNED` (`spec plan`), `IN PROGRESS` (`spec start`), `REVIEW` (`spec review`) | integrazione CLI | l'elenco letto dopo ogni transizione è rispettivamente `[implement]`, `[implement]`, `[review]`: cambia rispetto alla lettura precedente e coincide con quanto il Template dichiara per quello stato; `data.spec.status` riporta lo stato appena raggiunto | TASK-04 (unit di supporto su tutti gli stati canonici in TASK-02) |
+  | AC-4 | la stessa spec portata in `DONE` (`spec move --to done`) | integrazione CLI | exit code 0, nessun envelope d'errore su stderr, `data["actions"]` decodifica come `[]any` di lunghezza 0 (una type assertion che fallisce su `null` distingue le due forme) | TASK-04 (unit di supporto su `ActionsFor(StatusDone)` non-nil in TASK-02) |
+
+  L'unica sostituzione presente è l'assenza di rete e di connector remoti: il test d'integrazione usa il connector `file` reale su un workspace temporaneo, quindi lo stato letto è quello realmente persistito e il ricalcolo di AC-3 non è simulato da alcun doppio.
+
+  ---
+
+  ## Strategia di test
+
+  La verifica si regge su due livelli complementari: il contratto dichiarativo del Template, che è puro e va verificato nel suo package, e il ricalcolo per stato, che è vero soltanto se parte dallo stato realmente persistito di una spec.
+
+  - **Unit nel package `template`** (`cli/internal/template/template_test.go`): il contenuto della lista di azioni è scritto per esteso, come già fatto per `processSkills`, perché è il contratto che il workspace riceve e cambiarlo deve rompere un test in modo esplicito. Copre AC-1 e, a livello di funzione, tutti e cinque gli stati canonici più uno stato sconosciuto e la stringa vuota (AC-2, AC-3, AC-4), oltre alla non-aliasing di `Actions` e `Statuses`.
+  - **Integrazione CLI** (`cli/internal/cli/cli_test.go`): un solo test attraversa il ciclo di vita completo `TODO → PLANNED → IN PROGRESS → REVIEW → DONE` sullo stesso workspace temporaneo, leggendo le azioni dopo ogni transizione. È il livello che prova davvero AC-2, AC-3 e AC-4, perché nessun doppio si interpone tra lo stato scritto sul disco e l'elenco restituito.
+  - **Casi d'errore**, nello stesso file di integrazione: codice spec assente → `E_INVALID_INPUT` (exit 2, forma già usata da `spec show`); spec inesistente → `E_PRECONDITION` (exit 4, prodotto dal connector `filefs`).
+  - **Forma JSON**: l'asserzione su AC-4 non si accontenta di «lista vuota». `null` e `[]` decodificano diversamente (`nil` contro `[]any{}`), quindi la verifica usa una type assertion a `[]any` che fallisce su `null`, rendendo osservabile la scelta di restituire una slice non-nil.
+  - **Regressione**: `go test ./...` dal package `cli/` nel gate finale, insieme a `go vet ./...`, `go build ./...` e `gofmt -l cli`, cioè gli stessi check del job `lint` e `test` della CI.
+
+  ### Rinuncia agli e2e da browser
+
+  **Motivo:** l'incremento non ha alcuna superficie UI. È un comando CLI che emette un envelope JSON; non attraversa route HTTP, autenticazione, navigazione o comportamento specifico del browser. Il viewer locale non è toccato.
+  **Livello di evidenza usato al suo posto:** test d'integrazione Go che eseguono la CLI reale (`cli.Execute`) contro un workspace su filesystem, cioè lo stesso livello con cui il repository verifica già `init`, `config show` e le transizioni di stato.
+  **Video dimostrativo:** non atteso. `e2e.record_demo_video` è `false` in `.archetipo/config.yaml`; la dimostrazione della spec è una sequenza di comandi CLI, riproducibile dal revisore in accettazione senza registrazione.
+
+  ---
+
+  ## Impatto Wiki
+
+  ```yaml
+  wiki_impact:
+    read: [decisions/workspace-process-template, engineering/code-map, architecture/context-map, overview]
+    update: [decisions/workspace-process-template, engineering/code-map, architecture/context-map]
+    create: []
+  ```
+
+  La scoperta è stata fatta con `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo affected` sui path attesi (`cli/internal/template/template.go`, `cli/internal/template/template_test.go`, `cli/internal/cli/spec_cmd.go`, `cli/internal/cli/cli_test.go`, `README.md`, `README.it.md`), che ha restituito quattro candidate. La decisione pagina per pagina:
+
+  - **`decisions/workspace-process-template` → update.** La decisione accettata descrive un Template che possiede skill e stati e annuncia le azioni per stato come funzionalità successiva. Dopo US-027 il Template possiede anche le azioni e il loro vincolo di stato, ed è stata scartata un'alternativa reale (riusare il vocabolario di `execution`): il contenuto della decisione cambia davvero.
+  - **`engineering/code-map` → update.** La riga «Template di processo del workspace» elenca gli entry point e la verifica di quel processo. Con la nuova foglia `spec actions` in `spec_cmd.go` e i test di integrazione dedicati, entry point e verifica non sono più quelli descritti.
+  - **`architecture/context-map` → update.** La pagina afferma che un Template dichiara «quali skill un workspace possiede e quali stati usa il suo workflow». Dopo US-027 dichiara anche quali azioni sono ammesse in ciascuno stato, ed è questo che permette a un client di scegliere una skill senza conoscerne il nome: è una modifica del confine descritto, non una co-citazione.
+  - **`overview` → nessun impegno.** È stata restituita perché traccia `README.md`. Le sue affermazioni (scopo, attori, stack, perimetro) restano vere dopo l'aggiunta di una riga alla tabella dei comandi, quindi resta una candidata affected-only da riconciliare esplicitamente in accettazione e non entra nel contratto di documentazione.
+
+  Ogni pagina in `update` ha un task dedicato che la resetta come primo passo con `archetipo wiki --project-root {data.workdir} reset <page-id>`: modificare una pagina `reviewed` deriva `stale`, e `reset` è l'unica transizione verso `generated`. Non modificare a mano il blocco `review`: usare `archetipo wiki reset`.
+
+  ---
+
+  _Piano prodotto da ARchetipo Planning — 2026-08-16_
+tasks:
+  - id: TASK-01
+    title: Dichiarare le azioni del Template e il filtro per stato in cli/internal/template/template.go
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Il Template `fabbrica-del-software` dichiara le proprie azioni con identificativo, etichetta, skill e stati ammessi, ed espone un filtro per stato che restituisce sempre una slice non-nil.
+
+      ## Read
+      - `cli/internal/template/template.go` — tipo `Template`, costruzione del builtin in `Builtin()`, `Resolve`, e soprattutto `clone()`: è il punto che oggi stacca `Skills` e che dovrà staccare anche le azioni.
+      - `cli/internal/domain/types.go:24-31` — le costanti canoniche `StatusTodo`, `StatusPlanned`, `StatusInProgress`, `StatusReview`, `StatusDone`: sono i valori da usare, mai stringhe letterali.
+      - `cli/internal/execution/types.go:11-21` — vocabolario `ActionID`/`Capability` dell'esecuzione remota: leggerlo per capire perché NON va importato qui (vedi Non-goal).
+
+      ## Change
+      - `cli/internal/template/template.go` — unico file toccato da questo task:
+        - nuovo tipo esportato `Action`;
+        - nuovo campo `Actions []Action` su `Template`, con tag JSON `actions`;
+        - le tre azioni della Fabbrica del software dentro `Builtin()`;
+        - nuovo metodo `ActionsFor` su `Template`;
+        - `clone()` estesa alle azioni.
+      - Non-goal: non importare `cli/internal/execution` e non tipizzare `Action.ID` come `execution.ActionID`. `execution.RequiredCapability` conosce soltanto `plan` e restituisce un errore per il resto: dichiarare lì `implement` e `review` prometterebbe un confine di esecuzione remota che nessun provider implementa.
+      - Non-goal: nessuna azione su `DONE`, nessuna azione di ri-pianificazione su `PLANNED`, nessun campo di condizione oltre `Statuses`.
+
+      ## Steps
+      1. Definire il tipo, documentandone il ruolo con un commento nello stile del package (perché esiste, non cosa fa):
+
+         ```go
+         // Action is a step the process offers on a spec. ID is stable and is what a
+         // program keys on; Label is what a person reads; Skill is the capability that
+         // realizes it; Statuses are the workflow statuses in which it is admissible.
+         type Action struct {
+             ID       string          `json:"id"`
+             Label    string          `json:"label"`
+             Skill    string          `json:"skill"`
+             Statuses []domain.Status `json:"statuses"`
+         }
+         ```
+      2. Aggiungere alla struct `Template`, subito dopo `Skills`, il campo `Actions []Action` con tag JSON `actions`.
+      3. Dentro `Builtin()`, aggiungere al Template registrato il campo `Actions` con esattamente tre elementi, in quest'ordine:
+         - `{ID: "plan", Label: "Pianifica", Skill: "archetipo-plan", Statuses: []domain.Status{domain.StatusTodo}}`
+         - `{ID: "implement", Label: "Implementa", Skill: "archetipo-implement", Statuses: []domain.Status{domain.StatusPlanned, domain.StatusInProgress}}`
+         - `{ID: "review", Label: "Rivedi", Skill: "archetipo-review", Statuses: []domain.Status{domain.StatusReview}}`
+      4. Aggiungere il metodo di filtro, con la garanzia esplicita di non-nil documentata nel commento:
+
+         ```go
+         // ActionsFor returns the actions the process admits in status, in declaration
+         // order. The result is always non-nil: a status with no admissible action is
+         // an empty list, never an absence and never a failure.
+         func (t Template) ActionsFor(status domain.Status) []Action {
+             out := make([]Action, 0, len(t.Actions))
+             for _, action := range t.Actions {
+                 for _, candidate := range action.Statuses {
+                     if candidate == status {
+                         out = append(out, action.clone())
+                         break
+                     }
+                 }
+             }
+             return out
+         }
+         ```
+      5. Estendere `clone()` di `Template` perché copi anche `Actions`, e aggiungere un `clone()` su `Action` che copia la slice `Statuses`. Senza la copia profonda un chiamante che modifica `Statuses` raggiunge il registry, cioè la stessa proprietà già protetta per `Skills`.
+      6. Formattare: `cd cli && gofmt -w internal/template/template.go`.
+
+      ## Verify
+      - Working directory: `cli/`.
+      - Run: `go build ./...`
+      - Expect: compila senza errori (baseline: verde).
+      - Run: `go vet ./internal/template/...`
+      - Expect: nessuna segnalazione (baseline: verde).
+      - Run: `gofmt -l internal/template`
+      - Expect: nessun output.
+      - Run: `go test ./internal/template/... -count=1`
+      - Expect: `ok` — i test esistenti restano verdi; questo task non ne aggiunge (lo fa TASK-02).
+
+      ## Done
+      - [ ] AC-1 — `template.Default().Actions` contiene tre azioni, ciascuna con `ID`, `Label` e `Skill` non vuoti e con gli stati ammessi dichiarati.
+      - [ ] `ActionsFor` restituisce una slice non-nil per ogni stato, `DONE` compreso.
+      - [ ] `clone()` stacca `Actions` e le loro `Statuses`; il package non importa `cli/internal/execution`.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Verificare il contratto dichiarativo delle azioni in cli/internal/template/template_test.go
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il contratto delle azioni del Template — contenuto completo, filtro per ogni stato canonico, elenco vuoto non-nil, assenza di aliasing — è verificato nel package `template`.
+
+      ## Read
+      - `cli/internal/template/template_test.go` — in particolare `processSkills` (lista scritta per esteso apposta) e `TestDefaultSkillsAreNotAliased`: sono i due schemi da replicare per le azioni.
+      - `cli/internal/template/template.go` — le azioni e `ActionsFor` introdotti da TASK-01.
+
+      ## Change
+      - `cli/internal/template/template_test.go` — soli test aggiunti, nessun test esistente modificato o rimosso.
+      - Non-goal: non spostare i test in un nuovo file, non introdurre librerie di assertion (il package usa `testing` e `reflect` puri).
+
+      ## Steps
+      1. Aggiungere una variabile `processActions` che scrive per esteso le tre azioni attese, nello stesso spirito del commento su `processSkills`: cambiare il processo deve rompere questo test in modo esplicito.
+      2. `TestDefaultTemplateDeclaresItsActions`: confronta `Default().Actions` con `processActions` via `reflect.DeepEqual` e, in un secondo passaggio, verifica che per ogni azione `ID`, `Label` e `Skill` siano non vuoti — è l'evidenza diretta di AC-1.
+      3. `TestActionsForReturnsOnlyTheActionsAdmittedInTheStatus`: tabella su tutti e cinque gli stati canonici, che confronta gli id ottenuti da `Default().ActionsFor(status)`:
+         - `domain.StatusTodo` → `["plan"]`
+         - `domain.StatusPlanned` → `["implement"]`
+         - `domain.StatusInProgress` → `["implement"]`
+         - `domain.StatusReview` → `["review"]`
+         - `domain.StatusDone` → `[]`
+      4. `TestActionsForEmptyListIsNeverNil`: per `domain.StatusDone`, per uno stato sconosciuto (`domain.Status("SCONOSCIUTO")`) e per lo stato vuoto (`domain.Status("")`), il risultato deve avere lunghezza 0 **e** essere diverso da `nil` (`if got == nil { t.Fatal(...) }`). È la proprietà che rende `[]` e non `null` il JSON dell'envelope.
+      5. `TestDefaultActionsAreNotAliased`: modificare `first.Actions[0].ID` e `first.Actions[0].Statuses[0]` su un valore ottenuto da `Default()`, poi rileggere `Default()` e verificare che entrambi siano intatti.
+      6. Formattare con `cd cli && gofmt -w internal/template/template_test.go`.
+
+      ## Verify
+      - Working directory: `cli/`.
+      - Run: `go test ./internal/template/... -count=1 -v -run 'Action'`
+      - Expect: i quattro nuovi test passano; l'output nomina `TestDefaultTemplateDeclaresItsActions`, `TestActionsForReturnsOnlyTheActionsAdmittedInTheStatus`, `TestActionsForEmptyListIsNeverNil`, `TestDefaultActionsAreNotAliased`.
+      - Run: `go test ./internal/template/... -count=1`
+      - Expect: `ok` — i test preesistenti del package restano verdi (baseline: `ok ... 0.460s`).
+
+      ## Done
+      - [ ] AC-1 — un test confronta la lista completa delle azioni e prova che id, etichetta e skill sono presenti su ciascuna.
+      - [ ] AC-2 / AC-3 — la tabella per stato prova che ogni stato ottiene soltanto le azioni dichiarate per esso e che stati diversi danno elenchi diversi.
+      - [ ] AC-4 — l'elenco vuoto è asserito come lunghezza 0 e non-nil, per `DONE`, per uno stato sconosciuto e per lo stato vuoto.
+      - [ ] Nessuna asserzione si limita a «la funzione non è andata in errore»: ogni test nomina il contenuto atteso.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Aggiungere la foglia archetipo spec actions US-XXX in cli/internal/cli/spec_cmd.go
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      `archetipo spec actions US-XXX` emette un envelope `spec_actions` con lo stato corrente della spec, l'identità del Template risolto e le sole azioni che quel Template ammette in quello stato.
+
+      ## Read
+      - `cli/internal/cli/spec_cmd.go:21-48` — commento di `newSpecCmd` e registrazione delle foglie: la nuova va aggiunta a entrambi.
+      - `cli/internal/cli/spec_cmd.go:140-163` — `newSpecShowCmd`: forma esatta della validazione dell'argomento posizionale e dell'uso di `withConnectorCfg`. Va replicata, non reinventata.
+      - `cli/internal/cli/runner.go:85-102` — `withConnectorCfg`: il terzo argomento è il `kind` dell'envelope.
+      - `cli/internal/cli/init_project_cmd.go:71-81` — mappatura di un id di Template sconosciuto su `iox.NewInvalidInput` con l'elenco degli id validi: stessa forma da riusare.
+      - `cli/internal/config/config.go:69-75` — `TemplateConfig` con `ID` e `Version` persistiti, e i default applicati quando il blocco manca.
+
+      ## Change
+      - `cli/internal/cli/spec_cmd.go` — unico file toccato: registrazione della foglia in `newSpecCmd`, aggiornamento del commento di gruppo, nuova funzione `newSpecActionsCmd`.
+      - Non-goal: nessuna transizione di stato, nessuna esecuzione dell'azione, nessuna modifica a `config show`, nessuna modifica ai comandi esistenti, nessuna regola di processo scritta dentro il package `cli` (la fonte resta `template`).
+
+      ## Steps
+      1. Registrare `newSpecActionsCmd(s)` nell'elenco di `root.AddCommand(...)` dentro `newSpecCmd` e aggiungere la riga corrispondente al commento di gruppo, nello stile delle altre: `spec actions -> read the actions the workspace Template admits for the spec's current status`.
+      2. Importare `cli/internal/template` nel file (l'import di `config`, `domain` e `iox` è già presente).
+      3. Scrivere la foglia:
+
+         ```go
+         func newSpecActionsCmd(s streams) *cobra.Command {
+             return &cobra.Command{
+                 Use:   "actions US-XXX",
+                 Short: "List the actions the workspace Template admits for the spec's current status",
+                 Long: "Reads the spec's current status and returns the actions the workspace process " +
+                     "Template admits in that status, each with a stable id, a user-facing label and the " +
+                     "skill that realizes it. A status with no admissible action returns an empty list, not an error.",
+                 Args: cobra.ExactArgs(1),
+                 RunE: func(cmd *cobra.Command, args []string) error {
+                     ref := strings.TrimSpace(args[0])
+                     if ref == "" {
+                         return errInvalidUsage("missing spec code", "pass US-XXX as positional argument")
+                     }
+                     return withConnectorCfg(cmd, s, "spec_actions", func(ctx context.Context, cfg config.Config, c connector.Connector) (any, error) {
+                         spec, err := c.ReadSpecDetail(ctx, ref)
+                         if err != nil {
+                             return nil, err
+                         }
+                         tpl, err := template.Resolve(cfg.Template.ID)
+                         if err != nil {
+                             return nil, iox.NewInvalidInput(
+                                 "unknown template: "+cfg.Template.ID,
+                                 "valid: "+strings.Join(template.Builtin().IDs(), ", "),
+                                 err,
+                             )
+                         }
+                         return map[string]any{
+                             "spec":     map[string]any{"code": spec.Code, "status": spec.Status},
+                             "template": map[string]any{"id": tpl.ID, "version": tpl.Version},
+                             "actions":  tpl.ActionsFor(spec.Status),
+                         }, nil
+                     })
+                 },
+             }
+         }
+         ```
+      4. Commentare, sopra la funzione, la sola decisione non ovvia: la versione riportata è quella del Template **risolto**, perché è la definizione da cui provengono le azioni; la coppia persistita in `.archetipo/config.yaml` resta esposta da `config show`, e la decisione accettata esclude qualunque riconciliazione fra le due.
+      5. Verificare a mano l'assenza di regressioni sull'ordine delle foglie: `spec actions` non deve alterare la registrazione delle altre.
+      6. Formattare con `cd cli && gofmt -w internal/cli/spec_cmd.go`.
+
+      ## Verify
+      - Working directory: `cli/`.
+      - Run: `go build ./...`
+      - Expect: compila senza errori.
+      - Run: `go vet ./internal/cli/...`
+      - Expect: nessuna segnalazione (baseline: verde).
+      - Run: `gofmt -l internal/cli`
+      - Expect: nessun output.
+      - Run: `go test ./internal/cli/... -count=1`
+      - Expect: `ok` — nessun test esistente regredisce (baseline: `ok ... 3.767s`). Le asserzioni sul nuovo comando arrivano con TASK-04.
+
+      ## Done
+      - [ ] AC-2 — il comando restituisce `tpl.ActionsFor(spec.Status)`, quindi soltanto le azioni ammesse nello stato letto dal connector.
+      - [ ] AC-3 — nessuno stato viene memorizzato o passato dall'esterno: l'elenco è ricalcolato a ogni invocazione dallo stato corrente della spec.
+      - [ ] AC-4 — un elenco vuoto viaggia come `actions: []` in un envelope di successo, non come errore.
+      - [ ] Una spec inesistente continua a produrre `E_PRECONDITION` dal connector; un id di Template sconosciuto produce `E_INVALID_INPUT` con l'elenco degli id validi.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Provare il ricalcolo per stato con un test di integrazione CLI in cli/internal/cli/cli_test.go
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Un test di integrazione esegue la CLI reale su un workspace su filesystem e prova che l'elenco delle azioni cambia con lo stato della spec e che `DONE` restituisce un elenco vuoto in un envelope di successo.
+
+      ## Read
+      - `cli/internal/cli/cli_test.go:31-42` — `runCLI` e `newProject`: come si esegue la CLI reale su un workspace temporaneo.
+      - `cli/internal/cli/cli_test.go:105-152` — `writeInputFile`, `decodeOK`, `decodeError`: le uniche forme di asserzione usate nel file.
+      - `cli/internal/cli/cli_test.go:154-175` — le costanti `specJSON` e `validPlanJSON`: fixture già pronte per creare una spec e pianificarla.
+      - `cli/internal/cli/cli_test.go:349-410` — `TestSpecShow_ByCode` e `TestSpecShow_MissingCodeRejected`: lo schema dei casi positivi e dei casi d'errore.
+      - `cli/internal/connector/filefs/connector.go:129` — l'errore per una spec assente è `iox.NewPrecondition`, quindi `E_PRECONDITION` ed exit 4.
+
+      ## Change
+      - `cli/internal/cli/cli_test.go` — soli test aggiunti, accanto ai test `TestSpec*` esistenti.
+      - Non-goal: non modificare le fixture condivise `specJSON` / `validPlanJSON`, non introdurre helper globali nuovi se quelli esistenti bastano, non abilitare il workflow worktree (non serve e rallenterebbe il test).
+
+      ## Steps
+      1. Aggiungere un helper locale al test, non globale, che legge le azioni e restituisce gli id nell'ordine ricevuto:
+         ```go
+         readActionIDs := func(t *testing.T) []string { /* runCLI(... "spec","actions","US-001"), decodeOK, kind == "spec_actions", estrai data["actions"].([]any) e i campi "id" */ }
+         ```
+         L'helper deve fallire se `kind` non è `spec_actions` e se `data["actions"]` non è una `[]any` (una type assertion che fallisce su `null` è ciò che rende osservabile AC-4).
+      2. `TestSpecActionsFollowTheSpecStatus`:
+         - `newProject(t)`; `spec add --file` con `specJSON`;
+         - stato `TODO` → gli id sono esattamente `["plan"]`; verificare anche `label == "Pianifica"` e `skill == "archetipo-plan"` sul primo elemento, e che `data["spec"].(map[string]any)["status"] == "TODO"` (AC-2);
+         - `spec plan US-001 --file` con `validPlanJSON` → gli id sono `["implement"]` (AC-3);
+         - `spec start US-001` → gli id sono `["implement"]` e `data["spec"]["status"] == "IN PROGRESS"`;
+         - `spec review US-001` → gli id sono `["review"]` (AC-3);
+         - `spec move US-001 --to done` → l'elenco ha lunghezza 0, l'exit code è 0 e `res.stderr` non contiene un envelope d'errore (AC-4).
+         Ogni transizione va eseguita con `runCLI` e va verificato il suo exit code prima di leggere le azioni, così un fallimento di setup non viene scambiato per un fallimento di asserzione.
+      3. `TestSpecActionsReportTheResolvedTemplate`: sulla stessa spec in `TODO`, verificare che `data["template"].(map[string]any)["id"] == template.DefaultID` e che `version` sia non vuota (il package `template` è già importato dal file di test).
+      4. `TestSpecActionsMissingCodeRejected` e `TestSpecActionsUnknownSpecRejected`: rispettivamente nessun argomento posizionale → exit 2 con `E_INVALID_INPUT` tramite `decodeError`, e `spec actions US-999` su backlog popolato → exit 4 con `E_PRECONDITION`.
+      5. Formattare con `cd cli && gofmt -w internal/cli/cli_test.go`.
+
+      ## Verify
+      - Working directory: `cli/`.
+      - Run: `go test ./internal/cli/... -count=1 -v -run 'TestSpecActions'`
+      - Expect: i quattro test passano e l'output li nomina tutti; nessuno è saltato.
+      - Run: `go test ./internal/cli/... -count=1`
+      - Expect: `ok` — nessuna regressione sui test preesistenti (baseline: `ok ... 3.767s`).
+
+      ## Done
+      - [ ] AC-2 — con la spec in `TODO` il comando restituisce una sola azione `plan`, con etichetta «Pianifica» e skill `archetipo-plan`.
+      - [ ] AC-3 — le letture dopo `spec plan`, `spec start` e `spec review` restituiscono elenchi diversi e coerenti con lo stato appena raggiunto, letto dallo stesso envelope.
+      - [ ] AC-4 — con la spec in `DONE` l'exit code è 0, non c'è envelope d'errore e `data["actions"]` è una lista vuota, distinta da `null` da una type assertion.
+      - [ ] I casi d'errore su codice mancante e spec inesistente asseriscono il codice d'errore, non solo l'exit code diverso da zero.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Documentare archetipo spec actions in README.md e README.it.md
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Le due tabelle dei comandi del README descrivono `archetipo spec actions US-001` con la stessa granularità delle altre foglie di `spec`.
+
+      ## Read
+      - `README.md:180-190` — tabella «CLI e comandi», righe `archetipo spec ...`: la nuova riga va inserita subito dopo `archetipo spec next --status TODO`, cioè accanto alle altre letture.
+      - `README.it.md:176-186` — la stessa tabella in italiano, con lo stesso ordine di righe.
+      - `README.md` / `README.it.md`, riga della voce `archetipo config show`: è già stata estesa da US-026 per nominare il Template; usarla come riferimento di tono.
+
+      ## Change
+      - `README.md` — una riga nella tabella dei comandi.
+      - `README.it.md` — la riga equivalente, in italiano.
+      - Non-goal: non riscrivere la sezione «Stati workflow», non aggiungere una sezione nuova, non toccare `cli/README.md` (documenta build, layout e test del package Go, non la superficie dei comandi).
+
+      ## Steps
+      1. In `README.md`, dopo la riga di `archetipo spec next --status TODO`, aggiungere:
+         `| \`archetipo spec actions US-001\` | Lists the actions the workspace process Template admits for the spec's current status, each with a stable id, a user-facing label and the skill that realizes it. A status with no admissible action returns an empty list. |`
+      2. In `README.it.md`, nella stessa posizione relativa: `| \`archetipo spec actions US-001\` | Elenca le azioni che il Template di processo del workspace ammette per lo stato corrente della spec, ciascuna con identificativo stabile, etichetta utente e skill associata. Uno stato senza azioni ammesse restituisce un elenco vuoto. |`
+      3. Verificare che il carattere pipe e l'allineamento delle colonne restino coerenti con le righe vicine e che le due tabelle mantengano lo stesso ordine di righe.
+
+      ## Verify
+      - Working directory: radice del repository.
+      - Run: `grep -n "spec actions" README.md README.it.md`
+      - Expect: esattamente una occorrenza per file, nella tabella dei comandi, subito dopo la riga di `spec next`.
+      - Run: `grep -c "archetipo spec " README.md README.it.md`
+      - Expect: il conteggio di entrambi i file cresce di uno rispetto a prima della modifica, così le due tabelle restano allineate.
+
+      ## Done
+      - [ ] Entrambi i README descrivono il comando, l'identificativo/etichetta/skill di ogni azione e il caso dell'elenco vuoto.
+      - [ ] Nessuna altra riga delle tabelle è stata riordinata o riscritta.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Aggiornare la pagina Wiki decisions/workspace-process-template con le azioni per stato
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      La decisione accettata `decisions/workspace-process-template` descrive anche le azioni del Template, l'alternativa scartata del riuso del vocabolario di `execution` e la nuova verifica, e la pagina risulta `generated` in `archetipo wiki status`.
+
+      ## Read
+      - `docs/wiki/decisions/workspace-process-template.md` — l'intera pagina: i marcatori di sezione `context`, `decision`, `alternatives`, `consequences`, `verification`, l'elenco `sources` nel frontmatter e le frasi che già annunciano questa funzionalità («su cui una funzionalità successiva possa appoggiare le azioni ammesse per ciascuno stato di una spec», «il presupposto su cui poggeranno le azioni offerte dal Template»).
+      - `cli/internal/template/template.go` e `cli/internal/cli/spec_cmd.go` come consegnati da TASK-01 e TASK-03: la pagina deve descrivere il codice reale, non questo piano.
+
+      ## Change
+      - `docs/wiki/decisions/workspace-process-template.md` — contenuto delle sezioni `decision`, `alternatives`, `consequences`, `verification`, ed elenco `sources` nel frontmatter.
+      - Non-goal: non modificare a mano il blocco `review` del frontmatter — usare `archetipo wiki reset`. Non toccare `decision_status`, che resta `accepted`: questa non è una decisione superata ma la stessa decisione estesa.
+
+      ## Steps
+      1. **Primo passo, prima di qualunque modifica:** `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo reset decisions/workspace-process-template` eseguito da `/Users/stefanoleli/Project/ARchetipo`. Modificare una pagina `reviewed` deriva `stale`, e `reset` è l'unica transizione verso `generated`.
+      2. Sezione `decision`: aggiungere che il Template dichiara anche le proprie azioni — identificativo stabile, etichetta utente, skill che le realizza e stati in cui sono ammesse — e che il filtro per stato restituisce sempre un elenco, eventualmente vuoto: uno stato senza azioni non è un errore. Nominare la lettura `archetipo spec actions US-XXX` e il fatto che riporta l'identità del Template **risolto**, mentre la coppia persistita nella configurazione resta esposta da `config show`.
+      3. Sezione `alternatives`: aggiungere la voce scartata «riusare `execution.ActionID` e `execution.Capability` per le azioni del Template», con la motivazione reale: `execution.RequiredCapability` conosce soltanto `plan`, quindi dichiarare lì `implement` e `review` prometterebbe un confine di esecuzione remota che nessun provider implementa. Registrare il vincolo che tiene allineati i due vocabolari: l'identificativo condiviso resta `plan`.
+      4. Sezione `consequences`: la promessa lasciata aperta dalla decisione originale è ora mantenuta; il costo è la convivenza di due vocabolari di azione; resta fuori qualunque condizione oltre lo stato e qualunque esecuzione dell'azione.
+      5. Sezione `verification`: citare `ActionsFor` e le azioni builtin in `template.go`, i test del package in `template_test.go` (contenuto completo, tabella per stato, elenco vuoto non-nil, assenza di aliasing) e il test di integrazione in `cli_test.go` che attraversa il ciclo di vita della spec, con link relativi nello stile già usato dalla pagina.
+      6. Frontmatter `sources`: aggiungere `cli/internal/cli/spec_cmd.go` con ruolo `implementation`. `template.go`, `template_test.go` e `cli_test.go` sono già elencati e non vanno duplicati.
+      7. Rigenerare la navigazione: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo catalog`.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/ARchetipo`.
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status`
+      - Expect: `decisions/workspace-process-template` risulta `state: generated`, senza `issues`.
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`
+      - Expect: envelope `validation_result` con `data.ok: true`; eventuali finding restano di severità `warning`.
+
+      ## Done
+      - [ ] AC-1 — la pagina descrive il contratto dell'azione (identificativo, etichetta, skill) come parte della decisione, non come dettaglio implementativo.
+      - [ ] AC-4 — la pagina afferma esplicitamente che l'assenza di azioni ammesse è un elenco vuoto e non un errore.
+      - [ ] Le sezioni `decision`, `alternatives`, `consequences` e `verification` sono aggiornate e i marcatori di sezione sono intatti.
+      - [ ] `archetipo wiki status` riporta la pagina come `state: generated`.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Aggiornare la pagina Wiki engineering/code-map con la lettura delle azioni
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      La riga «Template di processo del workspace» della mappa del codice nomina la foglia `spec actions` come entry point e i suoi test come verifica, e la pagina risulta `generated` in `archetipo wiki status`.
+
+      ## Read
+      - `docs/wiki/engineering/code-map.md` — frontmatter (`sources`, `coverage`) e sezione `domain-code`, in particolare la riga `| Template di processo del workspace | ... |` e la sezione `shared` che descrive il ruolo di `cli/internal/template`.
+      - `cli/internal/cli/spec_cmd.go` come consegnato da TASK-03, per citare l'entry point reale.
+
+      ## Change
+      - `docs/wiki/engineering/code-map.md` — la riga della responsabilità «Template di processo del workspace» (colonne entry point e verifica), l'elenco `sources` del frontmatter e, se necessario, la frase sulla sorgente unica nella sezione `shared`.
+      - Non-goal: non modificare a mano il blocco `review` — usare `archetipo wiki reset`. Non toccare il blocco `coverage`: nessun boundary o candidate cambia, il codice nuovo resta dentro `cli`.
+
+      ## Steps
+      1. **Primo passo, prima di qualunque modifica:** `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo reset engineering/code-map` eseguito da `/Users/stefanoleli/Project/ARchetipo`.
+      2. Nella riga «Template di processo del workspace», colonna «Entry point e interfacce», aggiungere `cli/internal/cli/spec_cmd.go` (foglia `spec actions`, envelope `spec_actions`, risoluzione del Template dalla configurazione del workspace) accanto agli entry point già elencati.
+      3. Nella stessa riga, colonna «Logica e dati», aggiungere che il package `cli/internal/template` possiede ora anche le azioni del processo e il loro filtro per stato; colonna «Verifica», aggiungere i test di integrazione `TestSpecActions*` in `cli_test.go`.
+      4. Frontmatter `sources`: aggiungere `cli/internal/cli/spec_cmd.go` con ruolo `implementation` e `cli/internal/cli/cli_test.go` con ruolo `verification` se non già presenti.
+      5. Se la sezione `shared` descrive `cli/internal/template` come sorgente della sola lista di skill, correggerla: è la sorgente della definizione del processo, skill, stati e azioni comprese.
+      6. Rigenerare la navigazione: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo catalog`.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/ARchetipo`.
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status`
+      - Expect: `engineering/code-map` risulta `state: generated`, senza `issues`.
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`
+      - Expect: envelope `validation_result` con `data.ok: true`; nessun finding di severità `error`, in particolare nessuno su copertura o sorgenti mancanti.
+
+      ## Done
+      - [ ] AC-2 / AC-3 — la mappa nomina il comando che ricalcola le azioni dallo stato della spec e i test che lo verificano.
+      - [ ] Entry point, logica e verifica della riga del Template corrispondono ai file realmente consegnati.
+      - [ ] `archetipo wiki status` riporta la pagina come `state: generated`.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Aggiornare la pagina Wiki architecture/context-map con le azioni dichiarate dal Template
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      La mappa dei contesti afferma che il Template dichiara anche quali azioni sono ammesse in ciascuno stato e che la CLI le espone come lettura, e la pagina risulta `generated` in `archetipo wiki status`.
+
+      ## Read
+      - `docs/wiki/architecture/context-map.md` — il frontmatter `sources` e i due punti che parlano del Template: il paragrafo «Template di processo» (le skill e gli stati non più impliciti) e il paragrafo sull'inizializzazione e la rilettura via `config show`.
+      - `cli/internal/cli/spec_cmd.go` come consegnato da TASK-03, per descrivere il confine reale fra chi consuma le azioni e chi le dichiara.
+
+      ## Change
+      - `docs/wiki/architecture/context-map.md` — il paragrafo «Template di processo», il paragrafo sulla rilettura della selezione, ed `sources` nel frontmatter.
+      - Non-goal: non modificare a mano il blocco `review` — usare `archetipo wiki reset`. Non ridisegnare i confini né aggiungere contesti: nessun nuovo confine runtime nasce da questa spec.
+
+      ## Steps
+      1. **Primo passo, prima di qualunque modifica:** `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo reset architecture/context-map` eseguito da `/Users/stefanoleli/Project/ARchetipo`.
+      2. Estendere il paragrafo «Template di processo»: oltre a quali skill un workspace possiede e quali stati usa il suo workflow, il Template dichiara quali azioni sono ammesse in ciascuno stato, con identificativo stabile, etichetta utente e skill associata.
+      3. Nel paragrafo sulla rilettura, aggiungere che un client può chiedere alla CLI le azioni disponibili per una spec (`archetipo spec actions US-XXX`) e sceglierne una senza conoscere il nome interno della skill: è il confine che rende il processo consumabile da un programma, e l'elenco è ricalcolato a ogni richiesta dallo stato corrente della spec.
+      4. Frontmatter `sources`: aggiungere `cli/internal/cli/spec_cmd.go` con ruolo `process-actions` (o il ruolo già usato per gli entry point di comando in questa pagina, se ne esiste uno).
+      5. Rigenerare la navigazione: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo catalog`.
+
+      ## Verify
+      - Working directory: `/Users/stefanoleli/Project/ARchetipo`.
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status`
+      - Expect: `architecture/context-map` risulta `state: generated`, senza `issues`.
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`
+      - Expect: envelope `validation_result` con `data.ok: true`; nessun finding di severità `error`.
+
+      ## Done
+      - [ ] AC-1 — la pagina descrive che il Template dichiara le azioni con identificativo, etichetta e skill.
+      - [ ] AC-3 — la pagina afferma che l'elenco è ricalcolato dallo stato corrente della spec a ogni richiesta.
+      - [ ] `archetipo wiki status` riporta la pagina come `state: generated`.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Gate finale — check completi, Wiki generated e tutti i task DONE prima della review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Objective
+      L'incremento supera gli stessi check della CI, le pagine Wiki impegnate sono pronte per l'approvazione e nessun task resta `TODO` quando la spec viene mandata in review.
+
+      ## Read
+      - `AGENTS.md:55-70` — l'elenco dei check da eseguire prima di consegnare: sono esattamente quelli qui sotto.
+      - `.github/workflows/ci.yml` — job `lint` (gofmt su `cli`, `go vet`, golangci-lint) e job `test` (`go test ./... -count=1`), per confermare che la lista non è inventata.
+
+      ## Change
+      - Nessuna modifica funzionale. Solo le correzioni minime necessarie a far passare i check, mantenendo il perimetro dei task precedenti.
+      - Non-goal: non aggiungere test nuovi qui (appartengono a TASK-02 e TASK-04), non modificare pagine Wiki qui (appartengono a TASK-06, TASK-07, TASK-08).
+
+      ## Steps
+      1. Da `cli/`: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./... -count=1`.
+      2. Da `cli/`: `golangci-lint run --timeout 5m ./...` **se il binario è disponibile**. La baseline lo ha registrato come non installato in questo ambiente: se manca e `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` non è eseguibile (rete assente), registrare esplicitamente l'assenza nelle note di consegna invece di dichiarare il check superato. La CI lo esegue comunque sulla PR.
+      3. Da `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status` e `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`.
+      4. Ripercorrere a mano la Dimostrazione della spec sul workspace corrente o su uno temporaneo: leggere le azioni con la spec in `TODO`, osservare «Pianifica» con la skill associata, cambiare stato e osservare l'elenco ricalcolato.
+      5. Marcare questo task `DONE` con `archetipo task done US-027 TASK-09` da `/Users/stefanoleli/Project/ARchetipo`.
+      6. Ricaricare la spec: `archetipo spec show US-027` da `/Users/stefanoleli/Project/ARchetipo`, e verificare che **nessun** task risulti `TODO`.
+      7. Soltanto a quel punto richiedere la review con `archetipo spec review US-027`. L'ordine è vincolante: prima i check, poi il task `DONE`, poi la rilettura della spec, infine la review.
+
+      ## Verify
+      - Working directory: `cli/` per i check Go, `/Users/stefanoleli/Project/ARchetipo` per Wiki e CLI ARchetipo.
+      - Run: `gofmt -l .` (da `cli/`)
+      - Expect: nessun output (baseline: nessun output).
+      - Run: `go vet ./...` (da `cli/`)
+      - Expect: nessuna segnalazione (baseline: verde).
+      - Run: `go build ./...` (da `cli/`)
+      - Expect: compila (baseline: verde).
+      - Run: `go test ./... -count=1` (da `cli/`)
+      - Expect: tutti i package `ok`, incluso il conteggio dei test preesistenti (baseline: 709 test verdi in 24 package) più i nuovi test di TASK-02 e TASK-04.
+      - Run: `go test ./internal/template/... ./internal/cli/... -count=1 -v -run 'Action|TestSpecActions'` (da `cli/`)
+      - Expect: i test di accettazione di AC-1…AC-4 compaiono per nome e passano tutti.
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo status`
+      - Expect: `decisions/workspace-process-template`, `engineering/code-map` e `architecture/context-map` sono `state: generated`, nessuna pagina è `stale` o `attention`.
+      - Run: `archetipo wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`
+      - Expect: `data.ok: true`.
+      - Run: `archetipo spec show US-027` (da `/Users/stefanoleli/Project/ARchetipo`)
+      - Expect: `data.tasks` non contiene alcun task con `status: TODO`.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4 — i test nominati nella mappa delle evidenze passano tutti, eseguiti in un'unica sessione.
+      - [ ] `gofmt`, `go vet`, `go build` e `go test ./...` sono verdi da `cli/`; l'esito di golangci-lint è registrato (superato oppure non eseguibile per assenza del binario).
+      - [ ] Le tre pagine Wiki impegnate risultano `generated` e `wiki validate --profile bootstrap` restituisce `ok: true`.
+      - [ ] `archetipo spec show US-027` prova che nessun task è rimasto `TODO`, e soltanto dopo questa verifica viene eseguito `archetipo spec review US-027`.
+
+      ## Blockers
+      None.
+    ref: TASK-09

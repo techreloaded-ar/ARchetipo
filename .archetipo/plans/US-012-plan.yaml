@@ -1,0 +1,451 @@
+schema: archetipo/plan/v2
+spec_code: US-012
+body: "# US-012: Assegnare e controllare una Run remota — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-24\n\n---\n\n## Specifica\n\n**Epica:** EP-002 — Inception governata in ARchetipo Control\n**Priorità:** HIGH | **Punti:** 5\n\n**Storia utente**\nCome operatore, voglio inviare una Run a un Runner compatibile e seguirne il ciclo di vita, così da pilotare agenti remoti con stato affidabile e controllo umano.\n\n**Criteri di accettazione**\n- AC-1 — Control assegna la Run solo a un Runner che dichiara capacità compatibili.\n- AC-2 — Operatore e Runner osservano lo stesso identificatore e gli stessi stati della Run.\n- AC-3 — Un'assegnazione non accettata scade in modo riconoscibile.\n- AC-4 — La scadenza non produce due esecuzioni attive della stessa Run.\n- AC-5 — L'operatore può richiedere l'annullamento di una Run attiva.\n\n## Soluzione tecnica\n\nAggiungere al modulo Operations di Control una vertical slice persistente per le Run remote, mantenendo Control come autorità dell'identità, dell'assegnazione e dello stato osservabile e il Runner come esecutore che accetta comandi e pubblica eventi del Run Protocol v1. La slice usa il Project e il relativo Agent Profile effettivo già introdotti da US-009/US-011, seleziona deterministicamente un Runner online compatibile e conserva un solo identificatore `runId` in API, trasporto, UI, audit ed eventi.\n\n- `control/migrations/005_remote_runs.sql` introduce `remote_runs`, `run_assignments` e `remote_run_events`. La Run appartiene a Organization e Project, fotografa l'Agent Profile effettivo e il payload sessione redatto; l'assegnazione conserva Runner, deadline di accettazione, stato e token di fencing opaco; gli eventi append-only aggiornano la proiezione di stato nella stessa transazione.\n- La compatibilità è un confronto a insiemi chiuso: il Runner deve essere `online`, non revocato e dichiarare tutti gli `executors` e `toolchains` richiesti da `profile.capabilities.requiredRunner`. Il modello/provider resta configurazione logica dell'Agent Profile, non un requisito macchina implicito. A parità di candidati l'MVP sceglie per `lastSeenAt` più recente e poi `runnerId`; priorità, quote, pool e bilanciamento restano fuori ambito.\n- Il lifecycle Control è `created → assigned → running → completed|failed|cancelled`, con `assignment_expired` terminale quando il Runner non accetta entro la deadline e `cancel_requested` come intenzione operatore osservabile prima dell'esito `cancelled`. Le transizioni sono validate server-side; Runner e operatore ricevono lo stesso `runId`, lo stesso stato canonico e una sequenza monotona di eventi redatti.\n- L'offerta `run.start` include `runId`, `assignmentId` e fencing token. Il Runner risponde `run.accept` prima di eseguire; Control accetta il claim con compare-and-set soltanto per l'assegnazione corrente e non effettua riassegnazione automatica dopo expiry. Un coordinator con clock/timer iniettabili scade in modo idempotente le offerte pendenti e recupera le deadline scadute al bootstrap. Questa semantica evita due esecuzioni attive senza promettere exactly-once distribuito, replay o recovery, esplicitamente fuori dalla slice.\n- Dopo l'accettazione il Runner inoltra eventi `run.status` del Run Protocol v1; Control verifica identità macchina, assegnazione, fencing token, ordine e transizione prima di persistere snapshot ed evento. La richiesta HTTP di annullamento porta la Run a `cancel_requested`, appende audit/evento e invia `run.cancel`; il Runner applica il comando al proprio executor e riferisce `cancelled`. Se è offline, l'intenzione resta consultabile senza dichiarare falsamente l'avvenuta cancellazione.\n- Le API Organization-scoped permettono a ogni membership attiva di creare, leggere e annullare Run del proprio Project; ogni azione conserva actor e correlation id nell'audit. L'MVP crea Session Run da un obiettivo testuale e dall'Agent Profile effettivo: il supporto a cataloghi Workflow e Process Instance non è introdotto da questa storia.\n- La UI aggiunge `/operations/runs`: creazione per Project, riepilogo del profilo e del Runner compatibile, ID copiabile, badge testuali, timeline ordinata, deadline/expiry riconoscibile e conferma di annullamento. Non usa colore o animazione come unico segnale e segue i mockup `docs/mockups/US-012/`.\n\n### Decisioni architetturali\n\nLa scelta supera la soglia ADR perché definisce consistenza e failure semantics distribuite. Creare `decisions/remote-run-assignment-lease`: scegliere una singola offerta persistita con deadline, accettazione CAS e fencing token, senza riassegnazione automatica nell'MVP. Rispetto a un dispatch fire-and-forget, rende riconoscibili mancata accettazione e ownership; rispetto a retry/redispatch automatico, elimina la finestra in cui il vecchio Runner potrebbe avviarsi dopo la scadenza e produrre due esecuzioni attive. Il costo è terminalizzare la Run come `assignment_expired` e richiedere all'operatore una nuova Run esplicita. Una coda con lease rinnovabile e recovery è alternativa futura, ma richiede durable delivery, acknowledgement/replay e fencing dell'executor non disponibili oggi.\n\nAggiornare `decisions/project-process-run-model`, `decisions/run-protocol` e `decisions/outbound-runner-transport` dopo l'accettazione: la nuova decisione estende il protocollo applicativo e il trasporto senza cambiare l'autorità del journal locale né promettere exactly-once. La pagina ADR deve dichiarare contesto, scelta, alternative, conseguenze e verifiche con fonti repository.\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |\n|---|---|---|\n| `npm --prefix control exec vitest run -- src/modules/operations/connection-registry.test.ts test/integration/runner-transport.test.ts test/integration/agent-profile.test.ts test/integration/agent-profile-http.test.ts` | PASS: 4 file, 13 test, 0 failure | I nuovi test estendono i confini Operations, trasporto e Agent Profile senza alterarne i contratti esistenti. |\n| `npm run test:control` | PASS: 18 file/76 test server e 4 file/19 test web | La persistenza Run, le API e la nuova pagina devono mantenere verdi tutte le slice Control. |\n| `npm run test:runner` | PASS: 4 test, 0 failure | Il client Runner deve conservare capability, credenziali e validazione `run.start` esistenti. |\n| `npm run typecheck:control && npm run lint:control && npm run build:control && npm run typecheck:runner && npm run lint:runner && npm run build:runner` | PASS: nessuna diagnostica; build Vite/TypeScript riuscite | Ogni file modificato deve restare privo di diagnostiche e compilare in entrambi i package. |\n| `npm run test:runner-control` | PASS: outbound, presenza online/offline, singola consegna pre-revoca, zero consegne post-revoca e audit redatto | Lo smoke Run remoto deve estendere la fixture reale senza regredire enrollment, revoca o direzione outbound. |\n\nPrerequisiti ambiente: Node.js >=22.19 e npm; PostgreSQL 17 e Docker per gli integration/smoke test; Playwright e la fixture OIDC/PostgreSQL già presenti nel repository. Le suite devono usare clock e deadline iniettabili per evitare attese reali e test intermittenti.\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Project con Agent Profile effettivo che richiede `probe`/`node`; Runner online compatibile e Runner online incompatibile | Integration DB/transport + browser E2E | La Run persiste un'unica assegnazione verso il Runner compatibile; quello incompatibile riceve zero `run.start`; in assenza di candidati l'API risponde `no_compatible_runner` senza creare Run parziali | TASK-02, TASK-04, TASK-08 |\n| AC-2 | Run avviata dalla UI e accettata dal Runner reale | Contract/integration + browser E2E | UI, API, comando Runner, acknowledgement ed eventi mostrano lo stesso `runId`; la timeline osserva in ordine `created`, `assigned`, `running`, `completed` senza stati inventati dal client | TASK-04, TASK-06, TASK-08 |\n| AC-3 | Runner reso indisponibile dopo l'offerta e prima di `run.accept`, clock portato oltre la deadline | Integration coordinator + browser E2E | Stato e timeline diventano `assignment_expired`, mostrano deadline e motivo, e un accept tardivo è rifiutato senza avanzare la Run | TASK-02, TASK-04, TASK-08 |\n| AC-4 | Offerta scaduta con Runner originale che invia accept tardivo e nessuna riassegnazione automatica | Concurrency integration + E2E transport | Il database conserva zero assegnazioni `accepted`/Run `running`, nessun secondo `run.start` viene consegnato e l'unico stato terminale resta `assignment_expired` | TASK-02, TASK-04, TASK-08 |\n| AC-5 | Run `running` con Runner autenticato e operatore attivo | Integration HTTP/transport + browser E2E | Il click confermato produce `cancel_requested`, consegna una sola `run.cancel` con lo stesso `runId`, il Runner riferisce `cancelled` e la UI mostra il terminale; un replay HTTP è idempotente | TASK-04, TASK-06, TASK-08 |\n\nI test non sostituiscono con mock il confine che possiede l'oracolo: persistenza PostgreSQL, registry della sessione Runner, deadline coordinator e API vengono attraversati nelle prove integration; il browser usa la fixture Control/Runner reale per identità, route, trasporto e stato visibile.\n\n## Strategia di test\n\n- Unit test per compatibilità a insiemi, lifecycle/transition guard, contratto chiuso degli envelope di assignment e redazione degli eventi.\n- Integration test PostgreSQL per creazione atomica, selezione deterministica, vincoli Organization, singola assegnazione viva, accept CAS concorrente, expiry/recovery idempotenti, rifiuto tardivo e cancellazione idempotente.\n- Contract test bidirezionali su registry/WebSocket per `run.start`, `run.accept`, `run.status` e `run.cancel`, verificando `runId`, assignment/fencing, ordine e nessuna consegna duplicata.\n- Test Runner con executor controllabile per provare che l'accettazione precede l'esecuzione, che i report di stato conservano l'identità e che la cancellazione produce l'esito terminale senza esecuzione concorrente.\n- Component test React per form, stati testuali, timeline, deadline e dialog di cancellazione con API fake tipizzata; questi test coprono rendering locale ma non sostituiscono l'E2E.\n- Browser E2E Playwright obbligatorio perché il percorso attraversa OIDC, route React, API, PostgreSQL, WebSocket e processo Runner. La fixture usa clock controllabile o deadline breve deterministica e cleanup idempotente.\n- Demo filmabile: sì; `archetipo-review` potrà registrare creazione → assegnazione → avanzamento → completamento, poi il caso separato di expiry senza doppia esecuzione.\n\n### E2E browser — Simulazione utente\n\n**Framework:** Playwright già configurato nel repository.\n**Video demo:** atteso e demandato a `archetipo-review`.\n\n| Scenario | Flusso utente |\n|---|---|\n| Run compatibile e cancellabile | Login, Project con Agent Profile, Runner compatibile online, apertura Run, verifica ID/timeline fino a `running`, richiesta di annullamento e osservazione di `cancel_requested` → `cancelled` con lo stesso ID. |\n| Expiry senza doppia esecuzione | Avvio Run, blocco dell'accept/rimozione del Runner, avanzamento oltre la deadline, osservazione di `assignment_expired`, invio accept tardivo e verifica tramite fixture che nessun executor sia attivo e nessuna seconda consegna sia avvenuta. |\n| Completamento osservabile | Avvio su Runner compatibile, accettazione e avanzamento controllato fino a `completed`; API, pagina e Runner espongono identità e sequenza coerenti. |\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [decisions/project-process-run-model, decisions/run-protocol, decisions/outbound-runner-transport, architecture/context-map, operations/development]\n  update_after_acceptance: [decisions/project-process-run-model, decisions/run-protocol, decisions/outbound-runner-transport, architecture/context-map, engineering/code-map, operations/development]\n  create: [decisions/remote-run-assignment-lease]\n```\n\n> \U0001F3A8 Mockup per questa specifica disponibili in `docs/mockups/US-012/`.\n\n_Piano generato tramite ARchetipo Planning — 2026-07-24_"
+tasks:
+  - id: TASK-01
+    title: Modellare Run, assegnazioni ed eventi persistenti
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Creare il modello persistente e i tipi chiusi che rendono Run, singola assegnazione e timeline autorevoli in Control.
+
+      ## Read
+      - `control/migrations/003_runner_operations.sql` — identità e vincoli Runner da referenziare.
+      - `control/migrations/004_agent_profiles.sql` — relazione Organization/Project/Agent Profile.
+      - `control/src/modules/operations/domain.ts` — capacità e stati Runner esistenti.
+      - `control/src/modules/identity/repository.ts` — tipi schema Kysely e convenzioni database.
+
+      ## Change
+      - `control/migrations/005_remote_runs.sql` — aggiungere `remote_runs`, `run_assignments`, `remote_run_events`, foreign key Organization-scoped, check di stato e indici/unicità per una sola assegnazione viva.
+      - `control/src/modules/identity/repository.ts` — registrare i nuovi record nello schema tipizzato.
+      - `control/src/modules/operations/run-domain.ts` — aggiungere tipi, transition guard, compatibilità a insiemi, deadline e redazione; non introdurre code, pool, priorità o recovery.
+
+      ## Steps
+      1. Definire UUID `runId` come identità unica condivisa e stati `created`, `assigned`, `running`, `cancel_requested`, `completed`, `failed`, `cancelled`, `assignment_expired`.
+      2. Conservare Project, snapshot dell'Agent Profile e payload Session Run redatto sulla Run; conservare Runner, `assignmentId`, deadline, stato e digest del fencing token sull'assegnazione.
+      3. Rendere append-only gli eventi con sequenza monotona per Run e vincolo transazionale tra evento e proiezione.
+      4. Imporre una sola assegnazione non terminale per Run e vietare transizioni successive a `assignment_expired`.
+      5. Implementare compatibilità come supersets di executor/toolchain richiesti, senza inferire requisiti dal modello/provider.
+
+      ## Verify
+      - Run: `npm --prefix control run db:migrate:test`
+      - Run: `npm run typecheck:control && npm run lint:control`
+      - Expect: migrazioni forward-only riuscite, schema tipizzato senza diagnostiche e vincoli che rifiutano stati/relazioni non validi.
+
+      ## Done
+      - [ ] AC-1 — il dominio espone un predicato chiuso di compatibilità Runner/Profile.
+      - [ ] AC-2 — `runId`, stati e sequenza eventi hanno un'unica rappresentazione persistente.
+      - [ ] AC-3 — `assignment_expired` è un terminale distinguibile con deadline.
+      - [ ] AC-4 — il database impedisce più assegnazioni vive della stessa Run.
+      - [ ] AC-5 — `cancel_requested` è distinto da `cancelled`.
+
+      ## Blockers
+      US-010 deve restare DONE; US-011 deve essere almeno PLANNED e il suo schema Agent Profile disponibile.
+    ref: TASK-01
+  - id: TASK-02
+    title: Verificare repository, compatibilità e expiry concorrente
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Produrre prove PostgreSQL deterministiche per atomicità, selezione compatibile, scadenza e assenza di doppia esecuzione.
+
+      ## Read
+      - `control/test/integration/runner-operations.test.ts` — fixture PostgreSQL e isolamento Organization.
+      - `control/test/integration/agent-profile.test.ts` — creazione Profile/assignment effettivo.
+      - `control/test/fixtures/postgres.ts` — bootstrap e cleanup database.
+      - `control/src/modules/operations/run-domain.ts` — contratti prodotti da TASK-01.
+
+      ## Change
+      - `control/src/modules/operations/run-domain.test.ts` — test unitari per compatibilità e transizioni.
+      - `control/test/integration/remote-run-repository.test.ts` — test reali di vincoli, sequenza e concorrenza.
+      - Modifiche strettamente necessarie ai file fixture esistenti per applicare/reset della migration 005; non indebolire i test Runner/Profile.
+
+      ## Steps
+      1. Provare inclusione completa di executor/toolchain, esclusione dei Runner offline/revocati/incompatibili e tie-break deterministico.
+      2. Creare concorrenti offerte/accept sulla stessa Run e dimostrare un solo claim valido.
+      3. Portare un clock controllato oltre la deadline, applicare expiry due volte e verificare un solo evento terminale.
+      4. Inviare un accept tardivo e verificare zero transizioni `running`, zero seconda assegnazione e stato immutato `assignment_expired`.
+      5. Provare isolamento Organization e monotonicità delle sequenze evento.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run -- src/modules/operations/run-domain.test.ts test/integration/remote-run-repository.test.ts`
+      - Expect: tutte le prove passano senza timer reali; gli oracoli leggono righe e stati autorevoli, non soltanto chiamate mock.
+
+      ## Done
+      - [ ] AC-1 — solo un Runner online con tutti i requisiti è selezionabile.
+      - [ ] AC-2 — snapshot ed eventi condividono `runId` e ordine monotono.
+      - [ ] AC-3 — expiry idempotente produce il terminale riconoscibile.
+      - [ ] AC-4 — accept concorrente/tardivo non crea alcuna Run attiva duplicata.
+
+      ## Blockers
+      TASK-01.
+    ref: TASK-02
+  - id: TASK-03
+    title: Orchestrare creazione, assignment, lifecycle e cancellazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Objective
+      Implementare il servizio autorevole che crea una Session Run, assegna un Runner compatibile, accetta eventi validi e governa expiry/cancellazione.
+
+      ## Read
+      - `control/src/modules/operations/agent-profile-service.ts` — configurazione effettiva Project/Profile.
+      - `control/src/modules/operations/service.ts` — Runner dispatchable e audit.
+      - `control/src/modules/operations/repository.ts` — query e transazioni Operations.
+      - `control/src/modules/operations/connection-registry.ts` — sessioni live e dispatch corrente.
+      - `control/src/modules/operations/run-start-contract.ts` — envelope v1 esistente.
+
+      ## Change
+      - `control/src/modules/operations/run-repository.ts` — transazioni Run/assignment/eventi e query Organization-scoped.
+      - `control/src/modules/operations/run-service.ts` — create/list/get, selezione, accept/status/cancel e errori pubblici stabili.
+      - `control/src/modules/operations/assignment-expiry.ts` — sweep bootstrap/periodico con clock e scheduler iniettabili.
+      - `control/src/server/app.ts` — composition root e lifecycle del coordinator.
+      - Non implementare redispatch automatico, durable queue, lease renewal, Process Instance o workflow catalog.
+
+      ## Steps
+      1. Risolvere Project e Agent Profile effettivo nella stessa Organization prima di creare effetti.
+      2. Leggere le connessioni online e capacità persistite, filtrare con il predicato TASK-01 e scegliere `lastSeenAt DESC, runnerId ASC`.
+      3. In una transazione creare Run, singola offerta, eventi `created`/`assigned` e audit; se non esiste candidato restituire `no_compatible_runner` senza righe parziali.
+      4. Accettare `run.accept` mediante compare-and-set di assignment, deadline e fencing token; rifiutare replay/tardivi.
+      5. Validare ogni `run.status` contro actor Runner, assignment, sequenza e transition guard prima di aggiornare proiezione ed evento.
+      6. Per cancel idempotente, persistere `cancel_requested` prima del dispatch e non dichiarare `cancelled` fino al report Runner.
+      7. Eseguire sweep idempotente al bootstrap e periodico; terminalizzare senza creare una nuova offerta.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run -- src/modules/operations/run-domain.test.ts test/integration/remote-run-repository.test.ts`
+      - Run: `npm run typecheck:control && npm run lint:control`
+      - Expect: servizio e coordinator compilano senza diagnostiche; le prove di concorrenza ed expiry restano verdi.
+
+      ## Done
+      - [ ] AC-1 — create fallisce atomicamente se manca un Runner compatibile.
+      - [ ] AC-2 — il servizio è l'autorità dell'identità e delle transizioni osservabili.
+      - [ ] AC-3 — il coordinator recupera e scade offerte non accettate.
+      - [ ] AC-4 — expiry non avvia redispatch e gli accept tardivi sono non mutanti.
+      - [ ] AC-5 — cancel è persistito, auditato e idempotente.
+
+      ## Blockers
+      TASK-01 e TASK-02.
+    ref: TASK-03
+  - id: TASK-04
+    title: Estendere il trasporto con accept, stati e cancel
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Dimostrare e implementare il contratto bidirezionale Control–Runner mantenendo identità, fencing e ordine della Run.
+
+      ## Read
+      - `control/src/modules/operations/transport.ts` — hello/heartbeat e messaggi WebSocket.
+      - `control/src/modules/operations/connection-registry.ts` — singola sessione autorevole e dispatch.
+      - `control/test/integration/runner-transport.test.ts` — fixture socket e machine auth.
+      - `agent/src/run-protocol.mjs` — semantica pubblica `run.start`, `run.status`, `run.cancel`.
+
+      ## Change
+      - `control/src/modules/operations/run-transport-contract.ts` — envelope chiusi per offer metadata, accept e status correlati al protocollo v1.
+      - `control/src/modules/operations/transport.ts` — routing autenticato dei messaggi Runner al RunService.
+      - `control/src/modules/operations/connection-registry.ts` — dispatch di `run.start`/`run.cancel` con esito e nessun retry implicito.
+      - `control/src/modules/operations/connection-registry.test.ts` e `control/test/integration/remote-run-transport.test.ts` — prove contract/integration.
+      - Non esporre Pi RPC, transcript o fencing token nelle risposte browser/audit.
+
+      ## Steps
+      1. Allegare all'offerta gli opachi `assignmentId` e fencing token senza cambiare `runId` del comando applicativo.
+      2. Accettare dal socket autenticato solo `run.accept` e `run.status` per il Runner assegnato.
+      3. Rifiutare schema aperto, token errato, Run diversa, transizione fuori ordine, accept scaduto e messaggi da sessione sostituita.
+      4. Inviare `run.cancel` una sola volta per richiesta idempotente mentre la Run è attiva.
+      5. Provare disconnessione prima dell'accept, expiry, accept tardivo e assenza di seconda consegna.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run -- src/modules/operations/connection-registry.test.ts test/integration/runner-transport.test.ts test/integration/remote-run-transport.test.ts`
+      - Expect: ogni test passa; lo stesso `runId` appare su offerta, accept, stato e cancel, mentre expiry lascia zero Run `running` e zero seconda consegna.
+
+      ## Done
+      - [ ] AC-1 — l'offerta raggiunge esclusivamente la sessione del Runner scelto.
+      - [ ] AC-2 — tutti gli envelope conservano `runId` e stati canonici.
+      - [ ] AC-3 — accept oltre deadline è rifiutato con esito riconoscibile.
+      - [ ] AC-4 — nessuna nuova consegna o accettazione attiva segue l'expiry.
+      - [ ] AC-5 — un solo `run.cancel` correlato viene consegnato alla Run attiva.
+
+      ## Blockers
+      TASK-03.
+    ref: TASK-04
+  - id: TASK-05
+    title: Eseguire e riferire la Run dal Runner remoto
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Estendere il client Runner affinché accetti prima dell'esecuzione, riporti stati con la stessa identità e applichi la cancellazione.
+
+      ## Read
+      - `runner/src/control-client.ts` — connessione outbound e gestione `runner.command`.
+      - `runner/src/run-start-contract.ts` — validazione `run.start`.
+      - `runner/src/cli.ts` — composition root ed executor probe.
+      - `agent/src/run-protocol.mjs` e `agent/src/run-executor.mjs` — contratto applicativo e semantica cancellazione.
+
+      ## Change
+      - `runner/src/control-client.ts` — accept, status e gestione `run.cancel` con stato per Run.
+      - `runner/src/run-start-contract.ts` — validare metadata assignment/fencing senza aprire lo schema applicativo.
+      - `runner/src/cli.ts` e una porta executor dedicata sotto `runner/src/` se necessaria — esecuzione controllabile e cancellabile.
+      - Non aggiungere recovery dopo restart, spool, replay o concorrenza oltre la capacità dichiarata.
+
+      ## Steps
+      1. Conservare un registro in-memory bounded delle Run ricevute per rifiutare duplicati nella stessa sessione/processo.
+      2. Inviare `run.accept` valido prima di invocare l'executor; non eseguire se Control nega o chiude l'offerta.
+      3. Pubblicare `running` e terminale con `runId`, assignment/fencing e sequenza coerenti.
+      4. Instradare `run.cancel` all'executor della sola Run corrispondente e pubblicare `cancelled` soltanto dopo applicazione.
+      5. Redigere errori e log: nessun payload policy, credential o fencing token in output utente.
+
+      ## Verify
+      - Run: `npm run typecheck:runner && npm run lint:runner && npm run build:runner`
+      - Expect: package Runner compila senza diagnostiche e conserva il confine outbound esistente.
+
+      ## Done
+      - [ ] AC-2 — il Runner esegue e riferisce sempre lo stesso `runId` ricevuto.
+      - [ ] AC-4 — duplicati nella stessa sessione non avviano un secondo executor.
+      - [ ] AC-5 — cancel raggiunge l'executor corretto e produce un terminale riferito.
+
+      ## Blockers
+      TASK-04.
+    ref: TASK-05
+  - id: TASK-06
+    title: Provare il client Runner e lo smoke remoto
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Produrre evidenza che il Runner accetta, esegue, riferisce e cancella una sola Run senza regressioni di enrollment o revoca.
+
+      ## Read
+      - `runner/test/control-client.test.mjs` se presente, altrimenti i test sotto `runner/test/` — stile Node test del package.
+      - `test/e2e/runner-control-smoke.mjs` — processo/container Runner reale e oracoli JSON.
+      - `runner/src/control-client.ts` — lifecycle implementato da TASK-05.
+
+      ## Change
+      - `runner/test/control-client.test.mjs` — test con WebSocket/executor controllabili per accept-before-start, ordine, duplicati e cancel.
+      - `test/e2e/runner-control-smoke.mjs` — estendere gli oracoli Run senza rimuovere outbound, revoca e audit esistenti.
+      - Fixture strettamente necessarie sotto `test/e2e/`; mantenere bootstrap e cleanup idempotenti.
+
+      ## Steps
+      1. Bloccare l'executor per osservare che `run.accept` precede l'avvio e che il `runId` non cambia.
+      2. Consegnare duplicati e verificare una sola invocazione executor.
+      3. Inviare cancel durante `running` e verificare sequenza `running` → `cancelled` e cleanup.
+      4. Eseguire lo smoke reale con Profile/Runner compatibile e verificare created/assigned/running/completed.
+      5. Conservare gli oracoli preesistenti di revoca, nessuna porta pubblicata e audit redatto.
+
+      ## Verify
+      - Run: `npm run test:runner`
+      - Run: `npm run test:runner-control`
+      - Expect: tutti i test Runner passano e lo smoke stampa un JSON con un unico `runId`, sequenza canonica, una consegna/accettazione e zero duplicati.
+
+      ## Done
+      - [ ] AC-2 — executor, Control e output smoke condividono ID e stati.
+      - [ ] AC-4 — il conteggio executor resta uno anche con messaggi duplicati/tardivi.
+      - [ ] AC-5 — cancellazione osservata dal Runner termina la stessa Run.
+
+      ## Blockers
+      TASK-05.
+    ref: TASK-06
+  - id: TASK-07
+    title: Esporre API e pagina Operations Run
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Permettere a un operatore autenticato di creare, osservare e annullare Run remote tramite una pagina accessibile coerente con i mockup.
+
+      ## Read
+      - `docs/mockups/US-012/` — layout e stati approvati per la specifica.
+      - `control/src/modules/operations/http.ts` e `agent-profile-http.ts` — policy, error mapping e correlation id.
+      - `control/src/web/api/client.ts` — client tipizzato ed errori localizzati.
+      - `control/src/web/router.tsx`, `control/src/web/layouts/control-shell.tsx`, `control/src/web/pages/runners.tsx` — route, navigazione e pattern pagina Operations.
+      - `control/src/web/styles.css` — design system corrente.
+
+      ## Change
+      - `control/src/modules/operations/run-http.ts` — POST/list/get/cancel Organization-scoped con membership attiva e audit.
+      - `control/src/server/app.ts` — registrare API e fallback `/operations/runs`.
+      - `control/src/web/api/client.ts` — tipi/metodi Run e mapping errori stabili.
+      - `control/src/web/pages/runs.tsx` — form Session Run, dettaglio, timeline, expiry e dialog cancel.
+      - `control/src/web/router.tsx`, `control/src/web/layouts/control-shell.tsx`, `control/src/web/styles.css` — route/link/stili responsive e accessibili.
+      - Non mostrare fencing token, policy completa, secret o payload non redatti.
+
+      ## Steps
+      1. Esporre create con `projectId` e obiettivo; risolvere lato server il Profile effettivo e non accettare un `runnerId` scelto dal browser.
+      2. Esporre list/get con `runId`, stato, Runner assegnato, deadline e timeline redatta ordinata.
+      3. Esporre cancel idempotente solo per Run attive della Organization e mantenere correlation id nell'errore/successo.
+      4. Implementare pagina e navigazione da tastiera secondo mockup, con badge testuali e regioni live non rumorose.
+      5. Mostrare `no_compatible_runner`, `assignment_expired` e Runner offline come esiti distinti e comprensibili.
+      6. Richiedere conferma con conseguenza esplicita prima del cancel; dopo l'azione rileggere lo stato autorevole.
+
+      ## Verify
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control`
+      - Expect: API/UI compilano senza diagnostiche; `/operations/runs` entra nel bundle e il server serve il fallback senza esporre campi sensibili.
+
+      ## Done
+      - [ ] AC-1 — il browser non può forzare un Runner incompatibile e rende leggibile quello scelto da Control.
+      - [ ] AC-2 — pagina e timeline mostrano lo stesso `runId` e gli stati API.
+      - [ ] AC-3 — expiry e deadline sono testuali e riconoscibili.
+      - [ ] AC-5 — l'operatore può confermare cancel e osservare `cancel_requested`/terminale.
+
+      ## Blockers
+      TASK-03, TASK-04 e mockup presenti in `docs/mockups/US-012/`.
+    ref: TASK-07
+  - id: TASK-08
+    title: Dimostrare il lifecycle completo nel browser
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Attraversare UI, API, PostgreSQL, WebSocket e Runner reale per provare tutti gli esiti visibili di US-012.
+
+      ## Read
+      - `test/e2e/control-agent-profile.spec.ts` — bootstrap Project/Profile/Runner.
+      - `test/e2e/control-runner.spec.ts` — controllo del processo Runner e oracoli di consegna.
+      - `test/e2e/control-fixture.mjs` — clock, database e cleanup condivisi.
+      - `control/test/web/runners.test.tsx` e `control/test/web/agent-profiles.test.tsx` — test componenti con API fake.
+      - `control/src/web/pages/runs.tsx` — UI prodotta da TASK-07.
+
+      ## Change
+      - `control/test/integration/remote-run-http.test.ts` — authz, errori pubblici, replay cancel e redazione.
+      - `control/test/web/runs.test.tsx` — rendering form/timeline/expiry/dialog e reload autorevole.
+      - `test/e2e/control-remote-run.spec.ts` — scenari Playwright completi.
+      - `test/e2e/control-fixture.mjs` — helper deterministici per Profile, Runner, blocco accept, avanzamento clock e conteggi executor; cleanup idempotente.
+
+      ## Steps
+      1. Provare API cross-Organization, membership attiva, nessun candidato compatibile, creazione atomica e cancel replay.
+      2. Provare il componente con stati `assigned`, `running`, `cancel_requested`, `cancelled`, `completed`, `assignment_expired` e ID invariato.
+      3. Scenario Playwright positivo: creare Project/Profile, avviare Runner compatibile, creare Run e osservare `created` → `assigned` → `running` → `completed`.
+      4. Scenario cancel: fermare l'executor in `running`, confermare cancel e osservare una sola consegna e terminale `cancelled` con lo stesso ID.
+      5. Scenario expiry: bloccare accept/rendere Runner indisponibile, avanzare deterministicamente la deadline, osservare `assignment_expired`, inviare accept tardivo e verificare zero executor attivi/seconda consegna.
+      6. Verificare con un Runner incompatibile aggiuntivo che riceva zero comandi.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run -- test/integration/remote-run-http.test.ts test/web/runs.test.tsx`
+      - Run: `npm run build:control && npx playwright test test/e2e/control-remote-run.spec.ts`
+      - Expect: tutti gli scenari passano; gli oracoli browser osservano ID, testi di stato/timeline e conteggi reali, senza affidarsi soltanto a mock call.
+
+      ## Done
+      - [ ] AC-1 — l'E2E prova assegnazione solo al Runner compatibile e zero side effect senza candidati.
+      - [ ] AC-2 — UI, API e Runner condividono ID e sequenza completa.
+      - [ ] AC-3 — il browser mostra expiry/deadline dopo mancato accept.
+      - [ ] AC-4 — fixture prova zero executor attivi e zero redispatch dopo expiry.
+      - [ ] AC-5 — il browser richiede cancel e osserva una sola consegna e terminale reale.
+
+      ## Blockers
+      TASK-06 e TASK-07.
+    ref: TASK-08
+  - id: TASK-09
+    title: Documentare la semantica di assignment lease
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+      - TASK-08
+    body: |-
+      ## Objective
+      Registrare nella Wiki la decisione persistente su offerta, accept, expiry, fencing e assenza di redispatch automatico.
+
+      ## Read
+      - `docs/wiki/decisions/project-process-run-model.md` — identità e lifecycle Run.
+      - `docs/wiki/decisions/run-protocol.md` — contratto applicativo e limiti correnti.
+      - `docs/wiki/decisions/outbound-runner-transport.md` — trasporto e failure semantics escluse finora.
+      - `docs/wiki/architecture/context-map.md` e `docs/wiki/operations/development.md` — confini e flussi Operations.
+      - `.archetipo/plans/US-012-plan.yaml` — rationale del piano persistito.
+
+      ## Change
+      - `docs/wiki/decisions/remote-run-assignment-lease.md` — nuova ADR generated con marker completi, fonti e verifiche.
+      - Non approvare pagine né modificare manualmente hash/review metadata; gli aggiornamenti delle pagine esistenti restano nel contratto `update_after_acceptance` del review gate.
+
+      ## Steps
+      1. Documentare il problema di accept tardivo e impossibilità di promettere exactly-once su rete/processi fallibili.
+      2. Registrare la scelta di singola offerta persistita, deadline, CAS/fencing e terminale `assignment_expired` senza redispatch.
+      3. Confrontare dispatch fire-and-forget e coda/lease rinnovabile con tradeoff e futuro percorso di recovery.
+      4. Citare migration, servizio/coordinator, trasporto e test di concorrenza/E2E come evidenze.
+      5. Includere sezioni `context`, `decision`, `alternatives`, `consequences`, `verification` e link alle decisioni esistenti.
+
+      ## Verify
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Expect: `kind=validation_result`, `data.ok=true` e nessun errore strutturale sulla nuova decisione; warning semplici vengono corretti.
+
+      ## Done
+      - [ ] AC-3 — l'ADR rende esplicita la semantica di expiry.
+      - [ ] AC-4 — l'ADR motiva perché l'MVP non redistribuisce automaticamente e come il fencing rifiuta accept tardivi.
+
+      ## Blockers
+      TASK-03, TASK-04 e TASK-08 devono fornire evidenze repository verificabili.
+    ref: TASK-09
+  - id: TASK-10
+    title: Eseguire il gate finale di US-012
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+    body: |-
+      ## Objective
+      Confermare con la suite esatta che US-012 è implementata senza regressioni e che ogni task è DONE prima della review.
+
+      ## Read
+      - `.archetipo/plans/US-012-plan.yaml` — baseline, mappa evidenze e comandi vincolanti.
+      - Tutti i file modificati dai TASK-01..TASK-09 — verificare assenza di diagnostiche e scope drift.
+      - `AGENTS.md` — controlli CI Go obbligatori.
+
+      ## Change
+      - Nessuna modifica funzionale prevista; correggere soltanto difetti direttamente emersi dai controlli di questo gate nei file già in scope.
+      - `docs/test-results/US-012/review-summary.md` — persistere comandi, versioni e risultati redatti e riproducibili.
+
+      ## Steps
+      1. Eseguire focused unit/integration/component test per dominio, repository, trasporto, HTTP e UI Run.
+      2. Eseguire test/build/typecheck/lint completi di Control e Runner e lo smoke Runner-Control.
+      3. Eseguire Playwright `control-remote-run.spec.ts` e confermare gli oracoli AC-1..AC-5.
+      4. Eseguire i controlli Go richiesti dal repository, incluso golangci-lint; installarlo con il comando dichiarato se assente.
+      5. Validare la Wiki e registrare un riepilogo privo di secret, UUID temporanei e dati sensibili.
+      6. Marcare TASK-10 `DONE`, poi da `/Users/stefanoleli/Project/ARchetipo` eseguire `archetipo spec show US-012` e verificare che nessun task sia `TODO`; soltanto allora eseguire `archetipo spec review US-012`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run -- src/modules/operations/run-domain.test.ts test/integration/remote-run-repository.test.ts test/integration/remote-run-transport.test.ts test/integration/remote-run-http.test.ts test/web/runs.test.tsx`
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control && npm run test:control`
+      - Run: `npm run typecheck:runner && npm run lint:runner && npm run build:runner && npm run test:runner && npm run test:runner-control`
+      - Run: `npx playwright test test/e2e/control-remote-run.spec.ts`
+      - Run: `cd cli && test -z "$(gofmt -l .)" && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run after marking this task DONE: `archetipo spec show US-012`
+      - Expect: tutti i controlli passano; il riepilogo contiene evidenza AC-1..AC-5; l'ultimo envelope mostra 10 task `DONE` e zero `TODO` prima della richiesta di review.
+
+      ## Done
+      - [ ] AC-1 — suite integration/E2E prova selezione esclusivamente compatibile.
+      - [ ] AC-2 — suite contract/browser prova identità e stati coerenti end-to-end.
+      - [ ] AC-3 — suite coordinator/browser prova expiry riconoscibile.
+      - [ ] AC-4 — suite concurrency/E2E prova zero doppie esecuzioni.
+      - [ ] AC-5 — suite HTTP/Runner/browser prova cancellazione idempotente e terminale.
+      - [ ] Il gate è marcato DONE e `archetipo spec show US-012` mostra tutti i task DONE prima di `archetipo spec review US-012`.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06, TASK-07, TASK-08 e TASK-09.
+    ref: TASK-10

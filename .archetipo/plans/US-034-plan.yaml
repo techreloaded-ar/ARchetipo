@@ -1,0 +1,540 @@
+schema: archetipo/plan/v2
+spec_code: US-034
+body: |-
+  # US-034: Implementare una spec tramite un provider — Piano di implementazione
+
+  **Prodotto da:** ARchetipo Planning Team
+  **Data:** 2026-08-20
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-006 — Esecuzione locale e ciclo di delivery
+  **Priorità:** MEDIUM | **Punti:** 5 | **Bloccata da:** US-032 (DONE)
+
+  **User Story**
+  Come utilizzatore di un workspace con una spec pianificata, voglio avviare `Implementa` tramite un provider compatibile, così da eseguire il piano con lo stesso modello di esecuzione gestita usato per la pianificazione.
+
+  **Criteri di accettazione**
+  - AC-1 — L'azione `Implementa` è disponibile soltanto per una spec in uno stato ammesso dal Template.
+  - AC-2 — Un provider privo della capability di implementazione viene rifiutato prima di creare effetti sul repository o sullo stato della spec.
+  - AC-3 — All'avvio accettato la spec passa a `IN PROGRESS` e l'esecuzione identifica provider e piano di partenza.
+  - AC-4 — Al successo la spec raggiunge `REVIEW` e l'esecuzione espone un riepilogo verificabile di codice e test prodotti.
+  - AC-5 — Al fallimento la spec resta fuori da `REVIEW` e l'esecuzione conserva un errore interrogabile.
+
+  ---
+
+  ## Soluzione tecnica
+
+  L'azione `implement` viene aggiunta al modello di esecuzione gestita già usato da `plan`, `inception` e `backlog`, riusandone ogni pezzo invece di crearne uno parallelo: stessa `Request`, stesso record `Execution`, stesso store su file, stessa conferma dell'effetto contro il connettore. Il Template `fabbrica-del-software` **dichiara già** l'azione `implement` (`Implementa`, skill `archetipo-implement`, stati `PLANNED` e `IN PROGRESS`) e il viewer disegna i chip d'azione da quella dichiarazione: oggi l'avvio viene rifiutato solo perché `execution.RequiredCapability("implement")` non conosce l'azione. Il lavoro è quindi chiudere la catena azione → capability → prompt → ricevuta → conferma dell'effetto, senza toccare il frontend.
+
+  Punti chiave:
+
+  - **Azione e capability.** `execution.ActionImplement = "implement"` con `execution.CapabilitySpecImplement = "spec.implement"`, scope `spec`. Un provider che non dichiara `spec.implement` (oggi `arcipelago`) resta strutturalmente incompatibile: è la sorgente della prova di AC-2.
+  - **Il provider non tocca mai il connettore.** Come per `plan`, il provider avvia l'agente locale, gli fa invocare `/archetipo-implement {US-CODE}` e accetta una sola riga di ricevuta JSON finale. La skill `archetipo-implement` è già quella che esegue `archetipo spec start` e chiude con `archetipo spec review`, quindi la persistenza e le transizioni restano dove sono sempre state.
+  - **Ricevuta di implementazione.** Nuovo contratto condiviso `execution.ImplementReceipt` (`spec_code`, `status`, `tasks_done`, `tests`), parsato con lo stesso `parseTrailingReceipt` degli altri, accettato solo se dichiara `REVIEW`, almeno un task completato, un riepilogo test non vuoto e **quella** spec. È la metà "riepilogo di codice e test" di AC-4 e finisce nel payload del record.
+  - **Conferma dell'effetto.** `VerifyActionEffect` guadagna il caso `ActionImplement`: rilettura della spec (deve essere `REVIEW`) e dei task del piano (devono esistere e nessuno può essere rimasto `TODO`). Una ricevuta non confermata demansiona il record a `FAILED` con `UNCONFIRMED_EFFECT`, esattamente come per il piano. È la metà "verificabile" di AC-4.
+  - **Preflight condiviso.** `Service.Preflight` espone la fase che `Service.start` esegue già internamente (risoluzione del provider, capability, `ValidateConfig`) come metodo pubblico, così viewer e CLI possono rifiutare un provider incompatibile **prima** di qualunque scrittura, con una sola copia della regola.
+  - **Transizione a `IN PROGRESS` a carico del chiamante.** Dopo il preflight e la guardia sul piano, il chiamante (che è l'unico a possedere il connettore) porta la spec da `PLANNED` a `IN PROGRESS` e solo dopo avvia l'esecuzione. Su una spec già `IN PROGRESS` è un no-op.
+  - **Guardia sul piano.** Avviare `implement` su una spec senza task persistiti è rifiutato come precondizione mancante, e nel viewer il chip risulta non eseguibile con la ragione esplicita. Il record `RUNNING` che nasce da un avvio accettato porta quindi `provider_id`, `spec_code` e `spec_status_before: PLANNED` con la garanzia che un piano persistito esista: è l'identificazione di provider e piano di partenza richiesta da AC-3.
+  - **Provider locali.** `claude` e `codex` dichiarano `spec.implement` e ottengono il proprio percorso di esecuzione dell'azione (verifica che la skill `archetipo-implement` sia installata, prompt dedicato, accettazione della ricevuta di implementazione, payload con `tasks_done`, `tests`, `exit_code`, `duration_ms`). `arcipelago` resta volutamente fermo a `spec.plan`.
+
+  ### Decisioni architetturali
+
+  Il gate Wiki del workspace è disattivato (`wiki.enabled: false`), quindi le decisioni che avrebbero meritato una pagina `type: decision` sono registrate qui per intero.
+
+  **Decisione 1 — chi porta la spec a `IN PROGRESS`.**
+  *Contesto:* AC-3 chiede che la spec passi a `IN PROGRESS` "all'avvio accettato". Due opzioni erano praticabili.
+  *Opzione A (scartata):* lasciare la transizione all'agente, che la esegue comunque con `archetipo spec start` dentro la skill. È il minimo indispensabile in termini di codice, ma la transizione diventa un effetto collaterale del successo iniziale dell'agente: se il processo muore nei primi secondi la spec resta `PLANNED` benché l'avvio sia stato accettato, e il criterio diventa dimostrabile solo con un agente vero.
+  *Opzione B (scelta):* il chiamante esegue la transizione subito dopo il preflight, prima di far partire il dispatch. Il connettore è già nelle sue mani (`ws.conn` nel viewer, `conn` nella CLI), la transizione è deterministica e osservabile con un provider bloccato, e `archetipo spec start` della skill resta idempotente (rilegge lo stato, no-op se già `IN PROGRESS`, e crea comunque il worktree quando la modalità worktree è attiva, perché quel passo non dipende dalla transizione).
+  *Tradeoff:* la spec può restare `IN PROGRESS` dopo un fallimento del provider. È voluto e coerente con AC-5, che chiede solo che resti fuori da `REVIEW`: un rollback a `PLANNED` cancellerebbe la traccia di un lavoro potenzialmente già iniziato sul repository. Nessun rollback automatico, quindi, a differenza di PRD e backlog (dove l'artefatto nasce dentro la run e può essere ritirato intero).
+  *Verifica:* test HTTP con provider bloccato — la spec è `IN PROGRESS` mentre l'esecuzione è ancora `RUNNING`; e test di fallimento — la spec non è `REVIEW` e il record è `FAILED` con messaggio leggibile.
+
+  **Decisione 2 — cosa conferma un'implementazione riuscita.**
+  *Contesto:* la ricevuta è una dichiarazione dell'agente; la conferma deve essere un'ispezione del connettore.
+  *Opzione A (scartata):* accettare la sola ricevuta, come fa oggi il provider prima della conferma. Lascerebbe passare un agente che chiude la run senza aver mai spostato la spec.
+  *Opzione B (scartata):* confrontare `tasks_done` della ricevuta con il numero di task `DONE` letti dal connettore. Rende la ricevuta autoritativa su un conteggio di cui non è la fonte, e un piano modificato durante la run produrrebbe falsi fallimenti.
+  *Opzione C (scelta):* la regola è di stato, non di conteggio — la spec deve essere `REVIEW`, deve avere almeno un task e nessun task può essere rimasto `TODO`. È esattamente il completion gate che la skill `archetipo-implement` si impone, quindi una run conforme la supera sempre, e una run che ha "chiuso" senza finire il piano viene demansionata.
+  *Tradeoff:* un piano con un task lasciato volutamente `TODO` non è accettato. È il comportamento voluto: la skill vieta esplicitamente di chiedere la review con task aperti.
+  *Verifica:* test unitari su `VerifyActionEffect` per spec non in `REVIEW`, piano vuoto, task residuo `TODO`; test HTTP che demansiona una ricevuta non confermata.
+
+  **Nessun ADR ulteriore.** Il resto è applicazione di pattern già stabiliti nel repository (ricevuta condivisa, provider senza connettore, azione dichiarata dal Template).
+
+  ---
+
+  ## Baseline
+
+  Tutti i comandi sono eseguiti da `cli/` nella radice del progetto (`/Users/stefanoleli/Project/Archetipo`), che è anche `data.workdir` (la modalità worktree è disattivata).
+
+  | Verifica | Esito prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | Nessun output (pulito) | Ogni task che tocca file Go verifica che resti senza output |
+  | `cd cli && go build ./...` | Compila (`BUILD_OK`) | Ogni task deve lasciare il build verde |
+  | `cd cli && go vet ./...` | Nessun problema (`VET_OK`) | Ogni task deve lasciare `go vet` pulito |
+  | `cd cli && go test ./internal/execution/... ./internal/web/... ./internal/template/... ./internal/cli/...` | 843 test passati in 8 package | Nessun task può aggiungere fallimenti; i task di prodotto usano il sottoinsieme mirato |
+  | `golangci-lint run --timeout 5m ./...` | **Non eseguibile: `golangci-lint` non è installato su questa macchina** | Non è una verifica obbligatoria dei task. Il gate finale la esegue **solo se** il binario è presente, altrimenti registra esplicitamente che è stata saltata per prerequisito d'ambiente |
+
+  Prerequisiti d'ambiente (distinti dai fallimenti di codice): Go è installato e funzionante; `golangci-lint` non lo è (installabile con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`, opzionale per questa spec). Nessun test di questo piano richiede un binario `claude` o `codex` reale: i provider sono esercitati attraverso i loro seam iniettabili (`Runner`, `localrun.Starter`), come già fanno i test esistenti.
+
+  Nessun file toccato da questo piano presenta diagnostiche preesistenti di compilatore o vet.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | Workspace `filefs` reale con `US-901` portata in ogni stato (`TODO`, `PLANNED` con piano, `IN PROGRESS`, `REVIEW`, `DONE`), Template di produzione | Integrazione HTTP (`cli/internal/web`) | `POST /api/spec/US-901/execution {"action":"implement"}` risponde `201` su `PLANNED` e `IN PROGRESS` e `409` su `TODO`, `REVIEW`, `DONE` con messaggio che nomina processo, azione e stato; `GET /api/spec/US-901` espone il chip `implement` con `runnable: true` solo negli stati ammessi | TASK-08 |
+  | AC-2 | Stessa fixture, spec `PLANNED` con piano, provider di default che dichiara solo `spec.plan` | Integrazione HTTP + unitario (`execution`) | La risposta è `409` che nomina la capability `spec.implement`; **dopo** la richiesta `.archetipo/executions/` non contiene alcun record per la spec e la spec è ancora `PLANNED` (nessun effetto su stato o repository); a livello unitario `Service.Preflight` ritorna `*CapabilityError` senza aver creato alcun record nello store | TASK-08, TASK-04 |
+  | AC-3 | Spec `PLANNED` con piano di 1 task, provider bloccato dentro `Execute` | Integrazione HTTP | La risposta `201` porta `status: RUNNING`, `provider_id`, `spec_code` e `spec_status_before: PLANNED`; mentre l'esecuzione è ancora `RUNNING`, `GET /api/spec/US-901` riporta la spec `IN PROGRESS`; una spec `PLANNED` **senza** task persistiti riceve `409` e chip non eseguibile con ragione esplicita | TASK-08 |
+  | AC-4 | Spec `PLANNED` con piano, provider che completa il piano, sposta la spec a `REVIEW` e restituisce il payload di implementazione | Integrazione HTTP + unitario (`execution`, `claude`, `codex`) | Record terminale `SUCCEEDED` il cui `result.payload` contiene `result_summary` (la ricevuta re-serializzata), `tasks_done` e `tests`; `GET /api/spec/US-901` riporta `REVIEW` con tutti i task `DONE`; a livello di provider, `Execute` su una ricevuta di implementazione valida produce quel payload | TASK-08, TASK-05, TASK-06 |
+  | AC-5 | (a) provider che ritorna errore; (b) provider che dichiara `REVIEW` senza aver mosso nulla | Integrazione HTTP + unitario (`execution`) | (a) record `FAILED` con `error.message` non vuoto leggibile via `GET /api/execution/{id}`, spec **non** `REVIEW`; (b) il primo stato terminale leggibile è già `FAILED` con `error.code: UNCONFIRMED_EFFECT`, spec **non** `REVIEW`; unitariamente `VerifyActionEffect` demansiona su spec non in `REVIEW`, piano vuoto e task residuo `TODO` | TASK-08, TASK-03 |
+
+  La mappa è una mappa di accettazione, non un riassunto dei task. Nessun oracolo passa da un doppio: il connettore `filefs`, lo store dei record, il Template e la conferma dell'effetto restano quelli di produzione in ogni test HTTP, e l'unico doppio è il provider — che è esattamente il confine che US-034 rende pluggabile.
+
+  ---
+
+  ## Strategia di test
+
+  La strategia riusa la piramide già in piedi nel repository e non introduce alcuna infrastruttura nuova.
+
+  - **Unitari nel package `execution`**: mappatura azione → capability → scope, contratto della ricevuta di implementazione (estrazione dall'ultima riga utile, rifiuto di ricevute per un'altra spec, per uno stato diverso da `REVIEW`, senza task completati o senza riepilogo test), regola di conferma dell'effetto, `Service.Preflight` che rifiuta capability mancante e configurazione non valida senza scrivere nulla nello store, transizione di avvio idempotente.
+  - **Unitari nei package dei provider (`claude`, `codex`)**: costruzione del prompt (deterministico, nomina la spec e la skill `archetipo-implement`, chiede la ricevuta con `REVIEW`), rifiuto anticipato quando la skill non è installata nel workspace, classificazione dell'esito (turno mai completato, timeout, ricevuta assente, ricevuta di un'altra spec) e forma del payload di successo. Tutto attraverso i seam iniettabili, senza processi reali.
+  - **Integrazione HTTP nel package `web`**: è il livello che dimostra i cinque criteri, perché è il confine su cui il revisore preme `Implementa`. I test estendono l'apparato di `execution_run_test.go` (`newRunServer`, `startAction`, `awaitTerminal`, `runSpecDetail`, `recordFileCount`), che monta un workspace `filefs` vero.
+  - **CLI**: un test su `archetipo execution run US-XXX implement` che prova l'ordine degli effetti — provider incompatibile rifiutato senza toccare la spec, provider compatibile che porta la spec a `IN PROGRESS` prima del dispatch.
+  - **Regressione**: l'intera suite dei package toccati a ogni task, più build, vet e gofmt.
+
+  ### Rinuncia agli e2e di browser
+
+  **Motivo:** la spec non introduce alcuna superficie UI nuova. I chip d'azione, il pannello di esecuzione e il polling sono generici e già consegnati (US-028/US-030): il browser legge `label`, `runnable` e `unavailable_reason` dal server e non conosce né azioni né capability, quindi non esiste comportamento client nuovo da provare. Tutto ciò che i cinque criteri rendono osservabile — disponibilità dell'azione per stato, rifiuto del provider incompatibile senza effetti, passaggio a `IN PROGRESS`, riepilogo al successo, errore interrogabile al fallimento — attraversa il confine HTTP e viene provato lì con connettore, store, Template e conferma dell'effetto reali. Aprire un browser aggiungerebbe solo un secondo rendering degli stessi dati.
+  **Livello usato al suo posto:** test di integrazione HTTP deterministici in `cli/internal/web` con provider doppio e resto di produzione.
+  **Video dimostrativo:** la spec resta filmabile dall'interfaccia (avvio di `Implementa` su una spec pianificata). La decisione finale su registrazione o rinuncia appartiene a `archetipo-review`, non a questa fase.
+
+  _Piano generato da ARchetipo Planning — 2026-08-20_
+tasks:
+  - id: TASK-01
+    title: Dichiarare l'azione implement e la capability spec.implement
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      `execution.ActionImplement` esiste, richiede `execution.CapabilitySpecImplement` ed è un'azione di scope `spec`, con test che lo provano.
+
+      ## Read
+      - `cli/internal/execution/types.go` — costanti `ActionPlan`/`ActionInception`/`ActionBacklog`, `CapabilitySpecPlan`, funzioni `RequiredCapability` e `ActionScope`, tipo `ActionError`.
+      - `cli/internal/execution/provider_test.go` e `cli/internal/execution/service_test.go` — stile dei test del package (tabellari, nomi in inglese, messaggi che nominano il valore ottenuto e quello atteso).
+      - `cli/internal/template/template.go` — l'azione `implement` del Template (id `implement`, stati `PLANNED` e `IN PROGRESS`): l'id qui dichiarato deve coincidere esattamente con quello.
+
+      ## Change
+      - `cli/internal/execution/types.go` — aggiungere `ActionImplement ActionID = "implement"` accanto alle altre azioni, `CapabilitySpecImplement Capability = "spec.implement"` accanto a `CapabilitySpecPlan`, il caso in `RequiredCapability` e il caso in `ActionScope` (scope `ScopeSpec`).
+      - `cli/internal/execution/types_test.go` — nuovo file di test del package `execution` per la mappatura azione → capability → scope.
+      - Non goal: non modificare `Request`, `Execution`, `effect.go`, i provider o il Template in questo task.
+
+      ## Steps
+      1. In `types.go`, aggiungere la costante `ActionImplement` nel blocco delle azioni, mantenendo il commento esistente che distingue azione e capability.
+      2. Aggiungere `CapabilitySpecImplement Capability = "spec.implement"` subito dopo `CapabilitySpecPlan`, con una riga di commento che dice cosa dichiara (il provider sa eseguire il piano di una spec fino alla review).
+      3. Estendere `RequiredCapability` con `case ActionImplement: return CapabilitySpecImplement, nil`.
+      4. Estendere `ActionScope` aggiungendo `ActionImplement` al `case` che ritorna `ScopeSpec`.
+      5. Scrivere `cli/internal/execution/types_test.go` con un test tabellare che verifica, per tutte e quattro le azioni, la capability richiesta e lo scope, e che un'azione sconosciuta ritorna `*ActionError` in entrambe le funzioni.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/execution/...`
+      - Attese: `gofmt` senza output, build e vet puliti, tutti i test del package `execution` passati (baseline: verdi).
+
+      ## Done
+      - [ ] `RequiredCapability(ActionImplement)` ritorna `CapabilitySpecImplement` e `ActionScope(ActionImplement)` ritorna `ScopeSpec`, provato dal nuovo test.
+      - [ ] Un'azione sconosciuta continua a ritornare `*ActionError` (nessuna regressione sul comportamento esistente).
+      - [ ] AC-2 — la capability distinta esiste, quindi un provider che non la dichiara è rifiutabile in modo strutturale (il rifiuto vero è verificato in TASK-04 e TASK-08).
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Definire la ricevuta condivisa di implementazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Esiste un solo contratto di ricevuta per l'azione `implement`, con la sua regola di accettazione e i suoi test, riusando l'estrattore condiviso.
+
+      ## Read
+      - `cli/internal/execution/planreceipt.go` — `PlannedStatus`, `planReceiptFields`, `PlanReceipt`, `parseTrailingReceipt` (generico e condiviso), `hasReceiptFields`, `ParsePlanReceipt`, `AcceptPlanReceipt` e i loro commenti: sono il modello esatto da seguire.
+      - `cli/internal/execution/backlogreceipt.go` — seconda istanza dello stesso schema, per capire cosa è convenzione e cosa è specifico.
+      - `cli/internal/execution/planreceipt_test.go` e `backlogreceipt_test.go` — casi già coperti (nessuna ricevuta, ricevuta non ultima, JSON spurio dopo la ricevuta, campi mancanti).
+      - `cli/internal/domain/types.go` — `StatusReview`, per legare la costante invece di scrivere la stringa due volte.
+
+      ## Change
+      - `cli/internal/execution/implementreceipt.go` — nuovo file: `ReviewStatus`, `implementReceiptFields`, `ImplementReceipt`, `ParseImplementReceipt`, `AcceptImplementReceipt`.
+      - `cli/internal/execution/implementreceipt_test.go` — nuovo file di test.
+      - Non goal: non toccare `planreceipt.go` (l'estrattore generico è già riusabile così com'è) e non introdurre alcun accesso al connettore in questo file.
+
+      ## Steps
+      1. Creare `implementreceipt.go` con `const ReviewStatus = string(domain.StatusReview)`, documentando — come fa `PlannedStatus` — perché è legato alla costante di dominio e non riscritto a mano.
+      2. Dichiarare `var implementReceiptFields = []string{"spec_code", "status", "tasks_done", "tests"}`.
+      3. Dichiarare `type ImplementReceipt struct` con `SpecCode string \`json:"spec_code"\``, `Status string \`json:"status"\``, `TasksDone int \`json:"tasks_done"\``, `Tests string \`json:"tests"\``, documentando che `TasksDone` e `Tests` sono informativi (dichiarazione dell'agente) e che l'autorità sullo stato reale sta un livello sopra, dove si tiene il connettore.
+      4. Scrivere `ParseImplementReceipt(output string) (ImplementReceipt, error)` usando `parseTrailingReceipt[ImplementReceipt](output, implementReceiptFields)` e lo stesso messaggio di errore degli altri parser.
+      5. Scrivere `AcceptImplementReceipt(output, specCode string) (ImplementReceipt, error)`: dopo il parse, rifiutare quando `Status != ReviewStatus`, `TasksDone <= 0`, `strings.TrimSpace(Tests) == ""` o `SpecCode != specCode`, con il messaggio `the receipt does not declare a completed implementation for <specCode>`. Mantenere distinti i due modi di fallire (nessuna ricevuta vs ricevuta non accettabile), come documentato su `AcceptPlanReceipt`.
+      6. Scrivere i test: ricevuta valida presa dall'ultima riga utile anche con testo e altro JSON attorno; rifiuto per stato diverso da `REVIEW`; rifiuto per `tasks_done: 0`; rifiuto per `tests` vuoto o solo spazi; rifiuto per `spec_code` di un'altra spec; assenza totale di ricevuta.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/execution/...`
+      - Attese: `gofmt` senza output, build e vet puliti, tutti i test del package `execution` verdi, inclusi i nuovi.
+
+      ## Done
+      - [ ] `AcceptImplementReceipt` accetta soltanto una ricevuta che dichiara `REVIEW`, almeno un task completato, un riepilogo test non vuoto e la spec effettivamente dispacciata.
+      - [ ] I due modi di fallire restano distinguibili nei messaggi, provato da due asserzioni separate.
+      - [ ] AC-4 — il riepilogo di codice e test prodotto dall'agente ha un contratto tipizzato e verificato (l'esposizione nel record avviene in TASK-05/TASK-06).
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: 'Regole di stato dell''implementazione: piano richiesto, avvio a IN PROGRESS, conferma della review'
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Il package `execution` possiede, in un unico posto e sopra interfacce del consumatore, le tre regole di stato di `implement`: esiste un piano da cui partire, l'avvio accettato porta la spec a `IN PROGRESS`, il successo è confermato solo da una spec in `REVIEW` con il piano completato.
+
+      ## Read
+      - `cli/internal/execution/effect.go` — `SpecStateReader`, `VerifyActionEffect`, `ConfirmActionEffect`, `planEffect`, `UnconfirmedEffectError`, `discardPartial` e i loro commenti: qui vivono le regole che il viewer e la CLI condividono, e il package non importa mai `connector`.
+      - `cli/internal/execution/effect_test.go` — doppi di lettura già presenti e stile delle asserzioni.
+      - `cli/internal/connector/connector.go` righe 36-65 — firme esatte di `ReadSpecDetail`, `ReadSpecTasks`, `TransitionStatus`: le interfacce del consumatore devono combaciare senza adattatori.
+      - `cli/internal/cli/spec_cmd.go` — `transitionWithValidation` e `newSpecStartCmd`: `archetipo spec start` è idempotente (no-op se già nello stato di destinazione) e crea comunque il worktree; è ciò che rende sicura una transizione anticipata da parte del chiamante.
+      - `cli/internal/domain/types.go` — `StatusPlanned`, `StatusInProgress`, `StatusReview`, `StatusTodo`, `StatusDone`.
+
+      ## Change
+      - `cli/internal/execution/effect.go` — aggiungere: l'interfaccia consumatore `SpecTransitioner`; `BeginActionEffect`; `HasPersistedPlan`; `implementEffect`; il `case ActionImplement` in `VerifyActionEffect`.
+      - `cli/internal/execution/effect_test.go` — nuovi test per le tre regole.
+      - Non goal: nessun import di `connector` nel package `execution`; nessun rollback automatico dello stato della spec dopo un fallimento (scelta documentata nel piano); nessuna modifica ai casi `ActionPlan`, `ActionInception`, `ActionBacklog`.
+
+      ## Steps
+      1. Dichiarare `type SpecTransitioner interface { TransitionStatus(ctx context.Context, specRef string, newStatus domain.Status) (domain.WriteResult, error) }`, documentando — come per `SpecStateReader` — che è un'interfaccia del consumatore e che un connettore reale la soddisfa senza adattatori.
+      2. Scrivere `func HasPersistedPlan(ctx context.Context, reader SpecStateReader, specCode string) (bool, error)`: legge i task della spec e ritorna `len(tasks) > 0`. Un errore di precondizione mancante del connettore (`iox.CodePreconditionMissing`, già gestito così in `backlogEffect`) significa "nessun piano" e va tradotto in `false, nil`, non in un errore.
+      3. Scrivere `func BeginActionEffect(ctx context.Context, mover SpecTransitioner, action ActionID, spec domain.Spec) error`: ritorna `nil` per ogni azione diversa da `ActionImplement`; per `ActionImplement` ritorna `nil` se `spec.Status` è già `domain.StatusInProgress` (idempotenza) e altrimenti chiama `TransitionStatus(ctx, spec.Code, domain.StatusInProgress)` avvolgendo l'errore con il codice della spec. Documentare che è il chiamante — l'unico a possedere il connettore — a compiere questo effetto, e che non c'è rollback in caso di fallimento successivo perché AC-5 richiede solo che la spec resti fuori da `REVIEW`.
+      4. Scrivere `func implementEffect(ctx context.Context, reader SpecStateReader, specCode string) error` sul modello di `planEffect`: rileggere la spec (se non è `domain.StatusReview`, riportare stato trovato e atteso), rileggere i task (errore di lettura riportato com'è; lista vuota = "nessun task di piano"), e riportare i task rimasti `domain.StatusTodo` nominandone gli id. Documentare che la regola è quella del completion gate della skill `archetipo-implement`.
+      5. Aggiungere `case ActionImplement: reason = implementEffect(ctx, reader, specCode)` in `VerifyActionEffect`, prima del `default`.
+      6. Test in `effect_test.go`: (a) `HasPersistedPlan` con piano, senza task e con precondizione mancante; (b) `BeginActionEffect` che transita da `PLANNED`, che è no-op su `IN PROGRESS`, che non fa nulla per `ActionPlan`, e che propaga l'errore del connettore; (c) `VerifyActionEffect` con `ActionImplement` che accetta spec `REVIEW` con tutti i task `DONE`, e che demansiona a `FAILED` con `UNCONFIRMED_EFFECT` quando la spec è `IN PROGRESS`, quando non ci sono task e quando resta un task `TODO` — verificando in quest'ultimo caso che il messaggio nomini il task rimasto.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/execution/...`
+      - Attese: `gofmt` senza output, build e vet puliti, package `execution` interamente verde.
+
+      ## Done
+      - [ ] AC-3 — `BeginActionEffect` porta una spec `PLANNED` a `IN PROGRESS` ed è un no-op su una spec già `IN PROGRESS`, provato da test.
+      - [ ] AC-4 — `VerifyActionEffect(ActionImplement, ...)` ritorna `nil` solo per una spec `REVIEW` con almeno un task e nessun task `TODO`.
+      - [ ] AC-5 — una dichiarazione di successo non confermata riscrive il record come `FAILED` con `error.code: UNCONFIRMED_EFFECT` e un messaggio che dice perché.
+      - [ ] Il package `execution` continua a non importare `connector` (verificabile con `go list -deps` o semplicemente dall'assenza dell'import).
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Esporre il preflight del servizio per rifiutare un provider incompatibile senza effetti
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      `Service` espone come metodo pubblico la fase di verifica che già esegue prima di creare qualunque record, così i chiamanti possono rifiutare un provider incompatibile prima di toccare la spec, con una sola copia della regola.
+
+      ## Read
+      - `cli/internal/execution/service.go` — `Service.start` (risoluzione provider, `Capabilities`, `Supports`, `ValidateConfig`, generazione id, `store.Create`), `CapabilityError`, `Start`, `StartWorkspace`, `Run`, `RunIdempotent`, `validateActionObject`.
+      - `cli/internal/execution/service_test.go` — doppi di provider e store già presenti, e come i test contano le scritture sullo store.
+      - `cli/internal/execution/provider.go` — `Registry.Resolve`, `RegistryError`, `Supports`, `ConfigurationError`.
+
+      ## Change
+      - `cli/internal/execution/service.go` — estrarre da `start` la fase di verifica in un metodo esportato `Preflight`, e far sì che `start` la chiami (nessun cambiamento di comportamento, nessuna duplicazione della regola).
+      - `cli/internal/execution/service_test.go` — test di `Preflight`.
+      - Non goal: non cambiare firme o semantica di `Start`, `StartWorkspace`, `Run`, `RunIdempotent`; non spostare `validateActionObject` fuori da `start`.
+
+      ## Steps
+      1. Aggiungere `func (s *Service) Preflight(ctx context.Context, action ActionID, providerID string, providerConfig map[string]any) error`: risolve la capability richiesta dall'azione, risolve il provider dal registro, ne legge le `Capabilities` (avvolgendo l'errore in `*CapabilityError`), verifica `Supports` (altrimenti `*CapabilityError` senza `Err`), e chiama `provider.ValidateConfig` su una copia della configurazione. Documentare che non scrive nulla: è esattamente la parte di `start` che precede la creazione del record, esposta perché un chiamante possa rifiutare prima di produrre effetti sulla spec.
+      2. Riscrivere l'inizio di `start` in modo che invochi `Preflight` invece di ripetere quei passaggi, mantenendo l'ordine attuale dei fallimenti (oggetto dell'azione, capability, provider, configurazione) e riusando il provider risolto (risolverlo una seconda volta dal registro dopo il preflight è accettabile ed è la forma più semplice; l'importante è che la regola di accettazione stia in un solo posto).
+      3. Verificare che i messaggi d'errore esistenti non cambino: i test attuali del package e quelli di `web`/`cli` asseriscono su `*CapabilityError`, `*RegistryError` e `*ConfigurationError`.
+      4. Test: `Preflight` accetta un provider che dichiara la capability; ritorna `*CapabilityError` per un provider che dichiara solo `spec.plan` quando l'azione è `implement`; ritorna `*RegistryError` per un id sconosciuto; ritorna `*ConfigurationError` per una configurazione rifiutata; e — asserzione centrale — in tutti i casi di rifiuto lo store non ha ricevuto alcuna `Create` (contatore del doppio store a zero).
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/execution/... ./internal/web/... ./internal/cli/...`
+      - Attese: `gofmt` senza output, build e vet puliti, tutti i package verdi (baseline: 843 test verdi sui package toccati).
+
+      ## Done
+      - [ ] AC-2 — `Preflight` rifiuta un provider privo di `spec.implement` senza che alcun record venga creato, provato dal contatore dello store nel test.
+      - [ ] `start` continua a comportarsi esattamente come prima: i test preesistenti del package restano verdi senza modifiche.
+      - [ ] La regola di accettazione del provider esiste in un solo punto del codice.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Abilitare l'implementazione nel provider locale claude
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Il provider `claude` dichiara `spec.implement` e dispaccia l'azione a una sessione locale che invoca `/archetipo-implement`, accettando solo una ricevuta di implementazione per la spec dispacciata e producendo un payload con il riepilogo di codice e test.
+
+      ## Read
+      - `cli/internal/execution/claude/provider.go` — `Capabilities`, `Execute` (fork sull'azione, flusso a turno singolo del piano), `prepare`, `openSession`, `shutdown`, `ensureSkill`, `resultFor`, `diagnosticSuffix`, e le costanti `planSkillRelPath`, `inceptionSkillRelPath`, `backlogSkillRelPath`.
+      - `cli/internal/execution/claude/inception.go` — come un'azione dedicata vive in un file proprio e costruisce il proprio payload (`resultForInception`).
+      - `cli/internal/execution/claude/prompt.go` — `buildPrompt`, `buildInceptionPrompt`, `buildBacklogPrompt`: forma, determinismo e assenza di qualunque dato d'ambiente.
+      - `cli/internal/execution/claude/provider_test.go` — doppi `Runner`/`Starter`, costruzione delle sessioni finte, asserzioni sui messaggi d'errore.
+      - `skills/archetipo-implement/SKILL.md` sezioni "Execution Contract", "PHASE 0" e "PHASE 5" — la skill esegue `archetipo spec start`, poi `archetipo spec review`; il prompt deve chiedere la ricevuta solo dopo quest'ultimo.
+
+      ## Change
+      - `cli/internal/execution/claude/provider.go` — aggiungere `CapabilitySpecImplement` a `Capabilities`; aggiungere la costante `implementSkillRelPath = ".claude/skills/archetipo-implement/SKILL.md"`; instradare `req.Action == execution.ActionImplement` verso `executeImplement`; estrarre il corpo a turno singolo oggi inline in `Execute` in un helper riusabile.
+      - `cli/internal/execution/claude/implement.go` — nuovo file: `executeImplement` e `resultForImplement`.
+      - `cli/internal/execution/claude/prompt.go` — `buildImplementPrompt`.
+      - `cli/internal/execution/claude/implement_test.go` (o estensione di `provider_test.go`/`prompt` test esistenti) — test dell'azione.
+      - Non goal: non rendere conversazionale l'implementazione (resta a turno singolo come il piano); non cambiare i flag di `buildArgs`; non toccare inception e backlog.
+
+      ## Steps
+      1. Estrarre da `Execute` il flusso a turno singolo in un helper del package (ad esempio `runSingleTurn(runCtx context.Context, req execution.Request, cfg settings, dir, prompt, gerund string) (finalMessage string, exitCode int, stderr string, elapsed time.Duration, session *localrun.Session, err error)` oppure una piccola struct di esito): apertura sessione, attesa di `TurnDone`/`runCtx.Done()`, `shutdown`, classificazione di timeout, `waitErr` e turno non completato. `gerund` entra nei messaggi diagnostici (`planning %s` per il piano, `implementing %s` per l'implementazione) così le due azioni non producono la stessa frase.
+      2. Riscrivere il ramo del piano perché usi l'helper, senza cambiare i messaggi che i test esistenti asseriscono per il piano.
+      3. Scrivere `buildImplementPrompt(req execution.Request) string` in `prompt.go`: deterministico e puro come gli altri, deve dire di lavorare nella directory corrente, invocare `/archetipo-implement ` + `req.SpecCode`, portare a termine il piano persistito ed eseguire i test previsti, non incollare codice o diff nel messaggio finale, e chiudere con una sola riga di ricevuta `{"spec_code":"<code>","status":"REVIEW","tasks_done":<N>,"tests":"<riepilogo>"}` emessa **solo** dopo che la spec è in `REVIEW` (cioè dopo `archetipo spec review`), dove `<N>` è il numero di task completati e `<riepilogo>` una riga sull'esito della suite finale.
+      4. Scrivere `executeImplement` in `implement.go`: `ensureSkill(dir, implementSkillRelPath, "implementation")`, contesto con `cfg.Timeout`, `runSingleTurn` con `buildImplementPrompt(req)` e gerundio `implementing`, poi `execution.AcceptImplementReceipt(finalMessage, req.SpecCode)`; su rifiuto chiudere la sessione con `execution.RunCrashed` e un messaggio che dice che la sessione è finita senza implementare la spec, su accettazione `session.Close(execution.RunClosed, "")` e `resultForImplement`.
+      5. Scrivere `resultForImplement` sul modello di `resultFor`: payload con `command`, `model`, `exit_code`, `result_summary` (la ricevuta re-serializzata dalla struct, mai una fetta dell'output), `tasks_done`, `tests`, `duration_ms`. Nessuno stream dell'agente entra nel record.
+      6. Instradare in `Execute`: `if req.Action == execution.ActionImplement { return p.executeImplement(ctx, req, cfg, dir) }` accanto agli altri fork, dopo `prepare`.
+      7. Test: (a) `Capabilities` contiene `spec.implement`; (b) `buildImplementPrompt` nomina la spec, la skill `/archetipo-implement` e lo stato `REVIEW`, ed è identico a parità di `Request`; (c) `Execute` con azione `implement` fallisce prima di avviare qualunque processo quando `.claude/skills/archetipo-implement/SKILL.md` non esiste, con un messaggio che nomina `archetipo init --tool claude` (asserire che lo `Starter` finto non è stato invocato); (d) una sessione finta che chiude il turno con una ricevuta valida produce un `Result` il cui payload contiene `tasks_done`, `tests` e `result_summary`; (e) una sessione che chiude senza ricevuta, o con la ricevuta di un'altra spec, produce un errore che nomina la spec dispacciata.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/execution/...`
+      - Attese: `gofmt` senza output, build e vet puliti, package `execution` e sottopackage verdi, compresi i test preesistenti di `claude` sul piano (nessuna regressione dei messaggi diagnostici).
+
+      ## Done
+      - [ ] AC-4 — un run con ricevuta valida produce un payload che espone `tasks_done` e `tests` oltre a `result_summary`, provato dal test.
+      - [ ] AC-5 — turno non completato, timeout, ricevuta assente e ricevuta di un'altra spec producono tutti un errore con un messaggio che nomina il comando e la spec.
+      - [ ] `claude` dichiara `spec.implement`, quindi è un provider compatibile per l'azione.
+      - [ ] I test esistenti del provider sul piano restano verdi senza modifiche semantiche.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Abilitare l'implementazione nel provider locale codex
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Il provider `codex` dichiara `spec.implement` e dispaccia l'azione a una sessione locale che invoca `/archetipo-implement`, con lo stesso contratto di ricevuta e la stessa forma di payload del provider `claude`.
+
+      ## Read
+      - `cli/internal/execution/codex/provider.go` — `Capabilities`, `Execute` (oggi un unico flusso per il solo piano), `ensurePlanSkill`, `shutdown`, `resultFor`, `diagnosticSuffix`, costante `planSkillRelPath`.
+      - `cli/internal/execution/codex/prompt.go` — `buildPrompt` e `buildArgs`.
+      - `cli/internal/execution/codex/provider_test.go` e `appserver_test.go` — doppi di processo e app server, e come i test pilotano un turno completo senza un Codex reale.
+      - Il risultato di TASK-05 in `cli/internal/execution/claude/` — le due implementazioni devono chiedere la stessa cosa e accettare la stessa ricevuta; le differenze ammesse sono solo il comando, i percorsi delle skill e le diagnostiche.
+
+      ## Change
+      - `cli/internal/execution/codex/provider.go` — aggiungere `CapabilitySpecImplement` a `Capabilities`; aggiungere `implementSkillRelPath = ".agents/skills/archetipo-implement/SKILL.md"`; generalizzare `ensurePlanSkill` in una `ensureSkill(dir, relPath, label string)` come in `claude`; scomporre `Execute` in preparazione condivisa + un flusso per azione, e instradare `ActionImplement`.
+      - `cli/internal/execution/codex/implement.go` — nuovo file: `executeImplement` e `resultForImplement`.
+      - `cli/internal/execution/codex/prompt.go` — `buildImplementPrompt`.
+      - Test del package `codex` — nuovi casi per l'azione.
+      - Non goal: non toccare `appserver.go`/`translate.go`; non cambiare i flag di `buildArgs`; non introdurre conversazione multi-turno.
+
+      ## Steps
+      1. Scomporre `Execute`: estrarre la parte comune (parse config, working dir, `Available`) e il corpo a turno singolo (avvio sessione, `TurnDone`, `shutdown`, classificazione di timeout/`waitErr`/uscita senza turno completato) in helper del package, parametrizzati dal gerundio usato nelle diagnostiche (`planning` / `implementing`), preservando **esattamente** i messaggi che i test esistenti del piano asseriscono.
+      2. Generalizzare il controllo della skill installata (`ensureSkill(dir, relPath, label)`) e mantenere il messaggio che nomina `archetipo init --tool codex`.
+      3. Scrivere `buildImplementPrompt(req)` con lo stesso contenuto semantico di quello di `claude` (stessa skill, stessa ricevuta, stesso divieto di incollare codice nel messaggio finale): un provider che chiedesse qualcosa di diverso produrrebbe ricevute che l'altro non accetta.
+      4. Scrivere `executeImplement` e `resultForImplement` sul modello di `claude`, con `execution.AcceptImplementReceipt` e payload `command`, `model` (se il provider lo espone), `exit_code`, `result_summary`, `tasks_done`, `tests`, `duration_ms`.
+      5. Instradare `req.Action == execution.ActionImplement` in `Execute`.
+      6. Test: `Capabilities` contiene `spec.implement`; il prompt nomina spec, skill e `REVIEW`; l'assenza di `.agents/skills/archetipo-implement/SKILL.md` fallisce prima di avviare il processo; una sessione finta con ricevuta valida produce il payload atteso; ricevuta assente o di un'altra spec producono un errore che nomina la spec.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/execution/...`
+      - Attese: `gofmt` senza output, build e vet puliti, package `execution` e sottopackage verdi, inclusi tutti i test preesistenti di `codex` sul piano.
+
+      ## Done
+      - [ ] AC-4 — `codex` produce lo stesso payload verificabile di `claude` per un'implementazione riuscita.
+      - [ ] AC-5 — gli esiti di fallimento producono errori che nominano comando e spec.
+      - [ ] `codex` dichiara `spec.implement`; `arcipelago` resta volutamente su `spec.plan` (nessuna modifica al suo `Capabilities`).
+      - [ ] Nessuna regressione nei test esistenti del provider sul piano.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Avviare Implementa dal viewer con rifiuto anticipato e transizione a IN PROGRESS
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Il viewer avvia l'azione `implement` sulla spec: rifiuta prima di ogni effetto un provider incompatibile o una spec senza piano, porta la spec a `IN PROGRESS` all'avvio accettato e lascia al resto della macchina già esistente il record, il polling e la conferma dell'effetto.
+
+      ## Read
+      - `cli/internal/web/execution_run.go` — `handleRunSpecAction` per intero (ordine dei rifiuti: azione ignota 400, stato non ammesso 409, capability non dispacciabile 409, provider non usabile 409), `guardSingleExecution`, `actionAvailability`, `providerAvailability`, `reasonFor`, `decorateActions`, `supportedActions`, `mapExecutionStartError`, `writeProviderConfigError`.
+      - `cli/internal/web/handlers.go` righe 200-265 — il detail della spec legge già `tasks` prima di chiamare `decorateActions`.
+      - `cli/internal/template/template.go` — l'azione `implement` con i suoi stati ammessi (`PLANNED`, `IN PROGRESS`).
+      - `cli/internal/iox` — `NewConflict`, `NewInvalidInput`, `NewInternal`.
+      - `cli/internal/execution/effect.go` dopo TASK-03 — `HasPersistedPlan`, `BeginActionEffect`.
+      - `cli/internal/execution/service.go` dopo TASK-04 — `Service.Preflight`.
+
+      ## Change
+      - `cli/internal/web/execution_run.go` — `supportedActions` include `execution.ActionImplement`; `handleRunSpecAction` esegue preflight, guardia sul piano e transizione; `actionAvailability` porta lo stato del piano; `decorateActions` riceve il numero di task del piano.
+      - `cli/internal/web/handlers.go` — il detail passa `len(tasks)` a `decorateActions`.
+      - Non goal: nessuna modifica agli asset del frontend (`assets/app.js`, `index.html`, `app.css`) — i chip e il pannello di esecuzione sono già generici e guidati dal server; nessuna modifica alla rotta workspace-scoped (`workspace_execution.go`).
+
+      ## Steps
+      1. In `supportedActions`, aggiungere `execution.ActionImplement` alla lista `known`, mantenendo l'ordine di lettura (`plan`, `implement`, `inception`).
+      2. In `handleRunSpecAction`, dopo il controllo di disponibilità del runtime (`CheckAvailability`) e **prima** di `guardSingleExecution`, invocare `ws.service.Preflight(ctx, action, providerID, execution.CloneConfig(selection.Config))`; su errore rendere `*execution.ConfigurationError` con `writeProviderConfigError` e ogni altro errore con `mapExecutionStartError`, poi uscire. È questo il punto che garantisce AC-2: nessun record, nessuna transizione, nessun effetto sul repository.
+      3. Subito dopo il preflight, se `action == execution.ActionImplement`, chiamare `execution.HasPersistedPlan(ctx, ws.conn, code)`: su errore rispondere con `iox.NewInternal`; se non c'è piano rispondere `iox.NewConflict` con un messaggio che nomina la spec ("la spec non ha un piano persistito") e un rimedio ("pianificala prima di implementarla").
+      4. Dopo `guardSingleExecution` e **prima** di `ws.service.Start`, invocare `execution.BeginActionEffect(ctx, ws.conn, action, spec)`; su errore rilasciare la prenotazione (`ws.dispatch.release(code)`) e rispondere con `iox.NewInternal`. Aggiungere un commento che spiega perché la transizione è del chiamante e perché avviene dopo il preflight.
+      5. Estendere `actionAvailability` con un campo che dice se la spec ha un piano persistito e valorizzarlo in `actionAvailabilityFor` a partire dal numero di task passato dal detail; in `reasonFor`, per il solo id `implement`, restituire la ragione "questa spec non ha un piano persistito" quando il piano manca. Aggiornare `decorateActions` e la chiamata in `handlers.go` di conseguenza.
+      6. Verificare a mano il flusso residuo: il `confirm` già installato invoca `execution.VerifyActionEffect(ctx, ws.conn, outcome.Action, code, outcome)` e quindi copre `implement` senza altre modifiche; il pannello di esecuzione e il polling non richiedono nulla.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/web/... ./internal/execution/...`
+      - Attese: `gofmt` senza output, build e vet puliti, package `web` ed `execution` verdi (i test di accettazione dell'azione arrivano in TASK-08; qui devono restare verdi i 843 test di baseline).
+
+      ## Done
+      - [ ] AC-1 — l'azione `implement` è dispacciabile dal viewer e resta filtrata dal Template per stato (nessun controllo di stato duplicato nel codice del viewer).
+      - [ ] AC-2 — un provider senza `spec.implement` è rifiutato prima della prenotazione, della transizione e della creazione del record.
+      - [ ] AC-3 — un avvio accettato porta la spec a `IN PROGRESS` prima che il dispatch parta, e una spec senza piano non può essere avviata.
+      - [ ] Nessun file del frontend è stato modificato.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Test di accettazione HTTP dell'azione implement
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      I cinque criteri di accettazione sono provati al confine HTTP con connettore, store, Template e conferma dell'effetto di produzione, e un solo doppio: il provider.
+
+      ## Read
+      - `cli/internal/web/execution_run_test.go` per intero — `runTestProvider`, `blockedProvider`, `releasedProvider`, `seedRunSpecs`, `newRunServer`, `startAction`, `readExecution`, `awaitTerminal`, `runSpecDetail`, `specDetailResponse`, `recordFileCount`, `planningExecute`, e i test già scritti per `plan` (in particolare `TestRunSpecActionSuccessIsProvedByThePlannedSpec`, `...FailureLeavesTheSpecUnplannedAndRetryable`, `...DemotesASuccessTheConnectorDenies`, `...NeverPublishesAnUnverifiedSuccess`, `TestRunSpecActionRefusals`, `TestSpecDetailMarksAdmissibleActionsRunnable`): sono i modelli esatti da rispecchiare.
+      - `cli/internal/connector/filefs/connector.go` — `SavePlan`, `TransitionStatus`, `CompleteTask`, per costruire lo stato di partenza reale.
+      - `cli/internal/template/template.go` — stati ammessi per `implement`.
+
+      ## Change
+      - `cli/internal/web/execution_run_test.go` (o un nuovo `cli/internal/web/execution_implement_test.go` nello stesso package) — nuovi helper e nuovi test.
+      - Non goal: non modificare codice di produzione in questo task; se un test rivela un difetto, correggerlo nel task che possiede quel file e mantenere il test come oracolo.
+
+      ## Steps
+      1. Aggiungere un helper che porta `US-901` allo stato di partenza reale dell'implementazione: `SavePlan` con almeno due task `TODO`, poi `TransitionStatus(..., domain.StatusPlanned)`. Aggiungere un helper che porta la spec a uno stato arbitrario per i casi di AC-1.
+      2. Aggiungere un provider doppio che dichiara `spec.implement` (il `runTestProvider` esistente dichiara solo `spec.plan`: renderne configurabili le capability o affiancarne una variante) e un `implementingExecute(conn)` che simula l'agente onesto — completa i task con `CompleteTask`, esegue `TransitionStatus(..., domain.StatusReview)` e ritorna un payload con `result_summary`, `tasks_done` e `tests`.
+      3. **AC-1**: per ciascuno stato (`TODO`, `PLANNED`, `IN PROGRESS`, `REVIEW`, `DONE`) verificare il codice di risposta di `POST /api/spec/US-901/execution {"action":"implement"}` — `201` solo su `PLANNED` e `IN PROGRESS`, `409` altrove con messaggio che nomina processo, azione e stato — e che `GET /api/spec/US-901` esponga il chip `implement` con `runnable: true` solo negli stati ammessi.
+      4. **AC-2**: con il provider di default che dichiara solo `spec.plan`, verificare `409` con messaggio che nomina `spec.implement`, `recordFileCount(...) == 0` per la spec e spec ancora `PLANNED` nel detail.
+      5. **AC-3**: con il provider bloccato dentro `Execute`, verificare che la risposta `201` porti `status: RUNNING`, `provider_id`, `spec_code` e `spec_status_before: "PLANNED"`, e che `GET /api/spec/US-901` riporti `IN PROGRESS` mentre l'esecuzione è ancora aperta; poi rilasciare il provider e drenare. Verificare inoltre che una spec `PLANNED` senza task persistiti riceva `409` con la ragione sul piano mancante e che il chip risulti non eseguibile con la stessa ragione.
+      6. **AC-4**: con `implementingExecute`, attendere lo stato terminale e verificare `SUCCEEDED` con `result.payload` che contiene `tasks_done`, `tests` e `result_summary`; nel detail, spec `REVIEW` con tutti i task `DONE` e l'esecuzione ancora leggibile.
+      7. **AC-5a**: provider che ritorna errore — record `FAILED` con `error.message` non vuoto leggibile via `GET /api/execution/{id}`, spec **non** `REVIEW` nel detail. **AC-5b**: provider che ritorna una ricevuta di successo senza aver mosso nulla — il **primo** stato terminale leggibile è già `FAILED` con `error.code: UNCONFIRMED_EFFECT` (nessuna finestra `SUCCEEDED` osservabile), spec **non** `REVIEW`.
+      8. Dare a ogni test un nome che dice il comportamento provato e un commento che nomina l'`AC-N` coperto, come nei test esistenti del package.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `cd cli && go test ./internal/web/... -run Implement -count=1` e poi `cd cli && go test ./internal/web/...`
+      - Attese: i nuovi test passano; l'intero package `web` resta verde (baseline: verde).
+
+      ## Done
+      - [ ] AC-1 — provata la disponibilità dell'azione per stato, sia sull'avvio (`409`) sia sulla resa del chip.
+      - [ ] AC-2 — provato il rifiuto del provider incompatibile con zero record creati e spec immutata.
+      - [ ] AC-3 — provato che l'avvio accettato lascia la spec `IN PROGRESS` con un record `RUNNING` che nomina provider, spec e stato di partenza, e che senza piano l'avvio è rifiutato.
+      - [ ] AC-4 — provato che il successo porta la spec a `REVIEW` con task completati e un payload che espone il riepilogo di codice e test.
+      - [ ] AC-5 — provati entrambi i fallimenti (errore del provider, successo non confermato): spec fuori da `REVIEW` ed errore interrogabile sul record.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Allineare archetipo execution run all'ordine degli effetti dell'implementazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      `archetipo execution run US-XXX implement` applica lo stesso ordine del viewer — preflight, guardia sul piano, transizione a `IN PROGRESS`, dispatch, conferma dell'effetto — così la stessa configurazione produce lo stesso esito nei due punti d'ingresso.
+
+      ## Read
+      - `cli/internal/cli/execution_cmd.go` — `newExecutionRunCmd` per intero, `confirmActionEffect`, `mapExecutionRunError`, `mapExecutionError`, `defaultProviderConfigPath`.
+      - `cli/internal/cli/execution_cmd_internal_test.go` — `runExecutionRoot`, `decodeExecution`, i doppi `fake-success`/`fake-failure`, e in particolare `TestExecutionRejectedBeforeDispatch` e `TestExecutionRunRejectsManuallyInvalidDefaultBeforeRecord`: sono i modelli per asserire "rifiutato prima di qualunque effetto".
+      - `cli/internal/execution/effect.go` e `service.go` dopo TASK-03 e TASK-04 — `HasPersistedPlan`, `BeginActionEffect`, `Service.Preflight`.
+
+      ## Change
+      - `cli/internal/cli/execution_cmd.go` — nel corpo di `execution run`, dopo la creazione del `Service` e prima di `Run`/`RunIdempotent`: preflight, guardia sul piano per l'azione `implement`, transizione di avvio.
+      - `cli/internal/cli/execution_cmd_internal_test.go` — nuovi test per l'azione `implement`.
+      - Non goal: non aggiungere un controllo di stato del Template nella CLI (resta un ingresso di basso livello, come per `plan`); non cambiare il comportamento di `--request-id` né quello delle altre azioni.
+
+      ## Steps
+      1. Dopo aver costruito il `Service`, invocare `service.Preflight(ctx, action, resolvedProviderID, providerConfig)` e mappare l'errore con `mapExecutionRunError(err, fromDefault)` (che già distingue registro, capability e configurazione).
+      2. Se `action == execution.ActionImplement`, invocare `execution.HasPersistedPlan(ctx, conn, specCode)`; senza piano ritornare `iox.NewPrecondition` con un messaggio che nomina la spec e il rimedio (`archetipo spec plan <code>` o l'azione di pianificazione).
+      3. Invocare `execution.BeginActionEffect(ctx, conn, action, spec)` e, in caso di errore, ritornare `iox.NewInternal` senza dispacciare nulla.
+      4. Lasciare invariato tutto ciò che segue: `Run`/`RunIdempotent`, il ramo `reused`, `confirmActionEffect` (che ora copre anche `implement` grazie al caso aggiunto in `VerifyActionEffect`).
+      5. Test: (a) con un provider doppio che dichiara solo `spec.plan`, `execution run US-001 implement` fallisce con un errore che nomina `spec.implement`, non crea alcun record e lascia la spec nello stato iniziale; (b) con un provider doppio che dichiara `spec.implement` e simula l'agente onesto (task completati e spec portata a `REVIEW`), il comando riesce, la spec è `REVIEW` e il record è `SUCCEEDED`; (c) su una spec `PLANNED` senza task persistiti il comando fallisce come precondizione mancante senza creare record; (d) con un provider che fallisce, la spec resta fuori da `REVIEW` (è `IN PROGRESS`) e il record è `FAILED` con messaggio non vuoto.
+
+      ## Verify
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `cd cli && gofmt -l . && go build ./... && go vet ./... && go test ./internal/cli/... ./internal/execution/...`
+      - Attese: `gofmt` senza output, build e vet puliti, package `cli` ed `execution` verdi, inclusi i test preesistenti su `execution run ... plan`.
+
+      ## Done
+      - [ ] AC-2 — provato che nella CLI un provider senza `spec.implement` è rifiutato prima di creare record o muovere la spec.
+      - [ ] AC-3 — provato che un avvio accettato porta la spec a `IN PROGRESS` e che una spec senza piano non è avviabile.
+      - [ ] AC-4 / AC-5 — provati successo confermato e fallimento con errore interrogabile sul record.
+      - [ ] Le altre azioni della CLI non cambiano comportamento.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Gate finale — suite completa, controlli statici e verifica dello stato dei task
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+    body: |-
+      ## Objective
+      L'intero repository è verde sui controlli che il progetto considera obbligatori, e la spec è pronta per la review con tutti i task chiusi.
+
+      ## Read
+      - `AGENTS.md` sezione "Rules for CLI changes" — l'elenco esatto dei controlli che CI esegue e che vanno riprodotti in locale.
+      - La sezione `Baseline` del piano di questa spec — ciò che era già verde e cosa non è eseguibile su questa macchina.
+
+      ## Change
+      - Nessuna modifica di prodotto attesa. Se un controllo fallisce, correggere nel task che possiede quel file e tornare qui.
+
+      ## Steps
+      1. Eseguire, da `/Users/stefanoleli/Project/Archetipo`, nell'ordine: `cd cli && gofmt -l .`, `cd cli && go vet ./...`, `cd cli && go build ./...`, `cd cli && go test ./... -count=1`.
+      2. Eseguire `golangci-lint run --timeout 5m ./...` da `cli/` **solo se** `golangci-lint` è disponibile (`command -v golangci-lint`). Se non lo è, registrare esplicitamente nel riepilogo che il controllo è stato saltato per prerequisito d'ambiente assente — la baseline lo documenta come non eseguibile su questa macchina.
+      3. Verificare che nessun file toccato dalla spec abbia introdotto diagnostiche nuove rispetto alla baseline (vet e build puliti sono la prova).
+      4. Verificare che nessun asset del frontend sia stato modificato: `git status --short cli/internal/web/assets` non deve mostrare nulla.
+      5. Marcare questo task `DONE`.
+      6. Ricaricare la spec da `data.project_root` con `archetipo spec show US-034` e verificare che **nessun** task risulti ancora `TODO`.
+      7. Solo a quel punto richiedere la review con `archetipo spec review US-034 --commit-type feat`.
+
+      ## Verify
+      - Comandi: `cd cli && gofmt -l .` (nessun output), `cd cli && go vet ./...` (nessun problema), `cd cli && go build ./...` (compila), `cd cli && go test ./... -count=1` (tutti i test passano; la baseline sui package toccati era 843 test verdi e nessun nuovo fallimento è ammesso), `command -v golangci-lint && golangci-lint run --timeout 5m ./...` oppure annotazione esplicita di salto.
+      - Attese: nessun fallimento nuovo rispetto alla baseline registrata; l'unico esito "non eseguito" ammesso è `golangci-lint` per assenza del binario, dichiarato nel riepilogo.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5 — l'intera suite che li prova (package `web`, `execution`, `cli`) è verde in un'unica esecuzione completa.
+      - [ ] `gofmt`, `go vet` e `go build` puliti sull'intero modulo.
+      - [ ] `golangci-lint` eseguito e pulito, oppure saltato con motivazione esplicita registrata.
+      - [ ] `archetipo spec show US-034` non mostra alcun task `TODO` prima di `archetipo spec review`.
+
+      ## Blockers
+      None.
+    ref: TASK-10

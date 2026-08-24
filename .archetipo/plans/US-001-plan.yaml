@@ -1,0 +1,343 @@
+schema: archetipo/plan/v2
+spec_code: US-001
+body: |-
+  # US-001: Installare ARchetipo Agent senza alterare Core — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-07-23
+
+  ---
+
+  ## Spec
+
+  **Epica:** EP-001 — ARchetipo Agent locale e Run Protocol
+  **Priorità:** HIGH | **Punti:** 3
+
+  **Storia utente**
+  Come sviluppatore che usa già ARchetipo, voglio installare il componente Agent come capacità opzionale, così da continuare a usare CLI e skill esistenti anche senza il nuovo runtime.
+
+  **Criteri di accettazione**
+  - AC-1 — Un progetto può inizializzare e usare CLI e skill senza installare Agent.
+  - AC-2 — L'installazione di Agent non modifica il comportamento pubblico dei comandi Core esistenti.
+  - AC-3 — La rimozione di Agent lascia disponibili configurazione, CLI e skill Core.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Introdurre `agent/` come sorgente del package npm separato `@techreloaded/archetipo-agent`, mantenendo unidirezionale la dipendenza Agent → Core e lasciando invariato il package Core `@techreloaded/archetipo`. In questa spec l'eseguibile Agent espone soltanto un bootstrap deterministico di disponibilità/versione e verifica la compatibilità con il Core; la TUI, il caricamento delle skill in sessione e l'esperienza interattiva appartengono a US-002.
+
+  - Il manifest Agent dichiara Node.js `>=22.19`, un binario dedicato `archetipo-agent` e una dipendenza Core compatibile con la stessa release. Il manifest Core non acquisisce alcuna dipendenza o hook verso Agent.
+  - `scripts/build-npm.mjs`, `scripts/publish-npm.mjs`, `scripts/install-dev.mjs` e `scripts/uninstall-dev.mjs` trattano Agent come ottavo package indipendente: build e pubblicazione lo includono quando richiesto, mentre il percorso Core-only resta identico e l'uninstall Agent non rimuove il Core installato esplicitamente.
+  - Uno smoke test npm usa prefix e progetti temporanei, impacchetta gli artefatti locali, prova il percorso Core-only e quello Core+Agent, confronta gli oracoli Core prima/dopo l'installazione Agent e verifica che configurazione e skill sopravvivano alla rimozione Agent.
+  - Non vengono introdotti Control, Runner, esecuzione remota, provider LLM, sessioni o protocollo di Run.
+
+  ### Decisioni architetturali
+
+  Non è necessaria una nuova ADR: package separato, dipendenza unidirezionale e adozione progressiva applicano la decisione già accettata `decisions/four-layer-product-architecture`. Il piano aggiorna quella pagina con evidenze di repository dopo l'accettazione, senza scegliere un nuovo confine persistente, di sicurezza o di deployment.
+
+  ## Baseline
+
+  | Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `go test ./internal/cli -run 'TestInit_Cursor|TestDoctor_PassesAfterInit'` da `cli/` | Superato (`ok`, 0,488 s) | Il gate conserva i comportamenti Core di init e doctor. |
+  | `node --check scripts/build-npm.mjs && node --check scripts/install-dev.mjs && node --check scripts/uninstall-dev.mjs` | Superato senza output | Ogni modifica agli script deve restare sintatticamente valida; viene aggiunto anche `publish-npm.mjs` al controllo finale. |
+  | `npm test` | Superato; tutti i package Go risultano verdi | Il gate finale riesegue l'intera suite Core e non accetta regressioni. |
+
+  **Prerequisiti ambientali:** Node.js `>=22.19`, npm, Go come dichiarato in `cli/go.mod` e Git. Lo smoke di installazione deve usare directory temporanee e un prefix npm locale, senza richiedere pubblicazione, credenziali registry o modifiche al prefix globale dell'utente.
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |
+  |---|---|---|---|---|
+  | AC-1 | Progetto temporaneo vuoto con solo i tarball Core locali installati nel prefix isolato | E2E CLI/npm | `archetipo init --tool codex --connector file --yes`, `archetipo config show` e una skill installata funzionano senza che `@techreloaded/archetipo-agent` sia presente | TASK-04 |
+  | AC-2 | Secondo progetto temporaneo con Core inizializzato; snapshot normalizzato degli envelope Core prima dell'installazione Agent | E2E CLI/npm | Dopo l'installazione Agent, gli stessi comandi Core hanno exit code, `kind`, configurazione e artefatti equivalenti; `archetipo-agent --version` riporta versioni compatibili senza modificare il progetto | TASK-04 |
+  | AC-3 | Secondo progetto dopo installazione e bootstrap Agent, con configurazione e skill Core già create | E2E CLI/npm | Dopo `npm uninstall` del solo package Agent, il binario Agent non è più risolvibile mentre `archetipo config show`, `archetipo doctor` e i file delle skill/configurazione Core restano disponibili e invariati | TASK-04 |
+
+  ## Strategia di test
+
+  La verifica combina test Node deterministici del contratto Agent e uno smoke E2E del ciclo npm completo, mantenendo sempre osservabili i comandi e gli artefatti Core reali invece di sostituirli con mock.
+
+  - Test unitari del bootstrap Agent: versione, compatibilità Core, codici di uscita, assenza di scritture nel progetto e messaggi di errore senza secret.
+  - Test degli script di packaging: Agent viene versionato e incluso nella pubblicazione senza entrare nelle `optionalDependencies` del Core; gli ordinamenti pubblicano le dipendenze prima dei consumer.
+  - Smoke E2E su tarball e prefix isolati per Core-only, Core+Agent e rimozione del solo Agent; il test ripulisce sempre le directory temporanee.
+  - Regressione completa Core con `npm test` e controlli CI Go prescritti dal repository.
+
+  Non è richiesto browser E2E: la spec riguarda packaging e comandi terminale, non introduce UI o comportamento browser. La dimostrazione CLI è filmabile; l'eventuale registrazione spetta ad `archetipo-review`.
+
+  ## Impatto Wiki
+
+  ```yaml
+  wiki_impact:
+    read: [overview, decisions/four-layer-product-architecture, operations/development]
+    update_after_acceptance: [overview, decisions/four-layer-product-architecture, engineering/code-map, operations/development]
+    create: []
+  ```
+
+  _Piano generato tramite ARchetipo Planning — 2026-07-23_
+tasks:
+  - id: TASK-01
+    title: Creare il package Agent opzionale e il bootstrap di compatibilità
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Rendere disponibile un package sorgente `@techreloaded/archetipo-agent` installabile separatamente, con un bootstrap deterministico che identifica la versione Agent e verifica la compatibilità con il Core senza modificare il progetto.
+
+      ## Read
+      - `docs/PRD.md` — requisiti FR-001, FR-006 e struttura pubblica `agent/`
+      - `npm/archetipo/package.json` — metadati, versione e contratto di distribuzione Core
+      - `npm/archetipo/bin/archetipo.js` — pattern del binario npm esistente
+      - `docs/wiki/decisions/four-layer-product-architecture.md` — confine Core/Agent già accettato
+
+      ## Change
+      - `agent/package.json` — definire `@techreloaded/archetipo-agent`, Node.js `>=22.19`, bin `archetipo-agent`, file pubblicati e dipendenza compatibile da Agent verso Core
+      - `agent/bin/archetipo-agent.js` — aggiungere l'entrypoint eseguibile
+      - `agent/src/compatibility.mjs` — risolvere e confrontare in modo deterministico le versioni Agent/Core
+      - Non modificare `npm/archetipo/package.json` per aggiungere Agent come dipendenza, non introdurre Pi SDK, TUI, sessioni, provider o Run Protocol
+
+      ## Steps
+      1. Creare il manifest Agent con versione di sviluppo coerente con il repository e dipendenza Core esplicita nella sola direzione Agent → Core.
+      2. Implementare un comando bootstrap non interattivo con `--version` e verifica di compatibilità, con codici di uscita stabili e senza scritture nel working directory.
+      3. Risolvere la versione Core dalle API/metadati pubblici installati, senza importare moduli interni o duplicare asset Core.
+      4. Rendere l'entrypoint portabile su macOS, Linux e Windows tramite il campo `bin` npm.
+
+      ## Verify
+      - Run: `node --check agent/bin/archetipo-agent.js && node --check agent/src/compatibility.mjs`
+      - Run: `node agent/bin/archetipo-agent.js --version`
+      - Expect: i file sono sintatticamente validi; il comando termina 0, stampa identità/versione Agent e compatibilità Core, e non crea file nel progetto.
+
+      ## Done
+      - [ ] AC-1 — Il manifest Core resta privo di dipendenze verso Agent.
+      - [ ] AC-2 — Il bootstrap Agent usa soltanto il contratto pubblico/versionato del Core e non ne modifica configurazione o artefatti.
+      - [ ] AC-3 — Il package Agent non possiede né rimuove configurazione, runtime o skill Core.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Coprire il contratto del bootstrap Agent con test Node
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Fornire evidenza deterministica che il bootstrap Agent espone versione e incompatibilità in modo sicuro, senza effetti collaterali sul progetto.
+
+      ## Read
+      - `agent/bin/archetipo-agent.js` — parsing argomenti e codici di uscita introdotti da TASK-01
+      - `agent/src/compatibility.mjs` — regole di risoluzione e confronto versioni
+      - `test/web/task-markdown.test.mjs` — convenzioni `node:test` già presenti nel repository
+
+      ## Change
+      - `agent/test/compatibility.test.mjs` — casi compatibile, Core assente e versione incompatibile
+      - `agent/test/cli.test.mjs` — processo reale per `--version`, stderr/exit code e assenza di scritture
+      - Non usare rete, registry npm reale, credenziali o mock che nascondano stdout, stderr, exit code e filesystem osservabili
+
+      ## Steps
+      1. Creare fixture temporanee per metadati Core compatibili, mancanti e incompatibili.
+      2. Testare la funzione di compatibilità come unità pura.
+      3. Avviare l'entrypoint come processo figlio in una directory temporanea e asserire output, exit code e lista file prima/dopo.
+      4. Verificare che gli errori non includano env o contenuti potenzialmente sensibili.
+
+      ## Verify
+      - Run: `node --test agent/test/*.test.mjs`
+      - Expect: tutti i casi passano; gli oracoli includono exit code, output pubblico e assenza di modifiche al filesystem.
+
+      ## Done
+      - [ ] AC-2 — I test provano che il bootstrap compatibile termina 0 senza alterare il progetto.
+      - [ ] AC-3 — I test provano che Agent non scrive né cancella asset Core anche nei casi di errore.
+
+      ## Blockers
+      TASK-01 deve definire l'entrypoint e il contratto di compatibilità.
+    ref: TASK-02
+  - id: TASK-03
+    title: Integrare Agent nella build e pubblicazione npm senza accoppiarlo al Core
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Produrre e pubblicare `@techreloaded/archetipo-agent` come package separato della stessa release, preservando invariato il percorso di installazione Core-only e consentendo un ciclo dev install/uninstall isolato.
+
+      ## Read
+      - `scripts/build-npm.mjs` — sincronizzazione e versionamento dei sette package correnti
+      - `scripts/publish-npm.mjs` — discovery e ordine di pubblicazione
+      - `scripts/install-dev.mjs` — staging e installazione locale Core
+      - `scripts/uninstall-dev.mjs` — rimozione locale Core
+      - `.github/workflows/release.yml` — sequenza test, build e publish
+      - `npm/archetipo/package.json` — optionalDependencies limitate ai binari Core nativi
+
+      ## Change
+      - `scripts/build-npm.mjs` — sincronizzare `agent/` in `npm/archetipo-agent/` e allineare versione e dipendenza Core alla release
+      - `scripts/publish-npm.mjs` — pubblicare package nativi, Core e Agent in ordine dipendente e con lo stesso dist-tag
+      - `scripts/install-dev.mjs` — supportare esplicitamente lo staging/install Agent senza cambiare il default Core-only
+      - `scripts/uninstall-dev.mjs` — consentire la rimozione del solo Agent senza rimuovere Core e package nativo installati esplicitamente
+      - `package.json` — aggiungere script mirati per test/smoke Agent mantenendo `npm test` come regressione Core
+      - `.github/workflows/release.yml` — verificare il package Agent prima della pubblicazione
+      - `test/npm/agent-packaging.test.mjs` — verificare manifest generati, dipendenze e ordine di pubblicazione tramite directory/runner isolati
+      - Non aggiungere Agent alle dipendenze o optionalDependencies di `npm/archetipo/package.json`
+
+      ## Steps
+      1. Estendere il build affinché copi la sorgente Agent nello staging npm e sostituisca versione Agent e range Core con la versione release normalizzata.
+      2. Separare nel publisher i package nativi, il Core e l'Agent; pubblicare Agent soltanto dopo che il Core compatibile è disponibile.
+      3. Aggiungere opzioni dev esplicite per installare o rimuovere Agent, lasciando invariato `npm run install:dev` Core-only e impedendo che l'uninstall Agent tocchi il Core.
+      4. Aggiungere test Node dei manifest e dell'ordine senza pubblicare sul registry.
+      5. Integrare i controlli Agent nella release mantenendo i test Core esistenti.
+
+      ## Verify
+      - Run: `node --check scripts/build-npm.mjs && node --check scripts/publish-npm.mjs && node --check scripts/install-dev.mjs && node --check scripts/uninstall-dev.mjs`
+      - Run: `node --test test/npm/agent-packaging.test.mjs`
+      - Expect: sintassi e test passano; il manifest Core non contiene Agent, il manifest Agent dipende dalla versione Core della release e il publisher ordina nativi → Core → Agent.
+
+      ## Done
+      - [ ] AC-1 — Il percorso di build/installazione Core-only non richiede né risolve Agent.
+      - [ ] AC-2 — Agent è un package separato con compatibilità Core esplicita e senza hook che cambino i comandi Core.
+      - [ ] AC-3 — Il comando dev di rimozione Agent seleziona solo `@techreloaded/archetipo-agent`.
+
+      ## Blockers
+      TASK-01 deve fornire il package sorgente Agent.
+    ref: TASK-03
+  - id: TASK-04
+    title: Provare il ciclo Core-only, Core+Agent e rimozione Agent
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Objective
+      Automatizzare la dimostrazione di accettazione completa su tarball locali e prefix npm isolati, provando che Agent è additivo e rimovibile senza regressioni Core.
+
+      ## Read
+      - `test/e2e/run.mjs` — convenzioni per sandbox, processi e report E2E
+      - `scripts/install-dev.mjs` — staging locale dei package
+      - `npm/archetipo/bin/archetipo.js` — risoluzione del binario Core installato
+      - `cli/internal/cli/init_project_cmd.go` — asset creati da `archetipo init`
+      - `cli/internal/cli/doctor_cmd.go` — oracolo di operatività Core
+
+      ## Change
+      - `test/e2e/agent-installation-smoke.mjs` — nuovo smoke idempotente con due progetti/prefix temporanei e cleanup garantito
+      - `package.json` — esporre `test:agent-install-smoke`
+      - Non usare il prefix npm globale dell'utente, non richiedere rete o credenziali e non invocare un coding agent remoto
+
+      ## Steps
+      1. Impacchettare Core, package nativo corrente e Agent da sorgenti locali in una directory temporanea.
+      2. Nel primo prefix installare soltanto Core, inizializzare un progetto Codex, eseguire `config show` e `doctor`, e verificare almeno una skill installata e l'assenza di Agent.
+      3. Nel secondo prefix installare Core, inizializzare lo stesso fixture e salvare un oracle normalizzato di exit code, envelope e file Core.
+      4. Installare Agent nel secondo prefix, eseguire il bootstrap/versione Agent, ripetere gli oracoli Core e confrontarli ignorando soltanto campi temporali o path dichiaratamente variabili.
+      5. Disinstallare il solo Agent, verificare che il suo binario non sia più risolvibile e che config, doctor, CLI e skill Core siano ancora presenti e invariati.
+      6. Ripulire prefix, cache e progetti temporanei anche in caso di fallimento.
+
+      ## Verify
+      - Run: `npm run test:agent-install-smoke`
+      - Expect: lo smoke termina 0 e riporta separatamente Core-only, Core+Agent e post-rimozione; nessuna installazione compare nel prefix npm globale.
+
+      ## Done
+      - [ ] AC-1 — Il progetto Core-only inizializza configurazione e skill ed esegue comandi Core senza Agent installato.
+      - [ ] AC-2 — Dopo l'installazione Agent, gli oracoli pubblici Core confrontati restano equivalenti e il bootstrap Agent riporta compatibilità.
+      - [ ] AC-3 — Dopo la rimozione Agent, il binario Agent è assente mentre configurazione, CLI, doctor e skill Core restano operativi e invariati.
+
+      ## Blockers
+      TASK-02 deve rendere stabile il contratto CLI Agent; TASK-03 deve produrre tarball e comandi dev separati.
+    ref: TASK-04
+  - id: TASK-05
+    title: Documentare installazione opzionale e aggiornare la Wiki
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Rendere espliciti per utenti e manutentori i percorsi Core-only, Core+Agent e rimozione Agent, collegandoli alle evidenze di repository della decisione a quattro layer.
+
+      ## Read
+      - `README.md` — installazione utente corrente
+      - `npm/archetipo/README.md` — documentazione del package Core
+      - `docs/wiki/overview.md` — panoramica del sistema
+      - `docs/wiki/decisions/four-layer-product-architecture.md` — decisione da aggiornare con evidenze implementate
+      - `docs/wiki/engineering/code-map.md` — mappa dei package e directory
+      - `docs/wiki/operations/development.md` — build, test e release
+
+      ## Change
+      - `README.md` — distinguere comandi Core-only, installazione Agent opzionale e rimozione del solo Agent
+      - `npm/archetipo/README.md` — dichiarare che Core non installa né richiede Agent
+      - `agent/README.md` — documentare bootstrap disponibile e rinviare TUI/sessioni a capability successive
+      - `docs/wiki/overview.md` — descrivere Agent come layer opzionale implementato
+      - `docs/wiki/decisions/four-layer-product-architecture.md` — aggiungere evidenze del package e degli smoke test senza cambiare la decisione accettata
+      - `docs/wiki/engineering/code-map.md` — mappare `agent/` e il confine di dipendenza
+      - `docs/wiki/operations/development.md` — aggiungere build, test, installazione dev e release Agent
+      - Non documentare TUI, provider, sessioni, Runner o Control come già disponibili
+
+      ## Steps
+      1. Aggiungere esempi copiabili per installare Core, aggiungere Agent e rimuovere Agent conservando Core.
+      2. Spiegare la direzione Agent → Core e la policy di versione compatibile.
+      3. Aggiornare le quattro pagine Wiki con fonti puntuali verso manifest, script e smoke test.
+      4. Mantenere le pagine modificate in stato `generated` per la gate di review e aggiornare indice/relazioni secondo il contratto Wiki.
+
+      ## Verify
+      - Run: `rg -n "archetipo-agent|Core-only|Agent" README.md npm/archetipo/README.md agent/README.md docs/wiki/overview.md docs/wiki/decisions/four-layer-product-architecture.md docs/wiki/engineering/code-map.md docs/wiki/operations/development.md`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Expect: ogni percorso è documentato con comandi coerenti; la validazione Wiki restituisce `kind=validation_result` e `data.ok=true`.
+
+      ## Done
+      - [ ] AC-1 — La documentazione mostra il percorso Core-only senza Agent.
+      - [ ] AC-2 — La documentazione e la Wiki descrivono Agent come layer aggiuntivo con dipendenza unidirezionale.
+      - [ ] AC-3 — La rimozione del solo Agent è documentata e non include config, skill o package Core.
+
+      ## Blockers
+      TASK-03 deve stabilizzare i comandi di distribuzione; TASK-04 deve fornire le evidenze da citare.
+    ref: TASK-05
+  - id: TASK-06
+    title: Eseguire il gate finale di compatibilità Core e Agent
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Confermare con l'intera suite prescritta che il package Agent è installabile e rimovibile senza introdurre regressioni, diagnostica o mutazioni nei percorsi Core esistenti.
+
+      ## Read
+      - `AGENTS.md` — controlli CI obbligatori prima della consegna
+      - `package.json` — suite Core e smoke Agent
+      - `.github/workflows/ci.yml` — lint e test multipiattaforma
+      - `.github/workflows/release.yml` — gate di release
+      - `.archetipo/specs/US-001.yaml` — criteri e stato dei task
+
+      ## Change
+      - Solo correzioni strettamente necessarie nei file modificati dai TASK-01..TASK-05 quando un controllo fallisce; non ampliare lo scope funzionale
+      - `docs/test-results/` — salvare un riepilogo dei comandi, esiti e ambiente se previsto dal flusso di implementazione
+
+      ## Steps
+      1. Eseguire i test unitari Agent, i test di packaging e lo smoke E2E installa/rimuovi.
+      2. Eseguire la regressione Core completa e i controlli Go richiesti da CI; correggere ogni diagnostica introdotta nei file modificati.
+      3. Eseguire la validazione Wiki e i controlli sintattici degli script Node.
+      4. Marcare `TASK-06` come `DONE` soltanto dopo tutti gli esiti verdi.
+      5. Da `/Users/stefanoleli/Project/ARchetipo`, eseguire `archetipo spec show US-001` e confermare che nessun task sia ancora `TODO`; soltanto allora è consentito eseguire `archetipo spec review US-001`.
+
+      ## Verify
+      - Run: `node --test agent/test/*.test.mjs test/npm/agent-packaging.test.mjs`
+      - Run: `npm run test:agent-install-smoke`
+      - Run: `node --check scripts/build-npm.mjs && node --check scripts/publish-npm.mjs && node --check scripts/install-dev.mjs && node --check scripts/uninstall-dev.mjs`
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run after marking this gate DONE: `archetipo spec show US-001`
+      - Expect: tutti i comandi terminano 0, `gofmt -l .` non produce output, golangci-lint riporta 0 issue, la Wiki ha `data.ok=true`, lo smoke prova AC-1..AC-3 e lo spec ricaricato non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — Suite Core e scenario Core-only verdi senza Agent.
+      - [ ] AC-2 — Test Agent/packaging e confronto degli oracoli Core verdi dopo installazione Agent.
+      - [ ] AC-3 — Scenario post-rimozione verde con config, CLI e skill Core disponibili.
+      - [ ] Il gate è marcato `DONE` e `archetipo spec show US-001` conferma tutti i task `DONE` prima della richiesta di review.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04 e TASK-05 devono essere completati.
+    ref: TASK-06

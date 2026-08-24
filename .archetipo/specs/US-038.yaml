@@ -1,0 +1,45 @@
+schema: archetipo/spec/v2
+code: US-038
+title: Dialogare con una run locale di Codex
+epic:
+  code: EP-006
+  title: Esecuzione locale e ciclo di delivery
+priority: HIGH
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-038: Dialogare con una run locale di Codex
+
+  **Epic:** EP-006 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come operatore che lavora senza hub remoto,
+  voglio seguire una run locale di Codex e inviarle messaggi mentre è in corso,
+  così da condurre un lavoro conversazionale con lo stesso comportamento che oggi ho soltanto con un provider remoto.
+
+  **Dimostrazione**
+  Partendo da un workspace con Codex come provider predefinito, il revisore avvia un'azione conversazionale, osserva la storia della run crescere in ordine e senza duplicazioni, invia un messaggio e lo vede comparire nella storia solo quando il processo lo riemette. Chiede poi la cancellazione e osserva lo stato riportato dal processo. Su una run già chiusa ripete messaggio e cancellazione e osserva un rifiuto motivato con la storia byte per byte invariata. Consultando l'elenco dei provider osserva che Codex dichiara la capacità di dialogo e che un provider che non la dichiara la espone come assente.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Codex dichiara la capacità di dialogo nell'elenco dei provider, accanto alle capacità che già espone.
+  - [ ] AC-2 — La run locale espone una storia ordinata e riprendibile dallo stesso cursore usato per le run remote, senza eventi duplicati dopo una riconnessione.
+  - [ ] AC-3 — Un messaggio inviato durante la run raggiunge il processo ed entra nella storia soltanto quando il processo lo riemette.
+  - [ ] AC-4 — La cancellazione riporta lo stato che il processo conferma, mai uno stato terminale derivato localmente.
+  - [ ] AC-5 — Messaggio e cancellazione su una run non più attiva sono rifiutati con il motivo e lasciano la storia invariata.
+  - [ ] AC-6 — Nessuna credenziale o materiale di sessione di Codex entra nella configurazione del workspace o nelle risposte esposte dal viewer.
+
+  **Fuori ambito**
+  Dialogo con il provider Claude, esecuzione di azioni diverse da quella in corso, persistenza della conversazione oltre la durata della run e ripresa di una run chiusa.
+history:
+  - status: TODO
+    at: "2026-08-19T11:03:29Z"
+  - status: PLANNED
+    at: "2026-08-19T14:45:09Z"
+  - status: IN PROGRESS
+    at: "2026-08-19T14:45:29Z"
+  - status: REVIEW
+    at: "2026-08-19T15:11:32Z"
+  - status: DONE
+    at: "2026-08-19T15:12:08Z"

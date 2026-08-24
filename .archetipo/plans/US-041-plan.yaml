@@ -1,0 +1,780 @@
+schema: archetipo/plan/v2
+spec_code: US-041
+body: |-
+  # US-041: Generare il backlog iniziale dalla UI — Piano di implementazione
+
+  **Prodotto da:** Team di pianificazione ARchetipo
+  **Data:** 2026-08-20
+
+  ---
+
+  ## Spec
+
+  **Epica:** EP-005 — Esperienza operativa ARchetipo
+  **Priorità:** HIGH | **Punti:** 5 | **Bloccata da:** US-040 (stato attuale: `DONE`, precondizione soddisfatta)
+
+  **User Story**
+  Come persona che ha appena ottenuto il PRD, voglio generare il backlog iniziale dalla UI, così da avere epiche e specifiche senza preparare payload né invocare la CLI.
+
+  **Criteri di accettazione**
+  - AC-1 — Con un PRD presente e nessun backlog la UI offre la generazione del backlog iniziale.
+  - AC-2 — Al termine con esito positivo epiche e specifiche sono persistite e la board le mostra senza riavviare il viewer.
+  - AC-3 — Con un backlog già esistente l'azione di generazione iniziale non è offerta.
+  - AC-4 — Una run fallita o interrotta lascia il backlog nello stato precedente e ne dichiara il motivo.
+
+  **Fuori ambito**
+  Rigenerazione o sostituzione di un backlog esistente, modifica delle specifiche generate, pianificazione e priorità automatiche.
+
+  ---
+
+  ## Soluzione tecnica
+
+  US-040 ha già costruito, per l'inception, l'intera catena di una **azione il cui oggetto è il workspace**: la `template.WorkspaceAction`, la capability `workspace.inception`, il receipt JSON di chiusura, la conferma dell'effetto contro il connettore, il rollback dell'artefatto parziale, le rotte `GET /api/workspace/actions` e `POST /api/workspace/execution` e il pannello azione/esecuzione/run montato sulla modale PRD. US-041 **non introduce un secondo meccanismo**: aggiunge una seconda azione di workspace lungo la stessa catena, cambiando solo ciò che è realmente diverso — l'artefatto prodotto (il backlog invece del PRD), la precondizione che la ammette (PRD presente e nessun backlog invece di nessun PRD) e la skill invocata (`archetipo-spec` invece di `archetipo-inception`).
+
+  L'azione si chiama `backlog`, la capability `workspace.backlog`, lo scope resta `ScopeWorkspace` (chiave di prenotazione `""`, quindi una sola esecuzione di workspace alla volta: l'inception e la generazione del backlog non possono correre insieme, che è la semantica voluta perché la seconda dipende dall'output della prima).
+
+  I punti chiave, dal basso verso l'alto:
+
+  - **Vocabolario dell'esecuzione** (`cli/internal/execution/types.go`): `ActionBacklog = "backlog"`, `CapabilityWorkspaceBacklog = "workspace.backlog"`, aggiunte a `RequiredCapability` e ad `ActionScope`. Nessun campo nuovo sul record: lo scope resta derivato dall'azione.
+  - **Receipt** (`cli/internal/execution/backlogreceipt.go`): `{"artifact":"backlog","status":"WRITTEN","epics":<N>,"specs":<M>}`, con `ParseBacklogReceipt`/`AcceptBacklogReceipt` costruiti sullo stesso `parseTrailingReceipt` già condiviso da piano e PRD. La regola di accettazione richiede `artifact == "backlog"`, `status == WRITTEN`, `specs > 0` ed `epics > 0`. Come per gli altri receipt è condizione necessaria e mai sufficiente: è la dichiarazione dell'agente, non un'ispezione del filesystem.
+  - **Conferma dell'effetto** (`cli/internal/execution/effect.go`): un nuovo `case ActionBacklog` in `VerifyActionEffect` interroga un `BacklogStateReader` (interfaccia del consumatore, soddisfatta da qualunque connettore perché `ReadExistingBacklog` è nell'interfaccia base) e nega il successo quando il backlog riletto non ha specifiche o non ha epiche. È l'unico punto che decide se il successo dichiarato è vero, ed è verificato **dentro** la scrittura terminale del record — mai dopo — esattamente come per l'inception, perché il browser fa polling ogni due secondi e si ferma al primo stato terminale che legge.
+  - **Rollback** (`cli/internal/execution/effect.go` + `cli/internal/connector/capabilities.go` + `filefs`): nuova capability opzionale `connector.BacklogDiscarder` con `DiscardBacklog(ctx) (bool, error)`, implementata da `filefs` rimuovendo i file spec sotto `.archetipo/specs/` e l'indice `.archetipo/backlog.yaml`. Il gemello di `DiscardPartialPRD`, `DiscardPartialBacklog`, applica le stesse due condizioni portanti: si annulla **solo** se il workspace non aveva già un backlog prima della run (catturato prima dell'avvio) e **solo** se l'esito è `FAILED`. Le due funzioni condividono un helper privato così la regola non può divergere.
+  - **Template** (`cli/internal/template/template.go`): seconda `WorkspaceAction` `{ID: "backlog", Label: "Genera backlog", Skill: "archetipo-spec"}`. Il Template dichiara che il processo offre l'azione; **se** possa partire adesso resta una decisione del server, come già documentato sul tipo.
+  - **Provider claude** (`cli/internal/execution/claude/`): la generazione del backlog è, come l'inception, una conversazione — la skill `archetipo-spec` può porre domande di chiarimento — quindi riusa il ciclo `converse` invece del percorso a turno singolo del planning. `converse`/`drainTurns` vengono parametrizzati su un `accept func(string) bool` e restituiscono il messaggio finale, così l'unico codice che sa *quale* receipt chiude la run è il chiamante. Si aggiungono `backlogSkillRelPath = ".claude/skills/archetipo-spec/SKILL.md"`, `buildBacklogPrompt` ed `executeBacklog`; `Capabilities` dichiara anche `workspace.backlog`. Codex e arcipelago restano invariati: oggi non dichiarano nemmeno `workspace.inception`, e allargarli non è in questa spec.
+  - **Rotte del viewer** (`cli/internal/web/workspace_execution.go`): `workspaceActionsView` guadagna `has_backlog`, e `workspaceActionView` guadagna `offered`. `offered` è la precondizione che lo **stato del workspace** pone sull'azione (per `inception`: nessun PRD; per `backlog`: PRD presente e nessun backlog), distinta da `runnable`, che è `offered` più il provider utilizzabile e nessuna esecuzione in corso. `POST` continua a rifiutare con 409 usando esattamente la frase che il `GET` mostrava, e cattura `hadBacklog` prima di partire per passarlo al rollback.
+  - **Frontend** (`cli/internal/web/assets/app.js`, `index.html`): il pannello di workspace montato sulla modale PRD smette di essere "il pannello dell'inception" e diventa "il pannello delle azioni di workspace". Il token di contesto passa da `workspace:inception` a `workspace`; il pannello si mostra quando **almeno un'azione è offerta** (o c'è un'esecuzione da riprendere) invece che quando manca il PRD; vengono disegnate solo le azioni con `offered: true`, tra cui quelle non `runnable` restano chip disabilitate con il motivo. Alla chiusura con successo di un'azione di workspace il settle ricarica PRD, azioni **e board**.
+
+  ### Decisioni architetturali
+
+  Nessuna scelta di questa spec supera la soglia ADR: non tocca il modello dati persistente (aggiunge un file di receipt e una capability opzionale, non un formato), non cambia il modello di sicurezza, non sposta un confine di integrazione né la topologia di deploy, e segue in ogni punto il pattern già stabilito da US-040. Tre scelte locali meritano però di essere messe per iscritto, perché sono i punti in cui il piano ha preferito un'opzione a un'altra:
+
+  1. **`offered` come campo distinto da `runnable`, invece di nascondere il pannello lato client.** US-040 realizzava «l'azione non è offerta» nascondendo l'intero pannello quando `has_prd` era vero — corretto finché l'azione era una sola, insufficiente con due, perché lo stesso workspace deve nascondere l'inception e mostrare la generazione del backlog. L'alternativa era far sparire dal payload le azioni non ammissibili; è stata scartata perché la lista delle azioni dichiarate dal Template è essa stessa un'informazione (il client non deve dedurre quali azioni esistono da quali gli arrivano) e perché un'azione assente non può portare il proprio motivo. `offered` mantiene il verdetto sul server, che è la proprietà che US-040 aveva stabilito, e lascia al client una sola regola di rendering.
+  2. **`DiscardBacklog` rimuove i file spec e l'indice, invece di ripristinare uno snapshot.** L'alternativa — fotografare il backlog prima della run e riscriverlo in caso di fallimento — è più fedele in astratto ma introduce uno stato temporaneo che nessun'altra parte del sistema ha, e sarebbe codice esercitato solo dal caso di errore. La rimozione è sufficiente perché l'azione è ammessa **solo** su un workspace senza specifiche: tutto ciò che ha specifiche dopo la run è stato scritto dalla run. Limite accettato e dichiarato: un `.archetipo/backlog.yaml` che contenesse epiche dichiarate a mano e nessuna specifica verrebbe rimosso dal rollback. Non è uno stato raggiungibile attraverso i flussi supportati (`spec add` scrive sempre specifiche, e `normalizeBacklog` proietta le epiche dalle specifiche), ed è il prezzo della stessa semantica "o intero, o nessuna traccia" che `DiscardPRD` già applica al documento.
+  3. **La conversazione, non il turno singolo, come forma della run.** La skill `archetipo-spec` è autorizzata a porre domande di chiarimento quando manca un'informazione critica; con il percorso a turno singolo del planning la prima domanda chiuderebbe la run come fallita. Riusare `converse` costa la parametrizzazione dell'acceptor e nient'altro, e mantiene un solo ciclo di conversazione nel package invece di due copie libere di divergere.
+
+  ---
+
+  ## Baseline
+
+  Misurata il 2026-08-20 su `sleli` (working tree pulito a parte un file di stato autopilot non tracciato), directory `cli/` salvo dove indicato.
+
+  | Verifica | Esito prima dell'implementazione | Conseguenza sulla pianificazione |
+  |---|---|---|
+  | `gofmt -l .` | nessun output | ogni task che tocca Go la riesegue e pretende ancora nessun output |
+  | `go vet ./...` | nessun problema | invariato: `Expect: nessun errore` è legittimo |
+  | `go build ./...` | compila pulito | invariato |
+  | `go test ./...` | 1253 test passati in 28 package, exit 0 | tutte le suite sono verdi: nessun task può scrivere `Expect: passes` su un comando già rosso, e nessun fallimento preesistente va tollerato |
+  | `golangci-lint run --timeout 5m ./...` | **non eseguibile: binario assente sulla macchina** | prerequisito d'ambiente, non un difetto del codice. Il task gate installa il linter con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` (comando indicato da AGENTS.md) e poi pretende 0 issue. Se l'installazione non è possibile, il gate lo registra esplicitamente come verifica non eseguita invece di dichiararla verde |
+  | `npm run test:view-inception-smoke` (dalla radice del repo) | non eseguita in baseline: richiede una build del CLI e ~minuti di sandbox; è la smoke di US-040 e il commit `34d0d08` la introduce verde | il task che generalizza il pannello di workspace deve **rieseguirla** e pretenderla verde: è l'unica prova che la generalizzazione non ha rotto l'inception |
+
+  Prerequisiti d'ambiente, distinti dai fallimenti di codice:
+
+  - Go installato (già verificato: build e test girano).
+  - Node.js per le smoke E2E (`npm run test:view-*`), che compilano il CLI in `test/e2e/.bin/archetipo`.
+  - `golangci-lint` **non installato**: va installato prima del gate finale.
+  - Nessuna credenziale e nessuna rete: le smoke del viewer usano `test/e2e/support/fake-claude.mjs` su `127.0.0.1`.
+
+  Nessun file toccato da questo piano presenta diagnostiche preesistenti di compilatore o vet.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello | Oracolo osservabile | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | Server `web` reale su un workspace con `docs/PRD.md` non vuoto e nessuna specifica in `.archetipo/`, provider doppio che dichiara `workspace.backlog` e non è occupato | Integrazione HTTP (`cli/internal/web/workspace_execution_test.go`) | `GET /api/workspace/actions` risponde `has_prd:true`, `has_backlog:false` e, nell'elemento con `id:"backlog"`, `offered:true` e `runnable:true` con `unavailable_reason` assente; l'azione `inception` nello stesso payload è `offered:false` | TASK-12 |
+  | AC-1 | Sandbox reale servita da `archetipo view`, PRD scritto con `archetipo prd write`, nessuna specifica | E2E di processo (`test/e2e/backlog-from-view-smoke.mjs`) | La stessa rotta del viewer reale offre `backlog` come `offered:true, runnable:true`, e `POST /api/workspace/execution {"action":"backlog"}` risponde `201` con record `RUNNING` e `spec_code` vuoto | TASK-14 |
+  | AC-2 | Come AC-1; il provider doppio scrive il backlog attraverso il connettore **reale** e poi restituisce successo | Integrazione HTTP | Il record letto da `GET /api/execution/{id}` è `SUCCEEDED` (quindi `VerifyActionEffect` ha confermato), e `GET /api/board` sullo **stesso** server già avviato elenca le specifiche con le loro epiche | TASK-12 |
+  | AC-2 | Sandbox reale; il fake agent chiude con `{"artifact":"backlog","status":"WRITTEN","epics":2,"specs":3}` dopo che la smoke ha persistito il backlog con `archetipo spec add` | E2E di processo | `.archetipo/specs/US-001.yaml` … esistono su disco, e `GET /api/board` interrogata sul **medesimo processo viewer mai riavviato** restituisce le tre specifiche raggruppate nelle due epiche | TASK-14 |
+  | AC-3 | Server `web` reale su un workspace con PRD **e** backlog già popolato | Integrazione HTTP | Nell'elemento `id:"backlog"` di `GET /api/workspace/actions`: `offered:false` e `unavailable_reason` che nomina il backlog già esistente; `POST /api/workspace/execution {"action":"backlog"}` risponde `409` con quella stessa frase e `.archetipo/executions/` resta senza nuovi record | TASK-12 |
+  | AC-3 | Sandbox reale con backlog seminato | E2E di processo | Stesse due asserzioni sulle rotte del viewer reale, più il backlog byte-identico prima e dopo il rifiuto | TASK-14 |
+  | AC-4 | Server `web` reale, workspace senza backlog; il provider doppio scrive specifiche parziali attraverso il connettore reale e poi fallisce | Integrazione HTTP | Il record è `FAILED` con `error.message` non vuoto che nomina la causa **e** riporta la rimozione del backlog parziale; `ReadExistingBacklog` torna a `codes: []` e `GET /api/board` è di nuovo vuota; l'azione ridiventa `offered:true` | TASK-12 |
+  | AC-4 | Unità: `outcome` `SUCCEEDED` con connettore che rilegge un backlog vuoto; e `DiscardPartialBacklog` con `existedBefore` vero e falso | Unità (`cli/internal/execution/effect_test.go`) | Il primo diventa `FAILED` con `error.code == "UNCONFIRMED_EFFECT"`; il secondo rimuove solo quando `existedBefore` è falso **e** lo stato è `FAILED`, e in nessun caso sostituisce il messaggio originale | TASK-06 |
+  | AC-4 | Sandbox reale; run annullata con `POST /api/execution/{id}/run/cancel` dopo che sono state scritte specifiche parziali | E2E di processo | Il record chiude `FAILED` con motivo non vuoto, `.archetipo/specs/` non contiene più file spec, `.archetipo/backlog.yaml` non esiste e `GET /api/board` è vuota sullo stesso viewer | TASK-14 |
+
+  Ogni criterio ha evidenza a due livelli (contratto HTTP + processo reale) e nessun doppio nasconde l'oracolo: nei test del viewer il **connettore, lo store dei record, la conferma dell'effetto, il rollback e il Template sono quelli di produzione**, e solo il provider è sostituito; nella smoke solo il binario dell'agente è finto.
+
+  ---
+
+  ## Strategia di test
+
+  La strategia ricalca quella con cui US-040 ha dimostrato l'inception, perché i criteri hanno la stessa forma: una precondizione sullo stato del workspace, un effetto persistito, un rifiuto e un rollback.
+
+  - **Unità nel package `execution`**: accettazione del receipt del backlog (assente, malformato, per un altro artefatto, con zero specifiche, valido), `RequiredCapability`/`ActionScope` per `backlog`, `backlogEffect` (backlog assente, senza specifiche, senza epiche, completo) e `DiscardPartialBacklog` nelle quattro combinazioni di `existedBefore` × stato terminale.
+  - **Unità in `filefs`**: `DiscardBacklog` su backlog assente (`false, nil`, nessun errore), su backlog con specifiche (rimuove file spec e indice, `true, nil`), e verifica che una successiva `ReadExistingBacklog` risponda con liste vuote invece di fallire.
+  - **Unità in `claude`**: il prompt del backlog nomina `/archetipo-spec` e la riga di receipt attesa ed è funzione pura della richiesta; l'assenza della skill rifiuta prima di spawnare il processo; una conversazione che chiude su una domanda **non** termina la run, mentre il receipt la chiude; `Capabilities` dichiara `workspace.backlog`.
+  - **Unità in `template`**: il Template predefinito dichiara la `WorkspaceAction` `backlog` con label e skill attese, e continua a dichiarare `inception`.
+  - **Integrazione HTTP in `web`**: le quattro situazioni di AC-1..AC-4 contro il `Server` reale con connettore reale, come da mappa delle evidenze. Si aggiunge una regressione esplicita: su un workspace **senza** PRD l'azione `backlog` è `offered:false` con motivo, e l'azione `inception` resta `offered:true, runnable:true` — è la prova che l'introduzione di `offered` non ha cambiato il comportamento di US-040.
+  - **E2E di processo**: nuova smoke `test/e2e/backlog-from-view-smoke.mjs`, modellata su `inception-from-view-smoke.mjs` e sullo stesso `support/fake-claude.mjs` guidato frame per frame da un control server locale. Tre sandbox, una per situazione: generazione riuscita (AC-1, AC-2), run annullata a metà (AC-4), workspace con backlog già presente (AC-3). Nessuno `sleep` arbitrario: ogni attesa fa polling su una rotta del viewer o sul control server.
+  - **Regressione obbligatoria**: `npm run test:view-inception-smoke` va rieseguita e deve restare verde, perché il pannello di workspace e le sue rotte sono condivisi.
+
+  ### Test E2E — simulazione utente
+
+  **Framework:** harness Node.js locale del repository (`test/e2e/*.mjs`), viewer reale `archetipo view`, agente finto `test/e2e/support/fake-claude.mjs`. Nessun driver di browser è presente nel repository.
+  **Video demo:** `e2e.record_demo_video` è `false` nella configurazione: nessun video è atteso. La spec è comunque filmabile e la decisione finale resta di `archetipo-review`.
+
+  | Scenario | Flusso |
+  |---|---|
+  | Generazione riuscita | Sandbox inizializzata con `archetipo init --tool claude`, PRD scritto, nessuna specifica → `GET /api/workspace/actions` offre `backlog` → `POST /api/workspace/execution {"action":"backlog"}` → il processo riceve un prompt che nomina `/archetipo-spec` → il fake emette una domanda (turno chiuso senza receipt): il record resta `RUNNING` → la risposta inviata a `POST /api/execution/{id}/run/messages` raggiunge il processo → la smoke persiste il backlog con `archetipo spec add` → il fake chiude sul receipt → il record diventa `SUCCEEDED` e `GET /api/board`, sullo stesso viewer mai riavviato, elenca epiche e specifiche |
+  | Run annullata | Come sopra fino a specifiche parziali scritte, poi `POST /api/execution/{id}/run/cancel` → record `FAILED` con motivo non vuoto → nessun file spec, nessun `backlog.yaml`, board vuota, azione di nuovo offerta |
+  | Backlog già presente | Sandbox con PRD e backlog seminato → `backlog` risulta `offered:false` con motivo → `POST` risponde `409` → nessun record scritto sotto `.archetipo/executions/`, backlog byte-identico |
+
+  ### Rinuncia all'E2E di browser
+
+  **Motivo:** il repository non possiede né usa alcun driver di browser, e questa spec non introduce una schermata nuova: aggiunge una seconda chip al pannello di workspace già esistente nella modale PRD e generalizza la regola che decide quali chip mostrare. Il livello che decide davvero cosa viene offerto è il server (`offered`/`runnable`/`unavailable_reason`), che è esattamente ciò che le smoke di processo osservano; introdurre Playwright solo per questa aggiunta significherebbe far nascere un'infrastruttura di test per una regola di rendering di poche righe.
+  **Livello di evidenza usato al suo posto:** i test di integrazione HTTP sul `Server` reale con connettore reale, più le smoke di processo contro `archetipo view` reale, che è la scelta già stabilita da US-029, US-031, US-040 e US-044 per ogni spec del viewer. La regola di rendering del client (mostra solo le azioni `offered`, nascondi il pannello quando non ce n'è nessuna) è dimostrata dal revisore nella dimostrazione manuale della spec.
+
+  ### Note e assunzioni
+
+  - La skill `archetipo-spec` è già installata dal Template (`Skills` la elenca), quindi `archetipo init --tool claude` la mette in `.claude/skills/archetipo-spec/`: la guardia `ensureSkill` del provider ha un percorso reale da controllare.
+  - Nessun mockup è stato generato: la spec non introduce pagine, rotte o componenti con layout proprio, né riorganizza il layout di una pagina esistente.
+  - Il gate Wiki è disattivato (`wiki.enabled: false`): questo piano non prevede alcun lavoro di Wiki.
+tasks:
+  - id: TASK-01
+    title: Vocabolario dell'azione backlog e receipt condiviso nel package execution
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Il package `execution` conosce l'azione `backlog`, la sua capability `workspace.backlog`, il suo scope di workspace e il receipt JSON che chiude una generazione di backlog.
+
+      ## Read
+      - `cli/internal/execution/types.go` — `ActionID`, `Capability`, le costanti `ActionInception`/`CapabilityWorkspaceInception`, `RequiredCapability`, `ActionScope`.
+      - `cli/internal/execution/prdreceipt.go` — è il modello esatto da replicare: costanti, campi richiesti, `Parse*`, `Accept*` e i commenti che spiegano perché il receipt è condizione necessaria e mai sufficiente.
+      - `cli/internal/execution/planreceipt.go` — `parseTrailingReceipt` e `hasReceiptFields`, le funzioni condivise da riusare senza duplicarle.
+
+      ## Change
+      - `cli/internal/execution/types.go` — aggiungere `ActionBacklog ActionID = "backlog"` e `CapabilityWorkspaceBacklog Capability = "workspace.backlog"`; aggiungere il `case ActionBacklog` a `RequiredCapability` (restituisce `CapabilityWorkspaceBacklog`) e ad `ActionScope` (restituisce `ScopeWorkspace`).
+      - `cli/internal/execution/backlogreceipt.go` — **nuovo file** con `BacklogReceipt`, `ParseBacklogReceipt`, `AcceptBacklogReceipt`.
+      - Non-goal: non toccare `Execution`, non aggiungere campi al record, non introdurre un secondo `parseTrailingReceipt`, non modificare `prdreceipt.go` né `planreceipt.go`.
+
+      ## Steps
+      1. In `types.go`, dichiarare le due costanti accanto alle omologhe dell'inception, mantenendo il commento esistente che tiene azioni e capability separate.
+      2. Estendere `RequiredCapability` con `case ActionBacklog: return CapabilityWorkspaceBacklog, nil`.
+      3. Estendere `ActionScope` con `case ActionBacklog: return ScopeWorkspace, nil`.
+      4. Creare `backlogreceipt.go` con la costante non esportata `backlogArtifact = "backlog"` e `backlogReceiptFields = []string{"artifact", "status", "epics", "specs"}`.
+      5. Dichiarare `BacklogReceipt` con quattro campi e i rispettivi tag JSON: `Artifact string` (`artifact`), `Status string` (`status`), `Epics int` (`epics`), `Specs int` (`specs`). Documentare che `Epics` e `Specs` sono ciò che l'agente dichiara di aver persistito e non l'autorità su ciò che il connettore contiene.
+      6. Implementare `ParseBacklogReceipt(output string) (BacklogReceipt, error)` su `parseTrailingReceipt[BacklogReceipt](output, backlogReceiptFields)`, con lo stesso errore "the agent did not emit the expected JSON receipt line".
+      7. Implementare `AcceptBacklogReceipt(output string) (BacklogReceipt, error)`: dopo il parse, rifiutare con "the receipt does not declare a written backlog" quando `Artifact != backlogArtifact`, `Status != WrittenStatus`, `Specs <= 0` o `Epics <= 0`. Riusare la costante esportata `WrittenStatus` già definita in `prdreceipt.go` invece di una nuova stringa.
+      8. Eseguire `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Working dir: `cli/`
+      - Run: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/execution/...`
+      - Expect: `gofmt` non stampa nulla, `go vet` non segnala errori, la build compila e la suite di `internal/execution` resta verde come in baseline (nessun test nuovo ancora, nessuna regressione).
+
+      ## Done
+      - [ ] `RequiredCapability(ActionBacklog)` restituisce `CapabilityWorkspaceBacklog` senza errore e `ActionScope(ActionBacklog)` restituisce `ScopeWorkspace`.
+      - [ ] `AcceptBacklogReceipt` accetta `{"artifact":"backlog","status":"WRITTEN","epics":2,"specs":3}` e rifiuta con messaggi distinti l'assenza di receipt e un receipt che non dichiara un backlog scritto.
+      - [ ] Nessun nuovo parser di riga: `backlogreceipt.go` chiama `parseTrailingReceipt`.
+      - [ ] Preparatorio per AC-2 e AC-4: è il vocabolario su cui poggiano conferma dell'effetto e rollback.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test unitari del vocabolario e del receipt del backlog
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il receipt del backlog e la mappatura azione → capability → scope sono coperti da test che falliscono se la regola di accettazione cambia.
+
+      ## Read
+      - `cli/internal/execution/prdreceipt_test.go` — struttura, nomi e stile dei casi da replicare per il receipt.
+      - `cli/internal/execution/backlogreceipt.go` — la regola appena scritta.
+      - `cli/internal/execution/types.go` — `RequiredCapability`, `ActionScope`, `ActionError`.
+
+      ## Change
+      - `cli/internal/execution/backlogreceipt_test.go` — **nuovo file** nel package `execution` (stesso package dei file testati, come `prdreceipt_test.go`).
+      - Non-goal: non modificare codice di produzione; se un test rivela un difetto, correggerlo in TASK-01 e non adattare l'asserzione.
+
+      ## Steps
+      1. Scrivere un caso tabellare per `AcceptBacklogReceipt` con almeno: output senza alcuna riga JSON; riga JSON priva delle chiavi richieste; receipt con `artifact` diverso da `backlog`; receipt con `status` diverso da `WRITTEN`; receipt con `specs: 0`; receipt con `epics: 0`; receipt valido.
+      2. Asserire che i due modi di fallire restano **distinguibili**: assenza di receipt e receipt che non dichiara un backlog scritto producono messaggi diversi, verificati con `strings.Contains` sulle due frasi.
+      3. Aggiungere un caso che prova la scansione all'indietro: un receipt valido seguito da un'altra riga JSON qualunque (un dump di errore) viene comunque riconosciuto.
+      4. Aggiungere un caso in cui una riga JSON priva delle chiavi del receipt compare **dopo** quella valida e non la oscura.
+      5. Aggiungere test per `RequiredCapability(ActionBacklog)`, `ActionScope(ActionBacklog)` e per un'azione sconosciuta, che deve continuare a restituire `*ActionError`.
+
+      ## Verify
+      - Working dir: `cli/`
+      - Run: `go test ./internal/execution/ -run 'Backlog|Capability|Scope' -v` e poi `go test ./internal/execution/...`
+      - Expect: i nuovi test passano; l'intera suite del package resta verde come in baseline.
+
+      ## Done
+      - [ ] Un receipt valido è accettato e ognuna delle sei forme non valide è rifiutata da un caso dedicato.
+      - [ ] I messaggi delle due famiglie di fallimento sono asseriti distinti.
+      - [ ] `RequiredCapability` e `ActionScope` sono coperti per `backlog` e per un'azione sconosciuta.
+      - [ ] Preparatorio per AC-2 e AC-4: la porta d'ingresso del successo dichiarato è verificata.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Capability BacklogDiscarder e sua implementazione nel connettore filefs
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Un connettore può riportare il workspace allo stato senza backlog, e `filefs` lo fa rimuovendo i file spec e l'indice del backlog.
+
+      ## Read
+      - `cli/internal/connector/capabilities.go` — il blocco di documentazione delle capability opzionali e in particolare `PRDDiscarder`, di cui questa è la gemella: replicarne struttura, semantica del booleano e motivazione.
+      - `cli/internal/connector/filefs/connector.go` righe ~199-232 — `ReadPRD` e `DiscardPRD`, il modello esatto di implementazione e di errore.
+      - `cli/internal/connector/filefs/connector.go` — `ReadExistingBacklog` (righe ~139-177) e `SaveInitialBacklog` (~264).
+      - `cli/internal/connector/filefs/store.go` — `backlogPath()`, `specsDir()`, `specPath()`, `loadStore()`, `readSpecDocs`; serve per sapere che le specifiche stanno in file singoli sotto `.archetipo/specs/` e che `backlog.yaml` è solo l'indice.
+
+      ## Change
+      - `cli/internal/connector/capabilities.go` — aggiungere l'interfaccia `BacklogDiscarder` con `DiscardBacklog(ctx context.Context) (bool, error)` e il commento che ne spiega la garanzia.
+      - `cli/internal/connector/filefs/connector.go` — implementare `DiscardBacklog` e aggiungere l'asserzione a tempo di compilazione accanto alle altre già presenti nel file.
+      - Non-goal: non implementarla per il connettore `github`; non toccare `SaveInitialBacklog`, `AppendSpecs` né il formato dei documenti; non rimuovere piani, che una generazione di backlog non può aver creato.
+
+      ## Steps
+      1. In `capabilities.go`, dichiarare `BacklogDiscarder` subito dopo `PRDDiscarder`. Documentare: rimuove il backlog dal workspace così che una prima generazione o atterri intera o non lasci traccia; il booleano dice se c'era qualcosa da rimuovere, e un backlog assente non è un errore ma `(false, nil)`; il limite accettato è che un `backlog.yaml` con sole epiche dichiarate a mano e nessuna specifica viene rimosso anch'esso, stato non raggiungibile dai flussi supportati.
+      2. In `filefs`, implementare `DiscardBacklog(ctx)`: caricare lo store con `c.loadStore()`; se l'errore è il `CodePreconditionMissing` che segnala l'assenza del backlog, restituire `(false, nil)`; qualunque altro errore risale invariato.
+      3. Se `len(store.Specs) == 0`, restituire `(false, nil)` senza scrivere né rimuovere nulla.
+      4. Altrimenti rimuovere, per ogni codice presente in `store.Specs`, il file `c.specPath(code)`, tollerando `os.ErrNotExist`; poi rimuovere `c.backlogPath()`, tollerando anch'esso l'assenza. Qualunque altro errore di `os.Remove` diventa `iox.NewInternal("removing "+path, err)`.
+      5. Restituire `(true, nil)`.
+      6. Aggiungere `var _ connector.BacklogDiscarder = (*Connector)(nil)` accanto alle asserzioni esistenti, così che una futura rimozione del metodo diventi un errore di build e non un buco a runtime.
+      7. Eseguire `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Working dir: `cli/`
+      - Run: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/connector/...`
+      - Expect: nessun output da `gofmt`, nessun errore da `vet`, build pulita, suite dei connettori (conformance inclusa) verde come in baseline.
+
+      ## Done
+      - [ ] `connector.BacklogDiscarder` esiste ed è documentata accanto a `PRDDiscarder`.
+      - [ ] `filefs.Connector` la soddisfa con asserzione a tempo di compilazione.
+      - [ ] Su un workspace senza backlog `DiscardBacklog` risponde `(false, nil)` senza errore.
+      - [ ] Preparatorio per AC-4: è il meccanismo con cui il backlog parziale viene tolto.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test di DiscardBacklog nel connettore filefs
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      La rimozione del backlog è provata sul filesystem reale: cosa sparisce, cosa resta e cosa risponde una rilettura successiva.
+
+      ## Read
+      - `cli/internal/connector/filefs/filefs_test.go` — helper di creazione del workspace temporaneo e stile dei test già usati per `ReadPRD`/`DiscardPRD` (aggiunti dal commit `34d0d08`).
+      - `cli/internal/connector/filefs/connector.go` — `DiscardBacklog` appena scritta, `SaveInitialBacklog`, `ReadExistingBacklog`.
+
+      ## Change
+      - `cli/internal/connector/filefs/filefs_test.go` — aggiungere i casi di test in coda al file.
+      - Non-goal: non modificare il codice di produzione da qui.
+
+      ## Steps
+      1. Caso "nessun backlog": workspace appena creato, `DiscardBacklog` risponde `(false, nil)`; asserire anche che nessun file è stato creato come effetto collaterale.
+      2. Caso "backlog con specifiche": scrivere un backlog con `SaveInitialBacklog` di almeno due specifiche appartenenti a due epiche diverse; asserire che i file `.archetipo/specs/<code>.yaml` e `.archetipo/backlog.yaml` esistono; chiamare `DiscardBacklog` e asserire `(true, nil)`.
+      3. Nello stesso caso, asserire che entrambi i file spec e l'indice **non esistono più** (`os.Stat` restituisce `os.ErrNotExist`).
+      4. Sempre nello stesso caso, chiamare `ReadExistingBacklog` dopo la rimozione e asserire che risponde senza errore con `Codes`, `Titles` ed `Epics` vuoti: una board vuota è la prova osservabile che AC-4 riporta il workspace allo stato precedente.
+      5. Caso "idempotenza": una seconda `DiscardBacklog` sullo stesso workspace risponde `(false, nil)` e non fallisce.
+
+      ## Verify
+      - Working dir: `cli/`
+      - Run: `go test ./internal/connector/filefs/ -run 'DiscardBacklog' -v` e poi `go test ./internal/connector/...`
+      - Expect: i nuovi test passano; l'intera suite dei connettori resta verde come in baseline.
+
+      ## Done
+      - [ ] AC-4 — dopo `DiscardBacklog` una rilettura del backlog risponde con liste vuote e senza errore, provando che lo stato precedente (nessun backlog) è ripristinato.
+      - [ ] La rimozione dei file spec, non solo dell'indice, è asserita esplicitamente.
+      - [ ] La chiamata su un workspace senza backlog è un no-op provato, non un errore.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Conferma dell'effetto e rollback del backlog parziale in execution/effect.go
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Objective
+      Un successo dichiarato dalla generazione del backlog vale solo se il connettore lo conferma, e una run fallita che aveva già scritto specifiche le toglie.
+
+      ## Read
+      - `cli/internal/execution/effect.go` — per intero: `SpecStateReader`, `PRDStateReader`, `PRDDiscarder`, `VerifyActionEffect`, `inceptionEffect`, `DiscardPartialPRD`, `appendErrorNote`. È il file in cui vive tutta la modifica.
+      - `cli/internal/domain` — `BacklogSummary` (campi `Codes`, `Titles`, `Epics`, `LastCode`), restituita da `ReadExistingBacklog`.
+      - `cli/internal/connector/connector.go` — conferma che `ReadExistingBacklog` è nell'interfaccia base, quindi il reader non richiede una capability opzionale.
+
+      ## Change
+      - `cli/internal/execution/effect.go` — aggiungere `BacklogStateReader`, `BacklogDiscarder`, `backlogEffect`, il `case ActionBacklog` in `VerifyActionEffect`, `DiscardPartialBacklog`, e rifattorizzare `DiscardPartialPRD` e il nuovo gemello su un helper privato condiviso.
+      - Non-goal: questo package non deve importare `connector` (le interfacce sono dichiarate qui, come consumatore); non cambiare la firma pubblica di `VerifyActionEffect` né di `ConfirmActionEffect`; non toccare `planEffect` né `inceptionEffect`.
+
+      ## Steps
+      1. Dichiarare `BacklogStateReader` con `ReadExistingBacklog(ctx context.Context) (domain.BacklogSummary, error)`, documentando — come già fatto per `PRDStateReader` — che è un'interfaccia del consumatore e che un connettore reale la soddisfa senza adattatori.
+      2. Dichiarare `BacklogDiscarder` con `DiscardBacklog(ctx context.Context) (bool, error)`, gemella di `PRDDiscarder`.
+      3. In `VerifyActionEffect` aggiungere `case ActionBacklog`: fare il type assert del `reader` a `BacklogStateReader`; se fallisce, motivo `"the connector cannot read the backlog back"`; altrimenti chiamare `backlogEffect`.
+      4. Implementare `backlogEffect(ctx, reader BacklogStateReader) error`: rilettura fallita → errore avvolto `"re-reading the backlog failed: %w"`; `len(summary.Codes) == 0` → `"no backlog was persisted"`; `len(summary.Epics) == 0` → `"the backlog holds %d spec(s) but no epic"`. Documentare, come su `inceptionEffect`, che la validazione strutturale delle specifiche resta fuori ambito: qui si risponde solo se la run ha prodotto un backlog.
+      5. Estrarre da `DiscardPartialPRD` un helper privato `discardPartial(ctx context.Context, discard func(context.Context) (bool, error), removedNote, failedNote string, existedBefore bool, outcome *Execution)` che contiene le due condizioni portanti (`existedBefore` falso **e** stato `FAILED`), la tolleranza al discarder assente e l'uso di `appendErrorNote`.
+      6. Riscrivere `DiscardPartialPRD` sopra l'helper, mantenendo invariati i suoi messaggi attuali (`"the partial PRD could not be removed: %v"` e `"the partial PRD written by this run has been removed"`) e il suo commento di contratto.
+      7. Implementare `DiscardPartialBacklog(ctx, discarder BacklogDiscarder, existedBefore bool, outcome *Execution)` sopra lo stesso helper, con i messaggi `"the partial backlog could not be removed: %v"` e `"the partial backlog written by this run has been removed"`. Documentare che un discarder `nil` è una risposta valida e non un fallimento.
+      8. Verificare che `appendErrorNote` continui ad **aggiungere** al messaggio esistente e non a sostituirlo: la diagnosi originale è ciò che dichiara il motivo del fallimento (AC-4).
+      9. Eseguire `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Working dir: `cli/`
+      - Run: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/execution/...`
+      - Expect: nessun output da `gofmt`, nessun errore da `vet`, build pulita; la suite di `internal/execution` — che già copre `DiscardPartialPRD` — resta verde, il che prova che la rifattorizzazione non ha cambiato il comportamento del PRD.
+
+      ## Done
+      - [ ] AC-2 — un `outcome` `SUCCEEDED` su un connettore il cui backlog è vuoto viene riscritto `FAILED` con `error.code == "UNCONFIRMED_EFFECT"`.
+      - [ ] AC-4 — `DiscardPartialBacklog` rimuove solo quando il workspace non aveva un backlog prima e l'esito è `FAILED`, e annota l'avvenuta rimozione senza perdere il motivo originale.
+      - [ ] `DiscardPartialPRD` e `DiscardPartialBacklog` condividono un unico helper: la regola esiste una volta sola.
+      - [ ] Il package `execution` continua a non importare `connector`.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test di backlogEffect e DiscardPartialBacklog
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      La conferma dell'effetto e il rollback del backlog sono provati sul record: cosa diventa `FAILED`, con quale codice, e quando il rollback non deve scattare.
+
+      ## Read
+      - `cli/internal/execution/effect_test.go` — i doppi già presenti per lo `SpecStateReader`/`PRDStateReader` e i test di `DiscardPartialPRD`, da replicare per il backlog.
+      - `cli/internal/execution/effect.go` — `backlogEffect`, `DiscardPartialBacklog`, `discardPartial`, `appendErrorNote`.
+
+      ## Change
+      - `cli/internal/execution/effect_test.go` — aggiungere i doppi e i casi per il backlog.
+      - Non-goal: non modificare codice di produzione da qui; non riscrivere i test esistenti del PRD, che servono come regressione della rifattorizzazione.
+
+      ## Steps
+      1. Aggiungere un doppio che implementa sia `SpecStateReader` sia `BacklogStateReader`, con `BacklogSummary` e errore configurabili.
+      2. Caso "successo non confermato — nessuna specifica": `outcome` `SUCCEEDED`, reader che risponde con `BacklogSummary` vuota; asserire che `VerifyActionEffect` restituisce `*UnconfirmedEffectError`, che `outcome.Status` è `FAILED`, `outcome.Result` è `nil` e `outcome.Error.Code` è `"UNCONFIRMED_EFFECT"`, e che il messaggio nomina il backlog assente.
+      3. Caso "successo non confermato — nessuna epica": summary con `Codes` non vuoto ed `Epics` vuoto; stesse asserzioni sul record, messaggio che nomina l'epica mancante.
+      4. Caso "rilettura fallita": reader che restituisce errore; il record diventa `FAILED` e il messaggio riporta la causa avvolta.
+      5. Caso "successo confermato": summary con specifiche ed epiche; `VerifyActionEffect` restituisce `nil` e **non** modifica `outcome`.
+      6. Caso "reader senza backlog": un reader che implementa solo `SpecStateReader`; il record diventa `FAILED` con il motivo "the connector cannot read the backlog back".
+      7. Caso "external id preservato": `outcome.Result.ExternalID` non vuoto su un successo poi smentito finisce in `outcome.Error.ExternalID` e non viene perso.
+      8. Casi di `DiscardPartialBacklog`, tutti con un discarder che registra se è stato chiamato: `existedBefore=true` + `FAILED` → non chiamato; `existedBefore=false` + `SUCCEEDED` → non chiamato; `existedBefore=false` + `FAILED` + `removed=true` → chiamato e nota aggiunta **in coda** al messaggio di errore preesistente, che resta leggibile; `existedBefore=false` + `FAILED` + discarder che fallisce → nota di errore aggiunta senza sostituire il motivo originale; discarder `nil` → no-op senza panico.
+
+      ## Verify
+      - Working dir: `cli/`
+      - Run: `go test ./internal/execution/ -run 'Backlog|Effect|Discard' -v` e poi `go test ./internal/execution/...`
+      - Expect: i nuovi test passano; i test preesistenti di `DiscardPartialPRD` e `VerifyActionEffect` restano verdi, provando che l'estrazione dell'helper non ha cambiato comportamento.
+
+      ## Done
+      - [ ] AC-2 — un successo dichiarato senza backlog persistito è provato diventare `FAILED` con `UNCONFIRMED_EFFECT`.
+      - [ ] AC-4 — le quattro combinazioni di `existedBefore` × stato terminale sono coperte, e il messaggio originale del fallimento è asserito ancora presente accanto alla nota di rollback.
+      - [ ] Un backlog realmente persistito è confermato senza toccare il record.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Il Template dichiara la workspace action backlog
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il processo "Fabbrica del software" dichiara la generazione del backlog fra le azioni che offre sul workspace, accanto all'inception.
+
+      ## Read
+      - `cli/internal/template/template.go` — il tipo `WorkspaceAction` e il suo commento (perché non ha `Statuses`), la sezione `WorkspaceActions` del Template `Builtin()`, e la lista `Skills` che già contiene `archetipo-spec`.
+      - `cli/internal/template/template_test.go` — le asserzioni esistenti sul Template predefinito.
+
+      ## Change
+      - `cli/internal/template/template.go` — aggiungere una seconda `WorkspaceAction` alla slice `WorkspaceActions` del Template `fabbrica-del-software`.
+      - `cli/internal/template/template_test.go` — estendere le asserzioni sul Template predefinito.
+      - Non-goal: non aggiungere campi a `WorkspaceAction`; non toccare `Actions` (le azioni sulla spec) né `Skills`; non introdurre un secondo Template.
+
+      ## Steps
+      1. Aggiungere `{ID: "backlog", Label: "Genera backlog", Skill: "archetipo-spec"}` dopo l'azione `inception`, mantenendo l'ordine di dichiarazione, che è l'ordine in cui il client disegna le chip.
+      2. Verificare che `clone()` continui a staccare la slice `WorkspaceActions` (usa `copy`, quindi non serve alcuna modifica) e che nessun test esistente asserisca una lunghezza di 1 senza aggiornarla.
+      3. In `template_test.go`, asserire che `Default()` dichiara esattamente le due workspace action attese, con id, label e skill, nell'ordine dichiarato; asserire che `inception` è ancora presente e invariata.
+      4. Aggiungere un'asserzione che ogni `WorkspaceAction.Skill` compaia anche in `Template.Skills`: è la condizione che rende installata la skill che il provider invocherà.
+      5. Eseguire `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Working dir: `cli/`
+      - Run: `gofmt -l . && go vet ./... && go test ./internal/template/... && go test ./internal/web/... ./internal/cli/...`
+      - Expect: nessun output da `gofmt`, nessun errore da `vet`, la suite di `template` passa con i nuovi casi; le suite di `web` e `cli`, che consumano il Template, restano verdi — se un test lì asseriva implicitamente una sola workspace action, va corretto in questo task.
+
+      ## Done
+      - [ ] AC-1 — il payload di `GET /api/workspace/actions` può contenere l'azione `backlog`, perché il processo la dichiara.
+      - [ ] `Default()` dichiara `inception` e `backlog`, in quest'ordine, con label e skill asserite.
+      - [ ] La skill di ogni workspace action è fra quelle installate dal Template.
+      - [ ] Nessuna suite esistente è rimasta rossa per l'arrivo della seconda azione.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Il provider claude conduce la generazione del backlog come conversazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-07
+    body: |-
+      ## Objective
+      Il provider claude dispaccia l'azione `backlog` a una sessione locale conversazionale che invoca `/archetipo-spec` e si chiude sul receipt del backlog.
+
+      ## Read
+      - `cli/internal/execution/claude/inception.go` — per intero: `executeInception`, `converse`, `drainTurns`, `failInception`, `resultForInception` e i sentinelli `errTurnFailed`/`errProcessGone`/`errRunTerminated`. È la struttura da parametrizzare, non da duplicare.
+      - `cli/internal/execution/claude/provider.go` — `Execute` (il fork sull'azione), `prepare`, `openSession`, `shutdown`, `ensureSkill`, `Capabilities`, e le costanti `planSkillRelPath`/`inceptionSkillRelPath`.
+      - `cli/internal/execution/claude/prompt.go` — `buildInceptionPrompt`, e il commento che spiega perché il prompt è funzione pura della richiesta.
+      - `skills/archetipo-spec/SKILL.md` — per sapere cosa la skill fa davvero: legge il PRD, decide fra bootstrap ed estensione, e persiste con `archetipo spec add`. Serve a scrivere un prompt che chiede il lavoro giusto.
+
+      ## Change
+      - `cli/internal/execution/claude/inception.go` — parametrizzare `converse` e `drainTurns` su un acceptor, senza cambiare la semantica dei tre modi di terminare.
+      - `cli/internal/execution/claude/backlog.go` — **nuovo file** con `executeBacklog`, `failBacklog` e `resultForBacklog`.
+      - `cli/internal/execution/claude/prompt.go` — aggiungere `buildBacklogPrompt`.
+      - `cli/internal/execution/claude/provider.go` — aggiungere `backlogSkillRelPath`, il ramo `ActionBacklog` in `Execute`, e `CapabilityWorkspaceBacklog` in `Capabilities`.
+      - Non-goal: non toccare il percorso a turno singolo del planning; non modificare `buildArgs` né i flag dell'invocazione; non toccare i provider `codex` e `arcipelago`.
+
+      ## Steps
+      1. Cambiare la firma di `converse` in `converse(runCtx context.Context, client *streamSession, accept func(string) bool) (final string, turns int, err error)` e quella di `drainTurns` in `drainTurns(client *streamSession, accept func(string) bool) (string, int, bool)`. Sostituire ogni `execution.AcceptPRDReceipt(outcome.Final)` con `accept(outcome.Final)` e restituire `outcome.Final` al posto del receipt tipizzato. Conservare **integralmente** i commenti che spiegano perché i turni bufferizzati vengono drenati alla morte del processo e allo scadere del deadline.
+      2. In `executeInception`, passare `func(s string) bool { _, err := execution.AcceptPRDReceipt(s); return err == nil }`, poi ri-parsare il messaggio finale con `execution.AcceptPRDReceipt` per ottenere il receipt tipizzato da passare a `resultForInception`. Il comportamento osservabile dell'inception non cambia.
+      3. In `provider.go`, aggiungere `backlogSkillRelPath = ".claude/skills/archetipo-spec/SKILL.md"` accanto alle altre costanti di percorso, con lo stesso commento sul perché la sua assenza rende l'invocazione impossibile.
+      4. In `Execute`, aggiungere il ramo `if req.Action == execution.ActionBacklog { return p.executeBacklog(ctx, req, cfg, dir) }` accanto a quello dell'inception, prima del percorso di planning.
+      5. In `Capabilities`, restituire anche `execution.CapabilityWorkspaceBacklog`. Non dichiarare `run.dialog`: resta derivata.
+      6. In `prompt.go`, scrivere `buildBacklogPrompt(_ execution.Request) string`, funzione pura, che: fissa la working directory come workspace ARchetipo; chiede di generare il backlog iniziale dal PRD invocando `/archetipo-spec`; ricorda che si parla con una persona in chat, una domanda per messaggio, e che le domande vanno poste solo se davvero necessarie; chiede di persistere con `archetipo spec add` esattamente come la skill prescrive e di non incollare il backlog nel messaggio finale; chiede di chiudere con la sola riga `{"artifact":"backlog","status":"WRITTEN","epics":<N>,"specs":<M>}` e nulla dopo, dove `<N>` e `<M>` sono epiche e specifiche realmente persistite, emessa solo dopo la persistenza perché è ciò che termina la conversazione. Usare `execution.WrittenStatus` invece della stringa letterale.
+      7. In `backlog.go`, scrivere `executeBacklog` modellata su `executeInception`: `ensureSkill(dir, backlogSkillRelPath, "spec")`, contesto con timeout, `openSession(..., buildBacklogPrompt(req), true)` (conversazionale), `converse` con l'acceptor `execution.AcceptBacklogReceipt`, `shutdown`, e le stesse quattro diagnosi distinte in `failBacklog` (deadline, run fermata, turno fallito, processo uscito), ognuna che nomina il backlog e mai il PRD né la pianificazione.
+      8. Scrivere `resultForBacklog`: payload con `command`, `model`, `exit_code`, `result_summary` (il receipt ri-serializzato dal valore parsato, mai una fetta dell'output), `backlog_epics`, `backlog_specs`, `turns`, `duration_ms`. Nessuno stream dell'agente entra nel record.
+      9. Eseguire `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Working dir: `cli/`
+      - Run: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/execution/...`
+      - Expect: nessun output da `gofmt`, nessun errore da `vet`, build pulita; la suite di `claude` — che copre già l'inception conversazionale, incluso il drenaggio dei turni — resta verde, il che prova che la parametrizzazione di `converse` non ha cambiato il comportamento dell'inception.
+
+      ## Done
+      - [ ] AC-2 — il provider dispaccia `backlog` e restituisce successo solo su una run chiusa dal receipt del backlog.
+      - [ ] AC-4 — una conversazione fermata, un turno fallito o un processo uscito senza receipt producono un errore che nomina il backlog e distingue le quattro cause.
+      - [ ] Un turno che si chiude su una domanda **non** termina la run: la conversazione resta aperta, come per l'inception.
+      - [ ] `Capabilities` dichiara `spec.plan`, `workspace.inception` e `workspace.backlog`, e nessuna delle tre è `run.dialog`.
+      - [ ] Esiste un solo ciclo `converse` nel package.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Test del provider claude per la generazione del backlog
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Il ramo `backlog` del provider claude è provato senza avere Claude Code sulla macchina: prompt, guardia sulla skill, conversazione multi-turno, chiusura sul receipt e diagnosi dei fallimenti.
+
+      ## Read
+      - `cli/internal/execution/claude/inception_test.go` — i doppi di `localrun.Starter`/`Process`, il modo in cui i frame stream-json vengono emessi dal test e le asserzioni sui turni. È il file da imitare.
+      - `cli/internal/execution/claude/provider_test.go` — i test di `Capabilities`, `Available` e della guardia `ensureSkill`.
+      - `cli/internal/execution/claude/backlog.go` e `prompt.go` — il codice appena scritto.
+
+      ## Change
+      - `cli/internal/execution/claude/backlog_test.go` — **nuovo file** nel package `claude`.
+      - `cli/internal/execution/claude/provider_test.go` — estendere l'asserzione su `Capabilities`.
+      - Non-goal: non spawnare processi reali; non modificare codice di produzione da qui; non toccare `inception_test.go` se non per quello che la nuova firma di `converse` rende necessario.
+
+      ## Steps
+      1. Test del prompt: `buildBacklogPrompt` nomina `/archetipo-spec`, contiene la riga di receipt attesa con `WRITTEN`, chiede una domanda per messaggio, e restituisce lo stesso valore su due invocazioni con la stessa richiesta (purezza).
+      2. Test della guardia: in una directory priva di `.claude/skills/archetipo-spec/SKILL.md`, `Execute` con `ActionBacklog` fallisce **prima** di avviare qualunque processo — asserire che lo `Starter` doppio non è mai stato chiamato — e l'errore nomina `archetipo init --tool claude`.
+      3. Test della conversazione: il doppio emette un `assistant` seguito da un `result` senza receipt (una domanda); asserire che `Execute` non è ancora tornato, poi emettere il receipt valido e asserire che `Execute` restituisce un risultato il cui payload ha `turns: 2`, `backlog_specs` e `backlog_epics` uguali ai valori del receipt.
+      4. Test del `result_summary`: asserire che è esattamente il receipt ri-serializzato e che non contiene nulla di ciò che l'agente ha stampato attorno alla riga.
+      5. Test "turno fallito": un `result` con errore e senza receipt fa fallire la run con un messaggio che nomina il backlog e non il PRD.
+      6. Test "processo uscito senza receipt": il processo termina; l'errore nomina l'uscita e il backlog.
+      7. Test "receipt pubblicato nello stesso istante della fine del processo": il receipt viene emesso e subito dopo il processo esce; asserire che la run **riesce** — è la regola di drenaggio che vale anche qui.
+      8. Test "prompt consegnato": asserire che il primo frame utente inviato al processo contiene il testo di `buildBacklogPrompt`.
+      9. In `provider_test.go`, asserire che `Capabilities` restituisce esattamente `spec.plan`, `workspace.inception` e `workspace.backlog`.
+
+      ## Verify
+      - Working dir: `cli/`
+      - Run: `go test ./internal/execution/claude/ -v` e poi `go test ./internal/execution/...`
+      - Expect: i nuovi test passano; tutti i test preesistenti del package `claude`, inclusi quelli dell'inception, restano verdi.
+
+      ## Done
+      - [ ] AC-2 — una conversazione chiusa dal receipt del backlog produce un risultato con il numero di epiche e specifiche dichiarate.
+      - [ ] AC-4 — turno fallito, processo uscito e run fermata producono tre errori distinti che nominano il backlog.
+      - [ ] Una domanda dell'agente non chiude la run: l'oracolo è che `Execute` non ritorna finché il receipt non arriva.
+      - [ ] La skill assente rifiuta prima di spawnare, provato dallo `Starter` mai invocato.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Rotte del viewer — has_backlog, offered e avvio dell'azione backlog
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+      - TASK-07
+    body: |-
+      ## Objective
+      `GET /api/workspace/actions` dice se il workspace ha già un backlog e quali azioni il suo stato ammette; `POST /api/workspace/execution` avvia la generazione, ne conferma l'effetto e ne annulla il risultato parziale in caso di fallimento.
+
+      ## Read
+      - `cli/internal/web/workspace_execution.go` — per intero. Contiene già l'intera catena per l'inception: `workspaceActionView`, `workspaceActionsView`, `handleGetWorkspaceActions`, `handleRunWorkspaceAction`, `guardSingleWorkspaceExecution`, `workspaceAvailability`, `reasonFor`, `workspaceRemedy`, `prdDiscarder`.
+      - `cli/internal/web/execution.go` e `execution_run.go` — `providerAvailability`, `providerAvailabilityFor`, `supportedActions`, `mapExecutionStartError`, `writeProviderConfigError`.
+      - `cli/internal/web/server.go` righe ~166-200 — la registrazione delle rotte; qui **non** servono rotte nuove.
+      - `cli/internal/execution/effect.go` — `VerifyActionEffect`, `DiscardPartialBacklog` (TASK-05).
+      - `cli/internal/connector/capabilities.go` — `BacklogDiscarder` (TASK-03).
+
+      ## Change
+      - `cli/internal/web/workspace_execution.go` — aggiungere `Offered` a `workspaceActionView`, `HasBacklog` a `workspaceActionsView`, i campi `hasBacklog`/`backlogUnreadable` a `workspaceAvailability`, il metodo `offers`, l'estensione di `reasonFor` e `workspaceRemedy`, il `backlogDiscarder()` e il ramo del rollback in `handleRunWorkspaceAction`.
+      - Non-goal: nessuna rotta nuova; non cambiare il codice HTTP dei rifiuti (409 per conflitto di stato, 400 per azione non dichiarata dal processo); non toccare le rotte spec-scoped; non rimuovere `HasPRD`, che il client usa ancora.
+
+      ## Steps
+      1. Aggiungere a `workspaceActionView` il campo `Offered bool` con tag `offered`, documentando che `offered` è la precondizione posta dallo **stato del workspace** mentre `runnable` è `offered` più provider utilizzabile e nessuna esecuzione in corso; il client disegna solo ciò che è `offered`.
+      2. Aggiungere a `workspaceActionsView` il campo `HasBacklog bool` con tag `has_backlog`, con lo stesso motivo per cui c'è `HasPRD`: il browser non deve dedurlo da una seconda chiamata.
+      3. In `workspaceAvailability`, aggiungere `hasBacklog bool` e `backlogUnreadable string`. In `workspaceAvailability(ctx)`, dopo la lettura del PRD, chiamare `s.conn.ReadExistingBacklog(ctx)` (metodo dell'interfaccia base, nessun type assert necessario): un errore riempie `backlogUnreadable` con `"the backlog could not be read: "+err.Error()`; altrimenti `hasBacklog = len(summary.Codes) > 0`.
+      4. Aggiungere il metodo `offers(actionID string) string`, che restituisce il motivo per cui lo stato del workspace non ammette l'azione, o `""` quando la ammette: per `inception`, `prdUnreadable` e poi `"this workspace already has a PRD: a first inception would overwrite it"`; per `backlog`, `prdUnreadable`, poi `"this workspace has no PRD yet: generate it with a first inception before the backlog"` quando `!hasPRD`, poi `backlogUnreadable`, poi `"this workspace already has a backlog: the initial generation would replace it"`; per un'azione sconosciuta, `"this action cannot be started from the viewer yet"`.
+      5. Riscrivere `reasonFor` come composizione, mantenendo **invariato** l'ordine attuale dei fatti: capability non dispacciabile → esecuzione già in corso (che nomina il proprio id) → `offers(actionID)` → `providerAvailability.reasonFor(capability)`. Questo preserva alla lettera i motivi che US-040 già mostra per l'inception.
+      6. In `handleGetWorkspaceActions`, valorizzare per ogni azione `Offered: availability.offers(action.ID) == ""` insieme a `Runnable` e `UnavailableReason`, e valorizzare `HasBacklog` nella risposta.
+      7. In `handleRunWorkspaceAction`, catturare **prima** dell'avvio, accanto a `existedBefore`, un `backlogExistedBefore := availability.hasBacklog`, con lo stesso commento sul perché la cattura deve precedere la run.
+      8. Estendere la closure `confirm` così che, dopo `execution.VerifyActionEffect`, chiami `execution.DiscardPartialPRD` **oppure** `execution.DiscardPartialBacklog` in base a `outcome.Action`, passando il rispettivo flag `existedBefore`. Entrambe restano dentro la stessa finestra della scrittura terminale.
+      9. Aggiungere `backlogDiscarder()` gemello di `prdDiscarder()`: type assert del connettore a `connector.BacklogDiscarder`, `nil` quando non lo soddisfa; documentare che `nil` è una risposta valida.
+      10. Estendere `workspaceRemedy` con i rimedi dei nuovi rifiuti: backlog illeggibile → `"use a connector that exposes the backlog"`; backlog già presente → "add specs with archetipo spec add instead, or remove the existing backlog deliberately before generating it again"; PRD mancante per l'azione backlog → `"run a first inception to obtain the PRD before generating the backlog"`.
+      11. Verificare che il `defer s.broker.Publish()` già presente nel dispatch resti l'ultimo a sciogliersi: è ciò che fa ricaricare la board a tutti i client connessi appena il workspace smette di essere occupato (AC-2).
+      12. Eseguire `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Working dir: `cli/`
+      - Run: `gofmt -l . && go vet ./... && go build ./... && go test ./internal/web/...`
+      - Expect: nessun output da `gofmt`, nessun errore da `vet`, build pulita; la suite `web` esistente — inclusi i test dell'inception di US-040 — resta verde. Se un test asseriva il payload delle azioni con una struttura chiusa, va esteso qui e non indebolito.
+
+      ## Done
+      - [ ] AC-1 — con PRD e senza backlog, `GET /api/workspace/actions` risponde `has_prd:true`, `has_backlog:false` e l'azione `backlog` `offered:true, runnable:true`.
+      - [ ] AC-3 — con un backlog presente l'azione `backlog` è `offered:false` con motivo, e `POST` risponde `409` con la stessa frase, senza creare alcun record.
+      - [ ] AC-4 — una run fallita di `backlog` innesca `DiscardPartialBacklog` con il flag catturato prima dell'avvio, dentro la scrittura terminale del record.
+      - [ ] Nessuna regressione su US-040: l'inception mantiene esattamente i motivi e i codici di rifiuto che aveva.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Test di integrazione HTTP delle rotte di workspace per il backlog
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+      I quattro criteri sono provati sul contratto HTTP del `Server` reale, con connettore, store dei record, conferma dell'effetto, rollback e Template di produzione, e solo il provider sostituito.
+
+      ## Read
+      - `cli/internal/web/workspace_execution_test.go` — per intero: `inceptionProvider`, `releasedInceptionProvider`, `blockedInceptionProvider`, `workspaceActionsResponse`, `readWorkspaceActions`, `inceptionActionOf` e i test di US-040. È lo scheletro da estendere.
+      - `cli/internal/web/execution_test.go` / `run_routes_test.go` — `releasedProvider`, `blockedProvider`, `doJSON` e gli helper di costruzione del server su una directory temporanea.
+      - `cli/internal/web/workspace_execution.go` — il codice di TASK-10.
+
+      ## Change
+      - `cli/internal/web/workspace_execution_test.go` — aggiungere il doppio di provider che dichiara `workspace.backlog`, l'helper `backlogActionOf`, il campo `has_backlog` e `offered` in `workspaceActionsResponse`, e i casi di test.
+      - Non-goal: non sostituire il connettore con un doppio; non modificare codice di produzione da qui.
+
+      ## Steps
+      1. Estendere `workspaceActionsResponse` con `HasBacklog bool` (`has_backlog`) e con `Offered bool` (`offered`) nella struttura anonima delle azioni, così le asserzioni restano sulla forma di rete.
+      2. Aggiungere `backlogActionOf`, gemello di `inceptionActionOf`, che isola l'azione sotto test e fallisce esplicitamente se assente.
+      3. Aggiungere un provider doppio che dichiara `spec.plan`, `workspace.inception` e `workspace.backlog`, la cui `Execute` è una funzione fornita dal test (così può scrivere sul connettore reale prima di rispondere).
+      4. **AC-1** — workspace con `docs/PRD.md` non vuoto e nessuna specifica: `GET /api/workspace/actions` risponde `has_prd:true`, `has_backlog:false`; l'azione `backlog` è `offered:true, runnable:true` con `unavailable_reason` vuoto; l'azione `inception` è `offered:false` con motivo non vuoto.
+      5. **Regressione US-040** — workspace **senza** PRD: `inception` è `offered:true, runnable:true`, `backlog` è `offered:false` con un motivo che nomina il PRD mancante.
+      6. **AC-2** — stesso workspace di AC-1, `Execute` del doppio scrive un backlog di tre specifiche in due epiche attraverso il connettore **reale** del server e poi restituisce successo. Avviare con `POST /api/workspace/execution {"action":"backlog"}`, asserire `201` con record `RUNNING` e `spec_code` vuoto; attendere in polling `GET /api/execution/{id}` fino allo stato terminale e asserire `SUCCEEDED`; poi asserire che `GET /api/board`, sullo **stesso** server già avviato, elenca le tre specifiche con le due epiche, e che `GET /api/workspace/actions` risponde ora `has_backlog:true` con `backlog` `offered:false`.
+      7. **AC-3** — workspace con PRD e backlog già presente: `backlog` è `offered:false` con un motivo che nomina il backlog esistente; `POST /api/workspace/execution {"action":"backlog"}` risponde `409` con quella stessa frase; asserire che la directory `.archetipo/executions/` non contiene alcun record nuovo e che i file del backlog sono byte-identici prima e dopo.
+      8. **AC-4 (fallimento)** — workspace di AC-1, `Execute` del doppio scrive **una sola** specifica attraverso il connettore reale e poi restituisce errore. Asserire: il record terminale è `FAILED`; `error.message` non è vuoto, contiene la causa originale **e** la nota di rimozione del backlog parziale; `GET /api/board` è di nuovo vuota; `GET /api/workspace/actions` torna a `has_backlog:false` con `backlog` `offered:true`.
+      9. **AC-4 (successo dichiarato non confermato)** — `Execute` restituisce successo senza scrivere nulla: il record è `FAILED` con `error.code == "UNCONFIRMED_EFFECT"` e il backlog resta assente.
+      10. **Doppio avvio** — con il provider bloccato, un secondo `POST` mentre il primo è in corso risponde `409` nominando l'id dell'esecuzione già attiva, e nessun secondo record viene creato.
+
+      ## Verify
+      - Working dir: `cli/`
+      - Run: `go test ./internal/web/ -run 'Workspace' -v` e poi `go test ./internal/web/...`
+      - Expect: i nuovi test passano; tutti i test di US-040 nel medesimo file restano verdi senza essere indeboliti.
+
+      ## Done
+      - [ ] AC-1 — provato che con PRD e senza backlog la rotta offre l'azione come `offered` e `runnable`.
+      - [ ] AC-2 — provato che, dopo un successo confermato, `GET /api/board` dello **stesso** processo server mostra epiche e specifiche: nessun riavvio del viewer è coinvolto nell'asserzione.
+      - [ ] AC-3 — provato che con backlog presente l'azione non è offerta, che `POST` risponde `409` e che nessun record viene scritto.
+      - [ ] AC-4 — provato che una run fallita lascia la board vuota e che il record dichiara sia la causa sia l'avvenuta rimozione del parziale; e che un successo non confermato diventa `UNCONFIRMED_EFFECT`.
+      - [ ] In nessun caso il connettore è un doppio: l'oracolo di persistenza è il filesystem reale letto dalle rotte reali.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Il pannello della modale PRD diventa il pannello delle azioni di workspace
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+      Nella UI, un workspace con PRD e senza backlog offre la generazione del backlog, la segue mentre lavora e al termine ritrova la board popolata senza riavviare il viewer.
+
+      ## Read
+      - `cli/internal/web/assets/app.js` righe ~220-235 — il commento e la costante `WORKSPACE_INCEPTION_CONTEXT`, e le variabili di stato del pannello.
+      - `cli/internal/web/assets/app.js` righe ~290-300 — `bindActionsPanel(inceptionActions)` e `bindRunPanel(inceptionRun)`.
+      - `cli/internal/web/assets/app.js` righe ~1778-1910 — `mountExecutionPanels`, `unmountExecutionPanels`, `renderSpecActions`, `renderSpecActionChip`, `startPanelAction`, `resumeExecution`, `followExecution`, `settleExecution`, `settleSpecExecution`.
+      - `cli/internal/web/assets/app.js` righe ~3382-3445 — `loadInception`, `hideInception`, `settleInception`, e la chiamata in `onSavePRD`.
+      - `cli/internal/web/assets/index.html` righe ~235-239 — il blocco `prd-inception` con i tre contenitori.
+      - `cli/internal/web/assets/app.js` righe ~455-470 — la sottoscrizione a `/api/board/stream` e `loadBoard`.
+
+      ## Change
+      - `cli/internal/web/assets/app.js` — generalizzare il contesto e le tre funzioni del pannello di workspace; filtrare le azioni su `offered`; ricaricare la board sul successo.
+      - `cli/internal/web/assets/index.html` — rinominare, se necessario, solo il testo di intestazione del blocco; **gli id DOM restano invariati** (`prd-inception`, `inception-actions`, `inception-execution`, `inception-run`) perché il binding e le smoke vi si appoggiano.
+      - Non-goal: non introdurre una modale nuova; non spostare il pannello fuori dalla modale PRD; non far decidere al client quali azioni siano ammissibili — quel verdetto arriva dal server.
+
+      ## Steps
+      1. Sostituire `WORKSPACE_INCEPTION_CONTEXT = "workspace:inception"` con `WORKSPACE_CONTEXT = "workspace"` e aggiornarne ogni uso. Aggiornare il commento sopra la costante: il token identifica il pannello di workspace nel suo insieme, e una sola esecuzione di workspace può essere in corso per volta, quindi un token unico è sufficiente.
+      2. Rinominare `loadInception` in `loadWorkspaceActions`, `hideInception` in `hideWorkspaceActions`, `settleInception` in `settleWorkspaceAction`, aggiornando tutti i chiamanti (fra cui `closePRD`, `onSavePRD` e l'apertura della modale PRD).
+      3. In `loadWorkspaceActions`, sostituire la condizione di visibilità: calcolare `const offered = (view.actions || []).filter((a) => a.offered)`; nascondere il pannello quando `offered.length === 0` **e** non c'è `view.execution` da riprendere; altrimenti mostrarlo. Rimuovere la vecchia condizione basata su `view.has_prd`, che con due azioni nasconderebbe anche quella ammissibile.
+      4. Passare a `renderSpecActions` solo le azioni `offered`: fra queste, quelle non `runnable` restano chip disabilitate con `unavailable_reason` nel `title`, comportamento che `renderSpecActionChip` già fornisce senza modifiche.
+      5. In `settleWorkspaceAction`, dopo il ricaricamento del PRD e prima o dopo il ricaricamento delle azioni, aggiungere `if (record && record.status === "SUCCEEDED") await loadBoard();`. Commentare che la board segue solo il successo, come già fa `settleSpecExecution`, perché è l'unico esito che può averla cambiata. Adeguare la firma alla forma `(record, ctx)` che `settleExecution` passa.
+      6. Verificare che `hideWorkspaceActions` continui a chiamare `unmountExecutionPanels(WORKSPACE_CONTEXT)` e a svuotare i tre contenitori, così che chiudere la modale fermi i timer del pannello e di nessun altro.
+      7. Nella modale PRD, dare al blocco un'intestazione neutra che non nomini l'inception (per esempio "Azioni sul workspace"), poiché ora ospita due azioni. Non toccare gli id.
+      8. Riaprire mentalmente i tre stati e verificare la coerenza con il server: senza PRD → una sola chip (inception); con PRD e senza backlog → una sola chip (backlog); con PRD e backlog → nessuna chip, pannello nascosto.
+
+      ## Verify
+      - Working dir: radice del repository.
+      - Run: `npm run test:view-inception-smoke`
+      - Expect: la smoke di US-040 passa invariata, cioè la generalizzazione non ha cambiato il comportamento dell'inception. È il controllo di regressione che vale più di qualunque asserzione statica su questo file, perché nel repository non esiste un runner di test per il JavaScript del viewer.
+      - Run: `cd cli && go build ./... && go test ./internal/web/...`
+      - Expect: gli asset sono embedded, quindi la build deve restare pulita e la suite `web` verde.
+
+      ## Done
+      - [ ] AC-1 — su un workspace con PRD e senza backlog il pannello compare nella modale PRD con la sola chip di generazione del backlog, attiva.
+      - [ ] AC-2 — alla chiusura con successo il client ricarica la board nello stesso processo del viewer, senza riavvii.
+      - [ ] AC-3 — su un workspace con backlog nessuna chip di generazione iniziale viene disegnata, e con PRD e backlog il pannello è del tutto assente.
+      - [ ] AC-4 — su una run fallita il pannello torna a mostrare l'azione insieme al record `FAILED` e al suo motivo, perché lo stato viene riletto dal server e non asserito dal client.
+      - [ ] `npm run test:view-inception-smoke` resta verde.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Smoke E2E backlog-from-view e sua documentazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+      Un viewer reale, un connettore reale e un agente finto dimostrano end-to-end che una persona genera il backlog dalla UI, che una run annullata non lascia traccia e che un backlog esistente non viene rigenerato.
+
+      ## Read
+      - `test/e2e/inception-from-view-smoke.mjs` — per intero: è il modello diretto. Struttura a tre sandbox, control server locale, `ok(criterio, affermazione)`, attese in polling senza `sleep`, produzione di `report.html` e `summary.json`, skip su Windows.
+      - `test/e2e/support/fake-claude.mjs` — il protocollo: `--version`, i frame `system`/`assistant`/`user`/`result`, l'`interrupt` e il `control_response`. È generico e **non va modificato**.
+      - `package.json` — la sezione `scripts` e la posizione degli script `test:view-*`.
+      - `AGENTS.md` — la sezione "E2E tests", dove ogni smoke ha la propria voce descrittiva.
+      - `skills/archetipo-spec/SKILL.md` sezione "CLI payload shape" — la forma del payload di `archetipo spec add`, che la smoke usa per persistere il backlog al posto dell'agente.
+
+      ## Change
+      - `test/e2e/backlog-from-view-smoke.mjs` — **nuovo file**.
+      - `package.json` — aggiungere `"test:view-backlog-smoke": "node ./test/e2e/backlog-from-view-smoke.mjs"` accanto agli altri script `test:view-*`.
+      - `AGENTS.md` — aggiungere la voce della nuova smoke nella sezione E2E, subito dopo quella di `test:view-inception-smoke`.
+      - Non-goal: non modificare `fake-claude.mjs`; non modificare la smoke dell'inception; non aggiungere lo script alla CI, dove le smoke del viewer oggi non girano.
+
+      ## Steps
+      1. Copiare l'impalcatura di `inception-from-view-smoke.mjs`: build del CLI in `test/e2e/.bin/`, radice delle sandbox `test/workspaces/backlog-from-view-smoke/runs/<timestamp>/sandbox`, control server su `127.0.0.1`, helper `ok`, skip su Windows, scrittura di `report.html` e `summary.json`.
+      2. Per ogni sandbox: `archetipo init --tool claude --connector file --yes`, poi salvataggio del provider `claude` come default del workspace puntato al fake tramite la sua configurazione, esattamente come fa la smoke dell'inception. Verificare che `.claude/skills/archetipo-spec/` sia stata installata: è la skill che il prompt invoca.
+      3. **Scenario "generazione riuscita"** (AC-1, AC-2): scrivere il PRD con `archetipo prd write`; asserire che `GET /api/workspace/actions` risponde `has_prd:true`, `has_backlog:false` e l'azione `backlog` `offered:true, runnable:true`, senza esecuzione dietro; avviare con `POST /api/workspace/execution {"action":"backlog"}` e asserire `201`, record `RUNNING`, `spec_code` vuoto; asserire che il prompt consegnato al processo nomina `/archetipo-spec` leggendolo dal control server.
+      4. Nello stesso scenario, far emettere al fake un `assistant` con una domanda seguito da un `result` senza receipt; asserire che diventa un evento `text` su `GET /api/execution/{id}/run` e che il record resta `RUNNING`; inviare la risposta con `POST /api/execution/{id}/run/messages`, asserire `202` con corpo che non contiene il testo, e che il messaggio entra nella conversazione **una sola volta** e solo dopo che il processo lo ha ri-emesso.
+      5. Sempre nello stesso scenario, persistere il backlog con `archetipo spec add` (comando della smoke, mai del fake) con tre specifiche in due epiche; far chiudere il fake sulla riga `{"artifact":"backlog","status":"WRITTEN","epics":2,"specs":3}`; attendere in polling lo stato terminale e asserire `SUCCEEDED`; asserire che i tre file `.archetipo/specs/<code>.yaml` esistono su disco; asserire che `GET /api/board`, interrogata sul **medesimo processo viewer mai riavviato**, restituisce le tre specifiche con le loro due epiche; asserire che `GET /api/workspace/actions` risponde ora `has_backlog:true` con `backlog` `offered:false`.
+      6. **Scenario "run annullata"** (AC-4): come sopra fino alla scrittura di **una sola** specifica con `archetipo spec add`; annullare con `POST /api/execution/{id}/run/cancel`; attendere lo stato terminale e asserire `FAILED` con `error.message` non vuoto; asserire che `.archetipo/specs/` non contiene più file spec, che `.archetipo/backlog.yaml` non esiste e che `GET /api/board` è vuota sullo stesso viewer; asserire che `backlog` torna `offered:true`.
+      7. **Scenario "backlog già presente"** (AC-3): sandbox con PRD e backlog seminato prima dell'avvio del viewer; asserire `has_backlog:true` e l'azione `backlog` `offered:false` con motivo non vuoto; asserire che `POST /api/workspace/execution {"action":"backlog"}` risponde `409` con quella stessa frase; asserire che `.archetipo/executions/` non contiene alcun record e che i file del backlog sono byte-identici prima e dopo.
+      8. Nessun `sleep` arbitrario in alcun punto: ogni attesa fa polling su una rotta del viewer o sul control server finché non riporta ciò che il processo è stato appena istruito a fare.
+      9. Aggiungere lo script a `package.json` e la voce descrittiva ad `AGENTS.md`, elencando esplicitamente cosa la smoke verifica e cosa è finto (solo il binario dell'agente).
+
+      ## Verify
+      - Working dir: radice del repository.
+      - Run: `npm run test:view-backlog-smoke`
+      - Expect: i tre scenari passano; nessun test è classificato `skip` su macOS; la run produce `report.html` e `summary.json` sotto `test/workspaces/backlog-from-view-smoke/runs/<timestamp>/`.
+      - Run: `npm run test:view-inception-smoke`
+      - Expect: verde, come in TASK-12: le due smoke condividono pannello, rotte e provider.
+      - Run: `git status --porcelain test/workspaces test/e2e/.bin`
+      - Expect: nessun file da committare — sandbox e binario E2E sono ignorati.
+
+      ## Done
+      - [ ] AC-1 — provato sul viewer reale che un workspace con PRD e senza backlog offre l'azione come runnable.
+      - [ ] AC-2 — provato che, dopo il receipt, i file spec esistono su disco e `GET /api/board` dello stesso processo mai riavviato mostra epiche e specifiche.
+      - [ ] AC-3 — provato che con backlog presente l'azione non è offerta, che `POST` risponde `409` e che il backlog resta byte-identico.
+      - [ ] AC-4 — provato che una run annullata chiude `FAILED` con motivo, che nessun file spec e nessun `backlog.yaml` sopravvivono e che la board torna vuota.
+      - [ ] `package.json` e `AGENTS.md` documentano la nuova smoke.
+      - [ ] Solo il binario dell'agente è finto: viewer, connettore, provider claude, client stream-json, sessione locale, run follower e conferma dell'effetto sono quelli di produzione.
+
+      ## Blockers
+      None.
+    ref: TASK-13
+  - id: TASK-14
+    title: Gate finale — verifiche complete e controllo dello stato dei task
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+      - TASK-13
+    body: |-
+      ## Objective
+      L'incremento è verificato con esattamente i controlli che questo repository si fida di eseguire, e la spec entra in revisione solo quando nessun task è rimasto aperto.
+
+      ## Read
+      - `AGENTS.md` sezione "Rules for CLI changes" — l'elenco dei controlli che la CI esegue e che vanno riprodotti localmente prima di consegnare.
+      - La sezione Baseline di questo piano — è il confine oltre il quale nessun fallimento è tollerato.
+
+      ## Change
+      - Nessun file di prodotto. Questo task esegue verifiche e, se una fallisce, la correzione avviene nel task che ha introdotto il difetto, non qui.
+      - Non-goal: non aggiungere test nuovi in questo task; non modificare asserzioni per farle passare.
+
+      ## Steps
+      1. Se `golangci-lint` non è installato, installarlo: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`. Se l'installazione non è possibile in questo ambiente, registrarlo esplicitamente come verifica non eseguita — mai come verifica verde.
+      2. Eseguire, da `cli/`, nell'ordine: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`, `golangci-lint run --timeout 5m ./...`.
+      3. Eseguire, dalla radice del repository: `npm run test:view-backlog-smoke` e `npm run test:view-inception-smoke`.
+      4. Verificare che nessun file toccato dal piano abbia introdotto diagnostiche di compilatore, `vet` o linter rispetto alla baseline registrata.
+      5. Verificare con `git status --porcelain` che non restino artefatti generati da committare (`test/workspaces/*`, `test/e2e/.bin/` sono ignorati).
+      6. Marcare questo task `DONE` con `archetipo task done US-041 TASK-14`, eseguito da `/Users/stefanoleli/Project/Archetipo`.
+      7. Ricaricare la spec con `archetipo spec show US-041` da `/Users/stefanoleli/Project/Archetipo` e verificare che **ogni** task del piano risulti `DONE`.
+      8. Solo se il passo 7 non mostra alcun task `TODO`, richiedere la revisione con `archetipo spec review US-041` da `/Users/stefanoleli/Project/Archetipo`.
+
+      ## Verify
+      - Working dir: `cli/` per i controlli Go, radice del repository per le smoke e per i comandi `archetipo`.
+      - Run: `gofmt -l . && go vet ./... && go build ./... && go test ./...`
+      - Expect: `gofmt` non stampa nulla; `go vet` non segnala errori; la build compila; **tutti** i test passano — la baseline registrava 1253 test verdi in 28 package, quindi il numero deve essere maggiore o uguale e nessun fallimento è ammesso.
+      - Run: `golangci-lint run --timeout 5m ./...`
+      - Expect: 0 issue. Se il binario non è installabile in questo ambiente, la verifica è dichiarata non eseguita e il motivo è riportato, senza essere spacciata per verde.
+      - Run: `npm run test:view-backlog-smoke && npm run test:view-inception-smoke`
+      - Expect: entrambe verdi, nessuno scenario `fail` né `timeout`.
+      - Run: `archetipo spec show US-041`
+      - Expect: nessun task con `status: TODO`.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4 — le suite che li dimostrano (TASK-02, TASK-04, TASK-06, TASK-09, TASK-11, TASK-13) sono state rieseguite qui e sono verdi.
+      - [ ] `gofmt`, `go vet`, `go build` e `go test ./...` sono verdi da `cli/`, senza fallimenti nuovi rispetto alla baseline.
+      - [ ] `golangci-lint run --timeout 5m ./...` riporta 0 issue, oppure è dichiarato esplicitamente non eseguibile con il motivo.
+      - [ ] `npm run test:view-inception-smoke` è verde: nessuna regressione su US-040.
+      - [ ] `archetipo spec show US-041` non mostra alcun task `TODO`, e solo dopo questa verifica è stata invocata `archetipo spec review US-041`.
+
+      ## Blockers
+      None.
+    ref: TASK-14

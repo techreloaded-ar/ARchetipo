@@ -1,0 +1,500 @@
+schema: archetipo/plan/v2
+spec_code: US-017
+body: "# US-017: Approvare o rinviare il PRD al rework — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-25\n\n---\n\n## Specifica\n\n**Epica:** EP-002 — Inception governata in ARchetipo Control\n**Priorità:** HIGH | **Punti:** 5\n\n**Storia utente**\nCome responsabile del prodotto, voglio esaminare il PRD e scegliere approvazione o rework con motivazione, così da mantenere un gate umano informato prima di considerare l'artefatto ufficiale.\n\n**Criteri di accettazione**\n- AC-1 — Il gate presenta PRD, validazione, Run di origine e decisioni aperte.\n- AC-2 — L'approvazione registra autore, istante e versione esatta dell'artefatto.\n- AC-3 — Il rework richiede una motivazione e riapre un'attività riconoscibile.\n- AC-4 — La versione rinviata resta consultabile nella cronologia.\n- AC-5 — Solo il verdetto esplicito aggiorna lo stato del processo.\n\n---\n\n## Soluzione tecnica\n\nAggiungere a Control Product un gate PRD alimentato soltanto da Workflow Run Inception completate e corredate da una fotografia immutabile dell'artefatto verificato. Il dossier unisce contenuto esaminabile, receipt di validazione, provenienza Run/Process Input/Project e decisioni aperte; il comando di verdetto è l'unico writer della Process Instance.\n\n- Runner continua a lasciare il PRD autorevole nel connector Core. Dopo aver verificato locator e digest, carica tramite un endpoint machine-authenticated una fotografia Markdown limitata e digest-verificata; Control la conserva come evidenza immutabile di review, distinta dall'artefatto ufficiale e mai riscrivibile. Il WebSocket resta sotto il limite di 32 KiB: il receipt terminale contiene soltanto l'identificatore opaco della fotografia.\n- Product materializza un dossier per ogni versione esatta, identificata da fotografia, Run, locator e SHA-256. Le letture ricompongono validazione, workflow/versione, Process Input, decisioni aperte e cronologia senza mutare attività o stato.\n- Un comando transazionale e Project-scoped accetta un solo verdetto per versione. `approved` registra attore e istante server-derived e completa la Process Instance; `rework` richiede una nota non vuota, conserva la versione esaminata e apre un'occorrenza append-only riconoscibile dell'attività `produce-prd`, lasciando l'istanza attiva.\n- Replay dello stesso verdetto restituisce il record esistente; un verdetto incompatibile, una fotografia non più candidabile, una Run non completata o un contesto divergente falliscono senza side effect. Apertura dossier, dialog, annullamento, validazioni client e refresh sono rigorosamente read-only.\n- La pagina Project implementa il dossier secondo i mockup US-017: contenuto PRD reso come testo sicuro, prove di validazione e provenienza, decisioni aperte, azioni esplicite con conseguenza dichiarata, motivazione obbligatoria per il rework, prossimo passo e cronologia riapribile.\n\n### Decisioni architetturali\n\nLa scelta attraversa il confine della fonte di verità e il modello persistente, ma non richiede un nuovo ADR: estende `decisions/source-of-truth-transition` e `decisions/project-process-run-model`. L'alternativa di leggere soltanto il locator corrente è respinta perché un file sovrascritto non prova né conserva la versione esaminata; copiare il PRD in Control come nuovo artefatto autorevole è respinto perché introdurrebbe dual-write. La soluzione scelta conserva una fotografia append-only esclusivamente come evidenza di audit/review, verificata contro il digest prodotto dal Core, mentre il connector resta l'unico writer e owner del PRD ufficiale.\n\nPer il trasporto, un upload HTTPS autenticato dalla machine identity è preferito sia al contenuto nel receipt WebSocket, che supererebbe il limite di 32 KiB e allargherebbe il contratto degli eventi, sia a una lettura tardiva dal Runner, che renderebbe il dossier dipendente dalla presenza della macchina. L'upload è bounded, idempotente per Run/digest e deve precedere il terminale `completed`; la decisione aggiorna gli ADR esistenti `decisions/outbound-runner-transport`, `decisions/run-protocol` e `decisions/control-foundation` dopo l'accettazione.\n\n---\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza sul piano |\n|---|---|---|\n| `npm --prefix control exec vitest run test/integration/project-workflow-run-http.test.ts test/integration/remote-workflow-run.test.ts test/integration/project-process.test.ts test/integration/project-process-http.test.ts` | Verde: 4 file, 19 test | I nuovi record e comandi devono preservare receipt append-only, scope Project, version pinning e assenza di avanzamento implicito. |\n| `npm --prefix control test -- test/web/project.test.tsx` | Verde: 34 file/155 test non-web e 5 file/40 test web; lo script esegue le suite canoniche prima del filtro aggiunto | Le verifiche UI usano lo script di progetto con ambiente `jsdom`, non Vitest diretto. |\n| `npm --prefix control exec vitest run test/web/project.test.tsx` | Rosso per invocazione ambiente: 26 test falliscono con `ReferenceError: document is not defined` | È un prerequisito di comando, non un difetto applicativo: ogni task React usa `npm --prefix control run test:web -- test/web/project.test.tsx`. |\n| `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build` | Verde | Ogni file Control modificato deve restare senza diagnostiche e compilare. |\n| `npm run build:control && npx playwright test test/e2e/control-project-workflow-inception.spec.ts` | Verde: 1 scenario Chromium | Il nuovo browser E2E estende la catena autenticazione–Project–PostgreSQL senza regredire Inception. |\n\n**Prerequisiti ambiente:** Node.js 22.19, dipendenze root/Control/Runner installate, Docker con PostgreSQL 17 per gli integration test e Chromium Playwright installato. I test web devono essere eseguiti tramite `test:web` per attivare `jsdom`; l'upload fotografia usa una machine credential di Runner valida e non amplia il WebSocket oltre 32 KiB.\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Project con Process Instance attiva e Workflow Run Inception completata, receipt e fotografia PRD correlati | Integration API + component + browser E2E | Il dossier mostra il testo esatto del PRD, `validation.ok=true`, Run ID, `inception@1.0.0`, Process Input e tutte le decisioni aperte dello snapshot | TASK-02, TASK-03, TASK-05, TASK-06, TASK-07 |\n| AC-2 | Dossier non deciso con admin autenticato | Integration PostgreSQL/API + browser E2E | Dopo `approved`, API, DB e UI espongono email/identity server-derived, timestamp e la stessa versione/digest; la Process Instance è `completed` | TASK-01, TASK-04, TASK-05, TASK-06, TASK-07 |\n| AC-3 | Secondo dossier non deciso; dialog rework aperto prima senza nota, poi con nota valida | Integration API + component + browser E2E | Submit vuoto non invia né muta; il verdetto valido conserva la motivazione e crea una nuova occorrenza open `produce-prd` con ID/ciclo visibile | TASK-01, TASK-04, TASK-05, TASK-06, TASK-07 |\n| AC-4 | Versione A rinviata e successiva versione B candidata nello stesso Project | Integration query + browser E2E | La cronologia elenca digest, locator, Run, verdetto e nota di A e riapre il suo contenuto byte-identico dopo la comparsa di B | TASK-01, TASK-03, TASK-06, TASK-07 |\n| AC-5 | Dossier aperto, dialog annullato, richiesta invalida e due submit concorrenti | Integration transazionale + component + browser E2E | Snapshot DB di `process_instances` e attività resta identico per ogni lettura/annullamento/fallimento; solo un POST di verdetto autorizzato crea un record e applica una sola transizione | TASK-04, TASK-05, TASK-06, TASK-07 |\n\n---\n\n## Strategia di test\n\n- Contract e integration test PostgreSQL coprono fotografia bounded e digest-verificata, append-only, scope Organization/Project, unicità Run/versione/verdetto, replay, concorrenza e transizione atomica.\n- Test Runner/Operations provano upload machine-authenticated prima del completion, correlazione con receipt, rifiuto di digest o Run divergenti, idempotenza e rispetto del limite WebSocket.\n- Test di servizio e HTTP verificano dossier completo, payload chiusi, ruolo admin, attore server-derived, audit e assenza di side effect su GET, cancel, body invalidi e conflitti.\n- Component test React mantengono osservabili il contenuto reale e le conseguenze del verdetto senza mockare il componente responsabile; il PRD è reso senza HTML non fidato e dialog/focus/live region restano accessibili.\n- Browser E2E è obbligatorio: il percorso attraversa OIDC, autorizzazione, Project, PostgreSQL, provenienza Operations, persistenza e transizione di processo. Il test simula sia approvazione sia rework e confronta API/DB/UI; la demo è filmabile e la registrazione appartiene ad `archetipo-review`.\n\n### Test E2E — Simulazione utente\n\n**Framework:** Playwright esistente\n**Video demo:** previsto; sarà registrato da `archetipo-review`.\n\n| Scenario | Flusso utente |\n|---|---|\n| Approvazione informata | L'admin apre il dossier di una versione validata, legge PRD, Run e decisioni, apre e annulla la conferma verificando stato invariato, poi approva; reload e DB mostrano autore, istante, digest esatto, processo completato e prossimo passo. |\n| Rework con storia preservata | Su un secondo Project l'admin tenta rework senza nota, inserisce la motivazione e conferma; vede l'attività `produce-prd` riaperta. Dopo una nuova versione candidata, apre dalla cronologia quella rinviata e confronta contenuto, digest, Run e nota originali. |\n\n---\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [domains/delivery-workflow, domains/product-process-management, decisions/project-process-run-model, decisions/source-of-truth-transition, decisions/outbound-runner-transport, decisions/run-protocol, decisions/control-foundation]\n  update_after_acceptance: [domains/product-process-management, decisions/project-process-run-model, decisions/source-of-truth-transition, decisions/outbound-runner-transport, decisions/run-protocol, decisions/control-foundation, architecture/context-map, engineering/code-map, overview]\n  create: []\n```\n\n> \U0001F3A8 I mockup per questa specifica sono disponibili in `docs/mockups/US-017/`\n\n_Piano generato tramite ARchetipo Planning — 2026-07-25_\n\n## Rework — snapshot esatto delle evidenze Wiki\n\nLa review ha rilevato che il gate Wiki ha approvato 19 pagine contro `HEAD` (`75ea21d2c0e1f4fde7a07e5c41f976dab6179ca9`) invece che contro l'incremento dirty di US-017. Il CLI globale è `archetipo 0.0.0-dev.g8682809.dirty`; la correzione `1cad46d` è già antenata di `HEAD` e usa `git stash create` per i cambiamenti tracciati, ma il comando non include i nuovi file non tracciati. Di conseguenza 18 pagine risultano `stale` con `WIKI_EVIDENCE_CHANGED`, mentre soltanto `decisions/pi-sdk-adapter` resta `reviewed`.\n\nIl rework estende il seam introdotto da `1cad46d` affinché l'approvazione costruisca una revisione Git sintetica dell'intero working tree pertinente, inclusi file non tracciati non ignorati, senza modificare index, working tree o ref. Poi riporta esplicitamente allo stato `generated` il dossier di 19 pagine tramite `wiki reset`, rigenera il catalogo e lo consegna al gate umano senza alterarne i corpi o sintetizzare metadata di review. In review, lo stesso CLI costruito dal checkout deve approvare esattamente i 19 ID e `wiki status`/`wiki validate --profile bootstrap` devono mostrare tutti i 19 `reviewed`, metadata completi e nessun `WIKI_EVIDENCE_CHANGED`.\n\nLa decisione non supera la soglia ADR: è una correzione locale alla semantica già stabilita del gate Wiki e non cambia modello persistente, sicurezza, deployment, integrazioni o policy cross-cutting. I mockup US-017 esistenti non cambiano; il rework non introduce nuova UI.\n\n### Baseline mirata del rework\n\n| Controllo | Risultato | Conseguenza |\n|---|---|---|\n| `archetipo version` | `archetipo 0.0.0-dev.g8682809.dirty` | I task non devono affidarsi al binario globale; costruiscono e usano il CLI dal checkout corrente. |\n| `archetipo wiki status` | `generated: 2`, `reviewed: 1`, `stale: 18`; i 18 stale sono esattamente i finding `WIKI_EVIDENCE_CHANGED` del dossier escluso `decisions/pi-sdk-adapter` | Il reset deve includere tutti i 19 ID, anche la pagina ancora reviewed, e il gate finale deve distinguerli dalle due pagine generated estranee. |\n| `archetipo wiki validate --profile bootstrap` | `data.ok=true`, 18 warning `WIKI_EVIDENCE_CHANGED` | La struttura è valida ma la fiducia è degradata; il rework deve eliminare i warning per il set US-017 dopo la nuova approvazione. |\n| `go test ./internal/wiki ./internal/cli` da `cli/` | PASS | Il baseline Go è verde; i task devono aggiungere copertura senza regressioni. |\n| Fixture Git con un file tracciato modificato e uno non tracciato, poi `git stash create` e `git ls-tree` | FAIL mirato: lo snapshot contiene soltanto `tracked.txt` | La correzione deve includere anche file non tracciati non ignorati e provare che index/worktree/ref restano invariati. |\n\n### Mappa delle evidenze di rework\n\n| Feedback | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| Snapshot dirty completo | Repository Git temporaneo con file tracciato modificato, file staged, file non tracciato e file ignorato | Unit test Go del package Wiki | La revisione restituita contiene tracked/staged/untracked non ignorati, esclude l'ignorato e non modifica `HEAD`, index, working tree o refs | TASK-09, TASK-11 |\n| Dossier pronto per un nuovo gate | Checkout US-017 con i 19 ID espliciti oggi persistiti come reviewed/stale | CLI integration sul checkout | Dopo `wiki reset` e `wiki catalog`, tutti e soli i 19 ID sono `generated`, senza metadata `review`, con corpi invariati e validation `data.ok=true` | TASK-10, TASK-11 |\n| Approvazione sull'incremento esatto | Stesso checkout dirty con nuove sorgenti US-017 non tracciate e 19 pagine generated | Gate umano `archetipo-review` con CLI costruito dal checkout | `wiki approve` riporta `approved: 19`; subito dopo tutti i 19 ID sono `reviewed`, hanno `content_hash`, `evidence_revision`, `reviewed_at`, e validate non contiene `WIKI_EVIDENCE_CHANGED` per il dossier | TASK-09, TASK-10, TASK-11 e review umana |\n\n### Strategia di test del rework\n\n- Unit test Wiki con repository temporaneo reale per coprire modifiche tracked, staged, untracked e ignored, oltre a repository pulito e assenza di mutazioni osservabili del checkout.\n- Controlli CLI sul checkout reale usando un binario costruito da `cli/cmd/archetipo`: reset esplicito dei 19 ID, catalogo, status e validation. I corpi delle pagine vengono confrontati semanticamente prima/dopo il reset per provare che cambia soltanto il lifecycle.\n- Gate Go completo richiesto da `AGENTS.md`, perché il rework modifica `cli/`: `gofmt`, vet, build, test e golangci-lint.\n- Il test post-approvazione appartiene al nuovo gate umano: l'implementazione non auto-approva la Wiki. La review deve usare il CLI appena costruito, approvare soltanto i 19 ID presentati e verificare immediatamente metadata e assenza di evidenza stale prima di integrare.\n\n### Impatto Wiki aggiuntivo del rework\n\n```yaml\nwiki_impact:\n  read: [decisions/living-project-wiki, domains/project-knowledge]\n  update_after_acceptance: [architecture/context-map, decisions/control-foundation, decisions/four-layer-product-architecture, decisions/governed-run-modes, decisions/outbound-runner-transport, decisions/pi-sdk-adapter, decisions/project-process-run-model, decisions/remote-run-assignment-lease, decisions/run-protocol, decisions/source-of-truth-transition, domains/delivery-workflow, domains/fleet-and-run-management, domains/identity-and-policy, domains/product-process-management, domains/project-and-workspace, engineering/code-map, operations/development, overview, references/prd]\n  create: []\n```\n"
+tasks:
+  - id: TASK-01
+    title: Modella versioni di review, verdetti e attività di rework
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Persistire fotografie PRD, verdetti e occorrenze di rework come evidenze Project-scoped append-only, con una transizione di processo atomica.
+
+      ## Read
+      - `control/migrations/006_process_inception.sql` — Process Instance, stato e attività correnti.
+      - `control/migrations/008_remote_workflow_runs.sql` — receipt Workflow append-only e correlazioni.
+      - `control/src/modules/product/process-domain.ts` e `process-repository.ts` — contratti e lock del processo.
+      - `control/src/modules/identity/repository.ts` — tipi Kysely dello schema.
+
+      ## Change
+      - `control/migrations/009_prd_review_gate.sql` — aggiungere fotografie di review, verdetti, occorrenze attività e stato terminale della Process Instance con foreign key composite, check, indici e trigger append-only.
+      - `control/src/modules/product/prd-review-domain.ts` — tipi chiusi, limiti del Markdown/motivazione e invarianti del verdetto.
+      - `control/src/modules/identity/repository.ts` — mappare le nuove tabelle.
+      - `control/src/modules/product/prd-review-domain.test.ts` e `control/test/integration/migrations.test.ts` — verificare schema, limiti e immutabilità.
+      - Non rendere la fotografia un PRD scrivibile o un secondo locator autorevole; non aggiungere firme, quorum o verdict paralleli.
+
+      ## Steps
+      1. Modellare `prd_review_artifacts` con Organization, Project, Process Instance, Run/receipt, locator, digest, Markdown bounded, capture timestamp e unicità Run/digest.
+      2. Impedire update/delete delle fotografie e verificare SHA-256, dimensione e scope al confine dominio.
+      3. Modellare un solo `prd_review_verdict` append-only per fotografia con `approved|rework`, attore/email/istante server-derived e check che la motivazione sia obbligatoria soltanto per rework.
+      4. Modellare `process_activity_occurrences` append-only con chiave `produce-prd`, numero ciclo, stato open e riferimento al verdetto rework; rendere riconoscibile ogni nuova occorrenza.
+      5. Ampliare `process_instances.status` a `active|completed` mantenendo i record esistenti e conservare l'update soltanto nel comando transazionale futuro.
+      6. Provare foreign key cross-Organization/Project, unicità, trigger e migrazione del baseline.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/product/prd-review-domain.test.ts test/integration/migrations.test.ts`
+      - Expect: schema e dominio accettano soltanto fotografie/verdetti bounded e rifiutano mutazioni, scope divergente e rework senza nota.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: nessuna diagnostica nei file modificati.
+
+      ## Done
+      - [ ] AC-2 — il modello lega autore, istante e digest esatto a un solo verdetto.
+      - [ ] AC-3 — ogni rework valido può riferire una nuova occorrenza `produce-prd` riconoscibile.
+      - [ ] AC-4 — fotografia e verdetto restano append-only e consultabili.
+      - [ ] AC-5 — i vincoli impediscono due verdetti o transizioni concorrenti per la stessa versione.
+
+      ## Blockers
+      US-016 deve restare `DONE` e la migrazione `008_remote_workflow_runs.sql` disponibile.
+    ref: TASK-01
+  - id: TASK-02
+    title: Acquisisci la fotografia PRD verificata dal Runner
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Consegnare a Control una fotografia PRD immutabile e digest-verificata prima del completion Inception, senza inserire Markdown nel WebSocket.
+
+      ## Read
+      - `runner/src/workspace-executor.ts` — verifica corrente di locator, digest e artifact bytes.
+      - `runner/src/control-client.ts` — machine credential, accept e status terminali.
+      - `control/src/modules/operations/machine-auth.ts` e `transport.ts` — autenticazione Runner e limite messaggi 32 KiB.
+      - `control/src/modules/operations/run-domain.ts`, `run-transport-contract.ts`, `run-service.ts` e `run-repository.ts` — receipt e finalizzazione Workflow.
+      - `test/e2e/runner-control-workflow-smoke.mjs` — esecuzione reale Agent/Core.
+
+      ## Change
+      - `control/src/modules/operations/artifact-snapshot-http.ts` — endpoint HTTPS machine-authenticated, bounded e idempotente per upload fotografia.
+      - `control/src/modules/operations/run-domain.ts`, `run-transport-contract.ts`, `run-service.ts` e `run-repository.ts` — correlare l'ID opaco della fotografia al receipt prima di `completed`.
+      - `control/src/server/app.ts` — registrare l'endpoint.
+      - `runner/src/control-client.ts` e `workspace-executor.ts` — uploadare i byte già verificati e includere soltanto l'ID nel completion.
+      - Test contract/integration Operations, test Runner e `test/e2e/runner-control-workflow-smoke.mjs` — casi happy path, replay e rifiuto.
+      - Non alzare `MAX_MESSAGE_BYTES`, non inviare credenziali o Markdown negli eventi, non completare una Inception senza fotografia correlata.
+
+      ## Steps
+      1. Definire un upload con limite 512 KiB, content type Markdown, Run ID, locator e digest; autenticare la machine identity e verificare che il Runner possieda l'assignment accettato.
+      2. Calcolare server-side SHA-256 e rifiutare mismatch, Run non Workflow, Project diverso, assignment scaduto o fotografia fuori limite senza creare righe.
+      3. Rendere il replay dello stesso Run/digest idempotente e un contenuto diverso conflittuale.
+      4. Fare eseguire l'upload dal Runner dopo la verifica locale e prima dello status `completed`; mantenere il receipt bounded con il solo `reviewArtifactId`.
+      5. In Operations correlare fotografia, receipt e payload persistito nella stessa finalizzazione; fotografia mancante o divergente produce `failed` senza dossier candidabile.
+      6. Estendere lo smoke reale per confrontare bytes, digest, locator e singola fotografia, mantenendo un solo PRD nel connector Core.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/operations/run-transport-contract.test.ts test/integration/remote-workflow-run.test.ts test/integration/remote-workflow-run-transport.test.ts`
+      - Expect: solo un upload correlato consente completion e il receipt WebSocket resta bounded.
+      - Run: `npm --prefix runner test && npm run test:runner-control-workflow`
+      - Expect: Runner carica una sola fotografia verificata; retry/replay non duplica PRD, receipt o fotografia.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix runner run typecheck && npm --prefix runner run lint`
+      - Expect: nessuna diagnostica nei confini modificati.
+
+      ## Done
+      - [ ] AC-1 — il dossier futuro dispone del testo esatto correlato alla validazione e alla Run.
+      - [ ] AC-4 — la fotografia resta disponibile indipendentemente dalla successiva sovrascrittura del locator Core.
+
+      ## Blockers
+      Dipende dallo schema fotografia di TASK-01 e dalla Workflow Run US-016.
+    ref: TASK-02
+  - id: TASK-03
+    title: Componi il dossier e la cronologia PRD
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Restituire un dossier read-only completo per ogni versione PRD e una cronologia riapribile del Project.
+
+      ## Read
+      - `control/src/modules/product/workflow-run-service.ts` e `workflow-run-http.ts` — join Product/Operations e DTO della provenienza.
+      - `control/src/modules/product/process-input-repository.ts` — snapshot `outcome` e `openDecisions`.
+      - `control/src/modules/product/process-service.ts` — proiezione corrente della Process Instance.
+      - `control/src/modules/operations/run-repository.ts` — receipt e timeline di origine.
+
+      ## Change
+      - `control/src/modules/product/prd-review-repository.ts` — query Project-scoped per candidato, dettaglio versione e cronologia.
+      - `control/src/modules/product/prd-review-service.ts` — comporre fotografia, validazione, Run/workflow, Process Input, decisioni aperte, processo e verdetto.
+      - `control/test/integration/project-prd-review.test.ts` — dossier, scope, versione A/B e letture senza side effect.
+      - Non ricavare la versione dal locator mutabile, non accettare Organization/Project dal client e non aggiornare processo o attività durante le letture.
+
+      ## Steps
+      1. Selezionare come candidati soltanto Workflow Run `completed` con receipt e fotografia reciprocamente correlati allo stesso Project/Process Input.
+      2. Usare fotografia ID e digest come identità esatta della versione; mantenere locator e Run come provenienza, non come contenuto dinamico.
+      3. Unire `validation.ok`, workflow/versione, snapshot Project/Process Input e tutte le `openDecisions` senza copiare transcript o segreti.
+      4. Proiettare candidato corrente, verdetto eventuale, prossimo passo e cronologia ordinata; permettere il dettaglio di versioni rinviate anche dopo una versione successiva.
+      5. Provare Project/Organization isolation e confrontare snapshot DB prima/dopo lista e dettaglio.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/project-prd-review.test.ts test/integration/remote-workflow-run.test.ts`
+      - Expect: dossier e storia ricompongono contenuto/provenienza esatti, la versione A resta riapribile dopo B e nessuna GET modifica il processo.
+
+      ## Done
+      - [ ] AC-1 — il servizio espone PRD, validazione, Run e decisioni aperte nello stesso dossier.
+      - [ ] AC-4 — una versione rinviata è recuperata byte-identica dalla cronologia dopo una versione successiva.
+      - [ ] AC-5 — le letture lasciano invariati Process Instance, occorrenze e verdetti.
+
+      ## Blockers
+      Dipende dalla fotografia correlata di TASK-02.
+    ref: TASK-03
+  - id: TASK-04
+    title: Applica il verdetto come unica transizione di processo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Applicare approvazione o rework in una transazione serializzata, registrando un solo verdetto e una sola conseguenza di processo.
+
+      ## Read
+      - `control/src/modules/product/process-repository.ts` e `process-service.ts` — lock Project, istanza e proiezione.
+      - `control/src/modules/product/process-input-service.ts` — pattern di comando esplicito, replay e attore server-derived.
+      - `control/src/modules/product/prd-review-repository.ts` e `prd-review-service.ts` — dossier/candidato di TASK-03.
+      - `control/migrations/009_prd_review_gate.sql` — vincoli di TASK-01.
+
+      ## Change
+      - `control/src/modules/product/prd-review-repository.ts` — lock candidato, insert verdict, update processo e insert occorrenza atomici.
+      - `control/src/modules/product/prd-review-service.ts` — comando chiuso `approved|rework`, guardie, idempotenza e conflitti.
+      - `control/test/integration/project-prd-review.test.ts` — approval, rework, cancel simulato, replay, concorrenza e rollback.
+      - Non avviare automaticamente una nuova Workflow Run, non cancellare versioni e non consentire un secondo verdetto incompatibile.
+
+      ## Steps
+      1. In transazione acquisire il lock `process:{organization}:{project}`, rileggere fotografia, receipt, candidato e Process Instance e richiedere coerenza corrente.
+      2. Per `approved`, inserire verdetto con identity/email/time server-derived e portare l'istanza a `completed`; nessun altro writer può completarla.
+      3. Per `rework`, validare e normalizzare una motivazione entro 2.000 caratteri, inserire verdetto e una nuova occorrenza open `produce-prd` con ciclo monotono; mantenere l'istanza `active` e indicare l'attività come prossimo passo.
+      4. Trattare replay identico come idempotente; rifiutare verdetto diverso, candidato già deciso, istanza completata o versione non correlata senza righe parziali.
+      5. Eseguire due submit concorrenti e verificare un solo verdetto/transition; iniettare un errore dopo l'insert per provare rollback completo.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/project-prd-review.test.ts test/integration/project-process.test.ts`
+      - Expect: approvazione completa una volta, rework apre una sola attività con nota e ogni lettura/fallimento/concorrenza non produce side effect ulteriori.
+
+      ## Done
+      - [ ] AC-2 — approvazione registra attore, istante e versione esatta e completa il processo.
+      - [ ] AC-3 — rework senza nota fallisce; con nota crea un'attività `produce-prd` identificabile.
+      - [ ] AC-5 — soltanto il comando di verdetto autorizzato aggiorna la Process Instance.
+
+      ## Blockers
+      Dipende dalle query e dalle invarianti di TASK-03.
+    ref: TASK-04
+  - id: TASK-05
+    title: Esponi API e audit del gate PRD
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Esporre dossier, storia e verdetto tramite contratti HTTP stretti, autorizzati e auditabili.
+
+      ## Read
+      - `control/src/modules/product/workflow-run-http.ts` e `process-input-http.ts` — convenzioni Project-scoped, body chiusi e error mapping.
+      - `control/src/modules/identity/policy.ts` — membership e `requireRole`.
+      - `control/src/modules/audit/service.ts` — eventi audit.
+      - `control/src/server/app.ts` — composition root.
+
+      ## Change
+      - `control/src/modules/product/prd-review-http.ts` — GET lista/dettaglio e POST verdetto.
+      - `control/src/server/app.ts` — comporre repository/service e registrare route.
+      - `control/test/integration/project-prd-review-http.test.ts` — auth, ruolo, DTO, body, audit e fallimenti fail-closed.
+      - Non esporre Organization ID selezionabile, machine credential o contenuto oltre la fotografia Project-scoped; non accettare attore/timestamp/versione nel body.
+
+      ## Steps
+      1. Esporre `GET /api/projects/:projectId/prd-reviews` e `GET /api/projects/:projectId/prd-reviews/:artifactVersionId` a membership attiva dello stesso Project.
+      2. Esporre `POST /api/projects/:projectId/prd-reviews/:artifactVersionId/verdict` soltanto ad admin con schema esatto `{verdict:"approved"}` oppure `{verdict:"rework",reason:"..."}`.
+      3. Derivare identity, email, Organization, timestamp e correlation ID dal server; mappare not found, precondition e conflict con codici pubblici stabili.
+      4. Registrare audit `project.prd_review.approve` o `project.prd_review.request_rework` soltanto dopo commit riuscito, con target versione/digest e senza contenuto PRD o nota sensibile completa.
+      5. Provare collaborator, body extra, nota vuota, Project estraneo, replay e conflict; confrontare DB per assenza di mutazioni sui fallimenti.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/project-prd-review-http.test.ts test/integration/project-prd-review.test.ts`
+      - Expect: DTO e audit sono correlati; solo admin con body valido applica un verdetto e ogni rifiuto è fail-closed.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: nessuna diagnostica nelle route e nel composition root.
+
+      ## Done
+      - [ ] AC-1 — GET restituisce dossier e provenienza completi nello scope corretto.
+      - [ ] AC-2 — POST approval ignora qualunque authority client-supplied e restituisce attore/tempo/versione server-derived.
+      - [ ] AC-3 — API rifiuta rework senza motivazione e restituisce l'attività aperta.
+      - [ ] AC-5 — GET e POST negati/invalidi non aggiornano il processo.
+
+      ## Blockers
+      Dipende dal comando transazionale di TASK-04.
+    ref: TASK-05
+  - id: TASK-06
+    title: Integra il dossier decisionale nella pagina Project
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Consentire al revisore di esaminare ogni versione e applicare un verdetto esplicito e accessibile dalla pagina Project.
+
+      ## Read
+      - `docs/mockups/US-017/` — layout, gerarchia, stati approval/rework e cronologia approvati per la spec.
+      - `docs/mockups/US-016/` — continuità visiva con il risultato Workflow Run.
+      - `control/src/web/pages/project.tsx` — pannelli Process, Workflow e pattern dialog/focus correnti.
+      - `control/src/web/api/client.ts` e `control/src/web/styles.css` — DTO, chiamate e design system.
+      - `control/test/web/project.test.tsx` — fixture e oracoli UI esistenti.
+
+      ## Change
+      - `control/src/web/api/client.ts` — tipi e metodi lista/dettaglio/verdetto.
+      - `control/src/web/pages/project.tsx` — dossier PRD, provenienza, decisioni, dialog approval/rework, prossimo passo e storia riapribile.
+      - `control/src/web/styles.css` — layout responsive coerente con i mockup.
+      - `control/test/web/project.test.tsx` — test di contenuto, azioni, focus, ruolo, annullamento e storia.
+      - Non usare `dangerouslySetInnerHTML`, non mutare stato in fase di caricamento/apertura dialog e non mostrare azioni al collaborator.
+
+      ## Steps
+      1. Caricare lista e candidato insieme agli altri dati Project senza rendere indisponibili cockpit e Workflow in caso di errore isolato del dossier.
+      2. Rendere il Markdown come testo sicuro e leggibile; mostrare digest/versione, locator, validazione, Run/workflow, Process Input e ogni decisione aperta.
+      3. Implementare due azioni visivamente distinte: approval con conseguenza dichiarata e rework con textarea obbligatoria/contatore; entrambi richiedono conferma esplicita.
+      4. Intrappolare il focus, supportare Escape/cancel, ripristinare il focus al trigger e annunciare esito/errori con live region; prevenire doppio submit.
+      5. Dopo successo rileggere dossier e cockpit e mostrare autore/istante/versione, processo completato oppure nuova attività open.
+      6. Mostrare cronologia ordinata con verdetto e nota e permettere di riaprire il contenuto immutabile di una versione rinviata dopo una nuova candidata.
+
+      ## Verify
+      - Run: `npm --prefix control run test:web -- test/web/project.test.tsx`
+      - Expect: i test `jsdom` osservano contenuto PRD reale, prove, due verdetti, storia, focus e assenza di chiamate/mutazioni su cancel o ruolo non admin.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build`
+      - Expect: UI e client compilano senza diagnostiche.
+
+      ## Done
+      - [ ] AC-1 — il revisore vede nel dossier PRD, validazione, Run e decisioni aperte.
+      - [ ] AC-2 — dopo approval la UI mostra autore, istante e digest/versione esatti.
+      - [ ] AC-3 — rework senza nota non invia; con nota mostra l'attività riaperta.
+      - [ ] AC-4 — la versione rinviata resta apribile dalla storia con contenuto originale.
+      - [ ] AC-5 — apertura, cancel, refresh e doppio click non avanzano implicitamente il processo.
+
+      ## Blockers
+      Dipende dalle API di TASK-05 e dai mockup US-017 generati durante la pianificazione.
+    ref: TASK-06
+  - id: TASK-07
+    title: Prova approval e rework end-to-end nel browser
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-06
+    body: |-
+      ## Objective
+      Dimostrare in browser i due verdetti e la conservazione della versione esaminata attraversando autenticazione, API e PostgreSQL reali.
+
+      ## Read
+      - `test/e2e/control-fixture.mjs` — bootstrap OIDC, PostgreSQL e browser.
+      - `test/e2e/control-project-workflow-inception.spec.ts` — fixture Workflow/receipt e oracoli US-016.
+      - `test/e2e/control-project-session-promotion.spec.ts` — confronto stato processo e azioni esplicite.
+      - `test/e2e/runner-control-workflow-smoke.mjs` — fotografia reale prodotta da TASK-02.
+
+      ## Change
+      - `test/e2e/control-project-prd-review.spec.ts` — scenari approval e rework completi.
+      - Aggiornare fixture condivise soltanto per creare in modo idempotente due Project con fotografie verificate; non mockare API, DB o il componente dossier.
+      - Non registrare video in implementazione: la demo appartiene ad `archetipo-review`.
+
+      ## Steps
+      1. Preparare un Project approval e uno rework con Process Instance, Process Input, Workflow Run completata, receipt, fotografia PRD e decisioni aperte coerenti.
+      2. Nel primo scenario aprire dossier e confermare testo, validazione e provenienza; annullare una prima approval e confrontare DB invariato, quindi approvare.
+      3. Verificare in UI/API/DB attore, timestamp, digest/versione, stato `completed`, audit e prossimo passo.
+      4. Nel secondo scenario tentare rework vuoto, poi confermare una nota; verificare una sola occorrenza open `produce-prd` e processo ancora attivo.
+      5. Aggiungere una versione B e riaprire A dalla cronologia, confrontando bytes, digest, locator, Run e motivazione originari.
+      6. Conservare gli scenari US-016 e promozione come regressione del percorso precedente.
+
+      ## Verify
+      - Run: `npm run build:control && npx playwright test test/e2e/control-project-prd-review.spec.ts test/e2e/control-project-workflow-inception.spec.ts test/e2e/control-project-session-promotion.spec.ts`
+      - Expect: Chromium completa approval e rework; AC-1..AC-5 sono provati con oracoli UI/API/DB e le regressioni restano verdi.
+
+      ## Done
+      - [ ] AC-1 — il browser prova tutti gli elementi del dossier senza proxy.
+      - [ ] AC-2 — approval mostra e persiste attore, tempo e versione esatta.
+      - [ ] AC-3 — rework vuoto è bloccato e quello motivato apre l'attività visibile.
+      - [ ] AC-4 — A resta consultabile dopo B con contenuto byte-identico.
+      - [ ] AC-5 — cancel e richieste invalide lasciano il processo invariato; il verdetto esplicito lo cambia una sola volta.
+
+      ## Blockers
+      Dipende dall'interfaccia completa di TASK-06 e dalla fotografia reale verificata in TASK-02.
+    ref: TASK-07
+  - id: TASK-08
+    title: Esegui il gate finale della specifica
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Chiudere l'implementazione con tutte le evidenze focalizzate, le regressioni Control/Runner e il workflow ARchetipo verificati.
+
+      ## Read
+      - Tutti i file modificati da TASK-01..TASK-07 — verificare scope e diagnostiche.
+      - `.archetipo/plans/US-017-plan.yaml` — comandi e oracoli del piano.
+      - `AGENTS.md` — gate CI obbligatori quando cambia `cli/`.
+
+      ## Change
+      - Nessun cambiamento funzionale previsto; correggere soltanto difetti necessari a rendere verdi le verifiche US-017 senza ampliare lo scope.
+      - Salvare le evidenze richieste dal flusso di implementazione e aggiornare le pagine Wiki dichiarate nell'impatto; non richiedere review finché un task è `TODO`.
+
+      ## Steps
+      1. Eseguire i test dominio/integration/HTTP focalizzati per fotografia, dossier e verdetto.
+      2. Eseguire test Runner, smoke Runner–Control Workflow e suite web canonica.
+      3. Eseguire Playwright approval/rework con le regressioni Inception e promozione.
+      4. Eseguire typecheck, lint, build Control/Runner e `git diff --check`; se è cambiato qualunque file sotto `cli/`, eseguire anche `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...` e `golangci-lint run --timeout 5m ./...` da `cli/`.
+      5. Validare la Wiki secondo il flusso di implementazione e verificare che le pagine affected siano `generated`, non auto-approvate.
+      6. Da `/Users/stefanoleli/Project/ARchetipo`, marcare `TASK-08` `DONE`, poi eseguire `archetipo spec show US-017` e confermare che TASK-01..TASK-08 siano tutte `DONE` e nessuna resti `TODO`.
+      7. Solo dopo questa rilettura è consentito eseguire `archetipo spec review US-017`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/product/prd-review-domain.test.ts test/integration/migrations.test.ts test/integration/project-prd-review.test.ts test/integration/project-prd-review-http.test.ts test/integration/remote-workflow-run.test.ts test/integration/remote-workflow-run-transport.test.ts`
+      - Expect: tutti i contratti, comandi e casi concorrenza US-017 passano.
+      - Run: `npm --prefix runner test && npm run test:runner-control-workflow && npm --prefix control run test:web -- test/web/project.test.tsx`
+      - Expect: Runner/smoke e UI canonica passano senza regressioni.
+      - Run: `npm run build:control && npx playwright test test/e2e/control-project-prd-review.spec.ts test/e2e/control-project-workflow-inception.spec.ts test/e2e/control-project-session-promotion.spec.ts`
+      - Expect: approval, rework, Inception e promozione passano in Chromium.
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build && npm --prefix runner run typecheck && npm --prefix runner run lint && npm --prefix runner run build && git diff --check`
+      - Expect: zero diagnostiche, build verdi e nessun errore whitespace.
+      - Run: `archetipo spec show US-017` dalla root dopo aver marcato questo gate `DONE`.
+      - Expect: ogni task è `DONE`; soltanto allora la spec può entrare in review.
+
+      ## Done
+      - [ ] AC-1 — test integration, UI ed E2E provano il dossier completo.
+      - [ ] AC-2 — test DB/API/browser provano metadati e versione approval.
+      - [ ] AC-3 — test DB/API/browser provano motivazione e attività rework.
+      - [ ] AC-4 — test integration/browser provano la storia immutabile.
+      - [ ] AC-5 — concorrenza, cancel e fallimenti provano l'unico writer esplicito.
+      - [ ] Workflow — dopo `task done`, `archetipo spec show US-017` non contiene task `TODO` prima di `spec review`.
+
+      ## Blockers
+      Dipende da TASK-01..TASK-07 completati.
+    ref: TASK-08
+  - id: TASK-09
+    title: Includi le evidenze non tracciate nello snapshot di approvazione
+    type: Fix
+    status: DONE
+    body: |-
+      ## Objective
+      Produrre durante `wiki approve` una revisione Git sintetica che rappresenti esattamente il checkout dirty, inclusi i file non tracciati non ignorati, senza mutare il repository dell'utente.
+
+      ## Read
+      - `cli/internal/wiki/wiki.go:898` — `gitRevision`, introdotta da `1cad46d`, rileva soltanto differenze tracciate e usa `git stash create`.
+      - `cli/internal/wiki/wiki_test.go` — `TestApproveSnapshotsTrackedWorkingTreeEvidence` e helper Git esistenti.
+      - `skills/archetipo-review/SKILL.md` — ordine del gate Wiki e requisito che `wiki approve` sia l'unico writer dei metadata.
+
+      ## Change
+      - `cli/internal/wiki/wiki.go` — estendere la costruzione della evidence revision a staged, unstaged e untracked non ignorati usando un index temporaneo o un meccanismo Git equivalente, senza cambiare index reale, working tree, `HEAD`, refs o stash list.
+      - `cli/internal/wiki/wiki_test.go` — aggiungere fixture e asserzioni per tracked, staged, untracked, ignored, checkout pulito e assenza di side effect.
+      - Non includere file ignorati, file esterni al project root o metadata Wiki prodotti dopo il calcolo; non richiedere al reviewer di pre-stage l'incremento e non eseguire commit/stash persistenti.
+
+      ## Steps
+      1. Rilevare anche i file non tracciati con plumbing Git e mantenere il fast path `HEAD` soltanto quando tracked, staged e untracked non ignorati sono assenti.
+      2. Costruire un index temporaneo inizializzato da `HEAD`, applicarvi il contenuto corrente dei file tracked e aggiungere i file untracked non ignorati.
+      3. Scrivere tree e commit sintetico con parent `HEAD`, restituendo il commit come `evidence_revision`; ripulire sempre le sole risorse temporanee.
+      4. Conservare il fallback fail-closed esistente: se lo snapshot non è costruibile, non dichiarare una revisione che renderebbe immediatamente stale le evidenze.
+      5. Estendere il test introdotto da `1cad46d` e verificare con `git diff`, `git diff --cached`, `git status --short`, `git rev-parse HEAD` e refs che l'approvazione non muti il checkout.
+
+      ## Verify
+      - Run: `go test ./internal/wiki -run 'TestApproveSnapshots.*Evidence|TestApprovedPageBecomesStaleWhenEvidenceChanges'` da `cli/`.
+      - Expect: la pagina è `reviewed` subito dopo approval con fonti tracked/staged/untracked, il file ignored è assente dalla revisione e una modifica successiva rende la pagina stale.
+      - Run: `go test ./internal/cli` da `cli/`.
+      - Expect: i contratti CLI Wiki restano verdi.
+
+      ## Done
+      - [ ] AC-1..AC-5 — i metadata Wiki che documentano il dossier funzionale US-017 possono riferirsi all'intero incremento esaminato, incluse le nuove sorgenti non tracciate.
+      - [ ] Feedback review — la correzione `1cad46d` è estesa con una prova deterministica per evidenze untracked e zero side effect Git.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Ripristina le 19 pagine del dossier come generated
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      Consegnare al nuovo gate umano esattamente le 19 pagine Wiki di US-017 in stato `generated`, valide, senza metadata di review stale e senza modifiche ai corpi.
+
+      ## Read
+      - `docs/wiki/index.md` e `docs/wiki/log.md` — catalogo e precedente approvazione a `75ea21d2c0e1f4fde7a07e5c41f976dab6179ca9`.
+      - Le 19 pagine elencate in `wiki_impact.update_after_acceptance` del rework — frontmatter, corpo ed evidenze correnti.
+      - `cli/internal/wiki/wiki.go` — semantica `Reset`, `Catalog`, `Status` e `Validate`.
+
+      ## Change
+      - Le 19 pagine Wiki esplicite del dossier — usare soltanto il CLI costruito dal checkout per portarle a `status: generated` e rimuovere i metadata `review`; non editarne manualmente corpo, fonti, relazioni o marker.
+      - `docs/wiki/index.md` — rigenerare tramite `wiki catalog` dopo il reset.
+      - Non includere `decisions/living-project-wiki` o `domains/project-knowledge`; non approvare pagine durante l'implementazione e non riscrivere `docs/wiki/log.md` a mano.
+
+      ## Steps
+      1. Costruire `cli/cmd/archetipo` in un percorso temporaneo e verificarne la provenienza dal checkout contenente TASK-09, senza usare il globale `0.0.0-dev.g8682809.dirty`.
+      2. Salvare hash semantici dei corpi delle 19 pagine, escludendo soltanto `status` e blocco `review`, per provare l'assenza di modifiche elusive.
+      3. Eseguire `wiki reset` con i 19 ID espliciti: `architecture/context-map`, `decisions/control-foundation`, `decisions/four-layer-product-architecture`, `decisions/governed-run-modes`, `decisions/outbound-runner-transport`, `decisions/pi-sdk-adapter`, `decisions/project-process-run-model`, `decisions/remote-run-assignment-lease`, `decisions/run-protocol`, `decisions/source-of-truth-transition`, `domains/delivery-workflow`, `domains/fleet-and-run-management`, `domains/identity-and-policy`, `domains/product-process-management`, `domains/project-and-workspace`, `engineering/code-map`, `operations/development`, `overview`, `references/prd`.
+      4. Eseguire `wiki catalog`, poi confrontare gli hash semantici e richiedere che ogni ID sia `generated`, senza metadata `review`; le due pagine generated estranee restano fuori dal dossier.
+      5. Eseguire `wiki validate --profile bootstrap` e preparare nel riepilogo di review l'esatto comando `wiki approve` sugli stessi 19 ID con il binario costruito, senza eseguirlo in implementazione.
+
+      ## Verify
+      - Run: `<cli-costruito> wiki --project-root /Users/stefanoleli/Project/ARchetipo status`.
+      - Expect: tutti e soli i 19 ID del dossier sono `state: generated`, senza issue; nessuno è `stale` o `reviewed` prima del gate umano.
+      - Run: `<cli-costruito> wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`.
+      - Expect: `data.ok=true` e nessun `WIKI_EVIDENCE_CHANGED` riferito alle 19 pagine, perché i metadata precedenti sono stati rimossi dal normale lifecycle.
+      - Run: confronto degli hash semantici salvati prima/dopo `wiki reset`.
+      - Expect: i 19 corpi sono invariati; cambiano soltanto stato/metadata e il catalogo generato.
+
+      ## Done
+      - [ ] AC-1..AC-5 — il dossier documentale dell'incremento resta integro e pronto a essere riesaminato sul codice effettivo.
+      - [ ] Feedback review — 19/19 pagine sono `generated`, senza metadata stale e senza modifiche manuali ai corpi.
+
+      ## Blockers
+      Dipende dal CLI corretto in TASK-09.
+    ref: TASK-10
+  - id: TASK-11
+    title: Esegui il gate finale del rework Wiki
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+      - TASK-10
+    body: |-
+      ## Objective
+      Dimostrare che il CLI fotografa l'intero incremento, che le 19 pagine sono pronte per il gate umano e che nessun task resta aperto prima della nuova review.
+
+      ## Read
+      - `cli/internal/wiki/wiki.go` e `cli/internal/wiki/wiki_test.go` — implementazione e prove TASK-09.
+      - Le 19 pagine Wiki e `docs/wiki/index.md` — lifecycle preparato da TASK-10.
+      - `.archetipo/plans/US-017-plan.yaml` — contratto di rework e set esatto degli ID.
+      - `AGENTS.md` — gate CI obbligatori per cambiamenti CLI.
+
+      ## Change
+      - Nessun cambiamento funzionale previsto; correggere soltanto difetti necessari a soddisfare le verifiche del rework senza ampliare lo scope.
+      - Non approvare automaticamente la Wiki, non alterare i corpi delle pagine e non richiedere review finché un task è `TODO`.
+
+      ## Steps
+      1. Eseguire le prove focalizzate snapshot tracked/staged/untracked/ignored e i test CLI Wiki.
+      2. Eseguire da `cli/` tutti i gate CI: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...` e `golangci-lint run --timeout 5m ./...`.
+      3. Costruire il CLI dal checkout e rieseguire `wiki status` e `wiki validate --profile bootstrap` sul project root; richiedere i 19 ID `generated`, validi, issue-free e senza metadata review.
+      4. Eseguire `git diff --check` e verificare che nessun file fuori dal seam CLI, test, 19 lifecycle page e catalogo sia stato modificato dal rework.
+      5. Registrare nell'handoff della review il binario/comando costruito e l'elenco dei 19 ID. Il reviewer deve eseguire `wiki approve` sullo stesso checkout dirty, ottenere `approved: 19`, quindi verificare 19 `reviewed` con metadata e nessun `WIKI_EVIDENCE_CHANGED`; questo è un post-gate umano, non un'auto-approvazione del task.
+      6. Da `/Users/stefanoleli/Project/ARchetipo`, marcare `TASK-11` `DONE`, eseguire `archetipo spec show US-017` e confermare TASK-01..TASK-11 tutte `DONE` e nessuna `TODO`; soltanto allora richiedere review.
+
+      ## Verify
+      - Run: `go test ./internal/wiki ./internal/cli` da `cli/`.
+      - Expect: suite verdi, inclusa la revisione sintetica con fonti non tracciate.
+      - Run: `test -z "$(gofmt -l .)" && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...` da `cli/`.
+      - Expect: zero output gofmt, zero issue vet/lint e build/test verdi.
+      - Run: `<cli-costruito> wiki --project-root /Users/stefanoleli/Project/ARchetipo status && <cli-costruito> wiki --project-root /Users/stefanoleli/Project/ARchetipo validate --profile bootstrap`.
+      - Expect: prima della review i 19 ID sono `generated`, `data.ok=true`, senza issue o finding stale; dopo l'approvazione umana lo stesso controllo deve mostrare 19 `reviewed`, metadata completi e zero `WIKI_EVIDENCE_CHANGED` per il dossier.
+      - Run: `git diff --check`.
+      - Expect: nessun errore whitespace.
+      - Run: `archetipo spec show US-017` dalla root dopo aver marcato questo gate `DONE`.
+      - Expect: ogni task è `DONE`; soltanto allora la spec può rientrare in review.
+
+      ## Done
+      - [ ] AC-1..AC-5 — il dossier Wiki pronto per review rappresenta l'esatto incremento che implementa e prova tutti gli AC funzionali.
+      - [ ] Feedback review — suite CLI verde, 19 pagine generated pronte e contratto post-approvazione esplicito per 19 reviewed senza `WIKI_EVIDENCE_CHANGED`.
+      - [ ] Workflow — dopo `task done`, `archetipo spec show US-017` non contiene task `TODO` prima di `spec review`.
+
+      ## Blockers
+      Dipende da TASK-09 e TASK-10 completati.
+    ref: TASK-11

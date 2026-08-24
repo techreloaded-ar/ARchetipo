@@ -1,0 +1,571 @@
+schema: archetipo/plan/v2
+spec_code: US-056
+body: |-
+  # US-056: Vedere il passo successivo suggerito mentre si lavora — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-08-22
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-008 — Workspace gestiti dalla UI
+  **Priorità:** MEDIUM | **Punti:** 3
+  **Bloccata da:** US-055 (DONE)
+
+  **User Story**
+  Come utilizzatore di ARchetipo che non conosce a memoria il processo, voglio avere sempre sott'occhio cosa conviene fare adesso in questo workspace, così da non dover indovinare quale sia il passo successivo né cercarlo altrove.
+
+  **Criteri di accettazione**
+
+  - AC-1 — Il passo suggerito per il workspace aperto è visibile mentre il revisore lavora, senza aprire finestre.
+  - AC-2 — Il passo suggerito è avviabile da dove è mostrato, e produce la stessa azione che produrrebbe avviato dalla board.
+  - AC-3 — Quando lo stato del workspace cambia, il passo suggerito si aggiorna senza ricaricare la pagina.
+  - AC-4 — Un passo non disponibile è mostrato insieme alla condizione che lo sblocca, con le parole dichiarate dal processo, e non è avviabile.
+  - AC-5 — Quando nessun workspace è aperto, nessun passo viene suggerito.
+
+  ---
+
+  ## Soluzione tecnica
+
+  ### Punto di partenza
+
+  Il passo suggerito non nasce qui. US-043 ha già consegnato la rotta `GET /api/workspace/status` (`cli/internal/web/workspace_status.go`), che deriva stadio e passo successivo dall'Archetipo installato e dallo stato reale del workspace, e il renderer puro `cli/internal/web/assets/workspace-status.js`, che ne disegna la striscia `#workspace-status`. US-055 ha già consegnato il guscio a due colonne: il dettaglio spec non è più una finestra sovrapposta ma un pannello agganciato nella colonna primaria (`#workspace-shell` / `#workspace-primary` in `index.html`).
+
+  Di conseguenza **la maggior parte di questa spec è già vera per costruzione**, e il piano non ricostruisce nulla di ciò che esiste. Lo stato di partenza, criterio per criterio:
+
+  - **AC-1 — già vero, non presidiato.** `#workspace-status` è una fascia che sta *fuori* da `#workspace-shell`, fra la topbar e il guscio (`index.html:102`). Il guscio è `flex: 1 1 auto` con `min-height: 0` e le colonne scorrono per conto proprio (`app.css:4814`, `4828`): leggere una spec lunga non porta via la striscia. Aprire una spec non apre più una finestra, quindi il passo resta visibile mentre si lavora. Manca solo un test che impedisca a un futuro spostamento di romperlo in silenzio.
+  - **AC-2 — falso oggi.** Il gestore della striscia in `app.js:1076` **naviga soltanto**: `openEditor(code)` per uno step di scope `spec`, `openPRD()` per uno di scope `workspace`. Il commento sopra di esso lo dichiara esplicitamente («The strip never starts an execution itself»). È esattamente ciò che US-056 cambia: il passo deve essere *avviabile* da dove è mostrato.
+  - **AC-3 — vero a metà.** `loadWorkspaceStatus()` è già richiamata su `board_changed` (`scheduleBoardReload`, `app.js:975`), ma **dopo** sei guardie che tornano presto quando un form di modifica o una modale è aperta. La striscia è di sola lettura e non contiene nulla da salvare: congelarla insieme alla board è un difetto, e diventa visibile proprio nel flusso di questa spec, perché avviare un passo di scope `workspace` apre la modale PRD e da quel momento la striscia smetterebbe di seguire il workspace.
+  - **AC-4 — già vero, non presidiato.** `renderNextStep` in `workspace-status.js` emette già `disabled` e la frase di sblocco presa da `unlocked_by`, o in mancanza da `unavailable_reason`; il server la riempie in `nextStepFor`. Manca un oracolo sul fatto che il passo non eseguibile **non è avviabile** una volta che premere avvia davvero qualcosa.
+  - **AC-5 — svista.** `body.no-workspace #workspace-status { display: none }` (`app.css:4130`) nasconde la striscia, e la rotta è già rifiutata senza workspace (`cli/internal/web/no_workspace_test.go:80`). Ma `enterNoWorkspaceMode` non azzera `workspaceStatusSnapshot` né lo `innerHTML`, a differenza di quanto fa `resetWorkspaceRunsState()` per la rail: il passo dell'ultimo workspace sopravvive in memoria e tornerebbe in scena al primo ridisegno.
+
+  ### Forma della soluzione
+
+  Nessuna modifica al server. La rotta dichiara già tutto ciò che serve (`scope`, `action`, `spec.code`, `runnable`, `unavailable_reason`, `unlocked_by`) e nessuna regola di processo entra nel frontend: ogni parola disegnata continua a venire dal payload.
+
+  **1. La decisione «cosa fa premere il passo» diventa pura.** `workspace-status.js` acquista `nextStepDispatch(view)`, che restituisce `{scope, action, code}` quando il passo è avviabile e `null` quando non c'è passo o il passo non è eseguibile. `nextStepTarget` resta, arricchita di `runnable`, perché la navigazione e l'avvio sono due letture dello stesso payload e non devono divergere. La decisione sta lì e non in `app.js` per la ragione per cui ci stanno già `resolveLayout` e `awaitingCount`: è l'unico livello del frontend che questo repo sa testare senza DOM.
+
+  **2. L'avvio passa dall'unico dispatch esistente.** Premere il passo monta il pannello del bersaglio e poi chiama `startPanelAction(action, button)`, la stessa funzione che avvia l'azione premuta sulla board:
+
+  - scope `spec` → `await openEditor(code)` (che monta `startURL: /api/spec/{code}/execution`), poi `startPanelAction`;
+  - scope `workspace` → `await openPRD()` (che, attraverso `loadWorkspaceActions`, monta `startURL: /api/workspace/execution`), poi `startPanelAction`.
+
+  Così «la stessa azione che produrrebbe avviato dalla board» non è una somiglianza da verificare caso per caso: è la stessa riga di codice, la stessa rotta, la stessa garanzia «una pressione, una esecuzione» (il bottone è disabilitato prima che la richiesta parta), lo stesso pannello dove la run viene seguita.
+
+  **3. La striscia si aggiorna sempre.** In `scheduleBoardReload`, `loadWorkspaceStatus()` sale **prima** delle guardie, accanto a `refreshWorkspaceIdentity()` che già sta lì per la stessa ragione: ridisegnare una fascia di sola lettura non distrugge nessuna modifica in corso. Restano guardate `loadBoard()` e le sue modifiche.
+
+  **4. Senza workspace la striscia si dimentica.** Una `resetWorkspaceStatusState()` speculare a `resetWorkspaceRunsState()`, chiamata da `enterNoWorkspaceMode()`, azzera snapshot e markup.
+
+  ### Decisioni architetturali
+
+  Una sola scelta supera la soglia, e viene registrata qui perché il Wiki di questo progetto è disattivato (`wiki.enabled: false`).
+
+  **Contesto.** Il passo suggerito deve poter essere avviato dalla striscia. La striscia è però un elemento globale, mentre l'avvio di un'azione in questo viewer è legato a un *pannello montato* (`panelContext`, `panelStartURL`, `panelSettle`) che è anche il posto dove la run viene poi seguita.
+
+  **Opzione scelta.** La striscia non avvia direttamente: monta il pannello del bersaglio (spec o workspace) e delega a `startPanelAction`. Un solo cammino di avvio in tutta l'applicazione.
+
+  **Alternativa considerata e scartata.** Dare alla striscia un proprio `POST` verso `/api/spec/{code}/execution` o `/api/workspace/execution`, senza montare nulla. Sarebbe stato più diretto e non aprirebbe la modale PRD per le azioni di workspace. È stata scartata per due motivi: duplicherebbe la garanzia «una pressione, una esecuzione» in un secondo posto dove può divergere, e lascerebbe la run avviata senza un pannello che la segua — l'utente vedrebbe partire qualcosa e non avrebbe dove guardarlo. Il compromesso accettato è che avviare un passo di scope `workspace` apre la modale PRD: AC-1 vieta le finestre per *vedere* il passo, non per seguirne l'esecuzione, e la conversazione nella rail resta comunque raggiungibile.
+
+  **Compromesso residuo.** Il gesto è «vai al bersaglio e avvia», non «avvia restando dove sei». È deliberato: l'utente finisce dove la run è visibile.
+
+  **Verifica dell'intento.** Un test strutturale su `app.js` afferma che le URL di avvio compaiono esclusivamente come valori `startURL:` dei montaggi, così un secondo cammino di avvio introdotto in futuro fa fallire la suite invece di passare inosservato.
+
+  Nessun'altra scelta supera la soglia: non cambia il modello dati, non cambia il confine di integrazione, non cambia il modello di sicurezza. Tutto il resto è cablaggio dentro pattern già stabiliti in `app.js`.
+
+  ---
+
+  ## Baseline
+
+  Rilevata dalle istruzioni di repository (`AGENTS.md`, sezione «Before delivering changes») e da `package.json`. Comandi eseguiti dalla radice del progetto prima di pianificare.
+
+  | Verifica | Risultato prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `node --test "test/web/**/*.test.mjs"` | Verde — 109 test, 23 suite, 0 falliti | Ogni task di test può promettere verde; i nuovi test si aggiungono a questa suite |
+  | `cd cli && gofmt -l .` | Nessun output | Nessun file Go viene toccato dal piano; resta come regressione |
+  | `cd cli && go build ./...` | Compila pulito | Idem |
+  | `cd cli && go test ./internal/web/... ./internal/template/...` | Verde (`ok` su entrambi i pacchetti) | I test Go esistenti, incluso `no_workspace_test.go` che copre il rifiuto di `GET /api/workspace/status` senza workspace, restano l'evidenza di regressione per AC-5 lato server |
+
+  **Prerequisiti d'ambiente.** Node.js e Go devono essere installati (già presenti: la baseline è stata eseguita). Lo smoke E2E costruisce il CLI da sorgente in `test/e2e/.bin/` e non richiede né rete né agente AI: usa i provider locali finti già presenti in `test/e2e/support/`. Nessun database, nessun client generato, nessun servizio esterno.
+
+  **Diagnostica preesistente.** Nessuna: i file che il piano tocca (`cli/internal/web/assets/workspace-status.js`, `cli/internal/web/assets/app.js`, `test/web/`, `test/e2e/`, `package.json`) non presentano diagnostica di linter o compilatore prima dell'intervento. Il repository non configura un linter JavaScript (non esiste `eslint`/`biome` in `package.json`), quindi l'unico presidio sul frontend è la suite `node --test`.
+
+  ---
+
+  ## Mappa dell'evidenza di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello | Oracolo osservabile | Task che lo produce |
+  |---|---|---|---|---|
+  | AC-1 | Sorgenti `index.html` e `app.css` così come sono nel repository | Test strutturale (`node --test`) | `#workspace-status` compare nel markup **fuori** da `#workspace-shell`, e l'unica regola che lo nasconde è `body.no-workspace`: nessuna regola lo nasconde quando il pannello spec è aperto | TASK-06 |
+  | AC-2 | Payload di stato con `next_step` di scope `spec` e con `next_step` di scope `workspace`, entrambi `runnable: true` | Unit puro (`node --test`) + test strutturale | `nextStepDispatch` restituisce esattamente `{scope, action, code}` con l'`action` del payload; e in `app.js` le URL di avvio `/api/spec/${...}/execution` e `/api/workspace/execution` compaiono **solo** come valori `startURL:` dei montaggi, mentre il gestore di `.ws-status-next` chiama `startPanelAction` — quindi l'avvio dalla striscia è la stessa chiamata dell'avvio dalla board | TASK-02, TASK-06 |
+  | AC-2 | Workspace reale con backlog, provider locale finto configurato | E2E HTTP (`node test/e2e/next-step-view-smoke.mjs`) | L'`action` dichiarata da `next_step` per una spec compare, con lo stesso identificatore e con `runnable: true`, anche nella lista `actions` che `GET /api/spec/{code}` offre alla card della board | TASK-07 |
+  | AC-3 | Viewer avviato una volta sola su un workspace reale; il backlog cambia sul disco | E2E HTTP | `GET /api/workspace/status` riporta uno `stage.id` e un `next_step` diversi dopo il cambiamento, **con lo stesso PID del viewer** e senza riavvio; l'evento `board_changed` è arrivato sullo stream aperto | TASK-07 |
+  | AC-3 | Sorgente `app.js` | Test strutturale | In `scheduleBoardReload` la chiamata `loadWorkspaceStatus()` precede la prima guardia di `return`, quindi la striscia si ridisegna anche con un form o una modale aperti | TASK-06 |
+  | AC-4 | Payload di stato con `next_step` `runnable: false` che porta `unlocked_by` | Unit puro | Il bottone reso porta l'attributo `disabled`, il testo visibile contiene la frase esatta del payload, e `nextStepDispatch` restituisce `null` — il passo non è avviabile nemmeno per chi aggirasse il `disabled` | TASK-02 |
+  | AC-4 | Workspace reale senza provider utilizzabile | E2E HTTP | `next_step.runnable` è `false` e `next_step.unlocked_by` è una stringa non vuota, riportata così com'è dal processo | TASK-07 |
+  | AC-5 | Payload nullo / senza `next_step`; e viewer senza workspace aperto | Unit puro + E2E HTTP + regressione Go | `nextStepDispatch(null)` e `nextStepDispatch({})` restituiscono `null`; il rendering non contiene alcun bottone `.ws-status-next`; `GET /api/workspace/status` è rifiutato senza workspace aperto (`no_workspace_test.go`) | TASK-02, TASK-07 |
+  | AC-5 | Pagina che passa a nessun workspace aperto | Test strutturale | `enterNoWorkspaceMode` chiama `resetWorkspaceStatusState()`, che azzera snapshot e markup della striscia | TASK-06 |
+
+  **Demonstrates filmabile:** sì. La Dimostrazione è interamente osservabile nel viewer (striscia accanto al lavoro, pressione del passo, aggiornamento spontaneo, passo bloccato con la sua condizione). La registrazione è compito di `archetipo-review`, non dell'implementazione.
+
+  ---
+
+  ## Strategia di test
+
+  Tre livelli, tutti già in uso in questo repository, nessuno nuovo da introdurre.
+
+  - **Unit puri sui moduli senza DOM** (`test/web/*.test.mjs`, `node --test`). È il livello dove il frontend di questo progetto viene testato: `workspace-status.js`, `workspace-layout.js` e `workspace-runs.js` sono moduli puri proprio per questo. Qui vive la prova che la decisione di avvio è quella giusta e che un passo non eseguibile non è avviabile.
+  - **Test strutturali sulle sorgenti** (stesso runner). Il repository ha già questo precedente: `workspace-layout.test.mjs` legge il breakpoint da `app.css` per impedire che CSS e JS divergano su due numeri scritti in due posti. Con lo stesso metodo si presidiano i due fatti che nessun modulo puro può esprimere: la striscia sta fuori dal guscio e non viene coperta, e il cammino di avvio è uno solo.
+  - **Smoke E2E sul contratto HTTP** (`test/e2e/*-view-smoke.mjs`, un `npm run` dedicato). Il CLI è costruito da sorgente, il workspace è una directory reale, il viewer è un processo reale, e ogni attesa è un polling con timeout esplicito — mai una `sleep` come oracolo. Il fatto su cui poggia AC-3 è asserito a ogni transizione: il PID del viewer non cambia mai.
+
+  ### Rinuncia agli E2E di browser
+
+  **Motivo.** Questo repository non ha, e non ha mai avuto, un framework di browser: nessun Playwright, nessun Puppeteer, nessun jsdom in `package.json`. Tutti gli smoke del viewer (venti e più, da `create-spec-view-smoke` a `workspace-runs-view-smoke`) asseriscono sul contratto HTTP, e tutta la logica di presentazione è deliberatamente estratta in moduli puri testati senza DOM. Bootstrappare un browser per questa spec introdurrebbe un'infrastruttura nuova per un cambiamento che non introduce né una pagina né una rotta: la striscia esiste, il guscio esiste, la rotta esiste.
+
+  **Livello di evidenza usato al suo posto.** Per ogni AC la prova è ripartita fra: (a) unit puro sulla decisione osservabile — quale azione parte, e che non parte quando è bloccata; (b) test strutturale sulle sorgenti per i due fatti di collocazione e di unicità del cammino di avvio; (c) smoke HTTP sul processo reale per l'evoluzione del passo suggerito senza riavvio e per la sua coerenza con ciò che la board offre. La cosa che nessuno di questi livelli prova — che il *click del mouse* raggiunge il gestore — è coperta dal fatto che il gestore è delegato sul contenitore già esistente e già in uso dalla stessa striscia (US-043), non introdotto qui.
+
+  ### Scenari dello smoke E2E
+
+  **Framework:** harness Node.js locale (`test/e2e/`), nessun agente AI coinvolto.
+  **Video dimostrativo:** atteso (registrato più tardi da `archetipo-review`, non durante l'implementazione).
+
+  | Scenario | Flusso |
+  |---|---|
+  | Passo iniziale | Workspace appena inizializzato → `GET /api/workspace/status` dichiara lo stadio iniziale e il passo che lo avanza |
+  | Passo bloccato | Nessun provider utilizzabile → il passo è `runnable: false` e porta la sua `unlocked_by` con le parole del processo |
+  | Passo e board d'accordo | Provider locale finto configurato, spec in TODO → l'`action` del passo compare fra le `actions` runnable della spec bersaglio |
+  | Passo che si aggiorna | Il backlog cambia sul disco → lo stato cambia sullo stesso PID, con l'evento `board_changed` osservato sullo stream |
+  | Nessun workspace | Viewer senza workspace aperto → la rotta di stato è rifiutata, nessun passo è suggerito |
+tasks:
+  - id: TASK-01
+    title: Decidere in modo puro cosa avvia il passo suggerito (nextStepDispatch)
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      `workspace-status.js` sa dire, senza DOM, quale azione avvia il passo suggerito e quando non ne avvia nessuna.
+
+      ## Read
+
+      - `cli/internal/web/assets/workspace-status.js` — in particolare `nextStepTarget` (restituisce già `{scope, action, code}`) e `renderNextStep` (emette già `disabled` quando `step.runnable` è falso). Il modulo è puro: nessun DOM, nessun `fetch`, doppia esportazione browser/Node in fondo al file.
+      - `cli/internal/web/workspace_status.go` — la struttura `nextStepView` per i nomi esatti dei campi del payload: `scope`, `action`, `label`, `spec.code`, `runnable`, `unavailable_reason`, `unlocked_by`.
+
+      ## Change
+
+      - `cli/internal/web/assets/workspace-status.js`:
+        - aggiungere `runnable` all'oggetto restituito da `nextStepTarget`, letto come booleano dal payload (`step.runnable === true`);
+        - aggiungere una nuova funzione `nextStepDispatch(view)`;
+        - esportarla in entrambi i rami (`module.exports` e `window.WorkspaceStatus`).
+
+      Non-goal espliciti: non introdurre nessun identificatore di azione, di stadio o di stato nel modulo — resta senza regole di processo; non toccare `renderWorkspaceStatus` né `renderNextStep`; non aggiungere DOM, `fetch` o timer.
+
+      ## Steps
+
+      1. In `nextStepTarget`, aggiungere al valore di ritorno il campo `runnable: step.runnable === true`. Gli altri campi restano invariati, così i chiamanti esistenti non cambiano comportamento.
+      2. Scrivere `nextStepDispatch(view)` subito sotto, con un commento che ne dichiari la ragione: è la decisione «cosa avvia premere il passo», tenuta qui perché sia verificabile senza DOM, e il rifiuto di avviare un passo bloccato deve essere una decisione e non solo un attributo `disabled` sul markup.
+      3. `nextStepDispatch` restituisce `null` quando `nextStepTarget(view)` è `null`, oppure quando il bersaglio ha `runnable` falso, oppure quando lo `scope` è `"spec"` ma `code` è vuoto (un passo su nessuna spec non è avviabile). Altrimenti restituisce `{scope, action, code}`.
+      4. Aggiungere `nextStepDispatch` a entrambe le esportazioni in fondo al file, accanto a `nextStepTarget`.
+      5. Aggiornare il commento di testata del modulo per dire che il modulo ora decide anche *se e cosa* avviare, sempre senza avviarlo.
+
+      ## Verify
+
+      - Eseguire dalla radice del repository: `node --test "test/web/workspace-status.test.mjs"`
+      - Expect: verde, come nella baseline (i test esistenti su `nextStepTarget` continuano a passare: il campo aggiunto non ne rimuove nessuno).
+      - Eseguire: `node -e "const m=require('./cli/internal/web/assets/workspace-status.js'); console.log(typeof m.nextStepDispatch)"`
+      - Expect: stampa `function`.
+
+      ## Done
+
+      - [ ] AC-2 — `nextStepDispatch` restituisce `{scope, action, code}` con l'`action` dichiarata dal payload, per uno step di scope `spec` e per uno di scope `workspace`.
+      - [ ] AC-4 — `nextStepDispatch` restituisce `null` per uno step con `runnable: false`.
+      - [ ] AC-5 — `nextStepDispatch` restituisce `null` per un payload nullo o senza `next_step`.
+      - [ ] Il modulo non contiene nessun identificatore di azione, stadio o stato.
+
+      ## Blockers
+
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test puri sulla decisione di avvio del passo suggerito
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      La suite dimostra che il passo suggerito avvia esattamente l'azione dichiarata dal payload, e che un passo bloccato o assente non avvia nulla.
+
+      ## Read
+
+      - `test/web/workspace-status.test.mjs` — l'intero file: convenzioni di caricamento del modulo (`createContext`/`runInContext` su un `vm`), l'helper `visibleText(html)`, e lo stile degli oracoli (sul testo visibile, non sulla forma del modulo). I test sono scritti in italiano.
+      - `cli/internal/web/assets/workspace-status.js` — la `nextStepDispatch` appena aggiunta.
+
+      ## Change
+
+      - `test/web/workspace-status.test.mjs`: aggiungere una `describe("nextStepDispatch", ...)` e, dentro la `describe` già esistente sul rendering, i due casi mancanti su AC-4 e AC-5. Riutilizzare gli helper già presenti nel file.
+
+      Non-goal: non riscrivere né rinominare i test esistenti; non creare un file di test nuovo (la decisione appartiene a questo modulo).
+
+      ## Steps
+
+      1. Aggiungere in `describe("nextStepDispatch")` il caso AC-2 di scope `spec`: payload con `next_step` `{scope: "spec", action: "plan", spec: {code: "US-010"}, runnable: true}` → il ritorno è esattamente `{scope: "spec", action: "plan", code: "US-010", ...}`; asserire in particolare che `action` è la stringa del payload, e ripetere con un identificatore inventato (per esempio `"azione-mai-vista"`) per provare che nessuna regola di processo vive nel modulo.
+      2. Aggiungere il caso AC-2 di scope `workspace`: `{scope: "workspace", action: "inception", spec: null, runnable: true}` → ritorno con `scope: "workspace"`, `action: "inception"`, `code` vuoto.
+      3. Aggiungere il caso AC-4: `{..., runnable: false, unlocked_by: "installa un provider utilizzabile"}` → `nextStepDispatch` restituisce `null`. Nello stesso test asserire sul rendering che il bottone porta `disabled` e che il testo visibile contiene esattamente `installa un provider utilizzabile`.
+      4. Aggiungere il caso AC-5: `nextStepDispatch(null)`, `nextStepDispatch({})` e `nextStepDispatch({next_step: null})` restituiscono tutti `null`; e `renderWorkspaceStatus({})` non contiene la sottostringa `ws-status-next"` come bottone (nessun passo suggerito).
+      5. Aggiungere il caso di coerenza: quando `nextStepDispatch` non è `null`, `nextStepTarget(view).action` è la stessa stringa — le due letture dello stesso payload non divergono.
+
+      ## Verify
+
+      - Eseguire dalla radice: `node --test "test/web/workspace-status.test.mjs"`
+      - Expect: verde, con almeno cinque test in più rispetto alla baseline.
+      - Eseguire l'intera suite frontend: `node --test "test/web/**/*.test.mjs"`
+      - Expect: verde, nessun test in meno dei 109 della baseline.
+
+      ## Done
+
+      - [ ] AC-2 — un test asserisce che l'azione restituita è quella del payload, anche per un identificatore mai visto prima.
+      - [ ] AC-4 — un test asserisce insieme che il bottone è `disabled`, che la condizione di sblocco è testo visibile con le parole del payload, e che `nextStepDispatch` restituisce `null`.
+      - [ ] AC-5 — un test asserisce che payload nullo, vuoto e senza `next_step` non producono né dispatch né bottone.
+
+      ## Blockers
+
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Avviare il passo suggerito dalla striscia, per l'unico cammino di avvio
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Premere il passo suggerito avvia la stessa azione che la board avvierebbe, passando per `startPanelAction`.
+
+      ## Read
+
+      - `cli/internal/web/assets/app.js`, gestore della striscia intorno a riga 1076 (`workspaceStatusEl.addEventListener("click", ...)`) e il commento che lo precede: oggi dichiara che la striscia non avvia nulla e naviga soltanto.
+      - `cli/internal/web/assets/app.js`, `startPanelAction(actionID, button)` (~riga 2731): disabilita il bottone prima che la richiesta parta, fa `apiPost(panelStartURL, {action, ...})`, poi `renderExecution` e `followExecution`. È l'unico cammino di avvio dell'applicazione.
+      - `cli/internal/web/assets/app.js`, `openEditor(code)` (~riga 1263): chiama `mountExecutionPanels({startURL: "/api/spec/{code}/execution", ...})` in modo sincrono, prima di ogni `await`; è `async` e va attesa.
+      - `cli/internal/web/assets/app.js`, `openPRD()` (~riga 5010) e `loadWorkspaceActions()` (~riga 5045): `openPRD` attende `loadWorkspaceActions`, che monta `{context: WORKSPACE_CONTEXT, startURL: "/api/workspace/execution", ...}`. Il montaggio può non avvenire quando il workspace non offre azioni: `hideWorkspaceActions()` smonta.
+      - `cli/internal/web/assets/app.js`, `showToast(message, kind)` per il rifiuto visibile.
+
+      ## Change
+
+      - `cli/internal/web/assets/app.js`, solo il blocco del gestore della striscia e il suo commento. Sostituire la navigazione con: montaggio del pannello del bersaglio, poi `startPanelAction`.
+
+      Non-goal espliciti: **non** aggiungere un `apiPost` verso `/api/spec/{code}/execution` o `/api/workspace/execution` in questo blocco né altrove — l'unicità del cammino di avvio è ciò che TASK-06 verifica; non toccare `startPanelAction`, `mountExecutionPanels`, `openEditor`, `openPRD`; non toccare il renderer.
+
+      ## Steps
+
+      1. Riscrivere il commento sopra il gestore: la striscia ora *avvia* il passo, e lo fa portando l'utente sul pannello del bersaglio e delegando all'unico dispatch esistente, così che «la stessa azione della board» sia la stessa riga di codice e non una somiglianza.
+      2. Nel gestore, sostituire `nextStepTarget` con `window.WorkspaceStatus.nextStepDispatch(workspaceStatusSnapshot)`. Se restituisce `null`, uscire senza fare nulla: un passo bloccato non è avviabile nemmeno raggiungendo il gestore.
+      3. Estrarre il corpo in una funzione `async function startNextStep(target, button)` accanto a `loadWorkspaceStatus`, in modo che il gestore resti un dispatcher di tre righe.
+      4. In `startNextStep`: per `target.scope === "spec"` con `target.code`, `await openEditor(target.code)`; per `target.scope === "workspace"`, `await openPRD()`; per qualunque altro scope, uscire senza fare nulla (uno scope mai visto non si inventa un cammino).
+      5. Dopo l'attesa, verificare che il pannello atteso sia effettivamente montato prima di avviare: se `panelStartURL` è vuoto, mostrare `showToast` con un messaggio di rifiuto e uscire, invece di chiamare `startPanelAction` su un pannello inesistente.
+      6. Chiamare `await startPanelAction(target.action, button)` passando il bottone premuto: è ciò che conserva la garanzia «una pressione, una esecuzione», perché `startPanelAction` lo disabilita prima di partire.
+      7. Nel gestore, avvolgere la chiamata a `startNextStep` in modo che un errore non gestito non resti silenzioso (`.catch` con `showToast`), coerentemente con gli altri gestori del file.
+
+      ## Verify
+
+      - Eseguire dalla radice: `node --test "test/web/**/*.test.mjs"`
+      - Expect: verde (nessun test esistente dipende dal vecchio comportamento di navigazione della striscia; se uno lo facesse, va aggiornato in TASK-06 e non silenziato).
+      - Eseguire: `grep -n "api/spec/.*execution\|api/workspace/execution" cli/internal/web/assets/app.js`
+      - Expect: esattamente tre occorrenze, tutte su righe `startURL:` (righe ~1270, ~4395, ~5073) — nessuna nuova.
+
+      ## Done
+
+      - [ ] AC-2 — premere il passo suggerito monta il pannello del bersaglio e chiama `startPanelAction` con l'`action` del payload; nessuna nuova rotta di avvio è stata introdotta.
+      - [ ] AC-4 — con `nextStepDispatch` a `null` il gestore esce senza avviare nulla.
+      - [ ] Il commento del blocco descrive il comportamento nuovo e non quello vecchio.
+
+      ## Blockers
+
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: La striscia si aggiorna anche mentre una finestra o un form è aperto
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      Il passo suggerito segue lo stato del workspace senza ricaricare la pagina, anche quando una modale o un form di modifica è aperto.
+
+      ## Read
+
+      - `cli/internal/web/assets/app.js`, `scheduleBoardReload()` (~riga 975): dopo `refreshWorkspaceIdentity()` ci sono sei guardie `if (!X.classList.contains("hidden")) return;` (`specForm`, `planForm`, `prdModal`, `configModal`, `newSpecModal`, `newWorkspaceModal`) e solo dopo `loadBoard(); loadWorkspaceStatus();`. Leggere anche il commento sopra le guardie: dichiara che ciò che va protetto è la *modifica*, non la *lettura*.
+      - `cli/internal/web/assets/app.js`, `connectBoardStream()` subito sotto: `board_changed` è l'evento che innesca il ridisegno.
+      - `cli/internal/web/assets/app.js`, `settleSpecExecution(record)` (~riga 2795) e `settleWorkspaceAction` (cercarlo con `grep -n "function settleWorkspaceAction" cli/internal/web/assets/app.js`): sono i punti dove una run terminata ridisegna ciò che la riguarda.
+
+      ## Change
+
+      - `cli/internal/web/assets/app.js`, `scheduleBoardReload`: spostare `loadWorkspaceStatus()` **prima** della prima guardia, accanto a `refreshWorkspaceIdentity()`, e lasciare `loadBoard()` dopo le guardie.
+      - `cli/internal/web/assets/app.js`, `settleSpecExecution` e `settleWorkspaceAction`: aggiungere il ridisegno della striscia quando la run è terminata, se non è già presente.
+
+      Non-goal espliciti: non rimuovere né indebolire nessuna delle sei guardie su `loadBoard()`; non introdurre polling nuovo sulla striscia — l'aggiornamento resta guidato dagli eventi già esistenti.
+
+      ## Steps
+
+      1. In `scheduleBoardReload`, spostare `loadWorkspaceStatus()` sopra le guardie e aggiornare il commento: la striscia è di sola lettura e non contiene nulla da salvare, quindi ridisegnarla non distrugge nessuna modifica in corso; tenerla dietro le guardie la congelava per tutto il tempo in cui una finestra restava aperta — proprio il caso che avviare un passo di workspace produce.
+      2. Verificare che `loadBoard()` resti dietro tutte e sei le guardie e che il loro ordine non cambi.
+      3. In `settleSpecExecution`, dopo il ricaricamento del dettaglio, aggiungere `await loadWorkspaceStatus();` — una run terminata può aver mosso lo stato della spec e quindi il passo suggerito.
+      4. In `settleWorkspaceAction`, fare lo stesso se il ridisegno della striscia non è già presente; se lo è, lasciarlo dov'è e annotarlo nel commit.
+      5. Rileggere il blocco per essere certi che nessuna delle chiamate aggiunte possa lanciare senza gestione: `loadWorkspaceStatus` cattura già il proprio errore e nasconde la striscia.
+
+      ## Verify
+
+      - Eseguire dalla radice: `node --test "test/web/**/*.test.mjs"`
+      - Expect: verde.
+      - Eseguire: `grep -n -A 14 "function scheduleBoardReload" cli/internal/web/assets/app.js`
+      - Expect: `loadWorkspaceStatus()` compare prima della prima riga `return;` del corpo, e `loadBoard()` dopo l'ultima.
+
+      ## Done
+
+      - [ ] AC-3 — nel corpo di `scheduleBoardReload` la striscia viene ridisegnata prima delle guardie, quindi un evento `board_changed` la aggiorna anche con la modale PRD, il form spec o il form piano aperti.
+      - [ ] AC-3 — una run terminata ridisegna la striscia sia nel contesto spec sia nel contesto workspace.
+      - [ ] Le sei guardie su `loadBoard()` sono ancora tutte al loro posto.
+
+      ## Blockers
+
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Senza workspace aperto la striscia dimentica il passo suggerito
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      Quando nessun workspace è aperto, nessun passo è suggerito e nulla del workspace precedente sopravvive in memoria.
+
+      ## Read
+
+      - `cli/internal/web/assets/app.js`, `enterNoWorkspaceMode()` (~riga 628): chiama già `resetWorkspaceRunsState()` per la rail, con il commento che spiega perché — nulla è in corso in un workspace che non è aperto.
+      - `cli/internal/web/assets/app.js`, `resetWorkspaceRunsState()` (cercarlo con `grep -n "function resetWorkspaceRunsState" cli/internal/web/assets/app.js`): è il modello da seguire.
+      - `cli/internal/web/assets/app.js`, `loadWorkspaceStatus()` e la variabile `workspaceStatusSnapshot` (~riga 1048): il ramo di errore azzera già snapshot e markup e aggiunge `hidden`.
+      - `cli/internal/web/assets/app.css` riga ~4130: `body.no-workspace #workspace-status { display: none !important; }` — la regola esiste già e non va toccata.
+
+      ## Change
+
+      - `cli/internal/web/assets/app.js`: aggiungere `resetWorkspaceStatusState()` accanto a `loadWorkspaceStatus`, e chiamarla da `enterNoWorkspaceMode()`.
+
+      Non-goal espliciti: non toccare il CSS (la regola che nasconde la striscia esiste già); non toccare il server (la rotta è già rifiutata senza workspace, cfr. `cli/internal/web/no_workspace_test.go`).
+
+      ## Steps
+
+      1. Scrivere `function resetWorkspaceStatusState()` subito sotto `loadWorkspaceStatus`, con un commento che ne dichiari la ragione: il passo suggerito appartiene al workspace che lo ha prodotto, quindi lasciare l'ultimo snapshot in memoria significherebbe poter riproporre il passo di un workspace che non è più aperto.
+      2. Nel corpo: `workspaceStatusSnapshot = null;`, `workspaceStatusEl.innerHTML = "";`, `workspaceStatusEl.classList.add("hidden");` — le stesse tre righe del ramo di errore di `loadWorkspaceStatus`.
+      3. Fattorizzare il ramo di errore di `loadWorkspaceStatus` perché chiami `resetWorkspaceStatusState()` invece di ripetere le tre righe.
+      4. Chiamare `resetWorkspaceStatusState()` da `enterNoWorkspaceMode()`, subito accanto a `resetWorkspaceRunsState()`, e aggiornare il commento della funzione perché nomini anche la striscia.
+
+      ## Verify
+
+      - Eseguire dalla radice: `node --test "test/web/**/*.test.mjs"`
+      - Expect: verde.
+      - Eseguire: `grep -n -A 12 "function enterNoWorkspaceMode" cli/internal/web/assets/app.js`
+      - Expect: il corpo contiene sia `resetWorkspaceRunsState()` sia `resetWorkspaceStatusState()`.
+      - Eseguire: `cd cli && go test ./internal/web/...`
+      - Expect: `ok` (regressione: `no_workspace_test.go` continua a provare che `GET /api/workspace/status` è rifiutata senza workspace).
+
+      ## Done
+
+      - [ ] AC-5 — `enterNoWorkspaceMode` azzera snapshot e markup della striscia; nessun passo del workspace precedente resta suggeribile.
+      - [ ] Il ramo di errore di `loadWorkspaceStatus` e il reset condividono una sola implementazione.
+      - [ ] I test Go di `internal/web` restano verdi.
+
+      ## Blockers
+
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test strutturali — la striscia non è coperta e il cammino di avvio è uno solo
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Due fatti che nessun modulo puro può esprimere sono presidiati da test: il passo suggerito sta fuori dal guscio e non viene coperto dal pannello spec, e l'avvio dalla striscia è lo stesso avvio della board.
+
+      ## Read
+
+      - `test/web/workspace-layout.test.mjs` — il precedente da imitare: legge `app.css` dal disco e asserisce che il breakpoint del CSS coincide con `NARROW_MAX_WIDTH` del modulo, per impedire che due numeri scritti in due posti divergano. Copiarne il modo di risolvere i percorsi (`fileURLToPath`, `resolve(__dirname, "..", "..")`).
+      - `cli/internal/web/assets/index.html` righe ~100-125 — `#workspace-status` e l'apertura di `#workspace-shell`.
+      - `cli/internal/web/assets/app.css` riga ~4128 — l'unica regola che nasconde la striscia.
+      - `cli/internal/web/assets/app.js` — il gestore della striscia, `scheduleBoardReload`, `enterNoWorkspaceMode`, e le tre righe `startURL:`.
+
+      ## Change
+
+      - Nuovo file `test/web/workspace-status-shell.test.mjs`. Nessun file esistente viene modificato.
+
+      Non-goal espliciti: nessuna asserzione su formattazione, indentazione o numeri di riga — solo su fatti strutturali che, se cambiassero, romperebbero un criterio di accettazione. Nessun DOM, nessun browser, nessuna dipendenza nuova.
+
+      ## Steps
+
+      1. Creare il file con una testata che dichiari perché questi oracoli sono strutturali: sono i due fatti su cui poggiano AC-1 e AC-2 che non vivono in nessun modulo puro, e che un refactor futuro romperebbe in silenzio.
+      2. AC-1, collocazione: leggere `index.html`, asserire che l'indice di `id="workspace-status"` precede l'indice di `id="workspace-shell"` — la striscia è un fratello che sta *prima* del guscio, non un suo discendente. Asserire inoltre che fra le due posizioni non compare la stringa `workspace-primary`.
+      3. AC-1, non copertura: leggere `app.css`, raccogliere ogni selettore che nomina `#workspace-status` insieme a una dichiarazione `display: none`, e asserire che l'unico è quello che porta anche `body.no-workspace`. Il messaggio di fallimento deve nominare il selettore intruso.
+      4. AC-2, unicità del cammino: leggere `app.js`, trovare ogni riga che contiene `/api/workspace/execution` o una URL di esecuzione di spec (`api/spec/` seguito da `/execution`), e asserire che ognuna di quelle righe contiene anche `startURL:`. Il messaggio di fallimento deve dire che un secondo cammino di avvio è stato introdotto e che l'avvio deve passare da `startPanelAction`.
+      5. AC-2, delega: asserire che il blocco del gestore della striscia — la porzione di `app.js` che contiene `ws-status-next` — nomina `startPanelAction`.
+      6. AC-3, ordine: estrarre il corpo di `scheduleBoardReload` e asserire che l'indice di `loadWorkspaceStatus()` è minore dell'indice del primo `return;` del corpo, e che l'indice di `loadBoard()` è maggiore dell'ultimo.
+      7. AC-5, reset: estrarre il corpo di `enterNoWorkspaceMode` e asserire che nomina `resetWorkspaceStatusState`.
+
+      ## Verify
+
+      - Eseguire dalla radice: `node --test "test/web/workspace-status-shell.test.mjs"`
+      - Expect: verde, con almeno cinque test.
+      - Prova negativa manuale (non da lasciare committata): rendere temporaneamente falso uno dei fatti (per esempio togliere `loadWorkspaceStatus()` da sopra le guardie) e verificare che il test corrispondente fallisca con il messaggio previsto; poi ripristinare.
+      - Eseguire l'intera suite: `node --test "test/web/**/*.test.mjs"`
+      - Expect: verde.
+
+      ## Done
+
+      - [ ] AC-1 — un test prova che `#workspace-status` sta fuori dal guscio e che l'unica regola che lo nasconde è `body.no-workspace`, quindi aprire una spec non lo copre.
+      - [ ] AC-2 — un test prova che ogni URL di avvio esecuzione in `app.js` è un valore `startURL:` e che il gestore della striscia delega a `startPanelAction`.
+      - [ ] AC-3 — un test prova che la striscia si ridisegna prima delle guardie di `scheduleBoardReload`.
+      - [ ] AC-5 — un test prova che `enterNoWorkspaceMode` azzera lo stato della striscia.
+      - [ ] Ogni fallimento nomina il fatto rotto, non solo un confronto di stringhe.
+
+      ## Blockers
+
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Smoke E2E — il passo suggerito segue il workspace ed è quello che la board offre
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Su un viewer reale e un workspace reale, il passo suggerito cambia da sé, nomina un'azione che la board offre davvero, e quando è bloccato porta la sua condizione di sblocco.
+
+      ## Read
+
+      - `test/e2e/workspace-status-view-smoke.mjs` — l'intero file. È lo smoke di US-043 e il modello da seguire: costruisce il CLI da sorgente in `test/e2e/.bin/`, inizializza un workspace reale con `archetipo init --tool claude --connector file --yes`, semina il backlog con `archetipo spec add`, avvia il viewer, apre `GET /api/board/stream`, e attende con polling e timeout espliciti (`waitForStatus`, `waitFor`) invece che con `sleep`. Asserisce a ogni transizione che il PID del viewer non è cambiato.
+      - `test/e2e/run-from-view-smoke.mjs` righe ~85-95 — come si configura il provider di default via `PUT /api/execution/provider/default`.
+      - `test/e2e/local-run-view-smoke.mjs` righe ~60-145 — le due descrizioni di provider locale finto e i loro `providerConfig`, che puntano a `test/e2e/support/fake-codex.mjs` e `test/e2e/support/fake-claude.mjs`. Serve solo a rendere le azioni *avviabili*: questo smoke non avvia nessuna run.
+      - `package.json`, sezione `scripts` — la convenzione dei nomi `test:view-*-smoke`.
+      - `cli/internal/web/workspace_status.go` — i campi del payload su cui asserire.
+
+      ## Change
+
+      - Nuovo file `test/e2e/next-step-view-smoke.mjs`.
+      - `package.json`: una riga in `scripts`, `"test:view-next-step-smoke": "node ./test/e2e/next-step-view-smoke.mjs"`, collocata accanto a `test:view-workspace-status-smoke`.
+
+      Non-goal espliciti: non avviare nessuna esecuzione reale e non coinvolgere nessun agente AI — l'equivalenza fra avvio dalla striscia e avvio dalla board è provata dall'unicità del cammino (TASK-06) e dall'identità dell'azione offerta, non ri-eseguendo `run-from-view-smoke`. Non modificare `workspace-status-view-smoke.mjs`. Non toccare `test/e2e/run.yaml` (non ospita gli smoke, che girano dai propri `npm run`).
+
+      ## Steps
+
+      1. Copiare l'ossatura di `workspace-status-view-smoke.mjs`: parsing argomenti, `createRunDir`, `buildCLI`, `runCommand`, `apiJSON`, `waitFor`/`waitForStatus`, gestione del sandbox sotto `test/workspaces/next-step-view-smoke/runs/<timestamp>/sandbox`, e la chiusura ordinata del viewer. Adattare la testata: questo smoke percorre la Dimostrazione di US-056.
+      2. Scenario «nessun workspace»: avviare il viewer senza workspace aperto (seguire `test/e2e/no-workspace-view-smoke.mjs` per il modo esatto) e asserire che `GET /api/workspace/status` è rifiutata — nessun passo è suggerito. Registrare il PID.
+      3. Scenario «passo bloccato»: aprire un workspace inizializzato **senza configurare alcun provider utilizzabile**, e attendere che `GET /api/workspace/status` riporti un `next_step` con `runnable: false` e una `unlocked_by` non vuota. Asserire che la stringa arriva dal payload e non è inventata dal test: il confronto è «non vuota e uguale a se stessa nella risposta successiva», non con una frase scritta nello smoke.
+      4. Scenario «passo e board d'accordo»: configurare il provider locale finto via `PUT /api/execution/provider/default`, seminare due spec in TODO con `archetipo spec add`, attendere che `next_step` diventi `runnable: true` con `scope: "spec"`. Leggere `GET /api/spec/{next_step.spec.code}` e asserire che fra le sue `actions` esiste una voce con lo stesso `id` di `next_step.action` e `runnable: true`. È l'oracolo di AC-2 al livello del contratto: il passo suggerito nomina un'azione che la board offre davvero, sulla stessa spec.
+      5. Scenario «passo che si aggiorna»: pianificare sul disco la spec bersaglio (o comunque cambiarne lo stato con il comando CLI che l'Archetipo prevede, come fa lo smoke di US-043 quando fa comparire il backlog), attendere l'evento `board_changed` sullo stream aperto e poi che `GET /api/workspace/status` riporti uno `stage.id` diverso o un `next_step.spec.code` diverso. Asserire che il PID del viewer non è cambiato: è ciò che rende vero «senza ricaricare la pagina».
+      6. Dopo ogni transizione, riasserire il PID, come fa lo smoke di US-043.
+      7. Aggiungere lo script in `package.json` e nominarlo nel commento di testata del file, così chi lo trova sa come eseguirlo.
+
+      ## Verify
+
+      - Eseguire dalla radice: `npm run test:view-next-step-smoke`
+      - Expect: uscita con codice 0 e un riepilogo che nomina i cinque scenari come superati. Nessun `sleep` come oracolo: ogni attesa è un polling che, scadendo, riporta cosa era atteso e cosa è arrivato.
+      - Eseguire, per regressione: `npm run test:view-workspace-status-smoke`
+      - Expect: uscita con codice 0, come prima dell'intervento.
+
+      ## Done
+
+      - [ ] AC-2 — lo smoke prova che l'azione dichiarata da `next_step` è offerta come runnable dalla spec bersaglio, cioè è la stessa azione che si avvierebbe dalla board.
+      - [ ] AC-3 — lo smoke prova che stadio e passo cambiano sullo stesso PID del viewer, dopo un evento `board_changed`, senza riavvio.
+      - [ ] AC-4 — lo smoke prova che un passo non eseguibile riporta `runnable: false` e una `unlocked_by` non vuota presa dal processo.
+      - [ ] AC-5 — lo smoke prova che senza workspace aperto la rotta di stato è rifiutata e nessun passo è suggerito.
+      - [ ] `package.json` espone `test:view-next-step-smoke` e nessun altro script è cambiato.
+      - [ ] Le directory generate sotto `test/workspaces/` non sono committate.
+
+      ## Blockers
+
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Cancello finale — verifiche complete e spec pronta per la review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+
+      Tutte le verifiche che il repository si fida di eseguire sono verdi, e la spec è nello stato che permette di chiedere la review.
+
+      ## Read
+
+      - `AGENTS.md`, sezione «Before delivering changes» — l'elenco esatto dei controlli che la CI esegue.
+      - `package.json`, sezione `scripts` — i nomi esatti degli script.
+
+      ## Change
+
+      Nessuna modifica al codice. Se una verifica fallisce, la riparazione appartiene alla task che ha introdotto il difetto: correggerla lì e rieseguire questo cancello.
+
+      ## Steps
+
+      1. Eseguire l'intera suite frontend.
+      2. Eseguire i controlli Go nell'ordine dichiarato da `AGENTS.md`.
+      3. Eseguire i due smoke del viewer coinvolti.
+      4. Rileggere la spec dal project root e verificare che nessuna task sia rimasta `TODO`.
+      5. Solo dopo, chiedere la review.
+
+      ## Verify
+
+      Eseguire dalla radice del repository, nell'ordine:
+
+      - `node --test "test/web/**/*.test.mjs"`
+      - Expect: verde, con almeno 109 test (i 109 della baseline più quelli aggiunti da TASK-02 e TASK-06). Nessun test in meno.
+      - `cd cli && gofmt -l .`
+      - Expect: nessun output.
+      - `cd cli && go vet ./...`
+      - Expect: nessun errore.
+      - `cd cli && go build ./...`
+      - Expect: compila pulito.
+      - `cd cli && go test ./...`
+      - Expect: tutti i pacchetti `ok`, come nella baseline.
+      - `cd cli && golangci-lint run --timeout 5m ./...`
+      - Expect: 0 issue. Se `golangci-lint` non è installato, installarlo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` come prescrive `AGENTS.md`; non saltare la verifica in silenzio.
+      - `npm run test:view-next-step-smoke`
+      - Expect: uscita 0.
+      - `npm run test:view-workspace-status-smoke`
+      - Expect: uscita 0 (regressione su US-043).
+      - `git status --short`
+      - Expect: nessun file generato sotto `test/workspaces/` o `test/e2e/.bin/` fra le modifiche.
+      - `archetipo spec show US-056` eseguito da `/Users/stefanoleli/Project/Archetipo`
+      - Expect: ogni task dell'elenco riporta `DONE`, questa inclusa.
+
+      ## Done
+
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5 — tutte le prove nominate nella mappa dell'evidenza sono verdi nella stessa esecuzione.
+      - [ ] Nessuna verifica che era verde nella baseline è diventata rossa; i file toccati non aggiungono diagnostica di compilatore o linter.
+      - [ ] Questo cancello è marcato `DONE`, poi la spec è ricaricata con `archetipo spec show US-056` e nessuna task risulta `TODO`.
+      - [ ] Solo a quel punto viene richiesta la review con `archetipo spec review US-056`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-08

@@ -1,0 +1,47 @@
+schema: archetipo/spec/v2
+code: US-049
+title: Scegliere modello e opzioni per una singola run
+epic:
+  code: EP-005
+  title: Esperienza operativa ARchetipo
+priority: MEDIUM
+points: 5
+status: DONE
+blocked_by:
+  - US-048
+scope: MVP
+body: |-
+  #### US-049: Scegliere modello e opzioni per una singola run
+
+  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** US-048
+
+  **User Story**
+  Come utilizzatore che avvia un'azione dalla UI,
+  voglio poter usare per quella sola run un modello diverso da quello del workspace,
+  così da alzare o abbassare la potenza su una singola attività senza riconfigurare il workspace e senza dimenticarmelo configurato.
+
+  **Dimostrazione**
+  Partendo da un workspace con un modello configurato, il revisore avvia un'azione e osserva, prima della partenza, il modello che verrà usato e la possibilità di sceglierne un altro dall'elenco per questa sola run. Ne sceglie uno diverso, avvia, e osserva nel dettaglio della run il modello effettivamente usato. Riapre la configurazione del workspace e la trova invariata; avvia una seconda run senza toccare nulla e osserva che riparte dal modello del workspace. Con il provider non interrogabile, osserva che l'avvio resta possibile con il modello configurato e che la scelta per la singola run è indicata come non disponibile, con il motivo.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — L'avvio di un'azione mostra il modello che sarà usato, ereditato dalla configurazione del workspace.
+  - [ ] AC-2 — È possibile scegliere per la sola run un altro modello dall'elenco dichiarato dal provider, insieme alle opzioni che quel modello dichiara.
+  - [ ] AC-3 — Il dettaglio della run riporta il modello e le opzioni effettivamente usati.
+  - [ ] AC-4 — Dopo una run avviata con una scelta diversa, la configurazione del workspace resta invariata.
+  - [ ] AC-5 — Una run avviata senza scelta esplicita usa il modello e le opzioni del workspace.
+  - [ ] AC-6 — Quando l'elenco non è disponibile, l'avvio procede con il modello configurato e la scelta per la singola run è mostrata come non disponibile, con il motivo.
+
+  **Fuori ambito**
+  Memorizzazione della scelta come nuovo default del workspace, scelta di un provider diverso per la singola run, e cambio di modello a run già avviata.
+history:
+  - status: TODO
+    at: "2026-08-20T14:55:43Z"
+  - status: PLANNED
+    at: "2026-08-20T18:08:05Z"
+  - status: IN PROGRESS
+    at: "2026-08-20T18:09:10Z"
+  - status: REVIEW
+    at: "2026-08-20T18:43:32Z"
+  - status: DONE
+    at: "2026-08-20T18:46:31Z"

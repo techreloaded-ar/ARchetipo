@@ -1,0 +1,590 @@
+schema: archetipo/plan/v2
+spec_code: US-014
+body: "# US-014: Esplorare l'idea con una Session Run nel Project — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-25\n\n---\n\n## Specifica\n\n**Epica:** EP-002 — Inception governata in ARchetipo Control\n**Priorità:** HIGH | **Punti:** 5\n\n**Storia utente**\nCome stakeholder di business, voglio inviare un obiettivo libero a un agente nel contesto del Project, così da esplorare l'idea prima di impegnare il processo in un risultato formale.\n\n**Criteri di accettazione**\n- AC-1 — Un membro autorizzato può avviare una Session Run con un obiettivo libero dal Project.\n- AC-2 — La Run usa il contesto esplicito del Project e l'Agent Profile associato.\n- AC-3 — Esito e decisioni aperte restano consultabili nel Project.\n- AC-4 — La conclusione della Session non completa automaticamente un'attività di processo.\n\n---\n\n## Soluzione tecnica\n\nEstendere la vertical slice remota già consegnata da US-012 senza creare un secondo lifecycle: `remote_runs`, assignment, eventi e trasporto Runner restano la fonte autorevole Operations, mentre un piccolo servizio di integrazione Project compone lo snapshot Product necessario all'avvio e la pagina Project presenta la Session Run nel contesto business.\n\n- Definire contratti chiusi e limitati per `ProjectSessionContext` e `SessionRunResult`. Il payload `session` persistito contiene obiettivo e snapshot esplicito di Project, Process Instance corrente e configurazione Agent Profile effettiva; il terminal event `completed` contiene dialogo, esito e decisioni aperte validati e redatti. Si riusa il JSONB esistente: non serve una nuova tabella né una duplicazione dell'Agent Profile snapshot.\n- Aggiungere un confine HTTP Project-scoped per creare, elencare e rileggere Session Run. L'Organization e l'identità derivano dalla membership attiva; il servizio verifica Project, profilo effettivo e Process Cockpit prima di delegare l'esecuzione a `RemoteRunService`.\n- Estendere il comando `run.start` con il contesto esplicito e validare fail-closed il risultato terminale prima di renderlo consultabile. La UI mostra profilo/context snapshot, dialogo, esito e decisioni anche dopo reload.\n- Nessun codice della Session invoca comandi di avanzamento Product Process. La prova browser fotografa `process_instances.status`, `current_activity_key`, attività e gate prima della Run e li confronta dopo `completed` e dopo reload.\n\n### Decisioni architetturali\n\nNon serve un nuovo ADR: le alternative rilevanti sono già risolte da `decisions/governed-run-modes` (Session libera ma senza autorità di transizione) e `decisions/project-process-run-model` (Run distinta dalla Process Instance). Il piano applica e aggiorna queste decisioni, conservando Operations come owner della Run e Product come punto di composizione del contesto.\n\n---\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza sul piano |\n|---|---|---|\n| `npm --prefix control exec vitest run src/modules/operations/run-domain.test.ts src/modules/operations/run-service.test.ts` | Verde: 2 file, 5 test | I nuovi contratti mantengono verde questa suite con casi validi, limiti e rifiuti fail-closed. |\n| `npm --prefix control run test:integration -- remote-run-repository remote-run-http project-process` | Verde: 16 file, 50 test | La persistenza e l'integrazione Project–Run non devono introdurre regressioni nei confini esistenti. |\n| `npm --prefix control run test:web -- project runs` | Verde: 5 file, 26 test | Il nuovo pannello Project conserva gli oracoli accessibili correnti. |\n| `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build` | Verde | Ogni file modificato deve restare privo di diagnostiche e il bundle deve compilare. |\n| `npx playwright test test/e2e/control-project-process.spec.ts test/e2e/control-remote-run.spec.ts` | Verde: 5 scenari | Il nuovo scenario browser si aggiunge a questa regressione senza indebolirla. |\n\n**Prerequisiti ambiente:** Node.js >= 22.19, dipendenze root/Control già installate, Docker disponibile per PostgreSQL integration ed harness Playwright già configurato. Non è necessario inizializzare un nuovo framework browser.\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Organization con membro attivo, Project, Agent Profile associato e Runner compatibile online | Integration + browser E2E | Dal Project l'invio dell'obiettivo risponde `201`, mostra l'ID della Run e il Runner riceve una sola offerta; richiesta anonima o senza membership è negata | TASK-03, TASK-05, TASK-06 |\n| AC-2 | Project con obiettivo, Workspace, Process Instance attiva e Agent Profile effettivo | Integration + browser E2E | Il record/API e il comando Runner espongono gli stessi ID Project/Profile/assignment e lo snapshot di obiettivo, attività e gate osservato all'avvio | TASK-02, TASK-03, TASK-04, TASK-06 |\n| AC-3 | Executor fixture restituisce dialogo, sintesi e due decisioni aperte | Unit + integration + component + browser E2E | Dopo `completed` e dopo reload, il Project mostra i turni, l'esito e i titoli/dettagli delle decisioni aperte dalla lettura autorevole | TASK-01, TASK-03, TASK-05, TASK-06 |\n| AC-4 | Process Instance Inception attiva prima della Session Run | Integration + browser E2E | Snapshot DB/API di stato, `current_activity_key`, attività e prossimo gate è identico dopo conclusione e reload; UI dichiara che nessun avanzamento è avvenuto | TASK-02, TASK-05, TASK-06 |\n\n---\n\n## Strategia di test\n\n- Unit test sui parser chiusi di context/result, limiti dimensionali, redazione e rigetto di payload terminali incompleti o con campi inattesi.\n- Integration test PostgreSQL/HTTP su scope Organization, membership, snapshot immutabile, list/detail Project-scoped, persistenza del risultato e assenza di chiamate/transizioni Product Process.\n- Component test React con API fake che lasciano osservabili obiettivo, profilo, dialogo, decisioni, esito e indicatore di processo invariato.\n- Browser E2E necessario: il percorso attraversa autenticazione, route Project, PostgreSQL, scheduling, WebSocket Runner, risultato persistito e reload; nessun test di componente può provare da solo AC-1..AC-4.\n\n### Test E2E — Simulazione utente\n\n**Framework:** Playwright esistente\n**Video demo:** previsto; la registrazione appartiene ad `archetipo-review`.\n\n| Scenario | Flusso utente |\n|---|---|\n| Esplorazione completa dal Project | Login, apertura Project con Inception e profilo, inserimento obiettivo, avvio, osservazione del contesto fissato, attesa `completed`, lettura di dialogo/esito/decisioni e reload. |\n| Nessun avanzamento implicito | Snapshot Process Instance prima della Session, completamento Runner, confronto DB/API/UI dopo conclusione e reload con attività e gate identici. |\n| Autorizzazione e precondizioni | Richiesta anonima negata; Project senza profilo effettivo o senza Runner compatibile non crea una Run parziale. |\n\n---\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [decisions/governed-run-modes, decisions/project-process-run-model, overview]\n  update_after_acceptance: [decisions/governed-run-modes, decisions/project-process-run-model, domains/fleet-and-run-management, domains/project-and-workspace, domains/product-process-management, overview]\n  create: []\n```\n\n> \U0001F3A8 I mockup per questa specifica sono disponibili in `docs/mockups/US-014/`\n\n_Piano generato tramite ARchetipo Planning — 2026-07-25_\n\n---\n\n## Rework — riconciliazione del set Wiki affetto\n\nIl feedback di review non modifica la soluzione applicativa né la mappa delle evidenze AC-1..AC-4: richiede di riconciliare quattro pagine che citano file cambiati da US-014 e che risultano ancora `reviewed` con warning `WIKI_EVIDENCE_CHANGED`. Le correzioni devono confermare con fonti puntuali che:\n\n- `decisions/control-foundation` mantiene Control come modular monolith e documenta la composizione Project Session nello stesso deployable;\n- `decisions/remote-run-assignment-lease` conserva singola offerta, accept CAS, fencing, expiry terminale e assenza di redispatch automatico anche per le Run Project-scoped;\n- `domains/identity-and-policy` fornisce membership Organization-scoped e l'interfaccia database condivisa senza acquisire ownership sulle Session Run;\n- `references/prd` include US-014 nello stato osservato, distinguendo la Session Run consegnata dalle capacità prospettiche di promozione e generazione PRD.\n\nOgni pagina corretta deve essere lasciata in stato `generated`, con metadata di review rimossi o rigenerati secondo il lifecycle Wiki, così che la review umana possa approvare nuovamente l'intero set.\n\n### Baseline del rework\n\n| Controllo | Risultato prima delle correzioni | Vincolo di verifica |\n|---|---|---|\n| `npm --prefix control exec vitest run test/integration/project-session-run.test.ts test/integration/project-session-run-http.test.ts` | Verde: 2 file, 5 test | Le sole correzioni Wiki non devono regredire il confine Project Session. |\n| `npm --prefix control run typecheck` | Verde | Le fonti TypeScript citate dalle pagine restano prive di diagnostiche. |\n| `archetipo wiki validate --profile bootstrap` | `data.ok=true`, ma segnala `WIKI_EVIDENCE_CHANGED` per le quattro pagine del feedback e altre sei pagine fuori da questo rework | Il gate deve eliminare il warning per i quattro ID in scope; warning su pagine non citate dal feedback restano una baseline esterna e non vanno occultati. |\n\nNon sono necessari nuovi mockup: il feedback riguarda esclusivamente la documentazione viva e il prototipo US-014 esistente resta invariato."
+tasks:
+  - id: TASK-01
+    title: Definire i contratti della Session Run di Project
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Rendere tipizzati, limitati e validabili lo snapshot di contesto e il risultato consultabile di una Session Run.
+
+      ## Read
+      - `control/src/modules/operations/run-domain.ts` — tipi `RemoteRun`, lifecycle e redazione correnti
+      - `control/src/modules/operations/run-domain.test.ts` — convenzioni unit test del dominio Run
+      - `control/migrations/005_remote_runs.sql` — vincoli JSONB già disponibili
+      - `docs/mockups/US-014/` — campi di contesto, dialogo, esito e decisioni mostrati dal prototipo
+
+      ## Change
+      - `control/src/modules/operations/run-domain.ts` — aggiungere `ProjectSessionContext`, `SessionRunResult` e parser chiusi con limiti espliciti
+      - `control/src/modules/operations/run-domain.test.ts` — coprire contratti validi, campi inattesi, limiti, decisioni e dialogo invalidi
+      - Non aggiungere una seconda entità Run, non persistere credential e non modificare il lifecycle di stato
+
+      ## Steps
+      1. Modellare il context snapshot con Project, Process Instance/attività/gate eventuali e riferimenti dell'Agent Profile effettivo.
+      2. Modellare il risultato con esito testuale, dialogo ordinato e decisioni aperte identificate, senza output grezzo illimitato.
+      3. Implementare parser fail-closed con schema chiuso, trim e limiti deterministici coerenti con i vincoli JSONB.
+      4. Riutilizzare `redactRunPayload` prima della proiezione/persistenza di campi provenienti dal Runner.
+      5. Aggiungere test positivi e negativi che osservano il contratto restituito, non soltanto l'assenza di eccezioni.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/operations/run-domain.test.ts`
+      - Expect: tutti i test passano e provano context/result validi, rigetto dei payload malformati e redazione dei campi sensibili.
+
+      ## Done
+      - [ ] AC-2 — Il contratto identifica esplicitamente Project, Process snapshot e Agent Profile effettivo.
+      - [ ] AC-3 — Dialogo, esito e decisioni aperte hanno un contratto consultabile e bounded.
+
+      ## Blockers
+      US-012 e US-013 devono essere `DONE`; entrambe le precondizioni sono soddisfatte.
+    ref: TASK-01
+  - id: TASK-02
+    title: Comporre e fissare il contesto Product della Session
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Creare una Session Run dal Project con uno snapshot esplicito e immutabile del contesto Product e dell'Agent Profile associato.
+
+      ## Read
+      - `control/src/modules/product/service.ts` e `repository.ts` — lettura Project/Workspace organization-scoped
+      - `control/src/modules/product/process-service.ts` — proiezione Process Instance fissata
+      - `control/src/modules/operations/agent-profile-service.ts` — configurazione effettiva del Project
+      - `control/src/modules/operations/run-service.ts` e `run-repository.ts` — creazione e persistenza Run esistente
+      - `control/src/server/app.ts` — composition root
+
+      ## Change
+      - `control/src/modules/product/session-run-service.ts` — nuovo servizio di integrazione Project-scoped
+      - `control/src/modules/operations/run-service.ts` — accettare e dispatchare il context snapshot già verificato
+      - `control/src/modules/operations/run-repository.ts` e `control/src/modules/identity/repository.ts` — mappare il payload session tipizzato nel JSONB esistente
+      - `control/src/server/app.ts` — comporre il servizio senza introdurre un nuovo deployable
+      - Non modificare `process_instances`, attività o gate e non duplicare l'Agent Profile snapshot
+
+      ## Steps
+      1. Caricare Project/Workspace nello scope Organization della membership.
+      2. Caricare Process Cockpit eventuale e configurazione Agent Profile effettiva; fallire senza scritture se una precondizione manca.
+      3. Costruire lo snapshot con gli ID autorevoli, obiettivo Project, Workspace eventuale, attività/gate correnti e riferimenti Profile/assignment.
+      4. Passare goal e snapshot a `RemoteRunService.create`, conservando scheduling, assignment e audit di US-012.
+      5. Includere lo stesso snapshot nel comando `run.start` inviato al Runner e nel `session_payload` persistito.
+      6. Provare che la creazione non chiama alcuna transizione di `ProcessService`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/operations/run-service.test.ts test/integration/remote-run-repository.test.ts test/integration/project-process.test.ts`
+      - Expect: i test passano; record e offerta contengono lo stesso context snapshot e lo snapshot Process resta invariato.
+
+      ## Done
+      - [ ] AC-1 — Un membro attivo con precondizioni valide ottiene una sola Run assegnata.
+      - [ ] AC-2 — Persistenza e comando Runner contengono gli stessi riferimenti Project/Profile e lo stato Product osservato all'avvio.
+      - [ ] AC-4 — Il servizio non possiede né invoca un comando di avanzamento processo.
+
+      ## Blockers
+      TASK-01 deve definire i contratti da comporre.
+    ref: TASK-02
+  - id: TASK-03
+    title: Esporre Session Run e risultato nel confine Project
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Fornire API Project-scoped autorizzate per avviare, elencare e rileggere Session Run con risultato persistito.
+
+      ## Read
+      - `control/src/modules/product/process-http.ts` — convenzioni route Project-scoped e policy membership
+      - `control/src/modules/operations/run-http.ts` — mapping pubblico Run/errori corrente
+      - `control/src/modules/operations/run-service.ts` — ingest degli eventi terminali
+      - `control/test/integration/project-process-http.test.ts` e `remote-run-http.test.ts` — fixture e oracoli HTTP
+
+      ## Change
+      - `control/src/modules/product/session-run-http.ts` — route create/list/detail sotto il Project
+      - `control/src/modules/operations/run-service.ts` — validare il `SessionRunResult` su `completed` e derivarlo dagli eventi autorevoli
+      - `control/src/modules/operations/run-repository.ts` — query Project-scoped e ordinamento deterministico
+      - `control/src/server/app.ts` — registrare le route
+      - `control/test/integration/project-session-run.test.ts` e `project-session-run-http.test.ts` — persistenza, authorization, errori e risultato
+      - Non esporre `agent_profile_snapshot` completo, policy sensibili o dati di altre Organization
+
+      ## Steps
+      1. Definire `POST /api/projects/:projectId/session-runs`, lista e dettaglio con membership attiva e UUID validati.
+      2. Derivare Organization e actor server-side; ignorare/rifiutare autorità, profilo o processo forniti dal client.
+      3. Validare il payload `completed` prima della transizione terminale; rifiutare senza corrompere la timeline se non conforme.
+      4. Proiettare context summary e risultato redatto da record/eventi persistiti anche dopo ricostruzione del servizio.
+      5. Testare anonimo, cross-Organization, Project/profilo/Runner mancanti, happy path, reload e nessuna riga parziale sui fallimenti.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/project-session-run.test.ts test/integration/project-session-run-http.test.ts test/integration/remote-run-http.test.ts`
+      - Expect: tutte le route rispettano scope e authorization; il risultato è rileggibile dopo reload e i fallimenti non mutano Run o Process Instance.
+
+      ## Done
+      - [ ] AC-1 — L'avvio autorizzato risponde `201`; anonimo e cross-Organization sono negati.
+      - [ ] AC-2 — La risposta espone gli ID dello snapshot autorevole, non valori scelti dal client.
+      - [ ] AC-3 — Esito e decisioni aperte sono consultabili dalla route Project dopo completion e nuova lettura.
+      - [ ] AC-4 — I test confrontano la Process Instance prima/dopo senza variazioni.
+
+      ## Blockers
+      TASK-02 deve fornire il servizio di composizione del contesto.
+    ref: TASK-03
+  - id: TASK-04
+    title: Allineare Runner e protocollo al risultato esplorativo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Objective
+      Consegnare al Runner il contesto esplicito e riportare a Control un risultato Session conforme senza indebolire fencing e lifecycle remoti.
+
+      ## Read
+      - `control/src/modules/operations/run-start-contract.ts` e `run-transport-contract.ts` — contratti Control
+      - `runner/src/run-start-contract.ts` e `control-client.ts` — parsing offerta ed evento terminale
+      - `runner/test/` — test executor e Control client
+      - `test/e2e/control-fixture.mjs` — Runner fixture usato dagli scenari browser
+
+      ## Change
+      - `control/src/modules/operations/run-start-contract.ts` e relativi test — includere il context Project nella command v1
+      - `runner/src/run-start-contract.ts` e relativi test — validare e consegnare il context all'executor
+      - `runner/src/control-client.ts` e relativi test — inoltrare il risultato strutturato come terminal payload
+      - `test/e2e/control-fixture.mjs` — executor deterministico con dialogo, esito e decisioni aperte per US-014
+      - Non cambiare fencing token, sequence, assignment, cancel o compatibilità Runner
+
+      ## Steps
+      1. Estendere in modo compatibile il payload `mode: session` con context tipizzato e riferimenti profile.
+      2. Verificare exact fields e limiti su entrambi i lati del trasporto.
+      3. Consegnare goal/context all'executor e inoltrare il risultato restituito nel solo evento `completed`.
+      4. Conservare i rifiuti esistenti per token, sequence e transizioni invalide.
+      5. Configurare la fixture browser perché produca un dialogo e decisioni stabili senza mockare Control o PostgreSQL.
+
+      ## Verify
+      - Run: `npm run test:runner && npm --prefix control exec vitest run src/modules/operations/run-transport-contract.test.ts`
+      - Expect: contratti e regressioni Runner passano; l'executor osserva il context e il completed payload conserva il risultato atteso.
+
+      ## Done
+      - [ ] AC-2 — Il Runner riceve Project context e identità del profilo effettivo fissati da Control.
+      - [ ] AC-3 — Il risultato strutturato attraversa il trasporto reale ed è correlato alla stessa Run.
+
+      ## Blockers
+      TASK-01 e TASK-02 definiscono i contratti e lo snapshot inviato.
+    ref: TASK-04
+  - id: TASK-05
+    title: Integrare l'esplorazione Session nel Project
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Permettere al membro di avviare e consultare la Session Run dalla pagina Project con un'esperienza accessibile coerente con il mockup.
+
+      ## Read
+      - `docs/mockups/US-014/` — riferimento vincolante per layout e stati della nuova sezione
+      - `control/src/web/pages/project.tsx` — Project, Agent Profile e Process Cockpit esistenti
+      - `control/src/web/api/client.ts` — contratti client
+      - `control/src/web/styles.css` — design system e responsive rules
+      - `control/test/web/project.test.tsx` — oracoli accessibili correnti
+
+      ## Change
+      - `control/src/web/api/client.ts` — tipi e metodi Project Session Run
+      - `control/src/web/pages/project.tsx` — composer obiettivo, stato Run, context proof, dialogo, esito e decisioni aperte
+      - `control/src/web/styles.css` — stili responsive coerenti con `docs/mockups/US-014/`
+      - `control/test/web/project.test.tsx` — avvio, polling/reload, errori, risultato e processo invariato
+      - Non aggiungere promozione, PRD, avanzamento attività/gate o scelta manuale di Profile/Runner
+
+      ## Steps
+      1. Mostrare la sezione soltanto nel Project e disabilitare l'avvio finché profilo effettivo/precondizioni non sono disponibili.
+      2. Inviare soltanto l'obiettivo libero; Project, Organization, Profile e Process context restano server-derived.
+      3. Mostrare ID Run, stato testuale, profilo e context snapshot con regioni accessibili e annunci non basati solo sul colore.
+      4. Rileggere il dettaglio fino allo stato terminale e rendere dialogo, esito e lista decisioni aperte.
+      5. Dopo completion ricaricare il Process Cockpit e mostrare esplicitamente attività e gate invariati.
+      6. Preservare focus/alert e comportamento responsive già verificati.
+
+      ## Verify
+      - Run: `npm --prefix control run test:web -- project`
+      - Expect: i test osservano l'invio dal Project, i dati reali restituiti, il risultato dopo reload e il messaggio di nessun avanzamento; tutti i test web esistenti restano verdi.
+
+      ## Done
+      - [ ] AC-1 — Un membro attivo avvia la Run con un obiettivo dalla pagina Project.
+      - [ ] AC-2 — La UI mostra context e Agent Profile restituiti dal server senza selettori di autorità.
+      - [ ] AC-3 — Dialogo, esito e decisioni aperte restano visibili dopo reload.
+      - [ ] AC-4 — La UI rende evidente che attività e gate non sono avanzati.
+
+      ## Blockers
+      TASK-03 deve esporre le route e `docs/mockups/US-014/` deve esistere.
+    ref: TASK-05
+  - id: TASK-06
+    title: Provare la Session Run end-to-end dal Project
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Dimostrare AC-1..AC-4 attraverso browser, API, PostgreSQL, WebSocket e Runner reali dell'harness.
+
+      ## Read
+      - `test/e2e/control-project-process.spec.ts` — snapshot Process Instance e fixture Project
+      - `test/e2e/control-remote-run.spec.ts` — lifecycle Runner remoto
+      - `test/e2e/control-fixture.mjs` — setup Control/Runner e accesso DB
+      - `docs/mockups/US-014/` — flusso dimostrabile atteso
+
+      ## Change
+      - `test/e2e/control-project-session-run.spec.ts` — nuovi scenari browser US-014
+      - `test/e2e/control-fixture.mjs` — soltanto helper deterministici necessari a risultato e snapshot DB
+      - Non sostituire i boundary responsabili con mock e non duplicare test unitari
+
+      ## Steps
+      1. Preparare Organization, Project, Workspace, Inception attiva, Agent Profile associato e Runner compatibile.
+      2. Fotografare riga Process Instance e proiezione UI di attività/gate.
+      3. Dal Project inviare un obiettivo libero e verificare `201`, ID Run, Profile/context attesi e una sola offerta Runner.
+      4. Attendere `completed`, osservare dialogo, esito e decisioni aperte, quindi ricaricare la pagina e verificarli di nuovo.
+      5. Confrontare DB e API Process prima/dopo: stato, attività, gate e timestamp semantici non devono indicare avanzamento.
+      6. Provare richiesta anonima e precondizione Profile/Runner mancante senza Run parziali.
+
+      ## Verify
+      - Run: `npx playwright test test/e2e/control-project-session-run.spec.ts test/e2e/control-project-process.spec.ts test/e2e/control-remote-run.spec.ts`
+      - Expect: tutti gli scenari sono verdi; il nuovo flusso attraversa boundary reali e prova persistenza e non-avanzamento.
+
+      ## Done
+      - [ ] AC-1 — Browser e API provano avvio autorizzato e rifiuti non mutanti.
+      - [ ] AC-2 — L'offerta Runner e la UI mostrano gli stessi ID/context autorevoli.
+      - [ ] AC-3 — Dialogo, esito e decisioni sono visibili prima e dopo reload.
+      - [ ] AC-4 — Snapshot DB/API/UI del processo resta identico dopo completion.
+
+      ## Blockers
+      TASK-03, TASK-04 e TASK-05 devono completare API, trasporto e UI.
+    ref: TASK-06
+  - id: TASK-07
+    title: Riconciliare la Wiki con la Session Run di Project
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Aggiornare la conoscenza viva affinché ownership, contesto, risultato e assenza di autorità di processo della Session Run siano documentati con evidenze reali.
+
+      ## Read
+      - `docs/wiki/decisions/governed-run-modes.md` e `project-process-run-model.md` — decisioni accettate da applicare
+      - `docs/wiki/domains/fleet-and-run-management.md` — ownership Operations
+      - `docs/wiki/domains/project-and-workspace.md` e `product-process-management.md` — composizione Product e invarianti processo
+      - `docs/wiki/overview.md` — stato osservato complessivo
+      - `.archetipo/shared-runtime.md` — lifecycle Wiki
+
+      ## Change
+      - Aggiornare soltanto le pagine elencate in `wiki_impact.update_after_acceptance` con fonti puntuali US-014
+      - Impostare le pagine affette a `generated`, senza approvarle
+      - Non creare un nuovo ADR o bounded context e non descrivere promozione/PRD/avanzamento come implementati
+
+      ## Steps
+      1. Eseguire `wiki affected` sui file applicativi e test modificati.
+      2. Documentare Operations come owner di Run/eventi/risultato e Product come punto di composizione del context.
+      3. Aggiornare le due decisioni esistenti con la prova Control che Session completion non avanza Process Instance.
+      4. Aggiornare i domini con API, invarianti, flussi e verifiche puntuali senza duplicare ownership.
+      5. Rigenerare catalogo e lasciare ogni pagina modificata `generated` per la review umana.
+
+      ## Verify
+      - Run: `archetipo wiki affected --file control/src/modules/product/session-run-service.ts --file control/src/modules/product/session-run-http.ts --file control/src/modules/operations/run-domain.ts --file control/src/modules/operations/run-service.ts --file control/src/web/pages/project.tsx --file test/e2e/control-project-session-run.spec.ts`
+      - Run: `archetipo wiki catalog`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Expect: le pagine affette previste sono `generated`, il catalogo è coerente e la validazione restituisce `data.ok=true`.
+
+      ## Done
+      - [ ] AC-1 — La Wiki descrive l'entrypoint autorizzato dal Project.
+      - [ ] AC-2 — La Wiki attribuisce context Product e Agent Profile snapshot ai confini corretti.
+      - [ ] AC-3 — Risultato e decisioni consultabili sono collegati a persistenza/API/test reali.
+      - [ ] AC-4 — Le decisioni ribadiscono e verificano che completion non applica transizioni Product Process.
+
+      ## Blockers
+      TASK-02, TASK-03, TASK-04, TASK-05 e TASK-06 devono fornire evidenze stabili.
+    ref: TASK-07
+  - id: TASK-08
+    title: Eseguire il gate finale della Session Run
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Provare che US-014 soddisfa tutti i criteri senza regressioni Control, Runner, processo o Wiki e che ogni task è chiuso prima della review.
+
+      ## Read
+      - `.archetipo/plans/US-014-plan.yaml` — piano e task da chiudere
+      - `control/package.json` e `package.json` — suite autorevoli
+      - `test/e2e/control-project-session-run.spec.ts` — evidenza AC-1..AC-4
+      - `docs/wiki/index.md` — stato documentazione affetta
+
+      ## Change
+      - Nessun file applicativo previsto; correggere soltanto regressioni introdotte da TASK-01..TASK-07 e relative evidenze
+      - Non ampliare scope con promozione, PRD, designer di processo o transizioni automatiche
+
+      ## Steps
+      1. Eseguire unit, integration e web test focalizzati.
+      2. Eseguire typecheck, lint, build, intera suite Control e test Runner.
+      3. Eseguire gli scenari Playwright US-014 più regressioni Project Process e Remote Run.
+      4. Validare la Wiki e `git diff --check`; nessun file modificato può avere diagnostiche.
+      5. Marcare `TASK-08` `DONE` soltanto dopo tutti i gate verdi.
+      6. Da `/Users/stefanoleli/Project/ARchetipo`, eseguire `archetipo spec show US-014` e confermare che nessun task, incluso questo gate, sia `TODO`; soltanto allora eseguire `archetipo spec review US-014`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/operations/run-domain.test.ts src/modules/operations/run-service.test.ts test/integration/project-session-run.test.ts test/integration/project-session-run-http.test.ts`
+      - Run: `npm --prefix control run test:web -- project`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build && npm --prefix control test`
+      - Run: `npm run test:runner`
+      - Run: `npx playwright test test/e2e/control-project-session-run.spec.ts test/e2e/control-project-process.spec.ts test/e2e/control-remote-run.spec.ts`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run: `git diff --check`
+      - Run from project root after marking this gate DONE: `archetipo spec show US-014`
+      - Expect: tutti i comandi passano, Wiki è valida e l'envelope finale non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — Evidenza API/UI/browser verde per l'avvio autorizzato dal Project.
+      - [ ] AC-2 — Evidenza persistita/trasporto/UI verde per context e profilo effettivo.
+      - [ ] AC-3 — Evidenza integration/UI/browser verde per dialogo, esito e decisioni dopo reload.
+      - [ ] AC-4 — Evidenza DB/API/UI verde per Process Instance invariata dopo completion.
+      - [ ] Tutti i task US-014 sono `DONE` nell'ultimo `archetipo spec show US-014`; review non è stata richiesta prima di questa prova.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06 e TASK-07 devono essere completati.
+    ref: TASK-08
+  - id: TASK-09
+    title: Riconciliare la decisione fondativa di Control
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Aggiornare `decisions/control-foundation` affinché la composition root introdotta da US-014 sia descritta con fonti puntuali e la pagina torni revisionabile in stato `generated`.
+
+      ## Read
+      - `docs/wiki/decisions/control-foundation.md:1` — commento di review, frontmatter, confini del modular monolith e fonti attuali
+      - `control/src/server/app.ts` — composizione condivisa di ProductService, ProcessService, AgentProfileService, RemoteRunService e ProjectSessionRunService
+      - `control/src/modules/product/session-run-service.ts` — composizione del contesto Project senza nuovo deployable
+      - `control/src/modules/product/session-run-http.ts` — entrypoint Project-scoped
+      - `test/e2e/control-project-session-run.spec.ts` — verifica del confine runtime reale
+
+      ## Change
+      - `docs/wiki/decisions/control-foundation.md` — aggiungere fonti US-014 puntuali, aggiornare decisione/conseguenze/verifica per la composizione Project Session e impostare `status: generated`
+      - Rimuovere metadata `review` non più validi secondo il lifecycle Wiki
+      - Non cambiare `decision_status: accepted`, non introdurre un nuovo deployable e non trasferire ownership delle Run da Operations a Product
+
+      ## Steps
+      1. Collegare `session-run-service.ts`, `session-run-http.ts` e lo scenario E2E con ruoli di fonte non ambigui.
+      2. Esplicitare che Product compone Project, Process Cockpit e Agent Profile effettivo, mentre Operations resta autorevole per Run, assignment, eventi e risultato.
+      3. Confermare che la registrazione nello stesso Fastify e database estende il modular monolith senza cambiare topology o confine di deployment.
+      4. Aggiornare verifica e conseguenze con riferimenti ai simboli reali, senza riscrivere la motivazione storica.
+      5. Lasciare la pagina `generated` e priva di hash/revisione di review obsoleti.
+
+      ## Verify
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki affected --file control/src/server/app.ts --file control/src/modules/product/session-run-service.ts --file control/src/modules/product/session-run-http.ts --file test/e2e/control-project-session-run.spec.ts`
+      - Run: `archetipo wiki status`
+      - Expect: `decisions/control-foundation` è nel set affetto, risulta `generated` e il contenuto attribuisce correttamente composizione a Product e lifecycle Run a Operations.
+
+      ## Done
+      - [ ] AC-1 — La decisione documenta l'entrypoint Project-scoped autorizzato nello stesso deployable Control.
+      - [ ] AC-2 — La composizione del contesto e dell'Agent Profile è attribuita ai moduli corretti.
+      - [ ] AC-4 — La pagina non attribuisce alla Session autorità di transizione sul Product Process.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Riconciliare la decisione sul lease delle Run remote
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Aggiornare `decisions/remote-run-assignment-lease` per provare che l'estensione Project-scoped di US-014 conserva integralmente lease, fencing e assenza di redispatch.
+
+      ## Read
+      - `docs/wiki/decisions/remote-run-assignment-lease.md:1` — commento di review, scelta accettata e fonti correnti
+      - `control/src/modules/operations/run-service.ts` — creazione con context snapshot, singola assignment, accept e status fenced
+      - `control/src/modules/product/session-run-service.ts` — delega a RemoteRunService senza lifecycle parallelo
+      - `control/test/integration/project-session-run.test.ts` — prova di composizione e processo invariato
+      - `control/test/integration/remote-run-repository.test.ts` e `remote-run-transport.test.ts` — prove originarie di CAS, expiry e fencing
+
+      ## Change
+      - `docs/wiki/decisions/remote-run-assignment-lease.md` — aggiungere fonti e una conferma esplicita della semantica per Project Session, quindi impostare `status: generated`
+      - Rimuovere metadata `review` obsoleti
+      - Non cambiare `decision_status: accepted`, deadline, accept CAS, fencing, terminalità di `assignment_expired` o policy di nessun redispatch automatico
+
+      ## Steps
+      1. Citare il servizio Project Session come delega e `run-service.ts` come autorità invariata di assignment e transizioni.
+      2. Documentare che context snapshot e risultato strutturato sono payload della stessa Run e non creano una seconda offerta o un secondo lifecycle.
+      3. Confermare che ogni accept/status continua a richiedere runner, assignment e fencing token correnti.
+      4. Collegare test Project Session e regressioni lease esistenti come evidenze complementari.
+      5. Lasciare la pagina `generated` senza metadata della precedente review.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/project-session-run.test.ts test/integration/remote-run-repository.test.ts test/integration/remote-run-transport.test.ts`
+      - Run: `archetipo wiki status`
+      - Expect: test verdi; `decisions/remote-run-assignment-lease` è `generated` e dichiara senza ambiguità una sola offerta, fencing e nessun redispatch anche per US-014.
+
+      ## Done
+      - [ ] AC-1 — L'avvio dal Project riusa la singola assegnazione governata.
+      - [ ] AC-2 — Context snapshot e risultato restano correlati alla stessa Run e assignment.
+      - [ ] AC-3 — La consultabilità del risultato non indebolisce il lifecycle o il fencing.
+      - [ ] AC-4 — Nessuna nuova semantica di redispatch o avanzamento processo è introdotta.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Riconciliare Identity & Policy con le Session Run
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Aggiornare `domains/identity-and-policy` per descrivere la membership Organization-scoped consumata dalle route Session Run e chiarire che la tipizzazione database non trasferisce ownership.
+
+      ## Read
+      - `docs/wiki/domains/identity-and-policy.md:1` — commento di review, ownership, contratti e fonti correnti
+      - `control/src/modules/identity/repository.ts` — `ControlDatabase`, `RemoteRunsTable` e tipizzazione `ProjectSessionPayload`
+      - `control/src/modules/product/session-run-http.ts` — `requireActiveMembership` e derivazione server-side dell'Organization
+      - `control/src/modules/product/session-run-service.ts` — delega Product/Operations
+      - `control/test/integration/project-session-run-http.test.ts` — autorizzazione e isolamento Organization
+
+      ## Change
+      - `docs/wiki/domains/identity-and-policy.md` — aggiungere fonti Session Run, aggiornare contratti/flussi/codice e impostare `status: generated`
+      - Rimuovere metadata `review` obsoleti
+      - Dichiarare esplicitamente che `ProjectSessionPayload` in `ControlDatabase` è un contratto TypeScript condiviso; Identity non possiede Run, Project, Agent Profile o Process Instance
+      - Non ampliare ruoli, policy o modello Organization
+
+      ## Steps
+      1. Aggiungere la route Session Run e il relativo integration test alle fonti con ruoli precisi.
+      2. Documentare che `requireActiveMembership` fornisce Organization e identity server-side prima della creazione/list/detail.
+      3. Aggiornare la nota sull'interfaccia Kysely condivisa includendo `RemoteRunsTable.session_payload` tipizzato, senza attribuire query o lifecycle a Identity.
+      4. Collegare ownership Product/Operations e isolamento cross-Organization osservati nei test.
+      5. Lasciare la pagina `generated` senza metadata della precedente review.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/project-session-run-http.test.ts`
+      - Run: `npm --prefix control run typecheck`
+      - Run: `archetipo wiki status`
+      - Expect: test e typecheck verdi; `domains/identity-and-policy` è `generated` e distingue membership/policy da ownership della Session Run.
+
+      ## Done
+      - [ ] AC-1 — La pagina documenta l'autorizzazione tramite membership attiva Organization-scoped.
+      - [ ] AC-2 — L'identità e l'Organization sono server-derived, mentre Project context e Agent Profile restano fuori dall'ownership Identity.
+      - [ ] AC-3 — La tipizzazione del risultato/payload condiviso non è descritta come persistenza posseduta da Identity.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Aggiornare lo stato osservato nel riferimento PRD
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Riconciliare `references/prd` con la Session Run realmente consegnata da US-014, mantenendo separati stato osservato e visione prospettica.
+
+      ## Read
+      - `docs/wiki/references/prd.md:1` — commento di review, stato osservato US-001..US-013 e testo PRD incorporato
+      - `docs/PRD.md` — intento di prodotto autorevole
+      - `control/src/modules/product/session-run-service.ts` e `session-run-http.ts` — capacità Project Session osservata
+      - `control/src/web/pages/project.tsx` — superficie consultabile
+      - `test/e2e/control-project-session-run.spec.ts` — evidenza AC-1..AC-4
+
+      ## Change
+      - `docs/wiki/references/prd.md` — estendere lo stato osservato a US-014, aggiungere fonti puntuali e impostare `status: generated`
+      - Rimuovere metadata `review` obsoleti
+      - Non modificare il testo originale del PRD, non dichiarare implementate promozione, generazione PRD, sessioni multi-Run o avanzamento automatico del processo
+
+      ## Steps
+      1. Aggiornare il range delle slice osservate includendo US-014.
+      2. Aggiungere una voce Session Run che descriva obiettivo libero, context Project/Profile fissato, risultato e decisioni consultabili dopo reload.
+      3. Dichiarare esplicitamente che completion non avanza attività o gate e che promozione/PRD restano future.
+      4. Collegare servizio, route, UI ed E2E come fonti dello stato reale.
+      5. Lasciare la pagina `generated` senza metadata della precedente review.
+
+      ## Verify
+      - Run: `archetipo wiki affected --file control/src/modules/product/session-run-service.ts --file control/src/modules/product/session-run-http.ts --file control/src/web/pages/project.tsx --file test/e2e/control-project-session-run.spec.ts`
+      - Run: `archetipo wiki status`
+      - Expect: `references/prd` è `generated`; la sezione stato osservato include US-014 senza confondere capacità consegnate e prospettiche.
+
+      ## Done
+      - [ ] AC-1 — Lo stato osservato registra l'avvio autorizzato dal Project.
+      - [ ] AC-2 — Il riferimento descrive context e Agent Profile effettivo fissati.
+      - [ ] AC-3 — Esito e decisioni persistenti sono collegati a fonti e test reali.
+      - [ ] AC-4 — Il riferimento mantiene esplicita l'assenza di avanzamento automatico e non dichiara promozione/PRD implementati.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Eseguire il gate finale del rework Wiki
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+      Provare che i quattro feedback Wiki sono risolti senza regressioni della Session Run e che tutti i task preservati e aggiunti sono chiusi prima di richiedere una nuova review.
+
+      ## Read
+      - `.archetipo/plans/US-014-plan.yaml` — piano completo, task preservati e task di rework
+      - `docs/wiki/decisions/control-foundation.md`
+      - `docs/wiki/decisions/remote-run-assignment-lease.md`
+      - `docs/wiki/domains/identity-and-policy.md`
+      - `docs/wiki/references/prd.md`
+      - `control/package.json` — comandi typecheck e test focalizzati
+
+      ## Change
+      - Nessun cambiamento funzionale previsto
+      - Correggere soltanto difetti nelle quattro pagine in scope o regressioni introdotte da TASK-09..TASK-12
+      - Non risolvere incidentalmente warning Wiki di pagine esterne ai quattro feedback e non ampliare US-014
+
+      ## Steps
+      1. Eseguire i test integration Project Session focalizzati e il typecheck Control.
+      2. Rigenerare il catalogo Wiki dopo le quattro correzioni.
+      3. Eseguire `wiki status` e verificare che esattamente le quattro pagine in scope siano `generated`, non `reviewed` o `stale`.
+      4. Eseguire la validazione bootstrap e verificare `data.ok=true`; nessun finding `WIKI_EVIDENCE_CHANGED` può riferirsi ai quattro ID in scope. I warning baseline su altre pagine non bloccano questo rework.
+      5. Eseguire `git diff --check`.
+      6. Marcare `TASK-13` `DONE` soltanto dopo i gate precedenti.
+      7. Da `/Users/stefanoleli/Project/ARchetipo`, eseguire `archetipo spec show US-014`, confermare che nessun task preservato o aggiunto sia `TODO` e soltanto allora richiedere `archetipo spec review US-014`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run test/integration/project-session-run.test.ts test/integration/project-session-run-http.test.ts`
+      - Run: `npm --prefix control run typecheck`
+      - Run: `archetipo wiki catalog`
+      - Run: `archetipo wiki status`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run: `git diff --check`
+      - Run from project root after marking this gate DONE: `archetipo spec show US-014`
+      - Expect: test e typecheck verdi; le quattro pagine sono `generated`; la validazione è `data.ok=true` e non riporta `WIKI_EVIDENCE_CHANGED` per i quattro ID; il diff è pulito e l'envelope finale non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — L'evidenza Wiki dell'entrypoint autorizzato è revisionabile e i test HTTP restano verdi.
+      - [ ] AC-2 — Le pagine attribuiscono correttamente context, profilo, membership e lease ai rispettivi owner.
+      - [ ] AC-3 — Risultato e decisioni consultabili sono documentati con fonti reali.
+      - [ ] AC-4 — Tutte le pagine confermano che la Session non avanza automaticamente il processo.
+      - [ ] Tutti i task US-014 sono `DONE` nell'ultimo `archetipo spec show US-014`; la review non è stata richiesta prima di questa prova.
+
+      ## Blockers
+      TASK-09, TASK-10, TASK-11 e TASK-12 devono essere completati.
+    ref: TASK-13

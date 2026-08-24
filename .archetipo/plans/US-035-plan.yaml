@@ -1,0 +1,794 @@
+schema: archetipo/plan/v2
+spec_code: US-035
+body: |-
+  # US-035: Preparare e decidere la review con un gate umano — Piano di implementazione
+
+  **Prodotto da:** Team di pianificazione ARchetipo
+  **Data:** 2026-08-20
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-006 — Esecuzione locale e ciclo di delivery
+  **Priorità:** MEDIUM | **Punti:** 5
+  **Bloccata da:** US-034 (DONE)
+
+  **User Story**
+  Come responsabile dell'accettazione di una spec in `REVIEW`, voglio far preparare al provider le evidenze e conservare a una persona il verdetto finale, così da beneficiare dell'agente senza delegargli implicitamente l'approvazione del prodotto.
+
+  **Criteri di accettazione**
+  - AC-1 — Il provider prepara un dossier di review collegato alla spec senza applicare il verdetto finale.
+  - AC-2 — La spec resta `REVIEW` finché una persona autorizzata non sceglie approvazione o richiesta di modifiche.
+  - AC-3 — L'approvazione umana porta la spec a `DONE` e conserva il verdetto con l'esecuzione che ha preparato le evidenze.
+  - AC-4 — La richiesta di modifiche porta la spec allo stato previsto dal Template e conserva feedback strutturato per il rework.
+  - AC-5 — Un errore del provider lascia la spec in `REVIEW` e rende visibile il motivo senza produrre un verdetto implicito.
+
+  ---
+
+  ## Soluzione tecnica
+
+  L'azione `review` (`Rivedi`) è già dichiarata dal Template `fabbrica-del-software` per lo stato `REVIEW` (`cli/internal/template/template.go`), ma oggi `execution.RequiredCapability("review")` restituisce `*ActionError`: il viewer la mostra disabilitata con «this action cannot be started from the viewer yet». US-035 la rende eseguibile **senza** darle il potere di chiudere la spec, e aggiunge il gate umano esplicito che oggi esiste solo come `Integrate & close` (disponibile unicamente con worktree attivo).
+
+  L'approccio riusa integralmente la pipeline costruita da US-032/033/034 e non introduce alcun nuovo modo di eseguire un'azione:
+
+  - **Nuova azione e nuova capability.** `ActionReview = "review"` con `CapabilitySpecReview = "spec.review"`, scope `spec`. La distinzione azione/capability resta quella già documentata in `types.go`: chi chiama nomina l'azione, il provider dichiara la capability. Un provider che sa implementare non sa per ciò stesso preparare una review, quindi AC-1 e il rifiuto anticipato passano gratuitamente dal `Preflight` già esistente.
+  - **Ricevuta condivisa.** `ReviewReceipt` (`spec_code`, `status`, `criteria`, `blockers`) vive in `cli/internal/execution/reviewreceipt.go` accanto a `PlanReceipt` e `ImplementReceipt`, con lo stesso scanner `parseTrailingReceipt`. Il set di chiavi è disgiunto da quello delle altre due ricevute, quindi nessuna riga di chiusura può essere scambiata per un'altra. La regola di accettazione impone `status == REVIEW`: la ricevuta stessa dichiara che la spec **non** si è mossa, ed è il primo presidio contro un verdetto implicito.
+  - **Il dossier è un artefatto della spec, non del record di esecuzione.** `domain.Review` cresce di due campi opzionali, `dossier` e `verdict`, persistiti dal connettore file nello stesso `.archetipo/reviews/{code}.yaml` che già ospita i commenti inline. Il dossier porta `execution_id`: è l'unico modo per legare, più tardi, il verdetto umano all'esecuzione che ha preparato le evidenze (AC-3). Un nuovo comando `archetipo spec review-dossier US-XXX --file <payload>` è ciò che l'agente usa per persistere il dossier; rifiuta una spec che non sia in `REVIEW` e non transiziona nulla.
+  - **Conferma dell'effetto rovesciata.** Per ogni altra azione `VerifyActionEffect` verifica che la spec **si sia mossa**; per `review` verifica che sia **rimasta** in `REVIEW` e che un dossier con quell'`execution_id` sia leggibile. Un agente che si auto-approva produce quindi un record `FAILED` con codice `UNCONFIRMED_EFFECT`, non un successo. `BeginActionEffect` resta un no-op per la review, perché una preparazione di evidenze non deve muovere nulla nemmeno all'avvio.
+  - **Il verdetto è una rotta a sé.** `POST /api/spec/{code}/approve` è l'approvazione umana: rifiuta una spec non in `REVIEW`, scrive `verdict` (decisione, istante, `execution_id` dal dossier) nell'artefatto di review e solo dopo porta la spec a `DONE` — via `spec integrate` quando il workflow worktree è attivo e la spec ha un branch, via `TransitionStatus(DONE)` altrimenti. `handleRequestChanges` registra simmetricamente il verdetto `changes_requested` prima di ripulire i commenti, così AC-3 e AC-4 conservano la stessa traccia. Nessuna delle due rotte è raggiungibile da un provider: sono ingressi HTTP che solo l'utente del viewer preme.
+  - **Il provider locale sa preparare, non decidere.** `claude` e `codex` guadagnano `spec.review` e un `executeReview` modellato su `executeImplement` (turno singolo, ricevuta finale). Il prompt invoca `/archetipo-review {code}` in **modalità dossier preparato** e vieta esplicitamente `spec move`, `spec integrate` e `spec request-changes`. La skill `archetipo-review` guadagna la sezione che descrive quella modalità: raccoglie le evidenze delle FASI 0-1, le persiste con `spec review-dossier`, chiude con la ricevuta e si ferma prima della FASE 2. `arcipelago` resta fuori: dichiara solo `spec.plan` e il suo hub non ospita questa skill.
+
+  ### Decisioni architetturali
+
+  **Dove vive il dossier.** Due alternative reali. (a) Solo nel payload del record di esecuzione, come `result_summary`: zero superficie nuova, ma il dossier sparirebbe dalla vista della spec appena partisse un'altra esecuzione, e il verdetto umano non avrebbe nulla di stabile a cui agganciarsi — l'artefatto di review viene letto dal viewer, il record no. (b) Nell'artefatto di review già esistente, che il viewer legge a ogni apertura della tab Review e che il connettore file già serializza per spec. Scelta la (b): il dossier è conoscenza sulla spec, non sull'esecuzione, e AC-1 chiede esplicitamente che sia «collegato alla spec». Costo accettato: un campo in più nel formato `archetipo/review/v1` (additivo, i file esistenti restano leggibili perché `dossier` e `verdict` sono opzionali) e un comando CLI in più. Il payload del record continua comunque a portare il riepilogo della ricevuta, come per le altre azioni.
+
+  **Perché una rotta `approve` e non il riuso di `integrate`.** `handleIntegrate` esiste solo per il workflow worktree e fallisce con `E_CONFLICT` quando `worktree.enabled` è `false`; in quella configurazione l'unico modo di chiudere una spec dal viewer è trascinare la card su DONE, che non registra alcun verdetto. Un'unica rotta `approve` che decide internamente fra integrazione e transizione semplice è ciò che rende AC-3 vero in entrambe le configurazioni, e `handleIntegrate` resta come rotta separata per la sola integrazione. Alternativa scartata: estendere `handleIntegrate` con un ramo non-worktree, che avrebbe reso il nome della rotta una bugia in metà dei casi.
+
+  **Nessuna nuova nozione di autorizzazione.** AC-2 parla di «persona autorizzata»: il viewer è un server locale senza autenticazione, quindi la persona autorizzata è per costruzione chi ha il viewer aperto sul workspace. Non si introduce alcun modello di ruoli — sarebbe fuori ambito («policy di approvazione multilivello»). Ciò che il piano garantisce è che **nessun percorso automatico** raggiunga `DONE`: il verdetto arriva solo da una rotta HTTP che nessun provider può chiamare.
+
+  ---
+
+  ## Baseline
+
+  Eseguita il 2026-08-20 da `/Users/stefanoleli/Project/Archetipo` (worktree disabilitato: `workdir` == `project_root`). L'albero di lavoro contiene già modifiche non committate di altre spec in corso (`cli/internal/execution/claude/*`, `cli/internal/execution/codex/*`, `cli/internal/execution/arcipelago/events.go`, `cli/internal/execution/localrun/events.go`): la baseline è stata presa **su quell'albero**, ed è verde.
+
+  | Controllo | Esito prima dell'implementazione | Conseguenza per la pianificazione |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | nessun output | ogni task che tocca file Go deve lasciarlo così: `Expect: nessun output` è legittimo |
+  | `cd cli && go vet ./...` | nessuna segnalazione | idem: nessun task può introdurre diagnostiche |
+  | `cd cli && go build ./...` | compila pulito | idem |
+  | `cd cli && go test ./...` | 1453 test passati in 28 package | ogni `Expect: passa` nei task è coerente con questa baseline |
+  | `cd cli && golangci-lint run --timeout 5m ./...` | **non eseguibile**: `golangci-lint` non è installato su questa macchina | prerequisito d'ambiente, non un fallimento di codice. Il gate finale (TASK-15) lo esegue se presente e altrimenti registra esplicitamente la sua assenza; non è mai promesso verde a scatola chiusa |
+  | `npm run test:e2e` | non eseguita: richiede agenti reali e credenziali | fuori dal perimetro dei task; nessun task la dichiara |
+
+  Prerequisiti d'ambiente: Go installato (presente), `node` per gli script npm (presente). Per installare il linter: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task che lo produce |
+  |---|---|---|---|---|
+  | AC-1 | spec `US-901` in `REVIEW` con piano completato; provider doppio che dichiara solo `spec.review` e che, dentro `Execute`, scrive il dossier attraverso il connettore reale e restituisce la ricevuta | acceptance HTTP (`httptest` + server reale + connettore filefs) | dopo `POST /api/spec/US-901/execution {"action":"review"}` il record raggiunge `SUCCEEDED`, `GET /api/spec/US-901/review` restituisce `dossier.execution_id` uguale all'id del record e `GET /api/spec/US-901` riporta ancora `status: REVIEW` | TASK-13 |
+  | AC-1 (rifiuto anticipato) | stesso stato, provider che dichiara solo `spec.implement` | acceptance HTTP | `POST .../execution {"action":"review"}` risponde 409 nominando `spec.review`, nessun file compare sotto `.archetipo/executions/` e il file di review resta senza `dossier` | TASK-13 |
+  | AC-2 | esecuzione di review chiusa `SUCCEEDED` | acceptance HTTP | `GET /api/spec/US-901` è `REVIEW` prima di qualunque chiamata a `/approve` o `/request-changes`; il chip `review` resta l'unica azione ammessa | TASK-13 |
+  | AC-2 (agente che si auto-approva) | provider doppio che porta la spec a `DONE` dentro `Execute` e restituisce comunque una ricevuta ben formata | unit (`effect_test.go`) + acceptance HTTP | il record è `FAILED` con `error.code == "UNCONFIRMED_EFFECT"` e messaggio che nomina lo stato reale trovato | TASK-06, TASK-13 |
+  | AC-3 | spec `US-901` in `REVIEW` con dossier persistito che porta `execution_id` | acceptance HTTP | `POST /api/spec/US-901/approve` risponde 200, `GET /api/spec/US-901` è `DONE` e il file di review contiene `verdict.decision: approved` con lo stesso `execution_id` e un `decided_at` valorizzato | TASK-13 |
+  | AC-4 | spec `US-901` in `REVIEW` con dossier e con almeno un commento inline salvato | acceptance HTTP | `POST /api/spec/US-901/request-changes` porta la spec allo stato di rework del Template (`TODO`), il body contiene `## Rework Feedback` con l'ancora `file:line`, `rework` è `true` e il file di review conserva `verdict.decision: changes_requested` con l'`execution_id` del dossier | TASK-13 |
+  | AC-5 | provider doppio il cui `Execute` restituisce errore | acceptance HTTP | il record è `FAILED` con il messaggio del provider leggibile su `GET /api/execution/{id}`, `GET /api/spec/US-901` è ancora `REVIEW` e il file di review non ha né `dossier` né `verdict` | TASK-13 |
+  | AC-5 (ricevuta mancante) | runner doppio che chiude il turno senza riga di ricevuta | unit provider (`claude`, `codex`) | `Execute` restituisce un errore che nomina il comando e la spec, e nessuna scrittura sul connettore avviene | TASK-09 |
+
+  Ogni criterio ha almeno un oracolo osservabile prodotto contro il connettore **reale** (filefs su directory temporanea) e il server HTTP **reale**: i doppi sostituiscono soltanto il provider, cioè l'unico componente che in produzione è un processo esterno. Nessun mock nasconde lo stato della spec né il contenuto dell'artefatto di review, che sono i due oracoli su cui poggia l'intera user story.
+
+  ---
+
+  ## Strategia di test
+
+  La strategia ricalca quella con cui US-034 ha dimostrato l'azione `implement`, perché il rischio è lo stesso — una catena che attraversa dominio, connettore, boundary di esecuzione, provider e rotta HTTP — e perché le sue asserzioni sono già la miglior descrizione disponibile di che cosa significhi «l'effetto è confermato».
+
+  - **Unit sul boundary condiviso**: ricevuta (`reviewreceipt_test.go`) e regola d'effetto (`effect_test.go`). Qui si prova che una ricevuta che dichiara uno stato diverso da `REVIEW` è rifiutata, e che una spec spostata dall'agente produce `UNCONFIRMED_EFFECT`.
+  - **Unit sul dominio e sul connettore file**: round-trip YAML di `dossier` e `verdict`, più la retro-compatibilità di un file `archetipo/review/v1` che contiene solo `comments`.
+  - **Unit sui provider locali**: `claude` e `codex` con `Starter`/`Runner` doppi, come già fanno `implement_test.go` di entrambi. Si verificano la capability dichiarata, il prompt (che deve nominare la skill e vietare le transizioni), l'assenza della skill installata e la ricevuta mancante.
+  - **Acceptance HTTP** sul server reale con connettore filefs: è il livello che rende osservabili tutti e cinque i criteri, perché è l'unico in cui coesistono la rotta, il Template, il record di esecuzione e lo stato della spec.
+  - **Unit CLI** su `spec review-dossier`: rifiuto fuori da `REVIEW`, nessuna transizione, preservazione dei commenti esistenti.
+
+  ### Rinuncia motivata agli e2e da browser
+
+  **Motivo:** l'incremento non introduce alcun comportamento che esista solo nel browser. I confini che i criteri attraversano — rotta HTTP, Template, connettore, artefatto di review, record di esecuzione — sono tutti esercitati end-to-end dai test di accettazione HTTP contro il server reale, che è esattamente il livello con cui US-034 ha dimostrato l'azione `implement` e US-030 le rotte di run. Il repository non ha alcun harness browser per il viewer: gli script `test/e2e/*-view-smoke.mjs` pilotano il binario reale via HTTP, non un browser, e introdurre Playwright per una tab che guadagna un pannello e un pulsante sarebbe un costo infrastrutturale sproporzionato.
+  **Livello di evidenza usato al suo posto:** i test Go di accettazione HTTP in `cli/internal/web/execution_review_test.go` (server reale, connettore reale, Template reale, doppio solo sul provider), più i test unitari di dominio, boundary e provider elencati sopra.
+  **Demo video:** `Dimostrazione` è filmabile (un revisore avvia `Rivedi`, legge il dossier, sceglie). La registrazione è però competenza di `archetipo-review` e in questo workspace `e2e.record_demo_video` è `false`: nessun task la pianifica.
+
+  ---
+
+  _Piano generato da ARchetipo Planning — 2026-08-20_
+tasks:
+  - id: TASK-01
+    title: Dichiarare l'azione review e la capability spec.review
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      `execution.RequiredCapability("review")` restituisce `spec.review` invece di un `*ActionError`, e l'azione è riconosciuta come spec-scoped.
+
+      ## Read
+      - `cli/internal/execution/types.go` — costanti `ActionID`/`Capability`, `RequiredCapability`, `ActionScope`, e i commenti che spiegano perché azione e capability sono nozioni distinte.
+      - `cli/internal/execution/types_test.go` — tabelle che elencano azioni e capability attese.
+
+      ## Change
+      - `cli/internal/execution/types.go` — aggiungere `ActionReview ActionID = "review"` e `CapabilitySpecReview Capability = "spec.review"`; estendere `RequiredCapability` e `ActionScope` (scope `ScopeSpec`).
+      - `cli/internal/execution/types_test.go` — estendere le tabelle esistenti con la nuova coppia azione/capability e con lo scope.
+      - Non-goal: nessun altro file. In particolare non toccare `effect.go`, i provider o il web in questo task.
+
+      ## Steps
+      1. Aggiungere la costante `CapabilitySpecReview` accanto a `CapabilitySpecImplement`, con un commento che dice che cosa dichiara: il provider sa **preparare le evidenze** di una spec già in review, e che questa capability non contiene alcun potere di decidere — la decisione non è un'azione di esecuzione.
+      2. Aggiungere `ActionReview` accanto ad `ActionImplement`.
+      3. Estendere lo `switch` di `RequiredCapability` con `case ActionReview: return CapabilitySpecReview, nil`.
+      4. Estendere lo `switch` di `ActionScope` aggiungendo `ActionReview` al `case` che restituisce `ScopeSpec`.
+      5. Aggiornare le tabelle in `types_test.go` in modo che l'assenza della nuova azione faccia fallire il test.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/`
+      - Expect: passa (baseline: l'intera suite è verde).
+      - Run: `cd cli && gofmt -l internal/execution && go vet ./internal/execution/`
+      - Expect: nessun output e nessuna segnalazione.
+
+      ## Done
+      - [ ] `RequiredCapability(ActionReview)` restituisce `CapabilitySpecReview` senza errore.
+      - [ ] `ActionScope(ActionReview)` restituisce `ScopeSpec`.
+      - [ ] AC-1 — la capability che un provider deve dichiarare per preparare un dossier esiste ed è distinta da `spec.implement`.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Definire la ricevuta condivisa di review
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Esiste un'unica regola, condivisa da tutti i provider, che dice quando una riga di chiusura vale come ricevuta di una review preparata.
+
+      ## Read
+      - `cli/internal/execution/implementreceipt.go` — forma di `ImplementReceipt`, `ReviewStatus`, `ParseImplementReceipt`, `AcceptImplementReceipt` e i commenti sul perché la ricevuta è una dichiarazione dell'agente e non un'ispezione del connettore.
+      - `cli/internal/execution/planreceipt.go` — `parseTrailingReceipt` e `hasReceiptFields`, cioè lo scanner condiviso e la ragione per cui scorre all'indietro.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/reviewreceipt.go` con `ReviewReceipt`, `reviewReceiptFields`, `ParseReviewReceipt`, `AcceptReviewReceipt`.
+      - Non-goal: non introdurre un secondo scanner e non toccare `planreceipt.go`/`implementreceipt.go`.
+
+      ## Steps
+      1. Definire `type ReviewReceipt struct { SpecCode string \`json:"spec_code"\`; Status string \`json:"status"\`; Criteria int \`json:"criteria"\`; Blockers int \`json:"blockers"\` }`.
+      2. Definire `var reviewReceiptFields = []string{"spec_code", "status", "criteria", "blockers"}`. Documentare che il set è disgiunto da quello del piano (`tasks`) e da quello dell'implementazione (`tasks_done`, `tests`), così nessuna riga di chiusura può essere scambiata per una ricevuta di un'altra azione.
+      3. Scrivere `ParseReviewReceipt(output string)` come `ParseImplementReceipt`, riusando `parseTrailingReceipt[ReviewReceipt]`.
+      4. Scrivere `AcceptReviewReceipt(output, specCode string)`: accetta solo se `Status == ReviewStatus`, `Criteria > 0` e `SpecCode == specCode`. `Blockers` è informativo e può essere zero.
+      5. Documentare nel commento di `AcceptReviewReceipt` il punto centrale della user story: la ricevuta deve dichiarare `REVIEW`, cioè lo stato in cui la spec **è rimasta**. Una ricevuta che dichiarasse `DONE` sarebbe la firma di un agente che ha deciso al posto della persona, e va rifiutata qui prima ancora della conferma dell'effetto. Tenere distinti i due messaggi d'errore: «nessuna ricevuta» e «ricevuta che non dichiara un dossier preparato per <spec>».
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go vet ./internal/execution/`
+      - Expect: compila pulito, nessuna segnalazione.
+
+      ## Done
+      - [ ] `AcceptReviewReceipt` rifiuta una ricevuta con `status` diverso da `REVIEW`, con `criteria <= 0` o con uno `spec_code` diverso da quello dispacciato.
+      - [ ] AC-1 — esiste una regola condivisa che riconosce la chiusura di una preparazione di dossier.
+      - [ ] AC-2 — una ricevuta che dichiara uno stato diverso da `REVIEW` non può essere accettata da nessun provider.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Dossier e verdetto nell'artefatto di review del dominio e del connettore file
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      L'artefatto di review di una spec può portare, oltre ai commenti inline, il dossier preparato da un'esecuzione e il verdetto umano che ne è seguito, e il connettore file li conserva su disco.
+
+      ## Read
+      - `cli/internal/domain/types.go` (righe ~475-500) — `ReviewComment`, `Review` e i commenti che dicono dove l'artefatto è persistito e perché è effimero.
+      - `cli/internal/connector/filefs/review.go` — `reviewDoc`, `reviewSchema`, `ReadReview`, `SaveReview`.
+      - `cli/internal/connector/capabilities.go` (righe ~100-110) — l'interfaccia `ReviewStore`, che non cambia.
+
+      ## Change
+      - `cli/internal/domain/types.go` — aggiungere `ReviewDossier`, `ReviewCriterion`, `ReviewVerdict` e i due campi opzionali su `Review`.
+      - `cli/internal/connector/filefs/review.go` — estendere `reviewDoc` con `dossier` e `verdict` e propagarli in `ReadReview`/`SaveReview`.
+      - Non-goal: non cambiare `reviewSchema` (i campi sono additivi e opzionali, un file esistente resta leggibile) e non toccare la firma di `ReviewStore`.
+
+      ## Steps
+      1. In `domain`, definire:
+         - `ReviewCriterion{ ID, Verdict, Note string }` dove `Verdict` è uno fra `met`, `unclear`, `not_verifiable` (documentare i tre valori come vocabolario chiuso, senza introdurre validazione qui).
+         - `ReviewDossier{ ExecutionID, PreparedAt, Summary string; Criteria []ReviewCriterion; Blockers []string }` con tag `json` e `yaml` in snake_case.
+         - `ReviewVerdict{ Decision, DecidedAt, ExecutionID string }` dove `Decision` è `approved` o `changes_requested`; definire due costanti esportate per i due valori.
+      2. Aggiungere a `Review` i campi `Dossier *ReviewDossier` e `Verdict *ReviewVerdict`, entrambi `omitempty` in JSON e YAML. Documentare che restano puntatori perché «assente» e «vuoto» sono due fatti diversi: una spec senza dossier non ha ancora avuto una preparazione, e una senza verdetto non è ancora stata decisa.
+      3. Aggiornare il commento di `Review`: i commenti restano effimeri (la richiesta di modifiche li svuota), mentre il verdetto sopravvive proprio perché è la traccia della decisione.
+      4. In `filefs`, estendere `reviewDoc` con `Dossier *domain.ReviewDossier \`yaml:"dossier,omitempty"\`` e `Verdict *domain.ReviewVerdict \`yaml:"verdict,omitempty"\``, e propagarli in entrambe le direzioni.
+      5. Verificare che `ReadReview` su file inesistente continui a restituire un `Review` con `Comments` vuoto e i due puntatori a `nil`.
+      6. Aggiungere a `cli/internal/connector/filefs/filefs_test.go` un test di round-trip: salvare un `Review` con commenti + dossier + verdetto, rileggerlo e confrontare campo per campo; e un secondo test che legge un file YAML scritto a mano con i soli `comments` e verifica che `Dossier` e `Verdict` siano `nil`.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/domain/ ./internal/connector/...`
+      - Expect: passa, incluso il test di conformance dei connettori (baseline: verde).
+      - Run: `cd cli && gofmt -l internal/domain internal/connector`
+      - Expect: nessun output.
+
+      ## Done
+      - [ ] Un `Review` con dossier e verdetto sopravvive a un salvataggio e a una rilettura attraverso il connettore file, campo per campo.
+      - [ ] Un file di review preesistente con i soli `comments` resta leggibile e produce `Dossier == nil`, `Verdict == nil`.
+      - [ ] AC-1 — esiste una struttura dati, collegata alla spec, in cui un dossier può essere conservato.
+      - [ ] AC-3 — il verdetto è rappresentabile insieme all'`execution_id` che ha preparato le evidenze.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Comando CLI archetipo spec review-dossier
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Un agente può persistere il dossier di review di una spec con un solo comando, e quel comando non muove la spec di un millimetro.
+
+      ## Read
+      - `cli/internal/cli/spec_cmd.go` (righe ~30-40 per la mappa dei sottocomandi, ~638-690 per `newSpecRequestChangesCmd`) — forma di un comando che legge un payload strutturato, verifica lo stato e scrive attraverso il connettore.
+      - `cli/internal/cli/spec_cmd.go` — `readStructuredInput`, `withConnector`, `errInvalidUsage` e il punto in cui i sottocomandi vengono registrati.
+      - `cli/internal/connector/capabilities.go` — `ReviewStore`, che va scoperta con una type assertion perché non tutti i connettori la implementano.
+      - `cli/internal/cli/spec_cmd_test.go` — come i test dei comandi costruiscono un workspace temporaneo.
+
+      ## Change
+      - `cli/internal/cli/spec_cmd.go` — nuovo `newSpecReviewDossierCmd(s streams)` e sua registrazione accanto a `request-changes`.
+      - `cli/internal/cli/spec_cmd_test.go` — test del nuovo comando.
+      - Non-goal: nessuna transizione di stato, nessun commento postato, nessuna modifica al body della spec.
+
+      ## Steps
+      1. Creare il comando `review-dossier US-XXX` con flag obbligatorio `--file` (payload YAML o JSON), sulla falsariga di `request-changes`. Documentare in `Long` che il comando **non** cambia lo stato della spec e che il verdetto resta della persona.
+      2. Decodificare il payload in `domain.ReviewDossier` con `readStructuredInput`. Rifiutare con `errInvalidUsage` un payload il cui `summary` è vuoto o che non ha alcun criterio: un dossier senza criteri non è un dossier.
+      3. Dentro `withConnector`, leggere la spec e rifiutare con `iox.NewConflict` se lo stato non è `domain.StatusReview`, con lo stesso stile di messaggio di `request-changes` («cannot prepare a review dossier for %s: status is %s, expected REVIEW»).
+      4. Ottenere la `connector.ReviewStore` con una type assertion; se il connettore non la implementa, rispondere `iox.NewPrecondition` nominando il connettore file come alternativa.
+      5. Leggere l'artefatto di review esistente, **preservare i commenti già presenti**, sostituire il solo `Dossier` e azzerare `Verdict` (una nuova preparazione apre un nuovo giro di decisione), poi salvare.
+      6. Valorizzare `PreparedAt` con l'istante UTC in RFC3339 quando il payload non lo porta; lasciare `ExecutionID` esattamente come arriva dal payload — è il provider a conoscerlo, non la CLI.
+      7. Restituire l'envelope `write_result` coerente con gli altri comandi di scrittura.
+      8. Scrivere i test: dossier persistito e rileggibile; rifiuto con `E_CONFLICT` su spec in `PLANNED`; commenti preesistenti preservati; stato della spec invariato dopo il comando.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/cli/`
+      - Expect: passa (baseline: verde).
+      - Run: `cd cli && go build ./... && gofmt -l internal/cli`
+      - Expect: compila pulito, nessun output da gofmt.
+
+      ## Done
+      - [ ] `archetipo spec review-dossier US-XXX --file <payload>` persiste il dossier nell'artefatto di review della spec.
+      - [ ] Il comando rifiuta con `E_CONFLICT` una spec che non è in `REVIEW` e lascia lo stato invariato in ogni caso.
+      - [ ] I commenti inline già salvati sopravvivono alla scrittura del dossier.
+      - [ ] AC-1 — il provider ha un modo deterministico di collegare il dossier alla spec senza applicare alcun verdetto.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Regola d'effetto della review — la spec deve essere rimasta in REVIEW con un dossier
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Objective
+      Un'esecuzione di review che dichiara successo è confermata solo se la spec è **ancora** in `REVIEW` e un dossier è leggibile; ogni altra situazione la degrada a `FAILED`.
+
+      ## Read
+      - `cli/internal/execution/effect.go` — `VerifyActionEffect`, `ConfirmActionEffect`, `implementEffect`, `inceptionEffect`, `BeginActionEffect`, e il modo in cui `PRDStateReader`/`BacklogStateReader` restringono il reader al punto che conosce l'azione.
+      - `cli/internal/execution/effect_test.go` — come i test descrivono un reader doppio.
+      - `cli/internal/domain/types.go` — `Review`, `ReviewDossier` (introdotti da TASK-03).
+
+      ## Change
+      - `cli/internal/execution/effect.go` — nuova interfaccia consumer `ReviewStateReader`, nuova funzione `reviewEffect`, nuovo `case ActionReview` in `VerifyActionEffect`, commento esplicito su `BeginActionEffect`.
+      - Non-goal: non far importare `connector` al package `execution` (la restrizione avviene con una type assertion, come per il PRD); non aggiungere alcuna transizione.
+
+      ## Steps
+      1. Dichiarare `type ReviewStateReader interface { ReadReview(ctx context.Context, code string) (domain.Review, error) }` accanto a `PRDStateReader`, con lo stesso commento sul perché è un'interfaccia del consumatore.
+      2. Aggiungere a `VerifyActionEffect` il `case ActionReview`: restringere il `reader` a `ReviewStateReader` con una type assertion e, se fallisce, motivare con «il connettore non sa rileggere il dossier di review»; altrimenti chiamare `reviewEffect(ctx, reader, reviewReader, specCode, outcome.ID)`.
+      3. Scrivere `reviewEffect`. Due condizioni, entrambe portanti:
+         - la spec riletta deve avere `Status == domain.StatusReview`. Documentare che questa è la condizione **rovesciata** rispetto a ogni altra azione: qui il successo è che la spec **non** si sia mossa, perché l'unica cosa che potrebbe averla mossa è l'agente, e muoverla sarebbe stato un verdetto implicito. Il messaggio deve nominare lo stato reale trovato.
+         - l'artefatto di review deve avere `Dossier != nil` con `Summary` non vuoto e almeno un criterio. Un'esecuzione che dichiara di aver preparato le evidenze e non ne ha lasciate non è confermata.
+      4. Quando il dossier c'è ma il suo `ExecutionID` è valorizzato e diverso dall'id dell'esecuzione in corso, restituire il motivo: il dossier appartiene a un'altra esecuzione, e collegare il verdetto a quella sbagliata sarebbe peggio che non collegarlo. Un `ExecutionID` vuoto è tollerato e non è un errore (il dossier può essere stato preparato a mano).
+      5. In `BeginActionEffect` aggiungere un commento — e un caso di test — che dice esplicitamente che `ActionReview` non ha alcun effetto d'avvio: preparare evidenze non muove nulla, e la guardia `action != ActionImplement` già in essere è ciò che lo garantisce.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/`
+      - Expect: passa (baseline: verde).
+      - Run: `cd cli && go vet ./internal/execution/ && gofmt -l internal/execution`
+      - Expect: nessuna segnalazione, nessun output.
+
+      ## Done
+      - [ ] Una review "riuscita" su una spec che l'agente ha portato a `DONE` viene riscritta come `FAILED` con codice `UNCONFIRMED_EFFECT`.
+      - [ ] Una review "riuscita" senza dossier persistito viene riscritta come `FAILED`.
+      - [ ] `BeginActionEffect` non transiziona nulla per `ActionReview`.
+      - [ ] AC-2 — nessun percorso di esecuzione può far uscire la spec da `REVIEW`.
+      - [ ] AC-5 — la ragione della degradazione è conservata nel record in forma leggibile.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test unitari della ricevuta di review e della regola d'effetto
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-05
+    body: |-
+      ## Objective
+      La ricevuta e la conferma dell'effetto sono provate contro i due modi in cui un agente può sbagliare: chiudere senza aver preparato nulla, e chiudere avendo deciso al posto della persona.
+
+      ## Read
+      - `cli/internal/execution/implementreceipt_test.go` — tabelle e nomenclatura dei test di ricevuta esistenti.
+      - `cli/internal/execution/effect_test.go` — reader doppi e asserzioni su `outcome.Status`/`outcome.Error.Code`.
+      - `cli/internal/execution/reviewreceipt.go` e `cli/internal/execution/effect.go` — il codice appena scritto.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/reviewreceipt_test.go`.
+      - `cli/internal/execution/effect_test.go` — nuovi test per `reviewEffect` e per il no-op di `BeginActionEffect` sulla review.
+      - Non-goal: nessuna modifica al codice di produzione; se un test non passa, il difetto va corretto nel task che lo ha introdotto.
+
+      ## Steps
+      1. In `reviewreceipt_test.go` coprire, con asserzioni sul valore restituito e non solo sull'assenza di errore:
+         - output senza alcuna riga JSON → errore «nessuna ricevuta»;
+         - ricevuta ben formata per la spec dispacciata → accettata, con `Criteria` e `Blockers` letti correttamente;
+         - ricevuta con `status: "DONE"` → rifiutata (è il caso dell'agente che si è auto-approvato);
+         - ricevuta con `criteria: 0` → rifiutata;
+         - ricevuta per un'altra spec → rifiutata;
+         - riga di ricevuta seguita da altro output JSON non-ricevuta → la ricevuta è comunque trovata (prova che lo scanner condiviso è quello giusto);
+         - una riga di ricevuta di piano (`tasks`) o di implementazione (`tasks_done`,`tests`) → **non** riconosciuta come ricevuta di review.
+      2. In `effect_test.go` aggiungere:
+         - spec ancora `REVIEW` + dossier valido con l'`execution_id` corrente → `VerifyActionEffect` restituisce `nil` e lascia il record `SUCCEEDED`;
+         - spec portata a `DONE` dall'agente → record riscritto `FAILED`, `Error.Code == "UNCONFIRMED_EFFECT"`, messaggio che contiene lo stato trovato;
+         - spec ancora `REVIEW` ma nessun dossier → record riscritto `FAILED`;
+         - dossier con un `execution_id` di un'altra esecuzione → record riscritto `FAILED`;
+         - reader che non implementa `ReviewStateReader` → record riscritto `FAILED` con il motivo dedicato;
+         - `BeginActionEffect(ctx, mover, ActionReview, spec)` su una spec `REVIEW` → nessuna chiamata a `TransitionStatus` (il doppio conta le chiamate e il test asserisce zero).
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/ -run 'Review|BeginAction'`
+      - Expect: passa.
+      - Run: `cd cli && go test ./internal/execution/`
+      - Expect: passa per intero (baseline: verde).
+
+      ## Done
+      - [ ] Ogni caso elencato negli Steps esiste come test distinto e fallisce se la regola corrispondente viene rimossa.
+      - [ ] AC-2 — è provato che un'esecuzione non può portare la spec fuori da `REVIEW` senza essere degradata.
+      - [ ] AC-5 — è provato che la degradazione conserva un motivo interrogabile.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Abilitare la preparazione della review nel provider locale claude
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Il provider `claude` dichiara `spec.review` e sa eseguire un turno che prepara il dossier di una spec, chiudendo su una ricevuta di review.
+
+      ## Read
+      - `cli/internal/execution/claude/implement.go` — `executeImplement` e `resultForImplement`, che sono il modello esatto da seguire.
+      - `cli/internal/execution/claude/provider.go` — `Capabilities`, il fork su `req.Action` dentro `Execute`, le costanti `*SkillRelPath`, `ensureSkill`, `runSingleTurn`.
+      - `cli/internal/execution/claude/prompt.go` — `buildImplementPrompt` e il commento che spiega perché il prompt non ripete il workflow della skill.
+
+      ## Change
+      - `cli/internal/execution/claude/provider.go` — aggiungere `execution.CapabilitySpecReview` a `Capabilities`, la costante `reviewSkillRelPath = ".claude/skills/archetipo-review/SKILL.md"` e il ramo `if req.Action == execution.ActionReview` in `Execute`.
+      - `cli/internal/execution/claude/prompt.go` — nuova `buildReviewPrompt`.
+      - Nuovo file `cli/internal/execution/claude/review.go` con `executeReview` e `resultForReview`.
+      - Non-goal: il provider continua a non toccare il connettore; nessuna logica di verdetto entra in questo package.
+
+      ## Steps
+      1. Aggiungere `reviewSkillRelPath` accanto a `implementSkillRelPath`, con lo stesso commento sul perché l'assenza della skill è ciò che rende l'invocazione impossibile.
+      2. Aggiungere `execution.CapabilitySpecReview` alla lista restituita da `Capabilities`.
+      3. In `Execute`, aggiungere `if req.Action == execution.ActionReview { return p.executeReview(ctx, req, cfg, dir) }` accanto agli altri rami, prima del ramo di default (la pianificazione).
+      4. Scrivere `executeReview` copiando la struttura di `executeImplement`: `ensureSkill(dir, reviewSkillRelPath, "review")`, timeout dal config, `runSingleTurn(..., buildReviewPrompt(req), "preparing the review of")`, poi `execution.AcceptReviewReceipt(turn.final, req.SpecCode)`; su fallimento `turn.session.Close(execution.RunCrashed, ...)` con un messaggio che nomina comando e spec, su successo `turn.session.Close(execution.RunClosed, "")`.
+      5. Scrivere `resultForReview` come `resultForImplement`, con payload `command`, `model`, `exit_code`, `result_summary` (la ricevuta ri-serializzata), `criteria`, `blockers`, `duration_ms`. Nessuno stream entra nel record.
+      6. Scrivere `buildReviewPrompt`. Deve, in quest'ordine: dire di lavorare nella working directory corrente; invocare `/archetipo-review ` + `req.SpecCode` **in modalità dossier preparato**; dire che il verdetto è di una persona e che l'agente non deve in alcun caso eseguire `archetipo spec move`, `archetipo spec integrate` o `archetipo spec request-changes`; dire di persistire le evidenze con `archetipo spec review-dossier ` + `req.SpecCode` + ` --file <payload>` includendo nel payload `"execution_id": "` + `req.ExecutionID` + `"`; chiedere di chiudere con l'unica riga `{"spec_code":"<code>","status":"REVIEW","criteria":<N>,"blockers":<M>}` e nient'altro dopo. La funzione resta pura e deterministica sui soli campi di `req`.
+      7. Documentare nel commento di `buildReviewPrompt` perché l'`execution_id` viaggia nel prompt: è l'unico punto in cui il provider conosce l'identità dell'esecuzione, ed è ciò che permetterà al verdetto umano di nominare l'esecuzione che ha preparato le evidenze.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go test ./internal/execution/claude/`
+      - Expect: passa (baseline: verde).
+      - Run: `cd cli && gofmt -l internal/execution/claude && go vet ./internal/execution/claude/`
+      - Expect: nessun output, nessuna segnalazione.
+
+      ## Done
+      - [ ] `Capabilities` di `claude` include `spec.review`.
+      - [ ] `Execute` con `Action: "review"` esegue un turno singolo e accetta solo una ricevuta di review per la spec dispacciata.
+      - [ ] Il prompt nomina la skill, l'`execution_id` e il divieto esplicito di transizioni.
+      - [ ] AC-1 — un provider locale può preparare il dossier senza applicare il verdetto.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Abilitare la preparazione della review nel provider locale codex
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Il provider `codex` dichiara `spec.review` e prepara il dossier con lo stesso contratto di `claude`, chiudendo sulla stessa ricevuta condivisa.
+
+      ## Read
+      - `cli/internal/execution/codex/implement.go` — `executeImplement` e `resultForImplement`.
+      - `cli/internal/execution/codex/provider.go` — `Capabilities` (righe ~147-156), le costanti `planSkillRelPath`/`implementSkillRelPath` (righe ~55-64), il fork su `req.Action` in `Execute`, `ensureSkill`, `runSingleTurn`.
+      - `cli/internal/execution/codex/prompt.go` — `buildImplementPrompt`.
+      - `cli/internal/execution/claude/review.go` e `.../claude/prompt.go` — la versione già scritta in TASK-07, da cui questo task non deve divergere nel contratto (solo nei diagnostici e nel percorso della skill).
+
+      ## Change
+      - `cli/internal/execution/codex/provider.go` — `execution.CapabilitySpecReview` in `Capabilities`, costante `reviewSkillRelPath = ".agents/skills/archetipo-review/SKILL.md"`, ramo `ActionReview` in `Execute`.
+      - `cli/internal/execution/codex/prompt.go` — `buildReviewPrompt`.
+      - Nuovo file `cli/internal/execution/codex/review.go` con `executeReview` e `resultForReview`.
+      - Non-goal: nessuna astrazione condivisa fra i due provider. `claude` e `codex` restano implementazioni sorelle e separate, come dice il commento di package: ciò che è condiviso è la ricevuta, non il codice del provider.
+
+      ## Steps
+      1. Aggiungere `reviewSkillRelPath` con il percorso delle skill installate per codex (`.agents/skills/...`), accanto alle costanti esistenti.
+      2. Aggiungere `execution.CapabilitySpecReview` a `Capabilities`.
+      3. Aggiungere il ramo `ActionReview` in `Execute`, nella stessa posizione relativa in cui `claude` lo ha messo.
+      4. Scrivere `executeReview` e `resultForReview` sul modello di `implement.go` di **questo** package, con i diagnostici che nominano «the codex command %q».
+      5. Scrivere `buildReviewPrompt` con lo stesso identico contenuto sostanziale del prompt di `claude` (skill in modalità dossier preparato, divieto esplicito delle tre transizioni, `spec review-dossier` con `execution_id`, ricevuta finale), così che i due provider chiedano lo stesso lavoro e accettino la stessa ricevuta.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go test ./internal/execution/codex/`
+      - Expect: passa (baseline: verde).
+      - Run: `cd cli && gofmt -l internal/execution/codex && go vet ./internal/execution/codex/`
+      - Expect: nessun output, nessuna segnalazione.
+
+      ## Done
+      - [ ] `Capabilities` di `codex` include `spec.review`.
+      - [ ] `Execute` con `Action: "review"` esegue un turno singolo e accetta la stessa ricevuta che accetta `claude`.
+      - [ ] AC-1 — anche il secondo provider locale prepara il dossier senza applicare il verdetto.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Test dei provider locali per l'azione review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Objective
+      Per entrambi i provider locali è provato che l'azione review dichiara la capability giusta, chiede il lavoro giusto e rifiuta un turno che non ha preparato nulla.
+
+      ## Read
+      - `cli/internal/execution/claude/implement_test.go` e `cli/internal/execution/codex/implement_test.go` — doppi di `Starter`/`Runner`, costruzione della `execution.Request`, asserzioni su prompt e su errori.
+      - `cli/internal/execution/claude/provider_test.go` (riga ~230) — il test che elenca le capability attese, che va esteso.
+
+      ## Change
+      - Nuovi file `cli/internal/execution/claude/review_test.go` e `cli/internal/execution/codex/review_test.go`.
+      - `cli/internal/execution/claude/provider_test.go` e `cli/internal/execution/codex/provider_test.go` — estendere le asserzioni sulle capability con `spec.review`.
+      - Non-goal: nessun test avvia un processo reale; nessun test contatta il connettore.
+
+      ## Steps
+      1. Estendere in entrambi i package il test delle capability perché fallisca se `spec.review` manca.
+      2. Per ciascun provider scrivere, con i doppi già in uso:
+         - **skill assente**: workspace temporaneo senza `SKILL.md` della review → `Execute` fallisce con un messaggio che nomina il percorso atteso e `archetipo init`, e nessun processo viene avviato;
+         - **turno che chiude senza ricevuta** → `Execute` restituisce un errore che nomina il comando configurato e la spec, e la sessione risulta chiusa come `RunCrashed`;
+         - **turno che chiude con una ricevuta valida** → `Execute` restituisce un `Result` il cui payload contiene `result_summary`, `criteria` e `blockers` coerenti con la ricevuta, e nessuno stream dell'agente;
+         - **turno che chiude con una ricevuta che dichiara `status: "DONE"`** → `Execute` fallisce: è il caso dell'agente che ha deciso al posto della persona, e deve essere rifiutato già nel provider.
+      3. Scrivere un test sul prompt (funzione pura) che verifica la presenza, nella stringa prodotta: del nome della skill `/archetipo-review`, del codice spec, dell'`execution_id` della richiesta, del comando `spec review-dossier`, e delle tre transizioni vietate nominate esplicitamente. Il test asserisce sul contenuto, non sull'intera stringa, così una riformulazione non lo rompe senza motivo.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/claude/ ./internal/execution/codex/`
+      - Expect: passa (baseline: verde).
+
+      ## Done
+      - [ ] Entrambi i provider hanno i quattro casi di `Execute` elencati sopra come test distinti.
+      - [ ] Il test del prompt fallisce se il divieto delle transizioni o l'`execution_id` viene rimosso.
+      - [ ] AC-1 — è provato che l'esito «dossier preparato» è distinguibile da un turno che si è semplicemente concluso.
+      - [ ] AC-5 — è provato che un turno fallito produce un errore che nomina la causa, e nessun effetto.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Avviare Rivedi dal viewer e dalla CLI
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Il pulsante `Rivedi` di una spec in `REVIEW` è avviabile, e un provider che non dichiara `spec.review` viene rifiutato prima che esista qualunque record o effetto.
+
+      ## Read
+      - `cli/internal/web/execution_run.go` — `handleRunSpecAction` (l'ordine dei rifiuti, il `Preflight`, `guardSingleExecution`, `BeginActionEffect`, la `Confirmation`), `supportedActions`, `actionAvailability.reasonFor`, `providerAvailability.reasonFor`.
+      - `cli/internal/template/template.go` — l'azione `review` è già dichiarata per lo stato `REVIEW`: non va toccata.
+      - `cli/internal/cli/execution_cmd.go` (righe ~135-215) — il percorso CLI equivalente.
+
+      ## Change
+      - `cli/internal/web/execution_run.go` — includere `execution.ActionReview` in `supportedActions()`.
+      - Non-goal: **nessuna** nuova diramazione su `action` dentro `handleRunSpecAction`. La rotta è già generica e, con TASK-01 e TASK-05 al loro posto, l'azione passa da sola: il gate di stato lo fa il Template, la compatibilità del provider il `Preflight`, la conferma dell'effetto la `Confirmation`. Aggiungere una condizione qui sarebbe una seconda copia di regole che vivono altrove.
+      - Non-goal: non toccare `execution_cmd.go` se non emerge un rifiuto specifico — `RequiredCapability` è l'unico punto che vi rifiutava l'azione.
+
+      ## Steps
+      1. Aggiungere `execution.ActionReview` alla lista `known` di `supportedActions()`, così i messaggi d'errore la nominano come azione avviabile.
+      2. Verificare leggendo il codice che nessun altro punto di `execution_run.go` elenchi le azioni a mano; se ne esiste uno, allinearlo alla stessa lista invece di duplicarla.
+      3. Verificare che `actionAvailability.reasonFor("review")` produca ora una ragione vuota quando il provider dichiara `spec.review` e la spec non ha esecuzioni in corso, e che continui a produrre la ragione «does not declare the "spec.review" capability» altrimenti — senza aggiungere codice: la funzione è già generica sulla capability richiesta.
+      4. Controllare, leggendo `execution_cmd.go`, che il percorso CLI non abbia più bisogno di modifiche: `RequiredCapability` era l'unico punto di rifiuto. Se emerge un ramo specifico per l'implementazione che va generalizzato, farlo qui e documentarlo. La prova osservabile del comportamento è nei test di accettazione di TASK-13.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go test ./internal/web/ ./internal/cli/`
+      - Expect: passa (baseline: verde).
+      - Run: `cd cli && gofmt -l internal/web internal/cli && go vet ./internal/web/ ./internal/cli/`
+      - Expect: nessun output, nessuna segnalazione.
+
+      ## Done
+      - [ ] `POST /api/spec/{code}/execution` con `{"action":"review"}` su una spec in `REVIEW` e con provider compatibile crea un record `RUNNING`.
+      - [ ] Lo stesso POST con un provider che non dichiara `spec.review` risponde `409` nominando la capability, e non crea alcun record.
+      - [ ] Lo stesso POST su una spec fuori da `REVIEW` risponde `409` citando il Template.
+      - [ ] AC-1 — l'azione è avviabile dal viewer.
+      - [ ] AC-5 — un provider incompatibile è rifiutato senza produrre effetti.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Il verdetto umano nel viewer — rotta approve e verdetto sulla richiesta di modifiche
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-10
+    body: |-
+      ## Objective
+      Una persona può approvare una spec in `REVIEW` dal viewer: la spec raggiunge `DONE` e il verdetto resta conservato insieme all'esecuzione che ha preparato le evidenze. La richiesta di modifiche conserva simmetricamente il proprio verdetto.
+
+      ## Read
+      - `cli/internal/web/review.go` — `handleGetReview`, `handleSaveReview`, `handleRequestChanges` (che oggi svuota la review) e `handleIntegrate` (merge + pulizia metadati + transizione a `DONE`).
+      - `cli/internal/web/server.go` (righe ~170-175) — registrazione delle rotte di review.
+      - `cli/internal/web/execution_run.go` — `latestExecution`, utile per risalire all'esecuzione quando il dossier non porta un `execution_id`.
+      - `cli/internal/domain/types.go` — `ReviewVerdict` e le sue due costanti (TASK-03).
+
+      ## Change
+      - `cli/internal/web/review.go` — nuovo `handleApprove`; estrazione della sequenza di integrazione in una funzione riusabile; `handleRequestChanges` che registra il verdetto invece di azzerare tutto.
+      - `cli/internal/web/server.go` — registrare `POST /api/spec/{code}/approve`.
+      - Non-goal: nessuna nozione di ruoli o autenticazione (fuori ambito); `handleIntegrate` resta esposta e invariata nel comportamento osservabile.
+
+      ## Steps
+      1. Estrarre da `handleIntegrate` il corpo che integra il branch in una funzione `integrateSpec(ctx, ws, code, spec) error` che restituisce errori già renderizzati con `iox`, senza scrivere sulla `http.ResponseWriter`. `handleIntegrate` diventa il suo primo chiamante e mantiene la risposta attuale.
+      2. Scrivere `handleApprove`:
+         - leggere il codice spec dal path; rifiutare `iox.NewInvalidInput` se assente;
+         - rileggere la spec e rifiutare con `iox.NewConflict` se lo stato non è `domain.StatusReview`, con un messaggio che nomina lo stato reale. È il presidio di AC-2 sul lato del verdetto: nulla può essere approvato due volte, e nulla che non sia in review può essere approvato;
+         - ottenere la `connector.ReviewStore` con type assertion; se assente, l'approvazione resta possibile ma il verdetto non è persistibile: rispondere `iox.NewPrecondition` invece di approvare senza traccia, perché AC-3 chiede esplicitamente che il verdetto sia conservato;
+         - leggere l'artefatto di review e ricavare l'`execution_id`: quello del dossier quando c'è, altrimenti quello dell'ultima esecuzione `review` della spec (via `latestExecution`), altrimenti stringa vuota;
+         - scrivere il verdetto (`decision: approved`, `decided_at` in RFC3339 UTC, `execution_id`) preservando dossier e commenti, **prima** della transizione: se la transizione fallisce, resta una spec in review con un verdetto registrato, che è recuperabile; l'ordine inverso lascerebbe una spec `DONE` senza traccia di chi l'ha decisa;
+         - portare la spec a `DONE`: se `ws.cfg.Worktree.Enabled` è vero e `spec.Branch` non è vuoto, chiamare `integrateSpec`; altrimenti `ws.conn.TransitionStatus(ctx, code, domain.StatusDone)`;
+         - rispondere `200` con un oggetto che riporta almeno `ok`, `status`, `execution_id` e `integrated` (bool), così il browser sa che cosa è successo davvero;
+         - pubblicare l'aggiornamento della board con `s.broker.Publish()` come fanno le altre rotte che cambiano stato.
+      3. Modificare `handleRequestChanges`: prima di ripulire i commenti, comporre lo stesso `execution_id` con la stessa regola di `handleApprove`, e salvare `domain.Review{Comments: []domain.ReviewComment{}, Dossier: nil, Verdict: &domain.ReviewVerdict{Decision: changes_requested, ...}}`. Il dossier viene azzerato perché le evidenze appena respinte non descrivono più l'incremento; il verdetto resta. Il resto del comportamento (feedback nel body, `rework: true`, transizione allo stato di rework del Template) non cambia.
+      4. Correggere il campo di risposta di `handleRequestChanges` **o** il consumo nel client: oggi il server risponde `comments_moved` e `app.js` legge `res.tasks_added`, quindi il toast mostra `undefined`. Allineare i due nomi su `comments_moved` (il server è la fonte) e sistemare il client in TASK-12.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go test ./internal/web/`
+      - Expect: passa (baseline: verde).
+      - Run: `cd cli && gofmt -l internal/web && go vet ./internal/web/`
+      - Expect: nessun output, nessuna segnalazione.
+
+      ## Done
+      - [ ] `POST /api/spec/{code}/approve` su una spec in `REVIEW` la porta a `DONE` sia con worktree attivo sia senza.
+      - [ ] Lo stesso POST su una spec fuori da `REVIEW` risponde `409` e non cambia nulla.
+      - [ ] Dopo l'approvazione l'artefatto di review contiene `verdict.decision: approved` con l'`execution_id` dell'esecuzione che ha preparato il dossier.
+      - [ ] Dopo la richiesta di modifiche l'artefatto contiene `verdict.decision: changes_requested` con lo stesso `execution_id`.
+      - [ ] AC-2 — nessuna rotta diversa da queste due muove una spec fuori da `REVIEW`.
+      - [ ] AC-3 — l'approvazione umana porta a `DONE` e conserva il verdetto legato all'esecuzione.
+      - [ ] AC-4 — la richiesta di modifiche porta allo stato di rework del Template conservando feedback strutturato e verdetto.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Mostrare il dossier e il verdetto nella tab Review del viewer
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Objective
+      Nella tab Review il revisore legge le evidenze preparate dal provider — criteri, blocchi, riepilogo — e decide con due pulsanti espliciti: approvare o chiedere modifiche.
+
+      ## Read
+      - `cli/internal/web/assets/index.html` (righe ~215-226) — la `review-toolbar`, i pulsanti `review-request-btn` e `review-integrate-btn`, `review-diff`, `review-status`.
+      - `cli/internal/web/assets/app.js` — `loadReview` (~1064), `renderReviewBranch` (~1082), `onRequestChanges` (~1291), `onIntegrate` (~1321), `updateReviewTabVisibility` (~1055), `escapeHtml`, `showToast`, `apiPost`.
+      - `cli/internal/web/assets/app.css` — classi `review-toolbar`, `review-chip`, `review-empty`, per riusare lo stile esistente invece di inventarne uno.
+
+      ## Change
+      - `cli/internal/web/assets/index.html` — nuovo contenitore `<div id="review-dossier" class="review-dossier"></div>` fra la toolbar e `review-diff`; pulsante `review-approve-btn` (primario) accanto a `review-request-btn`; `review-integrate-btn` conservato ma secondario.
+      - `cli/internal/web/assets/app.js` — rendering del dossier e del verdetto, handler `onApprove`, correzione del campo `comments_moved`.
+      - `cli/internal/web/assets/app.css` — regole per `.review-dossier` e per i badge dei criteri, coerenti con la palette già in uso.
+      - Non-goal: nessuna riprogettazione della tab, nessuna dipendenza nuova, nessun cambiamento al diff inline e ai commenti.
+
+      ## Steps
+      1. In `index.html`, aggiungere il contenitore del dossier e il pulsante `review-approve-btn` con `title` che dice che cosa fa: «Accept the increment and close the spec». `review-integrate-btn` resta come azione separata di sola integrazione.
+      2. In `app.js`, catturare i nuovi elementi accanto agli esistenti e registrare `reviewApproveBtn.addEventListener("click", onApprove)`.
+      3. Estendere `loadReview` per passare l'intero oggetto `review` a una nuova `renderDossier(review)`, oltre a valorizzare `reviewComments` come oggi.
+      4. Scrivere `renderDossier(review)`. Tre stati, tutti espliciti:
+         - nessun dossier → messaggio «No review dossier yet — run *Rivedi* to have the provider prepare the evidence», con la stessa classe `review-empty` già usata dal diff;
+         - dossier presente → riga di intestazione con `execution_id` e `prepared_at`, il `summary` reso come testo (passato per `escapeHtml`), l'elenco dei criteri con un badge per `met`/`unclear`/`not_verifiable`, e la lista dei blocchi quando non vuota;
+         - verdetto presente → banner che dice quale decisione è stata presa, quando e da quale esecuzione proveniva l'istruttoria.
+      5. Quando `review.blockers` non è vuoto, disabilitare `review-approve-btn` e spiegare accanto perché: il verdetto resta della persona, ma l'interfaccia non invita ad approvare un incremento che il dossier dichiara bloccato. Il pulsante di richiesta modifiche resta sempre attivo.
+      6. Scrivere `onApprove`: conferma esplicita (`window.confirm`) che nomina la spec e dice che l'approvazione la chiude; `POST /api/spec/{code}/approve`; su successo toast, chiusura della modale e `loadBoard()`; su errore, messaggio nella `review-status` come fanno `onRequestChanges` e `onIntegrate`.
+      7. Correggere `onRequestChanges` perché legga `res.comments_moved` invece di `res.tasks_added`: oggi il toast mostra `undefined`.
+      8. Aggiungere in `app.css` le poche regole necessarie, riusando le variabili di colore già definite; niente palette nuova.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go test ./internal/web/`
+      - Expect: passa (gli asset sono embeddati: un file mancante rompe la build).
+      - Run: `cd cli && go run ./cmd/archetipo view --no-open` da un workspace con una spec in `REVIEW`, poi aprire la tab Review nel browser
+      - Expect: il pannello dossier compare con il messaggio di stato vuoto quando non c'è dossier, e con criteri e blocchi quando c'è; il pulsante Approve è presente.
+
+      ## Done
+      - [ ] La tab Review mostra il dossier preparato, i suoi criteri e i suoi blocchi, o dice esplicitamente che non ce n'è ancora uno.
+      - [ ] Il verdetto già registrato è visibile con la sua decisione e la sua esecuzione di origine.
+      - [ ] Il pulsante Approve chiama `POST /api/spec/{code}/approve` e aggiorna la board.
+      - [ ] Il toast della richiesta di modifiche riporta il numero reale di commenti convertiti.
+      - [ ] AC-1 — il revisore osserva criteri, modifiche, test, documentazione e problemi preparati dal provider.
+      - [ ] AC-3 — l'approvazione è un gesto umano esplicito nell'interfaccia.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Test di accettazione HTTP dell'azione review e del gate umano
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Objective
+      Tutti e cinque i criteri di accettazione sono provati contro il server HTTP reale, il connettore reale e il Template reale, con il solo provider sostituito da un doppio.
+
+      ## Read
+      - `cli/internal/web/execution_implement_test.go` — l'intera impalcatura: `implementTestProvider`, `blockedProvider`/`releasedProvider`, `persistImplementablePlan`, `moveSpecTo`, `actionChip`, e il modo in cui i test attendono la chiusura del record senza `sleep`.
+      - `cli/internal/web/execution_run_test.go` e `cli/internal/web/execution_test.go` — costruzione del server di test, del workspace temporaneo e del connettore filefs.
+      - `cli/internal/web/review.go` — le rotte sotto test.
+
+      ## Change
+      - Nuovo file `cli/internal/web/execution_review_test.go`.
+      - Non-goal: non modificare i test di US-034; non introdurre `time.Sleep`; non sostituire il connettore con un doppio.
+
+      ## Steps
+      1. Costruire i doppi di provider: `reviewTestProvider` che dichiara `spec.review` e, dentro `Execute`, scrive il dossier attraverso il connettore reale (con `ExecutionID` preso da `request.ExecutionID`) e restituisce la ricevuta; più le varianti che servono ai casi negativi (provider che dichiara solo `spec.implement`; provider che porta la spec a `DONE` e restituisce comunque una ricevuta; provider il cui `Execute` restituisce errore).
+      2. **AC-1** — portare `US-901` a `REVIEW` con piano completato, avviare `POST /api/spec/US-901/execution {"action":"review"}`, attendere il record terminale: deve essere `SUCCEEDED`; `GET /api/spec/US-901/review` deve restituire un `dossier` con `execution_id` uguale all'id del record, un `summary` non vuoto e i criteri scritti dal doppio; `GET /api/spec/US-901` deve riportare ancora `REVIEW`.
+      3. **AC-1 (rifiuto anticipato)** — con il provider che dichiara solo `spec.implement`, lo stesso POST risponde `409` nominando `spec.review`; asserire che la directory `.archetipo/executions/` non contiene alcun record e che l'artefatto di review non ha dossier.
+      4. **AC-1 (chip)** — con la spec in `REVIEW`, `GET /api/spec/US-901` espone il chip `review` con `runnable: true`; portando la spec in `PLANNED`, il chip `review` è assente e il POST risponde `409` citando il Template.
+      5. **AC-2** — dopo l'esecuzione riuscita del punto 2, e prima di ogni chiamata al gate, la spec è ancora `REVIEW`; poi `POST /api/spec/US-901/approve` la porta a `DONE`. Il test asserisce l'ordine: è la successione «esecuzione conclusa → spec ancora in review → gesto umano → DONE» a essere il criterio.
+      6. **AC-2 (auto-approvazione)** — con il provider che porta la spec a `DONE` dentro `Execute`, il record terminale è `FAILED` con `error.code == "UNCONFIRMED_EFFECT"`.
+      7. **AC-3** — dopo `POST .../approve`, l'artefatto di review contiene `verdict.decision == "approved"`, `verdict.execution_id` uguale all'id dell'esecuzione che ha preparato il dossier e `decided_at` non vuoto; `GET /api/spec/US-901` è `DONE`. Ripetere il POST: risponde `409` perché la spec non è più in `REVIEW`.
+      8. **AC-4** — su una spec in `REVIEW` con dossier e con un commento inline salvato via `PUT /api/spec/US-901/review`, `POST .../request-changes` porta la spec allo stato di rework del Template, il body contiene `## Rework Feedback` con l'ancora `file:line` del commento, `rework` è `true`, e l'artefatto conserva `verdict.decision == "changes_requested"` con l'`execution_id` del dossier.
+      9. **AC-5** — con il provider che fallisce, il record terminale è `FAILED`, `GET /api/execution/{id}` espone il messaggio del provider, `GET /api/spec/US-901` è ancora `REVIEW`, e l'artefatto di review non ha né dossier né verdetto: nessun verdetto implicito è stato prodotto.
+      10. Attendere sempre lo stato terminale con lo stesso meccanismo già usato dai test di US-034 (rilascio esplicito del provider bloccato e polling della rotta), mai con attese temporali.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/web/ -run Review`
+      - Expect: passa.
+      - Run: `cd cli && go test ./internal/web/`
+      - Expect: passa per intero (baseline: verde).
+
+      ## Done
+      - [ ] Esiste almeno un test dedicato per ciascuno di AC-1, AC-2, AC-3, AC-4, AC-5, con il nome del criterio nel commento del test.
+      - [ ] Nessun test usa `time.Sleep` e nessuno sostituisce il connettore o il Template con un doppio.
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5 — ciascuno provato con l'oracolo dichiarato nella mappa delle evidenze.
+
+      ## Blockers
+      None.
+    ref: TASK-13
+  - id: TASK-14
+    title: Modalità "dossier preparato" nella skill archetipo-review
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      La skill `archetipo-review` sa fermarsi prima del verdetto: raccoglie le evidenze, le persiste come dossier della spec e chiude con la ricevuta, senza mai eseguire una transizione.
+
+      ## Read
+      - `skills/archetipo-review/SKILL.md` — l'Execution Contract (in particolare il punto 1: «The verdict is the user's»), le FASI 0, 1, 2, 3 e la sezione dedicata all'Autonomous acceptance mode, che è il precedente formale di una modalità attivabile solo dal prompt invocante.
+      - `cli/internal/execution/claude/prompt.go` — `buildReviewPrompt` scritta in TASK-07: è il prompt che attiva questa modalità e deve corrispondere parola per parola sui comandi nominati.
+      - `cli/internal/cli/spec_cmd.go` — la forma del payload accettata da `spec review-dossier`.
+
+      ## Change
+      - `skills/archetipo-review/SKILL.md` — nuova sezione «Prepared dossier mode» e una riga nell'Execution Contract che la richiama; aggiungere `spec review-dossier` all'elenco delle operazioni CLI usate dalla skill (punto 3 dell'Execution Contract).
+      - Non-goal: non cambiare il comportamento interattivo esistente, non toccare l'Autonomous acceptance mode, non modificare le FASI 0-1 se non per rimandare alla nuova sezione.
+
+      ## Steps
+      1. Aggiungere all'Execution Contract una riga che dice che la modalità dossier preparato, come quella autonoma, non si attiva mai da sola: solo un prompt invocante può richiederla esplicitamente.
+      2. Scrivere la sezione «Prepared dossier mode» in fondo alla skill, accanto all'Autonomous acceptance mode, con questo contenuto:
+         - **attivazione**: solo su richiesta esplicita del prompt che invoca la skill (è il prompt dei provider locali `claude` e `codex`);
+         - **che cosa si esegue**: FASE 0 e FASE 1 per intero, con la Wiki gate rispettata come già prescritto;
+         - **che cosa non si esegue**: FASE 2 e FASE 3. Elencare per nome i comandi vietati — `archetipo spec move`, `archetipo spec integrate`, `archetipo spec request-changes`, `archetipo wiki approve`, `archetipo wiki reconfirm` — e dire perché: il verdetto appartiene alla persona, e questa modalità esiste proprio per non prenderlo;
+         - **che cosa si persiste**: comporre il payload del dossier (`execution_id` quando il prompt lo fornisce, `summary`, un `criteria` per ogni `AC-N` con verdetto `met`/`unclear`/`not_verifiable` e nota, e `blockers` per ogni impedimento trovato), scriverlo in `.archetipo/tmp/payload-{US-CODE}-dossier.json` con lo strumento di scrittura file — mai via pipe di shell, stessa regola cross-platform già in vigore per il feedback — ed eseguire `archetipo spec review-dossier {US-CODE} --file <path>` da `data.project_root`, cancellando poi il file temporaneo;
+         - **come si chiude**: emettere come ultima riga, e nulla dopo, la ricevuta `{"spec_code":"{US-CODE}","status":"REVIEW","criteria":<N>,"blockers":<M>}`, solo dopo che il dossier è stato persistito;
+         - **che cosa resta vero**: la spec resta in `REVIEW`; se la skill si accorge che la spec non è in `REVIEW`, si ferma e lo dice, senza tentare alcuna correzione.
+      3. Aggiungere `spec review-dossier` all'elenco delle operazioni CLI del punto 3 dell'Execution Contract.
+      4. Rileggere il prompt scritto in TASK-07/TASK-08 e verificare che i nomi dei comandi e il formato della ricevuta coincidano esattamente con quanto scritto qui. Una divergenza fra prompt e skill è il difetto che questa verifica esiste per intercettare.
+
+      ## Verify
+      - Run: `grep -n "Prepared dossier mode" skills/archetipo-review/SKILL.md && grep -c "spec review-dossier" skills/archetipo-review/SKILL.md`
+      - Expect: la sezione esiste e il comando è nominato almeno due volte (Execution Contract e sezione).
+      - Run: `head -4 skills/archetipo-review/SKILL.md`
+      - Expect: il frontmatter YAML (`---`, `name: archetipo-review`, `description: ...`) è intatto: la skill viene copiata così com'è nel workspace, quindi un frontmatter rotto la rende non installabile.
+      - Run: `cd cli && go test ./internal/workspace/`
+      - Expect: passa (baseline: verde) — nessuna regressione nella copia delle skill in fase di init.
+
+      ## Done
+      - [ ] La skill descrive una modalità che esegue FASI 0-1, persiste il dossier e si ferma prima del verdetto.
+      - [ ] I comandi vietati sono elencati per nome nella skill, con la ragione.
+      - [ ] Il formato della ricevuta nella skill coincide con quello accettato da `AcceptReviewReceipt` e con quello chiesto dai prompt dei due provider.
+      - [ ] AC-1 — l'agente ha istruzioni esplicite per preparare le evidenze senza applicare il verdetto.
+      - [ ] AC-2 — la skill in questa modalità non ha alcun percorso che porti la spec fuori da `REVIEW`.
+
+      ## Blockers
+      None.
+    ref: TASK-14
+  - id: TASK-15
+    title: Gate finale — suite completa, controlli statici e verifica dello stato dei task
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+      - TASK-13
+      - TASK-14
+    body: |-
+      ## Objective
+      L'incremento è verde su tutti i controlli che il repository considera vincolanti, e la spec è pronta per la review con ogni task chiuso.
+
+      ## Read
+      - `AGENTS.md`, sezione «Rules for CLI changes» — l'elenco esatto dei controlli che CI esegue e che vanno eseguiti localmente prima di consegnare.
+      - La sezione **Baseline** del piano — l'esito registrato di ciascun controllo prima dell'implementazione.
+
+      ## Change
+      - Nessuna modifica pianificata. Se un controllo fallisce, correggere il difetto nel file che lo causa e rieseguire il gate; non allentare mai un controllo per farlo passare.
+
+      ## Steps
+      1. Eseguire, da `cli/`, nell'ordine: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`.
+      2. Eseguire `golangci-lint run --timeout 5m ./...` da `cli/`. Se il binario non è installato — come alla baseline — installarlo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` ed eseguirlo. Se l'installazione non è possibile in questo ambiente, registrarlo esplicitamente come controllo non eseguito, senza dichiararlo verde.
+      3. Eseguire i test focalizzati sull'incremento e leggerne l'esito uno per uno: `go test ./internal/execution/... ./internal/web/ ./internal/cli/ ./internal/domain/ ./internal/connector/...`.
+      4. Verificare che nessuno dei file toccati dall'incremento introduca diagnostiche di `go vet` o di `gofmt` che non ci fossero alla baseline.
+      5. Marcare `DONE` questo task del gate.
+      6. Rileggere la spec da `data.project_root` con `archetipo spec show US-035` e verificare che **nessun** task risulti ancora `TODO`.
+      7. Solo a quel punto richiedere la review con `archetipo spec review US-035`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./...`
+      - Expect: nessun output da `gofmt`, nessuna segnalazione da `vet`, build pulita e suite verde — almeno i 1453 test della baseline più quelli aggiunti dai task di test.
+      - Run: `cd cli && golangci-lint run --timeout 5m ./...`
+      - Expect: 0 issue se il binario è disponibile; altrimenti l'esito registrato è «non eseguito: golangci-lint non installato», mai «passa».
+      - Run: `archetipo spec show US-035`
+      - Expect: ogni task riporta `DONE`.
+
+      ## Done
+      - [ ] `gofmt`, `go vet`, `go build` e `go test ./...` sono verdi e nessun controllo è peggiorato rispetto alla baseline registrata.
+      - [ ] L'esito di `golangci-lint` è registrato per quello che è: 0 issue, oppure non eseguito con la ragione.
+      - [ ] `archetipo spec show US-035` non mostra alcun task in `TODO` prima della richiesta di review.
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5 — i test di accettazione che li provano (TASK-13) sono parte della suite verde.
+
+      ## Blockers
+      None.
+    ref: TASK-15

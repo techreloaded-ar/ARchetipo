@@ -1,0 +1,549 @@
+schema: archetipo/plan/v2
+spec_code: US-013
+body: "# US-013: Avviare un processo di Inception versionato — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-24\n\n---\n\n## Spec\n\n**Epica:** EP-002 — Inception governata in ARchetipo Control\n**Priorità:** HIGH | **Punti:** 5\n\n**Storia utente**\nCome product lead, voglio avviare nel Project un processo di Inception definito e versionato, così da rendere espliciti attività, gate e prossimo passo del lavoro con business e sviluppo.\n\n**Criteri di accettazione**\n- AC-1 — Un utente autorizzato può avviare un'istanza dalla definizione Inception disponibile.\n- AC-2 — L'istanza registra la versione della definizione usata all'avvio.\n- AC-3 — La vista del processo mostra attività corrente, prossimo gate e stato.\n- AC-4 — La modifica della definizione pubblicata non altera un'istanza già avviata.\n\n---\n\n## Soluzione tecnica\n\nLa vertical slice resta nel modulo Product di Control e introduce un catalogo MVP read-only di versioni pubblicate della sola definizione `inception`, più una Process Instance persistita per Project. La UI del Project legge catalogo e istanza dallo stesso contratto pubblico e rende esplicita la differenza tra versione attualmente pubblicata e versione fissata dall'istanza.\n\n- La migrazione `006_process_inception.sql` crea versioni di definizione append-only e Process Instance organization-scoped. La versione Inception v1 è seed di sistema; pubblicare una revisione significa inserire una nuova riga, mai aggiornare la versione precedente.\n- `process_instances.definition_version_id` riferisce la riga immutabile selezionata all'avvio; stato e attività corrente appartengono all'istanza. Il prossimo passo e i gate sono proiettati dalla struttura validata di quella stessa versione, non dalla revisione corrente del catalogo.\n- Un vincolo univoco ammette una sola Process Instance MVP per Project. Il servizio usa lock transazionale e replay idempotente della stessa richiesta; rifiuta una selezione divenuta obsoleta o incompatibile senza mutazioni.\n- `GET /api/projects/:projectId/process` restituisce definizione Inception attualmente disponibile e istanza eventuale; `POST /api/projects/:projectId/process` accetta soltanto `definitionVersionId`, deriva Organization e attore dalla membership attiva e restituisce `201` al primo avvio o `200` al replay.\n- La pagina Project aggiunge un Process Cockpit: stato vuoto con definizione disponibile e azione di avvio, quindi versione fissata, stato, attività corrente, prossimo passo, prossimo gate e gate futuri. Non espone designer, migrazione di istanze o processi diversi dall'Inception.\n\n### Decisioni architetturali\n\nLa scelta tra aggiornare una definizione in-place e usare versioni append-only incide sul modello persistente e sulla semantica di consistenza. Viene estesa la decisione esistente `decisions/project-process-run-model`: una Process Instance punta a una versione immutabile, mentre una nuova pubblicazione crea una nuova versione disponibile soltanto ai futuri avvii. L'alternativa di copiare un blob completo nell'istanza semplificherebbe la lettura ma duplicherebbe identità e provenienza; l'alternativa di puntare alla sola definizione mutabile violerebbe AC-4. Non serve un nuovo ADR perché la scelta precisa e rende eseguibile il modello Project–Process–Run già accettato.\n\nAssunzioni: nell'MVP “utente autorizzato” significa membership attiva, coerentemente con le mutazioni Product esistenti; ruoli Product granulari restano fuori scope. Il catalogo è di sistema e contiene soltanto Inception. US-011 è ancora in `REVIEW`: l'implementazione deve attendere la sua accettazione perché la configurazione effettiva del Project è una dipendenza dichiarata.\n\n---\n\n## Baseline\n\n| Check | Risultato prima dell'implementazione | Conseguenza per il piano |\n|---|---|---|\n| `npm --prefix control exec vitest run src/modules/product/domain.test.ts` | Verde: 1 file, 4 test | I nuovi invarianti di dominio si aggiungono senza degradare i quattro casi esistenti. |\n| `npm --prefix control run test:web -- project` | Verde: 5 file, 21 test | I test del Process Cockpit mantengono verdi tutte le proiezioni web correnti del Project. |\n| `npm --prefix control run test:integration -- project-http` | Verde: 14 file, 37 test | Il comando corrente seleziona l'intera suite integration; resta il gate di regressione DB/API. |\n| `npm --prefix control run typecheck` | Verde | Ogni task sui file TypeScript deve lasciare entrambi i tsconfig senza diagnostiche. |\n| `npm --prefix control run lint` | Verde | Nessun file toccato può introdurre finding ESLint. |\n| `npm --prefix control run build` | Verde: server TypeScript e bundle Vite | Il gate finale conserva compilazione server e produzione web. |\n| `npx playwright test test/e2e/control-project.spec.ts` | Verde: 2 scenari Chromium | Il nuovo flusso browser si aggiunge alla baseline Project esistente. |\n\nPrerequisiti ambiente: Node >=22.19 e dipendenze `control/node_modules`; Docker deve poter avviare PostgreSQL 17 per integration ed E2E; Playwright Chromium deve essere installato. Le fixture esistenti gestiscono migrazioni, bootstrap OIDC e reset deterministico.\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Organization bootstrap, membership attiva e Project senza processo | Integration HTTP + browser E2E | `POST /api/projects/:id/process` restituisce `201`; il browser sostituisce l'azione di avvio con il Process Cockpit attivo | TASK-03, TASK-05 |\n| AC-2 | Definizione Inception v1 pubblicata | Integration repository/API + browser E2E | risposta, riga DB e UI mostrano lo stesso `definitionVersionId` e `version: 1` | TASK-02, TASK-05 |\n| AC-3 | Istanza v1 appena avviata sull'attività iniziale | Test componente + browser E2E | regioni nominate mostrano stato `active`, attività corrente, prossimo passo, prossimo gate e gate futuri con testo della versione v1 | TASK-04, TASK-05 |\n| AC-4 | Istanza v1 esistente; fixture pubblica Inception v2 dopo l'avvio | Integration DB/API + browser E2E | il catalogo espone v2 ma, dopo reload, l'istanza conserva ID/versione v1 e gli stessi dettagli di attività/gate | TASK-02, TASK-05 |\n\nI test web simulano soltanto il client per stati locali; gli oracoli di persistenza, autorizzazione e immutabilità attraversano PostgreSQL e Fastify senza mock del componente responsabile.\n\n---\n\n## Strategia di test\n\n- Test unitari del dominio per struttura esatta della definizione, attività iniziale, riferimenti a gate, limiti dimensionali e rifiuto fail-closed di contenuto invalido.\n- Test integration su PostgreSQL 17 per schema, seed v1, confini Organization, start concorrente/idempotente, selezione obsoleta e stabilità dell'istanza dopo inserimento della v2.\n- Test HTTP per autenticazione, membership attiva, UUID/body stretti, `201/200/400/404/409` e assenza di mutazioni nei fallimenti.\n- Test React Testing Library per stato vuoto, submit con solo `definitionVersionId`, rendering accessibile del cockpit, error alert focalizzato e distinzione fra versione pubblicata e versione dell'istanza.\n- Regressione con typecheck, lint, build, intera suite Control focalizzata e scenario Project preesistente.\n\n### Test E2E — Simulazione utente\n\n**Framework:** Playwright, Chromium, fixture Control/PostgreSQL/OIDC esistente\n**Video demo:** previsto e filmabile; sarà registrato da `archetipo-review`, non durante l'implementazione\n\n| Scenario | Flusso utente |\n|---|---|\n| Avvio Inception | L'utente effettua bootstrap/login, crea un Project senza processi, vede Inception v1 disponibile, avvia l'istanza e osserva versione, stato, attività iniziale, prossimo passo e gate. |\n| Version pinning | Dopo l'avvio v1 la fixture pubblica Inception v2; al reload il catalogo segnala v2 disponibile ma il cockpit conserva identità, versione e contenuto v1 dell'istanza. |\n\n---\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [decisions/project-process-run-model, domains/delivery-workflow, overview]\n  update_after_acceptance: [decisions/project-process-run-model, overview]\n  create: [domains/product-process-management]\n```\n\n> \U0001F3A8 I mockup per questa spec sono disponibili in `docs/mockups/US-013/`\n\n\n---\n\n## Rework 2026-07-25\n\nLa review richiede di riconciliare quattro pagine Wiki rese stale dalle evidenze US-013: fondazione Control, Identity & Policy, Project e Workspace e reference PRD. Le correzioni devono aggiornare fonti e contenuto soltanto dove il nuovo Product Process modifica il confine osservato, rimuovere i precedenti blocchi review, riportare le pagine a generated, rigenerare il catalogo e ottenere affected, status e validate bootstrap senza finding bloccanti. La baseline di rework registra git diff --check verde; docs/wiki/index.md segnala le quattro pagine target stale, mentre archetipo wiki search Process Instance trova il nuovo dominio Product Process e la decisione Project–Process–Run in generated. Nessuna evidenza runtime AC-1..AC-4 è invalidata: il rework è esclusivamente documentale e conserva i gate applicativi completati in TASK-01..TASK-07.\n\n_Piano generato via ARchetipo Planning — 2026-07-25_"
+tasks:
+  - id: TASK-01
+    title: Definire schema versionato e invarianti Inception
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Materializzare un catalogo append-only della definizione Inception e una Process Instance che fissa una versione immutabile per Project.
+
+      ## Read
+      - `control/migrations/002_project_workspace.sql` — identità e vincoli Organization dei Project
+      - `control/migrations/004_agent_profiles.sql` e `005_remote_runs.sql` — foreign key composite e pattern snapshot/versioning
+      - `control/src/modules/product/domain.ts` — tipi e validazione Product correnti
+      - `control/src/modules/identity/repository.ts` — tipi Kysely del database
+      - `control/test/integration/migrations.test.ts` — contratto autorevole delle migrazioni
+
+      ## Change
+      - `control/migrations/006_process_inception.sql` — tabelle/versione seed Inception v1 e vincoli
+      - `control/src/modules/product/process-domain.ts` — tipi e validatore della struttura Inception
+      - `control/src/modules/product/process-domain.test.ts` — casi validi e fail-closed
+      - `control/src/modules/identity/repository.ts` — tipi Kysely delle nuove tabelle
+      - `control/test/integration/migrations.test.ts` — presenza, seed, foreign key e immutabilità strutturale
+      - Non aggiungere designer, update/delete di versioni, avanzamento attività, altri processi o riferimenti a Run
+
+      ## Steps
+      1. Creare `process_definition_versions` con identità UUID, chiave vincolata a `inception`, versione positiva, stato `published`, struttura JSONB validabile, timestamp e unicità `(definition_key, version)`.
+      2. Inserire in migrazione la definizione Inception v1 con attività iniziale, prossimo passo e gate ordinati necessari alla dimostrazione.
+      3. Creare `process_instances` con Organization, Project, `definition_version_id`, stato `active`, `current_activity_key`, timestamp e unicità sul Project; usare la foreign key composita Project–Organization.
+      4. Non esporre un UPDATE della definizione: una nuova pubblicazione è sempre una nuova riga versione, mentre l'istanza conserva il riferimento originario.
+      5. Validare chiavi esatte, versione, attività iniziale esistente, riferimenti gate/attività, liste non vuote, duplicati e limiti dimensionali prima di proiettare la struttura.
+      6. Estendere il test migrazioni senza modificare le migrazioni `001`–`005` e provare che il seed v1 è completo.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/product/process-domain.test.ts`
+      - Run: `npm --prefix control run test:integration -- migrations`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: validatore e schema passano, Inception v1 è pubblicata una sola volta e nessun file toccato introduce diagnostiche.
+
+      ## Done
+      - [ ] AC-2 — Schema e tipi rendono obbligatorio il riferimento a una versione pubblicata identificabile.
+      - [ ] AC-3 — La struttura v1 contiene attività iniziale, prossimo passo e gate proiettabili.
+      - [ ] AC-4 — Nuove pubblicazioni non richiedono né consentono di riscrivere la versione riferita dall'istanza.
+
+      ## Blockers
+      US-011 deve essere accettata in `DONE`; è attualmente in `REVIEW`.
+    ref: TASK-01
+  - id: TASK-02
+    title: Implementare persistenza e avvio atomico del processo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Leggere la definizione Inception disponibile e avviare una sola istanza organization-scoped con replay idempotente e versione fissata.
+
+      ## Read
+      - `control/src/modules/product/repository.ts` e `service.ts` — transazioni, advisory lock, scope Project e mapping corrente
+      - `control/src/modules/product/process-domain.ts` e `control/migrations/006_process_inception.sql` — contratto di TASK-01
+      - `control/test/integration/project-workspace.test.ts` — concorrenza, replay e isolamento Product
+      - `control/src/modules/operations/agent-profile-service.ts` — configurazione effettiva del Project fornita da US-011
+
+      ## Change
+      - `control/src/modules/product/process-repository.ts` — query catalogo/istanza e insert atomico
+      - `control/src/modules/product/process-service.ts` — query cockpit, start e errori dominio
+      - `control/test/integration/project-process.test.ts` — persistenza, concorrenza, scope, versione obsoleta e pinning
+      - Non avanzare attività o gate, non creare Run, non modificare definizioni e non duplicare l'Agent Profile nell'istanza
+
+      ## Steps
+      1. Leggere la versione Inception pubblicata più recente in ordine deterministico e validarne la struttura prima dell'uso.
+      2. Comporre la query cockpit con Project organization-scoped, definizione disponibile e istanza eventuale proiettata dalla versione fissata.
+      3. Per lo start, aprire una transazione e acquisire un advisory lock sul Project prima di rileggere Project, definizione corrente e istanza.
+      4. Richiedere che `definitionVersionId` coincida con la versione disponibile al momento del commit; rifiutare selezioni obsolete senza insert.
+      5. Inserire l'istanza con `current_activity_key` uguale all'attività iniziale; su replay della stessa versione restituire la stessa identità con `created:false`, su versione incompatibile restituire conflitto.
+      6. Provare due start concorrenti, isolamento Organization, contenuto persistito corrotto rifiutato fail-closed e pubblicazione v2 successiva che lascia identità/contenuto v1 invariati.
+
+      ## Verify
+      - Run: `npm --prefix control run test:integration -- project-process`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: una sola istanza nasce anche in concorrenza; v2 diventa disponibile per nuovi Project ma l'istanza v1 conserva ID, versione, attività e gate.
+
+      ## Done
+      - [ ] AC-1 — Una membership attiva può avviare l'istanza dalla definizione corrente con risultato atomico.
+      - [ ] AC-2 — L'istanza riletta espone lo stesso `definitionVersionId` e numero versione selezionati.
+      - [ ] AC-3 — La proiezione usa attività e gate della versione fissata.
+      - [ ] AC-4 — Dopo pubblicazione v2 la stessa istanza continua a proiettare v1 senza mutazioni.
+
+      ## Blockers
+      TASK-01 fornisce schema e validazione; US-011 deve essere `DONE`.
+    ref: TASK-02
+  - id: TASK-03
+    title: Esporre il contratto HTTP del Process Cockpit
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Esporre lettura e avvio della Process Instance tramite API Fastify autenticate con payload e codici errore stabili.
+
+      ## Read
+      - `control/src/modules/product/http.ts` — convenzioni Product, UUID e mapping errori
+      - `control/src/modules/product/process-service.ts` — query/command ed errori di TASK-02
+      - `control/src/modules/identity/policy.ts` — membership attiva e autenticazione
+      - `control/src/server/app.ts` — composition root e route SPA
+      - `control/test/integration/project-http.test.ts` — fixture sessione e contratti pubblici
+
+      ## Change
+      - `control/src/modules/product/process-http.ts` — `GET` e `POST /api/projects/:projectId/process`
+      - `control/src/server/app.ts` — composizione repository/service e registrazione route
+      - `control/test/integration/project-process-http.test.ts` — auth, body stretto, status ed errori non mutanti
+      - Non accettare `organizationId`, stato, attività corrente, chiave processo o contenuto definizione dal client
+
+      ## Steps
+      1. Registrare `GET /api/projects/:projectId/process` per ogni membership attiva e restituire `{availableDefinition, instance}`.
+      2. Registrare `POST /api/projects/:projectId/process` con body esatto `{definitionVersionId}`; derivare Organization e actor dalla richiesta autenticata.
+      3. Restituire `201` al primo start e `200` al replay; mappare Project/definizione mancanti a `404`, body invalido a `400` e selezione obsoleta/istanza incompatibile a `409` con codici pubblici specifici.
+      4. Provare `401` anonimo, accesso di membership attiva, UUID errati, campi inattesi e contraffazione Organization; ogni fallimento deve lasciare zero nuove istanze.
+      5. Sanitizzare fault imprevisti tramite l'envelope globale senza esporre SQL o dettagli interni.
+
+      ## Verify
+      - Run: `npm --prefix control run test:integration -- project-process-http`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: status, error code e response body sono esatti; `400/401/404/409` non mutano il database.
+
+      ## Done
+      - [ ] AC-1 — Il contratto pubblico consente lo start soltanto a una membership attiva e restituisce `201`.
+      - [ ] AC-2 — La risposta include identità e versione autorevoli dell'istanza.
+      - [ ] AC-3 — Il GET restituisce attività corrente, prossimo passo, prossimo gate e stato.
+      - [ ] AC-4 — Il GET continua a restituire la versione fissata anche quando `availableDefinition` è una revisione successiva.
+
+      ## Blockers
+      TASK-02 fornisce semantica transazionale e proiezione.
+    ref: TASK-03
+  - id: TASK-04
+    title: Integrare il Process Cockpit nella pagina Project
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Permettere l'avvio Inception e rendere leggibili versione, stato, attività e gate nella pagina Project con una gerarchia accessibile.
+
+      ## Read
+      - `docs/mockups/US-013/` — stati vuoto, avvio e istanza attiva approvati
+      - `control/src/web/pages/project.tsx` — caricamenti paralleli, form, alert e sezioni correnti
+      - `control/src/web/api/client.ts` — tipi, error map e metodi Project
+      - `control/test/web/project.test.tsx` — fixture e oracoli React Testing Library
+      - `control/src/web/styles.css` — design system e layout responsive correnti
+
+      ## Change
+      - `control/src/web/api/client.ts` — tipi `ProcessDefinitionVersion`, `ProcessInstance` e metodi get/start
+      - `control/src/web/pages/project.tsx` — stato, azione e cockpit Inception
+      - `control/src/web/styles.css` — sole regole necessarie al componente coerenti con i mockup
+      - `control/test/web/project.test.tsx` — stato vuoto, submit, rendering, pinning, errori e accessibilità
+      - Non aggiungere route designer, editor definizione, transizioni attività/gate, timeline Run o processi diversi da Inception
+
+      ## Steps
+      1. Caricare il contratto processo in parallelo alle informazioni Project e all'Agent Profile, mantenendo status/error region indipendenti.
+      2. Nello stato senza istanza mostrare Inception disponibile con numero versione e azione “Avvia Inception”; inviare soltanto `definitionVersionId`.
+      3. Dopo `201/200`, sostituire il form con una regione nominata “Processo Inception” che espone ID/versione fissata, stato `active`, attività corrente, prossimo passo, prossimo gate e lista gate futuri.
+      4. Quando il catalogo propone una versione più nuova, mostrare la differenza senza suggerire che l'istanza sia migrata o modificabile.
+      5. Presentare errori con `role=alert` e focus; usare testo oltre a colore/icone e preservare il cockpit autorevole su failure.
+      6. Provare payload esatto, stato visibile, oracoli testuali completi, reload v1 con catalogo v2 e assenza di controlli fuori scope.
+
+      ## Verify
+      - Run: `npm --prefix control run test:web -- project`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build:web`
+      - Expect: tutti i test Project preesistenti e nuovi passano; il bundle compila e il cockpit espone gli oracoli accessibili richiesti.
+
+      ## Done
+      - [ ] AC-1 — L'azione visibile avvia Inception e il client invia soltanto la versione selezionata.
+      - [ ] AC-2 — Il cockpit mostra ID e numero della versione fissata.
+      - [ ] AC-3 — Stato, attività corrente, prossimo passo e gate sono osservabili in regioni accessibili.
+      - [ ] AC-4 — Con catalogo v2 e istanza v1 la UI continua a etichettare e mostrare v1 come versione attiva.
+
+      ## Blockers
+      TASK-03 espone il contratto HTTP; i mockup `docs/mockups/US-013/` definiscono la gerarchia visuale.
+    ref: TASK-04
+  - id: TASK-05
+    title: Dimostrare avvio e version pinning nel browser
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Provare end-to-end che un utente avvia Inception e che una pubblicazione successiva non altera l'istanza attiva.
+
+      ## Read
+      - `test/e2e/control-project.spec.ts` — bootstrap, creazione Project e oracoli UI/DB
+      - `test/e2e/control-fixture.mjs` — migrazioni, reset PostgreSQL e helper read-only
+      - `playwright.config.ts` — Chromium e isolamento scenari
+      - `docs/mockups/US-013/` — percorso filmabile e nomi visuali attesi
+
+      ## Change
+      - `test/e2e/control-project-process.spec.ts` — flusso completo AC-1..AC-4
+      - `test/e2e/control-fixture.mjs` — reset tabelle processo, helper snapshot e pubblicazione deterministica v2 per il solo test
+      - Aggiornare aspettative esatte sulle tabelle soltanto per la migrazione `006`
+      - Non mockare Fastify, PostgreSQL o il componente Project e non usare la sola risposta API come proxy dell'esito visibile
+
+      ## Steps
+      1. Estendere il reset rispettando l'ordine delle foreign key e aggiungere helper read-only per snapshot dell'istanza; l'helper che pubblica v2 inserisce una nuova riga senza aggiornare v1.
+      2. Attraversare OIDC/bootstrap, creare un Project reale e verificare che il cockpit proponga Inception v1 senza istanza.
+      3. Avviare dalla UI, attendere `201` e osservare regione processo con ID/versione v1, `active`, attività iniziale, prossimo passo, prossimo gate e gate futuri.
+      4. Fotografare la riga istanza, pubblicare v2 tramite fixture, ricaricare la pagina e verificare che il catalogo segnali v2 mentre il processo conserva snapshot DB e contenuto v1.
+      5. Verificare il replay senza duplicati e mantenere lo scenario deterministico e filmabile; la registrazione resta responsabilità di `archetipo-review`.
+
+      ## Verify
+      - Run: `npx playwright test test/e2e/control-project-process.spec.ts`
+      - Run: `npx playwright test test/e2e/control-project.spec.ts test/e2e/control-project-process.spec.ts`
+      - Expect: il nuovo scenario e i 2 scenari Project baseline passano; esiste una sola istanza e resta legata a v1 dopo la pubblicazione v2.
+
+      ## Done
+      - [ ] AC-1 — Il browser avvia il processo da un Project vuoto e mostra il cockpit attivo.
+      - [ ] AC-2 — UI e snapshot DB espongono lo stesso ID versione v1.
+      - [ ] AC-3 — Il browser osserva stato, attività corrente, prossimo passo e gate reali.
+      - [ ] AC-4 — Dopo pubblicazione v2 e reload, UI e DB provano che l'istanza è ancora v1 e invariata.
+
+      ## Blockers
+      TASK-03 e TASK-04 devono fornire API e UI; Docker/PostgreSQL 17 e Chromium devono essere disponibili.
+    ref: TASK-05
+  - id: TASK-06
+    title: Documentare il modello Product Process versionato
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Aggiornare la Wiki con ownership, linguaggio e conseguenze verificate della Process Instance version-pinned.
+
+      ## Read
+      - `docs/wiki/decisions/project-process-run-model.md` — decisione esistente da estendere
+      - `docs/wiki/overview.md` — capacità implementate e direzione MVP
+      - `docs/wiki/domains/delivery-workflow.md` — confine da non confondere con Product Process
+      - `skills/archetipo-wiki/references/wiki-contract.md` — frontmatter e marker richiesti
+      - Codice e test prodotti da TASK-01..TASK-05 — evidenza repository da citare
+
+      ## Change
+      - `docs/wiki/decisions/project-process-run-model.md` — scelta append-only, alternative, conseguenze e verifica
+      - `docs/wiki/overview.md` — capacità Product Process ora osservata
+      - `docs/wiki/domains/product-process-management.md` — nuovo dominio candidato con ownership, linguaggio, contratti, invarianti, codice e verifica
+      - `docs/wiki/index.md` e `docs/wiki/log.md` — catalogo e traccia generate dal workflow Wiki
+      - Non documentare designer, avanzamento gate, Run orchestration o processi non implementati come capacità corrente
+
+      ## Steps
+      1. Generare/aggiornare le pagine tramite il workflow Wiki mantenendole `generated` fino alla review umana.
+      2. Estendere la decisione con contesto, opzione append-only scelta, alternativa blob-copia, alternativa definizione mutabile, tradeoff e intento di verifica AC-4.
+      3. Descrivere nel nuovo dominio la separazione fra catalogo di sistema, Process Instance Product, Workflow Run Operations e delivery Core.
+      4. Collegare fonti concrete di migrazione, servizio, HTTP, UI, integration ed E2E; preservare tutti i marker di sezione richiesti.
+      5. Rigenerare indice/catalogo e validare copertura senza approvare automaticamente le pagine.
+
+      ## Verify
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run: `archetipo wiki search "Process Instance"`
+      - Expect: validazione `data.ok=true`; decisione, overview e dominio candidato sono reperibili, in stato `generated`, con fonti reali e marker completi.
+
+      ## Done
+      - [ ] AC-2 — La Wiki identifica la versione della definizione come parte dell'identità osservabile dell'istanza.
+      - [ ] AC-3 — Il dominio documenta ownership di stato, attività e gate proiettati.
+      - [ ] AC-4 — La decisione registra append-only, alternative, tradeoff ed evidenza del pinning senza presentare capacità future come correnti.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04 e TASK-05 devono fornire evidenza repository stabile.
+    ref: TASK-06
+  - id: TASK-07
+    title: Eseguire il gate finale di qualità e accettazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Dimostrare che l'intera slice US-013 è verde, non degrada Control e ha tutti i task completati prima della review.
+
+      ## Read
+      - `control/package.json` e `package.json` — suite autorevoli rilevate nella baseline
+      - `control/src/modules/product/process-domain.test.ts` — contratto definizione fail-closed
+      - `control/test/integration/project-process.test.ts` e `project-process-http.test.ts` — persistenza/API
+      - `control/test/web/project.test.tsx` — comportamento UI
+      - `test/e2e/control-project-process.spec.ts` — evidenza browser AC-1..AC-4
+      - `.archetipo/plans/US-013-plan.yaml` — piano e task da chiudere
+
+      ## Change
+      - Nessun file applicativo previsto; correggere soltanto regressioni introdotte da TASK-01..TASK-06 e aggiornare test/evidenze strettamente necessari
+      - Non ampliare scope con designer, migrazione istanze, avanzamento gate, nuovi processi o orchestrazione Run
+
+      ## Steps
+      1. Eseguire test dominio e integration focalizzati, quindi suite web Project.
+      2. Eseguire typecheck, lint, build e intera suite Control; nessun file toccato può avere diagnostiche.
+      3. Eseguire Playwright focalizzato e la regressione Project baseline.
+      4. Validare la Wiki e confermare che le pagine previste restino `generated` per la review.
+      5. Marcare `TASK-07` `DONE` soltanto dopo che tutti i comandi sono verdi.
+      6. Da `/Users/stefanoleli/Project/ARchetipo`, eseguire `archetipo spec show US-013` e confermare che nessun task, incluso questo gate, sia `TODO`; soltanto allora eseguire `archetipo spec review US-013`.
+
+      ## Verify
+      - Run: `npm --prefix control exec vitest run src/modules/product/process-domain.test.ts`
+      - Run: `npm --prefix control run test:integration -- project-process project-process-http`
+      - Run: `npm --prefix control run test:web -- project`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build && npm --prefix control test`
+      - Run: `npx playwright test test/e2e/control-project.spec.ts test/e2e/control-project-process.spec.ts`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run from project root after marking this gate DONE: `archetipo spec show US-013`
+      - Expect: tutti i comandi passano, i 2 scenari Project baseline più US-013 sono verdi, la Wiki è valida e l'envelope finale non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — Evidenza API/UI/browser verde per l'avvio autorizzato.
+      - [ ] AC-2 — Evidenza DB/API/UI/browser verde per identità e versione fissata.
+      - [ ] AC-3 — Evidenza dominio/UI/browser verde per stato, attività e gate osservabili.
+      - [ ] AC-4 — Evidenza integration/browser verde per istanza v1 invariata dopo pubblicazione v2.
+      - [ ] Tutti i task US-013 sono `DONE` nell'ultimo `archetipo spec show US-013`; review non è stata richiesta prima di questa prova.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04, TASK-05 e TASK-06 devono essere completati; US-011 deve essere `DONE`.
+    ref: TASK-07
+  - id: TASK-08
+    title: Riconciliare la decisione di fondazione Control
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Aggiornare `control-foundation` rispetto alla registrazione Product Process nel composition root, lasciando la decisione pronta per una nuova review senza alterarne lo scope architetturale.
+
+      ## Read
+      - `docs/wiki/decisions/control-foundation.md:5` — feedback di review, fonti correnti e decisione accettata
+      - `control/src/server/app.ts` — composizione di `ProcessRepository`, `ProcessService` e route Product Process
+      - `docs/wiki/domains/product-process-management.md` — ownership del nuovo dominio candidato
+      - `skills/archetipo-wiki/references/wiki-contract.md` — lifecycle `generated` e marker delle decisioni
+
+      ## Change
+      - `docs/wiki/decisions/control-foundation.md` — aggiungere le evidenze Product Process pertinenti e delimitare il nuovo modulo interno al modular monolith
+      - Rimuovere il blocco `review`, impostare `status: generated` e preservare `decision_status: accepted`
+      - Non riaprire stack, deployment, security model o alternative già accettate
+
+      ## Steps
+      1. Verificare nel composition root che Product Process è composto nello stesso deployable Control e non introduce un nuovo confine di deployment.
+      2. Aggiungere fonti puntuali per il boundary Product Process e aggiornare decisione, conseguenze o verifica solo dove l'evidenza nuova chiarisce il modular monolith.
+      3. Conservare tutti i marker della decisione e rimuovere i metadati della review precedente.
+      4. Impostare la pagina a `generated` senza approvarla automaticamente.
+
+      ## Verify
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki affected --file control/src/server/app.ts`
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki search "Fondazione di ARchetipo Control"`
+      - Expect: `decisions/control-foundation` resta collegata al composition root, descrive Product Process come modulo interno e risulta `generated` senza blocco `review`.
+
+      ## Done
+      - [ ] AC-1 — La decisione identifica la route di avvio come capacità Product composta nel Control esistente, senza attribuirle un nuovo boundary.
+      - [ ] AC-3 — La verifica documenta dove il Process Cockpit entra nel deployable Control.
+      - [ ] Il commento `docs/wiki/decisions/control-foundation.md:5` è risolto con evidenza aggiornata e stato `generated`.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Riconciliare Identity & Policy con i tipi processo condivisi
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Rinnovare l'evidenza di `identity-and-policy` dopo l'estensione dei tipi Kysely condivisi, mantenendo esplicito che Identity non possiede definizioni o istanze di processo.
+
+      ## Read
+      - `docs/wiki/domains/identity-and-policy.md:5` — feedback di review, ownership e fonti correnti
+      - `control/src/modules/identity/repository.ts` — interfaccia database condivisa e nuove tabelle processo
+      - `control/src/modules/product/process-repository.ts` — repository che possiede l'accesso alle tabelle processo
+      - `docs/wiki/domains/product-process-management.md` — ownership Product autorevole
+
+      ## Change
+      - `docs/wiki/domains/identity-and-policy.md` — riconciliare fonte persistence, ownership, codice e verifica con i tipi condivisi
+      - Rimuovere il blocco `review` e impostare `status: generated`
+      - Non attribuire a Identity & Policy catalogo Inception, Process Instance, stato, attività o gate
+
+      ## Steps
+      1. Distinguere l'interfaccia Kysely condivisa dall'ownership applicativa delle nuove tabelle.
+      2. Aggiornare le sezioni necessarie per dichiarare che Identity fornisce membership attiva e Organization, mentre Product Process possiede processo e persistenza.
+      3. Aggiornare le fonti puntuali senza introdurre riferimenti aggregati superflui.
+      4. Rimuovere i metadati review e lasciare la pagina `generated`.
+
+      ## Verify
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki affected --file control/src/modules/identity/repository.ts`
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki search "Identity & Policy Process Instance"`
+      - Expect: la pagina è `generated`, cita l'evidenza condivisa e continua a escludere esplicitamente Process dall'ownership Identity.
+
+      ## Done
+      - [ ] AC-1 — La documentazione conserva membership attiva e Organization come input di autorizzazione, non come ownership del processo.
+      - [ ] AC-2 — I tipi della versione persistita sono attribuiti al repository Product Process, non a Identity.
+      - [ ] Il commento `docs/wiki/domains/identity-and-policy.md:5` è risolto senza ampliare il bounded context candidato.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Documentare l'integrazione del Process Cockpit nel Project
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Rendere esplicito in `project-and-workspace` come il Process Cockpit si integra nella pagina Project senza trasferire ownership del processo al dominio Workspace.
+
+      ## Read
+      - `docs/wiki/domains/project-and-workspace.md:5` — feedback di review, contratti e fonti correnti
+      - `control/src/web/pages/project.tsx` — composizione visiva del Process Cockpit
+      - `control/test/web/project.test.tsx` — oracoli accessibili di avvio, stato e version pinning
+      - `docs/wiki/domains/product-process-management.md` — ownership e contratti del processo
+
+      ## Change
+      - `docs/wiki/domains/project-and-workspace.md` — aggiornare fonti, contratti, flussi, codice e relazioni pertinenti
+      - Rimuovere il blocco `review` e impostare `status: generated`
+      - Non assegnare a Project & Workspace lifecycle, definizione, attività o gate del Product Process
+
+      ## Steps
+      1. Descrivere la pagina Project come punto di composizione UI che presenta dati Project, Workspace, Agent Profile e Process Cockpit tramite contratti distinti.
+      2. Documentare l'avvio dal Project e gli oracoli visibili, collegando il dominio Product Process per ownership e invarianti.
+      3. Aggiornare le fonti con API/test processo solo quando provano l'integrazione, evitando duplicazione del modello di processo.
+      4. Rimuovere i metadati review e lasciare la pagina `generated`.
+
+      ## Verify
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki affected --file control/src/web/pages/project.tsx --file control/test/web/project.test.tsx`
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki search "Process Cockpit Project Workspace"`
+      - Expect: `domains/project-and-workspace` è `generated`, rende osservabile l'integrazione e rinvia a Product Process per ownership di versione, attività e gate.
+
+      ## Done
+      - [ ] AC-1 — La pagina documenta l'azione di avvio disponibile nel Project.
+      - [ ] AC-3 — Stato, attività corrente e prossimo gate sono descritti come proiezione del Process Cockpit.
+      - [ ] AC-4 — La distinzione tra versione disponibile e versione fissata resta attribuita al dominio Product Process.
+      - [ ] Il commento `docs/wiki/domains/project-and-workspace.md:5` è risolto e la pagina è pronta per review.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Riconciliare la reference PRD con la slice US-013
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-08
+      - TASK-09
+      - TASK-10
+    body: |-
+      ## Objective
+      Aggiornare l'evidenza aggregata della reference PRD affinché distingua la capacità US-013 osservata dalle capacità Product ancora prospettiche.
+
+      ## Read
+      - `docs/wiki/references/prd.md:5` — feedback di review, fonti aggregate e stato osservato corrente
+      - `docs/PRD.md` — intenzione di prodotto autorevole
+      - `docs/wiki/domains/product-process-management.md` — capacità processo effettivamente osservata
+      - `test/e2e/control-project-process.spec.ts` — evidenza browser AC-1..AC-4
+
+      ## Change
+      - `docs/wiki/references/prd.md` — aggiornare lo stato osservato fino a US-013 e delimitare capacità Product non ancora implementate
+      - Rimuovere il blocco `review` e impostare `status: generated`
+      - Non riscrivere il testo PRD incorporato né presentare designer, avanzamento, board o Run orchestration come consegnati
+
+      ## Steps
+      1. Estendere soltanto la sezione di stato osservato con la Process Definition Inception versionata, l'istanza fissata e il cockpit verificato.
+      2. Collegare le fonti aggregate `control/` e `test/e2e/` alle evidenze puntuali del dominio Product Process.
+      3. Mantenere esplicita la distanza tra FR-038/FR-039 parzialmente materializzati e le capacità fuori scope.
+      4. Rimuovere i metadati review e lasciare la reference `generated`.
+
+      ## Verify
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki affected --file control/src/modules/product/process-service.ts --file test/e2e/control-project-process.spec.ts`
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki search "PRD ARchetipo Process Instance"`
+      - Expect: `references/prd` è `generated`, include US-013 nello stato osservato e conserva come future le capacità non dimostrate.
+
+      ## Done
+      - [ ] AC-2 — La reference riconosce la versione fissata come capacità osservata.
+      - [ ] AC-3 — La reference riconosce il cockpit con stato, attività e gate senza sovrastimare il lifecycle.
+      - [ ] AC-4 — La reference distingue versioning immutabile implementato e migrazione di istanze fuori scope.
+      - [ ] Il commento `docs/wiki/references/prd.md:5` è risolto con evidenza aggiornata.
+
+      ## Blockers
+      TASK-08, TASK-09 e TASK-10 devono avere stabilizzato i confini documentali correlati.
+    ref: TASK-11
+  - id: TASK-12
+    title: Validare il rework Wiki e riaprire il gate di review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+    body: |-
+      ## Objective
+      Provare che tutte le pagine affette da US-013 sono coerenti, non stale, strutturalmente valide e pronte per la review senza invalidare le evidenze applicative già completate.
+
+      ## Read
+      - `docs/wiki/index.md` — catalogo e stati derivati
+      - `docs/wiki/log.md` — traccia lifecycle della Wiki
+      - `docs/wiki/decisions/control-foundation.md` — correzione TASK-08
+      - `docs/wiki/domains/identity-and-policy.md` — correzione TASK-09
+      - `docs/wiki/domains/project-and-workspace.md` — correzione TASK-10
+      - `docs/wiki/references/prd.md` — correzione TASK-11
+      - `.archetipo/plans/US-013-plan.yaml` — task preservati e nuovi task di rework
+
+      ## Change
+      - `docs/wiki/index.md` — rigenerare il catalogo dopo le correzioni
+      - `docs/wiki/log.md` — aggiornare soltanto se richiesto dal workflow Wiki
+      - Correggere esclusivamente finding Wiki causati dalle modifiche US-013; nessuna modifica applicativa o nuova capacità
+
+      ## Steps
+      1. Eseguire `git diff --check` e correggere ogni errore di whitespace nei file Wiki modificati.
+      2. Eseguire `archetipo wiki catalog`, quindi `archetipo wiki affected` con tutti i file applicativi e test introdotti o modificati da US-013.
+      3. Eseguire `archetipo wiki status` e verificare che nessuna delle quattro pagine target sia `stale` e che tutte restino `generated`.
+      4. Eseguire `archetipo wiki validate --profile bootstrap`; riparare ogni finding `severity: error` e ripetere catalogo, affected, status e validate.
+      5. Non rieseguire le suite runtime AC-1..AC-4: il rework modifica soltanto Markdown e le relative evidenze sono già verdi e preservate in TASK-01..TASK-07.
+      6. Marcare `TASK-12` `DONE` solo dopo i gate Wiki; poi eseguire `archetipo spec show US-013` dal project root e confermare che nessun task sia `TODO`. Soltanto allora richiedere la review.
+
+      ## Verify
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `git diff --check`
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki catalog`
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki affected --file control/src/server/app.ts --file control/src/modules/identity/repository.ts --file control/src/web/pages/project.tsx --file control/test/web/project.test.tsx --file control/migrations/006_process_inception.sql --file control/src/modules/product/process-domain.ts --file control/src/modules/product/process-repository.ts --file control/src/modules/product/process-service.ts --file control/src/modules/product/process-http.ts --file control/src/web/api/client.ts --file test/e2e/control-project-process.spec.ts`
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki status`
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo wiki validate --profile bootstrap`
+      - Run from project root after marking this gate DONE: `archetipo spec show US-013`
+      - Expect: `git diff --check` è verde; affected include le pagine pertinenti ma nessuna target resta stale; status mostra le quattro correzioni in `generated`; validate restituisce `kind=validation_result`, `data.ok=true`; lo spec non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — La Wiki collega l'avvio autorizzato al boundary Product e alla membership senza confondere ownership.
+      - [ ] AC-2 — Versione della definizione e persistenza sono documentate con fonti reali e coerenti.
+      - [ ] AC-3 — Process Cockpit, attività e gate sono rintracciabili nei domini corretti.
+      - [ ] AC-4 — Immutabilità/version pinning e relativo limite di scope restano verificabili nella decisione, nel dominio e nella reference.
+      - [ ] Le quattro pagine indicate dal reviewer sono `generated`, nessuna è `stale` e il profilo bootstrap è valido.
+      - [ ] Tutti i task US-013 sono `DONE` nell'ultimo `archetipo spec show US-013`; review non è stata richiesta prima di questa prova.
+
+      ## Blockers
+      TASK-08, TASK-09, TASK-10 e TASK-11 devono essere completati.
+    ref: TASK-12

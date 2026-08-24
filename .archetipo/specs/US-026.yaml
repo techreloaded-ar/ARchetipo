@@ -1,0 +1,46 @@
+schema: archetipo/spec/v2
+code: US-026
+title: Inizializzare un workspace con il Template Fabbrica del software
+epic:
+  code: EP-004
+  title: Workspace predisposti ai Template
+priority: MEDIUM
+points: 3
+status: DONE
+scope: MVP
+body: |-
+  #### US-026: Inizializzare un workspace con il Template Fabbrica del software
+
+  **Epic:** EP-004 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come utilizzatore che avvia un workspace ARchetipo,
+  voglio inizializzarlo con il Template Fabbrica del software,
+  così da ricevere il processo e le skill attuali senza configurarle singolarmente.
+
+  **Dimostrazione**
+  Partendo da un repository non inizializzato, il revisore sceglie il Template Fabbrica del software e osserva la configurazione, le skill e gli stati necessari disponibili nel workspace. Il revisore inizializza poi ARchetipo senza indicare un Template e osserva lo stesso comportamento predefinito compatibile con l'uso attuale.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — L'inizializzazione con il Template Fabbrica del software rende disponibili le skill previste dal processo corrente.
+  - [ ] AC-2 — Il workspace conserva identificativo e versione del Template selezionato.
+  - [ ] AC-3 — L'inizializzazione senza selezione esplicita produce il comportamento attuale della Fabbrica del software.
+  - [ ] AC-4 — Un identificativo di Template sconosciuto viene rifiutato senza lasciare un'inizializzazione parziale.
+
+  **Fuori ambito**
+  Secondo Template, marketplace, aggiornamento automatico dei Template ed ereditarietà tra Template.
+
+  ## Contesto Wiki
+  Nessuna Wiki canonica è ancora presente nel repository; installazione, skill supportate e configurazione corrente sono documentate nel README e in `AGENTS.md`.
+history:
+  - status: TODO
+    at: "2026-08-14T23:13:08Z"
+  - status: PLANNED
+    at: "2026-08-16T08:59:45Z"
+  - status: IN PROGRESS
+    at: "2026-08-16T09:21:19Z"
+  - status: REVIEW
+    at: "2026-08-16T09:34:38Z"
+  - status: DONE
+    at: "2026-08-16T09:36:19Z"

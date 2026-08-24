@@ -1,0 +1,444 @@
+schema: archetipo/plan/v2
+spec_code: US-005
+body: |-
+  # US-005: Eseguire una Workflow Run tipizzata — Piano di implementazione
+
+  **Generato da:** ARchetipo Planning Team
+  **Data:** 2026-07-24
+
+  ---
+
+  ## Spec
+
+  **Epica:** EP-001 — ARchetipo Agent locale e Run Protocol
+  **Priorità:** HIGH | **Punti:** 5
+
+  **Storia utente**
+  Come responsabile di processo, voglio eseguire un workflow identificato e versionato con input verificati, così da ottenere un risultato ripetibile che possa avanzare un processo autorizzato.
+
+  **Criteri di accettazione**
+  - AC-1 — Una Workflow Run registra identificatore e versione del workflow eseguito.
+  - AC-2 — Gli input non conformi sono rifiutati prima dell'avvio dell'agente.
+  - AC-3 — L'output conforme è verificato e associato alla Run.
+  - AC-4 — Solo una Workflow Run autorizzata può dichiarare una transizione di processo.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Estendere il Run Protocol locale già introdotto per le Session Run con una modalità `workflow` guidata da una definizione di progetto immutabile per coppia identificatore/versione. Il comando pubblico sarà `archetipo-agent workflow run <workflow-id>@<version> --input <file-json>`: il profilo modello, la policy fail-closed, gli schemi di input/output, il percorso relativo dell'artefatto e l'eventuale dichiarazione di transizione provengono dalla definizione versionata, non dall'input utente o dall'output del modello.
+
+  - Le definizioni risiedono in `.pi/workflows/<workflow-id>/<version>.json`, dichiarano `schema: archetipo-agent/workflow/v1` e vengono caricate con controlli su root canonico, segmenti di path sicuri, campi ammessi e coerenza `id`/`version` con il percorso.
+  - `ajv` 8, fissato come dipendenza diretta dell'Agent, valida JSON Schema Draft 2020-12. Input e definizione sono validati prima di creare journal o adapter; in caso di errore il comando termina non zero senza avviare Pi e senza creare l'artefatto atteso.
+  - Il journal `archetipo-agent/run/v1` diventa una union discriminata da `mode`, mantenendo leggibili i record `session` esistenti. Una Workflow Run registra identità/versione, digest dell'input senza contenuto grezzo, riferimento e digest dell'output verificato, stato di verifica e l'eventuale dichiarazione di transizione autorizzata.
+  - L'orchestrazione crea e avvia la Run soltanto dopo il preflight, usa la policy e il profilo della definizione, attende la chiusura del runtime Pi, valida l'artefatto reale contro lo schema e solo allora assegna `completed`. Output assente o non conforme produce `failed` e non può dichiarare transizioni.
+  - L'autorità è fail-closed: una dichiarazione di transizione viene copiata nel record terminale soltanto dalla sezione `authorization.processTransition` della definizione caricata e soltanto dopo output conforme. Input, prompt, risposta e artefatto non possono aggiungere o modificare tale autorità; questa spec registra la dichiarazione ma non modifica direttamente lo stato del Core o di una Process Instance.
+
+  ### Decisioni architetturali
+
+  La scelta tra definizioni versionate nel progetto e contratti forniti ad hoc dalla CLI incide sul modello persistente e sul confine di autorizzazione. Si adotta il file versionato nel progetto perché è ispezionabile, ripetibile e può essere trattato come fonte autorizzativa locale; un contratto passato dall'utente a ogni invocazione consentirebbe invece di auto-attribuirsi una transizione. La decisione estende gli ADR esistenti `decisions/governed-run-modes` e `decisions/project-process-run-model`; non serve un nuovo ID perché entrambi hanno già stabilito modalità, autorità e separazione Run/processo. Il trade-off è che la fiducia nel file di progetto resta locale all'MVP e dovrà essere sostituita da firma/policy Control in una fase successiva.
+
+  ## Baseline
+
+  | Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `npm run test:agent` | Superato: 62 test, 0 failure | I test nuovi devono preservare Session Run, profili, governance, journal e compatibilità CLI. |
+  | `npm run test:agent-run-smoke` | Superato: AC-1..AC-4 della Session Run e controllo secret leakage verdi | Lo smoke workflow riusa il provider deterministico e deve lasciare verde questo percorso di regressione. |
+  | `find agent test/e2e test/npm -name '*.mjs' -type f -exec node --check {} \;` | Superato senza output | Ogni modulo aggiunto o modificato deve restare privo di errori sintattici. |
+
+  Prerequisiti ambiente: Node.js `>=22.19`, npm install coerente con `package-lock.json`, Go disponibile per costruire il Core negli smoke e Python con supporto PTY soltanto per gli smoke TUI già adottati. `golangci-lint` è richiesto dal gate CI finale; se assente va installato con il comando indicato in `AGENTS.md`.
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |
+  |---|---|---|---|---|
+  | AC-1 | Progetto temporaneo con definizione `sample@1.0.0` e input valido | Integrazione CLI + E2E subprocess | `runs show` stampa modalità Workflow Run, ID `sample`, versione `1.0.0` e il journal persistito contiene la stessa coppia | TASK-06 |
+  | AC-2 | Stessa definizione, input privo di un campo `required`, sentinel adapter e artefatto assente | Unit contract + E2E subprocess | Exit non zero e diagnostica strutturata; factory adapter non invocata, nessun journal nuovo e nessun artefatto creato | TASK-02, TASK-06 |
+  | AC-3 | Provider locale deterministico produce un JSON conforme nel percorso dichiarato | Integrazione CLI + E2E subprocess | Run terminale `completed`, output `verified`, path relativo e digest SHA-256 coincidono con i byte dell'artefatto | TASK-04, TASK-06 |
+  | AC-4 | Due definizioni equivalenti, una con e una senza `authorization.processTransition` | Unit store/orchestrator + E2E subprocess | Solo il record della definizione autorizzata espone la dichiarazione dopo verifica; input/output che tentano di iniettarla sono ignorati o rifiutati | TASK-04, TASK-06 |
+
+  ## Strategia di test
+
+  La strategia protegge separatamente il preflight, il journal persistente e il percorso completo visibile dall'utente, mantenendo reali i confini responsabili degli esiti di accettazione.
+
+  - Test unitari di loader e validatore con definizioni/input validi, schema non valido, path traversal, mismatch id/versione, campi sensibili/sconosciuti e messaggi che non riflettono valori segreti.
+  - Test del Run Store su record `session` preesistenti e record `workflow`, transizioni illegali, output non verificato, digest, associazione artefatto e autorità di transizione fail-closed.
+  - Test d'integrazione `runCli` con filesystem reale e adapter iniettato soltanto al confine Pi, così preflight, journal, lettura dell'artefatto e presenter restano reali.
+  - Smoke subprocess con Core costruito da sorgente e provider locale deterministico: percorso valido, input mancante, output verificato e confronto degli artefatti prima/dopo il rifiuto.
+  - Nessun browser E2E: la superficie è CLI/TUI e non attraversa una UI web. Lo smoke subprocess/PTY dimostra direttamente tutti gli oracoli interessati senza introdurre un framework browser.
+
+  ### Test E2E — Simulazione utente
+
+  **Framework:** harness Node.js `spawn`/`spawnSync` e provider HTTP deterministico già usato da `test/e2e/agent-run-smoke.mjs`
+  **Video demo:** filmabile; la registrazione o l'eventuale skip appartengono ad `archetipo-review`.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | Workflow valido | Il revisore prepara definizione `sample@1.0.0` e input valido, esegue il comando, lascia che l'Agent produca il JSON, quindi consulta la Run e osserva identità, versione, stato, output verificato e dichiarazione autorizzata. |
+  | Input non valido | Il revisore elimina un campo obbligatorio e ripete il comando; osserva il rifiuto prima dell'avvio e verifica che journal e artefatto atteso non siano stati creati. |
+  | Workflow senza autorità | Il revisore esegue una definizione priva di autorizzazione alla transizione e verifica che output o input non possano far comparire una dichiarazione nel record. |
+
+  ## Impatto Wiki
+
+  ```yaml
+  wiki_impact:
+    read: [decisions/governed-run-modes, decisions/project-process-run-model, domains/delivery-workflow]
+    update_after_acceptance: [decisions/governed-run-modes, decisions/project-process-run-model, engineering/code-map, operations/development, overview]
+    create: []
+  ```
+
+  _Piano generato tramite ARchetipo Planning — 2026-07-24_
+tasks:
+  - id: TASK-01
+    title: Definire e caricare il contratto Workflow versionato
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Caricare una definizione `.pi/workflows/<id>/<version>.json` e un input JSON attraverso un contratto immutabile, tipizzato e confinato al progetto.
+
+      ## Read
+      - `agent/src/agent-config.mjs` — pattern di validazione fail-closed, errori sicuri e oggetti immutabili
+      - `agent/src/project-context.mjs` — root canonico e confine filesystem
+      - `agent/package.json` e `package-lock.json` — dipendenze dirette e vincolo Node
+      - `docs/wiki/decisions/governed-run-modes.md` — autorità e differenza workflow/session
+
+      ## Change
+      - `agent/src/workflow-definition.mjs` — loader della definizione, parser del riferimento `<id>@<version>`, validazione dei campi e path sicuri
+      - `agent/src/json-schema-validator.mjs` — wrapper Ajv Draft 2020-12 con errori deterministici e redatti
+      - `agent/package.json` e `package-lock.json` — aggiungere `ajv` 8 con versione esatta
+      - Non leggere workflow fuori da `.pi/workflows`, non accettare autorità dall'input e non modificare `sessionPolicy`
+
+      ## Steps
+      1. Definire `schema: archetipo-agent/workflow/v1` con campi ammessi: id, version, profileId, policy fail-closed, inputSchema, output con schema e artifactPath relativo, promptTemplate e `authorization.processTransition` opzionale.
+      2. Validare il riferimento CLI e i segmenti id/versione prima di comporre il path; risolvere realpath/parent e rifiutare traversal, symlink escape e mismatch tra path e contenuto.
+      3. Validare la struttura della definizione senza riflettere valori sensibili negli errori e congelare profondamente il risultato.
+      4. Caricare e parsare l'input JSON, validarlo contro `inputSchema` con Ajv prima di restituire il preflight, e produrre un digest SHA-256 senza conservare l'input grezzo.
+      5. Validare `artifactPath` come path relativo confinato al root e mantenere separata l'eventuale autorizzazione dalla parte controllabile dal modello.
+
+      ## Verify
+      - Run: `node --test agent/test/workflow-definition.test.mjs`
+      - Run: `node --check agent/src/workflow-definition.mjs && node --check agent/src/json-schema-validator.mjs`
+      - Expect: loader e validatore accettano la fixture valida e rifiutano schema/input/path/mismatch non validi prima di qualsiasi invocazione Agent, senza secret leakage.
+
+      ## Done
+      - [ ] AC-1 — Il contratto restituisce identificatore e versione esatti dalla definizione versionata.
+      - [ ] AC-2 — Un input privo di campo obbligatorio genera un errore di preflight prima di esporre dati al runtime.
+      - [ ] AC-4 — L'autorità di transizione può provenire soltanto dalla sezione autorizzativa della definizione.
+
+      ## Blockers
+      US-002 deve aver consegnato root di progetto e runtime Agent; è in REVIEW con tutti i task DONE.
+    ref: TASK-01
+  - id: TASK-02
+    title: Provare il preflight e il confine autorizzativo
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Dimostrare con fixture filesystem reali che definizione e input vengono validati in modo fail-closed prima dell'avvio dell'agente.
+
+      ## Read
+      - `agent/test/agent-config.test.mjs` — fixture temporanee, immutabilità e secret leakage
+      - `agent/test/project-context.test.mjs` — casi symlink e root canonico
+      - `agent/src/workflow-definition.mjs` — contratto e codici errore introdotti da TASK-01
+
+      ## Change
+      - `agent/test/workflow-definition.test.mjs` — test di contratto per definizione, schema, input, path e autorità
+      - Non simulare come successo un semplice mock Ajv e non testare dettagli interni che nascondano il filesystem responsabile del confine
+
+      ## Steps
+      1. Creare fixture valide con schema input/output e autorizzazione di transizione, verificando identità, versione, digest e immutabilità.
+      2. Coprire campo required mancante, JSON malformato, schema non supportato, definizione con campi sconosciuti, mismatch id/versione e artifact path fuori root.
+      3. Usare symlink reali dove supportati per provare che definizione e artefatto non evadono il progetto.
+      4. Inserire sentinel sensibili nei casi invalidi e asserire che messaggi/errori serializzati non li contengano.
+      5. Provare che proprietà di transizione presenti nell'input non alterano `authorization.processTransition`.
+
+      ## Verify
+      - Run: `node --test agent/test/workflow-definition.test.mjs`
+      - Expect: tutti i casi passano; il caso AC-2 fallisce nel preflight e il caso AC-4 conserva l'autorità solo dalla definizione.
+
+      ## Done
+      - [ ] AC-1 — Il test osserva id/versione della fixture dal contratto caricato.
+      - [ ] AC-2 — Il test osserva un errore prima che una factory Agent sentinel possa essere invocata.
+      - [ ] AC-4 — Il test prova che input non autorizzato non può dichiarare una transizione.
+
+      ## Blockers
+      TASK-01 deve definire loader, schema e codici errore.
+    ref: TASK-02
+  - id: TASK-03
+    title: Estendere il journal alle Workflow Run
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Persistire record `workflow` con identità, input redatto, output verificato e dichiarazione autorizzata senza rompere i record `session` esistenti.
+
+      ## Read
+      - `agent/src/run-store.mjs` — schema v1, transizioni atomiche, namespace progetto e redazione
+      - `agent/test/run-store.test.mjs` — invarianti, reopen, idempotenza e permessi file
+      - `agent/src/run-presenter.mjs` — campi pubblici oggi disponibili
+
+      ## Change
+      - `agent/src/run-store.mjs` — union discriminata `session|workflow`, creazione workflow e finalizzazione verificata
+      - `agent/test/run-store.test.mjs` — casi workflow e regressione byte/lettura session
+      - Non persistere input/output grezzi, prompt, credenziali o payload di tool; non consentire `completed` workflow senza output conforme
+
+      ## Steps
+      1. Mantenere `archetipo-agent/run/v1` e la lettura dei record session correnti, applicando campi mode-specific con allowlist separate.
+      2. Aggiungere a `create` un percorso workflow esplicito che registra `workflow.id`, `workflow.version`, digest input, profilo e policy.
+      3. Aggiungere una finalizzazione atomica che associa output relativo, digest e `verified: true` prima della transizione `running -> completed`; output assente/non conforme deve terminare `failed` senza associazione verificata.
+      4. Copiare `transitionDeclaration` soltanto dall'autorità immutabile conservata all'avvio e soltanto nella finalizzazione conforme; nessun metodo pubblico deve accettarla dall'output.
+      5. Conservare permessi `0600`, namespace esterno al repository, scrittura atomica, validazione on-read e idempotenza.
+
+      ## Verify
+      - Run: `node --test agent/test/run-store.test.mjs`
+      - Expect: record session esistenti restano validi; workflow non può completarsi senza output verificato e solo quello autorizzato espone una dichiarazione.
+
+      ## Done
+      - [ ] AC-1 — Il record persistito conserva workflow id/versione e li restituisce dopo reopen.
+      - [ ] AC-3 — Il completamento richiede path, digest e stato verified associati alla Run.
+      - [ ] AC-4 — La transizione compare solo nella finalizzazione autorizzata e conforme.
+
+      ## Blockers
+      TASK-01 deve fornire il contratto workflow canonico.
+    ref: TASK-03
+  - id: TASK-04
+    title: Eseguire e finalizzare il workflow dalla CLI
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Objective
+      Eseguire `archetipo-agent workflow run <id>@<version> --input <file>` con preflight, runtime Pi governato e verifica reale dell'artefatto prima del completamento.
+
+      ## Read
+      - `agent/src/cli.mjs` — parser, lifecycle Session Run, error handling e injection seam
+      - `agent/src/pi-adapter.mjs` — profilo selezionato, initial message, governance e dispose
+      - `agent/src/run-governance-extension.mjs` — terminalizzazione e policy tool
+      - `agent/src/run-presenter.mjs` — sommario consultabile
+      - `agent/src/workflow-definition.mjs` e `agent/src/run-store.mjs` — contratti dei TASK-01 e TASK-03
+
+      ## Change
+      - `agent/src/workflow-runner.mjs` — orchestratore preflight/esecuzione/verifica/finalizzazione
+      - `agent/src/cli.mjs` — sintassi workflow, diagnostiche stabili e percorso `runs show` mode-aware
+      - `agent/src/pi-adapter.mjs` e `agent/src/run-governance-extension.mjs` — modalità workflow senza terminalizzazione anticipata, conservando la governance dei tool
+      - `agent/src/run-presenter.mjs` — identità/versione/output/verifica/transizione dichiarata
+      - Non eseguire `archetipo spec ...`, non avanzare una Process Instance e non riusare `sessionPolicy` al posto della policy versionata del workflow
+
+      ## Steps
+      1. Estendere il parser con una grammatica non ambigua e rifiutare opzioni duplicate, input vuoto o riferimento senza versione.
+      2. Eseguire loader e validazione input prima di risolvere agentDir, creare store, creare adapter o toccare l'artefatto.
+      3. Creare il record workflow, selezionare il profilo dichiarato, comporre un initial message deterministico con input canonico e istruzione sul solo artifactPath autorizzato, quindi avviare Pi con la policy della definizione.
+      4. Impedire alla governance Pi di marcare `completed` alla chiusura: l'orchestratore legge l'artefatto confinato al root, valida JSON e outputSchema, calcola il digest e finalizza il journal.
+      5. In caso di runtime/output assente/non conforme, marcare `failed`, non associare output verified e non dichiarare transizioni; garantire dispose una sola volta.
+      6. Rendere `runs show` mode-aware e accessibile, mostrando id/versione, stato, output verificato e presenza/assenza della dichiarazione senza contenuti grezzi.
+
+      ## Verify
+      - Run: `node --test agent/test/cli.test.mjs agent/test/run-presenter.test.mjs agent/test/run-store.test.mjs agent/test/workflow-definition.test.mjs`
+      - Run: `node --check agent/src/cli.mjs && node --check agent/src/workflow-runner.mjs && node --check agent/src/pi-adapter.mjs && node --check agent/src/run-governance-extension.mjs && node --check agent/src/run-presenter.mjs`
+      - Expect: percorso valido completa solo dopo verifica; input invalido non invoca adapter/store; output invalido fallisce; presenter mostra il contratto pubblico senza segreti.
+
+      ## Done
+      - [ ] AC-1 — CLI e `runs show` espongono id/versione della definizione eseguita.
+      - [ ] AC-2 — Il test di integrazione osserva zero invocazioni di store/adapter per input non conforme.
+      - [ ] AC-3 — Il test legge l'artefatto reale e confronta path/digest/verified con il record.
+      - [ ] AC-4 — Solo una definizione autorizzata e completata espone la dichiarazione; nessuno stato Core viene mutato.
+
+      ## Blockers
+      TASK-02 deve stabilizzare il preflight e TASK-03 il journal workflow.
+    ref: TASK-04
+  - id: TASK-05
+    title: Documentare il comando e preservare il packaging Agent
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+      Distribuire e spiegare il contratto Workflow Run con dipendenze complete e senza alterare l'installazione opzionale dell'Agent.
+
+      ## Read
+      - `agent/README.md` — configurazione, Session Run e comandi correnti
+      - `test/npm/agent-packaging.test.mjs` — file e dipendenze del package staged
+      - `scripts/build-npm.mjs` e `test/e2e/agent-installation-smoke.mjs` — staging/installazione offline
+      - `agent/package.json` — file inclusi ed engine Node
+
+      ## Change
+      - `agent/README.md` — formato definizione, comando valido/invalido, semantica output e limite dichiarazione/transizione
+      - `test/npm/agent-packaging.test.mjs` — presenza moduli workflow e dipendenza Ajv fissata
+      - `test/e2e/agent-installation-smoke.mjs` e script di staging soltanto se necessario per risolvere la nuova dipendenza nel test offline
+      - Non documentare designer, catalogo aziendale, Process Instance persistita o autorità Control non implementati
+
+      ## Steps
+      1. Documentare struttura e percorso della definizione con un esempio minimale coerente allo schema reale.
+      2. Mostrare il comando con riferimento id@version e input file, più l'errore preflight senza artefatto.
+      3. Spiegare che output verified consente solo la dichiarazione autorizzata e non una mutazione automatica del Core.
+      4. Aggiornare i test di packaging per i nuovi moduli e Ajv diretto, mantenendo Core-only e install/uninstall Agent.
+      5. Verificare che il tarball non includa fixture, journal o dati locali.
+
+      ## Verify
+      - Run: `npm run test:agent-packaging`
+      - Run: `npm run test:agent-install-smoke`
+      - Expect: packaging e installazione terminano 0, includono il runtime workflow e preservano i casi Core-only/Core+Agent/rimozione senza dati locali.
+
+      ## Done
+      - [ ] AC-1 — README e package distribuito espongono il riferimento workflow versionato.
+      - [ ] AC-2 — README descrive il rifiuto pre-esecuzione con nessun artefatto.
+      - [ ] AC-3 — README distingue output prodotto da output verificato e associato.
+      - [ ] AC-4 — README dichiara esplicitamente che l'autorità non arriva da input/output e non avanza il Core in questa spec.
+
+      ## Blockers
+      TASK-04 deve stabilizzare sintassi e semantica pubbliche.
+    ref: TASK-05
+  - id: TASK-06
+    title: Automatizzare l'accettazione della Workflow Run
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Produrre evidenza subprocess ripetibile per workflow valido, input rifiutato e autorità di transizione senza dipendere da provider esterni.
+
+      ## Read
+      - `test/e2e/agent-run-smoke.mjs` — provider HTTP deterministico, PTY, secret sentinel e snapshot Core
+      - `agent/test/cli.test.mjs` — integrazione CLI con filesystem e dipendenze iniettate
+      - `agent/src/workflow-runner.mjs` — confine di preflight e finalizzazione
+      - `package.json` — naming dei comandi smoke
+
+      ## Change
+      - `test/e2e/agent-workflow-smoke.mjs` — progetto temporaneo, definizioni/input, provider deterministico e oracoli end-to-end
+      - `agent/test/cli.test.mjs` — integrazione mirata dei percorsi valido, output invalido e preflight
+      - `package.json` — aggiungere `test:agent-workflow-smoke`
+      - Non usare rete esterna, credenziali reali, stato npm globale o mock del loader/output store responsabile degli AC
+
+      ## Steps
+      1. Costruire il Core da sorgente, inizializzare un progetto Pi e configurare profilo/provider locale come nello smoke Session Run.
+      2. Creare `sample@1.0.0` con input/output schema, artifact path e transizione autorizzata; guidare Pi affinché scriva un output JSON conforme.
+      3. Eseguire il comando reale e `runs show`, quindi asserire id/versione, `completed`, `verified`, path/digest e dichiarazione autorizzata.
+      4. Ripetere con input privo del campo required e fotografare agentDir/journal/artefatto prima e dopo; asserire exit non zero, nessuna richiesta al provider e byte invariati.
+      5. Eseguire una definizione senza authorization mentre input/output contengono campi di transizione e provare che il record non dichiara alcun avanzamento.
+      6. Cercare la credential sentinel in stdout/stderr, transcript Pi, journal, artefatti e diagnostiche.
+
+      ## Verify
+      - Run: `npm run test:agent`
+      - Run: `npm run test:agent-workflow-smoke`
+      - Run: `npm run test:agent-run-smoke`
+      - Expect: tutti i comandi terminano 0; lo smoke stampa evidenze AC-1..AC-4, il provider non riceve richieste nel caso invalido e la regressione Session Run resta verde.
+
+      ## Done
+      - [ ] AC-1 — Il subprocess osserva e rilegge `sample@1.0.0` nel journal.
+      - [ ] AC-2 — Il subprocess prova rifiuto prima di provider, journal e artefatto.
+      - [ ] AC-3 — Il subprocess confronta digest e byte dell'output conforme associato.
+      - [ ] AC-4 — Il subprocess distingue definizione autorizzata e non autorizzata, senza mutazioni Core.
+
+      ## Blockers
+      TASK-04 deve consegnare il percorso CLI e TASK-05 il packaging necessario allo smoke.
+    ref: TASK-06
+  - id: TASK-07
+    title: Aggiornare le decisioni e la mappa del runtime Agent
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Allineare la Wiki alla Workflow Run implementata, conservando distinzione tra stato corrente, decisione autorizzativa e capacità future di Control.
+
+      ## Read
+      - `docs/wiki/decisions/governed-run-modes.md` — ADR da estendere con contratto workflow reale
+      - `docs/wiki/decisions/project-process-run-model.md` — separazione Run/processo e autorità
+      - `docs/wiki/engineering/code-map.md`, `docs/wiki/operations/development.md`, `docs/wiki/overview.md` — mappa, test e capacità correnti
+      - `agent/src/workflow-definition.mjs`, `agent/src/workflow-runner.mjs`, `agent/src/run-store.mjs`, `test/e2e/agent-workflow-smoke.mjs` — evidenze implementate
+
+      ## Change
+      - `docs/wiki/decisions/governed-run-modes.md` — definizione versionata, validazione, completion e confine autorizzativo
+      - `docs/wiki/decisions/project-process-run-model.md` — dichiarazione di transizione distinta dall'esecuzione del processo
+      - `docs/wiki/engineering/code-map.md` — moduli e test workflow
+      - `docs/wiki/operations/development.md` — comandi, Ajv e prerequisiti smoke
+      - `docs/wiki/overview.md`, `docs/wiki/index.md`, `docs/wiki/log.md` — capacità corrente, catalogo e cronologia
+      - Non creare un nuovo ADR e non dichiarare Process Instance, Control o transizione Core automatica come implementati
+
+      ## Steps
+      1. Aggiornare contesto, decisione, alternative, conseguenze e verifica degli ADR esistenti con fonti repository puntuali.
+      2. Documentare che la definizione di progetto è la fonte autorizzativa locale dell'MVP e che input/output non possono dichiarare transizioni.
+      3. Separare chiaramente `transitionDeclaration` persistita dalla futura applicazione della transizione da parte di Product/Control.
+      4. Aggiornare code map, overview e development soltanto dopo che test e smoke forniscono evidenza.
+      5. Rigenerare catalogo e validare profilo bootstrap lasciando le pagine `generated` per review umana.
+
+      ## Verify
+      - Run: `archetipo wiki catalog`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run: `rg -n "workflow-definition|workflow-runner|agent-workflow-smoke|transitionDeclaration" docs/wiki`
+      - Expect: validazione con `data.ok=true`, indice aggiornato e ogni nuova affermazione di stato collegata a una fonte implementata.
+
+      ## Done
+      - [ ] AC-1 — La Wiki collega identità/versione ai moduli e allo smoke reali.
+      - [ ] AC-2 — La Wiki documenta il preflight prima dell'Agent con evidenza.
+      - [ ] AC-3 — La Wiki descrive output verified e completion semantics effettivi.
+      - [ ] AC-4 — Gli ADR distinguono autorità locale, dichiarazione e futura applicazione della transizione.
+
+      ## Blockers
+      TASK-06 deve fornire le evidenze automatiche da citare.
+    ref: TASK-07
+  - id: TASK-08
+    title: Eseguire il gate finale della Workflow Run
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Confermare che US-005 soddisfi tutti i criteri senza regressioni su Agent, Session Run, packaging, Core, Wiki o file modificati.
+
+      ## Read
+      - `AGENTS.md` — controlli CI obbligatori
+      - `package.json` — suite Agent, packaging e smoke
+      - `.github/workflows/ci.yml` e `.github/workflows/release.yml` — gate multipiattaforma e distribuzione
+      - `.archetipo/specs/US-005.yaml` — criteri e stato task
+      - Tutti i file modificati da TASK-01..TASK-07 — diagnostica e scope finale
+
+      ## Change
+      - Solo correzioni strettamente necessarie nei file modificati da TASK-01..TASK-07 quando un controllo fallisce
+      - `docs/test-results/` — riepilogo di comandi, esiti e ambiente se previsto dal flusso di implementazione
+      - Non ampliare a designer visuale, catalogo, Control, Process Instance persistita o applicazione automatica di transizioni
+
+      ## Steps
+      1. Eseguire unit/integration Agent, smoke Workflow e Session, packaging e installazione isolata.
+      2. Eseguire `node --check` su tutti i moduli Agent/E2E/npm e correggere ogni diagnostica introdotta.
+      3. Eseguire i controlli Go completi prescritti dal repository per provare che il Core non regredisce.
+      4. Validare Wiki e verificare che package lock e tarball siano coerenti e privi di dati locali.
+      5. Marcare `TASK-08` come `DONE` soltanto dopo tutti gli esiti verdi.
+      6. Da `/Users/stefanoleli/Project/ARchetipo`, eseguire `archetipo spec show US-005` e confermare che nessun task sia `TODO`; soltanto allora è consentito eseguire `archetipo spec review US-005`.
+
+      ## Verify
+      - Run: `npm run test:agent && npm run test:agent-workflow-smoke && npm run test:agent-run-smoke && npm run test:agent-packaging && npm run test:agent-install-smoke`
+      - Run: `find agent test/e2e test/npm -name '*.mjs' -type f -exec node --check {} \;`
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run after marking this gate DONE: `archetipo spec show US-005`
+      - Expect: tutti i comandi terminano 0, `gofmt -l .` non produce output, golangci-lint riporta 0 issue, Wiki ha `data.ok=true`, gli smoke provano AC-1..AC-4 e lo spec ricaricato non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — Suite e smoke confermano identità/versione persistite e consultabili.
+      - [ ] AC-2 — Suite e smoke confermano rifiuto prima dell'Agent senza journal o artefatto.
+      - [ ] AC-3 — Suite e smoke confermano output conforme verificato e associato prima del completamento.
+      - [ ] AC-4 — Suite e smoke confermano che solo workflow autorizzato dichiara la transizione e che il Core resta invariato.
+      - [ ] Il gate è marcato `DONE` e `archetipo spec show US-005` conferma tutti i task `DONE` prima della richiesta di review.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06 e TASK-07 devono essere completati.
+    ref: TASK-08

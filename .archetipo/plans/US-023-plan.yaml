@@ -1,0 +1,576 @@
+schema: archetipo/plan/v2
+spec_code: US-023
+body: "# US-023: Eseguire un'azione ARchetipo tramite un provider intercambiabile — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team  \n**Data:** 2026-08-15\n\n---\n\n## Spec\n\n**Epica:** EP-003 — Esecuzione gestita e portabile  \n**Priorità:** HIGH | **Punti:** 3\n\n**Storia utente**  \nCome utilizzatore di ARchetipo, voglio affidare un'azione a un provider di esecuzione selezionato, così da usare lo stesso processo indipendentemente dal sistema che esegue l'agente.\n\n**Criteri di accettazione**\n\n- AC-1 — Avviando un'azione supportata, ARchetipo crea una sola esecuzione collegata alla spec e identifica il provider scelto.\n- AC-2 — Quando il provider completa l'azione, l'esecuzione espone il risultato ricevuto.\n- AC-3 — Quando il provider fallisce, l'esecuzione espone l'errore e la spec conserva lo stato precedente all'avvio.\n- AC-4 — Un provider che non supporta l'azione viene rifiutato con un messaggio che nomina la capability mancante.\n\n---\n\n## Soluzione tecnica\n\nLa slice introduce un confine di esecuzione sincrono e durevole, indipendente dai connector di backlog e pianificazione. La superficie pubblica sarà `archetipo execution run <US-CODE> <action> --provider <id>`; ogni avvio accettato crea un solo record JSON locale, mentre `archetipo execution show <execution-id>` rilegge lo stesso record e ne espone risultato o errore con envelope `kind: \"execution\"`.\n\n- **Contratto stabile e minimo.** Il package `cli/internal/execution` definisce `ActionID` con `plan`, `Capability` con `spec.plan`, stati dedicati `RUNNING`, `SUCCEEDED`, `FAILED`, `Provider`, `Request`, `Result`, `Execution` ed `ExecutionError`. Il risultato rimane `json.RawMessage` e può portare un `external_id` opzionale, così US-025 potrà collegare ARcipelago senza cambiare il core.\n- **Registry iniettabile.** Ogni provider dichiara un ID univoco e le capability supportate. Un registry istanziabile rifiuta duplicati e consente ai test CLI di montare un provider fake senza stato globale condiviso; il provider ARcipelago reale e la selezione predefinita restano rispettivamente a US-025 e US-024.\n- **Lifecycle fail-closed.** Il servizio legge la spec tramite una porta read-only, cattura `spec_status_before`, risolve il provider e verifica `spec.plan` prima di creare il record. Solo dopo genera l'ID, salva una sola esecuzione `RUNNING`, invoca una sola volta il provider e aggiorna lo stesso record a `SUCCEEDED` con `result` oppure `FAILED` con errore strutturato. Provider sconosciuto o capability mancante producono `E_PRECONDITION`, non invocano il provider e non creano record.\n- **Persistenza runtime separata.** Un file store salva `.archetipo/executions/<execution-id>.json` con create esclusivo e update atomico; la directory entra in `.gitignore` perché contiene stato operativo locale, non artefatti di backlog da versionare. `execution show` legge per ID e restituisce `E_NOT_FOUND` per record assenti.\n- **Nessuna mutazione della spec.** Il provider riceve solo una richiesta serializzabile, mai il `connector.Connector`; il comando usa il connector esclusivamente per leggere la spec. Anche un fallimento del provider non può quindi chiamare `TransitionStatus`. Persistenza del piano, transizione a `PLANNED`, retry, idempotenza cross-request, default provider e rete ARcipelago sono non-goal espliciti di questa slice.\n- **Semantica dell'errore provider.** Un dispatch concluso con errore è un outcome di dominio registrato: `execution run` restituisce exit `0` e l'envelope dell'esecuzione `FAILED`, preservandone l'ID. Errori di input, risoluzione provider/capability, store o codifica restano error envelope del processo.\n\n### Decisioni architetturali\n\nLa scelta supera la soglia ADR perché definisce un nuovo confine di integrazione, la proprietà della persistenza e la semantica dei fallimenti per tutte le azioni future. La decisione canonica nuova è `decisions/execution-provider-boundary`.\n\nOpzione scelta: provider separato dai connector, registry iniettabile e store locale dedicato. Alternative valutate e scartate: estendere `connector.Connector`, che obbligherebbe file, GitHub, Jira e inmemory a implementare una capacità estranea alla persistenza del workflow; usare un adapter generico a comando shell, che perderebbe capability tipizzate e risultati strutturati; restituire soltanto il valore della chiamata senza record, che renderebbe `result`, `error` ed `external_id` non interrogabili dopo il processo e preparerebbe male US-025. Il costo accettato è un nuovo piccolo lifecycle e una directory runtime locale; il vantaggio è mantenere indipendenti esecutore e source of truth del backlog.\n\n`archetipo wiki search --type decision` ha restituito `E_PRECONDITION` perché la Wiki non è ancora inizializzata, quindi non esiste un ID decisionale riutilizzabile. Il task documentale inizializza lo scaffold, crea soltanto la pagina decisionale richiesta con evidenze sui file effettivamente introdotti e ricostruisce il catalogo; il bootstrap DDD completo resta fuori ambito.\n\n---\n\n## Baseline\n\nComandi eseguiti in `/Users/stefanoleli/Project/ARchetipo` prima dell'implementazione.\n\n| Check | Risultato prima dell'implementazione | Conseguenza sulla pianificazione |\n|---|---|---|\n| `cd cli && gofmt -l .` | passa, nessun file elencato | ogni task Go deve mantenere la formattazione canonica |\n| `cd cli && go test ./internal/domain ./internal/cli` | passa, entrambi i package verdi | i nuovi tipi e il wiring CLI devono preservare i contratti esistenti |\n| `cd cli && go test ./...` | passa, tutti i package verdi | il gate finale può richiedere la regressione completa senza eccezioni |\n| `cd cli && go vet ./...` | passa, nessuna diagnostica | ogni file Go modificato deve restare privo di diagnostiche vet |\n| `cd cli && go build ./...` | passa, nessun output | il nuovo comando e il package execution devono compilare nell'intero modulo |\n| `npm run test:e2e:unit` | passa, 50 test su 50 | le modifiche non devono degradare l'harness Node e le regole Wiki esistenti |\n| `cd cli && golangci-lint run --timeout 5m ./...` | non eseguito: `golangci-lint` non è installato | il gate esegue il lint se disponibile; in assenza registra il prerequisito senza confonderlo con un fallimento di codice |\n\nPrerequisiti d'ambiente, distinti dai fallimenti di codice:\n\n- Go 1.26 e Node.js con le dipendenze già installate sono disponibili nella baseline.\n- `golangci-lint` non è installato localmente. Il comando deterministico indicato da `AGENTS.md` è `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`; l'implementazione non deve installarlo automaticamente senza necessità.\n- I test di US-023 usano provider fake, directory temporanee e il file connector locale: non richiedono rete, credenziali, Docker, browser o un agente reale.\n\nNessun check di codice della baseline è rosso.\n\n---\n\n## Mappa dell'evidenza di accettazione\n\n| Criterio | Stato iniziale / fixture | Layer di test | Oracolo osservabile | Task che produce l'evidenza |\n|---|---|---|---|---|\n| AC-1 | spec file-connector `US-001` in `TODO`, store temporaneo vuoto, registry con fake che dichiara `spec.plan` | unit service + integrazione CLI in-process | esiste un solo file execution; l'envelope e il record hanno lo stesso ID non vuoto, `spec_code: US-001`, `action: plan`, `capability: spec.plan`, `provider_id` scelto; il fake conta esattamente una invocazione | TASK-02, TASK-04, TASK-06, TASK-08 |\n| AC-2 | fake supportato che restituisce `{\"artifact\":\"plan-123\"}` | unit service + integrazione CLI in-process | lo stesso record termina `SUCCEEDED`, espone semanticamente lo stesso JSON in `result`, ha `error` assente ed è rileggibile con `execution show` | TASK-04, TASK-06, TASK-08 |\n| AC-3 | spec `TODO`, fake supportato che restituisce errore sentinella, store temporaneo | unit service + integrazione CLI con file connector reale | `execution run` restituisce exit `0` e un record `FAILED` con codice/messaggio osservabili; `execution show` rilegge lo stesso errore; `archetipo spec show US-001` prima e dopo riporta ancora `TODO` e nessuna API mutante del connector viene esposta al provider | TASK-04, TASK-06, TASK-08 |\n| AC-4 | fake registrato che dichiara una capability diversa da `spec.plan` | unit registry/service + contratto CLI | l'avvio restituisce `E_PRECONDITION`; messaggio o hint nomina letteralmente `spec.plan`; fake call count `0` e directory execution ancora vuota | TASK-02, TASK-06, TASK-08 |\n\nGli oracoli restano visibili attraverso i test double: il fake sostituisce soltanto il sistema esecutore esterno, mentre lifecycle, registry, file store, comando Cobra, envelope JSON e file connector coinvolti nell'outcome sono reali. L'assenza di una seconda esecuzione è provata dal conteggio dei record e dalla create esclusiva, non dedotta soltanto dal numero di chiamate al mock.\n\n---\n\n## Strategia di test\n\nLa strategia concentra le invarianti pure nel package `execution` e attraversa poi il confine pubblico con test CLI in-process, senza aggiungere un E2E con agente o browser.\n\n- I test di tipi e registry coprono identificatori vuoti/duplicati, mapping `plan -> spec.plan`, ricerca deterministica e rifiuto prima del dispatch.\n- I test del file store usano `t.TempDir()`, provano create esclusiva, update atomico, get, not-found e round-trip di `result`/`error`; clock e generatore ID sono iniettati per eliminare nondeterminismo.\n- I test del service coprono un solo lifecycle `RUNNING -> SUCCEEDED|FAILED`, una sola invocazione provider, result/error mutuamente esclusivi, capability discovery fallita e context cancellation senza retry.\n- I test CLI montano un registry fake iniettato e un file connector reale, decodificano gli envelope `execution`/`error`, invocano `run` e `show` e rileggono la spec per provare l'assenza di transizioni sul failure path.\n- La ripetizione della stessa richiesta non è resa idempotente in US-023: ogni invocazione esplicita accettata crea una nuova execution. L'idempotenza per identità remota appartiene a US-025.\n- La dimostrazione è filmabile come sessione terminale, ma non richiede né introduce browser. La review userà output JSON e test deterministici; nessun video Playwright è atteso per questa spec.\n\n---\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: []\n  update: []\n  create: [decisions/execution-provider-boundary]\n```\n\nLa sola pagina nuova registra il confine provider/connector, il record durevole, le alternative scartate e le failure semantics. Nessuna pagina esistente è candidata: la Wiki canonica non è inizializzata e la ricerca decisionale ha fallito con `E_PRECONDITION`.\n\n_Piano generato tramite ARchetipo Planning — 2026-08-15_\n\n## Rework\n\nIl feedback di review registrato in `.archetipo/specs/US-023.yaml:41` richiede di completare il bootstrap della Wiki canonica prima di ripresentare l'incremento. `decisions/execution-provider-boundary` resta valida, in stato `generated` e senza issue; il rework aggiunge `overview`, `architecture/context-map`, `engineering/code-map` e `operations/development`, tutte basate su evidenze repository reali, collegate nel grafo dei concetti e lasciate `generated` per l'approvazione congiunta in review.\n\nLa baseline del rework conferma il confine del problema: `archetipo wiki --project-root . validate --profile bootstrap` restituisce `data.ok: false` con esattamente quattro finding `WIKI_BOOTSTRAP_PAGE_MISSING`, mentre `archetipo wiki --project-root . status` riporta la decision page `generated` senza issue. `archetipo wiki --project-root . inspect` rileva sei boundary (`.`, `cli`, `npm`, `scripts`, `skills`, `test`) e il candidato `trip`, che appartiene alle fixture Wiki E2E e deve essere escluso dalla mappa del prodotto con motivazione esplicita. I controlli `go test ./internal/wiki -count=1`, `go test ./internal/execution ./internal/cli -count=1`, `gofmt -l .`, `go vet ./...`, `go build ./...` e `npm run test:e2e:unit` sono verdi; quest'ultimo esegue 50 test. `golangci-lint` non è installato, quindi il gate conserva lo skip esplicito già delimitato dalla baseline originaria e richiede comunque zero diagnostiche da `go vet`.\n\nL'evidenza di accettazione AC-1..AC-4 resta quella prodotta dai task completati TASK-02, TASK-04, TASK-06 e TASK-08. Il rework non modifica il contratto execution: aggiunge evidenza documentale verificata dalla validazione bootstrap e dalla regressione completa. Il contratto di impatto Wiki è esteso con la creazione di `overview`, `architecture/context-map`, `engineering/code-map` e `operations/development`; la decisione `decisions/execution-provider-boundary` rimane parte dell'insieme da approvare in acceptance."
+tasks:
+  - id: TASK-01
+    title: Definire il contratto dei provider e il registry iniettabile
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Il package `execution` espone tipi serializzabili, mapping azione-capability e un registry istanziabile che seleziona un provider senza dipendere dai connector.
+
+      ## Read
+      - `cli/internal/domain/types.go` — convenzioni per tipi stringa, costanti e tag JSON/YAML
+      - `cli/internal/connector/registry.go` — pattern di registrazione e lookup da adattare senza stato globale
+      - `cli/internal/connector/capabilities.go` — confine esistente da non confondere con le capability di esecuzione
+
+      ## Change
+      - Nuovo `cli/internal/execution/types.go`: `ActionID`, `Capability`, `ExecutionStatus`, `Request`, `Result`, `Execution`, `ExecutionError` e relative costanti.
+      - Nuovo `cli/internal/execution/provider.go`: interfaccia `Provider`, `Registry`, errori tipizzati e `RequiredCapability`.
+      - Non modificare `connector.Connector` né le capability opzionali dei connector; non introdurre provider ARcipelago o configurazione del provider predefinito.
+
+      ## Steps
+      1. Definire `ActionPlan = "plan"`, `CapabilitySpecPlan = "spec.plan"` e il mapping chiuso `RequiredCapability(ActionPlan)`; azioni vuote o sconosciute restituiscono un errore tipizzato.
+      2. Definire `Provider` con `ID() string`, `Capabilities(context.Context) ([]Capability, error)` ed `Execute(context.Context, Request) (Result, error)`.
+      3. Rendere `Request` autosufficiente con `execution_id`, `spec_code`, `action` e `capability`; rendere `Result` opaco con `payload json.RawMessage` e `external_id,omitempty` per compatibilità futura.
+      4. Definire `Execution` con ID, spec, azione, capability, provider, `spec_status_before`, stato, result/error mutuamente esclusivi e timestamp di creazione/completamento.
+      5. Implementare `Registry` come istanza con `Register` e `Resolve`: rifiutare ID vuoti e duplicati, restituire provider sconosciuto con errore tipizzato e ordinare/deduplicare le capability prima del confronto.
+      6. Non usare variabili globali mutabili: il chiamante costruisce e inietta il registry.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution`
+      - Expect: il package compila; in questa fase può riportare `[no test files]` finché TASK-02 non aggiunge i test.
+      - Run: `cd cli && go vet ./internal/execution`
+      - Expect: nessuna diagnostica.
+
+      ## Done
+      - [ ] AC-1 — il contratto identifica in modo stabile spec, azione, capability e provider su una execution.
+      - [ ] AC-2 — il modello può esporre un payload JSON di successo senza valorizzare l'errore.
+      - [ ] AC-3 — il modello distingue `FAILED` da `SUCCEEDED` con errore strutturato.
+      - [ ] AC-4 — `plan` richiede la capability machine-readable `spec.plan`.
+      - [ ] `connector.Connector` resta invariato.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Verificare tipi, mapping capability e isolamento del registry
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Test deterministici provano gli invarianti del contratto execution e impediscono selezioni ambigue o dispatch di capability non supportate.
+
+      ## Read
+      - `cli/internal/execution/types.go` — stati e DTO introdotti in TASK-01
+      - `cli/internal/execution/provider.go` — mapping e registry introdotti in TASK-01
+      - `cli/internal/connector/registry.go` — casi limite del registry connector esistente
+
+      ## Change
+      - Nuovo `cli/internal/execution/provider_test.go` con fake minimi locali al test.
+      - Se necessario, nuovo `cli/internal/execution/types_test.go` solo per round-trip JSON e invarianti non già coperti da `provider_test.go`.
+      - Non aggiungere provider di produzione né test che dipendono da ordine globale, clock, rete o credenziali.
+
+      ## Steps
+      1. Provare che `plan` mappa esattamente a `spec.plan` e che azione vuota/sconosciuta viene rifiutata.
+      2. Provare registrazione e risoluzione per ID, rifiuto di ID vuoto, duplicato e provider sconosciuto.
+      3. Costruire due registry indipendenti e provare che registrare un fake nel primo non lo rende visibile nel secondo.
+      4. Provare il round-trip JSON di execution `SUCCEEDED` e `FAILED`, inclusi `result`, `error`, `external_id,omitempty` e `spec_status_before`.
+      5. Asserire che l'elenco capability normalizzato non trasformi typo o label umane in `spec.plan`.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution -run 'Test(RequiredCapability|Registry|ExecutionJSON)' -count=1`
+      - Expect: tutti i casi passano; nessun fake condiviso fra test.
+
+      ## Done
+      - [ ] AC-1 — il test prova lookup deterministico del provider scelto e isolamento fra registry.
+      - [ ] AC-2 — il round-trip conserva integralmente un result JSON e lascia `error` assente.
+      - [ ] AC-3 — il round-trip conserva codice e messaggio di un errore terminale.
+      - [ ] AC-4 — il test nomina e verifica letteralmente `spec.plan`, rifiutando capability diverse.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Persistire le execution in record locali atomici
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Un file store durevole crea, aggiorna e rilegge una execution per ID sotto il project root senza sovrascrivere accidentalmente record esistenti.
+
+      ## Read
+      - `cli/internal/connector/filefs/writer.go` — convenzioni di scrittura atomica del connector file
+      - `cli/internal/connector/filefs/store.go` — risoluzione e lettura di artefatti locali
+      - `.gitignore` — policy corrente per gli artefatti runtime sotto `.archetipo/`
+
+      ## Change
+      - Nuovo `cli/internal/execution/store.go`: interfaccia `Store` e errori tipizzati `not found`/`already exists`.
+      - Nuovo `cli/internal/execution/file_store.go`: implementazione JSON sotto `.archetipo/executions/` relativa al project root esplicito.
+      - `.gitignore`: aggiungere soltanto `.archetipo/executions/*` fra gli artefatti runtime locali.
+      - Non modificare le policy esistenti per backlog, spec o piani e non salvare execution tramite un connector.
+
+      ## Steps
+      1. Definire `Store` con `Create(ctx, Execution)`, `Update(ctx, Execution)` e `Get(ctx, id)`; validare ID non vuoti e non accettare segmenti di percorso.
+      2. Implementare `NewFileStore(projectRoot)` risolvendo sempre il percorso assoluto sotto `<projectRoot>/.archetipo/executions`.
+      3. In `Create`, creare la directory con permessi `0700`, serializzare JSON deterministico e usare creazione esclusiva del file `0600`; una collisione restituisce `already exists` senza overwrite.
+      4. In `Update`, richiedere che il record esista e sostituirlo tramite file temporaneo nello stesso directory più rename atomico, preservando permessi `0600`.
+      5. In `Get`, decodificare con controllo degli errori e distinguere record assente da JSON corrotto.
+      6. Aggiungere l'ignore mirato delle execution, lasciando visibile e invariata la decisione futura sulla versionabilità di backlog/spec.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution`
+      - Expect: il package compila; i test focalizzati del file store arrivano in TASK-04.
+      - Run: `cd cli && go vet ./internal/execution`
+      - Expect: nessuna diagnostica.
+
+      ## Done
+      - [ ] AC-1 — `Create` può materializzare un solo record per execution ID e rifiuta collisioni.
+      - [ ] AC-2 — `Update` e `Get` conservano il result dello stesso record.
+      - [ ] AC-3 — `Update` e `Get` conservano l'errore dello stesso record.
+      - [ ] Solo `.archetipo/executions/*` viene aggiunto a `.gitignore`; backlog, spec e piani non cambiano policy.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Verificare create esclusiva e round-trip del file store
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Il file store è provato contro collisioni, aggiornamenti atomici, record assenti e round-trip dei due outcome terminali.
+
+      ## Read
+      - `cli/internal/execution/store.go` — contratto ed errori del persistence port
+      - `cli/internal/execution/file_store.go` — create/update/get e path safety
+      - `cli/internal/connector/filefs/filefs_test.go` — pattern con `t.TempDir()` per persistenza locale
+
+      ## Change
+      - Nuovo `cli/internal/execution/file_store_test.go`.
+      - Non usare la directory `.archetipo/` reale del repository; ogni caso costruisce un project root temporaneo.
+
+      ## Steps
+      1. Creare una execution `RUNNING`, verificare che esista un solo file e che una seconda `Create` con lo stesso ID restituisca `already exists` lasciando intatto il contenuto.
+      2. Aggiornare lo stesso record a `SUCCEEDED` con result JSON e provarne il round-trip tramite una nuova istanza di `FileStore` sullo stesso root.
+      3. Ripetere l'update a `FAILED` su un record distinto e provare codice/messaggio dell'errore con `result` assente.
+      4. Provare `Get` e `Update` su ID assente, ID con path traversal e file JSON corrotto, distinguendo gli errori.
+      5. Su sistemi POSIX, asserire permessi directory `0700` e file `0600`; saltare soltanto il controllo mode dove la piattaforma non lo supporta.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution -run TestFileStore -count=1`
+      - Expect: tutti i casi passano e ogni test lascia il proprio `t.TempDir()` isolato.
+
+      ## Done
+      - [ ] AC-1 — il test osserva un solo record e nessun overwrite alla seconda create.
+      - [ ] AC-2 — un nuovo reader rilegge lo stesso result `SUCCEEDED` dal disco.
+      - [ ] AC-3 — un nuovo reader rilegge lo stesso errore `FAILED` dal disco.
+      - [ ] Path traversal, record assente e JSON corrotto hanno prove negative esplicite.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Orchestrare il lifecycle sincrono di una execution
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-03
+    body: |-
+      ## Objective
+      `Service.Run` valida provider e capability, crea una sola execution e porta lo stesso record a successo o fallimento senza poter mutare la spec.
+
+      ## Read
+      - `cli/internal/execution/types.go` — request, result, stati e modello execution
+      - `cli/internal/execution/provider.go` — registry, provider e mapping action-capability
+      - `cli/internal/execution/store.go` — create/update/get
+      - `cli/internal/domain/types.go` — `domain.Spec` e stato iniziale da catturare
+
+      ## Change
+      - Nuovo `cli/internal/execution/service.go`: `Service`, dipendenze iniettate, `Run` e relativi errori.
+      - Nuovo `cli/internal/execution/id.go` solo se serve isolare il generatore ID sicuro di produzione dall'interfaccia iniettabile usata nei test.
+      - Non importare `connector`, non chiamare transizioni di stato, non implementare retry, fallback, parallelismo o idempotenza cross-request.
+
+      ## Steps
+      1. Costruire `Service` con `Registry`, `Store`, generatore ID e clock; rifiutare dipendenze mancanti alla costruzione.
+      2. Accettare una `domain.Spec` già letta dal chiamante, l'action e il provider ID; validare spec code, action e provider ID prima di qualunque scrittura.
+      3. Risolvere il provider, ottenere le capability e verificare `RequiredCapability(action)`; provider sconosciuto, discovery fallita o capability mancante terminano senza ID, senza `Store.Create` e senza `Execute`.
+      4. Generare un solo ID, costruire `RUNNING` con `spec_status_before`, salvare una sola volta via `Create` e invocare il provider esattamente una volta con lo stesso ID.
+      5. Sul successo, validare il payload JSON, valorizzare `SUCCEEDED`, result/external ID e `completed_at`, quindi aggiornare lo stesso record.
+      6. Su errore provider o cancellazione del context dopo il dispatch, valorizzare `FAILED` con errore strutturato sicuro, result assente e `completed_at`, aggiornare lo stesso record e restituire l'execution come outcome, senza retry.
+      7. Se l'update terminale fallisce, restituire errore di infrastruttura senza creare un secondo record; il record `RUNNING` rimane evidenza recuperabile.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution`
+      - Expect: il package compila e i test già presenti restano verdi.
+      - Run: `cd cli && go vet ./internal/execution`
+      - Expect: nessuna diagnostica.
+
+      ## Done
+      - [ ] AC-1 — un run accettato esegue esattamente una `Create` e una chiamata provider con lo stesso execution ID.
+      - [ ] AC-2 — successo produce `SUCCEEDED` con result ed errore assente.
+      - [ ] AC-3 — errore provider produce `FAILED`, conserva `spec_status_before` e il package non dipende da connector mutanti.
+      - [ ] AC-4 — capability mancante restituisce un errore che porta `spec.plan`, con zero create e zero dispatch.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Provare lifecycle, fallimenti e assenza di retry del service
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Una suite unit deterministica dimostra ogni ramo del lifecycle e gli oracoli AC-1..AC-4 prima del wiring CLI.
+
+      ## Read
+      - `cli/internal/execution/service.go` — orchestrazione introdotta in TASK-05
+      - `cli/internal/execution/provider_test.go` — fake e pattern registry da TASK-02
+      - `cli/internal/execution/file_store_test.go` — fixture store da TASK-04
+
+      ## Change
+      - Nuovo `cli/internal/execution/service_test.go` con spy provider, spy store, clock e ID generator deterministici locali al test.
+      - Non usare sleep, rete, UUID casuali o registry globali; non rendere i test paralleli se condividono risorse di processo.
+
+      ## Steps
+      1. Nel percorso supportato di successo, asserire una sola create, una sola invocation, un solo update, identità coerente fra request/record e `SUCCEEDED` con payload semanticamente uguale al sentinella.
+      2. Nel percorso provider-failed, asserire lo stesso record aggiornato a `FAILED`, errore osservabile, result assente, `spec_status_before = TODO` e call count `1` senza retry.
+      3. Nel percorso capability mancante, asserire errore contenente `spec.plan`, call count provider `0`, create/update `0`.
+      4. Coprire provider sconosciuto, errore di capability discovery, action sconosciuta, collisione ID/store create e update terminale fallito; nessuno di questi può creare una seconda execution.
+      5. Cancellare il context dentro il fake dopo il dispatch e asserire un solo outcome `FAILED` persistito, senza secondo tentativo.
+      6. Asserire esplicitamente l'invariante XOR: `SUCCEEDED` ha result e non error; `FAILED` ha error e non result.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution -run TestService -count=1`
+      - Expect: tutti i casi passano; gli spy provano i conteggi esatti e gli outcome osservabili.
+
+      ## Done
+      - [ ] AC-1 — una chiamata accettata produce un solo ID, una create e un dispatch.
+      - [ ] AC-2 — il test confronta il result effettivo, non soltanto il ritorno positivo del fake.
+      - [ ] AC-3 — il test osserva execution `FAILED`, errore e `spec_status_before: TODO`, con zero retry.
+      - [ ] AC-4 — capability mancante nomina `spec.plan`, non crea record e non invoca il fake.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Esporre execution run e show nella CLI
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      La CLI permette di avviare una action con provider esplicito e di rileggere il record durevole usando envelope JSON coerenti con il runtime ARchetipo.
+
+      ## Read
+      - `cli/internal/cli/root.go` — registrazione dei comandi root e costruzione Cobra
+      - `cli/internal/cli/runner.go` — `withConnectorCfg`, config/project root ed envelope
+      - `cli/internal/cli/spec_cmd.go` — convenzioni degli argomenti spec e lookup connector
+      - `cli/internal/iox/iox.go` — codici `E_PRECONDITION`, `E_NOT_FOUND`, `E_INVALID_INPUT`
+      - `README.md`, `README.it.md`, `cli/README.md` — superfici CLI documentate
+
+      ## Change
+      - Nuovo `cli/internal/cli/execution_cmd.go` con gruppo `execution`, sottocomandi `run` e `show`.
+      - `cli/internal/cli/root.go`: registrare il comando e aggiungere un costruttore interno con dipendenze execution iniettabili, mantenendo invariata la firma pubblica `Execute`.
+      - `README.md`, `README.it.md` e `cli/README.md`: documentare sintassi, envelope, record runtime e confini di US-023.
+      - Non aggiungere provider di produzione, default di workspace, UI web o mutazioni `spec plan`/`TransitionStatus`.
+
+      ## Steps
+      1. Definire `archetipo execution run <US-CODE> <action> --provider <id>` con esattamente due argomenti e flag provider obbligatorio; il solo action supportato in questa slice è `plan`.
+      2. Usare il connector per `ReadSpecDetail` della spec e costruire `FileStore` dal `cfg.ProjectRoot`; passare al service il valore `domain.Spec`, mai il connector.
+      3. Mappare provider sconosciuto, discovery capability e capability mancante a `E_PRECONDITION`; il messaggio/hint della capability mancante deve nominare `spec.plan`. Mappare input malformato a `E_INVALID_INPUT` e problemi store inattesi a `E_INTERNAL`.
+      4. Per outcome `SUCCEEDED` e `FAILED`, scrivere stdout `kind: "execution"`, `data` uguale al record e exit `0`; non trasformare un failure già registrato in un secondo error envelope.
+      5. Definire `archetipo execution show <execution-id>` che rilegge il file store e restituisce lo stesso `kind`; record assente produce `E_NOT_FOUND`.
+      6. Introdurre un builder root interno che riceve registry, ID generator, clock e store factory; `Execute` usa dipendenze di produzione e un registry vuoto finché una integrazione, a partire da US-025, registra provider reali.
+      7. Documentare che `.archetipo/executions/` è runtime locale ignorato, che `--provider` è obbligatorio fino a US-024 e che un fake viene iniettato soltanto nei test/dimostrazione della foundation.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/cli -run TestExecution -count=1`
+      - Expect: il package compila; i test focalizzati completi arrivano in TASK-08.
+      - Run: `cd cli && go vet ./internal/cli ./internal/execution`
+      - Expect: nessuna diagnostica.
+
+      ## Done
+      - [ ] AC-1 — `run` espone execution ID, spec, action, capability e provider selezionato.
+      - [ ] AC-2 — `run` e `show` espongono lo stesso result `SUCCEEDED`.
+      - [ ] AC-3 — `run` e `show` espongono lo stesso errore `FAILED` con exit `0` e nessuna transizione spec.
+      - [ ] AC-4 — il rifiuto CLI usa `E_PRECONDITION` e nomina `spec.plan`.
+      - [ ] La documentazione inglese e italiana descrive la stessa sintassi e gli stessi confini.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Verificare il contratto pubblico execution con il file connector
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-07
+    body: |-
+      ## Objective
+      Test CLI in-process attraversano parsing, connector read-only, provider fake, file store ed envelope per dimostrare l'intera slice senza processi esterni.
+
+      ## Read
+      - `cli/internal/cli/execution_cmd.go` — comandi e mapping errori da TASK-07
+      - `cli/internal/cli/view_cmd_internal_test.go` — pattern di test nello stesso package per costruttori interni
+      - `cli/internal/cli/cli_test.go` — fixture file connector ed envelope JSON
+      - `cli/internal/execution/service_test.go` — fake provider e outcome attesi
+
+      ## Change
+      - Nuovo `cli/internal/cli/execution_cmd_internal_test.go` nel package `cli`, così può costruire la root con dipendenze execution fake senza ampliare l'API pubblica.
+      - Non registrare il fake nella build di produzione e non scrivere nella `.archetipo/` reale del repository.
+
+      ## Steps
+      1. In `t.TempDir()`, creare tramite la CLI una spec `US-001` in `TODO`, un registry con fake `fake-success` che supporta `spec.plan`, ID/clock deterministici e file store reale.
+      2. Eseguire `execution run US-001 plan --provider fake-success`; decodificare `kind: execution`, asserire exit `0`, campi di collegamento, un solo record e una sola chiamata provider.
+      3. Eseguire `execution show <id>` con una nuova root sullo stesso project root e confrontare ID, stato `SUCCEEDED` e result JSON col run precedente.
+      4. Ripetere con `fake-failure`; asserire exit `0`, record `FAILED`, errore visibile e `show` coerente. Eseguire `spec show US-001` prima e dopo e confrontare `status: TODO` e history senza nuove transizioni.
+      5. Ripetere con fake privo di `spec.plan`; asserire exit non-zero `4`, code `E_PRECONDITION`, testo contenente `spec.plan`, call count `0` e nessun nuovo file execution.
+      6. Coprire provider sconosciuto, action sconosciuta, provider flag mancante e `show` di ID assente con i rispettivi codici stabili.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/cli -run TestExecution -count=1`
+      - Expect: tutti i percorsi passano; successo e fallimento registrato restituiscono exit `0`, capability mancante exit `4`/`E_PRECONDITION`.
+
+      ## Done
+      - [ ] AC-1 — l'oracolo pubblico prova un record, una invocation e provider scelto.
+      - [ ] AC-2 — `show` rilegge dal disco il result effettivo restituito dal fake.
+      - [ ] AC-3 — `show` rilegge l'errore e `spec show` prova che `TODO` e history sono invariati.
+      - [ ] AC-4 — l'envelope pubblico nomina `spec.plan`, il fake non viene chiamato e lo store non cresce.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Registrare decisions/execution-provider-boundary nella Wiki
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+      - TASK-08
+    body: |-
+      ## Objective
+      La Wiki canonica contiene una decisione `generated` che documenta il confine provider/connector, la persistenza locale e le failure semantics con evidenze di implementazione e verifica.
+
+      ## Read
+      - `docs/adr/0001-living-project-wiki.md` — decisione accettata che rende canoniche le pagine `decisions/`
+      - `skills/archetipo-wiki/references/wiki-contract.md` — frontmatter, marker e lifecycle delle decision page
+      - `cli/internal/execution/provider.go` — confine provider e registry implementati
+      - `cli/internal/execution/service.go` — lifecycle e failure semantics implementati
+      - `cli/internal/cli/execution_cmd_internal_test.go` — evidenza CLI degli outcome
+
+      ## Change
+      - Inizializzare `docs/wiki/index.md` e `docs/wiki/log.md` esclusivamente tramite `archetipo wiki init` se ancora assenti.
+      - Nuovo `docs/wiki/decisions/execution-provider-boundary.md` con ID canonico `decisions/execution-provider-boundary`.
+      - Ricostruire `docs/wiki/index.md` esclusivamente tramite `archetipo wiki catalog`.
+      - Non eseguire il bootstrap DDD completo e non sintetizzare a mano `index.md` o `log.md`.
+
+      ## Steps
+      1. Dal workdir della spec, eseguire `archetipo wiki --project-root . init`; il comando è idempotente e deve essere l'unico autore dello scaffold riservato.
+      2. Creare la decision page con frontmatter `type: decision`, titolo/descrizione, `decision_status: accepted`, `status: generated` e `sources` almeno su `cli/internal/execution/provider.go`, `cli/internal/execution/service.go`, `cli/internal/execution/service_test.go`, `cli/internal/cli/execution_cmd.go` e `cli/internal/cli/execution_cmd_internal_test.go`, distinguendo ruoli implementation/verification.
+      3. Compilare contenuto significativo sotto tutti i marker obbligatori `context`, `decision`, `alternatives`, `consequences`, `verification`.
+      4. Nel contesto spiegare l'indipendenza dai connector e il bisogno di un record interrogabile; nella decisione fissare registry iniettabile, capability `spec.plan`, file store e failure registrato con exit `0`.
+      5. Nelle alternative confrontare estensione di `connector.Connector`, adapter shell generico e risultato effimero; nelle conseguenze registrare benefici, costo operativo della directory runtime e non-goal di retry/idempotenza/default/provider remoto.
+      6. Eseguire `archetipo wiki --project-root . catalog`, poi validation e status; non hand-editare il blocco `review`, e non approvare la pagina durante implementazione.
+
+      ## Verify
+      - Run: `archetipo wiki --project-root . validate`
+      - Expect: `kind: validation_result`, `data.ok: true` e nessun finding bloccante per `decisions/execution-provider-boundary`.
+      - Run: `archetipo wiki --project-root . status`
+      - Expect: la pagina `decisions/execution-provider-boundary` riporta `state: generated` e nessuna issue.
+
+      ## Done
+      - [ ] La pagina canonica `decisions/execution-provider-boundary` esiste con tutti i marker decision richiesti.
+      - [ ] La decisione cita evidenze reali di implementazione e test introdotte da US-023.
+      - [ ] `archetipo wiki validate` è verde e `archetipo wiki status` riporta `generated`.
+      - [ ] AC-1 — la decisione registra unicità del record e provider esplicito.
+      - [ ] AC-3 — la decisione registra failure persistito e separazione read-only dalla spec.
+      - [ ] AC-4 — la decisione registra il controllo fail-closed di `spec.plan`.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Eseguire il gate finale di US-023
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+    body: |-
+      ## Objective
+      Tutta l'evidenza focalizzata, la regressione CLI e il contratto Wiki sono verdi prima che US-023 possa entrare in review.
+
+      ## Read
+      - `AGENTS.md` — gate CI richiesti per modifiche CLI
+      - `cli/internal/execution/*_test.go` — prove di registry, store e service
+      - `cli/internal/cli/execution_cmd_internal_test.go` — prove del confine pubblico
+      - `docs/wiki/decisions/execution-provider-boundary.md` — decisione richiesta dal piano
+      - `.archetipo/plans/US-023-plan.yaml` — elenco completo dei task da chiudere
+
+      ## Change
+      - Nessuna modifica funzionale prevista.
+      - Sono ammesse soltanto correzioni minime nei file introdotti o modificati da US-023 quando un check del gate rivela una regressione; non ampliare scope, provider o lifecycle.
+
+      ## Steps
+      1. Dal repository root eseguire i test focalizzati execution e CLI con cache disabilitata.
+      2. Dal modulo `cli` eseguire `gofmt -l .`, `go vet ./...`, `go build ./...` e `go test ./... -count=1`; `gofmt -l .` deve produrre output vuoto.
+      3. Dal repository root eseguire `npm run test:e2e:unit` e richiedere 50 test o più tutti verdi.
+      4. Se `golangci-lint` è disponibile, eseguire il comando CI; se manca, registrare esplicitamente il prerequisito già osservato in baseline e verificare almeno che nessun file modificato abbia diagnostiche da `go vet`.
+      5. Eseguire `archetipo wiki --project-root . validate` e `archetipo wiki --project-root . status`, richiedendo validation verde e decision page `generated` senza issue.
+      6. Solo dopo tutti i check, dal `data.project_root` eseguire `archetipo task done US-023 TASK-10`, poi `archetipo spec show US-023`.
+      7. Confermare dall'envelope ricaricato che TASK-10 e ogni altro task sono `DONE`; soltanto allora è consentito eseguire `archetipo spec review US-023`.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution ./internal/cli -count=1`
+      - Expect: tutti i test focalizzati passano, inclusi gli oracoli AC-1..AC-4.
+      - Run: `cd cli && test -z "$(gofmt -l .)" && go vet ./... && go build ./... && go test ./... -count=1`
+      - Expect: formattazione senza output, nessuna diagnostica, build e regressione completa verdi.
+      - Run: `npm run test:e2e:unit`
+      - Expect: almeno i 50 test della baseline passano senza failure.
+      - Run: `if command -v golangci-lint >/dev/null 2>&1; then cd cli && golangci-lint run --timeout 5m ./...; else echo 'SKIP: golangci-lint non installato (prerequisito baseline)'; fi`
+      - Expect: 0 issue quando disponibile; altrimenti solo lo skip esplicito già delimitato dalla baseline.
+      - Run: `archetipo wiki --project-root . validate && archetipo wiki --project-root . status`
+      - Expect: validation `data.ok: true`; `decisions/execution-provider-boundary` è `generated` e senza issue.
+
+      ## Done
+      - [ ] AC-1 — suite focalizzata prova una sola execution e identifica il provider scelto.
+      - [ ] AC-2 — suite focalizzata prova result persistito e rileggibile con `show`.
+      - [ ] AC-3 — suite focalizzata prova errore persistito e spec invariata.
+      - [ ] AC-4 — suite focalizzata prova rifiuto `E_PRECONDITION` che nomina `spec.plan` senza dispatch.
+      - [ ] Formattazione, vet, build, regressione Go, test Node e Wiki validation soddisfano le attese sopra.
+      - [ ] Dopo aver marcato TASK-10 `DONE`, `archetipo spec show US-023` non contiene alcun task `TODO`; la review non è stata richiesta prima di questa prova.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Completare il bootstrap della Wiki canonica
+    type: Fix
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+      La Wiki di ARchetipo supera il profilo bootstrap con le quattro pagine core richieste, evidenze repository reali e copertura completa dell'inventario corrente, risolvendo il feedback di review in `.archetipo/specs/US-023.yaml:41`.
+
+      ## Read
+      - `.archetipo/specs/US-023.yaml:41` — feedback di rework e quattro finding bloccanti da risolvere.
+      - `.agents/skills/archetipo-wiki/SKILL.md` — workflow codebase-first, classificazione delle capability e gate bootstrap.
+      - `.agents/skills/archetipo-wiki/references/wiki-contract.md` — frontmatter, marker obbligatori, grafo dei concetti e contratto `coverage`.
+      - `docs/wiki/decisions/execution-provider-boundary.md` — decision page già pronta da preservare e collegare.
+      - `README.md`, `AGENTS.md`, `package.json`, `.github/workflows/ci.yml`, `.github/workflows/release.yml` — scopo, struttura, comandi e pipeline del prodotto.
+      - `cli/cmd/archetipo/main.go`, `cli/internal/cli/root.go`, `cli/internal/connector/connector.go`, `cli/internal/execution/provider.go`, `cli/internal/web/server.go` — entry point e confini runtime da mappare.
+      - `npm/archetipo/bin/archetipo.js`, `scripts/build-npm.mjs`, `test/e2e/run.mjs` — distribuzione multipiattaforma e harness di verifica.
+
+      ## Change
+      - Nuovo `docs/wiki/overview.md` con `type: overview`, scopo del sistema, attori, stack, perimetro ispezionato ed esclusioni.
+      - Nuovo `docs/wiki/architecture/context-map.md` con `type: context-map` e i marker `contexts`, `relationships`, `shared`, `uncertainties`.
+      - Nuovo `docs/wiki/engineering/code-map.md` con `type: code-map`, i marker `domain-code`, `shared`, `unmapped`, `coverage` e frontmatter `coverage` completo.
+      - Nuovo `docs/wiki/operations/development.md` con `type: operations`, comandi di build/test/runtime/release e relativi vincoli operativi.
+      - `docs/wiki/index.md` e `docs/wiki/log.md` possono cambiare soltanto tramite `archetipo wiki --project-root . catalog` e le operazioni Wiki previste; preservare integralmente `docs/wiki/decisions/execution-provider-boundary.md` salvo collegamenti strettamente necessari.
+      - Non creare bounded context non supportati, non promuovere pagine a `reviewed`, non convertire le fixture `trip` in una capability del prodotto e non modificare codice, test o comportamento execution.
+
+      ## Steps
+      1. Eseguire `archetipo wiki --project-root . inspect` e usare l'envelope corrente come inventario autoritativo; ricontrollare i file rappresentativi prima di scrivere affermazioni su scopo, dipendenze, comandi e distribuzione.
+      2. Creare le quattro pagine core con `status: generated`, senza blocco `review` né `issues`, con almeno una `sources` entry esistente e significativa ciascuna e con tutti i marker richiesti dal relativo tipo.
+      3. Collegare le quattro pagine fra loro e alla decisione esistente mediante normali link Markdown, così nessuna pagina core resta orfana nel grafo.
+      4. In `engineering/code-map` rappresentare esattamente tutti i boundary restituiti dall'ispezione: mappare `.` e `skills` a `overview`, `cli` a `engineering/code-map` e/o alla decisione, `npm`, `scripts` e `test` a `operations/development`; ogni mapping deve puntare a page ID esistenti.
+      5. Rappresentare anche la capability candidate `trip` come `excluded` con una nota esplicita che la identifica come fixture isolata di `test/e2e/fixtures/wiki-codebase`, non come capability del prodotto ARchetipo. Se l'ispezione corrente differisce, coprire ogni nuovo item con `mapped`, `partial` o `excluded` secondo il contratto, senza omissioni.
+      6. Documentare soltanto relazioni osservabili: CLI, connector, execution provider, web viewer, packaging npm, script di release e test harness. Usare nomi DDD specializzati solo se l'evidenza dimostra davvero quelle semantiche; altrimenti descrivere la dipendenza in linguaggio piano.
+      7. Eseguire `archetipo wiki --project-root . catalog`, quindi `archetipo wiki --project-root . validate --profile bootstrap`; correggere ogni finding `severity: error` fino a `kind: validation_result` e `data.ok: true`.
+      8. Eseguire `archetipo wiki --project-root . status` e verificare che le quattro pagine core e `decisions/execution-provider-boundary` siano `generated` e senza issue; non approvarle in implementazione.
+
+      ## Verify
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `archetipo wiki --project-root . validate --profile bootstrap`
+      - Expect: envelope `kind: validation_result`, `data.ok: true`, nessun finding `severity: error` e nessun `WIKI_BOOTSTRAP_PAGE_MISSING`, `WIKI_UNCOVERED_BOUNDARY`, `WIKI_UNCOVERED_CAPABILITY`, `WIKI_BOOTSTRAP_CORE_ORPHAN` o `WIKI_BOOTSTRAP_SOURCE_MISSING`.
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `archetipo wiki --project-root . status`
+      - Expect: `overview`, `architecture/context-map`, `engineering/code-map`, `operations/development` e `decisions/execution-provider-boundary` risultano `generated`, senza issue.
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `go test ./internal/wiki -count=1`
+      - Expect: la suite Wiki resta verde; nella baseline del rework il comando passa.
+
+      ## Done
+      - [ ] Feedback di review — i quattro finding `WIKI_BOOTSTRAP_PAGE_MISSING` di `.archetipo/specs/US-023.yaml:41` sono risolti e la validazione bootstrap restituisce `data.ok: true`.
+      - [ ] AC-1 — `overview`, context map e code map documentano il collegamento spec/execution e il provider esplicito già provato dai test, senza alterarne il contratto.
+      - [ ] AC-3 — context map e decision page mantengono esplicita la separazione read-only fra provider execution e stato della spec.
+      - [ ] AC-4 — la documentazione conserva `spec.plan` come capability fail-closed e la collega alle evidenze implementative esistenti.
+      - [ ] La coverage include ogni boundary e capability candidate dell'ultimo `wiki inspect`, con mapping o motivazione esplicita.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Eseguire il gate finale del rework di US-023
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+    body: |-
+      ## Objective
+      Il bootstrap Wiki, l'evidenza AC-1..AC-4 e l'intera regressione del repository sono verificati insieme prima di consentire una nuova review di US-023.
+
+      ## Read
+      - `.archetipo/specs/US-023.yaml` — feedback di rework e stato corrente della spec.
+      - `.archetipo/plans/US-023-plan.yaml` — task preservati e nuovi task del rework.
+      - `docs/wiki/overview.md`, `docs/wiki/architecture/context-map.md`, `docs/wiki/engineering/code-map.md`, `docs/wiki/operations/development.md` — pagine core aggiunte da TASK-11.
+      - `docs/wiki/decisions/execution-provider-boundary.md` — decisione da verificare insieme alle pagine core.
+      - `cli/internal/execution/*_test.go`, `cli/internal/cli/execution_cmd_internal_test.go`, `cli/internal/wiki/*_test.go` — evidenza execution e validazione Wiki.
+      - `AGENTS.md`, `.github/workflows/ci.yml`, `package.json` — gate locali e CI da riprodurre.
+
+      ## Change
+      - Nessuna modifica funzionale prevista.
+      - Sono ammesse soltanto correzioni minime ai file Wiki creati da TASK-11 o ai file già toccati da US-023 quando un check riproducibile espone una regressione; non ampliare il lifecycle execution, i provider o il perimetro della spec.
+
+      ## Steps
+      1. Dal repository root eseguire la validazione Wiki bootstrap e lo status; richiedere `data.ok: true`, cinque pagine `generated` senza issue e nessun finding bloccante.
+      2. Dal modulo `cli` eseguire i test focalizzati `./internal/execution`, `./internal/cli` e `./internal/wiki` con cache disabilitata, verificando nuovamente gli oracoli AC-1..AC-4 e il contratto bootstrap.
+      3. Dal modulo `cli` eseguire `gofmt -l .`, `go vet ./...`, `go build ./...` e `go test ./... -count=1`; `gofmt -l .` deve produrre output vuoto e nessun file modificato può aggiungere diagnostiche.
+      4. Dal repository root eseguire `npm run test:e2e:unit` e `npm run test:wiki-smoke`; la prima suite deve mantenere almeno i 50 test verdi osservati in baseline e lo smoke deve completare il lifecycle Wiki senza errori.
+      5. Se `golangci-lint` è disponibile, eseguire `golangci-lint run --timeout 5m ./...` da `cli`; se manca, registrare lo skip esplicito già osservato nella baseline del rework e conservare come confine minimo obbligatorio `go vet ./...` senza diagnostiche.
+      6. Solo dopo tutti i check, dal `data.project_root` eseguire `archetipo task done US-023 TASK-12` e poi `archetipo spec show US-023`.
+      7. Confermare dall'envelope ricaricato che TASK-12 e tutti i task preservati o aggiunti sono `DONE`; soltanto dopo questa prova è consentito eseguire `archetipo spec review US-023`.
+
+      ## Verify
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `archetipo wiki --project-root . validate --profile bootstrap && archetipo wiki --project-root . status`
+      - Expect: validation `data.ok: true`; le quattro pagine core e la decision page sono `generated` e senza issue.
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `go test ./internal/execution ./internal/cli ./internal/wiki -count=1`
+      - Expect: test focalizzati verdi e oracoli AC-1..AC-4 invariati.
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `test -z "$(gofmt -l .)" && go vet ./... && go build ./... && go test ./... -count=1`
+      - Expect: nessun file non formattato, nessuna diagnostica, build e regressione Go complete verdi.
+      - Run (da `/Users/stefanoleli/Project/ARchetipo`): `npm run test:e2e:unit && npm run test:wiki-smoke`
+      - Expect: almeno 50 test E2E unit verdi e Wiki smoke completato senza failure.
+      - Run (da `/Users/stefanoleli/Project/ARchetipo/cli`): `if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run --timeout 5m ./...; else echo 'SKIP: golangci-lint non installato (prerequisito baseline)'; fi`
+      - Expect: zero issue quando disponibile; altrimenti soltanto lo skip esplicito già delimitato dalla baseline.
+
+      ## Done
+      - [ ] AC-1 — i test pubblici provano una sola execution collegata alla spec e identificano il provider scelto.
+      - [ ] AC-2 — i test pubblici provano result persistito e rileggibile tramite `execution show`.
+      - [ ] AC-3 — i test pubblici provano errore persistito e stato/history della spec invariati.
+      - [ ] AC-4 — i test pubblici provano il rifiuto `E_PRECONDITION` che nomina `spec.plan` senza dispatch.
+      - [ ] Il feedback Wiki è chiuso da una validazione bootstrap con `data.ok: true`, pagine `generated` senza issue e regressione completa verde.
+      - [ ] Dopo `archetipo task done US-023 TASK-12`, `archetipo spec show US-023` non contiene task `TODO`; la review non è stata richiesta prima di questa prova.
+
+      ## Blockers
+      None.
+    ref: TASK-12

@@ -1,0 +1,45 @@
+schema: archetipo/spec/v2
+code: US-057
+title: Aprire il workspace sulla conversazione invece che sulla board
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: HIGH
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-057: Aprire il workspace sulla conversazione invece che sulla board
+
+  **Epic:** EP-008 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come utilizzatore di ARchetipo che lavora parlando con l'agente,
+  voglio che aprendo un workspace la prima cosa davanti a me sia la conversazione, larga quanto la finestra,
+  così da poter leggere e scrivere senza strizzare il dialogo in una colonna laterale.
+
+  **Dimostrazione**
+  Partendo da un workspace con una conversazione già avviata, il revisore apre ARchetipo e osserva che la schermata iniziale è la conversazione a tutta larghezza, non la board. Passa alla board e osserva che occupa lo stesso spazio in cui stava la conversazione, con le stesse colonne e le stesse card di prima; torna alla conversazione e osserva che la sua storia è integra e che il testo eventualmente digitato e non inviato è ancora lì. Apre infine il dettaglio di una spec e osserva che criteri, piano e differenze sono raggiungibili senza che nulla si sovrapponga alla conversazione.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — All'apertura di un workspace la conversazione è la vista mostrata per prima e occupa la colonna principale della finestra.
+  - [ ] AC-2 — La board resta raggiungibile con un solo comando dalla schermata iniziale e, una volta aperta, mostra le stesse colonne e le stesse card che mostrava prima di questa spec.
+  - [ ] AC-3 — Tornando dalla board alla conversazione, la conversazione conserva la sua storia e il testo non ancora inviato.
+  - [ ] AC-4 — Il dettaglio di una spec è consultabile come vista della colonna principale, senza finestre sovrapposte che rendano inerte il resto della pagina.
+  - [ ] AC-5 — Il totale delle spec e il numero di spec in corso restano leggibili dalla schermata iniziale, senza dover aprire la board.
+  - [ ] AC-6 — In una finestra stretta la conversazione resta a piena larghezza e le altre viste vi si sovrappongono a richiesta, richiudendosi quando il revisore ne sceglie una.
+
+  **Fuori ambito**
+  Lo storico delle conversazioni passate, l'apertura di più conversazioni insieme e lo spostamento delle run dentro il flusso della conversazione: qui cambia solo quale vista è la casa del workspace. Non cambiano né il contenuto della board, né quello del dettaglio spec, né il modo in cui l'agente lavora.
+history:
+  - status: TODO
+    at: "2026-08-22T11:31:53Z"
+  - status: PLANNED
+    at: "2026-08-22T12:10:04Z"
+  - status: IN PROGRESS
+    at: "2026-08-22T12:11:34Z"
+  - status: REVIEW
+    at: "2026-08-22T12:32:35Z"
+  - status: DONE
+    at: "2026-08-22T12:36:00Z"

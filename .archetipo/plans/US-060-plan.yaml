@@ -1,0 +1,738 @@
+schema: archetipo/plan/v2
+spec_code: US-060
+body: |-
+  # US-060: Seguire una run e rispondere alle sue richieste dentro la conversazione — Piano di implementazione
+
+  **Prodotto da:** Team di Planning ARchetipo
+  **Data:** 2026-08-22
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-008 — Workspace gestiti dalla UI
+  **Priorità:** HIGH | **Punti:** 5
+  **Bloccata da:** US-057 (DONE)
+
+  **User Story**
+  Come utilizzatore di ARchetipo che ha avviato un passo del processo, voglio vedere la run e le sue richieste dentro la conversazione che le ha chieste, così da non dover sorvegliare un elenco a parte per accorgermi che l'agente aspetta una mia risposta.
+
+  **Criteri di accettazione**
+  - AC-1 — Una run avviata da una conversazione compare nel flusso di quella conversazione, nel punto in cui è stata chiesta.
+  - AC-2 — L'avanzamento e l'esito della run si aggiornano dentro quel flusso mentre la run procede, senza che il revisore debba aprire un elenco separato.
+  - AC-3 — Una richiesta di consenso della run compare nel flusso con il comando in chiaro, e la run resta ferma finché il revisore non risponde.
+  - AC-4 — Concedendo il consenso la run riprende; negandolo la run si ferma e il rifiuto resta leggibile nella conversazione.
+  - AC-5 — Mentre una run è ferma in attesa, il revisore può scrivere all'agente nella stessa conversazione e riceverne risposta.
+  - AC-6 — Da un'altra vista o da un'altra conversazione, il revisore è avvisato che una run attende una risposta e da quell'avviso raggiunge la conversazione e il punto in cui l'attesa si trova.
+
+  **Fuori ambito**
+  La chiusura o l'annullamento di run avviate fuori da una conversazione, la modifica di ciò che una run esegue, e le notifiche fuori dall'applicazione. Non cambia il comportamento degli agenti né il contenuto dei log: cambia dove il revisore li incontra.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Tutto ciò che questa spec chiede **esiste già nel viewer, ma in due posti diversi**. La conversazione (`cli/internal/web/conversation.go`) sa quale esecuzione ha fatto nascere — `conversationOutcome.ExecutionID`, scritto da US-054 — e non la mostra: offre solo un bottone «Go to the run» che porta *altrove*. La run, il suo stream di eventi e le sue approvazioni vivono nel `runFollower` (`cli/internal/web/run_follow.go`) e sono servite da `GET /api/execution/{id}/run`, che il pannello di esecuzione monta dentro il dettaglio spec o dentro la modale PRD. La striscia `GET /api/workspace/runs` (`workspace_runs.go`) sa già dire *quale* run attende una risposta, ma manda chi la preme nel dettaglio spec.
+
+  La spec non chiede quindi un meccanismo nuovo: chiede di **spostare il punto di incontro**. Il piano non tocca nessun provider, nessun protocollo di agente e nessun contenuto di log — coerentemente con il fuori ambito dichiarato. Aggiunge un solo fatto al payload della conversazione (le run che quella conversazione ha chiesto, ciascuna ancorata al suo punto), due campi al payload della striscia, e la resa nel renderer puro.
+
+  Il contratto visivo è il mockup **già presente** `docs/mockups/redesign-chat/stato-c-run-attesa.html`: un blocco `run` con la sua testata e il suo log dentro il flusso, un blocco `attesa` con il comando in chiaro e le opzioni, il composer che resta scrivibile e dichiara «la run riprende quando rispondi all'attesa qui sopra». **Nessun mockup nuovo viene prodotto per questa spec.** Il bottone «Consenti sempre» disegnato nel mockup resta fuori: le opzioni di un'approvazione sono la dichiarazione del provider (`execution.PendingApproval.Options`) e non una lista scritta nel viewer, quindi il blocco disegna le opzioni che arrivano e non quelle che il mockup illustra.
+
+  **1. Il registro delle decisioni diventa una lista — `conversation_state.go`.**
+  Oggi `conversationState` tiene `outcome *conversationOutcome`: *l'ultima* decisione. Una conversazione che avvia due passi ne perderebbe uno, e AC-1 parla di «una run … nel punto in cui è stata chiesta», al plurale per costruzione. Il piano aggiunge `outcomes []conversationOutcome`, in ordine di decisione, e lascia `outcome` come il puntatore all'ultimo elemento: il campo `outcome` del payload non cambia forma, quindi nessun client esistente si accorge di niente. Una nuova decisione sullo stesso `ProposalID` sostituisce la voce invece di aggiungerne una seconda — la watermark `decidedProposalID` garantisce già che ciò accada solo per un rifiuto seguito da una conferma della stessa proposta, e due voci per una sola proposta sarebbero due blocchi per un solo gesto.
+
+  **2. Le run entrano nel payload della conversazione — `conversation.go`.**
+  `conversationView` guadagna `runs []conversationRunView`, mai `null`. Per ogni outcome che porta un `ExecutionID`, `conversationViewOf` compone:
+
+  - i fatti del record (`ws.store.Get`): azione, scope, spec, stato, istante di avvio — sono ciò che rende leggibile un blocco anche quando la run non è raggiungibile;
+  - `anchor_event_id`, che è il `ProposalID` dell'outcome, cioè **l'id dell'evento che ha proposto il passo**: è letteralmente «il punto in cui è stata chiesta» di AC-1, e non una posizione calcolata dal browser;
+  - la proiezione della run, **solo per un record ancora `RUNNING`**, ottenuta da `s.resolveRunTarget` — la stessa funzione che usa `handleGetWorkspaceRuns`, con cursore 0, che legge la proiezione senza consumarla. Per un record terminale si usa `ws.followers.get(id)`: il follower non viene mai rimosso, quindi il log resta leggibile senza aprire un secondo stream verso una run che è finita.
+
+  Un fallimento di risoluzione non fa fallire la lettura della conversazione: diventa `notice` sul blocco, con la regola già scritta su `workspace_runs.go` — «una run che non si è potuta interrogare è riportata, non nascosta».
+
+  Gli eventi di una run viaggiano **troncati alla coda** (`conversationRunEventWindow = 200`) con `truncated: true` quando la finestra ha tagliato: il pannello di esecuzione resta il posto dove si legge il log intero, e il blocco lo dichiara invece di far crescere senza limite un payload che viene riletto ogni due secondi.
+
+  **3. Una correzione minima e obbligata sul send — `conversation.go`.**
+  `handleSendWorkspaceConversationMessage` chiude oggi ricalcolando `s.conversationAvailabilityFor(ctx, ws)` per rendere la vista, mentre la GET usa `heldConversationTarget(snapshot)`. Le due risposte si contraddicono appena il provider di default cambia mentre una conversazione è viva: la GET dice `available:true` (la conversazione è tenuta dal provider che la tiene davvero), la POST dice `available:false`, e il renderer disabilita il composer per un giro. AC-5 vive esattamente lì. La correzione è una riga: anche la POST rende con `heldConversationTarget(snapshot)`, che è la sola verità su una conversazione già aperta.
+
+  **4. L'avviso porta al punto — `workspace_runs.go`.**
+  `workspaceRunView` guadagna `conversation_id` e `anchor_event_id`, valorizzati quando l'esecuzione elencata è fra gli outcome della conversazione viva del workspace. È un fatto del holder, non del record: nessun campo nuovo viene scritto su disco, e una run avviata dalla board continua a non portarne nessuno — che è la ragione per cui AC-6 non promette niente sulle run nate fuori da una conversazione.
+
+  **5. Resa — `assets/conversation.js` (puro) e `assets/app.js` (cablaggio).**
+  `renderConversation` interfoglia i blocchi nella timeline: dopo l'evento il cui id è `anchor_event_id` emette il blocco della run; una run il cui evento d'ancora non è più nella storia trattenuta viene emessa in coda, perché un blocco che sparisce quando la finestra di ritenzione scorre sarebbe peggio di un blocco fuori posto. Il blocco disegna testata (azione, spec, stato), log, e — quando la proiezione porta approvazioni — la carta di consenso con `tool_name` e gli argomenti **in chiaro** (`approval.args`, resi come testo preformattato) e un bottone per opzione. Il composer non viene mai disabilitato da un'attesa: l'unica cosa che lo governa resta lo stato della conversazione.
+
+  `app.js` risponde all'approvazione con la rotta che già esiste, `POST /api/execution/{id}/run/approvals/{approvalId}`, e tiene la carta risolta lato client con la stessa disciplina del pannello run (`runAnswered`), così il rifiuto resta leggibile anche quando l'approvazione sparisce dalla lista dei pendenti. L'indicatore di attesa in topbar (`#runs-attention`) smette di portare al dettaglio spec quando la voce porta un `conversation_id`: porta alla vista conversazione, sul thread vivo, e porta il blocco ancorato in vista evidenziandolo.
+
+  ### Decisioni architetturali
+
+  Il gate Wiki del progetto è **spento** (`wiki.enabled: false` da `archetipo config show`), quindi le decisioni che superano la soglia vivono qui e in nessuna pagina.
+
+  **D1 — Le run della conversazione viaggiano nel payload della conversazione, non in un secondo canale che il browser correla.**
+  *Contesto:* AC-1 e AC-2 chiedono che la run si veda e si aggiorni *dentro* il flusso. Il browser ha già due letture in corso ogni due secondi: `/api/workspace/conversation` e `/api/workspace/runs`.
+  *Alternative valutate:* (a) lasciare che `app.js` incroci le due letture, correlando `outcome.execution_id` con le voci della striscia — non basta, perché la striscia elenca solo i record `RUNNING` e non porta né eventi né approvazioni, quindi il blocco non avrebbe log; (b) far leggere al browser `GET /api/execution/{id}/run` per ogni run della conversazione — moltiplica le richieste per il numero di run e sposta nel browser la decisione di *quali* run appartengono alla conversazione, che è un fatto del holder sul server; (c) uno stream SSE dedicato — l'intero viewer segue una disciplina a polling con cursore, e un secondo modello di trasporto per un solo pannello sarebbe una seconda disciplina da mantenere.
+  *Scelta:* (d) il server compone: chi conosce gli outcome è il holder, chi conosce la proiezione è il follower, ed entrambi sono nello stesso processo.
+  *Tradeoff:* il payload della conversazione cresce con il numero di run vive; mitigato dalla finestra di 200 eventi per run e dal fatto che solo i record `RUNNING` aprono un follower.
+  *Verifica:* i test di handler provano che il payload porta un blocco per outcome, ancorato al `ProposalID`, con la proiezione per un record `RUNNING` e senza stream nuovo per uno terminale; lo smoke e2e prova che il blocco si aggiorna mentre la run parla.
+
+  **D2 — L'ancora è l'id dell'evento che ha proposto il passo, non una posizione.**
+  *Contesto:* «nel punto in cui è stata chiesta» ha bisogno di un riferimento che sopravviva a un ricarico, a un cursore e a una finestra di ritenzione che scorre.
+  *Alternative valutate:* (a) l'indice nell'array degli eventi — cambia a ogni giro di polling e non sopravvive al troncamento; (b) l'istante di avvio dell'esecuzione — ordina, ma non identifica nessuna riga, e due passi confermati nello stesso secondo diventerebbero indistinguibili; (c) un evento sintetico scritto nella storia della conversazione — cambierebbe il contenuto dei log, che la spec mette esplicitamente fuori ambito.
+  *Scelta:* `conversationOutcome.ProposalID`, che è già l'id dell'evento `text` che portava la proposta ed è già l'identità con cui la decisione viene presa.
+  *Tradeoff:* quando l'evento d'ancora esce dalla finestra di ritenzione il blocco perde il suo posto esatto; risolto dichiarandolo — il blocco va in coda — invece di farlo sparire.
+  *Verifica:* test del renderer puro su tre casi: ancora presente, ancora assente, più run ancorate a eventi diversi.
+
+  **D3 — Nessuna persistenza dei blocchi nel journal delle conversazioni.**
+  *Contesto:* US-058 ha reso persistente la storia di una conversazione (`cli/internal/conversationlog`). Verrebbe naturale scriverci anche le run.
+  *Scelta:* non si scrive nulla. Una run locale non sopravvive al processo che l'ha aperta (`localrun.Registry` non è persistente) e una remota non appartiene alla conversazione ma al record dell'esecuzione, che è già su disco sotto `.archetipo/executions/`. Un blocco persistito sarebbe una promessa che alla riapertura non si può mantenere.
+  *Tradeoff:* riaprendo un thread passato i blocchi non ci sono; è lo stesso silenzio che US-058 ha già scelto per lo stato vivo (`live` è derivato, mai persistito).
+  *Verifica:* nessuna nuova scrittura su `.archetipo/conversations/`; lo smoke di US-058 (`npm run test:view-conversation-history-smoke`) non deve cambiare di una riga.
+
+  ---
+
+  ## Baseline
+
+  Rilevata dai check che CI e `AGENTS.md` dichiarano, eseguita il 2026-08-22 in `/Users/stefanoleli/Project/ARchetipo`.
+
+  | Check | Risultato prima dell'implementazione | Conseguenza sul piano |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | nessun output | ogni task Go chiude con `gofmt -l .` vuoto |
+  | `cd cli && go vet ./...` | 0 problemi | invariato: nessun task può introdurne |
+  | `cd cli && go build ./...` | compila pulito | invariato |
+  | `cd cli && go test ./...` | **1911 test passati in 29 package** | ogni task Go verifica il proprio package e il gate chiude sull'intera suite |
+  | `npm run test:web` | **162 test passati, 41 suite** | i moduli puri del viewer si verificano qui |
+  | `npm run test:view-conversation-action-smoke` | **PASS, 5 affermazioni provate** (US-054 AC-1..AC-5) | è il modello dello smoke di US-060 e **non deve regredire**: proposta, conferma, rifiuto e parità con la board restano invariati |
+  | `npm run test:view-conversation-smoke` | non eseguito in questa sessione; dichiarato PASS con 7 affermazioni nella baseline di US-058 | il gate lo esegue e pretende PASS |
+  | `npm run test:view-workspace-runs-smoke` | **ROSSO alla partenza, e in un modo preciso** — vedi il riquadro sotto | i task che toccano `/api/workspace/runs` non promettono verde: promettono *nessun fallimento nuovo* rispetto a questo confine |
+  | `golangci-lint run --timeout 5m ./...` | **non eseguibile: binario non installato su questa macchina** | prerequisito d'ambiente, non un fallimento del codice |
+
+  ### Il confine rosso di `test:view-workspace-runs-smoke`
+
+  Lo smoke prova sei affermazioni e **tutte e sei passano**: AC-3 (la striscia elenca le due run in volo e lascia fuori quella terminale), AC-4 (l'attesa su `appr-1` osservata solo attraverso `GET /api/workspace/runs`, con zero chiamate a `GET /api/execution/{id}/run`), AC-2 (la conversazione sopravvive a cinque letture del dettaglio spec), AC-1/AC-2/AC-4/AC-5 (gli identificatori serviti in `index.html`), AC-6 (il media query a 900px in `app.css`).
+
+  Fallisce solo il controllo finale sui segreti, con esattamente questo messaggio:
+
+  ```
+  FAIL: the viewer echoed the credential in 1 response(s)
+  ```
+
+  La risposta incriminata è stata isolata: è il **diff di review**, che restituisce le righe di `.archetipo/config.yaml` del sandbox — file in cui lo smoke stesso ha scritto la configurazione del provider, sentinella compresa. È un difetto preesistente della rotta di diff, riproducibile due volte su due, **estraneo a US-060**: nessun task di questo piano tocca né il diff né la configurazione del provider. Ogni task che tocca `workspace_runs.go` verifica quindi che le sei affermazioni passino ancora e che il fallimento resti **esattamente quella riga e nessun'altra**.
+
+  Nessun altro comando è rosso alla partenza: ogni altra verifica di questo piano può promettere verde.
+
+  **Prerequisiti d'ambiente** (nessuno da riscoprire durante l'implementazione): Go per la build del CLI; Node per `node --test` e per l'harness e2e; gli smoke `*-view-smoke.mjs` compilano da soli il CLI in `test/e2e/.bin/` e non richiedono credenziali, perché il binario dell'agente è sostituito da `test/e2e/support/fake-claude.mjs` e l'hub ARcipelago da un server Node su 127.0.0.1. `golangci-lint` si installa con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`; se l'installazione non riesce, il gate lo dichiara **non eseguito** invece di scrivere che è verde.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello | Oracolo osservabile | Task che lo produce |
+  |---|---|---|---|---|
+  | AC-1 | workspace con `US-A01` PLANNED e piano persistito; conversazione viva sul provider `claude` finto; l'agente propone `implement`, il revisore conferma | e2e (smoke) + unit (renderer) | `GET /api/workspace/conversation` porta `runs[0].execution_id` uguale all'unico record sotto `.archetipo/executions/` e `runs[0].anchor_event_id` uguale all'`event_id` della proposta confermata; l'HTML reso da `renderConversation` colloca il blocco **subito dopo** il `<li>` dell'evento con quell'id | TASK-11, TASK-08 |
+  | AC-2 | la stessa run, ancora `RUNNING`, guidata frame per frame dal control server del finto agente | e2e (smoke) | fra due letture consecutive della **sola** rotta `/api/workspace/conversation`, `runs[0].events` cresce con i frame appena emessi e `runs[0].run.state` passa da `ACTIVE` allo stato terminale, senza che lo smoke chiami mai `GET /api/execution/{id}/run` — contato sul registro delle richieste | TASK-11 |
+  | AC-3 | default del workspace spostato su `arcipelago` puntato all'hub finto, che assegna una run al record e apre `appr-1` con `tool_name: "Bash"` e argomenti `{"command":"git worktree prune --verbose"}` | e2e (smoke) + unit (renderer) | `runs[0].approvals[0].args` contiene la stringa `git worktree prune --verbose` e `runs[0].run.state` resta `ACTIVE` finché l'hub non riceve risposta; l'HTML reso contiene quella stringa dentro un `<pre>` del blocco d'attesa | TASK-11, TASK-08 |
+  | AC-4 | due approvazioni in sequenza sulla stessa run: `appr-1` risposta con l'opzione `allow`, `appr-2` con l'opzione `deny` | e2e (smoke) + unit (renderer) | l'hub riporta di aver ricevuto `allow` su `appr-1` e la run pubblica altri eventi dopo di essa; riporta `deny` su `appr-2` e chiude la run, e la lettura successiva della conversazione mostra `runs[0].run.state` terminale; il renderer, ricevuto `ui.answeredApprovals`, disegna la carta risolta con l'opzione scelta e la classe di rifiuto | TASK-11, TASK-08 |
+  | AC-5 | `appr-1` ancora pendente, conversazione viva tenuta dal provider `claude` mentre il default del workspace è ormai `arcipelago` | e2e (smoke) + unit (renderer) | `POST /api/workspace/conversation/messages` risponde 202 con `available:true` e il **processo agente stesso** riporta al control server di aver ricevuto la sentinella; il renderer produce un composer **non** disabilitato mentre `runs[0].awaiting_response` è vero | TASK-11, TASK-08 |
+  | AC-6 | la stessa attesa, con la vista portata sulla board | e2e (smoke) + unit (renderer + layout) | `GET /api/workspace/runs` marca quella voce `awaiting_response:true` **e** porta `conversation_id` uguale all'id della conversazione viva e `anchor_event_id` uguale all'`event_id` della proposta; il DOM servito espone `#runs-attention` non nascosto e il blocco ancorato porta `data-conversation-run-anchor` con quell'id, che è ciò su cui `app.js` fa lo scroll | TASK-11, TASK-06, TASK-08 |
+
+  **Perché due provider in un solo smoke.** Una decisione pendente esiste solo sotto un provider che abbia approvazioni: `localrun.Collaborator.ReadRunApprovals` risponde lista vuota e `RespondRunApproval` rifiuta per costruzione, perché una sessione locale gira con le approvazioni disabilitate. Una conversazione esiste solo sotto un provider che implementi `execution.Conversationalist`, e l'unico è `claude`. I due insiemi sono disgiunti, e il workspace ha **un solo** provider di default: la sola via per osservare AC-3..AC-6 è quella che `test/e2e/workspace-runs-view-smoke.mjs` ha già stabilito e documentato — spostare il default dall'uno all'altro attraverso la rotta che usa il pannello Execution, esattamente come farebbe una persona. È lecito perché `resolveRunTarget` legge deliberatamente il default **da disco a ogni chiamata** e non quello con cui il viewer è partito. Questo piano non cambia quella regola: la usa.
+
+  Nessun criterio è dimostrato con un doppio che nasconda il suo oracolo. Il finto `claude` non decide niente da sé — ogni frame che emette è comandato dallo smoke e ogni frame che riceve è riportato al control server — e l'hub finto è la sola cosa che sa quale opzione è stata davvero risposta, quindi AC-4 non può essere soddisfatta da una risposta HTTP 202.
+
+  ---
+
+  ## Strategia di test
+
+  Tre livelli, ciascuno dove è l'unico che può dire la verità.
+
+  - **Unit Go** (`cli/internal/web/*_test.go`, `go test ./...`) — il holder che tiene più decisioni in ordine, la composizione del payload della conversazione (blocco per outcome, ancora uguale al `ProposalID`, nessuno stream nuovo per un record terminale, `notice` invece di errore quando la run non si risolve) e i due campi nuovi della striscia. Gli handler sono già testati in-process con `httptest` in questo package: la fixture esiste e non va inventata.
+  - **Unit del renderer puro** (`test/web/conversation.test.mjs`, `node --test`) — l'interfogliatura nella timeline, il blocco d'attesa con il comando in chiaro, la carta risolta, il composer che resta abilitato durante un'attesa. È il livello giusto perché `conversation.js` non ha DOM, non ha fetch e non ha timer: si chiama con un payload e si legge una stringa.
+  - **Smoke e2e** (`test/e2e/conversation-run-view-smoke.mjs`) — l'unico livello che può provare AC-2 (l'aggiornamento nel tempo), AC-4 (che cosa l'hub ha davvero ricevuto) e AC-5 (che il messaggio è arrivato al *processo* agente e non solo alla rotta).
+
+  Non si introduce nessun framework di browser. La spec vive tutta nel payload e in una stringa HTML prodotta da una funzione pura, e i due smoke gemelli di US-053/US-054/US-058 già asseriscono il DOM servito leggendo `index.html` e `app.css` come testo: bootstrappare Playwright per questo cambiamento aggiungerebbe una dipendenza e un modo nuovo di fallire senza rendere osservabile un solo fatto in più.
+
+  ### Test E2E — simulazione utente
+
+  **Framework:** harness Node locale del repository (`test/e2e/*-view-smoke.mjs`), CLI compilato dai sorgenti, `support/fake-claude.mjs` al posto del binario dell'agente, hub ARcipelago finto su 127.0.0.1. Nessuna credenziale, nessuna rete fuori dal loopback, nessuna attesa a tempo: ogni passo interroga una rotta o il control server con un timeout che nomina che cosa aspettava.
+
+  **Video dimostrativo:** atteso — la spec è filmabile (una conversazione, un blocco che cresce, una carta d'attesa, una risposta). La registrazione è di `archetipo-review`, non dell'implementazione.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | La run compare dove è stata chiesta | Con il provider `claude` finto come default, il revisore apre una conversazione, l'agente propone `implement` su `US-A01`, il revisore conferma; la conversazione porta il blocco della run ancorato all'evento della proposta, e il blocco cresce mentre il finto agente emette frame |
+  | Il consenso si dà nel flusso | Il default passa ad `arcipelago` sull'hub finto, che assegna una run al record e apre una richiesta di consenso su un comando; la conversazione mostra il comando in chiaro e la run resta ferma; il revisore scrive all'agente mentre l'attesa è aperta e riceve risposta; poi concede su una richiesta e nega sull'altra, e l'hub conferma quale opzione ha ricevuto |
+  | L'avviso porta al punto | Con l'attesa aperta e la vista portata sulla board, `GET /api/workspace/runs` marca la voce e porta l'id della conversazione e l'ancora; il DOM servito espone l'indicatore e l'attributo su cui `app.js` porta in vista il blocco |
+tasks:
+  - id: TASK-01
+    title: Il holder della conversazione tiene tutte le decisioni, in ordine
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      `conversationState` conserva ogni decisione presa su una proposta, in ordine, invece della sola ultima, e sa dire a quale evento è ancorata l'esecuzione nata da ciascuna.
+
+      ## Read
+      - `cli/internal/web/conversation_state.go` — `conversationState` (campi `decidedProposalID`, `outcome`), `conversationOutcome`, `conversationSnapshot`, `current()`, `decide()`, `open()`, `close()`
+      - `cli/internal/web/conversation_proposal.go` — `handleDecideWorkspaceConversationProposal`, unico chiamante di `decide()`, e `newConversationOutcomeView`
+      - `cli/internal/web/conversation_state_test.go` se esiste, altrimenti `cli/internal/web/conversation_test.go` — per la forma delle fixture del package
+
+      ## Change
+      - `cli/internal/web/conversation_state.go` — soltanto questo file.
+        - aggiungere `outcomes []conversationOutcome` a `conversationState` e a `conversationSnapshot`;
+        - `decide()` accoda la nuova voce, **sostituendola** quando una voce con lo stesso `ProposalID` è già presente, e continua a fare tutto ciò che fa oggi (watermark `decidedProposalID`, campo `outcome`);
+        - `outcome` resta e continua a puntare all'**ultima** decisione: nessun campo esistente cambia forma o significato;
+        - `current()` consegna una **copia** della slice, come già fa per `providerConfig`;
+        - `open()` e `close()` azzerano `outcomes` insieme al resto dello stato della conversazione;
+        - aggiungere un metodo `anchorOf(executionID string) (int64, bool)` che scorre `outcomes` e risponde con il `ProposalID` della decisione che ha avviato quella esecuzione.
+      - Non goal: non toccare `conversation.go`, `conversation_proposal.go`, `conversation_journal.go`; non aggiungere campi al JSON in questo task; non persistere nulla su disco.
+
+      ## Steps
+      1. Leggere `conversation_state.go` per intero e individuare ogni punto in cui `outcome` è scritto o letto.
+      2. Aggiungere il campo `outcomes []conversationOutcome` alla struct e alla snapshot, con un commento che dice perché è una lista: una conversazione può avviare più passi, e ciascuno ha il suo punto nel discorso.
+      3. In `decide()`, dopo i controlli esistenti, cercare in `outcomes` una voce con lo stesso `ProposalID`: se c'è la si sostituisce, altrimenti si accoda. Poi assegnare `outcome` all'indirizzo dell'ultima voce accodata o sostituita.
+      4. In `current()`, copiare `outcomes` in una slice nuova prima di consegnarla.
+      5. In `open()` e in `close()` (o nel punto già esistente che azzera `decidedProposalID` e `outcome`), azzerare anche `outcomes`.
+      6. Scrivere `anchorOf`, sotto lock, che ritorna `(0, false)` per un id vuoto, per un holder chiuso e per una esecuzione che non risulta.
+      7. `cd cli && gofmt -w internal/web/conversation_state.go`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go vet ./internal/web/... && go build ./... && go test ./internal/web/...`
+      - Expect: `gofmt` non stampa nulla, `go vet` non riporta problemi, il build compila e i test del package `web` passano tutti — la baseline li dà verdi e questo task non ne rende rosso nessuno.
+
+      ## Done
+      - [ ] `conversationState` e `conversationSnapshot` portano `outcomes` e `current()` ne consegna una copia.
+      - [ ] `decide()` accoda una decisione nuova e sostituisce quella sullo stesso `ProposalID`, lasciando `outcome` sull'ultima.
+      - [ ] `anchorOf(executionID)` risponde con il `ProposalID` giusto e con `false` per un'esecuzione sconosciuta — è l'ancora che AC-1 e AC-6 useranno.
+      - [ ] Nessun campo JSON esistente è cambiato: `go test ./internal/web/...` è verde senza che nessun test esistente sia stato modificato.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test del registro ordinato delle decisioni
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Provare che il holder tiene più decisioni in ordine, che una decisione ripetuta sulla stessa proposta non ne produce due, e che l'ancora di un'esecuzione è l'id dell'evento che l'ha proposta.
+
+      ## Read
+      - `cli/internal/web/conversation_state.go` — la versione prodotta da TASK-01
+      - `cli/internal/web/conversation_test.go` — convenzioni del package: nomi dei test, costruzione del holder, uso di `t.Fatalf` con il valore osservato
+
+      ## Change
+      - `cli/internal/web/conversation_state_test.go` — creare il file se non esiste, altrimenti aggiungervi i casi. Nessun altro file.
+      - Non goal: nessun test HTTP qui; le rotte sono di TASK-04.
+
+      ## Steps
+      1. Scrivere `TestConversationStateKeepsEveryDecisionInOrder`: aprire un holder, decidere due proposte con `ProposalID` diversi e `ExecutionID` diversi, leggere `current()` e verificare che `outcomes` abbia due voci nell'ordine in cui sono state decise e che `outcome` sia la seconda.
+      2. Scrivere `TestConversationStateReplacesTheDecisionOfTheSameProposal`: decidere la stessa `ProposalID` due volte (prima `declined` senza esecuzione, poi `confirmed` con esecuzione) e verificare che `outcomes` abbia **una** sola voce, quella confermata.
+      3. Scrivere `TestConversationStateAnchorsAnExecutionToItsProposal`: verificare che `anchorOf` risponda con il `ProposalID` atteso per ciascuna delle due esecuzioni, e `(0, false)` per un id sconosciuto e per la stringa vuota.
+      4. Scrivere `TestConversationStateForgetsDecisionsWhenTheConversationChanges`: chiudere la conversazione, aprirne un'altra e verificare che `outcomes` sia vuota — le decisioni di una conversazione non sono quelle della successiva.
+      5. Verificare che `current()` consegni una copia: mutare la slice ricevuta e rileggere `current()` senza osservare la mutazione.
+      6. `cd cli && gofmt -w internal/web/conversation_state_test.go`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go test ./internal/web/... -run 'TestConversationState'`
+      - Expect: i cinque casi passano; `gofmt` non stampa nulla.
+
+      ## Done
+      - [ ] AC-1 — esiste un test che prova che due passi confermati nella stessa conversazione producono due voci distinte, ciascuna ancorata al proprio evento di proposta.
+      - [ ] Un test prova che `current()` consegna una copia e non la slice interna.
+      - [ ] `cd cli && go test ./internal/web/...` resta verde per intero.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Le run che la conversazione ha chiesto entrano nel suo payload
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      `GET /api/workspace/conversation` porta un blocco per ogni esecuzione nata da quella conversazione, ancorato all'evento che l'ha proposta, con lo stato, il log e le approvazioni della run.
+
+      ## Read
+      - `cli/internal/web/conversation.go` — `conversationView`, `conversationViewOf`, `handleGetWorkspaceConversation`, `handleSendWorkspaceConversationMessage`, `heldConversationTarget`
+      - `cli/internal/web/run_routes.go` — `runSnapshotView`, `runView`, `projectionView`, `resolveRunTarget` (firma e semantica del `notice`)
+      - `cli/internal/web/workspace_runs.go` — `handleGetWorkspaceRuns`, `runScopeOf`: è il modello da seguire, cursore 0 compreso
+      - `cli/internal/web/run_follow.go` — `runFollowers.get`, `runFollower.snapshotView`
+      - `cli/internal/execution/types.go` — `Execution`, `StatusRunning`, `ActionScope`
+
+      ## Change
+      - `cli/internal/web/conversation.go` — soltanto questo file.
+        - nuovo tipo `conversationRunView` con: `execution_id`, `anchor_event_id`, `action`, `label`, `scope`, `spec_code`, `status`, `created_at`, `decision`, e la `runView` esistente **incorporata anonima** (così `run`, `events`, `last_id`, `approvals`, `connected`, `truncated`, `notice` mantengono esattamente i nomi e i tipi che il browser già conosce dal pannello run);
+        - nuovo campo `Runs []conversationRunView \`json:"runs"\`` su `conversationView`, **mai `nil`**;
+        - nuova funzione `(s *Server) conversationRunsOf(ctx, ws, snapshot) []conversationRunView` che compone i blocchi dagli `outcomes` della snapshot;
+        - `conversationViewOf` la chiama, dopo aver reso `Outcome` e prima di leggere gli eventi, e assegna il risultato;
+        - una costante `conversationRunEventWindow = 200` e il troncamento alla coda descritto sotto;
+        - in `handleSendWorkspaceConversationMessage`, sostituire `target := s.conversationAvailabilityFor(ctx, ws)` con `heldConversationTarget(snapshot)`, che è ciò che la GET usa già per una conversazione tenuta.
+      - Non goal: non toccare `run_routes.go`, `run_follow.go`, `workspace_runs.go`, `conversation_journal.go`; non scrivere niente su disco; non aprire follower per esecuzioni terminate.
+
+      ## Steps
+      1. Dichiarare `conversationRunView` con la `runView` incorporata anonima e i campi propri elencati sopra. Documentare in commento che `anchor_event_id` è l'id dell'evento che ha proposto il passo, cioè «il punto in cui è stata chiesta».
+      2. Scrivere `conversationRunsOf`, che parte da `snapshot.outcomes` e, per ogni voce con `ExecutionID` non vuoto, nell'ordine in cui è stata decisa:
+         1. `record, err := ws.store.Get(ctx, outcome.ExecutionID)`; su errore emette comunque il blocco con i soli fatti dell'outcome (azione, label, scope, spec) e `notice` uguale al testo dell'errore — una run che non si è potuta leggere è riportata, non nascosta;
+         2. riempie `status`, `created_at` e `scope` dal record (`runScopeOf`), lasciando `label` e `spec_code` dell'outcome quando il record non li porta;
+         3. se `record.Status == execution.StatusRunning`: `target, notice, err := s.resolveRunTarget(ctx, ws, id)`; su errore scrive `notice` e prosegue; con `target.follower == nil` scrive il `notice` restituito; altrimenti usa `target.follower.snapshotView(0)`;
+         4. altrimenti (record terminale): `follower, ok := ws.followers.get(id)` e, solo se presente, `follower.snapshotView(0)` — **nessun follower nuovo viene mai avviato per una run finita**;
+         5. converte la proiezione con `projectionView` e applica la finestra: se `len(events) > conversationRunEventWindow`, tiene la **coda** e alza `truncated`;
+         6. `awaiting_response` è vero se e solo se la proiezione porta almeno un'approvazione: è la stessa regola di `handleGetWorkspaceRuns`, e resta un fatto del server.
+      3. In `conversationViewOf`, assegnare `view.Runs = s.conversationRunsOf(ctx, ws, snapshot)` e garantire `[]conversationRunView{}` invece di `nil` anche quando la conversazione non è aperta.
+      4. In `handleSendWorkspaceConversationMessage`, fare la sostituzione della riga di `target` e aggiungere un commento breve: una conversazione già aperta è tenuta dal provider che la tiene, non dal default di adesso, e la POST deve dirlo con la stessa voce della GET.
+      5. `cd cli && gofmt -w internal/web/conversation.go`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go vet ./internal/web/... && go build ./... && go test ./internal/web/...`
+      - Expect: nessun output da `gofmt`, nessun problema da `vet`, build pulito e tutti i test del package `web` verdi — se un test esistente si rompe è perché `runs` è `nil` da qualche parte o perché la POST ha cambiato risposta oltre a `available`, e va corretto il codice, non il test.
+
+      ## Done
+      - [ ] AC-1 — il payload della conversazione porta `runs`, mai `null`, con una voce per outcome che ha avviato un'esecuzione e `anchor_event_id` uguale al `ProposalID` di quella decisione.
+      - [ ] AC-2 — per un record `RUNNING` il blocco porta `run.state`, `events` e `approvals` dalla proiezione del follower, letta con cursore 0 e quindi senza sottrarre eventi al pannello run.
+      - [ ] Un record terminale non fa partire nessuno stream nuovo: si usa solo il follower già presente, se c'è.
+      - [ ] AC-5 — `POST /api/workspace/conversation/messages` risponde con la stessa `available` della GET per una conversazione tenuta.
+      - [ ] `cd cli && go test ./internal/web/...` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test degli handler sul payload delle run della conversazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Provare, contro il server HTTP in-process, che la conversazione porta i suoi blocchi ancorati, che una run irraggiungibile diventa un `notice` e non un errore, e che il composer resta offerto dopo un invio.
+
+      ## Read
+      - `cli/internal/web/conversation_test.go` — come il package costruisce un `Server`, un `workspaceSession` e un provider finto; è la fixture da riusare, non da reinventare
+      - `cli/internal/web/workspace_runs_test.go` — come si prepara un record `RUNNING` e un collaborator finto con approvazioni
+      - `cli/internal/web/conversation.go` — la versione prodotta da TASK-03
+
+      ## Change
+      - `cli/internal/web/conversation_test.go` — aggiungere i casi in coda. Se la fixture di un collaborator con approvazioni vive in `workspace_runs_test.go`, riusarla da lì invece di duplicarla.
+      - Non goal: nessun test del renderer JS qui; nessuna modifica al codice di produzione.
+
+      ## Steps
+      1. `TestConversationViewCarriesTheRunsItAsked`: conversazione aperta, una proposta decisa con `ExecutionID` di un record `RUNNING`, collaborator finto che pubblica due eventi. Asserire che `GET /api/workspace/conversation` risponde 200 con `runs` di lunghezza 1, `execution_id` giusto, `anchor_event_id` uguale all'id dell'evento della proposta, `run.state` `ACTIVE` e due eventi.
+      2. `TestConversationViewCarriesOneBlockPerDecision`: due proposte confermate, due record; asserire due blocchi nell'ordine delle decisioni con ancore diverse.
+      3. `TestConversationViewReportsAnUnreachableRunAsANotice`: outcome che punta a un `ExecutionID` inesistente nello store. Asserire 200 (non un errore), un blocco presente e `notice` non vuoto — la conversazione resta leggibile.
+      4. `TestConversationViewOpensNoFollowerForATerminalRun`: record `SUCCEEDED`, nessun follower registrato. Asserire che il blocco c'è con il suo `status`, che `run` è nullo o senza eventi, e che il collaborator finto **non** ha ricevuto nessuna chiamata a `StreamRunEvents` — contata dal finto.
+      5. `TestConversationViewMarksTheRunAwaitingAnAnswer`: collaborator finto che risponde una `PendingApproval` con `tool_name` e `args` contenenti un comando. Asserire `runs[0].awaiting_response == true` e che `approvals[0].args` porti il comando **testualmente**.
+      6. `TestSendConversationMessageKeepsTheConversationAvailable`: default del workspace cambiato dopo l'apertura verso un provider che non conversa; asserire che la POST dei messaggi risponde 202 con `available:true`, come la GET.
+      7. `TestConversationViewAlwaysCarriesARunsArray`: conversazione senza decisioni; asserire che `runs` è `[]` nel JSON e non `null`.
+      8. `cd cli && gofmt -w internal/web/conversation_test.go`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go test ./internal/web/...`
+      - Expect: tutti i casi nuovi passano e la suite del package resta interamente verde.
+
+      ## Done
+      - [ ] AC-1 — un test prova l'ancoraggio al `ProposalID` con due decisioni distinte.
+      - [ ] AC-2 — un test prova che gli eventi della run arrivano nel payload della conversazione.
+      - [ ] AC-3 — un test prova che l'argomento dell'approvazione arriva **in chiaro** nel payload, non riassunto e non troncato.
+      - [ ] AC-5 — un test prova che la POST dei messaggi non dichiara indisponibile una conversazione che è viva.
+      - [ ] Un test prova che una run terminale non apre nessuno stream, contando le chiamate del collaborator finto e non ispezionando lo stato interno.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: L'elenco delle run dice da quale conversazione e da quale punto viene ognuna
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      `GET /api/workspace/runs` porta, per ogni voce nata da una conversazione, l'id di quella conversazione e l'id dell'evento che l'ha chiesta, così che l'avviso di attesa possa portare al punto invece che a un pannello.
+
+      ## Read
+      - `cli/internal/web/workspace_runs.go` — `workspaceRunView`, `workspaceRunsView`, `handleGetWorkspaceRuns`
+      - `cli/internal/web/conversation_state.go` — `anchorOf`, `current()` (versione di TASK-01)
+      - `cli/internal/web/workspace.go` — il campo `conversation` su `workspaceSession`
+
+      ## Change
+      - `cli/internal/web/workspace_runs.go` — soltanto questo file.
+        - aggiungere a `workspaceRunView` i campi `ConversationID string \`json:"conversation_id,omitempty"\`` e `AnchorEventID int64 \`json:"anchor_event_id,omitempty"\``;
+        - in `handleGetWorkspaceRuns`, leggere una volta sola `snapshot, open := ws.conversation.current()` **prima** del ciclo, e per ogni voce chiedere `ws.conversation.anchorOf(record.ID)`: quando risponde `true`, valorizzare i due campi con `snapshot.id` e il `ProposalID`.
+      - Non goal: non toccare il record di esecuzione su disco; non aggiungere campi a `execution.Execution`; non cambiare quali voci sono elencate né la regola di `awaiting_response`.
+
+      ## Steps
+      1. Aggiungere i due campi con un commento che dice perché sono `omitempty`: una run avviata dalla board non è nata in nessuna conversazione, e un id vuoto sarebbe una promessa di navigazione che non si può mantenere.
+      2. Leggere la conversazione viva una sola volta prima del ciclo: interrogare il holder per ogni riga costerebbe un lock per riga per un fatto che non cambia dentro una risposta.
+      3. Nel ciclo, dopo aver riempito `view`, chiamare `anchorOf(record.ID)` e valorizzare i due campi solo quando la conversazione è aperta e la risposta è `true`.
+      4. `cd cli && gofmt -w internal/web/workspace_runs.go`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go vet ./internal/web/... && go build ./... && go test ./internal/web/...`
+      - Expect: nessun output da `gofmt`, nessun problema da `vet`, build pulito, test del package verdi.
+      - Run: `npm run test:view-workspace-runs-smoke`
+      - Expect: **non verde, e non deve esserlo**: la baseline registra questo smoke come rosso. Attendersi che le sei affermazioni continuino a essere stampate come `ok` e che l'unica riga di fallimento resti esattamente `FAIL: the viewer echoed the credential in 1 response(s)` — nessun fallimento nuovo, nessuna affermazione persa.
+
+      ## Done
+      - [ ] AC-6 — una voce nata da una conversazione porta `conversation_id` e `anchor_event_id`; una nata dalla board non porta né l'uno né l'altro.
+      - [ ] Nessun campo esistente della voce ha cambiato nome, tipo o significato.
+      - [ ] `cd cli && go test ./internal/web/...` verde e `npm run test:view-workspace-runs-smoke` fermo esattamente al confine registrato nella baseline.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test dell'ancora sulla striscia delle run
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Provare che l'elenco delle run distingue una run nata da una conversazione da una nata dalla board, e che l'ancora che porta è l'evento della proposta.
+
+      ## Read
+      - `cli/internal/web/workspace_runs_test.go` — fixture esistenti: record `RUNNING`, collaborator finto, chiamata alla rotta
+      - `cli/internal/web/workspace_runs.go` — la versione prodotta da TASK-05
+
+      ## Change
+      - `cli/internal/web/workspace_runs_test.go` — aggiungere i casi in coda. Nessun altro file.
+
+      ## Steps
+      1. `TestWorkspaceRunsCarryTheConversationThatAskedThem`: conversazione aperta con una decisione confermata su un record `RUNNING`; asserire che la voce corrispondente porta `conversation_id` uguale all'id della conversazione e `anchor_event_id` uguale al `ProposalID`.
+      2. `TestWorkspaceRunsOmitTheAnchorForABoardRun`: un secondo record `RUNNING` che nessuna decisione ha avviato; asserire che il JSON di quella voce **non contiene** le chiavi `conversation_id` e `anchor_event_id` (asserire sul JSON serializzato, non sulla struct, perché è `omitempty` a doverlo garantire).
+      3. `TestWorkspaceRunsOmitTheAnchorWithNoConversationOpen`: nessuna conversazione aperta; asserire che nessuna voce porta i due campi.
+      4. `cd cli && gofmt -w internal/web/workspace_runs_test.go`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go test ./internal/web/... -run 'TestWorkspaceRuns'`
+      - Expect: i tre casi passano.
+      - Run: `cd cli && go test ./internal/web/...`
+      - Expect: la suite del package resta interamente verde.
+
+      ## Done
+      - [ ] AC-6 — un test prova che l'avviso ha di che portare al punto: id della conversazione e id dell'evento, presenti insieme e solo per le run nate lì.
+      - [ ] Un test asserisce sull'assenza delle chiavi nel JSON, non sul valore zero nella struct.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Il renderer della conversazione disegna la run e l'attesa dentro il flusso
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      `renderConversation` colloca il blocco di ogni run subito dopo l'evento che l'ha chiesta, mostra il comando di una richiesta di consenso in chiaro con le sue opzioni, e lascia il composer scrivibile mentre una run attende.
+
+      ## Read
+      - `cli/internal/web/assets/conversation.js` — tutto: `renderEvent`, `renderTimeline`, `renderProposal`, `renderOutcome`, `renderComposer`, `renderConversation`, `escapeHtml`, `objectAt`, `textAt`, `renderNotice`
+      - `cli/internal/web/assets/app.js` righe ~3700-3800 — `renderRunApproval`, `approvalOptionTone`, `formatExecutionPayload`: la resa di un'approvazione **esiste già** nel pannello run, e il blocco della conversazione deve parlarne con le stesse parole e le stesse classi (`run-approval*`, `approval-btn allow|deny`)
+      - `cli/internal/web/assets/workspace-runs.js` — la disciplina di un modulo puro di questo repository: niente DOM, niente fetch, niente parola di processo scritta dentro
+      - `docs/mockups/redesign-chat/stato-c-run-attesa.html` — il contratto visivo: blocco `run` con testata e log, blocco `attesa` con il comando in chiaro e i controlli, suggerimento sotto al composer
+      - `docs/mockups/redesign-chat/shared.css` — classi `.block`, `.block.is-live`, `.block.is-waiting`, `.block-head`, `.block-body`, `.block-controls`, `.log`
+
+      ## Change
+      - `cli/internal/web/assets/conversation.js` — soltanto questo file.
+        - nuove funzioni interne `renderRunBlock(run, ui)`, `renderRunApprovalCard(approval, run, ui)`, `renderRunLog(events)`;
+        - `renderTimeline(view, active, ui)` accetta la vista intera e interfoglia i blocchi;
+        - `renderConversation` passa `view.runs` alla timeline e continua a non decidere nulla sul processo.
+      - Non goal: nessuna fetch, nessun `document`, nessun timer; non rimuovere `renderOutcome` né il bottone «Go to the run», che resta la via al log intero; non inventare opzioni di approvazione che il payload non porta.
+
+      ## Steps
+      1. Aggiungere `arrayAt(value, key)` accanto a `objectAt`/`textAt`, con la stessa regola: un payload parziale non deve mai far lanciare.
+      2. Scrivere `renderRunLog(events)`: una `<pre class="conv-run-log">` con una riga per evento, `ora · kind · tool/testo`, tutto passato da `escapeHtml`. Lista vuota ⇒ una riga che dice che la run non ha ancora pubblicato niente. Il modulo non interpreta i `kind`: riusa la tabella `EVENT_KINDS` già presente e degrada su un kind sconosciuto come già fa `renderEvent`.
+      3. Scrivere `renderRunApprovalCard(approval, run, ui)` modellata su `renderRunApproval` di `app.js`: occhiello, `<code class="run-approval-tool">` con `tool_name`, `<pre class="run-approval-args">` con gli argomenti **serializzati e non riassunti** (`JSON.stringify(args, null, 2)` quando `args` è un oggetto, la stringa così com'è quando è già testo), e un bottone per **ogni** opzione dichiarata dal payload, con `data-run-approval-id`, `data-run-option-id` e `data-execution-id`. Il tono (`allow`/`deny`) si deriva da `option.kind` con la stessa regola di `approvalOptionTone`. Quando `ui.answeredApprovals` porta una risposta per quell'id, la carta si disegna risolta — classe `is-answered`, opzione scelta marcata, nessun bottone attivo — così il rifiuto resta leggibile anche dopo che l'approvazione è sparita dai pendenti.
+      4. Scrivere `renderRunBlock(run, ui)`: `<div class="conv-run" data-conversation-run-anchor="<anchor_event_id>" data-execution-id="…">` con testata (azione, `label`, `spec_code` in mono, stato della run e stato del record), il `notice` del payload se c'è, il log, la dichiarazione di storia parziale quando `truncated`, la carta d'attesa per ogni approvazione, e un bottone «Vai al log intero» che riusa `data-conversation-reach-run` con lo `scope` e il `code` del blocco. La classe modificatrice viene dal payload e non da un giudizio locale: `is-waiting` quando `awaiting_response`, `is-live` quando `run.state` è `ACTIVE`, altrimenti `is-ended`.
+      5. Modificare `renderTimeline` perché accetti `view` e `ui`: costruire una mappa `anchor_event_id → [blocchi]` da `view.runs`; scorrere gli eventi e, dopo aver emesso l'evento il cui id compare nella mappa, emettere i suoi blocchi e segnarli come emessi; alla fine, emettere in coda ogni blocco rimasto — una run la cui ancora non è più nella storia trattenuta deve restare visibile, fuori posto ma presente.
+      6. In `renderComposer`, aggiungere un suggerimento — la frase del mockup, «la run riprende quando rispondi all'attesa qui sopra» — mostrato solo quando almeno una run del payload è in attesa. **Non** cambiare la condizione `writable`: un'attesa non toglie la parola a nessuno (AC-5).
+      7. In `renderConversation`, passare `view` e `local` a `renderTimeline` e non toccare nient'altro dell'ordine dei blocchi.
+      8. Aggiornare il commento di testa del modulo per dire che disegna anche le run del payload, restando senza regole di processo.
+
+      ## Verify
+      - Run: `npm run test:web`
+      - Expect: le 41 suite e i 162 test della baseline restano verdi (i casi nuovi arrivano con TASK-08; questo passo non deve romperne nessuno esistente).
+      - Run: `node --check cli/internal/web/assets/conversation.js`
+      - Expect: nessun output.
+
+      ## Done
+      - [ ] AC-1 — un blocco per run, emesso subito dopo l'evento il cui id è `anchor_event_id`, e in coda quando quell'evento non è più nella storia resa.
+      - [ ] AC-3 — la carta d'attesa mostra `tool_name` e gli argomenti per intero, e un bottone per ogni opzione che il payload dichiara, senza aggiungerne nessuna.
+      - [ ] AC-4 — con `ui.answeredApprovals` valorizzato, la carta si disegna risolta con l'opzione scelta e resta leggibile.
+      - [ ] AC-5 — il composer non è disabilitato da un'attesa: `renderComposer` continua a guardare solo lo stato della conversazione.
+      - [ ] Il modulo resta puro: nessuna occorrenza di `document`, `fetch`, `setTimeout` o `window.` (fuori dall'export finale) in `conversation.js`.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Test del renderer sui blocchi run e sulle carte d'attesa
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Provare, senza DOM, che il blocco della run sta dove è stato chiesto, che il comando di un consenso si legge in chiaro, che il rifiuto resta leggibile e che il composer resta scrivibile durante un'attesa.
+
+      ## Read
+      - `test/web/conversation.test.mjs` — convenzioni: import del modulo, costruzione dei payload, asserzioni su sottostringhe dell'HTML
+      - `cli/internal/web/assets/conversation.js` — la versione prodotta da TASK-07
+
+      ## Change
+      - `test/web/conversation.test.mjs` — aggiungere i casi in coda. Nessun altro file.
+
+      ## Steps
+      1. `il blocco della run sta subito dopo l'evento che l'ha chiesta`: payload con tre eventi (id 1, 2, 3) e una run con `anchor_event_id: 2`. Asserire, sull'indice delle sottostringhe, che `data-conversation-run-anchor="2"` compare **dopo** `#2` e **prima** di `#3`.
+      2. `una run la cui ancora non è più nella storia va in coda`: stessi eventi, `anchor_event_id: 99`. Asserire che il blocco compare dopo l'ultimo evento e che è comunque presente.
+      3. `due run producono due blocchi ancorati ai propri eventi`: verificare l'ordine relativo dei due `data-conversation-run-anchor`.
+      4. `il comando di un consenso si legge in chiaro`: approvazione con `tool_name: "Bash"` e `args: {"command":"git worktree prune --verbose"}`. Asserire che l'HTML contiene la stringa `git worktree prune --verbose` — con le entità dell'escape applicate solo dove servono — dentro un `run-approval-args`, e un bottone per ciascuna delle opzioni dichiarate, e nessuno in più.
+      5. `un'approvazione risolta resta leggibile`: stesso payload con `ui.answeredApprovals` che marca l'id con l'opzione di rifiuto. Asserire la classe `is-answered`, la presenza dell'etichetta dell'opzione scelta e l'assenza di bottoni abilitati.
+      6. `il composer resta scrivibile mentre una run attende`: payload con conversazione `ACTIVE` e `runs[0].awaiting_response: true`. Asserire che la `textarea` **non** porta `disabled` e che il suggerimento sull'attesa è presente.
+      7. `un payload senza runs non cambia nulla`: `runs` assente e `runs: []` producono entrambi la stessa timeline di prima, senza lanciare.
+      8. `un payload malformato non fa lanciare`: `runs` valorizzato a una stringa, a `null`, e una voce `null` dentro l'array.
+
+      ## Verify
+      - Run: `npm run test:web`
+      - Expect: i casi nuovi passano e le 41 suite della baseline restano verdi.
+
+      ## Done
+      - [ ] AC-1 — un test prova la posizione del blocco rispetto all'evento d'ancora, e un altro il caso in cui l'ancora è uscita dalla storia.
+      - [ ] AC-3 — un test prova che il comando compare **testualmente** nell'HTML e che i bottoni sono esattamente le opzioni del payload.
+      - [ ] AC-4 — un test prova che una decisione risolta resta sulla pagina con l'opzione scelta.
+      - [ ] AC-5 — un test prova che la `textarea` del composer non è disabilitata mentre una run attende.
+      - [ ] `npm run test:web` verde per intero.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Stile dei blocchi run e d'attesa dentro la conversazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      I blocchi che `conversation.js` produce hanno una forma leggibile nel flusso, coerente con il mockup e con lo stile già in uso nel pannello run.
+
+      ## Read
+      - `cli/internal/web/assets/app.css` — le regole `.conv-*` (timeline, evento, proposta, esito, composer) e le regole `.run-approval*` / `.approval-btn` già presenti: sono le due famiglie da riusare, non da duplicare
+      - `docs/mockups/redesign-chat/shared.css` — `.block`, `.block.is-live`, `.block.is-waiting`, `.block-head`, `.block-body`, `.block-controls`, `.log`, `.log .ok`, `.log .warn`, `.log .dim`
+      - `docs/mockups/redesign-chat/stato-c-run-attesa.html` — proporzioni e gerarchia dei blocchi nel flusso
+
+      ## Change
+      - `cli/internal/web/assets/app.css` — soltanto questo file, in coda alla sezione delle regole `.conv-*`.
+        - `.conv-run`, `.conv-run.is-live`, `.conv-run.is-waiting`, `.conv-run.is-ended`, `.conv-run-head`, `.conv-run-log`, `.conv-run-controls`, `.conv-run-notice`, `.conv-run-partial`, `.conv-composer-await`.
+      - Non goal: non ridefinire `.run-approval*` né `.approval-btn`, che il blocco riusa così come sono; non toccare il media query dei 900px né nessuna classe che `workspace-layout.js` dichiara.
+
+      ## Steps
+      1. Individuare in `app.css` la fine della sezione `.conv-*` e aggiungere lì le regole nuove, con un commento che dice da quale mockup vengono.
+      2. Riusare le variabili di colore e i raggi già usati dalle regole `.conv-proposal` / `.run-approval`, così i due posti in cui si decide qualcosa si somigliano invece di divergere.
+      3. `.conv-run-log` deve avere `overflow-x: auto` e `white-space: pre`: un log che allarga la conversazione la renderebbe illeggibile in modalità stretta.
+      4. `.conv-run.is-waiting` porta il segno che il mockup dà all'attesa (bordo di richiamo), e `.conv-run.is-ended` toglie ogni segno di vita.
+      5. Verificare a occhio, alle due larghezze, che il blocco non sfondi la colonna: aprire `docs/mockups/redesign-chat/stato-c-run-attesa.html` come riferimento e confrontare le proporzioni.
+
+      ## Verify
+      - Run: `cd cli && go build ./... && go test ./internal/web/...`
+      - Expect: build pulito e test verdi — `app.css` è servito da `assets.go` via `embed`, quindi un file rotto si vede qui.
+      - Run: `npm run test:view-workspace-runs-smoke`
+      - Expect: fermo esattamente al confine registrato nella baseline — le sei affermazioni ancora `ok`, incluso il controllo AC-6 su `app.css` che verifica il media query a 900px e le classi del layout, e l'unico fallimento resta `FAIL: the viewer echoed the credential in 1 response(s)`.
+
+      ## Done
+      - [ ] Ogni classe che `conversation.js` emette per un blocco ha una regola in `app.css`.
+      - [ ] Il log scorre dentro il proprio contenitore e non allarga la conversazione.
+      - [ ] Il controllo AC-6 dello smoke `workspace-runs` continua a trovare il media query e tutte le classi del layout in `app.css`.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Rispondere all'attesa dal flusso e raggiungerla da un'altra vista
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-05
+    body: |-
+      ## Objective
+      Un consenso si concede o si nega premendo dentro la conversazione, e l'avviso di attesa in topbar porta alla conversazione e al blocco esatto che sta aspettando.
+
+      ## Read
+      - `cli/internal/web/assets/app.js` righe ~3880-4000 — `bindConversationPanel`, in particolare il ramo `data-conversation-reach-run`
+      - `cli/internal/web/assets/app.js` righe ~3350-3420 — `respondRunApproval`, `findRunApproval`, `findRunApprovalOption`, `approvalOptionTone`: la sequenza di risposta a un'approvazione **esiste già** e va riusata, non riscritta
+      - `cli/internal/web/assets/app.js` righe ~4520-4560 — `renderConversationPanel` e il terzo argomento `ui` passato a `Conversation.renderConversation`
+      - `cli/internal/web/assets/app.js` righe ~850-1010 — `renderRunsAttention`, `openRunTarget`, il listener su `runsAttentionEl`
+      - `cli/internal/web/assets/app.js` righe ~705-850 — la sezione layout: come si porta la vista su `conversation` (`WorkspaceLayout.nextViewAfterSelection`)
+
+      ## Change
+      - `cli/internal/web/assets/app.js` — soltanto questo file.
+        - nuova variabile di sezione `conversationAnsweredApprovals = {}` accanto alle altre `conversation*`, azzerata da `resetConversationState` e da `openConversation`;
+        - nuova funzione `respondConversationApproval(executionID, approvalID, optionID)`;
+        - nuovo ramo nel listener di `bindConversationPanel` per `[data-run-approval-id]`;
+        - `renderConversationPanel` passa `answeredApprovals` e l'ancora da evidenziare dentro l'oggetto `ui`;
+        - nuova funzione `revealConversationRun(conversationID, anchorEventID)`;
+        - `openRunTarget` preferisce la conversazione quando la voce ne porta una.
+      - Non goal: non introdurre un secondo ciclo di polling — il payload della conversazione porta già le run a ogni giro; non toccare `respondRunApproval` del pannello run; non cambiare `workspace-runs.js`, che non naviga per contratto.
+
+      ## Steps
+      1. Dichiarare `conversationAnsweredApprovals` (mappa `approvalID → {optionID, label, denied}`) e azzerarla in `resetConversationState` e in `openConversation`, dove già si azzerano cursore, timeline e rifiuto.
+      2. Scrivere `respondConversationApproval`: alza `conversationBusy`, ridisegna, chiama `apiPost` su `/api/execution/${executionID}/run/approvals/${approvalID}` con `{ option_id }` — la rotta esiste e non va toccata — registra la risposta in `conversationAnsweredApprovals` leggendo etichetta e tono dall'opzione che il payload dichiarava, poi rilegge la conversazione con `after_id=${conversationAfterID}` e ridisegna. Un rifiuto della rotta passa da `showConversationRefusal`, come ogni altro comando del pannello.
+      3. Aggiungere il ramo nel listener: `const answer = e.target.closest("[data-run-approval-id]")` e, se c'è, chiamare `respondConversationApproval` con i tre attributi. Il ramo va **prima** di quello di `data-conversation-reach-run`, perché il bottone d'attesa vive dentro un blocco che porta anche quel controllo.
+      4. In `renderConversationPanel`, aggiungere all'oggetto `ui` i campi `answeredApprovals: conversationAnsweredApprovals` e `highlightAnchor: conversationHighlightAnchor`.
+      5. Scrivere `revealConversationRun(conversationID, anchorEventID)`: portare la vista su `conversation` con `WorkspaceLayout.nextViewAfterSelection`; se un thread passato è a schermo (`conversationTranscript`) tornare al vivo ricaricando la conversazione; poi, dopo il ridisegno, cercare `[data-conversation-run-anchor="<id>"]` dentro `conversationEl`, chiamare `scrollIntoView({ block: "center" })` e alzare `conversationHighlightAnchor` per un ridisegno, così il blocco è marcato e non solo inquadrato.
+      6. In `openRunTarget`, come **primo** ramo: se la voce porta `conversation_id`, chiamare `revealConversationRun` e uscire. Gli altri rami restano invariati, perché una run avviata dalla board continua a non avere nessuna conversazione dove essere raggiunta.
+      7. Adeguare il listener di `runsAttentionEl`: passa già l'intera voce trovata a `openRunTarget` — assicurarsi che le passi anche `conversation_id` e `anchor_event_id` invece dei soli tre campi di oggi.
+      8. Aggiornare il commento di sezione della striscia: l'avviso non porta più solo a un pannello, porta al punto della conversazione quando la run è nata lì.
+
+      ## Verify
+      - Run: `node --check cli/internal/web/assets/app.js`
+      - Expect: nessun output.
+      - Run: `npm run test:web`
+      - Expect: verde per intero — `app.js` non è coperto da `node --test`, ma i moduli puri che tocca lo sono e non devono cambiare comportamento.
+      - Run: `cd cli && go build ./... && go test ./internal/web/...`
+      - Expect: build pulito e test verdi.
+
+      ## Done
+      - [ ] AC-4 — premere un'opzione dentro il blocco chiama `POST /api/execution/{id}/run/approvals/{approvalId}` con l'`option_id` di quel bottone, e la carta resta sulla pagina come risolta.
+      - [ ] AC-5 — nessun ramo di questo cablaggio disabilita il composer: `conversationBusy` si alza e si riabbassa come per ogni altro comando.
+      - [ ] AC-6 — l'avviso di attesa in topbar porta alla vista conversazione, sul thread vivo, e porta in vista il blocco con l'ancora giusta.
+      - [ ] Nessun ciclo di polling nuovo è stato introdotto.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Smoke e2e — la run e la sua attesa vivono nella conversazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-04
+      - TASK-06
+      - TASK-08
+      - TASK-09
+      - TASK-10
+    body: |-
+      ## Objective
+      Provare i sei criteri contro il CLI compilato dai sorgenti, con il connector su disco, un vero processo agente finto e un vero hub finto, senza mai aprire il pannello run.
+
+      ## Read
+      - `test/e2e/conversation-action-view-smoke.mjs` — il modello: control server per il finto `claude`, nessuna attesa a tempo, ogni frame comandato e ogni frame ricevuto riportato dal processo stesso
+      - `test/e2e/workspace-runs-view-smoke.mjs` — l'hub ARcipelago finto (`startFakeHub`, `waitForTask`, `assignRun`, `emit`, l'apertura di un'approvazione e la lettura della risposta), il registro delle richieste al viewer, e la tecnica dichiarata dei due provider
+      - `test/e2e/support/fake-claude.mjs` — protocollo del finto agente
+      - `package.json` — la lista degli script `test:view-*-smoke`
+      - `AGENTS.md` sezione «E2E tests» — regole dell'harness
+
+      ## Change
+      - `test/e2e/conversation-run-view-smoke.mjs` — file nuovo.
+      - `package.json` — aggiungere lo script `"test:view-conversation-run-smoke": "node ./test/e2e/conversation-run-view-smoke.mjs"`, in ordine accanto agli altri `test:view-conversation-*`.
+      - Non goal: non modificare gli smoke esistenti; non toccare `test/e2e/run.yaml`, che governa gli scenari con agente reale; non introdurre nessun `sleep` arbitrario.
+
+      ## Steps
+      1. Copiare la struttura di `conversation-action-view-smoke.mjs`: `parseArgs`, `createRunDir`, `buildCLI`, control server, `startViewServer`, report HTML finale, skip su win32. Riusare `startFakeHub` di `workspace-runs-view-smoke.mjs` copiandone la funzione nel nuovo file (i due smoke sono indipendenti per contratto dell'harness).
+      2. Registrare **ogni** richiesta che lo smoke fa al viewer e **ogni** corpo di risposta, come fa `workspace-runs-view-smoke.mjs`: serve a provare AC-2 per assenza, cioè che l'aggiornamento è stato osservato senza mai chiamare `GET /api/execution/{id}/run`.
+      3. Preparare il workspace: `archetipo init --tool claude --connector file --yes`, una spec `US-A01` in `PLANNED` con piano persistito (come fa lo smoke di US-054), default provider `claude` con `command` uguale al finto.
+      4. **Fase A — la run compare dove è stata chiesta.**
+         1. `POST /api/workspace/conversation` per aprire la conversazione; il finto emette `system/init`.
+         2. Il finto emette un messaggio che si chiude con la riga JSON della proposta di `implement` su `US-A01`; leggere `GET /api/workspace/conversation` finché `proposal.runnable` è vero e prendere nota di `proposal.event_id`.
+         3. `POST /api/workspace/conversation/proposal` con `accept`; la risposta porta `outcome.execution_id`.
+         4. Leggere `GET /api/workspace/conversation` e asserire **AC-1**: `runs` ha una voce, `runs[0].execution_id` è quell'id ed è l'unico record sotto `.archetipo/executions/`, e `runs[0].anchor_event_id` è esattamente `proposal.event_id`.
+         5. Il secondo processo finto — quello della run — emette due frame; rileggere la sola conversazione e asserire **AC-2**: `runs[0].events` è cresciuto con quei frame e `runs[0].run.state` è `ACTIVE`, e il registro delle richieste contiene **zero** chiamate a `GET /api/execution/*/run`.
+      5. **Fase B — il consenso nel flusso.** Dichiarare in commento, in testa al file, perché i provider sono due: una sessione locale gira con le approvazioni disabilitate (`localrun.Collaborator` risponde lista vuota e rifiuta ogni risposta), e solo `claude` sa tenere una conversazione; il workspace ha un solo default, quindi il default si sposta attraverso la rotta che usa il pannello Execution, esattamente come farebbe una persona.
+         1. `PUT /api/execution/provider/default` verso `arcipelago`, `base_url` sull'hub finto, `token_env` su una sentinella.
+         2. L'hub serve un task il cui `externalId` è l'id dell'esecuzione della Fase A e le assegna una run; attendere leggendo la conversazione finché `runs[0].run.run_id` è quello.
+         3. L'hub apre `appr-1` con `tool_name: "Bash"` e `args: {"command":"git worktree prune --verbose"}` e due opzioni (`allow`, `deny`). Leggere la conversazione finché `runs[0].approvals` ha una voce e asserire **AC-3**: `args` contiene quella stringa **testualmente**, `awaiting_response` è vero e `run.state` è ancora `ACTIVE`.
+         4. Asserire **AC-5** mentre l'attesa è aperta: `POST /api/workspace/conversation/messages` con una sentinella risponde 202 con `available:true`, e il control server riporta che il **processo** della conversazione ha ricevuto quel testo; poi il finto risponde e la rilettura mostra la risposta nella timeline.
+         5. Asserire **AC-6**: `GET /api/workspace/runs` marca quella voce `awaiting_response:true` e porta `conversation_id` uguale all'id della conversazione e `anchor_event_id` uguale a `proposal.event_id`; il DOM servito da `GET /index.html` porta `#runs-attention`.
+         6. Rispondere `allow` su `appr-1` con `POST /api/execution/{id}/run/approvals/appr-1`; asserire che l'hub riporta di aver ricevuto l'opzione `allow`, che emette altri eventi e che la conversazione li mostra dentro `runs[0].events` — prima metà di **AC-4**.
+         7. L'hub apre `appr-2`; rispondere `deny`; asserire che l'hub riporta `deny`, chiude la run, e che la lettura successiva della conversazione mostra `runs[0].run.state` terminale — seconda metà di **AC-4**.
+      6. Chiudere ordinatamente: `DELETE /api/workspace/conversation`, spegnere viewer, hub e control server, scrivere `report.html` e `summary` come fanno gli smoke gemelli, e stampare una riga per affermazione provata.
+      7. Aggiungere lo script a `package.json`.
+
+      ## Verify
+      - Run: `npm run test:view-conversation-run-smoke`
+      - Expect: `PASS` con almeno sei affermazioni stampate, una per criterio, e nessuna attesa a tempo nel file (`grep -n "setTimeout\|delay(" test/e2e/conversation-run-view-smoke.mjs` deve mostrare solo i timeout di polling che nominano ciò che aspettavano).
+      - Run: `npm run test:view-conversation-action-smoke`
+      - Expect: `PASS` con le 5 affermazioni della baseline — questo smoke non deve regredire.
+
+      ## Done
+      - [ ] AC-1 — provato: la voce di `runs` porta l'id dell'unico record su disco e l'ancora è l'evento della proposta.
+      - [ ] AC-2 — provato: gli eventi crescono e lo stato cambia leggendo **solo** la conversazione, con zero chiamate a `GET /api/execution/*/run` contate sul registro delle richieste.
+      - [ ] AC-3 — provato: il comando arriva in chiaro nel payload e la run resta `ACTIVE` finché non si risponde.
+      - [ ] AC-4 — provato dall'hub, non dalla risposta HTTP: `allow` su una richiesta e `deny` sull'altra, con la run che prosegue e poi si ferma.
+      - [ ] AC-5 — provato dal processo agente stesso: il messaggio inviato durante l'attesa è stato ricevuto e ha avuto risposta.
+      - [ ] AC-6 — provato: `conversation_id` e `anchor_event_id` sulla voce in attesa, e `#runs-attention` nel DOM servito.
+      - [ ] `package.json` porta il nuovo script accanto agli altri `test:view-conversation-*`.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Gate finale — check del repository e stato della spec
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+    body: |-
+      ## Objective
+      Eseguire esattamente i check che questo repository dichiara, confrontarli con la baseline registrata, e non chiedere la review finché ogni task del piano non è `DONE`.
+
+      ## Read
+      - `AGENTS.md` sezione «Before delivering changes» — la lista dei check di CI
+      - La sezione **Baseline** del corpo di questo piano — i risultati di partenza con cui confrontare
+
+      ## Change
+      - Nessun file. Se un check fallisce, si corregge il codice nel file che l'ha causato e si rilancia: il gate non modifica nulla di suo.
+
+      ## Steps
+      1. `cd cli && gofmt -l .` — nessun output.
+      2. `cd cli && go vet ./...` — nessun problema.
+      3. `cd cli && go build ./...` — compila pulito.
+      4. `cd cli && go test ./...` — tutti i test passano; il totale non deve essere **inferiore** ai 1911 della baseline.
+      5. `npm run test:web` — tutti i test passano; il totale non deve essere inferiore ai 162 della baseline.
+      6. `npm run test:view-conversation-run-smoke` — `PASS`, sei affermazioni.
+      7. `npm run test:view-conversation-action-smoke` — `PASS`, cinque affermazioni (US-054 non regredisce).
+      8. `npm run test:view-conversation-smoke` — `PASS` (US-053 non regredisce).
+      9. `npm run test:view-conversation-history-smoke` — `PASS` (US-058 non regredisce: nessun blocco run è stato persistito).
+      10. `npm run test:view-workspace-runs-smoke` — **non verde per baseline**: verificare che le sei affermazioni siano ancora stampate come `ok` e che l'unica riga di fallimento sia ancora, testualmente, `FAIL: the viewer echoed the credential in 1 response(s)`. Qualsiasi altra riga di fallimento, o un'affermazione persa, è una regressione di questo lavoro e va corretta.
+      11. `golangci-lint run --timeout 5m ./...` dentro `cli/` — se il binario manca, installarlo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` ed eseguirlo. Se l'installazione non riesce, **dichiararlo non eseguito**: non scrivere che è verde.
+      12. Verificare che nessun file toccato dal piano abbia introdotto diagnostiche nuove: `cd cli && go vet ./internal/web/...` e `node --check` su `cli/internal/web/assets/conversation.js` e `cli/internal/web/assets/app.js`.
+      13. Marcare **questo** task `DONE`.
+      14. Da `/Users/stefanoleli/Project/ARchetipo` eseguire `archetipo spec show US-060` e verificare che **nessun** task risulti `TODO`.
+      15. Solo allora eseguire `archetipo spec review US-060`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./...`
+      - Expect: nessun output da `gofmt`, nessun problema da `vet`, build pulito, suite verde con almeno 1911 test.
+      - Run: `npm run test:web && npm run test:view-conversation-run-smoke && npm run test:view-conversation-action-smoke && npm run test:view-conversation-smoke && npm run test:view-conversation-history-smoke`
+      - Expect: tutti `PASS`.
+      - Run: `npm run test:view-workspace-runs-smoke`
+      - Expect: esce non-zero con esattamente il fallimento della baseline e le sei affermazioni ancora `ok`.
+      - Run: `archetipo spec show US-060` da `/Users/stefanoleli/Project/ARchetipo`
+      - Expect: ogni task `DONE`.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5, AC-6 — lo smoke `test:view-conversation-run-smoke` stampa un'affermazione per ciascuno e chiude `PASS`.
+      - [ ] `gofmt`, `go vet`, `go build`, `go test ./...` e `npm run test:web` verdi, con conteggi non inferiori alla baseline.
+      - [ ] Gli smoke di US-053, US-054 e US-058 non sono regrediti.
+      - [ ] `test:view-workspace-runs-smoke` è fermo esattamente al confine rosso registrato nella baseline, senza fallimenti nuovi.
+      - [ ] `golangci-lint` eseguito con 0 problemi, oppure dichiarato non eseguito con la ragione.
+      - [ ] `archetipo spec show US-060` non mostra nessun task `TODO`, e solo dopo questa verifica è stato chiesto `archetipo spec review US-060`.
+
+      ## Blockers
+      None.
+    ref: TASK-12

@@ -1,0 +1,594 @@
+schema: archetipo/plan/v2
+spec_code: US-048
+body: |-
+  # US-048: Configurare le opzioni che il provider dichiara per il modello scelto — Piano di implementazione
+
+  **Prodotto da:** Team di Pianificazione ARchetipo
+  **Data:** 2026-08-20
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-005 — Esperienza operativa ARchetipo
+  **Priorità:** MEDIUM | **Punti:** 3
+
+  **User Story**
+  Come utilizzatore che ha scelto un modello per il workspace, voglio impostare le opzioni che quel modello espone, come il livello di ragionamento, così da governare costo e profondità delle run senza modificare file di configurazione a mano.
+
+  **Criteri di accettazione**
+  - AC-1 — La configurazione mostra soltanto le opzioni che il provider dichiara per il modello attualmente scelto, con il rispettivo valore predefinito.
+  - AC-2 — Un'opzione impostata e salvata è riproposta invariata alla riapertura della configurazione.
+  - AC-3 — Cambiando modello, le opzioni mostrate diventano quelle del nuovo modello e quelle non più applicabili non restano nella configurazione salvata.
+  - AC-4 — Un valore rifiutato dal provider produce un errore che nomina l'opzione e lascia invariata la configurazione precedente.
+  - AC-5 — Un modello che non dichiara opzioni produce un messaggio esplicito invece di una sezione vuota.
+
+  **Fuori ambito**
+  Opzioni non collegate al modello, scelta valida per la singola run (US-049), e stima o esposizione dei costi di esecuzione.
+
+  **Bloccata da:** US-047 — `DONE`. Il catalogo dei modelli dichiarato dal provider, l'interfaccia opzionale `ModelLister`, i campi `model_field` / `models` / `models_unavailable_reason` della view e il renderer puro `provider-fields.js` esistono già e sono il fondamento di questa spec.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Le opzioni sono una proprietà **del modello**, non del provider: due modelli dello stesso provider ne dichiarano di diverse, ed è esattamente ciò che AC-3 chiede di far cambiare sotto gli occhi di chi guarda. La soluzione porta quindi la dichiarazione dentro la voce di catalogo introdotta da US-047, invece di aggiungere una seconda interfaccia e un secondo giro di interrogazione del provider.
+
+  - `execution.ModelOption` acquista `Options []ModelOptionField`: ogni voce del catalogo dichiara i campi che quel modello accetta, con etichetta, aiuto e insieme chiuso di valori. La voce che il runtime usa quando l'opzione non è impostata è marcata, con la stessa disciplina del marcatore `Default` dei modelli.
+  - I due provider locali dichiarano un'opzione reale e verificata sul binario installato: `claude` espone `effort` (`--effort <level>`, valori `low, medium, high, xhigh, max`), `codex` espone `reasoning_effort` (chiave `model_reasoning_effort` passata nel campo `config` di `thread/start`, la stessa che vive in `~/.codex/config.toml`).
+  - I valori delle opzioni sono **normali chiavi della configurazione del provider**: nessun contenitore annidato, nessuna migrazione del file di configurazione. `parseConfig` di ciascun provider le riconosce e le valida, quindi un valore rifiutato produce già oggi un `ConfigurationError` che nomina il campo — che è ciò che AC-4 chiede.
+  - Il viewer non guadagna nessun campo nuovo: le opzioni viaggiano dentro `models[]`, che la view serializza già. Il browser continua a non conoscere alcun provider.
+  - Il form disegna la sezione delle opzioni **del modello attualmente selezionato** e la ridisegna quando la selezione cambia. Questa è anche la ragione per cui un'opzione non più applicabile non finisce nella configurazione salvata: `collectProviderConfig` legge i controlli presenti nel DOM, e dopo il cambio di modello i controlli dell'opzione superata non esistono più.
+
+  ### Decisioni architetturali
+
+  Il gate Wiki è `false`: le decisioni che qualificano sono registrate qui per intero e in nessun altro posto.
+
+  **1. Opzioni dichiarate dentro la voce di catalogo, non da una seconda interfaccia.**
+  *Contesto:* servono, per ogni modello, i campi che quel modello accetta. *Alternative:* (a) una seconda interfaccia opzionale `ModelOptionLister.ModelOptions(ctx, config, modelID)`, sullo stampo di `ModelLister`; (b) `Options` dentro `ModelOption`. *Scelta:* (b). *Motivazione:* la voce di catalogo **è già** la dichiarazione per-modello, e `ListModels` la produce in un solo passaggio; la (a) aggiungerebbe una seconda chiamata, un secondo modo di fallire e la necessità di tenere in sincrono due elenchi che descrivono lo stesso modello. *Compromesso accettato:* un provider le cui opzioni dipendano dallo stato del runtime non può esprimerle, perché il catalogo è dichiarato staticamente — è lo stesso vincolo che US-047 ha già scelto e accettato. *Verifica:* il test di contratto prova che le opzioni arrivano con il catalogo e che la copia restituita è staccata in profondità.
+
+  **2. Le opzioni sono chiavi piatte della configurazione del provider.**
+  *Contesto:* i valori scelti devono essere persistiti e riproposti. *Alternative:* (a) un sotto-oggetto `model_options: {...}` nella configurazione; (b) chiavi di primo livello accanto a `command`, `model`, `timeout_seconds`. *Scelta:* (b). *Motivazione:* `parseConfig`, `rejectUnknownKeys` e `ConfigurationError` lavorano già su chiavi piatte, e con esse AC-4 è soddisfatto dal meccanismo esistente senza nuovo codice di errore; un sotto-oggetto richiederebbe un percorso di campo annidato che né la CLI né il form sanno oggi indicare. *Compromesso accettato:* il nome dell'opzione vive nello stesso spazio dei nomi delle altre chiavi del provider, quindi non può collidere con esse — vincolo esplicitato nel commento del contratto. *Verifica:* il round-trip HTTP salva e rilegge l'opzione, e un valore rifiutato torna con `field` uguale al nome dell'opzione.
+
+  **3. L'applicabilità è governata dal form, la validità dal provider.**
+  *Contesto:* AC-3 chiede che un'opzione non più applicabile non resti nella configurazione salvata. *Alternative:* (a) il provider rifiuta un'opzione impostata per un modello che non la dichiara; (b) il form raccoglie soltanto le opzioni del modello selezionato. *Scelta:* (b), con il provider che resta l'autorità sul **valore**. *Motivazione:* la (a) legherebbe la validità della configurazione al valore di un altro campo e renderebbe irrecuperabile una configurazione scritta a mano con un modello fuori catalogo — proprio il caso che US-047 ha deciso di non rifiutare mai. *Compromesso accettato:* una configurazione modificata a mano può contenere un'opzione non pertinente al modello scelto; resta valida e viene semplicemente ignorata dal runtime, e il primo salvataggio dal pannello la rimuove. *Verifica:* il test di integrazione salva con un modello diverso e prova che la chiave superata non è più nel file.
+
+  ---
+
+  ## Baseline
+
+  Misurata su questo repository prima di scrivere qualunque riga, dalla radice del progetto.
+
+  | Verifica | Risultato prima dell'implementazione | Conseguenza sulla pianificazione |
+  |---|---|---|
+  | `gofmt -l cli/` | nessun output | ogni task che tocca Go riesegue il comando e pretende ancora nessun output |
+  | `cd cli && go build ./...` | pulito | `Expect: passes` legittimo su tutti i task |
+  | `cd cli && go vet ./...` | pulito | nessun file toccato può restare con diagnostica |
+  | `cd cli && go test ./internal/execution/... ./internal/web/...` | 889 test verdi in 6 package | i task di test dichiarano il conteggio atteso in crescita, mai in calo |
+  | `npm run test:web` | 32/32 verdi | il renderer puro si verifica qui, senza browser |
+  | `npm run test:view-execution-smoke` | PASS | lo smoke resta il livello che prova il pannello reale servito dal viewer |
+  | `golangci-lint run` | **non eseguibile: `golangci-lint` non è installato su questa macchina** | prerequisito d'ambiente, non un fallimento del codice: il gate finale lo esegue solo se presente e altrimenti registra il salto |
+
+  Nota di ambiente verificata durante la pianificazione: `claude` e `codex` sono entrambi installati. `claude --help` dichiara `--effort <level>` con i valori `low, medium, high, xhigh, max`; `codex app-server generate-json-schema` mostra che `thread/start` accetta un campo `config` a chiavi libere, e `~/.codex/config.toml` contiene già `model_reasoning_effort`. Entrambe le opzioni dichiarate dal piano poggiano quindi su superfici reali del runtime installato, non su ipotesi.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | view del provider `claude` con `model: "sonnet"` configurato | unità Node (renderer) + integrazione HTTP | la sezione opzioni contiene esattamente i campi dichiarati da `sonnet` e nessun altro; la voce marcata porta il suffisso ` — provider default`; `GET /api/execution/providers` porta `models[].options` con `default: true` su una sola scelta per opzione | TASK-10, TASK-07 |
+  | AC-2 | config del workspace che contiene già `effort: "high"` | integrazione HTTP (round-trip reale su file) | dopo `POST` con `effort: "high"`, la `GET` successiva riporta `default.config.effort == "high"`, e il renderer disegna quella scelta come `selected` | TASK-11, TASK-10 |
+  | AC-3 | config con `model: "sonnet"`, `effort: "xhigh"`; si salva con `model: "haiku"` | integrazione HTTP + unità Node | il file di configurazione riletto non contiene più la chiave `effort`; il renderer con `model: "haiku"` non emette alcun controllo `provider_effort` | TASK-11, TASK-10 |
+  | AC-4 | `POST` con `effort: "turbo"` su una configurazione valida già salvata | integrazione HTTP | risposta `400` con `field == "effort"` e messaggio che nomina l'opzione; la `GET` successiva riporta ancora la configurazione precedente, invariata | TASK-11 |
+  | AC-5 | view del provider `claude` con `model: "haiku"` (nessuna opzione dichiarata) | unità Node (renderer) + e2e smoke | al posto della sezione compare la frase esplicita, e non esiste alcun contenitore di opzioni vuoto nel markup prodotto | TASK-10, TASK-12 |
+
+  Ogni criterio ha un oracolo che resta visibile attraverso i doppi scelti: il renderer è puro e viene verificato sul suo output reale, e i test HTTP girano su un server e una configurazione veri, senza mock del provider.
+
+  ---
+
+  ## Strategia di test
+
+  Tre livelli già in uso nel repository, più lo smoke sul viewer reale — la stessa piramide che US-047 ha usato e che il gate umano ha accettato.
+
+  - **Unità Go** sul contratto (`execution`) e sui due provider: che il catalogo porti le opzioni, che la copia restituita sia staccata in profondità, che `parseConfig` accetti il valore dichiarato e rifiuti il resto nominando l'opzione, che l'opzione raggiunga davvero l'argomento del processo (`--effort`) e il parametro del thread (`config.model_reasoning_effort`).
+  - **Integrazione HTTP** su `internal/web`, con server e file di configurazione reali: la view che espone le opzioni, il salvataggio che le persiste, il cambio di modello che rimuove quella superata, il valore rifiutato che non tocca nulla.
+  - **Unità Node** sul renderer puro `provider-fields.js`: sezione presente solo per il modello selezionato, marcatore del predefinito, messaggio esplicito quando il modello non dichiara opzioni.
+  - **Smoke del viewer** (`test:view-execution-smoke`): il pannello realmente servito porta le opzioni del modello configurato, e il caso senza opzioni mostra la frase.
+
+  ### Deroga al browser e2e
+
+  **Motivo:** il repository non ospita alcuna infrastruttura di browser e la modifica non attraversa né autenticazione né navigazione tra schermate: è un campo in più nello stesso form già coperto, servito dallo stesso endpoint. Ogni AC ha un oracolo provato a un livello che lo rende osservabile — HTTP reale per la persistenza e per il rifiuto, renderer puro per ciò che viene disegnato.
+  **Livello usato al suo posto:** integrazione HTTP su `internal/web` con configurazione reale, più unità Node deterministiche sul renderer e lo smoke sul viewer effettivamente avviato. Stessa deroga registrata e accettata per US-040/041/043/044/045/046/047.
+
+  _Piano generato da ARchetipo Planning — 2026-08-20_
+tasks:
+  - id: TASK-01
+    title: Dichiarare le opzioni di un modello nel contratto execution
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      `execution.ModelOption` porta le opzioni che quel modello accetta, e `ListModels` le restituisce staccate in profondità.
+
+      ## Read
+      - `cli/internal/execution/models.go` — `ModelOption`, `ModelLister`, `ListModels`: la copia oggi è superficiale (`copy(out, models)`), e va resa profonda quando la voce contiene una slice.
+      - `cli/internal/execution/provider.go` — `ConfigField`: forma e commenti dei campi dichiarati, da imitare nello stile.
+
+      ## Change
+      - `cli/internal/execution/models.go` — aggiungere `ModelOptionChoice`, `ModelOptionField`, il campo `Options` su `ModelOption`, e rendere profonda la copia in `ListModels`.
+      - Non-goal: non aggiungere nessuna interfaccia nuova, non toccare `Provider`, non toccare `ConfigField`.
+
+      ## Steps
+      1. Definire `ModelOptionChoice` con `Value string \`json:"value"\``, `Label string \`json:"label,omitempty"\`` e `Default bool \`json:"default,omitempty"\``, documentando che al massimo una scelta per opzione porta `Default`.
+      2. Definire `ModelOptionField` con `Name string \`json:"name"\``, `Label string \`json:"label"\``, `Help string \`json:"help,omitempty"\`` e `Choices []ModelOptionChoice \`json:"choices"\``, documentando che `Name` è una chiave della configurazione del provider e vive nello stesso spazio dei nomi delle altre, quindi non può collidere con esse.
+      3. Aggiungere a `ModelOption` il campo `Options []ModelOptionField \`json:"options,omitempty"\`` con un commento che spiega perché le opzioni stanno nella voce di catalogo e non in una seconda interfaccia (decisione 1 del piano).
+      4. In `ListModels`, sostituire la copia superficiale con una copia che duplica anche `Options` e, per ciascuna, `Choices`, così che un chiamante che muta il risultato non possa corrompere il catalogo del package.
+      5. Eseguire `gofmt -w` sul file toccato.
+
+      ## Verify
+      - Run: `gofmt -l cli/` — Expect: nessun output.
+      - Run: `cd cli && go build ./... && go vet ./...` — Expect: entrambi puliti, come da baseline.
+
+      ## Done
+      - [ ] `ModelOption` espone `Options`, e i tipi `ModelOptionField` / `ModelOptionChoice` sono documentati.
+      - [ ] La copia restituita da `ListModels` è staccata in profondità.
+      - [ ] AC-1 — il contratto è in grado di trasportare le opzioni dichiarate per un singolo modello.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Verificare il contratto delle opzioni di modello
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il contratto prova che le opzioni viaggiano con il catalogo e che il catalogo del package non è corrompibile dal chiamante.
+
+      ## Read
+      - `cli/internal/execution/models_test.go` — i test già scritti per US-047: stile, provider finti usati, nomi che descrivono il comportamento.
+
+      ## Change
+      - `cli/internal/execution/models_test.go` — aggiungere i casi nuovi in coda, senza riscrivere quelli esistenti.
+
+      ## Steps
+      1. Aggiungere un provider finto che dichiara un catalogo con due modelli: uno con un'opzione a tre scelte di cui una marcata `Default`, l'altro senza opzioni.
+      2. Scrivere un test che chiama `ListModels` e asserisce che il primo modello riporta l'opzione con nome, etichetta e scelte nell'ordine dichiarato, e che il secondo riporta `Options` vuoto.
+      3. Scrivere un test che muta la slice `Options` e la slice `Choices` del risultato e poi richiama `ListModels`, asserendo che la seconda chiamata restituisce ancora i valori originali (copia profonda).
+      4. Scrivere un test che asserisce che un provider senza catalogo continua a restituire `declared == false`, invariato rispetto a US-047.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/` — Expect: passa, con almeno tre test in più rispetto alla baseline.
+
+      ## Done
+      - [ ] I tre casi sopra sono verdi e asseriscono valori osservabili, non la sola assenza di errore.
+      - [ ] AC-1 — è provato che le opzioni dichiarate per un modello arrivano al chiamante insieme a quel modello.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Dichiarare e applicare l'opzione effort del provider claude
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      I modelli `opus` e `sonnet` dichiarano l'opzione `effort`, `haiku` non ne dichiara nessuna, e un `effort` configurato raggiunge il processo come `--effort <valore>`.
+
+      ## Read
+      - `cli/internal/execution/claude/models.go` — il catalogo dichiarato da US-047 e i suoi commenti sulla natura best-effort del marcatore predefinito.
+      - `cli/internal/execution/claude/config.go` — `settings`, `knownConfigKeys`, `ConfigFields`, `parseConfig`, `parsePermissionMode` (modello esatto da imitare per una chiave a insieme chiuso).
+      - `cli/internal/execution/claude/prompt.go:140-150` — costruzione degli argomenti e punto in cui `--model` viene aggiunto solo se valorizzato.
+
+      ## Change
+      - `cli/internal/execution/claude/models.go` — dichiarare `Options` sulle voci `opus` e `sonnet`; lasciare `haiku` senza opzioni.
+      - `cli/internal/execution/claude/config.go` — `settings.Effort`, `knownConfigKeys["effort"]`, `parseEffort`, chiamata in `parseConfig`.
+      - `cli/internal/execution/claude/prompt.go` — aggiungere `--effort` agli argomenti quando `cfg.Effort` non è vuoto.
+      - Non-goal: non aggiungere `effort` a `ConfigFields()`. È un'opzione del modello, non un campo di configurazione del provider: comparirebbe due volte nel form.
+
+      ## Steps
+      1. In `models.go` definire `effortLevels` come elenco chiuso `low, medium, high, xhigh, max`, con un commento che dichiara la verifica fatta (`claude --help` di Claude Code 2.1.236 documenta `--effort <level>` con esattamente quei valori) e che il marcatore del predefinito è un'indicazione best-effort, con la stessa formulazione già usata per il modello predefinito.
+      2. Costruire da `effortLevels` la `ModelOptionField` con `Name: "effort"`, `Label: "Effort"`, un `Help` che spiega che lasciandola vuota nessun flag viene passato e Claude applica il proprio livello, e `Choices` con `Default: true` su `medium`.
+      3. Assegnare quell'opzione alle voci `opus` e `sonnet` del catalogo; lasciare `haiku` con `Options` assente, e commentare che quel modello non espone un controllo di effort — è il caso che il pannello mostra con un messaggio esplicito.
+      4. In `config.go` aggiungere `Effort string` a `settings`, `"effort"` a `knownConfigKeys` e `parseEffort` sul calco esatto di `parsePermissionMode`: `nil` significa non impostato e restituisce stringa vuota; un valore non stringa, vuoto dopo trim, o fuori dall'insieme chiuso produce `configErr("effort", ...)` con il messaggio che elenca i valori ammessi.
+      5. Chiamare `parseEffort(raw["effort"])` in `parseConfig` e riportare il valore in `settings`.
+      6. In `prompt.go`, subito dopo il blocco che aggiunge `--model`, aggiungere `--effort` con lo stesso schema condizionale.
+      7. Eseguire `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Run: `gofmt -l cli/` — Expect: nessun output.
+      - Run: `cd cli && go build ./... && go vet ./...` — Expect: puliti.
+      - Run: `cd cli && go test ./internal/execution/claude/` — Expect: passa (i test esistenti restano verdi; i nuovi arrivano in TASK-04).
+
+      ## Done
+      - [ ] `opus` e `sonnet` dichiarano l'opzione `effort` con esattamente una scelta marcata come predefinita; `haiku` non dichiara opzioni.
+      - [ ] `parseConfig` accetta `effort` valido e rifiuta il resto nominando il campo `effort`.
+      - [ ] Un `effort` configurato compare come `--effort <valore>` negli argomenti del processo.
+      - [ ] AC-1, AC-4, AC-5 — la dichiarazione, il rifiuto nominato e il caso senza opzioni esistono lato provider.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Verificare catalogo, validazione e argomenti dell'opzione effort
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Il provider `claude` è provato su tutte e tre le superfici che l'opzione tocca: catalogo dichiarato, validazione della configurazione, argomento passato al processo.
+
+      ## Read
+      - `cli/internal/execution/claude/models_test.go` — asserzioni già scritte sul catalogo e sull'invariante del marcatore predefinito.
+      - `cli/internal/execution/claude/config_test.go` — casi di `permission_mode`, da imitare per `effort`.
+      - `cli/internal/execution/claude/provider_test.go` — come i test esistenti osservano gli argomenti passati al runner finto.
+
+      ## Change
+      - `cli/internal/execution/claude/models_test.go`, `config_test.go`, e il file di test che copre la costruzione degli argomenti — aggiungere casi in coda.
+
+      ## Steps
+      1. Catalogo: asserire che le voci `opus` e `sonnet` dichiarano un'opzione di nome `effort` con esattamente i cinque valori attesi nell'ordine dichiarato e una sola scelta con `Default: true`; asserire che la voce `haiku` non dichiara alcuna opzione.
+      2. Validazione, casi positivi: `effort` assente resta vuoto; ciascuno dei cinque valori è accettato e riportato in `settings`.
+      3. Validazione, casi negativi: un valore fuori insieme, una stringa vuota e un valore non stringa producono un `execution.ConfigurationError` il cui `Field` è esattamente `"effort"`; asserire il campo, non solo la presenza di un errore.
+      4. Argomenti: con `effort` impostato, gli argomenti del processo contengono la coppia adiacente `--effort <valore>`; con `effort` non impostato, la stringa `--effort` non compare affatto.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/claude/` — Expect: passa, con i casi nuovi visibili nel conteggio.
+
+      ## Done
+      - [ ] Le tre superfici sono coperte da asserzioni sul valore osservabile, non su proxy.
+      - [ ] AC-1 — il catalogo dichiara le opzioni attese per ciascun modello.
+      - [ ] AC-4 — il rifiuto nomina l'opzione.
+      - [ ] AC-5 — esiste un modello reale che non dichiara opzioni.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Dichiarare e applicare l'opzione reasoning_effort del provider codex
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      I due modelli del catalogo `codex` dichiarano l'opzione `reasoning_effort`, e un valore configurato raggiunge il thread come `config.model_reasoning_effort`.
+
+      ## Read
+      - `cli/internal/execution/codex/models.go` — il catalogo dichiarato da US-047 e i suoi commenti.
+      - `cli/internal/execution/codex/config.go` — `settings`, `knownConfigKeys`, `parseSandbox` (calco per una chiave a insieme chiuso).
+      - `cli/internal/execution/codex/appserver.go:224-234` — costruzione di `threadParams` e punto in cui `model` viene aggiunto solo se valorizzato.
+
+      ## Change
+      - `cli/internal/execution/codex/models.go` — dichiarare `Options` su entrambe le voci del catalogo.
+      - `cli/internal/execution/codex/config.go` — `settings.ReasoningEffort`, `knownConfigKeys["reasoning_effort"]`, `parseReasoningEffort`, chiamata in `parseConfig`.
+      - `cli/internal/execution/codex/appserver.go` — aggiungere l'override `config.model_reasoning_effort` quando il valore è impostato.
+      - Non-goal: non aggiungere `reasoning_effort` a `ConfigFields()`, per la stessa ragione dell'opzione `effort` di claude.
+
+      ## Steps
+      1. In `models.go` definire `reasoningEfforts` come elenco chiuso `minimal, low, medium, high`, con un commento che dichiara la verifica fatta: `codex app-server generate-json-schema` mostra `thread/start` con un campo `config` a chiavi libere e un tipo `ReasoningEffort` che è una stringa non vuota, quindi l'insieme è chiuso per scelta di questo package — esattamente come il catalogo dei modelli — e il marcatore del predefinito è un'indicazione best-effort.
+      2. Costruire la `ModelOptionField` con `Name: "reasoning_effort"`, `Label: "Reasoning effort"`, un `Help` che spiega che lasciandola vuota nessun override viene passato e Codex applica la propria impostazione, e `Choices` con `Default: true` su `medium`.
+      3. Assegnare la stessa opzione a entrambe le voci del catalogo.
+      4. In `config.go` aggiungere `ReasoningEffort string` a `settings`, `"reasoning_effort"` a `knownConfigKeys`, e `parseReasoningEffort` sul calco di `parseSandbox`, con la differenza che l'assenza significa "non impostato" e restituisce stringa vuota invece di un default. Ogni rifiuto usa `configErr("reasoning_effort", ...)`.
+      5. Chiamare la funzione in `parseConfig` e riportare il valore in `settings`.
+      6. In `appserver.go`, dopo il blocco che imposta `threadParams["model"]`, aggiungere: quando `cfg.ReasoningEffort` non è vuoto, `threadParams["config"] = map[string]any{"model_reasoning_effort": cfg.ReasoningEffort}`. Non impostare la chiave `config` quando l'opzione non è valorizzata, così i thread esistenti restano identici a oggi.
+      7. Eseguire `gofmt -w` sui file toccati.
+
+      ## Verify
+      - Run: `gofmt -l cli/` — Expect: nessun output.
+      - Run: `cd cli && go build ./... && go vet ./...` — Expect: puliti.
+      - Run: `cd cli && go test ./internal/execution/codex/` — Expect: passa.
+
+      ## Done
+      - [ ] Entrambe le voci del catalogo dichiarano `reasoning_effort` con una sola scelta marcata come predefinita.
+      - [ ] `parseConfig` accetta i valori dichiarati e rifiuta il resto nominando `reasoning_effort`.
+      - [ ] Il valore impostato compare in `threadParams["config"]["model_reasoning_effort"]`; senza valore la chiave `config` resta assente.
+      - [ ] AC-1, AC-4 — un secondo provider dichiara opzioni proprie, con nome e valori diversi da quelli di claude.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Verificare catalogo, validazione e parametri dell'opzione reasoning_effort
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Il provider `codex` è provato su catalogo, validazione della configurazione e parametri del thread.
+
+      ## Read
+      - `cli/internal/execution/codex/models_test.go` — asserzioni già scritte sul catalogo.
+      - `cli/internal/execution/codex/config_test.go` — casi di `sandbox`, da imitare.
+      - `cli/internal/execution/codex/appserver_test.go` — come i test esistenti osservano i parametri inviati al server finto.
+
+      ## Change
+      - I tre file di test sopra — aggiungere casi in coda.
+
+      ## Steps
+      1. Catalogo: asserire che entrambe le voci dichiarano un'opzione `reasoning_effort` con i quattro valori attesi nell'ordine dichiarato e una sola scelta con `Default: true`.
+      2. Validazione, casi positivi: assente resta vuoto; ciascuno dei quattro valori è accettato.
+      3. Validazione, casi negativi: valore fuori insieme, stringa vuota e valore non stringa producono un `execution.ConfigurationError` con `Field == "reasoning_effort"`.
+      4. Parametri: con l'opzione impostata, i parametri di `thread/start` contengono `config.model_reasoning_effort` con quel valore; senza opzione, la chiave `config` è assente dai parametri.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/execution/codex/` — Expect: passa, con i casi nuovi visibili nel conteggio.
+
+      ## Done
+      - [ ] I quattro gruppi di asserzioni sopra sono verdi e osservano valori, non proxy.
+      - [ ] AC-1, AC-4 — dichiarazione e rifiuto nominato sono provati anche per il secondo provider.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Verificare che la view dei provider porti le opzioni dichiarate per modello
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Objective
+      `GET /api/execution/providers` porta, dentro ogni voce di `models`, le opzioni dichiarate per quel modello, e nulla di più.
+
+      ## Read
+      - `cli/internal/web/execution.go` — `executionProviderView` e il blocco che riempie `ModelField`, `Models`, `ModelsUnavailableReason`: verificare se la serializzazione delle opzioni è già completa grazie al tag JSON aggiunto in TASK-01, e in caso contrario è questo il punto da correggere.
+      - `cli/internal/web/execution_test.go` — i test HTTP di US-047 sul catalogo: server reale, configurazione reale, stile delle asserzioni.
+
+      ## Change
+      - `cli/internal/web/execution_test.go` — aggiungere i casi nuovi.
+      - `cli/internal/web/execution.go` — solo se la view non trasporta già le opzioni; in tal caso la modifica è limitata alla serializzazione, senza nuovi campi di primo livello.
+
+      ## Steps
+      1. Scrivere un test che avvia il server con il provider `claude` come default e asserisce, sul JSON decodificato, che la voce `sonnet` di `models` porta un'opzione `effort` con le sue scelte e con esattamente una scelta marcata predefinita.
+      2. Nello stesso test, asserire che la voce `haiku` non porta alcuna opzione — la chiave `options` è assente o vuota.
+      3. Scrivere un test che asserisce che nessuna opzione compare tra i `config_fields` del provider: un'opzione di modello non è un campo di configurazione e non deve essere disegnata due volte.
+      4. Scrivere un test che asserisce l'invariante di US-047 ancora valida: quando il catalogo non è ottenibile, non arrivano né modelli né opzioni, e il motivo è presente.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/web/` — Expect: passa, con i casi nuovi visibili nel conteggio.
+
+      ## Done
+      - [ ] La view espone le opzioni per modello senza aver aggiunto alcun campo di primo livello.
+      - [ ] Nessuna opzione compare fra i `config_fields`.
+      - [ ] AC-1 — l'elenco delle opzioni che il browser riceve è esattamente quello dichiarato per il modello.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Disegnare le opzioni del modello selezionato nel renderer dei campi provider
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il renderer puro disegna, sotto il campo del catalogo, soltanto le opzioni del modello attualmente selezionato, oppure una frase esplicita quando quel modello non ne dichiara.
+
+      ## Read
+      - `cli/internal/web/assets/provider-fields.js` — l'intero modulo: `renderField`, `renderModelSelect`, `currentValue`, `catalogOf`, le tre costanti di dicitura e la promessa, scritta in testa, che il modulo non contiene alcuna regola di provider.
+      - `cli/internal/web/assets/app.css` — le classi `field`, `field-help`, `field-warning`, `config-copy` già usate.
+
+      ## Change
+      - `cli/internal/web/assets/provider-fields.js` — aggiungere il disegno della sezione opzioni e le sue diciture.
+      - `cli/internal/web/assets/app.css` — solo se serve una classe per raggruppare visivamente la sezione.
+      - Non-goal: nessun nome di provider, nessun nome di campo e nessun identificatore di modello nel modulo. Il campo del catalogo resta quello nominato da `model_field`, e le opzioni restano quelle dichiarate dal modello.
+
+      ## Steps
+      1. Aggiungere le diciture nuove accanto alle tre esistenti, nello stesso inglese del resto del pannello: la voce vuota di un'opzione (`No value — the provider chooses`) e il messaggio del modello senza opzioni (`This model declares no option.`). Riusare `DEFAULT_SUFFIX` per la scelta marcata, così una sola voce dell'elenco legge come predefinito del provider, esattamente come per i modelli.
+      2. Aggiungere una funzione pura che, dato il provider e il valore corrente del campo catalogo, restituisce le opzioni del modello selezionato: nessun modello selezionato o modello non presente in catalogo significa nessuna opzione da disegnare e nessun messaggio — il caso di AC-5 riguarda un modello scelto che non dichiara opzioni.
+      3. Aggiungere una funzione che disegna una singola opzione come `<select name="provider_option_{name}">` con la voce vuota per prima e selezionata quando il valore corrente è assente, ogni scelta dichiarata, e il suffisso di predefinito sulla scelta marcata. Avvolgerla in un `<label class="field full" data-provider-field="{name}">` così che l'evidenziazione dell'errore esistente possa raggiungerla senza modifiche.
+      4. In `renderProviderFields`, dopo i campi di configurazione, aggiungere la sezione delle opzioni: le opzioni disegnate quando ce ne sono, il messaggio esplicito quando il modello selezionato non ne dichiara, e nulla del tutto quando non c'è modello selezionato o il provider non dichiara catalogo.
+      5. Verificare che il valore corrente di ogni opzione sia letto da `values` con la stessa `currentValue` già usata dai campi, così un'opzione salvata è riproposta selezionata.
+
+      ## Verify
+      - Run: `npm run test:web` — Expect: i 32 test esistenti restano verdi (i casi nuovi arrivano in TASK-10).
+      - Run: `node -e "require('./cli/internal/web/assets/provider-fields.js')"` — Expect: nessun errore di sintassi.
+
+      ## Done
+      - [ ] La sezione opzioni compare solo per il modello selezionato e riflette le sue dichiarazioni.
+      - [ ] Un modello senza opzioni produce la frase esplicita e nessun contenitore vuoto.
+      - [ ] Il modulo continua a non nominare alcun provider, campo o modello.
+      - [ ] AC-1, AC-2, AC-5 — ciò che viene disegnato, il valore riproposto e il messaggio esplicito.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Ridisegnare le opzioni al cambio di modello e raccoglierle al salvataggio
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Cambiare modello aggiorna subito le opzioni mostrate, e il salvataggio scrive soltanto le opzioni del modello scelto.
+
+      ## Read
+      - `cli/internal/web/assets/app.js:1881-1945` — `selectProvider`, `renderProviderFields`, `collectProviderConfig`, `markProviderFieldError`.
+      - `cli/internal/web/assets/app.js:1960-1990` — il salvataggio e il punto in cui `err.field` viene passato a `markProviderFieldError`.
+
+      ## Change
+      - `cli/internal/web/assets/app.js` — ascolto del cambio sul campo catalogo, raccolta delle opzioni, nessun'altra modifica.
+      - Non-goal: non spostare la logica di disegno dentro `app.js`; il renderer resta il modulo puro.
+
+      ## Steps
+      1. Dopo aver scritto il markup prodotto dal renderer in `executionFields`, registrare un ascoltatore `change` sul controllo del campo nominato da `model_field`; alla variazione, raccogliere i valori attualmente immessi nel form, sovrascrivere il valore del modello con quello appena scelto e richiamare il disegno con quei valori. Così cambiare modello non perde ciò che l'utente ha già digitato negli altri campi.
+      2. Estendere `collectProviderConfig` perché, dopo i `config_fields`, aggiunga le opzioni: leggere i controlli `provider_option_*` effettivamente presenti nel DOM. Applicare la stessa regola dei campi — un valore vuoto significa "usa il predefinito del provider" e non viene inviato.
+      3. Verificare che la raccolta parta dal DOM e non dall'unione delle opzioni dichiarate dal catalogo: è ciò che fa sì che, dopo un cambio di modello, l'opzione non più disegnata semplicemente non venga inviata e quindi sparisca dalla configurazione salvata.
+      4. Verificare che `markProviderFieldError` raggiunga già l'opzione: cerca `[data-provider-field="..."]` e mette a fuoco `input, select`, entrambi soddisfatti dal markup di TASK-08. Se non lo fa, correggere qui.
+
+      ## Verify
+      - Run: `npm run test:web` — Expect: verde.
+      - Run: `npm run test:view-execution-smoke` — Expect: PASS, con i blocchi AC esistenti invariati.
+
+      ## Done
+      - [ ] Il cambio di modello ridisegna le opzioni senza perdere i valori già immessi negli altri campi.
+      - [ ] Il salvataggio invia soltanto le opzioni presenti nel DOM, cioè quelle del modello scelto.
+      - [ ] Un'opzione rifiutata dal provider viene evidenziata e messa a fuoco.
+      - [ ] AC-3, AC-4 — l'aggiornamento della sezione, la sparizione dell'opzione superata e l'evidenziazione dell'errore.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Verificare il renderer sulle opzioni del modello selezionato
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Il modulo puro è provato sull'HTML che produce davvero, per i tre casi che l'utente vede: opzioni del modello scelto, valore già salvato, modello senza opzioni.
+
+      ## Read
+      - `test/web/provider-fields.test.mjs` — i 10 test scritti per US-047: come costruiscono una view finta e come asseriscono sul markup.
+
+      ## Change
+      - `test/web/provider-fields.test.mjs` — aggiungere i casi nuovi in coda.
+
+      ## Steps
+      1. Costruire una view finta con due modelli — uno con un'opzione a tre scelte di cui una marcata, uno senza opzioni — e il campo catalogo nominato da `model_field`.
+      2. Caso AC-1: con il primo modello come valore corrente, asserire che il markup contiene un controllo per l'opzione dichiarata, che le sue voci sono esattamente quelle dichiarate più la voce vuota, e che il suffisso di predefinito compare una volta sola e sulla scelta marcata.
+      3. Caso AC-2: con un valore già impostato per l'opzione, asserire che quella voce è `selected`.
+      4. Caso AC-3: con il secondo modello come valore corrente, asserire che non esiste alcun controllo per l'opzione del primo modello.
+      5. Caso AC-5: sempre con il secondo modello, asserire che il markup contiene la frase esplicita e nessun contenitore di opzioni vuoto.
+      6. Caso di robustezza: una view priva di `model_field`, o con `models` assente, non produce alcuna sezione opzioni e non solleva eccezioni.
+
+      ## Verify
+      - Run: `npm run test:web` — Expect: passa, con almeno cinque test in più rispetto ai 32 di baseline.
+
+      ## Done
+      - [ ] I cinque casi asseriscono sul markup prodotto, non sull'assenza di eccezioni.
+      - [ ] AC-1, AC-2, AC-3, AC-5 — provati al livello che disegna ciò che l'utente legge.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Verificare persistenza, sostituzione e rifiuto di un'opzione via HTTP
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+      - TASK-09
+    body: |-
+      ## Objective
+      Il ciclo reale di salvataggio prova i tre comportamenti che l'utente sperimenta: l'opzione resta, l'opzione superata sparisce, l'opzione rifiutata non tocca nulla.
+
+      ## Read
+      - `cli/internal/web/execution_test.go` — i test di US-047 sul salvataggio, in particolare quello che prova che un modello fuori catalogo viene conservato e quello che prova che un campo vuoto non finisce nella configurazione.
+      - `cli/internal/web/execution.go` — `handleSaveDefaultExecutionProvider` e `writeProviderConfigError`.
+
+      ## Change
+      - `cli/internal/web/execution_test.go` — aggiungere i casi nuovi.
+
+      ## Steps
+      1. AC-2: salvare `{model: "sonnet", effort: "high"}`, poi rileggere con `GET` e asserire che `default.config.effort` vale ancora `"high"`. L'oracolo è la configurazione riletta dal file, non la risposta del `POST`.
+      2. AC-3: partendo dallo stato precedente, salvare `{model: "haiku"}` senza la chiave dell'opzione, poi rileggere e asserire che `effort` non è più presente nella configurazione. Asserire l'assenza della chiave, non un valore vuoto.
+      3. AC-4: partendo da una configurazione valida salvata, inviare `{model: "sonnet", effort: "turbo"}` e asserire risposta `400`, `field == "effort"`, e messaggio che nomina l'opzione; poi rileggere con `GET` e asserire che la configurazione è identica a quella precedente, campo per campo.
+      4. Aggiungere il simmetrico per `codex` su `reasoning_effort`, almeno per il caso di persistenza e per quello di rifiuto.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/web/` — Expect: passa, con i casi nuovi visibili nel conteggio.
+
+      ## Done
+      - [ ] AC-2 — l'opzione salvata è riproposta invariata alla rilettura.
+      - [ ] AC-3 — l'opzione non più applicabile non è più nella configurazione salvata.
+      - [ ] AC-4 — il rifiuto nomina l'opzione e lascia intatta la configurazione precedente.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Estendere lo smoke del pannello alle opzioni di modello
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+      - TASK-11
+    body: |-
+      ## Objective
+      Il pannello realmente servito dal viewer porta le opzioni del modello configurato e la frase esplicita per il modello che non ne dichiara.
+
+      ## Read
+      - `test/e2e/execution-config-view-smoke.mjs` — la struttura dei blocchi `AC-N`, come lo smoke costruisce il workspace sandbox e come interroga il viewer.
+      - `AGENTS.md:162` — la descrizione riga per riga dello smoke, che deve restare allineata a ciò che lo smoke fa davvero.
+
+      ## Change
+      - `test/e2e/execution-config-view-smoke.mjs` — aggiungere le asserzioni nuove.
+      - `AGENTS.md` — aggiornare la descrizione dello smoke.
+
+      ## Steps
+      1. Aggiungere al blocco esistente sul catalogo l'asserzione che la voce del modello configurato porta l'opzione dichiarata, con le sue scelte e una sola marcata predefinita.
+      2. Aggiungere l'asserzione sul modello che non dichiara opzioni: la sua voce non ne porta.
+      3. Se lo smoke verifica il markup prodotto e non solo il JSON, aggiungere l'asserzione che la frase esplicita compare per quel modello.
+      4. Aggiornare `AGENTS.md` così che l'elenco dei controlli dello smoke rispecchi esattamente i blocchi presenti nel file dopo questa modifica.
+
+      ## Verify
+      - Run: `npm run test:view-execution-smoke -- --cleanup` — Expect: PASS, con i blocchi nuovi stampati insieme a quelli esistenti.
+
+      ## Done
+      - [ ] Lo smoke verifica le opzioni sul pannello davvero servito.
+      - [ ] `AGENTS.md` descrive lo smoke come è ora.
+      - [ ] AC-1, AC-5 — provati anche sul viewer reale.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Gate finale — accettazione e regressione complete
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-04
+      - TASK-06
+      - TASK-07
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+      Tutte le evidenze di accettazione sono verdi insieme e nessuna verifica della baseline è peggiorata.
+
+      ## Read
+      - La sezione `Baseline` di questo piano — i comandi esatti e i risultati attesi.
+      - La `Mappa delle evidenze di accettazione` — per confermare che ogni AC ha un test verde che lo copre.
+
+      ## Change
+      - Nessuna modifica prevista. Se un controllo fallisce, correggere il codice responsabile e rieseguire l'intero gate, non solo il comando fallito.
+
+      ## Steps
+      1. Eseguire, dalla radice del progetto, nell'ordine: `gofmt -l cli/`, `cd cli && go build ./...`, `cd cli && go vet ./...`, `cd cli && go test ./...`, `npm run test:web`, `npm run test:view-execution-smoke -- --cleanup`.
+      2. Eseguire `golangci-lint run` **solo se il binario è presente**; se non lo è, registrare esplicitamente il salto nel resoconto, come previsto dalla baseline.
+      3. Confrontare i conteggi dei test con quelli della baseline: devono essere cresciuti, mai diminuiti.
+      4. Verificare che nessun file toccato dalla spec abbia introdotto diagnostica di `vet` o di formattazione.
+      5. Marcare questo task `DONE`.
+      6. Ricaricare la spec da `data.project_root` con `archetipo spec show US-048` e verificare che nessun task sia rimasto `TODO`.
+      7. Solo allora richiedere la review con `archetipo spec review US-048`.
+
+      ## Verify
+      - Run: `gofmt -l cli/` — Expect: nessun output.
+      - Run: `cd cli && go build ./... && go vet ./...` — Expect: puliti.
+      - Run: `cd cli && go test ./...` — Expect: verde, con più test della baseline di 889 sui package toccati.
+      - Run: `npm run test:web` — Expect: verde, più di 32 test.
+      - Run: `npm run test:view-execution-smoke -- --cleanup` — Expect: PASS.
+
+      ## Done
+      - [ ] Tutti i comandi sopra sono verdi, e l'eventuale salto di `golangci-lint` è registrato come prerequisito d'ambiente.
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5 — ciascuno è coperto da almeno un test verde, come da mappa delle evidenze.
+      - [ ] `archetipo spec show US-048` non riporta alcun task `TODO` prima della richiesta di review.
+
+      ## Blockers
+      None.
+    ref: TASK-13

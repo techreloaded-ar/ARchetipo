@@ -1,0 +1,45 @@
+schema: archetipo/spec/v2
+code: US-053
+title: Conversare con l'agente sul workspace aperto
+epic:
+  code: EP-006
+  title: Esecuzione locale e ciclo di delivery
+priority: HIGH
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-053: Conversare con l'agente sul workspace aperto
+
+  **Epic:** EP-006 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come utilizzatore di ARchetipo,
+  voglio parlare con l'agente sul workspace aperto senza avviare un'azione del processo,
+  così da fare brainstorming, chiedere del codice e capire dove sono prima di decidere cosa fare.
+
+  **Dimostrazione**
+  Partendo da un workspace aperto e da un provider che dichiara di saper conversare, il revisore apre la conversazione, chiede qualcosa sul contenuto del workspace e osserva la risposta dell'agente comparire progressivamente, senza che alcuna spec cambi stato e senza che venga creata alcuna esecuzione di processo. Il revisore ricarica la pagina e osserva che la conversazione è ancora lì con la sua storia. Sceglie poi un provider che non dichiara questa capacità e osserva che la conversazione non è offerta, con la ragione dichiarata.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Con un workspace aperto e un provider che dichiara la capacità di conversare, il revisore invia un messaggio e riceve la risposta dell'agente, che opera sulla project root del workspace aperto.
+  - [ ] AC-2 — Una conversazione non fa transitare alcuna spec e non compare come esecuzione di un'azione del processo.
+  - [ ] AC-3 — Ricaricando la pagina, la conversazione in corso e la sua storia sono ancora disponibili; se la storia mostrata è parziale, lo dichiara.
+  - [ ] AC-4 — Con un provider che non dichiara la capacità di conversare, la conversazione non è offerta e l'interfaccia ne dichiara la ragione nominando la capacità mancante.
+  - [ ] AC-5 — Aprendo un altro workspace, la conversazione mostrata è quella del workspace ora aperto e non quella del precedente.
+  - [ ] AC-6 — Il revisore può chiudere la conversazione, e da quel momento il provider non è più impegnato per essa.
+
+  **Fuori ambito**
+  L'avvio delle azioni del processo dalla conversazione, la disposizione della conversazione rispetto alla board e alla spec, i suggerimenti sul passo successivo, e ogni conversazione che non riguardi il workspace aperto.
+history:
+  - status: TODO
+    at: "2026-08-21T17:16:17Z"
+  - status: PLANNED
+    at: "2026-08-21T18:51:32Z"
+  - status: IN PROGRESS
+    at: "2026-08-21T18:52:53Z"
+  - status: REVIEW
+    at: "2026-08-21T20:14:30Z"
+  - status: DONE
+    at: "2026-08-21T20:18:24Z"

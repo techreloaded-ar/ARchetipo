@@ -1,0 +1,741 @@
+schema: archetipo/plan/v2
+spec_code: US-032
+body: |-
+  # US-032: Pianificare con Codex come provider locale — Piano di implementazione
+
+  **Prodotto da:** ARchetipo Planning Team
+  **Data:** 2026-08-18
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-006 — Esecuzione locale e ciclo di delivery
+  **Priorità:** MEDIUM | **Punti:** 5
+
+  **User Story**
+  Come utilizzatore che dispone di Codex sulla macchina del workspace, voglio selezionarlo come provider locale per pianificare una spec, così da usare l'esecuzione gestita di ARchetipo senza installare ARcipelago.
+
+  **Criteri di accettazione**
+  - AC-1 — ARchetipo rende selezionabile Codex come provider quando il runtime richiesto è disponibile.
+  - AC-2 — Una pianificazione riuscita tramite Codex produce un piano valido e porta la spec a `PLANNED`.
+  - AC-3 — L'esecuzione registra provider, stato e risultato senza salvare credenziali o contenuti di autenticazione.
+  - AC-4 — Codex assente, non autenticato o terminato con errore produce una diagnostica esplicita e lascia la spec fuori da `PLANNED`.
+  - AC-5 — L'uso diretto delle skill ARchetipo dentro Codex continua a funzionare senza richiedere il provider locale.
+
+  **Fuori ambito**
+  Installazione automatica di Codex, scelta automatica del modello, implementazione e review tramite provider.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Codex diventa un secondo `execution.Provider` accanto ad `arcipelago`, dietro lo stesso contratto già stabile (`ID`, `Capabilities`, `ValidateConfig`, `Execute` in `cli/internal/execution/provider.go`). La differenza rispetto ad ARcipelago è solo *dove* corre l'agente: non un hub remoto raggiunto via HTTP, ma un processo locale lanciato dalla macchina del workspace. Tutto ciò che sta sopra il provider — servizio di esecuzione, record persistito, conferma dell'effetto sul connector, azioni della UI — resta identico e non va toccato nella sua logica.
+
+  - **Nuovo pacchetto `cli/internal/execution/codex/`** con `Provider` che dichiara la capability `spec.plan` e lancia `codex exec` nella working directory del workspace. Il prompt chiede all'agente di invocare la skill `/archetipo-plan <US-CODE>` (le skill Codex sono installate in `.agents/skills/`, cfr. `cli/internal/cli/init_project_cmd.go:28`) e di chiudere la run con la stessa riga JSON di ricevuta già usata da ARcipelago.
+  - **Il provider non tocca il connector.** Come per ARcipelago, il piano lo persiste l'agente attraverso la skill; il provider osserva solo l'esito del processo e la ricevuta. La prova che la spec sia davvero `PLANNED` con un piano leggibile resta di `execution.VerifyActionEffect`/`ConfirmActionEffect` (`cli/internal/execution/effect.go`), che entrambi i chiamanti (CLI e viewer) applicano già. Questo è ciò che rende AC-4 strutturalmente vero: nessun percorso del provider può muovere una spec.
+  - **Contratto della ricevuta condiviso.** `parseReceipt` e la regola di accettazione oggi vivono in `cli/internal/execution/arcipelago/prompt.go` e `provider.go`. Vengono estratte in `cli/internal/execution/planreceipt.go` e usate da entrambi i provider: la ricevuta è il gate di accettazione di AC-2, e due copie che divergono sono esattamente il difetto da evitare. Il testo del prompt di ARcipelago **non cambia di un byte**, perché l'hub calcola un fingerprint canonico su titolo/prompt/metadata e l'idempotenza dipende da quella stabilità.
+  - **Disponibilità del runtime come verdetto del server.** `execution.Provider` è un contratto stabile e non va allargato: si aggiunge un'interfaccia opzionale `AvailabilityReporter` accanto a `ConfigDescriber`, con l'helper `execution.CheckAvailability(ctx, provider, config)` che ritorna `nil` per i provider che non la implementano. Il viewer espone `available` e `unavailable_reason` per ogni provider e li usa anche nel calcolo di `runnable` per l'azione `plan`, riusando la forma già introdotta da US-028 in `cli/internal/web/execution_run.go:325-330`.
+  - **Nessuna credenziale in configurazione.** Codex si autentica per conto suo (`codex login`, file di sessione sotto la home dell'utente). ARchetipo non legge, non copia e non registra nulla di quel materiale: la configurazione del provider contiene solo `command`, `model`, `exec_args` e `timeout_seconds`, e il payload dell'esecuzione contiene solo comando, modello, exit code, riga di ricevuta e numero di task. Nessun dump integrale di stdout finisce nel record.
+
+  ### Invocazione di Codex
+
+  `buildArgs(settings, prompt)` è una funzione pura e testata: `codex exec --full-auto --skip-git-repo-check [--model <m>] <prompt>`, dove `exec_args` sostituisce i flag intermedi quando valorizzato. Il default è `--full-auto` perché la pianificazione deve poter **scrivere** il piano nel workspace: una modalità di sola lettura produrrebbe una run che fallisce sempre. Il campo `exec_args` è la valvola di sicurezza per una versione di Codex con flag diversi, senza ricompilare.
+
+  ### Decisioni architetturali
+
+  **Come ARchetipo sa se il runtime è utilizzabile.** Opzioni valutate: (a) registrare il provider solo quando il binario esiste; (b) registrarlo sempre e dichiarare la disponibilità come dato osservabile. Scelta: (b). Con (a) un workspace senza Codex non mostrerebbe alcuna differenza tra "provider inesistente in questa build" e "Codex non installato", e AC-4 chiede una diagnostica esplicita, non un'assenza. Con (b) la card resta visibile, disabilitata, con il motivo esatto; il costo è un campo in più nella vista del viewer. Il probe è `exec.LookPath` **più** l'esecuzione di `<command> --version` con timeout breve: sulla macchina corrente `codex` è nel PATH ma fallisce con `spawn ... ENOENT` (installazione npm rotta), quindi il solo `LookPath` darebbe un falso positivo.
+
+  **Dove passa la working directory.** `execution.Request` non porta la radice di progetto e non va allargata per un solo provider. Il provider risolve la directory al momento dell'`Execute` con un seam `WorkingDir func() (string, error)` che di default è `os.Getwd`. È corretto in entrambi i chiamanti: il root CLI esegue un `os.Chdir` reale per `-C` in `PersistentPreRunE` (`cli/internal/cli/root.go`) prima che qualunque sottocomando parta, e `archetipo view` gira nella radice di progetto per tutta la sua vita. Risolverla alla costruzione del registry sarebbe invece sbagliato, perché il registry viene costruito **prima** del chdir.
+
+  **Perché non un ADR generico di "provider locale".** La roadmap prevede US-033 (Claude) come provider gemello, ma il contratto che li accomuna esiste già (`execution.Provider`): questa storia non introduce una nuova astrazione di orchestrazione, solo una seconda implementazione più l'interfaccia opzionale di disponibilità. Nessuna scelta supera la soglia dell'ADR su modello dati persistente, modello di sicurezza o topologia di deploy.
+
+  ---
+
+  ## Baseline
+
+  Comandi eseguiti nella radice del workspace (`/Users/stefanoleli/Project/Archetipo`) prima della progettazione dei task.
+
+  | Controllo | Esito prima dell'implementazione | Conseguenza sul piano |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | nessun output | ogni task che tocca file Go può pretendere `Expect: nessun output` |
+  | `cd cli && go vet ./...` | nessun problema | `Expect: nessun errore` è legittimo |
+  | `cd cli && go build ./...` | compila pulito | i task possono pretendere una build verde |
+  | `cd cli && go test ./...` | 936 test verdi in 24 pacchetti | ogni task Go verifica il pacchetto toccato e il gate finale rilancia l'intera suite pretendendo 0 fallimenti |
+  | `npm run test:view-execution-smoke` | PASS (AC-1..AC-5 dello smoke esistente) | lo smoke va esteso restando verde; nessun assert esistente va indebolito |
+  | `golangci-lint run --timeout 5m ./...` | **non installato sulla macchina** (`golangci-lint not found`) | prerequisito d'ambiente, non un fallimento di codice: installarlo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` prima del gate finale. Se l'installazione non è possibile, il gate lo dichiara esplicitamente come non eseguito invece di dichiararlo verde |
+  | `codex --version` | **fallisce**: `Error: spawn /opt/homebrew/lib/node_modules/@openai/codex/.../codex ENOENT` — binario presente nel PATH ma installazione npm rotta | è il caso reale che il probe di disponibilità deve classificare come *non disponibile con motivo esplicito*. Nessun test automatico può quindi dipendere da un Codex funzionante: ogni test usa il seam `Runner` o un processo di supporto Go |
+
+  ### Prerequisiti d'ambiente
+
+  - Go installato (già verificato dai comandi sopra).
+  - Node.js per gli smoke (`v25.8.1` presente).
+  - `golangci-lint` assente: vedi riga della tabella.
+  - Codex **non** è un prerequisito dei test: il pacchetto è progettato con un seam iniettabile proprio perché la CI non ha né Codex né le sue credenziali.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | root CLI reale costruito da `newRootCmd`; viewer su workspace file con `PATH` senza `codex` e con un finto `codex` funzionante | Go unit + Go integration (`cli/internal/web`) + smoke HTTP | `GET /api/execution/providers` contiene un elemento con `id: "codex"`, `capabilities: ["spec.plan"]`, `config_fields` con i nomi attesi e, a runtime assente, `available: false` con `unavailable_reason` non vuoto che nomina il comando cercato; a runtime presente `available: true` senza motivo | TASK-11, TASK-13 |
+  | AC-2 | workspace file con `US-001` in `TODO`; `Runner` finto che persiste un piano invocando davvero `spec plan` e poi stampa la riga di ricevuta | Go integration (`cli/internal/cli`) | dopo `execution run US-001 plan`: envelope `kind: execution` con `status: "SUCCEEDED"`, e `spec show US-001` risponde `status: PLANNED` con almeno un task di piano leggibile | TASK-09 |
+  | AC-3 | come AC-2, con `CODEX_FAKE_SECRET`/token sentinella esportato nell'ambiente e presente nell'output del processo finto | Go integration + smoke HTTP | il file del record sotto `.archetipo/executions/` e l'envelope stdout non contengono la stringa sentinella; il payload contiene solo `command`, `model`, `exit_code`, `result_summary` (sola riga di ricevuta), `plan_tasks`, `duration_ms`; `GET /api/execution/providers` non contiene la sentinella e nessun `config_field` è di tipo segreto | TASK-07, TASK-09, TASK-13 |
+  | AC-4 | quattro varianti: binario inesistente; exit code ≠ 0 con messaggio di autenticazione; run terminata senza riga di ricevuta; ricevuta valida ma `spec_code` diverso / spec non mossa | Go unit + Go integration | `execution run` esce con codice ≠ 0 e envelope `kind: error`; il record persistito è `FAILED` con `error.message` che nomina causa e comando; `spec show US-001` continua a rispondere `status: TODO` senza piano; nel viewer l'azione `plan` è `runnable: false` con `unavailable_reason` che nomina il provider e il motivo | TASK-07, TASK-09, TASK-11 |
+  | AC-5 | workspace inizializzato con `archetipo init --tool codex --connector file --yes` e **nessun** `execution.default_provider` in `.archetipo/config.yaml` | Go integration | `.agents/skills/archetipo-plan/SKILL.md` esiste dopo l'init; `spec plan US-001 --file <payload>` porta la spec a `PLANNED` senza che alcun provider sia configurato, e `config show` non riporta errori di precondizione | TASK-09 |
+
+  La mappa vive sopra i dubbi tipici: nessun criterio è provato da un mock che nasconda il confine responsabile. AC-2 non si accontenta della ricevuta (che è una dichiarazione dell'agente) ma rilegge la spec dal connector reale; AC-3 usa una sentinella vera nell'ambiente e nell'output invece di ispezionare solo la lista dei campi; AC-4 verifica lo stato della spec dopo il fallimento, non soltanto il messaggio d'errore.
+
+  ---
+
+  ## Strategia di test
+
+  La strategia ricalca quella già usata per ARcipelago (`cli/internal/cli/execution_arcipelago_test.go`), che è l'unico modo dimostrato in questo repository di provare una pianificazione end-to-end senza dipendere dall'agente reale: un finto backend che *persiste davvero* un piano attraverso la stessa CLI, e solo dopo dichiara il successo.
+
+  - **Unit Go sul pacchetto `codex`**: parsing e default della configurazione (per campo, con chiavi sconosciute rifiutate), `buildArgs` come funzione pura, probe di disponibilità (binario assente, binario presente ma `--version` fallito, binario sano), `Execute` nei suoi esiti (successo con ricevuta, exit code ≠ 0, output senza ricevuta, ricevuta di un'altra spec, timeout, output troncato).
+  - **Unit Go sul contratto condiviso**: i test di `parseReceipt` si spostano insieme al codice in `cli/internal/execution/planreceipt_test.go` e restano verdi; i test di ARcipelago che coprono il testo del prompt restano invariati e sono la prova che il refactor non ha cambiato un byte.
+  - **Integration Go sulla CLI**: percorso reale `execution run US-XXX plan` con connector file su directory temporanea, provider Codex costruito con un `Runner` finto. È il livello che prova AC-2, AC-4 e AC-3 sul record persistito, perché è l'unico che attraversa `ConfirmActionEffect` e il connector.
+  - **Integration Go sul viewer**: `cli/internal/web` verifica che la lista dei provider esponga disponibilità e motivo e che l'azione `plan` diventi non eseguibile quando il provider di default è indisponibile.
+  - **Smoke Node HTTP**: estensione di `test/e2e/execution-config-view-smoke.mjs` per il contratto osservato dal browser (provider `codex` presente, campi di configurazione senza segreti, campi di disponibilità presenti), senza credenziali e senza traffico fuori da `127.0.0.1`.
+  - **Determinismo**: nessun test invoca il vero `codex`. Dove serve un processo reale (per provare che il cablaggio con `os/exec` funziona davvero e non solo il seam) si usa il pattern standard del sotto-processo di test Go, che è cross-platform e non richiede uno script di shell — la CI gira anche su Windows.
+
+  ### Rinuncia agli E2E da browser
+
+  **Motivo:** il repository non possiede una suite browser per il proprio viewer e questa storia non introduce né una nuova pagina né un nuovo flusso di navigazione: aggiunge uno stato disabilitato con motivo a una card già esistente nel pannello Execution. Il confine che conta (server → provider → connector) è attraversato interamente dagli smoke HTTP e dai test Go, che osservano lo stesso JSON che il browser riceve.
+  **Livello di evidenza usato in sostituzione:** test Go del pacchetto `web` più lo smoke Node `npm run test:view-execution-smoke`, entrambi deterministici e già in uso per le storie US-028/US-029.
+  **Video dimostrativo:** non atteso (`e2e.record_demo_video: false` nella configurazione del workspace). La decisione finale su registrazione o rinuncia resta comunque di `archetipo-review`.
+
+  ---
+
+  _Piano generato da ARchetipo Planning — 2026-08-18_
+tasks:
+  - id: TASK-01
+    title: Estrarre il contratto della ricevuta di piano in cli/internal/execution/planreceipt.go
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Il parsing e la regola di accettazione della ricevuta di piano vivono una sola volta nel pacchetto `execution`, usabili da qualsiasi provider, con ARcipelago che continua a comportarsi esattamente come prima.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/prompt.go` — `plannedStatus`, `receiptFields`, `receipt`, `parseReceipt`, `hasReceiptFields`, `buildTask`.
+      - `cli/internal/execution/arcipelago/provider.go` — `resultFor`, che applica la regola di accettazione (`got.Status != plannedStatus || got.Tasks <= 0 || got.SpecCode != req.SpecCode`).
+      - `cli/internal/execution/arcipelago/provider_test.go` — i test che coprono ricevuta assente/valida/di un'altra spec, per capire quali si spostano.
+      - `cli/internal/execution/types.go` — dove vivono i tipi condivisi del pacchetto.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/planreceipt.go` con: costante esportata `PlannedStatus = string(domain.StatusPlanned)`, tipo esportato `PlanReceipt{SpecCode string; Status string; Tasks int}`, funzione `ParsePlanReceipt(output string) (PlanReceipt, error)` (il corpo di `parseReceipt`, invariato nella logica di scansione all'indietro) e `AcceptPlanReceipt(output, specCode string) (PlanReceipt, error)` che applica la regola oggi in `resultFor` e ritorna un errore che nomina `specCode`.
+      - Nuovo file `cli/internal/execution/planreceipt_test.go` con i casi di parsing spostati dai test ARcipelago (riga assente, oggetto JSON senza i campi della ricevuta, ricevuta seguita da altro output, ultima ricevuta valida vince).
+      - `cli/internal/execution/arcipelago/prompt.go`: rimuovere `receipt`, `receiptFields`, `parseReceipt`, `hasReceiptFields`; `plannedStatus` diventa un alias di `execution.PlannedStatus`.
+      - `cli/internal/execution/arcipelago/provider.go`: `resultFor` usa `execution.AcceptPlanReceipt`.
+      - **Non-goal:** non cambiare di un solo byte il testo prodotto da `buildTask` (titolo, prompt, metadata). L'hub calcola un fingerprint canonico su quei valori e l'idempotenza dei task esterni dipende dalla loro stabilità.
+      - **Non-goal:** non introdurre in questo task alcuna conoscenza di Codex.
+
+      ## Steps
+      1. Creare `planreceipt.go` spostando il codice **verbatim**, cambiando solo i nomi da non esportati a esportati e aggiungendo i commenti che spiegano perché la scansione parte dal fondo.
+      2. Scrivere `AcceptPlanReceipt` estraendo la condizione di `resultFor` senza alterarla; il messaggio d'errore deve continuare a distinguere "nessuna ricevuta" da "ricevuta che non dichiara un piano per <specCode>".
+      3. Aggiornare `prompt.go` e `provider.go` di ARcipelago per usare le nuove funzioni; verificare che `buildTask` continui a comporre la stessa stringa (il test esistente sul prompt lo prova).
+      4. Spostare i test di parsing in `planreceipt_test.go`, lasciando in `provider_test.go` i test che riguardano il comportamento di `Execute`.
+      5. Eseguire i controlli di verifica.
+
+      ## Verify
+      - Eseguire da `cli/`: `gofmt -l .`
+      - Expect: nessun output.
+      - Eseguire da `cli/`: `go test ./internal/execution/...`
+      - Expect: tutti i test passano, inclusi quelli preesistenti di ARcipelago (baseline: la suite era interamente verde).
+      - Eseguire da `cli/`: `go build ./... && go vet ./...`
+      - Expect: nessun errore.
+
+      ## Done
+      - [ ] `execution.ParsePlanReceipt` e `execution.AcceptPlanReceipt` esistono e sono le uniche implementazioni della regola nel repository (una `grep -rn "parseReceipt" cli` non trova più nulla).
+      - [ ] I test ARcipelago sul prompt e su `Execute` passano senza modifiche al testo del prompt.
+      - [ ] Nessun nuovo diagnostico di compilatore o vet sui file toccati rispetto alla baseline.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Aggiungere l'interfaccia opzionale di disponibilità dei provider di esecuzione
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Un provider può dichiarare se il runtime che gli serve è utilizzabile, e un chiamante può interrogarlo senza sapere quale provider sia e senza che il contratto `execution.Provider` cambi.
+
+      ## Read
+      - `cli/internal/execution/provider.go` — il pattern `ConfigDescriber`/`DescribeConfig`: interfaccia opzionale separata più helper che tollera chi non la implementa. È il modello da imitare, commenti compresi.
+      - `cli/internal/execution/provider_test.go` — come sono testati `DescribeConfig` e il registry.
+
+      ## Change
+      - `cli/internal/execution/provider.go` (oppure un nuovo `cli/internal/execution/availability.go`, a scelta dell'implementatore purché resti nel pacchetto `execution`): aggiungere
+        - `type AvailabilityReporter interface { Available(ctx context.Context, config map[string]any) error }`
+        - `func CheckAvailability(ctx context.Context, provider Provider, config map[string]any) error` che ritorna `nil` quando il provider non implementa l'interfaccia, e altrimenti inoltra la chiamata passando una copia della configurazione (`CloneConfig`).
+      - Test nel pacchetto `execution` per: provider che non implementa l'interfaccia (→ `nil`), provider disponibile (→ `nil`), provider indisponibile (→ errore inoltrato invariato), configurazione passata clonata (il provider non può mutare la mappa del chiamante).
+      - **Non-goal:** non aggiungere metodi a `Provider`; non introdurre un tipo di errore dedicato — l'errore del provider è già la diagnostica, e incapsularlo perderebbe il testo esplicito che AC-4 richiede.
+      - **Non-goal:** nessun consumo di questa interfaccia in questo task (viewer e CLI arrivano dopo).
+
+      ## Steps
+      1. Dichiarare l'interfaccia e l'helper accanto a `ConfigDescriber`, con un commento che spieghi perché è opzionale e separata.
+      2. Nell'helper, clonare la configurazione prima di passarla, come già fa `DescribeConfig`/`ValidateConfig` nei chiamanti esistenti.
+      3. Scrivere i quattro casi di test con provider finti definiti nel test stesso.
+      4. Eseguire i controlli di verifica.
+
+      ## Verify
+      - Eseguire da `cli/`: `go test ./internal/execution/`
+      - Expect: tutti i test del pacchetto passano, inclusi i nuovi.
+      - Eseguire da `cli/`: `gofmt -l . && go vet ./...`
+      - Expect: nessun output da `gofmt`, nessun errore da `vet`.
+
+      ## Done
+      - [ ] AC-1 — esiste un modo, indipendente dal provider concreto, per sapere se il suo runtime è utilizzabile, e un provider che non lo dichiara è trattato come disponibile.
+      - [ ] `execution.Provider` non ha nuovi metodi: i provider esistenti compilano senza modifiche.
+      - [ ] La configurazione passata al provider è una copia.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Configurazione non segreta del provider Codex in cli/internal/execution/codex/config.go
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Il provider Codex accetta una configurazione dichiarata, validata per campo e priva di qualsiasi credenziale, con default documentati.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/config.go` — struttura `settings`, `knownConfigKeys`, `ConfigFields`, `parseConfig`, `rejectUnknownKeys`, `requiredString`, `parseSeconds`. È il modello esatto da seguire, incluso il fatto che ogni rifiuto nomina la chiave offendente tramite `execution.ConfigurationError`.
+      - `cli/internal/execution/provider.go` — commento di `ConfigField` sul divieto di credenziali in configurazione.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/codex/config.go` con:
+        - `settings{Command string; Model string; ExecArgs []string; Timeout time.Duration}`;
+        - `knownConfigKeys` = `command`, `model`, `exec_args`, `timeout_seconds`;
+        - `parseConfig(raw map[string]any) (settings, error)` con default `command = "codex"`, `model = ""` (nessun flag `--model` emesso), `exec_args` vuoto (si usano i flag di default), `timeout_seconds = 3600` con intervallo `1..86400`;
+        - `(*Provider).ConfigFields()` che dichiara i quattro campi con `Label`, `Help` (default incluso) e `Placeholder`, nessuno `Required`;
+        - `var _ execution.ConfigDescriber = (*Provider)(nil)`.
+      - **Non-goal:** nessun campo che contenga o nomini un token, una password o un percorso di file di sessione. Codex si autentica da sé e ARchetipo non tocca quel materiale.
+      - **Non-goal:** nessuna lettura dell'ambiente e nessun `exec.LookPath` in `parseConfig` — `execution provider set-default` deve restare eseguibile su una macchina senza Codex, esattamente come per ARcipelago.
+
+      ## Steps
+      1. Creare il pacchetto `codex` con `config.go`; dichiarare `const ProviderID = "codex"` e `defaultCommand = "codex"`, `defaultTimeout = 3600`.
+      2. Implementare `parseConfig` riusando la forma di ARcipelago: prima `rejectUnknownKeys` (con chiavi ordinate per determinismo), poi i campi, ognuno con il proprio `execution.ConfigurationError`.
+      3. `exec_args` è una stringa: validarla come stringa e dividerla su spazi in una slice; una stringa presente ma vuota è un errore di campo (`must not be empty`), l'assenza è il default.
+      4. `command`: se presente deve essere una stringa non vuota; rifiutare valori che contengono separatori di percorso solo se non corrispondono a un percorso assoluto plausibile — in dubbio accettare, perché un percorso assoluto al binario è un uso legittimo.
+      5. Dichiarare `ConfigFields()` con testi in inglese, coerenti con quelli di ARcipelago (il pannello del viewer è in inglese).
+      6. Eseguire i controlli di verifica.
+
+      ## Verify
+      - Eseguire da `cli/`: `go build ./... && go vet ./...`
+      - Expect: nessun errore (il pacchetto compila anche prima che `Provider` sia completo, purché il tipo `Provider` sia dichiarato).
+      - Eseguire da `cli/`: `gofmt -l .`
+      - Expect: nessun output.
+
+      ## Done
+      - [ ] AC-3 — nessun campo di configurazione può contenere una credenziale, e una `grep -in "token\|secret\|password" cli/internal/execution/codex/config.go` non trova un campo che ne accetti una.
+      - [ ] I default sono applicati quando la chiave è assente e ogni rifiuto nomina la chiave esatta.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test unitari della configurazione Codex
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      La configurazione del provider Codex è provata per campo: default applicati, valori fuori intervallo rifiutati con il nome della chiave, chiavi sconosciute rifiutate, nessun campo segreto dichiarato.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/config_test.go` — tabella dei casi e asserzioni su `execution.ConfigurationError.Field`.
+      - `cli/internal/execution/codex/config.go` — i campi e i default appena introdotti.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/codex/config_test.go`.
+      - **Non-goal:** nessun test che invochi un processo o legga l'ambiente.
+
+      ## Steps
+      1. Caso "configurazione vuota": `parseConfig(map[string]any{})` restituisce `command == "codex"`, `Model == ""`, `ExecArgs` vuoto, `Timeout == 3600s`.
+      2. Caso "override completo": comando, modello, `exec_args` con due flag, `timeout_seconds` valorizzato; verificare la divisione di `exec_args` in slice.
+      3. Casi di rifiuto, uno per campo, asserendo `errors.As` su `*execution.ConfigurationError` e il valore esatto di `Field`: `command` non stringa, `command` vuoto, `model` non stringa, `exec_args` vuoto, `timeout_seconds` non intero, `timeout_seconds` fuori intervallo (0 e 86401), chiave sconosciuta (verificare che con più chiavi sconosciute il campo riportato sia deterministico).
+      4. Caso "forme numeriche": `timeout_seconds` come `int`, `int64` e `float64` intero sono accettati; `float64` con parte decimale è rifiutato.
+      5. Caso "nessun segreto dichiarato": iterare `ConfigFields()` e asserire che i nomi siano esattamente `command`, `exec_args`, `model`, `timeout_seconds` (ordinati) e che ogni `Help` sia non vuoto.
+
+      ## Verify
+      - Eseguire da `cli/`: `go test ./internal/execution/codex/ -run TestConfig -v`
+      - Expect: tutti i sottocasi passano.
+      - Eseguire da `cli/`: `go test ./internal/execution/...`
+      - Expect: nessun fallimento (baseline: suite verde).
+
+      ## Done
+      - [ ] AC-3 — un test asserisce l'elenco esatto dei campi di configurazione e prova che nessuno di essi è destinato a una credenziale.
+      - [ ] Ogni campo ha almeno un caso di rifiuto che nomina la chiave esatta.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Provider Codex — identità, capability, validazione e probe di disponibilità
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Esiste un `execution.Provider` con id `codex` che dichiara la capability `spec.plan`, valida la propria configurazione senza toccare la macchina, e sa dire con una diagnostica esplicita se il runtime Codex è utilizzabile.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/provider.go` — commento di pacchetto, struttura `Options`/`Provider`, seam iniettabili, `var _ execution.Provider = (*Provider)(nil)`, e il commento su `ValidateConfig` che spiega perché non deve leggere l'ambiente.
+      - `cli/internal/execution/provider.go` — `AvailabilityReporter` e `CheckAvailability` introdotti in TASK-02.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/codex/provider.go` con:
+        - commento di pacchetto che spiega che questo provider esegue un agente **locale**, non tocca il connector, e che la prova che la spec sia davvero `PLANNED` resta di `execution.VerifyActionEffect`;
+        - `type Runner interface { Run(ctx context.Context, dir string, name string, args []string) (stdout string, stderr string, exitCode int, err error) }` come unico seam verso il sistema operativo;
+        - `Options{Runner Runner; WorkingDir func() (string, error); Now func() time.Time}` e `New(Options) *Provider` che riempie ogni seam nullo con l'implementazione reale (`os/exec`, `os.Getwd`, `time.Now`);
+        - `ID() string`, `Capabilities(context.Context) ([]execution.Capability, error)` → `spec.plan`, `ValidateConfig` che delega a `parseConfig`;
+        - `Available(ctx context.Context, config map[string]any) error`: risolve `command` dalla configurazione (default incluso), esegue `<command> --version` con timeout breve (10s) tramite il `Runner`, e ritorna `nil` solo con exit code 0. Ogni fallimento produce un errore che nomina il comando cercato e distingue i casi: non trovato nel PATH, trovato ma non eseguibile, eseguito ma con exit code ≠ 0 (includendo una coda troncata di stderr);
+        - `var _ execution.AvailabilityReporter = (*Provider)(nil)`.
+      - Nuovo file `cli/internal/execution/codex/runner.go` con l'implementazione reale del `Runner` basata su `exec.CommandContext`, che cattura stdout e stderr separatamente, imposta `cmd.Dir`, e ricava l'exit code da `*exec.ExitError` distinguendolo dall'errore di avvio.
+      - **Non-goal:** nessuna lettura dell'ambiente in `ValidateConfig`; nessun accesso al materiale di autenticazione di Codex in nessun punto del pacchetto.
+      - **Non-goal:** `Execute` non è argomento di questo task (TASK-06); qui può restare un metodo che ritorna un errore "non ancora implementato" solo se serve a far compilare il pacchetto, e va sostituito in TASK-06.
+
+      ## Steps
+      1. Dichiarare `Provider`, `Options`, `New` e i seam, con i default reali applicati in `New`.
+      2. Implementare `Runner` reale in `runner.go`: `exec.CommandContext(ctx, name, args...)`, `cmd.Dir = dir`, buffer separati, exit code `0` in caso di successo, `ee.ExitCode()` da `*exec.ExitError`, e `-1` con errore quando il processo non è nemmeno partito.
+      3. Implementare `Available`: `parseConfig`, poi `exec.LookPath(command)` per distinguere "non presente nel PATH" (diagnostica dedicata) da "presente ma rotto", poi `Runner.Run(ctx, dir, command, []string{"--version"})` con un contesto a timeout di 10s.
+      4. Nei messaggi di diagnostica includere sempre il comando cercato e, per un exit code ≠ 0, una coda di stderr troncata a un limite costante (riusare la stessa idea di `truncate` di ARcipelago o dichiararne una locale).
+      5. Eseguire i controlli di verifica.
+
+      ## Verify
+      - Eseguire da `cli/`: `go build ./... && go vet ./...`
+      - Expect: nessun errore.
+      - Eseguire da `cli/`: `gofmt -l .`
+      - Expect: nessun output.
+      - Eseguire da `cli/`: `go test ./internal/execution/...`
+      - Expect: nessun fallimento (i test specifici arrivano in TASK-07).
+
+      ## Done
+      - [ ] AC-1 — il provider dichiara `spec.plan` e sa rispondere se il runtime è utilizzabile.
+      - [ ] AC-4 — il caso reale osservato in baseline (binario nel PATH ma non eseguibile, `spawn ... ENOENT`) è classificato come indisponibile con un motivo che nomina il comando, non come disponibile.
+      - [ ] `ValidateConfig` resta eseguibile su una macchina priva di Codex.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Execute del provider Codex — prompt, invocazione, ricevuta e payload senza segreti
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-05
+    body: |-
+      ## Objective
+      Una dispatch `spec.plan` verso il provider Codex lancia l'agente locale nella radice del workspace, accetta il successo solo contro una ricevuta valida, e chiude l'esecuzione con un payload che non contiene credenziali né dump di output.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/provider.go` — `Execute` e `resultFor`: la sequenza "preflight → lavoro → accettazione contro ricevuta → payload compatto" è quella da replicare.
+      - `cli/internal/execution/arcipelago/prompt.go` — `buildTask`, per riusare la stessa formulazione della richiesta all'agente e della riga di ricevuta.
+      - `cli/internal/execution/planreceipt.go` — `AcceptPlanReceipt` da TASK-01.
+      - `cli/internal/cli/init_project_cmd.go:28` — `{Key: "codex", Name: "Codex", ProjectPath: ".agents/skills"}`: è la radice dove la skill deve essere installata perché l'invocazione `/archetipo-plan` funzioni.
+
+      ## Change
+      - `cli/internal/execution/codex/prompt.go`: `buildPrompt(req execution.Request) string`, funzione pura, che chiede di pianificare la spec invocando `/archetipo-plan <US-CODE>`, di persistere il piano attraverso il connector configurato, di non incollare il piano nel messaggio finale e di chiudere con la sola riga JSON `{"spec_code":"…","status":"PLANNED","tasks":<N>}`. `PLANNED` viene da `execution.PlannedStatus`, mai scritto come letterale.
+      - `cli/internal/execution/codex/prompt.go`: `buildArgs(cfg settings, prompt string) []string`, funzione pura: `["exec", "--full-auto", "--skip-git-repo-check"]`, più `["--model", cfg.Model]` quando il modello è valorizzato, più il prompt come ultimo argomento; quando `cfg.ExecArgs` è valorizzato sostituisce i flag intermedi di default (restano `exec` in testa e il prompt in coda).
+      - `cli/internal/execution/codex/provider.go`: implementare `Execute`:
+        1. `parseConfig`;
+        2. risolvere la working directory con il seam `WorkingDir`;
+        3. preflight: `Available(ctx, req.ProviderConfig)`; se fallisce, ritornare quell'errore invariato — è già la diagnostica esplicita che AC-4 richiede;
+        4. preflight: verificare l'esistenza di `.agents/skills/archetipo-plan/SKILL.md` sotto la working directory e, se assente, fallire con un messaggio che dice di eseguire `archetipo init --tool codex`;
+        5. eseguire `Runner.Run` con un contesto a scadenza `cfg.Timeout`, misurando la durata con il seam `Now`;
+        6. exit code ≠ 0 → errore che nomina comando, exit code, durata e una coda troncata di stderr;
+        7. exit code 0 → `execution.AcceptPlanReceipt(stdout, req.SpecCode)`; il fallimento è un errore che dice che l'agente è terminato senza aver prodotto un piano per quella spec;
+        8. successo → `execution.Result{Payload: …}` con esattamente i campi `command`, `model`, `exit_code`, `result_summary` (la **sola** riga di ricevuta), `plan_tasks`, `duration_ms`.
+      - **Non-goal:** non inserire mai nel payload né nei messaggi d'errore l'output completo del processo, l'ambiente, o il contenuto di file di autenticazione. Solo code troncate a un limite costante e dichiarato.
+      - **Non-goal:** non leggere né scrivere il backlog: il provider non conosce il connector.
+      - **Non-goal:** non ritornare `execution.RemoteError` — non esiste lavoro remoto che sopravvive al fallimento; il processo locale è terminato o è stato ucciso dal timeout.
+
+      ## Steps
+      1. Scrivere `buildPrompt` e `buildArgs` come funzioni pure, senza timestamp, valori casuali o lookup d'ambiente.
+      2. Implementare `Execute` seguendo l'ordine sopra, con il preflight **prima** di qualunque lancio.
+      3. Verificare, se possibile su un'installazione Codex funzionante, l'esatto elenco dei flag con `codex exec --help`; se l'help contraddice i default scelti, correggere `buildArgs` (unico punto in cui i flag vivono) e aggiornare l'`Help` del campo `exec_args`. Se Codex non è utilizzabile sulla macchina (è il caso della baseline), lasciare i default e documentarli nel commento di `buildArgs`.
+      4. Bordare l'output: costante `maxCapturedOutput` e funzione di troncamento usata sia per stdout sia per stderr prima di comporre qualunque messaggio.
+      5. Eseguire i controlli di verifica.
+
+      ## Verify
+      - Eseguire da `cli/`: `go build ./... && go vet ./...`
+      - Expect: nessun errore.
+      - Eseguire da `cli/`: `gofmt -l .`
+      - Expect: nessun output.
+      - Eseguire da `cli/`: `go test ./internal/execution/...`
+      - Expect: nessun fallimento.
+
+      ## Done
+      - [ ] AC-2 — un `Execute` con exit code 0 e ricevuta valida per la spec richiesta produce un `execution.Result` con payload JSON valido.
+      - [ ] AC-3 — il payload contiene solo i sei campi dichiarati e nessun dump di output; nessun percorso del pacchetto legge l'ambiente oltre a ciò che serve a lanciare il processo.
+      - [ ] AC-4 — runtime indisponibile, skill non installata, exit code ≠ 0 e ricevuta assente/di un'altra spec producono quattro errori distinti e leggibili, e nessuno di essi restituisce un successo.
+      - [ ] I flag di invocazione vivono in un solo punto (`buildArgs`) e sono sovrascrivibili da configurazione.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Test unitari del provider Codex — disponibilità, esiti di Execute e assenza di segreti
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Ogni esito osservabile del provider Codex è provato con un `Runner` finto, senza dipendere da un Codex installato, e il cablaggio reale con `os/exec` è provato almeno una volta con un processo vero.
+
+      ## Read
+      - `cli/internal/execution/arcipelago/provider_test.go` — come sono organizzati i casi di `Execute` e le asserzioni sui messaggi d'errore.
+      - `cli/internal/execution/codex/provider.go` e `prompt.go` — i comportamenti da coprire.
+
+      ## Change
+      - Nuovo file `cli/internal/execution/codex/provider_test.go` con un `fakeRunner` che registra directory, comando e argomenti ricevuti e restituisce esiti scriptati.
+      - Nuovo file `cli/internal/execution/codex/runner_test.go` con il test del `Runner` reale basato sul pattern del sotto-processo Go (`TestHelperProcess` con `GO_WANT_HELPER_PROCESS`), che è cross-platform e non richiede uno script di shell.
+      - **Non-goal:** nessun test che invochi il vero `codex` o richieda credenziali.
+
+      ## Steps
+      1. `buildArgs`: casi tabellari — default, con `model`, con `exec_args` che sostituisce i flag intermedi; asserire che il prompt sia sempre l'ultimo argomento e `exec` sempre il primo.
+      2. `buildPrompt`: determinismo (due invocazioni con la stessa `Request` producono la stessa stringa) e presenza della riga di ricevuta con `execution.PlannedStatus` e il codice spec.
+      3. `Available`: comando assente dal PATH → errore che nomina il comando; comando presente ma `Run` fallisce all'avvio → errore distinto; exit code ≠ 0 → errore che include la coda di stderr; exit code 0 → `nil`.
+      4. `Execute` — successo: `Runner` che stampa qualche riga di rumore e poi la ricevuta corretta; asserire `Result.Payload` decodificabile con esattamente i campi attesi, `plan_tasks` uguale a quello della ricevuta, e che `Runner` sia stato chiamato con `dir` uguale alla working directory del seam.
+      5. `Execute` — fallimenti, uno per caso: runtime indisponibile; `.agents/skills/archetipo-plan/SKILL.md` assente (usare `t.TempDir()` come working directory); exit code ≠ 0; output senza riga di ricevuta; ricevuta con `spec_code` di un'altra spec; ricevuta con `tasks: 0`; timeout (contesto scaduto). Ogni caso asserisce che l'errore non sia `nil` e che il messaggio nomini la causa specifica.
+      6. Assenza di segreti: eseguire un `Execute` di successo in cui stdout dell'agente contiene la stringa sentinella `sk-CODEX-SENTINEL-DO-NOT-STORE` prima della ricevuta; asserire che né `Result.Payload` né il messaggio di un `Execute` fallito equivalente contengano la sentinella oltre il limite di troncamento consentito — per il payload di successo l'asserzione è assoluta: la sentinella non deve comparire.
+      7. `runner_test.go`: lanciare il binario di test come sotto-processo, verificare cattura separata di stdout/stderr, exit code diverso da zero propagato e `dir` rispettata.
+
+      ## Verify
+      - Eseguire da `cli/`: `go test ./internal/execution/codex/ -v`
+      - Expect: tutti i test passano; nessuno di essi richiede `codex` nel PATH (verificabile eseguendo con `PATH` ridotto).
+      - Eseguire da `cli/`: `go test ./...`
+      - Expect: nessun fallimento (baseline: 936 test verdi).
+
+      ## Done
+      - [ ] AC-3 — un test prova che una sentinella presente nell'output dell'agente non finisce nel payload dell'esecuzione.
+      - [ ] AC-4 — esistono sette casi di fallimento distinti, ognuno con la propria asserzione sul messaggio.
+      - [ ] AC-1 — `Available` è provato nei quattro esiti, incluso "presente ma non eseguibile".
+      - [ ] La suite del pacchetto passa su una macchina senza Codex.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Registrare il provider Codex nel registry reale della CLI
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Il binario `archetipo` reale offre `codex` accanto ad `arcipelago` in ogni percorso che usa il registry: `execution provider set-default`, `execution run` e `archetipo view`.
+
+      ## Read
+      - `cli/internal/cli/root.go:56-74` — `defaultExecutionRegistry` e `newRootCmd`, dove `arcipelago.New(arcipelago.Options{})` è registrato e l'errore è deliberatamente scartato.
+      - `cli/internal/cli/execution_arcipelago_test.go:413` — `TestArcipelagoProviderIsRegisteredInRealRoot`, il test da imitare.
+
+      ## Change
+      - `cli/internal/cli/root.go`: importare `cli/internal/execution/codex` e registrare `codex.New(codex.Options{})` in `defaultExecutionRegistry`, dopo ARcipelago, mantenendo il commento che spiega perché l'errore di registrazione è scartato (aggiornandolo al plurale se necessario).
+      - **Non-goal:** non cambiare l'ordine di registrazione di ARcipelago — l'ordine del registry è quello mostrato dalla UI e il default esistente dei workspace non deve spostarsi.
+      - **Non-goal:** nessun cambiamento alla configurazione di default del workspace: il provider predefinito resta una scelta esplicita dell'utente.
+
+      ## Steps
+      1. Aggiungere l'import e la riga di registrazione.
+      2. Verificare a mano che `archetipo execution provider set-default codex --file <config.json>` accetti una configurazione valida e rifiuti una chiave sconosciuta nominandola.
+      3. Eseguire i controlli di verifica.
+
+      ## Verify
+      - Eseguire da `cli/`: `go build ./... && go vet ./... && gofmt -l .`
+      - Expect: build e vet puliti, nessun output da `gofmt`.
+      - Eseguire da `cli/`: `go test ./internal/cli/`
+      - Expect: nessun fallimento.
+
+      ## Done
+      - [ ] AC-1 — il registry del root reale contiene un provider con id `codex` che dichiara `spec.plan`.
+      - [ ] L'ordine dei provider già registrati è invariato.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Test di integrazione CLI — pianificazione riuscita, fallimenti e modalità diretta
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Il percorso reale `execution run US-XXX plan` con provider Codex è provato end-to-end contro il connector file: un successo porta davvero la spec a `PLANNED`, ogni fallimento la lascia dov'era, e la modalità diretta continua a funzionare senza alcun provider configurato.
+
+      ## Read
+      - `cli/internal/cli/execution_arcipelago_test.go` — l'intero file: `runRealRoot`, `runExecutionRoot`, `writeRemotePlanPayload`, e i test `TestArcipelagoPlanRemoteHappyPath`, `TestArcipelagoRemoteFailurePreservesSpec`, `TestArcipelagoValidReceiptWithoutAPlanIsNotASuccess`. Sono lo schema esatto da replicare.
+      - `cli/internal/cli/execution_cmd.go` — `newExecutionRunCmd` e `confirmActionEffect`, per sapere quali envelope e quali exit code aspettarsi.
+      - `cli/internal/execution/effect.go` — la regola che demolisce un successo non confermato dal connector.
+
+      ## Change
+      - Nuovo file `cli/internal/cli/execution_codex_test.go`.
+      - **Non-goal:** non modificare `execution_arcipelago_test.go`; non introdurre dipendenze dal vero `codex`.
+
+      ## Steps
+      1. Costruire un helper che crea un workspace temporaneo con connector file e una spec `US-001` in `TODO`, e che monta il root CLI con `newRootCmdWithExecution` usando un registry che contiene un provider Codex costruito con un `Runner` finto.
+      2. **AC-2, happy path:** il `Runner` finto persiste davvero un piano invocando la stessa CLI (`spec plan US-001 --file <payload>`, come fa `writeRemotePlanPayload` per ARcipelago) e poi stampa su stdout la riga di ricevuta con `tasks` pari al numero reale di task. Asserire: exit code 0; envelope `kind: execution` con `status: "SUCCEEDED"`; `spec show US-001` risponde `PLANNED` con almeno un task; il payload dell'esecuzione contiene `plan_tasks` coerente.
+      3. **AC-3:** nello stesso test (o in uno dedicato) esportare una sentinella nell'ambiente e farla comparire nell'output del `Runner` finto; leggere il file del record sotto `.archetipo/executions/` e asserire che la sentinella non compaia né lì né nello stdout dell'envelope.
+      4. **AC-4, quattro casi separati**, ognuno con la propria asserzione: runtime indisponibile (il `Runner` fallisce il probe `--version`); exit code ≠ 0 con un messaggio che simula "not authenticated"; nessuna riga di ricevuta; ricevuta valida ma piano mai persistito (deve intervenire `UNCONFIRMED_EFFECT`). Per ognuno asserire: exit code ≠ 0, envelope `kind: error`, record persistito `FAILED` con `error.message` esplicito, e `spec show US-001` ancora `TODO` senza piano.
+      5. **AC-5:** test che inizializza un workspace con `init --tool codex --connector file --yes`, asserisce l'esistenza di `.agents/skills/archetipo-plan/SKILL.md`, verifica che `.archetipo/config.yaml` non contenga `default_provider`, e che `spec plan US-001 --file <payload>` porti comunque la spec a `PLANNED` — cioè che il provider locale sia un'aggiunta e non un prerequisito.
+      6. **AC-1:** test `TestCodexProviderIsRegisteredInRealRoot`, sul modello di quello ARcipelago, che interroga il registry del root reale.
+
+      ## Verify
+      - Eseguire da `cli/`: `go test ./internal/cli/ -run Codex -v`
+      - Expect: tutti i test passano.
+      - Eseguire da `cli/`: `go test ./...`
+      - Expect: nessun fallimento (baseline: 936 test verdi in 24 pacchetti; il numero cresce, i fallimenti restano zero).
+
+      ## Done
+      - [ ] AC-2 — un test prova che dopo un `execution run` riuscito la spec è `PLANNED` **rileggendola dal connector**, non fidandosi della ricevuta.
+      - [ ] AC-4 — quattro test distinti provano che la spec resta `TODO` e che il record è `FAILED` con motivo esplicito.
+      - [ ] AC-3 — un test prova che la sentinella non compare nel record persistito.
+      - [ ] AC-5 — un test prova che un workspace Codex senza provider configurato pianifica ugualmente tramite skill.
+      - [ ] AC-1 — un test prova che `codex` è nel registry del binario reale.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Esporre disponibilità del provider e motivo nel viewer
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Il viewer dice, per ogni provider, se il suo runtime è utilizzabile e perché no, e non offre l'azione `plan` quando il provider predefinito non è utilizzabile.
+
+      ## Read
+      - `cli/internal/web/execution.go` — `executionProviderView` e `handleListExecutionProviders`.
+      - `cli/internal/web/execution_run.go:318-425` — `specActionView`, `actionAvailability`, `actionAvailabilityFor`, `reasonFor`, `decorateActions`. La forma `runnable` + `unavailable_reason` esiste già ed è quella da estendere.
+      - `cli/internal/execution/provider.go` — `CheckAvailability` da TASK-02.
+
+      ## Change
+      - `cli/internal/web/execution.go`: aggiungere a `executionProviderView` i campi `Available bool \`json:"available"\`` e `UnavailableReason string \`json:"unavailable_reason,omitempty"\``; in `handleListExecutionProviders`, per ogni provider chiamare `execution.CheckAvailability` passando la configurazione persistita **solo quando quel provider è il default corrente**, altrimenti `nil` (il provider applica i propri default). Un provider che non dichiara disponibilità resta `available: true` senza motivo.
+      - `cli/internal/web/execution_run.go`: aggiungere ad `actionAvailability` un campo per il motivo di indisponibilità del provider predefinito, valorizzarlo in `actionAvailabilityFor` dopo il controllo delle capability, e restituirlo da `reasonFor` con un testo che nomina il provider e riporta il motivo del provider stesso.
+      - **Non-goal:** non far dipendere il rendering dal nome del provider: il browser continua a non sapere che Codex esiste.
+      - **Non-goal:** non chiamare il probe più di una volta per richiesta e non introdurre cache — il costo è un `--version` con timeout breve, e una cache renderebbe invisibile un Codex appena installato.
+      - **Non-goal:** non far fallire la lista dei provider quando il probe fallisce: l'indisponibilità è un dato, non un errore HTTP.
+
+      ## Steps
+      1. Estendere la vista dei provider e il suo popolamento, mantenendo l'ordine del registry.
+      2. Estendere `actionAvailability` e `reasonFor`, inserendo il nuovo motivo dopo `providerErr` e prima del controllo di capability, in modo che l'utente legga "il provider non è utilizzabile" invece di "non dichiara la capability".
+      3. Verificare a mano con `archetipo view` che il pannello Execution risponda con i nuovi campi (`curl` su `/api/execution/providers`).
+      4. Eseguire i controlli di verifica.
+
+      ## Verify
+      - Eseguire da `cli/`: `go build ./... && go vet ./... && gofmt -l .`
+      - Expect: build e vet puliti, nessun output da `gofmt`.
+      - Eseguire da `cli/`: `go test ./internal/web/`
+      - Expect: nessun fallimento; i test esistenti del pacchetto continuano a passare senza modifiche alle loro asserzioni.
+
+      ## Done
+      - [ ] AC-1 — `GET /api/execution/providers` riporta `available` per ogni provider e `unavailable_reason` quando `available` è falso.
+      - [ ] AC-4 — con provider predefinito indisponibile, l'azione `plan` di una spec `TODO` è `runnable: false` con un motivo che nomina provider e causa.
+      - [ ] Il payload continua a non contenere alcuna credenziale.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Test del viewer su disponibilità dei provider e azione bloccata
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+      Il contratto HTTP che il browser osserva è provato: disponibilità e motivo compaiono nella lista dei provider, e l'azione `plan` è rifiutata con spiegazione quando il provider predefinito non è utilizzabile.
+
+      ## Read
+      - `cli/internal/web/execution_test.go` — come sono costruiti server di test, registry e configurazione del workspace.
+      - `cli/internal/web/execution_run_test.go` — come sono asserite `runnable` e `unavailable_reason` per le azioni.
+
+      ## Change
+      - Estendere `cli/internal/web/execution_test.go` e `cli/internal/web/execution_run_test.go` con i nuovi casi, usando provider finti definiti nel pacchetto di test (uno disponibile, uno indisponibile con motivo, uno che non dichiara affatto la disponibilità).
+      - **Non-goal:** non usare il provider Codex reale in questi test — qui si prova il comportamento del viewer davanti a un provider qualunque.
+
+      ## Steps
+      1. Lista provider: con un provider che non implementa la disponibilità, asserire `available: true` e assenza di `unavailable_reason`.
+      2. Lista provider: con un provider indisponibile, asserire `available: false` e il motivo esatto restituito dal provider.
+      3. Lista provider: asserire che la configurazione persistita sia passata al probe solo per il provider di default (il provider finto registra ciò che riceve).
+      4. Azioni: workspace con default impostato su un provider indisponibile e spec in `TODO` → l'azione `plan` è `runnable: false` con un motivo che contiene il nome del provider e il testo del provider stesso.
+      5. Azioni: stesso workspace con provider disponibile → `plan` torna `runnable: true`, a prova che il nuovo controllo non blocca il caso sano.
+      6. Avvio esecuzione: `POST` dell'azione su provider indisponibile risponde con un errore leggibile e non crea alcun record di esecuzione (asserire la lista delle esecuzioni della spec ancora vuota).
+
+      ## Verify
+      - Eseguire da `cli/`: `go test ./internal/web/ -v`
+      - Expect: tutti i test del pacchetto passano, nuovi inclusi.
+      - Eseguire da `cli/`: `go test ./...`
+      - Expect: nessun fallimento.
+
+      ## Done
+      - [ ] AC-1 — un test asserisce `available`/`unavailable_reason` nella risposta di `/api/execution/providers`.
+      - [ ] AC-4 — un test asserisce che l'azione `plan` non è eseguibile e che nessun record viene creato quando il provider è indisponibile.
+      - [ ] Il caso sano resta eseguibile (nessuna regressione introdotta dal nuovo controllo).
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Rendere non selezionabile nel pannello Execution un provider indisponibile
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+      Nel pannello Execution della UI un provider il cui runtime non è utilizzabile appare disabilitato con il motivo visibile, e non può essere salvato come default per errore.
+
+      ## Read
+      - `cli/internal/web/assets/app.js:1534-1570` — `renderProviderGrid`, `selectProvider`, `loadExecutionProviders` (in particolare la scelta automatica del primo provider quando non esiste un default).
+      - `cli/internal/web/assets/app.js:1660-1700` — `saveExecutionProvider`.
+      - `cli/internal/web/assets/app.js` — `renderSpecActionChip`, che è il precedente esatto di "elemento non azionabile con `title` che spiega perché".
+      - `cli/internal/web/assets/app.css` — classi `config-connector-card` e `action-chip` per lo stile disabilitato.
+
+      ## Change
+      - `cli/internal/web/assets/app.js`: in `renderProviderGrid`, quando `p.available === false`, rendere l'`input` `disabled`, aggiungere una classe di stato alla card e mostrare `p.unavailable_reason` come testo secondario e come `title` (passando sempre da `escapeHtml`).
+      - `cli/internal/web/assets/app.js`: in `loadExecutionProviders`, la selezione automatica iniziale cade sul primo provider **disponibile**; se nessuno lo è, nessuna selezione e messaggio di stato esplicito.
+      - `cli/internal/web/assets/app.js`: in `saveExecutionProvider`, rifiutare localmente il salvataggio di un provider indisponibile con il motivo come messaggio di stato (il server resta comunque l'autorità).
+      - `cli/internal/web/assets/app.css`: stile per la card disabilitata, coerente con quello già usato per le azioni non eseguibili.
+      - **Non-goal:** nessun nome di provider cablato nel browser; la UI legge solo `available` e `unavailable_reason`.
+      - **Non-goal:** nessuna modifica al layout del pannello: si aggiunge uno stato a una card esistente.
+
+      ## Steps
+      1. Estendere `renderProviderGrid` con lo stato disabilitato e il motivo.
+      2. Correggere la selezione iniziale e il salvataggio.
+      3. Aggiungere le regole CSS.
+      4. Verificare a mano: avviare `archetipo view` su un workspace, osservare la card `codex` disabilitata con il motivo quando Codex non è utilizzabile (sulla macchina di baseline lo è già, perché `codex --version` fallisce).
+
+      ## Verify
+      - Eseguire dalla radice del repository: `node --check cli/internal/web/assets/app.js`
+      - Expect: nessun errore di sintassi.
+      - Eseguire dalla radice del repository: `node --test test/web/task-markdown.test.mjs`
+      - Expect: i test front-end esistenti continuano a passare.
+      - Eseguire da `cli/`: `go test ./internal/web/`
+      - Expect: nessun fallimento (gli asset sono serviti da questo pacchetto).
+
+      ## Done
+      - [ ] AC-1 — un provider disponibile è selezionabile; un provider indisponibile è visibile ma disabilitato, con il motivo leggibile.
+      - [ ] AC-4 — l'utente non può salvare come default un provider che il server dichiara indisponibile.
+      - [ ] Il browser non contiene alcun riferimento testuale a `codex`.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Estendere lo smoke HTTP del pannello Execution e aggiornare AGENTS.md
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-12
+    body: |-
+      ## Objective
+      Lo smoke Node che copre il pannello Execution osserva anche il provider Codex — presenza, campi di configurazione, campi di disponibilità, assenza di segreti — e la documentazione del repository descrive ciò che lo smoke verifica davvero.
+
+      ## Read
+      - `test/e2e/execution-config-view-smoke.mjs:42-62` — il blocco AC-1 che oggi asserisce solo il provider `arcipelago` e l'assenza della sentinella del token.
+      - `AGENTS.md`, sezione "Standalone smoke tests", voce `npm run test:view-execution-smoke`.
+
+      ## Change
+      - `test/e2e/execution-config-view-smoke.mjs`: estendere il blocco AC-1 (senza indebolire alcuna asserzione esistente) con: presenza del provider `codex` nella lista; `capabilities` che include `spec.plan`; `config_fields` con i nomi esatti `command`, `exec_args`, `model`, `timeout_seconds`; presenza del campo `available` (booleano) e, quando `available` è falso, di un `unavailable_reason` non vuoto; nessun campo di configurazione il cui nome suggerisca una credenziale.
+      - `AGENTS.md`: aggiornare la voce dello smoke descrivendo le nuove verifiche.
+      - **Non-goal:** non rendere lo smoke dipendente da un Codex installato: l'asserzione è "il campo di disponibilità esiste ed è coerente", non "Codex è disponibile".
+      - **Non-goal:** nessuna manipolazione del `PATH` di sistema nello smoke — la correttezza del motivo è già provata dai test Go, e giocare con il `PATH` in Node è la parte meno portabile che esista.
+
+      ## Steps
+      1. Estendere il blocco AC-1 dello smoke con le nuove asserzioni, riusando lo stile dei messaggi d'errore già presenti.
+      2. Verificare che l'asserzione esistente "nessuna sentinella nella risposta" continui a valere sull'intero payload esteso.
+      3. Aggiornare la voce di `AGENTS.md`.
+      4. Eseguire i controlli di verifica.
+
+      ## Verify
+      - Eseguire dalla radice del repository: `npm run test:view-execution-smoke`
+      - Expect: `PASS: execution-config view smoke test completed.` (baseline: già PASS prima delle modifiche).
+      - Eseguire dalla radice del repository: `npm run test:view-plan-smoke`
+      - Expect: PASS — prova che l'aggiunta di un provider non ha alterato il percorso di pianificazione già consegnato.
+
+      ## Done
+      - [ ] AC-1 — lo smoke fallisce se `codex` sparisce dalla lista o perde la capability `spec.plan`.
+      - [ ] AC-3 — lo smoke fallisce se un campo di configurazione destinato a una credenziale compare, o se la sentinella del token appare nella risposta.
+      - [ ] `AGENTS.md` descrive lo smoke esteso.
+
+      ## Blockers
+      None.
+    ref: TASK-13
+  - id: TASK-14
+    title: Gate finale di verifica di US-032
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+      - TASK-13
+    body: |-
+      ## Objective
+      Tutti i controlli che il repository considera vincolanti sono eseguiti e verdi, ogni criterio di accettazione ha la sua evidenza, e la spec è richiesta in review solo dopo che ogni task risulta `DONE`.
+
+      ## Read
+      - `AGENTS.md`, sezione "Rules for CLI changes" — l'elenco dei controlli da eseguire prima di consegnare.
+      - La sezione **Baseline** del corpo di questo piano — gli esiti attesi e il prerequisito d'ambiente su `golangci-lint`.
+
+      ## Change
+      - Nessuna modifica di codice attesa in questo task. Se un controllo fallisce, la correzione va fatta nel task che ha introdotto il problema e questo gate va rieseguito da capo.
+
+      ## Steps
+      1. Da `cli/`: `gofmt -l .`
+      2. Da `cli/`: `go vet ./...`
+      3. Da `cli/`: `go build ./...`
+      4. Da `cli/`: `go test ./...`
+      5. Se `golangci-lint` non è presente: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`, poi da `cli/`: `golangci-lint run --timeout 5m ./...`. Se l'installazione non è possibile, dichiararlo esplicitamente nel resoconto invece di considerarlo verde.
+      6. Dalla radice del repository: `npm run test:view-execution-smoke` e `npm run test:view-plan-smoke`.
+      7. Dalla radice del repository: `node --check cli/internal/web/assets/app.js`.
+      8. Verificare a mano la dimostrazione della spec: con un provider Codex non utilizzabile, il pannello mostra la card disabilitata con il motivo e l'azione `Pianifica` non è avviabile; nessuna spec si muove.
+      9. Marcare questo task `DONE` con `archetipo task done US-032 TASK-14`.
+      10. Da `/Users/stefanoleli/Project/Archetipo`: `archetipo spec show US-032` e verificare che **nessun** task risulti ancora `TODO`.
+      11. Solo allora: `archetipo spec review US-032`.
+
+      ## Verify
+      - Eseguire da `cli/`: `gofmt -l . && go vet ./... && go build ./... && go test ./...`
+      - Expect: nessun output da `gofmt`, nessun errore da `vet` e `build`, 0 fallimenti nei test (baseline: 936 test verdi in 24 pacchetti; il totale è cresciuto, i fallimenti restano 0).
+      - Eseguire da `cli/`: `golangci-lint run --timeout 5m ./...`
+      - Expect: 0 issue. Se lo strumento non è installabile in questo ambiente, riportarlo come non eseguito — mai come verde.
+      - Eseguire dalla radice del repository: `npm run test:view-execution-smoke && npm run test:view-plan-smoke`
+      - Expect: entrambi PASS.
+      - Eseguire da `/Users/stefanoleli/Project/Archetipo`: `archetipo spec show US-032`
+      - Expect: ogni task del piano è `DONE`.
+
+      ## Done
+      - [ ] AC-1 — il provider `codex` è registrato, selezionabile quando disponibile e disabilitato con motivo quando non lo è (TASK-09, TASK-11, TASK-13).
+      - [ ] AC-2 — una pianificazione riuscita porta la spec a `PLANNED` con un piano leggibile, verificato rileggendo il connector (TASK-09).
+      - [ ] AC-3 — provider, stato e risultato sono registrati senza credenziali né contenuti di autenticazione (TASK-04, TASK-07, TASK-09, TASK-13).
+      - [ ] AC-4 — Codex assente, non autenticato o fallito produce una diagnostica esplicita e lascia la spec fuori da `PLANNED` (TASK-07, TASK-09, TASK-11).
+      - [ ] AC-5 — l'uso diretto delle skill dentro Codex funziona senza provider configurato (TASK-09).
+      - [ ] Nessun file modificato dal piano introduce nuovi diagnostici di compilatore o linter rispetto alla baseline registrata.
+      - [ ] `archetipo spec show US-032` non riporta alcun task `TODO` **prima** della richiesta di review.
+
+      ## Blockers
+      None.
+    ref: TASK-14

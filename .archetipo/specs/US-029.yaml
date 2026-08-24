@@ -1,0 +1,52 @@
+schema: archetipo/spec/v2
+code: US-029
+title: Pianificare una spec dalla UI
+epic:
+  code: EP-005
+  title: Esperienza operativa ARchetipo
+priority: HIGH
+points: 5
+status: DONE
+blocked_by:
+  - US-028
+scope: MVP
+body: |-
+  #### US-029: Pianificare una spec dalla UI
+
+  **Epic:** EP-005 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** US-028
+
+  **User Story**
+  Come utilizzatore di ARchetipo,
+  voglio avviare la pianificazione di una spec `TODO` dalla UI e seguirne l'esito,
+  così da ottenere un piano tramite il provider del workspace senza aprire un coding agent o la console del provider.
+
+  **Dimostrazione**
+  Partendo da una spec `TODO`, da ARcipelago configurato come provider predefinito e da un runner disponibile, il revisore preme `Pianifica` e osserva una sola esecuzione collegata alla spec. La UI mostra lo stato fino al completamento, quindi il piano e la spec `PLANNED`; dopo un reload mostra lo stesso esito. In uno scenario di errore mostra il motivo e la spec non passa a `PLANNED`.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Premendo `Pianifica`, la UI crea una sola esecuzione collegata alla spec e al provider predefinito.
+  - [ ] AC-2 — Durante il lavoro la UI mostra uno stato non terminale senza bloccare la navigazione del workspace.
+  - [ ] AC-3 — Al successo la UI mostra il risultato, il piano persistito e la spec nello stato `PLANNED`.
+  - [ ] AC-4 — Al fallimento la UI mostra il motivo e la spec resta fuori dallo stato `PLANNED`.
+  - [ ] AC-5 — Dopo un reload la UI ritrova l'esecuzione e il suo esito senza avviarne una seconda.
+
+  **Fuori ambito**
+  Implementazione, review, selezione automatica di un provider alternativo e più esecuzioni concorrenti sulla stessa spec.
+
+  ## Contesto Wiki
+  - `architecture/context-map`
+  - `decisions/execution-provider-boundary`
+  - `decisions/remote-plan-ownership`
+  - `engineering/code-map`
+history:
+  - status: TODO
+    at: "2026-08-16T22:51:59Z"
+  - status: PLANNED
+    at: "2026-08-17T16:54:18Z"
+  - status: IN PROGRESS
+    at: "2026-08-17T16:56:21Z"
+  - status: REVIEW
+    at: "2026-08-17T23:39:12Z"
+  - status: DONE
+    at: "2026-08-17T23:42:30Z"

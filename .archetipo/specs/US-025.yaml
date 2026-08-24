@@ -1,0 +1,50 @@
+schema: archetipo/spec/v2
+code: US-025
+title: Pianificare una spec tramite ARcipelago
+epic:
+  code: EP-003
+  title: Esecuzione gestita e portabile
+priority: HIGH
+points: 5
+status: DONE
+blocked_by:
+  - US-023
+  - US-024
+scope: MVP
+body: |-
+  #### US-025: Pianificare una spec tramite ARcipelago
+
+  **Epic:** EP-003 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** US-023, US-024
+
+  **User Story**
+  Come utilizzatore di ARchetipo con esecuzione remota,
+  voglio pianificare una spec esistente usando ARcipelago,
+  così da ottenere un piano senza aprire manualmente un coding agent o la console ARcipelago.
+
+  **Dimostrazione**
+  Partendo da una spec `TODO`, da un workspace configurato per ARcipelago e da un runner disponibile, il revisore avvia la pianificazione da ARchetipo e osserva l'esecuzione remota, il piano persistito dal connector e la spec in stato `PLANNED`. Il revisore ripete la stessa richiesta con il medesimo identificativo e osserva che non viene creata una seconda esecuzione remota.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — L'avvio della pianificazione restituisce un'esecuzione ARchetipo collegata alla spec e all'identificativo remoto assegnato da ARcipelago.
+  - [ ] AC-2 — Il completamento remoto produce un piano valido nel connector configurato e porta la spec a `PLANNED`.
+  - [ ] AC-3 — La ripetizione della stessa richiesta con il medesimo identificativo restituisce l'esecuzione già creata.
+  - [ ] AC-4 — Un fallimento remoto lascia la spec fuori da `PLANNED` e rende visibile il motivo del fallimento.
+  - [ ] AC-5 — L'intero percorso può essere completato senza interagire con l'interfaccia utente di ARcipelago.
+
+  **Fuori ambito**
+  Implementazione, review, autopilot, UI web ARchetipo e trasferimento automatico di pacchetti skill completi ai runner.
+
+  ## Contesto Wiki
+  Nessuna Wiki canonica è ancora presente nel repository; il flusso `spec -> plan` e i connector attuali sono documentati nel README e verificabili tramite la CLI.
+history:
+  - status: TODO
+    at: "2026-08-14T23:13:08Z"
+  - status: PLANNED
+    at: "2026-08-15T22:47:53Z"
+  - status: IN PROGRESS
+    at: "2026-08-15T23:09:20Z"
+  - status: REVIEW
+    at: "2026-08-15T23:32:29Z"
+  - status: DONE
+    at: "2026-08-16T00:05:24Z"

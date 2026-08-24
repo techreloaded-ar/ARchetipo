@@ -1,0 +1,63 @@
+schema: archetipo/spec/v2
+code: US-031
+title: Creare una spec dalla UI
+epic:
+  code: EP-005
+  title: Esperienza operativa ARchetipo
+priority: MEDIUM
+points: 3
+status: DONE
+scope: MVP
+body: |
+  #### US-031: Creare una spec dalla UI
+
+  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 3 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come membro di un team di prodotto,
+  voglio creare una nuova spec dalla UI del workspace,
+  così da inserire lavoro nel processo senza dover prima conversare con un coding agent o preparare un payload CLI.
+
+  **Dimostrazione**
+  Partendo da un workspace con un backlog esistente, il revisore inserisce titolo, epic, priorità, punti e corpo della storia, conferma e osserva una nuova card `TODO` con un codice progressivo. Inviando dati incompleti osserva gli errori sui campi e nessuna nuova card; ripetendo accidentalmente la stessa conferma non ottiene un duplicato.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — La UI consente di inserire i dati minimi richiesti per una nuova spec usando epiche e valori ammessi dal workspace.
+  - [ ] AC-2 — Dopo la conferma compare una sola spec `TODO` con codice progressivo e contenuto rileggibile dal connector.
+  - [ ] AC-3 — Dati non validi producono errori associati ai campi e non modificano il backlog.
+  - [ ] AC-4 — Una ripetizione della stessa conferma non crea una seconda spec.
+
+  **Fuori ambito**
+  Generazione AI della storia, creazione di un nuovo PRD, importazione massiva e modifica grafica delle epiche.
+
+  ## Contesto Wiki
+  - `architecture/context-map`
+  - `engineering/code-map`
+
+  ## Rework Feedback
+
+  <!-- Added by request-changes. archetipo-plan converts each item into a Fix task. -->
+
+  - **docs/wiki/engineering/code-map.md:31** — Blocker Wiki (gate forte): `archetipo wiki validate --profile bootstrap` termina con `ok:false` per `WIKI_UNCOVERED_BOUNDARY` su `engineering/code-map` — "inspected boundary is not represented in coverage: docs". La sezione `coverage` del frontmatter copre `.`, `skills`, `cli`, `npm`, `scripts`, `test` ma non `docs`, mentre l'ispezione ora restituisce anche il boundary `docs` perche il repository contiene `docs/mockups/` (inclusi i mockup `docs/mockups/US-031/` introdotti da questa spec). Verificato empiricamente: rimuovendo temporaneamente `docs/mockups/` la validazione torna verde, quindi la causa e esattamente quella directory. Correzione richiesta: rappresentare il boundary `docs` nella `coverage` di `engineering/code-map` (mappato verso le pagine che lo descrivono, oppure `excluded` con motivazione esplicita come gia fatto per la candidate `trip`), aggiornare di conseguenza la sezione narrativa `archetipo:wiki section=coverage` che oggi elenca i boundary uno per uno, e lasciare `archetipo wiki validate --profile bootstrap` senza finding di severita `error`. Finche questo errore globale esiste, l'approvazione della spec non e disponibile.
+  - **cli/internal/web/spec_create.go:210** — Difetto su AC-1 ("epiche e valori ammessi dal workspace"): la `select` del form e popolata da `boardSnapshot.epics`, cioe da `GET /api/board` che restituisce `summary.Epics` letti da `ReadExistingBacklog` (la lista `epics:` dichiarata in `.archetipo/backlog.yaml`), mentre lato server `resolveEpic` accetta solo i codici epica che compaiono su almeno una spec gia presente nel backlog. Le due sorgenti non coincidono: un'epica dichiarata nel backlog ma ancora senza spec viene offerta dalla UI come valore ammesso e poi rifiutata dalla rotta con `SPEC_EPIC_UNKNOWN`, cioe la prima spec di un'epica nuova non e creabile dalla UI. Oggi il caso non e riproducibile in questo workspace solo perche tutte e cinque le epiche hanno gia spec, ma il modello dati lo rende raggiungibile. Correzione richiesta: risolvere l'epica dalla stessa fonte autorevole usata dalla UI (le epiche dichiarate del backlog, es. via `ReadExistingBacklog`) invece che dalle epiche derivate dalle spec, mantenendo la regola che titolo dell'epica arriva dal workspace e mai dal client. Aggiungere un test di integrazione HTTP che crea una spec su un'epica dichiarata e priva di spec.
+  - **cli/internal/web/spec_create.go:140** — Conseguenza del punto precedente, da rivedere insieme: il ramo `SaveInitialBacklog` per backlog vuoto e dichiarato nel commento come "defensive path, not reachable" proprio perche `resolveEpic` non puo mai risolvere un'epica su un backlog senza spec. Una volta che l'epica viene risolta dalle epiche dichiarate, verificare se questo ramo diventa raggiungibile (backlog con epiche ma senza spec) e, in quel caso, coprirlo con un test invece di lasciarlo documentato come irraggiungibile.
+history:
+  - status: TODO
+    at: "2026-08-16T22:51:59Z"
+  - status: PLANNED
+    at: "2026-08-18T10:51:22Z"
+  - status: IN PROGRESS
+    at: "2026-08-18T10:52:26Z"
+  - status: REVIEW
+    at: "2026-08-18T11:24:29Z"
+  - status: TODO
+    at: "2026-08-18T11:28:22Z"
+  - status: PLANNED
+    at: "2026-08-18T11:36:57Z"
+  - status: IN PROGRESS
+    at: "2026-08-18T11:37:49Z"
+  - status: REVIEW
+    at: "2026-08-18T11:48:33Z"
+  - status: DONE
+    at: "2026-08-18T11:51:38Z"

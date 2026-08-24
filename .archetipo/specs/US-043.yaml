@@ -1,0 +1,44 @@
+schema: archetipo/spec/v2
+code: US-043
+title: Conoscere lo stato del workspace e il passo successivo
+epic:
+  code: EP-005
+  title: Esperienza operativa ARchetipo
+priority: MEDIUM
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-043: Conoscere lo stato del workspace e il passo successivo
+
+  **Epic:** EP-005 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come persona che apre un workspace e non conosce il processo,
+  voglio vedere a che punto è il workspace e quale sia il passo successivo raccomandato,
+  così da procedere senza dover indovinare quale azione sia ammessa e perché.
+
+  **Dimostrazione**
+  Partendo da un workspace inizializzato e vuoto, il revisore apre la UI e legge che il workspace non ha ancora un PRD e che il passo raccomandato è l'inception, con l'azione raggiungibile da lì. Dopo aver ottenuto il PRD ricarica e legge che il passo raccomandato è diventato la generazione del backlog; dopo il backlog, la pianificazione della prima spec. In ogni stato osserva che nessuna azione è presentata come disponibile senza dire cosa la sblocca.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — La UI dichiara lo stato del workspace in termini del processo dell'Archetipo installato.
+  - [ ] AC-2 — Per lo stato corrente è indicato il passo successivo raccomandato con l'azione che lo esegue.
+  - [ ] AC-3 — Il passo raccomandato è ricavato dall'Archetipo e dallo stato reale del workspace, non da regole scritte nel frontend.
+  - [ ] AC-4 — Un'azione non eseguibile nello stato corrente dichiara la condizione che la sblocca, invece di presentarsi inerte.
+  - [ ] AC-5 — Il passo raccomandato si aggiorna quando lo stato del workspace cambia, senza riavviare il viewer.
+
+  **Fuori ambito**
+  Esecuzione automatica del passo raccomandato, sequenze multi-passo non richieste, personalizzazione del processo dalla UI.
+history:
+  - status: TODO
+    at: "2026-08-19T11:03:29Z"
+  - status: PLANNED
+    at: "2026-08-20T09:16:14Z"
+  - status: IN PROGRESS
+    at: "2026-08-20T09:17:48Z"
+  - status: REVIEW
+    at: "2026-08-20T09:44:23Z"
+  - status: DONE
+    at: "2026-08-20T09:46:48Z"

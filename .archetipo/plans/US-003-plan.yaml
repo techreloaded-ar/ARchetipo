@@ -1,0 +1,316 @@
+schema: archetipo/plan/v2
+spec_code: US-003
+body: "# US-003: Scegliere provider e modello per una sessione persistente — Piano di implementazione\n\n**Generato da:** Team di pianificazione ARchetipo\n**Data:** 2026-07-23\n\n---\n\n## Spec\n\n**Epica:** EP-001 — ARchetipo Agent locale e Run Protocol\n**Priorità:** HIGH | **Punti:** 5\n\n**Storia utente**\nCome sviluppatore, voglio scegliere fra più provider e modelli e riprendere la sessione successivamente, così da usare il modello adatto senza perdere il contesto di lavoro.\n\n**Criteri di accettazione**\n- AC-1 — La sessione mostra e consente di scegliere i profili di modello disponibili.\n- AC-2 — Alla riapertura sono ripristinati modello selezionato e cronologia della sessione.\n- AC-3 — Un profilo non utilizzabile produce un errore esplicito senza corrompere lo stato persistito.\n- AC-4 — Segreti e credenziali non compaiono nella cronologia mostrata o salvata.\n\n---\n\n## Soluzione tecnica\n\nEstendere l'adapter Pi same-process già introdotto da US-002, usando le API pubbliche fissate di `@earendil-works/pi-coding-agent@0.81.1` per persistenza, ripristino del modello e TUI, mantenendo nel codice ARchetipo soltanto il contratto locale dei profili e la composizione del runtime.\n\n- Definire profili locali, privi di credenziali, in `.pi/archetipo-agent.json` con identificatore, etichetta, provider, modello e livello di thinking opzionale. Un loader Agent applica schema allow-list, riferimenti univoci e messaggi diagnostici che non serializzano valori sensibili.\n- Sostituire `SessionManager.inMemory(projectRoot)` con `SessionManager.continueRecent(projectRoot)`: Pi conserva JSONL append-only nel proprio session store associato al cwd canonico, ripristina messaggi e ultimo `model_change`, e lascia le credenziali nel proprio auth store o nell'ambiente, fuori da `.archetipo/`, profili, transcript e log.\n- Risolvere tutti i profili configurati sul catalogo modelli, inclusi quelli senza autenticazione, e passarli come `scopedModels` alla sessione. La selezione usa `AgentSession.setModel`, che valida l'autenticazione prima di appendere `model_change`; in caso di errore il modello corrente e il file di sessione restano invariati e la TUI mostra un errore esplicito.\n- Conservare il confine dell'entrypoint: risoluzione progetto e compatibilità Core precedono qualsiasi apertura di sessione. Il presenter espone solo metadati non sensibili del profilo e della sessione, coerenti con il mockup, mai token, header o contenuti dell'auth store.\n\n### Decisioni architetturali\n\nLa scelta supera la soglia ADR perché cambia il modello di persistenza della sessione e il confine di sicurezza delle credenziali. Estende `decisions/pi-sdk-adapter`: il runtime resta same-process e sostituibile, ma passa dalla sessione in-memory al `SessionManager` persistente di Pi. Alternative valutate: un archivio sessioni ARchetipo proprietario, respinto perché duplicherebbe formato, branching e migrazioni Pi; sessioni sotto `.archetipo/`, respinte perché renderebbero facile versionare conversazioni e materiale sensibile; credenziali nei profili di progetto, respinte dal requisito di sicurezza. Il compromesso è dipendere dal formato/session lifecycle della versione Pi fissata, mitigato da contract test, smoke multiprocesso e aggiornamento dell'ADR esistente anziché creare una decisione duplicata.\n\nUS-003 dipende da US-002, che è in `REVIEW` con tutti i task `DONE`: il confine Agent necessario è disponibile, ma l'implementazione non deve iniziare se la review introduce rework incompatibile.\n\n---\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |\n|---|---|---|\n| `npm run test:agent` | Passato: 19 test, 0 failure | I test focalizzati devono restare verdi e aggiungere prove su profili, persistenza, atomicità e redazione. |\n| `npm run test:agent-interactive-smoke` | Passato: root, skill, delega TUI e rifiuto fuori progetto verificati | Lo smoke deve essere esteso senza perdere le garanzie read-only esistenti. |\n| `find agent test/e2e -name '*.mjs' -type f -exec node --check {} \\;` | Passato senza output | Ogni nuovo o modificato `.mjs` deve restare privo di errori sintattici. |\n\nPrerequisiti ambientali: Node.js >=22.19, dipendenze installate con `npm ci --ignore-scripts`, Go disponibile per gli smoke che costruiscono il Core. Le prove di credenziali usano store e provider deterministici fittizi; nessuna credenziale reale o rete esterna è necessaria.\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracle osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Progetto temporaneo con due profili canonici in `.pi/archetipo-agent.json` | Unit + integrazione TUI/processo | Il riepilogo/selettore espone entrambi i profili e, dopo la scelta, mostra provider/modello selezionato come attivo. | TASK-02, TASK-04, TASK-05 |\n| AC-2 | Prima invocazione con un messaggio completato e un profilo selezionato, seguita da una seconda invocazione sullo stesso root | E2E multiprocesso deterministico | La seconda invocazione apre lo stesso session id/file e rende visibili lo stesso profilo e il messaggio precedente. | TASK-05 |\n| AC-3 | Sessione persistita valida e secondo profilo il cui provider non ha credenziali | Contract + E2E multiprocesso | La selezione restituisce un errore esplicito; modello attivo, branch/context e hash/contenuto del JSONL precedente restano invariati. | TASK-04, TASK-05 |\n| AC-4 | Sentinel segreto presente soltanto nello store credenziali fittizio o nell'ambiente del processo | Unit + E2E multiprocesso | Sentinel assente da stdout, stderr, riepilogo TUI, profili e ogni riga del JSONL; il file contiene soltanto riferimenti provider/modello e messaggi non sensibili. | TASK-02, TASK-04, TASK-05 |\n\n---\n\n## Strategia di test\n\nLa strategia combina unit test puri per schema e redazione, contract test dell'adapter contro gli export pubblici Pi fissati e uno smoke multiprocesso che prova il comportamento osservabile senza chiamare provider reali.\n\n- I test del loader coprono file assente, due profili validi, duplicati, campi sconosciuti/sensibili e diagnostica senza eco dei valori.\n- I test adapter usano dipendenze iniettate per provare ordine di composizione, `continueRecent`, profili disponibili anche senza auth, ripristino e mancata append di `model_change` su selezione fallita.\n- Lo smoke avvia due processi isolati sullo stesso progetto/session store temporaneo, produce un turno deterministico, riapre la sessione e confronta session id, profilo, cronologia e contenuto JSONL; il provider senza credenziali deve fallire senza mutazione.\n- La suite Agent, packaging, smoke d'installazione, controlli Go e validazione Wiki restano gate di regressione.\n\n### E2E — Simulazione utente\n\n**Framework:** Node.js test/assert + processi `spawnSync` e Pi SDK pubblico con trasporto/provider deterministico iniettato\n**Video demo:** filmabile nella TUI; la registrazione è demandata ad `archetipo-review`.\n\n| Scenario | Flusso utente |\n|---|---|\n| Scelta e ripresa | Avvia Agent in un progetto con due profili, apre il selettore, sceglie il profilo utilizzabile, invia un messaggio, chiude, riavvia e osserva profilo e cronologia ripristinati. |\n| Credenziali assenti | Dalla sessione ripresa seleziona il profilo non autenticato, osserva l'errore esplicito e verifica che profilo precedente, cronologia e file persistito non cambino. |\n| Segreti esclusi | Esegue gli stessi flussi con una sentinel nello store credenziali/ambiente e verifica che non compaia in output o JSONL. |\n\n### Esclusione E2E browser\n\n**Motivo:** la superficie è una TUI terminale e non attraversa route web o API browser; un browser non può provare il rendering o il lifecycle responsabile dei criteri.\n**Livello di evidenza usato:** test di integrazione del componente/session runtime e smoke multiprocesso della CLI reale, che attraversa entrypoint, adapter, filesystem persistente e riapertura.\n\n---\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [overview, decisions/four-layer-product-architecture, operations/development, decisions/pi-sdk-adapter]\n  update_after_acceptance: [overview, engineering/code-map, operations/development, decisions/pi-sdk-adapter]\n  create: []\n```\n\n> \U0001F3A8 I mockup per questa spec sono disponibili in `docs/mockups/US-003/`\n\n_Piano generato tramite ARchetipo Planning — 2026-07-23_"
+tasks:
+  - id: TASK-01
+    title: Definire il contratto dei profili di modello locali
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Caricare profili provider/modello di progetto da un file JSON privo di credenziali, restituendo un contratto immutabile e diagnostiche sicure.
+
+      ## Read
+      - `agent/src/project-context.mjs` — risoluzione e canonicalizzazione del project root
+      - `agent/src/pi-adapter.mjs` — input correnti dell'adapter
+      - `node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.d.ts` — catalogo modelli pubblico disponibile
+      - `docs/PRD.md` — FR-009 e vincolo sulle credential provider
+
+      ## Change
+      - `agent/src/model-profiles.mjs` — nuovo loader di `.pi/archetipo-agent.json` con schema allow-list per `modelProfiles[]`: `id`, `label`, `provider`, `model`, `thinkingLevel` opzionale
+      - `agent/README.md` — esempio minimo di due profili e indicazione esplicita che chiavi, token, header e riferimenti a secret non appartengono al file
+      - Non modificare `.archetipo/config.yaml`, il parser/config pubblico del Core o il formato delle credenziali Pi
+
+      ## Steps
+      1. Risolvere il file soltanto sotto il root canonico ricevuto dall'adapter; file assente significa nessun profilo configurato.
+      2. Validare oggetto radice, array non vuoto quando presente, stringhe normalizzate, id univoci e `thinkingLevel` fra i livelli supportati da Pi.
+      3. Rifiutare proprietà non previste, in particolare nomi riconducibili a secret, token, api key, header o credential, senza includerne il valore nell'errore.
+      4. Restituire oggetti e array congelati in ordine di configurazione; gli errori nominano soltanto path, indice e campo.
+      5. Documentare che l'autenticazione resta in `~/.pi/agent/auth.json` o nell'ambiente e non viene copiata nel progetto.
+
+      ## Verify
+      - Run: `node --check agent/src/model-profiles.mjs`
+      - Run: `git diff --check -- agent/src/model-profiles.mjs agent/README.md`
+      - Expect: entrambi i comandi terminano 0; il diff non introduce parser YAML, modifiche Core o esempi contenenti valori di credenziali.
+
+      ## Done
+      - [ ] AC-1 — Il contratto rappresenta almeno due profili ordinati e nominati con provider e modello espliciti.
+      - [ ] AC-4 — Lo schema non ammette né riflette in diagnostica campi o valori di credenziali.
+
+      ## Blockers
+      US-002 deve restare disponibile almeno in stato `REVIEW` senza rework incompatibile.
+    ref: TASK-01
+  - id: TASK-02
+    title: Provare schema e redazione dei profili
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Dimostrare in modo deterministico che il loader accetta configurazioni valide e rifiuta input ambigui o sensibili senza esporre segreti.
+
+      ## Read
+      - `agent/src/model-profiles.mjs` — contratto prodotto da TASK-01
+      - `agent/test/project-context.test.mjs` — convenzioni fixture, cleanup e immutabilità
+      - `agent/test/cli.test.mjs` — sentinel e asserzioni di non-leakage esistenti
+
+      ## Change
+      - `agent/test/model-profiles.test.mjs` — unit test del nuovo loader
+      - Non leggere auth reali, home utente o rete; tutte le fixture devono vivere in directory temporanee eliminate da `afterEach`
+
+      ## Steps
+      1. Coprire file assente, due profili validi, ordine stabile, normalizzazione e immutabilità.
+      2. Coprire JSON invalido, radice errata, id duplicato, provider/modello vuoti e thinking level non supportato.
+      3. Inserire una sentinel come valore di campi `apiKey`, `token`, `headers` e proprietà sconosciuta; verificare rifiuto e assenza della sentinel nel messaggio/stack serializzato usato dall'applicazione.
+      4. Verificare che il loader non crei o modifichi file nella fixture.
+
+      ## Verify
+      - Run: `node --test agent/test/model-profiles.test.mjs`
+      - Run: `node --check agent/test/model-profiles.test.mjs`
+      - Expect: tutti i casi passano, 0 failure, e nessun output contiene la sentinel.
+
+      ## Done
+      - [ ] AC-1 — Il test osserva i due profili configurati con id, label, provider e modello corretti.
+      - [ ] AC-4 — I test provano che valori sensibili non entrano nel contratto né nelle diagnostiche.
+
+      ## Blockers
+      TASK-01 deve definire il loader e lo schema.
+    ref: TASK-02
+  - id: TASK-03
+    title: Integrare profili e persistenza nella TUI Agent
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Avviare la TUI sul profilo configurato e sulla sessione Pi persistente più recente del progetto, preservando atomicamente lo stato quando un profilo non è autenticato.
+
+      ## Read
+      - `agent/src/pi-adapter.mjs` — factory servizi/runtime e lifecycle correnti
+      - `agent/src/cli.mjs` e `agent/src/startup-presenter.mjs` — confine di avvio e metadati mostrati
+      - `agent/src/model-profiles.mjs` — profili validati da TASK-01
+      - `docs/mockups/US-003/index.html`, `docs/mockups/US-003/shared.css`, `docs/mockups/US-003/app.js` — stati visivi di profilo attivo, checkpoint ripreso ed errore conservativo
+      - `node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.d.ts` — `continueRecent`, contesto e `model_change`
+      - `node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts` — `setModel` e validazione auth prima della persistenza
+      - `node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session-services.d.ts` — composizione servizi e `scopedModels`
+
+      ## Change
+      - `agent/src/pi-adapter.mjs` — usare `SessionManager.continueRecent(projectRoot)`, risolvere i profili sul catalogo completo, passare gli scoped model al runtime e restituire solo metadati non sensibili
+      - `agent/src/startup-presenter.mjs` — sostituire il messaggio di memoria temporanea con stato di sessione persistente e profilo attivo/ripreso
+      - `agent/src/cli.mjs` — passare al presenter i metadati sicuri dell'adapter e mantenere errori generici redatti al confine runtime
+      - Non creare un archivio ARchetipo alternativo, non leggere direttamente `auth.json`, non copiare credential nel profilo/sessione e non modificare sorgenti vendorizzati Pi
+
+      ## Steps
+      1. Creare prima i servizi Pi sul root canonico e caricare i profili validati; risolvere ogni `provider/model` tramite il catalogo completo così che anche il profilo senza auth sia visibile.
+      2. Costruire il session manager con `continueRecent(projectRoot)` e passarlo, insieme agli scoped model e al thinking level opzionale, a `createAgentSessionFromServices`.
+      3. Lasciare a Pi il ripristino di messaggi e ultimo model change; propagare `modelFallbackMessage` come diagnostica redatta quando il modello salvato non è più disponibile.
+      4. Usare il selettore TUI scoped coerente con il mockup. La selezione deve chiamare il percorso `setModel` che valida auth prima di appendere; sull'errore mantenere modello, leaf/context e file di sessione precedenti.
+      5. Esporre a CLI/presenter soltanto id/label/provider/model, session id/file e flag `resumed`; non esporre auth result, env o header.
+      6. Conservare dispose idempotente su uscita normale ed errore.
+
+      ## Verify
+      - Run: `node --check agent/src/model-profiles.mjs agent/src/pi-adapter.mjs agent/src/startup-presenter.mjs agent/src/cli.mjs`
+      - Run: `npm run test:agent`
+      - Expect: sintassi valida e baseline Agent verde; il riepilogo non contiene più `memoria temporanea` e nessun test esistente di compatibilità, root, skill o cleanup regredisce.
+
+      ## Done
+      - [ ] AC-1 — La TUI riceve tutti i profili configurati e mostra quello attivo secondo gli stati del mockup.
+      - [ ] AC-2 — Il runtime usa `continueRecent` sul root canonico e rende disponibili cronologia e model change ripristinati.
+      - [ ] AC-3 — La selezione priva di auth fallisce prima di persistere un nuovo model change e conserva lo stato precedente.
+      - [ ] AC-4 — Presenter, diagnostiche e session metadata espongono soltanto identificatori non sensibili.
+
+      ## Blockers
+      TASK-01 deve fornire il contratto dei profili; US-002 deve conservare l'adapter same-process e la TUI interattiva.
+    ref: TASK-03
+  - id: TASK-04
+    title: Verificare il contratto persistente dell'adapter
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Objective
+      Provare con unit e contract test che l'adapter riprende sessione/modello, presenta profili non autenticati e non muta né divulga lo stato su errore.
+
+      ## Read
+      - `agent/test/pi-adapter.test.mjs` — fake SDK, contract test della versione fissata e cleanup
+      - `agent/test/cli.test.mjs` e `agent/test/startup-presenter.test.mjs` se presente — confine output e fixture
+      - `agent/src/pi-adapter.mjs`, `agent/src/cli.mjs`, `agent/src/startup-presenter.mjs` — comportamento implementato da TASK-03
+      - `node_modules/@earendil-works/pi-coding-agent/examples/sdk/11-sessions.ts` — uso pubblico di create/continue/open
+
+      ## Change
+      - `agent/test/pi-adapter.test.mjs` — sostituire le aspettative in-memory e coprire `continueRecent`, scoped model, restore, fallback e atomicità su auth mancante
+      - `agent/test/cli.test.mjs` e/o `agent/test/startup-presenter.test.mjs` — asserire metadati persistenti e redazione output
+      - Aggiornare il contract test degli export Pi soltanto per API pubbliche realmente usate; non importare path interni `dist/`
+
+      ## Steps
+      1. Estendere il fake SDK con session manager persistente, catalogo con due profili e session context contenente messaggio più model change.
+      2. Verificare ordine: servizi e profili vengono risolti sul root canonico, poi la sessione recente viene creata/ripresa e passata una sola volta al runtime.
+      3. Simulare scelta valida e riapertura; asserire stesso session id, messaggio visibile e profilo ripristinato.
+      4. Simulare `setModel` senza auth; catturare snapshot di modello, leaf/context e contenuto persistito prima/dopo e asserire uguaglianza oltre all'errore esplicito.
+      5. Inserire una sentinel nello store auth fittizio e verificare assenza da adapter metadata, stdout, stderr e session entries.
+      6. Conservare le prove di dispose singolo anche su errore TUI.
+
+      ## Verify
+      - Run: `node --test agent/test/pi-adapter.test.mjs agent/test/cli.test.mjs agent/test/startup-presenter.test.mjs`
+      - Run: `npm run test:agent`
+      - Expect: tutte le prove passano con 0 failure; il contract conferma `SessionManager.continueRecent` e le API modello/sessione pubbliche della versione `0.81.1`.
+
+      ## Done
+      - [ ] AC-1 — I test osservano entrambi i profili scoped e la selezione del profilo utilizzabile.
+      - [ ] AC-2 — I test osservano stesso id/session file, modello e messaggio dopo il resume.
+      - [ ] AC-3 — Errore esplicito e snapshot persistente invariato sono entrambi asseriti.
+      - [ ] AC-4 — La sentinel credential è assente da output, metadata e session entries.
+
+      ## Blockers
+      TASK-02 e TASK-03 devono essere completati.
+    ref: TASK-04
+  - id: TASK-05
+    title: Dimostrare scelta e ripresa in uno smoke multiprocesso
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Dimostrare il flusso utente completo attraverso due avvii Agent isolati, includendo selezione valida, ripresa, errore senza credenziali e assenza di secret.
+
+      ## Read
+      - `test/e2e/agent-interactive-smoke.mjs` — build Core, init Pi, staging Agent, process harness e snapshot read-only
+      - `test/e2e/agent-installation-smoke.mjs` — installazione/staging del package reale
+      - `agent/bin/archetipo-agent.js` e `agent/src/cli.mjs` — entrypoint effettivo
+      - `docs/mockups/US-003/` — sequenza osservabile da riprodurre nello smoke
+      - `package.json` e `.github/workflows/ci.yml` — script e job Agent correnti
+
+      ## Change
+      - `test/e2e/agent-session-smoke.mjs` — nuovo smoke multiprocesso con home/session store temporanei e provider deterministico iniettato, senza rete
+      - `package.json` — script `test:agent-session-smoke`
+      - `.github/workflows/ci.yml` e `.github/workflows/release.yml` — includere il nuovo smoke nel gate Agent/release
+      - Non usare credenziali reali, home reale, provider live o assertion basate soltanto su chiamate mock; ispezionare output e JSONL reali della sessione
+
+      ## Steps
+      1. Costruire il Core, inizializzare un progetto Pi temporaneo e scrivere due profili: uno autenticato nello store fittizio e uno senza auth.
+      2. Avviare un primo processo Agent tramite entrypoint staged, selezionare il profilo valido e produrre un turno deterministico con testo riconoscibile; chiudere in modo pulito.
+      3. Avviare un secondo processo sullo stesso root e session store; osservare stesso session id/file, profilo selezionato e messaggio precedente.
+      4. Tentare il profilo non autenticato, osservare il messaggio esplicito e confrontare modello, branch/context e hash/contenuto JSONL con lo snapshot precedente.
+      5. Collocare una sentinel soltanto nell'auth store/ambiente temporaneo e asserirne l'assenza da stdout, stderr, profili e JSONL.
+      6. Conservare nello smoke esistente le prove root/skill/delega e rifiuto fuori progetto; assicurare cleanup cross-platform delle directory temporanee.
+
+      ## Verify
+      - Run: `npm run test:agent-session-smoke`
+      - Run: `npm run test:agent-interactive-smoke && npm run test:agent-install-smoke`
+      - Expect: tutti gli smoke terminano 0; l'output dichiara scelta, resume ed errore conservativo, e le asserzioni leggono il JSONL reale per provare stato invariato e secret assente.
+
+      ## Done
+      - [ ] AC-1 — Il flusso mostra due profili e rende attivo quello scelto.
+      - [ ] AC-2 — Il secondo processo osserva stesso profilo e cronologia del primo.
+      - [ ] AC-3 — Il profilo senza auth produce errore esplicito e il JSONL resta byte-per-byte invariato.
+      - [ ] AC-4 — La sentinel non compare in alcun output o file di sessione.
+
+      ## Blockers
+      TASK-03 e TASK-04 devono fornire il runtime e i contract test verdi.
+    ref: TASK-05
+  - id: TASK-06
+    title: Allineare documentazione e decisione dell'adapter
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Aggiornare la conoscenza di progetto affinché persistenza, profili, ownership delle credenziali e verifiche di US-003 siano documentate con evidenza di repository.
+
+      ## Read
+      - `docs/wiki/overview.md` — capacità Agent correnti
+      - `docs/wiki/engineering/code-map.md` — confini fisici e test
+      - `docs/wiki/operations/development.md` — toolchain, test e vincoli operativi
+      - `docs/wiki/decisions/pi-sdk-adapter.md` — ADR same-process oggi limitato a sessione in-memory
+      - `docs/wiki/decisions/four-layer-product-architecture.md` — ownership del layer Agent
+      - File e test consegnati da TASK-01..TASK-05 — fonti implementate da citare
+
+      ## Change
+      - `docs/wiki/overview.md` — promuovere selezione profili e sessioni persistenti a capacità corrente
+      - `docs/wiki/engineering/code-map.md` — mappare loader profili, session store Pi e smoke multiprocesso
+      - `docs/wiki/operations/development.md` — aggiungere configurazione, comando smoke e confine credenziali
+      - `docs/wiki/decisions/pi-sdk-adapter.md` — estendere contesto, decisione, alternative, conseguenze e verifica dal manager in-memory a `continueRecent`, senza cancellare la motivazione same-process
+      - `docs/wiki/index.md` e `docs/wiki/log.md` — solo aggiornamenti generati dai comandi Wiki previsti
+
+      ## Steps
+      1. Aggiornare le fonti frontmatter con path e ruoli dei nuovi file/test.
+      2. Descrivere il file profili come configurazione non sensibile e indicare auth store/ambiente Pi come unico confine delle credenziali.
+      3. Nell'ADR registrare la scelta persistente, le alternative scartate, il tradeoff di dipendenza dal formato Pi e le prove di atomicità/redazione.
+      4. Distinguere chiaramente questa capacità locale dai futuri Agent Profile di Control e dal Run Protocol.
+      5. Rigenerare catalogo/relazioni e validare la Wiki.
+
+      ## Verify
+      - Run: `archetipo wiki catalog`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run: `rg -n "continueRecent|archetipo-agent.json|agent-session-smoke|credenzial" docs/wiki`
+      - Expect: catalog termina 0, la validazione restituisce `kind=validation_result` con `data.ok=true`, e ogni affermazione di stato corrente cita evidenza implementata.
+
+      ## Done
+      - [ ] AC-1 — Wiki e code map collegano profili configurati, selettore TUI e test osservabile.
+      - [ ] AC-2 — Wiki e ADR documentano resume di cronologia e modello tramite il session manager Pi.
+      - [ ] AC-3 — ADR e operations documentano fallimento atomico e relativa verifica.
+      - [ ] AC-4 — Il confine credenziali e le prove di non-persistenza sono espliciti.
+
+      ## Blockers
+      TASK-05 deve fornire l'evidenza E2E definitiva da citare.
+    ref: TASK-06
+  - id: TASK-07
+    title: Eseguire il gate finale di profili e sessioni
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Confermare con i controlli focalizzati e di regressione che US-003 soddisfa tutti i criteri senza degradare Agent, packaging, Core o Wiki.
+
+      ## Read
+      - `AGENTS.md` — controlli CI obbligatori
+      - `package.json` — suite Agent, packaging e smoke
+      - `.github/workflows/ci.yml` e `.github/workflows/release.yml` — gate distribuiti
+      - `.archetipo/specs/US-003.yaml` — criteri e stato dei task
+      - Tutti i file modificati dai TASK-01..TASK-06 — diagnostica e scope finale
+
+      ## Change
+      - Solo correzioni strettamente necessarie nei file modificati dai TASK-01..TASK-06 quando un controllo fallisce; non ampliare a routing automatico, budget, fallback multi-provider, Runner, Run Protocol o Control
+      - `docs/test-results/` — riepilogo di comandi, esiti e ambiente se previsto dal flusso di implementazione
+
+      ## Steps
+      1. Eseguire unit/contract Agent, packaging e tutti gli smoke Agent, incluso quello multiprocesso di US-003.
+      2. Eseguire `node --check` su tutti i `.mjs` Agent/test e correggere ogni diagnostica introdotta.
+      3. Eseguire i controlli Go completi prescritti dal repository per provare che il Core invariato non regredisce.
+      4. Eseguire validazione Wiki e `git diff --check`; verificare che mockup, README e documentazione siano coerenti con lo scope consegnato.
+      5. Marcare `TASK-07` come `DONE` soltanto dopo tutti gli esiti verdi.
+      6. Da `/Users/stefanoleli/Project/ARchetipo`, eseguire `archetipo spec show US-003` e confermare che nessun task sia `TODO`; soltanto allora è consentito eseguire `archetipo spec review US-003`.
+
+      ## Verify
+      - Run: `npm run test:agent && npm run test:agent-packaging && npm run test:agent-interactive-smoke && npm run test:agent-session-smoke && npm run test:agent-install-smoke`
+      - Run: `find agent test/e2e test/npm -name '*.mjs' -type f -exec node --check {} \;`
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./... && golangci-lint run --timeout 5m ./...`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run: `git diff --check`
+      - Run after marking this gate DONE: `archetipo spec show US-003`
+      - Expect: tutti i comandi terminano 0, `gofmt -l .` non produce output, golangci-lint riporta 0 issue, Wiki ha `data.ok=true`, gli smoke provano AC-1..AC-4 e lo spec ricaricato non contiene task `TODO`.
+
+      ## Done
+      - [ ] AC-1 — Suite e smoke confermano profili visibili e selezionabili.
+      - [ ] AC-2 — Smoke multiprocesso conferma profilo e cronologia ripristinati.
+      - [ ] AC-3 — Contract ed E2E confermano errore esplicito e stato persistito invariato.
+      - [ ] AC-4 — Unit, contract ed E2E confermano assenza di credenziali da output e JSONL.
+      - [ ] Il gate è marcato `DONE` e `archetipo spec show US-003` conferma tutti i task `DONE` prima della richiesta di review.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04, TASK-05 e TASK-06 devono essere completati.
+    ref: TASK-07

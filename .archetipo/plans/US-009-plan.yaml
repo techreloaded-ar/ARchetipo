@@ -1,0 +1,325 @@
+schema: archetipo/plan/v2
+spec_code: US-009
+body: "# US-009: Creare un Project e collegare il Workspace — Piano di implementazione\n\n**Generato da:** ARchetipo Planning Team\n**Data:** 2026-07-24\n\n---\n\n## Specifica\n\n**Epica:** EP-002 — Inception governata in ARchetipo Control\n**Priorità:** HIGH | **Punti:** 5\n\n**Storia utente**\nCome product lead, voglio creare un Project aziendale e collegarlo al luogo tecnico di lavoro, così da tenere obiettivi, processo e repository nello stesso contesto senza confonderli.\n\n**Criteri di accettazione**\n- AC-1 — Un membro autorizzato può creare un Project con nome e obiettivo.\n- AC-2 — Il Project può riferire un Workspace mantenendo identità e stato separati.\n- AC-3 — Un collegamento incompatibile viene rifiutato senza creare duplicati.\n- AC-4 — La pagina del Project mostra chiaramente il Workspace collegato.\n\n## Soluzione tecnica\n\nEstendere il modular monolith Control con un modulo Product autonomo che possiede Project, Workspace e il loro collegamento in PostgreSQL, riusando identità OIDC, membership attiva, error envelope, shell React e infrastruttura di test della slice US-008. Il modello conserva Project e Workspace come aggregate identificabili separatamente e usa una relazione esplicita, evitando di trasformare il repository remoto nell'identità del Project.\n\n- `projects` contiene `organization_id`, nome, obiettivo e stato `active`; `workspaces` contiene `organization_id`, nome tecnico, URL remoto canonico, ref predefinito e stato `available`; `project_workspace_links` contiene identità e stato del collegamento. Le tre identità e i rispettivi stati restano osservabili separatamente nell'API e nella pagina Project.\n- Nel perimetro di US-009 un Project ammette un solo collegamento e un Workspace può essere collegato a un solo Project. L'URL remoto viene validato come `https:` o `ssh:`, privato di query/fragment e canonicalizzato su protocollo/host, slash finale e suffisso `.git`; il path resta case-sensitive. La stessa richiesta ripetuta in modo identico è idempotente e restituisce il collegamento esistente, mentre un Project già collegato a un altro remoto o lo stesso remoto già collegato a un altro Project produce `409 workspace_link_conflict` senza inserimenti parziali.\n- Qualunque membership OIDC attiva dell'Organization è un “membro autorizzato” per questa slice, coerentemente con la persona product lead che può essere `collaborator`; richieste prive di membership attiva ricevono `401`. Ruoli Product più granulari restano fuori ambito e non vengono simulati nella UI.\n- Le API `POST /api/projects`, `GET /api/projects/:projectId` e `POST /api/projects/:projectId/workspace` derivano sempre l'Organization dalla membership server-side. La creazione e il link sono transazionali; UUID, Organization e vincoli univoci non sono controllabili dal client.\n- La UI aggiunge la sezione Product nella shell, una creazione guidata e la route di dettaglio `/projects/:projectId`. La pagina presenta nome, obiettivo, ID e stato del Project in un blocco distinto da nome, remoto, ref, ID e stato del Workspace; errore di incompatibilità, stato di caricamento e successo sono annunciati semanticamente e non affidati al solo colore.\n\n### Decisioni architetturali\n\nNon è necessario un nuovo ADR: la decisione accettata `decisions/project-process-run-model` ha già scelto esplicitamente Project distinto da Workspace e una relazione capace di evolvere verso più Workspace. Questa slice ne materializza il primo caso limitato a un collegamento per Project; l'alternativa “Project uguale a repository” resta respinta. L'uso di una tabella di relazione, anziché una foreign key `workspace_url` dentro `projects`, preserva l'identità separata e permette di rimuovere in futuro il vincolo MVP senza migrare il concetto. Dopo l'accettazione, la decisione esistente viene aggiornata con evidenze di schema, API e test; non si crea un ID decisionale artificiale.\n\n## Assunzioni e confini\n\n- “Workspace remoto” indica in questa slice un repository raggiungibile tramite URL `https:` o `ssh:` con ref predefinito; credenziali, clone, sincronizzazione, verifica di raggiungibilità e toolchain non vengono eseguiti né persistiti.\n- L'assenza di portfolio implica che la navigazione può offrire creazione e dettaglio del Project corrente senza introdurre una dashboard multi-Project completa.\n- US-008 è in `REVIEW`, quindi il blocco è oltre `PLANNED`; il piano usa la sua implementazione corrente come baseline ma non modifica i suoi contratti di bootstrap, ruoli o audit.\n\n## Baseline\n\n| Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |\n|---|---|---|\n| `npm --prefix control run typecheck` | PASS, nessuna diagnostica TypeScript | Ogni file Product e ogni file Control toccato deve restare privo di diagnostiche. |\n| `npm --prefix control run lint` | PASS, nessuna diagnostica ESLint | Il gate finale richiede lint verde sull'intero `control/src`. |\n| `npm --prefix control run build` | PASS, build server e Vite completate | Nuove route, tipi e bundle web devono compilare nel deployable esistente. |\n| `npm --prefix control test` | PASS: 8 file/25 test non-web e 1 file/4 test web | Le suite Project si aggiungono mantenendo tutti i 29 test correnti verdi. |\n| `npm run test:control:e2e` | PASS: 2 scenari Chromium US-008 | Gli scenari Project devono attraversare il confine browser/API/PostgreSQL senza degradare bootstrap, membership, deny e audit esistenti. |\n\nPrerequisiti ambiente: Node.js >=22.19, dipendenze npm già installate, Docker con PostgreSQL 17 e browser Chromium Playwright già disponibili. `archetipo e2e ensure` non è necessario perché Playwright e la configurazione esistono; il fixture PostgreSQL deve però applicare tutte le migrazioni ordinate invece del solo file `001`.\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task produttore |\n|---|---|---|---|---|\n| AC-1 | Organization bootstrap con admin attivo e zero Project | Integration DB/API, component e browser E2E | Il submit con nome e obiettivo restituisce `201`; PostgreSQL contiene un solo Project dell'Organization e la pagina mostra entrambi i valori | TASK-02, TASK-03, TASK-04, TASK-05 |\n| AC-2 | Project appena creato senza link | Integration DB/API e browser E2E | La risposta e la pagina espongono `project.id/status` distinti da `workspace.id/status` e un link con propria identità; il Project conserva nome e obiettivo invariati | TASK-01, TASK-02, TASK-03, TASK-04, TASK-05 |\n| AC-3 | Primo Project collegato a un remoto; secondo Project oppure secondo remoto incompatibile | Integration concorrente/API e browser E2E | La richiesta incompatibile risponde `409 workspace_link_conflict`; conteggi di Project, Workspace e link restano invariati e non esistono righe orfane o duplicate | TASK-02, TASK-03, TASK-05 |\n| AC-4 | Project con link persistito e pagina aperta da membership attiva | Component integration e browser E2E | Nel main sono visibili due regioni nominate “Project” e “Workspace collegato”, con nome/remoto, ID e stato testuale separati | TASK-04, TASK-05 |\n\nI test HTTP e browser usano database, session middleware e repository reali; il mock del client è ammesso soltanto nei test di componente e mantiene visibili gli oracoli di layout/accessibilità, non sostituisce le prove transazionali o di conflitto.\n\n## Strategia di test\n\n- Test di dominio per validazione di nome/obiettivo, canonicalizzazione deterministica del remoto, protocolli ammessi e uguaglianza semantica del link.\n- Integration PostgreSQL 17 per migrazione `002`, ownership per Organization, creazione, link idempotente, richieste concorrenti, vincoli one-to-one MVP e rollback completo su conflitto.\n- Contract/API Fastify con sessioni reali per `201/200/401/404/409`, derivazione dell'Organization dalla membership e payload Project/Workspace/link separati.\n- Component integration React per routing dinamico, form, regioni nominate, focus e annunci `status`/`alert`, senza usare assenza di card come proxy per il messaggio richiesto.\n- Browser E2E Playwright obbligatorio: l'accettazione attraversa login OIDC, route, PostgreSQL, transazioni e navigazione tra creazione e dettaglio. Lo scenario è filmabile; `archetipo-review` registrerà il percorso creazione → link → conflitto → verifica delle identità separate.\n\n### E2E browser — Simulazione utente\n\n**Framework:** Playwright esistente, Chromium, worker seriale e fixture Control/PostgreSQL 17.\n**Video demo:** atteso e filmabile; la registrazione appartiene ad `archetipo-review`.\n\n| Scenario | Flusso utente |\n|---|---|\n| Creazione e collegamento | Bootstrap/login come admin, apertura Product, creazione Project con nome e obiettivo, collegamento del remoto e verifica nella pagina delle regioni Project e Workspace con ID e stati distinti. |\n| Conflitto senza duplicati | Con un link esistente, tentativo di collegare un remoto diverso allo stesso Project e lo stesso remoto a un altro Project; osservazione dell'errore accessibile e verifica via API/database che conteggi e link originario non cambiano. |\n\n## Impatto Wiki\n\n```yaml\nwiki_impact:\n  read: [overview, architecture/context-map, decisions/project-process-run-model]\n  update_after_acceptance: [overview, architecture/context-map, decisions/project-process-run-model, decisions/control-foundation, engineering/code-map, operations/development]\n  create: [domains/project-and-workspace]\n```\n\n> \U0001F3A8 Mockup per questa specifica disponibili in `docs/mockups/US-009/`.\n\n_Piano generato tramite ARchetipo Planning — 2026-07-24_"
+tasks:
+  - id: TASK-01
+    title: Materializzare lo schema separato di Project, Workspace e collegamento
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Aggiungere al database Control identità, stati e vincoli separati per Project, Workspace e il loro collegamento one-to-one nell'MVP.
+
+      ## Read
+      - `control/migrations/001_identity_policy.sql` — stile DDL, UUID, Organization e vincoli correnti
+      - `control/src/modules/identity/repository.ts` — `ControlDatabase`, tipi Kysely e ownership per Organization
+      - `control/src/server/migrate.ts` — caricamento ordinato e ledger delle migrazioni
+      - `control/test/fixtures/postgres.ts` — fixture che oggi applica soltanto `001`
+      - `control/test/integration/migrations.test.ts` — oracolo corrente delle tabelle
+
+      ## Change
+      - `control/migrations/002_project_workspace.sql` — tabelle `projects`, `workspaces`, `project_workspace_links`, foreign key, stati e indici univoci MVP
+      - `control/src/modules/product/domain.ts` — tipi `Project`, `Workspace`, `ProjectWorkspaceLink`, validatori e canonicalizzazione del remoto
+      - `control/src/modules/identity/repository.ts` — estensione strettamente tipizzata di `ControlDatabase` con le tre tabelle, senza aggiungere logica Product a `IdentityRepository`
+      - `control/test/fixtures/postgres.ts` — applicazione deterministica di tutte le migrazioni ordinate
+      - `control/test/integration/migrations.test.ts` e `control/src/modules/product/domain.test.ts` — schema e regole pure
+      - Non mettere URL Workspace o stato tecnico nella tabella `projects`; non persistere credential o verificare la rete
+
+      ## Steps
+      1. Definire Project con UUID, `organization_id`, nome, obiettivo, stato `active` e timestamp; definire Workspace con UUID, Organization, nome, remoto canonico, ref e stato `available`.
+      2. Definire il link con UUID, `project_id`, `workspace_id`, stato `linked` e timestamp; imporre unicità su `project_id` e `workspace_id` per il solo limite US-009 e preservare la relazione come tabella autonoma.
+      3. Rendere unico `(organization_id, canonical_remote)` e vincolare ogni relazione all'Organization mediante repository/service, oltre alle foreign key.
+      4. Validare stringhe non vuote e URL `https:`/`ssh:`; rimuovere query/fragment, slash finale e `.git`, normalizzare protocollo/host e conservare case del path.
+      5. Modificare la fixture affinché legga e applichi `001`, `002` in ordine e ampliare il test migrazioni senza cambiare checksum o contenuto di `001`.
+
+      ## Verify
+      - Run: `npm --prefix control run test:integration -- migrations`
+      - Run: `npm --prefix control exec vitest run src/modules/product/domain.test.ts`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: PostgreSQL 17 espone le tre nuove tabelle e i vincoli; i test di canonicalizzazione passano; nessuna diagnostica nei file toccati.
+
+      ## Done
+      - [ ] AC-2 — Project, Workspace e link hanno UUID e stati separati nel dominio e nello schema.
+      - [ ] AC-3 — Vincoli univoci impediscono più link per Project, più Project per Workspace e duplicati del remoto canonico nell'Organization.
+
+      ## Blockers
+      US-008 deve fornire Organization, membership e migrazione `001`; è già in REVIEW.
+    ref: TASK-01
+  - id: TASK-02
+    title: Implementare creazione e link transazionali nel modulo Product
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Fornire un servizio Product che crea Project e collega Workspace in modo idempotente, organization-scoped e privo di scritture parziali sui conflitti.
+
+      ## Read
+      - `control/src/modules/product/domain.ts` e `control/migrations/002_project_workspace.sql` — invarianti e schema di TASK-01
+      - `control/src/modules/identity/repository.ts` — pattern `DatabaseClient`, transaction e mapping riga-dominio
+      - `control/src/modules/identity/service.ts` — stile dei servizi deterministici Control
+      - `control/test/integration/identity-policy.test.ts` — fixture e asserzioni PostgreSQL reali
+
+      ## Change
+      - `control/src/modules/product/repository.ts` — query organization-scoped, transazione, lock delle chiavi di link e mapping completi
+      - `control/src/modules/product/service.ts` — `createProject`, `getProjectDetails`, `linkWorkspace` e errori di dominio tipizzati
+      - `control/test/integration/project-workspace.test.ts` — creazione, isolamento Organization, idempotenza, concorrenza, conflitti e rollback
+      - Non esporre client-generated ID/Organization, non clonare remoti, non introdurre portfolio, unlink o più Workspace
+
+      ## Steps
+      1. Creare Project dopo trim/validazione di nome e obiettivo usando l'Organization della membership e restituire il record autorevole.
+      2. In `linkWorkspace`, aprire una sola transazione e serializzare per Project e remoto canonico prima di leggere o creare Workspace/link.
+      3. Se la stessa configurazione è già collegata allo stesso Project, restituire il dettaglio esistente con `created:false` senza nuove righe.
+      4. Se il Project possiede un altro link, oppure il remoto canonico è collegato a un altro Project o differisce per nome/ref incompatibili, sollevare `WorkspaceLinkConflictError` e fare rollback completo.
+      5. Restituire sempre un `ProjectDetails` che contiene oggetti Project, Workspace e link distinti; provare richieste concorrenti e conteggi esatti nelle tre tabelle.
+
+      ## Verify
+      - Run: `npm --prefix control run test:integration -- project-workspace`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: tutti i casi su PostgreSQL 17 passano; replay identico non duplica, conflitti e race lasciano invariati i conteggi e nessun record orfano.
+
+      ## Done
+      - [ ] AC-1 — Il servizio crea un solo Project con nome e obiettivo nell'Organization attiva.
+      - [ ] AC-2 — Il dettaglio conserva Project, Workspace e link come oggetti distinti con identità e stato propri.
+      - [ ] AC-3 — Replay identico è idempotente; configurazioni incompatibili falliscono senza duplicati o scritture parziali.
+
+      ## Blockers
+      TASK-01 fornisce schema, tipi e canonicalizzazione.
+    ref: TASK-02
+  - id: TASK-03
+    title: Esporre il contratto HTTP Product con membership attiva
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+      Esporre creazione, dettaglio e collegamento Workspace tramite API Fastify protette dalla membership e con errori pubblici stabili.
+
+      ## Read
+      - `control/src/modules/product/service.ts` e `repository.ts` — contratti transazionali di TASK-02
+      - `control/src/modules/identity/http.ts` e `policy.ts` — hydration sessione, membership e `PublicHttpError`
+      - `control/src/modules/organization/http.ts` — convenzioni route e validazione body
+      - `control/src/server/app.ts` — composition root e registrazione moduli
+      - `control/test/integration/http-authz.test.ts` — fixture sessione/API e oracoli error envelope
+
+      ## Change
+      - `control/src/modules/identity/policy.ts` — helper esportato `requireActiveMembership` senza ampliare i ruoli
+      - `control/src/modules/product/http.ts` — `POST /api/projects`, `GET /api/projects/:projectId`, `POST /api/projects/:projectId/workspace`
+      - `control/src/server/app.ts` — composizione di repository/service Product sul database già configurato
+      - `control/test/integration/project-http.test.ts` — contratti `201/200/400/401/404/409` e organization scope
+      - Non accettare `organizationId`, ID o stato dal client; non autorizzare identità senza membership attiva
+
+      ## Steps
+      1. Applicare `requireActiveMembership` a tutte le route e derivare l'Organization soltanto da `request.activeMembership`.
+      2. Validare `name` e `objective` per la creazione; restituire `201 {project}` senza campi tecnici non previsti.
+      3. Restituire il dettaglio con `{project, workspace, link}`, usando `null` per Workspace/link non ancora collegati e `404 project_not_found` fuori Organization.
+      4. Validare `{name, remoteUrl, defaultRef}` per il link; mappare la prima creazione a `201`, il replay idempotente a `200` e `WorkspaceLinkConflictError` a `409 workspace_link_conflict`.
+      5. Provare che richieste anonime/invitate ricevono `401`, che un collaborator attivo può creare e collegare e che payload con Organization contraffatta non possono attraversare il contratto.
+
+      ## Verify
+      - Run: `npm --prefix control run test:integration -- project-http`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint`
+      - Expect: gli status e gli error code pubblici sono esatti, il response body mantiene le identità separate e tutti i test HTTP Control preesistenti restano verdi.
+
+      ## Done
+      - [ ] AC-1 — Admin e collaborator attivi ricevono `201` creando nome e obiettivo; utenti senza membership attiva ricevono `401`.
+      - [ ] AC-2 — GET e POST restituiscono Project, Workspace e link distinti senza fidarsi dell'Organization client.
+      - [ ] AC-3 — Il conflitto pubblico è `409 workspace_link_conflict` e il replay identico è `200` senza duplicati.
+
+      ## Blockers
+      TASK-02 fornisce servizio, repository ed errori di dominio.
+    ref: TASK-03
+  - id: TASK-04
+    title: Costruire il percorso web Product accessibile
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Permettere a un membro attivo di creare il Project, collegare il Workspace e leggere le due identità distinte nella pagina di dettaglio.
+
+      ## Read
+      - `docs/mockups/US-009/index.html`, `shared.css`, `app.js` — gerarchia e stati del mockup approvato
+      - `control/src/web/router.tsx` — routing e bootstrap correnti
+      - `control/src/web/layouts/control-shell.tsx` — navigazione, active state e semantica shell
+      - `control/src/web/api/client.ts` — tipi, request wrapper ed error mapping
+      - `control/src/web/pages/members.tsx` e `control/test/web/setup-members-audit.test.tsx` — form, annunci, focus e test component
+
+      ## Change
+      - `control/src/web/api/client.ts` — tipi e metodi Project/Workspace/link più messaggi `project_not_found` e `workspace_link_conflict`
+      - `control/src/web/router.tsx` — route `/projects/new` e `/projects/:projectId`, parse dell'ID e navigazione preservata
+      - `control/src/web/layouts/control-shell.tsx` — sezione Product/Project con `aria-current` senza degradare Membri/Audit
+      - `control/src/web/pages/project.tsx` — form creazione, form link e dettaglio con regioni nominate distinte
+      - `control/src/web/styles.css` — stili responsive/accessibili derivati dal mockup, con focus e stati testuali
+      - `control/src/server/app.ts` — fallback SPA per le due route Product
+      - `control/test/web/project.test.tsx` — interaction test del flusso e degli oracoli visivi/accessibili
+      - Non implementare portfolio, clone/sync, credential, più link, processi o board
+
+      ## Steps
+      1. Aggiungere tipi client che rendono impossibile confondere `Project`, `Workspace` e `ProjectWorkspaceLink`; inoltrare solo nome/obiettivo e nome/remoto/ref.
+      2. Implementare `/projects/new` con label esplicite, validazione, submit e navigazione al dettaglio usando l'ID restituito.
+      3. Nel dettaglio caricare il Project e mostrare sempre la regione “Project”; se non collegato mostrare il form Workspace, altrimenti la regione “Workspace collegato”.
+      4. Mostrare ID e stato testuale in entrambe le regioni e lo stato del link separatamente; dopo successo aggiornare dal response autorevole.
+      5. Su `409` mantenere il link esistente visibile, mostrare `role=alert`, spostare il focus al messaggio e non creare card ottimistiche; usare `role=status` per successo/caricamento.
+      6. Testare con user-event creazione, link, replay/conflitto, regioni/label, navigazione e tastiera; i mock devono restituire il contratto reale, non sostituire gli oracoli di pagina.
+
+      ## Verify
+      - Run: `npm --prefix control run test:web -- project`
+      - Run: `npm --prefix control run typecheck && npm --prefix control run lint && npm --prefix control run build`
+      - Expect: i test osservano nome/obiettivo, regioni Project/Workspace, ID e stati distinti, alert di conflitto e focus; build e diagnostica Control restano verdi.
+
+      ## Done
+      - [ ] AC-1 — Il form crea un Project con nome e obiettivo e apre il dettaglio.
+      - [ ] AC-2 — I tipi e la pagina non fondono identità o stati di Project, Workspace e link.
+      - [ ] AC-3 — Il conflitto è annunciato senza sostituire o duplicare il Workspace corrente nella UI.
+      - [ ] AC-4 — La pagina mostra chiaramente la regione “Workspace collegato” con nome, remoto, ref, ID e stato testuale.
+
+      ## Blockers
+      TASK-03 fornisce il contratto HTTP; i mockup US-009 fissano gerarchia e copy.
+    ref: TASK-04
+  - id: TASK-05
+    title: Dimostrare il flusso Project–Workspace nel browser reale
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Produrre evidenza Playwright completa per creazione, identità separate e rifiuto non mutante dei collegamenti incompatibili.
+
+      ## Read
+      - `test/e2e/control-organization.spec.ts` — login/bootstrap e stile degli oracoli US-008
+      - `test/e2e/control-fixture.mjs` — server OIDC, PostgreSQL, reset e query helper
+      - `playwright.config.ts` e `package.json` — scope corrente della suite browser
+      - `control/src/web/pages/project.tsx` e `control/src/modules/product/http.ts` — superficie reale da attraversare
+
+      ## Change
+      - `test/e2e/control-fixture.mjs` — migrazioni complete, reset delle tabelle Product e helper di conteggio/read-only senza bypassare l'applicazione per le azioni utente
+      - `test/e2e/control-project.spec.ts` — scenari AC-1..AC-4 con browser, API e database reali
+      - `playwright.config.ts` — inclusione esplicita degli spec Control esistenti e nuovi
+      - `package.json` — `test:control:e2e` esegue tutti gli spec `control-*.spec.ts` dopo la build
+      - Non rimuovere o indebolire gli scenari US-008; non usare solo request API come prova di AC-4
+
+      ## Steps
+      1. Riutilizzare login/bootstrap reale e creare un Project dal form, attendendo la response `201` e il cambio route.
+      2. Collegare il Workspace dalla UI e verificare nel main le regioni nominate, nome/obiettivo, remoto/ref, ID e stati distinti.
+      3. Provare un remoto diverso sul Project già collegato e lo stesso remoto su un secondo Project; richiedere `409 workspace_link_conflict` e alert visibile.
+      4. Interrogare API e helper DB dopo i rifiuti per provare che il link originario è invariato e che Workspace/link non sono duplicati o orfani.
+      5. Eseguire anche i due scenari US-008 nella stessa configurazione per proteggere shell, bootstrap, ruoli, autorizzazione e audit.
+
+      ## Verify
+      - Run: `npm run test:control:e2e`
+      - Expect: Chromium completa tutti gli scenari US-008 e US-009; l'evidenza US-009 attraversa UI/API/PostgreSQL e prova `201`, `409`, conteggi invariati e regioni visibili.
+
+      ## Done
+      - [ ] AC-1 — Playwright crea il Project da browser e vede nome e obiettivo persistiti.
+      - [ ] AC-2 — Playwright osserva ID e stati separati di Project, Workspace e link.
+      - [ ] AC-3 — Due conflitti incompatibili mostrano l'alert e lasciano invariati link e conteggi.
+      - [ ] AC-4 — L'oracolo browser richiede che “Workspace collegato” e i suoi dettagli siano visibili, non soltanto che la chiamata API riesca.
+
+      ## Blockers
+      TASK-03 fornisce API reali e TASK-04 fornisce il percorso browser.
+    ref: TASK-05
+  - id: TASK-06
+    title: Allineare la Wiki al dominio Product osservato
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+    body: |-
+      ## Objective
+      Documentare il confine Project–Workspace soltanto dopo che schema, API, UI e test ne forniscono evidenza nel repository.
+
+      ## Read
+      - `docs/wiki/decisions/project-process-run-model.md` — decisione accettata da materializzare, non duplicare
+      - `docs/wiki/decisions/control-foundation.md` — confini del modular monolith Control
+      - `docs/wiki/architecture/context-map.md`, `overview.md`, `engineering/code-map.md`, `operations/development.md` — proiezioni correnti
+      - `skills/archetipo-wiki/references/wiki-contract.md` — frontmatter, marker, source evidence e stato `generated`
+      - Codice e test prodotti da TASK-01..TASK-05 — unica evidenza ammessa per dichiarare capacità corrente
+
+      ## Change
+      - `docs/wiki/domains/project-and-workspace.md` — nuova pagina domain `generated` con ownership, invarianti, termini, codice e test
+      - `docs/wiki/decisions/project-process-run-model.md` — nuove source e verifica della materializzazione Control, senza cambiare retroattivamente la decisione
+      - `docs/wiki/decisions/control-foundation.md`, `docs/wiki/architecture/context-map.md`, `docs/wiki/overview.md`, `docs/wiki/engineering/code-map.md`, `docs/wiki/operations/development.md` — aggiornamenti bounded e catalogo della capacità osservata
+      - `docs/wiki/index.md` e `docs/wiki/log.md` — rigenerazione/catalogazione richiesta dal workflow Wiki
+      - Non promuovere automaticamente il dominio a `reviewed` o bounded context; non dichiarare multi-workspace, sync o Process Instance implementati
+
+      ## Steps
+      1. Eseguire l'analisi Wiki affected sul diff Product e riconciliare la pagina nuova con le pagine dichiarate nell'impatto del piano.
+      2. Creare `domains/project-and-workspace` con Project, Workspace e link separati, limiti one-to-one temporanei, ownership Control e conflitto idempotente documentati da path reali.
+      3. Aggiornare la decisione esistente con schema/test come verifica, mantenendo l'alternativa Project=repository respinta e dichiarando fuori scope il multi-workspace.
+      4. Aggiornare context map, overview, code map, operations e fondazione Control senza presentare intento PRD come capacità osservata.
+      5. Rigenerare catalogo, lasciare le pagine cambiate `generated` e validare struttura/copertura; l'approvazione resta al review umano.
+
+      ## Verify
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run: `archetipo wiki search "Project Workspace"`
+      - Expect: validazione `data.ok=true`, la ricerca trova il dominio e la decisione aggiornata, tutte le source puntano a file reali e nessuna pagina viene marcata `reviewed` dal task.
+
+      ## Done
+      - [ ] AC-2 — La Wiki descrive identità, stato e ownership distinti di Project, Workspace e link con evidenza di codice/test.
+      - [ ] AC-3 — La Wiki registra idempotenza, conflitti, vincoli MVP e assenza di duplicati senza promettere funzionalità fuori scope.
+      - [ ] Le pagine previste da `wiki_impact` sono create/aggiornate e restano pronte per la review umana.
+
+      ## Blockers
+      TASK-01..TASK-05 devono fornire evidenza reale; non documentare anticipatamente file o comportamento inesistenti.
+    ref: TASK-06
+  - id: TASK-07
+    title: Eseguire il gate completo e provare la chiusura dei task
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+    body: |-
+      ## Objective
+      Confermare che l'intera slice US-009 soddisfa gli AC senza regressioni Control e che nessun task resta TODO prima della richiesta di review.
+
+      ## Read
+      - `.archetipo/plans/US-009-plan.yaml` — piano, task e comandi autorevoli
+      - `control/package.json`, `package.json`, `playwright.config.ts` — suite effettive
+      - `.github/workflows/ci.yml` e `AGENTS.md` — gate repository applicabili
+      - Tutti i file modificati da TASK-01..TASK-06 — confine del controllo diagnostico e Wiki
+
+      ## Change
+      - Solo correzioni minime nei file già in scope se un gate rivela un difetto; non aggiungere capability o refactor estranei
+      - Artefatti di test temporanei restano fuori dal commit
+
+      ## Steps
+      1. Eseguire typecheck, lint e build Control; correggere ogni diagnostica nei file modificati senza sopprimerla.
+      2. Eseguire l'intera suite Control unit/component/integration e tutti gli spec Playwright Control.
+      3. Eseguire self-host smoke e `npm test` per proteggere deployable e Core; eseguire la validazione Wiki bootstrap.
+      4. Verificare che AC-1..AC-4 abbiano gli oracoli dichiarati nella mappa e che il mockup non sia stato importato nel bundle di produzione.
+      5. Da `data.project_root`, marcare TASK-07 `DONE` soltanto dopo i gate, poi eseguire `archetipo spec show US-009` e confermare che tutti TASK-01..TASK-07 siano `DONE` e nessuno sia `TODO`.
+      6. Solo dopo quella rilettura senza TODO è consentito eseguire `archetipo spec review US-009`; in caso contrario fermarsi e completare il task residuo.
+
+      ## Verify
+      - Run: `npm run typecheck:control && npm run lint:control && npm run build:control`
+      - Run: `npm run test:control && npm run test:control:e2e && npm run test:control:self-host`
+      - Run: `npm test`
+      - Run: `archetipo wiki validate --profile bootstrap`
+      - Run from `/Users/stefanoleli/Project/ARchetipo`: `archetipo spec show US-009`
+      - Expect: tutti i comandi terminano con exit 0, la Wiki restituisce `data.ok=true`, gli scenari browser provano AC-1..AC-4 e l'envelope finale mostra sette task `DONE` e zero `TODO` prima di qualsiasi review.
+
+      ## Done
+      - [ ] AC-1 — Creazione Project dimostrata da integration, component e browser.
+      - [ ] AC-2 — Identità e stati separati dimostrati da schema, API, UI, browser e Wiki.
+      - [ ] AC-3 — Conflitti e concorrenza non creano duplicati o righe orfane.
+      - [ ] AC-4 — La pagina reale mostra il Workspace collegato con dettagli accessibili.
+      - [ ] Tutti i gate Control/Core/Wiki sono verdi e `archetipo spec show US-009` non contiene task TODO.
+
+      ## Blockers
+      TASK-01, TASK-02, TASK-03, TASK-04, TASK-05 e TASK-06 devono essere DONE.
+    ref: TASK-07

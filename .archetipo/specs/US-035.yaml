@@ -1,0 +1,52 @@
+schema: archetipo/spec/v2
+code: US-035
+title: Preparare e decidere la review con un gate umano
+epic:
+  code: EP-006
+  title: Esecuzione locale e ciclo di delivery
+priority: MEDIUM
+points: 5
+status: DONE
+blocked_by:
+  - US-034
+scope: MVP
+body: |-
+  #### US-035: Preparare e decidere la review con un gate umano
+
+  **Epic:** EP-006 | **Priorità:** MEDIUM | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** US-034
+
+  **User Story**
+  Come responsabile dell'accettazione di una spec in `REVIEW`,
+  voglio far preparare al provider le evidenze e conservare a una persona il verdetto finale,
+  così da beneficiare dell'agente senza delegargli implicitamente l'approvazione del prodotto.
+
+  **Dimostrazione**
+  Partendo da una spec in `REVIEW`, il revisore avvia `Rivedi` e osserva criteri di accettazione, modifiche, test, documentazione ed eventuali problemi preparati dal provider. La spec resta `REVIEW` finché una persona non sceglie; con approvazione passa a `DONE`, con richiesta di modifiche torna allo stato previsto dal processo con feedback strutturato. Un esito del provider da solo non chiude la spec.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — Il provider prepara un dossier di review collegato alla spec senza applicare il verdetto finale.
+  - [ ] AC-2 — La spec resta `REVIEW` finché una persona autorizzata non sceglie approvazione o richiesta di modifiche.
+  - [ ] AC-3 — L'approvazione umana porta la spec a `DONE` e conserva il verdetto con l'esecuzione che ha preparato le evidenze.
+  - [ ] AC-4 — La richiesta di modifiche porta la spec allo stato previsto dal Template e conserva feedback strutturato per il rework.
+  - [ ] AC-5 — Un errore del provider lascia la spec in `REVIEW` e rende visibile il motivo senza produrre un verdetto implicito.
+
+  **Fuori ambito**
+  Accettazione autonoma, policy di approvazione multilivello, firme legali e riapertura di una spec già `DONE`.
+
+  ## Contesto Wiki
+  - `architecture/context-map`
+  - `decisions/execution-provider-boundary`
+  - `decisions/workspace-process-template`
+  - `engineering/code-map`
+history:
+  - status: TODO
+    at: "2026-08-16T22:52:57Z"
+  - status: PLANNED
+    at: "2026-08-20T02:32:25Z"
+  - status: IN PROGRESS
+    at: "2026-08-20T02:33:46Z"
+  - status: REVIEW
+    at: "2026-08-20T07:12:14Z"
+  - status: DONE
+    at: "2026-08-20T07:12:34Z"

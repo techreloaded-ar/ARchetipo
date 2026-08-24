@@ -1,0 +1,621 @@
+schema: archetipo/plan/v2
+spec_code: US-050
+body: |-
+  # US-050: Eseguire una run nel workspace aperto e non nella directory di lancio — Piano di implementazione
+
+  **Prodotto da:** Team di Planning ARchetipo
+  **Data:** 2026-08-21
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-006 — Esecuzione locale e ciclo di delivery
+  **Priorità:** HIGH | **Punti:** 3
+
+  **User Story**
+  Come utilizzatore di ARchetipo che lavora su più workspace,
+  voglio che ogni run agisca sul workspace aperto nella UI,
+  così da non vedere un'azione modificare la cartella da cui ho lanciato il viewer invece di quella su cui sto lavorando.
+
+  **Criteri di accettazione**
+  - AC-1 — Un'azione avviata sul workspace aperto esegue nella project root di quel workspace, anche quando differisce dalla directory da cui il viewer è stato lanciato.
+  - AC-2 — Dopo l'apertura di un altro workspace, la prima azione avviata esegue nella project root del workspace appena aperto, senza riavviare il processo.
+  - AC-3 — Una run già in corso quando viene aperto un altro workspace continua a eseguire nella project root con cui è stata avviata.
+  - AC-4 — Se al momento dell'avvio la project root del workspace non è raggiungibile, l'azione è rifiutata con un messaggio che nomina la directory e nessuna esecuzione viene creata.
+
+  **Fuori ambito**
+  Il cambio di workspace dalla home quando nessuno è aperto, la presenza permanente dell'identità del workspace nell'interfaccia, la shell a due colonne con elenco laterale dei workspace e la conversazione affiancata alla board.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Il difetto ha un'unica causa, verificata nel codice: i provider locali risolvono la directory di lavoro con `os.Getwd` (`cli/internal/execution/claude/provider.go:153`, `cli/internal/execution/codex/provider.go:142`, valore di default di `Options.WorkingDir`, che nessun chiamante di produzione valorizza — vedi `defaultExecutionRegistry()` in `cli/internal/cli/root.go:70-74`). Il registry dei provider è deliberatamente condiviso fra le `workspaceSession` (commento in `cli/internal/web/server.go`), quindi dopo un cambio di workspace il processo dell'agente continua a partire nella cwd del processo `archetipo view`, cioè nella directory di lancio. Tutto il resto del viewer è già corretto: `readConfigState`, lo store, il connettore e i mockup sono già risolti su `ws.cfg.ProjectRoot`.
+
+  L'approccio è quindi rendere la radice di lavoro un **dato della richiesta di esecuzione**, non un fatto del processo:
+
+  - `execution.Request` guadagna `WorkingDir` e `execution.Execution` guadagna lo stesso campo persistito (`working_dir`, `omitempty`, così i record scritti prima restano deserializzabili).
+  - `execution.Service` guadagna la radice del workspace che serve, passata al costruttore: `NewService(registry, store, newID, now, workingRoot)`. Il `Service` è già per-workspace (è costruito con lo store di quel workspace in `cli/internal/web/session.go:82` e in `cli/internal/cli/execution_cmd.go:166`), quindi la radice appartiene esattamente allo stesso oggetto. Un costruttore che rifiuta una radice vuota rende impossibile costruire un servizio che non sa dove esegue: è la classe di difetto che questa spec chiude.
+  - `Service.start` timbra la radice sul record **e** sulla `Request` che la continuation dispaccia. La `Request` è costruita al momento dell'avvio e catturata dalla closure della continuation: una run già partita porta con sé la sua radice e non può essere riscritta da un cambio di workspace successivo (AC-3 per costruzione, non per convenzione).
+  - I provider `claude` e `codex` usano `req.WorkingDir` quando è valorizzata e ricadono su `p.workingDir()` quando è vuota, così ogni chiamante che non la valorizza si comporta esattamente come oggi.
+  - Le due rotte di avvio del viewer (`handleRunSpecAction`, `handleRunWorkspaceAction`) verificano per prima cosa che la project root della sessione sia raggiungibile, riusando `workspace.Probe` e `switchReason` — le stesse funzioni con cui `SwitchWorkspace` già rifiuta un workspace irraggiungibile e con le stesse tre parole per le tre cause. Il controllo sta **prima** della lettura della spec dal connettore, perché altrimenti fallirebbe prima un errore interno che non nomina la directory (AC-4).
+  - Il record già viaggia verso il browser (`writeJSON(w, http.StatusCreated, started)` e la rotta di polling `GET /api/execution/{id}`), quindi il pannello di esecuzione mostra la directory di lavoro come una voce in più della riga meta accanto a `provider` e `model`, senza nuove rotte e senza nuovi elementi di layout.
+
+  ### Decisioni architetturali
+
+  La scelta materiale è **dove vive la conoscenza della radice di lavoro**, e tocca il modello dei dati persistiti (il record di esecuzione) e una politica trasversale usata da tutte le capability. Il Wiki è disabilitato in questo workspace (`wiki.enabled: false`), quindi la decisione è registrata qui e in nessuna pagina.
+
+  **Contesto.** Il registry dei provider deve sopravvivere al cambio di workspace (i browser connessi restano collegati e il registry non dipende dalla project root), mentre la directory in cui l'agente deve essere avviato dipende dal workspace aperto in quel momento.
+
+  **Opzione scelta — la radice viaggia nella richiesta, timbrata dal `Service` del workspace.** Un solo campo, una sola sorgente di verità, congelata all'avvio. I provider restano senza stato e condivisibili; la CLI (`archetipo execution run`) passa `cfg.ProjectRoot`, che coincide già con la sua cwd (il flag `-C` fa un `chdir` reale in `root.go`), quindi il suo comportamento non cambia di una riga.
+
+  **Alternativa valutata — un registry di provider per sessione**, ricostruito a ogni `SwitchWorkspace` con `Options.WorkingDir` chiuso sulla nuova radice. Scartata: contraddice la separazione documentata in `server.go` fra ciò che appartiene alla sessione e ciò che deve sopravviverle, moltiplica gli oggetti provider per numero di aperture, e lascia comunque irrisolto AC-3 — un provider ricostruito mentre una run è in volo non dice nulla su dove quella run stava già eseguendo, perché la run tiene un puntatore al provider vecchio solo per accidente e non per contratto.
+
+  **Alternativa valutata — un `os.Chdir` del processo a ogni apertura di workspace.** Scartata senza appello: la cwd è globale al processo, il viewer serve richieste concorrenti e una run in volo la vedrebbe cambiare sotto di sé, che è esattamente il difetto in forma peggiore.
+
+  **Tradeoff accettato.** `NewService` cambia firma (due chiamanti di produzione, quattro nei test). È un costo una tantum e in cambio non esiste più un modo di costruire un servizio che non sa dove esegue.
+
+  **Intento di verifica.** La radice effettivamente usata è osservata dove conta: sulla `Request` che il provider riceve (test Go), sulla directory in cui il processo dell'agente viene realmente avviato (`cmd.Dir`, tramite lo `Starter` finto nei test di provider e tramite il binario finto nello smoke e2e), e sul record persistito che il browser legge.
+
+  ### Non-goal
+
+  - La risoluzione del worktree per-spec: gli AC parlano esplicitamente di "project root del workspace" e lo skill dice all'agente di lavorare sotto `data.workdir`. La radice del processo resta la project root, come oggi.
+  - La sonda di disponibilità (`Provider.Available`) continua a usare `p.workingDir()`: la sua firma appartiene all'interfaccia `execution.AvailabilityReporter`, esegue solo `--version` e AC-4 è già coperto dal controllo di raggiungibilità che sta prima di essa.
+  - Nessuna modifica al connettore, allo store, ai worktree o alle rotte di apertura del workspace.
+
+  ---
+
+  ## Baseline
+
+  Misurata prima di scrivere il piano, dalla radice del repository.
+
+  | Controllo | Risultato prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | nessun output | ogni task che tocca file Go deve lasciarlo senza output |
+  | `cd cli && go vet ./...` | nessun problema | atteso verde a ogni task |
+  | `cd cli && go build ./...` | compila | atteso verde a ogni task |
+  | `cd cli && go test ./...` | 1678 test passati in 28 package | atteso verde; nessun fallimento preesistente da tollerare |
+  | `npm run test:web` | 49 test passati, 0 falliti | atteso verde |
+  | `npm run test:view-open-workspace-smoke` | PASS (AC-1..AC-5 dello smoke) | è il template dello smoke nuovo e resta verde come regressione |
+  | `golangci-lint run --timeout 5m ./...` | **non eseguibile: `golangci-lint` non è installato su questa macchina** | prerequisito d'ambiente, non un fallimento del codice: installarlo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` prima del gate finale. Se l'installazione non è possibile, il gate lo dichiara esplicitamente invece di far finta di averlo eseguito. |
+
+  Prerequisiti d'ambiente rilevati: Go installato (richiesto da tutti gli smoke, che compilano la CLI in `test/e2e/.bin/`), Node installato, `golangci-lint` assente. Nessun file toccato dal piano presenta diagnostiche preesistenti di compilatore o vet.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato iniziale / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | viewer costruito su una project root `B` diversa dalla cwd del test; provider finto che registra la `Request` ricevuta | integrazione Go (`cli/internal/web`) | la `Request` che il provider riceve porta `WorkingDir == B`, e il record persistito letto da `GET /api/execution/{id}` porta `working_dir == B` | TASK-07 |
+  | AC-1 | provider `claude` e `codex` con `Options.WorkingDir` che restituisce `A` e `Request.WorkingDir == B` | unit Go (`execution/claude`, `execution/codex`) | lo `Starter` finto riporta `startedIn() == B` (è il `cmd.Dir` reale del processo), non `A` | TASK-04 |
+  | AC-1 | due workspace reali `A` e `B` su disco, `archetipo view` lanciato in `A`, `claude` finto come provider di default | e2e (smoke Node sul viewer reale) | il binario finto riporta al control server `cwd == B` e gli artefatti scritti dalla run compaiono sotto `B`, mentre l'albero di `A` è identico prima e dopo | TASK-09 |
+  | AC-2 | server avviato su `A`, poi `POST /api/workspaces/{id}/open` su `B` sullo **stesso** PID | integrazione Go + e2e | la prima `Request` dispacciata dopo lo switch porta `WorkingDir == B`; nello smoke, il PID del viewer è identico prima e dopo e il processo dell'agente parte in `B` | TASK-07, TASK-09 |
+  | AC-3 | una run avviata su `B` e tenuta aperta (il provider finto blocca dentro `Execute`), poi apertura di `A` mentre la run è in volo | integrazione Go + e2e | la `Request` catturata dalla run in volo continua a riportare `WorkingDir == B` dopo lo switch, e il processo dell'agente non cambia directory: nello smoke la seconda parte della conversazione arriva allo stesso processo, che riporta ancora `cwd == B`, e la run si chiude scrivendo sotto `B` | TASK-07, TASK-09 |
+  | AC-4 | workspace aperto e poi rinominato sul filesystem, sessione ancora puntata al vecchio percorso | integrazione Go + e2e | `POST /api/spec/{code}/execution` e `POST /api/workspace/execution` rispondono `409` con un messaggio che contiene il percorso della directory; `store.ListBySpec` e la directory `.archetipo/executions/` non hanno nessun record nuovo; lo stato della spec è invariato | TASK-06, TASK-09 |
+
+  Ogni criterio ha almeno un oracolo diretto sull'esito specificato: la directory in cui il processo viene realmente avviato, non un valore di configurazione che lo rappresenta. Il provider finto usato nei test del viewer registra la `Request` così com'è arrivata e non maschera il campo verificato; i test dei provider passano invece per lo `Starter`, cioè per il vero `cmd.Dir`.
+
+  ---
+
+  ## Strategia di test
+
+  La strategia segue la disciplina già in uso nel repository per le storie del viewer (US-046, US-049): test Go deterministici per il contratto e le rotte, uno smoke Node che esercita il viewer reale con un binario agente finto per la dimostrazione end-to-end.
+
+  - **Contratto (`cli/internal/execution`)**: la radice arriva sulla `Request` e sul record, il costruttore rifiuta una radice vuota, il percorso `Run`/`RunIdempotent` della CLI timbra la stessa radice del percorso `Start` del viewer.
+  - **Provider (`execution/claude`, `execution/codex`)**: la radice della richiesta vince sul fallback, e una richiesta senza radice ricade sul fallback — così ogni chiamante esistente resta invariato. L'oracolo è la directory in cui lo `Starter` avvia il processo, cioè il `cmd.Dir` reale. I due provider sono tenuti allo stesso identico asserto: si comportano uguale o è un difetto.
+  - **Viewer (`cli/internal/web`)**: la sessione timbra la propria project root; dopo `SwitchWorkspace` la prima esecuzione timbra la nuova; una run in volo conserva la sua; una project root irraggiungibile rifiuta l'avvio senza creare record e senza muovere la spec, su entrambe le rotte di avvio.
+  - **Regressione**: l'intera suite `go test ./...`, `npm run test:web` e gli smoke del viewer già esistenti che passano dalle stesse rotte (`test:view-open-workspace-smoke`, `test:view-local-run-smoke`, `test:view-run-model-smoke`).
+
+  ### Test e2e — simulazione utente
+
+  **Framework:** harness Node del repository (`test/e2e/*.mjs`), CLI compilata dai sorgenti, `archetipo view` reale, agente sostituito da `test/e2e/support/fake-claude.mjs`.
+  **Video dimostrativo:** non atteso (`e2e.record_demo_video: false` nella configurazione del workspace). La decisione finale su registrare o saltare resta di `archetipo-review`.
+
+  | Scenario | Flusso utente |
+  |---|---|
+  | La run segue il workspace aperto | Il viewer viene lanciato in `A`; dalla UI si registra e si apre `B`; si avvia l'azione `plan` su una spec di `B`; il processo dell'agente parte in `B`, il record riporta `working_dir = B`, gli artefatti compaiono sotto `B` e l'albero di `A` resta identico |
+  | La run in volo non segue lo switch | Con la run su `B` ancora aperta si riapre `A`; si prosegue la conversazione della run; il processo è lo stesso, la sua directory è ancora `B` e la chiusura della run scrive sotto `B` |
+  | La radice sparita rifiuta l'avvio | La directory di `B` viene rinominata; l'avvio di una nuova azione risponde `409` con un messaggio che nomina la directory e la directory rinominata non contiene nessun record di esecuzione nuovo |
+
+  ### Deroga al browser e2e
+
+  **Motivo:** il percorso di accettazione attraversa un confine di processo e di filesystem, non una logica di rendering. Gli oracoli degli AC — la directory in cui il processo dell'agente viene avviato, il record persistito, l'assenza di un record dopo un rifiuto — sono tutti osservabili sul contratto HTTP e sul filesystem, e lo sono in modo più diretto di quanto lo sarebbero attraverso un browser. Il repository non ha (e non ha mai avuto) un framework browser: ogni storia del viewer è dimostrata con questo harness, che esercita il viewer reale, il connettore reale, il provider reale e il vero `cmd.Dir` del processo. Introdurre Playwright qui aggiungerebbe un livello che non può osservare nulla di ciò che gli AC affermano.
+  **Livello di evidenza usato al suo posto:** smoke Node deterministici sul viewer reale (nessuno sleep arbitrario: ogni attesa interroga una rotta del viewer o il control server del binario finto) più i test di integrazione Go delle rotte.
+  **Superficie UI non coperta automaticamente:** la voce "directory di lavoro" nella riga meta del pannello di esecuzione è un'interpolazione diretta del campo `working_dir` già asserito, senza logica propria oltre all'escape; è la stessa scelta fatta per `model_choice` in US-049 e resta osservata nella dimostrazione umana.
+
+  ---
+
+  _Piano prodotto da ARchetipo Planning — 2026-08-21_
+tasks:
+  - id: TASK-01
+    title: Portare la radice di lavoro nel contratto di esecuzione e nel Service
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      `execution.Request` e `execution.Execution` portano la directory di lavoro del workspace, e `execution.Service` la timbra su ogni avvio a partire dalla project root con cui è stato costruito.
+
+      ## Read
+
+      - `cli/internal/execution/types.go` — `Request` (riga ~74) e `Execution` (riga ~115), incluso il commento su `ModelChoice` che spiega perché un campo nuovo è un puntatore/`omitempty`.
+      - `cli/internal/execution/service.go` — `Service`, `NewService`, `start` (costruzione di `started` e di `request`, applicazione delle `StartOption`), `run`, `RunIdempotent`.
+      - `cli/internal/execution/file_store.go:17-23` — `NewFileStore`: come una radice viene normalizzata con `filepath.Abs`.
+      - `cli/internal/web/session.go:75-90` — `newWorkspaceSession`, unico punto in cui il viewer costruisce il servizio.
+      - `cli/internal/cli/execution_cmd.go:160-175` — unico punto in cui la CLI costruisce il servizio.
+      - `cli/internal/execution/service_test.go` — le 4 invocazioni di `NewService` che dovranno compilare.
+
+      ## Change
+
+      - `cli/internal/execution/types.go`: aggiungere a `Request` il campo `WorkingDir string \`json:"working_dir,omitempty"\`` e a `Execution` il campo `WorkingDir string \`json:"working_dir,omitempty"\``. Commentare che è la directory in cui la run è stata avviata, congelata all'avvio, e che `omitempty` tiene deserializzabili i record scritti prima.
+      - `cli/internal/execution/service.go`: `Service` guadagna il campo `workingRoot string`; `NewService` guadagna un quinto parametro `workingRoot string`, rifiuta con errore una radice vuota o composta di soli spazi e la normalizza con `filepath.Abs` + `filepath.Clean`; `start` imposta `WorkingDir: s.workingRoot` nel literal di `started` (prima dell'applicazione delle `StartOption`) e `WorkingDir: started.WorkingDir` nel literal di `Request`.
+      - `cli/internal/web/session.go`: passare `cfg.ProjectRoot` a `NewService`.
+      - `cli/internal/cli/execution_cmd.go`: passare `cfg.ProjectRoot` a `NewService`.
+      - `cli/internal/execution/service_test.go`: aggiornare le 4 invocazioni esistenti al nuovo parametro (usare `t.TempDir()`), senza cambiare ciò che quei test asseriscono.
+      - Non-goal: non toccare i provider (TASK-03), non toccare le rotte del viewer (TASK-05), non introdurre nessuna risoluzione di worktree, non aggiungere `StartOption` nuove.
+
+      ## Steps
+
+      1. Aggiungere i due campi in `types.go` con i loro commenti.
+      2. Aggiungere `workingRoot` a `Service` e il parametro a `NewService`, con la validazione (radice vuota → errore, coerente con lo stile degli altri errori del costruttore) e la normalizzazione via `filepath.Abs`.
+      3. In `start`, timbrare la radice sul record e derivarla sulla `Request` dal record, così che esista una sola sorgente di verità.
+      4. Aggiornare i due chiamanti di produzione con `cfg.ProjectRoot`.
+      5. Aggiornare le invocazioni nei test esistenti perché compilino.
+      6. `gofmt -w` sui file toccati.
+
+      ## Verify
+
+      - Eseguire dalla radice del repository: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./internal/execution/... ./internal/web/... ./internal/cli/...`
+      - Expect: `gofmt` senza output, `vet` senza problemi, build pulita e tutti i test passanti — la baseline registrata è verde su tutta la suite, quindi qui non è ammesso nessun fallimento nuovo.
+
+      ## Done
+
+      - [ ] `execution.Request` ed `execution.Execution` espongono `working_dir` e i record scritti in precedenza restano deserializzabili.
+      - [ ] `NewService` rifiuta una radice vuota e nessun chiamante di produzione può costruire un servizio che non sa dove esegue.
+      - [ ] AC-1 (parte contrattuale) — la `Request` prodotta da `Service.start` porta la project root del workspace servito, non la cwd del processo.
+      - [ ] AC-3 (parte contrattuale) — la `Request` è costruita all'avvio e catturata dalla continuation, quindi non può essere riscritta dopo.
+
+      ## Blockers
+
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test del Service sulla radice timbrata su richiesta e record
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      I test di `execution.Service` provano che la radice del workspace arriva sulla `Request` e sul record persistito, per entrambi i percorsi (`Start` del viewer e `Run`/`RunIdempotent` della CLI), e che una radice vuota è rifiutata.
+
+      ## Read
+
+      - `cli/internal/execution/service_test.go` — provider finto già presente (quello che cattura la `Request`), helper di costruzione del servizio e stile degli asserti.
+      - `cli/internal/execution/service.go` — `start`, `run`, `RunIdempotent` come modificati da TASK-01.
+
+      ## Change
+
+      - `cli/internal/execution/service_test.go`: aggiungere test nuovi; non riscrivere quelli esistenti oltre all'adeguamento di firma già fatto in TASK-01.
+      - Non-goal: nessuna modifica al codice di produzione. Se un test non passa, il difetto è in TASK-01 e va corretto lì.
+
+      ## Steps
+
+      1. Se il provider finto del file non conserva già la `Request` ricevuta, estenderlo per registrarla (nient'altro).
+      2. Test "la radice del workspace arriva al provider": costruire il servizio con una radice `t.TempDir()`, avviare un'azione, asserire che la `Request` catturata porti esattamente quella radice e che il record restituito da `Start` porti lo stesso valore.
+      3. Test "il record persistito porta la radice": rileggere il record dallo store dopo la continuation e asserire `WorkingDir`.
+      4. Test "anche il percorso sincrono la timbra": ripetere l'asserto attraverso `Run` e attraverso `RunIdempotent`.
+      5. Test "una radice vuota è rifiutata": `NewService(..., "")` e `NewService(..., "   ")` restituiscono errore e nessun servizio.
+      6. Test "la radice è normalizzata": una radice passata con un `.` intermedio o senza pulizia arriva al provider in forma assoluta e pulita.
+      7. `gofmt -w` sul file toccato.
+
+      ## Verify
+
+      - Eseguire dalla radice del repository: `cd cli && gofmt -l . && go test ./internal/execution/ -run 'Service|WorkingDir|Working' -count=1 -v` e poi `go test ./internal/execution/...`
+      - Expect: i test nuovi passano e nessun test preesistente del package regredisce (baseline: package verde).
+
+      ## Done
+
+      - [ ] AC-1 — esiste un test che fallisce se la `Request` porta una directory diversa dalla project root con cui il servizio è stato costruito.
+      - [ ] AC-3 — esiste un test che prova che il valore sulla `Request` è quello dell'avvio, letto dal record chiuso dopo la continuation.
+      - [ ] Un servizio con radice vuota non è costruibile, e un test lo prova.
+
+      ## Blockers
+
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: I provider claude e codex avviano il processo nella radice della richiesta
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      I provider locali avviano il processo dell'agente nella directory portata dalla `Request`, ricadendo sul comportamento attuale solo quando quella directory è assente.
+
+      ## Read
+
+      - `cli/internal/execution/claude/provider.go` — `Options.WorkingDir` (riga ~109), `New` (riga ~143-155, il default `os.Getwd`), `prepare` (riga ~339-355), `openSession` e i punti in cui `dir` viene passato allo `Starter`.
+      - `cli/internal/execution/codex/provider.go` — gli stessi punti: `Options.WorkingDir` (riga ~98), `New` (riga ~132-145), `prepare` (riga ~232-253).
+      - `cli/internal/execution/claude/runner.go:28` e `cli/internal/execution/localrun/process.go:62-64` — `cmd.Dir = dir`: è la riga che rende la directory un fatto osservabile del processo.
+      - `cli/internal/execution/types.go` — `Request.WorkingDir` come introdotto da TASK-01.
+
+      ## Change
+
+      - `cli/internal/execution/claude/provider.go`: in `prepare`, risolvere la directory da `req.WorkingDir` quando la stringa ripulita non è vuota, altrimenti da `p.workingDir()`. Mantenere invariato il messaggio d'errore esistente per il fallimento del fallback.
+      - `cli/internal/execution/codex/provider.go`: la stessa identica modifica, con lo stesso ordine e la stessa formulazione, perché i due provider devono comportarsi allo stesso modo.
+      - Commentare in entrambi perché la richiesta vince: la directory è un dato del workspace che ha avviato la run, non un fatto del processo del viewer.
+      - Non-goal: non toccare `Provider.Available` (la sonda `--version` resta sul fallback: la sua firma appartiene a `execution.AvailabilityReporter` e AC-4 è coperto prima, dal controllo di raggiungibilità di TASK-05); non toccare il provider `arcipelago`, che non avvia processi locali; non cambiare `Options`.
+
+      ## Steps
+
+      1. In `claude/provider.go`, aggiungere la risoluzione della directory in `prepare` e verificare che sia l'unico punto da cui `openSession` riceve `dir`.
+      2. Ripetere in `codex/provider.go` mantenendo i due file simmetrici riga per riga.
+      3. `gofmt -w` sui file toccati.
+
+      ## Verify
+
+      - Eseguire dalla radice del repository: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./internal/execution/...`
+      - Expect: nessun output da `gofmt`, build pulita, package verde. I test esistenti dei provider (fra cui `TestWorkingDirectoryIsResolvedAtCallTime`, che non valorizza `WorkingDir` sulla richiesta) devono continuare a passare senza modifiche: è la prova che il fallback è preservato.
+
+      ## Done
+
+      - [ ] AC-1 — con una `Request` che porta una directory, entrambi i provider avviano il processo in quella directory.
+      - [ ] Una `Request` senza directory lascia il comportamento identico a prima, e i test preesistenti lo dimostrano senza essere stati toccati.
+
+      ## Blockers
+
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test dei provider sulla directory reale del processo avviato
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      Per entrambi i provider locali un test prova, guardando la directory in cui il processo viene realmente avviato, che la radice della richiesta vince sul fallback e che l'assenza di radice ricade sul fallback.
+
+      ## Read
+
+      - `cli/internal/execution/claude/provider_test.go:411-438` — `TestWorkingDirectoryIsResolvedAtCallTime`: `newTestProvider`, `installSkillIn`, `fake.startedIn()` e `runner.snapshot()`, cioè gli oracoli già disponibili sulla directory reale.
+      - `cli/internal/execution/claude/provider_test.go:140-170` — `testRequest` e come si costruisce una richiesta di prova.
+      - `cli/internal/execution/codex/provider_test.go:130-160` e `:300-330` — gli equivalenti per codex.
+
+      ## Change
+
+      - `cli/internal/execution/claude/provider_test.go` e `cli/internal/execution/codex/provider_test.go`: aggiungere per ciascuno due test, con gli stessi asserti nei due file.
+      - Non-goal: nessuna modifica al codice di produzione; non riscrivere i test esistenti.
+
+      ## Steps
+
+      1. Test "la directory della richiesta vince": costruire il provider con `Options.WorkingDir` che restituisce una directory `A`, dispacciare una `Request` con `WorkingDir` uguale a una directory `B` (preparata con lo skill installato, come fa `installSkillIn`), e asserire che `fake.startedIn()` sia `B` e non `A`.
+      2. Test "senza radice si ricade sul fallback": stessa costruzione con `Request.WorkingDir` vuota, asserire `fake.startedIn()` uguale ad `A`.
+      3. Ripetere gli stessi due test, con gli stessi asserti, nel file di codex.
+      4. `gofmt -w` sui file toccati.
+
+      ## Verify
+
+      - Eseguire dalla radice del repository: `cd cli && go test ./internal/execution/claude/... ./internal/execution/codex/... -count=1`
+      - Expect: tutti i test dei due package passano, inclusi i quattro nuovi. La baseline è verde su questi package, quindi nessun fallimento è tollerato.
+
+      ## Done
+
+      - [ ] AC-1 — per entrambi i provider l'oracolo è la directory di avvio del processo (`cmd.Dir` attraverso lo `Starter` finto), non un campo di configurazione che la rappresenta.
+      - [ ] I due provider sono tenuti allo stesso asserto, scritto identico nei due file.
+      - [ ] Il fallback è verificato esplicitamente, così una richiesta senza radice non può regredire in silenzio.
+
+      ## Blockers
+
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Rifiutare l'avvio quando la project root del workspace non è raggiungibile
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Le due rotte di avvio del viewer rifiutano l'azione, prima di qualunque lettura dal connettore e prima di creare qualunque record, quando la project root della sessione non è più raggiungibile, con un messaggio che nomina la directory.
+
+      ## Read
+
+      - `cli/internal/web/switch.go:14-32` — `switchReason`: le tre cause distinte (sparita, non directory, non leggibile, non più workspace) e le parole già usate per dirle.
+      - `cli/internal/workspace/registry.go:40-51` e `:215` — `Status`, `Reachable()` e `Probe(Entry)`.
+      - `cli/internal/web/session.go` — `workspaceSession`, dove aggiungere il metodo.
+      - `cli/internal/web/execution_run.go` — `handleRunSpecAction`: l'inizio della funzione (`ws := s.session()`, il codice spec, `decodeJSON`, `ws.conn.ReadSpecDetail`) e lo stile dei rifiuti già presenti (`iox.NewConflict` con messaggio e hint).
+      - `cli/internal/web/workspace_execution.go` — `handleRunWorkspaceAction`: l'inizio della funzione e i suoi rifiuti.
+
+      ## Change
+
+      - `cli/internal/web/session.go`: aggiungere `func (ws *workspaceSession) requireReachable() error`, che sonda `ws.cfg.ProjectRoot` con `workspace.Probe` e, se non raggiungibile, restituisce un `iox.NewConflict` il cui **messaggio contiene il percorso della directory** e la causa resa da `switchReason`, con un hint che invita a ripristinare o riaprire il workspace. Documentare perché deve essere chiamato per primo: dopo una lettura del connettore l'errore sarebbe già un interno che non nomina la directory.
+      - `cli/internal/web/execution_run.go`: invocare `ws.requireReachable()` come primo controllo di `handleRunSpecAction`, subito dopo `ws := s.session()`, restituendo l'errore con `writeError`.
+      - `cli/internal/web/workspace_execution.go`: la stessa invocazione come primo controllo di `handleRunWorkspaceAction`.
+      - Non-goal: non modificare le rotte di lettura (board, spec, config), che devono continuare a fallire come oggi; non toccare `SwitchWorkspace`; non introdurre un controllo periodico o in background.
+
+      ## Steps
+
+      1. Scrivere `requireReachable` in `session.go` riusando `workspace.Probe` e `switchReason` (stesso package, nessuna duplicazione di parole).
+      2. Inserire la chiamata all'inizio di `handleRunSpecAction`, prima di `decodeJSON` e prima di `ws.conn.ReadSpecDetail`.
+      3. Inserire la stessa chiamata all'inizio di `handleRunWorkspaceAction`.
+      4. Verificare a lettura che nessuna prenotazione (`ws.dispatch.reserve`) e nessun effetto sulla spec possa essere stato preso prima del rifiuto.
+      5. `gofmt -w` sui file toccati.
+
+      ## Verify
+
+      - Eseguire dalla radice del repository: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./internal/web/...`
+      - Expect: nessun output da `gofmt`, build pulita e package `web` verde come nella baseline; nessun test esistente deve rompersi, perché in tutti la project root è una directory reale creata dal test.
+
+      ## Done
+
+      - [ ] AC-4 — con la project root della sessione inesistente, `POST /api/spec/{code}/execution` risponde `409` e il messaggio contiene il percorso della directory.
+      - [ ] AC-4 — lo stesso vale per `POST /api/workspace/execution`.
+      - [ ] Il rifiuto avviene prima di qualunque lettura dal connettore, di qualunque prenotazione e di qualunque scrittura di record.
+
+      ## Blockers
+
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test del rifiuto per project root irraggiungibile su entrambe le rotte di avvio
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Un test prova che, con la project root sparita, l'avvio è rifiutato con un messaggio che nomina la directory e che nessuna esecuzione viene creata né sulla spec né sul workspace.
+
+      ## Read
+
+      - `cli/internal/web/execution_run_test.go:120-160` — `newExecutionServer`-simili: come si costruisce un viewer su una project root reale e come si chiamano le rotte.
+      - `cli/internal/web/switch_test.go:154-196` — `TestSwitchWorkspaceRejectsUnreachable`: come il repository rende irraggiungibile una radice in un test e come asserisce il messaggio.
+      - `cli/internal/web/workspace_execution_test.go` — come si esercita `POST /api/workspace/execution` e come si asserisce l'assenza di record.
+      - `cli/internal/web/execution_run.go` — `guardSingleExecution`, per sapere quale prenotazione non deve risultare presa.
+
+      ## Change
+
+      - `cli/internal/web/execution_run_test.go` e `cli/internal/web/workspace_execution_test.go` (o un file `workspace_root_test.go` nuovo nello stesso package, se risulta più leggibile): aggiungere i test.
+      - Non-goal: nessuna modifica al codice di produzione.
+
+      ## Steps
+
+      1. Costruire un viewer su una project root reale con una spec avviabile, poi rinominare (o rimuovere) quella directory prima della chiamata — la sessione resta puntata al vecchio percorso, esattamente come nella dimostrazione della storia.
+      2. Test sulla rotta spec: `POST /api/spec/{code}/execution` risponde `409`; il corpo dell'errore contiene il percorso della directory sparita; nessun record esiste per quella spec (verificato ripristinando la directory e leggendo lo store, oppure sullo store in memoria del test); lo stato della spec è invariato.
+      3. Test sulla rotta workspace: `POST /api/workspace/execution` risponde `409` con lo stesso criterio sul messaggio e senza record.
+      4. Test "il rifiuto non lascia la spec prenotata": dopo aver ripristinato la directory, un avvio successivo sulla stessa spec è accettato — se il rifiuto avesse trattenuto la prenotazione, questo avvio risponderebbe `409` per esecuzione già in corso.
+      5. `gofmt -w` sui file toccati.
+
+      ## Verify
+
+      - Eseguire dalla radice del repository: `cd cli && go test ./internal/web/ -count=1`
+      - Expect: package verde, inclusi i test nuovi. La baseline del package è verde: nessun fallimento nuovo è ammesso.
+
+      ## Done
+
+      - [ ] AC-4 — l'oracolo è il testo della risposta, che deve contenere il percorso della directory: un messaggio generico fa fallire il test.
+      - [ ] AC-4 — l'assenza di esecuzione è asserita sullo store, non dedotta dal codice di stato.
+      - [ ] Un rifiuto non lascia effetti collaterali: la spec resta nel suo stato e resta avviabile appena la directory torna raggiungibile.
+
+      ## Blockers
+
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Test del viewer sulla radice della run al cambio di workspace
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Test di integrazione del package `web` provano che una run è avviata nella project root della sessione, che la prima run dopo un'apertura di workspace usa la nuova radice sullo stesso processo, e che una run in volo conserva la radice con cui è partita.
+
+      ## Read
+
+      - `cli/internal/web/switch_test.go:368-480` — `TestSwitchWorkspaceLeavesTheNewWorkspaceRunnable`, `TestSwitchWorkspaceUnderConcurrentActionRequests` e `TestSwitchWorkspaceRebuildsTheExecutionService`: il modo già stabilito di costruire due workspace reali, chiamare `SwitchWorkspace` e avviare azioni.
+      - `cli/internal/web/switch_test.go:1-120` — il provider finto del file e ciò che registra oggi.
+      - `cli/internal/web/execution_run.go` — `handleRunSpecAction` e `ws.dispatch.run`, per sapere quando la continuation viene eseguita rispetto alla risposta HTTP.
+      - `cli/internal/execution/types.go` — `Request.WorkingDir` e `Execution.WorkingDir`.
+
+      ## Change
+
+      - `cli/internal/web/switch_test.go` (o un file `workspace_root_test.go` nuovo nello stesso package): aggiungere i test e, se necessario, estendere il provider finto perché registri la `Request` ricevuta e permetta di bloccare dentro `Execute` fino a un segnale del test.
+      - Non-goal: nessuna modifica al codice di produzione; nessun `time.Sleep` come sincronizzazione — usare canali, come già fa il package.
+
+      ## Steps
+
+      1. Test AC-1: costruire il viewer su una project root `B` diversa dalla directory di lavoro del processo di test; avviare un'azione; attendere la continuation; asserire che la `Request` catturata dal provider porti `B` e che il record letto da `GET /api/execution/{id}` porti `working_dir` uguale a `B`.
+      2. Test AC-2: costruire il viewer su `A`, chiamare `SwitchWorkspace(B)`, avviare la prima azione dopo lo switch, asserire che la `Request` porti `B`; asserire nello stesso test che il server è lo stesso oggetto (nessuna ricostruzione) — è l'equivalente in-process di "senza riavviare il processo".
+      3. Test AC-3: avviare un'azione su `B` con il provider finto che si blocca dentro `Execute`; mentre la run è in volo chiamare `SwitchWorkspace(A)`; sbloccare il provider; asserire che la `Request` di quella run porti ancora `B` e che il record chiuso riporti `working_dir` uguale a `B`, mentre una run avviata dopo lo switch porta `A`.
+      4. `gofmt -w` sui file toccati.
+
+      ## Verify
+
+      - Eseguire dalla radice del repository: `cd cli && go test ./internal/web/ -count=1 -race`
+      - Expect: package verde e nessuna segnalazione del race detector — il test AC-3 attraversa deliberatamente uno switch mentre una run è in volo, che è il punto in cui una condivisione sbagliata si manifesterebbe.
+
+      ## Done
+
+      - [ ] AC-1 — la run avviata dal viewer porta la project root della sessione, asserita sulla `Request` ricevuta dal provider e sul record servito dalla rotta.
+      - [ ] AC-2 — la prima run dopo `SwitchWorkspace` porta la nuova radice, sullo stesso server, senza ricostruzione.
+      - [ ] AC-3 — la run in volo durante lo switch conserva la radice di partenza, e il test fallisce se la riscrive.
+
+      ## Blockers
+
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Mostrare la directory di lavoro nel pannello di esecuzione del viewer
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Il pannello che accompagna una run nomina la directory di lavoro in cui quella run sta eseguendo, letta dal record e da nient'altro.
+
+      ## Read
+
+      - `cli/internal/web/assets/app.js:2395-2470` — `renderExecution`: la costruzione dell'array `lines` con `provider`, il modello e il timestamp, e `escapeHtml`.
+      - `cli/internal/web/assets/app.js:2476-2488` — `formatExecutionModel`: lo stile di un formatter che legge un campo del record e restituisce una stringa già sicura.
+      - `cli/internal/web/assets/app.css` — la classe `execution-meta`, per confermare che non serve stile nuovo.
+
+      ## Change
+
+      - `cli/internal/web/assets/app.js`: in `renderExecution`, aggiungere alla riga meta una voce che nomina la directory di lavoro quando `record.working_dir` è una stringa non vuota, subito dopo `provider` e prima del modello. Il valore passa da `escapeHtml`, come ogni altro campo del record.
+      - Non-goal: nessun nuovo elemento nel DOM, nessuna nuova classe CSS, nessuna nuova rotta, nessuna modifica a `index.html`. Se il campo manca (record scritto prima di questa spec) la riga resta esattamente com'era.
+
+      ## Steps
+
+      1. Aggiungere la voce in `lines`, con lo stesso trattamento di `provider` (stringa vuota o assente ⇒ nessuna voce).
+      2. Verificare a lettura che il testo mostrato provenga dal record e non da una variabile locale del client che rappresenta il workspace corrente: una run vecchia deve continuare a nominare la directory in cui è realmente girata.
+
+      ## Verify
+
+      - Eseguire dalla radice del repository: `node --check cli/internal/web/assets/app.js && npm run test:web`
+      - Expect: `node --check` senza output ed errore zero; i 49 test di `test/web` continuano a passare (baseline verde). `app.js` non è importabile dai test di `test/web`, quindi la resa di questa riga è osservata nello smoke e nella dimostrazione, non qui.
+
+      ## Done
+
+      - [ ] AC-1 (parte dimostrativa) — con una run avviata su un workspace, il pannello di esecuzione nomina la directory di lavoro di quella run.
+      - [ ] Un record senza `working_dir` produce la riga meta identica a prima.
+      - [ ] Il valore mostrato è escapato come ogni altro campo che arriva dal record.
+
+      ## Blockers
+
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Smoke e2e "la run segue il workspace aperto" sul viewer reale
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+      - TASK-05
+      - TASK-08
+    body: |-
+      ## Objective
+
+      Uno smoke Node esercita la dimostrazione della storia dall'inizio alla fine sul viewer reale: viewer lanciato in `A`, workspace `B` aperto dalla UI, run avviata su una spec di `B`, processo dell'agente realmente avviato in `B`, `A` invariato, run in volo che non segue lo switch, e avvio rifiutato quando la directory di `B` è stata rinominata.
+
+      ## Read
+
+      - `test/e2e/open-workspace-view-smoke.mjs` — l'intero file: creazione di due workspace reali, avvio del viewer con `ARCHETIPO_STATE_DIR` dentro la run directory, `POST /api/workspaces`, `POST /api/workspaces/{id}/open`, controllo che il PID del viewer non cambi mai, e la struttura di `main`/`report`.
+      - `test/e2e/run-model-choice-view-smoke.mjs` — come si configura il provider `claude` reale puntato al binario finto, come si avvia `POST /api/spec/{code}/execution` e come si attende senza sleep arbitrari.
+      - `test/e2e/support/fake-claude.mjs` — `report("argv", ...)`, il ciclo `pump()` che esegue i comandi del control server, e il comportamento su `--version`.
+      - `package.json` — il blocco degli script `test:view-*`.
+      - `AGENTS.md` — la sezione "E2E tests", dove ogni smoke ha una voce che descrive per esteso che cosa verifica.
+
+      ## Change
+
+      - `test/e2e/support/fake-claude.mjs`: aggiungere `cwd: process.cwd()` al report `argv` (la directory in cui il processo è stato avviato fa parte di come la sessione viene aperta, esattamente come i flag), e un comando di controllo che gli fa scrivere un file sentinella **relativo alla propria cwd**, così che l'artefatto prodotto dalla run sia osservabile sul filesystem. Il finto continua a non progredire da solo: entrambe le cose sono comandate dallo smoke o riportate all'avvio.
+      - `test/e2e/workspace-run-root-view-smoke.mjs` (nuovo): lo smoke.
+      - `package.json`: nuovo script `"test:view-workspace-root-smoke": "node ./test/e2e/workspace-run-root-view-smoke.mjs"`, inserito accanto agli altri `test:view-*`.
+      - `AGENTS.md`: una voce nell'elenco degli smoke, nello stesso stile esteso delle voci esistenti, che dice che cosa lo smoke verifica e perché l'oracolo è la directory reale del processo.
+      - Non-goal: non modificare gli smoke esistenti; non introdurre un framework browser; nessuno sleep arbitrario; nessuna credenziale e nessun traffico fuori da `127.0.0.1`; saltare su Windows come fanno gli altri smoke con binario finto.
+
+      ## Steps
+
+      1. Costruire la CLI dai sorgenti in `test/e2e/.bin/` e creare due workspace reali `A` e `B` con `archetipo init --tool claude`, ciascuno con almeno una spec `TODO` propria (codici diversi: il codice è l'oracolo di quale workspace è servito).
+      2. Salvare in `B` il provider `claude` reale puntato a `fake-claude.mjs` tramite `PUT /api/execution/provider/default`.
+      3. Avviare `archetipo view` **dentro `A`**, registrarne il PID, registrare `B` con `POST /api/workspaces` e aprirlo con `POST /api/workspaces/{id}/open`.
+      4. AC-1/AC-2: prendere un'istantanea ricorsiva dell'albero di `A`; avviare `POST /api/spec/{codice di B}/execution {"action":"plan"}`; attendere che il control server abbia ricevuto il report `argv` del processo; asserire che il `cwd` riportato sia la project root di `B`; comandare al finto la scrittura del file sentinella e asserire che compaia sotto `B` e non sotto `A`; asserire che `GET /api/execution/{id}` riporti `working_dir` uguale a `B`; asserire che il PID del viewer non sia cambiato e che l'albero di `A` sia identico all'istantanea.
+      5. AC-3: con la run ancora aperta, riaprire `A` con `POST /api/workspaces/{id}/open`; proseguire la conversazione della run (`POST /api/execution/{id}/run/messages`) e asserire che il messaggio arrivi allo **stesso** processo, che il `cwd` riportato sia ancora quello di `B` e che il file scritto dal finto dopo lo switch compaia ancora sotto `B`; chiudere la run e asserire che il record resti con `working_dir` uguale a `B`.
+      6. AC-4: riaprire `B`, rinominare la sua directory sul filesystem, avviare una nuova azione e asserire che la risposta sia `409` con un messaggio che contiene il percorso della directory; asserire che la directory rinominata non contenga nessun record di esecuzione nuovo rispetto a prima del tentativo.
+      7. Terminare il viewer, scrivere `report.html` e `summary.json` nella run directory come fanno gli altri smoke, e stampare l'elenco degli AC verificati.
+      8. Aggiornare `package.json` e `AGENTS.md`.
+
+      ## Verify
+
+      - Eseguire dalla radice del repository: `npm run test:view-workspace-root-smoke`
+      - Expect: `PASS` con la riga di ciascun AC verificato; nessuno sleep arbitrario nel file; la run directory contiene `report.html` e `summary.json`.
+      - Eseguire come regressione: `npm run test:view-open-workspace-smoke` e `npm run test:view-local-run-smoke`
+      - Expect: entrambi `PASS`, come nella baseline — il primo è stato misurato verde, il secondo passa dalle stesse rotte e dallo stesso binario finto modificato in questo task.
+
+      ## Done
+
+      - [ ] AC-1 — lo smoke fallisce se il processo dell'agente viene avviato nella directory di lancio del viewer invece che nella project root del workspace aperto.
+      - [ ] AC-2 — la prima azione dopo l'apertura di `B` gira in `B` e il PID del viewer è identico prima e dopo, quindi "senza riavviare il processo" è dimostrato e non affermato.
+      - [ ] AC-3 — la run in volo durante l'apertura di un altro workspace continua nello stesso processo e nella stessa directory.
+      - [ ] AC-4 — con la directory rinominata l'avvio risponde `409` nominando la directory e non compare nessun record di esecuzione nuovo.
+      - [ ] `package.json` e `AGENTS.md` descrivono il nuovo smoke insieme agli altri.
+
+      ## Blockers
+
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Gate finale — controlli completi e verifica dello stato dei task
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+    body: |-
+      ## Objective
+
+      Tutti i controlli che il repository considera vincolanti sono eseguiti sull'incremento completo, e la spec è chiesta in review solo dopo che ogni task risulta `DONE`.
+
+      ## Read
+
+      - `AGENTS.md` — sezione "Rules for CLI changes": l'elenco esatto dei controlli da eseguire prima di consegnare (`gofmt`, `go vet`, `go build`, `go test`, `golangci-lint`).
+      - La sezione `## Baseline` del piano di questa spec: i risultati misurati prima dell'implementazione e il prerequisito d'ambiente su `golangci-lint`.
+
+      ## Change
+
+      - Nessuna modifica di codice. Se un controllo fallisce, la correzione appartiene al task che ha introdotto il fallimento e va fatta lì, non qui.
+
+      ## Steps
+
+      1. Se `golangci-lint` non è disponibile, installarlo: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`.
+      2. Eseguire i controlli Go elencati sotto `## Verify`, nell'ordine.
+      3. Eseguire i controlli Node elencati sotto `## Verify`.
+      4. Marcare questo task come `DONE`.
+      5. Ricaricare la spec dalla project root e verificare che nessun task sia rimasto `TODO`.
+      6. Solo allora richiedere la review.
+
+      ## Verify
+
+      - Eseguire dalla radice del repository:
+        - `cd cli && gofmt -l .` — Expect: nessun output (baseline: nessun output).
+        - `cd cli && go vet ./...` — Expect: nessun problema (baseline: nessun problema).
+        - `cd cli && go build ./...` — Expect: build pulita (baseline: pulita).
+        - `cd cli && go test ./... -count=1` — Expect: tutti i package verdi; il numero di test passati è ≥ 1678, cioè la baseline più quelli aggiunti da questa spec, e nessun fallimento.
+        - `cd cli && golangci-lint run --timeout 5m ./...` — Expect: 0 issue. Se lo strumento non è installabile su questa macchina, dichiararlo esplicitamente nel resoconto invece di riportarlo come eseguito.
+        - `npm run test:web` — Expect: 49 test passati, 0 falliti (baseline invariata: questa spec non aggiunge test in `test/web`).
+        - `npm run test:view-workspace-root-smoke` — Expect: `PASS` con i quattro AC elencati.
+        - `npm run test:view-open-workspace-smoke` — Expect: `PASS` (baseline misurata verde).
+        - `npm run test:view-local-run-smoke` — Expect: `PASS`.
+        - `archetipo -C {project_root} spec show US-050` — Expect: ogni task in `DONE`.
+
+      ## Done
+
+      - [ ] AC-1, AC-2, AC-3, AC-4 — ogni criterio ha almeno un controllo verde fra quelli eseguiti qui, come descritto nella mappa delle evidenze del piano.
+      - [ ] Nessun file toccato dall'incremento aggiunge diagnostiche di compilatore, `vet` o linter rispetto alla baseline registrata.
+      - [ ] Questo task è `DONE`, `archetipo spec show US-050` non riporta nessun task `TODO`, e solo dopo questa verifica viene invocato `archetipo spec review`.
+
+      ## Blockers
+
+      None.
+    ref: TASK-10

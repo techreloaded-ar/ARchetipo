@@ -1,0 +1,638 @@
+schema: archetipo/plan/v2
+spec_code: US-044
+body: |-
+  ## Soluzione tecnica
+
+  ### Problema
+
+  `archetipo init` (`cli/internal/cli/init_project_cmd.go`) scrive nella **directory corrente**, accetta solo `--tool`, `--connector`, `--template`, `--wiki`, e non è atomico: copia le skill una alla volta e poi scrive `.archetipo/`. La UI ha bisogno di tre cose che quel comando non offre: una destinazione arbitraria, i percorsi e le impostazioni di worktree fra i parametri, e la garanzia che un rifiuto o un'interruzione non lascino nulla sul disco.
+
+  ### Approccio
+
+  Nasce `cli/internal/workspace`, che diventa l'**unica** fonte di verità su cosa un'inizializzazione accetta davvero (AC-2) e su come la scrive:
+
+  - `Tool`, `Tools()`, `ResolveTools()` — il registro dei tool, spostato da `internal/cli`;
+  - `Connectors()`, `ResolveConnector()` — l'elenco dei connector accettati, oggi codificato in due punti dentro `init_project_cmd.go`;
+  - `DiscoverDataDir()`, `CopyTree()`, `CopyFile()` — spostati da `internal/cli`;
+  - la resa del `config.yaml` a partire dall'asset impacchettato, estesa a `paths:` e `worktree:`;
+  - `Choices()`, `Preflight()`, `Initialize()` — la nuova capacità di inizializzazione trasferibile.
+
+  `internal/cli` non cambia comportamento: `allTools`, `allSkills` e `discoverDataDir` restano i nomi che `doctor_cmd.go` e `uninstall_cmd.go` già usano, ma diventano alias del package `workspace`. **`archetipo init` non viene riscritto**: continua a lavorare sulla cwd, con i suoi prompt interattivi e il suo backup del config esistente. La storia chiede un ingresso dalla UI, non una revisione della CLI, e il rifiuto su directory già inizializzata sarebbe una regressione per `init`, che oggi serve anche a reinstallare le skill in un workspace esistente.
+
+  ### Inizializzazione in due fasi
+
+  `Initialize(ctx, opts)` non scrive mai direttamente nella destinazione:
+
+  1. **Preflight** — valida tutto (destinazione, connector, tool, percorsi, worktree) e non tocca il disco se non per interrogarlo (AC-3).
+  2. **Staging** — costruisce l'intero workspace in una directory temporanea (`os.MkdirTemp`), skill comprese.
+  3. **Commit** — cammina lo staging e sposta un file per volta nella destinazione, creando le directory mancanti. Registra in ordine ogni file e ogni directory **che ha creato**, e solo quelli.
+  4. **Rollback** — su errore, su contesto annullato o su fallimento a metà commit, rimuove esattamente i percorsi registrati, dal più profondo al più superficiale, e cancella lo staging (AC-4).
+
+  Il commit sposta file singoli invece di rinominare directory intere perché la destinazione può già contenere `.claude/` o `.github/`: rinominare la directory fallirebbe, e rimuoverla distruggerebbe roba non nostra. Il tracciamento per percorso è anche ciò che rende il rollback non distruttivo: una directory preesistente non è nell'elenco e sopravvive.
+
+  Il contesto è controllato prima dello staging, prima del commit e a ogni file spostato: una richiesta HTTP annullata dal browser produce quindi un rollback vero, non un workspace a metà.
+
+  ### Ordine di commit
+
+  `.archetipo/` per prima, poi le directory delle skill. È deliberato: rende il caso "fallimento a metà" verificabile con un conflitto reale (un file dove serve una directory di skill), con `.archetipo/config.yaml` già spostato e quindi necessariamente da rimuovere dal rollback.
+
+  ### Configurazione scritta
+
+  L'asset impacchettato (`.archetipo/config.yaml` del pacchetto) resta la base, così il file generato conserva i suoi commenti. Le funzioni testuali già esistenti (`setConnectorField`, `setWikiEnabledField`, `setTemplateFields`) si spostano nel package `workspace`; `setTemplateFields` viene generalizzata in un `setMappingFields(body, section, values)` che serve anche a riscrivere `paths:` e `worktree:`. Non si passa a `config.RenderFull` perché rigenererebbe il file perdendo ogni commento, cioè cambierebbe in modo osservabile ciò che oggi produce `archetipo init`.
+
+  `template.id` e `template.version` vengono da `template.Default()` e la UI non li chiede: un catalogo con un elemento solo non è una scelta (AC-5). Il payload HTTP non ha alcun campo `template`, e `decodeJSON` usa `DisallowUnknownFields`, quindi un client che provasse a sceglierlo verrebbe rifiutato.
+
+  ### Superficie HTTP
+
+  - `GET /api/workspace/options` — connector, tool, percorsi predefiniti e worktree predefinito, tutti letti dal package `workspace`. È il contratto che AC-2 richiede: il frontend non contiene alcun elenco.
+  - `POST /api/workspace` — corpo `{dir, connector, tools[], paths{}, worktree{}}`. Risponde `201` con percorso assoluto, connector, tool, identità e versione dell'Archetipo; `400` con `fields[]` (stessa forma già usata da `POST /api/spec`) su rifiuto.
+
+  Le due rotte vivono nel viewer del workspace corrente ma non lo modificano: creano un workspace **altrove**. L'apertura resta fuori ambito (US-046), quindi la risposta dice esplicitamente che il nuovo workspace va aperto con un `archetipo view` nella sua directory.
+
+  ### Errori come errori di campo
+
+  Il preflight restituisce un `workspace.ValidationError` che porta un elenco di `Field/Code/Message`. Il viewer lo rende in `400 {error, code, hint, fields[]}`, la forma che il frontend sa già disegnare sotto l'input giusto. Nessun rifiuto è un messaggio globale generico: `dir`, `connector`, `tools`, `paths.prd`, `worktree.base` e simili sono nomi di campo veri.
+
+  ### Decisioni non prese
+
+  Nessuna scelta di questo piano attraversa la soglia dell'ADR: il modello dati persistito non cambia, il confine con ARcipelago non è toccato, e staging-più-commit è una tecnica implementativa reversibile dentro un solo package. La Wiki automatica è disattivata in questo repository (`wiki.enabled: false`), quindi il piano non contiene lavoro Wiki.
+
+  ### Non obiettivi
+
+  Scelta dell'Archetipo, apertura del workspace creato nella sessione corrente, registro dei workspace conosciuti, importazione di un workspace esistente, modifica dei parametri dopo l'inizializzazione, riscrittura di `archetipo init`.
+
+  ## Baseline
+
+  Eseguita da `cli/` il 19 agosto 2026, prima di toccare codice.
+
+  | Comando | Esito registrato |
+  |---|---|
+  | `gofmt -l .` | nessun output |
+  | `go build ./...` | successo |
+  | `go vet ./...` | nessun errore |
+  | `go test ./...` | tutti i package verdi |
+  | `golangci-lint run --timeout 5m ./...` | **non eseguibile: `golangci-lint` non è installato su questa macchina** |
+
+  Prerequisito d'ambiente, non un fallimento del codice: il linter va installato con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` prima del gate finale (AGENTS.md lo prescrive). Il task di gate lo installa se assente e poi lo esegue; il risultato atteso è `0 issues`, perché la baseline Go è pulita e nessun comando è oggi rosso.
+
+  Smoke UI disponibili dal root del repository (nessuna credenziale, tutto su `127.0.0.1`): `npm run test:view-execution-smoke`, `test:view-plan-smoke`, `test:view-run-smoke`, `test:view-create-smoke`, `test:view-delete-smoke`, `test:wiki-smoke`. Sono verdi e restano il modello per il nuovo smoke di questa storia.
+
+  Poiché nessun comando della baseline è rosso, ogni task può promettere verde: non esiste un confine di fallimento preesistente da preservare. I file toccati non hanno diagnostiche locali.
+
+  ## Mappa delle evidenze di accettazione
+
+  | AC | Livello | Oracolo osservabile | Stato di partenza | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | smoke HTTP + filesystem | `POST /api/workspace` con destinazione, connector `file`, tool `pi` e `claude`, percorsi non predefiniti e `worktree.enabled: true` risponde `201`; nella directory creata `.archetipo/config.yaml` contiene esattamente quei percorsi e quelle chiavi worktree, `.archetipo/shared-runtime.md` esiste, e ogni skill dell'Archetipo incorporato è presente in `.pi/skills/` e `.claude/skills/`. `archetipo config show` eseguito **in quella directory** riporta gli stessi percorsi. | sandbox con un workspace inizializzato che serve il viewer; destinazione inesistente | TASK-07 |
+  | AC-2 | test Go + smoke HTTP | `GET /api/workspace/options` elenca connector e tool; per **ogni** tool restituito una `POST` con quel solo tool è accettata, e una `POST` con `tools: ["nope"]` o `connector: "nope"` risponde `400` nominando il campo. Test Go: la lista che il viewer espone e la lista che `resolveToolFlags` della CLI accetta sono lo stesso valore (`workspace.Tools()`), e `internal/cli` non dichiara più un proprio registro. | viewer avviato | TASK-01, TASK-05, TASK-07 |
+  | AC-3 | smoke HTTP + filesystem | Tre rifiuti, ciascuno `400` con `fields[]` che nomina `dir` e un `code` distinto: destinazione già inizializzata (`.archetipo/config.yaml` presente), destinazione non scrivibile (directory a `0o500`), destinazione che è un file. In tutti e tre i casi l'elenco ricorsivo della destinazione è **byte per byte** quello di prima della richiesta. | sandbox con le tre destinazioni preparate | TASK-03, TASK-05, TASK-07 |
+  | AC-4 | test Go | (a) `Initialize` con contesto già annullato: la destinazione resta inesistente. (b) Contesto annullato dopo il preflight tramite destinazione preparata con un conflitto reale a metà commit (un **file** dove deve nascere `.pi/skills/`): la chiamata fallisce e nella destinazione non resta né `.archetipo/` né alcuna directory creata da noi, mentre il file preesistente e le directory preesistenti sono intatti. (c) Lo staging temporaneo non esiste più dopo il fallimento. | `t.TempDir()` | TASK-04 |
+  | AC-5 | smoke HTTP + filesystem | La risposta `201` riporta `template.id = "fabbrica-del-software"` e `template.version = "1.0.0"`; `.archetipo/config.yaml` creato contiene le stesse due chiavi; `GET /api/workspace/options` **non** espone alcun elenco di Archetipi; una `POST` che includa un campo `template` è rifiutata `400` da `DisallowUnknownFields`. | viewer avviato | TASK-05, TASK-07 |
+
+  Ogni oracolo è osservato sul contratto reale: il viewer, il connector, il package `workspace` e il filesystem sono quelli veri, non ci sono doppi. L'unico elemento non reale nello smoke è l'assenza di un browser.
+
+  ## Strategia di test
+
+  **Rinuncia motivata all'e2e di browser.** Ogni esito di accettazione di questa storia attraversa il confine HTTP e finisce sul filesystem: la creazione, i tre rifiuti, l'assenza di residui e l'identità dell'Archetipo sono tutti osservabili sulle due rotte e nella directory creata. Il modulo nel frontend è un renderer del contratto `GET /api/workspace/options` e non contiene regole proprie — è esattamente ciò che AC-2 impone. Lo smoke HTTP prova quindi tutti gli AC al livello dove la responsabilità vive davvero, come già fatto per US-028…US-031, e il repository non introduce un framework di browser per una modale che non decide nulla. `Dimostrazione` resta filmabile a mano; la decisione finale su registrazione o rinuncia appartiene ad `archetipo-review`, e `e2e.record_demo_video` è `false` in questo workspace.
+
+  **Livelli.**
+
+  - *Go, package `workspace`*: validazione (ogni campo rifiutato con il suo codice), staging/commit/rollback, contesto annullato, resa del `config.yaml` con percorsi e worktree, idempotenza delle funzioni testuali già coperte da `init_project_cmd_internal_test.go` (i test si spostano insieme alle funzioni).
+  - *Go, package `web`*: le due rotte con un `workspace` reale su `t.TempDir()` — `201` e la forma della risposta, `400` con `fields[]`, corpo con campo sconosciuto rifiutato.
+  - *Go, package `cli`*: `archetipo init` continua a produrre lo stesso risultato dopo lo spostamento degli helper (i test esistenti in `cli_test.go` sono la rete).
+  - *Smoke Node*: `test/e2e/create-workspace-view-smoke.mjs`, sul modello di `create-spec-view-smoke.mjs` — CLI costruita dai sorgenti, sandbox reale, viewer su porta libera, nessuna attesa arbitraria, nessuna credenziale, nessun traffico fuori da `127.0.0.1`.
+
+  **Non-obiettivi di test.** Nessun test verifica l'apertura del workspace creato né la sua comparsa in un registro: sono US-045 e US-046. Il caso "destinazione non scrivibile" viene saltato con motivo esplicito quando i test girano da root (`process.getuid() === 0`), perché `0o500` non ferma root: lo smoke lo dichiara come skip invece di fingere un successo.
+tasks:
+  - id: TASK-01
+    title: Estrarre in internal/workspace il registro di tool e connector, la scoperta del data dir e la copia dei file
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+
+      Il registro dei tool, l'elenco dei connector accettati, `discoverDataDir` e `copyTree`/`copyFile` vivono in un solo package, `cli/internal/workspace`, e `internal/cli` li consuma invece di dichiararli.
+
+      ## Read
+
+      - `cli/internal/cli/init_project_cmd.go` — `toolDef`, `allTools`, `validToolKeysHint`, `resolveToolFlags`, il ramo che valida `--connector` dentro `runInitProject`, `pickConnectorInteractive`, `discoverDataDir`, `repoFallbackDataDir`, `copyTree`, `copyFile`.
+      - `cli/internal/cli/doctor_cmd.go` righe 79 e 256-305 — usa `discoverDataDir`, `allSkills` e `allTools`.
+      - `cli/internal/cli/uninstall_cmd.go` riga 49 — usa `allSkills`.
+      - `cli/internal/template/template.go` — `Default()`, `Template.Skills`.
+
+      ## Change
+
+      - Nuovo `cli/internal/workspace/tools.go`: `type Tool struct { Key, Name, SkillsDir string }` (`SkillsDir` è l'attuale `ProjectPath`), `func Tools() []Tool` che restituisce una copia della lista, `func ToolKeys() []string`, `func ToolKeysHint() string`, `func ResolveTools(keys []string) ([]Tool, error)`.
+      - Nuovo `cli/internal/workspace/connectors.go`: `func Connectors() []string` con `file`, `github`, `jira` nell'ordine attuale, `func IsConnector(id string) bool`, `func ConnectorsHint() string`.
+      - Nuovo `cli/internal/workspace/datadir.go`: `func DiscoverDataDir() (string, error)` e il fallback repo, spostati verbatim.
+      - Nuovo `cli/internal/workspace/fsutil.go`: `func CopyTree(src, dst string) error` e `func CopyFile(src, dst string) error`, spostati verbatim.
+      - `cli/internal/cli/init_project_cmd.go`: rimuovere le dichiarazioni spostate e sostituirle con `type toolDef = workspace.Tool`, `var allTools = workspace.Tools()`, `func discoverDataDir() (string, error) { return workspace.DiscoverDataDir() }`, e chiamate a `workspace.CopyTree`/`workspace.CopyFile`. `resolveToolFlags` delega a `workspace.ResolveTools` mantenendo l'errore `iox.NewInvalidInput` con lo stesso testo e lo stesso hint; la validazione di `--connector` usa `workspace.IsConnector`.
+      - Adeguare `doctor_cmd.go` e `uninstall_cmd.go` **solo** se il rename di `ProjectPath` in `SkillsDir` lo richiede.
+
+      Non obiettivi: cambiare l'ordine dei tool o dei connector, cambiare un solo carattere dei messaggi d'errore di `init`, toccare `pickToolsInteractive`/`pickConnectorInteractive` oltre alla sostituzione della lista letta.
+
+      ## Steps
+
+      1. Creare i quattro file del package `workspace` spostando il codice esistente senza riscriverlo.
+      2. `ResolveTools` restituisce un errore tipizzato del package (`&UnknownToolError{Key: raw}`) e `init_project_cmd.go` lo traduce in `iox.NewInvalidInput("unknown tool: "+raw, "valid: "+workspace.ToolKeysHint(), nil)`, così il package non dipende da `iox` per un errore di dominio.
+      3. Sostituire in `init_project_cmd.go` le dichiarazioni con gli alias e le deleghe.
+      4. Ricompilare e correggere i riferimenti in `doctor_cmd.go` e `uninstall_cmd.go`.
+      5. Aggiungere `cli/internal/workspace/tools_test.go`: `Tools()` restituisce le sette chiavi attese nell'ordine attuale, la copia restituita non è condivisa (mutare il risultato non altera la chiamata successiva), `ResolveTools` deduplica preservando l'ordine e rifiuta una chiave sconosciuta, `Connectors()` restituisce `file, github, jira`.
+      6. Aggiungere in `cli/internal/cli/init_project_cmd_internal_test.go` un test che `allTools` e `workspace.Tools()` coincidono, così una divergenza futura fallisce invece di duplicarsi in silenzio.
+
+      ## Verify
+
+      - Run (da `cli/`): `go build ./... && go test ./internal/workspace/... ./internal/cli/...`
+      - Expect: verde. La baseline è verde, quindi nessun nuovo fallimento è ammesso.
+      - Run (da `cli/`): `go test ./internal/cli/ -run 'TestInit|TestDoctor|TestUninstall' -v`
+      - Expect: gli stessi test che passavano prima passano ancora, a prova che `init`, `doctor` e `uninstall` non hanno cambiato comportamento.
+
+      ## Done
+
+      - [ ] `internal/cli` non dichiara più un proprio elenco di tool o di connector: l'unica fonte è `internal/workspace` — AC-2
+      - [ ] `archetipo init --tool <sconosciuto>` produce lo stesso messaggio e lo stesso hint di prima
+      - [ ] `go build ./...` e `go test ./...` restano verdi
+
+      ## Blockers
+
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Spostare in internal/workspace la resa del config.yaml ed estenderla a paths e worktree
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+
+      Il `config.yaml` di un nuovo workspace si genera dall'asset impacchettato conservandone i commenti, e sa scrivere anche `paths:` e `worktree:` oltre a `connector:`, `wiki.enabled` e `template:`.
+
+      ## Read
+
+      - `cli/internal/cli/init_project_cmd.go` — `writeConfig`, `setConnectorField`, `setWikiEnabledField`, `setTemplateFields`, `installRuntimeAssets`.
+      - `cli/internal/cli/init_project_cmd_internal_test.go` — `TestSetWikiEnabledField`, `TestSetWikiEnabledFieldAppendsMissingSection`, `TestSetWikiEnabledFieldInsertsKeyIntoExistingSection`, `TestSetTemplateFields`, `TestSetTemplateFieldsIsIdempotent`.
+      - `.archetipo/config.yaml` alla radice del repository — è l'asset impacchettato: struttura delle sezioni `paths:` e `worktree:` e commenti che vanno preservati.
+      - `cli/internal/config/config.go` — `Default()`, `domain.ConfigPaths`, `domain.WorktreeConfig`.
+
+      ## Change
+
+      - Nuovo `cli/internal/workspace/configfile.go`: `setConnectorField`, `setWikiEnabledField` e `setTemplateFields` spostati verbatim, più `setMappingFields(body, section string, values [][2]string) string` che riscrive le chiavi indicate dentro una mappatura di primo livello e aggiunge quelle assenti in coda ai figli. `setTemplateFields` viene reimplementata come `setMappingFields(body, "template", ...)` con la sola specificità della citazione della versione.
+      - Sempre in `configfile.go`: `func RenderConfig(templateBody string, in RenderInput) string`, con `RenderInput{Connector string; Paths domain.ConfigPaths; Worktree domain.WorktreeConfig; Wiki bool; Template template.Template}`. Applica connector, `paths:` (`prd`, `wiki`, `mockups`, `test_results`), `worktree:` (`enabled`, `base`, `dir`, `branch_prefix`), `wiki.enabled` e `template:`.
+      - Nuovo `cli/internal/workspace/configfile_test.go`: i cinque test spostati da `init_project_cmd_internal_test.go`, più i nuovi elencati sotto.
+      - `cli/internal/cli/init_project_cmd.go`: `writeConfig` chiama `workspace.RenderConfig` passando i valori odierni — connector scelto, `config.Default().Paths`, `config.Default().Worktree`, `withWiki`, Template risolto — e rimuove le funzioni spostate. `backupExistingConfig`/`uniqueBackupPath` **restano** in `internal/cli` con i loro test: appartengono al riuso della cwd, non alla creazione di un workspace.
+
+      Non obiettivi: passare a `config.RenderFull` o a un round-trip `yaml.Node`; cambiare l'output che `archetipo init` produce oggi con i valori predefiniti.
+
+      ## Steps
+
+      1. Spostare le tre funzioni testuali e i loro test nel package `workspace`.
+      2. Scrivere `setMappingFields` generalizzando `setTemplateFields`: individuare la riga `<section>:` a colonna 0, delimitare i figli indentati, riscrivere le chiavi presenti conservando l'indentazione, inserire quelle mancanti dopo l'ultimo figlio, e aggiungere l'intera sezione in coda quando è assente.
+      3. Reimplementare `setTemplateFields` sopra `setMappingFields` e verificare che i due test spostati passino invariati.
+      4. Scrivere `RenderConfig` componendo le funzioni nell'ordine: connector, paths, worktree, wiki, template.
+      5. Adeguare `writeConfig` in `init_project_cmd.go`.
+      6. Aggiungere i test nuovi:
+         - `RenderConfig` sull'asset reale del repository con valori non predefiniti produce un YAML che, riletto con `config.ValidateRaw`, restituisce esattamente quei percorsi e quelle chiavi worktree;
+         - il testo reso conserva almeno un commento presente nell'asset (prova che non si sta rigenerando il file);
+         - `RenderConfig` è idempotente: applicarla due volte allo stesso input dà lo stesso testo;
+         - `setMappingFields` su una sezione assente la aggiunge in coda con YAML valido.
+
+      ## Verify
+
+      - Run (da `cli/`): `go test ./internal/workspace/... ./internal/cli/... ./internal/config/...`
+      - Expect: verde, i cinque test spostati inclusi.
+      - Run (da `cli/`): `go test ./internal/cli/ -run TestInit -v`
+      - Expect: verde — l'output di `archetipo init` con i valori predefiniti non è cambiato.
+
+      ## Done
+
+      - [ ] `RenderConfig` scrive percorsi e impostazioni di worktree scelti, e il file resta rileggibile da `config.ValidateRaw` — AC-1
+      - [ ] `template.id` e `template.version` sono scritti dall'Archetipo incorporato senza alcun parametro in ingresso — AC-5
+      - [ ] I commenti dell'asset impacchettato sopravvivono alla resa
+      - [ ] I test spostati passano senza modifiche al corpo
+
+      ## Blockers
+
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Definire Options, Choices e Preflight con errori per campo
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-02
+    body: |-
+      ## Objective
+
+      Il package `workspace` dichiara cosa un'inizializzazione accetta e rifiuta una richiesta non valida nominando il campo, senza scrivere nulla sul disco.
+
+      ## Read
+
+      - `cli/internal/workspace/tools.go`, `connectors.go`, `configfile.go` — prodotti da TASK-01 e TASK-02.
+      - `cli/internal/config/config.go` — `Default()`, `RelativePath` (`.archetipo/config.yaml`), `domain.ConfigPaths`, `domain.WorktreeConfig`.
+      - `cli/internal/web/spec_create.go` — `fieldError` e `writeCreateSpecFieldErrors`: è la forma di errore per campo che il viewer sa già rendere.
+
+      ## Change
+
+      - Nuovo `cli/internal/workspace/options.go`:
+        - `type Options struct { Dir string; Connector string; Tools []string; Paths domain.ConfigPaths; Worktree domain.WorktreeConfig }`;
+        - `type FieldError struct { Field, Code, Message string }` e `type ValidationError struct { Fields []FieldError }` con `Error() string` e `func (e *ValidationError) add(field, code, msg string)`;
+        - `type Choice struct { ID, Label string }`;
+        - `type Choices struct { Connectors []Choice; Tools []Choice; Paths domain.ConfigPaths; Worktree domain.WorktreeConfig; Template TemplateIdentity }` e `func Available() Choices`, che prende i tool e i connector dal registro e i valori predefiniti da `config.Default()`;
+        - `type TemplateIdentity struct { ID, Version, Label string }`, popolata da `template.Default()`.
+      - Nuovo `cli/internal/workspace/preflight.go`: `func Preflight(opts Options) (Resolved, error)` con `type Resolved struct { Dir string; Connector string; Tools []Tool; Paths domain.ConfigPaths; Worktree domain.WorktreeConfig; Template template.Template }`.
+      - Nuovo `cli/internal/workspace/preflight_test.go`.
+
+      Regole del preflight, ciascuna con il proprio `code`:
+      - `dir` vuota → `WORKSPACE_DIR_REQUIRED`; non assoluta dopo l'espansione di `~` → `WORKSPACE_DIR_NOT_ABSOLUTE`; esistente ma non directory → `WORKSPACE_DIR_NOT_A_DIRECTORY`; contiene già `.archetipo/config.yaml` → `WORKSPACE_ALREADY_INITIALIZED`; esistente ma non scrivibile → `WORKSPACE_DIR_NOT_WRITABLE`; inesistente con l'antenato esistente più vicino non scrivibile o non directory → `WORKSPACE_PARENT_NOT_WRITABLE`.
+      - `connector` non in `Connectors()` → `WORKSPACE_CONNECTOR_UNKNOWN`.
+      - `tools` vuoto → `WORKSPACE_TOOLS_REQUIRED`; chiave sconosciuta → `WORKSPACE_TOOL_UNKNOWN`.
+      - ogni percorso vuoto → `WORKSPACE_PATH_REQUIRED` sul campo `paths.<chiave>`; assoluto o contenente un segmento `..` → `WORKSPACE_PATH_NOT_RELATIVE`.
+      - con `worktree.enabled: true`: `base` o `branch_prefix` vuoti → `WORKSPACE_WORKTREE_FIELD_REQUIRED`; `dir` vuota, assoluta o con `..` → `WORKSPACE_WORKTREE_DIR_INVALID`. Con `enabled: false` i tre valori vuoti sono sostituiti da quelli predefiniti e non sono errori.
+      - I percorsi assenti nel payload (stringa vuota su tutti e quattro) non sono un errore: `Preflight` sostituisce l'intero blocco con `config.Default().Paths`. Un blocco parzialmente compilato invece è un errore, perché un percorso dimenticato sarebbe indistinguibile da uno scelto vuoto.
+
+      La scrivibilità si prova creando e rimuovendo un file temporaneo nella directory candidata: i bit di permesso da soli non dicono la verità su tutti i filesystem.
+
+      Non obiettivi: creare qualsiasi cosa nella destinazione (il file di prova sta nella directory esistente e viene rimosso), leggere il disco per validare connector o tool.
+
+      ## Steps
+
+      1. Scrivere `Options`, `ValidationError`, `Choice`, `Choices`, `Available`.
+      2. Scrivere `Preflight` accumulando **tutti** gli errori prima di restituirli: una sola risposta deve poter evidenziare più campi.
+      3. Espandere `~` all'inizio di `Dir` con `os.UserHomeDir`, poi `filepath.Clean`. Rifiutare esplicitamente un percorso relativo invece di risolverlo sulla cwd del viewer, che non è la destinazione che l'utente ha in mente.
+      4. Scrivere i test in `t.TempDir()`: un caso per ogni `code` sopra, più un caso valido su directory inesistente, uno valido su directory esistente e vuota, uno valido su directory esistente e non vuota ma non inizializzata, e uno con due campi invalidi che verifica che entrambi compaiano.
+      5. Aggiungere un test che dopo ogni rifiuto la destinazione è invariata: elenco ricorsivo prima e dopo identico.
+      6. Marcare come saltato con motivo il caso `WORKSPACE_DIR_NOT_WRITABLE` quando `os.Geteuid() == 0`.
+
+      ## Verify
+
+      - Run (da `cli/`): `go test ./internal/workspace/... -run 'TestPreflight|TestAvailable' -v`
+      - Expect: verde, con il caso non scrivibile eseguito (o saltato con motivo esplicito se root).
+      - Run (da `cli/`): `go vet ./internal/workspace/...`
+      - Expect: nessun errore.
+
+      ## Done
+
+      - [ ] `Available()` deriva connector, tool e valori predefiniti dal registro e da `config.Default()`, senza una seconda lista — AC-2
+      - [ ] Destinazione non valida, non scrivibile o già inizializzata è rifiutata con un `code` distinto e il nome del campo, e nulla è scritto — AC-3
+      - [ ] `Preflight` non crea alcun percorso nella destinazione
+
+      ## Blockers
+
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Inizializzazione atomica con staging, commit tracciato e rollback
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+
+      `Initialize` crea un workspace completo nella destinazione, oppure non lascia nulla: nessun file, nessuna directory creata da noi, nessuno staging residuo.
+
+      ## Read
+
+      - `cli/internal/workspace/preflight.go` — `Resolved` prodotto da TASK-03.
+      - `cli/internal/workspace/fsutil.go`, `datadir.go`, `configfile.go`.
+      - `cli/internal/cli/init_project_cmd.go` — `installRuntimeAssets`: come si localizzano `runtime/config.yaml` e `runtime/shared-runtime.md`, con il fallback su `.archetipo/` del repository.
+      - `cli/internal/template/template.go` — `Template.Skills`.
+
+      ## Change
+
+      - Nuovo `cli/internal/workspace/initialize.go`:
+        - `type Result struct { Dir string; Connector string; Tools []string; Paths domain.ConfigPaths; Worktree domain.WorktreeConfig; Template TemplateIdentity }`;
+        - `func Initialize(ctx context.Context, opts Options) (Result, error)`.
+      - Nuovo `cli/internal/workspace/initialize_test.go`.
+
+      Struttura di `Initialize`:
+      1. `Preflight(opts)`; su errore ritorna subito.
+      2. `DiscoverDataDir()`; assenza di `skills/` o degli asset di runtime → `iox.NewPrecondition` con lo stesso hint che usa `init`.
+      3. `os.MkdirTemp("", "archetipo-init-")`, con `defer os.RemoveAll(staging)` **sempre** attivo: dopo un commit riuscito lo staging è vuoto e la rimozione è un no-op.
+      4. Costruzione completa dentro lo staging: `.archetipo/config.yaml` reso da `RenderConfig`, `.archetipo/shared-runtime.md` copiato, e per ogni tool risolto `<SkillsDir>/<skill>` per ogni skill dell'Archetipo. Una skill assente nel pacchetto è un errore prima che il commit cominci.
+      5. Commit: `filepath.WalkDir` dello staging in ordine lessicale, con `.archetipo` per prima. Per ogni directory non ancora esistente nella destinazione, `os.Mkdir` e registrazione in `createdDirs`; per ogni file, `os.Rename` e registrazione in `createdFiles`. Un file già esistente nella destinazione è un errore (`WORKSPACE_PATH_OCCUPIED`) e innesca il rollback: il preflight ha già escluso il caso normale, quindi qui significa che qualcosa è cambiato sotto di noi.
+      6. `ctx.Err()` è controllato prima dello staging, prima del commit e prima di ogni `os.Rename`.
+      7. Rollback su qualsiasi errore: rimuove `createdFiles` in ordine inverso, poi `createdDirs` in ordine inverso con `os.Remove` (mai `RemoveAll`: una directory che nel frattempo contiene altro non va distrutta). Se un `os.Rename` fallisce perché la destinazione è su un altro filesystem, ricadere su `CopyFile` più `os.Remove` del sorgente.
+
+      `os.Rename` tra `os.MkdirTemp` e la destinazione può attraversare un mount: il fallback per copia non è teorico su macOS e va scritto ora, non scoperto in produzione.
+
+      Non obiettivi: registrare il workspace creato da qualche parte, aprirlo, avviare git, creare backlog o PRD.
+
+      ## Steps
+
+      1. Scrivere `Initialize` nell'ordine sopra, tenendo staging e commit in due funzioni non esportate distinte (`stage`, `commit`) così il test può ragionare su ciascuna.
+      2. Scrivere il rollback come metodo di una struttura `commitLedger` che possiede `createdFiles` e `createdDirs`.
+      3. Test **successo**: destinazione inesistente sotto `t.TempDir()`, due tool, percorsi non predefiniti, `worktree.enabled: true`. Verificare l'esistenza di `.archetipo/config.yaml`, `.archetipo/shared-runtime.md`, di ogni skill di `template.Default().Skills` sotto entrambe le directory dei tool, che `config.ValidateRaw` sul file creato restituisca i valori passati, e che `Result.Template` riporti id e versione dell'Archetipo incorporato.
+      4. Test **contesto già annullato**: `ctx` cancellato prima della chiamata; la destinazione non esiste dopo.
+      5. Test **fallimento a metà commit**: destinazione preesistente contenente `.pi` come **file** (non directory), più un file estraneo `README.md`. `Initialize` fallisce; dopo la chiamata la destinazione contiene esattamente `.pi` e `README.md`, senza `.archetipo/` e senza alcuna directory di skill. Verificare anche che il contenuto di `README.md` sia intatto.
+      6. Test **nessuno staging residuo**: dopo ogni test di fallimento, `os.TempDir()` non contiene più la directory `archetipo-init-*` creata dalla chiamata (catturarne il nome con un `t.Setenv("TMPDIR", ...)` su una directory di test e verificarla vuota).
+      7. Test **destinazione già inizializzata**: nessuna scrittura, errore di validazione di TASK-03.
+      8. Il test 5 su Windows userebbe semantiche di `Rename` diverse: marcarlo `t.Skip` con motivo su `runtime.GOOS == "windows"`, coerentemente con la matrice CI del repository.
+
+      ## Verify
+
+      - Run (da `cli/`): `go test ./internal/workspace/... -v`
+      - Expect: tutti verdi, con i test 4, 5 e 6 che provano il rollback.
+      - Run (da `cli/`): `go test ./...`
+      - Expect: verde.
+
+      ## Done
+
+      - [ ] Un'inizializzazione riuscita produce configurazione, shared-runtime e tutte le skill dell'Archetipo incorporato nella destinazione indicata — AC-1
+      - [ ] Un'inizializzazione fallita o con contesto annullato non lascia file, directory create o staging temporanei — AC-4
+      - [ ] Il rollback non tocca file e directory preesistenti nella destinazione — AC-4
+      - [ ] `Result` riporta identità e versione dell'Archetipo incorporato — AC-5
+
+      ## Blockers
+
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Esporre GET /api/workspace/options e POST /api/workspace nel viewer
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-04
+    body: |-
+      ## Objective
+
+      Il viewer offre il contratto che la UI consuma: le scelte ammesse e la creazione del workspace, con i rifiuti resi per campo.
+
+      ## Read
+
+      - `cli/internal/web/server.go` — `registerRoutes`, per collocare le due rotte accanto alle altre.
+      - `cli/internal/web/spec_create.go` — `fieldError`, `writeCreateSpecFieldErrors`: forma di errore da riusare.
+      - `cli/internal/web/handlers.go` — `decodeJSON`, `writeJSON`, `writeError`.
+      - `cli/internal/web/spec_create_test.go` — come si costruisce un `Server` nei test di package.
+      - `cli/internal/workspace/options.go`, `initialize.go` — prodotti da TASK-03 e TASK-04.
+
+      ## Change
+
+      - Nuovo `cli/internal/web/workspace.go`:
+        - `handleGetWorkspaceOptions` → `200` con `{connectors:[{id,label}], tools:[{id,label,skills_dir}], paths:{...}, worktree:{...}, template:{id,version,label}}`, tutto da `workspace.Available()`.
+        - `handleCreateWorkspace` → decodifica `createWorkspaceReq{Dir, Connector, Tools, Paths, Worktree}` con `decodeJSON` (che rifiuta i campi sconosciuti), chiama `workspace.Initialize(r.Context(), opts)` e risponde `201` con `{dir, connector, tools, paths, worktree, template, hint}`. `hint` dice che il workspace va aperto con `archetipo view` nella sua directory: l'apertura in sessione è US-046.
+        - Un `*workspace.ValidationError` diventa `400` con `{error, code, hint, fields[]}` usando la stessa funzione di scrittura degli errori di campo (estrarla da `spec_create.go` in una `writeFieldErrors(w, message, hint, fields)` condivisa, lasciando `writeCreateSpecFieldErrors` come chiamante).
+        - `context.Canceled` diventa `499`-equivalente: rispondere `499` non è standard, quindi si risponde `400` con `code: WORKSPACE_INITIALIZATION_CANCELLED`; in pratica il client che ha annullato non legge la risposta, ma il caso non deve diventare un `500`.
+        - Ogni altro errore passa da `writeError`.
+      - `cli/internal/web/server.go`: registrare `GET /api/workspace/options` e `POST /api/workspace`.
+      - Nuovo `cli/internal/web/workspace_test.go`.
+
+      Non obiettivi: cambiare il workspace servito dal viewer, ricaricare configurazione o board dopo la creazione, aggiungere il nuovo workspace a un registro.
+
+      ## Steps
+
+      1. Scrivere `workspace.go` con le due funzioni e i tipi di richiesta e risposta.
+      2. Estrarre `writeFieldErrors` in `spec_create.go` (o in `handlers.go`) e farla usare da entrambi i chiamanti.
+      3. Registrare le rotte in `registerRoutes`, subito dopo il blocco `/api/config`.
+      4. Test: `GET /api/workspace/options` restituisce esattamente le sette chiavi di tool e i tre connector, e **non** contiene un elenco di Archetipi (il campo `template` è un oggetto singolo, non una lista).
+      5. Test: `POST /api/workspace` verso una destinazione sotto `t.TempDir()` risponde `201`, e la directory creata contiene configurazione, shared-runtime e skill.
+      6. Test: `POST` con `connector` sconosciuto, con `tools` vuoto e con destinazione già inizializzata rispondono `400`, ciascuno con `fields[]` che nomina il campo giusto; in nessuno dei tre casi la destinazione cambia.
+      7. Test: un corpo con un campo `template` risponde `400` — la scelta dell'Archetipo non è offerta né accettata.
+      8. Test: un corpo con `paths` interamente vuoto è accettato e produce i percorsi predefiniti.
+
+      ## Verify
+
+      - Run (da `cli/`): `go test ./internal/web/... -run TestWorkspace -v`
+      - Expect: verde su tutti i casi sopra.
+      - Run (da `cli/`): `go test ./internal/web/...`
+      - Expect: verde — le rotte esistenti non sono state disturbate dall'estrazione di `writeFieldErrors`.
+
+      ## Done
+
+      - [ ] `POST /api/workspace` crea il workspace con destinazione, connector, tool, percorsi e worktree indicati — AC-1
+      - [ ] `GET /api/workspace/options` è la sola sorgente delle scelte offerte, e ciò che elenca è ciò che la `POST` accetta — AC-2
+      - [ ] I rifiuti sono `400` con `fields[]` che nomina il campo, e non scrivono nulla — AC-3
+      - [ ] La risposta riporta identità e versione dell'Archetipo incorporato, e nessuna scelta di Archetipo è offerta o accettata — AC-5
+
+      ## Blockers
+
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Modale "New workspace" nella UI, popolata dal contratto delle opzioni
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+
+      Dalla topbar del viewer si apre un modulo che raccoglie destinazione, connector, tool, percorsi e worktree, e che non contiene alcun elenco proprio di scelte.
+
+      ## Read
+
+      - `cli/internal/web/assets/index.html` righe 44-70 (topbar) e 267-337 (modale `new-spec`, modello strutturale da seguire).
+      - `cli/internal/web/assets/app.js` righe 40-60 (riferimenti agli elementi), 315-340 (registrazione dei listener), 2812-2940 (`openNewSpec`, `closeNewSpec`, `clearNewSpecErrors`, `showNewSpecErrors`, `onCreateSpec`) — sono il modello di apertura, chiusura, errori per campo e invio.
+      - `cli/internal/web/assets/app.css` — classi `modal-root`, `modal`, `form-grid`, `field`, `field-error`, `form-notice`, `form-actions`, `status-msg`.
+
+      ## Change
+
+      - `index.html`: un pulsante `#new-workspace-btn` nella topbar, prima di `#config-btn`, e una modale `#new-workspace-modal` con un `form#new-workspace-form` contenente: `dir` (testo, obbligatorio, segnaposto con un percorso assoluto di esempio), `connector` (select **vuota** nel markup), un gruppo `#new-workspace-tools` di checkbox **generato a runtime**, quattro campi percorso (`paths.prd`, `paths.wiki`, `paths.mockups`, `paths.test_results`), una checkbox `worktree.enabled` e i tre campi `worktree.base`, `worktree.dir`, `worktree.branch_prefix`, ciascuno con il proprio `<span class="field-error" data-error-for="…">`. I `data-error-for` usano i nomi di campo che il server restituisce (`dir`, `connector`, `tools`, `paths.prd`, `worktree.base`, …).
+      - `app.js`: `openNewWorkspace()` fa `GET /api/workspace/options` **a ogni apertura** e popola select, checkbox e valori predefiniti dei percorsi e del worktree; un fallimento della chiamata mostra il motivo e lascia il modulo disabilitato invece di offrire scelte inventate. `onCreateWorkspace()` invia la `POST`, rende `fields[]` con la stessa logica di `showNewSpecErrors` (estratta in una funzione condivisa che prende il form e l'elenco), e in caso di successo mostra il percorso creato e la nota che il nuovo workspace si apre con `archetipo view` in quella directory. I campi worktree sono disabilitati finché la checkbox non è attiva.
+      - `app.css`: solo le classi mancanti, riusando quelle esistenti.
+
+      Non obiettivi: aprire il workspace creato, elencare workspace conosciuti, sfogliare il filesystem con un selettore di directory, disabilitare il pulsante in base allo stato del backlog (il nuovo workspace non dipende da quello corrente).
+
+      ## Steps
+
+      1. Aggiungere il markup della modale sul modello di `#new-spec-modal`, con l'intestazione e il pulsante di chiusura coerenti.
+      2. Aggiungere i riferimenti agli elementi in cima ad `app.js`, accanto a quelli di `new-spec`.
+      3. Estrarre da `showNewSpecErrors` una `renderFieldErrors(form, statusEl, fields)` e farla usare da entrambe le modali, mantenendo invariato il comportamento della modale esistente (messaggi orfani nel messaggio globale, conteggio dei campi da correggere).
+      4. Scrivere `openNewWorkspace`, `closeNewWorkspace`, `onCreateWorkspace` seguendo la disciplina già in uso: una variabile `newWorkspaceBusy` impedisce il doppio invio e la chiusura durante la richiesta.
+      5. Registrare i listener (click sul pulsante, chiusura, click sullo sfondo, `Escape`) accanto a quelli esistenti, e includere la nuova modale nel controllo che sopprime le scorciatoie da tastiera mentre una modale è aperta (`app.js` riga 390 circa).
+      6. Verificare a mano nel browser: apertura, popolamento dal contratto, creazione riuscita, e un rifiuto reso sotto il campo giusto.
+
+      ## Verify
+
+      - Run (da `cli/`): `go build ./... && go test ./internal/web/...`
+      - Expect: verde — gli asset sono incorporati, quindi la build è ciò che prova che il file è servito.
+      - Run (dal root): `node --check cli/internal/web/assets/app.js`
+      - Expect: nessun errore di sintassi.
+      - Run (dal root): `npm run test:view-create-smoke`
+      - Expect: verde — prova che l'estrazione di `renderFieldErrors` non ha rotto la modale di creazione spec.
+
+      ## Done
+
+      - [ ] La UI raccoglie destinazione, connector, tool, percorsi e impostazioni di worktree e li invia alla rotta di creazione — AC-1
+      - [ ] Nessun elenco di connector o di tool è codificato in `index.html` o in `app.js`: entrambi vengono da `GET /api/workspace/options` — AC-2
+      - [ ] Un rifiuto del server è reso sotto il campo che lo ha causato — AC-3
+      - [ ] La UI non chiede alcuna scelta di Archetipo — AC-5
+
+      ## Blockers
+
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Smoke senza credenziali della creazione di un workspace dalla UI
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+
+      Uno smoke Node prova sui contratti reali che un workspace nasce dalla UI con i parametri scelti, che i tre rifiuti non scrivono nulla e che l'Archetipo persistito è quello incorporato.
+
+      ## Read
+
+      - `test/e2e/create-spec-view-smoke.mjs` — struttura da seguire: `buildCLI`, `runCommand`, `startViewServer`, `apiJSON`, `postExpectingStatus`, gestione della run directory, nessuna attesa arbitraria.
+      - `test/e2e/execution-config-view-smoke.mjs` — come si asserisce sul contenuto di `.archetipo/config.yaml` dopo una chiamata HTTP.
+      - `package.json` righe 14-20 — dove si registrano gli script `test:view-*`.
+
+      ## Change
+
+      - Nuovo `test/e2e/create-workspace-view-smoke.mjs`.
+      - `package.json`: `"test:view-workspace-smoke": "node ./test/e2e/create-workspace-view-smoke.mjs"`.
+
+      Sequenza dello smoke:
+      1. Costruisce la CLI dai sorgenti in `test/e2e/.bin/`, crea la run directory sotto `test/workspaces/create-workspace-view-smoke/runs/<timestamp>/`.
+      2. Inizializza una sandbox host (`archetipo init --tool pi --connector file --yes`) e vi avvia `archetipo view` su porta libera con `ARCHETIPO_DATA_DIR` puntato al repository.
+      3. **AC-2** — legge `GET /api/workspace/options`; asserisce che `connectors` e `tools` siano non vuoti, che `template` sia un oggetto singolo e non una lista, e memorizza le chiavi offerte.
+      4. **AC-1/AC-5** — `POST /api/workspace` verso `targets/created` (inesistente) con connector `file`, tool `pi` e `claude`, percorsi non predefiniti (`docs/prodotto.md`, `docs/kb/`, `docs/mock/`, `docs/esiti/`) e `worktree: {enabled: true, base: "develop", dir: ".archetipo/wt", branch_prefix: "us/"}`. Attende `201`. Verifica sul filesystem: `.archetipo/config.yaml` esiste e contiene quei percorsi e quelle chiavi worktree, `.archetipo/shared-runtime.md` esiste, ogni skill dell'Archetipo è presente in `.pi/skills/` e in `.claude/skills/`, `template.id`/`template.version` sono nel file e nella risposta. Esegue `archetipo config show` **con cwd nella directory creata** e asserisce gli stessi percorsi: è la prova che il workspace è utilizzabile, non solo scritto.
+      5. **AC-2** — `POST` con `connector: "nope"` e `POST` con `tools: ["nope"]` rispondono `400` nominando rispettivamente `connector` e `tools`.
+      6. **AC-3** — tre rifiuti su destinazioni preparate: (a) `targets/created` appena creata → `WORKSPACE_ALREADY_INITIALIZED`; (b) `targets/locked` a `0o500` → `WORKSPACE_DIR_NOT_WRITABLE`, saltato con motivo esplicito se `process.getuid?.() === 0` o su Windows; (c) `targets/afile` che è un file → `WORKSPACE_DIR_NOT_A_DIRECTORY`. Per ciascuno confronta l'elenco ricorsivo della destinazione prima e dopo e pretende che sia identico.
+      7. **AC-4** — `POST` verso `targets/partial`, una directory che contiene un **file** chiamato `.pi` e un `README.md` con contenuto noto. Attende un errore; verifica poi che la directory contenga esattamente `.pi` e `README.md`, che `README.md` sia intatto e che `.archetipo/` non esista.
+      8. **AC-5** — `POST` con un campo `template` risponde `400`.
+      9. Chiude il viewer, ripristina i permessi di `targets/locked` (altrimenti la pulizia della run directory fallisce), stampa il riepilogo e esce `0`.
+
+      Non obiettivi: pilotare un browser, verificare il DOM, aprire il workspace creato.
+
+      ## Steps
+
+      1. Copiare l'impalcatura di `create-spec-view-smoke.mjs` (parsing argomenti, run directory, build, avvio del viewer, helper HTTP) e adattarla.
+      2. Scrivere un helper `listRecursive(dir)` che restituisce l'elenco ordinato dei percorsi relativi, usato per i confronti prima/dopo.
+      3. Implementare i passi 3-8 nell'ordine, con un messaggio di errore che nomina l'AC quando un'asserzione fallisce.
+      4. Ogni attesa interroga una rotta del viewer o il filesystem in un ciclo con scadenza: nessun `delay` fisso come sincronizzazione.
+      5. Aggiungere lo script a `package.json`.
+      6. Eseguire lo smoke due volte di seguito per provare che non lascia stato condiviso fra esecuzioni.
+
+      ## Verify
+
+      - Run (dal root): `npm run test:view-workspace-smoke`
+      - Expect: esce `0`, con tutti gli AC riportati come verificati; il caso non scrivibile eseguito, o saltato con motivo esplicito.
+      - Run (dal root): `npm run test:view-workspace-smoke` una seconda volta
+      - Expect: esce `0` di nuovo.
+      - Run (dal root): `npm run test:view-create-smoke && npm run test:view-execution-smoke`
+      - Expect: verdi — gli smoke esistenti non sono stati disturbati.
+
+      ## Done
+
+      - [ ] Lo smoke crea un workspace dalla UI con destinazione, connector, tool, percorsi e worktree scelti, e lo prova con `archetipo config show` nella directory creata — AC-1
+      - [ ] Lo smoke prova che ciò che le opzioni offrono è ciò che la creazione accetta, e che il resto è rifiutato — AC-2
+      - [ ] I tre rifiuti lasciano la destinazione byte per byte invariata — AC-3
+      - [ ] Un fallimento a metà non lascia workspace parziale e non tocca i file preesistenti — AC-4
+      - [ ] Archetipo incorporato persistito con identità e versione, nessuna scelta offerta né accettata — AC-5
+
+      ## Blockers
+
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Documentare il nuovo smoke e il package workspace in AGENTS.md
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+
+      Chi apre il repository trova il nuovo smoke fra quelli standalone e il package `workspace` nella struttura, senza doverli dedurre dal codice.
+
+      ## Read
+
+      - `AGENTS.md` — sezione "Repository structure" (blocco `cli/internal/`) e sezione "Standalone smoke tests".
+
+      ## Change
+
+      - `AGENTS.md`, "Repository structure": aggiungere `workspace/  # Workspace initialization: tool/connector registry, config rendering, atomic init` sotto `cli/internal/`.
+      - `AGENTS.md`, "Standalone smoke tests": aggiungere la voce `npm run test:view-workspace-smoke` descrivendo cosa verifica, con la stessa densità delle voci vicine — creazione con parametri scelti provata anche da `archetipo config show` nella directory creata, i tre rifiuti che non scrivono nulla, il fallimento a metà senza residui, l'Archetipo incorporato persistito e non scelto, e la nota che il caso non scrivibile è saltato con motivo quando i test girano da root.
+
+      Non obiettivi: riscrivere altre sezioni di `AGENTS.md`, toccare `docs/ROADMAP-MANAGED-ORCHESTRATION.md` (lo stato per spec si legge dal backlog).
+
+      ## Steps
+
+      1. Inserire la riga nella struttura del repository mantenendo l'allineamento dei commenti.
+      2. Scrivere la voce dello smoke nell'elenco, nella posizione che segue l'ordine già presente.
+      3. Rileggere le due sezioni per coerenza di tempo verbale e di stile con le voci vicine.
+
+      ## Verify
+
+      - Run (dal root): `git diff --stat AGENTS.md`
+      - Expect: solo `AGENTS.md` modificato, con l'aggiunta delle due voci.
+      - Run (dal root): `grep -n "test:view-workspace-smoke" AGENTS.md package.json`
+      - Expect: una occorrenza in ciascun file, coerenti fra loro.
+
+      ## Done
+
+      - [ ] `AGENTS.md` elenca `internal/workspace/` nella struttura del repository
+      - [ ] `AGENTS.md` descrive `npm run test:view-workspace-smoke` fra gli smoke standalone
+      - [ ] Nessun altro file è toccato da questo task
+
+      ## Blockers
+
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Gate finale — verifiche complete e conferma che nessun task resti TODO
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+    body: |-
+      ## Objective
+
+      L'incremento supera esattamente i controlli che il repository si fida di eseguire, e la spec passa in revisione solo con ogni task completato.
+
+      ## Read
+
+      - `AGENTS.md`, sezione "Rules for CLI changes" — l'elenco dei cinque controlli obbligatori prima di consegnare.
+      - `docs/ROADMAP-MANAGED-ORCHESTRATION.md`, punto 6 di "Come si lavora" — gli smoke UI da lanciare dal root.
+
+      ## Change
+
+      Nessuna modifica di codice attesa. Se un controllo fallisce, la correzione appartiene al task che ha introdotto il difetto e va fatta lì, non qui.
+
+      ## Steps
+
+      1. Da `cli/`, nell'ordine: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`.
+      2. Se `golangci-lint` non è nel `PATH`, installarlo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`, poi eseguire da `cli/`: `golangci-lint run --timeout 5m ./...`.
+      3. Dal root, gli smoke UI: `npm run test:view-workspace-smoke`, `npm run test:view-create-smoke`, `npm run test:view-execution-smoke`, `npm run test:view-plan-smoke`, `npm run test:view-run-smoke`, `npm run test:view-delete-smoke`.
+      4. Dal root, `npm run test:e2e:unit`.
+      5. Verificare con `git status --short` che nessuna modifica non correlata presente all'inizio del lavoro sia stata persa, in particolare `docs/ROADMAP-MANAGED-ORCHESTRATION.md`.
+      6. Marcare **questo** task `DONE`.
+      7. Rileggere la spec da `data.project_root` con `archetipo spec show US-044` e verificare che nessun task risulti `TODO`.
+      8. Solo allora eseguire `archetipo spec review US-044`.
+
+      ## Verify
+
+      - Run (da `cli/`): `gofmt -l .`
+      - Expect: nessun output.
+      - Run (da `cli/`): `go vet ./... && go build ./... && go test ./...`
+      - Expect: verde, coerente con la baseline registrata.
+      - Run (da `cli/`): `golangci-lint run --timeout 5m ./...`
+      - Expect: `0 issues`.
+      - Run (dal root): i sei smoke UI e `npm run test:e2e:unit`
+      - Expect: tutti escono `0`.
+      - Run (da `data.project_root`): `archetipo spec show US-044`
+      - Expect: nessun task in stato `TODO`.
+
+      ## Done
+
+      - [ ] I cinque controlli Go di `AGENTS.md` sono verdi, `golangci-lint` incluso
+      - [ ] I sei smoke UI e i test unitari e2e sono verdi
+      - [ ] Le modifiche non correlate presenti all'inizio del lavoro sono ancora nel working tree
+      - [ ] `archetipo spec show US-044` non riporta alcun task `TODO`, e solo dopo è stata richiesta la revisione
+      - [ ] AC-1, AC-2, AC-3, AC-4 e AC-5 hanno tutti la loro evidenza eseguita e verde
+
+      ## Blockers
+
+      None.
+    ref: TASK-09

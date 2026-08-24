@@ -1,0 +1,673 @@
+schema: archetipo/plan/v2
+spec_code: US-061
+body: |-
+  # US-061: Liberare lo spazio sopra la conversazione — Piano di implementazione
+
+  **Generato da:** Team di Planning ARchetipo
+  **Data:** 2026-08-23
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-008 — Workspace gestiti dalla UI
+  **Priorità:** HIGH | **Punti:** 5
+
+  **User Story**
+  Come persona che guida il processo dal viewer, voglio che sopra la conversazione ci sia soltanto ciò che sto usando, così che aprire il workspace mi metta davanti al lavoro e non a un cruscotto di stato.
+
+  **Criteri di accettazione**
+  - AC-1 — Fra la barra superiore e la conversazione non compare alcuna fascia di stato (stage, riassunto, identità del template, chip delle azioni di workspace).
+  - AC-2 — In coda alla conversazione compare un blocco che propone il passo successivo con etichetta e, se l'azione riguarda una spec, codice spec; premendolo parte quella stessa azione su quel bersaglio.
+  - AC-3 — Un passo non eseguibile è mostrato non premibile, con il motivo dentro il blocco, e premerlo non avvia nulla.
+  - AC-4 — Senza passi in sospeso non compare alcun blocco né segnaposto.
+  - AC-5 — La barra superiore espone a un click identità workspace, una sola azione primaria, il contatore run in attesa e il tema; ogni altra voce resta raggiungibile da un unico menu di raccolta, senza perderne nessuna.
+  - AC-6 — I tre contatori del backlog spariscono dalla barra superiore e si leggono nella vista board.
+
+  **Riferimento visivo:** `docs/mockups/redesign-chat`, stato A.
+
+  ---
+
+  ## Soluzione tecnica
+
+  La spec è interamente di frontend: nessuna route, nessun payload e nessuna regola di processo cambiano. Il server continua a derivare stadio, passo successivo e azioni in `GET /api/workspace/status` (`cli/internal/web/workspace_status.go`) e la conversazione continua ad arrivare da `GET /api/workspace/conversations/{id}`. Cambia solo **dove** il browser disegna quelle stesse informazioni e **quali** controlli restano a un click.
+
+  Tre spostamenti, indipendenti fra loro:
+
+  - **La fascia sparisce, il passo successivo migra in coda al thread.** `#workspace-status` (index.html), le sue regole in `app.css` e il ramo di disegno in `workspace-status.js` vengono rimossi. Il passo raccomandato viene disegnato da `conversation.js`, subito dopo la timeline e prima del composer — esattamente dove il mockup `stato-a-conversazione.html` mette il blocco `is-proposal`. Il dato passa dal chiamante come stato locale del pannello (`ui.nextStep`), come già avviene per `answeredApprovals` e `highlightAnchor`: `conversation.js` resta puro e continua a non conoscere nessuna regola di processo, perché etichetta, codice spec, `runnable`, `unavailable_reason` e `unlocked_by` arrivano dal payload e vengono disegnati verbatim.
+  - **La decisione di avvio non si duplica.** `workspace-status.js` conserva `nextStepTarget` e `nextStepDispatch` — è il solo posto dove si decide se un passo è avviabile e su cosa — e perde soltanto la parte di rendering (`renderWorkspaceStatus`, `renderNextStep`, `renderActionChip`, `renderTemplateIdentity`, `unlockText`). Il click sul blocco viene delegato dal contenitore della conversazione e passa per `nextStepDispatch(workspaceStatusSnapshot)` e poi per `startNextStep`, cioè per `startPanelAction`: la stessa riga di codice che preme la board. "Parte quella stessa azione su quella stessa spec" resta una identità, non una somiglianza.
+  - **La barra superiore si riduce a quattro cose e un menu.** In `index.html` i bottoni `#metrics-btn`, `#prd-btn`, `#mockups-dropdown`, `#new-workspace-btn`, `#workspaces-btn`, `#config-btn`, `#refresh-btn` vengono spostati **con gli stessi id e la stessa struttura** dentro un `.dropdown` di raccolta (`#topbar-more`). Nessun listener di `app.js` cambia, perché nessun id cambia: è una riparentazione di markup. Restano fuori `#workspace-indicator`, `#new-spec-btn` (azione primaria), `#runs-attention` e `#theme-toggle`. I tre contatori escono dalla barra e rientrano come intestazione della vista board, disegnata da `renderBoard`.
+
+  Punti di attenzione già risolti qui, perché l'implementatore non li riscopra:
+
+  - `data-workspace-scoped` resta su ogni voce spostata, **non** sul contenitore del menu: `#new-workspace-btn` deve funzionare anche a workspace chiuso, e `body.no-workspace [data-workspace-scoped]` è la regola che nasconde le altre. Il bottone che apre il menu non porta l'attributo.
+  - `#mockups-dropdown` resta un dropdown annidato dentro il menu. Il suo `toggleMockupsMenu` fa già `stopPropagation`, e il listener globale che lo chiude è ristretto a `mockupsDropdown`; il listener del menu di raccolta deve chiudersi solo su click **fuori** da `#topbar-more`, così l'apertura del sottomenu non chiude il menu che lo contiene.
+  - `#refresh-btn` oggi è solo icona con `aria-label`: dentro un menu serve anche un'etichetta testuale.
+  - `renderBoard` azzera `#board` a ogni disegno, quindi l'intestazione con i contatori va emessa **dentro** `renderBoard`, in entrambi i rami (backlog vuoto compreso). Di conseguenza `updateStats` non può più tenere i riferimenti in costanti risolte al boot: li rilegge per id a ogni chiamata e non fa nulla se mancano.
+  - `app.css` riga ~4152 elenca `body.no-workspace #workspace-status` fra i selettori nascosti: va tolto insieme all'elemento.
+
+  ### Decisioni architetturali
+
+  Nessuna scelta supera la soglia ADR: non cambiano modello dati persistente, modello di sicurezza, confine di integrazione, topologia di deploy, semantica di consistenza o una politica tecnica trasversale. È un riposizionamento di UI su moduli già esistenti. Due scelte locali vanno però messe per iscritto, perché altrimenti l'implementatore le rifarebbe a caso:
+
+  1. **Chi disegna il blocco del passo.** Alternativa scartata: lasciare il rendering in `workspace-status.js` e passare a `conversation.js` una stringa HTML già composta. Scelta: `conversation.js` disegna il blocco da `ui.nextStep`. Motivo: il blocco vive dentro il thread, deve condividere il linguaggio visivo di `conv-proposal`/`conv-outcome` (che ha esattamente la stessa forma di payload) e passare HTML grezzo fra moduli puri rimuoverebbe l'unica garanzia di escaping controllato. Prezzo: `workspace-status.js` resta un modulo di sole decisioni — accettabile, ed è già la sua parte testabile e riusata.
+  2. **Le chip delle azioni di workspace non vengono ricollocate.** Erano `span` informativi che non dispacciavano nulla (commento esplicito in `workspace-status.js`), e AC-1 le toglie da quella posizione senza chiederne una nuova; AC-5 parla delle voci della barra superiore, non di quelle chip. Le stesse azioni restano premibili dove già lo erano: pannello della spec e modale PRD. Quindi vengono rimosse, non spostate.
+
+  ### Assunzione registrata
+
+  AC-2 dice "in coda alla conversazione attiva". Il blocco viene disegnato ogni volta che il pannello sta mostrando **una** conversazione, anche se il suo stato è `CLOSED`/`CRASHED`, e non solo quando è `ACTIVE`. Motivo: eliminata la fascia, legare il blocco al solo stato `ACTIVE` lascerebbe il passo raccomandato irraggiungibile dalla home del workspace ogni volta che l'ultima conversazione è finita. Con il pannello vuoto (nessuna conversazione da mostrare) il blocco non c'è: lì non esiste una coda a cui accodarlo.
+
+  ---
+
+  ## Baseline
+
+  Misurata il 2026-08-23 in `/Users/stefanoleli/Project/Archetipo` (nessun worktree per questa spec: `workdir` = radice del progetto).
+
+  | Verifica | Risultato prima dell'implementazione | Conseguenza per il piano |
+  |---|---|---|
+  | `npm run test:web` | **Verde** — 178 test, 44 suite, 0 fail | Ogni task che tocca gli asset può promettere verde. Tre file di test esistenti asseriscono però markup che questa spec rimuove: vanno aggiornati dentro i task che rimuovono quel markup, mai lasciati rossi. |
+  | `cd cli && go vet ./...` | **Verde** — nessun problema | Nessun file `.go` viene modificato; resta come cancello di non-regressione sul gate finale. |
+  | `npm run test:cli` (`go test ./...`) | **Verde** — tutti i pacchetti `ok`, `internal/web` incluso (~10s) | Gli asset sono serviti via `go:embed`: il pacchetto `internal/web` compila e testa anche dopo la modifica del markup. Cancello di non-regressione sul gate finale. |
+  | `cli/.golangci.yml` | Configurazione presente, nessun linter JS/CSS nel repository | Non esiste `biome`/`eslint`/`prettier`: la disciplina di stile per gli asset è quella dei file esistenti (tab per l'indentazione in `.js`, due spazi in `.html`). Nessun comando di lint da eseguire sugli asset. |
+  | Smoke e2e (`test/e2e/*-view-smoke.mjs`) | Non eseguiti in baseline | Sono smoke **sul contratto HTTP**: `grep` conferma che nessuno di essi asserisce su `index.html`, `app.js` o su classi `ws-status`. Questa spec non tocca il server, quindi non sono un cancello di questa spec e non vengono eseguiti nei task. |
+
+  Prerequisiti d'ambiente (distinti dai fallimenti di codice): Node con `node --test` e toolchain Go già presenti e funzionanti; nessun database, nessun client generato, nessun servizio esterno.
+
+  ### Debito già noto sui file toccati
+
+  `test/web/workspace-shell-home.test.mjs` contiene un blocco `describe("AC-5 — i contatori restano leggibili dalla schermata iniziale")` che pretende `id="topbar-stats"`, `id="stat-total"`, `id="stat-progress"` dentro `index.html` e vieta un `display:none` su `.topbar-stats`. È l'AC-5 di **US-057**, che AC-6 di questa spec supera: i contatori restano leggibili, ma dalla board. Quel blocco va riscritto, non cancellato, e le sue asserzioni vanno riportate sulla nuova posizione.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |
+  |---|---|---|---|---|
+  | AC-1 | `index.html`, `app.css`, `workspace-status.js` letti come sorgenti | Strutturale su sorgente (`test/web/workspace-status-shell.test.mjs`) | `index.html` non contiene più `id="workspace-status"`; `app.css` non contiene più regole `.workspace-status`/`.ws-status-*` né il selettore `body.no-workspace #workspace-status`; `workspace-status.js` non esporta più `renderWorkspaceStatus` | TASK-07 (impl. in TASK-06) |
+  | AC-2 | Payload conversazione con `conversation` presente + `ui.nextStep` runnable con `spec.code` | Unità sul modulo puro (`test/web/conversation.test.mjs`) | La stringa resa contiene un `<button class="conv-nextstep-run">` con `data-next-action`, `data-next-scope`, `data-next-spec="US-002"` e l'etichetta del passo, posizionato **fra** `conv-timeline` e `conv-composer` (indici a confronto) | TASK-03 (impl. in TASK-01) |
+  | AC-2 (avvio) | `workspaceStatusSnapshot` con passo runnable | Strutturale su sorgente (`test/web/workspace-status-shell.test.mjs`) | Il gestore del click del pannello conversazione chiama `WorkspaceStatus.nextStepDispatch` e poi `startNextStep`, che a sua volta chiama `startPanelAction`: unico percorso di avvio, condiviso con la board | TASK-07 (impl. in TASK-05) |
+  | AC-3 | `ui.nextStep` con `runnable:false`, `unavailable_reason`/`unlocked_by` valorizzati | Unità sul modulo puro | Il bottone porta l'attributo `disabled`, la frase del server compare **dentro** il blocco (sottostringa dell'HTML del blocco, non dell'intera sezione), e `nextStepDispatch` sullo stesso payload restituisce `null` (asserzione già esistente, conservata) | TASK-03 + TASK-07 |
+  | AC-4 | `ui.nextStep` assente / `null` / non-oggetto, e pannello senza conversazione | Unità sul modulo puro | Nella stringa resa non compare nessuna occorrenza di `conv-nextstep` | TASK-04 |
+  | AC-5 | `index.html` letto come sorgente | Strutturale su sorgente (nuovo `test/web/topbar-shell.test.mjs`) | In `.topbar-actions` i figli diretti sono esattamente `#new-spec-btn`, `#runs-attention`, `#theme-toggle` e `#topbar-more` (più il separatore); ognuno di `metrics-btn`, `prd-btn`, `mockups-dropdown`, `new-workspace-btn`, `workspaces-btn`, `config-btn`, `refresh-btn` è presente e contenuto in `#topbar-more-menu`; `#workspace-indicator` resta nel blocco `.brand`; `#new-workspace-btn` non porta `data-workspace-scoped` e `#topbar-more` neppure | TASK-09 (impl. in TASK-08) |
+  | AC-6 | `index.html` + corpo di `renderBoard`/`updateStats` in `app.js` | Strutturale su sorgente (`topbar-shell.test.mjs` + `workspace-shell-home.test.mjs`) | `index.html` non contiene più `id="topbar-stats"`; `renderBoard` emette un'intestazione `board-stats` con `stat-total`/`stat-progress`/`stat-done` in **entrambi** i rami (backlog vuoto compreso); `updateStats` risolve gli elementi per id a ogni chiamata | TASK-09 (impl. in TASK-08) |
+
+  Il gate finale (TASK-10) non aggiunge oracoli: riesegue le suite che li contengono più i cancelli di non-regressione della baseline.
+
+  ---
+
+  ## Strategia di test
+
+  Il repository ha una disciplina di test frontend già stabilita e questa spec la segue senza inventarne una nuova: gli oracoli di comportamento stanno sui **moduli puri** (`conversation.js`, `workspace-status.js`, caricati in una VM Node dai test in `test/web/`), gli oracoli di **posizione** stanno su asserzioni strutturali che leggono `index.html`, `app.css` e `app.js` come sorgenti (`workspace-status-shell.test.mjs`, `workspace-shell-home.test.mjs`).
+
+  - Il comportamento nuovo — blocco presente/assente, premibile/non premibile, motivo dentro il blocco, posizione fra timeline e composer — è interamente esprimibile su `renderConversation`, che è puro e già testato così: nessun DOM, nessun mock che nasconda il componente responsabile.
+  - Il rifiuto di un passo bloccato è verificato **due volte e a due livelli**, come è già oggi: l'attributo `disabled` sul markup e il `null` di `nextStepDispatch`. La seconda è quella che conta, perché è la decisione presa a prescindere da come si arriva al gestore.
+  - Le rimozioni (AC-1) e le riparentazioni (AC-5, AC-6) non hanno un oracolo di runtime possibile senza browser: sono fatti di *dove* sta il markup, e il repository li verifica leggendo i sorgenti. Le nuove asserzioni seguono lo stile già in uso: nessun confronto di formattazione o di numeri di riga, e ogni messaggio di fallimento nomina il fatto rotto.
+  - Le suite esistenti che asseriscono il markup rimosso vengono **aggiornate nello stesso task che lo rimuove**, mai lasciate rosse fra un task e l'altro.
+
+  ### Deroga all'e2e da browser
+
+  **Motivo:** il repository non ha e nessun harness da browser: ogni `test/e2e/*-view-smoke.mjs` è uno smoke sul **contratto HTTP** del viewer, con CLI compilata e workspace reali, e nessuno di essi legge gli asset. Questa spec non attraversa alcun confine di route, autenticazione, persistenza o integrazione: server, payload e regole di eseguibilità restano identici (è dichiarato fuori ambito). Ciò che cambia è dove il browser mette markup già alimentato dagli stessi payload. Introdurre Playwright per una ricollocazione di layout è esattamente il bootstrap che va evitato.
+  **Livello di evidenza usato al suo posto:** test unitari deterministici sui moduli puri (`test/web/conversation.test.mjs`) per AC-2, AC-3, AC-4, e asserzioni strutturali sui sorgenti (`test/web/workspace-status-shell.test.mjs`, nuovo `test/web/topbar-shell.test.mjs`, `test/web/workspace-shell-home.test.mjs`) per AC-1, AC-5, AC-6 e per l'identità del percorso di avvio.
+  **Video dimostrativo:** la spec è filmabile — la Dimostrazione è una sequenza di osservazioni a schermo. La decisione finale se registrarlo appartiene ad `archetipo-review`, non all'implementazione (`e2e.record_demo_video` è oggi `false`).
+
+  ---
+
+  ## Note di contesto
+
+  - **Wiki:** `wiki.enabled` è `false` in `.archetipo/config.yaml`. Nessun lavoro di Wiki è previsto da questo piano.
+  - **Worktree:** disabilitato; `data.workdir` coincide con la radice del progetto.
+  - **Bloccata da:** nessuna dipendenza (`-`).
+  - **Mockup:** non ne vengono generati di nuovi. La spec cita già un riferimento visivo esistente e completo, `docs/mockups/redesign-chat` (stato A per il blocco nel thread, stato D per la board). Attenzione: quel mockup mostra ancora i contatori nella barra superiore — è indicativo e **AC-6 prevale**.
+tasks:
+  - id: TASK-01
+    title: Disegnare il blocco del passo successivo in coda al thread in conversation.js
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      `renderConversation` disegna, subito dopo la timeline e prima del composer, un blocco che propone il passo successivo quando il chiamante gliene passa uno, e non disegna nulla quando non gliene passa.
+
+      ## Read
+      - `cli/internal/web/assets/conversation.js` — `renderProposal` (righe ~562-611) come modello di forma: stessa struttura di payload (`label`/`action`, `spec_code`, `runnable`, `unavailable_reason`, `unlocked_by`), stesse classi `conv-proposal-*`. Leggere anche `escapeHtml`, `objectAt`, `textAt` e il corpo di `renderConversation` (righe ~672-762), in particolare il punto in cui vengono accodati `renderTimeline` e `renderComposer`.
+      - `cli/internal/web/assets/workspace-status.js` — `renderNextStep` e `unlockText`: sono la resa attuale dello stesso dato e vanno replicate nella sostanza (etichetta, codice spec, `disabled`, frase di sblocco).
+      - `docs/mockups/redesign-chat/stato-a-conversazione.html` — il blocco `div.block.is-proposal` in coda ai messaggi: è il riferimento visivo di posizione e composizione.
+
+      ## Change
+      - `cli/internal/web/assets/conversation.js` — sola modifica ammessa: aggiungere una funzione interna `renderNextStep(step, ui)` e la sua chiamata dentro `renderConversation`.
+
+      Non-goal espliciti:
+      - Non toccare `renderProposal`/`renderOutcome`: la proposta dell'agente e il passo raccomandato del workspace sono due cose diverse e restano due blocchi distinti.
+      - Non aggiungere fetch, DOM, timer o accesso a `window`: il modulo resta puro.
+      - Non introdurre nomi di stadi, di azioni o di regole di processo: ogni parola visibile viene dal payload.
+      - Non cambiare la firma di `renderConversation` (resta `(view, draft, ui)`).
+
+      ## Steps
+      1. Aggiungere dopo `renderOutcome` una funzione interna `renderNextStep(step, ui)`:
+         - se `step` non è un oggetto, restituire `""`;
+         - `label = textAt(step, "label") || textAt(step, "action")`; se anche `label` è vuoto restituire `""` (un passo senza nome non è proponibile);
+         - `spec = objectAt(step, "spec")`; `code = spec ? textAt(spec, "code") : ""`;
+         - comporre l'intestazione `<div class="conv-nextstep-head"><span class="conv-nextstep-mark">passo successivo</span><span class="conv-nextstep-label">…</span></div>`, aggiungendo `<code class="conv-nextstep-code">…</code>` solo quando `code` non è vuoto;
+         - ogni interpolazione passa da `escapeHtml`.
+      2. Nel ramo eseguibile (`step.runnable === true`) emettere il controllo:
+         `<button type="button" class="conv-nextstep-run" data-next-scope="…" data-next-action="…" data-next-spec="…">Avvia</button>`, con `scope` da `textAt(step, "scope")`, `action` da `textAt(step, "action")` e `data-next-spec` uguale a `code` (stringa vuota ammessa). Aggiungere ` disabled` quando `ui && ui.busy`, come già fa `renderProposal`.
+      3. Nel ramo non eseguibile emettere lo stesso bottone **con `disabled`** e, subito sotto e **dentro** il contenitore del blocco, `<p class="conv-nextstep-unlock">…</p>` con `textAt(step, "unlocked_by") || textAt(step, "unavailable_reason")`; se entrambe sono vuote il paragrafo non viene emesso. Marcare il contenitore con la classe aggiuntiva `is-refused`.
+      4. Avvolgere il tutto in `<div class="conv-nextstep">…</div>` (con `is-refused` quando non eseguibile).
+      5. Dentro `renderConversation`, subito **dopo** `blocks.push(renderTimeline(...))` e **prima** di `blocks.push(renderComposer(...))`, aggiungere `blocks.push(renderNextStep(objectAt(local, "nextStep"), local));`.
+      6. Aggiornare il commento di intestazione del modulo e il JSDoc di `renderConversation` per dichiarare il nuovo campo di `ui`: `nextStep`, il passo raccomandato che il chiamante ha letto da `/api/workspace/status`, disegnato ma mai deciso qui.
+
+      ## Verify
+      - Eseguire dalla radice del repository: `npm run test:web`
+      - Expect: passa, 178 test verdi come in baseline. La modifica è additiva: nessuna suite esistente osserva il nuovo blocco, e i test di `renderConversation` che contano o confrontano l'HTML non devono andare rossi. Se qualcuno va rosso, la causa è un blocco emesso quando `ui.nextStep` è assente — correggere il ramo di uscita anticipata, non il test.
+
+      ## Done
+      - [ ] AC-2 — con `ui.nextStep` runnable e `spec.code` valorizzato, `renderConversation` restituisce una stringa che contiene `conv-nextstep-run` con `data-next-action` e `data-next-spec` valorizzati e l'etichetta del passo.
+      - [ ] AC-3 — con `runnable:false` il bottone porta `disabled` e la frase del server compare dentro `div.conv-nextstep`.
+      - [ ] AC-4 — senza `ui.nextStep` la stringa non contiene nessuna occorrenza di `conv-nextstep`.
+      - [ ] Il blocco compare fra `conv-timeline` e `conv-composer` nella stringa resa.
+      - [ ] `conversation.js` non contiene nomi di azioni o di stadi scritti a mano.
+      - [ ] `npm run test:web` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Stilare il blocco del passo successivo in app.css
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il blocco `conv-nextstep` ha una forma leggibile dentro il thread, coerente con i blocchi già presenti in conversazione, e lo stato non premibile si distingue a colpo d'occhio da quello premibile.
+
+      ## Read
+      - `cli/internal/web/assets/app.css` — le regole `.conv-proposal`, `.conv-proposal-head`, `.conv-proposal-mark`, `.conv-proposal-code`, `.conv-proposal-controls`, `.conv-proposal.is-refused` e `.approval-btn`: sono il linguaggio visivo da riusare (variabili di colore, raggi, spaziature). Cercarle con `grep -n "conv-proposal" cli/internal/web/assets/app.css`.
+      - `cli/internal/web/assets/app.css` — le regole `.ws-status-next`, `.ws-status-next:disabled`, `.ws-status-next-spec`, `.ws-status-next-unlock` (righe ~600-660): sono la resa attuale dello stesso dato e vanno usate come punto di partenza per i valori.
+      - `docs/mockups/redesign-chat/shared.css` — le regole `.block`, `.block-head`, `.block-body`, `.block-controls` per proporzioni e tono.
+
+      ## Change
+      - `cli/internal/web/assets/app.css` — sola modifica ammessa: aggiungere un blocco di regole per `.conv-nextstep`, `.conv-nextstep-head`, `.conv-nextstep-mark`, `.conv-nextstep-label`, `.conv-nextstep-code`, `.conv-nextstep-run`, `.conv-nextstep-run:disabled`, `.conv-nextstep-unlock` e `.conv-nextstep.is-refused`, collocato accanto alle regole `.conv-proposal` esistenti.
+
+      Non-goal espliciti:
+      - Non rimuovere ancora nessuna regola `.ws-status-*` né `.workspace-status`: la rimozione appartiene a TASK-06 e farla qui lascerebbe la fascia senza stile mentre è ancora disegnata.
+      - Non introdurre colori letterali dove esiste già una variabile CSS del tema: il blocco deve funzionare in tema chiaro e scuro come i suoi vicini.
+
+      ## Steps
+      1. Individuare il blocco `.conv-proposal` in `app.css` e aggiungere subito dopo le regole di `.conv-nextstep`, riusando le stesse variabili di colore e gli stessi raggi/spaziature.
+      2. `.conv-nextstep-run` riceve l'aspetto di un controllo primario del thread (riusare i valori di `.approval-btn.allow` o di `.ws-status-next`, a seconda di quale dei due è già il controllo primario in conversazione).
+      3. `.conv-nextstep-run:disabled` riceve gli stessi valori di `.ws-status-next:disabled` (opacità/cursore) così che "non premibile" sia visibile e non solo semantico.
+      4. `.conv-nextstep-unlock` riceve i valori di `.ws-status-next-unlock` e resta contenuto dentro il blocco, non a lato.
+      5. `.conv-nextstep.is-refused` differenzia il contorno del blocco come già fa `.conv-proposal.is-refused`.
+      6. Verificare a occhio nel tema scuro leggendo le variabili usate: nessun colore letterale che non abbia una controparte di tema.
+
+      ## Verify
+      - Eseguire dalla radice del repository: `npm run test:web`
+      - Expect: passa, come in baseline. Nessuna suite legge queste regole; la verifica serve a escludere che una parentesi sbilanciata in `app.css` rompa i test che leggono il foglio come sorgente (`workspace-shell-home.test.mjs` lo analizza a regole).
+
+      ## Done
+      - [ ] AC-2 — il blocco premibile ha una forma distinta dal testo dei messaggi e il suo controllo si legge come un bottone.
+      - [ ] AC-3 — lo stato non premibile è visivamente distinto e la frase di sblocco è stilata dentro il blocco.
+      - [ ] Nessuna regola `.ws-status-*` o `.workspace-status` è stata rimossa in questo task.
+      - [ ] `npm run test:web` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Oracoli di unità sul blocco del passo — presenza, bersaglio e rifiuto (AC-2, AC-3)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      `test/web/conversation.test.mjs` prova, senza DOM e senza mock che nascondano il renderer, che il blocco del passo successivo nomina l'azione e la spec, porta il bersaglio nei suoi attributi, sta fra la timeline e il composer, e che un passo bloccato è non premibile con il motivo dentro il blocco.
+
+      ## Read
+      - `test/web/conversation.test.mjs` — l'intestazione (righe 1-93: loader VM del modulo UMD, helper di costruzione dei payload) e il blocco `describe("renderConversation — proposta")` (righe ~402-512), che è il modello di stile da seguire per il nuovo blocco.
+      - `cli/internal/web/assets/conversation.js` — la `renderNextStep` scritta in TASK-01, per conoscere classi e attributi esatti.
+
+      ## Change
+      - `test/web/conversation.test.mjs` — sola modifica ammessa: aggiungere un nuovo `describe("renderConversation — passo successivo")` in coda al file.
+
+      Non-goal espliciti:
+      - Non modificare i `describe` esistenti.
+      - Non asserire su formattazione, indentazione o numeri di riga.
+      - Non introdurre jsdom o un browser: il modulo è puro e si testa sulla stringa che restituisce.
+
+      ## Steps
+      1. Costruire una view di conversazione aperta con la stessa helper già usata dai test esistenti (conversazione `ACTIVE` con qualche evento).
+      2. Test "nomina il passo e la spec su cui agisce": chiamare `renderConversation(view, "", { nextStep: { scope: "spec", action: "implement", label: "Implementa", runnable: true, spec: { code: "US-002" } } })` e asserire che l'HTML contiene l'etichetta `Implementa`, il codice `US-002` e un `class="conv-nextstep-run"` con `data-next-action="implement"`, `data-next-scope="spec"`, `data-next-spec="US-002"`.
+      3. Test "un passo di workspace non nomina nessuna spec": stesso payload con `scope: "workspace"` e senza `spec`; asserire `data-next-spec=""` e l'assenza di `conv-nextstep-code`.
+      4. Test "sta in coda alla conversazione, prima del composer": confrontare gli indici di `conv-timeline`, `conv-nextstep` e `conv-composer` nella stringa e asserire `idxTimeline < idxNextStep < idxComposer`. Messaggio di fallimento che nomina il fatto rotto ("il blocco non è più in coda alla conversazione"), non un diff.
+      5. Test "un passo bloccato non è premibile e dice perché": `runnable: false` con `unavailable_reason` e `unlocked_by` valorizzati; estrarre la sottostringa da `<div class="conv-nextstep` fino alla sua chiusura e asserire che **dentro quella sottostringa** compaiono sia `disabled` sul bottone sia il testo di `unlocked_by`.
+      6. Test "senza `unlocked_by` mostra la ragione del rifiuto": `runnable: false` con il solo `unavailable_reason`; asserire che quella frase compare nel blocco.
+      7. Test "neutralizza l'HTML che arriva dal payload": etichetta e ragione contenenti `<img src=x onerror=1>`; asserire che la stringa resa non contiene `<img` e contiene `&lt;img`.
+      8. Test "non lancia su un passo parziale": `{ nextStep: {} }`, `{ nextStep: { action: "plan" } }` e `{ nextStep: { runnable: true } }` non devono lanciare.
+
+      ## Verify
+      - Eseguire dalla radice del repository: `node --test test/web/conversation.test.mjs`
+      - Poi: `npm run test:web`
+      - Expect: entrambi passano. Il totale dei test cresce rispetto ai 178 di baseline; nessun test preesistente diventa rosso.
+
+      ## Done
+      - [ ] AC-2 — esiste un test che, sullo stesso payload, prova insieme etichetta, codice spec e attributi del bersaglio (`data-next-action`, `data-next-scope`, `data-next-spec`).
+      - [ ] AC-2 — esiste un test che prova la posizione in coda alla conversazione confrontando gli indici di timeline, blocco e composer.
+      - [ ] AC-3 — esiste un test che prova, dentro il solo markup del blocco, che il bottone è `disabled` e che il motivo del blocco è leggibile lì dentro.
+      - [ ] Nessun test asserisce solo "il file esiste" o "una funzione è stata chiamata".
+      - [ ] `npm run test:web` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Oracolo di unità sull'assenza del blocco quando non c'è nulla da proporre (AC-4)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      `test/web/conversation.test.mjs` prova che senza passo in sospeso in coda alla conversazione non compare nessun blocco e nessun segnaposto, e che lo stesso vale quando non c'è alcuna conversazione da mostrare.
+
+      ## Read
+      - `test/web/conversation.test.mjs` — il `describe("renderConversation — passo successivo")` aggiunto in TASK-03, a cui questi test si aggiungono.
+      - `cli/internal/web/assets/conversation.js` — i due rami di uscita anticipata di `renderConversation` (nessuna conversazione, conversazione non offerta) e l'uscita anticipata di `renderNextStep`.
+
+      ## Change
+      - `test/web/conversation.test.mjs` — sola modifica ammessa: aggiungere test dentro il `describe` già creato in TASK-03.
+
+      Non-goal espliciti:
+      - Non aggiungere un ramo "segnaposto vuoto" al renderer: l'assenza si prova, non si disegna.
+      - Non modificare i test scritti in TASK-03.
+
+      ## Steps
+      1. Test "senza passo raccomandato non c'è alcun blocco": chiamare `renderConversation(view, "", {})` su una conversazione aperta e asserire che la stringa **non contiene** la sottostringa `conv-nextstep`, con messaggio che nomina il fatto ("in coda alla conversazione compare un blocco anche senza passo in sospeso").
+      2. Ripetere l'asserzione con `{ nextStep: null }`, `{ nextStep: undefined }` e `{ nextStep: "plan" }` (valore non-oggetto): tutti e tre devono produrre la stessa assenza.
+      3. Test "un passo senza nome non viene proposto": `{ nextStep: { scope: "spec", runnable: true, spec: { code: "US-002" } } }` — senza `label` né `action` non c'è nulla da nominare, quindi nessun blocco.
+      4. Test "senza conversazione da mostrare non c'è coda a cui accodarsi": chiamare `renderConversation({}, "", { nextStep: <passo runnable> })` (payload senza `conversation`) e asserire l'assenza di `conv-nextstep` accanto alla presenza dell'invito ad aprire una conversazione (`conv-empty`).
+      5. Test "una conversazione conclusa mostra comunque il passo": conversazione con `state: "CLOSED"` e `nextStep` runnable; asserire la presenza di `conv-nextstep`. È l'assunzione registrata nella soluzione tecnica ed è resa esplicita qui perché una futura modifica non la rompa in silenzio.
+
+      ## Verify
+      - Eseguire dalla radice del repository: `node --test test/web/conversation.test.mjs`
+      - Poi: `npm run test:web`
+      - Expect: entrambi passano.
+
+      ## Done
+      - [ ] AC-4 — esiste un test che prova l'assenza di qualunque markup `conv-nextstep` quando non c'è passo in sospeso, su tutte e quattro le forme di assenza (mancante, `null`, `undefined`, non-oggetto).
+      - [ ] AC-4 — esiste un test che prova l'assenza del blocco quando non c'è conversazione da mostrare.
+      - [ ] È scritto un test che fissa il comportamento su una conversazione conclusa.
+      - [ ] `npm run test:web` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Alimentare e far premere il blocco dal pannello conversazione in app.js
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Il pannello conversazione riceve il passo raccomandato dallo stesso payload che la fascia usava, si ridisegna quando quel payload cambia, e premere il blocco avvia esattamente l'azione che la board avvierebbe sullo stesso bersaglio.
+
+      ## Read
+      - `cli/internal/web/assets/app.js` — `loadWorkspaceStatus` e `resetWorkspaceStatusState` (righe ~1126-1155), `startNextStep` (righe ~1175-1200), il listener di click su `workspaceStatusEl` (righe ~1202-1215): sono il codice da cui si parte.
+      - `cli/internal/web/assets/app.js` — `bindConversationPanel` (righe ~3977-4060) e `renderConversationPanel` (righe ~4750-4800): il listener delegato e la composizione dell'oggetto `ui`.
+      - `cli/internal/web/assets/workspace-status.js` — `nextStepDispatch`: è e resta l'unico posto dove si decide se un passo è avviabile.
+
+      ## Change
+      - `cli/internal/web/assets/app.js` — modifiche ammesse:
+        1. in `loadWorkspaceStatus`, dopo aver aggiornato `workspaceStatusSnapshot`, ridisegnare il pannello conversazione;
+        2. in `resetWorkspaceStatusState`, idem;
+        3. in `renderConversationPanel`, aggiungere `nextStep` all'oggetto `ui` passato a `renderConversation`;
+        4. in `bindConversationPanel`, aggiungere il ramo che intercetta il click sul blocco e chiama `startNextStep`.
+
+      Non-goal espliciti:
+      - Non rimuovere ancora `workspaceStatusEl`, la chiamata a `renderWorkspaceStatus` né il vecchio listener: la rimozione è di TASK-06. In questo task i due percorsi coesistono, e ciò è voluto — così ogni task resta verificabile da solo.
+      - Non modificare `startNextStep`, `startPanelAction`, `openEditor`, `openPRD`: il percorso di avvio non cambia.
+      - Non duplicare in `app.js` la decisione se un passo sia avviabile: passa da `nextStepDispatch` e basta.
+
+      ## Steps
+      1. In `renderConversationPanel`, dentro l'oggetto letterale passato come terzo argomento a `window.Conversation.renderConversation`, aggiungere:
+         `nextStep: workspaceStatusSnapshot && typeof workspaceStatusSnapshot === "object" ? workspaceStatusSnapshot.next_step : null,`
+         con un commento breve: il passo raccomandato è un fatto del workspace, non della conversazione, e arriva da `/api/workspace/status` — la conversazione lo ospita, non lo possiede.
+      2. In `loadWorkspaceStatus`, dopo `workspaceStatusSnapshot = view;`, aggiungere `renderConversationPanel();` con un commento: il blocco vive nel thread, quindi la lettura che aggiorna il passo deve ridisegnare il thread, altrimenti il blocco resterebbe fermo fino al prossimo poll della conversazione.
+      3. In `resetWorkspaceStatusState`, dopo aver azzerato lo snapshot, aggiungere `renderConversationPanel();` con lo stesso commento in negativo: dimenticare il passo del workspace che si è appena chiuso deve toglierlo anche dallo schermo.
+      4. In `bindConversationPanel`, dentro il listener di `click`, aggiungere **prima** del ramo `data-conversation-reach-run` (così un blocco dentro il thread non viene scambiato per una navigazione) il ramo:
+         ```js
+         const next = e.target.closest(".conv-nextstep-run");
+         if (next) {
+             const target = window.WorkspaceStatus.nextStepDispatch(workspaceStatusSnapshot);
+             if (!target) return;
+             startNextStep(target, next).catch((err) => {
+                 showToast(err.message || String(err), "err");
+             });
+             return;
+         }
+         ```
+         con un commento: il rifiuto di un passo bloccato è una decisione del modulo puro, non l'attributo `disabled` del markup, e vale per chiunque arrivi al gestore per qualunque via.
+      5. Verificare con `grep -n "conv-nextstep-run" cli/internal/web/assets/app.js` che il ramo esista una volta sola.
+
+      ## Verify
+      - Eseguire dalla radice del repository: `npm run test:web`
+      - Expect: passa. Nessuna suite esistente asserisce ancora su questo ramo; la corsa serve a escludere una rottura di sintassi in `app.js`, che i test strutturali leggono come sorgente e analizzano a blocchi bilanciati.
+      - Eseguire anche: `node --test test/web/workspace-status-shell.test.mjs`
+      - Expect: passa, ancora sulle asserzioni della vecchia fascia — che in questo task è ancora al suo posto.
+
+      ## Done
+      - [ ] AC-2 — `renderConversationPanel` passa a `renderConversation` il `next_step` letto da `/api/workspace/status` e nessun'altra fonte.
+      - [ ] AC-2 — premere il blocco passa per `WorkspaceStatus.nextStepDispatch` e poi per `startNextStep`, quindi per `startPanelAction`: la stessa funzione che preme la board, sullo stesso bersaglio.
+      - [ ] AC-3 — il gestore esce senza avviare nulla quando `nextStepDispatch` restituisce `null`.
+      - [ ] `loadWorkspaceStatus` e `resetWorkspaceStatusState` ridisegnano il pannello conversazione.
+      - [ ] `npm run test:web` verde.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Rimuovere la fascia di stato fra barra superiore e conversazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Fra la barra superiore e la conversazione non resta alcuna fascia: elemento, stili e codice di disegno spariscono, mentre la decisione su quale passo avviare resta dov'è sempre stata.
+
+      ## Read
+      - `cli/internal/web/assets/index.html` — riga ~102: `<section id="workspace-status" class="workspace-status hidden" aria-live="polite"></section>`, e riga ~767 lo `<script src="/workspace-status.js">`, che **resta**.
+      - `cli/internal/web/assets/app.css` — righe ~553-683: `.workspace-status` e tutte le `.ws-status-*`; riga ~4152: il selettore `body.no-workspace #workspace-status` dentro l'elenco che applica `display:none`. Individuarle con `grep -n "workspace-status\|ws-status" cli/internal/web/assets/app.css`.
+      - `cli/internal/web/assets/app.js` — riga 7 (`workspaceStatusEl`), righe ~1120-1215 (blocco "Workspace status strip").
+      - `cli/internal/web/assets/workspace-status.js` — `renderWorkspaceStatus`, `renderNextStep`, `renderActionChip`, `renderTemplateIdentity`, `unlockText`, `escapeHtml`, `objectAt` e la lista degli export.
+
+      ## Change
+      - `cli/internal/web/assets/index.html` — rimuovere la sola `<section id="workspace-status">` (e il suo eventuale commento dedicato). Lo `<script src="/workspace-status.js">` resta.
+      - `cli/internal/web/assets/app.css` — rimuovere le regole `.workspace-status` e `.ws-status-*` e il selettore `body.no-workspace #workspace-status` dall'elenco di riga ~4152, lasciando gli altri selettori di quell'elenco intatti.
+      - `cli/internal/web/assets/app.js` — rimuovere `workspaceStatusEl`, le due righe che scrivono `innerHTML`/`classList` su di esso, e il listener di click su `workspaceStatusEl`. `loadWorkspaceStatus`, `resetWorkspaceStatusState`, `workspaceStatusSnapshot` e `startNextStep` **restano** e mantengono tutti i loro punti di chiamata.
+      - `cli/internal/web/assets/workspace-status.js` — rimuovere `renderWorkspaceStatus`, `renderNextStep`, `renderActionChip`, `renderTemplateIdentity` e `unlockText`, e toglierli dagli export (Node e browser). Restano `nextStepTarget`, `nextStepDispatch` e gli helper che servono loro.
+
+      Non-goal espliciti:
+      - Non ricollocare da nessuna parte stadio, riassunto, identità del template e chip delle azioni di workspace: AC-1 li toglie e nessun criterio chiede una nuova casa. Le stesse azioni restano premibili nel pannello della spec e nella modale PRD, dove già lo erano.
+      - Non rimuovere né rinominare `.action-chip*`: quelle classi sono usate anche altrove (`action-chip-run` nel pannello della spec).
+      - Non toccare il server: `/api/workspace/status` continua a rispondere come oggi.
+
+      ## Steps
+      1. Rimuovere la sezione da `index.html`.
+      2. In `app.js`: cancellare la costante `workspaceStatusEl`; in `loadWorkspaceStatus` sostituire le due righe di scrittura sul DOM con il solo aggiornamento dello snapshot seguito da `renderConversationPanel()`; in `resetWorkspaceStatusState` lasciare solo l'azzeramento dello snapshot seguito da `renderConversationPanel()`; cancellare il listener `workspaceStatusEl.addEventListener("click", …)` per intero.
+      3. Aggiornare i commenti del blocco "Workspace status strip" in `app.js`: non è più una fascia, è il passo raccomandato che il thread ospita. Rinominare il commento di sezione di conseguenza (il codice resta dov'è).
+      4. In `workspace-status.js`: cancellare le cinque funzioni di rendering, ripulire il commento di intestazione del modulo (ora è un modulo di sole decisioni sul passo raccomandato) e aggiornare i due rami di export.
+      5. Verificare con `grep -rn "renderWorkspaceStatus\|ws-status\|workspaceStatusEl" cli/internal/web/assets` che non resti alcun riferimento. L'unica occorrenza ammessa in tutto il repository dopo questo task sta nei file di test, che TASK-07 aggiorna.
+      6. In `app.css`, rimuovere le regole individuate e ricontrollare che l'elenco di riga ~4152 resti sintatticamente valido (virgole e ultimo selettore).
+
+      ## Verify
+      - Eseguire: `grep -rn "renderWorkspaceStatus\|ws-status\|workspace-status\"" cli/internal/web/assets`
+      - Expect: nessun risultato (lo `<script src="/workspace-status.js">` non corrisponde a questi pattern).
+      - Eseguire dalla radice del repository: `npm run test:web`
+      - Expect: **rosso e atteso**, sui soli test di `test/web/workspace-status.test.mjs` che invocano `renderWorkspaceStatus` e sulle asserzioni di `test/web/workspace-status-shell.test.mjs` che pretendono la fascia in `index.html`. Nessun altro file di test deve diventare rosso: se lo diventa, è una regressione vera. TASK-07 riporta la suite al verde; la spec non può essere chiusa con la suite rossa.
+      - Eseguire: `cd cli && go vet ./... && go test ./internal/web/...`
+      - Expect: verdi come in baseline — gli asset sono inclusi con `go:embed` e la loro modifica non deve rompere né compilazione né test del pacchetto.
+
+      ## Done
+      - [ ] AC-1 — `index.html` non contiene più `id="workspace-status"`.
+      - [ ] AC-1 — `app.css` non contiene più regole `.workspace-status`/`.ws-status-*` né il selettore `body.no-workspace #workspace-status`.
+      - [ ] AC-1 — `workspace-status.js` non contiene e non esporta più `renderWorkspaceStatus`.
+      - [ ] AC-2 — `nextStepTarget`, `nextStepDispatch`, `startNextStep` e i punti di chiamata di `loadWorkspaceStatus` sono intatti: il passo si avvia ancora, dal blocco nel thread.
+      - [ ] `go vet ./...` e `go test ./internal/web/...` verdi.
+      - [ ] Il rosso residuo di `npm run test:web` è confinato ai due file di test citati e viene chiuso in TASK-07.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Riportare al verde e riorientare le suite della fascia rimossa (AC-1, AC-2)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      Le due suite che descrivevano la fascia descrivono ora la sua assenza e il percorso di avvio dal thread, e `npm run test:web` torna verde senza che nessuna garanzia sia stata semplicemente cancellata.
+
+      ## Read
+      - `test/web/workspace-status.test.mjs` — l'intero file: `describe("renderWorkspaceStatus")` (righe 63-270), `describe("nextStepTarget")` (271-301), `describe("nextStepDispatch")` (302-414).
+      - `test/web/workspace-status-shell.test.mjs` — l'intero file (190 righe): il commento di intestazione elenca i fatti strutturali che verifica, e gli helper `blockAfter`/`sectionOf` sono da riusare.
+      - `cli/internal/web/assets/app.js` — il ramo di click aggiunto in TASK-05 dentro `bindConversationPanel`, e `startNextStep`.
+
+      ## Change
+      - `test/web/workspace-status.test.mjs` — rimuovere il `describe("renderWorkspaceStatus")` e ogni asserzione che invoca quella funzione; conservare integri `nextStepTarget` e `nextStepDispatch`, spostando dentro `nextStepDispatch` la parte di "un passo bloccato non avvia nulla" che oggi si appoggia anche al markup (l'asserzione che resta è `nextStepDispatch(...) === null`).
+      - `test/web/workspace-status-shell.test.mjs` — riscrivere il commento di intestazione e i `describe` per esprimere i fatti nuovi (elenco negli Steps).
+
+      Non-goal espliciti:
+      - Non cancellare un `describe` senza sostituirlo: ogni garanzia persa va riscritta sulla nuova posizione o esplicitamente dichiarata superata nel commento del file.
+      - Non toccare `test/web/conversation.test.mjs`, già coperto da TASK-03 e TASK-04.
+      - Non introdurre jsdom.
+
+      ## Steps
+      1. In `workspace-status.test.mjs`: cancellare il `describe("renderWorkspaceStatus")`; se il loader VM caricava anche `renderWorkspaceStatus`, aggiornarne la destrutturazione; aggiornare il commento di intestazione dichiarando che il modulo è ora di sole decisioni e che la resa del passo vive in `conversation.js` (`conversation.test.mjs`).
+      2. Verificare che il test "un passo bloccato … non avvia nulla" non asserisca più su `disabled` nell'HTML (quel fatto è ora provato in `conversation.test.mjs`) e che continui a provare `nextStepDispatch(...) === null`.
+      3. In `workspace-status-shell.test.mjs` scrivere i `describe`:
+         - **AC-1 — la fascia non esiste più**: `index.html` non contiene `id="workspace-status"`; `app.css` non ha regole il cui selettore corrisponde a `\.workspace-status\b` o `\.ws-status`; `app.css` non nomina `#workspace-status` nell'elenco `body.no-workspace`; `workspace-status.js` non contiene `renderWorkspaceStatus`.
+         - **AC-2 — un solo percorso di avvio**: il corpo di `bindConversationPanel` (estratto con `blockAfter`) contiene sia `conv-nextstep-run` sia `nextStepDispatch` sia `startNextStep`; il corpo di `startNextStep` contiene `startPanelAction`; in tutto `app.js` `startPanelAction(` compare solo nei punti di chiamata legittimi già esistenti (asserire che il numero di occorrenze non è cresciuto rispetto a una costante scritta nel test, con messaggio che nomina il fatto).
+         - **AC-2 — il passo alimenta il thread**: il corpo di `renderConversationPanel` contiene `nextStep:` e `workspaceStatusSnapshot`; il corpo di `loadWorkspaceStatus` contiene `renderConversationPanel(`.
+         - **AC-1/AC-5 — chiudere il workspace dimentica il passo e lo toglie dallo schermo**: il corpo di `resetWorkspaceStatusState` azzera `workspaceStatusSnapshot` e chiama `renderConversationPanel(`; `enterNoWorkspaceMode` continua a chiamare `resetWorkspaceStatusState(`.
+         - **il passo si aggiorna prima delle guardie**: `loadWorkspaceStatus()` compare in `scheduleBoardReload` prima del primo `classList.contains("hidden")` (fatto già garantito oggi, da non perdere).
+      4. Ogni messaggio di fallimento nomina il fatto rotto in italiano, nello stile del file esistente.
+
+      ## Verify
+      - Eseguire dalla radice del repository: `node --test test/web/workspace-status.test.mjs test/web/workspace-status-shell.test.mjs`
+      - Expect: passano.
+      - Eseguire: `npm run test:web`
+      - Expect: **verde**, 0 fail — il rosso lasciato da TASK-06 è chiuso qui.
+
+      ## Done
+      - [ ] AC-1 — esiste un test che va rosso se `#workspace-status`, una regola `.ws-status-*` o `renderWorkspaceStatus` tornano nei sorgenti.
+      - [ ] AC-2 — esiste un test che va rosso se il click sul blocco smette di passare per `nextStepDispatch` + `startNextStep` + `startPanelAction`.
+      - [ ] AC-2 — esiste un test che va rosso se il pannello conversazione smette di ricevere `next_step` dallo snapshot di stato.
+      - [ ] Nessuna garanzia del file precedente è stata cancellata senza sostituzione o senza una nota esplicita di superamento.
+      - [ ] `npm run test:web` verde, 0 fail.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Ridurre la barra superiore a un menu di raccolta e portare i contatori nella board
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      La barra superiore espone a un click soltanto identità workspace, azione primaria, contatore run in attesa e tema; tutte le altre voci vivono in un unico menu senza perderne nessuna; i tre contatori del backlog si leggono nella vista board.
+
+      ## Read
+      - `cli/internal/web/assets/index.html` — righe 26-100: il `<header class="topbar">` per intero, con `.brand` (che contiene `#workspace-indicator`), `#topbar-stats` e `.topbar-actions` con i suoi nove figli.
+      - `cli/internal/web/assets/index.html` — righe 62-68: `#mockups-dropdown`, la struttura `.dropdown` + `.dropdown-menu.hidden` da replicare per il menu di raccolta.
+      - `cli/internal/web/assets/app.js` — righe 160-170 (`mockupsBtn`, `mockupsMenu`, `mockupsDropdown`, `statTotal`, `statProgress`, `statDone`), righe 573-578 (toggle e chiusura del menu mockups), `toggleMockupsMenu` (righe ~5922-5928), `updateStats` (righe ~1217-1231), `renderBoard` (righe ~1233-1267).
+      - `cli/internal/web/assets/app.css` — `.topbar` (~150), `.topbar-stats` (~268), `.stat-num`/`.stat-label`/`.stat-sep` (~285-305), `.topbar-actions` (~306), `.dropdown`/`.dropdown-menu`/`.dropdown-item` (~445-495), `.board` (~684), `.column-header` e `.column-count`; e riga ~4150-4153, l'elenco `body.no-workspace`.
+      - `docs/mockups/redesign-chat/stato-d-board.html` — la board con i suoi contatori, come riferimento di forma.
+
+      ## Change
+      - `cli/internal/web/assets/index.html` — riparentare i bottoni della barra dentro un nuovo `#topbar-more`; rimuovere il blocco `#topbar-stats`.
+      - `cli/internal/web/assets/app.js` — aggiungere il toggle del menu di raccolta e la sua chiusura su click esterno; far emettere a `renderBoard` l'intestazione con i contatori; far risolvere a `updateStats` i tre elementi per id a ogni chiamata.
+      - `cli/internal/web/assets/app.css` — stili di `#topbar-more`/`.topbar-more-menu` e di `.board-stats`; rimuovere le regole di `.topbar-stats` e dei suoi figli **solo se** non riusate dai contatori della board (altrimenti rinominarne il selettore).
+
+      Non-goal espliciti:
+      - Non cambiare gli **id** dei bottoni spostati (`metrics-btn`, `prd-btn`, `mockups-btn`, `mockups-menu`, `mockups-dropdown`, `new-workspace-btn`, `workspaces-btn`, `config-btn`, `refresh-btn`) né la loro struttura interna: i listener di `app.js` li risolvono per id e non devono essere toccati.
+      - Non spostare `#workspace-indicator` fuori da `.brand`, né togliere `#runs-attention` o `#theme-toggle` dalla barra.
+      - Non cambiare cosa fa un bottone: questa è una riparentazione, non un cambio di comportamento.
+      - Non introdurre scorciatoie da tastiera nuove (fuori ambito). La `R` di `refreshBoardAndStatus` resta com'è.
+      - Non tradurre in italiano le etichette della barra (fuori ambito).
+
+      ## Steps
+      1. In `index.html`, dentro `.topbar-actions`, inserire dopo `#new-spec-btn` il contenitore di raccolta:
+         ```html
+         <div class="dropdown topbar-more" id="topbar-more">
+             <button id="topbar-more-btn" type="button" class="ghost-btn" aria-haspopup="true" aria-expanded="false" aria-label="Altre azioni" title="Altre azioni">…</button>
+             <div class="dropdown-menu topbar-more-menu hidden" id="topbar-more-menu" role="menu"></div>
+         </div>
+         ```
+         Il bottone che apre il menu **non** porta `data-workspace-scoped`: deve restare premibile anche a workspace chiuso, perché il menu contiene `#new-workspace-btn`.
+      2. Spostare dentro `#topbar-more-menu`, **in quest'ordine e senza modificarne il markup interno**: `#metrics-btn`, `#prd-btn`, `#mockups-dropdown`, `#new-workspace-btn`, `#workspaces-btn`, `#config-btn`, `#refresh-btn`. Ciascuno conserva il proprio `data-workspace-scoped` dove già lo aveva; `#new-workspace-btn` continua a non averlo.
+      3. A `#refresh-btn`, che oggi è sola icona, aggiungere `<span>Refresh</span>` dopo l'SVG: dentro un menu una voce senza testo non è leggibile. `aria-label` e `title` restano.
+      4. Rimuovere da `.topbar` l'intero `<div class="topbar-stats" id="topbar-stats">` con i suoi tre `.stat` e i due `.stat-sep`.
+      5. In `app.js`, accanto a `mockupsBtn`/`mockupsMenu`/`mockupsDropdown`, risolvere `topbarMoreBtn`, `topbarMoreMenu`, `topbarMoreDropdown`; accanto a `mockupsBtn.addEventListener("click", toggleMockupsMenu)` aggiungere il toggle del menu di raccolta (che fa `stopPropagation` e commuta `hidden`, aggiornando `aria-expanded`) e un listener globale che lo chiude quando il click cade fuori da `#topbar-more`. Poiché `#mockups-dropdown` è ora **dentro** `#topbar-more`, aprire il sottomenu mockups non chiude il menu che lo contiene: verificarlo leggendo le due condizioni di `contains`.
+      6. Cancellare le costanti `statTotal`, `statProgress`, `statDone` risolte al boot e riscrivere `updateStats` perché risolva i tre elementi con `document.getElementById` a ogni chiamata, uscendo senza fare nulla se mancano. Il calcolo dei tre numeri non cambia.
+      7. In `renderBoard`, prima di qualunque colonna e **in entrambi i rami** (backlog vuoto compreso), emettere l'intestazione:
+         ```html
+         <header class="board-stats" id="board-stats" aria-live="polite">
+           <span class="stat"><span class="stat-num" id="stat-total">—</span><span class="stat-label">stories</span></span>
+           <span class="stat-sep">/</span>
+           <span class="stat"><span class="stat-num" id="stat-progress">—</span><span class="stat-label">in flight</span></span>
+           <span class="stat-sep">/</span>
+           <span class="stat"><span class="stat-num" id="stat-done">—</span><span class="stat-label">done</span></span>
+         </header>
+         ```
+         Attenzione: `renderBoard` oggi assegna `boardEl.innerHTML = ""` e, nel ramo vuoto, sovrascrive l'`innerHTML` con il messaggio di backlog assente — quel ramo va riscritto perché **aggiunga** il messaggio dopo l'intestazione invece di sostituirla.
+      8. Al termine di `renderBoard`, o nel punto di chiamata già esistente (`loadBoard` chiama `renderBoard(view)` e poi `updateStats(view)`), assicurarsi che `updateStats` giri **dopo** che l'intestazione è nel DOM. Verificare anche i due punti che chiamano `updateStats(boardSnapshot)` dopo uno spostamento di card (righe ~1354 e ~1383): devono continuare a trovare gli elementi.
+      9. In `app.css`: aggiungere le regole di `.topbar-more-menu` (le voci sono `.ghost-btn` dentro un `.dropdown-menu`: larghezza piena, allineamento a sinistra, spaziatura da voce di menu) e di `.board-stats` (riga di intestazione della board, riusando i valori di `.topbar-stats` per `.stat`, `.stat-num`, `.stat-label`, `.stat-sep`). Se `.stat*` erano definite solo sotto `.topbar-stats`, generalizzarne il selettore invece di duplicarle. Rimuovere la regola `.topbar-stats` ormai senza elemento.
+      10. Controllare l'elenco `body.no-workspace` in `app.css` (~riga 4150): non aggiungervi `#topbar-more`, che deve restare visibile.
+
+      ## Verify
+      - Eseguire: `grep -n "metrics-btn\|prd-btn\|mockups-dropdown\|new-workspace-btn\|workspaces-btn\|config-btn\|refresh-btn\|topbar-stats" cli/internal/web/assets/index.html`
+      - Expect: le prime sette compaiono ancora esattamente una volta ciascuna; `topbar-stats` non compare più.
+      - Eseguire dalla radice del repository: `npm run test:web`
+      - Expect: **rosso e atteso** sul solo `describe("AC-5 — i contatori restano leggibili dalla schermata iniziale")` di `test/web/workspace-shell-home.test.mjs`, che pretende `#topbar-stats` in `index.html`. È l'AC-5 di US-057, superata dall'AC-6 di questa spec; TASK-09 la riscrive. Nessun altro file deve diventare rosso.
+      - Eseguire: `cd cli && go vet ./... && go test ./internal/web/...`
+      - Expect: verdi come in baseline.
+
+      ## Done
+      - [ ] AC-5 — in `.topbar-actions` restano a un click solo `#new-spec-btn`, `#runs-attention`, `#theme-toggle` e `#topbar-more`; `#workspace-indicator` resta in `.brand`.
+      - [ ] AC-5 — tutte e sette le voci spostate sono presenti dentro `#topbar-more-menu`, con gli stessi id e senza modifiche di comportamento; nessuna voce è stata eliminata.
+      - [ ] AC-5 — `#topbar-more` non porta `data-workspace-scoped`, mentre le voci che già lo avevano lo conservano.
+      - [ ] AC-6 — `#topbar-stats` non esiste più in `index.html`.
+      - [ ] AC-6 — `renderBoard` emette l'intestazione con `stat-total`, `stat-progress`, `stat-done` in entrambi i rami, e `updateStats` li risolve per id a ogni chiamata.
+      - [ ] `go vet ./...` e `go test ./internal/web/...` verdi.
+      - [ ] Il rosso residuo di `npm run test:web` è confinato al blocco AC-5 di `workspace-shell-home.test.mjs` e viene chiuso in TASK-09.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Oracoli strutturali su barra superiore e contatori della board (AC-5, AC-6)
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      Un nuovo file di test prova che la barra superiore espone quattro cose a un click e che nessuna voce è andata persa nel menu di raccolta, e il blocco AC-5 di `workspace-shell-home.test.mjs` viene riportato sulla nuova posizione dei contatori: `npm run test:web` torna verde.
+
+      ## Read
+      - `test/web/workspace-status-shell.test.mjs` — righe 26-70: il modo in cui il repository legge `index.html`, `app.css`, `app.js` come sorgenti, e gli helper `blockAfter`/`sectionOf`/`cssRules`. Sono da riusare, non da reinventare.
+      - `test/web/workspace-shell-home.test.mjs` — righe 317-355: il `describe("AC-5 — i contatori restano leggibili dalla schermata iniziale")` da riscrivere, e l'helper `cssRules` che già contiene.
+      - `cli/internal/web/assets/index.html` — il `<header class="topbar">` come lasciato da TASK-08.
+      - `cli/internal/web/assets/app.js` — `renderBoard` e `updateStats` come lasciati da TASK-08.
+
+      ## Change
+      - Nuovo file `test/web/topbar-shell.test.mjs` — oracoli strutturali su AC-5 e AC-6.
+      - `test/web/workspace-shell-home.test.mjs` — riscrivere il solo `describe` dell'AC-5 di US-057; il resto del file resta intatto.
+
+      Non-goal espliciti:
+      - Non introdurre jsdom né un parser HTML esterno: il repository asserisce su sorgente con regex e ricerca di sottostringhe, e questi test seguono la stessa disciplina.
+      - Non asserire su indentazione, formattazione o numeri di riga.
+      - Non toccare gli altri `describe` di `workspace-shell-home.test.mjs`.
+
+      ## Steps
+      1. Creare `test/web/topbar-shell.test.mjs` con lo stesso preambolo dei file gemelli (lettura di `index.html`, `app.css`, `app.js` dagli asset) e un helper che estrae il contenuto testuale di un contenitore per id o per classe con parentesi bilanciate sui tag (o, più semplice e sufficiente, che ricava le sottostringhe fra due marcatori noti: da `class="topbar-actions"` alla chiusura di `</header>`).
+      2. `describe("AC-5 — la barra superiore espone quattro cose a un click")`:
+         - dentro il frammento di `.topbar-actions`, gli id presenti sono esattamente `new-spec-btn`, `topbar-more`, `topbar-more-btn`, `topbar-more-menu`, `runs-attention`, `theme-toggle` più gli id delle voci **contenute** nel menu; asserire in positivo che `new-spec-btn`, `runs-attention`, `theme-toggle`, `topbar-more` ci sono;
+         - asserire che il frammento di `#topbar-more-menu` (dalla sua apertura alla chiusura del `.dropdown`) contiene tutti e sette gli id `metrics-btn`, `prd-btn`, `mockups-dropdown`, `new-workspace-btn`, `workspaces-btn`, `config-btn`, `refresh-btn`, ciascuno con un messaggio di fallimento che nomina la voce persa;
+         - asserire che ciascuno di quei sette id compare **una volta sola** in tutto `index.html`: una voce duplicata sarebbe una voce che due listener premono;
+         - asserire che `#workspace-indicator` è nel frammento `.brand` e non nel menu;
+         - asserire che il tag di apertura di `#topbar-more` non contiene `data-workspace-scoped`, e che quello di `#new-workspace-btn` neppure.
+      3. `describe("AC-6 — i contatori del backlog stanno nella board")`:
+         - `index.html` non contiene `id="topbar-stats"` né `class="topbar-stats"`;
+         - il corpo di `renderBoard` (estratto con `blockAfter`) contiene `board-stats`, `stat-total`, `stat-progress`, `stat-done`;
+         - il ramo del backlog vuoto dentro `renderBoard` non azzera l'intestazione: asserire che nel corpo di `renderBoard` non compare più un `boardEl.innerHTML =` che assegna il solo messaggio `empty-board` **dopo** l'emissione dell'intestazione (verificare l'ordine confrontando gli indici di `board-stats` ed `empty-board`);
+         - il corpo di `updateStats` risolve gli elementi con `getElementById` e non usa costanti risolte al boot: asserire che `app.js` non contiene più `const statTotal = document.getElementById`;
+         - nessuna regola di `app.css` applica `display:none` a `.board-stats`.
+      4. Riscrivere in `workspace-shell-home.test.mjs` il `describe` dell'AC-5 di US-057 come `describe("AC-5 (US-057, superata da US-061 AC-6) — i contatori restano leggibili, dalla board")`: gli id `stat-total`/`stat-progress`/`stat-done` non stanno più in `index.html` ma sono emessi da `renderBoard`; la regola sul `display:none` si sposta da `.topbar-stats` a `.board-stats`; il test "boot() legge la board anche quando la board non è la vista visibile" **resta invariato**, perché continua a garantire che i numeri siano pronti quando la board viene aperta. Aggiornare il commento del `describe` spiegando quale spec ha superato quale.
+      5. Ogni messaggio di fallimento nomina il fatto rotto in italiano.
+
+      ## Verify
+      - Eseguire dalla radice del repository: `node --test test/web/topbar-shell.test.mjs test/web/workspace-shell-home.test.mjs`
+      - Expect: passano.
+      - Eseguire: `npm run test:web`
+      - Expect: **verde**, 0 fail — il rosso lasciato da TASK-08 è chiuso qui. Il numero totale di test è maggiore dei 178 di baseline.
+
+      ## Done
+      - [ ] AC-5 — esiste un test che va rosso se una delle sette voci sparisce dal menu di raccolta o riappare a un click nella barra.
+      - [ ] AC-5 — esiste un test che va rosso se `#topbar-more` diventa `data-workspace-scoped` (il che renderebbe irraggiungibile "New workspace" a workspace chiuso).
+      - [ ] AC-6 — esiste un test che va rosso se i contatori tornano nella barra superiore o spariscono dalla board, ramo backlog vuoto compreso.
+      - [ ] Il blocco AC-5 di `workspace-shell-home.test.mjs` è riscritto sulla nuova posizione, non cancellato, e dichiara nel commento quale spec lo ha superato.
+      - [ ] `npm run test:web` verde, 0 fail.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Cancello finale — suite complete, non-regressione e verifica che nessun task resti TODO
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+    body: |-
+      ## Objective
+      Tutte le verifiche della spec e tutti i cancelli di non-regressione della baseline sono verdi nello stesso momento, e la spec viene mandata in review solo dopo che il backlog conferma che nessun task è rimasto `TODO`.
+
+      ## Read
+      - La sezione **Baseline** del corpo di questo piano: sono i comandi esatti da rieseguire e i loro risultati attesi.
+      - La sezione **Mappa delle evidenze di accettazione**: ogni AC-N deve avere la sua evidenza prodotta e verde.
+
+      ## Change
+      Nessuna modifica al codice. Se una verifica è rossa, la correzione appartiene al task che ha prodotto quel codice: tornare lì, correggere, e rieseguire questo cancello da capo.
+
+      Non-goal espliciti:
+      - Non "sistemare" un test rendendolo meno esigente per far passare il cancello.
+      - Non eseguire gli smoke `test/e2e/*-view-smoke.mjs`: non sono cancelli di questa spec (nessuna route, nessun payload e nessun asset da loro asserito è cambiato), e richiedono la compilazione della CLI.
+
+      ## Steps
+      1. Dalla radice del repository (`/Users/stefanoleli/Project/Archetipo`), eseguire nell'ordine i comandi della sezione Verify qui sotto, uno per volta, leggendone l'esito.
+      2. Confrontare l'esito di ciascuno con la riga corrispondente della tabella Baseline: nessun comando che era verde può essere rosso adesso.
+      3. Rileggere la mappa delle evidenze e verificare che ogni AC-N da AC-1 ad AC-6 abbia il suo test verde, nominandolo.
+      4. Marcare questo task `DONE`.
+      5. Ricaricare la spec da `/Users/stefanoleli/Project/Archetipo` con `archetipo spec show US-061` e verificare nel campo `data.tasks` che **nessun** task sia rimasto `TODO`.
+      6. Solo allora richiedere la review con `archetipo spec review US-061`. L'ordine è: eseguire le verifiche → marcare `DONE` questo task → ricaricare la spec → confermare che nessun task è `TODO` → richiedere la review.
+
+      ## Verify
+      - `npm run test:web`
+        - Expect: verde, 0 fail, totale test **superiore** ai 178 della baseline (TASK-03, TASK-04 e TASK-09 ne hanno aggiunti).
+      - `node --test test/web/conversation.test.mjs test/web/workspace-status.test.mjs test/web/workspace-status-shell.test.mjs test/web/topbar-shell.test.mjs test/web/workspace-shell-home.test.mjs`
+        - Expect: verde. Sono le cinque suite che portano le evidenze di AC-1…AC-6.
+      - `cd cli && go vet ./...`
+        - Expect: `Go vet: No issues found`, come in baseline.
+      - `npm run test:cli`
+        - Expect: tutti i pacchetti `ok`, `internal/web` incluso, come in baseline. Gli asset sono inclusi via `go:embed`: questo comando è ciò che prova che il markup modificato non rompe il binario.
+      - `grep -rn "renderWorkspaceStatus\|ws-status\|topbar-stats" cli/internal/web/assets`
+        - Expect: nessun risultato.
+      - `archetipo spec show US-061` (da `/Users/stefanoleli/Project/Archetipo`)
+        - Expect: nessun task con `status: TODO`.
+
+      ## Done
+      - [ ] AC-1 — `npm run test:web` verde con gli oracoli di TASK-07 sull'assenza della fascia; il `grep` sui sorgenti non trova più residui.
+      - [ ] AC-2 — verdi gli oracoli di TASK-03 (blocco, bersaglio, posizione) e di TASK-07 (unico percorso di avvio verso `startPanelAction`).
+      - [ ] AC-3 — verdi gli oracoli di TASK-03 (non premibile, motivo dentro il blocco) e di TASK-07 (`nextStepDispatch` restituisce `null`).
+      - [ ] AC-4 — verdi gli oracoli di TASK-04 sull'assenza di qualunque blocco o segnaposto.
+      - [ ] AC-5 — verdi gli oracoli di TASK-09 su ciò che resta a un click e su ciò che il menu raccoglie, nessuna voce persa.
+      - [ ] AC-6 — verdi gli oracoli di TASK-09 sui contatori spariti dalla barra e presenti nella board.
+      - [ ] Nessuna verifica verde in baseline è rossa adesso: `go vet ./...` e `npm run test:cli` confermati.
+      - [ ] `archetipo spec show US-061` non riporta alcun task `TODO`, e solo dopo questa conferma viene invocato `archetipo spec review US-061`.
+
+      ## Blockers
+      None.
+    ref: TASK-10

@@ -1,0 +1,704 @@
+schema: archetipo/plan/v2
+spec_code: US-059
+body: "# US-059: Tenere aperte più conversazioni sullo stesso workspace — Piano di implementazione\n\n**Prodotto da:** Team di Planning ARchetipo\n**Data:** 2026-08-22\n\n---\n\n## Spec\n\n**Epic:** EP-008 — Workspace gestiti dalla UI\n**Priorità:** MEDIUM | **Punti:** 5\n**Bloccata da:** US-058 (DONE, tutti i 13 task DONE)\n\n**User Story**\nCome utilizzatore di ARchetipo che porta avanti più spec insieme, voglio poter tenere vive più conversazioni sullo stesso workspace, così da poter discutere una spec mentre l'agente sta ancora lavorando su un'altra, senza dover interrompere la prima.\n\n**Criteri di accettazione**\n- AC-1 — Avviando una nuova conversazione mentre un'altra è viva, entrambe restano attive e la prima conserva la sua storia e il lavoro in corso.\n- AC-2 — I messaggi di ogni conversazione viva restano nella propria conversazione e non compaiono nelle altre.\n- AC-3 — L'elenco distingue le conversazioni vive da quelle chiuse.\n- AC-4 — Chiudendo una conversazione, questa risulta chiusa e le altre conversazioni vive non ne risentono.\n- AC-5 — Oltre il numero massimo di conversazioni vive consentito, l'avvio è rifiutato con un messaggio che dichiara il limite e indica quali conversazioni chiudere.\n- AC-6 — Chiudendo il workspace, tutte le sue conversazioni vive vengono chiuse e nessun agente resta in esecuzione.\n\n**Fuori ambito**\nIsolamento delle directory di lavoro fra conversazioni concorrenti e prevenzione dei conflitti sui file: le conversazioni condividono il workspace come lo condividono oggi le run. Fuori ambito anche il passaggio rapido da tastiera fra conversazioni e la ripresa della sessione originale di una conversazione chiusa.\n\n---\n\n## Soluzione tecnica\n\nOggi il singolare è scritto nel tipo, non nella UI. `conversationState` (`cli/internal/web/conversation_state.go`) tiene **una** conversazione per workspace: `open()` rifiuta quando `c.id != \"\"`, `current()` restituisce «la» conversazione, e il frontend gira intorno a quel rifiuto chiudendo la conversazione viva (`releaseLiveConversation()` in `app.js`) prima di aprirne un'altra. Anche `conversationJournal` tiene un solo `current *conversationlog.Record` con un solo watermark, e `handleResumeWorkspaceConversation` sigilla e chiude la viva prima di aprire la ripresa. US-058 ha già introdotto la **collezione su disco** (`.archetipo/conversations/<id>.json`, `conversationlog.FileStore`, rotta indice `GET /api/workspace/conversations`): quello che manca è la collezione **viva**.\n\nQuesta spec toglie il singolare in quattro punti — l'holder, il journal, le rotte, la pagina — e ne mette al posto uno **limitato**.\n\n**1. `conversationSet`: l'holder passa da una conversazione a un insieme limitato.**\n`conversation_state.go` diventa una mappa `id → *liveConversation` protetta dallo stesso `sync.Mutex`. Ogni voce porta con sé ciò che oggi vive nei campi piatti dell'holder: provider, collaborator, `providerConfig`, `workingDir`, `openedAt`, `specCode`, `resumedFrom`, e soprattutto lo stato decisionale — `decidedProposalID`, `outcome`, `outcomes`. Lo spostamento dello stato decisionale dentro la voce **è** AC-2 al livello più basso: finché il watermark è un campo dell'holder, una proposta decisa in una conversazione marca come già decisa la proposta successiva di un'altra.\n\nLa superficie diventa: `open(...)` (rifiuta oltre il limite), `get(id)`, `list()` (ordinata per `openedAt`, così due letture non si contraddicono), `decide(id, ...)`, `anchorOf(executionID)` (cerca in tutte le vive e restituisce anche l'id della conversazione), `closeOne(ctx, id)`, `shutdown(ctx)`. `current()` sparisce: è il nome del singolare, e lasciarlo come «la più recente» sarebbe una regola nascosta che un test finirebbe per fissare.\n\n`maxLiveConversations = 3` è una costante di package, unico punto di verità: il messaggio di rifiuto, il test unitario e lo smoke la leggono da lì e nessuno la riscrive. Tre e non «illimitate» perché ogni conversazione viva è un processo agente radicato nella stessa directory — l'isolamento delle directory è dichiarato fuori ambito — e un numero che nessuno dichiara è un numero che si scopre quando la macchina si ferma.\n\nIl rifiuto di AC-5 è costruito dallo stato e non da una frase fissa: dichiara il limite e **nomina** le conversazioni vive con id e titolo, perché «indica quali conversazioni chiudere» non è soddisfatto da un numero.\n\n**2. Journal per conversazione.**\n`conversationJournal` passa da `current *Record` + `lastWrittenID` a `entries map[string]*journalEntry{record, titleFromMessage, lastWrittenID}`. `begin`, `record`, `finish` prendono già — o prenderanno — l'id: `record(ctx, id, events, live)` esiste già con il controllo `j.current.ID != id`, che era la difesa contro la corsa fra sealing e resume; con la mappa il controllo diventa una lookup e la corsa smette di esistere. Il watermark per conversazione è ciò che impedisce che il polling di una conversazione riscriva il file di un'altra.\n\n**3. Rotte indirizzate per id.**\nCon due conversazioni vive, `GET /api/workspace/conversation` non ha più un referente: non c'è «la» conversazione del workspace. La famiglia singolare viene quindi **ritirata** e sostituita da quella indirizzata, sotto il prefisso di collezione che US-058 ha già introdotto:\n\n| prima | dopo |\n|---|---|\n| `POST /api/workspace/conversation` | `POST /api/workspace/conversations` |\n| `GET /api/workspace/conversation?after_id=` | `GET /api/workspace/conversations/{id}?after_id=` |\n| `POST /api/workspace/conversation/messages` | `POST /api/workspace/conversations/{id}/messages` |\n| `POST /api/workspace/conversation/proposal` | `POST /api/workspace/conversations/{id}/proposal` |\n| `DELETE /api/workspace/conversation` | `DELETE /api/workspace/conversations/{id}` |\n| `GET /api/workspace/conversations` | invariata |\n| `GET /api/workspace/conversations/{id}` (trascritto) | **unificata** con la lettura viva |\n| `POST /api/workspace/conversations/{id}/resume` | invariata come rotta, cambiata come semantica |\n\nL'unificazione della lettura è deliberata: oggi esistono due rotte che rispondono «una conversazione», una per la viva e una per la passata, e con N vive la scelta fra le due non sarebbe più derivabile dal solo id da parte del client. `GET /api/workspace/conversations/{id}` risponde con l'unico payload `conversationView`: se l'id è nel set vivo legge la sessione (eventi dal cursore, proposta pendente, blocchi run, journalling di passaggio) altrimenti legge il record dal `FileStore` e lo rende con `state` finale e nessun controllo di comando. Un id che non è né vivo né su disco è `404`.\n\n**4. Resume affiancato invece che sostitutivo.**\n`handleResumeWorkspaceConversation` oggi sigilla e chiude la viva prima di aprire la ripresa; quel blocco sparisce. La ripresa diventa una `open` come le altre, soggetta allo stesso limite e allo stesso rifiuto. Resta il rifiuto di riprendere una conversazione **che è viva adesso** — quella si continua scrivendoci dentro.\n\n**5. La chiusura del workspace chiude tutte (AC-6).**\n`workspaceSession.stop()` sigilla e chiude oggi una conversazione sola. Diventa un ciclo su `list()`: sigilla ogni voce, poi `shutdown(ctx)` rilascia tutti i processi sullo stesso contesto limitato. L'errore di una chiusura non deve impedire le altre — un processo lasciato vivo perché il precedente ha risposto male è esattamente ciò che AC-6 vieta.\n\n**6. Frontend: una pagina che mostra una conversazione fra N vive.**\n`app.js` tiene già `conversationsCurrentId`. Cambia il significato di ciò che le sta intorno: `releaseLiveConversation()` **sparisce** (era l'aggiramento del rifiuto), `openConversation`/`openSpecConversation` non chiudono più nulla, le chiamate diventano indirizzate per id, e il polling segue la conversazione mostrata — che è viva o passata, e questo lo dice il payload, non il client. La proiezione locale (`conversationEvents`, `conversationAfterID`, `conversationAnsweredApprovals`, `conversationHighlightAnchor`) viene azzerata quando cambia `conversationsCurrentId`: è il corrispettivo lato pagina di AC-2, perché una timeline non azzerata mostrerebbe nell'una i messaggi dell'altra.\n\n`conversation-index.js` già raggruppa sotto «In corso» tutte le voci con `live: true` e non ha alcun assunto di unicità: AC-3 è quindi in gran parte già vero, e resta da rendervi il rifiuto del limite come avviso della rail — il mockup lo prevede già («**2** in corso» nella topbar di `docs/mockups/redesign-chat/stato-b-storico.html`).\n\n### Decisioni architetturali\n\n**Ritiro della famiglia singolare invece di alias di compatibilità.** Le alternative erano tre. (a) Tenere `/api/workspace/conversation` come alias della conversazione «in primo piano»: scartata perché «in primo piano» è uno stato del browser e HTTP non ce l'ha, e la regola implicita («la più recente») verrebbe fissata da un test e diventerebbe un contratto che nessuno ha scelto. (b) Tenere il singolare come «l'unica viva, `409` se ce ne sono due»: scartata perché è una rotta che smette di funzionare proprio nel caso che questa spec introduce. (c) Ritiro e sostituzione: costa il porto meccanico di ~30 punti di chiamata in cinque smoke e in `app.js`, ma è l'unica in cui ogni rotta ha sempre un referente. Scelta (c). Non è un ADR — il progetto non tiene pagine `decision` e il gate Wiki è disattivato — ma è la decisione che va letta prima di leggere i task.\n\n**Limite come costante e non come configurazione.** La spec chiede «il numero massimo consentito», non «un numero configurabile». Una chiave in `.archetipo/config.yaml` sarebbe una superficie pubblica in più da validare, documentare e migrare, per un valore che nessuno ha chiesto di cambiare. Se servirà, la costante è già l'unico punto da cui partire.\n\n**Lo stato decisionale scende nella voce.** L'alternativa — una mappa `conversationID → watermark` accanto al set — è stata scartata: due strutture da tenere allineate sotto lo stesso lock sono due strutture che prima o poi si disallineano, e il campo appartiene alla conversazione per definizione.\n\n---\n\n## Baseline\n\nMisurata il 2026-08-22 su `/Users/stefanoleli/Project/Archetipo` (nessun worktree per questa spec: `workdir` = project root), prima di qualunque modifica.\n\n| Verifica | Risultato prima dell'implementazione | Conseguenza sul piano |\n|---|---|---|\n| `cd cli && gofmt -l .` | nessun output | ogni task che tocca file Go può pretendere `Expect: nessun output` |\n| `cd cli && go vet ./...` | nessun problema | idem: `Expect: nessun problema` è legittimo |\n| `cd cli && go build ./...` | compila pulito | idem |\n| `cd cli && go test ./...` | tutti i pacchetti verdi | i task Test possono pretendere il verde pieno, non solo «nessuna nuova rottura» |\n| `npm run test:web` | 172 test, 42 suite, 0 falliti | idem |\n| `npm run test:view-conversation-smoke` | PASS, 7 affermazioni provate (~2 min) | è la prova che il porto alle rotte per id in TASK-13 parte da verde: una rottura dopo il porto è del porto |\n| `golangci-lint run --timeout 5m ./...` | **non eseguibile: binario assente** (`golangci-lint not found`) | prerequisito d'ambiente, non un fallimento del codice. Chi implementa lo installa con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` prima del gate finale; se l'installazione non è possibile, il gate lo dichiara saltato con il motivo invece di dichiararlo verde |\n\nPrerequisiti d'ambiente rilevati e distinti dai fallimenti di codice: Go e Node installati e funzionanti; `golangci-lint` **assente**; gli smoke e2e compilano da sé la CLI in `test/e2e/.bin/` e non richiedono credenziali né rete oltre `127.0.0.1`; gli smoke di conversazione usano `test/e2e/support/fake-claude.mjs`, il cui shebang POSIX li fa saltare su Windows.\n\nNessun file toccato dal piano parte con diagnostiche locali di compilatore o linter: `gofmt`, `go vet` e `go build` sono puliti su tutto `cli/`.\n\n---\n\n## Mappa delle evidenze di accettazione\n\n| Criterio | Stato di partenza / fixture | Livello di test | Oracolo osservabile | Task che produce l'evidenza |\n|---|---|---|---|---|\n| AC-1 | workspace con provider `claude` puntato a `fake-claude.mjs`, una conversazione viva con storia già prodotta | e2e (`conversation-multi-view-smoke.mjs`) + unit Go | `POST /api/workspace/conversations` risponde `201` con un id **diverso**; `GET /api/workspace/conversations/{primo}` restituisce gli **stessi** eventi con gli stessi id di prima dell'apertura della seconda, e il pid del processo agente della prima — riportato dal processo stesso al control server — è invariato e ancora vivo secondo il sistema operativo | TASK-02, TASK-14 |\n| AC-2 | due conversazioni vive, due processi `fake-claude` distinti guidati frame per frame | e2e + unit Go | un sentinella scritto nella seconda raggiunge **solo** il processo della seconda (il control server registra quale pid ha ricevuto il frame `user`) e compare in `GET /api/workspace/conversations/{seconda}` e **mai** in `{prima}`; simmetricamente per la prima. Sul lato holder: una `decide` sulla prima non muove il watermark della seconda | TASK-02, TASK-09, TASK-14 |\n| AC-3 | workspace con due conversazioni vive e almeno una chiusa su disco | unit JS (`test/web/conversation-index.test.mjs`) + e2e | `GET /api/workspace/conversations` marca `live:true` su **entrambe** le vive e `live:false` sulla chiusa, con lo `state` finale di quest'ultima; `renderConversationIndex` disegna due voci sotto il gruppo «In corso» con il flag `is-live` e la chiusa fuori da quel gruppo | TASK-12, TASK-14 |\n| AC-4 | due conversazioni vive | e2e + test handler Go | `DELETE /api/workspace/conversations/{seconda}` risponde `200`, il sistema operativo riporta **morto** il pid della seconda e **vivo** quello della prima, `GET /api/workspace/conversations/{prima}` restituisce ancora `state: ACTIVE` e la sua storia intatta, e l'indice mostra la seconda `live:false` | TASK-09, TASK-14 |\n| AC-5 | `maxLiveConversations` conversazioni vive già aperte | unit Go + e2e | il `POST` successivo risponde `409` con un messaggio che contiene il numero limite **e** l'id e il titolo di ciascuna conversazione viva; nessun processo agente in più è stato avviato (il control server ne conta esattamente `maxLiveConversations`) e l'indice è byte-identico prima e dopo il rifiuto | TASK-02, TASK-09, TASK-14 |\n| AC-6 | due conversazioni vive, poi apertura di un altro workspace sullo stesso pid del viewer | e2e | dopo `POST /api/workspaces/{B}/open` il sistema operativo riporta morti **entrambi** i pid dei processi agente di A, i due record su disco sono sigillati con un `final_state` non vuoto, e `GET /api/workspace/conversations` sul workspace B non contiene alcuno dei due id | TASK-08, TASK-14 |\n\nQuesta è una mappa di accettazione, non un riassunto dei task. Ogni criterio ha un oracolo che sopravvive ai test double impiegati: l'unico elemento falso negli e2e è il binario dell'agente, e le due asserzioni che potrebbero essere aggirate da un mock — «l'agente ha ricevuto proprio questo messaggio» e «nessun agente resta in esecuzione» — sono chieste rispettivamente al control server (che registra il pid ricevente) e al sistema operativo per pid, mai alla risposta della rotta.\n\n---\n\n## Strategia di test\n\nLa strategia segue i tre livelli che il repository già usa per la conversazione, e assegna a ciascuno ciò che solo lui può provare.\n\n- **Unit Go (`cli/internal/web/*_test.go`)** — la concorrenza e i limiti dell'holder: `conversationSet` accetta fino a `maxLiveConversations`, rifiuta oltre nominando le vive, isola il watermark decisionale per conversazione, chiude una sola voce lasciando le altre, e `shutdown` rilascia **tutte** le voci anche quando una `CloseConversation` fallisce. Il journal: due conversazioni scritte in parallelo producono due file distinti e nessun watermark dell'una blocca l'altra.\n- **Test handler Go** — il contratto delle rotte per id sui doppi già presenti nel pacchetto (`conversation_test.go`, `conversations_test.go`, `conversation_proposal_test.go`, `conversation_resume_test.go`): `404` su id sconosciuto, `409` con la frase del limite, `DELETE` che non tocca le altre, proposta decisa nella conversazione giusta.\n- **Unit JS (`test/web/`)** — i renderer puri: l'indice con N vive, il gruppo «In corso» con più di una voce, l'avviso di limite. Nessun DOM e nessuna rete, come per tutti i moduli serviti da `archetipo view`.\n- **E2E (`test/e2e/conversation-multi-view-smoke.mjs`, nuovo)** — l'unica sede in cui «due agenti vivi insieme» è un fatto e non una simulazione: due processi `fake-claude` distinti, guidati frame per frame attraverso un control server locale, il viewer, il connettore, il provider `claude`, il suo client stream-json, le sessioni locali e il journal tutti reali.\n\n### Test E2E — simulazione utente\n\n**Framework:** harness Node del repository (`test/e2e/*-smoke.mjs`), agente falso `test/e2e/support/fake-claude.mjs`, nessuna credenziale e nessun traffico fuori da `127.0.0.1`.\n**Video dimostrativo:** atteso — la Dimostrazione della spec è filmabile (due conversazioni vive nella rail, scrittura nell'una, ritorno all'altra, chiusura, rifiuto del limite). La registrazione è di `archetipo-review`, non dell'implementazione.\n\n| Scenario | Flusso utente |\n|---|---|\n| Due vive insieme | Con una conversazione viva e la sua storia già prodotta, si apre una seconda conversazione: entrambe risultano `live` nell'indice, la prima conserva eventi e pid del suo agente |\n| Nessuna mescolanza | Si scrive un sentinella nella seconda: raggiunge solo il pid della seconda, compare solo nella sua storia; simmetricamente per la prima |\n| Chiusura selettiva | Si chiude la seconda: il suo pid è morto, quello della prima è vivo, la prima resta `ACTIVE` e l'indice la mostra ancora in corso |\n| Limite raggiunto | Aperte `maxLiveConversations` conversazioni, l'apertura successiva è rifiutata con `409` che dichiara il limite e nomina le vive; nessun processo in più è stato avviato |\n| Uscita dal workspace | Aperto un altro workspace sullo stesso pid del viewer, tutti i pid degli agenti del workspace lasciato sono morti e i loro record sono sigillati |\n\nLo smoke non contiene alcuna attesa arbitraria: ogni attesa interroga una rotta del viewer, il control server o il sistema operativo con un timeout che dichiara cosa aspettava e cosa è arrivato. Salta su Windows, dove lo shebang POSIX del falso non si applica.\n\n### Mockup\n\nNessun mockup nuovo è prodotto per questa spec: il contratto visivo è già `docs/mockups/redesign-chat/` — in particolare `stato-b-storico.html`, che disegna la rail dei thread con il gruppo «In corso» **plurale** e il conteggio «2 in corso» nella topbar, ed è già la fonte dei nomi di classe di `conversation-index.js`. La spec non introduce né una schermata né un componente nuovo: rende plurale una lista che il mockup disegnava già al plurale.\n\n---\n\n> \U0001F3A8 I mockup di riferimento per questa spec sono quelli già presenti in `docs/mockups/redesign-chat/` (nessun mockup nuovo è stato generato).\n\n_Piano generato con ARchetipo Planning — 2026-08-22_"
+tasks:
+  - id: TASK-01
+    title: conversationSet — l'holder passa da una conversazione a un insieme limitato
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      `cli/internal/web/conversation_state.go` tiene fino a `maxLiveConversations` conversazioni vive per workspace, ciascuna con il proprio stato decisionale, e rifiuta l'apertura oltre il limite con un messaggio che dichiara il limite e nomina le conversazioni vive.
+
+      ## Read
+      - `cli/internal/web/conversation_state.go` — per intero: `conversationState`, `conversationSnapshot`, `conversationOutcome`, e i metodi `open`, `decide`, `anchorOf`, `current`, `close`, `releaseCurrent`, `shutdown`. È il file che questo task riscrive.
+      - `cli/internal/web/session.go` — il campo `conversation *conversationState` e il suo uso in `stop()`, per sapere quali firme devono restare compatibili con il resto del pacchetto (che sarà aggiornato nei task successivi).
+      - `cli/internal/execution/localrun/registry.go` — `Register`/`Lookup`: il livello sottostante indicizza già le sessioni per run id, quindi N conversazioni vive non richiedono alcuna modifica lì.
+
+      ## Change
+      - `cli/internal/web/conversation_state.go` — riscrittura del tipo e dei suoi metodi.
+      - Non-goal espliciti: **non** toccare in questo task `conversation.go`, `conversations.go`, `conversation_journal.go`, `conversation_proposal.go`, `conversation_resume.go`, `workspace_runs.go`, `session.go`. Il pacchetto **non compilerà** alla fine di questo task e va bene: i chiamanti sono aggiornati dai task 03, 05, 06, 07 e 08. **Non** introdurre alcuna chiave di configurazione per il limite.
+
+      ## Steps
+      1. Aggiungi `const maxLiveConversations = 3` con il commento che ne dà la ragione: ogni conversazione viva è un processo agente radicato nella stessa directory di lavoro, e l'isolamento fra directory è fuori ambito per questa spec.
+      2. Introduci `type liveConversation struct` con i campi che oggi sono piatti su `conversationState`: `id`, `providerID`, `provider`, `collaborator`, `providerConfig`, `workingDir`, `openedAt`, `specCode`, `resumedFrom`, e lo stato decisionale `decidedProposalID`, `outcome`, `outcomes`.
+      3. Sostituisci `conversationState` con `conversationSet`, che tiene `mu sync.Mutex`, `live map[string]*liveConversation` e `closed bool`. Rinomina il costruttore in `newConversationSet()`.
+      4. `open(id, providerID, provider, collaborator, providerConfig, workingDir, openedAt, specCode, resumedFrom string/…) error`: mantieni le validazioni esistenti (id non vuoto, provider non nil, holder non chiuso), aggiungi il rifiuto per id già presente e il rifiuto per limite raggiunto. Il messaggio del limite è costruito da `limitReasonLocked()` (vedi passo 5). Ogni voce nasce con `decidedProposalID: 0`, `outcome: nil`, `outcomes: nil`.
+      5. Aggiungi `limitReasonLocked() string`, chiamata con `mu` già preso, che produce la frase di AC-5: dichiara `maxLiveConversations` e **elenca** le conversazioni vive per id, in ordine di `openedAt`. Il titolo non è noto all'holder: esporta invece l'elenco degli id e lascia che sia il chiamante HTTP (TASK-05) ad arricchirlo con il titolo dal journal. Perché la frase resti una sola, `limitReasonLocked` restituisce anche gli id in una struttura dedicata — `conversationLimitError{Limit int, LiveIDs []string}` che implementa `error` — così il chiamante può riformulare senza duplicare la regola.
+      6. `get(id string) (conversationSnapshot, bool)`: sostituisce `current()`. Restituisce una **copia**, con `outcomes` copiato come oggi.
+      7. `list() []conversationSnapshot`: tutte le vive, ordinate per `openedAt` crescente e a parità per id, così due letture successive non si contraddicono.
+      8. `decide(id string, proposalID int64, outcome conversationOutcome) error`: come oggi, ma sulla voce indicata; rifiuta su holder chiuso e su id non vivo.
+      9. `anchorOf(executionID string) (conversationID string, anchor int64, ok bool)`: cerca in tutte le vive e restituisce anche l'id della conversazione, perché con N vive «di quale conversazione è quell'ancora» è una domanda che ha una risposta diversa per ognuna.
+      10. `closeOne(ctx context.Context, id string) error`: rimuove la voce sotto lock, poi chiama `provider.CloseConversation` **fuori** dal lock; è idempotente su un id non vivo (nessun errore, nulla rilasciato).
+      11. `shutdown(ctx context.Context) error`: sotto lock svuota la mappa e imposta `closed = true`, poi fuori dal lock chiude **tutte** le voci raccolte; prosegue anche se una `CloseConversation` fallisce e restituisce gli errori uniti con `errors.Join`. Un processo lasciato vivo perché il precedente ha risposto male è esattamente ciò che AC-6 vieta.
+      12. Aggiorna i commenti del file: quelli attuali argomentano il singolare («One, not a map…») e vanno riscritti per dire perché adesso è un insieme e perché è limitato.
+      13. `cd cli && gofmt -w internal/web/conversation_state.go`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l internal/web/conversation_state.go`
+      - Expect: nessun output (baseline: `gofmt -l .` era vuoto).
+      - Run: `cd cli && go build ./internal/web/ 2>&1 | head -30`
+      - Expect: **errori di compilazione attesi e solo** nei file chiamanti non ancora aggiornati (`conversation.go`, `conversations.go`, `conversation_journal.go`, `conversation_proposal.go`, `conversation_resume.go`, `session.go`, `workspace_runs.go`), tutti della forma «undefined: … / too many arguments». Nessun errore deve provenire da `conversation_state.go` stesso.
+
+      ## Done
+      - [ ] `maxLiveConversations` esiste come costante di package, unico punto in cui il numero è scritto.
+      - [ ] AC-1 — `open` accetta una seconda conversazione mentre la prima è viva, e `get(primo)` continua a restituire la prima intatta.
+      - [ ] AC-2 — `decidedProposalID`, `outcome` e `outcomes` sono campi di `liveConversation` e non di `conversationSet`.
+      - [ ] AC-4 — `closeOne` rimuove e rilascia una sola voce.
+      - [ ] AC-5 — `open` oltre il limite restituisce un `conversationLimitError` che porta il limite e gli id delle vive.
+      - [ ] AC-6 — `shutdown` rilascia tutte le voci e non si ferma al primo errore.
+      - [ ] `gofmt -l` sul file è vuoto.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test unitari di conversationSet — limite, isolamento decisionale, chiusura selettiva e totale
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      `cli/internal/web/conversation_state_test.go` prova, senza HTTP e senza processi, che l'insieme regge N conversazioni vive, le isola, ne chiude una sola e le chiude tutte.
+
+      ## Read
+      - `cli/internal/web/conversation_state_test.go` — i test attuali e soprattutto il doppio di `execution.Conversationalist` che già usano: va riusato, non riscritto.
+      - `cli/internal/web/conversation_state.go` come riscritto da TASK-01.
+
+      ## Change
+      - `cli/internal/web/conversation_state_test.go` — adegua i test esistenti alle nuove firme e aggiungi i casi elencati sotto.
+      - Non-goal: nessun test HTTP qui (sono di TASK-09), nessun `net/http/httptest`.
+
+      ## Steps
+      1. Adegua i test esistenti: `newConversationState` → `newConversationSet`, `current()` → `get(id)`, `close(ctx)` → `closeOne(ctx, id)`.
+      2. Aggiungi «due conversazioni vive convivono»: apri A, apri B, verifica che `get(A)` e `get(B)` restituiscano entrambe uno snapshot valido con i propri `specCode`/`openedAt`, e che `list()` ne restituisca due nell'ordine di apertura.
+      3. Aggiungi «il watermark è per conversazione»: apri A e B, `decide(A, 7, outcome)`, verifica che `get(A).decidedProposalID == 7` e `get(B).decidedProposalID == 0` e che `get(B).outcomes` sia vuoto.
+      4. Aggiungi «oltre il limite si rifiuta nominando le vive»: apri `maxLiveConversations` conversazioni, la successiva `open` deve restituire un errore che `errors.As` riconosce come `*conversationLimitError`, con `Limit == maxLiveConversations` e `LiveIDs` contenente esattamente gli id aperti; verifica anche che il doppio del provider **non** abbia registrato alcuna apertura in più (l'holder non apre processi, ma il test deve provare che il rifiuto non ha alterato la mappa: `len(list()) == maxLiveConversations`).
+      5. Aggiungi «chiudere una non tocca le altre»: apri A e B, `closeOne(ctx, B)`, verifica che il doppio registri la chiusura del **solo** id B, che `get(B)` risponda `false` e che `get(A)` risponda ancora `true` con lo stesso `openedAt`.
+      6. Aggiungi «`closeOne` su un id sconosciuto è innocuo»: nessun errore, nessuna chiusura registrata dal doppio, `list()` invariata.
+      7. Aggiungi «`shutdown` chiude tutte anche se una fallisce»: configura il doppio perché `CloseConversation` fallisca sul secondo id, chiama `shutdown`, verifica che il doppio abbia ricevuto la chiusura di **tutti** gli id, che l'errore restituito contenga quello del secondo, che `list()` sia vuota e che una `open` successiva sia rifiutata perché l'holder è chiuso.
+      8. `cd cli && gofmt -w internal/web/conversation_state_test.go`.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/web/ -run 'TestConversationSet|TestConversationState' -count=1`
+      - Expect: tutti i test del filtro passano. Se il pacchetto non compila ancora per via dei chiamanti non aggiornati, esegui invece questo task **dopo** TASK-08 e dichiaralo nel commit; la dipendenza dichiarata resta TASK-01 perché è quella logica.
+      - Run: `cd cli && gofmt -l internal/web/`
+      - Expect: nessun output.
+
+      ## Done
+      - [ ] AC-1 — esiste un test in cui due conversazioni sono vive insieme e la prima è integra dopo l'apertura della seconda.
+      - [ ] AC-2 — esiste un test in cui una `decide` su A lascia il watermark e gli outcomes di B a zero.
+      - [ ] AC-4 — esiste un test in cui `closeOne(B)` rilascia il solo B e A resta viva.
+      - [ ] AC-5 — esiste un test che asserisce `Limit` e `LiveIDs` dell'errore di limite e che la mappa non è cambiata.
+      - [ ] AC-6 — esiste un test in cui `shutdown` chiude tutte le voci pur fallendo su una.
+      - [ ] `go test ./internal/web/` con il filtro passa e `gofmt -l` è vuoto.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Journal per conversazione — da un record a una mappa id → voce
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      `conversationJournal` tiene un record e un watermark **per ogni** conversazione viva, così due conversazioni scritte in parallelo producono due file distinti e nessuna riscrive l'altra.
+
+      ## Read
+      - `cli/internal/web/conversation_journal.go` — per intero: `conversationJournal`, `begin`, `record`, `finish`, `sealConversation`, `finalConversationState`, e il controllo `j.current.ID != id` in `record`, che è la difesa attuale contro la corsa fra sealing e resume.
+      - `cli/internal/conversationlog/file_store.go` — `Save`, `Get`, `List`: lo store è già per id e non cambia.
+
+      ## Change
+      - `cli/internal/web/conversation_journal.go` — struttura e metodi.
+      - Non-goal: **non** cambiare il formato di `conversationlog.Record` né lo `FileStore`. **Non** introdurre una cache di lettura: il journal continua a scrivere spesso e a leggere dal disco quando serve.
+
+      ## Steps
+      1. Introduci `type journalEntry struct { record conversationlog.Record; titleFromMessage bool; lastWrittenID int64 }`.
+      2. Sostituisci i campi `current`, `titleFromMessage`, `lastWrittenID` con `entries map[string]*journalEntry`, inizializzata nel costruttore.
+      3. `begin(ctx, snapshot, specCode, resumedFrom)`: crea la voce sotto `snapshot.id` invece di sovrascrivere `current`. Se una voce con quell'id esiste già, è un riavvio anomalo: sostituiscila e non fondere, perché un id è unico per costruzione.
+      4. `record(ctx, id, events, live)`: la lookup sostituisce il confronto `j.current.ID != id`. Se la voce non esiste, esci senza errore (una conversazione già sigillata e rimossa non va riscritta). Il resto — watermark, titolo, `LastMessageAt`, `MessageCount` — resta identico ma per voce.
+      5. `finish(ctx, id string, state execution.RunState) error`: aggiungi il parametro `id` (oggi assente), sigilla quella voce, la **rimuove** dalla mappa dopo il salvataggio e resta idempotente su un id sconosciuto. La rimozione è ciò che impedisce alla mappa di crescere per tutta la vita del viewer.
+      6. Aggiorna `sealConversation(ctx, snapshot)` perché passi `snapshot.id` a `finish`.
+      7. Riscrivi i commenti che argomentano il singolare («It holds *one* record because a workspace holds one conversation…»): adesso ne tiene una per conversazione viva, e il watermark per voce è ciò che impedisce al polling dell'una di riscrivere il file dell'altra.
+      8. `cd cli && gofmt -w internal/web/conversation_journal.go`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l internal/web/conversation_journal.go`
+      - Expect: nessun output.
+      - Run: `cd cli && go vet ./internal/web/ 2>&1 | head -30`
+      - Expect: gli unici errori residui provengono dai file chiamanti non ancora aggiornati (`conversation.go`, `conversations.go`, `conversation_proposal.go`, `conversation_resume.go`, `session.go`, `workspace_runs.go`); nessuno da `conversation_journal.go`.
+
+      ## Done
+      - [ ] AC-1 — `begin` su una seconda conversazione non tocca la voce della prima.
+      - [ ] AC-2 — il watermark è per voce: `record` su una conversazione non può far saltare la scrittura dell'altra.
+      - [ ] AC-4 — `finish(id)` sigilla e rimuove una sola voce.
+      - [ ] `finish` accetta l'id ed è idempotente su un id sconosciuto.
+      - [ ] `gofmt -l` sul file è vuoto.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test unitari del journal multi-conversazione
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      `cli/internal/web/conversation_journal_test.go` prova che due conversazioni journalizzate insieme producono due file distinti, con storie, titoli e watermark indipendenti.
+
+      ## Read
+      - `cli/internal/web/conversation_journal_test.go` — i test attuali e il modo in cui costruiscono uno `FileStore` su una directory temporanea; va riusato.
+      - `cli/internal/web/conversation_journal.go` come riscritto da TASK-03.
+
+      ## Change
+      - `cli/internal/web/conversation_journal_test.go` — adegua i test esistenti alla firma di `finish(ctx, id, state)` e aggiungi i casi sotto.
+      - Non-goal: nessun test di rotta HTTP qui.
+
+      ## Steps
+      1. Adegua le chiamate esistenti a `finish` passando l'id della conversazione journalizzata.
+      2. Aggiungi «due conversazioni, due file»: `begin` su A e su B, `record` di eventi diversi su ciascuna, poi leggi dallo store entrambi i record e verifica che gli eventi di A siano solo in A e quelli di B solo in B.
+      3. Aggiungi «i titoli non si contaminano»: il primo messaggio umano di A e quello di B sono testi diversi; verifica che ogni record porti il proprio, e che un secondo messaggio in A non rinomini né A né B.
+      4. Aggiungi «il watermark non blocca l'altra»: scrivi in A eventi con id alti, poi in B eventi con id bassi, e verifica che B sia comunque scritto — è la regressione che una singola `lastWrittenID` condivisa causerebbe.
+      5. Aggiungi «`finish` sigilla e rimuove una sola voce»: `finish(A, RunClosed)`, verifica che il record A su disco porti `final_state` e che un `record` successivo su A non riscriva nulla, mentre `record` su B continua a scrivere.
+      6. `cd cli && gofmt -w internal/web/conversation_journal_test.go`.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/web/ -run 'TestConversationJournal' -count=1`
+      - Expect: tutti i test del filtro passano. Come per TASK-02, se il pacchetto non compila ancora, esegui questo task dopo TASK-08.
+      - Run: `cd cli && gofmt -l internal/web/`
+      - Expect: nessun output.
+
+      ## Done
+      - [ ] AC-1 — un test prova che journalizzare una seconda conversazione lascia intatto il record della prima.
+      - [ ] AC-2 — un test prova che eventi e titolo non passano da una conversazione all'altra.
+      - [ ] AC-2 — un test prova che il watermark di una conversazione non impedisce la scrittura dell'altra.
+      - [ ] AC-4 — un test prova che `finish` su una voce non ferma la scrittura dell'altra.
+      - [ ] `go test` con il filtro passa e `gofmt -l` è vuoto.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Rotte della conversazione indirizzate per id — apertura, lettura unificata, messaggio, chiusura
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Le rotte della conversazione nominano sempre la conversazione su cui agiscono: la famiglia singolare `/api/workspace/conversation*` è sostituita da `/api/workspace/conversations` e `/api/workspace/conversations/{id}/…`, e l'apertura oltre il limite risponde `409` dichiarando il limite e nominando le conversazioni da chiudere.
+
+      ## Read
+      - `cli/internal/web/server.go` righe ~255-290 — la registrazione delle cinque rotte singolari e delle tre di collezione, con i commenti che argomentano il singolare.
+      - `cli/internal/web/conversation.go` — per intero: `conversationViewOf`, `handleGetWorkspaceConversation`, `handleOpenWorkspaceConversation`, `handleSendWorkspaceConversationMessage`, `handleCloseWorkspaceConversation`, `heldConversationTarget`, `conversationSessionOf`, `conversationRunsOf`.
+      - `cli/internal/web/conversations.go` — `handleListWorkspaceConversations` (il `live` derivato da `snapshot.id == record.ID`) e `handleGetWorkspaceConversationTranscript`, che questo task fonde nella lettura per id.
+      - `cli/internal/iox/` — `NewConflict`, `NewNotFound`, `NewInvalidInput`: il vocabolario dei rifiuti, da riusare senza inventarne uno nuovo.
+
+      ## Change
+      - `cli/internal/web/server.go` — sostituzione delle rotte.
+      - `cli/internal/web/conversation.go` — handler per id.
+      - `cli/internal/web/conversations.go` — `live` calcolato dall'insieme; `handleGetWorkspaceConversationTranscript` assorbito dalla lettura per id.
+      - Non-goal: **non** lasciare alias sulle vecchie rotte singolari (la decisione e le alternative scartate sono nel corpo del piano). **Non** toccare `conversation_proposal.go` (TASK-06) né `conversation_resume.go` (TASK-07) né `session.go` (TASK-08). **Non** toccare `app.js` (TASK-10) né gli smoke (TASK-13).
+
+      ## Steps
+      1. In `server.go` sostituisci le registrazioni:
+         - `POST /api/workspace/conversations` → `handleOpenWorkspaceConversation`
+         - `GET /api/workspace/conversations` → `handleListWorkspaceConversations` (invariata)
+         - `GET /api/workspace/conversations/{id}` → `handleGetWorkspaceConversation` (lettura unificata)
+         - `POST /api/workspace/conversations/{id}/messages` → `handleSendWorkspaceConversationMessage`
+         - `DELETE /api/workspace/conversations/{id}` → `handleCloseWorkspaceConversation`
+         Rimuovi le cinque `…/conversation…` singolari e riscrivi il commento che diceva «a workspace holds exactly one conversation».
+      2. `handleOpenWorkspaceConversation`: sostituisci il blocco «rifiuta se una è già aperta» con la gestione dell'errore di limite restituito da `conversationSet.open`. Su `*conversationLimitError` rispondi `iox.NewConflict` con un messaggio che dichiara `maxLiveConversations` **e** elenca le vive con id e titolo — il titolo si legge dallo store del journal (`ws.conversationStore().Get`) per ciascun `LiveIDs`; se una lettura fallisce, usa il solo id invece di far fallire il rifiuto. Hint: chiudere una delle conversazioni elencate.
+         Attenzione all'ordine: la `open` del provider avviene **prima** dell'`open` dell'holder, quindi un rifiuto per limite scoperto solo dall'holder lascerebbe un processo agente acceso. Sposta il controllo del limite **prima** di `target.provider.OpenConversation` con una `canOpen()` sull'insieme, e mantieni comunque il ramo di recupero esistente (chiusura del processo appena aperto) per la corsa fra due richieste concorrenti.
+      3. `handleGetWorkspaceConversation`: prende `id` da `r.PathValue("id")`. Se `ws.conversation.get(id)` risponde `true`, rendi la vista viva come oggi (`heldConversationTarget`, `conversationViewOf`, journalling di passaggio). Altrimenti leggi il record dallo store: se esiste, rendi la stessa `conversationView` con gli eventi del record, lo `state` finale del record e nessuna proposta pendente; se non esiste rispondi `404` con la formula già usata da `handleGetWorkspaceConversationTranscript`.
+      4. Elimina `handleGetWorkspaceConversationTranscript` e `conversationTranscriptView` da `conversations.go`, riusandone i messaggi di errore nel ramo `404` del passo 3, così i due rifiuti non divergono in due vocabolari.
+      5. `handleListWorkspaceConversations`: sostituisci `snapshot.id == record.ID` con l'appartenenza all'insieme delle vive — costruisci una `map[string]bool` da `ws.conversation.list()` una volta sola e consultala per ogni record. È AC-3 al livello della rotta.
+      6. `handleSendWorkspaceConversationMessage` e `handleCloseWorkspaceConversation`: prendono `id` da `r.PathValue("id")` e usano `get(id)` / `closeOne(ctx, id)`. Il `409` «no conversation is open» diventa un `404` che nomina l'id quando la conversazione non è viva, e resta `409` con il motivo quando è viva ma non comandabile.
+      7. Verifica che `conversationViewOf` non usi più alcuno stato singolare: riceve già lo snapshot dal chiamante, quindi dovrebbe bastare la firma attuale.
+      8. `cd cli && gofmt -w internal/web/`.
+
+      ## Verify
+      - Run: `cd cli && go build ./... 2>&1 | head -30`
+      - Expect: gli unici errori residui provengono da `conversation_proposal.go`, `conversation_resume.go`, `workspace_runs.go` e `session.go`, non ancora aggiornati.
+      - Run: `cd cli && gofmt -l .`
+      - Expect: nessun output.
+
+      ## Done
+      - [ ] AC-1 — `POST /api/workspace/conversations` non rifiuta più perché una conversazione è già viva.
+      - [ ] AC-2 — ogni rotta di lettura, messaggio e chiusura nomina la conversazione nel path.
+      - [ ] AC-3 — `GET /api/workspace/conversations` marca `live:true` su tutte le vive.
+      - [ ] AC-4 — `DELETE /api/workspace/conversations/{id}` chiude solo quella.
+      - [ ] AC-5 — l'apertura oltre il limite risponde `409` con il numero limite e l'elenco delle vive, **prima** che un processo agente venga avviato.
+      - [ ] Nessuna rotta `/api/workspace/conversation` (singolare) resta registrata in `server.go`.
+      - [ ] `gofmt -l .` è vuoto.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Proposte e blocchi run per conversazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      La decisione su una proposta e l'ancoraggio di una run nominano la conversazione a cui appartengono, così una proposta decisa in una conversazione non risulta decisa in un'altra.
+
+      ## Read
+      - `cli/internal/web/conversation_proposal.go` — `handleDecideWorkspaceConversationProposal` e i punti alle righe ~306, ~349, ~353, ~387, ~399 dove usa `ws.conversation.current()` e `ws.conversation.decide(...)`.
+      - `cli/internal/web/workspace_runs.go` righe ~80-115 — `handleGetWorkspaceRuns`, dove `ws.conversation.current()` e `ws.conversation.anchorOf(record.ID)` legano una run alla (unica) conversazione.
+      - `cli/internal/web/conversation.go` — `conversationRunsOf`, per confermare che lavora già solo sullo snapshot ricevuto.
+
+      ## Change
+      - `cli/internal/web/conversation_proposal.go` — handler indirizzato per id.
+      - `cli/internal/web/workspace_runs.go` — ancora cercata su tutte le vive.
+      - `cli/internal/web/server.go` — registrazione di `POST /api/workspace/conversations/{id}/proposal`.
+      - Non-goal: **non** cambiare il payload della decisione né il vocabolario `accept`/`decline`. **Non** cambiare la semantica di `GET /api/workspace/runs` oltre all'aggiunta del campo che nomina la conversazione.
+
+      ## Steps
+      1. In `server.go` sostituisci `POST /api/workspace/conversation/proposal` con `POST /api/workspace/conversations/{id}/proposal`.
+      2. In `conversation_proposal.go` leggi `id` da `r.PathValue("id")` e sostituisci ogni `ws.conversation.current()` con `ws.conversation.get(id)`; se non è viva rispondi `404` nominando l'id, con la stessa formula di TASK-05.
+      3. Sostituisci `ws.conversation.decide(proposalID, outcome)` con `ws.conversation.decide(id, proposalID, outcome)` in entrambi i punti, e le due riletture `current()` successive con `get(id)`.
+      4. In `workspace_runs.go` sostituisci `snapshot, conversationOpen := ws.conversation.current()` con la nuova `anchorOf(record.ID)`, che restituisce anche l'id della conversazione. Il campo che oggi dice «questa run appartiene alla conversazione» deve portare quell'id: con N vive, «la conversazione» non identifica più nulla.
+      5. Aggiungi al payload della voce run il campo `conversation_id` (omitempty) e documentane nel commento la ragione: la rail delle run deve poter portare a **quale** conversazione ha chiesto quella run.
+      6. `cd cli && gofmt -w internal/web/`.
+
+      ## Verify
+      - Run: `cd cli && go build ./... 2>&1 | head -30`
+      - Expect: gli unici errori residui provengono da `conversation_resume.go` e `session.go`.
+      - Run: `cd cli && gofmt -l .`
+      - Expect: nessun output.
+
+      ## Done
+      - [ ] AC-2 — la decisione su una proposta è registrata sulla conversazione nominata nel path e su nessun'altra.
+      - [ ] AC-2 — `anchorOf` restituisce l'id della conversazione che ha chiesto la run.
+      - [ ] `POST /api/workspace/conversations/{id}/proposal` è registrata e la singolare non esiste più.
+      - [ ] `gofmt -l .` è vuoto.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: La ripresa affianca invece di sostituire
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-06
+    body: |-
+      ## Objective
+      `POST /api/workspace/conversations/{id}/resume` apre una conversazione **accanto** a quelle vive invece di chiudere la viva, ed è soggetta allo stesso limite e allo stesso rifiuto dell'apertura ordinaria.
+
+      ## Read
+      - `cli/internal/web/conversation_resume.go` righe ~130-215 — il blocco che rileva la viva (`ws.conversation.current()`), la sigilla (`ws.sealConversation`) e la chiude (`ws.conversation.close`) prima di aprire la ripresa, e la `open` finale.
+      - `cli/internal/web/conversation.go` — `handleOpenWorkspaceConversation` come riscritto da TASK-05: la ripresa deve rifiutare il limite con la **stessa** frase, non con una seconda formulazione.
+
+      ## Change
+      - `cli/internal/web/conversation_resume.go` — rimozione del sealing/chiusura preventivi e aggiunta del controllo di limite.
+      - Non-goal: **non** cambiare `transcriptOf`, il limite di contesto, i prefissi del trascritto né la semantica di `resumed_from`. **Non** riaprire la sessione originale dell'agente: resta fuori ambito per la spec.
+
+      ## Steps
+      1. Sostituisci `live, hasLive := ws.conversation.current()` con `_, isLive := ws.conversation.get(record.ID)`: serve solo a mantenere il rifiuto «questa conversazione è viva adesso, scrivici dentro invece di riprenderla».
+      2. Elimina il blocco `if hasLive { ws.sealConversation(...); ws.conversation.close(...) }` e riscrivi il commento che lo giustificava («so the workspace is never holding two live conversations»): adesso il workspace ne tiene fino a `maxLiveConversations`, e chiudere la viva per riprenderne una passata sarebbe proprio ciò che AC-1 vieta.
+      3. Applica il controllo di limite **prima** di `target.provider.OpenConversation`, con la stessa funzione e la stessa frase di TASK-05 — estraila in un helper condiviso in `conversation.go` (per esempio `refuseIfConversationLimitReached(ws) error`) perché il messaggio esista in un solo punto.
+      4. Verifica che la `open` finale continui a passare `record.SpecCode` e `record.ID` come `resumedFrom`.
+      5. `cd cli && gofmt -w internal/web/conversation_resume.go`.
+
+      ## Verify
+      - Run: `cd cli && go build ./... 2>&1 | head -30`
+      - Expect: l'unico errore residuo proviene da `session.go`.
+      - Run: `cd cli && gofmt -l .`
+      - Expect: nessun output.
+
+      ## Done
+      - [ ] AC-1 — riprendere una conversazione passata non chiude alcuna conversazione viva.
+      - [ ] AC-5 — la ripresa oltre il limite è rifiutata con la medesima frase dell'apertura, prodotta da un solo punto del codice.
+      - [ ] Il rifiuto «questa conversazione è già viva, scrivici dentro» è conservato.
+      - [ ] `gofmt -l .` è vuoto.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Chiudere il workspace chiude tutte le sue conversazioni vive
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      `workspaceSession.stop()` sigilla e rilascia **ogni** conversazione viva del workspace che si sta lasciando, senza fermarsi al primo errore, e il pacchetto `cli/...` torna a compilare per intero.
+
+      ## Read
+      - `cli/internal/web/session.go` righe ~150-190 — `stop()`, il contesto limitato `conversationCloseTimeout` e il blocco `if snapshot, held := ws.conversation.current(); held { ws.sealConversation(...) }` seguito da `ws.conversation.shutdown(...)`.
+      - `cli/internal/web/conversation_journal.go` — `sealConversation` come aggiornata da TASK-03 (prende l'id).
+      - `cli/internal/web/conversation_state.go` — `list()` e `shutdown()` come scritte da TASK-01.
+
+      ## Change
+      - `cli/internal/web/session.go` — il campo `conversation *conversationState` diventa `*conversationSet`, il costruttore usa `newConversationSet()`, e `stop()` cicla su `list()`.
+      - Non-goal: **non** cambiare l'ordine delle altre fasi di `stop()` (cancel, drain del dispatch, chiusura dei follower), che restano com'erano. **Non** allungare `conversationCloseTimeout` in questo task: se N chiusure non stanno nella finestra, è un fatto da misurare nello smoke, non da indovinare qui.
+
+      ## Steps
+      1. Cambia il tipo del campo `conversation` in `*conversationSet` e il costruttore in `newConversationSet()`; aggiorna il commento del campo, che oggi dice «the single free conversation of *this workspace*».
+      2. In `stop()`, sostituisci il blocco singolo con `for _, snapshot := range ws.conversation.list() { ws.sealConversation(closeCtx, snapshot) }`, poi `_ = ws.conversation.shutdown(closeCtx)` come oggi.
+      3. Verifica che `sealConversation` sia chiamata **prima** di `shutdown`: dopo lo shutdown l'insieme è vuoto e non ci sarebbe più nulla da sigillare.
+      4. Ricompila l'intero modulo e correggi gli ultimi punti di chiamata rimasti — attesi in `conversations.go` se il passo 5 di TASK-05 è stato applicato solo parzialmente.
+      5. `cd cli && gofmt -w .`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./...`
+      - Expect: nessun output da `gofmt`, nessun problema da `vet`, compilazione pulita (baseline: tutti e tre puliti).
+      - Run: `cd cli && go test ./... 2>&1 | tail -20`
+      - Expect: i test dei pacchetti diversi da `internal/web` restano verdi come in baseline; i fallimenti in `internal/web` sono ammessi **solo** nei test non ancora adeguati, che TASK-09 aggiorna. Elenca esplicitamente quali falliscono nel commit.
+
+      ## Done
+      - [ ] AC-6 — `stop()` sigilla ogni conversazione viva e poi le rilascia tutte.
+      - [ ] `cd cli && go build ./...` compila l'intero modulo.
+      - [ ] `gofmt -l .` è vuoto e `go vet ./...` non riporta problemi.
+      - [ ] I fallimenti residui di `go test` sono solo test da adeguare, elencati per nome.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Test degli handler — rotte per id, rifiuto del limite, chiusura selettiva
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-08
+    body: |-
+      ## Objective
+      I test HTTP del pacchetto `web` provano sul contratto delle rotte ciò che i test unitari provano sull'holder: due conversazioni vive convivono, i messaggi non si mescolano, chiuderne una lascia l'altra viva, e l'apertura oltre il limite è rifiutata con il numero e con l'elenco delle vive.
+
+      ## Read
+      - `cli/internal/web/conversation_test.go` (1246 righe) — i doppi di provider e collaborator già presenti, il modo in cui montano il `Server` e leggono le risposte; vanno riusati, non riscritti.
+      - `cli/internal/web/conversations_test.go`, `conversation_proposal_test.go`, `conversation_resume_test.go` — le stesse strutture per le altre rotte.
+      - I file modificati da TASK-05, TASK-06 e TASK-07, per i path e le formule dei rifiuti.
+
+      ## Change
+      - `cli/internal/web/conversation_test.go`, `conversations_test.go`, `conversation_proposal_test.go`, `conversation_resume_test.go` — adeguamento dei path e nuovi casi.
+      - Non-goal: **non** avviare processi reali né sostituire i doppi con l'agente falso (è compito dello smoke e2e).
+
+      ## Steps
+      1. Adegua ogni chiamata ai nuovi path: `POST /api/workspace/conversations`, `GET|DELETE /api/workspace/conversations/{id}`, `POST /api/workspace/conversations/{id}/messages`, `POST /api/workspace/conversations/{id}/proposal`. Elimina i test che asserivano il vecchio `409` «is already open for this workspace» all'apertura di una seconda conversazione: quel rifiuto non esiste più.
+      2. Aggiungi «due vive, letture separate»: apri A e B, verifica `201` con id distinti, poi che `GET .../{A}` e `GET .../{B}` rispondano ciascuna con la propria `conversation.id` e che nessuna riporti gli eventi dell'altra.
+      3. Aggiungi «il messaggio va alla conversazione del path»: invia un testo sentinella a `{B}`; il doppio del collaborator deve registrare la consegna con `RunID == B` e mai con `A`.
+      4. Aggiungi «il limite è rifiutato prima che un processo esista»: apri `maxLiveConversations` conversazioni, poi una in più; verifica `409`, che il messaggio contenga la rappresentazione del numero limite e **tutti** gli id vivi, e che il doppio del provider abbia registrato esattamente `maxLiveConversations` `OpenConversation` — è ciò che prova che il controllo precede l'apertura del processo.
+      5. Aggiungi «chiudere una non tocca l'altra»: `DELETE .../{B}` risponde `200`, il doppio registra la chiusura del solo B, `GET .../{A}` risponde ancora con `state: ACTIVE`, e `GET /api/workspace/conversations` marca A `live:true` e B `live:false`.
+      6. Aggiungi «id sconosciuto»: `GET`, `POST .../messages` e `DELETE` su un id che non è né vivo né su disco rispondono `404` nominando l'id, e la lettura dell'indice resta byte-identica prima e dopo i tre rifiuti.
+      7. Aggiungi «lettura unificata»: `GET .../{id}` su una conversazione **chiusa** presente su disco risponde `200` con gli eventi del record e uno `state` non `ACTIVE`.
+      8. In `conversation_resume_test.go` aggiungi «la ripresa non chiude la viva»: con A viva, riprendi un record passato; verifica `201`, che A sia ancora viva e che il doppio non abbia registrato alcuna chiusura di A.
+      9. In `conversation_proposal_test.go` aggiungi «la decisione resta nella sua conversazione»: decidi una proposta in A e verifica che una lettura di B non riporti alcun `outcome`.
+      10. `cd cli && gofmt -w internal/web/`.
+
+      ## Verify
+      - Run: `cd cli && go test ./internal/web/ -count=1`
+      - Expect: tutti i test del pacchetto passano (baseline: `go test ./...` era interamente verde).
+      - Run: `cd cli && gofmt -l . && go vet ./...`
+      - Expect: nessun output, nessun problema.
+
+      ## Done
+      - [ ] AC-1 — un test HTTP prova che l'apertura di una seconda conversazione risponde `201` e lascia la prima leggibile e attiva.
+      - [ ] AC-2 — un test prova che un messaggio è consegnato con il `RunID` della conversazione nominata nel path e con nessun altro.
+      - [ ] AC-3 — un test prova che l'indice marca `live` tutte e sole le vive.
+      - [ ] AC-4 — un test prova che `DELETE` di una conversazione lascia l'altra `ACTIVE`.
+      - [ ] AC-5 — un test prova il `409` con numero limite ed elenco delle vive, e che il provider non ha aperto processi oltre il limite.
+      - [ ] `go test ./internal/web/` è verde e `gofmt`/`vet` sono puliti.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Frontend — la pagina mostra una conversazione fra N vive
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      `cli/internal/web/assets/app.js` apre, legge, scrive e chiude conversazioni nominandole per id, non chiude più la conversazione viva per aprirne un'altra, e azzera la proiezione locale quando cambia la conversazione mostrata.
+
+      ## Read
+      - `cli/internal/web/assets/app.js` righe ~3920-4520 — l'intera sezione della conversazione: variabili di stato, `bindConversationPanel`, `bindConversationsRail`, `loadConversationsIndex`, `liveConversationEntry`, `openConversationThread`, `transcriptConversationView`, `resumeConversationThread`, `openSpecConversation`, `resetConversationState`, `applyConversationView`, `loadConversation`, `startConversationPolling`, `releaseLiveConversation`, `openConversation`, `sendConversationMessage`, `closeConversation`, `decideProposal`, `respondConversationApproval`.
+      - `docs/mockups/redesign-chat/stato-b-storico.html` e `stato-a-conversazione.html` — il contratto visivo già esistente: la rail con il gruppo «In corso» plurale e il conteggio in topbar. **Non generare mockup nuovi.**
+
+      ## Change
+      - `cli/internal/web/assets/app.js` — solo la sezione conversazione e la rail.
+      - Non-goal: **non** cambiare il layout né `workspace-layout.js`. **Non** introdurre scorciatoie da tastiera per passare fra conversazioni (fuori ambito). **Non** aggiungere un secondo timer: la rail continua a essere riletta dal giro di polling della conversazione mostrata.
+
+      ## Steps
+      1. Sostituisci ogni URL: `POST /api/workspace/conversation` → `POST /api/workspace/conversations`; `GET|DELETE /api/workspace/conversation?after_id=` → `.../conversations/{id}?after_id=`; `/api/workspace/conversation/messages` → `/api/workspace/conversations/{id}/messages`; `/api/workspace/conversation/proposal` → `/api/workspace/conversations/{id}/proposal`. L'id è sempre `conversationsCurrentId`, già presente.
+      2. **Elimina** `releaseLiveConversation()` e ogni sua chiamata in `openConversation` e `openSpecConversation`: era l'aggiramento del rifiuto singolare, e oggi chiuderebbe una conversazione che AC-1 vuole viva.
+      3. Introduci `switchToConversation(id)`, unico punto che cambia `conversationsCurrentId`: ferma il polling, azzera `conversationEvents`, `conversationAfterID`, `conversationAnsweredApprovals`, `conversationHighlightAnchor`, `conversationRefusal`, `conversationLink` e `conversationCloseArmed`, imposta il nuovo id, poi legge `GET /api/workspace/conversations/{id}?after_id=0`. È il corrispettivo lato pagina di AC-2: una timeline non azzerata mostrerebbe nell'una i messaggi dell'altra. `conversationDraft` **non** viene azzerata qui — resta di competenza del solo cambio di workspace, come già documentato.
+      4. Riscrivi `openConversationThread(id)` come chiamata a `switchToConversation(id)`: la distinzione fra viva e passata la fa il payload (`conversation.state`), non più il client, quindi `conversationTranscript` e `transcriptConversationView()` spariscono e la vista passata è disegnata dallo stesso ramo della viva.
+      5. `sendConversationMessage()`: la scelta fra messaggio e ripresa non guarda più `conversationTranscript` ma lo stato della conversazione mostrata — `ACTIVE` scrive su `.../messages`, qualunque altro stato chiama `.../resume`.
+      6. `startConversationPolling()` segue `conversationsCurrentId` e si ferma da sé quando la conversazione mostrata non è più `ACTIVE` e una lettura non ha portato nulla, come oggi. Se `conversationsCurrentId` cambia mentre un tick è in volo, il risultato di quel tick va scartato: confronta l'id per cui la richiesta era partita con quello corrente prima di applicare la vista.
+      7. `openConversation`/`openSpecConversation`: dopo il `201` chiamano `switchToConversation(nuovoId)` invece di manipolare a mano i contatori; in caso di `409` mostrano il rifiuto del server verbatim con `showConversationRefusal(err)` — la frase del limite è quella del server e non ne va scritta una seconda qui.
+      8. `resetConversationState()` resta il punto del cambio di workspace: azzera anche `conversationsCurrentId` e la rail, come già fa.
+      9. Verifica a mano nel browser (`archetipo view`) che aprendo due conversazioni entrambe compaiano sotto «In corso» e che il passaggio dall'una all'altra non trascini messaggi.
+
+      ## Verify
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && npm run test:web`
+      - Expect: 172 test verdi come in baseline (i moduli puri non cambiano in questo task; una rottura qui indica un errore di sintassi introdotto in `app.js`, che i test caricano indirettamente solo se importato — in tal caso vale il controllo sintattico sotto).
+      - Run: `node --check cli/internal/web/assets/app.js`
+      - Expect: nessun output.
+      - Run: `grep -n "api/workspace/conversation[^s]" cli/internal/web/assets/app.js`
+      - Expect: nessuna corrispondenza — nessuna rotta singolare residua.
+
+      ## Done
+      - [ ] AC-1 — aprire una conversazione non ne chiude alcuna: `releaseLiveConversation` non esiste più nel file.
+      - [ ] AC-2 — `switchToConversation` è l'unico punto che cambia la conversazione mostrata e azzera la proiezione locale; un tick di polling per un id superato viene scartato.
+      - [ ] AC-4 — la chiusura chiama `DELETE .../conversations/{id}` e non tocca lo stato delle altre.
+      - [ ] AC-5 — il rifiuto del limite mostrato è quello del server, verbatim.
+      - [ ] `node --check` passa e il grep sulle rotte singolari è vuoto.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: La rail dei thread rende N conversazioni vive e l'avviso di limite
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-10
+    body: |-
+      ## Objective
+      `conversation-index.js` disegna più voci sotto il gruppo «In corso» senza alcun assunto di unicità e rende l'avviso che il limite di conversazioni vive è stato raggiunto, con i nomi di classe già stabiliti dal mockup.
+
+      ## Read
+      - `cli/internal/web/assets/conversation-index.js` — per intero: `renderConversationIndex`, `renderGroup`, `renderThread`, `renderMeta`, `isLive`, `TEXT`, e i commenti che dichiarano il mockup come contratto visivo.
+      - `docs/mockups/redesign-chat/stato-b-storico.html` righe ~35-95 — il gruppo «In corso» con due voci, il flag `thread-flag is-live` e il conteggio «2 in corso» in topbar. **Non generare mockup nuovi**: questo è il contratto.
+      - `cli/internal/web/assets/app.css` — le regole `.thread-flag`, `.rail-group`, `.rail-empty`, per riusare le classi esistenti invece di inventarne.
+
+      ## Change
+      - `cli/internal/web/assets/conversation-index.js` — nessun assunto di unicità, nuovo `renderLimitNotice`.
+      - `cli/internal/web/assets/app.css` — solo se manca una regola per la classe dell'avviso.
+      - `cli/internal/web/assets/app.js` — montaggio dell'avviso nella rail.
+      - Non-goal: **non** aggiungere il campo di ricerca né il suggerimento da tastiera che il mockup disegna: restano fuori ambito, e un controllo inerte è una promessa che la pagina non mantiene.
+
+      ## Steps
+      1. Verifica e documenta con un commento che `renderGroup(TEXT.groupLive, live, …)` già rende N voci: `entries.filter(isLive)` non ha alcun limite. Se emerge un punto che assume una sola viva (per esempio un `find` al posto di un `filter`), correggilo.
+      2. Aggiungi a `TEXT` la voce dell'avviso di limite e `renderLimitNotice(reason)`: restituisce la stringa vuota per un motivo assente, altrimenti un blocco `<p class="rail-notice" role="status">` con il testo **del server**, sottoposto a `escapeHtml`. Il modulo non compone la frase e non conosce il numero: dichiararlo qui sarebbe una seconda verità sul limite.
+      3. Espone `renderLimitNotice` sia in `module.exports` sia su `window.ConversationIndex`, come gli altri.
+      4. In `app.js`, quando un'apertura è rifiutata, conserva il motivo in una variabile della rail e passala a `renderConversationsRail()`, che la antepone alla lista. Il motivo si azzera al primo esito positivo di un'apertura o di una chiusura.
+      5. Se `app.css` non ha una regola per `.rail-notice`, aggiungila accanto a `.rail-empty` riusandone i token di colore e spaziatura.
+      6. Run: `node --check cli/internal/web/assets/conversation-index.js`.
+
+      ## Verify
+      - Run: `node --check cli/internal/web/assets/conversation-index.js && node --check cli/internal/web/assets/app.js`
+      - Expect: nessun output.
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && npm run test:web`
+      - Expect: 172 test verdi (i nuovi arrivano con TASK-12; qui non deve rompersi nulla di esistente).
+
+      ## Done
+      - [ ] AC-3 — il gruppo «In corso» rende tutte le voci con `live:true`, senza alcun `find` o assunto di unicità.
+      - [ ] AC-5 — `renderLimitNotice` rende il motivo del server verbatim, senza comporre né conoscere il numero limite.
+      - [ ] I nomi di classe usati sono quelli di `docs/mockups/redesign-chat/`; nessun mockup nuovo è stato creato.
+      - [ ] `node --check` passa su entrambi i moduli e `npm run test:web` resta verde.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Test dei renderer — più vive nell'indice e avviso di limite
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+    body: |-
+      ## Objective
+      `test/web/conversation-index.test.mjs` prova sul renderer puro che l'indice distingue N conversazioni vive dalle chiuse e che l'avviso di limite rende il motivo del server senza riscriverlo.
+
+      ## Read
+      - `test/web/conversation-index.test.mjs` — i test attuali, il modo in cui importano il modulo UMD e costruiscono i payload di esempio.
+      - `cli/internal/web/assets/conversation-index.js` come modificato da TASK-11.
+
+      ## Change
+      - `test/web/conversation-index.test.mjs` — nuovi casi.
+      - Non-goal: nessun DOM, nessuna rete, nessun timer: i moduli sotto test sono renderer puri e il test resta al loro livello.
+
+      ## Steps
+      1. Aggiungi «due vive e una chiusa»: payload con tre voci, due `live:true` (una legata a una spec, una libera) e una `live:false`; asserisci che il gruppo «In corso» contenga **entrambi** gli id vivi, che ciascuna porti il flag `is-live`, e che l'id della chiusa non compaia in quel gruppo ma nel gruppo che gli spetta.
+      2. Aggiungi «la voce corrente è marcata anche quando ce ne sono più di una viva»: con `currentId` sulla seconda viva, solo quella porta `is-current` e `aria-current`.
+      3. Aggiungi «l'avviso di limite rende il motivo del server»: `renderLimitNotice("frase del server con 3 e gli id")` contiene quella frase esatta e la classe `rail-notice`; `renderLimitNotice("")` e `renderLimitNotice(null)` restituiscono la stringa vuota.
+      4. Aggiungi «l'avviso non inventa il numero»: asserisci che il sorgente del modulo non contenga la costante numerica del limite — un `assert.ok(!source.includes(...))` è sufficiente e documenta la regola per chi verrà dopo. In alternativa, asserisci che `renderLimitNotice` con un motivo che non contiene cifre produca un blocco privo di cifre.
+      5. Aggiungi «l'avviso è sfuggito»: un motivo contenente `<script>` compare escapato.
+
+      ## Verify
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && npm run test:web`
+      - Expect: tutti i test passano, 0 falliti, con un numero di test superiore ai 172 di baseline.
+
+      ## Done
+      - [ ] AC-3 — un test prova che due voci vive stanno insieme nel gruppo «In corso» e che una chiusa ne resta fuori.
+      - [ ] AC-5 — un test prova che l'avviso rende il motivo del server verbatim e che il modulo non conosce il numero limite.
+      - [ ] Un test prova l'escaping dell'avviso.
+      - [ ] `npm run test:web` è verde con più test di prima.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Porto degli smoke e2e esistenti alle rotte per id
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-12
+    body: |-
+      ## Objective
+      I cinque smoke e2e che usano le rotte singolari della conversazione tornano verdi sulle rotte indirizzate per id, senza cambiare né aggiungere alcuna affermazione: quello che provavano prima devono provarlo ancora.
+
+      ## Read
+      - `test/e2e/conversation-view-smoke.mjs` (1075 righe) — 7+6+2+1 usi delle rotte singolari.
+      - `test/e2e/conversation-history-view-smoke.mjs` (985 righe) — 3+2+1+1 usi singolari accanto a quelli di collezione già presenti.
+      - `test/e2e/conversation-action-view-smoke.mjs` — 4 usi di apertura, 3 di `/proposal`, 1 di `/messages`, 1 di lettura.
+      - `test/e2e/conversation-run-view-smoke.mjs` — 3 aperture, 1 `/proposal`, 2 `/messages`, 1 lettura.
+      - `test/e2e/workspace-runs-view-smoke.mjs` — 1 apertura e 1 lettura.
+
+      ## Change
+      - I cinque file `.mjs` elencati sopra.
+      - Non-goal: **non** aggiungere affermazioni nuove (sono di TASK-14), **non** cambiare i sentinella, **non** cambiare i testi delle affermazioni provate se non per il path citato, **non** toccare `test/e2e/support/fake-claude.mjs`.
+
+      ## Steps
+      1. In ciascun file, dopo l'apertura, cattura l'id dalla risposta (`body.conversation.id`) in una variabile locale — molti smoke già lo fanno per altre asserzioni.
+      2. Sostituisci meccanicamente: `POST /api/workspace/conversation` → `POST /api/workspace/conversations`; `GET /api/workspace/conversation?after_id=N` → `GET /api/workspace/conversations/${id}?after_id=N`; `/api/workspace/conversation/messages` → `/api/workspace/conversations/${id}/messages`; `/api/workspace/conversation/proposal` → `/api/workspace/conversations/${id}/proposal`; `DELETE /api/workspace/conversation?after_id=N` → `DELETE /api/workspace/conversations/${id}?after_id=N`.
+      3. In `conversation-view-smoke.mjs`, il caso «dopo il cambio di workspace la lettura risponde `conversation: null`» non ha più una rotta singolare su cui poggiare: sostituiscilo con la lettura per id della conversazione di A dal workspace B, che deve rispondere `404` — è la stessa affermazione («la conversazione di A non è raggiungibile da B») con l'oracolo che la nuova superficie ammette. Aggiorna il testo dell'affermazione di conseguenza.
+      4. Nello stesso file, il caso «una seconda apertura risponde `409` perché una è già aperta» non descrive più il sistema: sostituiscilo con l'apertura di una seconda conversazione che risponde `201`, e sposta il `409` sul superamento del limite **solo** se il caso vi capita naturalmente; altrimenti eliminalo qui e lascia la prova a TASK-14.
+      5. In `conversation-history-view-smoke.mjs`, il caso della ripresa asseriva implicitamente che la viva veniva chiusa: se un'asserzione lo dice, aggiornala per riflettere che la viva **resta** viva. Documenta il cambiamento nel testo dell'affermazione.
+      6. Aggiorna in `AGENTS.md`, sezione «Standalone smoke tests», le descrizioni dei cinque smoke nei punti in cui citano le rotte singolari.
+
+      ## Verify
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && npm run test:view-conversation-smoke`
+      - Expect: PASS (baseline: PASS con 7 affermazioni provate).
+      - Run: `npm run test:view-conversation-history-smoke && npm run test:view-conversation-action-smoke && npm run test:view-conversation-run-smoke && npm run test:view-workspace-runs-smoke`
+      - Expect: PASS su tutti e quattro. Su Windows sono saltati con motivo, come dichiarato in `AGENTS.md`.
+
+      ## Done
+      - [ ] AC-1 — nessuno smoke asserisce più che aprire una conversazione ne chiuda un'altra.
+      - [ ] AC-2 — ogni messaggio e ogni lettura degli smoke nomina la conversazione nel path.
+      - [ ] I cinque smoke passano, con lo stesso insieme di affermazioni provate della baseline salvo le due riformulate ai passi 3-5, che sono elencate nel commit.
+      - [ ] `AGENTS.md` non descrive più rotte che non esistono.
+
+      ## Blockers
+      None.
+    ref: TASK-13
+  - id: TASK-14
+    title: Smoke e2e nuovo — due conversazioni vive, isolamento, chiusura selettiva, limite e uscita dal workspace
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-13
+    body: |-
+      ## Objective
+      `test/e2e/conversation-multi-view-smoke.mjs` prova i sei criteri di accettazione contro il viewer reale, con due processi agente falsi distinti guidati frame per frame, e chiede al sistema operativo — mai alla rotta — se un agente è ancora in esecuzione.
+
+      ## Read
+      - `test/e2e/conversation-view-smoke.mjs` — la struttura da riusare per intero: avvio della CLI compilata, sandbox, control server locale, avvio del viewer, helper di attesa che interrogano una rotta con timeout esplicito, raccolta delle affermazioni provate e generazione di `report.html`/`summary.json`.
+      - `test/e2e/support/fake-claude.mjs` — il protocollo stream-json e il modo in cui riporta al control server il pid che ha ricevuto ogni frame: è l'oracolo di AC-2.
+      - `test/e2e/conversation-history-view-smoke.mjs` — l'uso dei sentinella e la chiusura di un processo verificata per pid.
+      - `cli/internal/web/conversation_state.go` — il valore di `maxLiveConversations`, da leggere e non da riscrivere: lo smoke lo estrae dal sorgente con una regex così una modifica futura della costante non lascia il test a mentire.
+
+      ## Change
+      - `test/e2e/conversation-multi-view-smoke.mjs` (nuovo).
+      - `package.json` — script `test:view-conversation-multi-smoke`.
+      - `AGENTS.md` — voce nella sezione «Standalone smoke tests».
+      - Non-goal: **non** duplicare le affermazioni di `conversation-view-smoke.mjs` (apertura, invocazione streaming, finestra di ritenzione): quelle restano lì. **Nessuna** attesa arbitraria: ogni attesa interroga una rotta, il control server o il sistema operativo con un timeout che nomina cosa aspettava e cosa è arrivato.
+
+      ## Steps
+      1. Prepara una sandbox con `archetipo init --tool claude`, una spec `TODO`, e salva come default del workspace il provider `claude` reale puntato a `fake-claude.mjs`, con una variabile d'ambiente sentinella nel processo del viewer.
+      2. **AC-1** — apri la conversazione A (`POST /api/workspace/conversations`), fai emettere all'agente un frame `assistant` e leggi la storia; annota il pid di A riportato dal processo stesso. Apri B: verifica `201` con id diverso, che il control server registri un **secondo** processo con pid diverso, che `GET .../conversations/{A}` restituisca gli stessi eventi con gli stessi id di prima, e che il sistema operativo riporti vivo il pid di A.
+      3. **AC-2** — invia `SENTINEL_B` a `POST .../conversations/{B}/messages`: il control server deve registrare il frame `user` ricevuto dal pid di B e da nessun altro. Fai ri-emettere il messaggio da B, poi verifica che `SENTINEL_B` compaia in `GET .../conversations/{B}` e **mai** in `GET .../conversations/{A}`. Ripeti simmetricamente con `SENTINEL_A` verso A.
+      4. **AC-3** — leggi `GET /api/workspace/conversations`: entrambe `live:true`. Chiudi B (passo 5) e rileggi: A `live:true`, B `live:false` con `state` non vuoto.
+      5. **AC-4** — `DELETE .../conversations/{B}` risponde `200`; il sistema operativo riporta **morto** il pid di B e **vivo** quello di A; `GET .../conversations/{A}` risponde ancora `state: ACTIVE` con la sua storia intatta (stessi id di eventi di prima della chiusura di B); un messaggio inviato ad A dopo la chiusura di B raggiunge il pid di A.
+      6. **AC-5** — leggi `maxLiveConversations` dal sorgente Go; apri conversazioni finché le vive sono esattamente quel numero, poi apri ancora: verifica `409`, che il corpo contenga il numero **e** gli id di tutte le vive, che il control server non abbia registrato alcun processo oltre il limite, e che `GET /api/workspace/conversations` sia byte-identico prima e dopo il rifiuto.
+      7. **AC-6** — con almeno due vive, registra un secondo workspace e aprilo con `POST /api/workspaces/{B}/open` sullo **stesso** pid del viewer (asserito invariato): verifica che il sistema operativo riporti morti **tutti** i pid degli agenti del workspace lasciato, che ogni record su disco sotto `.archetipo/conversations/` del workspace lasciato porti un `final_state` non vuoto, e che `GET /api/workspace/conversations` sul nuovo workspace non contenga nessuno di quegli id.
+      8. Verifica trasversale: il sentinella d'ambiente non compare in nessuna risposta del viewer né in alcun `.archetipo/config.yaml`.
+      9. Salta lo smoke su Windows con un motivo esplicito, come gli altri che usano i falsi POSIX.
+      10. Aggiungi lo script a `package.json` e la descrizione ad `AGENTS.md`, dichiarando cosa è finto (solo i binari agente) e cosa è reale (viewer, connettore, provider, client stream-json, sessioni locali, journal).
+
+      ## Verify
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && npm run test:view-conversation-multi-smoke`
+      - Expect: PASS con sei affermazioni provate, una per criterio, ciascuna con l'oracolo nominato nel testo.
+      - Run: `node --check test/e2e/conversation-multi-view-smoke.mjs`
+      - Expect: nessun output.
+
+      ## Done
+      - [ ] AC-1 — affermazione provata: due conversazioni vive insieme, la prima con eventi e pid invariati.
+      - [ ] AC-2 — affermazione provata: ogni sentinella raggiunge il solo pid della sua conversazione e compare nella sola storia di quella.
+      - [ ] AC-3 — affermazione provata: l'indice marca vive le vive e chiusa la chiusa.
+      - [ ] AC-4 — affermazione provata: chiudendo una, il suo pid è morto e l'altra è viva e integra.
+      - [ ] AC-5 — affermazione provata: `409` con limite ed elenco, nessun processo in più, indice invariato.
+      - [ ] AC-6 — affermazione provata: uscendo dal workspace tutti i pid sono morti e tutti i record sono sigillati.
+      - [ ] Nessuna attesa arbitraria nello smoke; `package.json` e `AGENTS.md` aggiornati.
+
+      ## Blockers
+      None.
+    ref: TASK-14
+  - id: TASK-15
+    title: Gate finale — verifiche complete e passaggio in review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+      - TASK-13
+      - TASK-14
+    body: |-
+      ## Objective
+      L'intero repository è verde sulle stesse verifiche della baseline più i test nuovi, e la spec passa in review solo dopo che ogni task risulta `DONE`.
+
+      ## Read
+      - La sezione «Baseline» del corpo di questo piano: è l'unico riferimento per decidere se un esito è una regressione o uno stato già noto.
+      - `AGENTS.md`, sezione «Before delivering changes»: è da lì che vengono i comandi Go elencati sotto.
+
+      ## Change
+      - Nessuna modifica di codice attesa. Se una verifica fallisce, la correzione appartiene al task che ha introdotto il difetto; questo task non è il posto in cui aggiustare a mano.
+      - Non-goal: **non** dichiarare verde un comando che non è stato eseguito, **non** saltare `golangci-lint` in silenzio.
+
+      ## Steps
+      1. Se `golangci-lint` non è installato, installalo: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`. Se l'installazione non è possibile in questo ambiente, dichiaralo esplicitamente nell'esito con il motivo, invece di riportare il comando come verde.
+      2. Esegui, da `/Users/stefanoleli/Project/Archetipo`, nell'ordine: le verifiche Go, i test dei moduli web, gli smoke di conversazione già esistenti e quello nuovo.
+      3. Confronta ogni esito con la tabella «Baseline». Una sola differenza ammessa: i test sono **di più** di prima. Qualunque fallimento è una regressione introdotta da questa spec.
+      4. Rileggi la spec da `data.project_root` con `archetipo spec show US-059` e verifica che **nessun** task sia rimasto `TODO`.
+      5. Solo allora richiedi la review con `archetipo spec review US-059`.
+
+      ## Verify
+      - Run: `cd cli && gofmt -l . && go vet ./... && go build ./... && go test ./... `
+      - Expect: nessun output da `gofmt`, nessun problema da `vet`, compilazione pulita, tutti i pacchetti verdi (baseline: tutti e quattro puliti).
+      - Run: `cd cli && golangci-lint run --timeout 5m ./...`
+      - Expect: 0 issue. Se il binario è assente e non installabile, l'esito è «saltato» con il motivo, mai «verde».
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && npm run test:web`
+      - Expect: 0 falliti, con più test dei 172 di baseline.
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && npm run test:view-conversation-smoke && npm run test:view-conversation-history-smoke && npm run test:view-conversation-action-smoke && npm run test:view-conversation-run-smoke && npm run test:view-workspace-runs-smoke && npm run test:view-conversation-multi-smoke`
+      - Expect: PASS su tutti e sei (baseline: `test:view-conversation-smoke` PASS con 7 affermazioni; gli altri quattro non erano stati eseguiti in baseline, quindi un loro fallimento va isolato eseguendoli su `HEAD` prima della spec prima di attribuirlo a questo lavoro).
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && grep -rn "api/workspace/conversation[^s]" cli/internal/web/ test/e2e/ | grep -v "_test.go:.*//"`
+      - Expect: nessuna corrispondenza — nessun riferimento residuo alle rotte singolari.
+      - Run: `cd /Users/stefanoleli/Project/Archetipo && archetipo spec show US-059`
+      - Expect: ogni task in `data.tasks` con `status: DONE`, incluso questo.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5, AC-6 — le sei affermazioni di `conversation-multi-view-smoke.mjs` risultano provate nel suo report.
+      - [ ] `gofmt`, `go vet`, `go build`, `go test` puliti su tutto `cli/`.
+      - [ ] `golangci-lint` a 0 issue, oppure dichiarato saltato con il motivo.
+      - [ ] `npm run test:web` verde con più test della baseline.
+      - [ ] I sei smoke di conversazione passano.
+      - [ ] Nessun file toccato dal piano aggiunge diagnostiche di compilatore o linter rispetto alla baseline.
+      - [ ] Ordine rispettato: verifiche eseguite → questo task marcato `DONE` → `archetipo spec show US-059` ricaricata → nessun task `TODO` → solo allora `archetipo spec review US-059`.
+
+      ## Blockers
+      None.
+    ref: TASK-15

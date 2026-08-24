@@ -1,0 +1,45 @@
+schema: archetipo/spec/v2
+code: US-047
+title: Scegliere il modello da un elenco offerto dal provider
+epic:
+  code: EP-005
+  title: Esperienza operativa ARchetipo
+priority: HIGH
+points: 5
+status: DONE
+scope: MVP
+body: |-
+  #### US-047: Scegliere il modello da un elenco offerto dal provider
+
+  **Epic:** EP-005 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **User Story**
+  Come utilizzatore che configura l'esecuzione di un workspace dalla UI,
+  voglio scegliere il modello da un elenco dichiarato dal provider installato invece di digitarne il nome,
+  così da non dover conoscere a memoria gli identificatori e non scoprire un errore di battitura solo quando la run fallisce.
+
+  **Dimostrazione**
+  Partendo da un workspace con un provider locale configurato e il modello lasciato vuoto, il revisore apre la configurazione dell'esecuzione e osserva il campo Modello popolato con i modelli dichiarati dal provider installato, con l'indicazione di quale sia il suo predefinito. Sceglie un modello, salva, avvia una pianificazione e osserva nel dettaglio della run lo stesso modello. Quindi imposta un comando di provider inesistente, riapre la configurazione e osserva il motivo per cui l'elenco non è disponibile e il campo Modello ancora compilabile a mano, con il valore precedente invariato.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — La configurazione dell'esecuzione mostra l'elenco dei modelli dichiarati dal provider selezionato, ciascuno con l'identificatore da usare.
+  - [ ] AC-2 — L'elenco indica quale modello il provider usa come proprio predefinito.
+  - [ ] AC-3 — Un modello scelto dall'elenco e salvato compare nella configurazione del workspace e nel record della run successiva come modello usato.
+  - [ ] AC-4 — Quando l'elenco non è ottenibile, la UI ne mostra il motivo in chiaro e lascia digitare il modello a mano.
+  - [ ] AC-5 — Un modello già configurato ma assente dall'elenco corrente resta selezionato e contrassegnato come non elencato, e il salvataggio non lo cancella.
+  - [ ] AC-6 — Lasciare il modello vuoto resta possibile e la configurazione salvata non contiene alcun modello.
+
+  **Fuori ambito**
+  Opzioni collegate al modello, scelta valida per la singola run, cataloghi di modelli remoti o mantenuti da ARchetipo, e qualunque gestione di credenziali del provider.
+history:
+  - status: TODO
+    at: "2026-08-20T14:55:43Z"
+  - status: PLANNED
+    at: "2026-08-20T15:23:53Z"
+  - status: IN PROGRESS
+    at: "2026-08-20T15:25:09Z"
+  - status: REVIEW
+    at: "2026-08-20T15:42:06Z"
+  - status: DONE
+    at: "2026-08-20T15:48:56Z"

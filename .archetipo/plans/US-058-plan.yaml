@@ -1,0 +1,752 @@
+schema: archetipo/plan/v2
+spec_code: US-058
+body: |-
+  # US-058: Ritrovare le conversazioni passate del workspace — Piano di implementazione
+
+  **Prodotto da:** Team di Planning ARchetipo
+  **Data:** 2026-08-22
+
+  ---
+
+  ## Spec
+
+  **Epic:** EP-008 — Workspace gestiti dalla UI
+  **Priorità:** HIGH | **Punti:** 5
+  **Bloccata da:** US-057 (DONE)
+
+  **User Story**
+  Come utilizzatore di ARchetipo che torna su un progetto dopo qualche giorno, voglio ritrovare le conversazioni già avute su questo workspace, elencate e riapribili, così da non dover ricostruire a memoria cosa ci siamo detti e perché una spec è fatta così.
+
+  **Criteri di accettazione**
+  - AC-1 — Le conversazioni di un workspace sopravvivono alla chiusura di ARchetipo e sono elencate alla riapertura.
+  - AC-2 — L'elenco mostra per ogni conversazione un titolo, il momento dell'ultimo messaggio e, quando la conversazione è nata da una spec, il codice di quella spec.
+  - AC-3 — Aprendo una conversazione passata, i suoi messaggi sono mostrati per intero e nell'ordine in cui si sono svolti.
+  - AC-4 — Scrivendo in una conversazione passata, l'agente risponde in una conversazione nuova che riceve quella passata come contesto, e la pagina dichiara che si tratta di una ripresa.
+  - AC-5 — Il revisore può avviare una conversazione nuova non legata ad alcuna spec, e questa compare nell'elenco distinta da quelle legate a una spec.
+  - AC-6 — Cambiando workspace, l'elenco mostra solo le conversazioni del workspace aperto.
+  - AC-7 — Su un workspace senza alcuna conversazione passata, l'elenco dichiara che non ce ne sono e offre di avviarne una.
+
+  **Fuori ambito**
+  Ricerca a testo pieno dentro le conversazioni, rinomina manuale del titolo, archiviazione o cancellazione di un thread, ripresa della sessione originale dell'agente con la sua memoria, e più conversazioni vive nello stesso momento.
+
+  ---
+
+  ## Soluzione tecnica
+
+  Oggi una conversazione è **stato del processo, non un dato**: `conversationState` (`cli/internal/web/conversation_state.go`) tiene *una* conversazione per workspace, e la sua storia vive solo nella `localrun.Session` in memoria, che `localrun.Registry` dichiara esplicitamente non persistente. Chiudere ARchetipo cancella tutto. Questa spec introduce la **collezione**: un registro su disco per workspace, due rotte di lettura, una rotta di ripresa e un indice dei thread nella shell.
+
+  Il disegno segue per intero il pattern già consolidato delle esecuzioni (`.archetipo/executions/` + `execution.FileStore`), perché è la stessa forma di problema — record piccoli, uno per file, letti scandendo la directory, senza indice e senza cache — ed è già quello che la review del progetto sa leggere.
+
+  **1. Persistenza — nuovo package `cli/internal/conversationlog`.**
+  Un `Record` per conversazione, salvato in `<project_root>/.archetipo/conversations/<conv-id>.json` con la stessa disciplina di `execution.FileStore`: id validato, directory `0o700`, scrittura atomica su file temporaneo + `os.Rename`, un record illeggibile fa fallire l'intera scansione nominando il file (una storia troncata in silenzio è indistinguibile da una assente). Campi: `id`, `spec_code`, `title`, `working_dir`, `provider_id`, `opened_at`, `last_message_at`, `message_count`, `resumed_from`, `final_state`, `events`. Gli eventi persistiti sono gli `execution.RunEvent` così come sono, senza traduzione: è ciò che permette a `conversation.js` di ridisegnare una conversazione passata con lo **stesso** renderer che disegna quella viva, e a AC-3 di essere vera per costruzione invece che per una seconda implementazione parallela.
+
+  Il record è **il journal della directory del workspace aperto**, e AC-6 ne discende: la lista legge `ws.cfg.ProjectRoot` e nient'altro, esattamente come lo store delle esecuzioni. Non esiste una lista globale da filtrare, quindi non esiste il modo di sbagliare il filtro.
+
+  **2. Journaling — `cli/internal/web/conversation_journal.go`.**
+  Il punto in cui la storia in memoria diventa storia su disco è **uno solo**: `conversationViewOf` è già l'unica funzione del viewer che legge `session.Events`, e `conversationState.releaseCurrent` è già l'unico punto in cui una conversazione finisce (chiusura esplicita, cambio workspace, shutdown). Il journal si aggancia lì e da nessun'altra parte.
+
+  Tiene un watermark dell'ultimo id già scritto: quando un giro di polling non porta eventi nuovi non tocca il disco, quando ne porta riscrive il record intero. La riscrittura intera invece dell'append è deliberata: il file è un JSON, e un formato append-only richiederebbe un secondo parser per una sola scrittura ogni due secondi su al più 2000 eventi.
+
+  `last_message_at` è l'istante dell'ultimo evento registrato, `message_count` il numero di eventi `user_message` e `text` — le due specie che una persona chiama "messaggi" — e non il totale degli eventi, che conterebbe anche i tool.
+
+  **3. Titolo (AC-2).**
+  Derivato, mai scritto a mano: il testo del **primo** `user_message` della conversazione, normalizzato agli spazi e troncato a 80 caratteri con ellissi. Finché non c'è ancora nessun messaggio dell'utente il titolo è `Conversazione del <data>`. Una volta che il primo messaggio esiste il titolo non cambia più — è ciò che rende l'elenco stabile fra un giro di polling e l'altro senza avere una rinomina, che è fuori ambito.
+
+  **4. Legame con la spec (AC-2, AC-5).**
+  `POST /api/workspace/conversation` accetta un corpo opzionale `{"spec_code":"US-XXX"}`. Vuoto o assente ⇒ conversazione **libera**, che è il comportamento di oggi e resta il default: nessun chiamante esistente cambia. Valorizzato ⇒ il codice viene verificato contro il connector (`ws.conn.ReadSpecDetail`) prima di avviare qualunque processo, con la stessa disciplina di rifiuto delle altre rotte di start, e finisce nel record. Il pannello di dettaglio spec guadagna un solo comando, «Conversa su questa spec», che è l'unico modo di produrre una conversazione legata: senza di esso AC-2 e AC-5 sarebbero criteri su uno stato irraggiungibile.
+
+  **5. Lettura — due rotte nuove.**
+  - `GET /api/workspace/conversations` → l'indice: una riga per record, ordinate per `last_message_at` decrescente, più il flag `live`.
+  - `GET /api/workspace/conversations/{id}` → il transcript intero di un record, eventi in ordine di id crescente.
+
+  `live` è **derivato, mai persistito**: un record è vivo se e solo se il suo id è quello che `ws.conversation.current()` tiene adesso, in questo processo. È l'invariante che rende AC-1 onesta — dopo un riavvio nessun record può dichiararsi vivo, perché il processo che lo teneva non esiste più, e uno `state: ACTIVE` congelato sul disco mentirebbe a ogni riapertura.
+
+  **6. Ripresa (AC-4) — `POST /api/workspace/conversations/{id}/resume`.**
+  La ripresa **non** riapre la sessione dell'agente (fuori ambito): apre una conversazione *nuova* e le consegna la vecchia come contesto. Meccanicamente:
+  1. se il workspace tiene una conversazione viva, la chiude e la journalizza (un workspace tiene una conversazione alla volta, e più conversazioni vive sono fuori ambito);
+  2. rende il transcript del record in testo piano (`tu: …` / `agente: …`, solo eventi `user_message` e `text`, troncato a un tetto dichiarato);
+  3. apre una conversazione nuova passando quel testo nel nuovo campo `execution.ConversationRequest.Context`, che il provider claude accoda al prompt di sistema in `buildConversationPrompt`;
+  4. registra `resumed_from: <id vecchio>` sul record nuovo e consegna il primo messaggio.
+
+  Il campo `Context` è additivo su una struct con **un solo** implementatore (`claude`) e **un solo** chiamante (`internal/web/conversation.go`): nessun provider esistente si rompe, e un provider che ignorasse il campo resterebbe corretto.
+
+  **7. Frontend — l'indice come rail.**
+  Il contratto visivo è il mockup **già presente** `docs/mockups/redesign-chat/stato-b-storico.html`: rail a sinistra con «Nuova conversazione» in cima, i thread raggruppati (`In corso` / `Spec` / `Progetto`), ognuno con codice spec in mono oppure il segno tratteggiato del thread libero, titolo e tempo relativo dell'ultimo messaggio. **Nessun mockup nuovo viene prodotto per questa spec.** La casella di ricerca disegnata nel mockup resta fuori: la ricerca a testo pieno è fuori ambito e un campo inerte sarebbe una promessa falsa.
+
+  Il codice segue la separazione già stabilita dalla shell di US-057: un modulo **puro** `cli/internal/web/assets/conversation-index.js` che prende il payload e restituisce HTML (nessun DOM, nessun fetch, testabile con `node --test` come `conversation.js`, `workspace-layout.js`, `workspace-runs.js`), e il cablaggio in `app.js`. Il pannello `#workspace-conversation` resta montato una volta sola e continua a essere disegnato da `conversation.js`: aprire un thread passato ne cambia il contenuto, non il posto — che è la prima delle tre regole del mockup.
+
+  ### Decisioni architetturali
+
+  Due scelte superano la soglia dell'ADR (semantica di persistenza e di fallimento, politica trasversale). Il gate Wiki del progetto è **spento** (`wiki.enabled: false` da `archetipo config show`), quindi vivono qui e in nessuna pagina.
+
+  **D1 — Dove vive la storia di una conversazione: un file JSON per conversazione sotto `.archetipo/conversations/`.**
+  *Contesto:* la storia sta in `localrun.Session`, che il suo stesso package dichiara non persistente; AC-1 chiede che sopravviva al processo.
+  *Alternative valutate:* (a) rendere persistente `localrun.Session` — tocca il cuore condiviso da run ed esecuzioni per un requisito che riguarda solo le conversazioni, e obbligherebbe ogni run a scrivere su disco; (b) riusare `execution.FileStore` allargando `Execution` — rompe l'invariante scritta a chiare lettere su `handleOpenWorkspaceConversation` («una conversazione non lascia record: apparirebbe fra le azioni del processo, e il processo non l'ha mai chiesta»); (c) un file JSONL append-only per conversazione — più efficiente in scrittura ma richiede un secondo formato e un secondo parser per un carico di al più 2000 eventi.
+  *Scelta:* (d) uno store dedicato, gemello di `execution.FileStore`, in un package proprio.
+  *Tradeoff:* riscrittura intera del file a ogni cambiamento; accettato perché il volume è limitato dalla finestra di ritenzione e la scrittura avviene solo quando sono arrivati eventi nuovi.
+  *Verifica:* i test dello store dimostrano round-trip, ordinamento, directory assente = zero record, file corrotto = errore che nomina il file; lo smoke e2e dimostra la sopravvivenza al riavvio del processo viewer.
+
+  **D2 — La ripresa apre una conversazione nuova e chiude quella viva; non riapre la sessione dell'agente.**
+  *Contesto:* AC-4 chiede una risposta «da una conversazione nuova, dichiarata come tale, che ha ricevuto quella di ieri come contesto»; la spec mette esplicitamente fuori ambito sia la ripresa della sessione originale con la sua memoria, sia più conversazioni vive insieme.
+  *Alternative valutate:* (a) rifiutare la ripresa mentre una conversazione è viva e chiedere alla persona di chiudere prima — onesto ma aggiunge un passo che la Dimostrazione non prevede; (b) tenere vive entrambe — esplicitamente fuori ambito, e richiederebbe un secondo processo agente senza nessuno che ne tenga la maniglia.
+  *Scelta:* la ripresa chiude e journalizza quella viva, poi apre la nuova. `conversationState.close` è già idempotente e già usato dal cambio workspace, quindi non nasce nessuna via di uscita nuova.
+  *Tradeoff:* una conversazione viva viene terminata da un gesto che parla di un'altra; mitigato dal fatto che il record chiuso resta leggibile nell'indice e dalla dichiarazione di ripresa che la pagina mostra.
+  *Verifica:* lo smoke e2e prova che l'id nuovo è diverso, che `resumed_from` lo indica, che il processo agente nuovo ha ricevuto davvero il transcript nel prompt, e che il processo vecchio è finito secondo il sistema operativo.
+
+  ---
+
+  ## Baseline
+
+  Rilevata dai check che CI e `AGENTS.md` dichiarano, eseguita il 2026-08-22 in `/Users/stefanoleli/Project/ARchetipo`.
+
+  | Check | Risultato prima dell'implementazione | Conseguenza sul piano |
+  |---|---|---|
+  | `cd cli && gofmt -l .` | nessun output | ogni task Go termina con `gofmt -l .` vuoto |
+  | `cd cli && go vet ./...` | 0 problemi | invariato: nessun task può introdurne |
+  | `cd cli && go build ./...` | compila pulito | invariato |
+  | `cd cli && go test ./...` | 1859 test passati in 28 package | ogni task Go verifica il proprio package e chiude sull'intera suite |
+  | `npm run test:web` | 150 test passati, 37 suite | i moduli puri del viewer si verificano qui |
+  | `npm run test:view-conversation-smoke` | PASS, 7 affermazioni provate (US-053 AC-1..AC-6) | è il modello dello smoke di US-058 e **non deve regredire**: la ripresa e il registro non devono cambiare nessuna delle sei affermazioni |
+  | `golangci-lint run --timeout 5m ./...` | **non eseguibile: binario non installato in questa macchina** | prerequisito d'ambiente, non un fallimento del codice. Chi implementa lo installa con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` ed esegue il check nel gate finale; se l'installazione non è possibile, lo dichiara come non eseguito invece di scrivere che è verde |
+
+  Nessun comando è rosso alla partenza: ogni task può quindi promettere verde, e nessuna verifica di questo piano contiene un confine di fallimento preesistente da preservare.
+
+  **Prerequisiti d'ambiente** (nessuno da riscoprire durante l'implementazione): Go installato per la build del CLI; Node per `node --test` e per l'harness e2e; `npm run test:e2e` e gli smoke `*-view-smoke.mjs` compilano da soli il CLI in `test/e2e/.bin/` e non richiedono credenziali, perché il binario dell'agente è sostituito da `test/e2e/support/fake-claude.mjs`.
+
+  ---
+
+  ## Mappa delle evidenze di accettazione
+
+  | Criterio | Stato di partenza / fixture | Livello | Oracolo osservabile | Task che lo produce |
+  |---|---|---|---|---|
+  | AC-1 | workspace sandbox con una conversazione avuta e chiusa, processo viewer terminato e **riavviato** su un pid diverso | e2e (`conversation-history-view-smoke.mjs`, viewer reale + fake claude) | `GET /api/workspace/conversations` sul viewer nuovo elenca l'id e il titolo della conversazione di prima, e il file `.archetipo/conversations/<id>.json` esiste con quegli eventi | TASK-12 |
+  | AC-2 | due record: uno libero, uno aperto con `spec_code` valido | Go (`internal/web`, rotta di lista) + JS puro (`test/web/conversation-index.test.mjs`) | il payload porta `title` non vuoto, `last_message_at` pari all'istante dell'ultimo evento e `spec_code` valorizzato solo sul secondo; l'HTML reso mostra il titolo, il tempo relativo e il codice spec in mono | TASK-06, TASK-10 |
+  | AC-3 | record con 6 eventi di specie miste, scritti in ordine noto | Go (rotta `GET /api/workspace/conversations/{id}`) + e2e | gli `events` tornano tutti, con id strettamente crescente e testi identici a quelli detti; nello smoke il transcript riletto dopo il riavvio è uguale a quello letto prima | TASK-06, TASK-12 |
+  | AC-4 | conversazione passata già journalizzata + una conversazione viva in corso | e2e + Go (prompt) + JS puro | `POST .../resume` risponde con un `id` **diverso**, `resumed_from` uguale all'id vecchio; il fake claude riporta di aver ricevuto nel prompt di sistema il transcript della conversazione ripresa (frase sentinella detta ieri); il processo agente vecchio risulta terminato al sistema operativo; il renderer dichiara la ripresa nella pagina | TASK-08, TASK-10, TASK-12 |
+  | AC-5 | workspace con un thread libero e un thread legato a `US-A01` | Go (rotta di apertura + lista) + JS puro | `POST /api/workspace/conversation` senza corpo produce un record con `spec_code` vuoto; l'HTML reso colloca i due thread in gruppi distinti e solo quello legato porta il codice | TASK-04, TASK-10 |
+  | AC-6 | due workspace sandbox A e B, conversazioni in entrambi, stesso processo viewer | e2e | dopo `POST /api/workspaces/{B}/open` la lista contiene solo gli id di B, e l'id di A **non compare in nessun punto del payload** | TASK-12 |
+  | AC-7 | workspace sandbox senza `.archetipo/conversations/` | Go (lista) + JS puro | la rotta risponde `200` con `conversations: []` (mai `null`); l'HTML reso contiene la dichiarazione che non ce ne sono e il comando per avviarne una | TASK-06, TASK-10 |
+
+  Le due specie di doppio usate qui non nascondono nessuno degli oracoli sopra: il fake dell'agente sostituisce **solo** il binario `claude` e riporta ciò che ha davvero ricevuto sullo stdio, quindi il contesto della ripresa è provato sul processo e non su una chiamata mockata; il modulo JS puro è provato sul **testo visibile** dell'HTML reso, non sulla forma del modulo. Nessun test di questa mappa afferma «non ci sono card» al posto di «c'è la dichiarazione»: AC-7 è provata sulla frase, non sull'assenza.
+
+  ---
+
+  ## Strategia di test
+
+  Tre livelli, ognuno sul confine che gli compete, nell'ordine in cui il repository già li usa.
+
+  - **Go unitari sullo store** (`internal/conversationlog`): round-trip di un record, ordinamento per recency, directory assente = zero record, id non valido rifiutato, file corrotto che fa fallire la scansione nominando il file. Nessun filesystem finto: si usa `t.TempDir()`, come `file_store_test.go`.
+  - **Go sulle rotte del viewer** (`internal/web`): apertura con e senza `spec_code`, journal scritto davvero su disco dopo un giro di vista e dopo la chiusura, `live` derivato dal detentore e non dal record, lista vuota che risponde `[]`, transcript intero e ordinato, ripresa che rifiuta un id sconosciuto. Si riusano gli helper già presenti nei test di `internal/web`.
+  - **Go sul prompt** (`internal/execution/claude`): `buildConversationPrompt` con un contesto porta il transcript ricevuto, senza contesto è identico byte per byte a oggi. Quest'ultima è la prova che il campo è additivo.
+  - **JS puro** (`test/web/conversation-index.test.mjs`, `node --test`): oracoli sul testo visibile dell'HTML — titolo, tempo relativo, codice spec, gruppi distinti, stato vuoto dichiarato, banner di ripresa. Stessa disciplina dichiarata in testa a `test/web/conversation.test.mjs`.
+
+  ### Test e2e — simulazione utente
+
+  **Framework:** l'harness Node del repository (`test/e2e/*-view-smoke.mjs`), che avvia il CLI compilato da sorgente, il viewer reale, il connector filefs e il provider claude reale, sostituendo **solo** il binario dell'agente con `test/e2e/support/fake-claude.mjs`. Nuovo script `test/e2e/conversation-history-view-smoke.mjs`, modellato su `conversation-view-smoke.mjs`, con script npm `test:view-conversation-history-smoke`.
+  **Video dimostrativo:** atteso — la spec è filmabile (elenco, apertura di un thread di ieri, ripresa, riavvio, cambio workspace). La registrazione appartiene a `archetipo-review`, non all'implementazione.
+
+  | Scenario | Flusso |
+  |---|---|
+  | Sopravvivenza al riavvio (AC-1, AC-3) | si apre una conversazione sul workspace A, si scambiano messaggi con frasi sentinella, si chiude; si termina il processo viewer e se ne avvia uno nuovo sulla stessa radice; si legge l'indice e poi il transcript del thread e si confrontano gli eventi con quelli di prima |
+  | Ripresa (AC-4) | dal thread passato si invoca la ripresa con un messaggio nuovo; si verifica id nuovo, `resumed_from`, la frase sentinella di ieri dentro il prompt che il fake dichiara di aver ricevuto, e la fine del processo agente precedente chiesta al sistema operativo per pid |
+  | Isolamento fra workspace (AC-6) | con conversazioni in A e in B, sullo stesso pid si apre B e si verifica che l'indice non contenga nessun id di A in nessun punto del payload |
+  | Non regressione di US-053..US-057 | `npm run test:view-conversation-smoke` deve restare PASS con le sue 7 affermazioni |
+
+  ### Rinuncia all'e2e da browser
+
+  **Motivo:** il repository non ha né usa un framework di browser (nessun Playwright, nessun driver DOM), e il suo livello di accettazione per ogni spec di viewer già consegnata — US-050..US-057 — è l'harness HTTP+processo sopra, che è **più forte** di un browser per gli oracoli di questa spec: la sopravvivenza al riavvio è provata su un pid diverso e su file reali, il contesto della ripresa è provato su ciò che il processo agente ha davvero ricevuto sullo stdio, e l'isolamento fra workspace è provato sull'assenza di un id nell'intero corpo della risposta. Introdurre un framework di browser per la sola metà DOM sarebbe un'infrastruttura nuova al servizio di un criterio che il livello attuale già copre.
+  **Livello usato al suo posto:** l'harness e2e Node per AC-1, AC-3, AC-4, AC-6; i test Go sulle rotte per AC-2, AC-5, AC-7; i test deterministici del modulo puro (`node --test`) sul testo visibile reso, per la metà di AC-2, AC-4, AC-5, AC-7 che riguarda ciò che la persona legge. Ogni AC ha così almeno un'evidenza su un oracolo osservabile e nessuna dipende dal solo giudizio di un mock.
+tasks:
+  - id: TASK-01
+    title: Store su disco delle conversazioni in internal/conversationlog
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Un package `conversationlog` che salva, rilegge ed elenca i record delle conversazioni di un workspace sotto `.archetipo/conversations/`, con la stessa disciplina di `execution.FileStore`.
+
+      ## Read
+      - `cli/internal/execution/file_store.go` — `NewFileStore`, `validID`, `path`, `Create`, `Update`, `readAll`, `sortByRecency`: sono il modello da ricalcare (permessi `0o700`/`0o600`, scrittura atomica temp+rename, record illeggibile che fa fallire l'intera scansione nominando il file).
+      - `cli/internal/execution/store.go` — `StoreError`, `StoreErrorKind`: il vocabolario degli errori da rispecchiare.
+      - `cli/internal/execution/run.go` oppure il file che definisce `execution.RunEvent` (cercalo con `grep -rn "type RunEvent struct" cli/internal/execution`) — i campi degli eventi persistiti così come sono.
+
+      ## Change
+      - Nuovo `cli/internal/conversationlog/record.go`: `type Record struct` con tag JSON `id`, `spec_code`, `title`, `working_dir`, `provider_id`, `opened_at`, `last_message_at`, `message_count`, `resumed_from`, `final_state`, `events` (`[]execution.RunEvent`).
+      - Nuovo `cli/internal/conversationlog/file_store.go`: `NewFileStore(projectRoot string) (*FileStore, error)` con `dir = <root>/.archetipo/conversations`; `Save(ctx, Record) error` (upsert atomico: temp nella stessa directory + `os.Rename`); `Get(ctx, id) (Record, error)`; `List(ctx) ([]Record, error)`.
+      - Non-goal: nessuna modifica a `internal/execution`, a `internal/web` o ai provider in questo task. Nessun indice, nessuna cache, nessun watcher.
+
+      ## Steps
+      1. Crea la directory `cli/internal/conversationlog/`.
+      2. Scrivi `record.go` con la struct sopra. `events` non deve mai serializzare `null`: se il campo è nil, `Save` lo normalizza a slice vuota prima di scrivere.
+      3. Scrivi `file_store.go` copiando la forma di `execution.FileStore`: validazione dell'id (rifiuta vuoto, `.`, `..`, e qualunque id che contenga un separatore di percorso) con un errore tipizzato `*StoreError{Kind: StoreInvalidID}` locale al package; `MkdirAll` a `0o700`; scrittura su `os.CreateTemp(s.dir, ".conversation-*.tmp")` con `Chmod(0o600)`, `Sync`, `Close`, poi `os.Rename`; `defer os.Remove(tmp)` per non lasciare residui su errore.
+      4. `Get` restituisce `*StoreError{Kind: StoreNotFound}` su file assente e un errore che nomina l'id su JSON non decodificabile.
+      5. `List` scandisce la directory ignorando sottodirectory e file non `.json`; directory assente ⇒ slice vuota, mai errore e mai nil; un file `.json` non decodificabile fa fallire l'intera chiamata con un errore che nomina il file. Ordina per `last_message_at` decrescente, con `id` decrescente a rompere la parità (stessa regola di `sortByRecency`).
+      6. Commenta ogni scelta non ovvia nello stile del package vicino: perché la scansione fallisce invece di saltare il file, perché non c'è indice.
+      7. `cd cli && gofmt -w ./internal/conversationlog`.
+
+      ## Verify
+      - Esegui da `cli/`: `gofmt -l . && go vet ./... && go build ./...`
+      - Expect: `gofmt -l .` non stampa nulla, `go vet` 0 problemi, `go build` compila pulito — è esattamente la baseline registrata.
+
+      ## Done
+      - [ ] Esiste `cli/internal/conversationlog/` con `Record`, `NewFileStore`, `Save`, `Get`, `List`.
+      - [ ] `List` su directory inesistente restituisce una slice vuota non nil.
+      - [ ] `gofmt -l .`, `go vet ./...` e `go build ./...` restano puliti come in baseline.
+      - [ ] AC-1 — la sede su disco della storia di una conversazione esiste (la prova end-to-end arriva in TASK-12).
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Test unitari dello store delle conversazioni
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Dimostrare che lo store conserva un record intero, lo riordina per recency, tratta l'assenza come risposta e il danneggiamento come errore che nomina il file.
+
+      ## Read
+      - `cli/internal/execution/file_store_test.go` — la forma dei test da ricalcare: `t.TempDir()`, nessun filesystem finto, asserzioni sui file reali.
+      - `cli/internal/conversationlog/file_store.go` — le firme scritte in TASK-01.
+
+      ## Change
+      - Nuovo `cli/internal/conversationlog/file_store_test.go`.
+      - Non-goal: nessun test di rotta HTTP qui; le rotte hanno i loro in `internal/web`.
+
+      ## Steps
+      1. Test round-trip: `Save` di un record con 3 `execution.RunEvent` di specie diverse, `Get` restituisce lo stesso id, titolo, `spec_code`, `resumed_from` e gli eventi con lo stesso ordine, stessi id e stessi testi.
+      2. Test di upsert: due `Save` sullo stesso id lasciano **un solo** file nella directory, e `Get` restituisce il secondo contenuto.
+      3. Test di ordinamento: tre record con `last_message_at` diversi tornano da `List` dal più recente al meno recente; due con lo stesso istante tornano in ordine di id decrescente.
+      4. Test di assenza: `List` su una radice il cui `.archetipo/conversations/` non esiste restituisce `len == 0` e una slice non nil; `Get` di un id mai salvato restituisce un errore riconoscibile come "non trovato".
+      5. Test di id non valido: `Save`/`Get` con id vuoto, `..` e un id contenente un separatore di percorso vengono rifiutati e non creano nessun file.
+      6. Test di danneggiamento: scrivi a mano `broken.json` con `{not json` nella directory, e verifica che `List` fallisca con un errore la cui stringa **contiene il nome del file**.
+      7. Verifica i permessi come fa `file_store_test.go`: directory `0o700`, file `0o600` (salta l'asserzione su `windows` con la stessa guardia già usata lì, se presente).
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/conversationlog/... && gofmt -l . && go vet ./...`
+      - Expect: tutti i test del package passano, `gofmt -l .` vuoto, `go vet` 0 problemi.
+
+      ## Done
+      - [ ] I sette casi sopra esistono e passano.
+      - [ ] L'asserzione sul danneggiamento verifica la presenza del nome del file nel messaggio, non solo che ci sia un errore.
+      - [ ] AC-1 — è provato che un record salvato viene riletto identico da un altro `FileStore` costruito sulla stessa radice, cioè senza nessuno stato in memoria condiviso.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Journaling della conversazione viva e legame opzionale con una spec
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Ogni conversazione del workspace aperto lascia un record su disco che si aggiorna mentre si parla e viene chiuso quando la conversazione finisce, e può nascere legata a una spec.
+
+      ## Read
+      - `cli/internal/web/conversation.go` — `conversationViewOf` (unico punto che legge `session.Events`), `handleOpenWorkspaceConversation` (ordine dei controlli: `requireReachable` per primo), `conversationSessionOf`, `conversationID`.
+      - `cli/internal/web/conversation_state.go` — `conversationState`, `open`, `current`, `releaseCurrent`, `close`, `shutdown`, `conversationSnapshot`.
+      - `cli/internal/web/session.go` — `workspaceSession`, `newWorkspaceSession`, `stop`.
+      - `cli/internal/web/conversation_proposal.go` righe 180-220 — come si legge una spec dal connector (`ws.conn.ReadSpecDetail`) e come si formula un rifiuto.
+      - `cli/internal/conversationlog/` — `Record`, `FileStore` di TASK-01.
+
+      ## Change
+      - Nuovo `cli/internal/web/conversation_journal.go`: `conversationJournal` con lo store, il record corrente, il watermark dell'ultimo id scritto, e i metodi `begin(snapshot, specCode, resumedFrom)`, `record(events []execution.RunEvent, live bool)`, `finish(state execution.RunState)`. Qui vivono anche `conversationTitleOf(events []execution.RunEvent, openedAt time.Time) string` e il conteggio dei messaggi.
+      - `cli/internal/web/conversation_state.go`: aggiungi al holder e allo snapshot i campi `specCode` e `resumedFrom`, passati da `open`; entrambi azzerati in `open` e in `releaseCurrent` insieme agli altri.
+      - `cli/internal/web/session.go`: costruisci il journal in `newWorkspaceSession` (uno store per project root) e chiamane la chiusura dentro `stop`, sullo stesso contesto limitato già usato per `conversation.shutdown`.
+      - `cli/internal/web/conversation.go`: `handleOpenWorkspaceConversation` decodifica un corpo **opzionale** `{"spec_code":"US-XXX"}` e, quando è valorizzato, verifica la spec con `ws.conn.ReadSpecDetail` **prima** di aprire qualunque processo, rifiutando con un `iox.NewConflict` che nomina il codice; `conversationViewOf` chiama `journal.record(...)` dopo aver letto gli eventi della sessione; `handleCloseWorkspaceConversation` chiama `journal.finish(...)`.
+      - Non-goal: nessuna rotta nuova in questo task (sono TASK-05 e TASK-07); nessuna modifica ai provider; nessuna modifica al payload della vista esistente oltre l'aggiunta di `spec_code` e `resumed_from` dentro `conversationSnapshotView`, che sono additivi.
+
+      ## Steps
+      1. Definisci `conversationJournal`. Tiene: `*conversationlog.FileStore`, un `sync.Mutex`, il `conversationlog.Record` corrente e `lastWrittenID int64`.
+      2. `begin` costruisce il record da uno `conversationSnapshot` (id, `working_dir`, `provider_id`, `opened_at`) più `spec_code` e `resumed_from`, azzera il watermark e lo salva subito: un thread esiste nell'indice dal momento in cui è stato aperto, anche se nessuno vi ha ancora detto nulla.
+      3. `record(events, live)` scrive **solo** se è arrivato almeno un evento con id maggiore del watermark. Aggiorna gli eventi del record con la storia intera (`session.Events(0)`), ricalcola `title`, `last_message_at` (l'istante dell'ultimo evento) e `message_count` (numero di eventi di kind `user_message` e `text`), sposta il watermark e chiama `Save`.
+      4. `conversationTitleOf`: primo evento di kind `user_message` con testo non vuoto ⇒ testo normalizzato agli spazi e troncato a 80 rune con `…`; nessuno ⇒ `"Conversazione del " + openedAt.Format("02/01/2006 15:04")`. Una volta che il titolo è stato derivato da un messaggio, non viene più ricalcolato.
+      5. `finish(state)` scrive `final_state` sul record e fa un ultimo `Save`. È idempotente: chiamarla su un journal senza record corrente non fa nulla e non è un errore.
+      6. In `conversationViewOf`, dopo `session := conversationSessionOf(snapshot)` e dopo aver ottenuto gli eventi, chiama `ws.journal.record(session.Events(0), true)`. Un errore di scrittura **non deve** far fallire la richiesta: la conversazione deve restare leggibile; segnalalo come `view.Notice` solo se non ce n'è già uno.
+      7. In `handleOpenWorkspaceConversation`: dopo `requireReachable` e prima di risolvere il provider, decodifica il corpo con `decodeJSON` tollerando un corpo vuoto; se `spec_code` è valorizzato, chiama `ws.conn.ReadSpecDetail(ctx, code)` e rifiuta con `iox.NewConflict("la spec "+code+" non esiste in questo workspace", ...)` quando non c'è. Passa il codice a `ws.conversation.open(...)` e chiama `journal.begin(...)` dopo che il holder ha accettato la conversazione.
+      8. In `handleCloseWorkspaceConversation` e in `workspaceSession.stop`, chiama `journal.finish(...)` con lo stato osservato prima di rilasciare il holder.
+      9. Aggiungi `SpecCode` e `ResumedFrom` (`json:"spec_code,omitempty"` / `json:"resumed_from,omitempty"`) a `conversationSnapshotView` e valorizzali dallo snapshot.
+      10. `cd cli && gofmt -w ./internal/web`.
+
+      ## Verify
+      - Esegui da `cli/`: `go build ./... && go test ./internal/web/... && gofmt -l . && go vet ./...`
+      - Expect: la suite di `internal/web` passa interamente, inclusi i test esistenti di `conversation_test.go` e `conversation_proposal_test.go` che non devono cambiare comportamento; `gofmt -l .` vuoto; `go vet` 0 problemi.
+
+      ## Done
+      - [ ] Aprire una conversazione crea subito `.archetipo/conversations/<id>.json`.
+      - [ ] Una lettura della vista dopo nuovi eventi aggiorna il file; una lettura senza eventi nuovi non lo tocca.
+      - [ ] Un `spec_code` inesistente è rifiutato prima che qualunque processo agente sia avviato.
+      - [ ] AC-2 — il record porta titolo, istante dell'ultimo messaggio e codice spec quando c'è.
+      - [ ] AC-5 — l'apertura senza corpo produce un record con `spec_code` vuoto, cioè la conversazione libera è il default.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Test Go del journaling e del legame con la spec
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Provare che il registro su disco riflette davvero ciò che è stato detto, che il titolo è derivato dal primo messaggio della persona, e che una conversazione può nascere legata a una spec esistente e mai a una inesistente.
+
+      ## Read
+      - `cli/internal/web/conversation_test.go` — gli helper già presenti per costruire un `Server` con un provider finto, un connector in memoria e una radice temporanea: vanno riusati, non riscritti.
+      - `cli/internal/web/conversation_journal.go` — le funzioni scritte in TASK-03.
+
+      ## Change
+      - Nuovo `cli/internal/web/conversation_journal_test.go`.
+      - Non-goal: nessuna modifica al codice di produzione; se un test non riesce a esprimersi, il difetto è nel disegno di TASK-03 e va corretto lì.
+
+      ## Steps
+      1. Test «un thread nasce con l'apertura»: dopo `POST /api/workspace/conversation` esiste un file in `.archetipo/conversations/`, il cui `id` coincide con quello del payload e il cui `events` è una lista vuota.
+      2. Test «il titolo viene dal primo messaggio della persona»: fai emettere alla sessione un `user_message` con un testo lungo noto e poi un `text` dell'agente; dopo una `GET /api/workspace/conversation` il record ha `title` uguale al testo troncato a 80 rune con `…`, non al testo dell'agente.
+      3. Test «senza messaggi il titolo è datato»: subito dopo l'apertura, `title` inizia con `Conversazione del`.
+      4. Test «`last_message_at` e `message_count`»: dopo tre eventi (`user_message`, `text`, `tool_start`), `message_count` è 2 e `last_message_at` è l'istante dell'ultimo evento registrato.
+      5. Test «nessuna scrittura senza eventi nuovi»: leggi l'`os.Stat().ModTime()` del file, esegui due `GET` consecutive senza produrre eventi, verifica che il contenuto del file sia byte-identico.
+      6. Test «spec inesistente rifiutata»: `POST /api/workspace/conversation` con `{"spec_code":"US-ZZZ"}` risponde 409, il messaggio nomina `US-ZZZ`, **nessun** file appare in `.archetipo/conversations/` e nessuna conversazione risulta aperta da una `GET` successiva.
+      7. Test «spec esistente legata» (AC-2): con una spec presente nel connector, l'apertura con quel codice produce un record il cui `spec_code` è quel codice, e il payload della vista lo riporta.
+      8. Test «libera per default» (AC-5): l'apertura senza corpo, e quella con `{"spec_code":""}`, producono entrambe un record con `spec_code` vuoto.
+      9. Test «la chiusura sigilla»: dopo `DELETE /api/workspace/conversation` il record ha `final_state` valorizzato e gli eventi detti fino a quel momento.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/web/... -run Conversation && go test ./internal/web/...`
+      - Expect: i nuovi test passano e l'intera suite di `internal/web` resta verde come in baseline.
+
+      ## Done
+      - [ ] I nove casi sopra esistono e passano.
+      - [ ] AC-2 — è provato su un file reale che il record porta titolo, `last_message_at` e `spec_code`.
+      - [ ] AC-5 — è provato che l'apertura senza spec produce un record libero e che quella con spec produce un record legato, distinguibili da un lettore.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Rotte di lettura dell'indice e del transcript di una conversazione
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-03
+    body: |-
+      ## Objective
+      Il viewer sa rispondere a «quali conversazioni ci sono su questo workspace» e a «cosa ci siamo detti in quella».
+
+      ## Read
+      - `cli/internal/web/server.go` righe 224-275 — `registerRoutes`, il gate `handleWorkspace`, lo stile dei pattern con `{id}`.
+      - `cli/internal/web/conversation.go` — `conversationView`, `conversationViewOf`, `conversationSessionOf`; e `writeJSON`, `writeError`, `parseAfterID` in `handlers.go`.
+      - `cli/internal/web/workspace_runs.go` — un esempio breve di rotta di sola lettura che elenca e ordina, con la sua vista dedicata.
+      - `cli/internal/iox` — `NewNotFound`/`NewConflict` e i codici d'errore.
+
+      ## Change
+      - Nuovo `cli/internal/web/conversations.go`: `conversationEntryView` (`id`, `title`, `spec_code`, `opened_at`, `last_message_at`, `message_count`, `resumed_from`, `state`, `live`), `conversationsView` (`conversations []conversationEntryView`, mai nil), `conversationTranscriptView` (i campi dell'entry più `events []execution.RunEvent`), e i due handler `handleListWorkspaceConversations` e `handleGetWorkspaceConversationTranscript`.
+      - `cli/internal/web/server.go`: registra `GET /api/workspace/conversations` e `GET /api/workspace/conversations/{id}` con `handleWorkspace`, subito sotto il blocco delle cinque rotte esistenti, con un commento che spiega perché ora esiste una collezione accanto alla conversazione singola.
+      - Non-goal: nessuna scrittura da queste rotte; nessun avvio di processo; nessun probe del runtime (le rotte di lettura non devono costare un sottoprocesso, per la ragione già scritta su `heldConversationTarget`).
+
+      ## Steps
+      1. `handleListWorkspaceConversations` legge `ws.journal` (o direttamente il `conversationlog.FileStore` del workspace) con `List(ctx)`, mappa i record in entry e risponde `200`.
+      2. `live` è derivato: `snapshot, open := ws.conversation.current()`; una entry è `live` se e solo se `open && snapshot.id == record.ID`. Il campo `state` del record non deve mai essere usato per dichiarare una conversazione viva.
+      3. L'ordinamento è quello dello store (`last_message_at` decrescente); non riordinare qui.
+      4. `conversations` non è mai `null`: inizializza a `[]conversationEntryView{}`, così AC-7 è un array vuoto e non un'assenza da interpretare.
+      5. `handleGetWorkspaceConversationTranscript` legge `r.PathValue("id")`, chiama `Get`, e risponde `404` con `iox.NewNotFound` quando il record non c'è, nominando l'id. Gli eventi vanno restituiti **tutti**, nell'ordine in cui sono nel record, che è quello crescente di id.
+      6. Quando l'id chiesto è quello della conversazione viva, il transcript preferisce la storia in memoria (`session.Events(0)`) al record su disco: è la più aggiornata delle due, e le due non devono poter divergere sotto gli occhi di chi legge.
+      7. Un errore di lettura dello store è un `iox.NewInternal` che nomina l'operazione; non deve essere mascherato da lista vuota.
+      8. `cd cli && gofmt -w ./internal/web`.
+
+      ## Verify
+      - Esegui da `cli/`: `go build ./... && go test ./internal/web/... && gofmt -l . && go vet ./...`
+      - Expect: build pulita, suite di `internal/web` verde, `gofmt -l .` vuoto, `go vet` 0 problemi.
+
+      ## Done
+      - [ ] Le due rotte sono registrate e rispondono attraverso il gate `handleWorkspace` (senza workspace aperto rispondono 409 `workspaceOpen:false` come tutte le altre).
+      - [ ] `live` è calcolato dal detentore e non letto dal record.
+      - [ ] AC-3 — il transcript restituisce tutti gli eventi in ordine.
+      - [ ] AC-6 — le rotte leggono solo la radice del workspace aperto, senza nessun parametro di workspace.
+      - [ ] AC-7 — un workspace senza conversazioni risponde `200` con `conversations: []`.
+
+      ## Blockers
+      None.
+    ref: TASK-05
+  - id: TASK-06
+    title: Test Go delle rotte di indice e transcript
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Provare sui payload delle due rotte ciò che la persona vedrà nell'elenco e nel thread riaperto: i campi di AC-2, l'ordine completo di AC-3, l'array vuoto di AC-7 e la derivazione della vivacità.
+
+      ## Read
+      - `cli/internal/web/conversation_test.go` e `cli/internal/web/workspace_runs_test.go` — gli helper di costruzione del server e di lettura di un payload JSON già presenti.
+      - `cli/internal/web/conversations.go` — le viste scritte in TASK-05.
+
+      ## Change
+      - Nuovo `cli/internal/web/conversations_test.go`.
+      - Non-goal: nessuna modifica al codice di produzione.
+
+      ## Steps
+      1. Test AC-7: su un workspace senza `.archetipo/conversations/`, `GET /api/workspace/conversations` risponde `200` e il corpo grezzo contiene `"conversations":[]` — l'asserzione è sul JSON, non su `len(slice)`, perché `null` e `[]` si distinguono solo lì.
+      2. Test AC-2: due record scritti direttamente con lo store (uno libero, uno con `spec_code`), con `last_message_at` diversi. Il payload li elenca dal più recente, ogni entry ha `title` non vuoto e `last_message_at` uguale a quello scritto, e solo il secondo ha `spec_code` valorizzato.
+      3. Test della vivacità: con una conversazione aperta davvero dal server, la sua entry ha `live: true` e tutte le altre `false`. Poi chiudi la conversazione e verifica che nessuna entry sia più `live`, pur restando tutte elencate.
+      4. Test «un record ACTIVE sul disco non è vivo»: scrivi a mano un record con `final_state` vuoto e senza nessuna conversazione aperta; la sua entry deve avere `live: false`. È la prova dell'invariante che rende AC-1 onesta dopo un riavvio.
+      5. Test AC-3: un record con sei eventi di specie miste e id noti; `GET /api/workspace/conversations/{id}` li restituisce tutti, con id strettamente crescente e testi uguali a quelli scritti.
+      6. Test del transcript della conversazione viva: gli eventi restituiti sono quelli della sessione in memoria e includono l'ultimo emesso, anche se il record su disco è di un istante prima.
+      7. Test id sconosciuto: `GET /api/workspace/conversations/conv-inesistente` risponde `404` e il messaggio nomina l'id.
+      8. Test del gate: entrambe le rotte, senza workspace aperto, rispondono `409` con `workspaceOpen:false`.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/web/... && gofmt -l . && go vet ./...`
+      - Expect: i nuovi test passano e l'intera suite di `internal/web` resta verde.
+
+      ## Done
+      - [ ] Gli otto casi sopra esistono e passano.
+      - [ ] AC-2 — provato sui campi del payload dell'indice.
+      - [ ] AC-3 — provato sull'ordine e sulla completezza degli eventi del transcript.
+      - [ ] AC-7 — provato sul JSON grezzo `"conversations":[]`.
+
+      ## Blockers
+      None.
+    ref: TASK-06
+  - id: TASK-07
+    title: Ripresa di una conversazione passata come contesto di una nuova
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Scrivere in una conversazione passata apre una conversazione nuova, dichiarata come ripresa, il cui agente ha ricevuto la conversazione passata come contesto.
+
+      ## Read
+      - `cli/internal/execution/conversation.go` — `ConversationRequest` e il commento che spiega perché porta solo i fatti che il provider deve conoscere.
+      - `cli/internal/execution/claude/conversation.go` — `OpenConversation` e la chiamata a `buildConversationPrompt(req.ProcessActions)`.
+      - `cli/internal/execution/claude/prompt.go` righe 262-323 — `buildConversationPrompt` e `formatConversationActions`.
+      - `cli/internal/web/conversation.go` — `handleOpenWorkspaceConversation` per intero: la ripresa ne è una variante e deve riusarne l'ordine dei controlli, non inventarne un altro.
+      - `cli/internal/web/conversation_state.go` — `close`, per la chiusura di quella viva.
+
+      ## Change
+      - `cli/internal/execution/conversation.go`: aggiungi `Context string \`json:"context,omitempty"\`` a `ConversationRequest`, documentato come «il transcript di una conversazione passata che questa riprende; vuoto per una conversazione che non riprende niente».
+      - `cli/internal/execution/claude/prompt.go`: `buildConversationPrompt(actions []execution.ConversationAction, resumed string) string`. Con `resumed` vuoto il risultato deve restare **identico byte per byte** a oggi; con `resumed` valorizzato accoda un blocco che dichiara che si tratta di una conversazione precedente sullo stesso workspace, riportata come contesto e non come istruzioni.
+      - `cli/internal/execution/claude/conversation.go`: passa `req.Context` alla nuova firma.
+      - Nuovo `cli/internal/web/conversation_resume.go`: `transcriptOf(record conversationlog.Record) string` e `handleResumeWorkspaceConversation`.
+      - `cli/internal/web/server.go`: registra `POST /api/workspace/conversations/{id}/resume`.
+      - Non-goal: non riaprire la sessione dell'agente originale (fuori ambito); non tenere due conversazioni vive; non toccare il provider codex, che non implementa `Conversationalist`.
+
+      ## Steps
+      1. Aggiungi il campo `Context` e aggiorna la firma di `buildConversationPrompt`, con il blocco di contesto accodato **dopo** le righe già esistenti, in modo che la frase finale sul non emettere ricevute resti l'ultima.
+      2. `transcriptOf` rende solo gli eventi di kind `user_message` e `text`, una riga per evento, prefissati `tu:` e `agente:`; normalizza gli a capo interni; tronca l'intero testo a un tetto dichiarato come costante (per es. 20000 rune) tagliando **dall'inizio** e premettendo una riga che dichiara che la parte più vecchia è stata omessa — una ripresa deve portare la coda della conversazione, che è la parte che conta.
+      3. `handleResumeWorkspaceConversation`: `requireReachable` per primo, come ogni rotta che avvia qualcosa; poi leggi `id` da `r.PathValue("id")` e il corpo `{"message":"…"}`, rifiutando un messaggio vuoto con `iox.NewInvalidInput` come fa `handleSendWorkspaceConversationMessage`.
+      4. Carica il record con lo store; `404` se non esiste. Rifiuta con `409` se l'id è quello della conversazione **viva**: quella si scrive con la rotta dei messaggi che esiste già, e riprendere sé stessi sarebbe una copia della propria storia nel proprio prompt.
+      5. Se c'è una conversazione viva, chiamane `journal.finish(...)` e `ws.conversation.close(ctx)` prima di aprire la nuova.
+      6. Apri la nuova esattamente come fa `handleOpenWorkspaceConversation` — stesso `resolveTemplate`, stesso `conversationID()`, stessa gestione di `ConfigurationError` e stessa compensazione se il holder rifiuta — aggiungendo `Context: transcriptOf(record)` alla richiesta. Erediti `spec_code` dal record ripreso e imposta `resumed_from: <id ripreso>`.
+      7. `journal.begin(...)` sul nuovo record con `resumed_from` valorizzato; poi consegna il primo messaggio con `snapshot.collaborator.SendRunMessage(...)`, con la stessa gestione dei rifiuti (`mapRunRefusal`) della rotta esistente.
+      8. Rispondi `201` con la vista della conversazione nuova, il cui `conversation.resumed_from` è l'id vecchio: è ciò da cui la pagina dichiara la ripresa.
+      9. `cd cli && gofmt -w ./internal`.
+
+      ## Verify
+      - Esegui da `cli/`: `go build ./... && go test ./internal/execution/... ./internal/web/... && gofmt -l . && go vet ./...`
+      - Expect: build pulita e suite verdi; in particolare i test esistenti di `prompt_conversation_test.go` continuano a passare dopo l'adeguamento della firma.
+
+      ## Done
+      - [ ] `ConversationRequest.Context` esiste, ha un solo chiamante e un solo implementatore aggiornati.
+      - [ ] Con contesto vuoto il prompt della conversazione è invariato.
+      - [ ] La ripresa risponde con un id nuovo, `resumed_from` valorizzato e la conversazione viva precedente chiusa e journalizzata.
+      - [ ] AC-4 — l'agente della conversazione nuova riceve nel prompt il transcript di quella ripresa, e il payload dichiara la ripresa.
+
+      ## Blockers
+      None.
+    ref: TASK-07
+  - id: TASK-08
+    title: Test Go della ripresa e del prompt con contesto
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-07
+    body: |-
+      ## Objective
+      Provare che il contesto della ripresa arriva davvero nel prompt del provider, che la rotta di ripresa apre una conversazione nuova e chiude quella viva, e che il prompt senza contesto è invariato.
+
+      ## Read
+      - `cli/internal/execution/claude/prompt_conversation_test.go` — la disciplina già dichiarata: si asserisce sul contratto (gli id ricevuti, la forma che il parser riconosce), mai sulla prosa.
+      - `cli/internal/web/conversation_test.go` — gli helper per aprire una conversazione con un provider finto.
+      - `cli/internal/web/conversation_resume.go` — le funzioni di TASK-07.
+
+      ## Change
+      - `cli/internal/execution/claude/prompt_conversation_test.go`: adegua le chiamate esistenti alla nuova firma e aggiungi i casi sul contesto.
+      - Nuovo `cli/internal/web/conversation_resume_test.go`.
+      - Non-goal: nessuna modifica al codice di produzione.
+
+      ## Steps
+      1. Test di invarianza del prompt: `buildConversationPrompt(actions, "")` deve essere uguale a una stringa catturata **prima** della modifica — cattura la baseline nel test come costante derivata dall'output corrente, oppure asserisci che il risultato non contiene nessuna delle parole del blocco di contesto e che termina con la riga sulle ricevute.
+      2. Test del contesto: con un transcript contenente una frase sentinella, il prompt la contiene, e contiene anche la dichiarazione che si tratta di una conversazione precedente offerta come contesto e non come istruzioni.
+      3. Test di `transcriptOf`: solo `user_message` e `text` compaiono; un `tool_start` no; l'ordine è quello degli eventi; il troncamento taglia dall'inizio e premette la riga di omissione, verificato su un record che supera il tetto.
+      4. Test della rotta (AC-4): apri una conversazione, falle produrre eventi con una frase sentinella, chiudila; poi `POST /api/workspace/conversations/{id}/resume` con un messaggio. Asserisci: `201`; l'`id` della risposta è diverso da quello ripreso; `resumed_from` è quello ripreso; il provider finto ha ricevuto una `ConversationRequest` il cui `Context` contiene la frase sentinella; il messaggio è stato consegnato alla nuova sessione.
+      5. Test «chiude quella viva»: con una conversazione A viva, la ripresa di B chiude A — il provider finto registra la `CloseConversation` di A — e il record di A ha `final_state` valorizzato.
+      6. Test dei rifiuti: id inesistente ⇒ `404` che nomina l'id; messaggio vuoto ⇒ `400`/invalid input; ripresa dell'id **vivo** ⇒ `409` con una ragione leggibile.
+      7. Test di eredità: la ripresa di un record legato a una spec produce un record nuovo con lo stesso `spec_code`.
+
+      ## Verify
+      - Esegui da `cli/`: `go test ./internal/execution/claude/... ./internal/web/... && gofmt -l . && go vet ./...`
+      - Expect: tutti verdi; nessun test preesistente modificato nel merito, solo nella firma.
+
+      ## Done
+      - [ ] I sette casi sopra esistono e passano.
+      - [ ] AC-4 — l'oracolo è il `Context` che il provider ha davvero ricevuto, non una chiamata mockata riuscita.
+
+      ## Blockers
+      None.
+    ref: TASK-08
+  - id: TASK-09
+    title: Renderer puro dell'indice delle conversazioni
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-05
+    body: |-
+      ## Objective
+      Un modulo puro che, dato il payload dell'indice, restituisce l'HTML del rail dei thread disegnato dal mockup, compreso lo stato vuoto e la dichiarazione di ripresa.
+
+      ## Read
+      - `docs/mockups/redesign-chat/stato-b-storico.html` — **il contratto visivo**: `.rail`, `.rail-top`, `.new-thread`, `.rail-list`, `.rail-group`, `.thread`, `.thread-code`, `.thread-title`, `.thread-meta`, `.thread-flag`, `.is-free`, `.is-current`. Usa questi nomi di classe.
+      - `docs/mockups/redesign-chat/shared.css` — le regole corrispondenti, da portare in `app.css` in TASK-11.
+      - `cli/internal/web/assets/conversation.js` — la disciplina del modulo puro: `escapeHtml`, `textAt`, `objectAt`, nessun DOM, nessun fetch, doppia esportazione `module.exports` / `window.*`.
+      - `cli/internal/web/assets/workspace-runs.js` — un secondo esempio della stessa forma, più corto.
+
+      ## Change
+      - Nuovo `cli/internal/web/assets/conversation-index.js`, che esporta `renderConversationIndex(view, ui)` e `relativeTime(value, now)`.
+      - Non-goal: nessun `document`, nessun `fetch`, nessun timer, nessuna regola di processo. **Nessun campo di ricerca**: la ricerca a testo pieno è fuori ambito e un campo inerte sarebbe una promessa falsa, anche se il mockup ne disegna uno.
+
+      ## Steps
+      1. Copia da `conversation.js` gli helper `escapeHtml`, `objectAt`, `textAt` — comportamento identico, come già fanno i moduli fratelli.
+      2. `relativeTime(value, now)` restituisce, in italiano: `adesso` (< 60 s), `N min fa`, `N ore fa`, `ieri`, `N giorni fa`, e per oltre una settimana la data breve `gg/mm/aaaa`. `now` è iniettabile, così il test possiede il tempo e non è mai instabile.
+      3. Raggruppa le entry in tre gruppi, nell'ordine del mockup: **In corso** (`live: true`), **Spec** (`spec_code` non vuoto e non vive), **Progetto** (`spec_code` vuoto e non vive). Un gruppo senza entry non viene disegnato affatto — nessuna intestazione orfana.
+      4. Ogni thread è un `<button type="button" class="thread" data-conversation-id="…">` con: `.thread-code` che porta il codice spec, oppure `···` più la classe `is-free` per un thread libero; `.thread-title` col titolo dal payload; `.thread-meta` col tempo relativo di `last_message_at` e, per un thread vivo, il segno `.thread-flag.is-live` con la parola `in corso`.
+      5. `ui.currentId` marca il thread aperto con `is-current` e `aria-current="true"`.
+      6. In cima, sempre, il comando `data-conversation-new` con l'etichetta `Nuova conversazione`.
+      7. Stato vuoto (AC-7): quando la lista è vuota, l'HTML contiene la frase `Su questo workspace non c'è ancora nessuna conversazione.` e il comando `data-conversation-new` — la dichiarazione e l'offerta, mai una lista vuota muta.
+      8. Esporta anche `renderResumeBanner(view)`: quando il payload della conversazione porta `resumed_from`, restituisce un blocco che dichiara che questa è una conversazione **nuova** che riprende quella indicata e ne ha ricevuto la storia come contesto; stringa vuota altrimenti. È la metà di AC-4 che la persona legge.
+      9. Tutto il testo che viene dal payload passa per `escapeHtml`; nessun tono o classe può essere scelto dal payload.
+      10. Doppia esportazione in fondo, come i moduli fratelli.
+
+      ## Verify
+      - Esegui dalla radice: `node -e "const m=require('./cli/internal/web/assets/conversation-index.js'); console.log(typeof m.renderConversationIndex, typeof m.relativeTime, typeof m.renderResumeBanner)"`
+      - Expect: stampa `function function function` — il modulo si carica in Node senza DOM, che è la condizione perché sia testabile.
+
+      ## Done
+      - [ ] Il modulo non contiene le stringhe `document`, `fetch`, `window.` (fuori dal blocco di esportazione finale) né `setInterval`.
+      - [ ] I nomi di classe usati sono quelli del mockup `stato-b-storico.html`.
+      - [ ] AC-2, AC-5, AC-7 — titolo, tempo relativo, codice spec, gruppi distinti e stato vuoto dichiarato sono tutti prodotti da questo modulo.
+      - [ ] AC-4 — `renderResumeBanner` produce la dichiarazione di ripresa.
+
+      ## Blockers
+      None.
+    ref: TASK-09
+  - id: TASK-10
+    title: Test del renderer dell'indice sul testo visibile
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-09
+    body: |-
+      ## Objective
+      Provare, sul testo che la persona legge nell'HTML reso, ciò che l'elenco deve dire: titolo, momento, codice spec, distinzione fra thread liberi e legati, dichiarazione dell'elenco vuoto e dichiarazione della ripresa.
+
+      ## Read
+      - `test/web/conversation.test.mjs` — la disciplina dichiarata in testa (oracoli sul testo visibile, non sulla forma del modulo) e il modo in cui il modulo viene caricato con `createContext`/`runInContext`.
+      - `cli/internal/web/assets/conversation-index.js` — il modulo di TASK-09.
+
+      ## Change
+      - Nuovo `test/web/conversation-index.test.mjs`.
+      - Non-goal: nessuna modifica al renderer se non per difetti che i test rivelano.
+
+      ## Steps
+      1. Carica il modulo con la stessa tecnica di `conversation.test.mjs`, così il test prova il file che il viewer serve davvero.
+      2. Test AC-2: una entry con titolo noto, `last_message_at` di due ore prima di un `now` fisso e `spec_code: "US-058"` ⇒ l'HTML contiene il titolo, contiene `2 ore fa` e contiene `US-058`.
+      3. Test AC-5: due entry, una con `spec_code` e una senza ⇒ l'HTML contiene entrambe le intestazioni di gruppo `Spec` e `Progetto`, la entry libera porta la classe `is-free` e **non** contiene nessun codice spec, e la entry legata porta il codice.
+      4. Test dei gruppi vuoti: con sole entry libere, l'intestazione `Spec` non compare.
+      5. Test del gruppo `In corso`: una entry `live: true` compare sotto `In corso` con la parola `in corso`, anche se ha un `spec_code`.
+      6. Test AC-7: `{conversations: []}` ⇒ l'HTML contiene la frase che dichiara che non ce n'è nessuna **e** il comando `data-conversation-new`. L'asserzione è sulla frase, non sull'assenza di card.
+      7. Test del thread corrente: con `ui.currentId` uguale a una entry, solo quella porta `is-current`.
+      8. Test AC-4: `renderResumeBanner({conversation:{resumed_from:"conv-vecchia"}})` produce un testo che dichiara la ripresa e nomina `conv-vecchia`; senza `resumed_from` restituisce stringa vuota.
+      9. Test di `relativeTime` sui confini: `adesso`, `min fa`, `ore fa`, `ieri`, `giorni fa`, data breve, con un `now` fisso.
+      10. Test di escaping: un titolo contenente `<script>` compare nell'HTML escapato e non come tag.
+      11. Test di purezza sul sorgente del modulo, come fa `conversation.test.mjs` per le regole di processo: il file non contiene `document`, `fetch(`, `setInterval`.
+
+      ## Verify
+      - Esegui dalla radice: `npm run test:web`
+      - Expect: tutti i test passano; il totale sale dai 150 della baseline al nuovo totale, con 0 fail.
+
+      ## Done
+      - [ ] Gli undici casi sopra esistono e passano.
+      - [ ] AC-2, AC-4, AC-5, AC-7 — ognuno ha almeno un'asserzione sul testo visibile reso.
+      - [ ] `npm run test:web` riporta 0 fail.
+
+      ## Blockers
+      None.
+    ref: TASK-10
+  - id: TASK-11
+    title: Rail dei thread nella shell del workspace e apertura di una conversazione passata
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-09
+      - TASK-07
+    body: |-
+      ## Objective
+      Nella shell del workspace, accanto alla conversazione, c'è l'indice dei thread: si sceglie un thread passato e lo si legge, si scrive dentro e la risposta arriva in una conversazione nuova dichiarata come ripresa, si avvia una conversazione nuova libera.
+
+      ## Read
+      - `docs/mockups/redesign-chat/stato-b-storico.html` e `stato-e-stretto.html` — la forma del rail e il suo comportamento in finestra stretta (l'indice scorre sopra, la conversazione non si comprime mai). **Non produrre mockup nuovi**: questi sono il contratto.
+      - `docs/mockups/redesign-chat/shared.css` — le regole di `.rail`, `.rail-top`, `.new-thread`, `.rail-list`, `.rail-group`, `.thread*` da adattare ai token di `app.css`.
+      - `cli/internal/web/assets/index.html` righe 117-155 — la shell di US-057: `#workspace-shell`, `#workspace-views`, `#workspace-runs`, `#workspace-primary`, `#workspace-conversation`.
+      - `cli/internal/web/assets/app.js` righe 3864-4130 e seguenti — lo stato della conversazione, `bindConversationPanel`, `loadConversation`, `resetConversationState`, `startConversationPolling`, `openConversation`; e le righe 580-640 e 690-800, dove si gestiscono cambio workspace e layout.
+      - `cli/internal/web/assets/workspace-layout.js` — `NARROW_MAX_WIDTH` e il fatto che la conversazione non viene mai smontata.
+      - `cli/internal/web/assets/app.css` — dove sono definiti i token di colore e la media query a 900px.
+
+      ## Change
+      - `cli/internal/web/assets/index.html`: un `<aside id="workspace-conversations" class="conversation-rail" aria-label="Conversazioni">` dentro `#workspace-shell`, prima di `#workspace-primary`, e il tag `<script src="conversation-index.js"></script>` accanto agli altri moduli.
+      - `cli/internal/web/assets/app.css`: le regole del rail (colonna a larghezza fissa in modalità larga; sopra la colonna primaria, scorrevole in orizzontale, sotto i 900px), portate dal mockup ai token esistenti.
+      - `cli/internal/web/assets/app.js`: stato dell'indice, caricamento, selezione di un thread, ripresa, nuova conversazione, azzeramento al cambio workspace.
+      - `cli/internal/web/assets/index.html`, pannello di dettaglio spec: un solo comando `data-conversation-new-spec` «Conversa su questa spec» nell'intestazione del pannello, che apre una conversazione con lo `spec_code` della spec aperta.
+      - Non-goal: non spostare né rifare la board, il dettaglio spec, la striscia delle run o il pannello conversazione; non toccare `conversation.js` se non per accodare il banner di ripresa; nessun campo di ricerca.
+
+      ## Steps
+      1. Aggiungi l'aside e lo script in `index.html`. Il rail vive dentro la shell e non dentro `#workspace-primary`, così non è una delle viste che `workspace-layout.js` alterna.
+      2. In `app.js`, accanto allo stato della conversazione, introduci: `conversationsIndex` (ultimo payload), `conversationsCurrentId` (thread aperto, vuoto = quello vivo), `conversationTranscript` (eventi del thread passato in lettura).
+      3. `loadConversationsIndex()` legge `GET /api/workspace/conversations` e ridisegna il rail con `ConversationIndex.renderConversationIndex(payload, {currentId})`. Chiamala al boot, dopo ogni apertura/chiusura/ripresa, e a ogni giro riuscito del polling della conversazione — così `last_message_at` e il segno «in corso» restano veri senza un secondo timer.
+      4. Lega il rail una volta sola, come `bindConversationPanel`: `[data-conversation-new]` apre una conversazione libera (`POST /api/workspace/conversation` senza corpo, cioè `openConversation()` così com'è); `[data-conversation-id]` apre quel thread.
+      5. Aprire un thread: se il suo id è quello vivo, torna alla vista viva (`loadConversation()`); altrimenti leggi `GET /api/workspace/conversations/{id}`, metti gli eventi in `conversationTranscript`, ferma il polling e disegna il pannello **in sola lettura** con lo stesso `Conversation.renderConversation`, passando una vista costruita dal transcript. Il posto in cui si guarda non cambia: il pannello resta montato, cambia solo il contenuto.
+      6. Scrivere in un thread passato (AC-4): il composer di un thread passato invia a `POST /api/workspace/conversations/{id}/resume` con `{message}`. Al `201`: azzera cursore e timeline come fa `openConversation`, applica la vista nuova, disegna il banner di `renderResumeBanner`, riavvia il polling, ricarica l'indice e sposta `conversationsCurrentId` sull'id nuovo.
+      7. `data-conversation-new-spec` nel pannello spec: `POST /api/workspace/conversation` con `{"spec_code": <codice della spec aperta>}`, poi le stesse azioni del punto 6 senza banner.
+      8. In `resetConversationState()` azzera anche `conversationsIndex`, `conversationsCurrentId` e `conversationTranscript`, e ricarica l'indice: al cambio workspace il rail non deve mai mostrare un thread del workspace lasciato (AC-6).
+      9. Quando non c'è workspace aperto (`noWorkspaceMode()`), il rail non viene disegnato, come il resto della shell.
+      10. CSS: in modalità larga il rail è una colonna a larghezza fissa alla sinistra di `#workspace-primary`; sotto `NARROW_MAX_WIDTH` (900px) diventa una striscia orizzontale scorrevole **sopra** la colonna primaria, e la conversazione non perde larghezza — è la regola non negoziabile di US-057 AC-6 e dello stato E del mockup.
+
+      ## Verify
+      - Esegui dalla radice: `npm run test:web && cd cli && go build ./... && go test ./internal/web/...`
+      - Expect: i test dei moduli puri restano verdi (l'HTML statico non li tocca), il binario compila con gli asset incorporati, e la suite del viewer resta verde.
+      - Verifica manuale ad occhio, dalla radice: `cd cli && go run ./cmd/archetipo view` su questo repository, poi apri il browser — il rail elenca i thread, «Nuova conversazione» ne avvia uno, uno passato si apre in lettura, e restringendo la finestra sotto i 900px l'indice passa sopra senza stringere la conversazione.
+
+      ## Done
+      - [ ] Il rail è disegnato dentro `#workspace-shell` e non è una vista alternata da `workspace-layout.js`.
+      - [ ] I nomi di classe e la disposizione seguono `docs/mockups/redesign-chat/stato-b-storico.html`; nessun mockup nuovo è stato creato.
+      - [ ] AC-2, AC-5, AC-7 — l'elenco reso nella pagina mostra titoli, momenti, codici spec, i due gruppi e lo stato vuoto con l'offerta.
+      - [ ] AC-3 — aprendo un thread passato la pagina mostra i suoi messaggi per intero e in ordine.
+      - [ ] AC-4 — scrivendo in un thread passato la pagina passa a una conversazione nuova e ne dichiara la ripresa.
+      - [ ] AC-6 — cambiando workspace il rail viene azzerato e ricaricato.
+
+      ## Blockers
+      None.
+    ref: TASK-11
+  - id: TASK-12
+    title: Smoke e2e — sopravvivenza al riavvio, ripresa e isolamento fra workspace
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-11
+      - TASK-08
+      - TASK-06
+    body: |-
+      ## Objective
+      Provare su un viewer reale, con file reali e processi reali, che le conversazioni sopravvivono alla chiusura di ARchetipo, che una passata si riapre intera, che riprenderla consegna il suo contesto a un agente nuovo, e che cambiando workspace l'elenco cambia con esso.
+
+      ## Read
+      - `test/e2e/conversation-view-smoke.mjs` — l'harness da ricalcare per intero: avvio del CLI compilato, server di controllo per il fake, attese che interrogano una rotta con un timeout esplicito e **nessuna** `sleep` arbitraria, report finale con un'affermazione per AC.
+      - `test/e2e/support/fake-claude.mjs` — come il fake riporta i frame ricevuti (è ciò che rende osservabile il prompt di sistema della ripresa).
+      - `package.json` — la forma degli script `test:view-*-smoke`.
+
+      ## Change
+      - Nuovo `test/e2e/conversation-history-view-smoke.mjs`.
+      - `package.json`: nuovo script `"test:view-conversation-history-smoke": "node ./test/e2e/conversation-history-view-smoke.mjs"`.
+      - Non-goal: non modificare `conversation-view-smoke.mjs`, che deve restare la prova non regredita di US-053; non introdurre nessun framework di browser.
+
+      ## Steps
+      1. Prepara due workspace sandbox A e B con `archetipo init --tool claude --connector file --yes` e qualche spec, come fa lo smoke esistente.
+      2. Su A: apri una conversazione, fai emettere al fake una risposta contenente una **frase sentinella di ieri**, invia un messaggio dell'operatore con una seconda sentinella, chiudi la conversazione. Registra id, titolo atteso ed eventi.
+      3. AC-1: leggi `.archetipo/conversations/<id>.json` sul filesystem e verifica che contenga gli eventi. Poi **termina il processo viewer** e avviane uno nuovo sulla stessa radice; asserisci che il pid è diverso e che `GET /api/workspace/conversations` del viewer nuovo elenca l'id con il suo titolo e con `live: false`.
+      4. AC-3: sul viewer nuovo, `GET /api/workspace/conversations/{id}` restituisce gli stessi eventi, negli stessi id crescenti e con gli stessi testi letti prima del riavvio; confronta le due liste elemento per elemento.
+      5. AC-4: apri una seconda conversazione viva su A, poi `POST /api/workspace/conversations/{id-di-ieri}/resume` con un messaggio nuovo. Asserisci: `201`; id diverso; `resumed_from` uguale all'id di ieri; il server di controllo del fake riporta che il **nuovo** processo agente ha ricevuto nel suo prompt la frase sentinella di ieri; il processo agente della conversazione viva precedente risulta terminato chiedendolo al sistema operativo per pid, come fa lo smoke esistente in AC-6; il messaggio nuovo entra nella storia della conversazione nuova.
+      6. AC-6: apri anche su B una conversazione con una sentinella propria; poi, sullo **stesso** processo viewer, `POST /api/workspaces/{B}/open` e verifica che `GET /api/workspace/conversations` elenchi solo gli id di B e che **nessuno** degli id di A compaia in nessun punto del corpo della risposta (confronto sulla stringa grezza, come fa lo smoke esistente).
+      7. AC-7: prepara un terzo workspace mai conversato, aprilo e verifica che la lista risponda `200` con `"conversations":[]`.
+      8. Chiudi tutti i processi avviati nel `finally`, scrivi `report.html` nella directory di run e stampa una riga per ogni affermazione provata, nello stile dello smoke esistente.
+
+      ## Verify
+      - Esegui dalla radice: `npm run test:view-conversation-history-smoke`
+      - Expect: `PASS` con le cinque affermazioni (AC-1, AC-3, AC-4, AC-6, AC-7) stampate per esteso.
+      - Esegui anche: `npm run test:view-conversation-smoke`
+      - Expect: `PASS` con le sue 7 affermazioni, identiche alla baseline — la persistenza e la ripresa non hanno cambiato nulla di US-053.
+
+      ## Done
+      - [ ] Lo script esiste, è registrato in `package.json` e non contiene nessuna attesa a tempo fisso.
+      - [ ] AC-1 — provata su un pid diverso e su file reali.
+      - [ ] AC-3 — provata confrontando gli eventi prima e dopo il riavvio.
+      - [ ] AC-4 — provata sul prompt che il processo agente nuovo ha davvero ricevuto e sulla fine di quello vecchio secondo il sistema operativo.
+      - [ ] AC-6 — provata sull'assenza degli id di A nell'intero corpo della risposta.
+      - [ ] AC-7 — provata sul JSON grezzo.
+      - [ ] `npm run test:view-conversation-smoke` resta PASS con 7 affermazioni.
+
+      ## Blockers
+      None.
+    ref: TASK-12
+  - id: TASK-13
+    title: Gate finale — verifiche complete e richiesta di review
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+      - TASK-05
+      - TASK-06
+      - TASK-07
+      - TASK-08
+      - TASK-09
+      - TASK-10
+      - TASK-11
+      - TASK-12
+    body: |-
+      ## Objective
+      Eseguire l'intera batteria di verifiche che il repository dichiara, confermare che ogni task del piano è concluso, e solo allora chiedere la review.
+
+      ## Read
+      - `AGENTS.md`, sezione «Rules for CLI changes» — i cinque check che CI esegue localmente.
+      - La sezione `Baseline` del corpo di questo piano — i risultati con cui confrontarsi.
+
+      ## Change
+      - Nessuna modifica di codice. Se un check è rosso, la correzione appartiene al task che lo ha rotto, non a questo.
+
+      ## Steps
+      1. Da `cli/`: `gofmt -l .` — deve stampare **niente**.
+      2. Da `cli/`: `go vet ./...`
+      3. Da `cli/`: `go build ./...`
+      4. Da `cli/`: `go test ./...`
+      5. Dalla radice: `npm run test:web`
+      6. Dalla radice: `npm run test:view-conversation-history-smoke`
+      7. Dalla radice: `npm run test:view-conversation-smoke`
+      8. Dalla radice: `npm run test:view-workspace-runs-smoke` e `npm run test:view-next-step-smoke` — le due smoke della shell più vicine a ciò che TASK-11 ha toccato.
+      9. Da `cli/`: `golangci-lint run --timeout 5m ./...`. Se il binario manca, installalo con `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` ed esegui. Se l'installazione non è possibile in questo ambiente, **dichiaralo esplicitamente come non eseguito** nella nota di consegna: non scrivere mai che è verde.
+      10. Marca questo task `DONE`.
+      11. Da `/Users/stefanoleli/Project/Archetipo`: esegui `archetipo spec show US-058` e verifica che **nessun** task risulti `TODO`.
+      12. Solo allora, da `/Users/stefanoleli/Project/Archetipo`: `archetipo spec review US-058`.
+
+      ## Verify
+      - Comandi: quelli dei passi 1-9, nell'ordine.
+      - Expect: `gofmt -l .` vuoto; `go vet` 0 problemi; `go build` pulito; `go test ./...` verde con **almeno** i 1859 test della baseline più quelli aggiunti; `npm run test:web` 0 fail con almeno i 150 della baseline più quelli aggiunti; le smoke tutte `PASS`; `golangci-lint` 0 issue oppure dichiarato non eseguito con la ragione d'ambiente.
+
+      ## Done
+      - [ ] Tutti i comandi dei passi 1-8 sono verdi; nessuno era rosso in baseline e nessuno lo è ora.
+      - [ ] Il passo 9 è verde oppure dichiarato non eseguito con la ragione, mai dato per verde.
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7 — ogni criterio ha almeno un test verde fra quelli eseguiti sopra, come da mappa delle evidenze.
+      - [ ] `archetipo spec show US-058` non riporta nessun task `TODO`.
+      - [ ] `archetipo spec review US-058` è stato eseguito **dopo** la conferma del passo 11.
+
+      ## Blockers
+      None.
+    ref: TASK-13
