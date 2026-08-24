@@ -308,9 +308,66 @@ func (c *conversationSet) decide(id string, proposalID int64, outcome conversati
 	// Only a confirmation moves it, because only a confirmation is work: a
 	// refusal started nothing, and letting it retarget the thread would rename
 	// it after a step nobody took.
-	if outcome.Decision == conversationDecisionConfirmed && strings.TrimSpace(outcome.SpecCode) != "" {
-		entry.specCode = strings.TrimSpace(outcome.SpecCode)
+	retargetLocked(entry, outcome)
+	return nil
+}
+
+// retargetLocked moves the conversation onto the spec an outcome worked on, with
+// mu already held. It is a function of its own because two gestures start work
+// in a conversation — confirming a proposal and pressing the recommended step —
+// and the thread has to be labelled the same way by both.
+func retargetLocked(entry *liveConversation, outcome conversationOutcome) {
+	if outcome.Decision != conversationDecisionConfirmed {
+		return
 	}
+	if code := strings.TrimSpace(outcome.SpecCode); code != "" {
+		entry.specCode = code
+	}
+}
+
+// adopt records that executionID was started *from* this conversation by a
+// gesture that carried no proposal — the recommended step, pressed at the tail
+// of the thread — anchored at the last event said before the press.
+//
+// It is not decide: nothing was proposed, so nothing was decided, and moving the
+// watermark here would silently answer a proposal the agent may have just made
+// and the person has not read. The register is written and the watermark is
+// left exactly where it was.
+//
+// The outcome is appended and never replaces one already filed under the same
+// anchor: two things really can be asked for at the same point of a history —
+// a proposal confirmed on the last event, and a step pressed right after it —
+// and each one started a run of its own that the thread has to keep showing.
+// An execution already adopted is ignored, so a retried request adds nothing.
+func (c *conversationSet) adopt(id string, anchorEventID int64, outcome conversationOutcome) error {
+	if c == nil {
+		return fmt.Errorf("this workspace cannot hold a conversation")
+	}
+	if strings.TrimSpace(outcome.ExecutionID) == "" {
+		return fmt.Errorf("an adopted run needs an execution id")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return fmt.Errorf("this workspace is no longer open")
+	}
+	entry, held := c.live[id]
+	if !held {
+		return fmt.Errorf("the conversation %s is not open for this workspace", id)
+	}
+	outcome.ProposalID = anchorEventID
+	for i := range entry.outcomes {
+		if entry.outcomes[i].ExecutionID == outcome.ExecutionID {
+			return nil
+		}
+	}
+	entry.outcomes = append(entry.outcomes, outcome)
+	// The last decision of the conversation is what it last set going, and this
+	// gesture set something going: leaving `outcome` pointing at an older one
+	// would make the thread report a step that has been superseded.
+	last := outcome
+	entry.outcome = &last
+	retargetLocked(entry, outcome)
 	return nil
 }
 

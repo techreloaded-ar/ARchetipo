@@ -1219,7 +1219,12 @@
 			showToast("This step cannot be started right now", "err");
 			return;
 		}
-		await startPanelAction(target.action, button);
+		// The thread the step was pressed in travels with the start: a run asked
+		// for inside a conversation has to be readable there, and not only in
+		// the workspace strip. It is the id the panel is showing, whatever it
+		// is — a conversation that has ended ties nothing, and the server is
+		// what decides that.
+		await startPanelAction(target.action, button, conversationsCurrentId);
 	}
 
 	function updateStats(view) {
@@ -2904,13 +2909,20 @@
 	// disabled before the request leaves and is only given back when the server
 	// refuses, so a double click cannot ask for a second run. Which route is
 	// asked is a property of the mounted panel, not of this code.
-	async function startPanelAction(actionID, button) {
+	//
+	// conversationID names the thread the press came from, and is absent for a
+	// press on the board — which came from no thread. It travels with the start
+	// so the run is tied to the conversation that asked for it; it changes
+	// nothing else about the request, and the server ties nothing when it is
+	// missing.
+	async function startPanelAction(actionID, button, conversationID) {
 		if (!actionID || !panelContext || !panelStartURL) return;
 		const ctx = panelContext;
 		const url = panelStartURL;
 		if (button) button.disabled = true;
 		try {
 			const body = { action: actionID };
+			if (conversationID) body.conversation_id = conversationID;
 			const override = runModelOverride();
 			if (override) {
 				body.model = override.model;

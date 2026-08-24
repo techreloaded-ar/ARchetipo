@@ -70,6 +70,10 @@ type runWorkspaceActionReq struct {
 	// same meaning and the same optionality they have on the spec-scoped start.
 	Model        string            `json:"model,omitempty"`
 	ModelOptions map[string]string `json:"model_options,omitempty"`
+	// ConversationID has the meaning it has on the spec-scoped start: the
+	// conversation this start was asked for in, absent when it was not asked for
+	// in one.
+	ConversationID string `json:"conversation_id,omitempty"`
 }
 
 // handleGetWorkspaceActions serves GET /api/workspace/actions.
@@ -157,6 +161,9 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 		writeStartError(w, err)
 		return
 	}
+	// Same rule as the spec route: the tie is made after the start and never
+	// gates it.
+	_ = s.adoptStartedRun(r.Context(), ws, req.ConversationID, started)
 	// As on the spec route, the response is written after the dispatch has been
 	// launched, and for the same reason it is indifferent: the dispatch is
 	// asynchronous and never touches this ResponseWriter, while the record the

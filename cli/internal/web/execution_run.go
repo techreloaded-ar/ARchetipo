@@ -135,6 +135,12 @@ type runSpecActionReq struct {
 	// configuration, and neither of them is ever saved back to it.
 	Model        string            `json:"model,omitempty"`
 	ModelOptions map[string]string `json:"model_options,omitempty"`
+	// ConversationID names the conversation the start was asked for in, and is
+	// absent for a start pressed on the board — which belongs to no thread. It
+	// changes nothing about the run: the same record, the same transition, the
+	// same dispatch. What it adds is the tie, so a run asked for inside a
+	// conversation is read where it was asked for.
+	ConversationID string `json:"conversation_id,omitempty"`
 }
 
 // handleRunSpecAction starts one action on one spec through the workspace
@@ -174,6 +180,10 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		writeStartError(w, err)
 		return
 	}
+	// The tie is made after the start and never gates it: by here the execution
+	// is persisted and running, and a conversation that ended in between is not
+	// a reason to refuse the answer that announces it.
+	_ = s.adoptStartedRun(r.Context(), ws, req.ConversationID, started)
 	// The response is written after the dispatch has been launched, which is
 	// indifferent: the dispatch is asynchronous and never touches this
 	// ResponseWriter — it only runs the continuation on the server's own
