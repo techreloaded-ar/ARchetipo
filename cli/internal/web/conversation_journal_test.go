@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
@@ -670,5 +671,87 @@ func TestJournalFinishSealsOnlyTheConversationItNames(t *testing.T) {
 	}
 	if recordB.FinalState != "" {
 		t.Fatalf("conv-b final_state = %q, want none: it was never sealed", recordB.FinalState)
+	}
+}
+
+// journalTestPlanningServer is a viewer whose provider both converses and
+// carries out a planning run, which is what a confirmation dispatches. The
+// connector is captured after construction because the run writes through the
+// very one the viewer serves.
+func journalTestPlanningServer(t *testing.T) (*Server, *conversingProvider) {
+	t.Helper()
+	var conn connector.Connector
+	provider := newConversingProvider("chatty", 0)
+	provider.execute = func(ctx context.Context, request execution.Request) (execution.Result, error) {
+		return planningExecute(conn)(ctx, request)
+	}
+	srv, backlog := newProposalServer(t, provider)
+	conn = backlog
+	return srv, provider
+}
+
+// journalTestOpenOnSpec opens a conversation bound to code and answers with its
+// id.
+func journalTestOpenOnSpec(t *testing.T, srv *Server, code string) string {
+	t.Helper()
+	status, body := journalTestOpenWith(t, srv, map[string]any{"spec_code": code})
+	if status != http.StatusCreated {
+		t.Fatalf("POST conversation on %s = %d, want 201: %s", code, status, body)
+	}
+	view := journalTestDecodeBound(t, body)
+	if view.Conversation == nil {
+		t.Fatalf("the open conversation is null: %s", body)
+	}
+	return view.Conversation.ID
+}
+
+// TestConfirmingWorkOnAnotherSpecRetargetsTheThread is the other half of the
+// binding: a conversation is opened on one card and used to start work on
+// another, and from that moment the index must say — and group by — the spec it
+// actually worked on. The title already follows the person's first message, and
+// a record whose two names point at two different specs is a record that cannot
+// be read.
+func TestConfirmingWorkOnAnotherSpecRetargetsTheThread(t *testing.T) {
+	srv, provider := journalTestPlanningServer(t)
+	id := journalTestOpenOnSpec(t, srv, "US-901")
+
+	eventID := emitProposal(t, provider, id, "Posso pianificare US-902.", "plan", "US-902")
+	status, view, body := decideProposal(t, srv, id, eventID, "accept")
+	if status != http.StatusCreated {
+		t.Fatalf("POST proposal accept = %d, want 201: %s", status, body)
+	}
+	if view.Outcome == nil || view.Outcome.SpecCode != "US-902" {
+		t.Fatalf("the acceptance does not name US-902: %s", body)
+	}
+
+	bound := journalTestDecodeBound(t, body)
+	if bound.Conversation == nil || bound.Conversation.SpecCode != "US-902" {
+		t.Errorf("the payload still binds the conversation to %#v, want US-902: %s", bound.Conversation, body)
+	}
+	if record := journalTestRecordOf(t, srv, id); record.SpecCode != "US-902" {
+		t.Errorf("record spec_code = %q, want US-902: the index would file the thread under a spec it never worked on", record.SpecCode)
+	}
+}
+
+// TestDecliningWorkOnAnotherSpecLeavesTheThreadWhereItWas is the boundary of
+// that rule: only work retargets a conversation. A proposal that was refused
+// started nothing, and renaming the thread after it would file it under a step
+// nobody took.
+func TestDecliningWorkOnAnotherSpecLeavesTheThreadWhereItWas(t *testing.T) {
+	srv, provider := journalTestPlanningServer(t)
+	id := journalTestOpenOnSpec(t, srv, "US-901")
+
+	eventID := emitProposal(t, provider, id, "Posso pianificare US-902.", "plan", "US-902")
+	status, _, body := decideProposal(t, srv, id, eventID, "decline")
+	if status != http.StatusOK {
+		t.Fatalf("POST proposal decline = %d, want 200: %s", status, body)
+	}
+
+	bound := journalTestDecodeBound(t, body)
+	if bound.Conversation == nil || bound.Conversation.SpecCode != "US-901" {
+		t.Errorf("a refusal moved the conversation to %#v, want it still on US-901: %s", bound.Conversation, body)
+	}
+	if record := journalTestRecordOf(t, srv, id); record.SpecCode != "US-901" {
+		t.Errorf("record spec_code = %q, want US-901: a refused proposal is not work", record.SpecCode)
 	}
 }

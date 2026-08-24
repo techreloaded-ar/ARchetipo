@@ -158,6 +158,39 @@ func (j *conversationJournal) record(ctx context.Context, id string, events []ex
 	return j.store.Save(ctx, saved)
 }
 
+// retarget records that the conversation is now about specCode, and writes it.
+//
+// It exists because the record already treats its two names asymmetrically and
+// only one of them was following the thread: the title is recomputed from the
+// first thing the person said, while the spec was written once at begin and
+// never again. An index that groups by a code the conversation was opened with
+// puts a thread under a card it never worked on, and says so next to a title
+// that names another one.
+//
+// An id this journal is not keeping is not an error, by the same rule as
+// finish: a sealed conversation is history, and history is not retargeted. An
+// empty code is ignored rather than clearing the binding, because "this started
+// nothing spec-scoped" is not "this is about nothing".
+func (j *conversationJournal) retarget(ctx context.Context, id, specCode string) error {
+	if j == nil || j.store == nil {
+		return nil
+	}
+	code := strings.TrimSpace(specCode)
+	if code == "" {
+		return nil
+	}
+	j.mu.Lock()
+	entry, kept := j.entries[id]
+	if !kept || entry.record.SpecCode == code {
+		j.mu.Unlock()
+		return nil
+	}
+	entry.record.SpecCode = code
+	saved := entry.record
+	j.mu.Unlock()
+	return j.store.Save(ctx, saved)
+}
+
 // finish seals the record with the state the conversation was left in.
 //
 // It is idempotent, and calling it for an id this journal is not keeping is not

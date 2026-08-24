@@ -398,5 +398,11 @@ func (s *Server) handleDecideWorkspaceConversationProposal(w http.ResponseWriter
 		return
 	}
 	decided, stillOpen := ws.conversation.get(id)
+	// The holder has already retargeted the live conversation; the journal is
+	// the same fact written where the index reads it. The error is dropped for
+	// the reason every other journal write in this package drops it: the record
+	// is a trace of the conversation, and a trace that could not be written is
+	// not a reason to refuse a start that has already happened.
+	_ = ws.journal.retarget(ctx, id, decided.specCode)
 	writeJSON(w, http.StatusCreated, s.conversationViewOf(ctx, ws, heldConversationTarget(decided), decided, stillOpen, afterID))
 }

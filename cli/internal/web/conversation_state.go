@@ -299,6 +299,18 @@ func (c *conversationSet) decide(id string, proposalID int64, outcome conversati
 	// decision on the same proposal is free to rewrite underneath it.
 	last := outcome
 	entry.outcome = &last
+	// The spec of the conversation follows the work it has actually started.
+	// The code it was opened with is where it began, not what it is about
+	// forever: a conversation opened on one card and then used to plan another
+	// would otherwise keep being labelled — and grouped — by a spec it never
+	// touched, while its title already says which one it did.
+	//
+	// Only a confirmation moves it, because only a confirmation is work: a
+	// refusal started nothing, and letting it retarget the thread would rename
+	// it after a step nobody took.
+	if outcome.Decision == conversationDecisionConfirmed && strings.TrimSpace(outcome.SpecCode) != "" {
+		entry.specCode = strings.TrimSpace(outcome.SpecCode)
+	}
 	return nil
 }
 
