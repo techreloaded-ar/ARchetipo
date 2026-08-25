@@ -152,8 +152,13 @@
 	// rendered here for the same reason the search box is not: the viewer binds
 	// no such shortcut, and a key legend that does nothing when pressed is a
 	// promise this page cannot keep.
+	//
+	// The glyph is decorative and hidden from the accessibility tree: the label
+	// beside it already names the command, and an icon that repeats a visible
+	// word only makes the announcement longer.
 	function renderNewThread() {
 		return `<button type="button" class="new-thread" data-conversation-new>
+			<svg class="new-thread-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
 			<span>${TEXT.newThread}</span>
 		</button>`;
 	}

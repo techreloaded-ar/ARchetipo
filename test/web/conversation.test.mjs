@@ -243,6 +243,45 @@ describe("renderConversation", () => {
 		);
 	});
 
+	it("il comando di chiusura sta nella testata e non nella riga del compositore", () => {
+		// L'unico comando irreversibile del pannello non condivide la riga con
+		// l'unico comando ordinario: sta accanto allo stato su cui agisce, in
+		// testa, e la riga sotto al campo resta a scrivere e inviare.
+		const html = renderConversation(LIVE, "", {});
+		const idxHead = html.indexOf('class="conv-head"');
+		const idxClose = html.indexOf("data-conversation-close-open");
+		const idxComposer = html.indexOf("conv-composer");
+
+		assert.ok(
+			idxHead !== -1 && idxClose !== -1 && idxComposer !== -1,
+			"testata, comando di chiusura o compositore non sono disegnati",
+		);
+		assert.ok(
+			idxHead < idxClose && idxClose < idxComposer,
+			"il comando di chiusura non è più nella testata: sta fuori dalla banda che intesta la conversazione",
+		);
+
+		const armed = renderConversation(LIVE, "", { closeArmed: true });
+		assert.ok(
+			armed.indexOf("data-conversation-close-confirm") <
+				armed.indexOf("conv-composer"),
+			"armata, la conferma è scesa nella riga del compositore",
+		);
+	});
+
+	it("il comando di chiusura si annuncia per esteso anche quando l'etichetta è corta", () => {
+		// L'etichetta visibile è breve perché il controllo è quieto; il nome
+		// accessibile dice per intero che cosa si sta per chiudere.
+		const html = renderConversation(LIVE, "", {});
+		const button = html.match(/<button[^>]*data-conversation-close-open[^>]*>/);
+		assert.ok(button, "il comando di chiusura non è un bottone");
+		assert.match(
+			button[0],
+			/aria-label="Close conversation"/,
+			"il comando di chiusura non dichiara il proprio nome accessibile",
+		);
+	});
+
 	it("il comando di chiusura chiede conferma prima di chiudere", () => {
 		const armed = renderConversation(LIVE, "", { closeArmed: true });
 		assert.ok(

@@ -167,7 +167,11 @@
              the pure renderer in conversation-index.js; this element is the
              holder the renderer deliberately does not return. In a narrow
              window it becomes a horizontal strip above the primary column, so
-             the conversation never loses width (US-057 AC-6). -->
+             the conversation never loses width (US-057 AC-6).
+             It is on screen only while the conversation is the view of the
+             primary column: beside the board or the spec detail it was a
+             column of links to somewhere else. Which is decided by
+             workspace-layout.js and arrives here as is-visible / is-hidden. -->
         <aside id="workspace-conversations" class="conversation-rail" aria-label="Conversazioni"></aside>
 
         <div id="workspace-primary" class="workspace-primary">

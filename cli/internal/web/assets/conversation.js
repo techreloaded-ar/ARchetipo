@@ -485,13 +485,25 @@
 	// The close control exists only while the conversation is live: one that has
 	// ended cannot be closed again, so offering it would be a lie.
 	//
-	// The confirmation is inline rather than a window.confirm: a modal dialog
-	// would block the loop that keeps the panel current.
+	// It lives in the head, beside the state it acts on, and no longer in the
+	// composer row: a red-bordered pill sitting a thumb away from Send made the
+	// one irreversible command of this panel share a row with its most ordinary
+	// one. Here it is a quiet control among the facts about the conversation —
+	// what state it is in, where it works, which provider holds it — and the
+	// writing area is left to writing.
+	//
+	// Quiet is not hidden, and it is not unguarded: the danger colour is spent
+	// where it is worth spending, on the confirmation, and the confirmation is
+	// inline rather than a window.confirm — a modal dialog would block the loop
+	// that keeps the panel current.
 	function renderCloseControl(ui) {
 		const disabled = ui.busy ? " disabled" : "";
 		if (!ui.closeArmed) {
 			return `<span class="conv-close">
-				<button type="button" class="ghost-btn danger-ghost-btn" data-conversation-close-open${disabled}>Close conversation</button>
+				<button type="button" class="conv-close-btn" data-conversation-close-open${disabled} title="Close conversation" aria-label="Close conversation">
+					<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.5 2.5H3.5v11h3M9.5 5.5L12 8l-2.5 2.5M12 8H6.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+					<span>Close</span>
+				</button>
 			</span>`;
 		}
 		return `<span class="conv-close">
@@ -506,7 +518,8 @@
 	// `offered` is whether a conversation can be opened in this workspace at all.
 	// It gates the writing half and nothing else: a live conversation whose
 	// provider is no longer the offered one takes no new message, but it is still
-	// holding an agent process, so its close control stays exactly where it was.
+	// holding an agent process, so its close control — now in the head — stays
+	// offered exactly as before.
 	//
 	// A run waiting for an answer adds a hint under the composer and nothing
 	// else: it never takes the word away. Writing to the agent while its run is
@@ -520,7 +533,6 @@
 			: active
 				? "This conversation takes no more messages: close it to let the agent go"
 				: "This conversation is over and takes no more messages";
-		const close = active ? renderCloseControl(ui) : "";
 		const hint = writable ? "⌘ + enter to send" : "read only";
 		const await_ = awaiting
 			? '<p class="conv-composer-await">the run resumes when you answer the wait above</p>'
@@ -528,7 +540,6 @@
 		return `<form class="conv-composer">
 			<textarea class="conv-composer-input" rows="1" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
 			<div class="conv-composer-row">
-				${close}
 				<span class="conv-composer-spacer"></span>
 				<span class="conv-composer-hint">${escapeHtml(hint)}</span>
 				<button type="submit" class="primary-btn"${disabled}>Send</button>
@@ -537,7 +548,11 @@
 		</form>`;
 	}
 
-	function renderHead(view, badge, variant) {
+	// `controls` is whatever the caller wants at the right end of the band —
+	// today the close control, and only while the conversation is live. The head
+	// does not decide what belongs there and never builds it: it is handed the
+	// markup or the empty string, exactly like every other fact it draws.
+	function renderHead(view, badge, variant, controls) {
 		const dir = objectAt(view, "conversation")
 			? textAt(objectAt(view, "conversation"), "working_dir")
 			: "";
@@ -553,6 +568,7 @@
 			${dirHtml}
 			<span class="conv-head-spacer"></span>
 			${providerHtml}
+			${typeof controls === "string" ? controls : ""}
 		</div>`;
 	}
 
@@ -841,7 +857,7 @@
 		}
 
 		return `<section class="conv-panel ${variant}" aria-label="Conversation">
-			${renderHead(value, badge, variant)}
+			${renderHead(value, badge, variant, active ? renderCloseControl(local) : "")}
 			${blocks.join("")}
 		</section>`;
 	}

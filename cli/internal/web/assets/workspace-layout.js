@@ -9,8 +9,9 @@
 // and the called view is laid over it, so nothing that was there is unmounted.
 //
 // It answers one question: given the current state, which panes of the shell
-// are visible, which of them is an overlay, which control returns to the work,
-// and which switchers reach the views that are not on screen.
+// are visible, which of them is an overlay, whether the thread rail beside them
+// is on screen, which control returns to the work, and which switchers reach
+// the views that are not on screen.
 //
 // It is pure: no DOM, no document, no fetch, and it never applies a class. It
 // returns the class names; writing them onto elements belongs to the caller.
@@ -126,6 +127,15 @@
 		// the primary column. It is offered whenever a spec is open.
 		const back = specOpen ? switcherFor("board", specOpen) : null;
 
+		// The rail of past conversations belongs to the conversation, not to the
+		// shell that holds it: it is the index of what has been said in this
+		// workspace, and it says nothing about a board or about a spec detail.
+		// So it is on screen exactly when the conversation is the view being
+		// read — in both widths — and the permanent switcher in the topbar stays
+		// the way back to it. Beside the board it was a column of links to
+		// somewhere else, taking width from the one thing the board needs.
+		const railVisible = view === "conversation";
+
 		const panes = {};
 		PANES.forEach(function (pane) {
 			const isVisible = visible.indexOf(pane) !== -1;
@@ -148,6 +158,14 @@
 			present: present,
 			visible: visible,
 			panes: panes,
+			// The thread rail is not a pane of the primary column — it is the
+			// companion of one view — so it gets its own answer rather than an
+			// entry in `panes`, and the caller applies the same two state classes
+			// to it that it applies to a pane.
+			rail: {
+				visible: railVisible,
+				stateClass: railVisible ? PANE_VISIBLE_CLASS : PANE_HIDDEN_CLASS,
+			},
 			back: back,
 			switchers: switchers,
 		};

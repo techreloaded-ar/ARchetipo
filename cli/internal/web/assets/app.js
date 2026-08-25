@@ -811,6 +811,17 @@
 		el.classList.toggle("hidden", !pane.present);
 	}
 
+	// The thread rail is not a pane of the primary column: it is the companion
+	// of one view. It gets the same two state classes a pane gets — the shell
+	// already hides `is-hidden` children — and never the `hidden` class, which
+	// the rail's own renderer owns by emptying itself when there is no
+	// workspace to index.
+	function applyRailState(el, rail) {
+		if (!el || !rail) return;
+		el.classList.toggle(WorkspaceLayout.PANE_VISIBLE_CLASS, rail.visible);
+		el.classList.toggle(WorkspaceLayout.PANE_HIDDEN_CLASS, !rail.visible);
+	}
+
 	// The switcher is permanent, in both widths: the three tabs of the design —
 	// Conversazione · Spec · Board — with the current one marked. The tabs that
 	// are not current come from the module's switcher list; the current one is
@@ -858,6 +869,7 @@
 		applyPaneState(conversationEl, layout.panes.conversation);
 		applyPaneState(boardEl, layout.panes.board);
 		applyPaneState(modal, layout.panes.spec);
+		applyRailState(conversationsRailEl, layout.rail);
 		renderShellViews(layout.switchers, {
 			view: layout.view,
 			label: layout.panes[layout.view].label || layout.view,

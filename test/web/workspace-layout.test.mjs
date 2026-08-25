@@ -18,6 +18,8 @@
 //     nothing is laid over anything
 //   - AC-6 in a narrow window the conversation is always on screen and the
 //     called view is an overlay; and a choice made inside an overlay closes it
+//   - the thread rail is the companion of the conversation: it is on screen
+//     exactly when the conversation is the view, in both widths
 //   - the breakpoint is declared once: app.css and the module share one number
 
 import { describe, it } from "node:test";
@@ -296,6 +298,39 @@ describe("nulla di irraggiungibile", () => {
 				`la board deve essere a un solo comando — ${describeState(state)}, trovati ${toBoard.length}`,
 			);
 			assert.equal(toBoard[0].view, "board");
+		}
+	});
+});
+
+describe("il rail dei thread accompagna la conversazione", () => {
+	it("è sullo schermo solo quando la vista è la conversazione", () => {
+		for (const state of STATES) {
+			const layout = resolveLayout(state);
+			assert.equal(
+				layout.rail.visible,
+				layout.view === "conversation",
+				`il rail delle conversazioni non segue la vista — ${describeState(state)}`,
+			);
+		}
+	});
+
+	it("dichiara la classe di stato coerente con la sua visibilità", () => {
+		for (const state of STATES) {
+			const layout = resolveLayout(state);
+			assert.equal(
+				layout.rail.stateClass,
+				layout.rail.visible ? "is-visible" : "is-hidden",
+				`la classe del rail contraddice la sua visibilità — ${describeState(state)}`,
+			);
+		}
+	});
+
+	it("non toglie larghezza alla board in nessuna delle due misure", () => {
+		// Il motivo per cui la regola esiste: la board è la vista che ha più
+		// bisogno di colonne, e il rail accanto a lei indicizzava altro.
+		for (const narrow of [false, true]) {
+			const layout = resolveLayout({ view: "board", specOpen: false, narrow });
+			assert.equal(layout.rail.visible, false);
 		}
 	});
 });
