@@ -2,10 +2,10 @@
 // Pure renderer for the GET /api/workspace/conversations payload.
 //
 // It draws the thread rail: the list of the conversations this workspace has
-// had, grouped by what they are about, plus the standing offer to open a new
-// one. It knows no process rule — not one spec status, not one action name.
-// Every word it draws about a thread comes from the payload, so a title or a
-// code it has never seen is rendered as it is, unchanged.
+// had, grouped by whether they are still running, plus the standing offer to
+// open a new one. It knows no process rule — not one spec status, not one
+// action name. Every word it draws about a thread comes from the payload, so a
+// title or a code it has never seen is rendered as it is, unchanged.
 //
 // The only judgement it makes is presentational: which group a thread belongs
 // to, and how long ago its last message was, said in words instead of an
@@ -63,14 +63,17 @@
 	// The words this module owns. None of them names a step or a state of
 	// anybody's method: they are the furniture of a list — what its groups are,
 	// what the standing offer is, and what the list says when it is empty.
+	// I due gruppi dicono l'unica cosa che cambia il modo di leggere un filo:
+	// se sta ancora girando o se è finito. Raggrupparli invece per spec o
+	// progetto divideva la lista su un fatto che il codice accanto al titolo già
+	// dice, e lasciava le conversazioni senza spec sotto un'intestazione che non
+	// significa niente.
 	const TEXT = {
 		newThread: "Nuova conversazione",
 		groupLive: "In corso",
-		groupSpec: "Spec",
-		groupFree: "Progetto",
+		groupDone: "Concluse",
 		live: "in corso",
 		empty: "Su questo workspace non c'è ancora nessuna conversazione.",
-		freeCode: "···",
 	};
 
 	// There is deliberately no entry here for the limit of live conversations.
@@ -122,14 +125,21 @@
 		return `<span class="thread-meta">${parts.join(" · ")}</span>`;
 	}
 
+	// Il codice della spec sta sopra al titolo, e solo quando c'è: prima stava a
+	// sinistra e occupava una colonna anche per le conversazioni che una spec non
+	// ce l'hanno, dove disegnava un segnaposto di tre puntini che non diceva
+	// niente e stringeva il titolo di tutte le altre.
 	function renderThread(entry, currentId, now) {
 		if (!entry || typeof entry !== "object") return "";
 		const id = textAt(entry, "id");
 		const code = textAt(entry, "spec_code");
 		const classes = threadClasses(entry, currentId).join(" ");
 		const current = classes.indexOf("is-current") >= 0 ? ` aria-current="true"` : "";
+		const codeHtml = code
+			? `<span class="thread-code">${escapeHtml(code)}</span>`
+			: "";
 		return `<button type="button" class="${classes}" data-conversation-id="${escapeHtml(id)}"${current}>
-			<span class="thread-code">${code ? escapeHtml(code) : TEXT.freeCode}</span>
+			${codeHtml}
 			<span class="thread-title">${escapeHtml(textAt(entry, "title"))}</span>
 			${renderMeta(entry, now)}
 		</button>`;
@@ -242,17 +252,11 @@
 		// the others, which is precisely the assumption of uniqueness this rail
 		// must not make.
 		const live = entries.filter(isLive);
-		const spec = entries.filter(
-			(entry) => !isLive(entry) && !!textAt(entry, "spec_code"),
-		);
-		const free = entries.filter(
-			(entry) => !isLive(entry) && !textAt(entry, "spec_code"),
-		);
+		const done = entries.filter((entry) => !isLive(entry));
 
 		const groups = [
 			renderGroup(TEXT.groupLive, live, currentId, now),
-			renderGroup(TEXT.groupSpec, spec, currentId, now),
-			renderGroup(TEXT.groupFree, free, currentId, now),
+			renderGroup(TEXT.groupDone, done, currentId, now),
 		]
 			.filter(Boolean)
 			.join("");

@@ -125,7 +125,9 @@
 			"Questa conversazione non accetta altri messaggi: chiudila per lasciare andare l'agente",
 		writeOverPlaceholder:
 			"Questa conversazione è finita e non accetta altri messaggi",
-		writeHint: "invio per inviare · maiusc+invio a capo",
+		// Corta e minuta: è un promemoria da leggere una volta, non una frase da
+		// rileggere a ogni messaggio, e la larghezza che occupa la toglie al campo.
+		writeHint: "invio: invia · maiusc+invio: a capo",
 		readOnly: "sola lettura",
 		awaitHint: "la run riprende quando rispondi all'attesa qui sopra",
 		send: "Invia",
@@ -623,10 +625,13 @@
 		// invece di stare stretto accanto al campo come un suggerimento fra gli
 		// altri, dove rubava larghezza a ciò che si sta scrivendo.
 		const ended = !active;
-		const hint = writable ? TEXT.writeHint : ended ? "" : TEXT.readOnly;
-		const hintHtml = hint
-			? `<span class="conv-composer-hint">${escapeHtml(hint)}</span>`
-			: "";
+		// Il suggerimento c'è sempre: sparendo a conversazione finita lasciava la
+		// riga senza dire perché il campo non risponde, e chi tornava a scrivere
+		// su una conversazione viva se lo trovava comparire come una novità. Ora
+		// dice sempre una delle due cose vere del campo — come si manda, oppure
+		// che non si scrive — e sta scritto minuto perché è un promemoria.
+		const hint = writable ? TEXT.writeHint : TEXT.readOnly;
+		const hintHtml = `<span class="conv-composer-hint">${escapeHtml(hint)}</span>`;
 		// Si chiude come ogni altra nota del pannello: dopo la prima lettura la
 		// riga è del compositore. Il segnaposto del campo continua comunque a
 		// dire che si sta scrivendo per riprendere, quindi chiuderla non lascia

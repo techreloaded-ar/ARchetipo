@@ -79,6 +79,39 @@ func TestMockupsRouteResolvesThroughSession(t *testing.T) {
 	}
 }
 
+// TestBrandLogoIsServedAndReferenced pins the one thing that would break the
+// mark silently: the page names /logo.svg as the icon of the browser tab, and
+// that file has to come out of the embedded assets. A rename or a move would
+// leave the tab with a broken icon and no test would have said a word.
+func TestBrandLogoIsServedAndReferenced(t *testing.T) {
+	srv, _ := newFileServer(t)
+
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/logo.svg", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /logo.svg = %d, want 200", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "<svg") {
+		t.Errorf("GET /logo.svg served something that is not an SVG: %q", body)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "svg") {
+		t.Errorf("Content-Type = %q, want an SVG type", ct)
+	}
+
+	page, err := assetsFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), `href="/logo.svg"`) {
+		t.Error("index.html no longer names /logo.svg as the icon of the tab")
+	}
+	// Il marchio nella testata è disegnato in linea e prende i colori dal tema:
+	// se tornasse a essere una lettera in una piastrella, questa sparirebbe.
+	if !strings.Contains(string(page), "brand-logo-peak") {
+		t.Error("the header no longer draws the inline ARchetipo mark")
+	}
+}
+
 // TestSessionWithoutProviderRegistryHasNoService keeps the nil service explicit:
 // it is what makes the run route answer "no provider" instead of panicking.
 func TestSessionWithoutProviderRegistryHasNoService(t *testing.T) {

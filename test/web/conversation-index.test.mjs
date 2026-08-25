@@ -13,8 +13,8 @@
 // Verifies:
 //   - AC-2 every entry shows its title, when it was last spoken in, and the
 //     code of the spec it was born from
-//   - AC-5 a conversation tied to no spec is listed apart from the tied ones
-//     and carries no spec code
+//   - AC-5 a conversation tied to no spec carries no spec code, and no
+//     placeholder in its place
 //   - AC-7 a workspace with no past conversation says so and offers to open
 //     the first one
 //   - AC-4 a resumed conversation declares that it is a new one carrying the
@@ -151,17 +151,42 @@ describe("renderConversationIndex", () => {
 			{ now: NOW },
 		);
 
-		const visible = visibleText(html);
-		assert.match(visible, /Spec/);
-		assert.match(visible, /Progetto/);
+		// Le due stanno nello stesso gruppo: quello che le distingue è il codice
+		// sopra al titolo, non un'intestazione che le separa.
+		assert.match(visibleText(html), /Concluse/);
+		assert.doesNotMatch(visibleText(html), /Progetto/);
 
 		const free = threadWithTitle(html, "Conversazione di progetto");
 		assert.match(free, /is-free/);
 		assert.doesNotMatch(free, /US-\d/);
+		// E soprattutto: niente riquadro al posto del codice che non c'è.
+		assert.doesNotMatch(free, /thread-code/);
 
 		const tied = threadWithTitle(html, "Conversazione della spec");
 		assert.match(tied, /US-058/);
 		assert.doesNotMatch(tied, /is-free/);
+	});
+
+	it("mette il codice della spec sopra al titolo, non accanto (AC-5)", () => {
+		const html = renderConversationIndex(
+			{
+				conversations: [
+					{
+						id: "conv-legata",
+						title: "Conversazione della spec",
+						last_message_at: ago(2 * HOUR),
+						spec_code: "US-058",
+					},
+				],
+			},
+			{ now: NOW },
+		);
+
+		const tied = threadWithTitle(html, "Conversazione della spec");
+		assert.ok(
+			tied.indexOf("thread-code") < tied.indexOf("thread-title"),
+			"the spec code must be rendered before the title it stands over",
+		);
 	});
 
 	it("non lascia intestazioni orfane sopra un gruppo vuoto", () => {
@@ -183,8 +208,7 @@ describe("renderConversationIndex", () => {
 			{ now: NOW },
 		);
 
-		assert.match(html, /Progetto/);
-		assert.doesNotMatch(html, /Spec/);
+		assert.match(html, /Concluse/);
 		assert.doesNotMatch(html, /In corso/);
 	});
 
@@ -384,11 +408,11 @@ describe("renderConversationIndex con più conversazioni vive", () => {
 			2,
 			"no entry outside the live group may carry the is-live flag",
 		);
-		// And the one that ended is still listed, under the group its spec code
-		// puts it in: closed is not hidden, it is elsewhere.
+		// And the one that ended is still listed, under the group of what is
+		// over: closed is not hidden, it is elsewhere.
 		assert.ok(
-			groupBody(html, "Spec").includes("conv-chiusa"),
-			"the closed conversation must still be listed under its own group",
+			groupBody(html, "Concluse").includes("conv-chiusa"),
+			"the closed conversation must still be listed under Concluse",
 		);
 	});
 

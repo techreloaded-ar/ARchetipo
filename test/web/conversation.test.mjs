@@ -1521,9 +1521,12 @@ describe("la ripresa di una conversazione finita", () => {
 			idxNota < idxRiga,
 			"la nota è finita dentro la riga del campo invece di stare sopra",
 		);
+		// La riga del campo un suggerimento ce l'ha sempre, ma è il suo — dice
+		// che non si scrive — e non una seconda copia della nota qui sopra.
+		const riga = html.slice(idxRiga);
 		assert.ok(
-			!html.includes("conv-composer-hint"),
-			"a conversazione finita la riga del campo ospita ancora un suggerimento",
+			!/conv-composer-hint[^]*conversazione nuova/.test(riga),
+			"la nota di ripresa è ripetuta anche nella riga del campo",
 		);
 	});
 
@@ -1558,7 +1561,26 @@ describe("la ripresa di una conversazione finita", () => {
 		// La scorciatoia è cambiata: Invio manda, Maiusc+Invio va a capo. Il
 		// suggerimento accanto al campo deve dire quella, non un'altra.
 		const text = visibleText(renderConversation(LIVE, "", {}));
-		assert.match(text, /invio per inviare/);
-		assert.match(text, /maiusc\+invio/);
+		assert.match(text, /invio: invia/);
+		assert.match(text, /maiusc\+invio: a capo/);
+	});
+
+	it("il suggerimento del campo c'è anche a conversazione finita", () => {
+		// Non è la stessa frase — su una conversazione chiusa non si manda
+		// niente — ma la riga non resta mai muta: dice che è di sola lettura.
+		const html = renderConversation(
+			Object.assign({}, LIVE, {
+				conversation: Object.assign({}, LIVE.conversation, {
+					state: "CLOSED",
+				}),
+			}),
+			"",
+			{},
+		);
+		assert.ok(
+			html.includes("conv-composer-hint"),
+			"la riga del compositore resta senza suggerimento",
+		);
+		assert.match(visibleText(html), /sola lettura/);
 	});
 });

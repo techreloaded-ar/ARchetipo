@@ -301,28 +301,39 @@ h4 {
 	gap: 10px;
 }
 
+/* Il marchio sta per sé, senza piastrella colorata dietro: ha già due colori
+   suoi, e un fondo pieno sotto ne faceva un terzo che litigava con tutti e due.
+   I due tracciati leggono da qui il loro colore, così il picco resta leggibile
+   anche sul tema scuro, dove il grafite del marchio sparirebbe. */
 .brand-mark {
-	width: 32px;
-	height: 32px;
+	--logo-peak: #272c30;
+	--logo-arrow: #0052cc;
+	height: 30px;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	background: var(--accent);
-	color: var(--accent-ink);
-	border-radius: 10px;
-	font-family: var(--font-sans);
-	font-size: 16px;
-	font-weight: 800;
-	line-height: 1;
-	box-shadow: var(--shadow-sm);
-	transition:
-		transform 0.35s var(--ease),
-		background var(--transition);
+	transition: transform 0.35s var(--ease);
 }
-.brand-mark em {
-	font-style: normal;
-	display: inline-block;
+
+html[data-theme="dark"] .brand-mark {
+	--logo-peak: #f4f4fa;
+	--logo-arrow: #4d8dff;
 }
+
+.brand-logo {
+	height: 100%;
+	width: auto;
+	display: block;
+}
+
+.brand-logo-peak {
+	fill: var(--logo-peak);
+}
+
+.brand-logo-arrow {
+	fill: var(--logo-arrow);
+}
+
 .brand:hover .brand-mark {
 	transform: rotate(-6deg) scale(1.04);
 }
@@ -5354,17 +5365,22 @@ body.no-workspace [data-workspace-scoped] {
 	gap: var(--space-3);
 }
 
+/* Minuto e discreto: è un promemoria che sta sempre lì, non un messaggio da
+   leggere. Alla larghezza della riga costa il minimo, e all'occhio non compete
+   con quello che si sta scrivendo. */
 .conv-composer-hint {
-	font-size: 13px;
+	font-size: 11px;
+	line-height: 1.4;
 	color: var(--text-dim);
 	white-space: nowrap;
 	/* Il suggerimento è la cosa che si può perdere: sta sulla riga finché la
 	   riga la regge, e sparisce prima che a stringersi sia il campo. */
 	flex: 0 1 auto;
 	overflow: hidden;
+	text-overflow: ellipsis;
 	/* Allineato al testo del pulsante accanto — alto 40px — e non al suo bordo
 	   inferiore. */
-	padding-bottom: calc((40px - 1.5em) / 2);
+	padding-bottom: calc((40px - 1.4em) / 2);
 }
 
 .conv-composer-row .primary-btn {
@@ -6421,13 +6437,18 @@ body.no-workspace [data-workspace-scoped] {
 	background: var(--border);
 }
 
+/* Una colonna sola: il codice della spec — quando c'è — sta sopra al titolo, e
+   la riga di quando sotto. La griglia a due colonne di prima teneva la prima
+   larga quanto il codice anche per i fili che non ne hanno uno, e quello spazio
+   lo pagava il titolo di tutti. */
 .thread {
-	display: grid;
-	grid-template-columns: auto 1fr;
-	gap: 3px var(--space-2);
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 3px;
 	width: 100%;
 	min-height: 56px;
-	align-content: center;
+	justify-content: center;
 	text-align: left;
 	border: 1px solid transparent;
 	border-radius: var(--radius);
@@ -6452,29 +6473,20 @@ body.no-workspace [data-workspace-scoped] {
 	box-shadow: none;
 }
 
-/* The spec code anchors the thread: in mono, before the title, so the eye tells
-   a spec's thread from a free one at a glance — the free one carries a mark in
-   its place. */
-/* Il codice della spec ancora il filo: in monospazio, prima del titolo, così
-   l'occhio distingue il filo di una spec da uno libero. */
+/* Il codice della spec ancora il filo: in monospazio, sopra al titolo, così
+   l'occhio trova a colpo d'occhio i fili di una spec. Un filo che una spec non
+   ce l'ha non disegna niente al suo posto: un segnaposto vuoto occuperebbe la
+   stessa riga per non dire niente. */
 .thread-code {
-	grid-row: span 2;
-	align-self: start;
 	font-family: var(--font-mono);
-	font-size: 12px;
-	font-weight: 500;
-	letter-spacing: 0;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
 	color: var(--accent);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
-	padding: 1px 6px;
-	margin-top: 2px;
+	padding: 0 5px;
 	white-space: nowrap;
-}
-
-.thread.is-free .thread-code {
-	border-style: dashed;
-	color: var(--text-dim);
 }
 
 .thread.is-current .thread-code {

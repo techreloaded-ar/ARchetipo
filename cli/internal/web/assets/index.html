@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ARchetipo &middot; Visore del backlog</title>
+    <!-- Il marchio vero anche nella linguetta del browser: lo stesso file che
+         la testata disegna in linea, qui nei suoi colori fissi. -->
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <!-- Un carattere solo per tutto ciò che si legge, e JetBrains Mono per il
@@ -32,7 +35,17 @@
 
     <header class="topbar">
         <div class="brand">
-            <span class="brand-mark"><em>A</em></span>
+            <!-- Il marchio ARchetipo, in linea e non come immagine: i due
+                 tracciati prendono il colore dal tema, così il picco scuro non
+                 sparisce sul fondo scuro. La stessa forma sta in /logo.svg, che
+                 è l'icona della linguetta. È decorativo per la lettura
+                 assistita — il nome per esteso gli sta accanto. -->
+            <span class="brand-mark">
+                <svg class="brand-logo" viewBox="0 0 100 86.59" aria-hidden="true" focusable="false">
+                    <path class="brand-logo-peak" d="M39.22 0.0L39.9 0.0L40.41 0.85L63.84 51.95L64.18 53.82L58.4 59.59L57.72 59.59L40.75 22.24L39.9 20.88L39.22 20.88L9.0 86.42L0.0 86.42L0.34 84.72L39.22 0.0Z M69.27 65.37L70.12 65.37L70.8 66.72L79.46 85.74L79.46 86.42L70.29 86.42L69.44 84.72L63.67 72.16L63.67 71.31L69.27 65.37Z"/>
+                    <path class="brand-logo-arrow" d="M79.97 19.86L99.83 20.03L99.83 41.94L95.76 42.11L95.76 31.41L94.91 31.24L87.44 41.94L77.93 54.67L70.29 64.01L70.12 65.2L69.27 65.2L63.33 71.48L63.16 71.99L54.67 79.97L47.03 86.25L39.9 86.42L39.9 85.74L43.12 82.51L55.35 71.14L63.33 63.16L70.97 54.5L76.91 46.86L83.02 38.37L91.17 26.15L91.0 25.13L79.97 25.13L79.97 19.86Z"/>
+                </svg>
+            </span>
             <div class="brand-stack">
                 <span class="brand-name">ARchetipo</span>
                 <span class="brand-sub">by Tech Reloaded</span>
