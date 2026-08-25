@@ -4843,6 +4843,10 @@
 	// many consecutive failures rather than polling forever.
 	const CONVERSATION_POLL_MS = 2000;
 	const CONVERSATION_POLL_FAILURE_LIMIT = 3;
+	// Ogni quanto scorre il contatore dell'attesa, e dove resta scritto che il
+	// dettaglio tecnico va tenuto aperto.
+	const CONVERSATION_WORKING_TICK_MS = 1000;
+	const CONVERSATION_TECHNICAL_KEY = "archetipo:conversation:technical";
 
 	let conversationView = null; // last read of GET /api/workspace/conversation
 	let conversationAfterID = 0; // highest event id already rendered — the only cursor
@@ -4899,6 +4903,26 @@
 	// conversazione su schermo e si dimentica con lei.
 	let conversationDismissedNotices = {}; // chiave avviso → true
 
+	// ---- Il dettaglio tecnico, e l'attesa ---
+	// Quali pieghe tecniche sono state aperte a mano. Vale per la conversazione
+	// su schermo e si dimentica con lei, come gli avvisi chiusi: una piega
+	// aperta qui non deve stare aperta in un'altra conversazione.
+	let conversationTechnicalOpen = {}; // chiave piega → true
+	// La scelta di tenerle *tutte* aperte, invece, e' di chi guarda e non della
+	// conversazione: chi lavora al dettaglio tecnico lo vuole aperto sempre, e
+	// non deve ridirlo a ogni conversazione ne' domani mattina.
+	let conversationTechnicalAll =
+		localStorage.getItem(CONVERSATION_TECHNICAL_KEY) === "1";
+	// Da quando l'agente sta lavorando a questo turno, in millisecondi. Zero
+	// significa che non sta lavorando: e' l'unico stato: il *se* si deriva
+	// dalla storia a ogni disegno, il *da quando* no — quello va ricordato,
+	// perche' la storia non dice a che ora e' cominciata l'attesa di chi guarda.
+	let conversationWorkingSince = 0;
+	// Il contatore dei secondi. Ridisegnare tutto il pannello una volta al
+	// secondo costerebbe quanto un giro di poll per far scorrere un numero:
+	// questo tempo riscrive quel solo numero e niente altro.
+	let conversationWorkingTimer = null;
+
 	// Quanto è alto il campo lo decide ciò che c'è scritto, non un numero fisso:
 	// da vuoto è una riga sola, e cresce riga per riga mentre si scrive. Serve
 	// perché il pannello vive in una colonna e ogni pixel che il compositore
@@ -4928,6 +4952,112 @@
 		renderConversationPanel();
 	}
 
+	// toggleConversationTechnicalGroup apre o richiude una piega e soltanto
+	// quella. Il pannello si ridisegna a ogni lettura, quindi la scelta non puo'
+	// vivere nel DOM: senza questa tabella la piega si richiuderebbe da sola al
+	// giro di poll successivo, e il comando non comanderebbe niente.
+	function toggleConversationTechnicalGroup(key) {
+		if (!key) return;
+		if (conversationTechnicalOpen[key] === true) {
+			delete conversationTechnicalOpen[key];
+		} else {
+			conversationTechnicalOpen[key] = true;
+		}
+		renderConversationPanel();
+	}
+
+	// toggleConversationTechnicalAll decide come si legge la conversazione — con
+	// o senza il dettaglio tecnico — e la scelta resta scritta: e' di chi
+	// guarda, non della conversazione che ha davanti.
+	//
+	// Riaccendendola le pieghe aperte a mano non vengono dimenticate: spegnerla
+	// riporta esattamente allo stato di prima invece di richiudere anche quello
+	// che era stato aperto uno per uno.
+	function toggleConversationTechnicalAll() {
+		conversationTechnicalAll = !conversationTechnicalAll;
+		try {
+			localStorage.setItem(
+				CONVERSATION_TECHNICAL_KEY,
+				conversationTechnicalAll ? "1" : "0",
+			);
+		} catch (_) {
+			// Una preferenza che non si riesce a scrivere resta valida per la
+			// sessione: non e' un motivo per rifiutare il comando.
+		}
+		renderConversationPanel();
+	}
+
+	// conversationWorking dice se l'agente sta lavorando a questo turno, e a che
+	// punto e'. Non c'e' un campo del server che lo dichiari, e non ne viene
+	// inventato uno: si legge dalla storia, che e' l'unica cosa che il server
+	// dice davvero.
+	//
+	// La regola e' quella del turno. Un turno comincia quando un messaggio parte
+	// e finisce quando arriva la riga che lo chiude — `turn_end`, che ogni
+	// provider traduce nel vocabolario comune. Fra i due l'agente sta lavorando,
+	// e l'ultima riga che ha prodotto dice a che cosa: ragiona, apre uno
+	// strumento, scrive. Un errore chiude l'attesa come la chiude la fine del
+	// turno: dopo un errore non si sta piu' aspettando niente.
+	//
+	// Fuori da una conversazione viva non si aspetta nulla per definizione, e
+	// una conversazione appena aperta — nessuna riga, nessun messaggio in
+	// consegna — non sta aspettando: sta aspettando *chi scrive*.
+	function conversationWorking() {
+		if (!conversationIsActive()) return { active: false };
+		const last = conversationEvents.length
+			? conversationEvents[conversationEvents.length - 1]
+			: null;
+		const lastKind = last && typeof last.kind === "string" ? last.kind : "";
+		const closed = lastKind === "turn_end" || lastKind === "error";
+		// Il messaggio consegnato e non ancora tornato indietro e' gia' un turno
+		// cominciato: l'attesa parte da li', non dal primo segno di vita
+		// dell'agente, perche' e' li' che chi ha premuto invio comincia ad
+		// aspettare.
+		const active = !!conversationPendingMessage || (!!last && !closed);
+		if (!active) return { active: false };
+		return {
+			active: true,
+			// Il tipo dell'ultima riga e il nome dello strumento che porta sono
+			// fatti: le parole con cui vengono detti le sceglie il renderer.
+			kind: conversationPendingMessage ? "user_message" : lastKind,
+			tool: last && typeof last.tool === "string" ? last.tool : "",
+			seconds: conversationWorkingSince
+				? Math.floor((Date.now() - conversationWorkingSince) / 1000)
+				: 0,
+		};
+	}
+
+	// Il tempo che fa scorrere il contatore dell'attesa. Riscrive un numero e
+	// niente altro: non ridisegna il pannello, non legge dal server, e si ferma
+	// da solo appena la riga dell'attesa non e' piu' sulla pagina.
+	function startConversationWorkingTicker() {
+		if (conversationWorkingTimer !== null) return;
+		conversationWorkingTimer = setInterval(() => {
+			if (!conversationEl || !conversationWorkingSince) {
+				stopConversationWorkingTicker();
+				return;
+			}
+			const cell = conversationEl.querySelector(
+				"[data-conversation-working-elapsed]",
+			);
+			if (!cell) {
+				stopConversationWorkingTicker();
+				return;
+			}
+			const seconds = Math.floor(
+				(Date.now() - conversationWorkingSince) / 1000,
+			);
+			cell.textContent =
+				seconds >= 1 ? window.Conversation.formatElapsed(seconds) : "";
+		}, CONVERSATION_WORKING_TICK_MS);
+	}
+
+	function stopConversationWorkingTicker() {
+		if (conversationWorkingTimer === null) return;
+		clearInterval(conversationWorkingTimer);
+		conversationWorkingTimer = null;
+	}
+
 	// The panel is redrawn on every poll, so its controls cannot own their
 	// handlers: the container does, bound once, and each control declares what
 	// it is through its data attributes.
@@ -4941,6 +5071,21 @@
 				dismissConversationNotice(
 					noticeDismiss.getAttribute("data-conversation-notice-dismiss") || "",
 				);
+				return;
+			}
+			const technicalToggle = e.target.closest(
+				"[data-conversation-technical-toggle]",
+			);
+			if (technicalToggle) {
+				toggleConversationTechnicalGroup(
+					technicalToggle.getAttribute(
+						"data-conversation-technical-toggle",
+					) || "",
+				);
+				return;
+			}
+			if (e.target.closest("[data-conversation-technical-all]")) {
+				toggleConversationTechnicalAll();
 				return;
 			}
 			if (e.target.closest("[data-conversation-open]")) {
@@ -5200,6 +5345,13 @@
 		conversationAnsweredApprovals = {};
 		conversationHighlightAnchor = "";
 		conversationDismissedNotices = {};
+		// Le pieghe aperte a mano e l'attesa in corso appartengono alla
+		// conversazione che si sta lasciando: sotto un'altra sarebbero l'attesa
+		// di qualcun altro. La scelta di tenere il dettaglio tecnico sempre
+		// aperto invece resta: quella e' di chi guarda.
+		conversationTechnicalOpen = {};
+		conversationWorkingSince = 0;
+		stopConversationWorkingTicker();
 		conversationRefusal = "";
 		conversationLink = "";
 		conversationCloseArmed = false;
@@ -5345,6 +5497,9 @@
 		conversationAnsweredApprovals = {};
 		conversationHighlightAnchor = "";
 		conversationDismissedNotices = {};
+		conversationTechnicalOpen = {};
+		conversationWorkingSince = 0;
+		stopConversationWorkingTicker();
 		// The rail is forgotten with the conversation (AC-6): the index of the
 		// workspace being left must never be on screen beside the workspace now
 		// open, not even for the instant it takes to read the new one. Emptied
@@ -5840,6 +5995,18 @@
 		const view = conversationView
 			? Object.assign({}, conversationView, { events: conversationEvents })
 			: emptyConversationView();
+
+		// Da quanto si aspetta lo decide qui il pannello, e in un posto solo: se
+		// l'attesa comincia adesso si segna l'ora, se e' finita si dimentica.
+		// Cosi' il contatore misura l'attesa vera — quella che comincia quando
+		// il messaggio parte — e non riparte da zero a ogni ridisegno.
+		const working = conversationWorking();
+		if (working.active) {
+			if (!conversationWorkingSince) conversationWorkingSince = Date.now();
+		} else {
+			conversationWorkingSince = 0;
+		}
+
 		conversationEl.innerHTML = window.Conversation.renderConversation(
 			view,
 			conversationDraft,
@@ -5856,6 +6023,14 @@
 				// Quali avvisi sono stati chiusi con la loro X: il renderer non
 				// disegna quelli, e nessuno dei due lati decide da solo.
 				dismissed: conversationDismissedNotices,
+				// Come si legge il dettaglio tecnico: quali pieghe sono aperte,
+				// e se vanno tenute aperte tutte. Sono scelte di chi guarda, e
+				// il server non ne sa niente.
+				technicalOpen: conversationTechnicalOpen,
+				technicalAll: conversationTechnicalAll,
+				// Che l'agente stia lavorando a questo turno non e' un campo del
+				// payload: e' letto dalla storia qui sopra e passato come fatto.
+				working,
 				// Il messaggio consegnato e non ancora tornato indietro. È
 				// l'unica cosa che il pannello disegna in coda alla storia senza
 				// che il server l'abbia detta, ed è dichiarata come tale.
@@ -5870,6 +6045,10 @@
 						: null,
 			},
 		);
+
+		// Il contatore vive quanto la riga che aggiorna, non un istante di piu'.
+		if (conversationWorkingSince) startConversationWorkingTicker();
+		else stopConversationWorkingTicker();
 
 		// The declaration of a resume, at the head of the conversation it is
 		// about (AC-4). It is drawn from the payload alone — a conversation that

@@ -35,6 +35,14 @@
 //     chiuso non viene disegnato affatto
 //   - una conversazione finita dice sopra al campo, e non accanto, che la
 //     risposta arriverà in una conversazione nuova
+//   - il dettaglio tecnico — strumenti, ganci, ragionamento — è ripiegato per
+//     difetto, la piega dice quanti passaggi contiene e quali strumenti ha
+//     toccato, e aperta rende esattamente le righe di prima
+//   - il testo dell'agente e la frase di chi scrive non finiscono mai in una
+//     piega, e un tipo sconosciuto nemmeno
+//   - una piega che contiene un errore lo dichiara da chiusa
+//   - mentre l'agente lavora la conversazione lo dichiara in coda, dice a che
+//     cosa sta lavorando e da quanto, e la riga sparisce a turno chiuso
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -71,7 +79,7 @@ function loadConversation() {
 	return mod.exports;
 }
 
-const { renderConversation } = loadConversation();
+const { renderConversation, formatElapsed } = loadConversation();
 
 // Strip every attribute from the markup, leaving only what a reader sees.
 // A sentence that survives this is visible text; one that does not was only
@@ -1582,5 +1590,230 @@ describe("la ripresa di una conversazione finita", () => {
 			"la riga del compositore resta senza suggerimento",
 		);
 		assert.match(visibleText(html), /sola lettura/);
+	});
+	// ---- Il dettaglio tecnico, ripiegato ---------------------------------
+	// Una conversazione la si legge per le risposte dell'agente. Gli strumenti
+	// che ha aperto e il ragionamento con cui c'è arrivato restano leggibili,
+	// ma un passo indietro: gli oracoli qui sotto guardano il testo visibile,
+	// cioè quello che si legge senza premere niente.
+
+	const CON_STRUMENTI = withConversation({
+		events: [
+			{ id: 1, at: "2026-08-21T10:00:01.000Z", kind: "user_message", text: "DOMANDA-MIA" },
+			{ id: 2, at: "2026-08-21T10:00:02.000Z", kind: "thinking", text: "RAGIONAMENTO-INTERNO" },
+			{ id: 3, at: "2026-08-21T10:00:03.000Z", kind: "tool_start", tool: "STRUMENTO-UNO", text: "AVVIO-STRUMENTO" },
+			{ id: 4, at: "2026-08-21T10:00:04.000Z", kind: "tool_end", tool: "STRUMENTO-UNO", text: "ESITO-STRUMENTO" },
+			{ id: 5, at: "2026-08-21T10:00:05.000Z", kind: "text", text: "RISPOSTA-AGENTE" },
+		],
+		last_id: 5,
+	});
+
+	it("i passaggi tecnici sono ripiegati e la risposta dell'agente no", () => {
+		const text = visibleText(renderConversation(CON_STRUMENTI, "", {}));
+		assert.match(text, /RISPOSTA-AGENTE/, "la risposta dell'agente non si legge");
+		assert.match(text, /DOMANDA-MIA/, "la frase di chi scrive non si legge");
+		assert.ok(
+			!text.includes("RAGIONAMENTO-INTERNO"),
+			"il ragionamento è in chiaro invece che dietro la piega",
+		);
+		assert.ok(
+			!text.includes("ESITO-STRUMENTO"),
+			"l'esito dello strumento è in chiaro invece che dietro la piega",
+		);
+	});
+
+	it("la piega dice quanti passaggi contiene e quali strumenti ha toccato", () => {
+		const text = visibleText(renderConversation(CON_STRUMENTI, "", {}));
+		assert.match(text, /3 passaggi tecnici/, "la piega non conta i passaggi");
+		assert.match(text, /STRUMENTO-UNO/, "la piega non nomina lo strumento toccato");
+		// Lo strumento è nominato una volta sola anche se compare due volte:
+		// avvio e fine sono lo stesso strumento.
+		assert.equal(
+			(text.match(/STRUMENTO-UNO/g) || []).length,
+			1,
+			"lo stesso strumento è nominato più di una volta nella riga di comando",
+		);
+	});
+
+	it("aperta, la piega rende esattamente le righe che teneva", () => {
+		const chiusa = renderConversation(CON_STRUMENTI, "", {});
+		const chiave = (chiusa.match(/data-conversation-technical-toggle="([^"]+)"/) || [])[1];
+		assert.ok(chiave, "la piega non dichiara la chiave con cui si apre");
+		const aperta = visibleText(
+			renderConversation(CON_STRUMENTI, "", { technicalOpen: { [chiave]: true } }),
+		);
+		assert.match(aperta, /RAGIONAMENTO-INTERNO/, "aperta, la piega non mostra il ragionamento");
+		assert.match(aperta, /ESITO-STRUMENTO/, "aperta, la piega non mostra l'esito dello strumento");
+		assert.match(aperta, /RISPOSTA-AGENTE/, "aprire la piega si è portata via la risposta");
+	});
+
+	it("il comando della testata apre il dettaglio di tutta la conversazione", () => {
+		const html = renderConversation(CON_STRUMENTI, "", {});
+		assert.ok(
+			html.includes("data-conversation-technical-all"),
+			"la testata non offre il comando del dettaglio tecnico",
+		);
+		const tutto = visibleText(
+			renderConversation(CON_STRUMENTI, "", { technicalAll: true }),
+		);
+		assert.match(tutto, /RAGIONAMENTO-INTERNO/);
+		assert.match(tutto, /ESITO-STRUMENTO/);
+	});
+
+	it("una piega che contiene un errore lo dichiara da chiusa", () => {
+		const html = renderConversation(
+			withConversation({
+				events: [
+					{ id: 1, kind: "tool_error", tool: "STRUMENTO-DUE", text: "DETTAGLIO-ERRORE" },
+					{ id: 2, kind: "text", text: "RISPOSTA-AGENTE" },
+				],
+				last_id: 2,
+			}),
+			"",
+			{},
+		);
+		const text = visibleText(html);
+		assert.match(text, /con errore/, "la piega chiusa tace l'errore che contiene");
+		assert.ok(
+			!text.includes("DETTAGLIO-ERRORE"),
+			"il dettaglio dell'errore è in chiaro invece che dietro la piega",
+		);
+	});
+
+	it("un errore della conversazione non è un passaggio tecnico", () => {
+		// Il vocabolario porta anche `error`, che non è la lavorazione ma una
+		// risposta: si legge senza premere niente.
+		const text = visibleText(
+			renderConversation(
+				withConversation({
+					events: [{ id: 1, kind: "error", text: "ERRORE-DELLA-CONVERSAZIONE" }],
+					last_id: 1,
+				}),
+				"",
+				{},
+			),
+		);
+		assert.match(text, /ERRORE-DELLA-CONVERSAZIONE/);
+	});
+
+	it("un tipo sconosciuto resta in chiaro invece di essere ripiegato", () => {
+		// Il vocabolario è dell'agente e può crescere: ripiegare per difetto ciò
+		// che non si sa leggere farebbe sparire dalla vista il primo messaggio
+		// di un tipo nuovo.
+		const text = visibleText(
+			renderConversation(
+				withConversation({
+					events: [{ id: 1, kind: "tipo-mai-visto", text: "TESTO-MAI-VISTO" }],
+					last_id: 1,
+				}),
+				"",
+				{},
+			),
+		);
+		assert.match(text, /TESTO-MAI-VISTO/);
+		assert.match(text, /tipo-mai-visto/);
+	});
+
+	it("anche il log di una run e' ripiegato, e la decisione che aspetta no", () => {
+		// Il log di una run e' la stessa cosa dei passaggi tecnici della
+		// timeline: righe che dicono come si e' lavorato. Cio' che le sta
+		// intorno no — una run ferma su una domanda deve restare visibile per
+		// intero, altrimenti la piega nasconde la cosa da fare.
+		const CON_RUN = withConversation({
+			events: [{ id: 1, kind: "user_message", text: "DOMANDA-MIA" }],
+			runs: [
+				{
+					execution_id: "ESECUZIONE-UNO",
+					anchor_event_id: 1,
+					action: "azione-inventata",
+					label: "AZIONE-INVENTATA",
+					scope: "spec",
+					spec_code: "CODICE-X",
+					run: { id: "run-1", state: "ACTIVE" },
+					events: [
+						{ id: 1, kind: "tool_start", tool: "STRUMENTO-QUATTRO", text: "RIGA-DI-LOG" },
+					],
+					approvals: [
+						{
+							id: "decisione-1",
+							tool_name: "STRUMENTO-QUATTRO",
+							args: { comando: "COMANDO-DA-APPROVARE" },
+							options: [{ id: "allow", label: "ETICHETTA-CONSENSO", kind: "allow" }],
+						},
+					],
+					awaiting_response: true,
+				},
+			],
+			last_id: 1,
+		});
+
+		const chiusa = renderConversation(CON_RUN, "", {});
+		assert.ok(
+			!chiusa.includes('<pre class="conv-run-log"'),
+			"il log della run e' aperto per difetto",
+		);
+		const testo = visibleText(chiusa);
+		assert.match(testo, /1 riga di log/, "la piega non conta le righe del log");
+		assert.match(testo, /STRUMENTO-QUATTRO/, "la piega non nomina lo strumento");
+		assert.ok(
+			!testo.includes("RIGA-DI-LOG"),
+			"la riga di log e' in chiaro invece che dietro la piega",
+		);
+		// Cio' che la run aspetta resta in chiaro: il comando e la risposta che
+		// si puo' dare.
+		assert.match(testo, /COMANDO-DA-APPROVARE/, "il comando in attesa e' stato ripiegato");
+		assert.match(testo, /ETICHETTA-CONSENSO/, "la risposta da dare e' stata ripiegata");
+
+		const aperta = renderConversation(CON_RUN, "", {
+			technicalOpen: { "rESECUZIONE-UNO": true },
+		});
+		assert.ok(
+			aperta.includes('<pre class="conv-run-log"'),
+			"aperta, la piega non mostra il log della run",
+		);
+		assert.match(visibleText(aperta), /RIGA-DI-LOG/);
+	});
+
+	// ---- L'attesa dell'agente ---------------------------------------------
+
+	it("mentre l'agente lavora la conversazione lo dichiara, e dice a che cosa", () => {
+		const text = visibleText(
+			renderConversation(LIVE, "", {
+				working: { active: true, kind: "tool_start", tool: "STRUMENTO-TRE", seconds: 5 },
+			}),
+		);
+		assert.match(text, /sta usando STRUMENTO-TRE/);
+		assert.match(text, /5s/, "l'attesa non dice da quanto dura");
+	});
+
+	it("il ragionamento e la scrittura hanno parole proprie", () => {
+		const ragiona = visibleText(
+			renderConversation(LIVE, "", { working: { active: true, kind: "thinking" } }),
+		);
+		assert.match(ragiona, /sta ragionando/);
+		const scrive = visibleText(
+			renderConversation(LIVE, "", { working: { active: true, kind: "text" } }),
+		);
+		assert.match(scrive, /sta scrivendo/);
+	});
+
+	it("a turno chiuso la riga dell'attesa non c'è", () => {
+		assert.ok(
+			!renderConversation(LIVE, "", {}).includes("conv-working"),
+			"la riga dell'attesa è disegnata senza che nessuno stia aspettando",
+		);
+		assert.ok(
+			!renderConversation(LIVE, "", { working: { active: false } }).includes(
+				"conv-working",
+			),
+			"un'attesa dichiarata finita resta sullo schermo",
+		);
+	});
+
+	it("l'attesa si legge in secondi e, superato il minuto, in minuti", () => {
+		assert.equal(formatElapsed(0), "0s");
+		assert.equal(formatElapsed(42), "42s");
+		assert.equal(formatElapsed(60), "1m 00s");
+		assert.equal(formatElapsed(125), "2m 05s");
 	});
 });

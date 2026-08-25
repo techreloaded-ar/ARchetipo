@@ -355,12 +355,22 @@
         </div>
     </div>
 
-    <footer class="hint-bar" aria-hidden="true">
-        <span><kbd>R</kbd> ricarica</span>
-        <span><kbd>T</kbd> tema</span>
-        <span><kbd>Esc</kbd> chiudi</span>
-        <span class="hint-spacer"></span>
-        <span class="hint-version">ARchetipo by Tech Reloaded</span>
+    <!-- I promemoria dei tasti restano decorativi — chi legge con un lettore di
+         schermo non preme R per ricaricare — ma la firma no: adesso porta
+         altrove, e un collegamento raggiungibile con il tasto di tabulazione
+         dentro un contenitore nascosto sarebbe un punto di fermata senza voce.
+         Per questo aria-hidden e' sceso sui singoli promemoria. -->
+    <footer class="hint-bar">
+        <span aria-hidden="true"><kbd>R</kbd> ricarica</span>
+        <span aria-hidden="true"><kbd>T</kbd> tema</span>
+        <span aria-hidden="true"><kbd>Esc</kbd> chiudi</span>
+        <span class="hint-spacer" aria-hidden="true"></span>
+        <!-- Due destinazioni, perche' sono due cose diverse: il nome del
+             prodotto porta al suo repository, la firma porta a chi lo fa. -->
+        <span class="hint-version">
+            <a class="hint-link" href="https://github.com/techreloaded-ar/ARchetipo" target="_blank" rel="noopener noreferrer" title="Il repository di ARchetipo su GitHub">ARchetipo</a>
+            <a class="hint-link" href="https://techreloaded.it" target="_blank" rel="noopener noreferrer" title="Il sito di Tech Reloaded">by Tech Reloaded</a>
+        </span>
     </footer>
 
     <div id="prd-modal" class="modal-root hidden" role="dialog" aria-modal="true" aria-labelledby="prd-editor-title">

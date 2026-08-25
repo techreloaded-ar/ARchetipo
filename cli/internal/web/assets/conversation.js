@@ -113,6 +113,8 @@
 		// Blocco run
 		markRun: "run",
 		runLogEmpty: "Questa run non ha ancora pubblicato niente.",
+		runLogLines: (howMany) =>
+			howMany === 1 ? "1 riga di log" : `${howMany} righe di log`,
 		runPartial:
 			"La parte più vecchia di questa run è fuori dalla finestra che il visore conserva; il provider la tiene ancora.",
 		runReach: "Vai al log completo",
@@ -153,6 +155,40 @@
 		// Passo successivo
 		nextStepRun: "Avvia",
 		nextStepReach: "Vai alla run",
+		// Il dettaglio tecnico, ripiegato.
+		//
+		// Una conversazione la si legge per le risposte dell'agente: gli
+		// strumenti che ha aperto, i ganci che sono scattati e il ragionamento
+		// con cui c'e' arrivato sono la lavorazione, non il risultato, e chi
+		// non li sta cercando li legge come rumore fra una frase e l'altra.
+		// Restano tutti, alla loro riga e nel loro ordine, dietro un comando
+		// che dice quanti sono e che cosa hanno toccato: piegato non e'
+		// nascosto, e chi quel dettaglio lo cerca lo apre.
+		technicalOne: "1 passaggio tecnico",
+		technicalMany: (howMany) => `${howMany} passaggi tecnici`,
+		technicalReveal: "Mostra questi passaggi",
+		technicalFold: "Ripiega questi passaggi",
+		technicalFailed: "con errore",
+		// Il comando della testata vale per tutta la conversazione e resta
+		// scelto: chi lavora al dettaglio tecnico non deve riaprirlo a ogni
+		// piega, e chi non lo vuole non se lo ritrova aperto domani.
+		technicalAllOn: "Ripiega il dettaglio tecnico",
+		technicalAllOff: "Mostra sempre il dettaglio tecnico",
+		// Mentre l'agente lavora
+		//
+		// Fra l'invio e la risposta c'e' un'attesa che nessuna riga dichiarava:
+		// la conversazione restava identica a se stessa e non si poteva sapere
+		// se l'agente stesse ancora ragionando o avesse gia' finito. Questa
+		// riga sta in coda, dice a che punto e' e da quanto, e sparisce quando
+		// il turno si chiude.
+		workingDefault: "L'agente sta lavorando",
+		workingThinking: "L'agente sta ragionando",
+		workingWriting: "L'agente sta scrivendo",
+		workingToolNamed: (tool) => `L'agente sta usando ${tool}`,
+		workingToolAny: "L'agente sta usando uno strumento",
+		workingReceived: "L'agente ha ricevuto il messaggio",
+		workingTitle:
+			"L'agente sta lavorando a questo turno: la riga sparisce quando il turno si chiude",
 	};
 
 	const STATE_LABELS = {
@@ -172,14 +208,40 @@
 	// and may grow, so an unknown kind degrades to a readable generic row
 	// instead of disappearing — and it takes the `cev-unknown` variant, drawn as
 	// explicitly uninterpreted rather than disguised as agent text.
+	//
+	// `technical` dice che la riga racconta *come* l'agente sta lavorando e non
+	// *che cosa* ha risposto: il ragionamento, gli strumenti che apre e chiude,
+	// la fine del turno. Sono le righe che il pannello ripiega di suo — non le
+	// toglie: le mette dietro un comando che le conta. Il testo dell'agente e
+	// quello di chi scrive non sono mai tecnici, e nemmeno un errore della
+	// conversazione: quello e' una risposta a tutti gli effetti.
+	//
+	// Un tipo sconosciuto non e' tecnico. Il vocabolario e' dell'agente e puo'
+	// crescere, e ripiegare per difetto cio' che non si sa leggere vorrebbe
+	// dire far sparire dalla vista il primo messaggio di un tipo nuovo: resta
+	// dov'e', dichiarato come non interpretato.
 	const EVENT_KINDS = {
 		text: { label: "agente", variant: "cev-agent" },
-		thinking: { label: "ragionamento", variant: "cev-thinking" },
+		thinking: { label: "ragionamento", variant: "cev-thinking", technical: true },
 		user_message: { label: "tu", variant: "cev-you" },
-		tool_start: { label: "strumento · avvio", variant: "cev-tool-start" },
-		tool_end: { label: "strumento · fatto", variant: "cev-tool-end" },
-		tool_error: { label: "strumento · errore", variant: "cev-tool-error" },
-		turn_end: { label: "fine turno", variant: "cev-turn-end" },
+		tool_start: {
+			label: "strumento · avvio",
+			variant: "cev-tool-start",
+			technical: true,
+		},
+		tool_end: {
+			label: "strumento · fatto",
+			variant: "cev-tool-end",
+			technical: true,
+		},
+		tool_error: {
+			label: "strumento · errore",
+			variant: "cev-tool-error",
+			technical: true,
+			failed: true,
+		},
+		turn_end: { label: "fine turno", variant: "cev-turn-end", technical: true },
+		error: { label: "errore", variant: "cev-error" },
 	};
 
 	// The affirmative/negative tone of an answer, keyed by the kind the provider
@@ -266,6 +328,160 @@
 		</li>`;
 	}
 
+	/** Il tipo di un evento, o stringa vuota: i payload parziali non sollevano. */
+	function eventKind(event) {
+		return event && typeof event === "object" && typeof event.kind === "string"
+			? event.kind
+			: "";
+	}
+
+	/** La voce del vocabolario per questo evento, o null se il tipo e' ignoto. */
+	function eventEntry(event) {
+		const kind = eventKind(event);
+		return known(EVENT_KINDS, kind) ? EVENT_KINDS[kind] : null;
+	}
+
+	// Se questa riga racconta la lavorazione invece del suo risultato. Lo dice
+	// il vocabolario e nient'altro: nessun testo del payload viene letto per
+	// indovinarlo, e un tipo che il vocabolario non conosce non e' tecnico.
+	function isTechnicalEvent(event) {
+		const entry = eventEntry(event);
+		return !!(entry && entry.technical === true);
+	}
+
+	/** La chiave con cui il chiamante ricorda che questa piega e' aperta. */
+	function technicalKey(events, ordinal) {
+		const first = events.length ? events[0] : null;
+		if (first && first.id !== null && first.id !== undefined) {
+			return `e${first.id}`;
+		}
+		return `p${ordinal}`;
+	}
+
+	// Un gruppo di righe tecniche consecutive, ripiegato in una riga sola.
+	//
+	// La riga di comando dice tre cose e sono tutte fatti del gruppo: quante
+	// righe contiene, quali strumenti ha toccato — i nomi che gli eventi stessi
+	// portano, mai inventati qui — e se fra quelle righe c'e' stato un errore.
+	// Aperta, il gruppo mostra esattamente le righe di prima, nello stesso
+	// ordine e con lo stesso disegno: piegare non riscrive niente.
+	function renderTechnicalGroup(events, ui, ordinal) {
+		const rows = Array.isArray(events) ? events : [];
+		if (!rows.length) return "";
+		const local = ui && typeof ui === "object" ? ui : {};
+		const key = technicalKey(rows, ordinal);
+		const opened = objectAt(local, "technicalOpen") || {};
+		const open = local.technicalAll === true || opened[key] === true;
+
+		// I nomi degli strumenti toccati, ciascuno una volta sola e nell'ordine
+		// in cui sono comparsi. Piu' di tre non entrano in una riga di comando
+		// senza rubare la parola alla conversazione, quindi oltre il terzo si
+		// dice quanti restano.
+		const tools = [];
+		let failed = false;
+		for (const event of rows) {
+			const entry = eventEntry(event);
+			if (entry && entry.failed === true) failed = true;
+			const tool = typeof event.tool === "string" ? event.tool.trim() : "";
+			if (tool && tools.indexOf(tool) === -1) tools.push(tool);
+		}
+		const shown = tools.slice(0, 3);
+		const rest = tools.length - shown.length;
+		const toolsText = shown.length
+			? shown.join(" · ") + (rest > 0 ? ` +${rest}` : "")
+			: "";
+
+		const count =
+			rows.length === 1 ? TEXT.technicalOne : TEXT.technicalMany(rows.length);
+		const command = open ? TEXT.technicalFold : TEXT.technicalReveal;
+		const toolsHtml = toolsText
+			? `<span class="conv-tech-tools">${escapeHtml(toolsText)}</span>`
+			: "";
+		const failedHtml = failed
+			? `<span class="conv-tech-failed">${escapeHtml(TEXT.technicalFailed)}</span>`
+			: "";
+		const listHtml = open
+			? `<ol class="conv-tech-list">${rows.map(renderEvent).join("")}</ol>`
+			: "";
+
+		return `<li class="conv-tech${open ? " is-open" : ""}${failed ? " has-error" : ""}">
+			<div class="conv-event-rail"><span class="conv-tech-glyph" aria-hidden="true"></span></div>
+			<div class="conv-tech-body">
+				<button type="button" class="conv-tech-toggle" data-conversation-technical-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}" title="${escapeHtml(command)}">
+					<span class="conv-tech-caret" aria-hidden="true"></span>
+					<span class="conv-tech-count">${escapeHtml(count)}</span>
+					${toolsHtml}
+					${failedHtml}
+				</button>
+				${listHtml}
+			</div>
+		</li>`;
+	}
+
+	// Il comando che vale per tutta la conversazione: o le pieghe restano
+	// chiuse e si apre quella che serve, oppure il dettaglio tecnico sta sempre
+	// aperto. Sta nella testata, fra i fatti della conversazione, perche' e'
+	// una scelta su come la si legge e non un'azione su cio' che contiene.
+	function renderTechnicalControl(ui) {
+		const local = ui && typeof ui === "object" ? ui : {};
+		const on = local.technicalAll === true;
+		const label = on ? TEXT.technicalAllOn : TEXT.technicalAllOff;
+		return `<button type="button" class="conv-tech-all${on ? " is-on" : ""}" data-conversation-technical-all aria-pressed="${on ? "true" : "false"}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
+			<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 4.5h12M2 8h12M2 11.5h12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+		</button>`;
+	}
+
+	/** Un'attesa in secondi, come la si legge: `42s`, oppure `2m 05s`. */
+	function formatElapsed(seconds) {
+		const whole = Math.max(0, Math.floor(Number(seconds) || 0));
+		if (whole < 60) return `${whole}s`;
+		const minutes = Math.floor(whole / 60);
+		const rest = whole % 60;
+		return `${minutes}m ${rest < 10 ? "0" : ""}${rest}s`;
+	}
+
+	// Che cosa sta facendo l'agente, detto con le parole di questo modulo a
+	// partire dall'ultima riga che ha prodotto. Il chiamante passa il tipo e il
+	// nome dello strumento — fatti — e non la frase: la frase la scrive qui chi
+	// possiede le parole del pannello.
+	function workingLabel(kind, tool) {
+		if (kind === "thinking") return TEXT.workingThinking;
+		if (kind === "text") return TEXT.workingWriting;
+		if (kind === "tool_start" || kind === "tool_end" || kind === "tool_error") {
+			const named = typeof tool === "string" ? tool.trim() : "";
+			return named ? TEXT.workingToolNamed(named) : TEXT.workingToolAny;
+		}
+		if (kind === "user_message") return TEXT.workingReceived;
+		return TEXT.workingDefault;
+	}
+
+	// La riga che dichiara l'attesa, in coda alla conversazione.
+	//
+	// Non e' un evento e non finge di esserlo: la colonnina non porta un id, e
+	// quello che dice non e' storia ma lo stato di adesso. Vive finche' il
+	// chiamante la passa — il turno si chiude e la riga sparisce — e porta con
+	// se' da quanto dura, perche' un'attesa senza durata non si distingue da
+	// una schermata ferma.
+	function renderWorking(working) {
+		if (!working || typeof working !== "object") return "";
+		if (working.active !== true) return "";
+		const label = workingLabel(
+			textAt(working, "kind"),
+			textAt(working, "tool"),
+		);
+		const seconds = Number(working.seconds);
+		const elapsed =
+			Number.isFinite(seconds) && seconds >= 1 ? formatElapsed(seconds) : "";
+		return `<li class="conv-working" role="status" aria-live="polite" title="${escapeHtml(TEXT.workingTitle)}">
+			<div class="conv-event-rail"><span class="conv-working-pulse" aria-hidden="true"></span></div>
+			<div class="conv-working-body">
+				<span class="conv-working-label">${escapeHtml(label)}</span>
+				<span class="conv-working-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+				<span class="conv-working-elapsed" data-conversation-working-elapsed>${escapeHtml(elapsed)}</span>
+			</div>
+		</li>`;
+	}
+
 	// The run's own history, compressed to one line per event: the flow shows
 	// that the run is speaking, not everything it said — the whole log stays one
 	// press away, behind the control at the foot of the block.
@@ -293,6 +509,63 @@
 			return escapeHtml(parts.filter(Boolean).join(" · "));
 		});
 		return `<pre class="conv-run-log">${lines.join("\n")}</pre>`;
+	}
+
+	// Il log della run, ripiegato come il resto della lavorazione.
+	//
+	// E' la stessa cosa dei passaggi tecnici della timeline — righe che dicono
+	// come si e' lavorato — e obbedisce allo stesso comando: la piega di questa
+	// run si apre da sola, e il comando della testata le apre tutte. Cio' che
+	// non si ripiega mai e' quello che sta intorno: l'avviso della run, la sua
+	// parte fuori finestra, e soprattutto le decisioni che aspetta una risposta.
+	// Una run ferma su una domanda deve restare visibile per intero.
+	function renderRunLogFold(run, ui) {
+		const local = ui && typeof ui === "object" ? ui : {};
+		const events = (Array.isArray(run.events) ? run.events : []).filter(
+			(event) => event && typeof event === "object",
+		);
+		const execution = textAt(run, "execution_id");
+		const anchorID =
+			run.anchor_event_id === null || run.anchor_event_id === undefined
+				? ""
+				: String(run.anchor_event_id);
+		const key = `r${execution || anchorID || "0"}`;
+		const opened = objectAt(local, "technicalOpen") || {};
+		const open = local.technicalAll === true || opened[key] === true;
+		if (open) {
+			return `${renderRunLogToggle(key, events, true)}${renderRunLog(events)}`;
+		}
+		return renderRunLogToggle(key, events, false);
+	}
+
+	// Il comando che apre il log di una run. Dice quante righe tiene e quali
+	// strumenti ha toccato — gli stessi fatti della piega della timeline, letti
+	// dagli stessi campi — e su una run che non ha ancora pubblicato niente dice
+	// proprio quello, invece di offrire di aprire il vuoto.
+	function renderRunLogToggle(key, events, open) {
+		const tools = [];
+		let failed = false;
+		for (const event of events) {
+			const entry = eventEntry(event);
+			if (entry && entry.failed === true) failed = true;
+			const tool = typeof event.tool === "string" ? event.tool.trim() : "";
+			if (tool && tools.indexOf(tool) === -1) tools.push(tool);
+		}
+		const shown = tools.slice(0, 3);
+		const rest = tools.length - shown.length;
+		const toolsText = shown.length
+			? shown.join(" · ") + (rest > 0 ? ` +${rest}` : "")
+			: "";
+		const count = events.length
+			? TEXT.runLogLines(events.length)
+			: TEXT.runLogEmpty;
+		const command = open ? TEXT.technicalFold : TEXT.technicalReveal;
+		return `<button type="button" class="conv-tech-toggle conv-run-log-toggle" data-conversation-technical-toggle="${escapeHtml(key)}" aria-expanded="${open ? "true" : "false"}" title="${escapeHtml(command)}">
+			<span class="conv-tech-caret${open ? " is-open" : ""}" aria-hidden="true"></span>
+			<span class="conv-tech-count">${escapeHtml(count)}</span>
+			${toolsText ? `<span class="conv-tech-tools">${escapeHtml(toolsText)}</span>` : ""}
+			${failed ? `<span class="conv-tech-failed">${escapeHtml(TEXT.technicalFailed)}</span>` : ""}
+		</button>`;
 	}
 
 	/**
@@ -439,7 +712,7 @@
 		if (notice) {
 			rows.push(`<div class="conv-run-notice">${escapeHtml(notice)}</div>`);
 		}
-		rows.push(renderRunLog(run.events));
+		rows.push(renderRunLogFold(run, local));
 		if (run.truncated) {
 			rows.push(
 				`<div class="conv-run-partial" role="note">${escapeHtml(TEXT.runPartial)}</div>`,
@@ -554,16 +827,36 @@
 				`<li class="conv-timeline-empty">${escapeHtml(TEXT.timelineEmpty)}</li>`,
 			);
 		} else {
+			// Le righe tecniche consecutive si accumulano qui e escono come una
+			// piega sola. Si chiude quando arriva una riga che non e' tecnica —
+			// il testo dell'agente, la frase di chi scrive — e quando sotto una
+			// riga sta per comparire un blocco run: una run non finisce mai
+			// dentro la piega dei passaggi che l'hanno preceduta.
+			let folding = [];
+			let folded = 0;
+			const flushTechnical = () => {
+				if (!folding.length) return;
+				rows.push(renderTechnicalGroup(folding, local, folded));
+				folded += 1;
+				folding = [];
+			};
 			for (const event of events) {
-				rows.push(renderEvent(event));
+				if (isTechnicalEvent(event)) {
+					folding.push(event);
+				} else {
+					flushTechnical();
+					rows.push(renderEvent(event));
+				}
 				const id =
 					event && event.id !== null && event.id !== undefined
 						? String(event.id)
 						: "";
 				if (!id || emitted.has(id) || !anchored.has(id)) continue;
 				emitted.add(id);
+				flushTechnical();
 				for (const row of anchored.get(id)) rows.push(row);
 			}
+			flushTechnical();
 		}
 		for (const [anchor, blocks] of anchored) {
 			if (emitted.has(anchor)) continue;
@@ -584,6 +877,11 @@
 		// chiamante smette di passarla e al suo posto resta l'evento vero.
 		const pendingRow = renderPendingMessage(local.pendingMessage);
 		if (pendingRow) rows.push(pendingRow);
+		// E in fondo a tutto, se l'agente sta ancora lavorando a questo turno,
+		// la riga che lo dichiara: sta sotto l'ultima cosa detta perche' e' li'
+		// che si guarda mentre si aspetta.
+		const workingRow = renderWorking(objectAt(local, "working"));
+		if (workingRow) rows.push(workingRow);
 		const frozen = active ? "" : " is-frozen";
 		return `<ol class="conv-timeline${frozen}">${rows.join("")}</ol>`;
 	}
@@ -947,6 +1245,15 @@
 	 *                            the tail of the timeline, marked as in
 	 *                            delivery, and it is the caller that stops
 	 *                            passing it once the real event arrives.
+	 *                            technicalOpen è la tabella delle pieghe
+	 *                            tecniche aperte, chiave → true, e technicalAll
+	 *                            la scelta di tenerle tutte aperte: nessuna
+	 *                            delle due è un fatto del server, e il renderer
+	 *                            non le decide da sé.
+	 *                            working dice che l'agente sta lavorando a
+	 *                            questo turno — {active, kind, tool, seconds} —
+	 *                            e sono fatti, non parole: la frase la scrive
+	 *                            questo modulo.
 	 *                            nextStep is the step the workspace recommends,
 	 *                            read by the caller from /api/workspace/status:
 	 *                            the thread hosts it at its tail, draws it, and
@@ -1055,17 +1362,26 @@
 			renderComposer(active, typed, local, offered, anyRunAwaiting(value)),
 		);
 
+		// Due comandi nella testata e non piu' uno: come si legge la
+		// conversazione — con o senza il dettaglio tecnico — e, finche' e'
+		// viva, lasciarla andare. Il primo c'e' sempre, perche' una
+		// conversazione conclusa la si rilegge esattamente come una viva.
+		const controls = `${renderTechnicalControl(local)}${active ? renderCloseControl(local) : ""}`;
 		return `<section class="conv-panel ${variant}" aria-label="${escapeHtml(TEXT.panel)}">
-			${renderHead(value, badge, variant, active ? renderCloseControl(local) : "")}
+			${renderHead(value, badge, variant, controls)}
 			${blocks.join("")}
 		</section>`;
 	}
 
 	// ---- exports ----
 
+	// formatElapsed esce insieme al renderer perche' la durata dell'attesa si
+	// aggiorna al secondo, e ridisegnare tutto il pannello una volta al secondo
+	// per far scorrere un contatore sarebbe un prezzo assurdo: il chiamante
+	// riscrive quel solo numero, e lo scrive con le stesse parole di qui.
 	if (typeof module !== "undefined" && module.exports) {
-		module.exports = { renderConversation, escapeHtml };
+		module.exports = { renderConversation, escapeHtml, formatElapsed };
 	} else {
-		window.Conversation = { renderConversation };
+		window.Conversation = { renderConversation, formatElapsed };
 	}
 })();

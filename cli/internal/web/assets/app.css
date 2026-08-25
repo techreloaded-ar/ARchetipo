@@ -1165,9 +1165,35 @@ html[data-theme="light"] .theme-ico-moon {
 }
 
 .hint-version {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 4px;
 	font-size: 12px;
 	font-weight: 700;
 	color: var(--text-dim);
+}
+
+/* La firma e' fatta di due collegamenti, e deve continuare a leggersi come una
+   firma: nessuna sottolineatura a riposo, nessun colore da collegamento. Che
+   siano premibili lo dice il passaggio del puntatore, e il percorso da tastiera
+   ha comunque il suo contorno visibile. */
+.hint-link {
+	color: inherit;
+	text-decoration: none;
+	border-radius: 4px;
+	transition: color 0.12s ease;
+}
+
+.hint-link:hover,
+.hint-link:focus-visible {
+	color: var(--accent);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
+.hint-link:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
 }
 
 /* ---- Modal ------------------------------------------------------------- */
@@ -5323,6 +5349,309 @@ body.no-workspace [data-workspace-scoped] {
 	color: var(--text-muted);
 }
 
+/* Un errore della conversazione non e' un passaggio tecnico: e' una risposta, e
+   sta in chiaro come le altre. */
+.cev-error .conv-event-glyph {
+	background: var(--danger);
+}
+
+.cev-error .conv-event-kind,
+.cev-error .conv-event-text {
+	color: var(--danger);
+}
+
+/* ---- Il dettaglio tecnico, ripiegato ------------------------------------- */
+/* Gli strumenti aperti, i ganci scattati e il ragionamento sono la lavorazione,
+   non il risultato: stanno dietro una riga sola che dice quanti sono e che cosa
+   hanno toccato. La riga e' quieta di proposito — nessun riquadro, nessun'ombra,
+   il peso di un margine — perche' deve farsi leggere solo da chi la sta
+   cercando. Aperta, sotto compaiono esattamente le righe di prima. */
+.conv-tech {
+	display: grid;
+	grid-template-columns: 58px 1fr;
+	gap: var(--space-3);
+	align-items: start;
+	position: relative;
+}
+
+.conv-tech-glyph {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: none;
+	border: 1px solid var(--border-strong);
+	flex-shrink: 0;
+}
+
+.conv-tech-body {
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+.conv-tech-toggle {
+	align-self: flex-start;
+	max-width: 100%;
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: 4px var(--space-2) 4px 4px;
+	border: 1px solid transparent;
+	border-radius: var(--radius-pill);
+	background: none;
+	color: var(--text-dim);
+	font-family: var(--font-sans);
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 1.2;
+	text-align: left;
+	cursor: pointer;
+	transition:
+		background var(--transition),
+		border-color var(--transition),
+		color var(--transition);
+}
+
+.conv-tech-toggle:hover {
+	background: var(--surface-3);
+	border-color: var(--border);
+	color: var(--text-muted);
+}
+
+.conv-tech-toggle:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+/* La freccetta e' l'unica cosa che si muove: dice da che parte va il comando. */
+.conv-tech-caret {
+	width: 0;
+	height: 0;
+	flex-shrink: 0;
+	margin-left: 4px;
+	border-left: 5px solid currentColor;
+	border-top: 4px solid transparent;
+	border-bottom: 4px solid transparent;
+	transition: transform var(--transition);
+}
+
+.conv-tech.is-open .conv-tech-caret,
+.conv-tech-caret.is-open {
+	transform: rotate(90deg);
+}
+
+/* Lo stesso comando dentro un blocco run: si allinea al margine del log che
+   apre, invece di partire dal bordo del blocco. */
+.conv-run-log-toggle {
+	margin: var(--space-3) var(--space-4) 0 var(--space-4);
+}
+
+.conv-run-log-toggle[aria-expanded="true"] + .conv-run-log {
+	margin-top: var(--space-2);
+}
+
+.conv-tech-count {
+	flex-shrink: 0;
+	letter-spacing: 0.04em;
+}
+
+/* I nomi degli strumenti sono testo del payload: stanno in mono, e se non ci
+   stanno si accorciano invece di mandare a capo la riga di comando. */
+.conv-tech-tools {
+	min-width: 0;
+	font-family: var(--font-mono);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0;
+	color: var(--text-dim);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Che dentro la piega ci sia stato un errore si legge da fuori: e' l'unica cosa
+   che una piega chiusa non ha il diritto di tacere. */
+.conv-tech-failed {
+	flex-shrink: 0;
+	padding: 1px 6px;
+	border: 1px solid var(--danger-border);
+	border-radius: var(--radius-sm);
+	background: var(--danger-soft);
+	color: var(--danger);
+	font-size: 10px;
+	font-weight: 800;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.conv-tech-list {
+	list-style: none;
+	margin: 0;
+	padding: 0 0 var(--space-1) 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	border-left: 2px solid var(--border);
+	padding-left: var(--space-3);
+	margin-left: 4px;
+}
+
+/* Dentro la piega la colonnina degli id si stringe: la riga ha gia' meno
+   larghezza di prima, e quei numeri servono meno del testo che c'e' accanto. */
+.conv-tech-list .conv-event {
+	grid-template-columns: 34px 1fr;
+	gap: var(--space-2);
+}
+
+.conv-tech-list .conv-event-body {
+	box-shadow: none;
+	background: var(--surface-2);
+}
+
+/* Il comando della testata: una sola icona, quieta come il controllo di
+   chiusura che le sta accanto, e premuta quando il dettaglio tecnico e' aperto
+   per tutta la conversazione. */
+.conv-tech-all {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: var(--control-h);
+	min-width: var(--control-h);
+	padding: 0 var(--space-2);
+	border: 1px solid transparent;
+	border-radius: var(--radius-pill);
+	background: none;
+	color: var(--text-dim);
+	cursor: pointer;
+	transition:
+		background var(--transition),
+		border-color var(--transition),
+		color var(--transition);
+}
+
+.conv-tech-all:hover {
+	background: var(--surface-3);
+	border-color: var(--border);
+	color: var(--text-muted);
+}
+
+.conv-tech-all:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.conv-tech-all.is-on {
+	background: var(--accent-soft);
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+/* ---- L'attesa dell'agente ------------------------------------------------ */
+/* La riga in coda mentre l'agente lavora. Dice tre cose e nient'altro: che sta
+   lavorando, a che cosa, e da quanto. Si muove — il punto pulsa, i puntini
+   scorrono — perche' e' esattamente il moto a distinguerla da una schermata
+   ferma, che e' la cosa che c'era prima al suo posto. */
+.conv-working {
+	display: grid;
+	grid-template-columns: 58px 1fr;
+	gap: var(--space-3);
+	align-items: center;
+}
+
+.conv-working-pulse {
+	justify-self: end;
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	background: var(--accent);
+	animation: conv-working-pulse 1.4s ease-in-out infinite;
+}
+
+.conv-working-body {
+	min-width: 0;
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
+	flex-wrap: wrap;
+}
+
+.conv-working-label {
+	font-size: 13px;
+	font-weight: 700;
+	color: var(--accent);
+}
+
+.conv-working-dots {
+	display: inline-flex;
+	align-items: flex-end;
+	gap: 3px;
+	padding-bottom: 3px;
+}
+
+.conv-working-dots i {
+	width: 3px;
+	height: 3px;
+	border-radius: 50%;
+	background: var(--accent);
+	animation: conv-working-dot 1.2s ease-in-out infinite;
+}
+
+.conv-working-dots i:nth-child(2) {
+	animation-delay: 0.16s;
+}
+
+.conv-working-dots i:nth-child(3) {
+	animation-delay: 0.32s;
+}
+
+/* La durata e' un numero che scorre: in mono non balla mentre cambia. */
+.conv-working-elapsed {
+	font-family: var(--font-mono);
+	font-size: 12px;
+	letter-spacing: 0;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+
+@keyframes conv-working-pulse {
+	0%,
+	100% {
+		opacity: 0.35;
+		transform: scale(0.82);
+	}
+	50% {
+		opacity: 1;
+		transform: scale(1.12);
+	}
+}
+
+@keyframes conv-working-dot {
+	0%,
+	100% {
+		opacity: 0.25;
+		transform: translateY(0);
+	}
+	50% {
+		opacity: 1;
+		transform: translateY(-3px);
+	}
+}
+
+/* Chi ha chiesto meno movimento non lo riceve: la riga resta, ferma e leggibile
+   — e' la frase a dire che si sta lavorando, l'animazione la accompagna. */
+@media (prefers-reduced-motion: reduce) {
+	.conv-working-pulse,
+	.conv-working-dots i {
+		animation: none;
+		opacity: 1;
+		transform: none;
+	}
+	.conv-tech-caret {
+		transition: none;
+	}
+}
+
 /* ---- Composer ------------------------------------------------------------ */
 /* Il campo per scrivere, ancorato in fondo alla conversazione come oggi. Campo,
    suggerimento della scorciatoia e unico comando principale del pannello stanno
@@ -6271,7 +6600,13 @@ body.no-workspace [data-workspace-scoped] {
 		padding-bottom: 0;
 	}
 
-	.conv-event {
+	/* Su una riga stretta la colonnina degli id smette di essere una colonna:
+	   sale sopra al corpo, dove costa un'altezza di riga invece di 58px di
+	   larghezza. Vale per gli eventi, per la piega del dettaglio tecnico e per
+	   la riga dell'attesa, che quella griglia la condividono. */
+	.conv-event,
+	.conv-tech,
+	.conv-working {
 		grid-template-columns: 1fr;
 		gap: var(--space-1);
 	}
@@ -6279,6 +6614,16 @@ body.no-workspace [data-workspace-scoped] {
 	.conv-event-rail {
 		justify-content: flex-start;
 		padding-top: 0;
+	}
+
+	.conv-working-pulse {
+		justify-self: start;
+	}
+
+	/* Dentro la piega la colonnina è già scesa insieme alle altre: qui torna
+	   solo a occupare tutta la riga, come fuori. */
+	.conv-tech-list .conv-event {
+		grid-template-columns: 1fr;
 	}
 
 	.spec-pane-body > .tab-panel {
