@@ -298,11 +298,30 @@ describe("AC-4 — il dettaglio spec non è una finestra", () => {
 		);
 	});
 
-	it("nessun elemento della pagina viene reso inerte", () => {
-		const code = js.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+	it("aprire il dettaglio spec non rende inerte niente", () => {
+		// `inert` esiste in app.js, ma appartiene alle vere modali con fondale:
+		// enterModal lo mette sullo sfondo e leaveModal lo toglie, perché
+		// aria-modal è una promessa che va mantenuta. Il dettaglio spec non è
+		// una modale, quindi nessuna delle funzioni che lo aprono, lo chiudono o
+		// lo dispongono deve passare di lì — altrimenti tornerebbe a bloccare il
+		// resto della pagina, conversazione compresa.
+		const strip = (source) =>
+			source.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+		for (const marker of [
+			"async function openEditor(",
+			"function closeModal(",
+			"function applyShellLayout(",
+		]) {
+			const body = strip(sectionOf(js, marker));
+			assert.ok(
+				!/\binert\b/.test(body) && !/enterModal\(/.test(body),
+				`\`${marker}\` rende inerte lo sfondo: il dettaglio spec tornerebbe a essere una finestra`,
+			);
+		}
+		const code = strip(js);
 		assert.ok(
-			!/\binert\b/.test(code),
-			"app.js rende inerte qualcosa: il dettaglio spec tornerebbe a bloccare il resto della pagina, conversazione compresa",
+			!/enterModal\(\s*modal[,)]/.test(code),
+			"il dettaglio spec (#modal-root) viene passato al trap del fuoco delle modali: non è una modale",
 		);
 	});
 

@@ -16,26 +16,28 @@
 // Consumable in both browser (defines window.ProviderFields) and Node
 // (exports renderProviderFields / renderModelChoice / escapeHtml).
 (function () {
-	// ---- visible wording ------------------------------------------------
-	// The three phrases the acceptance criteria are about, in the English of
-	// every other visible string in this viewer. They are kept apart on
-	// purpose: the empty entry says the provider decides, and only the catalog
-	// entry the provider marked carries the words "provider default", so
-	// exactly one entry of the list reads as the provider's own default.
-	const EMPTY_OPTION_LABEL = "No model — the provider chooses";
-	const DEFAULT_SUFFIX = " — provider default";
-	const UNLISTED_SUFFIX = " — not listed";
+	// ---- le parole visibili ---------------------------------------------
+	// Le tre frasi di cui parlano i criteri di accettazione, nella lingua di
+	// ogni altra stringa visibile di questo visore. Stanno separate apposta: la
+	// voce vuota dice che decide il provider, e soltanto la voce di catalogo che
+	// il provider ha marcato porta le parole "default del provider", così una
+	// sola voce dell'elenco si legge come il default del provider stesso.
+	const EMPTY_OPTION_LABEL = "Nessun modello — sceglie il provider";
+	const DEFAULT_SUFFIX = " — default del provider";
+	const UNLISTED_SUFFIX = " — non in elenco";
 	// The empty entry of a model option, and the sentence that takes the place
 	// of the section when the selected model declares no option at all: an
 	// empty container would leave the reader wondering whether the panel is
 	// broken or the model simply has nothing to offer.
-	const EMPTY_MODEL_OPTION_LABEL = "No value — the provider chooses";
-	const NO_MODEL_OPTIONS_COPY = "This model declares no option.";
+	const EMPTY_MODEL_OPTION_LABEL = "Nessun valore — sceglie il provider";
+	const NO_MODEL_OPTIONS_COPY = "Questo modello non dichiara nessuna opzione.";
 	// The section that lets a single run depart from the configuration, and
 	// the sentence that says where the model on display comes from when
 	// nobody has departed from it yet.
-	const MODEL_CHOICE_TITLE = "Model for this run";
-	const INHERITED_COPY = "inherited from the workspace";
+	const NO_SETTINGS_COPY =
+		"Questo provider non dichiara nessuna impostazione configurabile.";
+	const MODEL_CHOICE_TITLE = "Modello per questa run";
+	const INHERITED_COPY = "ereditato dal workspace";
 	const WORKSPACE_SOURCE = "workspace";
 
 	// The two naming scopes the same controls are drawn under. The prefix is
@@ -135,7 +137,7 @@
 	function renderField(provider, field, values) {
 		const value = currentValue(values, field.name);
 		const required = field.required
-			? ' <span class="field-required">required</span>'
+			? ' <span class="field-required">obbligatorio</span>'
 			: "";
 		const help = field.help
 			? `<small class="field-help">${escapeHtml(field.help)}</small>`
@@ -254,7 +256,7 @@
 			? provider.config_fields.filter(Boolean)
 			: [];
 		if (!fields.length) {
-			return '<p class="config-copy">This provider declares no configurable setting.</p>';
+			return '<p class="config-copy">${escapeHtml(NO_SETTINGS_COPY)}</p>';
 		}
 		// The options of the selected model come after the configuration
 		// fields, because they are a property of the value chosen in one of

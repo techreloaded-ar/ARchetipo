@@ -18,8 +18,8 @@
 	// ---- text, declared once ----
 
 	const TITLE_SUFFIX = " · ARchetipo";
-	const EMPTY_LABEL = "No workspace open";
-	const EMPTY_TITLE = "No workspace" + TITLE_SUFFIX;
+	const EMPTY_LABEL = "Nessun workspace aperto";
+	const EMPTY_TITLE = "Nessun workspace" + TITLE_SUFFIX;
 
 	// ---- public API ----
 

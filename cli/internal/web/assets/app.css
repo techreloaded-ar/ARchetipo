@@ -938,7 +938,16 @@ html[data-theme="light"] .theme-ico-moon {
 	transform: scale(0.995);
 }
 
-.card:hover::before {
+/* La card si apre anche da tastiera, quindi deve dire dove si è arrivati.
+   L'anello ricalca il bordo arrotondato e resta leggibile su entrambi i temi. */
+.card:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+	border-color: var(--accent);
+}
+
+.card:hover::before,
+.card:focus-visible::before {
 	width: 4px;
 }
 
@@ -965,6 +974,7 @@ html[data-theme="light"] .theme-ico-moon {
 }
 
 .card:hover .card-delete-btn,
+.card:focus-visible .card-delete-btn,
 .card-delete-btn:focus-visible {
 	opacity: 1;
 }
@@ -2395,6 +2405,14 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 }
 
 /* ---- Toast ------------------------------------------------------------- */
+
+/* La regione vive sempre nel DOM e non occupa spazio: serve solo perché il
+   role="status" che porta sia già nell'albero di accessibilità quando il
+   messaggio arriva. */
+.toast-region {
+	position: static;
+}
+
 .toast {
 	position: fixed;
 	bottom: 56px;
@@ -2419,6 +2437,40 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 
 .toast.hidden {
 	display: none;
+}
+
+.toast-message {
+	flex: 1 1 auto;
+}
+
+/* Il dismiss è un bottone vero: raggiungibile da tastiera e con un anello di
+   focus proprio, perché è l'unico modo di togliere di mezzo un messaggio lungo. */
+.toast-dismiss {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	margin-left: var(--space-1);
+	padding: 0;
+	border: 1px solid transparent;
+	border-radius: var(--radius-pill);
+	background: transparent;
+	color: inherit;
+	opacity: 0.7;
+	cursor: pointer;
+}
+
+.toast-dismiss:hover {
+	opacity: 1;
+	border-color: currentColor;
+}
+
+.toast-dismiss:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 2px;
+	opacity: 1;
 }
 
 .toast::before {

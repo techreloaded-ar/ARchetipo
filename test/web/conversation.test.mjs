@@ -281,7 +281,7 @@ describe("renderConversation", () => {
 		assert.ok(button, "il comando di chiusura non è un bottone");
 		assert.match(
 			button[0],
-			/aria-label="Close conversation"/,
+			/aria-label="Chiudi la conversazione"/,
 			"il comando di chiusura non dichiara il proprio nome accessibile",
 		);
 	});
@@ -317,7 +317,7 @@ describe("renderConversation", () => {
 			"la storia deve restare leggibile dopo la chiusura",
 		);
 		assert.ok(
-			/no longer engaged/i.test(text),
+			/non è più impegnato/i.test(text),
 			"deve dichiarare che l'agente non è più impegnato",
 		);
 		assert.ok(
@@ -488,7 +488,7 @@ describe("renderConversation — proposta", () => {
 			"manca il comando di rifiuto della proposta",
 		);
 		assert.ok(
-			/nothing has started yet/i.test(text),
+			/non è ancora partito niente/i.test(text),
 			"il pannello non dichiara che nulla è ancora partito",
 		);
 	});
@@ -1369,7 +1369,7 @@ describe("l'agente nominato in testata", () => {
 const CHIUDIBILI = [
 	{
 		chiave: "over",
-		testo: "no longer engaged",
+		testo: "non è più impegnato",
 		view: withConversation({
 			conversation: {
 				id: "conv-1",

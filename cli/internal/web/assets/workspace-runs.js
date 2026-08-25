@@ -60,9 +60,9 @@
 	// list is, and what it says when it is empty. A caller that wants other
 	// wording passes it in.
 	const DEFAULT_TEXT = {
-		title: "In flight",
-		empty: "Nothing is running in this workspace.",
-		awaiting: "waiting for you",
+		title: "In corso",
+		empty: "In questo workspace non sta girando niente.",
+		awaiting: "aspetta te",
 	};
 
 	/** How many targets the closed summary names before it counts the rest. */
@@ -114,7 +114,11 @@
 		const body = named
 			? `<span class="ws-run-await-body">${escapeHtml(named)}</span>`
 			: "";
-		return `<div class="ws-run-await" role="note">
+		// role="status" e non role="note": questa non è una postilla, è la cosa
+		// che aspetta una persona. Perché l'annuncio non si ripeta a ogni
+		// passata di polling, chi monta il pannello ridisegna solo quando il
+		// markup cambia davvero (renderWorkspaceRunsPanel in app.js).
+		return `<div class="ws-run-await" role="status">
 			<span class="ws-run-await-mark">${escapeHtml(textOption(opts, "awaiting"))}</span>
 			${body}
 		</div>`;

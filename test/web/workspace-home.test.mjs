@@ -107,9 +107,9 @@ describe("renderWorkspaceRows", () => {
 			text.includes("AT[2026-02-01T08:00:00Z]"),
 			"l'ultimo accesso della seconda voce non è reso con il formatTime iniettato",
 		);
-		assert.ok(text.includes("reachable"), "la voce raggiungibile non lo dichiara");
+		assert.ok(text.includes("raggiungibile"), "la voce raggiungibile non lo dichiara");
 		assert.ok(
-			text.includes("not found"),
+			text.includes("non trovato"),
 			"la voce irraggiungibile non dice perché non lo è",
 		);
 	});
@@ -124,7 +124,7 @@ describe("renderWorkspaceRows", () => {
 			assert.ok(html.includes(`data-remove="${id}"`), `manca dimentica per ${id}`);
 		}
 		assert.ok(
-			visibleText(html).includes("Open") && visibleText(html).includes("Remove"),
+			visibleText(html).includes("Apri") && visibleText(html).includes("Rimuovi"),
 			"le azioni non sono nominate nel testo visibile",
 		);
 	});
@@ -141,7 +141,7 @@ describe("renderWorkspaceRows", () => {
 		);
 		assert.match(
 			unreachable,
-			/title="Cannot be opened: not found"/,
+			/title="Non si può aprire: non trovato"/,
 			"l'apertura disabilitata non dice la sua ragione",
 		);
 		assert.ok(
@@ -170,7 +170,7 @@ describe("renderWorkspaceRows", () => {
 		);
 
 		assert.ok(
-			visibleText(html).includes("current"),
+			visibleText(html).includes("aperto"),
 			"la voce corrente non è dichiarata tale",
 		);
 		assert.ok(
@@ -179,7 +179,7 @@ describe("renderWorkspaceRows", () => {
 		);
 		assert.match(
 			html,
-			/title="This is the workspace already open"/,
+			/title="È il workspace già aperto"/,
 			"l'apertura della voce corrente non dice perché è disabilitata",
 		);
 	});
@@ -190,7 +190,7 @@ describe("renderWorkspaceRows", () => {
 			opts,
 		);
 		assert.ok(/data-open=""[^>]*\sdisabled/.test(html));
-		assert.match(html, /title="This entry has no identity in the registry"/);
+		assert.match(html, /title="Questa voce non ha un&#39;identità nel registro"/);
 	});
 
 	it("mostra grezzo uno stato che non conosce", () => {
@@ -225,7 +225,7 @@ describe("renderWorkspaceRows", () => {
 		);
 		assert.ok(visibleText(html).includes("SOLO-NOME"));
 		// Senza lastOpenedAt la riga esiste comunque, con l'etichetta e nulla dopo.
-		assert.ok(visibleText(html).includes("Last opened:"));
+		assert.ok(visibleText(html).includes("Ultima apertura:"));
 	});
 });
 
@@ -233,7 +233,7 @@ describe("renderWorkspaceHome", () => {
 	it("con elenco vuoto dice che nessun workspace è stato registrato", () => {
 		const html = renderWorkspaceHome({ workspaces: [], open: false }, opts);
 		assert.ok(
-			visibleText(html).includes("No workspace has been recorded yet"),
+			visibleText(html).includes("Non è ancora stato registrato nessun workspace"),
 			"l'elenco vuoto non si spiega",
 		);
 		assert.ok(

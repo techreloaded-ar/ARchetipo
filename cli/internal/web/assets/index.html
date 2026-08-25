@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="it" data-theme="light">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ARchetipo &middot; Backlog Viewer</title>
+    <title>ARchetipo &middot; Visore del backlog</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <!-- Un carattere solo per tutto ciò che si legge, e JetBrains Mono per il
@@ -43,7 +43,7 @@
                  data-workspace-scoped: it is the one control that must stay
                  visible with no workspace open, because its job is to declare
                  the absence too. -->
-            <button id="workspace-indicator" type="button" class="workspace-indicator" aria-live="polite">
+            <button id="workspace-indicator" type="button" class="workspace-indicator">
                 <span class="workspace-indicator-eyebrow">workspace</span>
                 <span class="workspace-indicator-name" id="workspace-indicator-name">&mdash;</span>
             </button>
@@ -64,7 +64,7 @@
         <div class="topbar-actions">
             <button id="new-spec-btn" type="button" class="ghost-btn new-spec-btn" data-workspace-scoped>
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-                <span>New spec</span>
+                <span>Nuova spec</span>
             </button>
             <!-- Everything the topbar used to keep one click away (US-061).
                  The bar exposes the workspace identity, one primary action, the
@@ -75,13 +75,13 @@
                  "New workspace", which must stay reachable with no workspace
                  open. -->
             <div class="dropdown topbar-more" id="topbar-more">
-                <button id="topbar-more-btn" type="button" class="ghost-btn" aria-haspopup="true" aria-expanded="false" aria-label="More actions" title="More actions">
+                <button id="topbar-more-btn" type="button" class="ghost-btn" aria-haspopup="true" aria-expanded="false" aria-label="Altre azioni" title="Altre azioni">
                     <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.3" fill="currentColor"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="13" cy="8" r="1.3" fill="currentColor"/></svg>
                 </button>
                 <div class="dropdown-menu topbar-more-menu hidden" id="topbar-more-menu" role="menu">
                     <button id="metrics-btn" type="button" class="ghost-btn" data-workspace-scoped>
                         <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 13.5h12" stroke="currentColor" stroke-width="1.2"/><path d="M3.5 13.5V9M7 13.5V5.5M10.5 13.5V7.5M14 13.5V3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-                        <span>Metrics</span>
+                        <span>Metriche</span>
                     </button>
                     <button id="prd-btn" type="button" class="ghost-btn" data-workspace-scoped>
                         <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.5h7.5L13 4v10.5H3z" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M10.5 1.5V4H13" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 7h5M5.5 9.5h5M5.5 12h3" stroke="currentColor" stroke-width="1.2"/></svg>
@@ -90,30 +90,30 @@
                     <div class="dropdown" id="mockups-dropdown" data-workspace-scoped>
                         <button id="mockups-btn" type="button" class="ghost-btn" aria-haspopup="true" aria-expanded="false">
                             <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="9.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 5.5h13M5 13.5h6M8 12v1.5" stroke="currentColor" stroke-width="1.2"/></svg>
-                            <span>Mockups</span>
+                            <span>Mockup</span>
                             <svg class="btn-caret" width="9" height="9" viewBox="0 0 9 9" aria-hidden="true"><path d="M1.5 3l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
                         </button>
                         <div class="dropdown-menu hidden" id="mockups-menu" role="menu"></div>
                     </div>
                     <button id="new-workspace-btn" type="button" class="ghost-btn">
                         <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4.5h5l1.2 1.5h6.8v7.5h-13z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M8 8v4M6 10h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-                        <span>New workspace</span>
+                        <span>Nuovo workspace</span>
                     </button>
                     <button id="workspaces-btn" type="button" class="ghost-btn" data-workspace-scoped>
                         <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="1.5" y="9.5" width="13" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M4 4.5h.01M4 11.5h.01" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-                        <span>Workspaces</span>
+                        <span>Workspace</span>
                     </button>
                     <button id="config-btn" type="button" class="ghost-btn" data-workspace-scoped>
                         <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l1 .35.5 1.24 1.3.36 1.04-.72.88.88-.72 1.04.36 1.3 1.24.5.35 1-.35 1-1.24.5-.36 1.3.72 1.04-.88.88-1.04-.72-1.3.36-.5 1.24-1 .35-1-.35-.5-1.24-1.3-.36-1.04.72-.88-.88.72-1.04-.36-1.3-1.24-.5-.35-1 .35-1 1.24-.5.36-1.3-.72-1.04.88-.88 1.04.72 1.3-.36.5-1.24z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>
-                        <span>Config</span>
+                        <span>Configurazione</span>
                     </button>
-                    <button id="density-toggle" type="button" class="ghost-btn" title="How much the interface breathes">
+                    <button id="density-toggle" type="button" class="ghost-btn" title="Quanto respira l'interfaccia">
                         <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12M2 8h12M2 13h12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-                        <span data-density-label>Compact density</span>
+                        <span data-density-label>Densità compatta</span>
                     </button>
-                    <button id="refresh-btn" type="button" class="ghost-btn" aria-label="Refresh board" title="Refresh (R)" data-workspace-scoped>
+                    <button id="refresh-btn" type="button" class="ghost-btn" aria-label="Ricarica la board" title="Ricarica (R)" data-workspace-scoped>
                         <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.88" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
-                        <span>Refresh</span>
+                        <span>Ricarica</span>
                     </button>
                 </div>
             </div>
@@ -123,7 +123,7 @@
                  strip draws. Empty until there is something to wait for. -->
             <div id="runs-attention" class="runs-attention hidden" aria-live="polite" data-workspace-scoped></div>
             <span class="action-sep" aria-hidden="true"></span>
-            <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Toggle theme" title="Toggle theme (T)">
+            <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Cambia tema" title="Cambia tema (T)">
                 <svg class="theme-ico theme-ico-sun" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></g></svg>
                 <svg class="theme-ico theme-ico-moon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 10.2a5.5 5.5 0 0 1-7.7-7.7 6 6 0 1 0 7.7 7.7z" fill="currentColor"/></svg>
             </button>
@@ -134,11 +134,11 @@
          the same renderer as the known-workspaces modal; the "add an existing
          workspace" form is moved in here at boot, so there stays exactly one
          implementation of adding. -->
-    <section id="workspace-home" class="workspace-home hidden" aria-live="polite">
+    <section id="workspace-home" class="workspace-home hidden">
         <div class="workspace-home-inner">
             <div id="workspace-home-list"></div>
             <div id="workspace-home-actions" class="workspace-home-actions">
-                <button id="workspace-home-create" type="button" class="primary-btn">New workspace</button>
+                <button id="workspace-home-create" type="button" class="primary-btn">Nuovo workspace</button>
             </div>
         </div>
     </section>
@@ -159,7 +159,7 @@
              strip above the primary column: it is visible in every view, so it
              never takes width away from the conversation. Drawn by the pure
              renderer in workspace-runs.js from /api/workspace/runs. -->
-        <section id="workspace-runs" class="workspace-runs" aria-live="polite" data-workspace-scoped></section>
+        <section id="workspace-runs" class="workspace-runs" data-workspace-scoped></section>
 
         <!-- The index of the conversations this workspace has had (US-058).
              It lives in the shell and not in #workspace-primary on purpose: it
@@ -184,9 +184,9 @@
                  visibility belongs to the layout module alone. Everything it
                  draws comes from /api/workspace/conversations/{id}, through the pure
                  renderer in conversation.js. -->
-            <section id="workspace-conversation" class="workspace-conversation shell-pane-conversation is-visible" aria-live="polite" data-workspace-scoped></section>
+            <section id="workspace-conversation" class="workspace-conversation shell-pane-conversation is-visible" data-workspace-scoped></section>
 
-            <main id="board" class="board shell-pane-board is-hidden" aria-live="polite"></main>
+            <main id="board" class="board shell-pane-board is-hidden"></main>
 
             <!-- The spec detail. It is not an overlaid window: it is a view of
                  the primary column, called into the same space the conversation
@@ -195,26 +195,26 @@
             <div id="modal-root" class="spec-pane shell-pane-spec hidden" role="region" aria-labelledby="story-editor-title">
                 <div class="spec-pane-body">
             <header class="modal-header">
-                <h2 id="story-editor-title" class="modal-title">Story</h2>
+                <h2 id="story-editor-title" class="modal-title">Storia</h2>
                 <!-- Opens a conversation about the spec on screen (US-058): a
                      new conversation carrying this spec's code, so it lands in
                      the rail under Spec and not among the free threads. -->
                 <button id="spec-conversation-btn" type="button" class="ghost-btn" data-conversation-new-spec>Conversa su questa spec</button>
-                <button id="modal-close" type="button" class="icon-btn" aria-label="Close">
+                <button id="modal-close" type="button" class="icon-btn" aria-label="Chiudi">
                     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
                 </button>
             </header>
             <nav class="modal-tabs" role="tablist">
-                <button type="button" class="tab active" data-tab="story" role="tab" aria-selected="true">Story</button>
-                <button type="button" class="tab" data-tab="plan" role="tab" aria-selected="false">Plan</button>
-                <button type="button" class="tab hidden" data-tab="review" id="review-tab" role="tab" aria-selected="false">Review</button>
+                <button type="button" class="tab active" data-tab="story" role="tab" aria-selected="true">Storia</button>
+                <button type="button" class="tab" data-tab="plan" role="tab" aria-selected="false">Piano</button>
+                <button type="button" class="tab hidden" data-tab="review" id="review-tab" role="tab" aria-selected="false">Revisione</button>
             </nav>
             <section class="tab-panel active" data-panel="story">
                 <div id="story-view" class="story-view">
                     <div class="story-view-topbar">
                         <div class="story-view-meta" id="story-view-meta"></div>
                         <div class="story-view-actions">
-                            <button type="button" id="story-delete-btn" class="ghost-btn danger-ghost-btn">Delete story</button>
+                            <button type="button" id="story-delete-btn" class="ghost-btn danger-ghost-btn">Elimina la storia</button>
                         </div>
                     </div>
                     <h3 class="story-view-title" id="story-view-title"></h3>
@@ -224,16 +224,16 @@
                     <div class="story-run" id="story-run"></div>
                     <div class="markdown-rendered" id="story-body-view"></div>
                     <div class="form-actions">
-                        <button type="button" id="story-edit-btn" class="primary-btn">Edit</button>
+                        <button type="button" id="story-edit-btn" class="primary-btn">Modifica</button>
                     </div>
                 </div>
                 <form id="story-form" class="form-grid hidden">
                     <label class="field full">
-                        <span>Title</span>
+                        <span>Titolo</span>
                         <input type="text" name="title" required />
                     </label>
                     <label class="field">
-                        <span>Priority</span>
+                        <span>Priorità</span>
                         <select name="priority">
                             <option value="HIGH">HIGH</option>
                             <option value="MEDIUM">MEDIUM</option>
@@ -241,7 +241,7 @@
                         </select>
                     </label>
                     <label class="field">
-                        <span>Story Points</span>
+                        <span>Story point</span>
                         <input type="number" name="story_points" min="0" max="100" />
                     </label>
                     <label class="field">
@@ -249,16 +249,16 @@
                         <input type="text" name="scope" placeholder="MVP / Growth / Vision" />
                     </label>
                     <label class="field">
-                        <span>Blocked by</span>
+                        <span>Bloccata da</span>
                         <input type="text" name="blocked_by" placeholder="US-002, US-003" />
                     </label>
                     <label class="field full">
-                        <span>Body (markdown)</span>
+                        <span>Corpo (markdown)</span>
                         <textarea name="body" rows="14" spellcheck="false"></textarea>
                     </label>
                     <div class="form-actions full">
-                        <button type="submit" class="primary-btn">Save story</button>
-                        <button type="button" id="story-cancel-btn" class="ghost-btn">Cancel</button>
+                        <button type="submit" class="primary-btn">Salva la storia</button>
+                        <button type="button" id="story-cancel-btn" class="ghost-btn">Annulla</button>
                         <span class="status-msg" id="story-status"></span>
                     </div>
                 </form>
@@ -267,42 +267,42 @@
                 <div id="plan-view" class="story-view">
                     <div class="markdown-rendered" id="plan-body-view"></div>
                     <div class="tasks-header">
-                        <span>Tasks</span>
+                        <span>Task</span>
                     </div>
                     <table class="tasks-table">
                         <thead>
                             <tr>
                                 <th>ID</th>
-                                <th>Title</th>
-                                <th>Type</th>
-                                <th>Status</th>
-                                <th>Deps</th>
+                                <th>Titolo</th>
+                                <th>Tipo</th>
+                                <th>Stato</th>
+                                <th>Dipendenze</th>
                             </tr>
                         </thead>
                         <tbody id="plan-tasks-view"></tbody>
                     </table>
                     <div class="form-actions">
-                        <button type="button" id="plan-edit-btn" class="primary-btn">Edit</button>
+                        <button type="button" id="plan-edit-btn" class="primary-btn">Modifica</button>
                     </div>
                 </div>
                 <form id="plan-form" class="form-grid hidden">
                     <label class="field full">
-                        <span>Plan body (markdown)</span>
+                        <span>Corpo del piano (markdown)</span>
                         <textarea name="plan_body" rows="10" spellcheck="false"></textarea>
                     </label>
                     <div class="field full">
                         <div class="tasks-header">
-                            <span>Tasks</span>
-                            <button type="button" id="add-task-btn" class="ghost-btn">+ Add task</button>
+                            <span>Task</span>
+                            <button type="button" id="add-task-btn" class="ghost-btn">+ Aggiungi task</button>
                         </div>
                         <table class="tasks-table">
                             <thead>
                                 <tr>
                                     <th>ID</th>
-                                    <th>Title</th>
-                                    <th>Type</th>
-                                    <th>Status</th>
-                                    <th>Deps</th>
+                                    <th>Titolo</th>
+                                    <th>Tipo</th>
+                                    <th>Stato</th>
+                                    <th>Dipendenze</th>
                                     <th></th>
                                 </tr>
                             </thead>
@@ -310,8 +310,8 @@
                         </table>
                     </div>
                     <div class="form-actions full">
-                        <button type="submit" class="primary-btn">Save plan</button>
-                        <button type="button" id="plan-cancel-btn" class="ghost-btn">Cancel</button>
+                        <button type="submit" class="primary-btn">Salva il piano</button>
+                        <button type="button" id="plan-cancel-btn" class="ghost-btn">Annulla</button>
                         <span class="status-msg" id="plan-status"></span>
                     </div>
                 </form>
@@ -320,9 +320,9 @@
                 <div class="review-toolbar">
                     <div class="review-branch" id="review-branch"></div>
                     <div class="review-actions">
-                        <button type="button" id="review-request-btn" class="ghost-btn" title="Convert comments into Fix tasks and send the spec back to IN PROGRESS">Request changes</button>
-                        <button type="button" id="review-approve-btn" class="primary-btn" title="Accept the increment and close the spec">Approve</button>
-                        <button type="button" id="review-integrate-btn" class="ghost-btn" title="Merge the branch into base and close the spec">Integrate &amp; close</button>
+                        <button type="button" id="review-request-btn" class="ghost-btn" title="Converte i commenti in task di fix e riporta la spec a IN PROGRESS">Chiedi modifiche</button>
+                        <button type="button" id="review-approve-btn" class="primary-btn" title="Accetta l'incremento e chiude la spec">Approva</button>
+                        <button type="button" id="review-integrate-btn" class="ghost-btn" title="Integra il ramo nel base e chiude la spec">Integra e chiudi</button>
                     </div>
                 </div>
                 <div class="review-dossier" id="review-dossier"></div>
@@ -335,9 +335,9 @@
     </div>
 
     <footer class="hint-bar" aria-hidden="true">
-        <span><kbd>R</kbd> refresh</span>
-        <span><kbd>T</kbd> theme</span>
-        <span><kbd>Esc</kbd> close</span>
+        <span><kbd>R</kbd> ricarica</span>
+        <span><kbd>T</kbd> tema</span>
+        <span><kbd>Esc</kbd> chiudi</span>
         <span class="hint-spacer"></span>
         <span class="hint-version">ARchetipo by Tech Reloaded</span>
     </footer>
@@ -346,13 +346,13 @@
         <div class="modal">
             <header class="modal-header">
                 <h2 id="prd-editor-title" class="modal-title">PRD</h2>
-                <button id="prd-modal-close" type="button" class="icon-btn" aria-label="Close">
+                <button id="prd-modal-close" type="button" class="icon-btn" aria-label="Chiudi">
                     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
                 </button>
             </header>
             <section class="tab-panel active">
                 <div id="prd-inception" class="hidden">
-                    <h3 class="metrics-section-title">Workspace actions</h3>
+                    <h3 class="metrics-section-title">Azioni sul workspace</h3>
                     <div class="story-model-choice" id="inception-model-choice"></div>
                     <div class="story-actions" id="inception-actions"></div>
                     <div class="story-execution" id="inception-execution"></div>
@@ -361,17 +361,17 @@
                 <div id="prd-view" class="story-view">
                     <div class="markdown-rendered" id="prd-body-view"></div>
                     <div class="form-actions">
-                        <button type="button" id="prd-edit-btn" class="primary-btn">Edit</button>
+                        <button type="button" id="prd-edit-btn" class="primary-btn">Modifica</button>
                     </div>
                 </div>
                 <form id="prd-form" class="form-grid hidden">
                     <label class="field full">
-                        <span>PRD body (markdown)</span>
+                        <span>Corpo del PRD (markdown)</span>
                         <textarea name="prd_body" rows="18" spellcheck="false"></textarea>
                     </label>
                     <div class="form-actions full">
-                        <button type="submit" class="primary-btn">Save PRD</button>
-                        <button type="button" id="prd-cancel-btn" class="ghost-btn">Cancel</button>
+                        <button type="submit" class="primary-btn">Salva il PRD</button>
+                        <button type="button" id="prd-cancel-btn" class="ghost-btn">Annulla</button>
                         <span class="status-msg" id="prd-status"></span>
                     </div>
                 </form>
@@ -382,8 +382,8 @@
     <div id="metrics-modal" class="modal-root hidden" role="dialog" aria-modal="true" aria-labelledby="metrics-title">
         <div class="modal">
             <header class="modal-header">
-                <h2 id="metrics-title" class="modal-title">Metrics</h2>
-                <button id="metrics-modal-close" type="button" class="icon-btn" aria-label="Close">
+                <h2 id="metrics-title" class="modal-title">Metriche</h2>
+                <button id="metrics-modal-close" type="button" class="icon-btn" aria-label="Chiudi">
                     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
                 </button>
             </header>
@@ -399,26 +399,26 @@
             <header class="modal-header">
                 <div class="new-spec-header">
                     <div>
-                        <span class="new-spec-eyebrow">new spec</span>
-                        <h2 id="new-spec-title" class="modal-title">Add a story to the backlog</h2>
+                        <span class="new-spec-eyebrow">nuova spec</span>
+                        <h2 id="new-spec-title" class="modal-title">Aggiungi una storia al backlog</h2>
                     </div>
-                    <span class="code-slot" title="The code is assigned by the server on confirmation">
+                    <span class="code-slot" title="Il codice lo assegna il server alla conferma">
                         US-•••
-                        <span class="code-slot-note">assigned on confirmation</span>
+                        <span class="code-slot-note">assegnato alla conferma</span>
                     </span>
                 </div>
-                <button id="new-spec-modal-close" type="button" class="icon-btn" aria-label="Close">
+                <button id="new-spec-modal-close" type="button" class="icon-btn" aria-label="Chiudi">
                     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
                 </button>
             </header>
             <section class="tab-panel active">
                 <div id="new-spec-no-epics" class="form-notice hidden">
-                    <span class="form-notice-mark">no epics</span>
-                    <span><strong>This workspace has no epics yet.</strong> A new spec must belong to an existing epic: generate the backlog first, then come back and create the story.</span>
+                    <span class="form-notice-mark">nessuna epica</span>
+                    <span><strong>Questo workspace non ha ancora nessuna epica.</strong> Una nuova spec deve appartenere a un'epica che esiste già: genera prima il backlog, poi torna qui e crea la storia.</span>
                 </div>
-                <div class="mode-switch" id="new-spec-modes" role="group" aria-label="How to write the spec">
-                    <button type="button" id="spec-draft-mode-manual" class="mode-chip is-active" aria-pressed="true">Write it yourself</button>
-                    <button type="button" id="spec-draft-mode-assisted" class="mode-chip" aria-pressed="false">Ask the agent</button>
+                <div class="mode-switch" id="new-spec-modes" role="group" aria-label="Come scrivere la spec">
+                    <button type="button" id="spec-draft-mode-manual" class="mode-chip is-active" aria-pressed="true">Scrivila tu</button>
+                    <button type="button" id="spec-draft-mode-assisted" class="mode-chip" aria-pressed="false">Chiedi all'agente</button>
                 </div>
                 <div id="spec-draft-notice" class="form-notice hidden" aria-live="polite"></div>
                 <div id="spec-draft-panel" class="spec-draft-panel hidden">
@@ -429,17 +429,17 @@
                 </div>
                 <form id="new-spec-form" class="form-grid" novalidate>
                     <label class="field full">
-                        <span>Title</span>
-                        <input type="text" name="title" placeholder="One line: what the user must be able to do" required />
+                        <span>Titolo</span>
+                        <input type="text" name="title" placeholder="Una riga: che cosa deve poter fare la persona" required />
                         <span class="field-error" data-error-for="title"></span>
                     </label>
                     <label class="field">
-                        <span>Epic</span>
+                        <span>Epica</span>
                         <select name="epic_code"></select>
                         <span class="field-error" data-error-for="epic_code"></span>
                     </label>
                     <label class="field">
-                        <span>Priority</span>
+                        <span>Priorità</span>
                         <select name="priority">
                             <option value="HIGH">HIGH</option>
                             <option value="MEDIUM" selected>MEDIUM</option>
@@ -448,7 +448,7 @@
                         <span class="field-error" data-error-for="priority"></span>
                     </label>
                     <label class="field">
-                        <span>Story Points</span>
+                        <span>Story point</span>
                         <input type="number" name="story_points" min="1" max="100" value="3" />
                         <span class="field-error" data-error-for="points"></span>
                     </label>
@@ -458,18 +458,18 @@
                         <span class="field-error" data-error-for="scope"></span>
                     </label>
                     <label class="field">
-                        <span>Blocked by</span>
+                        <span>Bloccata da</span>
                         <input type="text" name="blocked_by" placeholder="US-002, US-003" />
                         <span class="field-error" data-error-for="blocked_by"></span>
                     </label>
                     <label class="field full">
-                        <span>Body (markdown)</span>
+                        <span>Corpo (markdown)</span>
                         <textarea name="body" rows="16" spellcheck="false"></textarea>
                         <span class="field-error" data-error-for="body"></span>
                     </label>
                     <div class="form-actions full">
-                        <button type="submit" id="new-spec-submit" class="primary-btn">Create spec</button>
-                        <button type="button" id="new-spec-cancel" class="ghost-btn">Cancel</button>
+                        <button type="submit" id="new-spec-submit" class="primary-btn">Crea la spec</button>
+                        <button type="button" id="new-spec-cancel" class="ghost-btn">Annulla</button>
                         <span class="status-msg" id="new-spec-status" aria-live="polite"></span>
                     </div>
                 </form>
@@ -482,37 +482,37 @@
             <header class="modal-header">
                 <div class="new-spec-header">
                     <div>
-                        <span class="new-spec-eyebrow">new workspace</span>
-                        <h2 id="new-workspace-title" class="modal-title">Create and initialize a workspace</h2>
+                        <span class="new-spec-eyebrow">nuovo workspace</span>
+                        <h2 id="new-workspace-title" class="modal-title">Crea e inizializza un workspace</h2>
                     </div>
-                    <span class="code-slot" id="new-workspace-template" title="The installed process Archetype: it is recorded, not chosen">
+                    <span class="code-slot" id="new-workspace-template" title="L'Archetipo di processo installato: si constata, non si sceglie">
                         —
-                        <span class="code-slot-note">process Archetype</span>
+                        <span class="code-slot-note">Archetipo di processo</span>
                     </span>
                 </div>
-                <button id="new-workspace-modal-close" type="button" class="icon-btn" aria-label="Close">
+                <button id="new-workspace-modal-close" type="button" class="icon-btn" aria-label="Chiudi">
                     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
                 </button>
             </header>
             <section class="tab-panel active">
                 <div id="new-workspace-unavailable" class="form-notice hidden">
-                    <span class="form-notice-mark">unavailable</span>
+                    <span class="form-notice-mark">non disponibile</span>
                     <span id="new-workspace-unavailable-text"></span>
                 </div>
                 <form id="new-workspace-form" class="form-grid" novalidate>
                     <label class="field full">
-                        <span>Destination directory</span>
-                        <input type="text" name="dir" spellcheck="false" placeholder="/absolute/path/to/the/new/workspace" required />
-                        <span class="field-hint">An absolute path. The directory may already exist, as long as it is not already an ARchetipo workspace.</span>
+                        <span>Directory di destinazione</span>
+                        <input type="text" name="dir" spellcheck="false" placeholder="/percorso/assoluto/del/nuovo/workspace" required />
+                        <span class="field-hint">Un percorso assoluto. La directory può esistere già, purché non sia già un workspace ARchetipo.</span>
                         <span class="field-error" data-error-for="dir"></span>
                     </label>
                     <label class="field">
-                        <span>Connector</span>
+                        <span>Connettore</span>
                         <select name="connector"></select>
                         <span class="field-error" data-error-for="connector"></span>
                     </label>
                     <div class="field">
-                        <span>Tools</span>
+                        <span>Strumenti</span>
                         <div id="new-workspace-tools" class="checkbox-grid"></div>
                         <span class="field-error" data-error-for="tools"></span>
                     </div>
@@ -527,37 +527,37 @@
                         <span class="field-error" data-error-for="paths.wiki"></span>
                     </label>
                     <label class="field">
-                        <span>Mockups</span>
+                        <span>Mockup</span>
                         <input type="text" name="paths.mockups" spellcheck="false" />
                         <span class="field-error" data-error-for="paths.mockups"></span>
                     </label>
                     <label class="field">
-                        <span>Test results</span>
+                        <span>Risultati dei test</span>
                         <input type="text" name="paths.test_results" spellcheck="false" />
                         <span class="field-error" data-error-for="paths.test_results"></span>
                     </label>
                     <label class="field full checkbox-field">
                         <input type="checkbox" name="worktree.enabled" id="new-workspace-worktree-enabled" />
-                        <span>Per-spec git worktree workflow</span>
+                        <span>Flusso con worktree git per spec</span>
                     </label>
                     <label class="field">
-                        <span>Worktree base branch</span>
+                        <span>Ramo base del worktree</span>
                         <input type="text" name="worktree.base" spellcheck="false" disabled />
                         <span class="field-error" data-error-for="worktree.base"></span>
                     </label>
                     <label class="field">
-                        <span>Worktree directory</span>
+                        <span>Directory dei worktree</span>
                         <input type="text" name="worktree.dir" spellcheck="false" disabled />
                         <span class="field-error" data-error-for="worktree.dir"></span>
                     </label>
                     <label class="field">
-                        <span>Branch prefix</span>
+                        <span>Prefisso dei rami</span>
                         <input type="text" name="worktree.branch_prefix" spellcheck="false" disabled />
                         <span class="field-error" data-error-for="worktree.branch_prefix"></span>
                     </label>
                     <div class="form-actions full">
-                        <button type="submit" id="new-workspace-submit" class="primary-btn">Create workspace</button>
-                        <button type="button" id="new-workspace-cancel" class="ghost-btn">Cancel</button>
+                        <button type="submit" id="new-workspace-submit" class="primary-btn">Crea il workspace</button>
+                        <button type="button" id="new-workspace-cancel" class="ghost-btn">Annulla</button>
                         <span class="status-msg" id="new-workspace-status" aria-live="polite"></span>
                     </div>
                 </form>
@@ -570,26 +570,26 @@
             <header class="modal-header">
                 <div class="new-spec-header">
                     <div>
-                        <span class="new-spec-eyebrow">workspaces</span>
-                        <h2 id="workspaces-title" class="modal-title">Known workspaces</h2>
+                        <span class="new-spec-eyebrow">workspace</span>
+                        <h2 id="workspaces-title" class="modal-title">Workspace conosciuti</h2>
                     </div>
                 </div>
-                <button id="workspaces-modal-close" type="button" class="icon-btn" aria-label="Close">
+                <button id="workspaces-modal-close" type="button" class="icon-btn" aria-label="Chiudi">
                     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
                 </button>
             </header>
             <section class="tab-panel active">
                 <div id="workspaces-list"></div>
-                <p id="workspaces-empty" class="form-notice hidden">No workspace has been recorded yet. Create one, or add an existing one below.</p>
+                <p id="workspaces-empty" class="form-notice hidden">Non è ancora stato registrato nessun workspace. Creane uno, oppure aggiungine uno esistente qui sotto.</p>
                 <form id="workspaces-add-form" class="form-grid" novalidate>
                     <label class="field full">
-                        <span>Existing workspace</span>
-                        <input type="text" name="path" spellcheck="false" placeholder="/absolute/path/to/an/existing/workspace" />
-                        <span class="field-hint">An absolute path to a directory that already contains <code>.archetipo/config.yaml</code>.</span>
+                        <span>Workspace esistente</span>
+                        <input type="text" name="path" spellcheck="false" placeholder="/percorso/assoluto/di/un/workspace/esistente" />
+                        <span class="field-hint">Un percorso assoluto a una directory che contiene già <code>.archetipo/config.yaml</code>.</span>
                         <span class="field-error" data-error-for="path"></span>
                     </label>
                     <div class="form-actions full">
-                        <button type="submit" id="workspaces-add-submit" class="primary-btn">Add workspace</button>
+                        <button type="submit" id="workspaces-add-submit" class="primary-btn">Aggiungi il workspace</button>
                         <span class="status-msg" id="workspaces-status" aria-live="polite"></span>
                     </div>
                 </form>
@@ -601,79 +601,79 @@
         <div class="modal config-modal-shell">
             <header class="modal-header config-modal-header">
                 <div>
-                    <div class="config-eyebrow">Project configuration</div>
-                    <h2 id="config-title" class="modal-title">Configure ARchetipo</h2>
+                    <div class="config-eyebrow">Configurazione del progetto</div>
+                    <h2 id="config-title" class="modal-title">Configura ARchetipo</h2>
                     <div class="config-path" id="config-path"></div>
-                    <div class="config-notice hidden" id="config-restart-notice">Some changes affect the running viewer. Save is allowed, then restart <code>archetipo view</code> to use the new connector and paths.</div>
+                    <div class="config-notice hidden" id="config-restart-notice">Alcune modifiche riguardano il visore in esecuzione. Il salvataggio è permesso, poi riavvia <code>archetipo view</code> per usare il nuovo connettore e i nuovi percorsi.</div>
                 </div>
-                <button id="config-modal-close" type="button" class="icon-btn" aria-label="Close">
+                <button id="config-modal-close" type="button" class="icon-btn" aria-label="Chiudi">
                     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
                 </button>
             </header>
             <nav class="modal-tabs config-modal-tabs" role="tablist">
-                <button type="button" class="tab active" data-config-tab="guided" role="tab" aria-selected="true">Guided</button>
-                <button type="button" class="tab" data-config-tab="connector" role="tab" aria-selected="false">Connector</button>
-                <button type="button" class="tab" data-config-tab="execution" role="tab" aria-selected="false">Execution</button>
-                <button type="button" class="tab" data-config-tab="advanced" role="tab" aria-selected="false">Advanced YAML</button>
+                <button type="button" class="tab active" data-config-tab="guided" role="tab" aria-selected="true">Guidata</button>
+                <button type="button" class="tab" data-config-tab="connector" role="tab" aria-selected="false">Connettore</button>
+                <button type="button" class="tab" data-config-tab="execution" role="tab" aria-selected="false">Esecuzione</button>
+                <button type="button" class="tab" data-config-tab="advanced" role="tab" aria-selected="false">YAML avanzato</button>
             </nav>
             <div class="config-layout">
                 <aside class="config-sidebar">
                     <div class="config-sidebar-section">
-                        <h3>Current state</h3>
-                        <div class="config-kv"><span>Connector</span><span id="config-summary-connector">—</span></div>
-                        <div class="config-kv"><span>Config file</span><span id="config-summary-exists">—</span></div>
-                        <div class="config-kv"><span>Execution provider</span><span id="config-summary-provider">—</span></div>
-                        <div class="config-kv"><span>Secrets</span><span>env only</span></div>
+                        <h3>Stato attuale</h3>
+                        <div class="config-kv"><span>Connettore</span><span id="config-summary-connector">—</span></div>
+                        <div class="config-kv"><span>File di configurazione</span><span id="config-summary-exists">—</span></div>
+                        <div class="config-kv"><span>Provider di esecuzione</span><span id="config-summary-provider">—</span></div>
+                        <div class="config-kv"><span>Segreti</span><span>solo variabili d'ambiente</span></div>
                     </div>
                     <div class="config-sidebar-section">
-                        <h3>Validation</h3>
-                        <div class="config-validation" id="config-validation">Not tested in this session.</div>
+                        <h3>Verifica</h3>
+                        <div class="config-validation" id="config-validation">Non verificata in questa sessione.</div>
                     </div>
                     <div class="config-sidebar-section">
-                        <h3>Notes</h3>
-                        <p class="config-copy">Guided save writes canonical YAML for the supported fields. Use the Advanced YAML tab when you need to preserve comments or unsupported keys exactly.</p>
+                        <h3>Note</h3>
+                        <p class="config-copy">Il salvataggio guidato scrive YAML canonico per i campi supportati. Usa la scheda YAML avanzato quando devi conservare esattamente commenti o chiavi non supportate.</p>
                     </div>
                 </aside>
                 <div class="config-main">
                     <section class="tab-panel active config-panel" data-config-panel="guided">
                         <div class="config-section-head">
                             <div>
-                                <h3 class="config-section-title">Common settings</h3>
-                                <p class="config-copy">Fields most users change without editing raw YAML.</p>
+                                <h3 class="config-section-title">Impostazioni comuni</h3>
+                                <p class="config-copy">I campi che si cambiano senza mettere mano allo YAML.</p>
                             </div>
                         </div>
                         <form id="config-guided-form" class="config-form-stack">
                             <section class="config-group">
-                                <h4>Living Wiki</h4>
+                                <h4>Wiki vivente</h4>
                                 <div class="form-grid config-form-grid">
                                     <div class="field full config-toggle-field">
-                                        <span>Maintain the Wiki automatically</span>
-                                        <label class="config-toggle-row"><input type="checkbox" name="wiki_enabled" /><span>Off by default. When off, the standard workflow (inception, spec, plan, implement, review) neither reads nor updates the Wiki; <code>archetipo wiki</code> and <code>/archetipo-wiki</code> keep working on demand.</span></label>
+                                        <span>Mantieni la Wiki automaticamente</span>
+                                        <label class="config-toggle-row"><input type="checkbox" name="wiki_enabled" /><span>Spenta di partenza. Da spenta, il flusso standard (inception, spec, piano, implementazione, revisione) non legge né aggiorna la Wiki; <code>archetipo wiki</code> e <code>/archetipo-wiki</code> restano disponibili su richiesta.</span></label>
                                     </div>
                                 </div>
                             </section>
                             <section class="config-group">
-                                <h4>Worktree workflow</h4>
+                                <h4>Flusso con worktree</h4>
                                 <div class="form-grid config-form-grid">
                                     <div class="field full config-toggle-field">
-                                        <span>Enable isolated worktrees</span>
-                                        <label class="config-toggle-row"><input type="checkbox" name="worktree_enabled" /><span>One branch + worktree per spec for review and integration.</span></label>
+                                        <span>Abilita i worktree isolati</span>
+                                        <label class="config-toggle-row"><input type="checkbox" name="worktree_enabled" /><span>Un ramo e un worktree per spec, per la revisione e l'integrazione.</span></label>
                                     </div>
-                                    <label class="field"><span>Base branch</span><input type="text" name="worktree_base" /></label>
-                                    <label class="field"><span>Worktree directory</span><input type="text" name="worktree_dir" /></label>
-                                    <label class="field"><span>Branch prefix</span><input type="text" name="worktree_branch_prefix" /></label>
+                                    <label class="field"><span>Ramo base</span><input type="text" name="worktree_base" /></label>
+                                    <label class="field"><span>Directory dei worktree</span><input type="text" name="worktree_dir" /></label>
+                                    <label class="field"><span>Prefisso dei rami</span><input type="text" name="worktree_branch_prefix" /></label>
                                     <div class="field full config-toggle-field">
-                                        <span>Commit each spec automatically</span>
-                                        <label class="config-toggle-row"><input type="checkbox" name="git_auto_commit" /><span>Without worktrees, <code>archetipo spec review</code> commits the increment in the project root. Worktrees always commit.</span></label>
+                                        <span>Committa ogni spec automaticamente</span>
+                                        <label class="config-toggle-row"><input type="checkbox" name="git_auto_commit" /><span>Senza worktree, <code>archetipo spec review</code> committa l'incremento nella radice del progetto. Con i worktree il commit c'è sempre.</span></label>
                                     </div>
                                     <div class="field full config-toggle-field">
-                                        <span>Record E2E demo video</span>
-                                        <label class="config-toggle-row"><input type="checkbox" name="e2e_record_demo_video" /><span>Allows <code>archetipo e2e demo</code> to record a video.</span></label>
+                                        <span>Registra il video della demo E2E</span>
+                                        <label class="config-toggle-row"><input type="checkbox" name="e2e_record_demo_video" /><span>Permette ad <code>archetipo e2e demo</code> di registrare un video.</span></label>
                                     </div>
                                 </div>
                             </section>
                             <section class="config-group">
-                                <h4>Workflow labels</h4>
+                                <h4>Etichette del flusso</h4>
                                 <div class="form-grid config-form-grid">
                                     <label class="field"><span>Todo</span><input type="text" name="status_todo" /></label>
                                     <label class="field"><span>Planned</span><input type="text" name="status_planned" /></label>
@@ -683,13 +683,13 @@
                                 </div>
                             </section>
                             <section class="config-group">
-                                <h4>Paths</h4>
+                                <h4>Percorsi</h4>
                                 <div class="form-grid config-form-grid">
-                                    <label class="field"><span>PRD path</span><input type="text" name="paths_prd" /></label>
-                                    <label class="field"><span>Mockups directory</span><input type="text" name="paths_mockups" /></label>
-                                    <label class="field"><span>Test results directory</span><input type="text" name="paths_test_results" /></label>
-                                    <label class="field"><span>Backlog file</span><input type="text" name="file_backlog" /></label>
-                                    <label class="field"><span>Planning directory</span><input type="text" name="file_planning" /></label>
+                                    <label class="field"><span>Percorso del PRD</span><input type="text" name="paths_prd" /></label>
+                                    <label class="field"><span>Directory dei mockup</span><input type="text" name="paths_mockups" /></label>
+                                    <label class="field"><span>Directory dei risultati dei test</span><input type="text" name="paths_test_results" /></label>
+                                    <label class="field"><span>File del backlog</span><input type="text" name="file_backlog" /></label>
+                                    <label class="field"><span>Directory della pianificazione</span><input type="text" name="file_planning" /></label>
                                 </div>
                             </section>
                         </form>
@@ -697,74 +697,74 @@
                     <section class="tab-panel config-panel" data-config-panel="connector">
                         <div class="config-section-head">
                             <div>
-                                <h3 class="config-section-title">Connector settings</h3>
-                                <p class="config-copy">Non-secret connector settings only. Tokens remain environment-only.</p>
+                                <h3 class="config-section-title">Impostazioni del connettore</h3>
+                                <p class="config-copy">Solo impostazioni non segrete del connettore. I token restano solo nelle variabili d'ambiente.</p>
                             </div>
                         </div>
                         <div class="config-group">
-                            <h4>Connector</h4>
+                            <h4>Connettore</h4>
                             <div class="config-connector-grid" id="config-connector-grid">
-                                <label class="config-connector-card"><input type="radio" name="connector" value="file" /><strong>File</strong><small>Local markdown and YAML artifacts</small></label>
-                                <label class="config-connector-card"><input type="radio" name="connector" value="github" /><strong>GitHub</strong><small>Projects v2 via <code>gh</code> auth</small></label>
-                                <label class="config-connector-card"><input type="radio" name="connector" value="jira" /><strong>Jira</strong><small>Cloud API via environment credentials</small></label>
+                                <label class="config-connector-card"><input type="radio" name="connector" value="file" /><strong>File</strong><small>Artefatti markdown e YAML in locale</small></label>
+                                <label class="config-connector-card"><input type="radio" name="connector" value="github" /><strong>GitHub</strong><small>Projects v2 tramite <code>gh</code> auth</small></label>
+                                <label class="config-connector-card"><input type="radio" name="connector" value="jira" /><strong>Jira</strong><small>API cloud con credenziali dalle variabili d'ambiente</small></label>
                             </div>
                         </div>
                         <div class="config-group config-connector-section" data-connector-section="github">
                             <h4>GitHub</h4>
                             <div class="form-grid config-form-grid">
-                                <label class="field"><span>Owner</span><input type="text" name="github_owner" /></label>
-                                <label class="field"><span>Project number</span><input type="number" name="github_project_number" min="0" /></label>
-                                <label class="field"><span>Project node id</span><input type="text" name="github_project_node_id" /></label>
-                                <label class="field"><span>Project URL</span><input type="text" name="github_project_url" /></label>
-                                <label class="field"><span>Status field id</span><input type="text" name="github_status_field_id" /></label>
-                                <label class="field"><span>Priority field id</span><input type="text" name="github_priority_field_id" /></label>
-                                <label class="field"><span>Points field id</span><input type="text" name="github_points_field_id" /></label>
-                                <label class="field"><span>Epic field id</span><input type="text" name="github_epic_field_id" /></label>
-                                <label class="field full"><span>Status options (KEY: value)</span><textarea name="github_status_options" rows="4" spellcheck="false"></textarea></label>
-                                <label class="field full"><span>Priority options (KEY: value)</span><textarea name="github_priority_options" rows="4" spellcheck="false"></textarea></label>
-                                <label class="field full"><span>Epic options (KEY: value)</span><textarea name="github_epic_options" rows="4" spellcheck="false"></textarea></label>
+                                <label class="field"><span>Proprietario</span><input type="text" name="github_owner" /></label>
+                                <label class="field"><span>Numero del progetto</span><input type="number" name="github_project_number" min="0" /></label>
+                                <label class="field"><span>Node id del progetto</span><input type="text" name="github_project_node_id" /></label>
+                                <label class="field"><span>URL del progetto</span><input type="text" name="github_project_url" /></label>
+                                <label class="field"><span>Id del campo stato</span><input type="text" name="github_status_field_id" /></label>
+                                <label class="field"><span>Id del campo priorità</span><input type="text" name="github_priority_field_id" /></label>
+                                <label class="field"><span>Id del campo punti</span><input type="text" name="github_points_field_id" /></label>
+                                <label class="field"><span>Id del campo epica</span><input type="text" name="github_epic_field_id" /></label>
+                                <label class="field full"><span>Opzioni di stato (CHIAVE: valore)</span><textarea name="github_status_options" rows="4" spellcheck="false"></textarea></label>
+                                <label class="field full"><span>Opzioni di priorità (CHIAVE: valore)</span><textarea name="github_priority_options" rows="4" spellcheck="false"></textarea></label>
+                                <label class="field full"><span>Opzioni di epica (CHIAVE: valore)</span><textarea name="github_epic_options" rows="4" spellcheck="false"></textarea></label>
                             </div>
                         </div>
                         <div class="config-group config-connector-section" data-connector-section="jira">
                             <h4>Jira</h4>
                             <div class="form-grid config-form-grid">
                                 <label class="field"><span>Base URL</span><input type="text" name="jira_base_url" placeholder="https://acme.atlassian.net" /></label>
-                                <label class="field"><span>Project key</span><input type="text" name="jira_project_key" /></label>
+                                <label class="field"><span>Chiave del progetto</span><input type="text" name="jira_project_key" /></label>
                                 <label class="field"><span>Email</span><input type="text" name="jira_email" /></label>
-                                <label class="field"><span>Story type</span><input type="text" name="jira_story_type" /></label>
-                                <label class="field"><span>Subtask type</span><input type="text" name="jira_subtask_type" /></label>
-                                <label class="field"><span>Points field</span><input type="text" name="jira_points_field" /></label>
-                                <label class="field full"><span>Status map (KEY: value)</span><textarea name="jira_status_map" rows="5" spellcheck="false"></textarea></label>
-                                <label class="field full"><span>Priority map (KEY: value)</span><textarea name="jira_priority_map" rows="4" spellcheck="false"></textarea></label>
+                                <label class="field"><span>Tipo storia</span><input type="text" name="jira_story_type" /></label>
+                                <label class="field"><span>Tipo sotto-task</span><input type="text" name="jira_subtask_type" /></label>
+                                <label class="field"><span>Campo punti</span><input type="text" name="jira_points_field" /></label>
+                                <label class="field full"><span>Mappa degli stati (CHIAVE: valore)</span><textarea name="jira_status_map" rows="5" spellcheck="false"></textarea></label>
+                                <label class="field full"><span>Mappa delle priorità (CHIAVE: valore)</span><textarea name="jira_priority_map" rows="4" spellcheck="false"></textarea></label>
                             </div>
                         </div>
                     </section>
                     <section class="tab-panel config-panel" data-config-panel="execution">
                         <div class="config-section-head">
                             <div>
-                                <h3 class="config-section-title">Execution provider</h3>
-                                <p class="config-copy">The workspace default used to run process actions. Non-secret settings only: a provider that needs a credential names the environment variable holding it, never the credential itself.</p>
+                                <h3 class="config-section-title">Provider di esecuzione</h3>
+                                <p class="config-copy">Il default del workspace per eseguire le azioni di processo. Solo impostazioni non segrete: un provider che ha bisogno di una credenziale nomina la variabile d'ambiente che la contiene, mai la credenziale.</p>
                             </div>
                         </div>
                         <div class="config-group">
-                            <h4>Registered providers</h4>
+                            <h4>Provider registrati</h4>
                             <div class="config-connector-grid" id="execution-provider-grid"></div>
                         </div>
                         <div class="config-group">
-                            <h4>Provider settings</h4>
+                            <h4>Impostazioni del provider</h4>
                             <div class="form-grid config-form-grid" id="execution-fields"></div>
                         </div>
                         <div class="config-actions-row">
-                            <button type="button" id="execution-save-btn" class="primary-btn">Save provider</button>
+                            <button type="button" id="execution-save-btn" class="primary-btn">Salva il provider</button>
                             <span class="status-msg" id="execution-status"></span>
                         </div>
-                        <p class="config-copy">Saving here writes only <code>execution.default_provider</code> in <code>.archetipo/config.yaml</code>, immediately and independently of <em>Save config</em>.</p>
+                        <p class="config-copy">Il salvataggio qui scrive soltanto <code>execution.default_provider</code> in <code>.archetipo/config.yaml</code>, subito e indipendentemente da <em>Salva la configurazione</em>.</p>
                     </section>
                     <section class="tab-panel config-panel" data-config-panel="advanced">
                         <div class="config-section-head">
                             <div>
-                                <h3 class="config-section-title">Advanced YAML</h3>
-                                <p class="config-copy">Full-fidelity editing for comments, unsupported keys and connector-specific details.</p>
+                                <h3 class="config-section-title">YAML avanzato</h3>
+                                <p class="config-copy">Modifica fedele di commenti, chiavi non supportate e dettagli specifici del connettore.</p>
                             </div>
                         </div>
                         <label class="field full">
@@ -777,15 +777,25 @@
             <footer class="config-footer">
                 <span class="status-msg" id="config-status"></span>
                 <div class="config-footer-actions">
-                    <button type="button" id="config-cancel-btn" class="ghost-btn">Cancel</button>
-                    <button type="button" id="config-validate-btn" class="ghost-btn">Validate / Test</button>
-                    <button type="button" id="config-save-btn" class="primary-btn">Save config</button>
+                    <button type="button" id="config-cancel-btn" class="ghost-btn">Annulla</button>
+                    <button type="button" id="config-validate-btn" class="ghost-btn">Verifica</button>
+                    <button type="button" id="config-save-btn" class="primary-btn">Salva la configurazione</button>
                 </div>
             </footer>
         </div>
     </div>
 
-    <div id="toast" class="toast hidden"></div>
+    <!-- La regione è sempre presente e vuota: è l'unico modo perché lo screen
+         reader annunci il messaggio quando il toast compare. Il toast stesso
+         resta un figlio che appare e scompare. -->
+    <div id="toast-region" class="toast-region" role="status">
+        <div id="toast" class="toast hidden">
+            <span id="toast-message" class="toast-message"></span>
+            <button id="toast-dismiss" type="button" class="toast-dismiss" aria-label="Chiudi il messaggio">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+        </div>
+    </div>
 
     <script src="/vendor/sortable.min.js"></script>
     <script src="/vendor/marked.min.js"></script>

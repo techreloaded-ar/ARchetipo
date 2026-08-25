@@ -1,5 +1,273 @@
 // biome-ignore lint/suspicious/noInnerHtml: safe — all data goes through escapeHtml() or marked.parse()
 (() => {
+	// ---- Le parole dell'interfaccia -----------------------------------------
+	//
+	// Ogni stringa che una persona legge sta qui, in una lingua sola. Nel punto
+	// d'uso non si scrive più nessun testo a mano: una parola si cambia in un
+	// posto solo, e non può più succedere che due righe vicine parlino due
+	// lingue diverse. Quello che invece arriva dal server — stati, azioni, nomi
+	// di provider, ragioni di rifiuto — resta com'è: è il vocabolario del
+	// dominio, e riscriverlo qui vorrebbe dire inventarne una seconda versione.
+	//
+	// Le voci che dipendono da un valore sono funzioni: la frase resta intera e
+	// leggibile qui dentro invece di essere cucita a pezzi nel punto d'uso.
+	const TEXT = {
+		// Tema e densità
+		themeToLight: "Passa al tema chiaro",
+		themeToDark: "Passa al tema scuro",
+		densityComfortable: "Densità comoda",
+		densityCompact: "Densità compatta",
+
+		// Board e spec
+		backTo: (label) => `Torna a ${label}`,
+		statStories: "storie",
+		statInFlight: "in corso",
+		statDone: "concluse",
+		untitled: "(senza titolo)",
+		noDescription: "*(nessuna descrizione)*",
+		noPlan: "*(nessun piano)*",
+		noPRD: "*(nessun PRD ancora)*",
+		deleteSpec: (code) => `Elimina ${code}`,
+		deleteStory: "Elimina la storia",
+		specTitle: (code) => `Spec ${code}`,
+		blockedBy: (list) => `bloccata da ${list}`,
+		emptyDone: "trascina qui una card in Review per approvarla",
+		emptyColumn: "nessuna spec",
+		dragOnlyReviewToDone:
+			"Si può trascinare soltanto da Review a Done",
+		movedToDone: (code, column) => `${code} approvata e spostata in ${column}`,
+		moveFailed: (reason) => `Spostamento fallito: ${reason}`,
+		noEpicsYet:
+			"Definisci almeno un'epica nel backlog prima di creare una spec",
+		backlogUnreadable: "Il backlog non si è potuto leggere",
+		boardError: (reason) => `Errore: ${reason}`,
+		stepNotStartable: "Questo passo non si può avviare adesso",
+		loadFailed: (reason) => `Lettura fallita: ${reason}`,
+		saveFailed: (reason) => `Salvataggio fallito: ${reason}`,
+		specUpdated: (code) => `${code} aggiornata`,
+		planUpdated: (code) => `piano di ${code} aggiornato`,
+
+		// Attenzione sulle run
+		waitingCount: (n) => `${n} in attesa`,
+		waitingHint: "Vai alla run che aspetta una risposta",
+
+		// Piano: righe dei task
+		taskBodyPlaceholder: "Corpo del task in markdown…",
+		removeTask: "Rimuovi",
+
+		// Revisione
+		verdictApproved: "Approvata",
+		verdictChangesRequested: "Modifiche richieste",
+		verdictWhen: (when) => ` il ${when}`,
+		verdictFrom: (id) => ` — evidenze preparate dall'esecuzione ${id}`,
+		noDossier:
+			"Nessun dossier di revisione — avvia <em>Rivedi</em> perché il provider prepari le evidenze",
+		approveHint: "Accetta l'incremento e chiude la spec",
+		approveBlocked: (n) =>
+			`Il dossier riporta ${n} elemento/i bloccante/i: chiedi modifiche, oppure risolvili prima`,
+		unknownPath: "(sconosciuto)",
+		addComment: "Aggiungi un commento",
+		deleteComment: "Elimina il commento",
+		commentPlaceholder: "Lascia un commento…",
+		commentSave: "Commenta",
+		commentCancel: "Annulla",
+		commentsFirst: "Aggiungi prima almeno un commento",
+		requestChangesConfirm: (n, code) =>
+			`Convertire ${n} commento/i in task di fix e riportare ${code} a IN PROGRESS?`,
+		requestingChanges: "Richiesta delle modifiche in corso…",
+		changesRequested: (code, n) =>
+			`${code}: ${n} commento/i convertito/i in task di fix`,
+		failed: (reason) => `Fallito: ${reason}`,
+		approveConfirm: (code) =>
+			TEXT.approveConfirm(code),
+		approving: "Approvazione in corso…",
+		approvedIntegrated: (code) => `${code} approvata e integrata`,
+		approved: (code) => `${code} approvata`,
+		integrateConfirm: (code) =>
+			`Integrare il ramo di ${code} nel base, rimuovere il suo worktree e segnarla DONE?`,
+		integrating: "Integrazione in corso…",
+		integrated: (code) => `${code} integrata`,
+		deleteSpecConfirm: (label) =>
+			`Eliminare ${label}? La storia esce dal backlog locale e i suoi artefatti locali di piano e revisione vengono cancellati, se ci sono. Dal visore non si può annullare.`,
+		specDeleted: (code) => `${code} eliminata`,
+		deleteFailed: (reason) => `Eliminazione fallita: ${reason}`,
+
+		// Configurazione
+		configNotTested: "Non verificata in questa sessione.",
+		configPath: (path, exists) =>
+			`${path} · ${exists ? "presente" : "verrà creato al salvataggio"}`,
+		configPresent: "presente",
+		configMissing: "mancante",
+		configLoading: "Lettura in corso…",
+		configSaving: "Salvataggio in corso…",
+		configValidating: "Verifica in corso…",
+		configValidOk: (connector) =>
+			`Verifica riuscita · il connettore ${connector} è pronto.`,
+		configValidPlain: "Verifica riuscita.",
+		configValidDone: "Verifica completata",
+		configValidFailed: (reason) => `Verifica fallita: ${reason}`,
+		configSaved: "Configurazione salvata",
+		configBackup: (path) => `backup: ${path}`,
+		configRestartRequired: "serve riavviare",
+
+		// Provider di esecuzione
+		providerNotConfigured: "non configurato",
+		providerNoneUsable:
+			"Su questa macchina non c'è nessun provider di esecuzione utilizzabile.",
+		providerNoCapability: "nessuna capacità dichiarata",
+		providerRuntimeUnusable: "runtime non utilizzabile",
+		providerPickFirst: "Scegli prima un provider.",
+		providerRejected: (reason) => `Rifiutato: ${reason}`,
+		providerSaving: "Salvataggio in corso…",
+		providerSavedDefault: (id) => `${id} salvato come default del workspace.`,
+		providerSetToast: (id) => `Provider di esecuzione impostato su ${id}`,
+
+		// Pannello esecuzione
+		executionStatusUnavailable: (reason) =>
+			`Stato non disponibile: ${reason}. Riapri per controllare di nuovo.`,
+		executionSucceeded: (action) => `${action} riuscita`,
+		executionFailed: (action) => `${action} fallita`,
+		executionRunning: (action) => `${action} in corso`,
+		executionProvider: (id) => `provider ${id}`,
+		executionDirectory: (dir) => `directory ${dir}`,
+		executionCompleted: (stamp) => `conclusa ${stamp}`,
+		executionStarted: (stamp) => `avviata ${stamp}`,
+		executionModel: (model, options, inherited) =>
+			`modello ${model}${options}${inherited ? " (dal workspace)" : ""}`,
+		executionPayload: "Risultato del provider",
+
+		// Pannello run
+		runPanel: "Run remota",
+		runUnreadable: (reason) => `La run di questa esecuzione non si può leggere: ${reason}`,
+		runUnavailable: (reason) =>
+			`Run non disponibile: ${reason}. Riapri per seguirla di nuovo.`,
+		runClosedAt: (when) => `Il provider ha chiuso questa run alle ${when}.`,
+		runWindow:
+			"La parte più vecchia della storia è fuori dalla finestra che il visore conserva; il provider la tiene ancora.",
+		runDismissNotice: "Chiudi questo avviso",
+		runSeam: (id) => `ripresa da #${id}`,
+		runEventFallback: "evento",
+		runBadgeFallback: "run",
+		runCancel: "Annulla la run",
+		runCancelQuestion: "Fermare l'agente dov'è?",
+		runCancelYes: "Sì, annulla",
+		runCancelNo: "No",
+		runCancelConfirmed: (stamp) => `annullamento confermato · ${stamp}`,
+		runCancelConfirmedPlain: "annullamento confermato",
+		runCancelDelivered:
+			"annullamento inviato · si aspetta che la run dichiari il suo stato",
+		runApprovalPending: "Decisione in attesa",
+		runApprovalResolved: "Decisione risolta",
+		runApprovalTitle: "La run aspetta una decisione",
+		runAnsweredStillWaiting: (label) =>
+			`Risposto “${label}” — la run aspetta ancora su questa decisione.`,
+		runAnsweredTaken: (label) => `Risposto “${label}” — la run ha preso la decisione.`,
+		runComposerClosed: "Questa run è finita e non accetta altri messaggi",
+		runComposerPlaceholder: "Scrivi un messaggio all'agente…",
+		runComposerTerminal: "la run è terminale",
+		runComposerHint: "invio per inviare · maiusc+invio a capo",
+		runSend: "Invia",
+		runPending: "in attesa di conferma",
+
+		// Conversazione
+		conversationUnreadable: (reason) =>
+			`Questa conversazione non si può più leggere: ${reason}. Ricarica per seguirla di nuovo.`,
+
+		// Nuova spec
+		chooseEpic: "Scegli un'epica…",
+		assistedUnavailable: (reason) =>
+			`La creazione assistita non è disponibile: ${reason}`,
+		assistedNotOffered:
+			"Questo workspace non offre la creazione assistita.",
+		draftUnreadable:
+			"La run è finita senza una proposta leggibile. Scrivi la spec tu, oppure riprova.",
+		draftProposed:
+			"Proposta dall'agente — leggila, cambia quello che vuoi, poi conferma. Non è ancora stato scritto niente.",
+		draftEpicUnknown: (epic) =>
+			`L'agente ha proposto l'epica ${epic}, che questo workspace non dichiara: scegline una.`,
+		fieldsToFix: (n) =>
+			`${n} ${n === 1 ? "campo" : "campi"} da correggere · non è stato scritto niente`,
+		creating: "Creazione in corso…",
+		specExisted: (code) => `${code} esisteva già — non è stato creato niente`,
+		specCreated: (code) => `${code} creata`,
+		createFailed: (reason) => `Creazione fallita: ${reason}`,
+
+		// Workspace
+		workspaceOptionsUnreadable: (reason) =>
+			`Le opzioni di inizializzazione non si sono potute leggere: ${reason}`,
+		workspaceCreated: (dir) => `Workspace creato in ${dir}`,
+		workspaceOpening: (name) => `Apertura di ${name}…`,
+		workspaceOpenFailed: (reason) => `Apertura fallita: ${reason}`,
+		workspaceRemoveConfirm: (label) =>
+			`Rimuovere ${label} dai workspace conosciuti? La directory del workspace e i suoi file su disco non vengono toccati.`,
+		workspaceRemoved: "Rimosso dai workspace conosciuti",
+		workspaceRemoveFailed: (reason) => `Rimozione fallita: ${reason}`,
+		workspaceAdding: "Aggiunta in corso…",
+		workspaceAdded: (name) => `${name} aggiunto`,
+		workspaceAddFailed: (reason) => `Aggiunta fallita: ${reason}`,
+		workspaceFallbackName: "Workspace",
+
+		// PRD e mockup
+		prdLoadFailed: (reason) => `Lettura fallita: ${reason}`,
+		prdSaving: "Salvataggio in corso…",
+		prdSaved: "Salvato",
+		prdUpdated: "PRD aggiornato",
+		noMockups: "Nessun mockup dell'app",
+		mockupsSpecs: (n) => `Spec (${n})`,
+
+		// Bozze non confermate
+		discardDraft: "Ci sono modifiche non salvate. Scartare la bozza?",
+
+		// Board: stati di caricamento e vuoti
+		boardLoading: "Caricamento…",
+		boardNoBacklog:
+			"Nessun backlog ancora — esegui <code>archetipo init</code> per cominciare.",
+		reworkBadge: "In rework: le osservazioni della revisione aspettano di essere ripianificate",
+		branchTitle: "ramo git",
+
+		// Diff e revisione
+		diffLoading: "Caricamento del diff…",
+		diffError: (reason) => `Errore: ${reason}`,
+		diffEmpty: "Nessuna modifica in questo diff.",
+
+		// Azioni della spec
+		noActionAvailable: "In questo stato non è disponibile nessuna azione",
+		runAction: (label) => `Avvia ${label}`,
+
+		// Esecuzione: errori
+		providerGaveNoReason: "il provider non ha dato nessuna ragione",
+		executionExternalID: (id) => `id esterno ${id}`,
+
+		// Run: canale e coda
+		runTailWorking: "la run sta ancora lavorando",
+		runTimelineEmpty: "Su questa run non è ancora stato pubblicato niente.",
+		runLinkClosed: "canale chiuso",
+		runLinkOff: "non in ascolto",
+		runLinkOn: "in ascolto",
+		runLinkReconnecting: "riconnessione…",
+		runApprovalEyebrowResolved: "decisione risolta",
+		runApprovalEyebrowRequested: "decisione richiesta",
+
+		// Provider: elenco vuoto
+		providerNoneRegistered:
+			"In questa build non è registrato nessun provider di esecuzione.",
+
+		// Metriche
+		metricsPoints: "punti",
+		metricsSpecsDone: "spec concluse",
+		metricsInFlight: "in corso",
+		metricsEpics: "Epiche",
+		metricsFlow: "Flusso",
+		metricsAvgCycle: "tempo di ciclo medio",
+		metricsAvgLead: "tempo di attraversamento medio",
+		metricsMeasured: "spec misurate",
+		metricsAttention: "Attenzione",
+		metricsReworkRow: (code) =>
+			`${code} è tornata dalla revisione con delle osservazioni`,
+		metricsBlockedRow: (code, on) => `${code} aspetta ${on}`,
+		metricsEmpty: "Nel backlog non c'è ancora nessuna spec.",
+	};
+
 	// DOM element ids are kept with their original "story-" naming for HTML
 	// and CSS stability. The data model exposed by the API is "spec", which
 	// is reflected in variable names, payloads and envelope keys.
@@ -51,7 +319,10 @@
 	const planCancelBtn = document.getElementById("plan-cancel-btn");
 	const tasksTbody = document.getElementById("tasks-tbody");
 	const addTaskBtn = document.getElementById("add-task-btn");
+	const toastRegion = document.getElementById("toast-region");
 	const toast = document.getElementById("toast");
+	const toastMessage = document.getElementById("toast-message");
+	const toastDismiss = document.getElementById("toast-dismiss");
 	const prdBtn = document.getElementById("prd-btn");
 	const prdModal = document.getElementById("prd-modal");
 	const prdModalClose = document.getElementById("prd-modal-close");
@@ -187,7 +458,7 @@
 		document.documentElement.dataset.theme = next;
 		themeToggle.setAttribute(
 			"aria-label",
-			next === "dark" ? "Switch to light theme" : "Switch to dark theme",
+			next === "dark" ? TEXT.themeToLight : TEXT.themeToDark,
 		);
 		if (persist) {
 			try {
@@ -216,7 +487,7 @@
 		document.documentElement.dataset.density = next;
 		if (densityToggle) {
 			densityToggle.querySelector("[data-density-label]").textContent =
-				next === "compatta" ? "Comfortable density" : "Compact density";
+				next === "compatta" ? TEXT.densityComfortable : TEXT.densityCompact;
 		}
 		if (persist) {
 			try {
@@ -514,35 +785,32 @@
 	prdBtn.addEventListener("click", openPRD);
 	prdModalClose.addEventListener("click", closePRD);
 	prdModal.addEventListener("click", (e) => {
-		if (e.target === prdModal) closePRD();
+		if (e.target === prdModal && isTopModal(prdModal)) closePRD();
 	});
 	prdEditBtn.addEventListener("click", enterPrdEditMode);
 	prdCancelBtn.addEventListener("click", exitPrdEditMode);
 	prdForm.addEventListener("submit", onSavePRD);
 	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && !prdModal.classList.contains("hidden"))
-			closePRD();
+		if (e.key === "Escape" && isTopModal(prdModal)) closePRD();
 	});
 
 	metricsBtn.addEventListener("click", openMetrics);
 	metricsModalClose.addEventListener("click", closeMetrics);
 	metricsModal.addEventListener("click", (e) => {
-		if (e.target === metricsModal) closeMetrics();
+		if (e.target === metricsModal && isTopModal(metricsModal)) closeMetrics();
 	});
 	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && !metricsModal.classList.contains("hidden"))
-			closeMetrics();
+		if (e.key === "Escape" && isTopModal(metricsModal)) closeMetrics();
 	});
 
 	newSpecBtn.addEventListener("click", openNewSpec);
 	newSpecModalClose.addEventListener("click", closeNewSpec);
 	newSpecCancel.addEventListener("click", closeNewSpec);
 	newSpecModal.addEventListener("click", (e) => {
-		if (e.target === newSpecModal) closeNewSpec();
+		if (e.target === newSpecModal && isTopModal(newSpecModal)) closeNewSpec();
 	});
 	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && !newSpecModal.classList.contains("hidden"))
-			closeNewSpec();
+		if (e.key === "Escape" && isTopModal(newSpecModal)) closeNewSpec();
 	});
 	newSpecForm.addEventListener("submit", onCreateSpec);
 	specDraftModeManual.addEventListener("click", () => showSpecDraftMode(false));
@@ -552,11 +820,10 @@
 	newWorkspaceModalClose.addEventListener("click", closeNewWorkspace);
 	newWorkspaceCancel.addEventListener("click", closeNewWorkspace);
 	newWorkspaceModal.addEventListener("click", (e) => {
-		if (e.target === newWorkspaceModal) closeNewWorkspace();
+		if (e.target === newWorkspaceModal && isTopModal(newWorkspaceModal)) closeNewWorkspace();
 	});
 	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && !newWorkspaceModal.classList.contains("hidden"))
-			closeNewWorkspace();
+		if (e.key === "Escape" && isTopModal(newWorkspaceModal)) closeNewWorkspace();
 	});
 	newWorkspaceWorktreeEnabled.addEventListener("change", syncWorktreeFields);
 	newWorkspaceForm.addEventListener("submit", onCreateWorkspace);
@@ -569,11 +836,10 @@
 	workspaceIndicator.addEventListener("click", openWorkspaces);
 	workspacesModalClose.addEventListener("click", closeWorkspaces);
 	workspacesModal.addEventListener("click", (e) => {
-		if (e.target === workspacesModal) closeWorkspaces();
+		if (e.target === workspacesModal && isTopModal(workspacesModal)) closeWorkspaces();
 	});
 	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && !workspacesModal.classList.contains("hidden"))
-			closeWorkspaces();
+		if (e.key === "Escape" && isTopModal(workspacesModal)) closeWorkspaces();
 	});
 	workspacesAddForm.addEventListener("submit", onAddWorkspace);
 	// The modal and the home draw the same rows, so they are acted on by the
@@ -602,11 +868,10 @@
 	configValidateBtn.addEventListener("click", validateConfig);
 	configSaveBtn.addEventListener("click", saveConfig);
 	configModal.addEventListener("click", (e) => {
-		if (e.target === configModal) closeConfig();
+		if (e.target === configModal && isTopModal(configModal)) closeConfig();
 	});
 	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && !configModal.classList.contains("hidden"))
-			closeConfig();
+		if (e.key === "Escape" && isTopModal(configModal)) closeConfig();
 	});
 	configTabs.forEach((tab) =>
 		tab.addEventListener("click", () => activateConfigTab(tab.dataset.configTab)),
@@ -684,7 +949,7 @@
 			applyWorkspaceIdentity(null);
 			enterNoWorkspaceMode();
 			resetConversationState();
-			renderWorkspaceHomeView(null, `Load failed: ${err.message || err}`);
+			renderWorkspaceHomeView(null, TEXT.loadFailed(err.message || err));
 			return;
 		}
 		// Written once, before the fork, so the two branches cannot diverge on
@@ -899,7 +1164,7 @@
 		// it leaves the detail and puts the board back. It is named after what
 		// it reaches, in the module's own words.
 		if (layout.back) {
-			const label = `Back to ${layout.back.label}`;
+			const label = TEXT.backTo(layout.back.label);
 			modalClose.setAttribute("aria-label", label);
 			modalClose.setAttribute("title", label);
 		}
@@ -964,6 +1229,11 @@
 	let workspaceRunsTimer = null; // interval following the workspace's runs
 	let workspaceRunsBusy = false; // a poll is in flight: ticks never overlap
 	let workspaceRunsFailures = 0; // consecutive failed reads, for the give-up threshold
+	// L'ultimo markup scritto nella striscia. Serve a non riscrivere il pannello
+	// quando la passata di polling non ha cambiato nulla: dentro la striscia c'è
+	// un role="status" (la decisione in attesa), e reinserirlo identico ogni
+	// pochi secondi significherebbe riannunciarlo a ogni giro allo screen reader.
+	let workspaceRunsHTML = null;
 
 	function stopWorkspaceRunsPolling() {
 		if (workspaceRunsTimer === null) return;
@@ -979,6 +1249,7 @@
 		workspaceRunsBusy = false;
 		workspaceRunsFailures = 0;
 		if (workspaceRunsEl) workspaceRunsEl.innerHTML = "";
+		workspaceRunsHTML = null;
 		renderRunsAttention();
 	}
 
@@ -989,10 +1260,10 @@
 		if (!runsAttentionEl) return;
 		const waiting = WorkspaceRuns.awaitingCount(workspaceRunsView);
 		runsAttentionEl.classList.toggle("hidden", waiting === 0);
-		runsAttentionEl.textContent = waiting ? `${waiting} waiting` : "";
+		runsAttentionEl.textContent = waiting ? TEXT.waitingCount(waiting) : "";
 		runsAttentionEl.setAttribute(
 			"title",
-			waiting ? "Go to the run waiting for an answer" : "",
+			waiting ? TEXT.waitingHint : "",
 		);
 	}
 
@@ -1010,10 +1281,13 @@
 
 	function renderWorkspaceRunsPanel() {
 		if (!workspaceRunsEl) return;
-		workspaceRunsEl.innerHTML = WorkspaceRuns.renderWorkspaceRuns(
-			workspaceRunsView,
-			{ expanded: workspaceRunsExpanded },
-		);
+		const html = WorkspaceRuns.renderWorkspaceRuns(workspaceRunsView, {
+			expanded: workspaceRunsExpanded,
+		});
+		if (html !== workspaceRunsHTML) {
+			workspaceRunsHTML = html;
+			workspaceRunsEl.innerHTML = html;
+		}
 		renderRunsAttention();
 	}
 
@@ -1213,7 +1487,7 @@
 		// Inside .board-columns, like every other message the board shows: .board
 		// itself is only the stack of header and row, and carries no padding.
 		boardEl.innerHTML =
-			'<div class="board-columns"><div class="empty-board">Loading…</div></div>';
+			`<div class="board-columns"><div class="empty-board">${escapeHtml(TEXT.boardLoading)}</div></div>`;
 		try {
 			const view = await apiGet("/api/board");
 			renderBoard(view);
@@ -1226,12 +1500,12 @@
 			newSpecBtn.disabled = !hasEpics;
 			newSpecBtn.title = hasEpics
 				? ""
-				: "Define at least one epic in the backlog before creating a spec";
+				: TEXT.noEpicsYet;
 		} catch (err) {
 			// A board that could not be read cannot vouch for its epics either.
 			newSpecBtn.disabled = true;
-			newSpecBtn.title = "The backlog could not be read";
-			boardEl.innerHTML = `<div class="board-columns"><div class="empty-board">Error: ${escapeHtml(err.message || err)}</div></div>`;
+			newSpecBtn.title = TEXT.backlogUnreadable;
+			boardEl.innerHTML = `<div class="board-columns"><div class="empty-board">${escapeHtml(TEXT.boardError(err.message || err))}</div></div>`;
 		}
 	}
 
@@ -1316,7 +1590,7 @@
 		// offer unmounts nothing when a spec detail is the mounted context, and
 		// the workspace action would then be posted to the spec's own route.
 		if (panelContext !== expected || !panelStartURL) {
-			showToast("This step cannot be started right now", "err");
+			showToast(TEXT.stepNotStartable, "err");
 			return;
 		}
 		// The thread the step was pressed in travels with the start: a run asked
@@ -1356,12 +1630,12 @@
 	// backlog is a backlog with three zeros, not a board with no header —
 	// because renderBoard clears #board before drawing anything.
 	function boardStatsHeader() {
-		return `<header class="board-stats" id="board-stats" aria-live="polite">
-			<span class="stat"><span class="stat-num" id="stat-total">&mdash;</span><span class="stat-label">stories</span></span>
+		return `<header class="board-stats" id="board-stats">
+			<span class="stat"><span class="stat-num" id="stat-total">&mdash;</span><span class="stat-label">${TEXT.statStories}</span></span>
 			<span class="stat-sep">/</span>
-			<span class="stat"><span class="stat-num" id="stat-progress">&mdash;</span><span class="stat-label">in flight</span></span>
+			<span class="stat"><span class="stat-num" id="stat-progress">&mdash;</span><span class="stat-label">${TEXT.statInFlight}</span></span>
 			<span class="stat-sep">/</span>
-			<span class="stat"><span class="stat-num" id="stat-done">&mdash;</span><span class="stat-label">done</span></span>
+			<span class="stat"><span class="stat-num" id="stat-done">&mdash;</span><span class="stat-label">${TEXT.statDone}</span></span>
 		</header>`;
 	}
 
@@ -1378,7 +1652,7 @@
 			// empty backlog must still be able to say it is empty in numbers.
 			columnsEl.insertAdjacentHTML(
 				"beforeend",
-				'<div class="empty-board">No backlog yet — run <code>archetipo init</code> to begin.</div>',
+				`<div class="empty-board">${TEXT.boardNoBacklog}</div>`,
 			);
 			return;
 		}
@@ -1444,26 +1718,37 @@
 		el.className = "card";
 		if (spec.priority) el.classList.add("prio-" + spec.priority);
 		el.dataset.code = spec.code;
+		// La card è l'oggetto interattivo primario del prodotto: apre il
+		// dettaglio della spec. Finora lo faceva solo col puntatore. Il nome
+		// accessibile è dichiarato, e non lasciato al contenuto, perché dentro
+		// la card c'è anche il comando di cancellazione e la sua etichetta
+		// finirebbe nel nome di quello che si sta per aprire.
+		el.setAttribute("role", "button");
+		el.setAttribute("tabindex", "0");
+		el.setAttribute(
+			"aria-label",
+			`${spec.code}: ${spec.title || TEXT.untitled}`,
+		);
 		const epicCode = spec.epic && spec.epic.code ? spec.epic.code : "";
 		const epicTooltip =
 			spec.epic && spec.epic.title
 				? `${epicCode} — ${spec.epic.title}`
 				: epicCode;
 		el.innerHTML = `
-            <button type="button" class="card-delete-btn" title="Delete ${escapeHtml(spec.code)}" aria-label="Delete ${escapeHtml(spec.code)}">
+            <button type="button" class="card-delete-btn" title="${escapeHtml(TEXT.deleteSpec(spec.code))}" aria-label="${escapeHtml(TEXT.deleteSpec(spec.code))}">
                 <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 4.5h9" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M6 2.5h4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M5 4.5v8h6v-8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6.75 6.5v4.25M9.25 6.5v4.25" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
             </button>
             <div class="card-top">
                 <span class="card-code">${escapeHtml(spec.code)}</span>
-                ${spec.rework ? `<span class="rework-badge" title="In rework: review feedback waiting to be re-planned">⟲ rework</span>` : ""}
+                ${spec.rework ? `<span class="rework-badge" title="${escapeHtml(TEXT.reworkBadge)}">⟲ rework</span>` : ""}
                 ${spec.priority ? `<span class="priority-badge priority-${escapeHtml(spec.priority)}">${escapeHtml(spec.priority)}</span>` : ""}
             </div>
-            <div class="card-title">${escapeHtml(spec.title || "(untitled)")}</div>
+            <div class="card-title">${escapeHtml(spec.title || TEXT.untitled)}</div>
             <div class="card-meta">
                 <span class="card-epic" title="${escapeHtml(epicTooltip)}">${escapeHtml(epicCode)}</span>
                 <span class="card-points">${Number.isFinite(spec.points) ? spec.points + " pt" : ""}</span>
             </div>
-            ${spec.branch ? `<div class="card-branch" title="git branch">⎇ ${escapeHtml(spec.branch)}</div>` : ""}
+            ${spec.branch ? `<div class="card-branch" title="${escapeHtml(TEXT.branchTitle)}">⎇ ${escapeHtml(spec.branch)}</div>` : ""}
         `;
 		const deleteBtn = el.querySelector(".card-delete-btn");
 		const stopDeleteEvent = (event) => event.stopPropagation();
@@ -1475,6 +1760,14 @@
 			await confirmAndDeleteSpec(spec.code, spec.title);
 		});
 		el.addEventListener("click", () => openEditor(spec.code));
+		el.addEventListener("keydown", (event) => {
+			if (event.key !== "Enter" && event.key !== " ") return;
+			// Un tasto premuto dentro il comando di cancellazione è suo: la card
+			// non deve aprire il dettaglio della spec che si sta cancellando.
+			if (event.target !== el) return;
+			event.preventDefault();
+			openEditor(spec.code);
+		});
 		return el;
 	}
 
@@ -1482,7 +1775,7 @@
 		const e = document.createElement("div");
 		e.className = "empty-column";
 		e.textContent =
-			columnId === "done" ? "drop a Review card here to approve" : "no specs";
+			columnId === "done" ? TEXT.emptyDone : TEXT.emptyColumn;
 		return e;
 	}
 
@@ -1492,7 +1785,7 @@
 		const targetColumn =
 			evt.to && evt.to.dataset ? evt.to.dataset.columnId : "";
 		if (sourceColumn !== "review" || targetColumn !== "done") {
-			showToast("Only Review → Done drag-and-drop is allowed", "err");
+			showToast(TEXT.dragOnlyReviewToDone, "err");
 			// revert any accidental DOM change by restoring the last known good board.
 			if (boardSnapshot) {
 				renderBoard(boardSnapshot);
@@ -1504,6 +1797,21 @@
 		}
 
 		const code = evt.item.dataset.code;
+
+		// Un drop su Done è un'approvazione a tutti gli effetti: chiede la
+		// stessa conferma del bottone Approva, perché un trascinamento
+		// accidentale non deve poter chiudere una spec. Se la conferma non
+		// arriva, la card torna dov'era.
+		if (!confirmApproval(code)) {
+			if (boardSnapshot) {
+				renderBoard(boardSnapshot);
+				updateStats(boardSnapshot);
+			} else {
+				await loadBoard();
+			}
+			return;
+		}
+
 		// Determine anchor based on the card now next to the dragged item.
 		let anchor = {};
 		const cards = Array.from(evt.to.querySelectorAll(".card"));
@@ -1517,11 +1825,11 @@
 		}
 		try {
 			await apiPost("/api/board/move", { code, to: targetColumn, ...anchor });
-			showToast(`${code} approved and moved to ${targetColumn}`, "ok");
+			showToast(TEXT.movedToDone(code, targetColumn), "ok");
 			await loadBoard();
 			await loadWorkspaceStatus();
 		} catch (err) {
-			showToast(`Move failed: ${err.message || err}`, "err");
+			showToast(TEXT.moveFailed(err.message || err), "err");
 			// revert the optimistic DOM change by reloading the last known good board.
 			if (boardSnapshot) {
 				renderBoard(boardSnapshot);
@@ -1546,7 +1854,7 @@
 			modelChoice: storyModelChoice,
 			settle: settleSpecExecution,
 		});
-		modalTitle.textContent = `Spec ${code}`;
+		modalTitle.textContent = TEXT.specTitle(code);
 		// Choosing a spec is a selection made inside the view that is on screen,
 		// so the module's reducer says what comes next: the detail becomes the
 		// view of the primary column, and in a narrow window the overlay the
@@ -1586,7 +1894,7 @@
 			updateReviewTabVisibility(currentSpecSnapshot);
 			specStatus.textContent = "";
 		} catch (err) {
-			specStatus.textContent = `Load failed: ${err.message || err}`;
+			specStatus.textContent = TEXT.loadFailed(err.message || err);
 			specStatus.className = "status-msg err";
 		}
 	}
@@ -1610,7 +1918,7 @@
 			metaParts.push(`<span class="meta-chip">${escapeHtml(s.scope)}</span>`);
 		if (s.blocked_by && s.blocked_by.length)
 			metaParts.push(
-				`<span class="meta-chip blocked">blocked by ${escapeHtml(s.blocked_by.join(", "))}</span>`,
+				`<span class="meta-chip blocked">${escapeHtml(TEXT.blockedBy(s.blocked_by.join(", ")))}</span>`,
 			);
 		const mockup = findMockupForSpec(s.code);
 		if (mockup)
@@ -1618,12 +1926,12 @@
 				`<a class="meta-chip mockup-link" href="${escapeHtml(mockup.url)}" target="_blank" rel="noopener">↗ mockup</a>`,
 			);
 		specViewMeta.innerHTML = metaParts.join("");
-		specDeleteBtn.title = s.code ? `Delete ${s.code}` : "Delete story";
+		specDeleteBtn.title = s.code ? TEXT.deleteSpec(s.code) : TEXT.deleteStory;
 		specDeleteBtn.setAttribute(
 			"aria-label",
-			s.code ? `Delete ${s.code}` : "Delete story",
+			s.code ? TEXT.deleteSpec(s.code) : TEXT.deleteStory,
 		);
-		specBodyView.innerHTML = marked.parse(s.body || "*(no description)*");
+		specBodyView.innerHTML = marked.parse(s.body || TEXT.noDescription);
 	}
 
 	function findMockupForSpec(code) {
@@ -1687,7 +1995,7 @@
 	}
 
 	function fillPlanView(body, tasks) {
-		planBodyView.innerHTML = marked.parse(body || "*(no plan)*");
+		planBodyView.innerHTML = marked.parse(body || TEXT.noPlan);
 		planTasksView.innerHTML = "";
 		(tasks || []).forEach((t) => {
 			const tr = document.createElement("tr");
@@ -1741,7 +2049,7 @@
             <td><input type="text" class="task-id" value="${escapeHtml(t.id || "")}" /></td>
             <td>
                 <input type="text" class="task-title" value="${escapeHtml(t.title || "")}" />
-                <textarea class="task-desc" rows="2" placeholder="Task markdown body…">${escapeHtml(getTaskMarkdown(t))}</textarea>
+                <textarea class="task-desc" rows="2" placeholder="${escapeHtml(TEXT.taskBodyPlaceholder)}">${escapeHtml(getTaskMarkdown(t))}</textarea>
             </td>
             <td>
                 <select class="task-type">
@@ -1759,7 +2067,7 @@
                 </select>
             </td>
             <td><input type="text" class="task-deps" value="${escapeHtml((t.dependencies || []).join(", "))}" placeholder="TASK-01" /></td>
-            <td><button type="button" class="remove-task" aria-label="Remove">&times;</button></td>
+            <td><button type="button" class="remove-task" aria-label="${escapeHtml(TEXT.removeTask)}">&times;</button></td>
         `;
 		tr.querySelector(".task-type").value = t.type || "Impl";
 		tr.querySelector(".task-status").value = t.status || "TODO";
@@ -1798,13 +2106,13 @@
 			await apiPut(`/api/spec/${encodeURIComponent(currentSpecCode)}`, patch);
 			specStatus.textContent = "Saved";
 			specStatus.className = "status-msg ok";
-			showToast(`${currentSpecCode} updated`, "ok");
+			showToast(TEXT.specUpdated(currentSpecCode), "ok");
 			currentSpecSnapshot = { ...(currentSpecSnapshot || {}), ...patch };
 			fillSpecView(currentSpecSnapshot);
 			showSpecView();
 			await loadBoard();
 		} catch (err) {
-			specStatus.textContent = `Save failed: ${err.message || err}`;
+			specStatus.textContent = TEXT.saveFailed(err.message || err);
 			specStatus.className = "status-msg err";
 		}
 	}
@@ -1846,7 +2154,7 @@
 			);
 			planStatus.textContent = "Saved";
 			planStatus.className = "status-msg ok";
-			showToast(`${currentSpecCode} plan updated`, "ok");
+			showToast(TEXT.planUpdated(currentSpecCode), "ok");
 			currentPlanSnapshot = {
 				plan_body: payload.plan_body,
 				tasks: payload.tasks,
@@ -1854,7 +2162,7 @@
 			fillPlanView(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
 			showPlanView();
 		} catch (err) {
-			planStatus.textContent = `Save failed: ${err.message || err}`;
+			planStatus.textContent = TEXT.saveFailed(err.message || err);
 			planStatus.className = "status-msg err";
 		}
 	}
@@ -1900,12 +2208,253 @@
 		reviewTab.classList.add("hidden");
 	}
 
+	// ---- Toast ---------------------------------------------------------------
+	//
+	// Il toast è l'unico canale di feedback generale dell'app e veicola anche
+	// gli errori: deve essere annunciato dalle tecnologie assistive (role="status"
+	// sulla regione contenitrice, che resta sempre nel DOM), deve durare
+	// abbastanza da poter leggere il dettaglio del server, deve poter essere
+	// chiuso, e un secondo messaggio non deve cancellare il primo — si mette in
+	// coda e aspetta il suo turno.
+
+	/** Quanto resta a schermo un messaggio prima di lasciare il posto al successivo. */
+	const TOAST_DURATION = 4500;
+	/** Oltre questa soglia la coda smette di crescere: i messaggi più vecchi non letti si perdono. */
+	const TOAST_QUEUE_MAX = 4;
+
+	const toastQueue = [];
+	let toastTimer = null;
+	let toastShowing = false;
+
 	function showToast(msg, kind) {
-		toast.textContent = msg;
+		const text = typeof msg === "string" ? msg : String(msg ?? "");
+		if (!text) return;
+		// Un messaggio identico a quello in coda non viene ripetuto: durante un
+		// run gli stessi errori arrivano ravvicinati e la coda si riempirebbe di
+		// copie della stessa frase.
+		const last = toastQueue[toastQueue.length - 1];
+		if (last && last.text === text && last.kind === kind) return;
+		if (toastQueue.length >= TOAST_QUEUE_MAX) toastQueue.shift();
+		toastQueue.push({ text, kind });
+		if (!toastShowing) drainToastQueue();
+	}
+
+	function drainToastQueue() {
+		const next = toastQueue.shift();
+		if (!next) {
+			toastShowing = false;
+			hideToast();
+			return;
+		}
+		toastShowing = true;
+		toastMessage.textContent = next.text;
 		toast.classList.remove("hidden", "ok", "err", "warn");
-		if (kind) toast.classList.add(kind);
-		clearTimeout(showToast._t);
-		showToast._t = setTimeout(() => toast.classList.add("hidden"), 2200);
+		if (next.kind) toast.classList.add(next.kind);
+		clearTimeout(toastTimer);
+		toastTimer = setTimeout(drainToastQueue, TOAST_DURATION);
+	}
+
+	function hideToast() {
+		clearTimeout(toastTimer);
+		toastTimer = null;
+		toast.classList.add("hidden");
+		toastMessage.textContent = "";
+	}
+
+	/** Il dismiss esplicito chiude il messaggio corrente e passa subito al successivo. */
+	function dismissToast() {
+		clearTimeout(toastTimer);
+		toastTimer = null;
+		drainToastQueue();
+	}
+
+	toastDismiss.addEventListener("click", dismissToast);
+
+	// ---- Bozze non ancora confermate ----------------------------------------
+	//
+	// Le modali che ospitano un form o un editor ospitano lavoro: una spec
+	// scritta a mano o proposta dall'agente, una configurazione compilata campo
+	// per campo, un PRD riscritto. Esc e il click sul fondale sono gesti facili
+	// da fare per sbaglio e finora scartavano tutto senza chiedere nulla.
+	// Da qui in poi ogni modale con contenuto dichiara come si legge il proprio
+	// stato: se lo stato differisce da quello di partenza, la chiusura chiede
+	// conferma. Il submit in corso resta protetto a parte — è una cosa diversa,
+	// e non sostituisce questa.
+
+	/**
+	 * Crea la sentinella di una modale. `readState` restituisce una stringa che
+	 * riassume il contenuto corrente: due stringhe uguali sono due contenuti
+	 * indistinguibili per chi guarda, ed è l'unica cosa che serve sapere.
+	 */
+	function createDirtyGuard(readState) {
+		let baseline = null;
+		function current() {
+			try {
+				return readState();
+			} catch (_) {
+				// Uno stato illeggibile non deve poter bloccare una chiusura:
+				// meglio una modale che si chiude che una che non si chiude più.
+				return null;
+			}
+		}
+		return {
+			/** Fissa lo stato di partenza. Va chiamata quando la modale è pronta. */
+			arm() {
+				baseline = current();
+			},
+			/** Dimentica lo stato di partenza: dopo un salvataggio o una chiusura già decisa. */
+			disarm() {
+				baseline = null;
+			},
+			isDirty() {
+				if (baseline === null) return false;
+				const now = current();
+				return now !== null && now !== baseline;
+			},
+			/**
+			 * True quando la chiusura può procedere: o non c'è niente da perdere,
+			 * o chi guarda ha detto di procedere lo stesso.
+			 */
+			allowsClose() {
+				if (!this.isDirty()) return true;
+				return window.confirm(TEXT.discardDraft);
+			},
+		};
+	}
+
+	// ---- Modali: fuoco trattenuto e restituito ------------------------------
+	//
+	// aria-modal="true" è una promessa: finché la modale è aperta il resto della
+	// pagina non c'è. Finora era soltanto scritta — Tab usciva nella board
+	// dietro, e nessuno riportava il fuoco al comando che aveva aperto. Questa è
+	// l'unica implementazione della promessa e vale per tutte le modali: una
+	// pila, perché una modale può aprirne un'altra (la casa dei workspace apre
+	// la creazione), e in quel caso la sola che risponde è quella in cima.
+
+	const FOCUSABLE_SELECTOR = [
+		"a[href]",
+		"button:not([disabled])",
+		"input:not([disabled])",
+		"select:not([disabled])",
+		"textarea:not([disabled])",
+		'[tabindex]:not([tabindex="-1"])',
+	].join(",");
+
+	/** Gli elementi che possono davvero ricevere il fuoco dentro `root`, in ordine di Tab. */
+	function focusableWithin(root) {
+		return Array.from(root.querySelectorAll(FOCUSABLE_SELECTOR)).filter(
+			(el) =>
+				!el.closest(".hidden") &&
+				!el.hasAttribute("inert") &&
+				(el.offsetWidth > 0 ||
+					el.offsetHeight > 0 ||
+					el.getClientRects().length > 0),
+		);
+	}
+
+	/** Le modali aperte, dalla prima all'ultima. Solo l'ultima è viva. */
+	const openModals = [];
+
+	function topModal() {
+		return openModals.length ? openModals[openModals.length - 1] : null;
+	}
+
+	/** True quando `root` è la modale che deve rispondere a Esc e al fondale. */
+	function isTopModal(root) {
+		const top = topModal();
+		return !!top && top.root === root;
+	}
+
+	/**
+	 * Dichiara aperta una modale: sospende lo sfondo, ricorda a chi restituire
+	 * il fuoco e lo porta sul primo elemento utile. Va chiamata dopo aver tolto
+	 * `hidden`, altrimenti non c'è ancora niente su cui posare il fuoco.
+	 */
+	function enterModal(root, preferred) {
+		if (!root || openModals.some((entry) => entry.root === root)) return;
+		const opener =
+			document.activeElement instanceof HTMLElement
+				? document.activeElement
+				: null;
+		// Lo sfondo diventa inerte: non è raggiungibile da Tab, dal puntatore né
+		// dalle tecnologie assistive. La regione del toast resta fuori, perché
+		// il feedback deve poter essere annunciato anche sopra una modale.
+		const suspended = Array.from(document.body.children).filter(
+			(el) => el !== root && el !== toastRegion && !el.hasAttribute("inert"),
+		);
+		suspended.forEach((el) => el.setAttribute("inert", ""));
+		openModals.push({ root, opener, suspended });
+		const target =
+			(preferred && !preferred.disabled && preferred) ||
+			focusableWithin(root)[0] ||
+			null;
+		if (target) target.focus();
+	}
+
+	/** Dichiara chiusa una modale: rende di nuovo vivo lo sfondo e restituisce il fuoco. */
+	function leaveModal(root) {
+		const index = openModals.findIndex((entry) => entry.root === root);
+		if (index === -1) return;
+		const [entry] = openModals.splice(index, 1);
+		entry.suspended.forEach((el) => el.removeAttribute("inert"));
+		// Il fuoco torna dov'era solo se quel comando esiste ancora ed è
+		// raggiungibile: dopo un'azione che ha ridisegnato la pagina può non
+		// esserci più, e insistere lo manderebbe nel vuoto.
+		const opener = entry.opener;
+		if (opener && opener.isConnected && !opener.closest("[inert]")) {
+			opener.focus();
+		}
+	}
+
+	// Tab e Maiusc+Tab girano dentro la modale in cima. In cattura, così nessun
+	// gestore di campo può portarsi via il tasto prima.
+	document.addEventListener(
+		"keydown",
+		(e) => {
+			if (e.key !== "Tab") return;
+			const top = topModal();
+			if (!top) return;
+			const items = focusableWithin(top.root);
+			if (items.length === 0) {
+				// Una modale senza niente da mettere a fuoco trattiene comunque:
+				// uscire da qui sarebbe uscire dietro a uno schermo inerte.
+				e.preventDefault();
+				return;
+			}
+			const first = items[0];
+			const last = items[items.length - 1];
+			const active = document.activeElement;
+			if (!top.root.contains(active)) {
+				e.preventDefault();
+				(e.shiftKey ? last : first).focus();
+				return;
+			}
+			if (e.shiftKey && active === first) {
+				e.preventDefault();
+				last.focus();
+			} else if (!e.shiftKey && active === last) {
+				e.preventDefault();
+				first.focus();
+			}
+		},
+		true,
+	);
+
+	/** Lo stato di un form come stringa: nomi e valori nell'ordine dei campi. */
+	function formState(form) {
+		if (!form) return "";
+		const parts = [];
+		Array.from(form.elements).forEach((el) => {
+			if (!el.name) return;
+			const type = el.type || "";
+			if (type === "submit" || type === "button" || type === "file") return;
+			if (type === "checkbox" || type === "radio") {
+				parts.push(`${el.name}:${el.checked ? el.value || "on" : ""}`);
+				return;
+			}
+			parts.push(`${el.name}:${el.value}`);
+		});
+		return parts.join(" ");
 	}
 
 	// ---- Review (diff + inline comments) -----------------------------------
@@ -1922,7 +2471,7 @@
 		reviewLoaded = true;
 		reviewStatus.textContent = "";
 		reviewStatus.className = "status-msg";
-		reviewDiff.innerHTML = '<div class="review-empty">Loading diff…</div>';
+		reviewDiff.innerHTML = `<div class="review-empty">${escapeHtml(TEXT.diffLoading)}</div>`;
 		try {
 			const [diff, review] = await Promise.all([
 				apiGet(`/api/spec/${encodeURIComponent(currentSpecCode)}/diff`),
@@ -1934,7 +2483,7 @@
 			renderDiff(diff);
 		} catch (err) {
 			reviewLoaded = false;
-			reviewDiff.innerHTML = `<div class="review-empty">Error: ${escapeHtml(err.message || err)}</div>`;
+			reviewDiff.innerHTML = `<div class="review-empty">${escapeHtml(TEXT.diffError(err.message || err))}</div>`;
 		}
 	}
 
@@ -1964,12 +2513,14 @@
 		const parts = [];
 		if (verdict) {
 			const decided =
-				verdict.decision === "approved" ? "Approved" : "Changes requested";
+				verdict.decision === "approved"
+					? TEXT.verdictApproved
+					: TEXT.verdictChangesRequested;
 			const when = verdict.decided_at
-				? ` on ${escapeHtml(verdict.decided_at)}`
+				? escapeHtml(TEXT.verdictWhen(verdict.decided_at))
 				: "";
 			const from = verdict.execution_id
-				? ` — evidence prepared by execution ${escapeHtml(verdict.execution_id)}`
+				? escapeHtml(TEXT.verdictFrom(verdict.execution_id))
 				: "";
 			parts.push(
 				`<div class="review-verdict">${decided}${when}${from}</div>`,
@@ -1977,11 +2528,11 @@
 		}
 		if (!dossier) {
 			parts.push(
-				'<div class="review-empty">No review dossier yet — run <em>Rivedi</em> to have the provider prepare the evidence</div>',
+				`<div class="review-empty">${TEXT.noDossier}</div>`,
 			);
 			reviewDossier.innerHTML = parts.join("");
 			reviewApproveBtn.disabled = false;
-			reviewApproveBtn.title = "Accept the increment and close the spec";
+			reviewApproveBtn.title = TEXT.approveHint;
 			return;
 		}
 		const head = [];
@@ -2027,8 +2578,8 @@
 		reviewApproveBtn.disabled = blockers.length > 0;
 		reviewApproveBtn.title =
 			blockers.length > 0
-				? `The dossier reports ${blockers.length} blocker(s): request changes, or clear them first`
-				: "Accept the increment and close the spec";
+				? TEXT.approveBlocked(blockers.length)
+				: TEXT.approveHint;
 	}
 
 	function renderDiff(diff) {
@@ -2036,7 +2587,7 @@
 		const files = diff.files || [];
 		if (files.length === 0) {
 			reviewDiff.innerHTML =
-				'<div class="review-empty">No changes in this diff.</div>';
+				`<div class="review-empty">${escapeHtml(TEXT.diffEmpty)}</div>`;
 			return;
 		}
 		files.forEach((file) => reviewDiff.appendChild(renderFileDiff(file)));
@@ -2044,7 +2595,7 @@
 	}
 
 	function renderFileDiff(file) {
-		const path = file.new_path || file.old_path || "(unknown)";
+		const path = file.new_path || file.old_path || TEXT.unknownPath;
 		const wrap = document.createElement("div");
 		wrap.className = "diff-file";
 		const header = document.createElement("div");
@@ -2076,7 +2627,7 @@
 		row.innerHTML = `
             <span class="diff-gutter old">${line.old_line > 0 ? line.old_line : ""}</span>
             <span class="diff-gutter new">${line.new_line > 0 ? line.new_line : ""}</span>
-            <span class="diff-comment-add" title="Add comment">+</span>
+            <span class="diff-comment-add" title="${escapeHtml(TEXT.addComment)}">+</span>
             <span class="diff-sign">${sign}</span>
             <span class="diff-code">${escapeHtml(line.text)}</span>
         `;
@@ -2109,7 +2660,7 @@
 		block.className = "diff-comment-block";
 		block.innerHTML = `
             <div class="diff-comment-body">${escapeHtml(comment.body)}</div>
-            <button type="button" class="diff-comment-del" aria-label="Delete comment">&times;</button>
+            <button type="button" class="diff-comment-del" aria-label="${escapeHtml(TEXT.deleteComment)}">&times;</button>
         `;
 		block
 			.querySelector(".diff-comment-del")
@@ -2127,10 +2678,10 @@
 		const box = document.createElement("div");
 		box.className = "diff-comment-block diff-composer";
 		box.innerHTML = `
-            <textarea class="diff-comment-input" rows="3" placeholder="Leave a comment…"></textarea>
+            <textarea class="diff-comment-input" rows="3" placeholder="${escapeHtml(TEXT.commentPlaceholder)}"></textarea>
             <div class="diff-composer-actions">
-                <button type="button" class="primary-btn diff-comment-save">Comment</button>
-                <button type="button" class="ghost-btn diff-comment-cancel">Cancel</button>
+                <button type="button" class="primary-btn diff-comment-save">${escapeHtml(TEXT.commentSave)}</button>
+                <button type="button" class="ghost-btn diff-comment-cancel">${escapeHtml(TEXT.commentCancel)}</button>
             </div>
         `;
 		box
@@ -2199,7 +2750,7 @@
 				comments: reviewComments,
 			});
 		} catch (err) {
-			showToast(`Save failed: ${err.message || err}`, "err");
+			showToast(TEXT.saveFailed(err.message || err), "err");
 		}
 	}
 
@@ -2207,12 +2758,12 @@
 		if (!code) return false;
 		const label = title ? `${code} — ${title}` : code;
 		const confirmed = window.confirm(
-			`Delete ${label}? This removes the story from the local backlog and deletes its local plan/review artifacts if present. This cannot be undone from the viewer.`,
+			TEXT.deleteSpecConfirm(label),
 		);
 		if (!confirmed) return false;
 		try {
 			await apiDelete(`/api/spec/${encodeURIComponent(code)}`);
-			showToast(`${code} deleted`, "ok");
+			showToast(TEXT.specDeleted(code), "ok");
 			if (currentSpecCode === code) {
 				closeModal();
 			}
@@ -2220,7 +2771,7 @@
 			await loadWorkspaceStatus();
 			return true;
 		} catch (err) {
-			showToast(`Delete failed: ${err.message || err}`, "err");
+			showToast(TEXT.deleteFailed(err.message || err), "err");
 			return false;
 		}
 	}
@@ -2228,16 +2779,16 @@
 	async function onRequestChanges() {
 		if (!currentSpecCode) return;
 		if (reviewComments.length === 0) {
-			showToast("Add at least one comment first", "err");
+			showToast(TEXT.commentsFirst, "err");
 			return;
 		}
 		if (
 			!window.confirm(
-				`Convert ${reviewComments.length} comment(s) into Fix tasks and send ${currentSpecCode} back to IN PROGRESS?`,
+				TEXT.requestChangesConfirm(reviewComments.length, currentSpecCode),
 			)
 		)
 			return;
-		reviewStatus.textContent = "Requesting changes…";
+		reviewStatus.textContent = TEXT.requestingChanges;
 		reviewStatus.className = "status-msg";
 		try {
 			const res = await apiPost(
@@ -2245,26 +2796,32 @@
 				{},
 			);
 			showToast(
-				`${currentSpecCode}: ${res.comments_moved} comment(s) converted into fix tasks`,
+				TEXT.changesRequested(currentSpecCode, res.comments_moved),
 				"ok",
 			);
 			closeModal();
 			await loadBoard();
 		} catch (err) {
-			reviewStatus.textContent = `Failed: ${err.message || err}`;
+			reviewStatus.textContent = TEXT.failed(err.message || err);
 			reviewStatus.className = "status-msg err";
 		}
 	}
 
+	// L'approvazione si può chiedere da due strade — il bottone Approva e il
+	// trascinamento di una card da Review a Done — ma è la stessa azione
+	// irreversibile, quindi deve fare la stessa domanda. La domanda sta scritta
+	// qui una volta sola: due formulazioni diverse sarebbero due promesse
+	// diverse sullo stesso effetto.
+	function confirmApproval(code) {
+		return window.confirm(
+			TEXT.approveConfirm(code),
+		);
+	}
+
 	async function onApprove() {
 		if (!currentSpecCode) return;
-		if (
-			!window.confirm(
-				`Approve ${currentSpecCode}? This accepts the increment and closes the spec.`,
-			)
-		)
-			return;
-		reviewStatus.textContent = "Approving…";
+		if (!confirmApproval(currentSpecCode)) return;
+		reviewStatus.textContent = TEXT.approving;
 		reviewStatus.className = "status-msg";
 		try {
 			const res = await apiPost(
@@ -2273,14 +2830,14 @@
 			);
 			showToast(
 				res.integrated
-					? `${currentSpecCode} approved and integrated`
-					: `${currentSpecCode} approved`,
+					? TEXT.approvedIntegrated(currentSpecCode)
+					: TEXT.approved(currentSpecCode),
 				"ok",
 			);
 			closeModal();
 			await loadBoard();
 		} catch (err) {
-			reviewStatus.textContent = `Failed: ${err.message || err}`;
+			reviewStatus.textContent = TEXT.failed(err.message || err);
 			reviewStatus.className = "status-msg err";
 		}
 	}
@@ -2289,22 +2846,22 @@
 		if (!currentSpecCode) return;
 		if (
 			!window.confirm(
-				`Merge ${currentSpecCode}'s branch into base, remove its worktree and mark it DONE?`,
+				TEXT.integrateConfirm(currentSpecCode),
 			)
 		)
 			return;
-		reviewStatus.textContent = "Integrating…";
+		reviewStatus.textContent = TEXT.integrating;
 		reviewStatus.className = "status-msg";
 		try {
 			await apiPost(
 				`/api/spec/${encodeURIComponent(currentSpecCode)}/integrate`,
 				{},
 			);
-			showToast(`${currentSpecCode} integrated`, "ok");
+			showToast(TEXT.integrated(currentSpecCode), "ok");
 			closeModal();
 			await loadBoard();
 		} catch (err) {
-			reviewStatus.textContent = `Failed: ${err.message || err}`;
+			reviewStatus.textContent = TEXT.failed(err.message || err);
 			reviewStatus.className = "status-msg err";
 		}
 	}
@@ -2357,7 +2914,7 @@
 	}
 
 	function setConfigValidation(message, kind) {
-		configValidation.textContent = message || "Not tested in this session.";
+		configValidation.textContent = message || TEXT.configNotTested;
 		configValidation.className = "config-validation";
 		if (kind) configValidation.classList.add(kind);
 	}
@@ -2554,9 +3111,10 @@
 
 	async function openConfig() {
 		configModal.classList.remove("hidden");
+		enterModal(configModal);
 		activateConfigTab(activeConfigTab);
-		setConfigStatus("Loading...", null);
-		setConfigValidation("Not tested in this session.", null);
+		setConfigStatus(TEXT.configLoading, null);
+		setConfigValidation(TEXT.configNotTested, null);
 		configRestartNotice.classList.add("hidden");
 		setExecutionStatus("", null);
 		await Promise.all([loadConfig(), loadExecutionProviders()]);
@@ -2605,7 +3163,7 @@
 			updateProviderSummary();
 			if (!selected && executionProviders.length) {
 				setExecutionStatus(
-					"No execution provider is usable on this machine.",
+					TEXT.providerNoneUsable,
 					"err",
 				);
 			} else {
@@ -2615,25 +3173,25 @@
 			executionProviders = [];
 			executionDefault = null;
 			renderProviderGrid();
-			setExecutionStatus(`Load failed: ${err.message || err}`, "err");
+			setExecutionStatus(TEXT.loadFailed(err.message || err), "err");
 		}
 	}
 
 	function renderProviderGrid() {
 		if (!executionProviders.length) {
 			executionProviderGrid.innerHTML =
-				'<p class="config-copy">No execution provider is registered in this build.</p>';
+				`<p class="config-copy">${escapeHtml(TEXT.providerNoneRegistered)}</p>`;
 			executionFields.innerHTML = "";
 			return;
 		}
 		executionProviderGrid.innerHTML = executionProviders
 			.map((p) => {
-				const caps = (p.capabilities || []).join(", ") || "no capability declared";
+				const caps = (p.capabilities || []).join(", ") || TEXT.providerNoCapability;
 				// `available` is a server verdict: the panel only renders it. An
 				// unusable provider stays visible — with its reason — but cannot be
 				// picked, so nobody saves a default that could never run.
 				const unavailable = p.available === false;
-				const reason = p.unavailable_reason || "runtime not usable";
+				const reason = p.unavailable_reason || TEXT.providerRuntimeUnusable;
 				const cls = unavailable
 					? "config-connector-card unavailable"
 					: "config-connector-card";
@@ -2750,13 +3308,13 @@
 	function updateProviderSummary() {
 		configSummaryProvider.textContent = executionDefault
 			? executionDefault.id
-			: "not configured";
+			: TEXT.providerNotConfigured;
 	}
 
 	async function saveExecutionProvider() {
 		const id = selectedProviderID();
 		if (!id) {
-			setExecutionStatus("Select a provider first.", "err");
+			setExecutionStatus(TEXT.providerPickFirst, "err");
 			return;
 		}
 		const provider = findProvider(id);
@@ -2765,13 +3323,15 @@
 		// user a round trip that could not succeed.
 		if (provider.available === false) {
 			setExecutionStatus(
-				`Rejected: ${provider.unavailable_reason || "runtime not usable"}`,
+				TEXT.providerRejected(
+					provider.unavailable_reason || TEXT.providerRuntimeUnusable,
+				),
 				"err",
 			);
 			return;
 		}
 		markProviderFieldError("");
-		setExecutionStatus("Saving…", null);
+		setExecutionStatus(TEXT.providerSaving, null);
 		try {
 			await apiPut("/api/execution/provider/default", {
 				id,
@@ -2780,11 +3340,11 @@
 			// Reload from the server instead of trusting the local form: what the
 			// panel shows is then exactly what was persisted.
 			await loadExecutionProviders();
-			setExecutionStatus(`${id} saved as workspace default.`, "ok");
-			showToast(`Execution provider set to ${id}`, "ok");
+			setExecutionStatus(TEXT.providerSavedDefault(id), "ok");
+			showToast(TEXT.providerSetToast(id), "ok");
 		} catch (err) {
 			markProviderFieldError(err.field || "");
-			setExecutionStatus(`Rejected: ${err.message || err}`, "err");
+			setExecutionStatus(TEXT.providerRejected(err.message || err), "err");
 		}
 	}
 
@@ -2970,7 +3530,7 @@
 		if (!panelActions) return;
 		if (!list.length) {
 			panelActions.innerHTML =
-				'<span class="story-actions-empty">No action is available in this status</span>';
+				`<span class="story-actions-empty">${escapeHtml(TEXT.noActionAvailable)}</span>`;
 			return;
 		}
 		panelActions.innerHTML = list.map(renderSpecActionChip).join("");
@@ -2985,7 +3545,7 @@
 		const id = escapeHtml(action.id);
 		const body = `<span class="action-chip-label">${label}</span><code class="action-chip-id">${id}</code>`;
 		if (action.runnable) {
-			return `<button type="button" class="action-chip action-chip-run" data-action-id="${id}" title="Run ${label}">${body}</button>`;
+			return `<button type="button" class="action-chip action-chip-run" data-action-id="${id}" title="${escapeHtml(TEXT.runAction(action.label || action.id))}">${body}</button>`;
 		}
 		const unlock = action.unlocked_by || action.unavailable_reason || "";
 		if (!unlock) {
@@ -3121,7 +3681,7 @@
 				stopExecutionPolling();
 				renderExecution(
 					lastExecutionRecord,
-					`Status unavailable: ${err.message || err}. Reopen to check again.`,
+					TEXT.executionStatusUnavailable(err.message || err),
 				);
 				return;
 			}
@@ -3154,27 +3714,31 @@
 		const action = escapeHtml(record.action || "");
 		const headline =
 			state === "ok"
-				? `${action} succeeded`
+				? TEXT.executionSucceeded(action)
 				: state === "err"
-					? `${action} failed`
-					: `${action} is running`;
+					? TEXT.executionFailed(action)
+					: TEXT.executionRunning(action);
 		const lines = [];
 		if (record.provider_id) {
-			lines.push(`provider ${escapeHtml(record.provider_id)}`);
+			lines.push(escapeHtml(TEXT.executionProvider(record.provider_id)));
 		}
 		// The directory this run is executing in, read from the record and from
 		// nothing else: an old run has to keep naming the directory it really ran
 		// in, not the workspace that happens to be open while it is being read.
 		// A record written before the field existed leaves the line as it was.
 		if (typeof record.working_dir === "string" && record.working_dir) {
-			lines.push(`directory ${escapeHtml(record.working_dir)}`);
+			lines.push(escapeHtml(TEXT.executionDirectory(record.working_dir)));
 		}
 		const modelLine = formatExecutionModel(record.model_choice);
 		if (modelLine) lines.push(modelLine);
 		const stamp = formatExecutionTime(record.completed_at || record.created_at);
 		if (stamp) {
 			lines.push(
-				`${isExecutionTerminal(record) ? "completed" : "started"} ${escapeHtml(stamp)}`,
+				escapeHtml(
+					isExecutionTerminal(record)
+						? TEXT.executionCompleted(stamp)
+						: TEXT.executionStarted(stamp),
+				),
 			);
 		}
 		const blocks = [];
@@ -3186,11 +3750,11 @@
 				? `<code class="execution-code">${escapeHtml(record.error.code)}</code>`
 				: "";
 			blocks.push(
-				`<div class="execution-message">${code}<span>${escapeHtml(record.error.message || "the provider gave no reason")}</span></div>`,
+				`<div class="execution-message">${code}<span>${escapeHtml(record.error.message || TEXT.providerGaveNoReason)}</span></div>`,
 			);
 			if (record.error.external_id) {
 				blocks.push(
-					`<div class="execution-meta">external id ${escapeHtml(record.error.external_id)}</div>`,
+					`<div class="execution-meta">${escapeHtml(TEXT.executionExternalID(record.error.external_id))}</div>`,
 				);
 			}
 		}
@@ -3203,7 +3767,7 @@
 			const payload = formatExecutionPayload(record.result.payload);
 			if (payload) {
 				blocks.push(
-					`<details class="execution-payload"><summary>Provider result</summary><pre>${escapeHtml(payload)}</pre></details>`,
+					`<details class="execution-payload"><summary>${escapeHtml(TEXT.executionPayload)}</summary><pre>${escapeHtml(payload)}</pre></details>`,
 				);
 			}
 		}
@@ -3232,9 +3796,12 @@
 		const parts = Object.keys(options)
 			.sort()
 			.map((key) => `${escapeHtml(key)}=${escapeHtml(String(options[key]))}`);
-		const suffix = choice.source === "workspace" ? " (from the workspace)" : "";
 		const rendered = parts.length ? ` ${parts.join(", ")}` : "";
-		return `model ${escapeHtml(model)}${rendered}${suffix}`;
+		return TEXT.executionModel(
+			escapeHtml(model),
+			rendered,
+			choice.source === "workspace",
+		);
 	}
 
 	function formatExecutionTime(value) {
@@ -3278,13 +3845,13 @@
 	// row instead of disappearing — and it takes the `ev-unknown` variant, which
 	// is drawn as explicitly uninterpreted rather than disguised as agent text.
 	const RUN_EVENT_KINDS = {
-		text: { label: "agent", variant: "ev-assistant" },
-		thinking: { label: "thinking", variant: "ev-thinking" },
-		user_message: { label: "you", variant: "ev-user" },
-		tool_start: { label: "tool · start", variant: "ev-tool-start" },
-		tool_end: { label: "tool · done", variant: "ev-tool-end" },
-		tool_error: { label: "tool · error", variant: "ev-tool-error" },
-		turn_end: { label: "turn end", variant: "ev-turn-end" },
+		text: { label: "agente", variant: "ev-assistant" },
+		thinking: { label: "ragionamento", variant: "ev-thinking" },
+		user_message: { label: "tu", variant: "ev-user" },
+		tool_start: { label: "strumento · avvio", variant: "ev-tool-start" },
+		tool_end: { label: "strumento · fatto", variant: "ev-tool-end" },
+		tool_error: { label: "strumento · errore", variant: "ev-tool-error" },
+		turn_end: { label: "fine turno", variant: "ev-turn-end" },
 	};
 
 	// The wire carries three states today. CANCELLED is listed because the
@@ -3292,10 +3859,10 @@
 	// its own panel instead of the neutral fallback — nothing local ever picks
 	// a row here.
 	const RUN_STATE_LABELS = {
-		ACTIVE: "active",
-		CLOSED: "closed",
-		CRASHED: "ended badly",
-		CANCELLED: "cancelled",
+		ACTIVE: "attiva",
+		CLOSED: "chiusa",
+		CRASHED: "conclusa male",
+		CANCELLED: "annullata",
 	};
 
 	// The panel variant drives the whole colour scheme of the card, so it is
@@ -3371,7 +3938,7 @@
 		} catch (err) {
 			if (panelContext !== ctx) return;
 			if (err.status === 409 || err.code === "E_CONFLICT") return;
-			runNotice = `The run of this execution cannot be read: ${err.message || err}`;
+			runNotice = TEXT.runUnreadable(err.message || err);
 			renderRun();
 			return;
 		}
@@ -3426,7 +3993,7 @@
 					// Nothing is reconnecting any more, so the panel must stop
 					// saying that it is.
 					runPollAbandoned = true;
-					runNotice = `Run unavailable: ${err.message || err}. Reopen to follow it again.`;
+					runNotice = TEXT.runUnavailable(err.message || err);
 				}
 				renderRun();
 				return;
@@ -3563,8 +4130,8 @@
 				(item) => item && item.id === approvalID,
 			);
 			runOutcome = stillPending
-				? `Answered “${label}” — the run is still waiting on this approval.`
-				: `Answered “${label}” — the run took the decision.`;
+				? TEXT.runAnsweredStillWaiting(label)
+				: TEXT.runAnsweredTaken(label);
 			// The resolved card keeps the decision readable once the provider
 			// stops listing it as pending. It shows the provider's own options,
 			// verbatim and disabled, with the answered one marked.
@@ -3700,7 +4267,7 @@
 				renderRunNotice(
 					"info",
 					"ended",
-					`The provider closed this run at ${closedAt}.`,
+					TEXT.runClosedAt(closedAt),
 					"ended",
 				),
 			);
@@ -3710,7 +4277,7 @@
 				renderRunNotice(
 					"info",
 					"window",
-					"Older history is beyond the window this viewer keeps; the provider still holds it.",
+					TEXT.runWindow,
 					"window",
 				),
 			);
@@ -3720,7 +4287,7 @@
 		// server reported and from its connection flag, never from a local guess.
 		if (runSnapshot.state === "ACTIVE" && runConnected && runEvents.length) {
 			blocks.push(
-				'<div class="run-tail"><span class="run-tail-dots" aria-hidden="true"><span></span><span></span><span></span></span>the run is still working</div>',
+				'<div class="run-tail"><span class="run-tail-dots" aria-hidden="true"><span></span><span></span><span></span></span>${escapeHtml(TEXT.runTailWorking)}</div>',
 			);
 		}
 		blocks.push(
@@ -3731,9 +4298,9 @@
 		}
 		blocks.push(renderRunComposer());
 
-		panelRun.innerHTML = `<section class="run-panel ${variant}" aria-label="Remote run">
+		panelRun.innerHTML = `<section class="run-panel ${variant}" aria-label="${escapeHtml(TEXT.runPanel)}">
 			<div class="run-head">
-				<span class="run-badge">${escapeHtml(RUN_STATE_LABELS[runSnapshot.state] || "run")}</span>
+				<span class="run-badge">${escapeHtml(RUN_STATE_LABELS[runSnapshot.state] || TEXT.runBadgeFallback)}</span>
 				<code class="run-id">${escapeHtml(runSnapshot.run_id || "")}</code>
 				<span class="run-head-spacer"></span>
 				${renderRunLink()}
@@ -3770,7 +4337,7 @@
 	function renderRunNotice(tone, mark, body, dismiss) {
 		if (dismiss && runDismissedNotices[dismiss] === true) return "";
 		const close = dismiss
-			? `<button type="button" class="run-notice-dismiss" data-notice-dismiss="${escapeHtml(dismiss)}" title="Dismiss this notice" aria-label="Dismiss this notice">✕</button>`
+			? `<button type="button" class="run-notice-dismiss" data-notice-dismiss="${escapeHtml(dismiss)}" title="${escapeHtml(TEXT.runDismissNotice)}" aria-label="${escapeHtml(TEXT.runDismissNotice)}">✕</button>`
 			: "";
 		return `<div class="run-notice ${tone}"${tone === "refused" ? ' role="alert"' : ""}>
 			<span class="run-notice-mark">${escapeHtml(mark)}</span>
@@ -3803,15 +4370,15 @@
 	function renderRunLink() {
 		const mark = '<span class="run-link-mark" aria-hidden="true"></span>';
 		if (runSnapshot && runSnapshot.state !== "ACTIVE") {
-			return `<span class="run-link offline">${mark}channel closed</span>`;
+			return `<span class="run-link offline">${mark}${escapeHtml(TEXT.runLinkClosed)}</span>`;
 		}
 		if (runPollAbandoned) {
-			return `<span class="run-link offline">${mark}not following</span>`;
+			return `<span class="run-link offline">${mark}${escapeHtml(TEXT.runLinkOff)}</span>`;
 		}
 		if (runConnected) {
-			return `<span class="run-link listening">${mark}following</span>`;
+			return `<span class="run-link listening">${mark}${escapeHtml(TEXT.runLinkOn)}</span>`;
 		}
-		return `<span class="run-link reconnecting">${mark}reconnecting…</span>`;
+		return `<span class="run-link reconnecting">${mark}${escapeHtml(TEXT.runLinkReconnecting)}</span>`;
 	}
 
 	// The cancel control exists only while the run is active. A run that has
@@ -3829,23 +4396,25 @@
 			// The same instant as the "ended" notice, so it is formatted the same
 			// way: one panel must not show one moment in two spellings.
 			const stamp = formatExecutionTime(runSnapshot.closed_at);
-			const settled = stamp ? `cancel confirmed · ${stamp}` : "cancel confirmed";
+			const settled = stamp
+				? TEXT.runCancelConfirmed(stamp)
+				: TEXT.runCancelConfirmedPlain;
 			return `<span class="run-cancel"><span class="run-cancel-state confirmed">${escapeHtml(settled)}</span></span>`;
 		}
 		if (runCancelSent) {
-			return '<span class="run-cancel"><span class="run-cancel-state">cancel delivered · waiting for the run to report its state</span></span>';
+			return `<span class="run-cancel"><span class="run-cancel-state">${escapeHtml(TEXT.runCancelDelivered)}</span></span>`;
 		}
 		const disabled = runBusy ? " disabled" : "";
 		if (!runCancelArmed) {
 			return `<span class="run-cancel">
-				<button type="button" class="ghost-btn danger-ghost-btn" data-cancel-open${disabled}>Cancel run</button>
+				<button type="button" class="ghost-btn danger-ghost-btn" data-cancel-open${disabled}>${escapeHtml(TEXT.runCancel)}</button>
 			</span>`;
 		}
 		return `<span class="run-cancel">
 			<span class="run-cancel-confirm">
-				<span class="run-cancel-question">Stop the agent where it is?</span>
-				<button type="button" class="approval-btn deny" data-cancel-confirm${disabled}>Yes, cancel</button>
-				<button type="button" class="approval-btn" data-cancel-abort${disabled}>No</button>
+				<span class="run-cancel-question">${escapeHtml(TEXT.runCancelQuestion)}</span>
+				<button type="button" class="approval-btn deny" data-cancel-confirm${disabled}>${escapeHtml(TEXT.runCancelYes)}</button>
+				<button type="button" class="approval-btn" data-cancel-abort${disabled}>${escapeHtml(TEXT.runCancelNo)}</button>
 			</span>
 		</span>`;
 	}
@@ -3856,7 +4425,7 @@
 		const frozen =
 			runSnapshot && runSnapshot.state !== "ACTIVE" ? " is-frozen" : "";
 		if (!runEvents.length) {
-			return `<ol class="run-timeline${frozen}"><li class="run-timeline-empty">Nothing has been published on this run yet.</li></ol>`;
+			return `<ol class="run-timeline${frozen}"><li class="run-timeline-empty">${escapeHtml(TEXT.runTimelineEmpty)}</li></ol>`;
 		}
 		const rows = runEvents
 			.map((event) => renderRunSeam(event) + renderRunEvent(event))
@@ -3869,7 +4438,7 @@
 	// nothing was lost or repeated around it.
 	function renderRunSeam(event) {
 		if (!runSeams.has(event.id)) return "";
-		return `<li class="run-seam" role="separator">resumed at #${escapeHtml(String(event.id))}</li>`;
+		return `<li class="run-seam" role="separator">${escapeHtml(TEXT.runSeam(String(event.id)))}</li>`;
 	}
 
 	// renderRunEvent draws one row: the rail carries the glyph and the event id,
@@ -3883,7 +4452,7 @@
 		// written by the provider.
 		const known = Object.prototype.hasOwnProperty.call(RUN_EVENT_KINDS, kind);
 		const variant = known ? RUN_EVENT_KINDS[kind].variant : "ev-unknown";
-		const label = known ? RUN_EVENT_KINDS[kind].label : kind || "event";
+		const label = known ? RUN_EVENT_KINDS[kind].label : kind || TEXT.runEventFallback;
 		const head = [`<span class="run-event-kind">${escapeHtml(label)}</span>`];
 		const stamp = formatRunTime(event.at);
 		if (stamp) {
@@ -3921,7 +4490,7 @@
 		if (!approval || !approval.id) return "";
 		const id = escapeHtml(approval.id);
 		const head = [
-			`<span class="run-approval-eyebrow">${answered ? "approval resolved" : "approval requested"}</span>`,
+			`<span class="run-approval-eyebrow">${escapeHtml(answered ? TEXT.runApprovalEyebrowResolved : TEXT.runApprovalEyebrowRequested)}</span>`,
 		];
 		if (approval.tool_name) {
 			head.push(
@@ -3958,9 +4527,9 @@
 		const outcome = answered
 			? `<div class="run-approval-outcome${answered.denied ? " denied" : ""}">${escapeHtml(answered.outcome)}</div>`
 			: "";
-		return `<div class="${card.join(" ")}" role="group" aria-label="${answered ? "Resolved approval" : "Pending approval"}">
+		return `<div class="${card.join(" ")}" role="group" aria-label="${answered ? TEXT.runApprovalResolved : TEXT.runApprovalPending}">
 			<div class="run-approval-head">${head.join("")}</div>
-			<p class="run-approval-title">${escapeHtml(approval.title || "The run is waiting for a decision")}</p>
+			<p class="run-approval-title">${escapeHtml(approval.title || TEXT.runApprovalTitle)}</p>
 			${argsBlock}
 			<div class="run-approval-options">${options}</div>
 			${outcome}
@@ -3971,8 +4540,8 @@
 		const closed = runSnapshot && runSnapshot.state !== "ACTIVE";
 		const disabled = runBusy || closed ? " disabled" : "";
 		const placeholder = closed
-			? "This run has ended and takes no more messages"
-			: "Write a message to the agent…";
+			? TEXT.runComposerClosed
+			: TEXT.runComposerPlaceholder;
 		// The pending pill sits in the composer row, not in the timeline: a
 		// message that has been accepted but not yet republished is a state of
 		// the composer, and putting it among the events would be exactly the
@@ -3980,7 +4549,7 @@
 		const pending = runPendingMessage
 			? `<span class="run-pending" role="status">
 					<span class="run-pending-mark" aria-hidden="true"></span>
-					awaiting confirmation
+					${escapeHtml(TEXT.runPending)}
 					<span class="run-pending-text">«${escapeHtml(runPendingMessage)}»</span>
 				</span>`
 			: "";
@@ -3990,8 +4559,8 @@
 				${renderRunCancel()}
 				${pending}
 				<span class="run-composer-spacer"></span>
-				<span class="run-composer-hint">${closed ? "the run is terminal" : "enter to send · shift+enter for a new line"}</span>
-				<button type="submit" class="primary-btn"${disabled}>Send</button>
+				<span class="run-composer-hint">${escapeHtml(closed ? TEXT.runComposerTerminal : TEXT.runComposerHint)}</span>
+				<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.runSend)}</button>
 			</div>
 		</form>`;
 	}
@@ -4011,20 +4580,39 @@
 			currentConfigExists = !!(data && data.exists);
 			fillConfigForm(currentConfigSnapshot);
 			configRaw.value = currentConfigRaw;
-			configPath.textContent = `${data.path || ".archetipo/config.yaml"} · ${currentConfigExists ? "present" : "will be created on save"}`;
+			configPath.textContent = TEXT.configPath(
+				data.path || ".archetipo/config.yaml",
+				currentConfigExists,
+			);
 			configSummaryConnector.textContent =
 				(currentConfigSnapshot && currentConfigSnapshot.connector) || "file";
-			configSummaryExists.textContent = currentConfigExists ? "present" : "missing";
+			configSummaryExists.textContent = currentConfigExists
+				? TEXT.configPresent
+				: TEXT.configMissing;
 			setConfigStatus("", null);
+			// Il riferimento è la configurazione appena letta dal server: è
+			// arrivata adesso e non è lavoro di nessuno.
+			configGuard.arm();
 		} catch (err) {
-			setConfigStatus(`Load failed: ${err.message || err}`, "err");
+			setConfigStatus(TEXT.loadFailed(err.message || err), "err");
 		}
 	}
 
+	// La configurazione si compila da due lati — il form guidato e il YAML
+	// grezzo — e la modale può essere chiusa da qualunque dei due: lo stato è
+	// la somma, altrimenti chi lavora sul grezzo chiude senza che nessuno gli
+	// chieda niente.
+	const configGuard = createDirtyGuard(
+		() => `${formState(configGuidedForm)}\n${configRaw.value}`,
+	);
+
 	function closeConfig() {
+		if (!configGuard.allowsClose()) return;
+		configGuard.disarm();
 		configModal.classList.add("hidden");
+		leaveModal(configModal);
 		setConfigStatus("", null);
-		setConfigValidation("Not tested in this session.", null);
+		setConfigValidation(TEXT.configNotTested, null);
 	}
 
 	function configPayload() {
@@ -4035,7 +4623,7 @@
 	}
 
 	async function validateConfig() {
-		setConfigStatus("Validating...", null);
+		setConfigStatus(TEXT.configValidating, null);
 		try {
 			const result = await apiPost("/api/config/test", configPayload());
 			const warnings = (result && result.warnings) || [];
@@ -4043,21 +4631,21 @@
 				setConfigValidation(warnings.join(" "), "warn");
 			} else if (result && result.info && result.info.connector) {
 				setConfigValidation(
-					`Validation ok · ${result.info.connector} connector is ready.`,
+					TEXT.configValidOk(result.info.connector),
 					"ok",
 				);
 			} else {
-				setConfigValidation("Validation ok.", "ok");
+				setConfigValidation(TEXT.configValidPlain, "ok");
 			}
-			setConfigStatus("Validation complete", "ok");
+			setConfigStatus(TEXT.configValidDone, "ok");
 		} catch (err) {
 			setConfigValidation(err.message || String(err), "err");
-			setConfigStatus(`Validation failed: ${err.message || err}`, "err");
+			setConfigStatus(TEXT.configValidFailed(err.message || err), "err");
 		}
 	}
 
 	async function saveConfig() {
-		setConfigStatus("Saving...", null);
+		setConfigStatus(TEXT.configSaving, null);
 		try {
 			const data = await apiPut("/api/config", configPayload());
 			currentConfigSnapshot = (data && data.config) || currentConfigSnapshot;
@@ -4067,18 +4655,20 @@
 			configRaw.value = currentConfigRaw;
 			configSummaryConnector.textContent =
 				(currentConfigSnapshot && currentConfigSnapshot.connector) || "file";
-			configSummaryExists.textContent = "present";
+			configSummaryExists.textContent = TEXT.configPresent;
 			configRestartNotice.classList.toggle(
 				"hidden",
 				!(data && data.restart_required),
 			);
-			const bits = ["Config saved"];
-			if (data && data.backup_path) bits.push(`backup: ${data.backup_path}`);
-			if (data && data.restart_required) bits.push("restart required");
+			const bits = [TEXT.configSaved];
+			if (data && data.backup_path) bits.push(TEXT.configBackup(data.backup_path));
+			if (data && data.restart_required) bits.push(TEXT.configRestartRequired);
 			setConfigStatus(bits.join(" · "), "ok");
-			showToast("Config saved", "ok");
+			showToast(TEXT.configSaved, "ok");
+			// Quello che è a schermo è ora quello che c'è su disco.
+			configGuard.arm();
 		} catch (err) {
-			setConfigStatus(`Save failed: ${err.message || err}`, "err");
+			setConfigStatus(TEXT.saveFailed(err.message || err), "err");
 		}
 	}
 
@@ -4701,7 +5291,7 @@
 					stopConversationPolling();
 					// Nothing is reconnecting any more, so the panel must stop
 					// implying that it is.
-					conversationLink = `This conversation can no longer be read: ${err.message || err}. Refresh to follow it again.`;
+					conversationLink = TEXT.conversationUnreadable(err.message || err);
 				}
 				renderConversationPanel();
 				return;
@@ -5191,6 +5781,12 @@
 		].join("\n");
 	}
 
+	// Lo stato della modale è il form più il corpo nell'editor: il corpo è la
+	// parte che costa di più ed è l'unica che non è un campo del form.
+	const newSpecGuard = createDirtyGuard(
+		() => `${formState(newSpecForm)}\n${newSpecEditor.value()}`,
+	);
+
 	function openNewSpec() {
 		newSpecForm.reset();
 		clearNewSpecErrors();
@@ -5216,7 +5812,7 @@
 		placeholder.value = "";
 		placeholder.disabled = true;
 		placeholder.selected = true;
-		placeholder.textContent = "Choose an epic…";
+		placeholder.textContent = TEXT.chooseEpic;
 		select.appendChild(placeholder);
 		epics.forEach((epic) => {
 			const opt = document.createElement("option");
@@ -5231,6 +5827,8 @@
 			newSpecNoEpics.classList.remove("hidden");
 			newSpecSubmit.disabled = true;
 			newSpecModal.classList.remove("hidden");
+			newSpecGuard.arm();
+			enterModal(newSpecModal);
 			return;
 		}
 
@@ -5238,6 +5836,12 @@
 		newSpecSubmit.disabled = false;
 		newSpecEditor.value(specBodyTemplate());
 		newSpecModal.classList.remove("hidden");
+		// Il fuoco parte dal titolo: è il primo campo che si compila davvero.
+		enterModal(newSpecModal, newSpecForm.title);
+		// Il riferimento è il modulo appena preparato, template compreso: quello
+		// che il form propone da solo non è lavoro di nessuno, e chiudere senza
+		// averlo toccato non deve chiedere niente.
+		newSpecGuard.arm();
 		setTimeout(() => newSpecEditor.codemirror.refresh(), 0);
 	}
 
@@ -5246,6 +5850,10 @@
 		// closing it would let a late response reopen the editor on top of a
 		// draft the user has already started rewriting.
 		if (newSpecBusy) return;
+		// La bozza è la cosa più costosa che questa modale contiene — scritta a
+		// mano o prodotta da un run dell'agente: non si scarta per sbaglio.
+		if (!newSpecGuard.allowsClose()) return;
+		newSpecGuard.disarm();
 		// Closing the form is how a person cancels an assisted creation, so the
 		// run is asked to stop. What guarantees that nothing was created is the
 		// server, which refuses a proposal that wrote and takes back whatever it
@@ -5253,6 +5861,7 @@
 		cancelSpecDraftRun();
 		teardownSpecDraft();
 		newSpecModal.classList.add("hidden");
+		leaveModal(newSpecModal);
 		clearNewSpecErrors();
 		newSpecBusy = false;
 		newSpecSubmit.disabled = false;
@@ -5315,7 +5924,7 @@
 			view = await apiGet("/api/workspace/actions");
 		} catch (err) {
 			setSpecDraftNotice(
-				`The assisted creation is unavailable: ${err.message || err}`,
+				TEXT.assistedUnavailable(err.message || err),
 				"err",
 			);
 			return;
@@ -5327,7 +5936,7 @@
 		if (!action || !action.offered) {
 			setSpecDraftNotice(
 				(action && action.unavailable_reason) ||
-					"This workspace does not offer the assisted creation.",
+					TEXT.assistedNotOffered,
 				"err",
 			);
 			return;
@@ -5360,7 +5969,7 @@
 			record.result && record.result.payload && record.result.payload.spec_draft;
 		if (!draft || typeof draft !== "object") {
 			setSpecDraftNotice(
-				"The run finished without a readable proposal. Write the spec yourself, or try again.",
+				TEXT.draftUnreadable,
 				"err",
 			);
 			return;
@@ -5368,7 +5977,7 @@
 		applySpecDraft(draft);
 		showSpecDraftMode(false);
 		setSpecDraftNotice(
-			"Proposed by the agent — review it, edit anything, then confirm. Nothing has been written yet.",
+			TEXT.draftProposed,
 		);
 	}
 
@@ -5407,7 +6016,7 @@
 		showNewSpecErrors([
 			{
 				field: "epic_code",
-				message: `The agent proposed the epic ${wanted}, which this workspace does not declare: pick one.`,
+				message: TEXT.draftEpicUnknown(wanted),
 			},
 		]);
 	}
@@ -5448,7 +6057,7 @@
 		const parts = [];
 		if (counted > 0)
 			parts.push(
-				`${counted} ${counted === 1 ? "field" : "fields"} to fix · nothing was written`,
+				TEXT.fieldsToFix(counted),
 			);
 		parts.push(...orphans);
 		statusEl.textContent = parts.join(" · ");
@@ -5465,7 +6074,7 @@
 		clearNewSpecErrors();
 		newSpecBusy = true;
 		newSpecSubmit.disabled = true;
-		newSpecStatus.textContent = "Creating…";
+		newSpecStatus.textContent = TEXT.creating;
 		newSpecStatus.className = "status-msg";
 		const blocked = newSpecForm.blocked_by.value
 			.split(",")
@@ -5487,20 +6096,23 @@
 			const code = res && res.spec && res.spec.code;
 			// The request is over, so the modal may close again.
 			newSpecBusy = false;
+			// La bozza è stata confermata: non c'è più niente da perdere, e la
+			// chiusura non deve chiedere nulla.
+			newSpecGuard.disarm();
 			closeNewSpec();
 			await loadBoard();
 			await loadWorkspaceStatus();
 			if (res && res.created === false) {
-				showToast(`${code} already existed — nothing created`, "ok");
+				showToast(TEXT.specExisted(code), "ok");
 			} else {
-				showToast(`${code} created`, "ok");
+				showToast(TEXT.specCreated(code), "ok");
 			}
 			if (code) await openEditor(code);
 		} catch (err) {
 			if (Array.isArray(err.fields) && err.fields.length > 0) {
 				showNewSpecErrors(err.fields);
 			} else {
-				newSpecStatus.textContent = `Create failed: ${err.message || err}`;
+				newSpecStatus.textContent = TEXT.createFailed(err.message || err);
 				newSpecStatus.className = "status-msg err";
 			}
 		} finally {
@@ -5514,6 +6126,10 @@
 	// The choices are fetched on every opening rather than cached at load time:
 	// this form must offer what the server accepts now, and there is no list of
 	// connectors, tools or defaults written down anywhere in the frontend.
+	const newWorkspaceGuard = createDirtyGuard(() =>
+		formState(newWorkspaceForm),
+	);
+
 	async function openNewWorkspace() {
 		newWorkspaceForm.reset();
 		clearWorkspaceErrors();
@@ -5523,6 +6139,10 @@
 		newWorkspaceUnavailable.classList.add("hidden");
 		newWorkspaceSubmit.disabled = true;
 		newWorkspaceModal.classList.remove("hidden");
+		// Il fuoco viene trattenuto subito, non a lettura finita: fra l'apertura
+		// e le opzioni c'è un'attesa, e in quell'attesa la modale è già a
+		// schermo — Esc e il click sul fondale devono già essere i suoi.
+		enterModal(newWorkspaceModal);
 
 		let options;
 		try {
@@ -5530,8 +6150,11 @@
 		} catch (err) {
 			// Without the contract there is nothing legitimate to offer, so the
 			// form says why instead of inventing a plausible list.
-			newWorkspaceUnavailableText.textContent = `The initialization options could not be read: ${err.message || err}`;
+			newWorkspaceUnavailableText.textContent = TEXT.workspaceOptionsUnreadable(
+				err.message || err,
+			);
 			newWorkspaceUnavailable.classList.remove("hidden");
+			newWorkspaceGuard.arm();
 			return;
 		}
 
@@ -5581,6 +6204,10 @@
 			: "—";
 
 		newWorkspaceSubmit.disabled = false;
+		// I valori proposti dal server sono il punto di partenza: quello che
+		// arriva già compilato non è lavoro di nessuno.
+		newWorkspaceGuard.arm();
+		// Il primo campo che si compila davvero è la destinazione.
 		newWorkspaceForm.dir.focus();
 	}
 
@@ -5588,7 +6215,10 @@
 		// While a creation is in flight the modal cannot be dismissed: closing it
 		// would hide an operation that is still writing to disk.
 		if (newWorkspaceBusy) return;
+		if (!newWorkspaceGuard.allowsClose()) return;
+		newWorkspaceGuard.disarm();
 		newWorkspaceModal.classList.add("hidden");
+		leaveModal(newWorkspaceModal);
 		clearWorkspaceErrors();
 		newWorkspaceSubmit.disabled = false;
 	}
@@ -5628,7 +6258,7 @@
 		clearWorkspaceErrors();
 		newWorkspaceBusy = true;
 		newWorkspaceSubmit.disabled = true;
-		newWorkspaceStatus.textContent = "Creating…";
+		newWorkspaceStatus.textContent = TEXT.creating;
 		newWorkspaceStatus.className = "status-msg";
 
 		const worktreeOn = newWorkspaceWorktreeEnabled.checked;
@@ -5656,14 +6286,17 @@
 			newWorkspaceBusy = false;
 			// The workspace is on disk either way, so a registry that could not
 			// record it is reported beside the outcome rather than swallowed.
-			const outcome = res.hint || `Workspace created in ${res.dir}`;
+			const outcome = res.hint || TEXT.workspaceCreated(res.dir);
 			newWorkspaceStatus.textContent = res.registryWarning
 				? `${outcome} — ${res.registryWarning}`
 				: outcome;
 			newWorkspaceStatus.className = res.registryWarning
 				? "status-msg warn"
 				: "status-msg ok";
-			showToast(`Workspace created in ${res.dir}`, "ok");
+			showToast(TEXT.workspaceCreated(res.dir), "ok");
+			// Il workspace è stato creato: quello che resta nel form è già
+			// scritto su disco, non è più una bozza da difendere.
+			newWorkspaceGuard.arm();
 			// The server records the new workspace in the registry, so the list
 			// the user is looking at is already stale. From the modal that was
 			// invisible; from the home it is the very list the new workspace
@@ -5673,7 +6306,7 @@
 			if (Array.isArray(err.fields) && err.fields.length > 0) {
 				renderFieldErrors(newWorkspaceForm, newWorkspaceStatus, err.fields);
 			} else {
-				newWorkspaceStatus.textContent = `Create failed: ${err.message || err}`;
+				newWorkspaceStatus.textContent = TEXT.createFailed(err.message || err);
 				newWorkspaceStatus.className = "status-msg err";
 			}
 		} finally {
@@ -5694,11 +6327,13 @@
 		workspacesStatus.textContent = "";
 		workspacesStatus.className = "status-msg";
 		workspacesModal.classList.remove("hidden");
+		enterModal(workspacesModal);
 		await loadWorkspaces();
 	}
 
 	function closeWorkspaces() {
 		workspacesModal.classList.add("hidden");
+		leaveModal(workspacesModal);
 	}
 
 	function clearWorkspacesErrors() {
@@ -5717,7 +6352,7 @@
 			const view = await apiGet("/api/workspaces");
 			renderWorkspaces(view);
 		} catch (err) {
-			const message = `Load failed: ${err.message || err}`;
+			const message = TEXT.loadFailed(err.message || err);
 			workspacesList.textContent = "";
 			workspacesEmpty.classList.add("hidden");
 			workspacesStatus.textContent = message;
@@ -5758,7 +6393,7 @@
 		buttons.forEach((b) => {
 			b.disabled = true;
 		});
-		workspacesStatus.textContent = `Opening ${name || id}…`;
+		workspacesStatus.textContent = TEXT.workspaceOpening(name || id);
 		workspacesStatus.className = "status-msg";
 		try {
 			const res = await apiPost(
@@ -5786,7 +6421,7 @@
 				b.disabled = false;
 			});
 			await loadWorkspaces();
-			workspacesStatus.textContent = `Open failed: ${err.message || err}`;
+			workspacesStatus.textContent = TEXT.workspaceOpenFailed(err.message || err);
 			workspacesStatus.className = "status-msg err";
 		}
 	}
@@ -5794,17 +6429,17 @@
 	async function removeWorkspace(id, name) {
 		const label = name || id;
 		const ok = window.confirm(
-			`Remove ${label} from the known workspaces? The workspace directory and its files on disk are not touched.`,
+			TEXT.workspaceRemoveConfirm(label),
 		);
 		if (!ok) return;
 		try {
 			await apiDelete(`/api/workspaces/${encodeURIComponent(id)}`);
-			showToast("Removed from the known workspaces", "ok");
+			showToast(TEXT.workspaceRemoved, "ok");
 			workspacesStatus.textContent = "";
 			workspacesStatus.className = "status-msg";
 			await loadWorkspaces();
 		} catch (err) {
-			workspacesStatus.textContent = `Remove failed: ${err.message || err}`;
+			workspacesStatus.textContent = TEXT.workspaceRemoveFailed(err.message || err);
 			workspacesStatus.className = "status-msg err";
 		}
 	}
@@ -5813,7 +6448,7 @@
 		e.preventDefault();
 		clearWorkspacesErrors();
 		workspacesAddSubmit.disabled = true;
-		workspacesStatus.textContent = "Adding…";
+		workspacesStatus.textContent = TEXT.workspaceAdding;
 		workspacesStatus.className = "status-msg";
 		try {
 			const res = await apiPost("/api/workspaces", {
@@ -5822,13 +6457,13 @@
 			workspacesAddForm.reset();
 			workspacesStatus.textContent = "";
 			workspacesStatus.className = "status-msg";
-			showToast(`${(res && res.name) || "Workspace"} added`, "ok");
+			showToast(TEXT.workspaceAdded((res && res.name) || TEXT.workspaceFallbackName), "ok");
 			await loadWorkspaces();
 		} catch (err) {
 			if (Array.isArray(err.fields) && err.fields.length > 0) {
 				renderFieldErrors(workspacesAddForm, workspacesStatus, err.fields);
 			} else {
-				workspacesStatus.textContent = `Add failed: ${err.message || err}`;
+				workspacesStatus.textContent = TEXT.workspaceAddFailed(err.message || err);
 				workspacesStatus.className = "status-msg err";
 			}
 		} finally {
@@ -5840,6 +6475,7 @@
 
 	async function openMetrics() {
 		metricsModal.classList.remove("hidden");
+		enterModal(metricsModal);
 		metricsBody.innerHTML = "";
 		metricsStatus.textContent = "Loading...";
 		metricsStatus.className = "status-msg";
@@ -5848,13 +6484,14 @@
 			renderMetrics(data || {});
 			metricsStatus.textContent = "";
 		} catch (err) {
-			metricsStatus.textContent = `Load failed: ${err.message || err}`;
+			metricsStatus.textContent = TEXT.loadFailed(err.message || err);
 			metricsStatus.className = "status-msg err";
 		}
 	}
 
 	function closeMetrics() {
 		metricsModal.classList.add("hidden");
+		leaveModal(metricsModal);
 	}
 
 	function renderMetrics(data) {
@@ -5873,9 +6510,9 @@
                 <div class="metrics-hero-detail">
                     <div class="metrics-bar"><div class="metrics-bar-fill" style="width:${Math.min(pct, 100)}%"></div></div>
                     <div class="metrics-hero-caption">
-                        ${totals.done_points || 0}/${totals.points || 0} points ·
-                        ${totals.done_specs || 0}/${totals.specs || 0} specs done ·
-                        ${totals.wip_specs || 0} in flight
+                        ${totals.done_points || 0}/${totals.points || 0} ${TEXT.metricsPoints} ·
+                        ${totals.done_specs || 0}/${totals.specs || 0} ${TEXT.metricsSpecsDone} ·
+                        ${totals.wip_specs || 0} ${TEXT.metricsInFlight}
                     </div>
                 </div>
             </div>
@@ -5889,7 +6526,7 @@
 		const epics = data.by_epic || [];
 		if (epics.length > 0) {
 			html +=
-				'<h3 class="metrics-section-title">Epics</h3><div class="metrics-epics">';
+				`<h3 class="metrics-section-title">${escapeHtml(TEXT.metricsEpics)}</h3><div class="metrics-epics">`;
 			epics.forEach((e) => {
 				const epct = e.completion_pct || 0;
 				html += `
@@ -5900,7 +6537,7 @@
                             <span class="metrics-epic-pct">${epct}%</span>
                         </div>
                         <div class="metrics-bar slim"><div class="metrics-bar-fill" style="width:${Math.min(epct, 100)}%"></div></div>
-                        <div class="metrics-epic-caption">${e.done_points || 0}/${e.points || 0} points · ${e.done_specs || 0}/${e.specs || 0} specs</div>
+                        <div class="metrics-epic-caption">${e.done_points || 0}/${e.points || 0} ${TEXT.metricsPoints} · ${e.done_specs || 0}/${e.specs || 0} spec</div>
                     </div>`;
 			});
 			html += "</div>";
@@ -5908,11 +6545,11 @@
 
 		if (data.flow) {
 			html += `
-                <h3 class="metrics-section-title">Flow</h3>
+                <h3 class="metrics-section-title">${TEXT.metricsFlow}</h3>
                 <div class="metrics-flow">
-                    <div class="metrics-flow-item"><span class="metrics-flow-num">${fmtDuration(data.flow.avg_cycle_seconds)}</span><span class="metrics-flow-label">avg cycle time</span></div>
-                    <div class="metrics-flow-item"><span class="metrics-flow-num">${fmtDuration(data.flow.avg_lead_seconds)}</span><span class="metrics-flow-label">avg lead time</span></div>
-                    <div class="metrics-flow-item"><span class="metrics-flow-num">${data.flow.measured_specs}</span><span class="metrics-flow-label">specs measured</span></div>
+                    <div class="metrics-flow-item"><span class="metrics-flow-num">${fmtDuration(data.flow.avg_cycle_seconds)}</span><span class="metrics-flow-label">${TEXT.metricsAvgCycle}</span></div>
+                    <div class="metrics-flow-item"><span class="metrics-flow-num">${fmtDuration(data.flow.avg_lead_seconds)}</span><span class="metrics-flow-label">${TEXT.metricsAvgLead}</span></div>
+                    <div class="metrics-flow-item"><span class="metrics-flow-num">${data.flow.measured_specs}</span><span class="metrics-flow-label">${TEXT.metricsMeasured}</span></div>
                 </div>`;
 		}
 
@@ -5920,18 +6557,18 @@
 		const blocked = data.blocked || [];
 		if (rework.length > 0 || blocked.length > 0) {
 			html +=
-				'<h3 class="metrics-section-title">Attention</h3><ul class="metrics-attention">';
+				`<h3 class="metrics-section-title">${escapeHtml(TEXT.metricsAttention)}</h3><ul class="metrics-attention">`;
 			rework.forEach((code) => {
-				html += `<li><span class="metrics-flag rework">rework</span> ${escapeHtml(code)} came back from review with feedback</li>`;
+				html += `<li><span class="metrics-flag rework">rework</span> ${escapeHtml(TEXT.metricsReworkRow(code))}</li>`;
 			});
 			blocked.forEach((b) => {
-				html += `<li><span class="metrics-flag blocked">blocked</span> ${escapeHtml(b.code)} waits on ${escapeHtml((b.blocked_by || []).join(", "))}</li>`;
+				html += `<li><span class="metrics-flag blocked">blocked</span> ${escapeHtml(TEXT.metricsBlockedRow(b.code, (b.blocked_by || []).join(", ")))}</li>`;
 			});
 			html += "</ul>";
 		}
 
 		if ((totals.specs || 0) === 0) {
-			html = '<div class="empty-board">No specs in the backlog yet.</div>';
+			html = `<div class="empty-board">${escapeHtml(TEXT.metricsEmpty)}</div>`;
 		}
 		metricsBody.innerHTML = html;
 	}
@@ -5951,14 +6588,15 @@
 
 	async function openPRD() {
 		prdModal.classList.remove("hidden");
+		enterModal(prdModal);
 		showPrdView();
-		prdStatus.textContent = "Loading...";
+		prdStatus.textContent = TEXT.configLoading;
 		prdStatus.className = "status-msg";
 		try {
 			await reloadPrdBody();
 			prdStatus.textContent = "";
 		} catch (err) {
-			prdStatus.textContent = `Load failed: ${err.message || err}`;
+			prdStatus.textContent = TEXT.prdLoadFailed(err.message || err);
 			prdStatus.className = "status-msg err";
 		}
 		await loadWorkspaceActions();
@@ -5971,8 +6609,16 @@
 		prdEditor.value(currentPrdSnapshot);
 	}
 
+	// Il PRD è in bozza solo quando la modale è in modalità scrittura: la
+	// sentinella si arma entrando in modifica e si disarma uscendone, così in
+	// lettura non c'è nessuna domanda da fare — non c'è niente da perdere.
+	const prdGuard = createDirtyGuard(() => prdEditor.value());
+
 	function closePRD() {
+		if (!prdGuard.allowsClose()) return;
+		prdGuard.disarm();
 		prdModal.classList.add("hidden");
+		leaveModal(prdModal);
 		showPrdView();
 		hideWorkspaceActions();
 	}
@@ -6058,7 +6704,7 @@
 	}
 
 	function fillPrdView(body) {
-		prdBodyView.innerHTML = marked.parse(body || "*(no PRD yet)*");
+		prdBodyView.innerHTML = marked.parse(body || TEXT.noPRD);
 	}
 
 	function showPrdView() {
@@ -6071,10 +6717,15 @@
 		prdForm.classList.remove("hidden");
 		prdStatus.textContent = "";
 		prdStatus.className = "status-msg";
+		prdGuard.arm();
 		setTimeout(() => prdEditor.codemirror.refresh(), 0);
 	}
 
 	function exitPrdEditMode() {
+		// Annullare è un modo di scartare come gli altri: se c'è testo scritto,
+		// la domanda va fatta anche qui.
+		if (!prdGuard.allowsClose()) return;
+		prdGuard.disarm();
 		prdEditor.value(currentPrdSnapshot || "");
 		showPrdView();
 	}
@@ -6082,22 +6733,23 @@
 	async function onSavePRD(e) {
 		e.preventDefault();
 		const body = prdEditor.value();
-		prdStatus.textContent = "Saving...";
+		prdStatus.textContent = TEXT.prdSaving;
 		prdStatus.className = "status-msg";
 		try {
 			await apiPut("/api/prd", { body });
 			currentPrdSnapshot = body;
+			prdGuard.disarm();
 			fillPrdView(body);
 			showPrdView();
-			prdStatus.textContent = "Saved";
+			prdStatus.textContent = TEXT.prdSaved;
 			prdStatus.className = "status-msg ok";
-			showToast("PRD updated", "ok");
+			showToast(TEXT.prdUpdated, "ok");
 			// A PRD written by hand is a PRD: the inception must stop being
 			// offered and the backlog generation must start being offered, and
 			// that verdict is re-read rather than assumed.
 			await loadWorkspaceActions();
 		} catch (err) {
-			prdStatus.textContent = `Save failed: ${err.message || err}`;
+			prdStatus.textContent = TEXT.saveFailed(err.message || err);
 			prdStatus.className = "status-msg err";
 		}
 	}
@@ -6123,7 +6775,7 @@
 		if (appMockups.length === 0) {
 			const empty = document.createElement("div");
 			empty.className = "dropdown-empty";
-			empty.textContent = "No app mockups";
+			empty.textContent = TEXT.noMockups;
 			appSection.appendChild(empty);
 		} else {
 			appMockups.forEach((m) => appSection.appendChild(createMockupItem(m)));
@@ -6154,7 +6806,7 @@
 		header.setAttribute("role", "button");
 		header.setAttribute("tabindex", "0");
 		header.innerHTML =
-			`<span>Specs (${items.length})</span>` +
+			`<span>${TEXT.mockupsSpecs(items.length)}</span>` +
 			'<svg class="mockups-section-caret" width="9" height="9" viewBox="0 0 9 9" aria-hidden="true">' +
 			'<path d="M1.5 3l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
 

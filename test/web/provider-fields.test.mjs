@@ -122,7 +122,7 @@ describe("renderProviderFields — campo del catalogo", () => {
 		const html = renderProviderFields(CATALOG_VIEW, {});
 		const text = visibleText(html);
 
-		const marked = options(html).filter((o) => /provider default/i.test(o.text));
+		const marked = options(html).filter((o) => /default del provider/i.test(o.text));
 		assert.equal(
 			marked.length,
 			1,
@@ -132,7 +132,7 @@ describe("renderProviderFields — campo del catalogo", () => {
 			marked[0].text.includes("Modello Beta"),
 			"la dicitura di predefinito è accanto al modello sbagliato",
 		);
-		assert.ok(text.includes("provider default"), "la dicitura di predefinito non è testo visibile");
+		assert.ok(text.includes("default del provider"), "la dicitura di predefinito non è testo visibile");
 	});
 
 	it("senza valore configurato seleziona la voce vuota", () => {
@@ -151,7 +151,7 @@ describe("renderProviderFields — campo del catalogo", () => {
 
 		assert.equal(submittedValue(html), "modello-gamma");
 		assert.ok(
-			!/not listed/i.test(visibleText(html)),
+			!/non in elenco/i.test(visibleText(html)),
 			"un modello del catalogo non deve essere marcato come non elencato",
 		);
 		assert.equal(options(html).length, 4, "nessuna voce aggiuntiva per un valore in catalogo");
@@ -170,7 +170,7 @@ describe("renderProviderFields — campo del catalogo", () => {
 			text.includes("modello-fuori-catalogo"),
 			"il valore fuori catalogo non è testo visibile",
 		);
-		const unlisted = options(html).filter((o) => /not listed/i.test(o.text));
+		const unlisted = options(html).filter((o) => /non in elenco/i.test(o.text));
 		assert.equal(unlisted.length, 1, "una sola voce deve essere marcata come non elencata");
 		assert.equal(unlisted[0].value, "modello-fuori-catalogo");
 		for (const id of ["modello-alfa", "modello-beta", "modello-gamma"]) {
@@ -217,8 +217,8 @@ describe("renderProviderFields — resa invariata fuori dal catalogo", () => {
 		);
 		assert.equal(options(html).length, 0, "nessuna voce di elenco senza catalogo dichiarato");
 		const text = visibleText(html);
-		assert.ok(!/provider default/i.test(text), "nessuna dicitura di predefinito senza catalogo");
-		assert.ok(!/not listed/i.test(text), "nessuna dicitura di voce non elencata senza catalogo");
+		assert.ok(!/default del provider/i.test(text), "nessuna dicitura di predefinito senza catalogo");
+		assert.ok(!/non in elenco/i.test(text), "nessuna dicitura di voce non elencata senza catalogo");
 	});
 
 	it("gli altri campi non sono toccati", () => {
@@ -383,7 +383,7 @@ describe("renderProviderFields — opzioni del modello selezionato", () => {
 		);
 		// Exactly one entry reads as the provider default, and it is the one
 		// the provider marked.
-		const marked = entries.filter((o) => /provider default/i.test(o.text));
+		const marked = entries.filter((o) => /default del provider/i.test(o.text));
 		assert.equal(marked.length, 1, "una sola scelta deve leggersi come predefinita");
 		assert.equal(marked[0].value, "medio", "il marcatore è finito sulla scelta sbagliata");
 	});
@@ -428,7 +428,7 @@ describe("renderProviderFields — opzioni del modello selezionato", () => {
 		const html = renderProviderFields(OPTION_VIEW, { model: "modello-beta" });
 		const text = visibleText(html);
 		assert.ok(
-			text.includes("This model declares no option."),
+			text.includes("Questo modello non dichiara nessuna opzione."),
 			"la frase esplicita non è visibile",
 		);
 		assert.ok(
@@ -462,7 +462,7 @@ describe("renderProviderFields — opzioni del modello selezionato", () => {
 				"è stato disegnato un controllo di opzione senza modello di catalogo scelto",
 			);
 			assert.ok(
-				!html.includes("This model declares no option."),
+				!html.includes("Questo modello non dichiara nessuna opzione."),
 				"è stata mostrata la frase del modello senza opzioni fuori dal suo caso",
 			);
 		}
@@ -596,7 +596,7 @@ describe("renderModelChoice — scelta per la singola run", () => {
 		);
 		const text = visibleText(html);
 		assert.ok(
-			/inherited from the workspace/i.test(text),
+			/ereditato dal workspace/i.test(text),
 			"l'ereditarietà dal workspace non è dichiarata a parole",
 		);
 		assert.ok(text.includes("Modello Uno"), "il modello ereditato non è leggibile");
@@ -627,7 +627,7 @@ describe("renderModelChoice — scelta per la singola run", () => {
 			"un modello senza opzioni disegna comunque un controllo di opzione",
 		);
 		assert.ok(
-			visibleText(other).includes("This model declares no option."),
+			visibleText(other).includes("Questo modello non dichiara nessuna opzione."),
 			"il modello senza opzioni non lo dichiara a parole",
 		);
 	});

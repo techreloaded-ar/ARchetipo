@@ -19,10 +19,30 @@
 	// falls back to the raw value for anything it does not: a new server status
 	// must never disappear from the UI just because this map is older.
 	const WORKSPACE_STATUS_LABELS = {
-		missing: "not found",
-		not_a_directory: "not a directory",
-		not_readable: "not readable",
-		not_a_workspace: "not an ARchetipo workspace",
+		missing: "non trovato",
+		not_a_directory: "non è una directory",
+		not_readable: "non leggibile",
+		not_a_workspace: "non è un workspace ARchetipo",
+	};
+
+	// Le parole che questo modulo possiede, tutte insieme e in una lingua sola.
+	// Nessuna nomina un passo del metodo: sono le parole di un elenco — che cosa
+	// è una riga, che cosa se ne può fare, e che cosa dice l'elenco vuoto.
+	const TEXT = {
+		reachable: "raggiungibile",
+		current: "aperto",
+		noIdentity: "Questa voce non ha un'identità nel registro",
+		alreadyOpen: "È il workspace già aperto",
+		cannotOpen: "Non si può aprire",
+		lastOpened: "Ultima apertura",
+		open: "Apri",
+		remove: "Rimuovi",
+		eyebrow: "workspace",
+		title: "Scegli un workspace",
+		subtitle:
+			"Non c'è nessun workspace aperto. Aprine uno fra quelli qui sotto, aggiungine uno esistente, oppure creane uno nuovo.",
+		empty:
+			"Non è ancora stato registrato nessun workspace. Creane uno, oppure aggiungine uno esistente qui sotto.",
 	};
 
 	/**
@@ -68,7 +88,7 @@
 	// would leave the user with a registry that silently disagrees with the disk.
 	function statusBadge(item) {
 		if (item.reachable) {
-			return `<span class="workspace-badge">reachable</span>`;
+			return `<span class="workspace-badge">${escapeHtml(TEXT.reachable)}</span>`;
 		}
 		return `<span class="workspace-badge warn">${escapeHtml(statusLabel(item))}</span>`;
 	}
@@ -78,9 +98,9 @@
 	// server has just probed as unreachable. The title carries the reason, so a
 	// greyed button is never a mystery.
 	function openRefusal(item) {
-		if (!item.id) return "This entry has no identity in the registry";
-		if (item.current) return "This is the workspace already open";
-		if (!item.reachable) return `Cannot be opened: ${statusLabel(item)}`;
+		if (!item.id) return TEXT.noIdentity;
+		if (item.current) return TEXT.alreadyOpen;
+		if (!item.reachable) return `${TEXT.cannotOpen}: ${statusLabel(item)}`;
 		return "";
 	}
 
@@ -95,7 +115,9 @@
 
 		const head =
 			`<span class="workspace-name">${escapeHtml(entry.name || "")}</span>` +
-			(entry.current ? `<span class="workspace-badge">current</span>` : "") +
+			(entry.current
+				? `<span class="workspace-badge">${escapeHtml(TEXT.current)}</span>`
+				: "") +
 			statusBadge(entry);
 
 		return (
@@ -103,11 +125,11 @@
 			`<div class="workspace-row-main">` +
 			`<div class="workspace-row-head">${head}</div>` +
 			`<code class="workspace-path">${escapeHtml(entry.path || "")}</code>` +
-			`<span class="workspace-meta">Last opened: ${escapeHtml(formatTime(entry.lastOpenedAt))}</span>` +
+			`<span class="workspace-meta">${escapeHtml(TEXT.lastOpened)}: ${escapeHtml(formatTime(entry.lastOpenedAt))}</span>` +
 			`</div>` +
 			`<div class="workspace-row-actions">` +
-			`<button type="button" class="primary-btn" ${openAttrs}>Open</button>` +
-			`<button type="button" class="ghost-btn" data-remove="${id}" data-remove-name="${label}">Remove</button>` +
+			`<button type="button" class="primary-btn" ${openAttrs}>${escapeHtml(TEXT.open)}</button>` +
+			`<button type="button" class="ghost-btn" data-remove="${id}" data-remove-name="${label}">${escapeHtml(TEXT.remove)}</button>` +
 			`</div>` +
 			`</div>`
 		);
@@ -145,7 +167,7 @@
 		const rows = renderWorkspaceRows(view, options);
 		const body = rows
 			? `<div class="workspace-home-list">${rows}</div>`
-			: `<p class="form-notice">No workspace has been recorded yet. Create one, or add an existing one below.</p>`;
+			: `<p class="form-notice">${escapeHtml(TEXT.empty)}</p>`;
 		// A message is how the caller reports that the list could not be read:
 		// a page that does not know which workspace it serves must say so rather
 		// than draw a board for one.
@@ -154,9 +176,9 @@
 			: "";
 		return (
 			`<header class="workspace-home-head">` +
-			`<span class="workspace-home-eyebrow">workspaces</span>` +
-			`<h1 class="workspace-home-title">Choose a workspace</h1>` +
-			`<p class="workspace-home-sub">No workspace is open. Open one of the workspaces below, add an existing one, or create a new one.</p>` +
+			`<span class="workspace-home-eyebrow">${escapeHtml(TEXT.eyebrow)}</span>` +
+			`<h1 class="workspace-home-title">${escapeHtml(TEXT.title)}</h1>` +
+			`<p class="workspace-home-sub">${escapeHtml(TEXT.subtitle)}</p>` +
 			`</header>` +
 			message +
 			body

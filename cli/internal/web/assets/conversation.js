@@ -72,10 +72,84 @@
 	// nothing about the agent doing something: a conversation just opened has an
 	// agent waiting for a first message, and a badge reading "talking" would
 	// describe work that nobody has asked for yet.
+	// Le parole che questo modulo possiede. Stanno tutte qui, in una lingua
+	// sola: fuori di qui nessuna stringa visibile viene scritta a mano nel punto
+	// d'uso, così una parola si cambia in un posto e non in dodici, e non può
+	// più succedere che due righe vicine parlino due lingue diverse.
+	// Niente qui nomina un passo del metodo che un workspace segue: quelle
+	// parole le dice il server, e arrivano nel payload.
+	const TEXT = {
+		// Testata e stati del ciclo di vita
+		panel: "Conversazione",
+		badgeFallback: "conversazione",
+		badgeNotOffered: "non disponibile",
+		badgeNoneOpen: "nessuna aperta",
+		// Avvisi
+		markNotOffered: "non disponibile",
+		markError: "errore",
+		markRefused: "rifiutato",
+		markNote: "nota",
+		markChannel: "canale",
+		markOver: "conclusa",
+		over:
+			"Questa conversazione è finita: l'agente che la teneva non è più impegnato, e quello che è stato detto resta leggibile.",
+		unavailable: "in questo workspace non si può aprire una conversazione",
+		dismissNotice: "Chiudi questo avviso",
+		// Stato vuoto
+		empty: "Su questo workspace non c'è nessuna conversazione aperta.",
+		open: "Apri una conversazione",
+		// Timeline
+		markPartialHistory: "storia parziale",
+		partialHistory:
+			"la parte più vecchia di questa conversazione non è più conservata",
+		timelineEmpty: "In questa conversazione non è ancora stato detto niente.",
+		// Blocco run
+		markRun: "run",
+		runLogEmpty: "Questa run non ha ancora pubblicato niente.",
+		runPartial:
+			"La parte più vecchia di questa run è fuori dalla finestra che il visore conserva; il provider la tiene ancora.",
+		runReach: "Vai al log completo",
+		// Decisioni
+		approvalPending: "Decisione in attesa",
+		approvalResolved: "Decisione risolta",
+		approvalTitle: "La run aspetta una decisione",
+		// Chiusura della conversazione
+		close: "Chiudi",
+		closeConversation: "Chiudi la conversazione",
+		closeQuestion: "Chiuderla e lasciare andare l'agente?",
+		closeYes: "Sì, chiudi",
+		closeNo: "No",
+		// Compositore
+		writePlaceholder: "Scrivi all'agente…",
+		writeClosePlaceholder:
+			"Questa conversazione non accetta altri messaggi: chiudila per lasciare andare l'agente",
+		writeOverPlaceholder:
+			"Questa conversazione è finita e non accetta altri messaggi",
+		writeHint: "invio per inviare · maiusc+invio a capo",
+		readOnly: "sola lettura",
+		awaitHint: "la run riprende quando rispondi all'attesa qui sopra",
+		send: "Invia",
+		markResume: "ripresa",
+		resumeNote:
+			"La risposta arriva in una <strong>conversazione nuova</strong>, che riceve questa come contesto.",
+		// Proposta e suo esito
+		markProposed: "proposta",
+		markNotPossible: "non è possibile",
+		markUnlockedBy: "si sblocca con",
+		proposalPromise:
+			"Non è ancora partito niente: questo è soltanto quello che l'agente farebbe, e succede se lo confermi.",
+		proposalConfirm: "Conferma",
+		proposalRefuse: "Rifiuta",
+		outcomeReach: "Vai alla run",
+		// Passo successivo
+		nextStepRun: "Avvia",
+		nextStepReach: "Vai alla run",
+	};
+
 	const STATE_LABELS = {
-		ACTIVE: "open",
-		CLOSED: "ended",
-		CRASHED: "ended badly",
+		ACTIVE: "aperta",
+		CLOSED: "conclusa",
+		CRASHED: "conclusa male",
 	};
 
 	const STATE_VARIANTS = {
@@ -90,13 +164,13 @@
 	// instead of disappearing — and it takes the `cev-unknown` variant, drawn as
 	// explicitly uninterpreted rather than disguised as agent text.
 	const EVENT_KINDS = {
-		text: { label: "agent", variant: "cev-agent" },
-		thinking: { label: "thinking", variant: "cev-thinking" },
-		user_message: { label: "you", variant: "cev-you" },
-		tool_start: { label: "tool · start", variant: "cev-tool-start" },
-		tool_end: { label: "tool · done", variant: "cev-tool-end" },
-		tool_error: { label: "tool · error", variant: "cev-tool-error" },
-		turn_end: { label: "turn end", variant: "cev-turn-end" },
+		text: { label: "agente", variant: "cev-agent" },
+		thinking: { label: "ragionamento", variant: "cev-thinking" },
+		user_message: { label: "tu", variant: "cev-you" },
+		tool_start: { label: "strumento · avvio", variant: "cev-tool-start" },
+		tool_end: { label: "strumento · fatto", variant: "cev-tool-end" },
+		tool_error: { label: "strumento · errore", variant: "cev-tool-error" },
+		turn_end: { label: "fine turno", variant: "cev-turn-end" },
 	};
 
 	// The affirmative/negative tone of an answer, keyed by the kind the provider
@@ -130,7 +204,7 @@
 	 */
 	function renderNotice(tone, mark, body, key) {
 		const dismiss = key
-			? `<button type="button" class="conv-notice-dismiss" data-conversation-notice-dismiss="${escapeHtml(key)}" title="Chiudi questo avviso" aria-label="Chiudi questo avviso">✕</button>`
+			? `<button type="button" class="conv-notice-dismiss" data-conversation-notice-dismiss="${escapeHtml(key)}" title="${escapeHtml(TEXT.dismissNotice)}" aria-label="${escapeHtml(TEXT.dismissNotice)}">✕</button>`
 			: "";
 		return `<div class="conv-notice ${tone}"${tone === "refused" ? ' role="alert"' : ""}>
 			<span class="conv-notice-mark">${escapeHtml(mark)}</span>
@@ -194,7 +268,7 @@
 			(event) => event && typeof event === "object",
 		);
 		if (!rows.length) {
-			return '<pre class="conv-run-log conv-run-log-empty">This run has published nothing yet.</pre>';
+			return `<pre class="conv-run-log conv-run-log-empty">${escapeHtml(TEXT.runLogEmpty)}</pre>`;
 		}
 		const lines = rows.map((event) => {
 			const kind = typeof event.kind === "string" ? event.kind : "";
@@ -283,9 +357,9 @@
 					textAt(answered, "label") || chosenID,
 				)}</div>`
 			: "";
-		return `<div class="${card.join(" ")}" role="group" aria-label="${answered ? "Resolved approval" : "Pending approval"}">
+		return `<div class="${card.join(" ")}" role="group" aria-label="${answered ? TEXT.approvalResolved : TEXT.approvalPending}">
 			<div class="run-approval-head">${head.join("")}</div>
-			<p class="run-approval-title">${escapeHtml(textAt(approval, "title") || "The run is waiting for a decision")}</p>
+			<p class="run-approval-title">${escapeHtml(textAt(approval, "title") || TEXT.approvalTitle)}</p>
 			${argsBlock}
 			<div class="run-approval-options">${options}</div>
 			${outcome}
@@ -333,7 +407,7 @@
 		const code = textAt(run, "spec_code");
 		const scope = textAt(run, "scope");
 
-		const head = ['<span class="conv-run-mark">run</span>'];
+		const head = [`<span class="conv-run-mark">${escapeHtml(TEXT.markRun)}</span>`];
 		const action = textAt(run, "action");
 		const label = textAt(run, "label") || action;
 		if (label) {
@@ -359,7 +433,7 @@
 		rows.push(renderRunLog(run.events));
 		if (run.truncated) {
 			rows.push(
-				'<div class="conv-run-partial" role="note">Older history of this run is beyond the window this viewer keeps; the provider still holds it.</div>',
+				`<div class="conv-run-partial" role="note">${escapeHtml(TEXT.runPartial)}</div>`,
 			);
 		}
 		const pending = Array.isArray(run.approvals) ? run.approvals : [];
@@ -403,7 +477,7 @@
 
 		const disabled = local.busy ? " disabled" : "";
 		const reach = `<div class="conv-run-controls">
-			<button type="button" class="ghost-btn conv-run-reach" data-conversation-reach-run data-scope="${escapeHtml(scope)}" data-code="${escapeHtml(code)}" data-execution-id="${escapeHtml(execution)}"${disabled}>Go to the whole log</button>
+			<button type="button" class="ghost-btn conv-run-reach" data-conversation-reach-run data-scope="${escapeHtml(scope)}" data-code="${escapeHtml(code)}" data-execution-id="${escapeHtml(execution)}"${disabled}>${escapeHtml(TEXT.runReach)}</button>
 		</div>`;
 
 		const highlight =
@@ -461,15 +535,14 @@
 		const rows = [];
 		if (view.truncated) {
 			const declared =
-				textAt(view, "notice") ||
-				"the oldest part of this conversation is no longer kept";
+				textAt(view, "notice") || TEXT.partialHistory;
 			rows.push(
-				`<li class="conv-history-partial" role="note"><span class="conv-history-mark">partial history</span><span class="conv-history-body">${escapeHtml(declared)}</span></li>`,
+				`<li class="conv-history-partial" role="note"><span class="conv-history-mark">${escapeHtml(TEXT.markPartialHistory)}</span><span class="conv-history-body">${escapeHtml(declared)}</span></li>`,
 			);
 		}
 		if (!events.length) {
 			rows.push(
-				'<li class="conv-timeline-empty">Nothing has been said in this conversation yet.</li>',
+				`<li class="conv-timeline-empty">${escapeHtml(TEXT.timelineEmpty)}</li>`,
 			);
 		} else {
 			for (const event of events) {
@@ -510,17 +583,17 @@
 		const disabled = ui.busy ? " disabled" : "";
 		if (!ui.closeArmed) {
 			return `<span class="conv-close">
-				<button type="button" class="conv-close-btn" data-conversation-close-open${disabled} title="Close conversation" aria-label="Close conversation">
+				<button type="button" class="conv-close-btn" data-conversation-close-open${disabled} title="${escapeHtml(TEXT.closeConversation)}" aria-label="${escapeHtml(TEXT.closeConversation)}">
 					<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.5 2.5H3.5v11h3M9.5 5.5L12 8l-2.5 2.5M12 8H6.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-					<span>Close</span>
+					<span>${escapeHtml(TEXT.close)}</span>
 				</button>
 			</span>`;
 		}
 		return `<span class="conv-close">
 			<span class="conv-close-confirm">
-				<span class="conv-close-question">Close it and let the agent go?</span>
-				<button type="button" class="approval-btn deny" data-conversation-close-confirm${disabled}>Yes, close</button>
-				<button type="button" class="approval-btn" data-conversation-close-abort${disabled}>No</button>
+				<span class="conv-close-question">${escapeHtml(TEXT.closeQuestion)}</span>
+				<button type="button" class="approval-btn deny" data-conversation-close-confirm${disabled}>${escapeHtml(TEXT.closeYes)}</button>
+				<button type="button" class="approval-btn" data-conversation-close-abort${disabled}>${escapeHtml(TEXT.closeNo)}</button>
 			</span>
 		</span>`;
 	}
@@ -539,10 +612,10 @@
 		const writable = active && offered !== false;
 		const disabled = ui.busy || !writable ? " disabled" : "";
 		const placeholder = writable
-			? "Write to the agent…"
+			? TEXT.writePlaceholder
 			: active
-				? "This conversation takes no more messages: close it to let the agent go"
-				: "This conversation is over and takes no more messages";
+				? TEXT.writeClosePlaceholder
+				: TEXT.writeOverPlaceholder;
 		// Una conversazione finita non è muta: ci si scrive per riprenderla, e
 		// ciò che ne esce è una conversazione nuova. Quel fatto è la cosa più
 		// importante da sapere prima di premere Invio, quindi sta su una riga
@@ -550,11 +623,7 @@
 		// invece di stare stretto accanto al campo come un suggerimento fra gli
 		// altri, dove rubava larghezza a ciò che si sta scrivendo.
 		const ended = !active;
-		const hint = writable
-			? "invio per inviare · maiusc+invio a capo"
-			: ended
-				? ""
-				: "read only";
+		const hint = writable ? TEXT.writeHint : ended ? "" : TEXT.readOnly;
 		const hintHtml = hint
 			? `<span class="conv-composer-hint">${escapeHtml(hint)}</span>`
 			: "";
@@ -566,13 +635,13 @@
 		const resumeHtml =
 			ended && dismissedNotes["resume-note"] !== true
 				? `<p class="conv-resume-note" role="status">
-				<span class="conv-resume-note-mark">ripresa</span>
-				<span class="conv-resume-note-body">La risposta arriva in una <strong>conversazione nuova</strong>, che riceve questa come contesto.</span>
+				<span class="conv-resume-note-mark">${escapeHtml(TEXT.markResume)}</span>
+				<span class="conv-resume-note-body">${TEXT.resumeNote}</span>
 				<button type="button" class="conv-notice-dismiss" data-conversation-notice-dismiss="resume-note" title="Chiudi questo avviso" aria-label="Chiudi questo avviso">✕</button>
 			</p>`
 				: "";
 		const await_ = awaiting
-			? '<p class="conv-composer-await">the run resumes when you answer the wait above</p>'
+			? `<p class="conv-composer-await">${escapeHtml(TEXT.awaitHint)}</p>`
 			: "";
 		// Campo e comando sulla stessa riga: il pulsante sta a destra, allineato
 		// in fondo al campo, e non su una riga propria. La riga sotto costava al
@@ -583,7 +652,7 @@
 			<div class="conv-composer-row">
 				<textarea class="conv-composer-input" rows="1" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
 				${hintHtml}
-				<button type="submit" class="primary-btn"${disabled}>Send</button>
+				<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
 			</div>
 			${await_}
 		</form>`;
@@ -676,7 +745,7 @@
 			target.push(`<span class="conv-proposal-title">${escapeHtml(title)}</span>`);
 		}
 		const head = `<div class="conv-proposal-head">
-			<span class="conv-proposal-mark">proposed</span>
+			<span class="conv-proposal-mark">${escapeHtml(TEXT.markProposed)}</span>
 			<span class="conv-proposal-label">${escapeHtml(label)}</span>
 			${target.join("")}
 		</div>`;
@@ -684,9 +753,9 @@
 		if (!proposal.runnable) {
 			const rows = [];
 			const reason = textAt(proposal, "unavailable_reason");
-			if (reason) rows.push(renderNotice("refused", "not possible", reason));
+			if (reason) rows.push(renderNotice("refused", TEXT.markNotPossible, reason));
 			const unlocked = textAt(proposal, "unlocked_by");
-			if (unlocked) rows.push(renderNotice("info", "unlocked by", unlocked));
+			if (unlocked) rows.push(renderNotice("info", TEXT.markUnlockedBy, unlocked));
 			return `<div class="conv-proposal is-refused">${head}${rows.join("")}</div>`;
 		}
 
@@ -697,10 +766,10 @@
 				: String(proposal.event_id);
 		return `<div class="conv-proposal">
 			${head}
-			<p class="conv-proposal-promise">Nothing has started yet: this is only what the agent would do, and it happens if you confirm it.</p>
+			<p class="conv-proposal-promise">${escapeHtml(TEXT.proposalPromise)}</p>
 			<div class="conv-proposal-controls">
-				<button type="button" class="approval-btn allow" data-conversation-proposal-accept data-proposal-id="${escapeHtml(id)}"${disabled}>Confirm</button>
-				<button type="button" class="approval-btn deny" data-conversation-proposal-decline data-proposal-id="${escapeHtml(id)}"${disabled}>Refuse</button>
+				<button type="button" class="approval-btn allow" data-conversation-proposal-accept data-proposal-id="${escapeHtml(id)}"${disabled}>${escapeHtml(TEXT.proposalConfirm)}</button>
+				<button type="button" class="approval-btn deny" data-conversation-proposal-decline data-proposal-id="${escapeHtml(id)}"${disabled}>${escapeHtml(TEXT.proposalRefuse)}</button>
 			</div>
 		</div>`;
 	}
@@ -733,7 +802,7 @@
 		let reach = "";
 		if (textAt(outcome, "execution_id")) {
 			const disabled = ui && ui.busy ? " disabled" : "";
-			reach = `<button type="button" class="ghost-btn conv-outcome-reach" data-conversation-reach-run data-scope="${escapeHtml(textAt(outcome, "scope"))}" data-code="${escapeHtml(code)}"${disabled}>Go to the run</button>`;
+			reach = `<button type="button" class="ghost-btn conv-outcome-reach" data-conversation-reach-run data-scope="${escapeHtml(textAt(outcome, "scope"))}" data-code="${escapeHtml(code)}"${disabled}>${escapeHtml(TEXT.outcomeReach)}</button>`;
 		}
 		return `<div class="conv-outcome">
 			<div class="conv-outcome-body">${parts.join("")}</div>
@@ -787,8 +856,8 @@
 			// naming the run.
 			const running = textAt(step, "running_execution_id");
 			const control = running
-				? `<button type="button" class="ghost-btn conv-nextstep-reach" data-conversation-reach-run data-scope="${escapeHtml(textAt(step, "scope"))}" data-code="${escapeHtml(code)}" data-execution-id="${escapeHtml(running)}">Vai alla run</button>`
-				: `<button type="button" class="conv-nextstep-run"${attrs} disabled>Avvia</button>`;
+				? `<button type="button" class="ghost-btn conv-nextstep-reach" data-conversation-reach-run data-scope="${escapeHtml(textAt(step, "scope"))}" data-code="${escapeHtml(code)}" data-execution-id="${escapeHtml(running)}">${escapeHtml(TEXT.nextStepReach)}</button>`
+				: `<button type="button" class="conv-nextstep-run"${attrs} disabled>${escapeHtml(TEXT.nextStepRun)}</button>`;
 			return `<div class="conv-nextstep is-refused">
 				${head}
 				<div class="conv-nextstep-controls">
@@ -802,7 +871,7 @@
 		return `<div class="conv-nextstep">
 			${head}
 			<div class="conv-nextstep-controls">
-				<button type="button" class="conv-nextstep-run"${attrs}${disabled}>Avvia</button>
+				<button type="button" class="conv-nextstep-run"${attrs}${disabled}>${escapeHtml(TEXT.nextStepRun)}</button>
 			</div>
 		</div>`;
 	}
@@ -848,8 +917,7 @@
 		// draw.
 		const offered = value.available !== false;
 		const refusal =
-			textAt(value, "unavailable_reason") ||
-			"a conversation cannot be opened in this workspace";
+			textAt(value, "unavailable_reason") || TEXT.unavailable;
 
 		// Quali avvisi il lettore ha già chiuso. La scelta è sua e vive nel
 		// chiamante — il pannello si ridisegna a ogni lettura, quindi ricordarla
@@ -866,20 +934,20 @@
 		// sentence, shown verbatim, and nothing is offered next to it — neither a
 		// composer nor a way to open one.
 		if (!offered && !conversation) {
-			return `<section class="conv-panel conv-unavailable" aria-label="Conversation">
-				${renderHead(value, "not offered", "conv-off")}
-				${dismissed["not-offered"] === true ? "" : renderNotice("refused", "not offered", refusal, "not-offered")}
+			return `<section class="conv-panel conv-unavailable" aria-label="${escapeHtml(TEXT.panel)}">
+				${renderHead(value, TEXT.badgeNotOffered, "conv-off")}
+				${dismissed["not-offered"] === true ? "" : renderNotice("refused", TEXT.markNotOffered, refusal, "not-offered")}
 			</section>`;
 		}
 
 		if (!conversation) {
 			// Nothing open. The invitation is the whole answer, and the button is
 			// the only control.
-			return `<section class="conv-panel conv-empty-panel" aria-label="Conversation">
-				${renderHead(value, "none open", "conv-off")}
+			return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">
+				${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}
 				<div class="conv-empty">
-					<p class="conv-empty-text">No conversation is open for this workspace.</p>
-					${renderOpenButton(local, "Open a conversation")}
+					<p class="conv-empty-text">${escapeHtml(TEXT.empty)}</p>
+					${renderOpenButton(local, TEXT.open)}
 				</div>
 			</section>`;
 		}
@@ -889,35 +957,30 @@
 		const variant = known(STATE_VARIANTS, state)
 			? STATE_VARIANTS[state]
 			: "conv-ended";
-		const badge = known(STATE_LABELS, state) ? STATE_LABELS[state] : state || "conversation";
+		const badge = known(STATE_LABELS, state) ? STATE_LABELS[state] : state || TEXT.badgeFallback;
 
 		// The refusal rides at the head of a conversation that is open anyway: it
 		// explains why nothing more can be said here, while the history stays
 		// readable and the close control stays offered — the conversation is still
 		// holding an agent, and letting it go must remain possible.
-		if (!offered) pushNotice("not-offered", "refused", "not offered", refusal);
+		if (!offered) pushNotice("not-offered", "refused", TEXT.markNotOffered, refusal);
 
 		const failure = textAt(conversation, "error");
-		if (failure) pushNotice("error", "refused", "error", failure);
+		if (failure) pushNotice("error", "refused", TEXT.markError, failure);
 		if (local.refusal) {
-			pushNotice("refusal", "refused", "refused", String(local.refusal));
+			pushNotice("refusal", "refused", TEXT.markRefused, String(local.refusal));
 		}
 		// A note the server sent that is not the partial-history declaration: the
 		// declaration lives at the head of the timeline and nowhere else, so one
 		// fact is never stated twice.
 		if (!value.truncated && textAt(value, "notice")) {
-			pushNotice("note", "info", "note", textAt(value, "notice"));
+			pushNotice("note", "info", TEXT.markNote, textAt(value, "notice"));
 		}
 		if (local.link) {
-			pushNotice("channel", "info", "channel", String(local.link));
+			pushNotice("channel", "info", TEXT.markChannel, String(local.link));
 		}
 		if (!active) {
-			pushNotice(
-				"over",
-				"info",
-				"over",
-				"This conversation is over: the agent behind it is no longer engaged, and what was said stays readable.",
-			);
+			pushNotice("over", "info", TEXT.markOver, TEXT.over);
 		}
 		// The proposal and its outcome sit between the notices and the timeline:
 		// both are about now, and now must be readable without scrolling a
@@ -942,7 +1005,7 @@
 			renderComposer(active, typed, local, offered, anyRunAwaiting(value)),
 		);
 
-		return `<section class="conv-panel ${variant}" aria-label="Conversation">
+		return `<section class="conv-panel ${variant}" aria-label="${escapeHtml(TEXT.panel)}">
 			${renderHead(value, badge, variant, active ? renderCloseControl(local) : "")}
 			${blocks.join("")}
 		</section>`;
