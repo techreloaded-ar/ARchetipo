@@ -4670,6 +4670,36 @@ body.no-workspace [data-workspace-scoped] {
 	color: var(--text);
 }
 
+/* Ogni avviso si chiude. Il comando sta in fondo alla riga, quieto finché non
+   lo si cerca: è la via d'uscita di una nota, non una delle cose che la nota
+   dice. Il bersaglio però è pieno — 24px per lato — perché una X da premere
+   non può essere solo un carattere. */
+.conv-notice-dismiss {
+	margin-left: auto;
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	margin-top: -2px;
+	background: none;
+	border: none;
+	border-radius: var(--radius-sm);
+	color: inherit;
+	opacity: 0.55;
+	cursor: pointer;
+	font-size: 14px;
+	line-height: 1;
+	padding: 0;
+}
+
+.conv-notice-dismiss:hover,
+.conv-notice-dismiss:focus-visible {
+	opacity: 1;
+	background: var(--surface-2);
+}
+
 /* The unavailable panel is the head and the reason and nothing else: no
    composer, and no control that would start what the server just refused. */
 .conv-unavailable .conv-notice {
@@ -5289,6 +5319,40 @@ body.no-workspace [data-workspace-scoped] {
 	flex: 0 0 auto;
 }
 
+/* Dove andrà a finire ciò che si sta per scrivere, a conversazione finita.
+   Prima era un suggerimento stretto accanto al campo, dove divideva la riga con
+   ciò che si scrive e si troncava per primo; qui è una riga propria sopra al
+   campo, con il colore dell'accento, perché è un fatto da leggere prima di
+   premere Invio e non una scorciatoia da ricordare. */
+.conv-resume-note {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
+	/* Il compositore è una colonna con il suo interlinea: la nota non ne
+	   aggiunge un secondo. */
+	margin: 0;
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--accent);
+	border-radius: var(--radius);
+	background: var(--accent-soft);
+}
+
+.conv-resume-note-mark {
+	font-size: 11px;
+	font-weight: 800;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--accent);
+	white-space: nowrap;
+}
+
+.conv-resume-note-body {
+	font-size: 14px;
+	line-height: 1.5;
+	color: var(--text);
+	min-width: 0;
+}
+
 /* ---- Close control ------------------------------------------------------ */
 /* It lives in the head now, at the far end of the band, and not in the composer
    row: the one irreversible command of this panel no longer shares a row with
@@ -5623,10 +5687,12 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 /* ---- View switcher ------------------------------------------------------ */
-/* Permanent, in both widths: Conversazione · Spec · Board. The board is one
-   press away from the home screen, and the current view is the one marked
-   is-current. Filled by the caller from the switcher list workspace-layout.js
-   returns; the markup here takes no decision.
+/* Permanente, in entrambe le larghezze, con due sole linguette: Conversazione ·
+   Board. La board è a un comando dalla casa del workspace, e la vista corrente
+   è quella marcata is-current — nessuna delle due lo è mentre in colonna c'è il
+   dettaglio spec, che linguetta non ne ha. La riempie il chiamante dalla lista
+   di commutatori che restituisce workspace-layout.js; il markup qui non prende
+   nessuna decisione.
 
    It lives in the middle cell of the topbar, so it takes no band of its own:
    no border below it, no ground of its own, no vertical padding — the bar it
@@ -6057,10 +6123,10 @@ body.no-workspace [data-workspace-scoped] {
 		margin-right: var(--space-4);
 	}
 
-	/* Su una riga stretta i tre elementi non ci stanno affiancati, e la frase a
-	   sinistra di Send non è sempre una scorciatoia: a conversazione finita dice
-	   dove andrà la risposta, che è un fatto da leggere. Torna quindi sotto al
-	   campo invece di essere troncata. */
+	/* Su una riga stretta i tre elementi non ci stanno affiancati: il campo
+	   prende la riga tutta per sé e il suggerimento scende sotto, intero,
+	   invece di essere troncato. Dove andrà la risposta a conversazione finita
+	   non è più qui — sta sopra al campo, su una riga propria. */
 	.conv-composer-row {
 		flex-wrap: wrap;
 	}
@@ -6243,10 +6309,42 @@ body.no-workspace [data-workspace-scoped] {
    next to it, only louder in colour, because it names what to close before
    another conversation can be opened. */
 .rail-notice {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--space-2);
 	margin: var(--space-3) var(--space-1);
 	font-size: 14px;
 	line-height: 1.45;
 	color: var(--text);
+}
+
+.rail-notice-body {
+	min-width: 0;
+}
+
+.rail-notice-dismiss {
+	margin-left: auto;
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	background: none;
+	border: none;
+	border-radius: var(--radius-sm);
+	color: inherit;
+	opacity: 0.55;
+	cursor: pointer;
+	font-size: 13px;
+	line-height: 1;
+	padding: 0;
+}
+
+.rail-notice-dismiss:hover,
+.rail-notice-dismiss:focus-visible {
+	opacity: 1;
+	background: var(--surface-2);
 }
 
 /* A group heading is a typographic rule, not a bar: the index has to read like
@@ -6434,6 +6532,33 @@ body.no-workspace [data-workspace-scoped] {
 	font-family: var(--font-mono);
 	font-size: 13px;
 	color: var(--text-muted);
+}
+
+/* Anche la dichiarazione di ripresa si chiude, come ogni altra nota del
+   pannello: è stata scritta per essere letta una volta. */
+.resume-banner-dismiss {
+	margin-left: auto;
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	background: none;
+	border: none;
+	border-radius: var(--radius-sm);
+	color: var(--text-muted);
+	opacity: 0.6;
+	cursor: pointer;
+	font-size: 14px;
+	line-height: 1;
+	padding: 0;
+}
+
+.resume-banner-dismiss:hover,
+.resume-banner-dismiss:focus-visible {
+	opacity: 1;
+	background: var(--surface-2);
 }
 
 /* The spec pane keeps its title on the left and gathers its two commands on the

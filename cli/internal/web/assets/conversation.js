@@ -121,11 +121,21 @@
 	 * One additive row above the timeline. Every caller passes a tone from the
 	 * stylesheet's closed set — info, refused, ok — so payload text can never
 	 * choose how it is presented.
+	 *
+	 * `key` è il nome con cui il chiamante ricorda che questo avviso è stato
+	 * chiuso. Ogni avviso ne ha uno, perché ogni avviso si deve poter chiudere:
+	 * è una nota che sta sopra alla conversazione, e chi l'ha letta deve poter
+	 * restituire quello spazio alla conversazione. Senza chiave il riquadro
+	 * resta com'era, senza comando.
 	 */
-	function renderNotice(tone, mark, body) {
+	function renderNotice(tone, mark, body, key) {
+		const dismiss = key
+			? `<button type="button" class="conv-notice-dismiss" data-conversation-notice-dismiss="${escapeHtml(key)}" title="Chiudi questo avviso" aria-label="Chiudi questo avviso">✕</button>`
+			: "";
 		return `<div class="conv-notice ${tone}"${tone === "refused" ? ' role="alert"' : ""}>
 			<span class="conv-notice-mark">${escapeHtml(mark)}</span>
 			<span class="conv-notice-body">${escapeHtml(body)}</span>
+			${dismiss}
 		</div>`;
 	}
 
@@ -533,7 +543,34 @@
 			: active
 				? "This conversation takes no more messages: close it to let the agent go"
 				: "This conversation is over and takes no more messages";
-		const hint = writable ? "⌘ + enter to send" : "read only";
+		// Una conversazione finita non è muta: ci si scrive per riprenderla, e
+		// ciò che ne esce è una conversazione nuova. Quel fatto è la cosa più
+		// importante da sapere prima di premere Invio, quindi sta su una riga
+		// propria sopra al campo — visibile per intero e in ogni larghezza —
+		// invece di stare stretto accanto al campo come un suggerimento fra gli
+		// altri, dove rubava larghezza a ciò che si sta scrivendo.
+		const ended = !active;
+		const hint = writable
+			? "invio per inviare · maiusc+invio a capo"
+			: ended
+				? ""
+				: "read only";
+		const hintHtml = hint
+			? `<span class="conv-composer-hint">${escapeHtml(hint)}</span>`
+			: "";
+		// Si chiude come ogni altra nota del pannello: dopo la prima lettura la
+		// riga è del compositore. Il segnaposto del campo continua comunque a
+		// dire che si sta scrivendo per riprendere, quindi chiuderla non lascia
+		// nessuno all'oscuro.
+		const dismissedNotes = objectAt(ui, "dismissed") || {};
+		const resumeHtml =
+			ended && dismissedNotes["resume-note"] !== true
+				? `<p class="conv-resume-note" role="status">
+				<span class="conv-resume-note-mark">ripresa</span>
+				<span class="conv-resume-note-body">La risposta arriva in una <strong>conversazione nuova</strong>, che riceve questa come contesto.</span>
+				<button type="button" class="conv-notice-dismiss" data-conversation-notice-dismiss="resume-note" title="Chiudi questo avviso" aria-label="Chiudi questo avviso">✕</button>
+			</p>`
+				: "";
 		const await_ = awaiting
 			? '<p class="conv-composer-await">the run resumes when you answer the wait above</p>'
 			: "";
@@ -542,9 +579,10 @@
 		// pannello un'altezza intera per un solo bottone, e la conversazione è
 		// ciò che quello spazio deve avere.
 		return `<form class="conv-composer">
+			${resumeHtml}
 			<div class="conv-composer-row">
 				<textarea class="conv-composer-input" rows="1" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
-				<span class="conv-composer-hint">${escapeHtml(hint)}</span>
+				${hintHtml}
 				<button type="submit" class="primary-btn"${disabled}>Send</button>
 			</div>
 			${await_}
@@ -813,13 +851,24 @@
 			textAt(value, "unavailable_reason") ||
 			"a conversation cannot be opened in this workspace";
 
+		// Quali avvisi il lettore ha già chiuso. La scelta è sua e vive nel
+		// chiamante — il pannello si ridisegna a ogni lettura, quindi ricordarla
+		// qui dentro non avrebbe alcun effetto — e qui arriva come una tabella di
+		// chiavi. Un avviso chiuso non viene disegnato affatto: non lascia
+		// nemmeno il posto vuoto dov'era.
+		const dismissed = objectAt(local, "dismissed") || {};
+		function pushNotice(key, tone, mark, body) {
+			if (dismissed[key] === true) return;
+			blocks.push(renderNotice(tone, mark, body, key));
+		}
+
 		// Refused here and now, with nothing open: the reason is the server's
 		// sentence, shown verbatim, and nothing is offered next to it — neither a
 		// composer nor a way to open one.
 		if (!offered && !conversation) {
 			return `<section class="conv-panel conv-unavailable" aria-label="Conversation">
 				${renderHead(value, "not offered", "conv-off")}
-				${renderNotice("refused", "not offered", refusal)}
+				${dismissed["not-offered"] === true ? "" : renderNotice("refused", "not offered", refusal, "not-offered")}
 			</section>`;
 		}
 
@@ -846,29 +895,28 @@
 		// explains why nothing more can be said here, while the history stays
 		// readable and the close control stays offered — the conversation is still
 		// holding an agent, and letting it go must remain possible.
-		if (!offered) blocks.push(renderNotice("refused", "not offered", refusal));
+		if (!offered) pushNotice("not-offered", "refused", "not offered", refusal);
 
 		const failure = textAt(conversation, "error");
-		if (failure) blocks.push(renderNotice("refused", "error", failure));
+		if (failure) pushNotice("error", "refused", "error", failure);
 		if (local.refusal) {
-			blocks.push(renderNotice("refused", "refused", String(local.refusal)));
+			pushNotice("refusal", "refused", "refused", String(local.refusal));
 		}
 		// A note the server sent that is not the partial-history declaration: the
 		// declaration lives at the head of the timeline and nowhere else, so one
 		// fact is never stated twice.
 		if (!value.truncated && textAt(value, "notice")) {
-			blocks.push(renderNotice("info", "note", textAt(value, "notice")));
+			pushNotice("note", "info", "note", textAt(value, "notice"));
 		}
 		if (local.link) {
-			blocks.push(renderNotice("info", "channel", String(local.link)));
+			pushNotice("channel", "info", "channel", String(local.link));
 		}
 		if (!active) {
-			blocks.push(
-				renderNotice(
-					"info",
-					"over",
-					"This conversation is over: the agent behind it is no longer engaged, and what was said stays readable.",
-				),
+			pushNotice(
+				"over",
+				"info",
+				"over",
+				"This conversation is over: the agent behind it is no longer engaged, and what was said stays readable.",
 			);
 		}
 		// The proposal and its outcome sit between the notices and the timeline:

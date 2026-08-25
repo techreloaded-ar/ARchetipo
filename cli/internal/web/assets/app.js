@@ -355,6 +355,11 @@
 	let runTruncated = false; // whether older history fell outside the retained window
 	let runRefusal = ""; // last refused command, shown inline until the next one
 	let runOutcome = ""; // outcome of the last accepted command
+	// Gli avvisi che il lettore ha chiuso con la loro X. Il pannello si
+	// ridisegna a ogni lettura, quindi la scelta non può vivere nel DOM: senza
+	// questa tabella il riquadro tornerebbe al giro successivo. Vale per la run
+	// montata e si dimentica con lei.
+	let runDismissedNotices = {}; // chiave avviso → true
 	let runDraft = ""; // composer text, preserved across re-renders
 	let runBusy = false; // a command is in flight: the controls stay disabled
 	let runCancelArmed = false; // the inline cancel confirmation is showing
@@ -490,14 +495,19 @@
 			const input = e.target.closest(".run-composer-input");
 			if (input) runDraft = input.value;
 		});
+		// Stessa regola del compositore della conversazione — Invio manda,
+		// Maiusc+Invio va a capo — perché è lo stesso gesto sullo stesso tipo di
+		// campo: due scorciatoie diverse per scrivere a un agente sarebbero due
+		// cose da ricordare al posto di una.
 		container.addEventListener("keydown", (e) => {
 			const input = e.target.closest(".run-composer-input");
 			if (!input) return;
-			if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-				e.preventDefault();
-				runDraft = input.value;
-				sendRunMessage();
-			}
+			if (e.key !== "Enter") return;
+			if (e.isComposing || e.keyCode === 229) return;
+			if (e.shiftKey || e.altKey) return;
+			e.preventDefault();
+			runDraft = input.value;
+			sendRunMessage();
 		});
 	}
 
@@ -822,10 +832,14 @@
 		el.classList.toggle(WorkspaceLayout.PANE_HIDDEN_CLASS, !rail.visible);
 	}
 
-	// The switcher is permanent, in both widths: the three tabs of the design —
-	// Conversazione · Spec · Board — with the current one marked. The tabs that
-	// are not current come from the module's switcher list; the current one is
-	// drawn from the view the module normalised, so the two cannot disagree.
+	// La barra è permanente, in entrambe le larghezze, e ha due linguette e
+	// basta: Conversazione · Board, con quella corrente accesa. Le linguette non
+	// correnti vengono dalla lista di commutatori del modulo; quella corrente
+	// dal modulo stesso, così le due non possono contraddirsi. Il dettaglio spec
+	// non è una linguetta — si apre da una card della board e si chiude col
+	// comando di ritorno — quindi mentre occupa la colonna `current` è nullo e
+	// nessuna delle due risulta accesa: accenderne una direbbe che si sta
+	// guardando qualcosa che non si sta guardando.
 	function renderShellViews(switchers, current) {
 		if (!shellViewsEl) return;
 		const buttons = (switchers || []).map((s) => ({
@@ -833,15 +847,19 @@
 			label: s.label,
 			current: false,
 		}));
-		buttons.push({
-			view: current.view,
-			label: current.label,
-			current: true,
-		});
-		// The order of the three tabs in the design (docs/mockups/redesign-chat,
-		// states A and D): Conversazione · Spec · Board. It is presentation, not
-		// a decision about what is on screen — that stays with the module.
-		const order = ["conversation", "spec", "board"];
+		// Senza linguetta corrente — è il dettaglio spec a occupare la colonna —
+		// la barra resta quella di sempre, con le sue due voci, e nessuna accesa.
+		if (current) {
+			buttons.push({
+				view: current.view,
+				label: current.label,
+				current: true,
+			});
+		}
+		// L'ordine di lettura delle linguette: Conversazione · Board. È
+		// presentazione, non una decisione su che cosa sia su schermo — quella
+		// resta al modulo, che dichiara le stesse due linguette in TABS.
+		const order = ["conversation", "board"];
 		buttons.sort((a, b) => order.indexOf(a.view) - order.indexOf(b.view));
 		shellViewsEl.innerHTML = buttons
 			.map(
@@ -870,10 +888,13 @@
 		applyPaneState(boardEl, layout.panes.board);
 		applyPaneState(modal, layout.panes.spec);
 		applyRailState(conversationsRailEl, layout.rail);
-		renderShellViews(layout.switchers, {
-			view: layout.view,
-			label: layout.panes[layout.view].label || layout.view,
-		});
+		const currentTab = layout.currentTab
+			? {
+					view: layout.currentTab,
+					label: layout.panes[layout.currentTab].label || layout.currentTab,
+				}
+			: null;
+		renderShellViews(layout.switchers, currentTab);
 		// The return control is the close button the spec pane has always had:
 		// it leaves the detail and puts the board back. It is named after what
 		// it reaches, in the module's own words.
@@ -3320,6 +3341,7 @@
 		runTruncated = false;
 		runRefusal = "";
 		runOutcome = "";
+		runDismissedNotices = {};
 		runDraft = "";
 		runBusy = false;
 		runCancelArmed = false;
@@ -3646,7 +3668,7 @@
 
 		if (!runSnapshot) {
 			panelRun.innerHTML = `<section class="run-panel">
-				${runNotice ? renderRunNotice("info", "waiting", runNotice) : ""}
+				${runNotice ? renderRunNotice("info", "waiting", runNotice, "waiting") : ""}
 			</section>`;
 			return;
 		}
@@ -3661,7 +3683,7 @@
 		);
 		const blocks = [];
 		if (runSnapshot.error) {
-			blocks.push(renderRunNotice("refused", "error", runSnapshot.error));
+			blocks.push(renderRunNotice("refused", "error", runSnapshot.error, "error"));
 		}
 		if (runRefusal) {
 			blocks.push(renderRunNotice("refused", "refused", runRefusal, "refusal"));
@@ -3670,12 +3692,17 @@
 			blocks.push(renderRunNotice("ok", "confirmed", runOutcome, "outcome"));
 		}
 		if (runNotice) {
-			blocks.push(renderRunNotice("info", "channel", runNotice));
+			blocks.push(renderRunNotice("info", "channel", runNotice, "channel"));
 		}
 		const closedAt = formatExecutionTime(runSnapshot.closed_at);
 		if (closedAt) {
 			blocks.push(
-				renderRunNotice("info", "ended", `The provider closed this run at ${closedAt}.`),
+				renderRunNotice(
+					"info",
+					"ended",
+					`The provider closed this run at ${closedAt}.`,
+					"ended",
+				),
 			);
 		}
 		if (runTruncated) {
@@ -3684,6 +3711,7 @@
 					"info",
 					"window",
 					"Older history is beyond the window this viewer keeps; the provider still holds it.",
+					"window",
 				),
 			);
 		}
@@ -3735,9 +3763,14 @@
 	// renderRunNotice draws one additive row above the timeline. Every caller
 	// passes a tone from the stylesheet's closed set — info, refused, ok — so a
 	// provider string can never choose how it is presented.
+	//
+	// `dismiss` è la chiave con cui l'avviso è ricordato come chiuso. Ce l'hanno
+	// tutti, perché ogni avviso si deve poter chiudere: una volta letto, lo
+	// spazio che occupa appartiene alla run.
 	function renderRunNotice(tone, mark, body, dismiss) {
+		if (dismiss && runDismissedNotices[dismiss] === true) return "";
 		const close = dismiss
-			? `<button type="button" class="run-notice-dismiss" data-notice-dismiss="${escapeHtml(dismiss)}" aria-label="Dismiss this notice">✕</button>`
+			? `<button type="button" class="run-notice-dismiss" data-notice-dismiss="${escapeHtml(dismiss)}" title="Dismiss this notice" aria-label="Dismiss this notice">✕</button>`
 			: "";
 		return `<div class="run-notice ${tone}"${tone === "refused" ? ' role="alert"' : ""}>
 			<span class="run-notice-mark">${escapeHtml(mark)}</span>
@@ -3748,10 +3781,16 @@
 
 	// dismissRunNotice closes one inline notice and only that: the projection it
 	// was reporting on — timeline, cursor, run state — is untouched.
+	//
+	// Il rifiuto e l'esito si spengono alla fonte — sono testo locale, e il
+	// prossimo deve poter tornare a farsi vedere — mentre gli altri, che
+	// raccontano il payload e tornerebbero identici al prossimo disegno, sono
+	// ricordati come chiusi.
 	function dismissRunNotice(which) {
+		if (!which) return;
 		if (which === "refusal") runRefusal = "";
 		else if (which === "outcome") runOutcome = "";
-		else return;
+		else runDismissedNotices[which] = true;
 		renderRun();
 	}
 
@@ -3951,7 +3990,7 @@
 				${renderRunCancel()}
 				${pending}
 				<span class="run-composer-spacer"></span>
-				<span class="run-composer-hint">${closed ? "the run is terminal" : "⌘ + enter to send"}</span>
+				<span class="run-composer-hint">${closed ? "the run is terminal" : "enter to send · shift+enter for a new line"}</span>
 				<button type="submit" class="primary-btn"${disabled}>Send</button>
 			</div>
 		</form>`;
@@ -4101,6 +4140,12 @@
 	// marks it instead of only scrolling to it.
 	let conversationAnsweredApprovals = {}; // approvalID → {optionID, label, denied, executionID, approval}
 	let conversationHighlightAnchor = ""; // anchor event id of the block just reached
+	// Quali avvisi del pannello sono stati chiusi con la loro X. Il pannello si
+	// ridisegna a ogni lettura, quindi la scelta non può vivere nel DOM: senza
+	// questa tabella il riquadro tornerebbe da solo al giro di poll successivo,
+	// e la X sarebbe un comando che non comanda niente. Vale per la
+	// conversazione su schermo e si dimentica con lei.
+	let conversationDismissedNotices = {}; // chiave avviso → true
 
 	// Quanto è alto il campo lo decide ciò che c'è scritto, non un numero fisso:
 	// da vuoto è una riga sola, e cresce riga per riga mentre si scrive. Serve
@@ -4117,12 +4162,35 @@
 		input.style.height = `${input.scrollHeight + bordi}px`;
 	}
 
+	// dismissConversationNotice chiude un avviso e soltanto quello: ciò di cui
+	// parlava — lo stato della conversazione, la sua storia, il suo cursore —
+	// non viene toccato.
+	//
+	// Un rifiuto è l'unico che si spegne alla fonte invece di essere ricordato
+	// come chiuso: è testo locale, e tenerlo in vita solo per non disegnarlo
+	// significherebbe far riapparire il riquadro al prossimo rifiuto uguale.
+	function dismissConversationNotice(key) {
+		if (!key) return;
+		if (key === "refusal") conversationRefusal = "";
+		else conversationDismissedNotices[key] = true;
+		renderConversationPanel();
+	}
+
 	// The panel is redrawn on every poll, so its controls cannot own their
 	// handlers: the container does, bound once, and each control declares what
 	// it is through its data attributes.
 	function bindConversationPanel(container) {
 		if (!container) return;
 		container.addEventListener("click", (e) => {
+			const noticeDismiss = e.target.closest(
+				"[data-conversation-notice-dismiss]",
+			);
+			if (noticeDismiss) {
+				dismissConversationNotice(
+					noticeDismiss.getAttribute("data-conversation-notice-dismiss") || "",
+				);
+				return;
+			}
 			if (e.target.closest("[data-conversation-open]")) {
 				openConversation();
 				return;
@@ -4215,14 +4283,23 @@
 			conversationDraft = input.value;
 			adattaAltezzaCompositore(input);
 		});
+		// Invio manda il messaggio, Maiusc+Invio va a capo: è il gesto che si ha
+		// nelle dita in una conversazione, e scrivere è ciò che qui si fa più
+		// spesso. ⌘/Ctrl+Invio resta valido perché chi lo aveva imparato non
+		// deve disimpararlo.
+		//
+		// Una composizione IME in corso non è un invio: il primo Invio chiude la
+		// scelta dei caratteri e non deve mandare a metà ciò che si sta ancora
+		// scrivendo.
 		container.addEventListener("keydown", (e) => {
 			const input = e.target.closest(".conv-composer-input");
 			if (!input) return;
-			if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-				e.preventDefault();
-				conversationDraft = input.value;
-				sendConversationMessage();
-			}
+			if (e.key !== "Enter") return;
+			if (e.isComposing || e.keyCode === 229) return;
+			if (e.shiftKey || e.altKey) return;
+			e.preventDefault();
+			conversationDraft = input.value;
+			sendConversationMessage();
 		});
 	}
 
@@ -4241,6 +4318,13 @@
 	function bindConversationsRail(container) {
 		if (!container) return;
 		container.addEventListener("click", (e) => {
+			if (e.target.closest("[data-rail-notice-dismiss]")) {
+				// Il rifiuto si spegne alla fonte: è testo locale, e il prossimo
+				// rifiuto deve poter tornare a farsi vedere.
+				conversationsRefusal = "";
+				renderConversationsRail();
+				return;
+			}
 			if (e.target.closest("[data-conversation-new]")) {
 				// A free conversation: the very same open route the panel's own
 				// invitation uses, with no spec attached (AC-5).
@@ -4360,6 +4444,7 @@
 		conversationAfterID = 0;
 		conversationAnsweredApprovals = {};
 		conversationHighlightAnchor = "";
+		conversationDismissedNotices = {};
 		conversationRefusal = "";
 		conversationLink = "";
 		conversationCloseArmed = false;
@@ -4488,9 +4573,12 @@
 		conversationPollBusy = false;
 		conversationPollFailures = 0;
 		// The answers given here and the block last reached belong to the
-		// conversation being left: neither may be read as the new one's.
+		// conversation being left: neither may be read as the new one's. Lo
+		// stesso vale per gli avvisi chiusi: chiuderne uno qui non deve zittire
+		// lo stesso avviso in un'altra conversazione.
 		conversationAnsweredApprovals = {};
 		conversationHighlightAnchor = "";
+		conversationDismissedNotices = {};
 		// The rail is forgotten with the conversation (AC-6): the index of the
 		// workspace being left must never be on screen beside the workspace now
 		// open, not even for the instant it takes to read the new one. Emptied
@@ -4957,6 +5045,9 @@
 				// which block the viewer was just sent to.
 				answeredApprovals: conversationAnsweredApprovals,
 				highlightAnchor: conversationHighlightAnchor,
+				// Quali avvisi sono stati chiusi con la loro X: il renderer non
+				// disegna quelli, e nessuno dei due lati decide da solo.
+				dismissed: conversationDismissedNotices,
 				// The recommended step is a fact of the workspace, not of this
 				// conversation: it comes from /api/workspace/status and from no
 				// other source. The thread hosts it at its tail — it does not
@@ -4972,9 +5063,11 @@
 		// about (AC-4). It is drawn from the payload alone — a conversation that
 		// took up no other one carries no resumed_from, and the renderer answers
 		// that with silence.
-		const banner = window.ConversationIndex
-			? window.ConversationIndex.renderResumeBanner(view)
-			: "";
+		const banner =
+			window.ConversationIndex &&
+			conversationDismissedNotices["resume"] !== true
+				? window.ConversationIndex.renderResumeBanner(view)
+				: "";
 		if (banner) {
 			const panel = conversationEl.querySelector(".conv-panel");
 			const head = panel ? panel.querySelector(".conv-head") : null;
@@ -4992,19 +5085,18 @@
 		if (view && view.conversation && !conversationIsActive()) {
 			const resumeInput = conversationEl.querySelector(".conv-composer-input");
 			const resumeSend = conversationEl.querySelector(
-				".conv-composer button[type='submit']",
+				".conv-composer .conv-composer-row button[type='submit']",
 			);
-			const resumeHint = conversationEl.querySelector(".conv-composer-hint");
 			if (resumeInput) {
 				resumeInput.disabled = conversationBusy;
 				resumeInput.placeholder =
 					"Scrivi per riprendere questa conversazione…";
 			}
 			if (resumeSend) resumeSend.disabled = conversationBusy;
-			if (resumeHint) {
-				resumeHint.textContent =
-					"la risposta arriva in una conversazione nuova";
-			}
+			// Che la risposta arrivi in una conversazione nuova non è più un
+			// suggerimento stretto accanto al campo: il renderer lo dice per
+			// esteso su una riga propria sopra al compositore, dove si legge
+			// senza togliere larghezza a ciò che si scrive.
 		}
 
 		const nextTimeline = conversationEl.querySelector(".conv-timeline");

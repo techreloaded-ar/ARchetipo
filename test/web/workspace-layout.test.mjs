@@ -12,8 +12,12 @@
 // Verifies:
 //   - AC-1 the conversation is the home: an empty state, and every view that is
 //     not admissible, resolve to the conversation, in both widths
-//   - AC-2 every view that exists and is not the current one is reachable with
-//     exactly one switcher — one command, one button
+//   - AC-2 ogni linguetta della barra che esiste e non è la vista corrente è
+//     raggiungibile con esattamente un commutatore — un comando, un bottone
+//   - la barra ha due linguette e sempre le stesse: Conversazione e Board. Il
+//     dettaglio spec non è una linguetta — si apre scegliendo una card della
+//     board e si chiude col comando di ritorno — quindi nessuno stato può farne
+//     comparire una terza
 //   - AC-4 in a wide window the primary column shows exactly one view and
 //     nothing is laid over anything
 //   - AC-6 in a narrow window the conversation is always on screen and the
@@ -62,6 +66,7 @@ const {
 	NARROW_MAX_WIDTH,
 	PANES,
 	VIEWS,
+	TABS,
 	DEFAULT_VIEW,
 } = loadWorkspaceLayout();
 
@@ -240,7 +245,11 @@ describe("finestra stretta — la conversazione resta, le altre viste si sovrapp
 });
 
 describe("nulla di irraggiungibile", () => {
-	it("raggiunge con un commutatore ogni vista esistente e non corrente", () => {
+	it("raggiunge con un commutatore ogni linguetta esistente e non corrente", () => {
+		// Il dettaglio spec è deliberatamente fuori da questa regola: non è una
+		// vista fra pari ma il dettaglio di una card, e si raggiunge scegliendo
+		// la card. Ciò che deve restare a un comando sono le due linguette della
+		// barra, da qualunque stato.
 		for (const state of STATES) {
 			const layout = resolveLayout(state);
 			const reachable = new Set([layout.view]);
@@ -252,9 +261,50 @@ describe("nulla di irraggiungibile", () => {
 				reachable.add(switcher.target);
 			}
 			for (const pane of layout.present) {
+				if (!TABS.includes(pane)) continue;
 				assert.ok(
 					reachable.has(pane),
-					`il riquadro ${pane} esiste ma non è né la vista corrente né raggiungibile con ${describeState(state)}`,
+					`la linguetta ${pane} esiste ma non è né la vista corrente né raggiungibile con ${describeState(state)}`,
+				);
+			}
+		}
+	});
+
+	it("la barra ha sempre e solo le due linguette dichiarate", () => {
+		assert.deepEqual(Array.from(TABS), ["conversation", "board"]);
+		for (const state of STATES) {
+			const layout = resolveLayout(state);
+			for (const switcher of layout.switchers) {
+				assert.ok(
+					TABS.includes(switcher.target),
+					`la barra offre una linguetta che non è delle sue (${switcher.target}) con ${describeState(state)}`,
+				);
+			}
+			// Le voci disegnate sono i commutatori più, quando c'è, la linguetta
+			// corrente: mai una terza voce, in nessuno stato.
+			const drawn = layout.switchers.length + (layout.currentTab ? 1 : 0);
+			assert.equal(
+				drawn,
+				TABS.length,
+				`la barra non ha ${TABS.length} voci ma ${drawn} con ${describeState(state)}`,
+			);
+		}
+	});
+
+	it("non accende nessuna linguetta mentre in colonna c'è il dettaglio spec", () => {
+		for (const state of STATES) {
+			const layout = resolveLayout(state);
+			if (layout.view === "spec") {
+				assert.equal(
+					layout.currentTab,
+					"",
+					`una linguetta risulta corrente mentre si guarda il dettaglio spec — ${describeState(state)}`,
+				);
+			} else {
+				assert.equal(
+					layout.currentTab,
+					layout.view,
+					`la linguetta accesa non è la vista corrente — ${describeState(state)}`,
 				);
 			}
 		}
@@ -287,7 +337,8 @@ describe("nulla di irraggiungibile", () => {
 	});
 
 	it("raggiunge la board con esattamente un comando quando non è la vista corrente", () => {
-		// AC-2, alla lettera.
+		// AC-2, alla lettera: vale anche mentre in colonna c'è il dettaglio
+		// spec, dove premere Board è ciò che lo chiude e la riporta in colonna.
 		for (const state of STATES) {
 			const layout = resolveLayout(state);
 			if (layout.view === "board") continue;

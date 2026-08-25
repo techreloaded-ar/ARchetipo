@@ -42,6 +42,14 @@
 	// because a view *is* the pane that occupies the column.
 	const VIEWS = ["conversation", "board", "spec"];
 
+	// Le linguette della barra in alto, e sono queste due e basta. Il dettaglio
+	// spec non è una vista fra pari: è il dettaglio di una card della board, si
+	// apre scegliendo la card e si chiude col comando di ritorno. Dargli una
+	// linguetta faceva comparire e sparire una terza voce a seconda di ciò che
+	// era aperto, e una barra che cambia numero di voci non è più una barra:
+	// è un elenco di cose che capitano.
+	const TABS = ["conversation", "board"];
+
 	// The home of the workspace. An empty state — the page that has just booted
 	// and asked for nothing — resolves to this, so opening a workspace lands on
 	// the conversation by construction and not by the order in which the caller
@@ -83,6 +91,15 @@
 		return view;
 	}
 
+	// La linguetta accesa nella barra, o la stringa vuota quando non ce n'è
+	// nessuna: mentre il dettaglio spec occupa la colonna nessuna delle due è la
+	// vista corrente, e restano entrambe premibili — la board perché chiude il
+	// dettaglio e torna in colonna, la conversazione perché è la casa. Accendere
+	// una linguetta che non è ciò che si sta guardando direbbe una cosa falsa.
+	function currentTabFor(view) {
+		return TABS.indexOf(view) !== -1 ? view : "";
+	}
+
 	function switcherFor(pane, specOpen) {
 		return {
 			target: pane,
@@ -103,6 +120,7 @@
 		const specOpen = value.specOpen === true;
 		const narrow = value.narrow === true;
 		const view = normalizeView(value.view, specOpen);
+		const currentTab = currentTabFor(view);
 
 		const present = presentPanes(specOpen);
 
@@ -116,12 +134,13 @@
 				: ["conversation"]
 			: [view];
 
-		// Every view that exists and is not the current one must be one press
-		// away, in both modes: the switcher is permanent, not a narrow-window
-		// fallback.
-		const switchers = present
-			.filter((pane) => pane !== view)
-			.map((pane) => switcherFor(pane, specOpen));
+		// Ogni linguetta che non è quella corrente è a un solo comando, in
+		// entrambe le larghezze: la barra è permanente, non un ripiego per la
+		// finestra stretta. Le linguette sono sempre le stesse due, così la
+		// barra non cambia forma sotto le dita mentre si lavora.
+		const switchers = TABS.filter(
+			(pane) => present.indexOf(pane) !== -1 && pane !== view,
+		).map((pane) => switcherFor(pane, specOpen));
 
 		// The return control leaves the spec detail and puts the board back in
 		// the primary column. It is offered whenever a spec is open.
@@ -152,6 +171,10 @@
 
 		return {
 			view: view,
+			// La linguetta accesa nella barra: la vista corrente quando è una
+			// delle due, la stringa vuota mentre in colonna c'è il dettaglio
+			// spec, che linguetta non ne ha.
+			currentTab: currentTab,
 			narrow: narrow,
 			specOpen: specOpen,
 			shellClass: narrow ? SHELL_CLASS_NARROW : SHELL_CLASS_WIDE,
@@ -199,6 +222,7 @@
 		NARROW_MAX_WIDTH,
 		PANES,
 		VIEWS,
+		TABS,
 		DEFAULT_VIEW,
 		SHELL_CLASS_WIDE,
 		SHELL_CLASS_NARROW,

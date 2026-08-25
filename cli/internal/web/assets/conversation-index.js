@@ -279,7 +279,10 @@
 	function renderLimitNotice(reason) {
 		const text = typeof reason === "string" ? reason.trim() : "";
 		if (!text) return "";
-		return `<p class="rail-notice" role="status">${escapeHtml(text)}</p>`;
+		return `<p class="rail-notice" role="status">
+			<span class="rail-notice-body">${escapeHtml(text)}</span>
+			<button type="button" class="rail-notice-dismiss" data-rail-notice-dismiss title="Chiudi questo avviso" aria-label="Chiudi questo avviso">✕</button>
+		</p>`;
 	}
 
 	/**
@@ -304,6 +307,7 @@
 		return `<div class="resume-banner" role="note" data-resumed-from="${escapeHtml(from)}">
 			<span class="resume-banner-mark">ripresa</span>
 			<span class="resume-banner-body">Questa è una conversazione nuova che riprende <code>${escapeHtml(from)}</code>: ne ha ricevuto la storia come contesto.</span>
+			<button type="button" class="resume-banner-dismiss" data-conversation-notice-dismiss="resume" title="Chiudi questo avviso" aria-label="Chiudi questo avviso">✕</button>
 		</div>`;
 	}
 

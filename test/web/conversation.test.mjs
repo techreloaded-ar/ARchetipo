@@ -31,6 +31,10 @@
 //   - US-061 AC-4 with nothing pending no block and no placeholder is drawn
 //   - the module carries no process rules: no capability, no provider, no
 //     action identifier
+//   - ogni avviso porta il comando per chiuderlo, e un avviso che il lettore ha
+//     chiuso non viene disegnato affatto
+//   - una conversazione finita dice sopra al campo, e non accanto, che la
+//     risposta arriverà in una conversazione nuova
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -1346,5 +1350,215 @@ describe("l'agente nominato in testata", () => {
 			/class="conv-provider"[^>]*>Fornitore</,
 			"senza modello la testata non nomina più nemmeno il provider",
 		);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Gli avvisi si chiudono
+//
+// Un avviso è una nota sopra alla conversazione: una volta letta, lo spazio che
+// occupa appartiene alla conversazione. Quindi ognuno porta la sua X, e chiudere
+// significa non disegnarlo — non lasciarne il posto vuoto.
+//
+// Che la scelta duri è del chiamante: il pannello si ridisegna a ogni lettura,
+// e il renderer la riceve come tabella di chiavi. Qui si verifica il patto fra i
+// due: la chiave dichiarata dal bottone è la stessa che, passata come chiusa,
+// fa sparire il riquadro.
+// ---------------------------------------------------------------------------
+
+const CHIUDIBILI = [
+	{
+		chiave: "over",
+		testo: "no longer engaged",
+		view: withConversation({
+			conversation: {
+				id: "conv-1",
+				state: "CLOSED",
+				working_dir: "/tmp/DIRECTORY-X",
+				opened_at: "2026-08-21T10:00:00.000Z",
+			},
+		}),
+		ui: {},
+	},
+	{
+		chiave: "note",
+		testo: "NOTA-DEL-SERVER",
+		view: withConversation({ notice: "NOTA-DEL-SERVER", truncated: false }),
+		ui: {},
+	},
+	{
+		chiave: "channel",
+		testo: "CANALE-X",
+		view: LIVE,
+		ui: { link: "CANALE-X" },
+	},
+	{
+		chiave: "refusal",
+		testo: "RIFIUTO-X",
+		view: LIVE,
+		ui: { refusal: "RIFIUTO-X" },
+	},
+	{
+		chiave: "error",
+		testo: "ERRORE-X",
+		view: withConversation({
+			conversation: {
+				id: "conv-1",
+				state: "ACTIVE",
+				working_dir: "/tmp/DIRECTORY-X",
+				opened_at: "2026-08-21T10:00:00.000Z",
+				error: "ERRORE-X",
+			},
+		}),
+		ui: {},
+	},
+	{
+		chiave: "not-offered",
+		testo: "RAGIONE-X",
+		view: {
+			available: false,
+			unavailable_reason: "RAGIONE-X",
+			conversation: null,
+			events: [],
+			last_id: 0,
+		},
+		ui: {},
+	},
+];
+
+describe("ogni avviso si può chiudere", () => {
+	for (const caso of CHIUDIBILI) {
+		it(`l'avviso ${caso.chiave} porta il comando per chiuderlo`, () => {
+			const html = renderConversation(caso.view, "", caso.ui);
+			assert.ok(
+				visibleText(html).includes(caso.testo),
+				`l'avviso ${caso.chiave} non è nemmeno disegnato: il caso non prova niente`,
+			);
+			assert.ok(
+				html.includes(
+					`data-conversation-notice-dismiss="${caso.chiave}"`,
+				),
+				`l'avviso ${caso.chiave} non offre la X per chiuderlo`,
+			);
+		});
+
+		it(`l'avviso ${caso.chiave} chiuso non viene disegnato`, () => {
+			const chiuso = renderConversation(
+				caso.view,
+				"",
+				Object.assign({}, caso.ui, { dismissed: { [caso.chiave]: true } }),
+			);
+			assert.ok(
+				!visibleText(chiuso).includes(caso.testo),
+				`l'avviso ${caso.chiave} torna sullo schermo dopo essere stato chiuso`,
+			);
+			assert.ok(
+				!chiuso.includes(
+					`data-conversation-notice-dismiss="${caso.chiave}"`,
+				),
+				`del riquadro ${caso.chiave} chiuso resta il posto vuoto`,
+			);
+		});
+	}
+
+	it("chiudere un avviso non ne chiude un altro", () => {
+		const html = renderConversation(LIVE, "", {
+			link: "CANALE-X",
+			refusal: "RIFIUTO-X",
+			dismissed: { channel: true },
+		});
+		const text = visibleText(html);
+		assert.ok(!text.includes("CANALE-X"), "l'avviso chiuso è ancora lì");
+		assert.ok(
+			text.includes("RIFIUTO-X"),
+			"chiudere un avviso ne ha portato via un altro",
+		);
+	});
+
+	it("senza tabella degli avvisi chiusi li disegna tutti", () => {
+		// Il chiamante può non passarla affatto: il pannello deve dire tutto
+		// quello che sa, non tacere per via di un argomento mancante.
+		const html = renderConversation(LIVE, "", { link: "CANALE-X" });
+		assert.ok(visibleText(html).includes("CANALE-X"));
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Dove arriva la risposta a conversazione finita
+//
+// Una conversazione finita non è muta: ci si scrive per riprenderla, e ciò che
+// ne esce è una conversazione nuova. È il fatto da sapere prima di premere
+// Invio, quindi sta su una riga propria sopra al campo — non stretto accanto,
+// dove divideva la riga con ciò che si scrive ed era il primo a essere troncato.
+// ---------------------------------------------------------------------------
+
+describe("la ripresa di una conversazione finita", () => {
+	const CHIUSA = withConversation({
+		conversation: {
+			id: "conv-1",
+			state: "CLOSED",
+			working_dir: "/tmp/DIRECTORY-X",
+			opened_at: "2026-08-21T10:00:00.000Z",
+		},
+	});
+
+	it("dice che la risposta arriverà in una conversazione nuova", () => {
+		const text = visibleText(renderConversation(CHIUSA, "", {}));
+		assert.match(
+			text,
+			/conversazione nuova/,
+			"non dice dove andrà a finire ciò che si sta per scrivere",
+		);
+	});
+
+	it("lo dice sopra al campo e non nella riga del campo", () => {
+		const html = renderConversation(CHIUSA, "", {});
+		const idxNota = html.indexOf("conv-resume-note");
+		const idxRiga = html.indexOf("conv-composer-row");
+		assert.ok(idxNota !== -1, "la nota di ripresa non è disegnata");
+		assert.ok(idxRiga !== -1, "la riga del compositore non è disegnata");
+		assert.ok(
+			idxNota < idxRiga,
+			"la nota è finita dentro la riga del campo invece di stare sopra",
+		);
+		assert.ok(
+			!html.includes("conv-composer-hint"),
+			"a conversazione finita la riga del campo ospita ancora un suggerimento",
+		);
+	});
+
+	it("la nota porta il comando per chiuderla, e chiusa non viene disegnata", () => {
+		const aperta = renderConversation(CHIUSA, "", {});
+		assert.ok(
+			aperta.includes('data-conversation-notice-dismiss="resume-note"'),
+			"la nota di ripresa non offre la X per chiuderla",
+		);
+		const chiusa = renderConversation(CHIUSA, "", {
+			dismissed: { "resume-note": true },
+		});
+		assert.ok(
+			!chiusa.includes("conv-resume-note"),
+			"la nota di ripresa torna sullo schermo dopo essere stata chiusa",
+		);
+		assert.ok(
+			chiusa.includes("conv-composer-row"),
+			"chiudere la nota si è portata via anche il compositore",
+		);
+	});
+
+	it("una conversazione viva non porta la nota di ripresa", () => {
+		const html = renderConversation(LIVE, "", {});
+		assert.ok(
+			!html.includes("conv-resume-note"),
+			"la nota di ripresa compare in una conversazione che non è finita",
+		);
+	});
+
+	it("il suggerimento dei tasti nomina invio e maiusc+invio", () => {
+		// La scorciatoia è cambiata: Invio manda, Maiusc+Invio va a capo. Il
+		// suggerimento accanto al campo deve dire quella, non un'altra.
+		const text = visibleText(renderConversation(LIVE, "", {}));
+		assert.match(text, /invio per inviare/);
+		assert.match(text, /maiusc\+invio/);
 	});
 });

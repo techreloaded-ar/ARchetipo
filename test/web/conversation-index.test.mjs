@@ -19,6 +19,8 @@
 //     the first one
 //   - AC-4 a resumed conversation declares that it is a new one carrying the
 //     earlier one as context, and names it
+//   - ogni nota del pannello — la dichiarazione di ripresa e il rifiuto della
+//     colonna — porta il comando per chiuderla
 //   - a group with no members leaves no orphan heading
 //   - the live conversation is listed as such even when it has a spec code
 //   - US-059 AC-3 several live conversations stand together under "In corso"
@@ -296,6 +298,19 @@ describe("renderResumeBanner", () => {
 		assert.equal(renderResumeBanner({ conversation: { id: "conv-1" } }), "");
 		assert.equal(renderResumeBanner(null), "");
 	});
+
+	it("porta il comando per chiuderlo, come ogni altra nota del pannello", () => {
+		// È una dichiarazione scritta per essere letta una volta: dopo, lo
+		// spazio che occupa appartiene alla conversazione. La chiave è quella
+		// con cui il pannello ricorda che è stata chiusa.
+		const html = renderResumeBanner({
+			conversation: { resumed_from: "conv-vecchia" },
+		});
+
+		assert.match(html, /data-conversation-notice-dismiss="resume"/);
+		assert.match(html, /class="resume-banner-dismiss"/);
+		assert.match(html, /aria-label="Chiudi questo avviso"/);
+	});
 });
 
 describe("renderConversationIndex con più conversazioni vive", () => {
@@ -419,6 +434,12 @@ describe("renderLimitNotice", () => {
 			visibleText(html).includes(serverRefusal),
 			`the notice must carry the server sentence unchanged, got ${html}`,
 		);
+	});
+
+	it("porta il comando per chiuderlo", () => {
+		const html = renderLimitNotice(serverRefusal);
+		assert.match(html, /data-rail-notice-dismiss/);
+		assert.match(html, /aria-label="Chiudi questo avviso"/);
 	});
 
 	it("tace quando non c'è nulla da dire", () => {
