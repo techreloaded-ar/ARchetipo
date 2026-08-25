@@ -186,7 +186,6 @@
 		workingWriting: "L'agente sta scrivendo",
 		workingToolNamed: (tool) => `L'agente sta usando ${tool}`,
 		workingToolAny: "L'agente sta usando uno strumento",
-		workingReceived: "L'agente ha ricevuto il messaggio",
 		workingTitle:
 			"L'agente sta lavorando a questo turno: la riga sparisce quando il turno si chiude",
 	};
@@ -216,10 +215,14 @@
 	// quello di chi scrive non sono mai tecnici, e nemmeno un errore della
 	// conversazione: quello e' una risposta a tutti gli effetti.
 	//
-	// Un tipo sconosciuto non e' tecnico. Il vocabolario e' dell'agente e puo'
-	// crescere, e ripiegare per difetto cio' che non si sa leggere vorrebbe
-	// dire far sparire dalla vista il primo messaggio di un tipo nuovo: resta
-	// dov'e', dichiarato come non interpretato.
+	// Anche un tipo sconosciuto e' tecnico. Non e' un messaggio dell'agente: i
+	// provider traducono nel vocabolario comune tutto cio' che l'agente *dice*,
+	// e cio' che non traducono viaggia col nome del proprio protocollo — ogni
+	// conversazione si apre con `system/hook_started` e `system/hook_response`,
+	// che sono i ganci scattati all'avvio. Sono la lavorazione con un nome che
+	// il pannello non sa leggere, e stavano in chiaro fra le risposte.
+	// Ripiegarli non li perde: la piega li conta, li nomina col nome che
+	// portano, e si apre.
 	const EVENT_KINDS = {
 		text: { label: "agente", variant: "cev-agent" },
 		thinking: { label: "ragionamento", variant: "cev-thinking", technical: true },
@@ -345,8 +348,47 @@
 	// il vocabolario e nient'altro: nessun testo del payload viene letto per
 	// indovinarlo, e un tipo che il vocabolario non conosce non e' tecnico.
 	function isTechnicalEvent(event) {
+		// Cio' che non e' nemmeno un evento non e' lavorazione: e' un buco nel
+		// payload, e la timeline lo salta come ha sempre fatto. Dentro una piega
+		// diventerebbe una riga da contare e da nominare, e non c'e' niente da
+		// contare ne' da nominare.
+		if (!event || typeof event !== "object") return false;
 		const entry = eventEntry(event);
-		return !!(entry && entry.technical === true);
+		if (!entry) return true;
+		return entry.technical === true;
+	}
+
+	// Che cosa contiene una piega, in una riga: i nomi degli strumenti che ha
+	// toccato, ciascuno una volta sola e nell'ordine in cui sono comparsi.
+	//
+	// Senza strumenti si dicono i tipi delle righe, che per una riga tradotta e'
+	// la sua etichetta e per una che il pannello non sa leggere e' il nome che
+	// porta — `system/hook_started` si legge cosi' com'e'. Una piega che dice
+	// solo «2 passaggi tecnici» non fa sapere se val la pena aprirla.
+	//
+	// Piu' di tre nomi non entrano in una riga di comando senza rubare la parola
+	// alla conversazione: oltre il terzo si dice quanti restano.
+	function technicalSummary(events) {
+		const tools = [];
+		const kinds = [];
+		let failed = false;
+		for (const event of events) {
+			const entry = eventEntry(event);
+			if (entry && entry.failed === true) failed = true;
+			const tool = typeof event.tool === "string" ? event.tool.trim() : "";
+			if (tool && tools.indexOf(tool) === -1) tools.push(tool);
+			const label = entry ? entry.label : eventKind(event);
+			if (label && kinds.indexOf(label) === -1) kinds.push(label);
+		}
+		const names = tools.length ? tools : kinds;
+		const shown = names.slice(0, 3);
+		const rest = names.length - shown.length;
+		return {
+			failed,
+			detail: shown.length
+				? shown.join(" · ") + (rest > 0 ? ` +${rest}` : "")
+				: "",
+		};
 	}
 
 	/** La chiave con cui il chiamante ricorda che questa piega e' aperta. */
@@ -373,23 +415,9 @@
 		const opened = objectAt(local, "technicalOpen") || {};
 		const open = local.technicalAll === true || opened[key] === true;
 
-		// I nomi degli strumenti toccati, ciascuno una volta sola e nell'ordine
-		// in cui sono comparsi. Piu' di tre non entrano in una riga di comando
-		// senza rubare la parola alla conversazione, quindi oltre il terzo si
-		// dice quanti restano.
-		const tools = [];
-		let failed = false;
-		for (const event of rows) {
-			const entry = eventEntry(event);
-			if (entry && entry.failed === true) failed = true;
-			const tool = typeof event.tool === "string" ? event.tool.trim() : "";
-			if (tool && tools.indexOf(tool) === -1) tools.push(tool);
-		}
-		const shown = tools.slice(0, 3);
-		const rest = tools.length - shown.length;
-		const toolsText = shown.length
-			? shown.join(" · ") + (rest > 0 ? ` +${rest}` : "")
-			: "";
+		const summary = technicalSummary(rows);
+		const toolsText = summary.detail;
+		const failed = summary.failed;
 
 		const count =
 			rows.length === 1 ? TEXT.technicalOne : TEXT.technicalMany(rows.length);
@@ -451,7 +479,11 @@
 			const named = typeof tool === "string" ? tool.trim() : "";
 			return named ? TEXT.workingToolNamed(named) : TEXT.workingToolAny;
 		}
-		if (kind === "user_message") return TEXT.workingReceived;
+		// Nessuna attivita' ancora — il turno e' cominciato e l'agente non ha
+		// prodotto niente — vuol dire che sta lavorando e non si sa a che cosa,
+		// che e' esattamente cio' che dice la frase generica. Qui prima c'era
+		// «ha ricevuto il messaggio», che e' una frase finita: si leggeva come
+		// un lavoro concluso proprio nel momento in cui il lavoro comincia.
 		return TEXT.workingDefault;
 	}
 
@@ -538,24 +570,14 @@
 		return renderRunLogToggle(key, events, false);
 	}
 
-	// Il comando che apre il log di una run. Dice quante righe tiene e quali
-	// strumenti ha toccato — gli stessi fatti della piega della timeline, letti
-	// dagli stessi campi — e su una run che non ha ancora pubblicato niente dice
+	// Il comando che apre il log di una run. Dice quante righe tiene e che cosa
+	// ha toccato — lo stesso riassunto della piega della timeline, scritto in un
+	// posto solo — e su una run che non ha ancora pubblicato niente dice
 	// proprio quello, invece di offrire di aprire il vuoto.
 	function renderRunLogToggle(key, events, open) {
-		const tools = [];
-		let failed = false;
-		for (const event of events) {
-			const entry = eventEntry(event);
-			if (entry && entry.failed === true) failed = true;
-			const tool = typeof event.tool === "string" ? event.tool.trim() : "";
-			if (tool && tools.indexOf(tool) === -1) tools.push(tool);
-		}
-		const shown = tools.slice(0, 3);
-		const rest = tools.length - shown.length;
-		const toolsText = shown.length
-			? shown.join(" · ") + (rest > 0 ? ` +${rest}` : "")
-			: "";
+		const summary = technicalSummary(events);
+		const toolsText = summary.detail;
+		const failed = summary.failed;
 		const count = events.length
 			? TEXT.runLogLines(events.length)
 			: TEXT.runLogEmpty;

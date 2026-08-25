@@ -8,7 +8,10 @@
 //      prodotto al suo repository, la firma a chi lo fa;
 //   2. fra l'invio di un messaggio e la risposta la conversazione dichiara che
 //      l'agente sta lavorando, e la dichiarazione finisce quando finisce il
-//      turno;
+//      turno — non prima e, soprattutto, non da prima che il turno cominci:
+//      ogni conversazione vera si apre con due righe di gancio, e leggere solo
+//      l'ultima riga della storia faceva dichiarare un'attesa a conversazione
+//      appena aperta;
 //   3. il dettaglio tecnico — strumenti, ganci, ragionamento — sta ripiegato,
 //      e chi lo cerca lo apre.
 //
@@ -58,6 +61,13 @@ function functionOf(source, name) {
 }
 
 const CONVERSATION_WORKING = functionOf(js, "conversationWorking");
+// Le righe da cui si capisce a che cosa si sta lavorando viaggiano insieme alla
+// regola che le legge: se una viene cambiata senza l'altra, questo test se ne
+// accorge invece di provare una regola che nel visore non esiste più.
+const ACTIVITY_KINDS = (js.match(
+	/const CONVERSATION_ACTIVITY_KINDS = \{[\s\S]*?\};/,
+) || [])[0];
+assert.ok(ACTIVITY_KINDS, "app.js non dichiara più le righe di attività");
 
 // La regola del turno si prova chiamandola, non leggendola: la funzione vive
 // dentro la chiusura di app.js e legge lo stato del pannello come variabili
@@ -72,9 +82,19 @@ function working(state) {
 		Math,
 		out: null,
 	});
-	runInContext(`${CONVERSATION_WORKING}\nout = conversationWorking();`, ctx);
+	runInContext(
+		`${ACTIVITY_KINDS}\n${CONVERSATION_WORKING}\nout = conversationWorking();`,
+		ctx,
+	);
 	return ctx.out;
 }
+
+// Le due righe con cui ogni conversazione vera comincia: i ganci scattati
+// all'avvio dell'agente, che nessun provider traduce nel vocabolario comune.
+const GANCI_DI_APERTURA = [
+	{ id: 1, kind: "system/hook_started" },
+	{ id: 2, kind: "system/hook_response" },
+];
 
 describe("la firma in fondo alla pagina porta da qualche parte", () => {
 	it("il nome del prodotto porta al suo repository", () => {
@@ -120,24 +140,35 @@ describe("la firma in fondo alla pagina porta da qualche parte", () => {
 
 describe("la regola del turno", () => {
 	it("una conversazione appena aperta non sta aspettando l'agente", () => {
+		// Il caso che si vedeva davvero: appena aperta la conversazione non è
+		// vuota — porta già i due ganci di apertura — e leggere solo l'ultima
+		// riga faceva dire che l'agente stava lavorando prima ancora che
+		// qualcuno gli avesse scritto. Lì non si aspetta l'agente: si aspetta
+		// chi scrive.
 		assert.equal(working({ events: [] }).active, false);
+		assert.equal(
+			working({ events: GANCI_DI_APERTURA }).active,
+			false,
+			"i ganci di apertura vengono contati come un turno in corso",
+		);
 	});
 
 	it("un messaggio consegnato e non ancora tornato indietro è già un turno", () => {
-		const stato = working({ events: [], pending: "DETTO-ADESSO" });
+		const stato = working({ events: GANCI_DI_APERTURA, pending: "DETTO-ADESSO" });
 		assert.equal(stato.active, true);
 		assert.equal(
 			stato.kind,
-			"user_message",
-			"l'attesa non parte dal messaggio consegnato",
+			"",
+			"l'attesa nomina un'attività che l'agente non ha ancora svolto",
 		);
 	});
 
 	it("fra la domanda e la fine del turno l'agente sta lavorando", () => {
 		const stato = working({
 			events: [
-				{ id: 1, kind: "user_message", text: "DOMANDA" },
-				{ id: 2, kind: "tool_start", tool: "STRUMENTO-UNO" },
+				...GANCI_DI_APERTURA,
+				{ id: 3, kind: "user_message", text: "DOMANDA" },
+				{ id: 4, kind: "tool_start", tool: "STRUMENTO-UNO" },
 			],
 		});
 		assert.equal(stato.active, true);
@@ -149,22 +180,69 @@ describe("la regola del turno", () => {
 		);
 	});
 
+	it("subito dopo l'invio il turno è aperto e nessuna attività è ancora nota", () => {
+		// L'altro caso che si vedeva: l'agente ha ricevuto il messaggio e non ha
+		// ancora prodotto niente. Il turno è aperto, e che cosa stia facendo non
+		// si sa ancora — che è un fatto, non una frase finita.
+		const stato = working({
+			events: [...GANCI_DI_APERTURA, { id: 3, kind: "user_message", text: "DOMANDA" }],
+		});
+		assert.equal(stato.active, true);
+		assert.equal(stato.kind, "");
+	});
+
+	it("una riga di protocollo non cancella l'attività in corso", () => {
+		// I ganci scattano anche in mezzo a un turno. Dicono che qualcosa è
+		// successo, non che cosa si sta facendo: fra un gancio e l'altro «sta
+		// ragionando» resta vero.
+		const stato = working({
+			events: [
+				...GANCI_DI_APERTURA,
+				{ id: 3, kind: "user_message" },
+				{ id: 4, kind: "thinking" },
+				{ id: 5, kind: "system/hook_started" },
+			],
+		});
+		assert.equal(stato.active, true);
+		assert.equal(stato.kind, "thinking");
+	});
+
 	it("la fine del turno chiude l'attesa", () => {
 		assert.equal(
 			working({
 				events: [
-					{ id: 1, kind: "user_message" },
-					{ id: 2, kind: "text", text: "RISPOSTA" },
-					{ id: 3, kind: "turn_end" },
+					...GANCI_DI_APERTURA,
+					{ id: 3, kind: "user_message" },
+					{ id: 4, kind: "text", text: "RISPOSTA" },
+					{ id: 5, kind: "turn_end" },
 				],
 			}).active,
 			false,
 		);
 	});
 
+	it("chiuso un turno, il successivo riapre l'attesa", () => {
+		const stato = working({
+			events: [
+				{ id: 1, kind: "user_message" },
+				{ id: 2, kind: "text" },
+				{ id: 3, kind: "turn_end" },
+				{ id: 4, kind: "user_message" },
+				{ id: 5, kind: "thinking" },
+			],
+		});
+		assert.equal(stato.active, true);
+		assert.equal(stato.kind, "thinking");
+	});
+
 	it("un errore chiude l'attesa come la chiude la fine del turno", () => {
 		assert.equal(
-			working({ events: [{ id: 1, kind: "error", text: "GUASTO" }] }).active,
+			working({
+				events: [
+					{ id: 1, kind: "user_message" },
+					{ id: 2, kind: "error", text: "GUASTO" },
+				],
+			}).active,
 			false,
 		);
 	});
@@ -174,7 +252,7 @@ describe("la regola del turno", () => {
 			working({
 				active: false,
 				pending: "DETTO-ADESSO",
-				events: [{ id: 1, kind: "tool_start" }],
+				events: [{ id: 1, kind: "user_message" }],
 			}).active,
 			false,
 		);
@@ -182,7 +260,7 @@ describe("la regola del turno", () => {
 
 	it("l'attesa si misura da quando è cominciata, non dall'ultimo disegno", () => {
 		const stato = working({
-			events: [{ id: 1, kind: "thinking" }],
+			events: [{ id: 1, kind: "user_message" }, { id: 2, kind: "thinking" }],
 			since: Date.now() - 7_000,
 		});
 		assert.ok(

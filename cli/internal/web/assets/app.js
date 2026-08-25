@@ -4847,6 +4847,17 @@
 	// dettaglio tecnico va tenuto aperto.
 	const CONVERSATION_WORKING_TICK_MS = 1000;
 	const CONVERSATION_TECHNICAL_KEY = "archetipo:conversation:technical";
+	// Le righe da cui si capisce a che cosa l'agente sta lavorando. Sono le
+	// stesse che il vocabolario del renderer conosce per nome: tutto il resto —
+	// i ganci, le righe di protocollo che un provider non traduce — dice che
+	// qualcosa e' successo, non che cosa si sta facendo.
+	const CONVERSATION_ACTIVITY_KINDS = {
+		thinking: true,
+		text: true,
+		tool_start: true,
+		tool_end: true,
+		tool_error: true,
+	};
 
 	let conversationView = null; // last read of GET /api/workspace/conversation
 	let conversationAfterID = 0; // highest event id already rendered — the only cursor
@@ -5004,23 +5015,49 @@
 	// consegna — non sta aspettando: sta aspettando *chi scrive*.
 	function conversationWorking() {
 		if (!conversationIsActive()) return { active: false };
-		const last = conversationEvents.length
-			? conversationEvents[conversationEvents.length - 1]
-			: null;
-		const lastKind = last && typeof last.kind === "string" ? last.kind : "";
-		const closed = lastKind === "turn_end" || lastKind === "error";
+		// Un turno si apre con il messaggio di chi scrive e si chiude con la
+		// riga che lo chiude. Non basta guardare l'ultima riga della storia:
+		// una conversazione appena aperta ne ha gia' due — i ganci che scattano
+		// all'avvio dell'agente — e nessuna delle due e' un turno. Li' non si
+		// sta aspettando l'agente: si sta aspettando chi scrive.
+		let open = false;
+		let doing = null;
+		for (const event of conversationEvents) {
+			const kind = event && typeof event.kind === "string" ? event.kind : "";
+			if (kind === "user_message") {
+				open = true;
+				doing = null;
+				continue;
+			}
+			if (kind === "turn_end" || kind === "error") {
+				open = false;
+				doing = null;
+				continue;
+			}
+			// Solo le righe da cui si capisce *a che cosa* sta lavorando
+			// diventano l'attivita' in corso. Una riga di protocollo del
+			// provider non lo dice, e non deve cancellare l'ultima che lo
+			// diceva: fra un gancio e l'altro «sta ragionando» resta vero.
+			if (open && CONVERSATION_ACTIVITY_KINDS[kind] === true) doing = event;
+		}
 		// Il messaggio consegnato e non ancora tornato indietro e' gia' un turno
 		// cominciato: l'attesa parte da li', non dal primo segno di vita
 		// dell'agente, perche' e' li' che chi ha premuto invio comincia ad
 		// aspettare.
-		const active = !!conversationPendingMessage || (!!last && !closed);
-		if (!active) return { active: false };
+		if (conversationPendingMessage) {
+			open = true;
+			doing = null;
+		}
+		if (!open) return { active: false };
 		return {
 			active: true,
-			// Il tipo dell'ultima riga e il nome dello strumento che porta sono
-			// fatti: le parole con cui vengono detti le sceglie il renderer.
-			kind: conversationPendingMessage ? "user_message" : lastKind,
-			tool: last && typeof last.tool === "string" ? last.tool : "",
+			// Il tipo dell'ultima attivita' e il nome dello strumento che porta
+			// sono fatti: le parole con cui vengono detti le sceglie il
+			// renderer. Nessuna attivita' ancora e' un fatto anche quello — il
+			// turno e' cominciato e l'agente non ha ancora prodotto niente — e
+			// il renderer ha la frase generica per dirlo.
+			kind: doing && typeof doing.kind === "string" ? doing.kind : "",
+			tool: doing && typeof doing.tool === "string" ? doing.tool : "",
 			seconds: conversationWorkingSince
 				? Math.floor((Date.now() - conversationWorkingSince) / 1000)
 				: 0,

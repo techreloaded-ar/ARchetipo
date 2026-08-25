@@ -39,7 +39,8 @@
 //     difetto, la piega dice quanti passaggi contiene e quali strumenti ha
 //     toccato, e aperta rende esattamente le righe di prima
 //   - il testo dell'agente e la frase di chi scrive non finiscono mai in una
-//     piega, e un tipo sconosciuto nemmeno
+//     piega; i ganci di apertura e ogni altra riga che il pannello non sa
+//     leggere sì, e la piega li nomina
 //   - una piega che contiene un errore lo dichiara da chiusa
 //   - mentre l'agente lavora la conversazione lo dichiara in coda, dice a che
 //     cosa sta lavorando e da quanto, e la riga sparisce a turno chiuso
@@ -1696,22 +1697,52 @@ describe("la ripresa di una conversazione finita", () => {
 		assert.match(text, /ERRORE-DELLA-CONVERSAZIONE/);
 	});
 
-	it("un tipo sconosciuto resta in chiaro invece di essere ripiegato", () => {
-		// Il vocabolario è dell'agente e può crescere: ripiegare per difetto ciò
-		// che non si sa leggere farebbe sparire dalla vista il primo messaggio
-		// di un tipo nuovo.
-		const text = visibleText(
-			renderConversation(
-				withConversation({
-					events: [{ id: 1, kind: "tipo-mai-visto", text: "TESTO-MAI-VISTO" }],
-					last_id: 1,
-				}),
-				"",
-				{},
-			),
+	it("i ganci di apertura sono ripiegati, e la piega li nomina", () => {
+		// Ogni conversazione vera si apre con due righe che nessun provider
+		// traduce — i ganci scattati all'avvio dell'agente — e prima stavano in
+		// chiaro sopra alla prima cosa detta. Sono la lavorazione con un nome
+		// che il pannello non sa leggere: ripiegate, ma nominate, altrimenti la
+		// piega non fa sapere se val la pena aprirla.
+		const html = renderConversation(
+			withConversation({
+				events: [
+					{ id: 1, kind: "system/hook_started" },
+					{ id: 2, kind: "system/hook_response" },
+					{ id: 3, kind: "user_message", text: "DOMANDA-MIA" },
+					{ id: 4, kind: "text", text: "RISPOSTA-AGENTE" },
+				],
+				last_id: 4,
+			}),
+			"",
+			{},
 		);
-		assert.match(text, /TESTO-MAI-VISTO/);
-		assert.match(text, /tipo-mai-visto/);
+		const text = visibleText(html);
+		assert.match(text, /2 passaggi tecnici/, "i due ganci non sono in una piega sola");
+		assert.match(
+			text,
+			/system\/hook_started · system\/hook_response/,
+			"la piega non dice quali righe tiene",
+		);
+		assert.match(text, /DOMANDA-MIA/);
+		assert.match(text, /RISPOSTA-AGENTE/);
+	});
+
+	it("un tipo sconosciuto è ripiegato ma non perso", () => {
+		const events = [{ id: 1, kind: "tipo-mai-visto", text: "TESTO-MAI-VISTO" }];
+		const chiusa = visibleText(
+			renderConversation(withConversation({ events, last_id: 1 }), "", {}),
+		);
+		assert.ok(
+			!chiusa.includes("TESTO-MAI-VISTO"),
+			"un tipo sconosciuto sta in chiaro fra le risposte",
+		);
+		assert.match(chiusa, /tipo-mai-visto/, "la piega non nomina il tipo che tiene");
+		const aperta = visibleText(
+			renderConversation(withConversation({ events, last_id: 1 }), "", {
+				technicalAll: true,
+			}),
+		);
+		assert.match(aperta, /TESTO-MAI-VISTO/, "aperta, la piega non rende il testo");
 	});
 
 	it("anche il log di una run e' ripiegato, e la decisione che aspetta no", () => {
@@ -1784,6 +1815,21 @@ describe("la ripresa di una conversazione finita", () => {
 		);
 		assert.match(text, /sta usando STRUMENTO-TRE/);
 		assert.match(text, /5s/, "l'attesa non dice da quanto dura");
+	});
+
+	it("senza attività ancora, l'attesa dice comunque che si sta lavorando", () => {
+		// Fra il messaggio consegnato e la prima riga dell'agente non si sa a
+		// che cosa stia lavorando, e la frase generica dice esattamente quello.
+		// Qui prima c'era «ha ricevuto il messaggio», che è una frase finita: si
+		// leggeva come un lavoro concluso proprio quando il lavoro comincia.
+		const text = visibleText(
+			renderConversation(LIVE, "", { working: { active: true, kind: "" } }),
+		);
+		assert.match(text, /sta lavorando/);
+		assert.ok(
+			!text.includes("ricevuto il messaggio"),
+			"l'attesa si dichiara con una frase finita",
+		);
 	});
 
 	it("il ragionamento e la scrittura hanno parole proprie", () => {
