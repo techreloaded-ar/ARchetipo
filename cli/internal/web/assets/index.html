@@ -208,14 +208,22 @@
             <div id="modal-root" class="spec-pane shell-pane-spec hidden" role="region" aria-labelledby="story-editor-title">
                 <div class="spec-pane-body">
             <header class="modal-header">
+                <!-- Il comando di ritorno, in testa e non in coda. Era una ✕ in
+                     fondo alla riga: una ✕ dice "chiudi questa finestra", e il
+                     dettaglio non è una finestra — è la board che lascia il
+                     posto a una sua card, e da lì si torna. La freccia e la
+                     parola lo dicono senza doverci passare sopra col mouse, e
+                     la parola la scrive workspace-layout.js, che è l'unico a
+                     sapere dove questo comando porta. -->
+                <button id="modal-close" type="button" class="ghost-btn spec-back-btn" aria-label="Torna alla board">
+                    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.6 3.4L5 8l4.6 4.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    <span id="modal-close-label">Board</span>
+                </button>
                 <h2 id="story-editor-title" class="modal-title">Storia</h2>
                 <!-- Opens a conversation about the spec on screen (US-058): a
                      new conversation carrying this spec's code, so it lands in
                      the rail under Spec and not among the free threads. -->
                 <button id="spec-conversation-btn" type="button" class="ghost-btn" data-conversation-new-spec>Conversa su questa spec</button>
-                <button id="modal-close" type="button" class="icon-btn" aria-label="Chiudi">
-                    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-                </button>
             </header>
             <nav class="modal-tabs" role="tablist">
                 <button type="button" class="tab active" data-tab="story" role="tab" aria-selected="true">Storia</button>

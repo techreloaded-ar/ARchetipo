@@ -234,12 +234,18 @@ describe("AC-3 — la bozza e la storia non si perdono cambiando vista", () => {
 		}
 	});
 
-	it("conversationDraft è assegnata solo nei tre punti attesi", () => {
+	it("conversationDraft è assegnata solo nei punti attesi", () => {
 		// I contesti ammessi: l'evento `input` del compositore (e la sua scorciatoia
-		// da tastiera), l'invio che la azzera dopo aver spedito — nella
-		// conversazione aperta come nella ripresa di una passata, che è un invio
-		// anch'essa (US-058 AC-4) — e il reset di workspace. Nessuno è un cambio
-		// di vista.
+		// da tastiera), l'invio che la azzera — nella conversazione aperta come
+		// nella ripresa di una passata, che è un invio anch'essa (US-058 AC-4) —
+		// il rimettere il testo nel campo quando la consegna viene rifiutata, e il
+		// reset di workspace. Nessuno è un cambio di vista.
+		//
+		// L'invio ora svuota il campo *prima* della chiamata, non dopo: il
+		// messaggio compare subito in coda alla conversazione come eco in
+		// consegna, e un campo ancora pieno accanto a quella riga direbbe che il
+		// messaggio è in due posti. Il rifiuto è la strada di ritorno, e c'è
+		// proprio perché lo svuotamento è anticipato.
 		const assignments = js
 			.split("\n")
 			.map((line, i) => ({ line: line.trim(), n: i + 1 }))
@@ -255,12 +261,13 @@ describe("AC-3 — la bozza e la storia non si perdono cambiando vista", () => {
 			"conversationDraft = input.value;", // scorciatoia cmd/ctrl+invio
 			'conversationDraft = "";', // ripresa riuscita di una conversazione passata
 			'conversationDraft = "";', // reset di workspace
-			'conversationDraft = "";', // invio riuscito
+			'conversationDraft = "";', // invio: il campo si svuota appena parte
+			"conversationDraft = message;", // consegna rifiutata: il testo torna nel campo
 		];
 		assert.deepEqual(
 			assignments.map(({ line }) => line),
 			expected,
-			`le assegnazioni a conversationDraft non sono più quelle attese. Ammesse: l'evento input del compositore, la scorciatoia da tastiera, l'azzeramento dopo l'invio riuscito e il reset di workspace. Trovate: ${assignments
+			`le assegnazioni a conversationDraft non sono più quelle attese. Ammesse: l'evento input del compositore, la scorciatoia da tastiera, l'azzeramento all'invio, il ripristino dopo una consegna rifiutata e il reset di workspace. Trovate: ${assignments
 				.map(({ n, line }) => `${n}: ${line}`)
 				.join(" | ")}`,
 		);

@@ -52,6 +52,11 @@
 	--transition: 0.2s var(--ease);
 
 	--reading-width: 68ch;
+	/* La colonna di contenuto del dettaglio spec: la misura del mockup
+	   restyle-viewer (.spec-interno), centrata nel riquadro. Il dettaglio non è
+	   prosa continua ma un documento tecnico — targhette, elenchi, tabelle di
+	   task — e a 68ch metà del riquadro restava bianca sulla destra. */
+	--spec-content-width: 900px;
 }
 
 /* Il modo compatto, scelto dalla persona che guarda e ricordato come il tema.
@@ -5245,6 +5250,30 @@ body.no-workspace [data-workspace-scoped] {
 	font-weight: 600;
 }
 
+/* Il messaggio appena consegnato e non ancora riportato indietro dall'agente.
+   Ha la forma della riga che diventerà — stessa bolla, stessa colonna — e se ne
+   distingue per il poco che basta a non spacciarsi per storia: la colonnina non
+   porta nessun id, perché un id non ce l'ha ancora, e il bordo tratteggiato dice
+   che la riga non è ancora chiusa. Niente lampeggia: l'attesa qui è quella
+   dell'agente, e una riga che pulsa la farebbe sembrare un errore. */
+.conv-event-pending .conv-event-body {
+	border: 1px dashed var(--border-strong);
+}
+
+.conv-event-pending .conv-event-glyph {
+	background: transparent;
+	border: 1.5px solid var(--text-dim);
+}
+
+/* La parola che dichiara lo stato della riga: minuta, accanto a "tu", nello
+   stesso registro delle altre marche della testata. */
+.conv-event-pending-mark {
+	font-family: var(--font-mono);
+	font-size: 12px;
+	letter-spacing: 0;
+	color: var(--text-dim);
+}
+
 .cev-tool-start .conv-event-glyph {
 	background: var(--work);
 }
@@ -5861,6 +5890,37 @@ body.no-workspace [data-workspace-scoped] {
 .spec-pane-body > .tab-panel.active {
 	flex: 1 1 auto;
 	min-height: 0;
+}
+
+/* Una colonna di contenuto sola, centrata, per tutte e tre le linguette.
+   Il dettaglio occupa l'intera colonna primaria — su uno schermo largo sono
+   più di mille pixel — e la prosa si fermava alla misura di lettura restando
+   appoggiata a sinistra: il titolo, le targhette e i comandi arrivavano al
+   bordo destro, il testo che li spiega no, e in mezzo restava un vuoto che
+   sembrava un errore di impaginazione. Ora ogni cosa che la linguetta contiene
+   condivide una misura e un margine, e lo spazio che avanza sta da entrambe le
+   parti: è il margine di un documento, non un buco. */
+.spec-pane-body > .tab-panel > * {
+	width: 100%;
+	max-width: var(--spec-content-width);
+	margin-inline: auto;
+}
+
+/* Dentro quella colonna la prosa la riempie. La misura di lettura da 68ch è
+   giusta per un testo lungo su una pagina larga a piacere; qui la larghezza è
+   già decisa dalla colonna, e un secondo tetto dentro il primo non protegge
+   nessuno — riproduce il vuoto a destra un livello più in dentro. */
+.spec-pane .markdown-rendered,
+.spec-pane .review-dossier-summary {
+	max-width: none;
+}
+
+/* Il diff è l'eccezione, e per un motivo che non riguarda la lettura: le sue
+   righe sono codice, non prosa, e stringerle vuol dire mandarle a capo o
+   nasconderle dietro uno scorrimento orizzontale. Prende tutta la larghezza
+   che il riquadro ha. */
+.spec-pane-body > .tab-panel > .review-diff {
+	max-width: none;
 }
 
 /* ---- Runs section (US-055) ---------------------------------------------- */
@@ -6633,6 +6693,20 @@ body.no-workspace [data-workspace-scoped] {
 
 .spec-pane .modal-header .modal-title {
 	margin-right: auto;
+}
+
+/* Il comando di ritorno apre la riga, prima del titolo: è il posto in cui si
+   cerca il modo di tornare indietro, e da lì non lo si cerca affatto — si vede.
+   Resta un comando quieto, come gli altri della testata: il colore acceso è di
+   ciò che scrive, non di ciò che riporta dove si era. */
+.spec-back-btn {
+	flex: 0 0 auto;
+	padding-left: var(--space-3);
+	color: var(--text-muted);
+}
+
+.spec-back-btn:hover {
+	color: var(--accent);
 }
 
 /* ---- Thread rail, narrow mode ------------------------------------------

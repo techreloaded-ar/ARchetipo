@@ -298,6 +298,7 @@
 	// and renaming it would touch the whole file for nothing.
 	const modal = document.getElementById("modal-root");
 	const modalClose = document.getElementById("modal-close");
+	const modalCloseLabel = document.getElementById("modal-close-label");
 	const modalTitle = document.getElementById("story-editor-title");
 	const tabs = modal.querySelectorAll(".tab");
 	const panels = modal.querySelectorAll(".tab-panel");
@@ -643,7 +644,7 @@
 	let runSeamPending = false; // the channel dropped: the next appended event opens a seam
 
 	refreshBtn.addEventListener("click", refreshBoardAndStatus);
-	modalClose.addEventListener("click", closeModal);
+	modalClose.addEventListener("click", leaveSpecDetail);
 	// One command in the head of the spec detail: talk about *this* spec
 	// (US-058). It opens a conversation carrying the code of the spec on screen,
 	// so the thread is filed under that code in the rail instead of among the
@@ -664,7 +665,8 @@
 		// keystroke in a text field: acting on it would throw the reader onto
 		// the board and unmount the panels of a spec they never asked to leave.
 		// The handlers below still close real modals, and are untouched.
-		if (e.key === "Escape" && specOpen && shellView === "spec") closeModal();
+		if (e.key === "Escape" && specOpen && shellView === "spec")
+			leaveSpecDetail();
 	});
 	tabs.forEach((t) =>
 		t.addEventListener("click", () => activateTab(t.dataset.tab)),
@@ -966,6 +968,10 @@
 			loadWorkspaceRuns();
 			loadMockups();
 			connectBoardStream();
+			// Per ultimo, perché è l'indirizzo a decidere: se porta una spec, il
+			// dettaglio si riapre sopra la board appena chiesta, e la voce
+			// d'ingresso resta la board per chi premerà Indietro.
+			restoreSpecFromLocation();
 			return;
 		}
 		enterNoWorkspaceMode();
@@ -1167,6 +1173,9 @@
 			const label = TEXT.backTo(layout.back.label);
 			modalClose.setAttribute("aria-label", label);
 			modalClose.setAttribute("title", label);
+			// E la parola sul comando è quella del modulo, non una seconda
+			// scritta a mano qui: dove il comando porta lo sa lui solo.
+			if (modalCloseLabel) modalCloseLabel.textContent = layout.back.label;
 		}
 	}
 
@@ -1178,11 +1187,147 @@
 		if (WorkspaceLayout.VIEWS.indexOf(view) === -1) return;
 		shellView = view;
 		if (view === "board" && specOpen) {
-			// closeModal applies the layout itself, through the same reducer.
-			closeModal();
+			// Il ritorno alla board passa dalla cronologia: leaveSpecDetail
+			// torna indietro di una voce e sarà popstate a chiudere davvero,
+			// così questo comando e il tasto Indietro del browser percorrono la
+			// stessa strada. Il layout lo applica closeModal, dall'altra parte.
+			leaveSpecDetail();
 			return;
 		}
 		applyShellLayout();
+	}
+
+	// ---- Cronologia del browser ----------------------------------------------
+	//
+	// Aprire la card di una spec è una navigazione, non un dettaglio interno:
+	// chi la apre si aspetta che il tasto Indietro riporti alla board, che
+	// Avanti ci ritorni dentro e che l'indirizzo dica quale spec sta guardando —
+	// così ricaricare la pagina, o mandare il link a qualcuno, arriva allo
+	// stesso posto invece che a una board qualunque.
+	//
+	// La regola è una sola, e tutto il resto discende da lì: **aprire aggiunge
+	// una voce, e a chiudere il dettaglio è sempre e solo popstate**. Il comando
+	// di ritorno, Escape e la linguetta Board non chiudono niente per conto
+	// proprio: tornano indietro di una voce, e la chiusura arriva dall'evento,
+	// esattamente come quando a premere è il browser. Un cammino solo, quindi la
+	// cronologia non può descrivere una schermata diversa da quella su video.
+	//
+	// Il percorso dell'indirizzo non cambia mai: la spec viaggia come parametro
+	// di ricerca, che il server serve la stessa pagina comunque.
+
+	/** Il nome del parametro che porta la spec aperta nell'indirizzo. */
+	const SPEC_QUERY_PARAM = "spec";
+	/**
+	 * Vero mentre apriamo o chiudiamo il dettaglio *in risposta* a un popstate:
+	 * lì la cronologia è già dove deve essere, e riscriverla aggiungerebbe voci
+	 * che nessuno ha chiesto.
+	 */
+	let navigatingFromHistory = false;
+
+	function historySupported() {
+		return (
+			typeof window !== "undefined" &&
+			!!window.history &&
+			typeof window.history.pushState === "function"
+		);
+	}
+
+	/** Il codice della spec aperta secondo l'indirizzo, o la stringa vuota. */
+	function specCodeInLocation() {
+		try {
+			return (
+				new URL(window.location.href).searchParams.get(SPEC_QUERY_PARAM) || ""
+			);
+		} catch (_) {
+			return "";
+		}
+	}
+
+	/** L'indirizzo che descrive la schermata con quella spec aperta (o nessuna). */
+	function locationWithSpec(code) {
+		const url = new URL(window.location.href);
+		if (code) url.searchParams.set(SPEC_QUERY_PARAM, code);
+		else url.searchParams.delete(SPEC_QUERY_PARAM);
+		return url.pathname + url.search + url.hash;
+	}
+
+	/** La voce di cronologia corrente descrive un dettaglio spec aperto. */
+	function historyHoldsSpec() {
+		return !!(
+			historySupported() &&
+			window.history.state &&
+			window.history.state.archetipoSpec
+		);
+	}
+
+	// Aprire una spec dalla board aggiunge una voce: è quella che il tasto
+	// Indietro toglierà. Passare da una spec all'altra senza uscire dal
+	// dettaglio riscrive invece la voce che c'è già, altrimenti tornare alla
+	// board costerebbe tanti Indietro quante card sono state guardate.
+	function rememberSpecInHistory(code) {
+		if (!historySupported() || navigatingFromHistory || !code) return;
+		const state = { archetipoSpec: code };
+		const url = locationWithSpec(code);
+		if (historyHoldsSpec()) window.history.replaceState(state, "", url);
+		else window.history.pushState(state, "", url);
+	}
+
+	// Il dettaglio si è chiuso da sé — spec eliminata, approvata, integrata —
+	// senza che nessuno abbia chiesto di navigare. La voce che lo descriveva non
+	// può restare: si riscrive come board, così un Indietro successivo non
+	// riapre una spec che non c'è più.
+	function forgetSpecInHistory() {
+		if (!historySupported() || navigatingFromHistory) return;
+		if (!historyHoldsSpec()) return;
+		window.history.replaceState({ archetipoSpec: "" }, "", locationWithSpec(""));
+	}
+
+	// L'unico modo in cui l'interfaccia lascia il dettaglio: si torna indietro
+	// di una voce e sarà popstate a chiudere. Senza una voce nostra in
+	// cronologia — un browser senza History API — si chiude e basta.
+	function leaveSpecDetail() {
+		if (historyHoldsSpec()) {
+			window.history.back();
+			return;
+		}
+		closeModal();
+	}
+
+	// Il tasto Indietro (e Avanti) del browser. È qui che il dettaglio si apre e
+	// si chiude davvero: la voce dice quale spec descrive, e la schermata si
+	// mette d'accordo con lei.
+	if (historySupported()) {
+		window.addEventListener("popstate", (e) => {
+			const code =
+				(e.state && e.state.archetipoSpec) || specCodeInLocation() || "";
+			navigatingFromHistory = true;
+			try {
+				if (code) {
+					if (!specOpen || currentSpecCode !== code) openEditor(code);
+				} else if (specOpen) {
+					closeModal();
+				}
+			} finally {
+				navigatingFromHistory = false;
+			}
+		});
+	}
+
+	// Chi arriva da un link con una spec dentro deve avere dove tornare: la voce
+	// d'ingresso viene riscritta come board, e openEditor aggiunge sopra quella
+	// del dettaglio. Così il primo Indietro porta alla board di questo
+	// workspace, non fuori dall'applicazione.
+	function restoreSpecFromLocation() {
+		const code = specCodeInLocation();
+		if (!code) return;
+		if (historySupported()) {
+			window.history.replaceState(
+				{ archetipoSpec: "" },
+				"",
+				locationWithSpec(""),
+			);
+		}
+		openEditor(code);
 	}
 
 	// The switcher is redrawn on every layout change, so the handler lives on
@@ -1845,6 +1990,12 @@
 		// would keep polling an execution nobody is looking at, and would reload
 		// the detail of a spec the user has already left.
 		currentSpecCode = code;
+		// La card che si apre è una voce di cronologia: da qui in poi il tasto
+		// Indietro del browser riporta alla board, e l'indirizzo dice quale spec
+		// è sotto gli occhi. Sta prima di ogni attesa perché il flag che
+		// distingue "aperta da chi guarda" da "aperta dalla cronologia" vale
+		// solo finché non si cede il turno.
+		rememberSpecInHistory(code);
 		mountExecutionPanels({
 			context: specContext(code),
 			startURL: `/api/spec/${encodeURIComponent(code)}/execution`,
@@ -2199,6 +2350,10 @@
 		shellView = nextBoard.view;
 		specOpen = nextBoard.specOpen;
 		applyShellLayout();
+		// La cronologia smette di descrivere un dettaglio che non c'è più.
+		// Quando a chiudere è stato il tasto Indietro questo non fa nulla: la
+		// voce l'ha già tolta il browser.
+		forgetSpecInHistory();
 		unmountExecutionPanels(specContext(currentSpecCode));
 		currentSpecCode = null;
 		currentSpecSnapshot = null;
@@ -4693,6 +4848,13 @@
 	let conversationAfterID = 0; // highest event id already rendered — the only cursor
 	let conversationEvents = []; // timeline, appended to and never rebuilt
 	let conversationDraft = ""; // composer text, preserved across re-renders
+	// Il messaggio consegnato all'agente e non ancora tornato indietro come
+	// evento. Non è una copia della storia: è ciò che sta *fuori* dalla storia
+	// per la finestra di tempo in cui il server non ha ancora niente da dire —
+	// consegnare non pubblica, e quella finestra è tutta l'attesa dell'agente.
+	// La conversazione lo disegna in coda, dichiarato in consegna, finché
+	// l'evento vero non prende il suo posto.
+	let conversationPendingMessage = "";
 	let conversationBusy = false; // a command is in flight: the controls stay disabled
 	let conversationCloseArmed = false; // the inline close confirmation is showing
 	let conversationRefusal = ""; // last refused command, shown inline until the next one
@@ -5032,6 +5194,9 @@
 		conversationView = null;
 		conversationEvents = [];
 		conversationAfterID = 0;
+		// L'eco locale appartiene alla conversazione che si sta lasciando: sotto
+		// un'altra sarebbe una frase detta a qualcun altro.
+		conversationPendingMessage = "";
 		conversationAnsweredApprovals = {};
 		conversationHighlightAnchor = "";
 		conversationDismissedNotices = {};
@@ -5096,7 +5261,17 @@
 			conversationDraft = "";
 			conversationsRefusal = "";
 			await switchToConversation(conversationIdOf(view), view);
+			// La conversazione nuova nasce vuota e il messaggio che l'ha aperta è
+			// già stato consegnato: senza l'eco, chi ha premuto invio si
+			// ritroverebbe davanti una storia vuota al posto di ciò che ha
+			// appena detto. L'eco si rimette *dopo* il cambio, che l'ha azzerata
+			// con tutto il resto, e si sistema subito contro quello che la
+			// conversazione nuova porta già con sé.
+			conversationPendingMessage = message;
+			conversationEvents.forEach(settleConversationPending);
 		} catch (err) {
+			// Rifiutata: qui la bozza non era stata svuotata — si svuota solo
+			// quando la ripresa riesce — quindi il testo è già dov'era.
 			showConversationRefusal(err);
 			renderConversationPanel();
 		} finally {
@@ -5156,6 +5331,7 @@
 		conversationAfterID = 0;
 		conversationEvents = [];
 		conversationDraft = "";
+		conversationPendingMessage = "";
 		conversationBusy = false;
 		conversationCloseArmed = false;
 		conversationRefusal = "";
@@ -5203,6 +5379,7 @@
 			conversationEvents.push(event);
 			conversationAfterID = event.id;
 			appended += 1;
+			settleConversationPending(event);
 		}
 		if (
 			typeof view.last_id === "number" &&
@@ -5212,6 +5389,33 @@
 		}
 		conversationView = view;
 		return appended;
+	}
+
+	// L'eco locale smette di esistere quando l'agente riporta indietro il
+	// messaggio: quell'evento *è* la riga in coda alla conversazione, e tenerne
+	// due sarebbe far leggere due volte la stessa frase.
+	//
+	// Il confronto è sul testo perché non c'è altro da confrontare: la consegna
+	// non restituisce un identificatore, e l'id dell'evento lo assegna il
+	// processo dell'agente. Si confrontano le parole con gli spazi normalizzati,
+	// così un provider che ricompone gli a capo a modo suo non lascia l'eco
+	// appesa per sempre sotto la sua stessa riga.
+	function settleConversationPending(event) {
+		if (!conversationPendingMessage) return;
+		if (!event || event.kind !== "user_message") return;
+		const said =
+			event.text === undefined || event.text === null
+				? ""
+				: String(event.text);
+		if (collapseSpaces(said) !== collapseSpaces(conversationPendingMessage)) {
+			return;
+		}
+		conversationPendingMessage = "";
+	}
+
+	/** Le stesse parole, con ogni sequenza di spazi ridotta a uno solo. */
+	function collapseSpaces(text) {
+		return String(text).replace(/\s+/g, " ").trim();
 	}
 
 	function conversationIsActive() {
@@ -5370,6 +5574,14 @@
 		const message = conversationDraft.trim();
 		if (!message) return;
 		conversationBusy = true;
+		// Il campo si svuota e il messaggio compare in coda alla conversazione
+		// *adesso*, prima ancora di partire: chi ha premuto invio deve vedere
+		// subito quello che ha detto, e l'attesa dell'agente deve essere l'attesa
+		// di una risposta a qualcosa di visibile, non il silenzio di una schermata
+		// identica a un istante prima. Se la consegna viene rifiutata, sotto si
+		// rimette esattamente ciò che era stato scritto.
+		conversationPendingMessage = message;
+		conversationDraft = "";
 		renderConversationPanel();
 		try {
 			const view = await apiPost(
@@ -5377,12 +5589,18 @@
 				{ message },
 			);
 			// Accepted means delivered, not published: the text stays out of the
-			// timeline until the agent carries it back.
-			conversationDraft = "";
+			// timeline until the agent carries it back. Quello che si vede in
+			// coda fino ad allora è l'eco locale qui sopra, e porta scritto che
+			// è in consegna — non si spaccia per storia.
 			conversationRefusal = "";
 			applyConversationView(view);
 			startConversationPolling();
 		} catch (err) {
+			// Rifiutato: niente è stato consegnato, quindi niente resta in coda
+			// alla conversazione, e il testo torna nel campo da cui era uscito —
+			// chi l'ha scritto non deve riscriverlo per leggere il rifiuto.
+			conversationPendingMessage = "";
+			conversationDraft = message;
 			showConversationRefusal(err);
 		} finally {
 			conversationBusy = false;
@@ -5638,6 +5856,10 @@
 				// Quali avvisi sono stati chiusi con la loro X: il renderer non
 				// disegna quelli, e nessuno dei due lati decide da solo.
 				dismissed: conversationDismissedNotices,
+				// Il messaggio consegnato e non ancora tornato indietro. È
+				// l'unica cosa che il pannello disegna in coda alla storia senza
+				// che il server l'abbia detta, ed è dichiarata come tale.
+				pendingMessage: conversationPendingMessage,
 				// The recommended step is a fact of the workspace, not of this
 				// conversation: it comes from /api/workspace/status and from no
 				// other source. The thread hosts it at its tail — it does not
@@ -6411,6 +6633,19 @@
 			if (res && res.registryWarning) {
 				showToast(res.registryWarning, "warn");
 				await new Promise((resolve) => setTimeout(resolve, 1200));
+			}
+			// La spec eventualmente nell'indirizzo era di *quell'altro*
+			// workspace: la si toglie prima di ricostruire il documento,
+			// altrimenti la pagina appena aperta andrebbe a cercare un codice
+			// che qui non esiste. Si guarda l'indirizzo, non la voce di
+			// cronologia: il parametro può esserci anche prima che qualcuno
+			// abbia aperto qualcosa.
+			if (historySupported() && specCodeInLocation()) {
+				window.history.replaceState(
+					{ archetipoSpec: "" },
+					"",
+					locationWithSpec(""),
+				);
 			}
 			window.location.reload();
 		} catch (err) {

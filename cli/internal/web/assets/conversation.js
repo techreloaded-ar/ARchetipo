@@ -103,6 +103,13 @@
 		partialHistory:
 			"la parte più vecchia di questa conversazione non è più conservata",
 		timelineEmpty: "In questa conversazione non è ancora stato detto niente.",
+		// Il messaggio appena inviato, in coda alla storia e ancora fuori da
+		// essa: è stato consegnato all'agente, che non l'ha ancora riportato
+		// indietro. La parola dice esattamente questo — non "inviato", che
+		// prometterebbe una ricevuta che non c'è, e non "in attesa", che
+		// suonerebbe come un rifiuto.
+		pendingMessageMark: "in consegna",
+		pendingMessageTitle: "Consegnato all'agente: comparirà nella storia quando l'agente lo riporta",
 		// Blocco run
 		markRun: "run",
 		runLogEmpty: "Questa run non ha ancora pubblicato niente.",
@@ -563,8 +570,41 @@
 			for (const row of blocks) rows.push(row);
 		}
 		for (const row of pending) rows.push(row);
+		// In fondo a tutto, il messaggio che chi guarda ha appena scritto.
+		//
+		// Il server non lo scrive nella storia — un messaggio consegnato diventa
+		// storia solo quando l'agente lo riporta indietro — e fino a quel momento
+		// il riquadro restava identico a com'era un istante prima: si premeva
+		// invio, il campo si svuotava, e per tutto il tempo che l'agente si
+		// prendeva non c'era una sola prova che qualcosa fosse partito.
+		//
+		// Questa riga è quella prova, e dice la verità su di sé: non è un evento
+		// della conversazione, non ha un id nella colonnina, e porta scritto in
+		// testa che è in consegna. Quando l'agente riporta il messaggio, il
+		// chiamante smette di passarla e al suo posto resta l'evento vero.
+		const pendingRow = renderPendingMessage(local.pendingMessage);
+		if (pendingRow) rows.push(pendingRow);
 		const frozen = active ? "" : " is-frozen";
 		return `<ol class="conv-timeline${frozen}">${rows.join("")}</ol>`;
+	}
+
+	// L'eco locale del messaggio appena inviato. Ha la forma di una riga della
+	// timeline perché sta dove starà quella vera, e se ne distingue per due
+	// cose sole: la colonnina non porta un id — non ce n'è uno, il messaggio non
+	// è ancora un evento — e la testa dichiara che è in consegna.
+	function renderPendingMessage(text) {
+		const said = typeof text === "string" ? text : "";
+		if (!said.trim()) return "";
+		return `<li class="conv-event cev-you conv-event-pending">
+			<div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span></div>
+			<div class="conv-event-body">
+				<div class="conv-event-head">
+					<span class="conv-event-kind">${escapeHtml(EVENT_KINDS.user_message.label)}</span>
+					<span class="conv-event-pending-mark" title="${escapeHtml(TEXT.pendingMessageTitle)}">${escapeHtml(TEXT.pendingMessageMark)}</span>
+				</div>
+				<p class="conv-event-text">${escapeHtml(said)}</p>
+			</div>
+		</li>`;
 	}
 
 	// The close control exists only while the conversation is live: one that has
@@ -902,6 +942,11 @@
 	 *                            kept approval is what the resolved card is
 	 *                            drawn from, and executionID names the run it
 	 *                            belongs to.
+	 *                            pendingMessage is the message just sent and not
+	 *                            yet carried back by the agent: it is drawn at
+	 *                            the tail of the timeline, marked as in
+	 *                            delivery, and it is the caller that stops
+	 *                            passing it once the real event arrives.
 	 *                            nextStep is the step the workspace recommends,
 	 *                            read by the caller from /api/workspace/status:
 	 *                            the thread hosts it at its tail, draws it, and
