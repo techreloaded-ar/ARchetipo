@@ -324,9 +324,12 @@ describe("renderConversation", () => {
 			!html.includes("data-conversation-close-open"),
 			"una conversazione già chiusa non deve offrire di chiudersi di nuovo",
 		);
+		// Aprirne una nuova si comanda dall'elenco delle conversazioni: il
+		// pannello non ripete in coda un comando che ha già il suo posto, e la
+		// fascia che gli serviva torna alla conversazione.
 		assert.ok(
-			html.includes("data-conversation-open"),
-			"deve restare possibile aprirne una nuova",
+			!html.includes("data-conversation-open"),
+			"il pannello ripete in coda il comando di apertura invece di lasciarlo all'elenco",
 		);
 	});
 
@@ -1273,6 +1276,75 @@ describe("renderConversation — passo successivo", () => {
 		assert.ok(
 			html.includes("conv-nextstep"),
 			"una conversazione conclusa nasconde il passo raccomandato",
+		);
+	});
+});
+
+// La testata nomina per intero chi risponde: provider, modello e i valori delle
+// opzioni che quel modello dichiara — l'effort fra queste. Il solo
+// identificativo del provider diceva il terzo meno interessante del fatto.
+describe("l'agente nominato in testata", () => {
+	it("mette in fila provider, modello e opzioni del modello", () => {
+		const html = renderConversation(
+			withConversation({
+				provider_id: "fornitore",
+				model: "modello",
+				model_options: { effort: "LIVELLO-X" },
+			}),
+			"",
+		);
+
+		assert.match(
+			html,
+			/class="conv-provider"[^>]*>Fornitore Modello LIVELLO-X</,
+			"la testata non nomina modello e opzioni accanto al provider",
+		);
+	});
+
+	it("ordina le opzioni per nome, così due letture non divergono", () => {
+		const html = renderConversation(
+			withConversation({
+				provider_id: "fornitore",
+				model: "modello",
+				model_options: { zeta: "ULTIMA", alfa: "PRIMA" },
+			}),
+			"",
+		);
+
+		assert.match(
+			html,
+			/class="conv-provider"[^>]*>Fornitore Modello PRIMA ULTIMA</,
+			"le opzioni non sono in ordine di nome",
+		);
+	});
+
+	it("un identificativo composto resta come è scritto", () => {
+		// Maiuscolare un identificativo con cifre o trattini produrrebbe un nome
+		// che nessuno usa: si maiuscola solo la parola sola.
+		const html = renderConversation(
+			withConversation({ provider_id: "fornitore-2", model: "modello.9" }),
+			"",
+		);
+
+		assert.match(
+			html,
+			/class="conv-provider"[^>]*>fornitore-2 modello\.9</,
+			"un identificativo composto è stato riscritto",
+		);
+	});
+
+	it("senza modello resta il solo provider", () => {
+		// Un provider che non dichiara catalogo non lascia una casella vuota:
+		// la testata dice quello che sa e nient'altro.
+		const html = renderConversation(
+			withConversation({ provider_id: "fornitore", model: "" }),
+			"",
+		);
+
+		assert.match(
+			html,
+			/class="conv-provider"[^>]*>Fornitore</,
+			"senza modello la testata non nomina più nemmeno il provider",
 		);
 	});
 });

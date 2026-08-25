@@ -4611,12 +4611,17 @@ body.no-workspace [data-workspace-scoped] {
 	flex: 1 1 auto;
 }
 
+/* Nomina per intero chi risponde — provider, modello, effort — quindi è più
+   lungo di una parola sola: resta su una riga e cede il posto al percorso, che
+   è ciò che nella banda si accorcia. */
 .conv-provider {
 	font-size: 13px;
 	font-weight: 700;
 	letter-spacing: 0;
 	text-transform: none;
 	color: var(--text-muted);
+	white-space: nowrap;
+	flex: 0 0 auto;
 }
 
 /* ---- Notices ------------------------------------------------------------ */
@@ -4765,7 +4770,10 @@ body.no-workspace [data-workspace-scoped] {
 	align-items: center;
 	flex-wrap: wrap;
 	gap: var(--space-2) var(--space-3);
-	margin: var(--space-3) var(--gutter) 0;
+	/* Il margine sotto è quello che tiene il comando staccato dal bordo del
+	   compositore, che gli sta subito sotto: appoggiato alla riga di separazione
+	   il pulsante leggeva come parte del campo di scrittura. */
+	margin: var(--space-3) var(--gutter) var(--space-3);
 	padding: 0;
 	border: 0;
 	border-radius: 0;
@@ -4948,10 +4956,6 @@ body.no-workspace [data-workspace-scoped] {
 	margin: 0;
 	font-size: 15px;
 	color: var(--text-muted);
-}
-
-.conv-again {
-	padding: 0 var(--space-5) var(--space-4);
 }
 
 /* ---- Timeline -----------------------------------------------------------
@@ -5198,14 +5202,15 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 /* ---- Composer ------------------------------------------------------------ */
-/* Il campo per scrivere, ancorato in fondo alla conversazione come oggi. La
-   riga sotto al campo tiene ormai solo il suggerimento della scorciatoia e
-   l'unico comando principale del pannello: il controllo di chiusura è salito
-   nella testata, dove sta il fatto su cui agisce. */
+/* Il campo per scrivere, ancorato in fondo alla conversazione come oggi. Campo,
+   suggerimento della scorciatoia e unico comando principale del pannello stanno
+   su una riga sola: il controllo di chiusura è salito nella testata, dove sta il
+   fatto su cui agisce, e Send è sceso accanto al campo invece di occupare una
+   riga per sé. */
 .conv-composer {
 	border-top: 1px solid var(--border);
 	background: var(--surface);
-	padding: var(--space-3) var(--gutter) var(--space-4);
+	padding: var(--space-3) var(--gutter);
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
@@ -5213,7 +5218,10 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 .conv-composer-input {
-	width: 100%;
+	/* La larghezza è quella che avanza sulla riga, non il 100% del pannello: il
+	   suggerimento e Send stanno alla sua destra. */
+	flex: 1 1 auto;
+	min-width: 0;
 	background: var(--surface);
 	border: 1.5px solid var(--border-strong);
 	border-radius: var(--radius);
@@ -5255,20 +5263,30 @@ body.no-workspace [data-workspace-scoped] {
 	cursor: not-allowed;
 }
 
+/* Allineata in fondo e non al centro: il campo cresce verso l'alto mentre si
+   scrive, e ciò che gli sta accanto resta ancorato all'ultima riga scritta,
+   dov'è il cursore. */
 .conv-composer-row {
 	display: flex;
-	align-items: center;
+	align-items: flex-end;
 	gap: var(--space-3);
-	flex-wrap: wrap;
-}
-
-.conv-composer-spacer {
-	flex: 1 1 auto;
 }
 
 .conv-composer-hint {
 	font-size: 13px;
 	color: var(--text-dim);
+	white-space: nowrap;
+	/* Il suggerimento è la cosa che si può perdere: sta sulla riga finché la
+	   riga la regge, e sparisce prima che a stringersi sia il campo. */
+	flex: 0 1 auto;
+	overflow: hidden;
+	/* Allineato al testo del pulsante accanto — alto 40px — e non al suo bordo
+	   inferiore. */
+	padding-bottom: calc((40px - 1.5em) / 2);
+}
+
+.conv-composer-row .primary-btn {
+	flex: 0 0 auto;
 }
 
 /* ---- Close control ------------------------------------------------------ */
@@ -6033,9 +6051,30 @@ body.no-workspace [data-workspace-scoped] {
 	.conv-notice,
 	.conv-proposal,
 	.conv-nextstep,
-	.conv-outcome {
+	.conv-outcome,
+	.resume-banner {
 		margin-left: var(--space-4);
 		margin-right: var(--space-4);
+	}
+
+	/* Su una riga stretta i tre elementi non ci stanno affiancati, e la frase a
+	   sinistra di Send non è sempre una scorciatoia: a conversazione finita dice
+	   dove andrà la risposta, che è un fatto da leggere. Torna quindi sotto al
+	   campo invece di essere troncata. */
+	.conv-composer-row {
+		flex-wrap: wrap;
+	}
+
+	.conv-composer-input {
+		flex-basis: 100%;
+	}
+
+	.conv-composer-hint {
+		flex: 1 1 auto;
+		align-self: center;
+		overflow: visible;
+		white-space: normal;
+		padding-bottom: 0;
 	}
 
 	.conv-event {
@@ -6361,12 +6400,16 @@ body.no-workspace [data-workspace-scoped] {
    one. It says out loud that this is a *new* conversation handed the old one as
    context, so the page never implies the agent remembers a session it does not
    hold. */
+/* Rientra come ogni altro blocco del pannello — notizie, proposta, passo
+   successivo — invece di appoggiarsi ai bordi: è una nota dentro la
+   conversazione, non una fascia che la intesta. Il respiro è quello minimo dei
+   blocchi, così il distacco si vede senza costare una riga di storia. */
 .resume-banner {
 	display: flex;
 	align-items: baseline;
 	gap: var(--space-2);
-	margin: 0 0 var(--space-3);
-	padding: var(--space-3) var(--space-4);
+	margin: var(--space-2) var(--gutter) 0;
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--accent);
 	border-radius: var(--radius);
 	background: var(--accent-soft);

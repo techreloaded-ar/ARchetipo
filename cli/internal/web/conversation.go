@@ -66,13 +66,25 @@ type conversationView struct {
 	Available bool `json:"available"`
 	// UnavailableReason is omitted when a conversation can be opened, so a
 	// client can never render a reason next to an offer that has none.
-	UnavailableReason string                    `json:"unavailable_reason,omitempty"`
-	ProviderID        string                    `json:"provider_id,omitempty"`
-	Conversation      *conversationSnapshotView `json:"conversation"`
-	Events            []execution.RunEvent      `json:"events"`
-	LastID            int64                     `json:"last_id"`
-	Truncated         bool                      `json:"truncated"`
-	Notice            string                    `json:"notice,omitempty"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
+	ProviderID        string `json:"provider_id,omitempty"`
+	// Model is the model identifier the provider named above would use, and
+	// ModelOptions the values of the options that model declares — the effort
+	// level among them. They travel beside the provider id because the provider
+	// alone does not say what is answering: the same provider holds a
+	// conversation with a different model and a different reasoning budget from
+	// one workspace to the next.
+	//
+	// Both are omitted when the provider declares no catalog, when its catalog
+	// cannot be obtained, or when nothing is configured: a viewer that has only
+	// the provider id draws exactly what it drew before these fields existed.
+	Model        string                    `json:"model,omitempty"`
+	ModelOptions map[string]string         `json:"model_options,omitempty"`
+	Conversation *conversationSnapshotView `json:"conversation"`
+	Events       []execution.RunEvent      `json:"events"`
+	LastID       int64                     `json:"last_id"`
+	Truncated    bool                      `json:"truncated"`
+	Notice       string                    `json:"notice,omitempty"`
 	// Proposal is the action the agent has proposed and nobody has decided yet,
 	// or null when there is none. It is always present, never omitted, because
 	// "there is nothing to decide" is the answer a poll most often needs, and a
@@ -329,10 +341,16 @@ func (s *Server) conversationRunsOf(ctx context.Context, ws *workspaceSession, s
 // view read from the holder would answer "there is none" to a caller who has
 // every right to keep reading the history of what it just ended.
 func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, target conversationTarget, snapshot conversationSnapshot, open bool, afterID int64) conversationView {
+	// The model is read from the configuration the target carries, which for a
+	// conversation already open is the one its holder was started with and not
+	// today's default: the head must name what is actually answering.
+	model, modelOptions := s.conversationModelChoiceOf(ctx, target.availability.providerID, target.availability.providerConfig)
 	view := conversationView{
 		Available:         target.reason == "",
 		UnavailableReason: target.reason,
 		ProviderID:        target.availability.providerID,
+		Model:             model,
+		ModelOptions:      modelOptions,
 		Events:            []execution.RunEvent{},
 		LastID:            afterID,
 		// Never nil, whether or not a conversation is open: a client reading a
@@ -428,6 +446,33 @@ func conversationNotFound(id string, err error) error {
 	)
 }
 
+// conversationModelChoiceOf names the model — and the options of that model —
+// the given provider configuration resolves to.
+//
+// It costs no subprocess: a catalog is declared statically by the provider that
+// has one, so this is a read of what the package already knows plus a parse of
+// the configuration. That matters because the conversation routes are polled
+// every couple of seconds for as long as a conversation lives.
+//
+// Every way of not knowing answers the same way — two empty values — and none
+// of them is an error: a provider without a catalog, a catalog that could not be
+// obtained and a configuration that names no model are all "there is nothing to
+// say about the model here", and the head simply names the provider alone.
+func (s *Server) conversationModelChoiceOf(ctx context.Context, providerID string, config map[string]any) (string, map[string]string) {
+	if s.registry == nil || strings.TrimSpace(providerID) == "" {
+		return "", nil
+	}
+	provider, err := s.registry.Resolve(providerID)
+	if err != nil {
+		return "", nil
+	}
+	resolution := execution.ResolveModelChoice(ctx, provider, config)
+	if !resolution.Declared || resolution.Reason != "" {
+		return "", nil
+	}
+	return resolution.Choice.Model, resolution.Choice.Options
+}
+
 // conversationOpenability is the answer to "is there a provider here that could
 // hold a conversation", as the reads render it next to whatever they were asked
 // for.
@@ -442,6 +487,11 @@ type conversationOpenability struct {
 	available  bool
 	reason     string
 	providerID string
+	// model and modelOptions travel with the provider id for the same reason
+	// conversationView carries them: naming who would answer without naming
+	// what would answer says only half of it.
+	model        string
+	modelOptions map[string]string
 }
 
 // conversationOpenabilityOf answers that question at the cost the caller can
@@ -457,13 +507,23 @@ type conversationOpenability struct {
 // is asking while an agent is already talking.
 func (s *Server) conversationOpenabilityOf(ctx context.Context, ws *workspaceSession) conversationOpenability {
 	if live := ws.conversation.list(); len(live) > 0 {
-		return conversationOpenability{available: true, providerID: live[len(live)-1].providerID}
+		held := live[len(live)-1]
+		model, options := s.conversationModelChoiceOf(ctx, held.providerID, held.providerConfig)
+		return conversationOpenability{
+			available:    true,
+			providerID:   held.providerID,
+			model:        model,
+			modelOptions: options,
+		}
 	}
 	target := s.conversationAvailabilityFor(ctx, ws)
+	model, options := s.conversationModelChoiceOf(ctx, target.availability.providerID, target.availability.providerConfig)
 	return conversationOpenability{
-		available:  target.reason == "",
-		reason:     target.reason,
-		providerID: target.availability.providerID,
+		available:    target.reason == "",
+		reason:       target.reason,
+		providerID:   target.availability.providerID,
+		model:        model,
+		modelOptions: options,
 	}
 }
 
@@ -488,6 +548,8 @@ func pastConversationViewOf(record conversationlog.Record, openability conversat
 		Available:         openability.available,
 		UnavailableReason: openability.reason,
 		ProviderID:        openability.providerID,
+		Model:             openability.model,
+		ModelOptions:      openability.modelOptions,
 		Conversation: &conversationSnapshotView{
 			ID: record.ID,
 			// The state travels as the record left it, with no interpretation:

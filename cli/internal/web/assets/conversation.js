@@ -486,7 +486,7 @@
 	// ended cannot be closed again, so offering it would be a lie.
 	//
 	// It lives in the head, beside the state it acts on, and no longer in the
-	// composer row: a red-bordered pill sitting a thumb away from Send made the
+	// writing row: a red-bordered pill sitting a thumb away from Send made the
 	// one irreversible command of this panel share a row with its most ordinary
 	// one. Here it is a quiet control among the facts about the conversation —
 	// what state it is in, where it works, which provider holds it — and the
@@ -537,15 +537,53 @@
 		const await_ = awaiting
 			? '<p class="conv-composer-await">the run resumes when you answer the wait above</p>'
 			: "";
+		// Campo e comando sulla stessa riga: il pulsante sta a destra, allineato
+		// in fondo al campo, e non su una riga propria. La riga sotto costava al
+		// pannello un'altezza intera per un solo bottone, e la conversazione è
+		// ciò che quello spazio deve avere.
 		return `<form class="conv-composer">
-			<textarea class="conv-composer-input" rows="1" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
 			<div class="conv-composer-row">
-				<span class="conv-composer-spacer"></span>
+				<textarea class="conv-composer-input" rows="1" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
 				<span class="conv-composer-hint">${escapeHtml(hint)}</span>
 				<button type="submit" class="primary-btn"${disabled}>Send</button>
 			</div>
 			${await_}
 		</form>`;
+	}
+
+	// A one-word identifier is a name and reads as one once it is capitalised;
+	// anything else — an identifier carrying digits, dashes or dots — is left
+	// exactly as it is spelled, because title-casing a compound identifier
+	// produces a name nobody uses.
+	function displayName(id) {
+		const value = typeof id === "string" ? id.trim() : "";
+		if (!/^[a-z][a-z]*$/i.test(value)) return value;
+		return value.charAt(0).toUpperCase() + value.slice(1);
+	}
+
+	// Who is answering, in one line: the provider, the model it is running, and
+	// the values of whatever options that model declares — the effort level
+	// among them. The provider id alone said the least interesting third of it:
+	// the same provider answers with a different model and a different reasoning
+	// budget from one workspace to the next, and that is the part worth reading.
+	//
+	// Every piece is optional and each missing one simply drops out, so a
+	// provider that declares no catalog still reads as its own name and nothing
+	// is ever drawn as an empty slot.
+	function agentLabel(view) {
+		const parts = [];
+		const provider = displayName(textAt(view, "provider_id"));
+		if (provider) parts.push(provider);
+		const model = displayName(textAt(view, "model"));
+		if (model) parts.push(model);
+		const options = objectAt(view, "model_options");
+		if (options) {
+			for (const key of Object.keys(options).sort()) {
+				const value = textAt(options, key);
+				if (value) parts.push(value);
+			}
+		}
+		return parts.join(" ");
 	}
 
 	// `controls` is whatever the caller wants at the right end of the band —
@@ -556,12 +594,12 @@
 		const dir = objectAt(view, "conversation")
 			? textAt(objectAt(view, "conversation"), "working_dir")
 			: "";
-		const provider = textAt(view, "provider_id");
+		const agent = agentLabel(view);
 		const dirHtml = dir
 			? `<code class="conv-dir" title="${escapeHtml(dir)}">${escapeHtml(dir)}</code>`
 			: "";
-		const providerHtml = provider
-			? `<span class="conv-provider">${escapeHtml(provider)}</span>`
+		const providerHtml = agent
+			? `<span class="conv-provider" title="${escapeHtml(agent)}">${escapeHtml(agent)}</span>`
 			: "";
 		return `<div class="conv-head">
 			<span class="conv-badge ${variant}">${escapeHtml(badge)}</span>
@@ -847,14 +885,14 @@
 		// belongs after everything that has been said and before the place where
 		// the next thing is said.
 		blocks.push(renderNextStep(objectAt(local, "nextStep"), local));
+		// Il compositore chiude il pannello e nient'altro lo segue. Aprire una
+		// conversazione nuova si comanda dall'elenco delle conversazioni e
+		// chiudere quella aperta dalla testata: ripetere qui uno dei due
+		// costava al pannello una fascia intera per un comando che ha già il suo
+		// posto, e la conversazione è ciò che quello spazio deve avere.
 		blocks.push(
 			renderComposer(active, typed, local, offered, anyRunAwaiting(value)),
 		);
-		if (!active && offered) {
-			blocks.push(
-				`<div class="conv-again">${renderOpenButton(local, "Open a new conversation")}</div>`,
-			);
-		}
 
 		return `<section class="conv-panel ${variant}" aria-label="Conversation">
 			${renderHead(value, badge, variant, active ? renderCloseControl(local) : "")}
