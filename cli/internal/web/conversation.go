@@ -168,6 +168,16 @@ type conversationRunView struct {
 	// approvals exist only while a follower is attached, and attaching it is
 	// this side's job.
 	AwaitingResponse bool `json:"awaiting_response"`
+	// ThreadID names the conversation this run is read in, empty for a run that
+	// is read nowhere else.
+	//
+	// When it is set the block carries no history at all, and that is the point:
+	// the run *is* that conversation, so quoting its whole log here would be the
+	// same agent rendered twice inside one page, with the block's own composer
+	// and the thread's writing into a single turn. What the block keeps is what
+	// this conversation actually knows — that it asked for the step, and where
+	// the step is happening.
+	ThreadID string `json:"thread_id,omitempty"`
 }
 
 // conversationTarget is everything the routes need once the configuration has
@@ -320,6 +330,14 @@ func (s *Server) conversationRunsOf(ctx context.Context, ws *workspaceSession, s
 		view.Scope = runScopeOf(record)
 		if record.SpecCode != "" {
 			view.SpecCode = record.SpecCode
+		}
+		// A run that is read in a conversation of its own is named and not
+		// quoted: the block says where the work is, and the thread shows it.
+		if thread := threadOfRun(ws, outcome.ExecutionID); thread != "" {
+			view.ThreadID = thread
+			view.AwaitingResponse = false
+			views = append(views, view)
+			continue
 		}
 		var projection runProjection
 		followed := false

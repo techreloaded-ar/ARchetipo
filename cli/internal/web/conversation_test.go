@@ -242,7 +242,10 @@ type conversationRunResponse struct {
 	Status        string `json:"status"`
 	CreatedAt     string `json:"created_at"`
 	Decision      string `json:"decision"`
-	Run           *struct {
+	// ThreadID names the conversation the step is happening in, empty for a run
+	// that is read nowhere else.
+	ThreadID string `json:"thread_id"`
+	Run      *struct {
 		RunID string `json:"run_id"`
 		State string `json:"state"`
 	} `json:"run"`

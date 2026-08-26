@@ -287,3 +287,128 @@ func TestARunOfAProviderThatCannotConverseIsNotAThread(t *testing.T) {
 		t.Fatalf("the workspace holds %v, want nothing: this provider does not converse", live)
 	}
 }
+
+// runViewOf reads the run projection of an execution the way the viewer does.
+func runViewOf(t *testing.T, srv *Server, executionID string) map[string]any {
+	t.Helper()
+	w := doJSON(t, srv, http.MethodGet, "/api/execution/"+executionID+"/run?after_id=0", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET run = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var view map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatalf("undecodable run view: %v (%s)", err, w.Body.String())
+	}
+	return view
+}
+
+// The run projection says where the run is read, so the viewer draws the work
+// once. A run held as a conversation names that conversation; drawing a panel
+// beside it would be the same history rendered twice, polled twice, with two
+// composers writing into one turn.
+func TestTheRunProjectionNamesTheThreadItIsReadIn(t *testing.T) {
+	srv, provider := actionThreadServer(t)
+	executionID := actionThreadStart(t, srv, "US-901")
+	<-provider.entered
+
+	view := runViewOf(t, srv, executionID)
+	if got, _ := view["thread_id"].(string); got != executionID {
+		t.Fatalf("thread_id = %q, want the conversation this run is read in %q: %#v", got, executionID, view)
+	}
+
+	close(provider.release)
+	awaitTerminal(t, srv, executionID)
+}
+
+// dispatchOnlyProvider exposes an interactive run and cannot converse: the
+// shape of a remote, dispatch-based provider. Its runs are followed through the
+// projection and nothing else, which is the fallback the boundary keeps.
+type dispatchOnlyProvider struct {
+	*runTestProvider
+	*localrun.Collaborator
+}
+
+func newDispatchOnlyProvider(id string) *dispatchOnlyProvider {
+	p := &dispatchOnlyProvider{
+		runTestProvider: newRunTestProvider(id, nil),
+		Collaborator:    localrun.NewCollaborator(localrun.NewRegistry()),
+	}
+	return p
+}
+
+func (p *dispatchOnlyProvider) Execute(ctx context.Context, request execution.Request) (execution.Result, error) {
+	session := localrun.NewSession(request.ExecutionID, nil)
+	session.AttachDialogue(&fakeDialogue{})
+	p.Registry().Register(session)
+	result, err := p.runTestProvider.Execute(ctx, request)
+	session.Close(execution.RunClosed, "")
+	return result, err
+}
+
+// A run nobody holds as a conversation names none, and that is the answer that
+// keeps the run panel alive where it is still the only way to follow the work:
+// a provider that exposes a run and cannot converse.
+func TestTheRunProjectionOfAnUnthreadedRunNamesNoThread(t *testing.T) {
+	provider := newDispatchOnlyProvider("remote")
+	srv, _, _ := newRunServer(t, provider, true)
+
+	status, started := startAction(t, srv, "US-901", "plan")
+	if status != http.StatusCreated {
+		t.Fatalf("POST: %d %v", status, started)
+	}
+	id, _ := started["id"].(string)
+	<-provider.entered
+
+	view := runViewOf(t, srv, id)
+	if got, present := view["thread_id"]; present && got != "" {
+		t.Fatalf("thread_id = %v, want none: this run is read nowhere else", got)
+	}
+	// And the projection is still a real one, so the panel that reads it has
+	// something to draw.
+	if view["run"] == nil {
+		t.Fatalf("the run of a dispatch-based provider is not followable: %#v", view)
+	}
+	if live := liveConversationIDs(srv); len(live) != 0 {
+		t.Fatalf("the workspace holds %v, want nothing: this provider does not converse", live)
+	}
+
+	close(provider.release)
+	awaitTerminal(t, srv, id)
+}
+
+// A step asked for inside a conversation is remembered there, and the block
+// that remembers it names the conversation the step is happening in instead of
+// quoting its whole log: the run *is* that conversation, and quoting it here
+// would draw one agent twice inside one page.
+func TestARunAskedForInAConversationIsNamedNotQuoted(t *testing.T) {
+	srv, provider := actionThreadServer(t)
+	asked := journalTestOpenOnSpec(t, srv, "US-901")
+	provider.emit(t, asked, localrun.KindUserMessage, "Pianifica la US-901")
+	said := provider.emit(t, asked, localrun.KindText, "Va bene.")
+
+	status, started := adoptTestStart(t, srv, "US-901", "plan", asked)
+	if status != http.StatusCreated {
+		t.Fatalf("POST spec execution = %d, want 201: %v", status, started)
+	}
+	executionID, _ := started["id"].(string)
+	<-provider.entered
+	provider.runSessionOf(t, executionID).Append(execution.RunEvent{Kind: localrun.KindText, Text: "STO-PIANIFICANDO"})
+
+	_, view, body := readConversation(t, srv, asked, 0)
+	if len(view.Runs) != 1 {
+		t.Fatalf("the conversation carries %d run blocks, want the one it asked for: %s", len(view.Runs), body)
+	}
+	block := view.Runs[0]
+	if block.ExecutionID != executionID || block.AnchorEventID != said.ID {
+		t.Fatalf("the block does not name the step it asked for: %#v (%s)", block, body)
+	}
+	if block.ThreadID != executionID {
+		t.Fatalf("thread_id = %q, want the conversation the step is happening in %q", block.ThreadID, executionID)
+	}
+	if len(block.Events) != 0 {
+		t.Fatalf("the block quotes the log of a step that has its own conversation: %#v", block.Events)
+	}
+
+	close(provider.release)
+	awaitTerminal(t, srv, executionID)
+}

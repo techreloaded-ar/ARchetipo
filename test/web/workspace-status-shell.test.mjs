@@ -274,3 +274,51 @@ describe("US-056 AC-5 — senza workspace aperto nessun passo è suggerito", () 
 		);
 	});
 });
+
+// Il lavoro si disegna una volta sola.
+//
+// Dopo l'unificazione una run tenuta come conversazione *è* quella
+// conversazione: una sessione, un processo d'agente. Un pannello disegnato
+// accanto al thread sarebbe la stessa storia resa due volte, interrogata due
+// volte, con due compositori che scrivono in un turno solo. Chi delle due sia
+// una run lo sa il server — `thread_id` sulla proiezione — e la pagina non lo
+// deduce: dedurlo vorrebbe dire indovinare una capability del provider.
+//
+// Non è un test unitario perché non è il risultato di una funzione: è una
+// proprietà di *dove* la decisione è scritta, e un refactor che la perdesse non
+// farebbe fallire nient'altro — tornerebbero solo a esserci due pannelli.
+describe("il visore disegna la run una volta sola", () => {
+	it("il pannello della run non si monta per una run che si legge in un thread", () => {
+		const body = blockAfter(js, "async function resumeRun(");
+		assert.ok(
+			body.includes("view.thread_id"),
+			"resumeRun non legge più thread_id: monterebbe il pannello anche per una run che il thread già mostra",
+		);
+		assert.ok(
+			body.includes("executionThreadID"),
+			"resumeRun non ricorda più dove la run si legge: renderExecution non avrebbe su cosa decidere",
+		);
+	});
+
+	it("il pannello dell'esecuzione tace per una run che si legge in un thread", () => {
+		const body = blockAfter(js, "function renderExecution(");
+		assert.ok(
+			body.includes("executionThreadID"),
+			"renderExecution non guarda più se la run ha un thread: l'esito comparirebbe due volte, nel pannello e come esito del thread",
+		);
+	});
+
+	it("prima si sa dove la run si legge, poi la si disegna", () => {
+		// L'ordine non è stile: disegnare prima di sapere mostrerebbe per un
+		// istante un pannello che sta per sparire.
+		const follow = blockAfter(js, "async function followExecution(");
+		const resumeAt = follow.indexOf("resumeRun(");
+		const renderAt = follow.indexOf("renderExecution(");
+		assert.ok(resumeAt >= 0, "followExecution non chiede più dove la run si legge");
+		assert.ok(renderAt >= 0, "followExecution non disegna più l'esecuzione");
+		assert.ok(
+			resumeAt < renderAt,
+			"followExecution disegna prima di sapere dove la run si legge",
+		);
+	});
+});

@@ -118,6 +118,9 @@
 		runPartial:
 			"La parte più vecchia di questa run è fuori dalla finestra che il visore conserva; il provider la tiene ancora.",
 		runReach: "Vai al log completo",
+		// Un passo che si legge in una conversazione sua non ha un «log» da
+		// raggiungere: ha un posto in cui sta accadendo.
+		runReachThread: "Vai alla conversazione del passo",
 		// Decisioni
 		approvalPending: "Decisione in attesa",
 		approvalResolved: "Decisione risolta",
@@ -752,7 +755,15 @@
 		if (notice) {
 			rows.push(`<div class="conv-run-notice">${escapeHtml(notice)}</div>`);
 		}
-		rows.push(renderRunLogFold(run, local));
+		// Un passo che si legge in una conversazione sua non porta qui nessuna
+		// storia, e non è una mancanza: la conversazione *è* quel passo — una
+		// sessione sola, un agente solo — e citarne il log qui vorrebbe dire
+		// disegnare lo stesso agente due volte nella stessa pagina, con due
+		// compositori che scrivono in un turno solo. Quello che il blocco tiene
+		// è ciò che questa conversazione sa davvero: di aver chiesto il passo, e
+		// dove il passo sta accadendo.
+		const threadID = textAt(run, "thread_id");
+		if (!threadID) rows.push(renderRunLogFold(run, local));
 		if (run.truncated) {
 			rows.push(
 				`<div class="conv-run-partial" role="note">${escapeHtml(TEXT.runPartial)}</div>`,
@@ -802,7 +813,11 @@
 		}
 
 		const disabled = local.busy ? " disabled" : "";
-		const reach = `<div class="conv-run-controls">
+		const reach = threadID
+			? `<div class="conv-run-controls">
+			<button type="button" class="ghost-btn conv-run-reach" data-conversation-reach-thread="${escapeHtml(threadID)}"${disabled}>${escapeHtml(TEXT.runReachThread)}</button>
+		</div>`
+			: `<div class="conv-run-controls">
 			<button type="button" class="ghost-btn conv-run-reach" data-conversation-reach-run data-scope="${escapeHtml(scope)}" data-code="${escapeHtml(code)}" data-execution-id="${escapeHtml(execution)}"${disabled}>${escapeHtml(TEXT.runReach)}</button>
 		</div>`;
 

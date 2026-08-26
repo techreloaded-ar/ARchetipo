@@ -2002,3 +2002,63 @@ describe("renderConversation — la decisione della conversazione", () => {
 		);
 	});
 });
+
+// Un passo che si legge in una conversazione sua non si cita qui.
+//
+// Dopo l'unificazione la run *è* la conversazione: una sessione, un agente. Un
+// blocco che ne quotasse tutto il log dentro la conversazione che l'ha chiesto
+// disegnerebbe lo stesso agente due volte nella stessa pagina, con due
+// compositori che scrivono in un turno solo. Quello che il blocco tiene è ciò
+// che questa conversazione sa davvero: di aver chiesto il passo, e dove il
+// passo sta accadendo.
+describe("renderConversation — il passo che ha una conversazione sua", () => {
+	it("il blocco nomina la conversazione invece di citarne il log", () => {
+		const html = renderConversation(
+			withConversation({
+				events: RUN_EVENTS,
+				last_id: 3,
+				runs: [
+					runAt(2, {
+						thread_id: "exec-abc",
+						events: [],
+						approvals: [],
+					}),
+				],
+			}),
+			"",
+		);
+
+		assert.ok(
+			html.includes('data-conversation-reach-thread="exec-abc"'),
+			"il blocco non offre la strada verso la conversazione del passo",
+		);
+		assert.ok(
+			!html.includes("data-conversation-reach-run"),
+			"il blocco porta ancora alla vecchia strada: il pannello della run per un passo che ha una conversazione sua è vuoto",
+		);
+		assert.ok(
+			!html.includes("conv-run-log-toggle"),
+			"il blocco disegna ancora la piega del log: sarebbe lo stesso agente reso due volte",
+		);
+	});
+
+	it("un passo senza conversazione sua tiene la piega del log e la vecchia strada", () => {
+		const html = renderConversation(
+			withConversation({
+				events: RUN_EVENTS,
+				last_id: 3,
+				runs: [runAt(2, { events: [{ id: 1, kind: "text", text: "X" }] })],
+			}),
+			"",
+		);
+
+		assert.ok(
+			html.includes("data-conversation-reach-run"),
+			"un passo dispatch-based ha perso la strada verso il suo pannello",
+		);
+		assert.ok(
+			html.includes("conv-run-log-toggle"),
+			"un passo dispatch-based ha perso la piega del log: non si leggerebbe da nessuna parte",
+		);
+	});
+});

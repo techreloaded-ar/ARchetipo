@@ -30,6 +30,16 @@ type runView struct {
 	Connected bool                        `json:"connected"`
 	Truncated bool                        `json:"truncated"`
 	Notice    string                      `json:"notice,omitempty"`
+	// ThreadID names the conversation this run is read in, and is empty for a
+	// run that is read nowhere else.
+	//
+	// It exists so the viewer draws the work once. A run held as a conversation
+	// *is* that conversation — one session, one agent process — and a panel
+	// drawn beside the thread would be the same history rendered twice, polled
+	// twice, with two composers writing into one turn. Which of the two a run is
+	// depends on the provider behind it, and that is the server's knowledge: a
+	// client guessing at it would be guessing at a capability.
+	ThreadID string `json:"thread_id,omitempty"`
 }
 
 // runTarget is everything a run route needs once the plumbing has been
@@ -218,6 +228,25 @@ func executionIDOf(r *http.Request) (string, error) {
 	return id, nil
 }
 
+// threadOfRun names the conversation an execution is read in, and is empty when
+// it is read in none.
+//
+// It answers from the conversations the workspace is *holding*, and only those.
+// A run whose thread has been sealed is a run whose work is over: the transcript
+// stays readable by its id, and the outcome belongs beside the spec again — what
+// must never happen is the same agent being watched in two places while it is
+// still working.
+func threadOfRun(ws *workspaceSession, executionID string) string {
+	if ws == nil || strings.TrimSpace(executionID) == "" {
+		return ""
+	}
+	snapshot, held := ws.conversation.get(executionID)
+	if !held || strings.TrimSpace(snapshot.executionID) == "" {
+		return ""
+	}
+	return snapshot.id
+}
+
 // handleGetExecutionRun serves the projection of the run behind an execution.
 func (s *Server) handleGetExecutionRun(w http.ResponseWriter, r *http.Request) {
 	id, err := executionIDOf(r)
@@ -237,10 +266,14 @@ func (s *Server) handleGetExecutionRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if target.follower == nil {
-		writeJSON(w, http.StatusOK, emptyRunView(notice))
+		view := emptyRunView(notice)
+		view.ThreadID = threadOfRun(ws, id)
+		writeJSON(w, http.StatusOK, view)
 		return
 	}
-	writeJSON(w, http.StatusOK, projectionView(target.follower.snapshotView(afterID)))
+	view := projectionView(target.follower.snapshotView(afterID))
+	view.ThreadID = threadOfRun(ws, id)
+	writeJSON(w, http.StatusOK, view)
 }
 
 type sendRunMessageReq struct {

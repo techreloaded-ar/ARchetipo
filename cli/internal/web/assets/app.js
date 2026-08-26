@@ -608,6 +608,11 @@
 	let panelActions = null; // container the action chips are drawn in
 	let panelExecution = null; // container the execution panel is drawn in
 	let panelRun = null; // container the run panel is drawn in
+	// La conversazione in cui si legge la run del pannello montato, vuota per
+	// una run che non si legge da nessun'altra parte. È la risposta del server,
+	// mai una deduzione della pagina: quale delle due sia una run dipende dal
+	// provider che c'è dietro.
+	let executionThreadID = "";
 	let panelModelChoice = null; // container the single-run model choice is drawn in
 	let modelChoiceView = null; // last read of GET /api/execution/model-choice
 	let modelChoiceSelection = null; // what the reader chose here, or null when nobody touched it
@@ -3528,6 +3533,9 @@
 		modelChoiceView = null;
 		modelChoiceSelection = null;
 		if (panelModelChoice) panelModelChoice.innerHTML = "";
+		// Prima di renderExecution: è la condizione che quella legge, e montare
+		// un pannello nuovo non deve ereditare il verdetto del precedente.
+		executionThreadID = "";
 		renderExecution(null);
 		resetRunState();
 	}
@@ -3761,7 +3769,6 @@
 			modelChoiceSelection = null;
 			renderModelChoicePanel();
 			loadModelChoice(ctx);
-			renderExecution(record);
 			await followExecution(record, ctx);
 			// Il thread della run è la run: si raggiunge con il suo stesso id.
 			await revealThread(record && record.id ? record.id : "");
@@ -3804,11 +3811,17 @@
 	// its polling back up when it is still open. It never starts anything: a
 	// page load must show the run, not launch one.
 	function resumeExecution(record, ctx) {
-		renderExecution(record);
+		// resumeRun per prima, e il disegno dopo: è lei che impara dal server se
+		// questa run si legge in una conversazione, ed è quella risposta che
+		// decide se il pannello dell'esecuzione esiste. Disegnare prima
+		// mostrerebbe per un istante un pannello che sta per sparire.
+		resumeRun(record, ctx).then(() => {
+			if (panelContext !== ctx) return;
+			renderExecution(record);
+		});
 		if (record && !isExecutionTerminal(record)) {
 			startExecutionPolling(record.id, ctx);
 		}
-		resumeRun(record, ctx);
 	}
 
 	// followExecution either keeps watching a still open execution, or settles
@@ -3816,8 +3829,12 @@
 	async function followExecution(record, ctx) {
 		if (!record) return;
 		if (!isExecutionTerminal(record)) {
+			// Nell'ordine di resumeExecution, e per la stessa ragione: prima si
+			// sa dove la run si legge, poi la si disegna.
+			await resumeRun(record, ctx);
+			if (panelContext !== ctx) return;
+			renderExecution(record);
 			startExecutionPolling(record.id, ctx);
-			resumeRun(record, ctx);
 			return;
 		}
 		await settleExecution(record, ctx);
@@ -3894,10 +3911,18 @@
 
 	// renderExecution draws the execution panel from the record alone. No record
 	// means no panel: a spec that was never run shows nothing at all.
+	//
+	// E nemmeno una run che si legge in una conversazione: quella run *è* la
+	// conversazione — una sessione sola, un processo d'agente solo — e un
+	// pannello accanto al thread sarebbe la stessa cosa disegnata due volte,
+	// interrogata due volte, con due compositori che scrivono in un turno solo.
+	// Chi lo sa è il server: `thread_id` sulla proiezione della run. Un provider
+	// che non conversa non ha nessun thread, e per lui il pannello resta quello
+	// di sempre — è il ripiego che l'ADR gli lascia.
 	function renderExecution(record, note) {
 		lastExecutionRecord = record || null;
 		if (!panelExecution) return;
-		if (!record) {
+		if (!record || executionThreadID) {
 			panelExecution.innerHTML = "";
 			return;
 		}
@@ -4139,6 +4164,16 @@
 			return;
 		}
 		if (panelContext !== ctx) return;
+		// Una run che si legge in una conversazione non apre nessun pannello e
+		// non si interroga: il thread la mostra già, dalla stessa sessione.
+		// Il pannello dell'esecuzione si spegne con lui — l'esito lo porta il
+		// payload della conversazione.
+		executionThreadID = view && view.thread_id ? String(view.thread_id) : "";
+		if (executionThreadID) {
+			resetRunState();
+			renderExecution(lastExecutionRecord);
+			return;
+		}
 		runExecutionID = executionID;
 		applyRunView(view);
 		renderRun();
@@ -5230,6 +5265,19 @@
 				startNextStep(target, next).catch((err) => {
 					showToast(err.message || String(err), "err");
 				});
+				return;
+			}
+			// Un passo che si legge in una conversazione sua si raggiunge
+			// andandoci: non c'è nessun pannello da montare, perché quella
+			// conversazione è il passo.
+			const reachThread = e.target.closest("[data-conversation-reach-thread]");
+			if (reachThread) {
+				const target = reachThread.getAttribute("data-conversation-reach-thread");
+				if (target) {
+					switchToConversation(target).catch((err) => {
+						showToast(err.message || String(err), "err");
+					});
+				}
 				return;
 			}
 			// Same rule as the status strip: reaching a run only navigates to the
