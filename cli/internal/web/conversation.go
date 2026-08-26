@@ -84,6 +84,15 @@ type conversationView struct {
 	LastID       int64                     `json:"last_id"`
 	Truncated    bool                      `json:"truncated"`
 	Notice       string                    `json:"notice,omitempty"`
+	// Approvals are the decisions the agent of this conversation is waiting on.
+	// They exist because a local agent asks before it uses a tool it may not use
+	// on its own, and a question nobody can see is a conversation stopped
+	// forever: the agent is waiting for an answer the viewer never offered.
+	//
+	// It is never nil, so a client always iterates an array. A conversation that
+	// has ended carries an empty list, always: a decision can only be answered
+	// while there is a process to answer it.
+	Approvals []execution.PendingApproval `json:"approvals"`
 	// Proposal is the action the agent has proposed and nobody has decided yet,
 	// or null when there is none. It is always present, never omitted, because
 	// "there is nothing to decide" is the answer a poll most often needs, and a
@@ -354,7 +363,8 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 		LastID:            afterID,
 		// Never nil, whether or not a conversation is open: a client reading a
 		// workspace that holds none still iterates an array.
-		Runs: []conversationRunView{},
+		Runs:      []conversationRunView{},
+		Approvals: []execution.PendingApproval{},
 	}
 	if !open {
 		return view
@@ -378,6 +388,17 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 		}
 	}
 	view.Conversation = rendered
+	// The decisions the agent is waiting on are read from the collaborator that
+	// holds it, on every poll, for the same reason the state above is: they are
+	// the process's own statement and never a deduction of this handler. A read
+	// that fails leaves the list empty and raises no notice of its own — the
+	// state read just above has already spoken for a conversation that cannot be
+	// reached at all.
+	if snapshot.collaborator != nil {
+		if pending, err := snapshot.collaborator.ReadRunApprovals(ctx, execution.RunRequest{RunID: snapshot.id, ProviderConfig: snapshot.providerConfig}); err == nil && pending != nil {
+			view.Approvals = pending
+		}
+	}
 	// The outcome comes from the holder and not from the history, so it is
 	// rendered even by a viewer that cannot read the events: what was decided
 	// and what it started are facts of the workspace, not lines of a timeline.
@@ -567,6 +588,10 @@ func pastConversationViewOf(record conversationlog.Record, openability conversat
 		// because both are read from a holder that no longer holds it.
 		Proposal: nil,
 		Runs:     []conversationRunView{},
+		// A conversation that has ended waits on nothing: there is no process
+		// left to answer, and offering a live button on one would be an offer
+		// nothing can honour.
+		Approvals: []execution.PendingApproval{},
 	}
 	if len(events) > 0 {
 		view.LastID = events[len(events)-1].ID
@@ -911,6 +936,63 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 	// who has it or about whether it is available.
 	target := heldConversationTarget(snapshot)
 	writeJSON(w, http.StatusAccepted, s.conversationViewOf(ctx, ws, target, snapshot, true, afterID))
+}
+
+type respondConversationApprovalReq struct {
+	OptionID string `json:"option_id"`
+}
+
+// handleRespondWorkspaceConversationApproval answers a decision the agent of a
+// conversation is waiting on.
+//
+// It is the twin of handleRespondRunApproval and refuses in the same words for
+// the same reasons; what differs is only what names the session — a
+// conversation id instead of an execution record. It writes nothing into the
+// history: what the answer did becomes visible through what the agent does with
+// it, a tool that runs or a tool result reporting the refusal, which is the
+// rule every command of a local run follows.
+func (s *Server) handleRespondWorkspaceConversationApproval(w http.ResponseWriter, r *http.Request) {
+	afterID, err := parseAfterID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	approvalID := strings.TrimSpace(r.PathValue("approvalId"))
+	if approvalID == "" {
+		writeError(w, iox.NewInvalidInput("missing approval id", "use /api/workspace/conversations/<id>/approvals/<approvalId>", nil))
+		return
+	}
+	var body respondConversationApprovalReq
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, err)
+		return
+	}
+	if strings.TrimSpace(body.OptionID) == "" {
+		writeError(w, iox.NewInvalidInput("option_id is required", "pick one of the options the approval declares", nil))
+		return
+	}
+	ws := s.session()
+	id := strings.TrimSpace(r.PathValue("id"))
+	snapshot, live := ws.conversation.get(id)
+	if !live {
+		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "answer a decision"))
+		return
+	}
+	if snapshot.collaborator == nil {
+		writeError(w, iox.NewConflict(
+			"the conversation "+snapshot.id+" cannot be commanded from this viewer",
+			"close it and open a new one with a provider that exposes an interactive run",
+			nil,
+		))
+		return
+	}
+	ctx := r.Context()
+	req := execution.RunRequest{RunID: snapshot.id, ProviderConfig: snapshot.providerConfig}
+	if err := snapshot.collaborator.RespondRunApproval(ctx, req, approvalID, body.OptionID); err != nil {
+		writeError(w, mapRunRefusal(err))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, s.conversationViewOf(ctx, ws, heldConversationTarget(snapshot), snapshot, true, afterID))
 }
 
 // handleCloseWorkspaceConversation closes the conversation and releases the

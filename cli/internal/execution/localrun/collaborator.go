@@ -91,15 +91,28 @@ func (c *Collaborator) ReadRun(_ context.Context, req execution.RunRequest) (exe
 	return session.Snapshot(), nil
 }
 
-// ReadRunApprovals answers with an empty list, and that is an answer rather
-// than a gap: a local session runs with approvals disabled, so the process
-// never stops to ask. Returning a non-nil slice keeps a caller that serializes
-// the result producing [] instead of null.
+// ReadRunApprovals lists the decisions the live process is waiting on.
+//
+// It resolves the run rather than requiring it to be commandable: a run that
+// has ended has no pending decision, and that is an answer — an empty list —
+// and not the refusal a command sent to it would deserve. The same is true of
+// a dialogue that never asks: absence of questions is not absence of an answer.
+// Returning a non-nil slice keeps a caller that serializes the result producing
+// [] instead of null.
 func (c *Collaborator) ReadRunApprovals(_ context.Context, req execution.RunRequest) ([]execution.PendingApproval, error) {
-	if _, err := c.session(req.RunID); err != nil {
+	session, err := c.session(req.RunID)
+	if err != nil {
 		return nil, err
 	}
-	return []execution.PendingApproval{}, nil
+	arbiter, asks := ArbiterOf(session.dialogueOf())
+	if !asks {
+		return []execution.PendingApproval{}, nil
+	}
+	pending := arbiter.PendingApprovals()
+	if pending == nil {
+		return []execution.PendingApproval{}, nil
+	}
+	return pending, nil
 }
 
 func (c *Collaborator) StreamRunEvents(ctx context.Context, req execution.RunRequest, afterID int64, sink func(execution.RunEvent) error) error {
@@ -131,13 +144,35 @@ func (c *Collaborator) SendRunMessage(ctx context.Context, req execution.RunRequ
 	return deliver(session.dialogueOf().Send(ctx, text))
 }
 
-// RespondRunApproval is refused by construction: a local session runs with
-// approvals disabled, so there is never a decision to answer.
-func (c *Collaborator) RespondRunApproval(_ context.Context, req execution.RunRequest, _, _ string) error {
-	if _, err := c.session(req.RunID); err != nil {
+// RespondRunApproval hands one decision back to the live process.
+//
+// It goes through commandable for the same reason SendRunMessage does: an
+// answer is a command, and a run that has ended or has nothing attached cannot
+// take one. A dialogue that never asks keeps the refusal it has always given —
+// there is no decision of its to answer — and it is a refusal and not a fault,
+// because nothing about the run is broken.
+//
+// It writes no history. The decision becomes visible through what the process
+// does with it: a tool that runs, or a tool result reporting the refusal. That
+// is the same rule SendRunMessage follows, and for the same reason — a line
+// written locally would show the operator something the agent may never have
+// received.
+func (c *Collaborator) RespondRunApproval(ctx context.Context, req execution.RunRequest, approvalID, optionID string) error {
+	session, err := c.commandable(req.RunID)
+	if err != nil {
 		return err
 	}
-	return refusal(execution.RunRefusedUnsupported, req.RunID, fmt.Errorf("a local run asks for no approval"))
+	arbiter, asks := ArbiterOf(session.dialogueOf())
+	if !asks {
+		return refusal(execution.RunRefusedUnsupported, req.RunID, fmt.Errorf("this local run asks for no approval"))
+	}
+	if strings.TrimSpace(approvalID) == "" {
+		return refusal(execution.RunRefusedUnsupported, req.RunID, fmt.Errorf("no approval was named"))
+	}
+	if strings.TrimSpace(optionID) == "" {
+		return refusal(execution.RunRefusedUnsupported, req.RunID, fmt.Errorf("no option was chosen"))
+	}
+	return deliver(arbiter.RespondApproval(ctx, approvalID, optionID))
 }
 
 // CancelRun asks the process to stop and reports nothing about the outcome.

@@ -132,6 +132,16 @@ func buildReviewPrompt(req execution.Request) string {
 // managed run from leaving a resumable session on disk. Verified against Claude
 // Code 2.1.235.
 //
+// `--permission-prompt-tool stdio` is what makes the permission policy mean
+// what it says. Without it `--print` has nobody to ask, so a tool call the
+// policy will not grant on its own is refused where it stands: the agent is
+// told no by a wall, and closes the turn asking a person for something nothing
+// in the run could have given it. With it, the question travels out as a
+// `can_use_tool` control request and the person following the run answers it.
+// The value is a sentinel and not an MCP tool name — the process reads it as
+// "the host on the other end of this stream decides". Verified against Claude
+// Code 2.1.246.
+//
 // The prompt is deliberately absent: it travels inside the protocol as the
 // first user frame, not as an argument, because a live session is opened before
 // it is told what to do.
@@ -144,6 +154,7 @@ func buildArgs(cfg settings) []string {
 		"--replay-user-messages",
 		"--no-session-persistence",
 		"--permission-mode", cfg.PermissionMode,
+		"--permission-prompt-tool", permissionPromptHost,
 	}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)

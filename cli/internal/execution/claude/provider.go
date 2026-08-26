@@ -424,6 +424,10 @@ func (p *Provider) openSession(runCtx context.Context, req execution.Request, cf
 	}
 
 	client := newStreamSession(process, session, conversational)
+	// Written before the reader starts, which is the one instant at which
+	// nothing is looking at it yet: from `go client.consume()` on, the clock
+	// belongs to the goroutine that stamps the questions the process asks.
+	client.now = p.now
 	go client.consume()
 
 	if deferOpening {

@@ -276,6 +276,11 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("GET /api/workspace/conversations/{id}", s.handleGetWorkspaceConversation)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/messages", s.handleSendWorkspaceConversationMessage)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/proposal", s.handleDecideWorkspaceConversationProposal)
+	// A conversation whose agent stops to ask permission is a conversation
+	// waiting on a person, exactly like a run: the answer travels on the
+	// conversation's own id, because a conversation has no execution record to
+	// be named by.
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/approvals/{approvalId}", s.handleRespondWorkspaceConversationApproval)
 	s.handleWorkspace("DELETE /api/workspace/conversations/{id}", s.handleCloseWorkspaceConversation)
 	// Writing into a past conversation is the one thing this collection does
 	// that is neither a read nor a plain open: it opens a new conversation with

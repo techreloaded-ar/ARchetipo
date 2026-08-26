@@ -225,8 +225,11 @@ func TestResolveRunAnswersAbsenceWithoutFailing(t *testing.T) {
 	}
 }
 
-// A local run asks for no approval, and says so without ever failing.
-func TestReadRunApprovalsIsAlwaysAnEmptyList(t *testing.T) {
+// A dialogue that never asks says so without ever failing, and refuses a
+// decision it has none of. It is the behaviour every local run had before the
+// permission bridge existed, and the one a provider whose process cannot ask
+// still has: absence of questions is not absence of an answer.
+func TestADialogueThatNeverAsksReportsNoApprovals(t *testing.T) {
 	collaborator, _, _ := newActiveRun(t)
 	approvals, err := collaborator.ReadRunApprovals(context.Background(), request("run-1"))
 	if err != nil {
@@ -277,5 +280,89 @@ func TestCommandsBeforeTheProcessIsAttachedAreTransient(t *testing.T) {
 	}
 	if fmt.Sprint(err) == "" {
 		t.Fatal("a refusal must state a reason")
+	}
+}
+
+// arbiterDialogue is a process that stops to ask. It carries the two methods of
+// Arbiter and nothing else, so what is exercised here is the discovery and the
+// routing this package does — never a provider's protocol.
+type arbiterDialogue struct {
+	fakeDialogue
+	pending   []execution.PendingApproval
+	answered  [][2]string
+	answerErr error
+}
+
+func (d *arbiterDialogue) PendingApprovals() []execution.PendingApproval { return d.pending }
+
+func (d *arbiterDialogue) RespondApproval(_ context.Context, approvalID, optionID string) error {
+	d.answered = append(d.answered, [2]string{approvalID, optionID})
+	return d.answerErr
+}
+
+// A dialogue that asks is discovered on the session, and its questions and its
+// answers travel through the collaborator unchanged.
+func TestADialogueThatAsksIsReadAndAnswered(t *testing.T) {
+	session := NewSession("run-1", nil)
+	dialogue := &arbiterDialogue{pending: []execution.PendingApproval{{ID: "appr-1", ToolName: "Bash"}}}
+	session.AttachDialogue(dialogue)
+	registry := NewRegistry()
+	registry.Register(session)
+	collaborator := NewCollaborator(registry)
+
+	approvals, err := collaborator.ReadRunApprovals(context.Background(), request("run-1"))
+	if err != nil {
+		t.Fatalf("ReadRunApprovals failed: %v", err)
+	}
+	if len(approvals) != 1 || approvals[0].ID != "appr-1" {
+		t.Fatalf("got %#v; want the one open decision", approvals)
+	}
+	if err := collaborator.RespondRunApproval(context.Background(), request("run-1"), "appr-1", ApprovalAllow); err != nil {
+		t.Fatalf("RespondRunApproval failed: %v", err)
+	}
+	if len(dialogue.answered) != 1 || dialogue.answered[0] != [2]string{"appr-1", ApprovalAllow} {
+		t.Fatalf("the answer did not reach the dialogue: %#v", dialogue.answered)
+	}
+}
+
+// An answer with nothing named is the caller's mistake, decided here rather
+// than spent on a round trip to the process to be told so.
+func TestAnEmptyApprovalOrOptionIsRefused(t *testing.T) {
+	session := NewSession("run-1", nil)
+	dialogue := &arbiterDialogue{}
+	session.AttachDialogue(dialogue)
+	registry := NewRegistry()
+	registry.Register(session)
+	collaborator := NewCollaborator(registry)
+
+	for _, tc := range [][2]string{{"", ApprovalAllow}, {"appr-1", "  "}} {
+		err := collaborator.RespondRunApproval(context.Background(), request("run-1"), tc[0], tc[1])
+		reason, refused := execution.RefusalOf(err)
+		if !refused || reason != execution.RunRefusedUnsupported {
+			t.Fatalf("RespondRunApproval(%q, %q) = %v; want an unsupported refusal", tc[0], tc[1], err)
+		}
+	}
+	if len(dialogue.answered) != 0 {
+		t.Fatalf("a refused answer still reached the process: %#v", dialogue.answered)
+	}
+}
+
+// The approvals of a run that has ended are an empty list and never a refusal:
+// a finished run has no decision open, which is an answer.
+func TestApprovalsOfAFinishedRunAreEmpty(t *testing.T) {
+	session := NewSession("run-1", nil)
+	session.AttachDialogue(&arbiterDialogue{pending: []execution.PendingApproval{{ID: "appr-1"}}})
+	registry := NewRegistry()
+	registry.Register(session)
+	collaborator := NewCollaborator(registry)
+	session.Close(execution.RunClosed, "")
+
+	if _, err := collaborator.ReadRunApprovals(context.Background(), request("run-1")); err != nil {
+		t.Fatalf("reading the approvals of a finished run failed: %v", err)
+	}
+	err := collaborator.RespondRunApproval(context.Background(), request("run-1"), "appr-1", ApprovalAllow)
+	reason, refused := execution.RefusalOf(err)
+	if !refused || reason != execution.RunRefusedNotActive {
+		t.Fatalf("got %v; want a run_not_active refusal", err)
 	}
 }

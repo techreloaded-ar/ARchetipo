@@ -5932,7 +5932,13 @@
 	// falls exactly as it does for every other command of this panel, so writing
 	// to the agent while a run is stopped stays possible (AC-5).
 	async function respondConversationApproval(executionID, approvalID, optionID) {
-		if (conversationBusy || !executionID || !approvalID || !optionID) return;
+		if (conversationBusy || !approvalID || !optionID) return;
+		// No execution id means the decision is the conversation's own: the agent
+		// holding the thread stopped to ask, and there is no run to answer on.
+		// The route is the conversation's, and the id it needs is the one on
+		// screen — the same one every other command of this panel is sent to.
+		const showingID = conversationsCurrentId;
+		if (!executionID && !showingID) return;
 		// The label and the tone are the provider's own words, read from the
 		// option the payload declared — never invented from the id that was
 		// pressed.
@@ -5943,7 +5949,9 @@
 		renderConversationPanel();
 		try {
 			await apiPost(
-				`/api/execution/${encodeURIComponent(executionID)}/run/approvals/${encodeURIComponent(approvalID)}`,
+				executionID
+					? `/api/execution/${encodeURIComponent(executionID)}/run/approvals/${encodeURIComponent(approvalID)}`
+					: `/api/workspace/conversations/${encodeURIComponent(showingID)}/approvals/${encodeURIComponent(approvalID)}`,
 				{ option_id: optionID },
 			);
 			conversationRefusal = "";
@@ -5959,6 +5967,13 @@
 				label,
 				denied: approvalOptionTone(option) === " deny",
 				executionID,
+				// Which of the two things was answered, said outright rather than
+				// deduced from an empty run id: the renderer draws a decision of
+				// the conversation at the tail of the thread and a decision of a
+				// run inside its block, and reading that from an absence would
+				// make every answer that simply forgot to name its run land in
+				// the wrong place.
+				conversation: !executionID,
 				approval: answering,
 			};
 			try {
@@ -5988,6 +6003,18 @@
 	// command and the options stay readable once the approval has stopped being
 	// pending — the same discipline as findRunApproval in the run panel.
 	function findConversationApproval(executionID, approvalID) {
+		// A decision with no run is the conversation's own, and it is declared at
+		// the top of the payload rather than inside a run block.
+		if (!executionID) {
+			const own =
+				conversationView && Array.isArray(conversationView.approvals)
+					? conversationView.approvals
+					: [];
+			for (const approval of own) {
+				if (approval && approval.id === approvalID) return approval;
+			}
+			return null;
+		}
 		const runs =
 			conversationView && Array.isArray(conversationView.runs)
 				? conversationView.runs

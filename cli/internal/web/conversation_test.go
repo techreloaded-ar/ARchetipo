@@ -191,6 +191,19 @@ type conversationResponse struct {
 	LastID    int64  `json:"last_id"`
 	Truncated bool   `json:"truncated"`
 	Notice    string `json:"notice"`
+	// Approvals are the decisions the agent of the conversation itself is
+	// waiting on — the ones that belong to no run, because the agent holding the
+	// thread stopped to ask before using a tool.
+	Approvals []struct {
+		ID       string `json:"id"`
+		ToolName string `json:"tool_name"`
+		Title    string `json:"title"`
+		Options  []struct {
+			ID    string `json:"id"`
+			Kind  string `json:"kind"`
+			Label string `json:"label"`
+		} `json:"options"`
+	} `json:"approvals"`
 	// Runs is the block list the flow draws inside the conversation. It is
 	// decoded from the wire like everything else here, so the assertions are
 	// about the JSON the browser reads and not about the server's own struct.

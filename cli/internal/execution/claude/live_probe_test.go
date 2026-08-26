@@ -5,6 +5,8 @@ package claude
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,4 +230,113 @@ func assertDeliveredOrRefused(t *testing.T, what string, err error) {
 		return
 	}
 	t.Fatalf("%s failed against the real binary: %v", what, err)
+}
+
+// TestLiveClaudeAsksAndAcceptsAPermissionDecision drives the real Claude Code
+// binary through the permission half of the control protocol: the process stops
+// to ask whether it may use a tool, the answer travels back on the same stream,
+// and the run goes on.
+//
+// It is the one check that the bridge really works. Every other test of this
+// package goes through the process seam, so it would happily agree on a frame
+// shape the binary does not produce or a flag it does not understand — and the
+// whole reason the bridge exists is a run that failed because nobody could
+// answer such a question.
+//
+// The workspace it runs in declares an ask rule for Bash, so the escalation is
+// a fact of the configuration and not of a classifier that may change its mind
+// between releases. Both answers are exercised: the allowed call runs and its
+// output comes back, the denied one comes back to the agent as a tool result in
+// error, and the agent goes on from there.
+//
+//	LIVE_CLAUDE=1 go test -tags liveprobe -run TestLiveClaudeAsksAndAcceptsAPermissionDecision -timeout 10m ./internal/execution/claude/
+func TestLiveClaudeAsksAndAcceptsAPermissionDecision(t *testing.T) {
+	if os.Getenv("LIVE_CLAUDE") == "" {
+		t.Skip("set LIVE_CLAUDE=1 to run the live Claude permission probe")
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The escalation is declared, not hoped for: a classifier deciding on its
+	// own that a command is safe would make this probe pass without ever having
+	// exercised the bridge.
+	if err := os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte(`{"permissions":{"ask":["Bash"]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("PAROLA-SEGRETA\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cfg := settings{Command: defaultCommand, PermissionMode: defaultPermissionMode, Timeout: 5 * time.Minute}
+	process, err := localrun.ExecStarter{}.Start(ctx, dir, cfg.Command, buildArgs(cfg))
+	if err != nil {
+		t.Fatalf("starting the claude session: %v", err)
+	}
+	session := localrun.NewSession("live-approval", nil)
+	client := newStreamSession(process, session, true)
+	go client.consume()
+	t.Cleanup(func() { _ = process.Close() })
+
+	if err := client.start(ctx, "Esegui `cat file.txt` con lo strumento Bash e riportami il suo output. Poi fermati."); err != nil {
+		t.Fatalf("the session was refused: %v", err)
+	}
+	session.AttachDialogue(client)
+
+	allowed := waitForLivePermission(t, ctx, client, "the first permission request")
+	t.Logf("asked about %s: %s", allowed.ToolName, string(allowed.Args))
+	if allowed.ToolName == "" || len(allowed.Options) != 2 {
+		t.Fatalf("the request did not arrive as a decision the viewer can render: %#v", allowed)
+	}
+	if err := client.RespondApproval(ctx, allowed.ID, localrun.ApprovalAllow); err != nil {
+		t.Fatalf("the real binary refused the answer: %v", err)
+	}
+	first := waitForLiveTurn(t, ctx, client, "the allowed turn")
+	t.Logf("allowed turn: completed=%v final=%q", first.Completed, first.Final)
+	if !first.Completed || !strings.Contains(first.Final, "PAROLA-SEGRETA") {
+		t.Fatalf("the allowed call did not run: %#v", first)
+	}
+
+	// The other answer, on the same session: a refusal must reach the agent as
+	// something it can read and go on from, not as a wall.
+	if err := client.Send(ctx, "Ora esegui `cat file.txt` un'altra volta con lo strumento Bash."); err != nil {
+		t.Fatalf("the second message was refused: %v", err)
+	}
+	denied := waitForLivePermission(t, ctx, client, "the second permission request")
+	if err := client.RespondApproval(ctx, denied.ID, localrun.ApprovalDeny); err != nil {
+		t.Fatalf("the real binary refused the denial: %v", err)
+	}
+	second := waitForLiveTurn(t, ctx, client, "the denied turn")
+	t.Logf("denied turn: completed=%v final=%q", second.Completed, second.Final)
+	if !second.Completed {
+		t.Fatalf("a denied call ended the turn in error instead of letting the agent go on: %#v", second)
+	}
+	// The refusal is history: it comes back on the user side of the protocol as
+	// a tool result in error, which is what the agent read to write its answer.
+	waitForLiveEvent(t, ctx, session, func(event execution.RunEvent) bool {
+		return event.Kind == localrun.KindToolError && strings.Contains(event.Text, "ARchetipo")
+	}, "the refusal as a tool result in error")
+
+	if pending := client.PendingApprovals(); len(pending) != 0 {
+		t.Fatalf("a decision already taken is still pending: %#v", pending)
+	}
+}
+
+// waitForLivePermission blocks until the real process asks for one.
+func waitForLivePermission(t *testing.T, ctx context.Context, client *streamSession, what string) execution.PendingApproval {
+	t.Helper()
+	for {
+		if pending := client.PendingApprovals(); len(pending) > 0 {
+			return pending[0]
+		}
+		select {
+		case <-client.Gone():
+			t.Fatalf("the process ended before %s", what)
+		case <-ctx.Done():
+			t.Fatalf("%s never arrived", what)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }

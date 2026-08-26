@@ -250,8 +250,10 @@ func TestValidateConfigAcceptsAnAbsentCommandAndRejectsAnUnknownKey(t *testing.T
 // The invocation is the streaming one, and it is asserted literally because it
 // is the single line that decides whether the process can hold a conversation
 // at all: without `--input-format stream-json` no message can reach a live
-// turn, and without `--replay-user-messages` a message that did reach it would
-// never come back out to enter the history.
+// turn, without `--replay-user-messages` a message that did reach it would
+// never come back out to enter the history, and without `--permission-prompt-tool`
+// a tool call the policy will not grant on its own is refused where it stands
+// instead of being asked about.
 //
 // The prompt is deliberately absent: a live session is opened before it is told
 // what to do, so the instruction travels inside the protocol as the first user
@@ -273,6 +275,7 @@ func TestBuildArgsStartsTheStreamingSession(t *testing.T) {
 				"--replay-user-messages",
 				"--no-session-persistence",
 				"--permission-mode", "auto",
+				"--permission-prompt-tool", "stdio",
 			},
 		},
 		{
@@ -286,6 +289,7 @@ func TestBuildArgsStartsTheStreamingSession(t *testing.T) {
 				"--replay-user-messages",
 				"--no-session-persistence",
 				"--permission-mode", "bypassPermissions",
+				"--permission-prompt-tool", "stdio",
 				"--model", "opus",
 			},
 		},

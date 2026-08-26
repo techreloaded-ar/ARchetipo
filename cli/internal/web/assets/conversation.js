@@ -771,8 +771,11 @@
 		//
 		// The card is drawn from the declaration the caller kept, so the command
 		// and the options remain the provider's own words. An answer that names
-		// no run, or an answer whose declaration is missing, draws nothing: this
-		// module invents no approval it has not been given.
+		// another run, or an answer whose declaration is missing, draws nothing:
+		// this module invents no approval it has not been given. An answer the
+		// caller marked as the conversation's own draws nothing here either — it
+		// belongs at the tail of the thread, where renderConversationApprovals
+		// puts it, because there is no run it was ever about.
 		const stillPending = {};
 		for (const approval of pending) {
 			const pendingID = approval ? textAt(approval, "id") : "";
@@ -786,6 +789,7 @@
 			const answered = answers[approvalID];
 			const declared = objectAt(answered, "approval");
 			if (!declared) continue;
+			if (answered && answered.conversation === true) continue;
 			const owner = textAt(answered, "executionID");
 			if (owner && execution && owner !== execution) continue;
 			rows.push(
@@ -819,6 +823,64 @@
 		return arrayAt(view, "runs").some(
 			(run) => run && typeof run === "object" && !!run.awaiting_response,
 		);
+	}
+
+	/**
+	 * The decisions the agent of this conversation is itself waiting on, drawn
+	 * at the tail of the thread.
+	 *
+	 * They are the conversation's own and not a run's: the agent stopped to ask
+	 * whether it may use a tool, and until somebody answers it does nothing.
+	 * That is why the card is drawn here and not inside a run block — there is
+	 * no run to draw it in — and why it carries no execution id: what the
+	 * caller has to answer on is the conversation itself.
+	 *
+	 * A decision already answered keeps its card exactly as a run's does, for
+	 * the same reason: the provider stops listing it the moment it is answered,
+	 * and a refusal must stay readable in the conversation that refused it.
+	 */
+	function renderConversationApprovals(view, ui) {
+		const local = ui && typeof ui === "object" ? ui : {};
+		const pending = arrayAt(view, "approvals");
+		const cards = [];
+		const stillPending = {};
+		for (const approval of pending) {
+			const id = approval ? textAt(approval, "id") : "";
+			if (!id) continue;
+			stillPending[id] = true;
+			cards.push(renderRunApprovalCard(approval, null, local));
+		}
+		const answers = objectAt(local, "answeredApprovals") || {};
+		for (const approvalID of Object.keys(answers)) {
+			if (Object.prototype.hasOwnProperty.call(stillPending, approvalID)) {
+				continue;
+			}
+			const answered = answers[approvalID];
+			// Only the answers the caller marked as the conversation's own: one
+			// given on a run belongs to that run's block, and drawing it here too
+			// would show one decision twice.
+			if (!answered || answered.conversation !== true) continue;
+			const declared = objectAt(answered, "approval");
+			if (!declared) continue;
+			cards.push(
+				renderRunApprovalCard(
+					Object.assign({}, declared, { id: approvalID }),
+					null,
+					local,
+				),
+			);
+		}
+		const body = cards.filter(Boolean).join("");
+		if (!body) return "";
+		return `<div class="conv-approvals">${body}</div>`;
+	}
+
+	// Whether anything in this conversation is waiting on a person: a run of it,
+	// or the agent of the conversation itself. The composer says so with one
+	// sentence, and it must say it for both — an agent stopped on a permission
+	// is exactly as blocked as a run stopped on one.
+	function anyAwaiting(view) {
+		return anyRunAwaiting(view) || arrayAt(view, "approvals").length > 0;
 	}
 
 	// The timeline, with the partial-history declaration at its head when the
@@ -1389,6 +1451,11 @@
 		const outcome = objectAt(value, "outcome");
 		if (outcome) blocks.push(renderOutcome(outcome, local));
 		blocks.push(renderTimeline(value, active, local));
+		// A decision the agent is waiting on sits right after the history and
+		// before what to do next: it is the reason nothing more is happening,
+		// and it must be readable without scrolling past a step nobody can take
+		// while the agent is stopped.
+		blocks.push(renderConversationApprovals(value, local));
 		// The recommended step closes the thread: it is what to do next, and it
 		// belongs after everything that has been said and before the place where
 		// the next thing is said.
@@ -1399,7 +1466,7 @@
 		// costava al pannello una fascia intera per un comando che ha già il suo
 		// posto, e la conversazione è ciò che quello spazio deve avere.
 		blocks.push(
-			renderComposer(active, typed, local, offered, anyRunAwaiting(value)),
+			renderComposer(active, typed, local, offered, anyAwaiting(value)),
 		);
 
 		// Due comandi nella testata e non piu' uno: come si legge la

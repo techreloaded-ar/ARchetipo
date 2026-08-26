@@ -1892,3 +1892,113 @@ describe("la ripresa di una conversazione finita", () => {
 		assert.equal(formatElapsed(125), "2m 05s");
 	});
 });
+
+// La decisione della conversazione stessa: l'agente si è fermato a chiedere il
+// permesso di usare uno strumento, e non c'è nessuna run su cui rispondere.
+// Senza una carta nel thread la conversazione resterebbe ferma per sempre —
+// l'agente aspetta una risposta che il visore non ha mai offerto.
+describe("renderConversation — la decisione della conversazione", () => {
+	it("un permesso in attesa si legge in fondo al thread, senza run", () => {
+		const html = renderConversation(
+			withConversation({ events: RUN_EVENTS, last_id: 3, approvals: [APPROVAL] }),
+			"",
+		);
+
+		assert.ok(
+			html.includes("conv-approvals"),
+			"la decisione della conversazione non è disegnata",
+		);
+		assert.ok(
+			visibleText(html).includes("git worktree prune --verbose"),
+			"il comando da giudicare non si legge in chiaro",
+		);
+		// Nessuna run: i bottoni non nominano nessuna esecuzione, ed è così che
+		// il chiamante sa di dover rispondere sulla conversazione.
+		const buttons = html.match(/<button[^>]*data-run-approval-id="appr-1"[^>]*>/g) || [];
+		assert.equal(buttons.length, 2, "le due opzioni dichiarate non ci sono");
+		for (const button of buttons) {
+			assert.ok(
+				/data-execution-id=""/.test(button),
+				`un permesso della conversazione nomina una run: ${button}`,
+			);
+		}
+	});
+
+	it("il compositore dichiara l'attesa anche senza run", () => {
+		const html = renderConversation(
+			withConversation({ events: RUN_EVENTS, last_id: 3, approvals: [APPROVAL] }),
+			"",
+		);
+		assert.ok(
+			html.includes("conv-composer-await"),
+			"il compositore non dice che si sta aspettando una risposta",
+		);
+	});
+
+	it("la decisione presa resta leggibile quando non è più pendente", () => {
+		const html = renderConversation(
+			withConversation({ events: RUN_EVENTS, last_id: 3, approvals: [] }),
+			"",
+			{
+				answeredApprovals: {
+					"appr-1": {
+						optionID: "deny-once",
+						label: "OPZIONE-RIFIUTO",
+						denied: true,
+						executionID: "",
+						conversation: true,
+						approval: APPROVAL,
+					},
+				},
+			},
+		);
+
+		assert.ok(html.includes("is-denied"), "il rifiuto non resta disegnato come tale");
+		assert.ok(
+			visibleText(html).includes("OPZIONE-RIFIUTO"),
+			"l'opzione scelta non resta leggibile",
+		);
+		const enabled = (html.match(/<button[^>]*data-run-approval-id[^>]*>/g) || []).filter(
+			(button) => !/\sdisabled/.test(button),
+		);
+		assert.equal(enabled.length, 0, "una decisione già data lascia bottoni premibili");
+	});
+
+	it("una decisione della conversazione non compare dentro il blocco di una run", () => {
+		const html = renderConversation(
+			withConversation({
+				events: RUN_EVENTS,
+				last_id: 3,
+				approvals: [],
+				runs: [runAt(2, { approvals: [] })],
+			}),
+			"",
+			{
+				answeredApprovals: {
+					"appr-1": {
+						optionID: "allow-once",
+						label: "OPZIONE-CONSENSO",
+						executionID: "",
+						conversation: true,
+						approval: APPROVAL,
+					},
+				},
+			},
+		);
+
+		const cards = html.match(/run-approval-title/g) || [];
+		assert.equal(cards.length, 1, "la stessa decisione è disegnata due volte");
+	});
+
+	it("senza permessi in attesa non c'è nessuna carta e nessuna attesa", () => {
+		const html = renderConversation(
+			withConversation({ events: RUN_EVENTS, last_id: 3, approvals: [] }),
+			"",
+		);
+		assert.ok(!html.includes("conv-approvals"), "una carta è disegnata senza decisione");
+		assert.ok(
+			!html.includes("conv-composer-await"),
+			"il compositore dichiara un'attesa che non c'è",
+		);
+	});
+});

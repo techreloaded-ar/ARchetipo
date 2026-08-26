@@ -30,10 +30,19 @@ const (
 // Verified against Claude Code 2.1.235.
 var permissionModes = []string{"acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"}
 
-// defaultPermissionMode hands the local policy decision to Claude itself, which
-// is what lets the planning skill persist the plan without a prompt no one is
-// there to answer. It is the behaviour this provider has always had.
+// defaultPermissionMode hands the local policy decision to Claude itself, and
+// is the behaviour this provider has always had. What changed under it is the
+// meaning of the word: with the permission bridge in place there *is* somebody
+// there to answer, so `auto` finally does what it says — it asks about the
+// calls it will not grant on its own, instead of refusing them where they
+// stand. See permissionPromptHost.
 const defaultPermissionMode = "auto"
+
+// permissionPromptHost is the sentinel that tells Claude Code to route a
+// permission decision to whoever holds the other end of its streams, rather
+// than to an MCP tool. It is a protocol constant, not a name anybody chose: the
+// build answers to this word and to no other.
+const permissionPromptHost = "stdio"
 
 // settings is the parsed, non-secret provider configuration. Claude
 // authenticates by itself, so no credential — and no path to its session

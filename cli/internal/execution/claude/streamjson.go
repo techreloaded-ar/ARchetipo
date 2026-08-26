@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
@@ -27,10 +28,13 @@ const (
 	frameAssistant       = "assistant"
 	frameUser            = "user"
 	frameResult          = "result"
+	frameControlRequest  = "control_request"
 	frameControlResponse = "control_response"
+	frameControlCancel   = "control_cancel_request"
 
-	subtypeInit    = "init"
-	controlSuccess = "success"
+	subtypeInit       = "init"
+	subtypeCanUseTool = "can_use_tool"
+	controlSuccess    = "success"
 )
 
 // frame is the part of a stream-json frame this client interprets. Everything
@@ -42,6 +46,12 @@ type frame struct {
 	Message json.RawMessage `json:"message"`
 	Result  string          `json:"result"`
 	IsError bool            `json:"is_error"`
+	// RequestID and Request belong to the control protocol, which travels on
+	// the same stream as the history. They are read here rather than in a
+	// second decode of the line because the frame type alone does not say what
+	// a control frame is: the subtype that does live inside Request.
+	RequestID string          `json:"request_id"`
+	Request   json.RawMessage `json:"request"`
 }
 
 // controlResponse is the answer to a control request. The correlation key is
@@ -116,6 +126,20 @@ type streamSession struct {
 	// every turn: a map that lived for the whole session would grow with the
 	// work instead of with the turn.
 	tools map[string]string
+	// asked holds the permission requests the process is waiting on, in the
+	// order it opened them. They live here and nowhere else on purpose: a
+	// pending question belongs to the process that asked it, so it dies with it
+	// — a question nobody answered before the agent left has no answer left to
+	// give. The slice keeps the order and the map keeps the lookup; both are
+	// written under mu like every other fact of the session.
+	asked   map[string]execution.PendingApproval
+	askedIn []string
+	// now stamps a question with the instant it was asked. It is a field with a
+	// real default rather than a constructor parameter so that the seven places
+	// that build a session for a test keep building it unchanged; the provider
+	// overrides it before consume starts, which is the only moment at which
+	// nothing is reading it yet.
+	now func() time.Time
 
 	// turnDone is re-armable: it is closed when the current turn ends and
 	// replaced by a fresh one when the next turn opens. It lives under mu, like
@@ -144,6 +168,8 @@ func newStreamSession(process localrun.Process, session *localrun.Session, conve
 		seq:      1,
 		pending:  make(map[string]chan controlOutcome),
 		tools:    make(map[string]string),
+		asked:    make(map[string]execution.PendingApproval),
+		now:      time.Now,
 		ready:    make(chan struct{}),
 		turnDone: make(chan struct{}),
 		turns:    make(chan TurnOutcome, turnBuffer),
@@ -160,6 +186,10 @@ func newStreamSession(process localrun.Process, session *localrun.Session, conve
 func (s *streamSession) consume() {
 	defer close(s.gone)
 	defer s.endTurn()
+	// A process that has gone can no longer be answered, so its open questions
+	// are withdrawn rather than left on offer. Leaving them would show a
+	// decision card, with live buttons, on a run that has stopped.
+	defer s.withdrawAll()
 	for line := range s.process.Lines() {
 		var f frame
 		if err := json.Unmarshal(line, &f); err != nil {
@@ -173,6 +203,21 @@ func (s *streamSession) consume() {
 			// was taken, and what the process then does with it arrives as
 			// ordinary frames.
 			s.settle(line)
+			continue
+		}
+		if f.Type == frameControlRequest {
+			// A question the process asks is not history either: it is a decision
+			// waiting for somebody, and it becomes history only through what the
+			// process does once it has been answered — a tool that runs, or a tool
+			// result reporting the refusal.
+			s.ask(f)
+			continue
+		}
+		if f.Type == frameControlCancel {
+			// The process no longer needs the answer — the turn was interrupted,
+			// or somebody else answered. Keeping the question on offer would let
+			// an operator answer something nobody is listening for.
+			s.withdraw(f.RequestID)
 			continue
 		}
 		s.project(f, line)
