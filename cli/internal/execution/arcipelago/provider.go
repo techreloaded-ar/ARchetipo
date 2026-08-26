@@ -145,7 +145,10 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 func (p *Provider) ID() string { return ProviderID }
 
 func (p *Provider) Capabilities(context.Context) ([]execution.Capability, error) {
-	return []execution.Capability{execution.CapabilitySpecPlan}, nil
+	return []execution.Capability{
+		execution.CapabilitySpecPlan,
+		execution.CapabilitySpecImplement,
+	}, nil
 }
 
 // ValidateConfig checks the shape of the non-secret configuration only. It must
@@ -292,7 +295,19 @@ func timeoutError(cfg settings, taskID, lastStatus string) error {
 
 // resultFor accepts the completed task only against a valid receipt, then
 // builds the compact payload the execution record carries.
+//
+// The fork is the same one buildTask makes, and it has to be: the task was
+// dispatched asking for one receipt, so accepting the other would let an agent
+// close an implementation by declaring a plan.
 func (p *Provider) resultFor(cfg settings, req execution.Request, task remoteTask) (execution.Result, error) {
+	if req.Action == execution.ActionImplement {
+		return p.implementResultFor(cfg, req, task)
+	}
+	return p.planResultFor(cfg, req, task)
+}
+
+// planResultFor accepts a planning task.
+func (p *Provider) planResultFor(cfg settings, req execution.Request, task remoteTask) (execution.Result, error) {
 	// The acceptance rule is the shared one: a receipt this provider accepted
 	// and another rejected would be a contract that exists twice. Its two
 	// distinct causes collapse into one message here on purpose, because from
@@ -317,6 +332,40 @@ func (p *Provider) resultFor(cfg settings, req execution.Request, task remoteTas
 		Status:        task.Status,
 		ResultSummary: task.ResultSummary,
 		PlanTasks:     got.Tasks,
+	})
+	if err != nil {
+		return execution.Result{}, fmt.Errorf("encoding the arcipelago execution payload: %w", err)
+	}
+	return execution.Result{Payload: payload, ExternalID: task.ID}, nil
+}
+
+// implementResultFor accepts an implementation task.
+//
+// TasksDone and Tests are the agent's own account of the work, carried into the
+// record so a reviewer reads a summary without opening the run. They are never
+// the authority on what happened: that is the connector, read one layer up.
+func (p *Provider) implementResultFor(cfg settings, req execution.Request, task remoteTask) (execution.Result, error) {
+	got, err := execution.AcceptImplementReceipt(task.ResultSummary, req.SpecCode)
+	if err != nil {
+		return execution.Result{}, fmt.Errorf(
+			"arcipelago task %s ended completed without having implemented %s%s",
+			task.ID, req.SpecCode, summarySuffix(task.ResultSummary),
+		)
+	}
+	payload, err := json.Marshal(struct {
+		TaskID        string `json:"task_id"`
+		WorkspaceID   string `json:"workspace_id"`
+		Status        string `json:"status"`
+		ResultSummary string `json:"result_summary"`
+		TasksDone     int    `json:"tasks_done"`
+		Tests         string `json:"tests"`
+	}{
+		TaskID:        task.ID,
+		WorkspaceID:   cfg.WorkspaceID,
+		Status:        task.Status,
+		ResultSummary: task.ResultSummary,
+		TasksDone:     got.TasksDone,
+		Tests:         got.Tests,
 	})
 	if err != nil {
 		return execution.Result{}, fmt.Errorf("encoding the arcipelago execution payload: %w", err)

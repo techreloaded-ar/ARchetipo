@@ -3,6 +3,7 @@ package arcipelago
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -168,7 +169,8 @@ func TestProviderIdentityAndCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(capabilities) != 1 || capabilities[0] != execution.CapabilitySpecPlan {
-		t.Fatalf("capabilities = %v", capabilities)
+	want := []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement}
+	if !slices.Equal(capabilities, want) {
+		t.Fatalf("capabilities = %v, want %v", capabilities, want)
 	}
 }

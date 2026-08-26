@@ -606,3 +606,105 @@ func TestArcipelagoDeclaresNoModelCatalog(t *testing.T) {
 		t.Fatalf("a provider without a catalog returned %d models", len(models))
 	}
 }
+
+func implementRequest(server *httptest.Server) execution.Request {
+	req := testRequest(server)
+	req.Action = execution.ActionImplement
+	req.Capability = execution.CapabilitySpecImplement
+	return req
+}
+
+func validImplementReceipt(tasksDone int) string {
+	return fmt.Sprintf(`{\"spec_code\":\"US-001\",\"status\":\"REVIEW\",\"tasks_done\":%d,\"tests\":\"12 passed\"}`, tasksDone)
+}
+
+func TestExecuteImplementAsksForTheImplementationSkillAndAcceptsItsReceipt(t *testing.T) {
+	server, calls := newStubHub(t, hubScript{
+		createResponses: []hubResponse{{status: http.StatusCreated, body: `{"task":{"id":"task-remote-1","status":"queued"}}`}},
+		getResponses:    []hubResponse{{status: http.StatusOK, body: completedBody(validImplementReceipt(4))}},
+	})
+	got, err := newTestProvider(t, server, Options{}).Execute(context.Background(), implementRequest(server))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		TaskID    string `json:"task_id"`
+		TasksDone int    `json:"tasks_done"`
+		Tests     string `json:"tests"`
+	}
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatalf("payload is not valid JSON (%s): %v", got.Payload, err)
+	}
+	if payload.TaskID != "task-remote-1" || payload.TasksDone != 4 || payload.Tests != "12 passed" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	calls.mu.Lock()
+	defer calls.mu.Unlock()
+	if !strings.Contains(calls.lastCreateBody.Prompt, "/archetipo-implement US-001") {
+		t.Fatalf("the remote task did not ask for the implementation skill: %q", calls.lastCreateBody.Prompt)
+	}
+	if strings.Contains(calls.lastCreateBody.Prompt, "/archetipo-plan") {
+		t.Fatalf("the implementation task still asks for a plan: %q", calls.lastCreateBody.Prompt)
+	}
+	if calls.lastCreateBody.Metadata["action"] != string(execution.ActionImplement) {
+		t.Fatalf("metadata action = %#v", calls.lastCreateBody.Metadata["action"])
+	}
+}
+
+// The two actions must not be interchangeable: an agent that closed an
+// implementation by declaring a plan would move a spec nobody implemented.
+func TestExecuteImplementRejectsAPlanReceipt(t *testing.T) {
+	server, _ := newStubHub(t, hubScript{
+		createResponses: []hubResponse{{status: http.StatusCreated, body: `{"task":{"id":"task-remote-1","status":"queued"}}`}},
+		getResponses:    []hubResponse{{status: http.StatusOK, body: completedBody(validReceipt(9))}},
+	})
+	_, err := newTestProvider(t, server, Options{}).Execute(context.Background(), implementRequest(server))
+	if err == nil {
+		t.Fatal("expected a plan receipt to be refused for an implementation")
+	}
+	if !strings.Contains(err.Error(), "without having implemented US-001") {
+		t.Fatalf("error does not say what was missing: %v", err)
+	}
+	assertNoSecret(t, err)
+}
+
+// And the other way round, for the same reason.
+func TestExecutePlanRejectsAnImplementationReceipt(t *testing.T) {
+	server, _ := newStubHub(t, hubScript{
+		createResponses: []hubResponse{{status: http.StatusCreated, body: `{"task":{"id":"task-remote-1","status":"queued"}}`}},
+		getResponses:    []hubResponse{{status: http.StatusOK, body: completedBody(validImplementReceipt(4))}},
+	})
+	_, err := newTestProvider(t, server, Options{}).Execute(context.Background(), testRequest(server))
+	if err == nil {
+		t.Fatal("expected an implementation receipt to be refused for a plan")
+	}
+	if !strings.Contains(err.Error(), "without having produced a plan for US-001") {
+		t.Fatalf("error does not say what was missing: %v", err)
+	}
+}
+
+// The two actions must also be two distinct remote payloads: they share the
+// identity triple only when the execution id is the same, but a title and a
+// prompt that did not differ would make an implementation indistinguishable
+// from the plan it follows in every hub listing.
+func TestBuildTaskDistinguishesPlanFromImplement(t *testing.T) {
+	base := execution.Request{ExecutionID: "req-abc123", SpecCode: "US-001"}
+	plan := base
+	plan.Action, plan.Capability = execution.ActionPlan, execution.CapabilitySpecPlan
+	implement := base
+	implement.Action, implement.Capability = execution.ActionImplement, execution.CapabilitySpecImplement
+
+	planTitle, planPrompt, _ := buildTask(plan)
+	implementTitle, implementPrompt, _ := buildTask(implement)
+	if planTitle == implementTitle || planPrompt == implementPrompt {
+		t.Fatalf("plan and implement share a payload: %q / %q", planTitle, implementTitle)
+	}
+	if !strings.Contains(implementPrompt, execution.ReviewStatus) {
+		t.Fatalf("the implementation prompt does not name the review status: %q", implementPrompt)
+	}
+	// Determinism holds per action, which is what the remote fingerprint keys on.
+	againTitle, againPrompt, _ := buildTask(implement)
+	if againTitle != implementTitle || againPrompt != implementPrompt {
+		t.Fatal("buildTask is not deterministic for the implement action")
+	}
+}
