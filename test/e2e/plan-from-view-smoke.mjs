@@ -92,17 +92,22 @@ async function main() {
     });
 
     // AC-1 — one press creates exactly one execution, bound to the spec and to
-    // the default provider; a second press is refused while it runs.
+    // the default provider, and one record on disk.
+    //
+    // Il server non rifiuta più una seconda pressione mentre la prima gira. Era
+    // un vincolo illusorio — bastava aprire una conversazione accanto e chiedere
+    // a mano qualcosa in conflitto — ed è diventato dannoso quando un'azione è
+    // diventata una conversazione: una run ferma su una domanda resta aperta
+    // finché qualcuno non risponde, e la spec di cui parla sarebbe rimasta
+    // chiusa a ogni altro passo, fino a un'ora intera, per colpa di una run che
+    // aspettava e basta. «Una pressione, una run» resta, e sta dove un debounce
+    // ha senso: il bottone si disabilita al click.
     const started = await apiJSON(`${view.url}/api/spec/${SUCCESS_SPEC}/execution`, postAction("plan"), 201);
     if (started.status !== "RUNNING" || started.provider_id !== "arcipelago" || started.spec_code !== SUCCESS_SPEC) {
       throw new Error(`Unexpected execution record on start: ${JSON.stringify(started)}`);
     }
     if (!started.id || !started.created_at) {
       throw new Error(`The started execution is not identifiable: ${JSON.stringify(started)}`);
-    }
-    const refused = await expectStatus(`${view.url}/api/spec/${SUCCESS_SPEC}/execution`, 409, postAction("plan"));
-    if (!String(refused.error || "").includes(started.id)) {
-      throw new Error(`The refusal must name the running execution ${started.id}; got ${JSON.stringify(refused)}`);
     }
     const afterStart = await listExecutionRecords(executionsDir);
     if (afterStart.length !== 1) {
@@ -112,7 +117,7 @@ async function main() {
     if (remote.request.externalId !== started.id || remote.request.source !== "archetipo" || remote.request.workspaceId !== WORKSPACE_ID) {
       throw new Error(`The remote task does not carry the ARchetipo external identity: ${JSON.stringify(remote.request)}`);
     }
-    console.log(`-> AC-1 ok: one execution ${started.id} on provider arcipelago, second press refused with 409, one record on disk`);
+    console.log(`-> AC-1 ok: one execution ${started.id} on provider arcipelago, one record on disk`);
 
     // AC-2 — while the hub has not answered yet the record is non-terminal and
     // the rest of the workspace stays navigable. The hub is gated, so the window
