@@ -33,6 +33,7 @@ type recordedRequest struct {
 type runStub struct {
 	mu sync.Mutex
 
+	create    hubResponse
 	task      hubResponse
 	byRef     hubResponse
 	run       hubResponse
@@ -45,6 +46,12 @@ type runStub struct {
 	// keep the connection open until it decides otherwise.
 	stream func(ctx context.Context, w io.Writer, flush func())
 
+	// onTaskRead, when installed, answers each read of the task instead of the
+	// canned response: a conversation waits for the hub to assign a run, and
+	// that wait can only be exercised by a task that answers differently the
+	// second time.
+	onTaskRead func() hubResponse
+
 	cursors  []string
 	requests []recordedRequest
 
@@ -54,6 +61,7 @@ type runStub struct {
 func newRunStub(t *testing.T) *runStub {
 	t.Helper()
 	stub := &runStub{
+		create:    hubResponse{status: http.StatusCreated, body: `{"task":{"id":"task-1","status":"running","runId":"` + testRunID + `"}}`},
 		task:      hubResponse{status: http.StatusOK, body: `{"task":{"id":"task-1","status":"running","runId":"` + testRunID + `"}}`},
 		byRef:     hubResponse{status: http.StatusOK, body: `{"task":{"id":"task-1","status":"running","runId":"` + testRunID + `"}}`},
 		run:       hubResponse{status: http.StatusOK, body: `{"run":{"id":"` + testRunID + `","state":"active"}}`},
@@ -84,10 +92,17 @@ func (s *runStub) serve(w http.ResponseWriter, r *http.Request) {
 
 	path := r.URL.Path
 	switch {
+	case r.Method == http.MethodPost && path == pathTasks:
+		write(w, s.pick(func() hubResponse { return s.create }))
 	case r.Method == http.MethodGet && path == pathByReference:
 		write(w, s.pick(func() hubResponse { return s.byRef }))
 	case r.Method == http.MethodGet && strings.HasPrefix(path, pathTasks+"/"):
-		write(w, s.pick(func() hubResponse { return s.task }))
+		write(w, s.pick(func() hubResponse {
+			if s.onTaskRead != nil {
+				return s.onTaskRead()
+			}
+			return s.task
+		}))
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/events"):
 		s.serveStream(w, r)
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/approvals"):

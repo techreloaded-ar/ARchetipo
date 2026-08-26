@@ -120,7 +120,7 @@ func (p *Provider) StreamRunEvents(ctx context.Context, req execution.RunRequest
 	if token == "" {
 		return fmt.Errorf("the ARcipelago application credential is not available: export it in the %s environment variable", cfg.TokenEnv)
 	}
-	endpoint := cfg.BaseURL + "/api/external/runs/" + url.PathEscape(req.RunID) + "/events"
+	endpoint := cfg.BaseURL + "/api/external/runs/" + url.PathEscape(p.remoteRunOf(req.RunID)) + "/events"
 	if afterID > 0 {
 		endpoint += "?afterId=" + strconv.FormatInt(afterID, 10)
 	}

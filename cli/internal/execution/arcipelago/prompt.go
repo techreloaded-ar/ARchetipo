@@ -49,3 +49,33 @@ func buildTask(req execution.Request) (title, prompt string, metadata map[string
 	}
 	return title, prompt, metadata
 }
+
+// buildConversationTask renders the remote task that carries one conversation:
+// its title, its opening prompt and its metadata.
+//
+// It is pure and deterministic for the same reason buildTask is — the hub keys
+// external equivalence on a fingerprint over exactly these three fields — and
+// it matters more here, not less: a conversation is opened under an id the
+// viewer generated, so a repetition can only ever be a retry of the same open,
+// and it must be recognized as one instead of answering 409.
+//
+// Everything the agent is told about *being* in a conversation is the shared
+// declaration in execution.ConversationPrompt. Only the opening sentence is
+// this provider's, and it says the one thing that is genuinely different here:
+// the agent is standing in the runner's checkout, not in the directory the
+// person has open. That is a fact about this deployment and not a limitation to
+// hide — a conversation held on the hub talks about the workspace the hub has.
+func buildConversationTask(conversationID string, req execution.ConversationRequest) (title, prompt string, metadata map[string]any) {
+	title = "ARchetipo conversation " + conversationID
+	prompt = execution.ConversationPrompt(conversationOpening, req.ProcessActions, req.Context)
+	metadata = map[string]any{
+		"kind":            "conversation",
+		"conversation_id": conversationID,
+	}
+	return title, prompt, metadata
+}
+
+// conversationOpening says where a conversation held through the hub is
+// standing: the runner's working directory, which is a checkout of the project
+// and not the folder open in the viewer.
+const conversationOpening = "Work in the runner working directory: it is a checkout of the ARchetipo workspace this conversation is about, with the archetipo CLI and the ARchetipo skills already installed."

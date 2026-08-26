@@ -28,9 +28,11 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
 // ProviderID is the registry id under which this provider is reachable.
@@ -63,6 +65,15 @@ type Provider struct {
 	getenv     func(string) string
 	sleep      func(context.Context, time.Duration) error
 	now        func() time.Time
+
+	// conversationsMu guards both maps below. One lock and not two: reserving
+	// an id and registering its mirror are one moment, and two locks would let
+	// a second open slip between them.
+	conversationsMu sync.RWMutex
+	conversations   map[string]*liveConversation
+	// registry mirrors the conversations this provider holds, and is built on
+	// first use: a provider that never holds one costs nothing for it.
+	registry *localrun.Registry
 }
 
 var _ execution.Provider = (*Provider)(nil)

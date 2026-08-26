@@ -718,7 +718,13 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 			writeError(w, iox.NewConflict(configErr.Error(), conversationRemedy, openErr))
 			return
 		}
-		writeError(w, iox.NewInternal("opening a conversation with the "+quoted(target.availability.providerID)+" provider", openErr))
+		// The cause travels into the message and not only into Cause, which the
+		// browser never sees. A provider holding the agent on another machine
+		// fails for reasons only it knows — a credential it was not given, a hub
+		// that is not answering — and the person in front of the viewer has no
+		// log to go and read: without the sentence the provider wrote, all they
+		// are told is that something went wrong.
+		writeError(w, iox.NewInternal("opening a conversation with the "+quoted(target.availability.providerID)+" provider: "+openErr.Error(), openErr))
 		return
 	}
 	if err := ws.conversation.open(id, target.availability.providerID, target.provider, target.collaborator, providerConfig, ws.cfg.ProjectRoot, time.Now().UTC(), specCode, ""); err != nil {

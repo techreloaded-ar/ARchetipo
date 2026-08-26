@@ -185,8 +185,9 @@ func (p *Provider) ReadRun(ctx context.Context, req execution.RunRequest) (execu
 	if err != nil {
 		return execution.RunSnapshot{}, err
 	}
+	remoteID := p.remoteRunOf(req.RunID)
 	var envelope runEnvelope
-	status, payload, err := p.doWithBody(ctx, cfg, token, http.MethodGet, runPath(req.RunID), nil, &envelope)
+	status, payload, err := p.doWithBody(ctx, cfg, token, http.MethodGet, runPath(remoteID), nil, &envelope)
 	if err != nil {
 		return execution.RunSnapshot{}, refusalForBody(status, payload, req.RunID, err)
 	}
@@ -195,7 +196,11 @@ func (p *Provider) ReadRun(ctx context.Context, req execution.RunRequest) (execu
 	if snapshot.Error == "" {
 		snapshot.Error = note
 	}
-	if id := strings.TrimSpace(envelope.Run.ID); id != "" {
+	// The id the hub answers with is echoed back only when it is the id the
+	// caller asked about. A conversation is commanded under its own id, and
+	// answering it with the run behind it would hand the viewer an id it never
+	// asked for and cannot command anything with.
+	if id := strings.TrimSpace(envelope.Run.ID); id != "" && remoteID == req.RunID {
 		snapshot.RunID = id
 	}
 	if envelope.Run.ClosedAt > 0 {
@@ -214,7 +219,7 @@ func (p *Provider) ReadRunApprovals(ctx context.Context, req execution.RunReques
 		return nil, err
 	}
 	var envelope approvalsEnvelope
-	status, payload, err := p.doWithBody(ctx, cfg, token, http.MethodGet, runPath(req.RunID)+"/approvals", nil, &envelope)
+	status, payload, err := p.doWithBody(ctx, cfg, token, http.MethodGet, runPath(p.remoteRunOf(req.RunID))+"/approvals", nil, &envelope)
 	if err != nil {
 		return nil, refusalForBody(status, payload, req.RunID, err)
 	}
@@ -261,7 +266,7 @@ func (p *Provider) SendRunMessage(ctx context.Context, req execution.RunRequest,
 	body := struct {
 		Message string `json:"message"`
 	}{Message: text}
-	status, payload, err := p.doWithBody(ctx, cfg, token, http.MethodPost, runPath(req.RunID)+"/messages", body, nil)
+	status, payload, err := p.doWithBody(ctx, cfg, token, http.MethodPost, runPath(p.remoteRunOf(req.RunID))+"/messages", body, nil)
 	if err != nil {
 		return refusalForBody(status, payload, req.RunID, err)
 	}
@@ -287,7 +292,7 @@ func (p *Provider) RespondRunApproval(ctx context.Context, req execution.RunRequ
 	body := struct {
 		OptionID string `json:"optionId"`
 	}{OptionID: option}
-	path := runPath(req.RunID) + "/approvals/" + url.PathEscape(approval) + "/respond"
+	path := runPath(p.remoteRunOf(req.RunID)) + "/approvals/" + url.PathEscape(approval) + "/respond"
 	status, payload, err := p.doWithBody(ctx, cfg, token, http.MethodPost, path, body, nil)
 	if err != nil {
 		return refusalForBody(status, payload, req.RunID, err)
@@ -306,7 +311,7 @@ func (p *Provider) CancelRun(ctx context.Context, req execution.RunRequest) erro
 	if err != nil {
 		return err
 	}
-	status, payload, err := p.doWithBody(ctx, cfg, token, http.MethodPost, runPath(req.RunID)+"/cancel", nil, nil)
+	status, payload, err := p.doWithBody(ctx, cfg, token, http.MethodPost, runPath(p.remoteRunOf(req.RunID))+"/cancel", nil, nil)
 	if err != nil {
 		return refusalForBody(status, payload, req.RunID, err)
 	}
