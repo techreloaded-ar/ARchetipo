@@ -12,9 +12,9 @@ import (
 // executeReview has a local Claude session prepare the review evidence of a
 // spec that is already waiting under review.
 //
-// It is a single turn, like planning and implementation: the agent is reading
-// an increment, not talking to anybody, so a turn that ends without a receipt
-// has failed rather than asked a question.
+// It is a conversation, like every other action of this provider: a turn that
+// ends without a receipt is the agent needing something only a person can give,
+// and the run stays open for the answer.
 //
 // What makes this action different from every other one is what it must *not*
 // do. The provider prepares evidence; it never decides. The prompt says so
@@ -30,24 +30,28 @@ func (p *Provider) executeReview(ctx context.Context, req execution.Request, cfg
 	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	turn, err := p.runSingleTurn(runCtx, req, cfg, dir, buildReviewPrompt(req), "preparing the review of")
+	subject := specSubject{gerund: "preparing the review of", outcome: "the review of " + req.SpecCode}
+	held, err := p.runSpecConversation(runCtx, req, cfg, dir, buildReviewPrompt(req), subject, func(message string) bool {
+		_, err := execution.AcceptReviewReceipt(message, req.SpecCode)
+		return err == nil
+	})
 	if err != nil {
 		return execution.Result{}, err
 	}
 
 	// The acceptance rule is the shared one, so a receipt this provider takes
-	// and codex refuses cannot exist. It is read from the message the run ends
+	// and codex refuses cannot exist. It is read from the message a turn ends
 	// on, which is where the prompt asks for it, and never from the stream.
-	receipt, err := execution.AcceptReviewReceipt(turn.final, req.SpecCode)
+	receipt, err := execution.AcceptReviewReceipt(held.final, req.SpecCode)
 	if err != nil {
-		turn.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without preparing the review of %s", req.SpecCode))
+		held.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without preparing the review of %s", req.SpecCode))
 		return execution.Result{}, fmt.Errorf(
 			"the claude command %q ended without having prepared the review of %s%s: %w",
-			cfg.Command, req.SpecCode, diagnosticSuffix(turn.stderr), err,
+			cfg.Command, req.SpecCode, diagnosticSuffix(held.stderr), err,
 		)
 	}
-	turn.session.Close(execution.RunClosed, "")
-	return p.resultForReview(cfg, turn.exitCode, turn.elapsed, receipt)
+	held.session.Close(execution.RunClosed, "")
+	return p.resultForReview(cfg, held.exitCode, held.elapsed, receipt)
 }
 
 // resultForReview builds the execution payload of a prepared review. Like the

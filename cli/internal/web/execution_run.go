@@ -23,9 +23,18 @@ import (
 // shutdown drains, and the in-flight reservation per spec that makes "one
 // execution per press" a server guarantee instead of a button behaviour.
 type dispatchGroup struct {
-	mu       sync.Mutex
-	ctx      context.Context
-	inFlight map[string]string
+	mu  sync.Mutex
+	ctx context.Context
+	// inFlight holds, per subject, the ids of the executions this server has
+	// started and not yet closed, oldest first.
+	//
+	// It is a list and no longer a single id because a subject can carry more
+	// than one at a time. It used to be one because a second start was refused,
+	// and that refusal is gone: an action is a conversation now, so it stays
+	// open for as long as the person keeps it open, and a spec locked out of
+	// every other action while one of its runs waits for an answer would be a
+	// lock nobody chose and no one could lift.
+	inFlight map[string][]string
 	wg       sync.WaitGroup
 	// stopped is raised by wait, under the same mutex run takes before touching
 	// the wait group. Without it a request that reached run while the drain had
@@ -36,7 +45,7 @@ type dispatchGroup struct {
 }
 
 func newDispatchGroup() *dispatchGroup {
-	return &dispatchGroup{ctx: context.Background(), inFlight: map[string]string{}}
+	return &dispatchGroup{ctx: context.Background(), inFlight: map[string][]string{}}
 }
 
 // bind installs the context dispatches will run on. Until Run binds one, the
@@ -48,41 +57,53 @@ func (g *dispatchGroup) bind(ctx context.Context) {
 	g.ctx = ctx
 }
 
-// reserve claims the spec for a new execution. It returns false together with
-// the id of the execution already holding it — an empty id means a dispatch
-// that has been reserved but has not received its id yet.
-func (g *dispatchGroup) reserve(specCode string) (string, bool) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if id, busy := g.inFlight[specCode]; busy {
-		return id, false
+// claim records that an execution has been started for a subject and is not
+// closed yet. It writes nothing about permission: whether a second one may be
+// started is not a question this group answers any more.
+func (g *dispatchGroup) claim(subject, executionID string) {
+	if strings.TrimSpace(executionID) == "" {
+		return
 	}
-	g.inFlight[specCode] = ""
-	return "", true
-}
-
-// claim records the id of the execution that holds the reservation, so a second
-// request can name it instead of describing an anonymous "something running".
-func (g *dispatchGroup) claim(specCode, executionID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, reserved := g.inFlight[specCode]; reserved {
-		g.inFlight[specCode] = executionID
+	g.inFlight[subject] = append(g.inFlight[subject], executionID)
+}
+
+// release drops one execution from its subject. It names the execution and not
+// only the subject, because a subject can hold several: releasing by subject
+// alone would let the end of one run declare every other run of the same spec
+// finished.
+func (g *dispatchGroup) release(subject, executionID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	kept := g.inFlight[subject][:0]
+	for _, id := range g.inFlight[subject] {
+		if id != executionID {
+			kept = append(kept, id)
+		}
 	}
+	if len(kept) == 0 {
+		delete(g.inFlight, subject)
+		return
+	}
+	g.inFlight[subject] = kept
 }
 
-func (g *dispatchGroup) release(specCode string) {
+// current names the most recent execution this server is still dispatching for
+// the subject.
+//
+// The most recent and not the first: it is what a caller offers a way *to*, and
+// with several open the one somebody just started is the one they are looking
+// for. It is the same rule the store-backed answer beside it follows, where the
+// newest record is the one read.
+func (g *dispatchGroup) current(subject string) (string, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	delete(g.inFlight, specCode)
-}
-
-// current reports the execution this server is dispatching for the spec.
-func (g *dispatchGroup) current(specCode string) (string, bool) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	id, busy := g.inFlight[specCode]
-	return id, busy
+	ids := g.inFlight[subject]
+	if len(ids) == 0 {
+		return "", false
+	}
+	return ids[len(ids)-1], true
 }
 
 // run executes fn on the dispatch context and registers it for the shutdown
@@ -320,9 +341,6 @@ func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code
 		}
 	}
 
-	if err := s.guardSingleExecution(ctx, ws, code); err != nil {
-		return nil, err
-	}
 	// The state change an accepted start owes the backlog is the caller's,
 	// because the caller is the only one holding a connector — the execution
 	// package deliberately never does. It runs after the preflight, so a
@@ -330,7 +348,6 @@ func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code
 	// dispatch, so the spec is IN PROGRESS by the time the response is written
 	// instead of depending on the agent surviving its first seconds.
 	if err := execution.BeginActionEffect(ctx, ws.conn, action, spec); err != nil {
-		ws.dispatch.release(code)
 		return nil, iox.NewInternal("starting the "+string(action)+" action on "+code, err)
 	}
 	// The claimed effect is verified inside the terminal write, not after it. The
@@ -348,7 +365,6 @@ func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code
 	}
 	started, continuation, err := ws.service.Start(ctx, spec, action, providerID, execution.CloneConfig(effectiveConfig), confirm, startOpts...)
 	if err != nil {
-		ws.dispatch.release(code)
 		// A rejected configuration travels back typed, so the single error
 		// renderer can answer it with the form the Execution panel already
 		// understands, pointing at the offending field instead of showing a
@@ -368,45 +384,16 @@ func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code
 		// clients to re-read a spec the server is about to declare free, and hand
 		// them back an action still marked unavailable.
 		defer s.broker.Publish()
-		// The reservation spans the whole dispatch, verdict included, so no client
-		// can start a second execution against a record this one has not closed.
-		defer ws.dispatch.release(code)
+		// The registration spans the whole dispatch, verdict included, so a
+		// caller asking what is running for this spec is answered until the
+		// record this dispatch is about has really been closed.
+		defer ws.dispatch.release(code, started.ID)
 		// The outcome is already verified: the continuation applied the
 		// confirmation before writing the terminal record, so there is nothing
 		// left to reconcile here.
 		_, _ = continuation(dispatchCtx)
 	})
 	return &started, nil
-}
-
-// guardSingleExecution enforces AC-1 on the server: one press, one execution.
-// Both halves are needed and both are checked under the same reservation. The
-// in-memory map catches a double click or two tabs racing on this process; the
-// persisted record catches a viewer restarted while an execution was still
-// open, which the map alone would have forgotten.
-func (s *Server) guardSingleExecution(ctx context.Context, ws *workspaceSession, code string) error {
-	existingID, reserved := ws.dispatch.reserve(code)
-	if !reserved {
-		message := "an execution is already running for " + code
-		if existingID != "" {
-			message = "execution " + existingID + " is already running for " + code
-		}
-		return iox.NewConflict(message, "wait for it to finish before starting another one", nil)
-	}
-	records, err := ws.store.ListBySpec(ctx, code)
-	if err != nil {
-		ws.dispatch.release(code)
-		return iox.NewInternal("reading the executions of "+code, err)
-	}
-	if len(records) > 0 && records[0].Status == execution.StatusRunning {
-		ws.dispatch.release(code)
-		return iox.NewConflict(
-			"execution "+records[0].ID+" is already running for "+code,
-			"wait for it to finish, or remove its record under .archetipo/executions/ if it was left behind by an interrupted run",
-			nil,
-		)
-	}
-	return nil
 }
 
 // handleGetExecution serves the polling route. It reads the persisted record and

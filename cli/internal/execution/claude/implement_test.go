@@ -59,11 +59,14 @@ func implementReceiptLine(specCode string, tasksDone int, tests string) string {
 // implementedSession drives the fake to the outcome of a successful
 // implementation: the agent works, then closes the turn with the receipt as the
 // message the run ends on.
+// implementedSession drives a whole implementation session and lets the process
+// leave afterwards, for the reason written on plannedSession.
 func implementedSession(fake *fakeClaude, specCode string, tasksDone int, tests string) {
 	go func() {
 		<-fake.started
 		fake.emit(`{"type":"assistant","message":{"content":[{"type":"text","text":"implemento"}]}}`)
 		fake.emit(resultFrame(implementReceiptLine(specCode, tasksDone, tests), false))
+		fake.end()
 	}()
 }
 
@@ -224,6 +227,7 @@ func TestExecuteImplementFailureModes(t *testing.T) {
 				go func() {
 					<-fake.started
 					fake.emit(resultFrame("done, I implemented everything", false))
+					fake.end()
 				}()
 			},
 			wantErr: []string{"ended without having implemented " + testSpec, "did not emit the expected JSON receipt line"},
@@ -239,6 +243,7 @@ func TestExecuteImplementFailureModes(t *testing.T) {
 				go func() {
 					<-fake.started
 					fake.emit(resultFrame(`{"spec_code":"`+testSpec+`","status":"IN PROGRESS","tasks_done":4,"tests":"ok"}`, false))
+					fake.end()
 				}()
 			},
 			wantErr: []string{"does not declare a completed implementation for " + testSpec},

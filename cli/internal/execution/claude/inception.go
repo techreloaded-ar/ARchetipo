@@ -100,14 +100,20 @@ func converse(runCtx context.Context, client *streamSession, accept func(string)
 		select {
 		case outcome := <-client.Turns():
 			turns++
-			// The receipt is looked for before the outcome of the turn is
-			// judged, because an agent that emitted it has done the work
-			// whatever the process did next.
-			if accept(outcome.Final) {
-				return outcome.Final, turns, nil
-			}
+			// A turn the process itself flagged as not completed cannot carry a
+			// receipt, and the order of these two checks is the whole point. An
+			// interrupted turn is also closed with a `result`, reporting
+			// `error_during_execution`, and the message it ends on is whatever
+			// the agent had got to — so accepting a receipt found there would
+			// take the last words of work somebody had just cancelled as a
+			// statement that the work was done. The exit code cannot decide it
+			// either: stopping the process after an interrupt is an ordinary
+			// shutdown and exits 0. The turn decides.
 			if !outcome.Completed {
 				return "", turns, errTurnFailed
+			}
+			if accept(outcome.Final) {
+				return outcome.Final, turns, nil
 			}
 			// A completed turn with no receipt is the agent's question. The
 			// conversation stays open: the answer will arrive through the run's
@@ -154,7 +160,9 @@ func drainTurns(client *streamSession, accept func(string) bool) (string, int, b
 		select {
 		case outcome := <-client.Turns():
 			turns++
-			if accept(outcome.Final) {
+			// The same order as converse, and for the same reason: a turn that
+			// never completed carries no receipt, whatever text it ended on.
+			if outcome.Completed && accept(outcome.Final) {
 				return outcome.Final, turns, true
 			}
 		default:

@@ -165,6 +165,13 @@ func (p *claudeSessionProcess) work() {
 	if err == nil {
 		p.push(result)
 	}
+	// The process leaves once its turn is over, which is what makes these
+	// scenarios terminal. A run is a conversation now: a turn that ends on
+	// something the receipt gate refuses is the agent waiting for an answer, and
+	// `execution run` is a batch command with nobody to give one — so a fixture
+	// that stayed alive would describe a run bounded only by its timeout instead
+	// of the failure each of these cases is about.
+	p.end()
 }
 
 func (p *claudeSessionProcess) push(payload []byte) {

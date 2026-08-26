@@ -302,9 +302,22 @@ func planningExecute(conn connector.Connector) func(context.Context, execution.R
 	}
 }
 
-// AC-1: one press, one execution. The second request does not create a second
-// record, and says which one already holds the spec.
-func TestRunSpecActionStartsExactlyOneExecutionPerSpec(t *testing.T) {
+// A second start on a spec that already has a run in flight is accepted, and it
+// is its own execution.
+//
+// The server used to refuse it, and that refusal is gone on purpose. It was
+// never the guarantee it looked like — a conversation opened beside the run
+// could ask for anything in conflict with it by hand — and it became actively
+// harmful once an action became a conversation: a run that ends its turn asking
+// a question stays open until somebody answers, so the spec it is about would
+// have been locked out of every other action, for up to the whole provider
+// timeout, by a run that is doing nothing but waiting. One press is still one
+// execution: the button is disabled after the click, which is where a debounce
+// belongs.
+//
+// The server still knows what is in flight — that is what offers a way to the
+// run — and it now knows all of them rather than the first.
+func TestRunSpecActionAcceptsASecondRunOnTheSameSpec(t *testing.T) {
 	provider := blockedProvider("fake")
 	srv, cfg, _ := newRunServer(t, provider, true)
 
@@ -321,19 +334,25 @@ func TestRunSpecActionStartsExactlyOneExecutionPerSpec(t *testing.T) {
 	}
 
 	status, second := startAction(t, srv, "US-901", "plan")
-	if status != http.StatusConflict {
+	if status != http.StatusCreated {
 		t.Fatalf("second POST: %d %v", status, second)
 	}
-	message, _ := second["error"].(string)
-	if !strings.Contains(message, startedID) {
-		t.Fatalf("the refusal does not name the running execution: %q", message)
+	secondID, _ := second["id"].(string)
+	if secondID == "" || secondID == startedID {
+		t.Fatalf("the second start did not produce its own execution: %v", second)
 	}
-	if got := recordFileCount(t, cfg.ProjectRoot, "US-901"); got != 1 {
-		t.Fatalf("a second press created %d records", got)
+	if got := recordFileCount(t, cfg.ProjectRoot, "US-901"); got != 2 {
+		t.Fatalf("two starts wrote %d records", got)
+	}
+	// The most recent run is the one a caller is offered a way to, and the first
+	// is still known: the end of one must not declare the other finished.
+	if id, busy := srv.session().dispatch.current("US-901"); !busy || id != secondID {
+		t.Fatalf("current run = %q, %v; want the one just started", id, busy)
 	}
 
 	close(provider.release)
 	awaitTerminal(t, srv, startedID)
+	awaitTerminal(t, srv, secondID)
 }
 
 // AC-2: the state is observable while the provider is still working, and the

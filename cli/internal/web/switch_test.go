@@ -361,18 +361,19 @@ func TestDispatchRunAfterDrainDoesNotPanic(t *testing.T) {
 }
 
 // TestSwitchWorkspaceLeavesTheNewWorkspaceRunnable is the observable form of
-// the invariant that a reservation is taken and released on one session: a
-// spec busy on the workspace being left must not look busy on the one being
-// opened, or the new workspace would refuse that action for the whole life of
-// the process.
+// the invariant that a run is registered and released on one session: a spec
+// with a run in flight on the workspace being left must not look busy on the
+// one being opened, or the new workspace would show that action as already
+// running for the whole life of the process.
 func TestSwitchWorkspaceLeavesTheNewWorkspaceRunnable(t *testing.T) {
 	a := realWorkspace(t, "alpha", "US-A01", true)
 	b := realWorkspace(t, "beta", "US-B01", false)
 	srv := serverOn(t, a)
 
 	previous := srv.session()
-	if _, reserved := previous.dispatch.reserve("US-A01"); !reserved {
-		t.Fatal("the spec should have been free on the workspace being left")
+	previous.dispatch.claim("US-A01", "exec-a01")
+	if id, busy := previous.dispatch.current("US-A01"); !busy || id != "exec-a01" {
+		t.Fatalf("the run was not registered on the workspace being left: %q, %v", id, busy)
 	}
 
 	if err := srv.SwitchWorkspace(b); err != nil {
@@ -380,9 +381,31 @@ func TestSwitchWorkspaceLeavesTheNewWorkspaceRunnable(t *testing.T) {
 	}
 
 	if id, busy := srv.session().dispatch.current("US-A01"); busy {
-		t.Errorf("the opened workspace inherited a reservation (%q): the guard and the handler are reading different sessions", id)
+		t.Errorf("the opened workspace inherited a run (%q): the availability and the handler are reading different sessions", id)
 	}
-	previous.dispatch.release("US-A01")
+	previous.dispatch.release("US-A01", "exec-a01")
+}
+
+// A subject can hold more than one run at a time, and the end of one must not
+// declare the others finished. It is the whole reason a run is released by its
+// own id and not by the spec it belongs to.
+func TestDispatchGroupHoldsSeveralRunsPerSubject(t *testing.T) {
+	group := newDispatchGroup()
+	group.claim("US-A01", "exec-1")
+	group.claim("US-A01", "exec-2")
+
+	// The most recent one is what a caller is offered a way to.
+	if id, busy := group.current("US-A01"); !busy || id != "exec-2" {
+		t.Fatalf("current = %q, %v; want the most recent run", id, busy)
+	}
+	group.release("US-A01", "exec-2")
+	if id, busy := group.current("US-A01"); !busy || id != "exec-1" {
+		t.Fatalf("the end of one run took the other with it: %q, %v", id, busy)
+	}
+	group.release("US-A01", "exec-1")
+	if id, busy := group.current("US-A01"); busy {
+		t.Fatalf("the subject is still busy with nothing running: %q", id)
+	}
 }
 
 // TestSwitchWorkspaceUnderConcurrentActionRequests is the concurrency guard on

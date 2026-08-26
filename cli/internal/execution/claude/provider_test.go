@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
 // sentinel stands for anything the agent may have printed that must never be
@@ -168,11 +169,21 @@ func newSessionProvider(dir string, runner Runner, fake *fakeClaude, now func() 
 // plannedSession drives the fake to the outcome of a successful planning: the
 // agent works, then closes the turn with the receipt as the message the run
 // ends on.
+// plannedSession drives a whole planning session: the agent works, closes its
+// turn on the receipt line it was given, and the process then leaves.
+//
+// The process leaving is part of the fixture and not an afterthought. A run is
+// a conversation now: a turn that ends on something the gate refuses is the
+// agent waiting for an answer, so a fixture that only emitted the frame would
+// describe a run that is still going — which is a real state, and the one
+// TestExecuteWaitsWhenATurnEndsWithoutAReceipt is about, but not the terminal
+// one these cases assert on.
 func plannedSession(fake *fakeClaude, specCode string, tasks int) {
 	go func() {
 		<-fake.started
 		fake.emit(`{"type":"assistant","message":{"content":[{"type":"text","text":"pianifico"}]}}`)
 		fake.emit(resultFrame(receiptLine(specCode, tasks), false))
+		fake.end()
 	}()
 }
 
@@ -715,6 +726,7 @@ func TestExecuteFailureModes(t *testing.T) {
 				go func() {
 					<-fake.started
 					fake.emit(resultFrame("done, I planned everything", false))
+					fake.end()
 				}()
 			},
 			wantErr:   []string{"ended without having produced a plan for " + testSpec, "did not emit the expected JSON receipt line"},
@@ -757,6 +769,7 @@ func TestExecuteFailureModes(t *testing.T) {
 				go func() {
 					<-fake.started
 					fake.emit(resultFrame(`{"spec_code":"`+testSpec+`","status":"TODO","tasks":4}`, false))
+					fake.end()
 				}()
 			},
 			wantErr:   []string{"does not declare a persisted plan for " + testSpec},
@@ -780,6 +793,7 @@ func TestExecuteFailureModes(t *testing.T) {
 				go func() {
 					<-fake.started
 					fake.emit(resultFrame(`{"spec_code":"`+testSpec+`","status":"PLANNED","tasks":`, false))
+					fake.end()
 				}()
 			},
 			wantErr:   []string{"did not emit the expected JSON receipt line"},
@@ -934,6 +948,7 @@ func TestFailedExecutionDoesNotEchoWhatTheAgentSaid(t *testing.T) {
 	go func() {
 		<-fake.started
 		fake.emit(resultFrame("token="+sentinel, false))
+		fake.end()
 	}()
 
 	runner := &fakeRunner{outcomes: []runOutcome{probeOK}}
@@ -956,6 +971,7 @@ func TestDiagnosticTruncatesAVeryLongStderr(t *testing.T) {
 	go func() {
 		<-fake.started
 		fake.emit(resultFrame("", false))
+		fake.end()
 	}()
 
 	runner := &fakeRunner{outcomes: []runOutcome{probeOK}}
@@ -1056,5 +1072,138 @@ func TestRequestWithoutWorkingDirectoryFallsBackToTheProvider(t *testing.T) {
 	}
 	if dir := fake.startedIn(); dir != fallback {
 		t.Fatalf("the session ran in %q, want the provider fallback %q", dir, fallback)
+	}
+}
+
+// --- an action is a conversation -------------------------------------------
+
+// A planning turn that ends without a receipt is the agent asking for something
+// only a person can give. The run must stay open on it: the session stays
+// ACTIVE, Execute has not returned, and the answer sent through the run's own
+// dialogue opens the next turn, where the receipt closes the work.
+//
+// This is the whole of what changed. The run that motivated it failed exactly
+// here: the agent asked for an authorization, the turn ended, and a turn was
+// all there was — so the request became a failure instead of a question.
+func TestPlanningWaitsWhenATurnEndsWithoutAReceipt(t *testing.T) {
+	command := fakeCommand(t)
+	fake := newFakeClaude()
+	t.Cleanup(fake.end)
+	provider := newSessionProvider(workspaceWithSkill(t), &fakeRunner{outcomes: []runOutcome{probeOK}}, fake, nil)
+
+	req := testRequest(command)
+	req.ProviderConfig["timeout_seconds"] = 60
+	results, failures := startInception(provider, req)
+
+	// --- the agent asks, and ends its turn on the question -------------------
+	const question = "Non ho l'autorizzazione a scrivere il piano: posso procedere?"
+	<-fake.started
+	fake.emit(`{"type":"assistant","message":{"content":[{"type":"text","text":` + quoted(question) + `}]}}`)
+	fake.emit(resultFrame(question, false))
+	waitFor(t, func() bool {
+		return countEvents(collectEvents(provider, "exec-1", 0), localrun.KindTurnEnd) == 1
+	})
+
+	select {
+	case err := <-failures:
+		t.Fatalf("the planning run ended on the agent's question instead of waiting: %v", err)
+	default:
+	}
+	snapshot, err := provider.ReadRun(context.Background(), execution.RunRequest{RunID: "exec-1"})
+	if err != nil {
+		t.Fatalf("ReadRun failed while the run was waiting: %v", err)
+	}
+	if snapshot.State != execution.RunActive {
+		t.Fatalf("the run reported %q after a turn without a receipt: a question is not the end of the work", snapshot.State)
+	}
+
+	// --- the person answers, and the next turn carries the receipt -----------
+	const answer = "Sì, procedi."
+	if err := provider.SendRunMessage(context.Background(), execution.RunRequest{RunID: "exec-1"}, answer); err != nil {
+		t.Fatalf("the answer was refused after the turn ended: %v", err)
+	}
+	if got := fake.messagesReceived(); len(got) != 2 || got[1] != answer {
+		t.Fatalf("the process received %v; want the prompt and then exactly the answer", got)
+	}
+	fake.emit(resultFrame(receiptLine(testSpec, 4), false))
+
+	if err := <-failures; err != nil {
+		t.Fatalf("the receipt on the second turn did not close the run: %v", err)
+	}
+	got := <-results
+	var payload struct {
+		PlanTasks int `json:"plan_tasks"`
+	}
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatalf("payload is not valid JSON (%s): %v", got.Payload, err)
+	}
+	if payload.PlanTasks != 4 {
+		t.Fatalf("plan_tasks = %d, want the tasks the receipt declared", payload.PlanTasks)
+	}
+	// The run is closed as observed, on the receipt and not on a deduction.
+	if snapshot, err := provider.ReadRun(context.Background(), execution.RunRequest{RunID: "exec-1"}); err != nil || snapshot.State != execution.RunClosed {
+		t.Fatalf("the finished run reported %#v (err=%v), want the observed closed state", snapshot, err)
+	}
+}
+
+// A cancellation between two turns is what a person does to an action they no
+// longer want. It closes the input of the process and nothing else: no terminal
+// state is deduced from the command, the run ends only when the process's
+// output really ends, and then it is the failure it is — planning that was
+// stopped, named as stopped.
+func TestPlanningCancelledBetweenTwoTurnsFailsAsStopped(t *testing.T) {
+	command := fakeCommand(t)
+	fake := newLingeringClaude()
+	t.Cleanup(fake.end)
+	provider := New(Options{
+		Runner:     &fakeRunner{outcomes: []runOutcome{probeOK}},
+		Starter:    fake,
+		WorkingDir: func() (string, error) { return workspaceWithSkill(t), nil },
+		Now:        fixedElapsedClock(1500 * time.Millisecond),
+	})
+
+	req := testRequest(command)
+	req.ProviderConfig["timeout_seconds"] = 60
+	_, failures := startInception(provider, req)
+
+	<-fake.started
+	fake.emit(resultFrame("una domanda, non un piano", false))
+	waitFor(t, func() bool {
+		return countEvents(collectEvents(provider, "exec-1", 0), localrun.KindTurnEnd) == 1
+	})
+
+	if err := provider.CancelRun(context.Background(), execution.RunRequest{RunID: "exec-1"}); err != nil {
+		t.Fatalf("the cancellation was refused between two turns: %v", err)
+	}
+	select {
+	case <-fake.closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the cancellation never reached the input of the process")
+	}
+	// The command decided nothing: the run is still what it was observed to be.
+	if snapshot, readErr := provider.ReadRun(context.Background(), execution.RunRequest{RunID: "exec-1"}); readErr != nil || snapshot.State != execution.RunActive {
+		t.Fatalf("the run reported %#v (err=%v) on the command alone, before the process ended", snapshot, readErr)
+	}
+
+	// The process leaves, and only now is the run over.
+	fake.exitCode = 143
+	fake.end()
+
+	err := <-failures
+	if err == nil {
+		t.Fatal("a cancelled planning run reported a success")
+	}
+	// The diagnostic names the spec and says no plan came of it. It does not
+	// blame the cancellation, and it cannot: closing the input of a process is
+	// indistinguishable, from inside the protocol, from a process that left on
+	// its own, and a provider that guessed between the two would be inventing
+	// the one fact it does not have.
+	assertContains(t, err.Error(), "ended without having produced a plan for "+testSpec, "execution error")
+	snapshot, readErr := provider.ReadRun(context.Background(), execution.RunRequest{RunID: "exec-1"})
+	if readErr != nil {
+		t.Fatalf("ReadRun failed after the cancellation: %v", readErr)
+	}
+	if snapshot.State != execution.RunCrashed || strings.TrimSpace(snapshot.Error) == "" {
+		t.Fatalf("the cancelled run = %#v, want a crashed run that says why", snapshot)
 	}
 }

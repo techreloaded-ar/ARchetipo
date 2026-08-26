@@ -525,17 +525,22 @@ func TestInceptionCancelledBetweenTwoTurnsEndsOnlyWithTheProcess(t *testing.T) {
 	}
 }
 
-// The two actions are dispatched by the action alone, and the mode of the
-// session is what separates them: a planning run that ends its turn without a
-// receipt fails at once, and it must keep failing at once now that a
-// conversation exists. The inception prompt must never be the one a planning
-// run receives.
+// The two actions are dispatched by the action alone, and what separates them
+// is the prompt and nothing else: both hold the turn, because both are
+// conversations, and a planning run that asks a question must never receive the
+// inception's instruction.
+//
+// This test used to assert the opposite of its first half — that a planning
+// turn without a receipt failed at once — and that was the whole defect. An
+// agent that ends its turn asking for something only a person can give has not
+// failed; it is waiting, and there was nobody to wait for.
 func TestInceptionAndPlanningAreDispatchedByTheActionAlone(t *testing.T) {
 	command := fakeCommand(t)
 	dir := inceptionWorkspace(t)
 	installSkillIn(t, dir)
 
-	// The planning action still fails on the first turn without a receipt.
+	// The planning action holds the turn on a question, exactly as an inception
+	// does, and receives the planning prompt.
 	planFake := newFakeClaude()
 	t.Cleanup(planFake.end)
 	go func() {
@@ -544,14 +549,31 @@ func TestInceptionAndPlanningAreDispatchedByTheActionAlone(t *testing.T) {
 	}()
 	planReq := testRequest(command)
 	planReq.ProviderConfig["timeout_seconds"] = 60
-	if _, err := newSessionProvider(dir, &fakeRunner{outcomes: []runOutcome{probeOK}}, planFake, nil).Execute(context.Background(), planReq); err == nil {
-		t.Fatal("a planning turn without a receipt was accepted: the conversational mode leaked into spec.plan")
-	} else {
-		assertContains(t, err.Error(), "ended without having produced a plan for "+testSpec, "planning error")
+	planDone := make(chan error, 1)
+	planProvider := newSessionProvider(dir, &fakeRunner{outcomes: []runOutcome{probeOK}}, planFake, nil)
+	go func() {
+		_, err := planProvider.Execute(context.Background(), planReq)
+		planDone <- err
+	}()
+	waitFor(t, func() bool {
+		return countEvents(collectEvents(planProvider, "exec-1", 0), localrun.KindTurnEnd) == 1
+	})
+	select {
+	case err := <-planDone:
+		t.Fatalf("the planning run ended on the agent's question instead of waiting: %v", err)
+	default:
 	}
 	if got := planFake.messagesReceived(); len(got) != 1 || got[0] != buildPrompt(planReq) {
 		t.Fatalf("the planning process received %v; want exactly the planning prompt", got)
 	}
+	// Only the end of the process closes it, and then it is a run without a
+	// receipt — which is a failure, and says which one.
+	planFake.end()
+	err := <-planDone
+	if err == nil {
+		t.Fatal("a planning run that ended without a receipt reported a success")
+	}
+	assertContains(t, err.Error(), "ended without having produced a plan for "+testSpec, "planning error")
 
 	// The inception action receives the inception prompt and holds the turn.
 	inceptionFake := newFakeClaude()

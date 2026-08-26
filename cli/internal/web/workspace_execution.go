@@ -242,9 +242,6 @@ func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession,
 	}
 	providerConfig = effectiveConfig
 
-	if err := s.guardSingleWorkspaceExecution(ctx, ws); err != nil {
-		return nil, err
-	}
 	// The claimed effect is verified inside the terminal write, not after it: a
 	// browser polling every two seconds settles on the first terminal status it
 	// reads, so a success closed now and disowned a moment later is a success
@@ -275,7 +272,6 @@ func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession,
 	}
 	started, continuation, err := ws.service.StartWorkspace(ctx, action, providerID, providerConfig, confirm, startOpts...)
 	if err != nil {
-		ws.dispatch.release(workspaceExecutionKey)
 		// A rejected configuration travels back typed, so the single error
 		// renderer can answer it with the form the Execution panel already
 		// understands and point at the offending field.
@@ -290,43 +286,13 @@ func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession,
 	ws.dispatch.run(func(dispatchCtx context.Context) {
 		// Deferred in this order so they unwind in the other one: the workspace
 		// stops being busy first, and only then is every connected client told to
-		// re-read. Publishing while the reservation still stands would send them
+		// re-read. Publishing while the registration still stands would send them
 		// back an action still marked unavailable.
 		defer s.broker.Publish()
-		defer ws.dispatch.release(workspaceExecutionKey)
+		defer ws.dispatch.release(workspaceExecutionKey, started.ID)
 		_, _ = continuation(dispatchCtx)
 	})
 	return &started, nil
-}
-
-// guardSingleWorkspaceExecution enforces "one press, one execution" on the
-// workspace, with the same two halves the spec guard has and for the same
-// reasons: the in-memory reservation catches a double click or two tabs racing
-// on this process, the persisted record catches a viewer restarted while an
-// execution was still open.
-func (s *Server) guardSingleWorkspaceExecution(ctx context.Context, ws *workspaceSession) error {
-	existingID, reserved := ws.dispatch.reserve(workspaceExecutionKey)
-	if !reserved {
-		message := "an execution is already running for this workspace"
-		if existingID != "" {
-			message = "execution " + existingID + " is already running for this workspace"
-		}
-		return iox.NewConflict(message, "wait for it to finish before starting another one", nil)
-	}
-	records, err := ws.store.ListBySpec(ctx, workspaceExecutionKey)
-	if err != nil {
-		ws.dispatch.release(workspaceExecutionKey)
-		return iox.NewInternal("reading the executions of this workspace", err)
-	}
-	if len(records) > 0 && records[0].Status == execution.StatusRunning {
-		ws.dispatch.release(workspaceExecutionKey)
-		return iox.NewConflict(
-			"execution "+records[0].ID+" is already running for this workspace",
-			"wait for it to finish, or remove its record under .archetipo/executions/ if it was left behind by an interrupted run",
-			nil,
-		)
-	}
-	return nil
 }
 
 // workspaceAvailability answers "can this workspace run this workspace action

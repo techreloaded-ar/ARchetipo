@@ -54,11 +54,14 @@ func reviewReceiptLine(specCode string, criteria, blockers int) string {
 // reviewedSession drives the fake to the outcome of a successfully prepared
 // review: the agent reads the increment, then closes the turn with the receipt
 // as the message the run ends on.
+// reviewedSession drives a whole review session and lets the process leave
+// afterwards, for the reason written on plannedSession.
 func reviewedSession(fake *fakeClaude, specCode string, criteria, blockers int) {
 	go func() {
 		<-fake.started
 		fake.emit(`{"type":"assistant","message":{"content":[{"type":"text","text":"preparo il dossier"}]}}`)
 		fake.emit(resultFrame(reviewReceiptLine(specCode, criteria, blockers), false))
+		fake.end()
 	}()
 }
 
@@ -242,6 +245,7 @@ func TestExecuteReviewFailureModes(t *testing.T) {
 				go func() {
 					<-fake.started
 					fake.emit(resultFrame("dossier ready, looks good to me", false))
+					fake.end()
 				}()
 			},
 			wantErr: []string{"ended without having prepared the review of " + testSpec, "did not emit the expected JSON receipt line"},
@@ -252,6 +256,7 @@ func TestExecuteReviewFailureModes(t *testing.T) {
 				go func() {
 					<-fake.started
 					fake.emit(resultFrame(`{"spec_code":"`+testSpec+`","status":"DONE","criteria":5,"blockers":0}`, false))
+					fake.end()
 				}()
 			},
 			wantErr: []string{"does not declare a prepared review dossier for " + testSpec},

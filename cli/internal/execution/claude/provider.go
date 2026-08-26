@@ -27,6 +27,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -247,103 +248,165 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	turn, err := p.runSingleTurn(runCtx, req, cfg, dir, buildPrompt(req), "planning")
+	subject := specSubject{gerund: "planning", outcome: "a plan for " + req.SpecCode}
+	held, err := p.runSpecConversation(runCtx, req, cfg, dir, buildPrompt(req), subject, func(message string) bool {
+		_, err := execution.AcceptPlanReceipt(message, req.SpecCode)
+		return err == nil
+	})
 	if err != nil {
 		return execution.Result{}, err
 	}
 
 	// The acceptance rule is the shared one: a receipt this provider accepted
 	// and another rejected would be a contract that exists twice. The receipt is
-	// looked for in the message the run ends on, which is where the prompt asks
-	// for it — never in the stream as a whole.
-	receipt, err := execution.AcceptPlanReceipt(turn.final, req.SpecCode)
+	// looked for in the message a turn ends on, which is where the prompt asks
+	// for it — never in the stream as a whole. It is parsed back here rather
+	// than carried out of the conversation as a typed value, for the reason
+	// written on converse: the loop recognizes an acceptable closing message,
+	// and which artifact that message describes is this layer's knowledge.
+	receipt, err := execution.AcceptPlanReceipt(held.final, req.SpecCode)
 	if err != nil {
-		turn.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a plan for %s", req.SpecCode))
+		held.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a plan for %s", req.SpecCode))
 		return execution.Result{}, fmt.Errorf(
 			"the claude command %q ended without having produced a plan for %s%s: %w",
-			cfg.Command, req.SpecCode, diagnosticSuffix(turn.stderr), err,
+			cfg.Command, req.SpecCode, diagnosticSuffix(held.stderr), err,
 		)
 	}
-	turn.session.Close(execution.RunClosed, "")
-	return p.resultFor(cfg, turn.exitCode, turn.elapsed, receipt)
+	held.session.Close(execution.RunClosed, "")
+	return p.resultFor(cfg, held.exitCode, held.elapsed, receipt)
 }
 
-// singleTurn is what a completed one-turn run leaves behind: the message the
-// agent ended on, the facts a payload or a diagnostic is built from, and the
-// still-open session, which only the caller can close — because only the caller
-// knows whether the message it was given is the receipt it asked for.
-type singleTurn struct {
-	session  *localrun.Session
-	final    string
+// specSubject is how one spec-scoped action names itself in a diagnostic.
+//
+// It exists because the three actions differ in exactly two words and in
+// nothing else: what the agent was doing, and what it had to produce. Writing
+// the four failures once and parameterizing them on those two is what keeps
+// "did not finish planning US-1" and "did not finish implementing US-1" two
+// different diagnoses of two different runs, without three copies of the same
+// switch free to classify the same failure differently.
+type specSubject struct {
+	// gerund is the work in progress, as "did not finish <gerund> US-1 within
+	// 1h" reads it: "planning", "implementing", "preparing the review of".
+	gerund string
+	// outcome is what the run had to produce, as "without having produced
+	// <outcome>" reads it: "a plan for US-1", "the review of US-1".
+	outcome string
+}
+
+// specConversation is what a finished spec-scoped conversation leaves behind:
+// the message the agent closed on, the facts a payload or a diagnostic is built
+// from, and the still-open session — which only the caller can close, because
+// only the caller knows whether the message it was given is the receipt it
+// asked for.
+type specConversation struct {
+	session *localrun.Session
+	final   string
+	// turns counts how many times the agent finished speaking before it was
+	// done. It is the cheapest honest measure of a conversation, and it is the
+	// number that says out loud that these actions are no longer single-turn.
+	turns    int
 	exitCode int
 	stderr   string
 	elapsed  time.Duration
 }
 
-// runSingleTurn runs one prompt as one turn and reports the message it ended
-// on, or the reason there is none.
+// runSpecConversation runs one spec-scoped action as a conversation and reports
+// the message it ended on, or the reason there is none.
 //
-// It is the shape of every non-conversational action: planning and
-// implementation both ask for work that ends on a receipt, so a turn that ends
-// without one has failed here and now rather than asked a question. Keeping it
-// in one function is what keeps the four failures — the deadline, a process
-// that could not be run to completion, a turn that never completed, and a
-// session that could not be opened at all — identical for both, instead of two
-// copies free to classify them differently.
+// It is the shape of planning, implementation and review. It used to be one
+// turn, and the reasoning for that was sound as far as it went: those three
+// actions end on a receipt, so a turn that ends without one has not asked a
+// question. What it missed is that a turn can end without a receipt for a
+// reason that is neither success nor failure — the agent needs something only a
+// person can give, and says so. Under one turn that sentence was the end of the
+// work; here it is the agent waiting, and the answer arrives through the run's
+// own dialogue exactly as it does in an inception.
 //
-// gerund is the only thing that varies between the callers, and it varies on
-// purpose: "did not finish planning US-1" and "did not finish implementing
-// US-1" are two different diagnoses of two different runs, and a shared phrase
-// would make them indistinguishable in a record.
+// The receipt is therefore tried at the end of every turn and not only of the
+// first. Nothing else about the acceptance changed: it is still the shared gate,
+// still read from the message the turn ends on, and still a declaration of the
+// agent rather than an inspection of the connector.
 //
 // Every failure closes the session before returning; a success deliberately
 // leaves it open.
-func (p *Provider) runSingleTurn(runCtx context.Context, req execution.Request, cfg settings, dir, prompt, gerund string) (*singleTurn, error) {
-	live, err := p.openSession(runCtx, req, cfg, dir, prompt, false, false, 0)
+func (p *Provider) runSpecConversation(runCtx context.Context, req execution.Request, cfg settings, dir, prompt string, subject specSubject, accept func(string) bool) (*specConversation, error) {
+	// Conversational, which is what the whole change amounts to at the protocol
+	// level: the end of a turn no longer ends the session, so a message sent
+	// after it opens the next turn instead of being refused.
+	live, err := p.openSession(runCtx, req, cfg, dir, prompt, true, false, 0)
 	if err != nil {
 		return nil, err
 	}
-	session, client := live.session, live.client
 
-	select {
-	case <-client.TurnDone():
-	case <-runCtx.Done():
-	}
+	final, turns, convErr := converse(runCtx, live.client, accept)
 
 	exitCode, stderr, waitErr := p.shutdown(live.process)
 	elapsed := p.now().Sub(live.startedAt)
 
-	if runErr := runCtx.Err(); runErr != nil {
-		reason := fmt.Sprintf("the claude session was stopped after %s: %v", elapsed.Round(time.Millisecond), runErr)
-		session.Close(execution.RunCrashed, reason)
-		return nil, fmt.Errorf("the claude command %q did not finish %s %s within %s", cfg.Command, gerund, req.SpecCode, cfg.Timeout)
+	if convErr != nil {
+		// The process left after the agent had finished speaking, and what it
+		// finished on was not the receipt. That is not one of the four failures
+		// below: it is a closing message that has to be judged, and only the
+		// caller can judge it — it is the one layer that knows which receipt it
+		// asked for and can therefore say what was wrong with the one it got.
+		// Handing it over is what keeps "did not emit the expected JSON receipt
+		// line" in the record instead of a flat "the run ended".
+		if errors.Is(convErr, errProcessGone) && live.client.Completed() {
+			return &specConversation{
+				session:  live.session,
+				final:    live.client.FinalMessage(),
+				turns:    turns,
+				exitCode: exitCode,
+				stderr:   stderr,
+				elapsed:  elapsed,
+			}, nil
+		}
+		return nil, p.failSpecConversation(live, cfg, req, subject, runCtx.Err(), convErr, exitCode, stderr, elapsed)
 	}
 	if waitErr != nil {
-		session.Close(execution.RunCrashed, waitErr.Error())
+		live.session.Close(execution.RunCrashed, waitErr.Error())
 		return nil, fmt.Errorf("the claude command %q could not be run to completion after %s: %w", cfg.Command, elapsed.Round(time.Millisecond), waitErr)
 	}
-	// Only a turn the process declared finished, and finished without error,
-	// can carry a result. Two different outcomes fail this test and both must:
-	// a turn that ended because the process died, and an interrupted turn —
-	// which Claude also closes with a `result`, reporting `is_error`. The
-	// second one is the reason the exit code cannot be the whole condition:
-	// stopping the process after an interrupt is an ordinary shutdown and can
-	// exit 0, so a run cancelled by the operator would otherwise be accepted
-	// as a success on whatever the agent happened to have said last.
-	if !client.Completed() {
-		session.Close(execution.RunCrashed, fmt.Sprintf("the claude process exited %d without completing the turn", exitCode))
-		return nil, fmt.Errorf(
-			"the claude command %q exited %d after %s without %s %s: the turn never completed%s",
-			cfg.Command, exitCode, elapsed.Round(time.Millisecond), gerund, req.SpecCode, diagnosticSuffix(stderr),
-		)
-	}
-	return &singleTurn{
-		session:  session,
-		final:    client.FinalMessage(),
+	return &specConversation{
+		session:  live.session,
+		final:    final,
+		turns:    turns,
 		exitCode: exitCode,
 		stderr:   stderr,
 		elapsed:  elapsed,
 	}, nil
+}
+
+// failSpecConversation closes the run and composes the diagnostic for a
+// spec-scoped conversation that ended without a receipt.
+//
+// It keeps the four causes apart, because they are four different things to
+// fix: the deadline, a cancellation, a turn the agent itself closed with an
+// error, and a process that left. The wording of the first two is the one those
+// runs have always had, so a record written before this change and one written
+// after read the same way for the same failure.
+func (p *Provider) failSpecConversation(live *liveSession, cfg settings, req execution.Request, subject specSubject, runErr, convErr error, exitCode int, stderr string, elapsed time.Duration) error {
+	rounded := elapsed.Round(time.Millisecond)
+	switch {
+	case errors.Is(convErr, errRunTerminated) && errors.Is(runErr, context.DeadlineExceeded):
+		live.session.Close(execution.RunCrashed, fmt.Sprintf("the claude session was stopped after %s: %v", rounded, runErr))
+		return fmt.Errorf("the claude command %q did not finish %s %s within %s", cfg.Command, subject.gerund, req.SpecCode, cfg.Timeout)
+	case errors.Is(convErr, errRunTerminated):
+		live.session.Close(execution.RunCrashed, fmt.Sprintf("the claude session was stopped after %s: %v", rounded, runErr))
+		return fmt.Errorf("the claude command %q was stopped after %s without having produced %s: %v", cfg.Command, rounded, subject.outcome, runErr)
+	default:
+		// A turn the agent closed with an error, and a process that left in the
+		// middle of one, are the same sentence because they are the same fact:
+		// the turn never completed, so whatever the agent last said cannot be
+		// read as the outcome of work it never finished. An interrupted turn is
+		// the reason the exit code cannot be the whole condition — stopping the
+		// process afterwards is an ordinary shutdown and can exit 0.
+		live.session.Close(execution.RunCrashed, fmt.Sprintf("the claude process exited %d without completing the turn", exitCode))
+		return fmt.Errorf(
+			"the claude command %q exited %d after %s without %s %s: the turn never completed%s",
+			cfg.Command, exitCode, rounded, subject.gerund, req.SpecCode, diagnosticSuffix(stderr),
+		)
+	}
 }
 
 // prepare answers everything that can be known before a process exists: the
