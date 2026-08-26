@@ -40,6 +40,33 @@ var knownConfigKeys = map[string]struct{}{
 	"timeout_seconds":       {},
 }
 
+// parseConnection validates the part of the configuration that says *which hub
+// and with what credential*, leaving out the part that says *which workspace*.
+//
+// It exists for the one call that legitimately has no destination yet: asking
+// the hub which workspaces this credential may use, which is how a setup finds
+// the value of workspace_id in the first place. Requiring it there would make
+// the question unaskable until its own answer was already known.
+//
+// parseConfig is written on top of this rather than beside it, so base_url and
+// token_env cannot end up validated two ways; and ValidateConfig still goes
+// through parseConfig, so `execution provider set-default` is no more
+// permissive than it was.
+func parseConnection(raw map[string]any) (settings, error) {
+	if err := rejectUnknownKeys(raw); err != nil {
+		return settings{}, err
+	}
+	baseURL, err := parseBaseURL(raw["base_url"])
+	if err != nil {
+		return settings{}, err
+	}
+	tokenEnv, err := parseTokenEnv(raw["token_env"])
+	if err != nil {
+		return settings{}, err
+	}
+	return settings{BaseURL: baseURL, TokenEnv: tokenEnv}, nil
+}
+
 // ConfigFields declares the non-secret settings this provider accepts, so a
 // caller that does not know ARcipelago — the viewer's configuration form — can
 // offer them without hard-coding this package's keys. The names are exactly the
@@ -97,18 +124,11 @@ func configErr(field, reason string) error {
 // documented defaults. Every rejection names the exact offending key, so the
 // CLI can render it as execution.default_provider.config.<field>.
 func parseConfig(raw map[string]any) (settings, error) {
-	if err := rejectUnknownKeys(raw); err != nil {
-		return settings{}, err
-	}
-	baseURL, err := parseBaseURL(raw["base_url"])
+	connection, err := parseConnection(raw)
 	if err != nil {
 		return settings{}, err
 	}
 	workspaceID, err := parseWorkspaceID(raw["workspace_id"])
-	if err != nil {
-		return settings{}, err
-	}
-	tokenEnv, err := parseTokenEnv(raw["token_env"])
 	if err != nil {
 		return settings{}, err
 	}
@@ -124,9 +144,9 @@ func parseConfig(raw map[string]any) (settings, error) {
 		return settings{}, configErr("timeout_seconds", fmt.Sprintf("must be greater than or equal to poll_interval_seconds (%d)", pollSeconds))
 	}
 	return settings{
-		BaseURL:      baseURL,
+		BaseURL:      connection.BaseURL,
 		WorkspaceID:  workspaceID,
-		TokenEnv:     tokenEnv,
+		TokenEnv:     connection.TokenEnv,
 		PollInterval: time.Duration(pollSeconds) * time.Second,
 		Timeout:      time.Duration(timeoutSeconds) * time.Second,
 	}, nil

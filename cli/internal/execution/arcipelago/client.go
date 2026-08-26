@@ -160,6 +160,12 @@ func classify(status int, payload []byte, cfg settings) error {
 	case http.StatusUnauthorized:
 		return fmt.Errorf("arcipelago rejected the application credential (HTTP 401): check the token exported in %s", cfg.TokenEnv)
 	case http.StatusNotFound:
+		// A call made before a workspace is chosen — the discovery one — has no
+		// workspace to blame, and saying `workspace ""` would send an operator
+		// looking for a setting that is not the problem.
+		if strings.TrimSpace(cfg.WorkspaceID) == "" {
+			return fmt.Errorf("arcipelago answered 404: this hub does not serve the route, or the credential reaches nothing")
+		}
 		return fmt.Errorf("arcipelago workspace %q or task is not visible to this credential (HTTP 404): check workspace_id and that the credential is granted the workspace", cfg.WorkspaceID)
 	case http.StatusConflict:
 		var decoded errorResponse

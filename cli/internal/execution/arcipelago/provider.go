@@ -172,7 +172,7 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 	}
 	token := strings.TrimSpace(p.getenv(cfg.TokenEnv))
 	if token == "" {
-		return execution.Result{}, fmt.Errorf("the ARcipelago application credential is not available: export it in the %s environment variable", cfg.TokenEnv)
+		return execution.Result{}, missingCredential(cfg)
 	}
 	task, err := p.createTask(ctx, cfg, token, req)
 	if err != nil {

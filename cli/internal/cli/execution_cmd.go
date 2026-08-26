@@ -30,14 +30,93 @@ type executionDependencies struct {
 
 func newExecutionCmd(s streams, deps executionDependencies) *cobra.Command {
 	root := &cobra.Command{Use: "execution", Short: "Execution provider operations"}
-	root.AddCommand(newExecutionRunCmd(s, deps), newExecutionShowCmd(s, deps), newExecutionProviderCmd(s, deps))
+	root.AddCommand(
+		newExecutionRunCmd(s, deps),
+		newExecutionShowCmd(s, deps),
+		newExecutionProviderCmd(s, deps),
+		newExecutionSetupCmd(s, deps),
+	)
 	return root
 }
 
 func newExecutionProviderCmd(s streams, deps executionDependencies) *cobra.Command {
 	root := &cobra.Command{Use: "provider", Short: "Configure the workspace execution provider"}
-	root.AddCommand(newExecutionProviderSetDefaultCmd(s, deps), newExecutionProviderShowDefaultCmd(s))
+	root.AddCommand(
+		newExecutionProviderListCmd(s, deps),
+		newExecutionProviderSetDefaultCmd(s, deps),
+		newExecutionProviderShowDefaultCmd(s),
+	)
 	return root
+}
+
+type executionProviderListing struct {
+	ID                string                  `json:"id"`
+	Capabilities      []execution.Capability  `json:"capabilities"`
+	ConfigFields      []execution.ConfigField `json:"config_fields"`
+	Available         bool                    `json:"available"`
+	UnavailableReason string                  `json:"unavailable_reason,omitempty"`
+	IsDefault         bool                    `json:"is_default"`
+}
+
+// newExecutionProviderListCmd builds `archetipo execution provider list`.
+//
+// Until now the only way to learn that a provider exists, what it can do and
+// which keys it accepts was to open the viewer: `set-default` demands a file
+// whose shape is documented nowhere the terminal can reach. This assembles
+// exactly what the viewer's panel assembles, from the same three helpers, so
+// the two views of one fact cannot disagree.
+func newExecutionProviderListCmd(s streams, deps executionDependencies) *cobra.Command {
+	return &cobra.Command{
+		Use: "list", Short: "List the registered execution providers and what they accept",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := loadConfigFor(cmd)
+			if err != nil {
+				return err
+			}
+			defaultID := ""
+			var defaultConfig map[string]any
+			if selection := cfg.Execution.DefaultProvider; selection != nil {
+				defaultID = strings.TrimSpace(selection.ID)
+				defaultConfig = selection.Config
+			}
+
+			listings := make([]executionProviderListing, 0)
+			for _, provider := range deps.registry.List() {
+				capabilities, err := execution.DeclaredCapabilities(cmd.Context(), provider)
+				if err != nil {
+					return iox.NewInternal("reading capabilities of provider "+provider.ID(), err)
+				}
+				// Only the workspace default is probed with a real
+				// configuration: one saved for a provider means nothing to
+				// another, and probing them all with it would report failures
+				// about settings nobody chose.
+				var providerConfig map[string]any
+				if provider.ID() == defaultID {
+					providerConfig = defaultConfig
+				}
+				reason := ""
+				if err := execution.CheckAvailability(cmd.Context(), provider, providerConfig); err != nil {
+					reason = err.Error()
+				}
+				listings = append(listings, executionProviderListing{
+					ID:                provider.ID(),
+					Capabilities:      capabilities,
+					ConfigFields:      execution.DescribeConfig(provider),
+					Available:         reason == "",
+					UnavailableReason: reason,
+					IsDefault:         provider.ID() == defaultID,
+				})
+			}
+			data := struct {
+				Providers []executionProviderListing `json:"providers"`
+			}{Providers: listings}
+			if err := iox.WriteOKWithWarnings(s.out, "execution_providers", data, cfg.ResolutionNotices); err != nil {
+				return iox.NewInternal("encoding output", err)
+			}
+			return nil
+		},
+	}
 }
 
 func newExecutionProviderSetDefaultCmd(s streams, deps executionDependencies) *cobra.Command {
