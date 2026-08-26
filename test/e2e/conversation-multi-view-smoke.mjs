@@ -15,10 +15,10 @@
 // What this smoke proves and the conversation smoke deliberately does not: the
 // *plural*. Two agent processes alive at once, each keeping its own history;
 // which process a message really reached; a close that ends one process and
-// leaves the other running; the refusal past `maxLiveConversations` — read from
-// the Go source rather than retyped here, so a future change of the constant
-// cannot leave this test lying; and the workspace switch that must leave no
-// agent process of the workspace behind and no unsealed record on disk.
+// leaves the other running; several conversations alive at once past the
+// ceiling of three that used to refuse them, each with an agent process of its
+// own; and the workspace switch that must leave no agent process of the
+// workspace behind and no unsealed record on disk.
 //
 // The oracles are the ones no viewer field can stand in for: the pid each agent
 // process reports about itself, the frames that pid was really given, the
@@ -51,7 +51,6 @@ const binDir = path.join(repoRoot, "test", "e2e", ".bin");
 const binName = process.platform === "win32" ? "archetipo.exe" : "archetipo";
 const cliPath = path.join(binDir, binName);
 const fakeClaudePath = path.join(__dirname, "support", "fake-claude.mjs");
-const conversationStateSource = path.join(repoRoot, "cli", "internal", "web", "conversation_state.go");
 const defaultWorkspaceRoot = path.join(repoRoot, "test", "workspaces", "conversation-multi-view-smoke");
 
 const CODE_A = "US-A01";
@@ -302,44 +301,38 @@ async function scenarioSeveralLiveConversations(runDir, dirA, dirB, env) {
     );
 
     // --- AC-5 ---------------------------------------------------------------
-    // The limit is read from the one place it is written, so a change of the
-    // constant changes this test instead of leaving it asserting a stale number.
-    const limit = await readMaxLiveConversations();
-    console.log(`-> maxLiveConversations read from ${path.relative(repoRoot, conversationStateSource)}: ${limit}`);
+    // There used to be a ceiling of three live conversations per workspace, and
+    // this criterion proved the refusal of the fourth. The ceiling is gone: a
+    // number nobody chose was turning "open one more" into an error to read and
+    // a thread to close first, and once a step that finds no thread opens its
+    // own, that refusal would have started falling on runs nobody asked to have
+    // refused. What is proved now is the opposite, and it is proved past the old
+    // number on purpose: every open is honoured, every one gets an agent process
+    // of its own, and the index lists them all live.
+    const beyondTheOldLimit = 5;
+    const processesBeforeMany = agentProcessCount(control);
     const extra = [];
-    for (let i = 2; i <= limit; i += 1) {
-      extra.push(await open(`limit-${i}`));
+    for (let i = 2; i <= beyondTheOldLimit; i += 1) {
+      extra.push(await open(`many-${i}`));
     }
     const liveIDs = [a.id, ...extra.map((entry) => entry.id)];
-    if (liveIDs.length !== limit) {
-      throw new Error(`AC-5: the workspace must hold exactly ${limit} live conversations before the refusal; it holds ${liveIDs.length}`);
+    if (liveIDs.length !== beyondTheOldLimit) {
+      throw new Error(`AC-5: the workspace must hold ${beyondTheOldLimit} live conversations; it holds ${liveIDs.length}`);
     }
-    const indexAtTheLimit = await apiJSON(conversationsURL);
-    for (const id of liveIDs) assertListedLive("AC-5", indexAtTheLimit, id, true);
-
-    const processesBefore = agentProcessCount(control);
-    const indexBefore = await rawGet(conversationsURL);
-    const refused = await expectStatus(conversationsURL, 409, postJSON({}));
-    const reason = String(refused.error || "");
-    if (!reason.includes(String(limit))) {
-      throw new Error(`AC-5: the refusal must declare the limit ${limit}; got ${JSON.stringify(reason)}`);
+    const indexWithMany = await apiJSON(conversationsURL);
+    for (const id of liveIDs) assertListedLive("AC-5", indexWithMany, id, true);
+    const processesAfterMany = agentProcessCount(control);
+    if (processesAfterMany !== processesBeforeMany + extra.length) {
+      throw new Error(
+        `AC-5: opening ${extra.length} more conversations should have started ${extra.length} more agent processes; the control server saw ${processesBeforeMany} before and ${processesAfterMany} after`,
+      );
     }
-    for (const id of liveIDs) {
-      if (!reason.includes(id)) {
-        throw new Error(`AC-5: the refusal must name the live conversation ${id} so a person knows which one to close; got ${JSON.stringify(reason)}`);
-      }
-    }
-    const indexAfterRefusal = await rawGet(conversationsURL);
-    if (indexAfterRefusal !== indexBefore) {
-      throw new Error(`AC-5: the refused open changed the index\n  before: ${truncate(indexBefore, 500)}\n  after:  ${truncate(indexAfterRefusal, 500)}`);
-    }
-    const processesAfter = agentProcessCount(control);
-    if (processesAfter !== processesBefore) {
-      throw new Error(`AC-5: a refused open started a process: the control server saw ${processesBefore} agent processes before it and ${processesAfter} after`);
+    for (const entry of extra) {
+      assertProcessAlive(entry.pid, `the agent process (pid ${entry.pid}) of the conversation ${entry.id}`);
     }
     ok(
       "AC-5",
-      `with ${limit} conversations live — the number read from the constant maxLiveConversations in cli/internal/web/conversation_state.go — POST /api/workspace/conversations answered 409 with a message declaring ${limit} and naming every live conversation (${liveIDs.join(", ")}), the control server still counts the same ${processesAfter} agent processes it counted before, and the ${indexBefore.length}-byte body of GET /api/workspace/conversations is byte-identical before and after the refusal`,
+      `${beyondTheOldLimit} conversations were opened on one workspace with no refusal — past the ceiling of three that used to exist — POST /api/workspace/conversations answered 201 every time, the control server counts one agent process per conversation (${processesBeforeMany} before, ${processesAfterMany} after ${extra.length} opens), and GET /api/workspace/conversations marks every one of ${liveIDs.join(", ")} live:true`,
     );
 
     // --- AC-6 ---------------------------------------------------------------
@@ -433,25 +426,6 @@ async function writeAgentLauncher(launcherDir, name, controlURL) {
 
 function shQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
-
-// --- reading the limit from the source ----------------------------------------
-
-// readMaxLiveConversations extracts the limit from the Go source instead of
-// repeating it. The constant says of itself that it is "the single place it is
-// written"; a number retyped here would go on passing after the constant moved,
-// and the test would be asserting a limit the product no longer has.
-async function readMaxLiveConversations() {
-  const source = await fs.readFile(conversationStateSource, "utf8");
-  const match = source.match(/^const\s+maxLiveConversations\s*=\s*(\d+)\s*$/m);
-  if (!match) {
-    throw new Error(`could not read maxLiveConversations from ${conversationStateSource}: the constant is not declared as \`const maxLiveConversations = <n>\` any more, so this smoke cannot know the limit it has to prove`);
-  }
-  const limit = Number.parseInt(match[1], 10);
-  if (!Number.isInteger(limit) || limit < 2) {
-    throw new Error(`maxLiveConversations is ${JSON.stringify(match[1])}: a workspace that cannot hold two conversations makes this smoke meaningless`);
-  }
-  return limit;
 }
 
 // --- oracles ------------------------------------------------------------------

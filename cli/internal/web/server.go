@@ -259,9 +259,9 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("POST /api/workspace/execution", s.handleRunWorkspaceAction)
 	s.handleWorkspace("GET /api/workspace/runs", s.handleGetWorkspaceRuns)
 	// The conversations of the open workspace, every one of them named by its
-	// id. There is no singular route any more: a workspace holds up to
-	// maxLiveConversations conversations at once, so "the conversation of this
-	// workspace" identifies nothing a client could act on — and a route that
+	// id. There is no singular route any more: a workspace holds as many
+	// conversations at once as it has been asked to, so "the conversation of
+	// this workspace" identifies nothing a client could act on — and a route that
 	// picked "the most recent" would be a rule nobody chose, fixed by whichever
 	// test happened to assert it. The family is deliberately absent from
 	// /api/workspace/actions because a conversation is not an action of the

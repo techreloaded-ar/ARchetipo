@@ -1,11 +1,9 @@
 package web
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
@@ -152,56 +150,21 @@ func (s *Server) handleResumeWorkspaceConversation(w http.ResponseWriter, r *htt
 	// which is precisely what this workspace now does, and closing a live thread
 	// to take up a past one would throw away the history and the work in flight
 	// that AC-1 exists to keep. A resume is an open like any other, and it is
-	// refused by the same limit, with the same sentence, produced in the one
+	// refused by the same rule, with the same sentence, produced in the one
 	// place that produces it.
-	if err := s.refuseConversationLimit(ctx, ws); err != nil {
-		writeError(w, err)
-		return
-	}
-	target := s.conversationAvailabilityFor(ctx, ws)
-	if target.reason != "" {
-		writeError(w, iox.NewConflict(target.reason, conversationRemedy, nil))
-		return
-	}
-	tpl, err := s.resolveTemplate(ws)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	newID, err := conversationID()
-	if err != nil {
-		writeError(w, iox.NewInternal("generating the conversation id", err))
-		return
-	}
-	providerConfig := execution.CloneConfig(target.availability.providerConfig)
-	openErr := target.provider.OpenConversation(ctx, execution.ConversationRequest{
-		ConversationID: newID,
-		ProcessActions: conversationActionsOf(tpl),
-		WorkingDir:     ws.cfg.ProjectRoot,
-		ProviderConfig: providerConfig,
-		Context:        transcriptOf(record),
-	})
-	if openErr != nil {
-		var configErr *execution.ConfigurationError
-		if errors.As(openErr, &configErr) {
-			writeError(w, iox.NewConflict(configErr.Error(), conversationRemedy, openErr))
-			return
-		}
-		writeError(w, iox.NewInternal("opening a conversation with the "+quoted(target.availability.providerID)+" provider", openErr))
-		return
-	}
 	// The spec of the resumed conversation is inherited: a thread taken up is
 	// about whatever the thread was about, and asking the person to name it
 	// again would let the same conversation change subject by being resumed.
-	if err := ws.conversation.open(newID, target.availability.providerID, target.provider, target.collaborator, providerConfig, ws.cfg.ProjectRoot, time.Now().UTC(), record.SpecCode, record.ID); err != nil {
-		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), conversationCloseTimeout)
-		defer cancel()
-		_ = target.provider.CloseConversation(closeCtx, newID)
-		writeError(w, conversationOpenRefusal(ctx, ws, err))
+	opened, err := s.openConversationOn(ctx, ws, conversationOpenSpec{
+		specCode:    record.SpecCode,
+		resumedFrom: record.ID,
+		transcript:  transcriptOf(record),
+	})
+	if err != nil {
+		writeError(w, err)
 		return
 	}
-	snapshot, open := ws.conversation.get(newID)
-	journalErr := ws.journal.begin(ctx, snapshot, record.SpecCode, record.ID)
+	snapshot := opened.snapshot
 	// The message that asked for the resume is delivered to the conversation it
 	// asked for, and a provider that refuses it is reported with the very same
 	// vocabulary the message route uses. The conversation stays open either
@@ -219,9 +182,9 @@ func (s *Server) handleResumeWorkspaceConversation(w http.ResponseWriter, r *htt
 		writeError(w, mapRunRefusal(err))
 		return
 	}
-	view := s.conversationViewOf(ctx, ws, target, snapshot, open, 0)
-	if journalErr != nil && view.Notice == "" {
-		view.Notice = "this conversation could not be written to disk: " + journalErr.Error()
+	view := s.conversationViewOf(ctx, ws, opened.target, snapshot, opened.held, 0)
+	if opened.notice != "" && view.Notice == "" {
+		view.Notice = opened.notice
 	}
 	writeJSON(w, http.StatusCreated, view)
 }

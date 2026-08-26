@@ -27,7 +27,8 @@
 	 * which action, on which spec — kept here so it can be tested without a DOM.
 	 *
 	 * @param {object|null} view  The /api/workspace/status payload.
-	 * @returns {{scope: string, action: string, code: string, runnable: boolean}|null}
+	 * @returns {{scope: string, action: string, code: string, label: string,
+	 *            runnable: boolean}|null}
 	 */
 	function nextStepTarget(view) {
 		const value = view && typeof view === "object" ? view : {};
@@ -38,6 +39,13 @@
 			scope: step.scope || "",
 			action: step.action,
 			code: spec && spec.code ? spec.code : "",
+			// Il nome che il processo dà al passo. Viaggia perché è il nome che
+			// il filo aperto per questo passo si porta nell'elenco: lì nessuno
+			// scriverà per primo, e senza un nome l'elenco lo chiamerebbe con la
+			// data. Manca finché il payload non lo porta, e allora resta vuoto:
+			// un nome inventato qui sarebbe una seconda parola per la stessa
+			// cosa.
+			label: typeof step.label === "string" ? step.label : "",
 			runnable: step.runnable === true,
 		};
 	}
@@ -57,7 +65,7 @@
 	 * whatever it is.
 	 *
 	 * @param {object|null} view  The /api/workspace/status payload.
-	 * @returns {{scope: string, action: string, code: string}|null}
+	 * @returns {{scope: string, action: string, code: string, label: string}|null}
 	 */
 	function nextStepDispatch(view) {
 		const target = nextStepTarget(view);
@@ -65,7 +73,12 @@
 		if (!target.runnable) return null;
 		// A spec-scoped step with no spec names nothing to act on.
 		if (target.scope === "spec" && !target.code) return null;
-		return { scope: target.scope, action: target.action, code: target.code };
+		return {
+			scope: target.scope,
+			action: target.action,
+			code: target.code,
+			label: target.label,
+		};
 	}
 
 	// ---- exports ----

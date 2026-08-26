@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -654,13 +653,12 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 	}
 	specCode := strings.TrimSpace(body.SpecCode)
 	ctx := r.Context()
-	// The limit is checked here, before the provider is asked for anything: an
-	// open refused only by the holder would already have started an agent
-	// process, and the refusal would leave it running behind a request that has
-	// no reason to hold it. It is not a guarantee — two concurrent opens can
-	// both pass it — which is why the holder checks again below and this handler
-	// keeps its recovery branch.
-	if err := s.refuseConversationLimit(ctx, ws); err != nil {
+	// Asked here, before the provider is told anything: an open refused only by
+	// the holder would already have started an agent process, and the refusal
+	// would leave it running behind a request that has no reason to hold it. It
+	// is not a guarantee — the holder can be shut down in between — which is why
+	// the holder asks again below and this handler keeps its recovery branch.
+	if err := s.refuseConversationOpen(ctx, ws); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -677,13 +675,76 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 			return
 		}
 	}
+	opened, err := s.openConversationOn(ctx, ws, conversationOpenSpec{
+		specCode: specCode,
+		title:    strings.TrimSpace(body.Title),
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	view := s.conversationViewOf(ctx, ws, opened.target, opened.snapshot, opened.held, 0)
+	if opened.notice != "" && view.Notice == "" {
+		view.Notice = opened.notice
+	}
+	writeJSON(w, http.StatusCreated, view)
+}
+
+// conversationOpenSpec is what an open is about, and nothing about how it was
+// asked for: the three routes that open one — the plain open, the resume, and
+// the adoption of a run that found no thread — differ in exactly these fields
+// and in nothing else.
+type conversationOpenSpec struct {
+	// specCode is the spec the conversation is about, empty for a free one.
+	specCode string
+	// resumedFrom is the id of the past conversation this one takes up.
+	resumedFrom string
+	// transcript is the history handed to the agent as context. It travels with
+	// resumedFrom on a resume and is empty everywhere else.
+	transcript string
+	// title is the name the thread is to carry. Empty means "name it the way
+	// threads are named", which is by the first thing said in it.
+	title string
+}
+
+// openedConversation is a conversation that exists by the time it is returned:
+// the agent process is running, the holder has the handle, and the journal has
+// the record.
+//
+// notice is a journal write that failed. It is carried and not raised for the
+// reason it always was: the conversation is open either way, and the caller has
+// to learn it will not be found again rather than be told the open failed when
+// it did not.
+type openedConversation struct {
+	target   conversationTarget
+	snapshot conversationSnapshot
+	held     bool
+	notice   string
+}
+
+// openConversationOn starts an agent process for this workspace and hands back
+// the conversation holding it.
+//
+// It is the single body of every open there is. It was inlined in the open
+// route and copied into the resume one, and the copy is what a third caller
+// would have had to make a third time: an adoption that opens the thread a run
+// was started without. Everything route-shaped stays with the routes — reading
+// the body, checking that the spec exists, refusing an unreachable project
+// root — and everything that has to happen in order for a process not to be
+// leaked lives here, once.
+func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, spec conversationOpenSpec) (openedConversation, error) {
+	// Asked before the provider is told anything: an open refused only by the
+	// holder would already have started an agent process, and the refusal would
+	// leave it running behind a request that has no reason to hold it.
+	if err := s.refuseConversationOpen(ctx, ws); err != nil {
+		return openedConversation{}, err
+	}
 	target := s.conversationAvailabilityFor(ctx, ws)
 	if target.reason != "" {
 		// The very sentence the GET renders next to available:false, so pressing
 		// the button on an offer the payload declared unavailable never starts a
 		// process only to refuse it a moment later with different words.
-		writeError(w, iox.NewConflict(target.reason, conversationRemedy, nil))
-		return
+		return openedConversation{}, iox.NewConflict(target.reason, conversationRemedy, nil)
 	}
 	// The process vocabulary is resolved here and travels on the request,
 	// because the provider does not know the process and must not learn it: the
@@ -692,13 +753,11 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 	// other route that needs one, and it is answered the same way here.
 	tpl, err := s.resolveTemplate(ws)
 	if err != nil {
-		writeError(w, err)
-		return
+		return openedConversation{}, err
 	}
 	id, err := conversationID()
 	if err != nil {
-		writeError(w, iox.NewInternal("generating the conversation id", err))
-		return
+		return openedConversation{}, iox.NewInternal("generating the conversation id", err)
 	}
 	providerConfig := execution.CloneConfig(target.availability.providerConfig)
 	openErr := target.provider.OpenConversation(ctx, execution.ConversationRequest{
@@ -709,14 +768,14 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		// a fact of the workspace that opened it.
 		WorkingDir:     ws.cfg.ProjectRoot,
 		ProviderConfig: providerConfig,
+		Context:        spec.transcript,
 	})
 	if openErr != nil {
 		// A failed open records nothing, on either branch: there is no
 		// conversation to hold and nothing to close.
 		var configErr *execution.ConfigurationError
 		if errors.As(openErr, &configErr) {
-			writeError(w, iox.NewConflict(configErr.Error(), conversationRemedy, openErr))
-			return
+			return openedConversation{}, iox.NewConflict(configErr.Error(), conversationRemedy, openErr)
 		}
 		// The cause travels into the message and not only into Cause, which the
 		// browser never sees. A provider holding the agent on another machine
@@ -724,31 +783,29 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		// that is not answering — and the person in front of the viewer has no
 		// log to go and read: without the sentence the provider wrote, all they
 		// are told is that something went wrong.
-		writeError(w, iox.NewInternal("opening a conversation with the "+quoted(target.availability.providerID)+" provider: "+openErr.Error(), openErr))
-		return
+		return openedConversation{}, iox.NewInternal("opening a conversation with the "+quoted(target.availability.providerID)+" provider: "+openErr.Error(), openErr)
 	}
-	if err := ws.conversation.open(id, target.availability.providerID, target.provider, target.collaborator, providerConfig, ws.cfg.ProjectRoot, time.Now().UTC(), specCode, ""); err != nil {
-		// The holder refused it — another request won the race to the last free
-		// slot, or the workspace has been left. Either way this process is the
-		// only one holding the handle, so it closes what it just started instead
-		// of leaking it.
+	if err := ws.conversation.open(id, target.availability.providerID, target.provider, target.collaborator, providerConfig, ws.cfg.ProjectRoot, time.Now().UTC(), spec.specCode, spec.resumedFrom); err != nil {
+		// The holder refused it — the workspace has been left while this open
+		// was in flight. This process is the only one holding the handle, so it
+		// closes what it just started instead of leaking it.
 		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), conversationCloseTimeout)
 		defer cancel()
 		_ = target.provider.CloseConversation(closeCtx, id)
-		writeError(w, conversationOpenRefusal(ctx, ws, err))
-		return
+		return openedConversation{}, conversationOpenRefusal(ctx, ws, err)
 	}
-	snapshot, open := ws.conversation.get(id)
-	// Written down before the view is rendered, and a failure to write is
-	// reported rather than raised: the conversation is open either way, and the
-	// caller has to learn it will not be found again rather than be told the
-	// open failed when it did not.
-	journalErr := ws.journal.begin(ctx, snapshot, specCode, "")
-	view := s.conversationViewOf(ctx, ws, target, snapshot, open, 0)
-	if journalErr != nil && view.Notice == "" {
-		view.Notice = "this conversation could not be written to disk: " + journalErr.Error()
+	snapshot, held := ws.conversation.get(id)
+	opened := openedConversation{target: target, snapshot: snapshot, held: held}
+	if journalErr := ws.journal.begin(ctx, snapshot, spec.specCode, spec.resumedFrom); journalErr != nil {
+		opened.notice = "this conversation could not be written to disk: " + journalErr.Error()
 	}
-	writeJSON(w, http.StatusCreated, view)
+	// After begin and never instead of it: the record exists first, and the name
+	// is written onto it. A name that could not be written is not a failure of
+	// the open — the thread exists, holds the agent and is listed, under the
+	// dated title the journal falls back to — so it is dropped rather than
+	// turned into a notice about a conversation that is perfectly fine.
+	_ = ws.journal.name(ctx, snapshot.id, spec.title)
+	return opened, nil
 }
 
 // conversationActionsOf turns the steps a process declares into the vocabulary
@@ -783,8 +840,16 @@ func conversationID() (string, error) {
 // openConversationReq is the optional body of an open request. SpecCode binds
 // the conversation to a spec of this workspace; left out, or left empty, the
 // conversation is free — which is what an open with no body at all asks for.
+//
+// Title names the thread. It exists for the thread nobody is going to type a
+// first message into: the viewer opens one when a step is started outside every
+// conversation, and a thread named "Conversazione del 26/08/2026 09:14" in an
+// index full of them is no name at all. Left out, the journal names the thread
+// as it always has — by the first thing the person says in it, and by the
+// moment it was opened until they do.
 type openConversationReq struct {
 	SpecCode string `json:"spec_code"`
+	Title    string `json:"title"`
 }
 
 type sendConversationMessageReq struct {
@@ -906,52 +971,26 @@ func (s *Server) conversationGoneRefusal(ctx context.Context, ws *workspaceSessi
 	)
 }
 
-// refuseConversationLimit is the one place an open — ordinary or resumed — is
-// refused for having no room left.
+// refuseConversationOpen is the one place an open — ordinary or resumed — is
+// refused before any agent process exists.
 //
-// It lives here and is shared with the resume route so the sentence a person
-// reads exists once: two routes composing the same refusal would sooner or later
-// declare the same limit in two ways.
-func (s *Server) refuseConversationLimit(ctx context.Context, ws *workspaceSession) error {
+// It used to be about the ceiling of live conversations and is now about the
+// only thing left that can refuse one: a workspace that has been left. It stays
+// shared with the resume route so the sentence a person reads exists once.
+func (s *Server) refuseConversationOpen(ctx context.Context, ws *workspaceSession) error {
 	if err := ws.conversation.canOpen(); err != nil {
 		return conversationOpenRefusal(ctx, ws, err)
 	}
 	return nil
 }
 
-// conversationOpenRefusal turns a holder refusal into the HTTP one, naming the
-// live conversations when the reason is the limit.
+// conversationOpenRefusal turns a holder refusal into the HTTP one.
 //
-// The ids come from the holder and the titles from the journal, because "which
-// ones do I close?" is not answered by a number: a person picks the thread they
-// are done with by its name. A title that cannot be read falls back to the id
-// alone rather than failing the refusal — the refusal is the message that
-// matters, and losing it to a failed read would leave the caller with nothing.
-func conversationOpenRefusal(ctx context.Context, ws *workspaceSession, err error) error {
-	var limitErr *conversationLimitError
-	if !errors.As(err, &limitErr) {
-		return iox.NewConflict(err.Error(), "read the conversations of this workspace before opening one", err)
-	}
-	named := make([]string, 0, len(limitErr.LiveIDs))
-	store := ws.conversationStore()
-	for _, id := range limitErr.LiveIDs {
-		title := ""
-		if store != nil {
-			if record, readErr := store.Get(ctx, id); readErr == nil {
-				title = strings.TrimSpace(record.Title)
-			}
-		}
-		if title == "" {
-			named = append(named, id)
-			continue
-		}
-		named = append(named, id+" ("+title+")")
-	}
-	return iox.NewConflict(
-		"this workspace already holds "+strconv.Itoa(limitErr.Limit)+
-			" live conversations: "+strings.Join(named, ", ")+
-			". Close one of them before opening another.",
-		"close one of the conversations listed above, then open this one again",
-		err,
-	)
+// It carries the holder's own sentence and adds nothing to it. It used to have
+// a second half, which named the live conversations one by one so a person
+// could pick which to close: with the ceiling gone there is nothing left to
+// make room for, and a refusal that listed threads would be asking for a
+// gesture that no longer unblocks anything.
+func conversationOpenRefusal(_ context.Context, _ *workspaceSession, err error) error {
+	return iox.NewConflict(err.Error(), "read the conversations of this workspace before opening one", err)
 }

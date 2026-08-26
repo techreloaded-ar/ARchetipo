@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -581,40 +582,41 @@ func TestAMessageGoesToTheConversationNamedInThePath(t *testing.T) {
 	}
 }
 
-// TestOpeningPastTheLimitIsRefusedBeforeAProcessExists is AC-5. The count of
-// openings on the provider is what proves the order of the two checks: the
-// refusal has to come before the agent is started, or a request that answered
-// 409 would leave a process behind that nobody holds the handle for.
-func TestOpeningPastTheLimitIsRefusedBeforeAProcessExists(t *testing.T) {
+// TestOpeningManyConversationsIsNeverRefusedForBeingMany replaces the old AC-5,
+// which refused the fourth open of a workspace. Nothing refuses an open for the
+// number of threads already alive: every one of them answers 201, the provider
+// is asked for every one, and the index lists them all.
+func TestOpeningManyConversationsIsNeverRefusedForBeingMany(t *testing.T) {
 	provider := newConversingProvider("chatty", 0)
 	srv := newConversationServer(t, provider)
 
-	live := make([]string, 0, maxLiveConversations)
-	for i := 0; i < maxLiveConversations; i++ {
-		live = append(live, openConversationOK(t, srv).Conversation.ID)
+	const many = 6
+	live := make([]string, 0, many)
+	for i := 0; i < many; i++ {
+		status, view, body := openConversation(t, srv)
+		if status != http.StatusCreated {
+			t.Fatalf("POST conversation number %d = %d, want 201: %s", i+1, status, body)
+		}
+		if view.Conversation == nil {
+			t.Fatalf("the open number %d answered with no conversation: %s", i+1, body)
+		}
+		live = append(live, view.Conversation.ID)
 	}
 
-	status, _, body := openConversation(t, srv)
-	if status != http.StatusConflict {
-		t.Fatalf("POST conversation past the limit = %d, want 409: %s", status, body)
-	}
-	refused := refusalMessage(t, body)
-	if !strings.Contains(refused, strconv.Itoa(maxLiveConversations)) {
-		t.Errorf("the refusal %q does not declare the limit of %d", refused, maxLiveConversations)
-	}
-	for _, id := range live {
-		if !strings.Contains(refused, id) {
-			t.Errorf("the refusal %q does not name the live conversation %q the person would have to close", refused, id)
-		}
-	}
-	if openings := provider.openings(); len(openings) != maxLiveConversations {
-		t.Errorf("the provider opened %d conversations, want exactly %d: the limit was checked after the process was started", len(openings), maxLiveConversations)
+	if openings := provider.openings(); len(openings) != many {
+		t.Errorf("the provider opened %d conversations, want %d", len(openings), many)
 	}
 	if closings := provider.closings(); len(closings) != 0 {
-		t.Errorf("the refused open started a process it then had to release: %v", closings)
+		t.Errorf("an open started a process it then had to release: %v", closings)
 	}
-	if got := liveConversationIDs(srv); len(got) != maxLiveConversations {
-		t.Errorf("the workspace holds %d conversations after a refused open, want %d", len(got), maxLiveConversations)
+	got := liveConversationIDs(srv)
+	if len(got) != many {
+		t.Fatalf("the workspace holds %d conversations, want %d", len(got), many)
+	}
+	for _, id := range live {
+		if !slices.Contains(got, id) {
+			t.Errorf("the conversation %q was opened and is not held", id)
+		}
 	}
 }
 

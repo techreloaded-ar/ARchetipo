@@ -191,6 +191,43 @@ func (j *conversationJournal) retarget(ctx context.Context, id, specCode string)
 	return j.store.Save(ctx, saved)
 }
 
+// name records that this conversation is called title, and freezes the name.
+//
+// It exists for the thread nobody opened by hand: the one a step opens for
+// itself when it is started outside any conversation. That thread has no first
+// human message to be named by, and the dated fallback — "Conversazione del
+// 26/08/2026 09:14" — says when it happened and never what it is, which in an
+// index full of them is no name at all. The step has a name, the process's own
+// word for it, and that is what the index shows.
+//
+// It freezes the title for the same reason a title derived from a message is
+// frozen: a conversation is named by how it started, and a name that kept
+// following the history would rename a thread under the reader looking at it.
+//
+// An id this journal is not keeping is not an error, and neither is an empty
+// title: by the same rule as retarget, "this has no name of its own" is not
+// "this is called nothing", and the dated fallback stays.
+func (j *conversationJournal) name(ctx context.Context, id, title string) error {
+	if j == nil || j.store == nil {
+		return nil
+	}
+	named := strings.TrimSpace(title)
+	if named == "" {
+		return nil
+	}
+	j.mu.Lock()
+	entry, kept := j.entries[id]
+	if !kept {
+		j.mu.Unlock()
+		return nil
+	}
+	entry.record.Title = truncateRunes(named, conversationTitleLimit)
+	entry.titleFromMessage = true
+	saved := entry.record
+	j.mu.Unlock()
+	return j.store.Save(ctx, saved)
+}
+
 // finish seals the record with the state the conversation was left in.
 //
 // It is idempotent, and calling it for an id this journal is not keeping is not

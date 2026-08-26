@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,18 +20,20 @@ import (
 // cancelled context would ask the provider to release nothing.
 const conversationCloseTimeout = 5 * time.Second
 
-// maxLiveConversations is how many conversations a workspace may hold alive at
-// the same time.
+// There is no ceiling on how many conversations a workspace may hold alive.
 //
-// It is a number and not "as many as you like" because every live conversation
-// is an agent process rooted in the *same* working directory: isolating those
-// directories from one another is out of scope here, so two agents editing the
-// same tree is a cost a person takes on knowingly, and a limit nobody declares
-// is a limit discovered when the machine stops. It is a package constant and
-// not a configuration key because the number is the rule, not a preference:
-// this is the single place it is written, and the refusal, the unit tests and
-// the smoke all read it from here.
-const maxLiveConversations = 3
+// There used to be one — three — and it was a guess dressed as a rule: it was
+// meant to keep a person from running several agents over the same working
+// directory without noticing, but nobody ever chose the number, and the cost it
+// was guarding against is one the person is already choosing every time they
+// open a thread. What the ceiling did instead was refuse: it turned "open one
+// more" into an error to be read and a thread to be closed first, and once a
+// step that finds no thread opens its own — see adoptStartedRun — that refusal
+// would have started falling on runs nobody had asked to be refused.
+//
+// What replaces it is nothing at all. A workspace holds what it has been asked
+// to hold, the index says how many that is, and closing a thread stays the
+// person's gesture and not a toll the viewer collects.
 
 // liveConversation is one conversation the workspace is holding right now.
 //
@@ -93,14 +94,13 @@ type liveConversation struct {
 	outcomes []conversationOutcome
 }
 
-// conversationSet holds the conversations a workspace has alive, up to
-// maxLiveConversations of them.
+// conversationSet holds the conversations a workspace has alive.
 //
 // A map and no longer a single value: a person carrying two specs forward talks
 // about one while an agent is still working on the other, and closing the first
 // to open the second — which is what the singular holder forced the browser to
-// do — threw away both the history and the work in flight. It is *bounded*
-// rather than unbounded for the reason written on maxLiveConversations.
+// do — threw away both the history and the work in flight. It is unbounded for
+// the reason written where the old ceiling used to be.
 //
 // Every field is read and written under mu, and readers never receive the
 // entries themselves: get() and list() hand back copies, so nobody can observe
@@ -116,28 +116,6 @@ type conversationSet struct {
 	closed bool
 }
 
-// conversationLimitError is the refusal of an open that would take the
-// workspace past maxLiveConversations.
-//
-// It carries the limit and the ids of the conversations currently alive rather
-// than a finished sentence, because the person is told which ones to close and
-// the ids are only half of that: the HTTP layer, which can read the titles from
-// the journal, names them properly. The default sentence is still a complete
-// refusal on its own, so a caller that does not enrich it says something true.
-type conversationLimitError struct {
-	Limit   int
-	LiveIDs []string
-}
-
-func (e *conversationLimitError) Error() string {
-	if e == nil {
-		return ""
-	}
-	return "this workspace already holds " + strconv.Itoa(e.Limit) +
-		" live conversations (" + strings.Join(e.LiveIDs, ", ") +
-		"): close one of them before opening another"
-}
-
 func newConversationSet() *conversationSet {
 	return &conversationSet{live: map[string]*liveConversation{}}
 }
@@ -145,11 +123,12 @@ func newConversationSet() *conversationSet {
 // canOpen answers whether another conversation could be opened right now, and
 // with which refusal when it could not.
 //
-// It exists so the routes can check the limit *before* asking the provider to
-// start an agent process: a limit discovered only by open() would leave a
-// process running that the refused request no longer has any reason to hold.
-// It is not a guarantee — two concurrent requests can both pass it — which is
-// why open() checks again and the routes keep their recovery branch.
+// Now that no ceiling exists there is one refusal left, and it is the one that
+// always mattered: a holder that has been shut down. It is asked *before* the
+// provider is told to start an agent process, because a workspace that has been
+// left would otherwise be handed a process nobody is left to close. It is not a
+// guarantee — the holder can be shut down between this answer and the open —
+// which is why open() asks again and the routes keep their recovery branch.
 func (c *conversationSet) canOpen() error {
 	if c == nil {
 		return fmt.Errorf("this workspace cannot hold a conversation")
@@ -159,9 +138,6 @@ func (c *conversationSet) canOpen() error {
 	if c.closed {
 		return fmt.Errorf("this workspace is no longer open")
 	}
-	if len(c.live) >= maxLiveConversations {
-		return c.limitErrorLocked()
-	}
 	return nil
 }
 
@@ -169,10 +145,10 @@ func (c *conversationSet) canOpen() error {
 //
 // It refuses an id it is already holding rather than replacing it: replacing
 // would silently drop the handle of a live agent process, and the process would
-// then outlive everything that could stop it. It refuses past the limit for the
-// reason written on maxLiveConversations, and on a holder that has been closed
-// for the same reason runFollowers refuses after closeAll — the workspace it
-// belonged to is gone.
+// then outlive everything that could stop it. It refuses on a holder that has
+// been closed for the same reason runFollowers refuses after closeAll — the
+// workspace it belonged to is gone. It refuses for no other reason: how many
+// are already alive is not one.
 func (c *conversationSet) open(id, providerID string, provider execution.Conversationalist, collaborator execution.RunCollaborator, providerConfig map[string]any, workingDir string, openedAt time.Time, specCode, resumedFrom string) error {
 	if c == nil {
 		return fmt.Errorf("this workspace cannot hold a conversation")
@@ -193,9 +169,6 @@ func (c *conversationSet) open(id, providerID string, provider execution.Convers
 	}
 	if _, held := c.live[id]; held {
 		return fmt.Errorf("conversation %s is already open for this workspace", id)
-	}
-	if len(c.live) >= maxLiveConversations {
-		return c.limitErrorLocked()
 	}
 	// A new conversation is a new story, and it starts with nothing decided: the
 	// watermark, the outcome and the register are zero here and are never
@@ -218,18 +191,8 @@ func (c *conversationSet) open(id, providerID string, provider execution.Convers
 	return nil
 }
 
-// limitErrorLocked builds the refusal of AC-5 from the state itself, with mu
-// already held.
-//
-// It is built and not written out as a phrase because "which ones do I close?"
-// is answered by the conversations that are actually alive at this instant, and
-// a fixed sentence would answer it with a number.
-func (c *conversationSet) limitErrorLocked() *conversationLimitError {
-	return &conversationLimitError{Limit: maxLiveConversations, LiveIDs: c.liveIDsLocked()}
-}
-
 // liveIDsLocked is the ids of the live conversations in the order list() uses,
-// so the refusal and the index never name them in two different orders.
+// so every reader that walks the set walks it in the same order.
 func (c *conversationSet) liveIDsLocked() []string {
 	entries := make([]*liveConversation, 0, len(c.live))
 	for _, entry := range c.live {

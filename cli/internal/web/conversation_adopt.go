@@ -11,6 +11,15 @@ package web
 // from the workspace strip. The person who pressed it in a thread was then
 // reading a thread that did not mention it.
 //
+// The other half of that hole is not closed here, and deliberately: a start
+// that names no conversation came from no thread, and this file does not invent
+// one for it. What the person pressing in the viewer sees instead is a thread
+// opened by the viewer *before* the start, whose id then arrives here like any
+// other — see startPanelAction in app.js. The rule lives there because opening a
+// thread means starting a second agent process, and that is worth doing exactly
+// when there is a person who pressed and will want to talk to it. A run started
+// through the API has nobody to give a thread to.
+//
 // What is added here is only the tie. The start itself stays where it was, in
 // startSpecAction and startWorkspaceAction, and this file runs *after* it: an
 // adoption that failed must never be able to unstart, duplicate or refuse a run
@@ -46,8 +55,8 @@ func conversationAnchorOf(snapshot conversationSnapshot) int64 {
 // adoptStartedRun ties a run just started to the conversation it was started
 // from.
 //
-// An empty id is not an attempt: a start from the board carries none, and is
-// anchored to nothing on purpose. Every failure is returned and none is ever
+// An empty id is not an attempt: a start that names no conversation came from
+// none, and is anchored to nothing. Every failure is returned and none is ever
 // raised into the response: the execution exists and is running by the time
 // this runs, so refusing the answer that announces it would leave the person
 // with a run they were never told about — the very fault this file exists to

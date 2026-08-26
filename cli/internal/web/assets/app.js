@@ -707,7 +707,16 @@
 		container.addEventListener("click", (e) => {
 			const btn = e.target.closest(".action-chip-run");
 			if (!btn) return;
-			startPanelAction(btn.dataset.actionId, btn);
+			// L'etichetta del passo si legge dalla targhetta che la porta: è la
+			// parola del processo, già scritta lì dal server, e diventa il nome
+			// del filo che questa pressione apre.
+			const label = btn.querySelector(".action-chip-label");
+			startPanelAction(
+				btn.dataset.actionId,
+				btn,
+				conversationsCurrentId,
+				label ? label.textContent : "",
+			);
 		});
 	}
 
@@ -1743,7 +1752,12 @@
 		// the workspace strip. It is the id the panel is showing, whatever it
 		// is — a conversation that has ended ties nothing, and the server is
 		// what decides that.
-		await startPanelAction(target.action, button, conversationsCurrentId);
+		await startPanelAction(
+			target.action,
+			button,
+			conversationsCurrentId,
+			target.label || "",
+		);
 	}
 
 	function updateStats(view) {
@@ -3725,19 +3739,34 @@
 	// refuses, so a double click cannot ask for a second run. Which route is
 	// asked is a property of the mounted panel, not of this code.
 	//
-	// conversationID names the thread the press came from, and is absent for a
-	// press on the board — which came from no thread. It travels with the start
-	// so the run is tied to the conversation that asked for it; it changes
-	// nothing else about the request, and the server ties nothing when it is
-	// missing.
-	async function startPanelAction(actionID, button, conversationID) {
+	// conversationID nomina il filo da cui viene la pressione. Quando non ne
+	// nomina nessuno — una pressione sui dettagli di una spec non ne nomina — o
+	// ne nomina uno che non è più vivo, il filo si apre qui, prima di avviare, e
+	// la run ci nasce dentro. Prima non succedeva, e si vedeva: l'agente
+	// lavorava nel pannello della run e nell'elenco delle conversazioni non
+	// c'era niente, così la risposta a «dove sta succedendo?» era un posto che
+	// l'elenco non nominava.
+	//
+	// La regola vive qui e non nella rotta di avvio, ed è una differenza di
+	// sostanza: aprire un filo vuol dire accendere un secondo processo
+	// d'agente, e ha senso esattamente quando c'è una persona che ha premuto e
+	// che vorrà parlargli. Una run avviata da un programma non ha nessuno a cui
+	// dare un filo, e la rotta continua a legare la run alla conversazione che
+	// le viene nominata e a nient'altro.
+	//
+	// label è il nome del passo, e diventa il nome del filo: in quel filo non
+	// scriverà nessuno per primo, e senza un nome l'elenco lo chiamerebbe con la
+	// data — che fra dieci fili uguali non dice quale.
+	async function startPanelAction(actionID, button, conversationID, label) {
 		if (!actionID || !panelContext || !panelStartURL) return;
 		const ctx = panelContext;
 		const url = panelStartURL;
 		if (button) button.disabled = true;
 		try {
+			const thread = await threadForStart(conversationID, label);
+			if (panelContext !== ctx) return;
 			const body = { action: actionID };
-			if (conversationID) body.conversation_id = conversationID;
+			if (thread) body.conversation_id = thread;
 			const override = runModelOverride();
 			if (override) {
 				body.model = override.model;
@@ -3753,10 +3782,64 @@
 			loadModelChoice(ctx);
 			renderExecution(record);
 			await followExecution(record, ctx);
+			await revealThread(thread);
 		} catch (err) {
 			showToast(err.message || String(err), "err");
 			if (button) button.disabled = false;
 		}
+	}
+
+	// Il filo in cui questa pressione avvia: quello che si porta dietro, se è
+	// ancora vivo, altrimenti uno aperto adesso.
+	//
+	// Un filo che non si è potuto aprire non ferma il passo: si torna a non
+	// nominarne nessuno, la run parte lo stesso e resta dov'è sempre stata — nel
+	// pannello e nella striscia delle run. Perdere l'avvio per il posto in cui
+	// raccontarlo sarebbe scambiare la cosa col suo indice.
+	async function threadForStart(conversationID, label) {
+		const named = String(conversationID || "");
+		if (named && liveConversationEntries().some((entry) => entry.id === named)) {
+			return named;
+		}
+		const body = {};
+		const specCode = specCodeOfContext(panelContext);
+		if (specCode) body.spec_code = specCode;
+		const chosenTitle = String(label || "").trim();
+		if (chosenTitle) body.title = chosenTitle;
+		try {
+			return conversationIdOf(await apiPost("/api/workspace/conversations", body));
+		} catch (_) {
+			return "";
+		}
+	}
+
+	// La spec di cui parla il pannello montato, o niente per il contesto di
+	// workspace. Il contesto è una stringa sola — `spec:<codice>` — e questo è
+	// l'unico posto che la rilegge.
+	function specCodeOfContext(context) {
+		const value = String(context || "");
+		return value.startsWith("spec:") ? value.slice("spec:".length) : "";
+	}
+
+	// Porta sullo schermo il filo in cui la run è appena nata.
+	//
+	// L'elenco si rilegge subito perché altrimenti non si rileggerebbe affatto:
+	// la rail si aggiorna a ogni giro del poll della conversazione, e quel poll
+	// gira solo mentre se ne sta seguendo una. Chi ha premuto un passo dai
+	// dettagli di una spec senza avere un filo aperto è esattamente chi non ha
+	// quel poll acceso, ed è chi non vedeva niente.
+	//
+	// Il pannello passa al filo nuovo soltanto se non ne sta già seguendo uno
+	// vivo: chi stava leggendo una conversazione non se la vede sostituire da
+	// sotto, e chi non stava leggendo niente si trova davanti il posto in cui
+	// l'agente sta lavorando.
+	async function revealThread(id) {
+		if (!id) return;
+		await loadConversationsIndex();
+		if (liveConversationEntries().some((entry) => entry.id === conversationsCurrentId)) {
+			return;
+		}
+		await switchToConversation(id);
 	}
 
 	// resumeExecution renders the execution that came with the detail and picks

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"slices"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -301,53 +300,46 @@ func TestConversationSetKeepsTheDecisionWatermarkPerConversation(t *testing.T) {
 	}
 }
 
-// TestConversationSetRefusesPastTheLimitNamingTheLiveOnes is AC-5: the refusal
-// declares the limit and names every conversation that would have to be closed
-// to make room, and the set is left exactly as it was.
-func TestConversationSetRefusesPastTheLimitNamingTheLiveOnes(t *testing.T) {
+// TestConversationSetHoldsAsManyAsItIsAsked replaces the old refusal past a
+// ceiling of three. There is no ceiling: a workspace holds every conversation it
+// has been asked to hold, and the only thing that refuses an open is a holder
+// that has been shut down. The number here is deliberately well past the old
+// limit, and canOpen agrees with open — which is what lets a route ask before
+// an agent process exists.
+func TestConversationSetHoldsAsManyAsItIsAsked(t *testing.T) {
 	provider := &stubConversationalist{}
 	c := newConversationSet()
 	now := time.Now().UTC()
-	opened := make([]string, 0, maxLiveConversations)
-	for i := 0; i < maxLiveConversations; i++ {
+	const many = 12
+	opened := make([]string, 0, many)
+	for i := 0; i < many; i++ {
 		id := "conv-" + strconv.Itoa(i)
+		if err := c.canOpen(); err != nil {
+			t.Fatalf("canOpen() before the %dth = %v, want no refusal", i+1, err)
+		}
 		openInto(t, c, provider, id, "", now.Add(time.Duration(i)*time.Second))
 		opened = append(opened, id)
 	}
-
-	err := c.open("conv-too-many", "stub", provider, nil, nil, t.TempDir(), now.Add(time.Hour), "", "")
-	if err == nil {
-		t.Fatalf("opening one past the limit should be refused")
-	}
-	var limitErr *conversationLimitError
-	if !errors.As(err, &limitErr) {
-		t.Fatalf("err = %v (%T), want a *conversationLimitError", err, err)
-	}
-	if limitErr.Limit != maxLiveConversations {
-		t.Fatalf("Limit = %d, want %d", limitErr.Limit, maxLiveConversations)
-	}
-	if !slices.Equal(limitErr.LiveIDs, opened) {
-		t.Fatalf("LiveIDs = %v, want exactly the live ones %v", limitErr.LiveIDs, opened)
+	if len(c.list()) != many {
+		t.Fatalf("list() = %d entries, want %d: every conversation asked for is held", len(c.list()), many)
 	}
 	for _, id := range opened {
-		if !strings.Contains(limitErr.Error(), id) {
-			t.Fatalf("the refusal %q does not name the live conversation %s", limitErr.Error(), id)
+		if _, alive := c.get(id); !alive {
+			t.Fatalf("the conversation %s is not held", id)
 		}
 	}
-	if len(c.list()) != maxLiveConversations {
-		t.Fatalf("list() = %d entries after the refusal, want %d: a refused open must change nothing", len(c.list()), maxLiveConversations)
-	}
-	if _, alive := c.get("conv-too-many"); alive {
-		t.Fatalf("the refused conversation must not be held")
-	}
 	if len(provider.closed) != 0 {
-		t.Fatalf("closed = %v, want none: refusing an open releases nothing", provider.closed)
+		t.Fatalf("closed = %v, want none: holding many releases nothing", provider.closed)
 	}
-	// canOpen answers with the same refusal, which is what lets the routes check
-	// the limit before a process exists.
-	var beforeErr *conversationLimitError
-	if !errors.As(c.canOpen(), &beforeErr) || beforeErr.Limit != maxLiveConversations {
-		t.Fatalf("canOpen() = %v, want the same limit refusal", c.canOpen())
+	// The one refusal left: a holder that has been shut down takes no more.
+	if err := c.shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown() = %v", err)
+	}
+	if err := c.canOpen(); err == nil {
+		t.Fatalf("canOpen() after shutdown should be refused")
+	}
+	if err := c.open("conv-after", "stub", provider, nil, nil, t.TempDir(), now.Add(time.Hour), "", ""); err == nil {
+		t.Fatalf("opening on a stopped holder should be refused")
 	}
 }
 

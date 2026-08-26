@@ -161,6 +161,36 @@ describe("AC-2 — il cammino di avvio è uno solo", () => {
 		);
 	});
 
+	it("l'avvio si procura un filo prima di partire", () => {
+		// Il buco che questo chiude: un passo avviato dai dettagli di una spec
+		// faceva lavorare un agente senza che nell'elenco delle conversazioni
+		// comparisse niente, e la risposta a «dove sta succedendo?» era un posto
+		// che l'elenco non nominava. Ora la pressione si apre il filo prima di
+		// avviare, gli dà il nome del passo, e ci nasce dentro la run.
+		const start = blockAfter(js, "async function startPanelAction(");
+		assert.ok(
+			start.includes("threadForStart"),
+			"startPanelAction non si procura più un filo: una run avviata dai dettagli di una spec tornerebbe a non comparire in nessuna conversazione",
+		);
+		assert.ok(
+			start.includes("body.conversation_id = thread"),
+			"l'avvio non nomina più il filo che si è procurato: il server non avrebbe niente a cui legare la run",
+		);
+		const thread = blockAfter(js, "async function threadForStart(");
+		assert.ok(
+			thread.includes("/api/workspace/conversations"),
+			"threadForStart non apre più una conversazione: senza un filo da aprire la funzione non serve a niente",
+		);
+		assert.ok(
+			thread.includes("liveConversationEntries"),
+			"threadForStart non guarda più se il filo che gli è stato nominato è vivo: una pressione dentro un thread ne aprirebbe un secondo ogni volta",
+		);
+		assert.ok(
+			thread.includes("body.title"),
+			"il filo aperto per un passo non porta più il nome del passo: nell'elenco si chiamerebbe con la data, che fra dieci fili uguali non dice quale",
+		);
+	});
+
 	// Il numero di punti che avviano un'azione è un fatto, non uno stile: due
 	// cammini di avvio sono due modi di partire che possono divergere. Sono la
 	// chip del pannello, il passo raccomandato e la dichiarazione della

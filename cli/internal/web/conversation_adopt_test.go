@@ -10,6 +10,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
@@ -105,11 +106,15 @@ func TestARunStartedFromTheThreadIsReadInTheThread(t *testing.T) {
 	}
 }
 
-// TestARunStartedFromTheBoardBelongsToNoThread is the boundary: only a press
-// that came from a conversation is tied to one. A start from the board carries
-// no id, and inventing "the" conversation for it would file a run under a
-// discourse that never asked for it.
-func TestARunStartedFromTheBoardBelongsToNoThread(t *testing.T) {
+// TestARunStartedNamingNoThreadBelongsToNone is the boundary: only a press that
+// came from a conversation is tied to one. A start that names none is anchored
+// to nothing, and inventing "the" conversation for it here would file a run
+// under a discourse that never asked for it.
+//
+// What the person pressing in the viewer sees is not this: the viewer opens a
+// thread before it starts, so the id below is empty only for a caller that
+// really has no thread — which is a caller with no person behind it.
+func TestARunStartedNamingNoThreadBelongsToNone(t *testing.T) {
 	srv, provider := journalTestPlanningServer(t)
 	id := journalTestOpenOnSpec(t, srv, "US-901")
 	provider.emit(t, id, localrun.KindUserMessage, "Pianifica la US-901")
@@ -123,12 +128,69 @@ func TestARunStartedFromTheBoardBelongsToNoThread(t *testing.T) {
 	if len(view.Runs) != 0 {
 		t.Fatalf("the conversation adopted a run nobody asked it for: %s", body)
 	}
+	if live := liveConversationIDs(srv); len(live) != 1 || live[0] != id {
+		t.Fatalf("the workspace holds %v, want only the conversation that was opened by hand: a start opens none", live)
+	}
 	runs := adoptTestWorkspaceRuns(t, srv)
 	if len(runs.Runs) != 1 {
 		t.Fatalf("the strip lists %d runs, want the one just started: %#v", len(runs.Runs), runs.Runs)
 	}
 	if runs.Runs[0].ConversationID != "" {
-		t.Errorf("the strip ties a board run to %q, want no conversation", runs.Runs[0].ConversationID)
+		t.Errorf("the strip ties an unanchored run to %q, want no conversation", runs.Runs[0].ConversationID)
+	}
+}
+
+// TestAThreadOpenedForAStepCarriesTheNameItWasGiven is the other side of the
+// same gesture: the viewer opens the thread first, names it after the step, and
+// starts the run in it. The name matters because nobody is going to type a
+// first message into that thread, and an index full of "Conversazione del
+// <date>" answers "which one is the planning of US-901?" with nothing.
+func TestAThreadOpenedForAStepCarriesTheNameItWasGiven(t *testing.T) {
+	srv, _ := journalTestPlanningServer(t)
+	status, body := journalTestOpenWith(t, srv, map[string]any{"spec_code": "US-901", "title": "Pianifica"})
+	if status != http.StatusCreated {
+		t.Fatalf("POST conversation = %d, want 201: %s", status, body)
+	}
+	view := journalTestDecodeBound(t, body)
+	if view.Conversation == nil {
+		t.Fatalf("the open conversation is null: %s", body)
+	}
+	id := view.Conversation.ID
+
+	status, started := adoptTestStart(t, srv, "US-901", "plan", id)
+	if status != http.StatusCreated {
+		t.Fatalf("POST spec execution = %d, want 201: %v", status, started)
+	}
+	executionID, _ := started["id"].(string)
+
+	_, threadView, threadBody := readConversation(t, srv, id, 0)
+	if len(threadView.Runs) != 1 || threadView.Runs[0].ExecutionID != executionID {
+		t.Fatalf("the thread does not carry the run %q it was opened for: %s", executionID, threadBody)
+	}
+
+	index, indexBody := conversationsRouteTestReadIndex(t, srv)
+	entry := conversationsRouteTestEntryOf(t, index, id)
+	if !entry.Live {
+		t.Errorf("the index does not list the thread of a run in flight as live: %s", indexBody)
+	}
+	if entry.SpecCode != "US-901" {
+		t.Errorf("the index files the thread under %q, want US-901", entry.SpecCode)
+	}
+	if entry.Title != "Pianifica" {
+		t.Errorf("the index calls the thread %q, want the name the open gave it", entry.Title)
+	}
+}
+
+// TestAThreadOpenedWithNoNameKeepsTheDatedOne is the boundary of the name: an
+// open that asks for none is named exactly as it always was, so the addition
+// changes nothing for the thread a person opens by hand.
+func TestAThreadOpenedWithNoNameKeepsTheDatedOne(t *testing.T) {
+	srv, _ := journalTestPlanningServer(t)
+	id := journalTestOpenOnSpec(t, srv, "US-901")
+	index, indexBody := conversationsRouteTestReadIndex(t, srv)
+	entry := conversationsRouteTestEntryOf(t, index, id)
+	if !strings.HasPrefix(entry.Title, "Conversazione del ") {
+		t.Fatalf("the index calls the unnamed thread %q, want the dated fallback: %s", entry.Title, indexBody)
 	}
 }
 

@@ -76,11 +76,10 @@
 		empty: "Su questo workspace non c'è ancora nessuna conversazione.",
 	};
 
-	// There is deliberately no entry here for the limit of live conversations.
-	// The sentence that declares it — how many may live at once, and which ones
-	// to close — is the server's, and renderLimitNotice draws it as it arrives.
-	// A word about the limit written here would be a second truth about it, and
-	// the number would be the worse half of the two.
+	// There is deliberately no entry here for a refusal to open a conversation.
+	// The sentence is the server's, and renderLimitNotice draws it as it
+	// arrives. A word about it written here would be a second truth about it,
+	// and the one written far from the rule is always the worse half.
 
 	const MINUTE = 60 * 1000;
 	const HOUR = 60 * MINUTE;
@@ -268,11 +267,14 @@
 	/**
 	 * The notice a person reads when opening another conversation was refused.
 	 *
-	 * The words are the caller's — which is to say the server's: the refusal
-	 * declares how many conversations may live at once and names the ones that
-	 * are holding the places, and neither fact is knowable here. This function
-	 * escapes that sentence and gives it a place to stand; it composes nothing,
-	 * and it does not know the number.
+	 * The words are the caller's — which is to say the server's: why an open was
+	 * refused is not knowable here. This function escapes that sentence and
+	 * gives it a place to stand; it composes nothing.
+	 *
+	 * Its name is older than what it draws: it was written for the refusal past
+	 * the ceiling of three live conversations, which no longer exists — a
+	 * workspace now holds as many as it is asked to. What reaches it today is
+	 * any refusal of an open, and it draws each one the same way.
 	 *
 	 * Returns the empty string when there is no reason: no refusal is the
 	 * ordinary state of the rail, and its rendering is silence.

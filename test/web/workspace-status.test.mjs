@@ -140,6 +140,10 @@ describe("nextStepDispatch", () => {
 		assert.equal(dispatch.scope, "spec");
 		assert.equal(dispatch.action, "plan");
 		assert.equal(dispatch.code, "US-010");
+		// Il nome del passo viaggia con quello che lo avvia: è il nome che il
+		// filo aperto per questo passo si porta nell'elenco delle conversazioni,
+		// dove nessuno scriverà per primo e la data non direbbe quale.
+		assert.equal(dispatch.label, "Pianifica");
 
 		// Un identificativo mai visto prima deve uscire tale e quale: nessuna
 		// regola di processo vive nel modulo.
@@ -153,6 +157,8 @@ describe("nextStepDispatch", () => {
 		});
 		assert.equal(invented.action, "azione-mai-vista");
 		assert.equal(invented.code, "US-011");
+		// Nessun nome nel payload, nessun nome inventato qui.
+		assert.equal(invented.label, "");
 	});
 
 	it("avvia l'azione di workspace senza spec bersaglio", () => {
