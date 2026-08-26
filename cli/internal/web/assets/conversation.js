@@ -172,6 +172,15 @@
 		// Il comando della testata vale per tutta la conversazione e resta
 		// scelto: chi lavora al dettaglio tecnico non deve riaprirlo a ogni
 		// piega, e chi non lo vuole non se lo ritrova aperto domani.
+		//
+		// Il comando si nomina, e il nome sta scritto sul pulsante. Un'icona
+		// sola non dice di che cosa parla — tre righe orizzontali sono state
+		// lette come un menu, e la spiegazione arrivava solo al titolo del
+		// browser, che chi usa il touch o la tastiera non vede mai. Ora il
+		// pulsante porta la cosa di cui parla, «Dettaglio tecnico», e il titolo
+		// porta l'azione che la pressione compie — che cambia con lo stato,
+		// mentre il nome resta fermo.
+		technicalAllName: "Dettaglio tecnico",
 		technicalAllOn: "Ripiega il dettaglio tecnico",
 		technicalAllOff: "Mostra sempre il dettaglio tecnico",
 		// Mentre l'agente lavora
@@ -450,12 +459,21 @@
 	// chiuse e si apre quella che serve, oppure il dettaglio tecnico sta sempre
 	// aperto. Sta nella testata, fra i fatti della conversazione, perche' e'
 	// una scelta su come la si legge e non un'azione su cio' che contiene.
+	//
+	// Il pulsante dice che cosa comanda e non solo che è premuto: il nome della
+	// cosa è scritto accanto all'icona — le parentesi angolari, che è il segno
+	// con cui si nomina il codice ovunque, e non tre righe orizzontali che in
+	// una testata si leggono come un menu — e l'azione che la pressione compie
+	// sta nel titolo, dove la si legge prima di premere. `aria-pressed` resta
+	// l'unico posto in cui lo stato è dichiarato: raddoppiarlo nel nome
+	// accessibile farebbe leggere due volte la stessa cosa.
 	function renderTechnicalControl(ui) {
 		const local = ui && typeof ui === "object" ? ui : {};
 		const on = local.technicalAll === true;
-		const label = on ? TEXT.technicalAllOn : TEXT.technicalAllOff;
-		return `<button type="button" class="conv-tech-all${on ? " is-on" : ""}" data-conversation-technical-all aria-pressed="${on ? "true" : "false"}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
-			<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 4.5h12M2 8h12M2 11.5h12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+		const command = on ? TEXT.technicalAllOn : TEXT.technicalAllOff;
+		return `<button type="button" class="conv-tech-all${on ? " is-on" : ""}" data-conversation-technical-all aria-pressed="${on ? "true" : "false"}" title="${escapeHtml(command)}">
+			<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 4.5L2.75 8 6 11.5M10 4.5L13.25 8 10 11.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+			<span class="conv-tech-all-label">${escapeHtml(TEXT.technicalAllName)}</span>
 		</button>`;
 	}
 

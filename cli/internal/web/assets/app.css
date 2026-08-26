@@ -5509,25 +5509,45 @@ body.no-workspace [data-workspace-scoped] {
 	background: var(--surface-2);
 }
 
-/* Il comando della testata: una sola icona, quieta come il controllo di
-   chiusura che le sta accanto, e premuta quando il dettaglio tecnico e' aperto
-   per tutta la conversazione. */
+/* Il comando della testata: icona e nome, quieto come il controllo di chiusura
+   che gli sta accanto — stessa altezza, stesso peso, stesso modo di scriversi —
+   e premuto quando il dettaglio tecnico e' aperto per tutta la conversazione.
+   Il nome accanto all'icona non e' decorazione: l'icona da sola non dice di che
+   cosa parla il comando, e il titolo del browser non arriva ne' al touch ne'
+   alla tastiera. */
 .conv-tech-all {
 	display: inline-flex;
 	align-items: center;
-	justify-content: center;
+	gap: 6px;
 	min-height: var(--control-h);
-	min-width: var(--control-h);
 	padding: 0 var(--space-2);
 	border: 1px solid transparent;
 	border-radius: var(--radius-pill);
 	background: none;
 	color: var(--text-dim);
+	font-family: var(--font-sans);
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1;
 	cursor: pointer;
 	transition:
 		background var(--transition),
 		border-color var(--transition),
 		color var(--transition);
+}
+
+/* La testata e' stretta e ha gia' il nome del provider da tenere: sotto una
+   certa larghezza il nome del comando si ritira e resta l'icona, che a quel
+   punto e' cio' che ci sta. Il titolo, che dice l'azione, resta comunque. */
+@media (max-width: 720px) {
+	.conv-tech-all-label {
+		display: none;
+	}
+
+	.conv-tech-all {
+		justify-content: center;
+		min-width: var(--control-h);
+	}
 }
 
 .conv-tech-all:hover {

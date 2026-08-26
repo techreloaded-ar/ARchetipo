@@ -1661,6 +1661,35 @@ describe("la ripresa di una conversazione finita", () => {
 		assert.match(tutto, /ESITO-STRUMENTO/);
 	});
 
+	it("il comando della testata dice il proprio nome e l'azione che compie", () => {
+		// Era un'icona sola, e di che cosa parlasse lo diceva soltanto il titolo
+		// del browser: chi non ha un mouse non lo legge mai. Il nome sta scritto
+		// sul pulsante, e il titolo dice che cosa succede a premerlo — che è
+		// l'opposto a seconda di come sta.
+		const chiusa = renderConversation(CON_STRUMENTI, "", {});
+		assert.match(
+			visibleText(chiusa),
+			/Dettaglio tecnico/,
+			"il comando della testata non porta scritto di che cosa parla",
+		);
+		assert.match(
+			chiusa,
+			/data-conversation-technical-all aria-pressed="false" title="Mostra sempre il dettaglio tecnico"/,
+			"da chiuso il comando non dice che aprirebbe il dettaglio",
+		);
+		const aperta = renderConversation(CON_STRUMENTI, "", { technicalAll: true });
+		assert.match(
+			visibleText(aperta),
+			/Dettaglio tecnico/,
+			"aperto, il comando perde il proprio nome",
+		);
+		assert.match(
+			aperta,
+			/data-conversation-technical-all aria-pressed="true" title="Ripiega il dettaglio tecnico"/,
+			"da aperto il comando non dice che ripiegherebbe il dettaglio",
+		);
+	});
+
 	it("una piega che contiene un errore lo dichiara da chiusa", () => {
 		const html = renderConversation(
 			withConversation({
