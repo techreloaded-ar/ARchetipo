@@ -68,14 +68,38 @@ git:
 e2e:
   record_demo_video: false
 
-# Optional default execution provider. Only non-secret provider settings belong
-# here: keep tokens and credentials in the environment or an external secret
-# mechanism. Configure this block with `archetipo execution provider set-default`.
+# Optional default execution provider: who carries out a spec when you run
+# `archetipo execution run <SPEC> <action>` or dispatch from the viewer.
+#
+# The easy way to write this block is `archetipo execution setup`, which asks
+# for the hub URL, verifies the credential, and picks the workspace for you —
+# without asking at all when there is only one. `archetipo execution provider
+# list` shows the registered providers, what each can do, and which keys it
+# accepts; `archetipo doctor` tells you whether the one configured here can
+# actually dispatch today.
+#
+# Only non-secret settings belong here. A provider that needs a credential
+# names the environment variable holding it, never the credential itself.
+#
+# Registered providers:
+#   arcipelago — dispatches to a remote ARcipelago fleet
+#   codex, claude — run a local coding agent
+#
+# The arcipelago provider requires the runner's working directory to be a
+# checkout of this project, with the ARchetipo skills installed and the same
+# connector configured. Say so once on the hub — `arcipelago workspaces update
+# <ws> --cwd <dir> --requires project:<slug>` — and a runner without it is
+# refused immediately instead of leaving the work queued.
+# See docs/wiki/decisions/remote-plan-ownership.md.
 # execution:
 #   default_provider:
-#     id: <registered-provider-id>
+#     id: arcipelago
 #     config:
-#       endpoint: https://runner.example
+#       base_url: https://arcipelago.example
+#       workspace_id: <workspace id>       # `archetipo execution setup` fills it in
+#       token_env: ARCIPELAGO_TOKEN        # export the token; never write it here
+#       poll_interval_seconds: 5           # optional, 1..300
+#       timeout_seconds: 3600              # optional, 1..86400
 
 # Used only when connector == github. owner/project_number are auto-detected
 # from `gh`; the remaining keys are populated automatically by the CLI during

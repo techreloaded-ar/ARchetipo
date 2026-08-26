@@ -185,6 +185,8 @@ ARchetipo usa una CLI deterministica scritta in Go, `archetipo`, per persistenza
 | `archetipo spec update US-001 --file patch.yaml` | Applica una patch parziale (title, priority, points, scope, blocked_by, body, epic, rework) a una spec esistente. Supportato su tutti i connector. |
 | `archetipo spec integrate US-001` | Fonde il branch worktree di una spec approvata nel base, pulisce e la marca `DONE` (workflow worktree). |
 | `archetipo task done US-001 TASK-01` | Marca un task come completato. |
+| `archetipo execution setup [--url <hub>] [--workspace <nome>]` | Configura il provider di esecuzione predefinito: verifica la credenziale contro l'hub, sceglie il workspace (senza chiedere quando ce n'è uno solo) e scrive `execution.default_provider`. |
+| `archetipo execution provider list` | Elenca i provider registrati, le loro capability, le chiavi di configurazione che accettano e se possono eseguire un dispatch adesso. |
 | `archetipo execution provider set-default <id> --file provider.yaml` | Valida e salva atomicamente il provider predefinito del workspace e la sua configurazione non segreta. |
 | `archetipo execution provider show-default` | Rilegge il provider predefinito senza esporre credenziali d'ambiente. |
 | `archetipo execution run US-001 plan [--provider <id>]` | Crea una sola execution durevole e invia `plan`; un provider esplicito prevale sul default del workspace. |
@@ -196,7 +198,31 @@ ARchetipo usa una CLI deterministica scritta in Go, `archetipo`, per persistenza
 
 La CLI legge `.archetipo/config.yaml` dal progetto per scegliere connector attivo e percorsi degli artefatti. Tutti i comandi `archetipo validate ...` restituiscono `kind: "validation_result"` su stdout con `data.ok` a `true` o `false`; gli error envelope restano riservati agli errori di processo.
 
-I record delle execution sono stato runtime locale sotto `.archetipo/executions/` e sono ignorati da Git. La sezione opzionale `execution.default_provider` conserva l'ID di un provider registrato e una configurazione non segreta; token e credenziali devono restare fuori da `.archetipo/config.yaml`. `set-default` valida prima dell'aggiornamento atomico, mentre una run senza `--provider` valida nuovamente la configurazione salvata prima del dispatch. Un `--provider` esplicito prevale sempre e riceve una configurazione vuota. Questa foundation non include intenzionalmente un provider di produzione: le integrazioni registrano provider in-process, mentre i test usano fake iniettati. Sia i dispatch riusciti sia i fallimenti del provider già registrati restituiscono un envelope `kind: "execution"`; errori di lookup, configurazione o capability vengono rifiutati prima di creare record.
+I record delle execution sono stato runtime locale sotto `.archetipo/executions/` e sono ignorati da Git. La sezione opzionale `execution.default_provider` conserva l'ID di un provider registrato e una configurazione non segreta; token e credenziali devono restare fuori da `.archetipo/config.yaml`. `set-default` valida prima dell'aggiornamento atomico, mentre una run senza `--provider` valida nuovamente la configurazione salvata prima del dispatch. Un `--provider` esplicito prevale sempre e riceve una configurazione vuota. Tre provider sono registrati di serie — `arcipelago`, `codex` e `claude`; `archetipo execution provider list` mostra cosa accetta ciascuno. Sia i dispatch riusciti sia i fallimenti del provider già registrati restituiscono un envelope `kind: "execution"`; errori di lookup, configurazione o capability vengono rifiutati prima di creare record.
+
+### Esecuzione remota su una flotta ARcipelago
+
+Il provider `arcipelago` manda `spec.plan` e `spec.implement` a una flotta remota: pianificazione e implementazione girano sulle macchine di qualcun altro, mentre il backlog resta qui.
+
+Una volta sola, sull'hub, da amministratore:
+
+```bash
+arcipelago workspaces create demo --cwd /workspace --requires project:demo --model <provider/modello>
+arcipelago apps create archetipo --workspace demo    # stampa il token una volta sola
+```
+
+Poi, nel progetto:
+
+```bash
+export ARCIPELAGO_TOKEN='arc_app_…'
+archetipo execution setup --url https://arcipelago.example
+archetipo doctor
+archetipo execution run US-001 plan
+```
+
+`execution setup` legge il token dall'ambiente per verificarlo, e non lo scrive da nessuna parte: `.archetipo/config.yaml` registra solo il *nome* della variabile, `token_env`, che di default è `ARCIPELAGO_TOKEN`. L'export sta nel profilo della shell, o in quello che la CI usa per i segreti.
+
+Il provider richiede che la working directory del runner sia un checkout di questo progetto, con le skill ARchetipo installate e lo stesso connector configurato. `--requires project:<slug>` sul workspace è il modo di dichiararlo: un runner che non espone quel tag viene rifiutato subito, nominando ciò che manca, invece di lasciare il lavoro in coda fino allo scadere dell'attesa locale. `archetipo doctor` dice la stessa cosa prima ancora di spedire qualcosa. Vedi [`docs/wiki/decisions/remote-plan-ownership.md`](docs/wiki/decisions/remote-plan-ownership.md).
 
 Per sviluppo locale della CLI senza pubblicare pacchetti npm, vedi [`guides/dev-local-cli.md`](guides/dev-local-cli.md).
 

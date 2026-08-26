@@ -340,3 +340,98 @@ func fmtInt(value any) int {
 		return -1
 	}
 }
+
+func TestDoctorDiagnosesTheExecutionProvider(t *testing.T) {
+	t.Run("says nothing when no provider is configured", func(t *testing.T) {
+		newProject(t)
+		out := runCLI(t, "", "doctor")
+		report := out.stdout.String()
+		if !strings.Contains(report, "execution credential: skipped (no default execution provider)") {
+			t.Fatalf("report = %s, want both execution lines skipped", report)
+		}
+		if !strings.Contains(report, "execution provider: skipped (no default execution provider)") {
+			t.Fatalf("report = %s, want the probe skipped too", report)
+		}
+	})
+
+	t.Run("names the missing variable without touching the network", func(t *testing.T) {
+		newProject(t)
+		// A hub that would answer, and a credential that is not exported. The
+		// diagnosis must be the local one: it is both the commonest failure and
+		// the one that needs no round trip.
+		baseURL := setupHub(t, "arc_app_test", oneReadyWorkspace)
+		t.Setenv("ARCIPELAGO_TOKEN", "arc_app_test")
+		if out := runCLI(t, "", "execution", "setup", "--url", baseURL); out.exit != 0 {
+			t.Fatalf("setup exit = %d, stderr = %s", out.exit, out.stderr.String())
+		}
+		t.Setenv("ARCIPELAGO_TOKEN", "")
+
+		out := runCLI(t, "", "doctor")
+		report := out.stdout.String()
+		if out.exit == 0 {
+			t.Fatal("doctor passed with an unusable execution provider")
+		}
+		if !strings.Contains(report, "ARCIPELAGO_TOKEN is not set") {
+			t.Fatalf("report = %s, want the variable named", report)
+		}
+		if !strings.Contains(report, "execution provider: skipped (credential missing)") {
+			t.Fatalf("report = %s, want the probe skipped rather than repeating the cause", report)
+		}
+	})
+
+	t.Run("carries the provider's own sentence when the hub refuses", func(t *testing.T) {
+		newProject(t)
+		baseURL := setupHub(t, "arc_app_test", oneReadyWorkspace)
+		t.Setenv("ARCIPELAGO_TOKEN", "arc_app_test")
+		if out := runCLI(t, "", "execution", "setup", "--url", baseURL); out.exit != 0 {
+			t.Fatalf("setup exit = %d, stderr = %s", out.exit, out.stderr.String())
+		}
+		t.Setenv("ARCIPELAGO_TOKEN", "a-stale-token")
+
+		out := runCLI(t, "", "doctor")
+		report := out.stdout.String()
+		if out.exit == 0 {
+			t.Fatal("doctor passed against a hub that rejects the credential")
+		}
+		if !strings.Contains(report, "rejected the application credential") {
+			t.Fatalf("report = %s, want the provider's own diagnosis", report)
+		}
+	})
+
+	t.Run("passes when everything is in place", func(t *testing.T) {
+		newProject(t)
+		baseURL := setupHub(t, "arc_app_test", oneReadyWorkspace)
+		t.Setenv("ARCIPELAGO_TOKEN", "arc_app_test")
+		if out := runCLI(t, "", "execution", "setup", "--url", baseURL); out.exit != 0 {
+			t.Fatalf("setup exit = %d, stderr = %s", out.exit, out.stderr.String())
+		}
+
+		out := runCLI(t, "", "doctor")
+		report := out.stdout.String()
+		if !strings.Contains(report, "✓ execution provider: arcipelago is ready to dispatch") {
+			t.Fatalf("report = %s, want the provider reported ready", report)
+		}
+		if strings.Contains(report, "arc_app_test") {
+			t.Fatal("doctor printed the credential")
+		}
+	})
+
+	t.Run("--offline skips only the check that needs a network", func(t *testing.T) {
+		newProject(t)
+		t.Setenv("ARCIPELAGO_TOKEN", "arc_app_test")
+		// A URL nothing answers: without --offline this check would fail.
+		if out := runCLI(t, "", "execution", "setup",
+			"--url", "http://127.0.0.1:1", "--workspace", "ws-0001", "--no-probe"); out.exit != 0 {
+			t.Fatalf("setup exit = %d, stderr = %s", out.exit, out.stderr.String())
+		}
+
+		offlineRun := runCLI(t, "", "doctor", "--offline")
+		report := offlineRun.stdout.String()
+		if !strings.Contains(report, "✓ execution credential") {
+			t.Fatalf("report = %s, want the local half still checked", report)
+		}
+		if !strings.Contains(report, "execution provider: skipped (--offline)") {
+			t.Fatalf("report = %s, want the remote half skipped", report)
+		}
+	})
+}

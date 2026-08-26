@@ -14,6 +14,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/e2e"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/version"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/wiki"
@@ -32,17 +33,18 @@ type doctorCheck struct {
 // newDoctorCmd diagnoses the local installation: data directory, skills,
 // runtime assets, project config, installed skills per tool, git and gh.
 // Human-readable output (like `version`), exit code 4 when any check fails.
-func newDoctorCmd(s streams) *cobra.Command {
-	return &cobra.Command{
+func newDoctorCmd(s streams, deps executionDependencies) *cobra.Command {
+	offline := false
+	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose the ARchetipo installation and project setup",
 		Long: "Checks the CLI installation (data directory, packaged skills, runtime assets), " +
-			"the project setup (.archetipo/config.yaml, skills installed in tool directories) " +
-			"and external dependencies (git, gh when the github connector is configured). " +
-			"Exits non-zero when a check fails.",
+			"the project setup (.archetipo/config.yaml, skills installed in tool directories), " +
+			"the configured execution provider, and external dependencies (git, gh when the " +
+			"github connector is configured). Exits non-zero when a check fails.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			checks := runDoctorChecks(cmd)
+			checks := runDoctorChecks(cmd, deps, offline)
 			failed := 0
 			fmt.Fprintf(s.out, "archetipo %s\n\n", version.Version)
 			for _, c := range checks {
@@ -69,9 +71,11 @@ func newDoctorCmd(s streams) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&offline, "offline", false, "skip the checks that contact a remote provider")
+	return cmd
 }
 
-func runDoctorChecks(cmd *cobra.Command) []doctorCheck {
+func runDoctorChecks(cmd *cobra.Command, deps executionDependencies, offline bool) []doctorCheck {
 	ctx := cmd.Context()
 	var checks []doctorCheck
 
@@ -136,7 +140,18 @@ func runDoctorChecks(cmd *cobra.Command) []doctorCheck {
 		checks = append(checks, doctorCheck{name: "jira", skipped: true, detail: "skipped (connector is not jira)"})
 	}
 
-	// 7. e2e toolchain, only relevant for Node projects that use it.
+	// 7. The execution provider: whether work can be dispatched at all.
+	if cfgErr == nil {
+		credential, probe := checkExecution(ctx, cfg, deps, offline)
+		checks = append(checks, credential, probe)
+	} else {
+		checks = append(checks,
+			doctorCheck{name: "execution credential", skipped: true, detail: "skipped (project config unavailable)"},
+			doctorCheck{name: "execution provider", skipped: true, detail: "skipped (project config unavailable)"},
+		)
+	}
+
+	// 8. e2e toolchain, only relevant for Node projects that use it.
 	if cfgErr == nil {
 		checks = append(checks, checkE2E(cfg))
 	} else {
@@ -353,4 +368,110 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// executionProbeTimeout bounds the network half of the execution diagnosis.
+// `doctor` is run when something is already wrong, so a hub that has gone away
+// must answer quickly rather than hold the whole report open.
+const executionProbeTimeout = 10 * time.Second
+
+// checkExecution diagnoses the configured execution provider in two lines,
+// split the way `gh` and `jira` are split elsewhere in this report: what can be
+// known locally, and what has to be asked.
+//
+// The first line is the credential, and needs no network: a provider that names
+// an environment variable is unusable the moment that variable is empty, and
+// saying so without a round trip means the most common failure is also the
+// fastest to diagnose. The second is the provider's own probe, which answers
+// the remaining questions at once — is the hub reachable, is the token good, is
+// the workspace granted, could any machine take the work.
+//
+// Before this, `doctor` said nothing at all about remote execution: a project
+// configured to dispatch to a fleet passed every check and then failed at the
+// first `execution run`.
+func checkExecution(
+	ctx context.Context,
+	cfg config.Config,
+	deps executionDependencies,
+	offline bool,
+) (credential doctorCheck, probe doctorCheck) {
+	selection := cfg.Execution.DefaultProvider
+	if selection == nil || strings.TrimSpace(selection.ID) == "" {
+		skipped := "skipped (no default execution provider)"
+		return doctorCheck{name: "execution credential", skipped: true, detail: skipped},
+			doctorCheck{name: "execution provider", skipped: true, detail: skipped}
+	}
+	providerID := strings.TrimSpace(selection.ID)
+	provider, err := deps.registry.Resolve(providerID)
+	if err != nil {
+		return doctorCheck{
+				name:   "execution credential",
+				detail: fmt.Sprintf("provider %q is not registered", providerID),
+				hint:   "run `archetipo execution provider list` to see the registered providers",
+			}, doctorCheck{
+				name:    "execution provider",
+				skipped: true,
+				detail:  "skipped (provider not registered)",
+			}
+	}
+
+	credential = checkExecutionCredential(providerID, selection.Config)
+	switch {
+	case offline:
+		probe = doctorCheck{name: "execution provider", skipped: true, detail: "skipped (--offline)"}
+	case !credential.ok && !credential.skipped:
+		// Probing without a credential would report the same thing twice, and
+		// the second report would be the less precise of the two.
+		probe = doctorCheck{name: "execution provider", skipped: true, detail: "skipped (credential missing)"}
+	default:
+		probeCtx, cancel := context.WithTimeout(ctx, executionProbeTimeout)
+		defer cancel()
+		if err := execution.CheckAvailability(probeCtx, provider, selection.Config); err != nil {
+			probe = doctorCheck{
+				name:   "execution provider",
+				detail: providerID + " cannot dispatch",
+				// The provider writes its errors to be read by a person, so the
+				// hint is that sentence rather than a paraphrase of it.
+				hint: err.Error(),
+			}
+		} else {
+			probe = doctorCheck{
+				name:   "execution provider",
+				ok:     true,
+				detail: providerID + " is ready to dispatch",
+			}
+		}
+	}
+	return credential, probe
+}
+
+// checkExecutionCredential reports whether the variable the provider names is
+// populated. It never reads the value, and never prints it.
+func checkExecutionCredential(providerID string, providerConfig map[string]any) doctorCheck {
+	tokenEnv, ok := providerConfig["token_env"].(string)
+	if strings.TrimSpace(tokenEnv) == "" {
+		if !ok && providerConfig["base_url"] == nil {
+			// A local provider authenticates through the tool it drives, so
+			// there is no variable of ours to look at.
+			return doctorCheck{
+				name:    "execution credential",
+				skipped: true,
+				detail:  fmt.Sprintf("skipped (%s needs no credential of its own)", providerID),
+			}
+		}
+		tokenEnv = defaultTokenEnvName
+	}
+	if strings.TrimSpace(os.Getenv(tokenEnv)) == "" {
+		return doctorCheck{
+			name:   "execution credential",
+			detail: tokenEnv + " is not set",
+			hint: "get one with `arcipelago apps create archetipo --workspace <name>` on the hub, " +
+				"then `export " + tokenEnv + "=<token>`",
+		}
+	}
+	detail := tokenEnv + " is set"
+	if baseURL, ok := providerConfig["base_url"].(string); ok && strings.TrimSpace(baseURL) != "" {
+		detail = fmt.Sprintf("%s → %s", tokenEnv, baseURL)
+	}
+	return doctorCheck{name: "execution credential", ok: true, detail: detail}
 }
