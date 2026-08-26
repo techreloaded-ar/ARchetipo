@@ -161,33 +161,35 @@ describe("AC-2 — il cammino di avvio è uno solo", () => {
 		);
 	});
 
-	it("l'avvio si procura un filo prima di partire", () => {
-		// Il buco che questo chiude: un passo avviato dai dettagli di una spec
-		// faceva lavorare un agente senza che nell'elenco delle conversazioni
-		// comparisse niente, e la risposta a «dove sta succedendo?» era un posto
-		// che l'elenco non nominava. Ora la pressione si apre il filo prima di
-		// avviare, gli dà il nome del passo, e ci nasce dentro la run.
+	it("l'avvio non apre più un secondo thread: la run è il thread", () => {
+		// Il buco che questo chiudeva era vero e resta chiuso, ma altrove. Un
+		// passo avviato dai dettagli di una spec faceva lavorare un agente senza
+		// che nell'elenco delle conversazioni comparisse niente. La risposta era
+		// aprire un thread prima di avviare — e quel thread era un secondo
+		// processo d'agente, inerte, aperto solo per raccontare il lavoro di un
+		// altro. Ora la run *è* una conversazione: il server tiene la sua stessa
+		// sessione sotto l'id dell'esecuzione, e il client la raggiunge con
+		// quell'id invece di aprirne una accanto.
 		const start = blockAfter(js, "async function startPanelAction(");
 		assert.ok(
-			start.includes("threadForStart"),
-			"startPanelAction non si procura più un filo: una run avviata dai dettagli di una spec tornerebbe a non comparire in nessuna conversazione",
+			!start.includes("threadForStart"),
+			"startPanelAction apre ancora un thread prima di avviare: sarebbero di nuovo due processi d'agente per una pressione sola",
 		);
 		assert.ok(
-			start.includes("body.conversation_id = thread"),
-			"l'avvio non nomina più il filo che si è procurato: il server non avrebbe niente a cui legare la run",
-		);
-		const thread = blockAfter(js, "async function threadForStart(");
-		assert.ok(
-			thread.includes("/api/workspace/conversations"),
-			"threadForStart non apre più una conversazione: senza un filo da aprire la funzione non serve a niente",
+			start.includes("revealThread(record"),
+			"l'avvio non porta più sullo schermo il thread della run: chi preme resterebbe senza il posto in cui l'agente sta lavorando",
 		);
 		assert.ok(
-			thread.includes("liveConversationEntries"),
-			"threadForStart non guarda più se il filo che gli è stato nominato è vivo: una pressione dentro un thread ne aprirebbe un secondo ogni volta",
+			start.includes("body.conversation_id = from"),
+			"l'avvio non nomina più la conversazione da cui viene la pressione: una run chiesta dentro un thread smetterebbe di essere ricordata lì",
 		);
 		assert.ok(
-			thread.includes("body.title"),
-			"il filo aperto per un passo non porta più il nome del passo: nell'elenco si chiamerebbe con la data, che fra dieci fili uguali non dice quale",
+			start.includes("liveConversationEntries"),
+			"l'avvio non guarda più se la conversazione che gli è stata nominata è viva: legherebbe la run a un thread già chiuso",
+		);
+		assert.ok(
+			!js.includes("async function threadForStart("),
+			"threadForStart esiste ancora: nessuno la chiama più",
 		);
 	});
 

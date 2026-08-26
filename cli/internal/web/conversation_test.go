@@ -51,6 +51,14 @@ func (d *fakeDialogue) messages() []string {
 	return append([]string(nil), d.sent...)
 }
 
+// stops is how many times the process was asked to stop, which is what a
+// cancellation really does and the only thing it does.
+func (d *fakeDialogue) stops() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.interrupt
+}
+
 // conversingProvider is a provider that can hold a conversation. Only the agent
 // process is a double: the session, the collaborator, the retention window, the
 // routes and the JSON serialization are the production ones, so what these
@@ -182,6 +190,10 @@ type conversationResponse struct {
 		OpenedAt    string `json:"opened_at"`
 		SpecCode    string `json:"spec_code"`
 		ResumedFrom string `json:"resumed_from"`
+		// Action and ExecutionID are set when the conversation *is* a step of
+		// the process: the thread and the run are one session.
+		Action      string `json:"action"`
+		ExecutionID string `json:"execution_id"`
 	} `json:"conversation"`
 	Events []struct {
 		ID   int64  `json:"id"`
@@ -204,6 +216,14 @@ type conversationResponse struct {
 			Label string `json:"label"`
 		} `json:"options"`
 	} `json:"approvals"`
+	// Execution is the record an action conversation is the outcome of, absent
+	// for a free one.
+	Execution *struct {
+		ID       string `json:"id"`
+		Action   string `json:"action"`
+		SpecCode string `json:"spec_code"`
+		Status   string `json:"status"`
+	} `json:"execution"`
 	// Runs is the block list the flow draws inside the conversation. It is
 	// decoded from the wire like everything else here, so the assertions are
 	// about the JSON the browser reads and not about the server's own struct.

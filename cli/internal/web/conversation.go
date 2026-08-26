@@ -45,6 +45,16 @@ type conversationSnapshotView struct {
 	// client that ignores them reads the payload exactly as before.
 	SpecCode    string `json:"spec_code,omitempty"`
 	ResumedFrom string `json:"resumed_from,omitempty"`
+	// Action is the step of the process this conversation *is*, omitted for a
+	// free one. It is what tells a client that the agent it is reading is doing
+	// something rather than answering questions: the thread has an outcome, its
+	// prompt was not written by anybody here, and closing it stops work.
+	Action execution.ActionID `json:"action,omitempty"`
+	// ExecutionID names the record that outcome is written into. For an action
+	// conversation it is the conversation's own id — they are one session — and
+	// it travels anyway, so a client never has to know that and never has to
+	// guess which of the two it is holding.
+	ExecutionID string `json:"execution_id,omitempty"`
 }
 
 // conversationView is what the browser reads from the four conversation routes.
@@ -102,6 +112,15 @@ type conversationView struct {
 	// omitted while nothing has been decided: a conversation that has never
 	// answered a proposal has no outcome to speak of.
 	Outcome *conversationOutcomeView `json:"outcome,omitempty"`
+	// Execution is the record this conversation is the outcome of, present only
+	// for a conversation that *is* an action of the process. It is the whole
+	// record, exactly as /api/execution/{id} serves it, so a client renders the
+	// outcome of a step with the code it already has and never with a second,
+	// parallel shape of the same fact.
+	//
+	// It is omitted — never null — for a free conversation, which has no
+	// outcome to have: nothing it says is written into a record.
+	Execution *execution.Execution `json:"execution,omitempty"`
 	// Runs is one block per execution this conversation started, in the order
 	// the decisions were taken. It is never nil, so a client always iterates an
 	// array: a conversation that has started nothing answers with an empty list
@@ -375,6 +394,8 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 		OpenedAt:    snapshot.openedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 		SpecCode:    snapshot.specCode,
 		ResumedFrom: snapshot.resumedFrom,
+		Action:      snapshot.action,
+		ExecutionID: snapshot.executionID,
 	}
 	// The state is what the collaborator reports, never what this handler
 	// believes: a conversation whose process has left is CLOSED or CRASHED
@@ -409,8 +430,29 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 	// events of the conversation itself.
 	view.Runs = s.conversationRunsOf(ctx, ws, snapshot)
 
+	// The outcome of an action conversation is its record, read on every poll
+	// like everything else about it: the record is written by the dispatch, and
+	// a copy kept here would be a second statement of a fact that has one
+	// author. A read that fails leaves it absent rather than raising a notice —
+	// the thread is still the thread, and the next poll says the same thing.
+	if strings.TrimSpace(snapshot.executionID) != "" {
+		if record, err := ws.store.Get(ctx, snapshot.executionID); err == nil {
+			view.Execution = &record
+		}
+	}
+
 	session, found := conversationSessionOf(snapshot)
 	if !found {
+		// An action conversation is held the instant its record exists, which is
+		// a moment before the provider has registered the session behind it: the
+		// process still has to be spawned and probed. Saying the history is
+		// unreadable in that window would be answering "this viewer cannot read
+		// it" to a thread that is simply about to start speaking. A record that
+		// has already stopped running is a different matter, and keeps the
+		// sentence.
+		if view.Execution != nil && view.Execution.Status == execution.StatusRunning {
+			return view
+		}
 		if view.Notice == "" {
 			view.Notice = "the history of this conversation is not readable from this viewer"
 		}
@@ -810,7 +852,17 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 		// are told is that something went wrong.
 		return openedConversation{}, iox.NewInternal("opening a conversation with the "+quoted(target.availability.providerID)+" provider: "+openErr.Error(), openErr)
 	}
-	if err := ws.conversation.open(id, target.availability.providerID, target.provider, target.collaborator, providerConfig, ws.cfg.ProjectRoot, time.Now().UTC(), spec.specCode, spec.resumedFrom); err != nil {
+	if err := ws.conversation.open(conversationHold{
+		id:             id,
+		providerID:     target.availability.providerID,
+		provider:       target.provider,
+		collaborator:   target.collaborator,
+		providerConfig: providerConfig,
+		workingDir:     ws.cfg.ProjectRoot,
+		openedAt:       time.Now().UTC(),
+		specCode:       spec.specCode,
+		resumedFrom:    spec.resumedFrom,
+	}); err != nil {
 		// The holder refused it — the workspace has been left while this open
 		// was in flight. This process is the only one holding the handle, so it
 		// closes what it just started instead of leaking it.

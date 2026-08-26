@@ -38,4 +38,21 @@ type Record struct {
 	ResumedFrom   string               `json:"resumed_from"`
 	FinalState    string               `json:"final_state"`
 	Events        []execution.RunEvent `json:"events"`
+
+	// Action, ExecutionID and Outcome are the record of a conversation that
+	// *was* a step of the process rather than a free one: which step, which
+	// execution it was written into, and what became of that execution.
+	//
+	// They live here and not only under .archetipo/executions/ because the two
+	// answer different questions. The execution record says what a step did; the
+	// conversation says what was said while it was doing it — the questions the
+	// agent asked, the answers it was given, the permissions somebody granted or
+	// refused. A transcript that could not name its own outcome would leave a
+	// reader with the whole discussion and no way to learn how it ended.
+	//
+	// All three are empty for a free conversation, which is the default, so a
+	// record written before they existed deserializes unchanged.
+	Action      string `json:"action,omitempty"`
+	ExecutionID string `json:"execution_id,omitempty"`
+	Outcome     string `json:"outcome,omitempty"`
 }

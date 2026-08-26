@@ -106,15 +106,18 @@ func TestARunStartedFromTheThreadIsReadInTheThread(t *testing.T) {
 	}
 }
 
-// TestARunStartedNamingNoThreadBelongsToNone is the boundary: only a press that
-// came from a conversation is tied to one. A start that names none is anchored
-// to nothing, and inventing "the" conversation for it here would file a run
-// under a discourse that never asked for it.
+// TestARunStartedNamingNoThreadIsItsOwnThread is the boundary, and it moved.
 //
-// What the person pressing in the viewer sees is not this: the viewer opens a
-// thread before it starts, so the id below is empty only for a caller that
-// really has no thread — which is a caller with no person behind it.
-func TestARunStartedNamingNoThreadBelongsToNone(t *testing.T) {
+// Only a press that came from a conversation is *adopted* by one: a start that
+// names none is anchored to no discourse, and inventing "the" conversation for
+// it would file a run under a history that never asked for it. That is
+// unchanged.
+//
+// What changed is that the run is not therefore threadless. A run is a
+// conversation with a preconfigured prompt, so it is held as one under its own
+// execution id: the session the provider registered for it *is* the thread, and
+// there is one agent process rather than the two the viewer used to light.
+func TestARunStartedNamingNoThreadIsItsOwnThread(t *testing.T) {
 	srv, provider := journalTestPlanningServer(t)
 	id := journalTestOpenOnSpec(t, srv, "US-901")
 	provider.emit(t, id, localrun.KindUserMessage, "Pianifica la US-901")
@@ -123,14 +126,36 @@ func TestARunStartedNamingNoThreadBelongsToNone(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatalf("POST spec execution = %d, want 201: %v", status, started)
 	}
+	executionID, _ := started["id"].(string)
+	if executionID == "" {
+		t.Fatalf("the start does not name the execution: %v", started)
+	}
 
 	_, view, body := readConversation(t, srv, id, 0)
 	if len(view.Runs) != 0 {
 		t.Fatalf("the conversation adopted a run nobody asked it for: %s", body)
 	}
-	if live := liveConversationIDs(srv); len(live) != 1 || live[0] != id {
-		t.Fatalf("the workspace holds %v, want only the conversation that was opened by hand: a start opens none", live)
+	live := liveConversationIDs(srv)
+	if len(live) != 2 {
+		t.Fatalf("the workspace holds %v, want the conversation opened by hand and the run's own thread", live)
 	}
+	if !containsString(live, id) || !containsString(live, executionID) {
+		t.Fatalf("the workspace holds %v, want %q and %q", live, id, executionID)
+	}
+
+	// The run's thread is the run: it is held under the execution's id, it says
+	// which step it is doing, and it carries that execution as its outcome.
+	_, own, ownBody := readConversation(t, srv, executionID, 0)
+	if own.Conversation == nil {
+		t.Fatalf("the run has no thread of its own: %s", ownBody)
+	}
+	if own.Conversation.Action != "plan" || own.Conversation.ExecutionID != executionID {
+		t.Fatalf("the thread does not say it is the plan run: %#v (%s)", own.Conversation, ownBody)
+	}
+	if own.Conversation.SpecCode != "US-901" {
+		t.Fatalf("the thread is not about the spec it plans: %#v", own.Conversation)
+	}
+
 	runs := adoptTestWorkspaceRuns(t, srv)
 	if len(runs.Runs) != 1 {
 		t.Fatalf("the strip lists %d runs, want the one just started: %#v", len(runs.Runs), runs.Runs)
@@ -138,6 +163,15 @@ func TestARunStartedNamingNoThreadBelongsToNone(t *testing.T) {
 	if runs.Runs[0].ConversationID != "" {
 		t.Errorf("the strip ties an unanchored run to %q, want no conversation", runs.Runs[0].ConversationID)
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // TestAThreadOpenedForAStepCarriesTheNameItWasGiven is the other side of the

@@ -707,16 +707,7 @@
 		container.addEventListener("click", (e) => {
 			const btn = e.target.closest(".action-chip-run");
 			if (!btn) return;
-			// L'etichetta del passo si legge dalla targhetta che la porta: è la
-			// parola del processo, già scritta lì dal server, e diventa il nome
-			// del filo che questa pressione apre.
-			const label = btn.querySelector(".action-chip-label");
-			startPanelAction(
-				btn.dataset.actionId,
-				btn,
-				conversationsCurrentId,
-				label ? label.textContent : "",
-			);
+			startPanelAction(btn.dataset.actionId, btn, conversationsCurrentId);
 		});
 	}
 
@@ -1720,11 +1711,11 @@
 	//
 	// The gesture is therefore "go to the target and start", not "start where
 	// you stand": the run must be started somewhere it can be followed.
-	// The "one press, one execution" guarantee is the server's here, not the
-	// disabled attribute's: startPanelAction disables the button it was handed,
-	// but that button lives inside the thread's markup, which the very
-	// board_changed the start produces redraws. What refuses a second press is
-	// the reservation on the server.
+	// "Una pressione, una run" qui è del bottone e non del server: il server non
+	// rifiuta più una seconda azione sulla stessa spec — un'azione è una
+	// conversazione, e una run ferma su una domanda avrebbe tenuto chiusa la
+	// spec a ogni altro passo finché qualcuno non rispondeva. startPanelAction
+	// disabilita il bottone che le viene passato, ed è lì che un debounce sta.
 	async function startNextStep(target, button) {
 		let expected;
 		if (target.scope === "spec" && target.code) {
@@ -1752,12 +1743,7 @@
 		// the workspace strip. It is the id the panel is showing, whatever it
 		// is — a conversation that has ended ties nothing, and the server is
 		// what decides that.
-		await startPanelAction(
-			target.action,
-			button,
-			conversationsCurrentId,
-			target.label || "",
-		);
+		await startPanelAction(target.action, button, conversationsCurrentId);
 	}
 
 	function updateStats(view) {
@@ -3739,34 +3725,29 @@
 	// refuses, so a double click cannot ask for a second run. Which route is
 	// asked is a property of the mounted panel, not of this code.
 	//
-	// conversationID nomina il filo da cui viene la pressione. Quando non ne
-	// nomina nessuno — una pressione sui dettagli di una spec non ne nomina — o
-	// ne nomina uno che non è più vivo, il filo si apre qui, prima di avviare, e
-	// la run ci nasce dentro. Prima non succedeva, e si vedeva: l'agente
-	// lavorava nel pannello della run e nell'elenco delle conversazioni non
-	// c'era niente, così la risposta a «dove sta succedendo?» era un posto che
-	// l'elenco non nominava.
+	// Non apre più nessun thread prima di avviare, e non gli serve: la run *è*
+	// una conversazione. La sessione che il provider apre per lei è già quella
+	// che una conversazione legge e comanda, e il server la tiene come tale
+	// sotto l'id dell'esecuzione. Prima ne apriva uno lui, e quel thread era un
+	// secondo processo d'agente, inerte, aperto solo per avere un posto in cui
+	// raccontare il lavoro di un altro.
 	//
-	// La regola vive qui e non nella rotta di avvio, ed è una differenza di
-	// sostanza: aprire un filo vuol dire accendere un secondo processo
-	// d'agente, e ha senso esattamente quando c'è una persona che ha premuto e
-	// che vorrà parlargli. Una run avviata da un programma non ha nessuno a cui
-	// dare un filo, e la rotta continua a legare la run alla conversazione che
-	// le viene nominata e a nient'altro.
-	//
-	// label è il nome del passo, e diventa il nome del filo: in quel filo non
-	// scriverà nessuno per primo, e senza un nome l'elenco lo chiamerebbe con la
-	// data — che fra dieci fili uguali non dice quale.
-	async function startPanelAction(actionID, button, conversationID, label) {
+	// conversationID resta, e nomina il thread *da cui viene la pressione* — il
+	// passo consigliato premuto in coda a una conversazione. Serve alla run per
+	// essere ricordata lì dentro, nel punto del discorso che l'ha chiesta, e a
+	// nient'altro: una pressione che non viene da nessuna conversazione non ne
+	// inventa una, perché non c'è nessun discorso a cui attaccarla.
+	async function startPanelAction(actionID, button, conversationID) {
 		if (!actionID || !panelContext || !panelStartURL) return;
 		const ctx = panelContext;
 		const url = panelStartURL;
 		if (button) button.disabled = true;
 		try {
-			const thread = await threadForStart(conversationID, label);
-			if (panelContext !== ctx) return;
 			const body = { action: actionID };
-			if (thread) body.conversation_id = thread;
+			const from = String(conversationID || "");
+			if (from && liveConversationEntries().some((entry) => entry.id === from)) {
+				body.conversation_id = from;
+			}
 			const override = runModelOverride();
 			if (override) {
 				body.model = override.model;
@@ -3782,34 +3763,11 @@
 			loadModelChoice(ctx);
 			renderExecution(record);
 			await followExecution(record, ctx);
-			await revealThread(thread);
+			// Il thread della run è la run: si raggiunge con il suo stesso id.
+			await revealThread(record && record.id ? record.id : "");
 		} catch (err) {
 			showToast(err.message || String(err), "err");
 			if (button) button.disabled = false;
-		}
-	}
-
-	// Il filo in cui questa pressione avvia: quello che si porta dietro, se è
-	// ancora vivo, altrimenti uno aperto adesso.
-	//
-	// Un filo che non si è potuto aprire non ferma il passo: si torna a non
-	// nominarne nessuno, la run parte lo stesso e resta dov'è sempre stata — nel
-	// pannello e nella striscia delle run. Perdere l'avvio per il posto in cui
-	// raccontarlo sarebbe scambiare la cosa col suo indice.
-	async function threadForStart(conversationID, label) {
-		const named = String(conversationID || "");
-		if (named && liveConversationEntries().some((entry) => entry.id === named)) {
-			return named;
-		}
-		const body = {};
-		const specCode = specCodeOfContext(panelContext);
-		if (specCode) body.spec_code = specCode;
-		const chosenTitle = String(label || "").trim();
-		if (chosenTitle) body.title = chosenTitle;
-		try {
-			return conversationIdOf(await apiPost("/api/workspace/conversations", body));
-		} catch (_) {
-			return "";
 		}
 	}
 

@@ -40,7 +40,7 @@
 			action: step.action,
 			code: spec && spec.code ? spec.code : "",
 			// Il nome che il processo dà al passo. Viaggia perché è il nome che
-			// il filo aperto per questo passo si porta nell'elenco: lì nessuno
+			// il thread aperto per questo passo si porta nell'elenco: lì nessuno
 			// scriverà per primo, e senza un nome l'elenco lo chiamerebbe con la
 			// data. Manca finché il payload non lo porta, e allora resta vuoto:
 			// un nome inventato qui sarebbe una seconda parola per la stessa

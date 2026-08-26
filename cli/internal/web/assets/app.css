@@ -6864,7 +6864,7 @@ body.no-workspace [data-workspace-scoped] {
 
 /* Una colonna sola: il codice della spec — quando c'è — sta sopra al titolo, e
    la riga di quando sotto. La griglia a due colonne di prima teneva la prima
-   larga quanto il codice anche per i fili che non ne hanno uno, e quello spazio
+   larga quanto il codice anche per i thread che non ne hanno uno, e quello spazio
    lo pagava il titolo di tutti. */
 .thread {
 	display: flex;
@@ -6898,8 +6898,8 @@ body.no-workspace [data-workspace-scoped] {
 	box-shadow: none;
 }
 
-/* Il codice della spec ancora il filo: in monospazio, sopra al titolo, così
-   l'occhio trova a colpo d'occhio i fili di una spec. Un filo che una spec non
+/* Il codice della spec ancora il thread: in monospazio, sopra al titolo, così
+   l'occhio trova a colpo d'occhio i thread di una spec. Un thread che una spec non
    ce l'ha non disegna niente al suo posto: un segnaposto vuoto occuperebbe la
    stessa riga per non dire niente. */
 .thread-code {

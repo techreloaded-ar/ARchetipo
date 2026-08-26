@@ -13,12 +13,12 @@ package web
 //
 // The other half of that hole is not closed here, and deliberately: a start
 // that names no conversation came from no thread, and this file does not invent
-// one for it. What the person pressing in the viewer sees instead is a thread
-// opened by the viewer *before* the start, whose id then arrives here like any
-// other — see startPanelAction in app.js. The rule lives there because opening a
-// thread means starting a second agent process, and that is worth doing exactly
-// when there is a person who pressed and will want to talk to it. A run started
-// through the API has nobody to give a thread to.
+// one for it. Nor does it need to any more. A run *is* a conversation now, held
+// under its own execution id — see conversation_action.go — so a start that
+// names none is not a start with nowhere to be read: it is read in its own
+// thread. What this file still does, and only this, is remember inside a
+// conversation that a step was asked for there, at the point of the discourse
+// that asked for it.
 //
 // What is added here is only the tie. The start itself stays where it was, in
 // startSpecAction and startWorkspaceAction, and this file runs *after* it: an

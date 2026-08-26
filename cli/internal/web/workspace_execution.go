@@ -282,6 +282,10 @@ func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession,
 		return nil, mapExecutionStartError(err, providerID)
 	}
 	ws.dispatch.claim(workspaceExecutionKey, started.ID)
+	// The run becomes the thread it is read in, exactly as a spec-scoped one
+	// does: an inception is a conversation with a preconfigured prompt and it
+	// always was, so there is nothing here that is only true of a spec.
+	s.holdRunAsConversation(ctx, ws, &started, provider, providerConfig)
 
 	ws.dispatch.run(func(dispatchCtx context.Context) {
 		// Deferred in this order so they unwind in the other one: the workspace
@@ -291,6 +295,9 @@ func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession,
 		defer s.broker.Publish()
 		defer ws.dispatch.release(workspaceExecutionKey, started.ID)
 		_, _ = continuation(dispatchCtx)
+		// The thread of this run ends with it, on a context of its own so a
+		// shutdown racing the end cannot throw away the transcript.
+		s.sealRunConversation(context.WithoutCancel(dispatchCtx), ws, started.ID)
 	})
 	return &started, nil
 }

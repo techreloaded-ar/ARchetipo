@@ -71,6 +71,19 @@ type liveConversation struct {
 	// resumedFrom is the id of the past conversation this one was resumed from,
 	// empty for a conversation that started on its own.
 	resumedFrom string
+	// executionID and action say that this conversation *is* an action of the
+	// process rather than a free one: the agent behind it was given the
+	// action's instruction, it has the authority the action needs, and the
+	// record named here is the outcome of what is said in it. Both are empty
+	// for a free conversation, which is the default.
+	//
+	// An action conversation is held under the id of its own execution, because
+	// they are one thing: the session the provider registered for the run *is*
+	// the session this conversation is read and commanded through. There is one
+	// agent process, not two — which is the whole point of the unification, and
+	// what makes closing the thread and cancelling the run the same gesture.
+	executionID string
+	action      execution.ActionID
 
 	// decidedProposalID is the id of the last event of *this* conversation whose
 	// action proposal has been decided. It is a watermark and not a flag: a
@@ -141,7 +154,35 @@ func (c *conversationSet) canOpen() error {
 	return nil
 }
 
-// open records a conversation the provider has just started.
+// conversationHold is everything the holder needs to keep one conversation.
+//
+// It is a struct and no longer a list of arguments because the two kinds of
+// conversation differ in which fields they fill, and a positional call with ten
+// values gives a reader no way to see which kind is being opened.
+type conversationHold struct {
+	id             string
+	providerID     string
+	provider       execution.Conversationalist
+	collaborator   execution.RunCollaborator
+	providerConfig map[string]any
+	workingDir     string
+	openedAt       time.Time
+	specCode       string
+	resumedFrom    string
+	// executionID and action are set only for a conversation that *is* an
+	// action of the process. See the fields of the same name on
+	// liveConversation.
+	executionID string
+	action      execution.ActionID
+}
+
+// isAction reports whether this hold is an action of the process rather than a
+// free conversation.
+func (h conversationHold) isAction() bool {
+	return strings.TrimSpace(h.executionID) != ""
+}
+
+// open records a conversation that has just been started.
 //
 // It refuses an id it is already holding rather than replacing it: replacing
 // would silently drop the handle of a live agent process, and the process would
@@ -149,14 +190,26 @@ func (c *conversationSet) canOpen() error {
 // been closed for the same reason runFollowers refuses after closeAll — the
 // workspace it belonged to is gone. It refuses for no other reason: how many
 // are already alive is not one.
-func (c *conversationSet) open(id, providerID string, provider execution.Conversationalist, collaborator execution.RunCollaborator, providerConfig map[string]any, workingDir string, openedAt time.Time, specCode, resumedFrom string) error {
+//
+// What it needs in order to be able to end the conversation depends on which
+// kind it is, and the two are genuinely different: a free conversation was
+// started through OpenConversation and is ended through CloseConversation, so
+// it needs the Conversationalist; an action was started as a run and is ended by
+// cancelling that run, so it needs the collaborator. Requiring both would refuse
+// a legitimate conversation for lacking a handle nothing would ever use.
+func (c *conversationSet) open(hold conversationHold) error {
 	if c == nil {
 		return fmt.Errorf("this workspace cannot hold a conversation")
 	}
-	if strings.TrimSpace(id) == "" {
+	id := strings.TrimSpace(hold.id)
+	if id == "" {
 		return fmt.Errorf("a conversation needs an id")
 	}
-	if provider == nil {
+	if hold.isAction() {
+		if hold.collaborator == nil {
+			return fmt.Errorf("an action conversation needs a collaborator that can end its run")
+		}
+	} else if hold.provider == nil {
 		return fmt.Errorf("a conversation needs a provider that can close it")
 	}
 	c.mu.Lock()
@@ -176,14 +229,16 @@ func (c *conversationSet) open(id, providerID string, provider execution.Convers
 	// conversation out of every other one.
 	c.live[id] = &liveConversation{
 		id:                id,
-		providerID:        providerID,
-		provider:          provider,
-		collaborator:      collaborator,
-		providerConfig:    providerConfig,
-		workingDir:        workingDir,
-		openedAt:          openedAt,
-		specCode:          specCode,
-		resumedFrom:       resumedFrom,
+		providerID:        hold.providerID,
+		provider:          hold.provider,
+		collaborator:      hold.collaborator,
+		providerConfig:    hold.providerConfig,
+		workingDir:        hold.workingDir,
+		openedAt:          hold.openedAt,
+		specCode:          hold.specCode,
+		resumedFrom:       hold.resumedFrom,
+		executionID:       strings.TrimSpace(hold.executionID),
+		action:            hold.action,
 		decidedProposalID: 0,
 		outcome:           nil,
 		outcomes:          nil,
@@ -427,6 +482,8 @@ func snapshotOf(entry *liveConversation) conversationSnapshot {
 		openedAt:          entry.openedAt,
 		specCode:          entry.specCode,
 		resumedFrom:       entry.resumedFrom,
+		executionID:       entry.executionID,
+		action:            entry.action,
 		decidedProposalID: entry.decidedProposalID,
 		outcome:           entry.outcome,
 		outcomes:          outcomes,
@@ -455,13 +512,62 @@ func (c *conversationSet) closeOne(ctx context.Context, id string) error {
 		delete(c.live, id)
 	}
 	c.mu.Unlock()
-	if !held || entry.provider == nil {
+	if !held {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	return releaseConversation(ctx, entry)
+}
+
+// releaseConversation ends the agent process behind one conversation, whichever
+// way that conversation was started.
+//
+// An action is ended by cancelling its run, and that is not a translation of
+// "close the conversation" into another vocabulary: the run and the thread are
+// one session, so the gesture that ends one is the gesture that ends the other.
+// It also keeps the invariant the whole localrun package rests on — the state of
+// a run is observed and never derived: the cancel asks the process to stop, and
+// what closes the record is the dispatch noticing that it did.
+//
+// A run that has already ended answers with a refusal, and that is success here:
+// closing a thread whose work is over releases nothing because there is nothing
+// left to release.
+func releaseConversation(ctx context.Context, entry *liveConversation) error {
+	if entry == nil {
+		return nil
+	}
+	if strings.TrimSpace(entry.executionID) != "" {
+		if entry.collaborator == nil {
+			return nil
+		}
+		err := entry.collaborator.CancelRun(ctx, execution.RunRequest{RunID: entry.id, ProviderConfig: entry.providerConfig})
+		if reason, refused := execution.RefusalOf(err); refused && (reason == execution.RunRefusedNotActive || reason == execution.RunRefusedNotFound) {
+			return nil
+		}
+		return err
+	}
+	if entry.provider == nil {
+		return nil
+	}
 	return entry.provider.CloseConversation(ctx, entry.id)
+}
+
+// forget drops one conversation from the set without releasing anything.
+//
+// It is what the end of an action thread does: the process behind it belongs to
+// the dispatch, which has already ended it, so there is nothing left to close
+// and a close would only earn a refusal. Everything else about the end — the
+// transcript, the final state — is the journal's, and has already been written
+// by the time this runs.
+func (c *conversationSet) forget(id string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.live, id)
 }
 
 // shutdown closes every conversation for good: after it, open refuses. It is
@@ -494,10 +600,7 @@ func (c *conversationSet) shutdown(ctx context.Context) error {
 	}
 	var errs []error
 	for _, entry := range entries {
-		if entry.provider == nil {
-			continue
-		}
-		if err := entry.provider.CloseConversation(ctx, entry.id); err != nil {
+		if err := releaseConversation(ctx, entry); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -542,6 +645,11 @@ type conversationSnapshot struct {
 	openedAt       time.Time
 	specCode       string
 	resumedFrom    string
+	// executionID and action say this conversation is an action of the process,
+	// and name the record it is the outcome of. Both are empty for a free
+	// conversation. See the fields of the same name on liveConversation.
+	executionID string
+	action      execution.ActionID
 	// decidedProposalID and outcome travel in the copy because every reader of
 	// the conversation needs them together with its history: what is pending is
 	// decided against the watermark, and what was decided is read from the

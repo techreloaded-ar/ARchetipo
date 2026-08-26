@@ -97,6 +97,11 @@ func (j *conversationJournal) begin(ctx context.Context, snapshot conversationSn
 		LastMessageAt: openedAt,
 		ResumedFrom:   strings.TrimSpace(resumedFrom),
 		Events:        []execution.RunEvent{},
+		// Read from the conversation and never passed in: whether a thread is a
+		// step of the process is a fact of the thread, and a caller free to say
+		// otherwise would be a second author of it.
+		Action:      string(snapshot.action),
+		ExecutionID: strings.TrimSpace(snapshot.executionID),
 	}
 	j.mu.Lock()
 	if j.entries == nil {
@@ -249,6 +254,33 @@ func (j *conversationJournal) finish(ctx context.Context, id string, state execu
 	// rewrite it, and a map that only ever grew would keep every conversation of
 	// the whole life of the viewer.
 	delete(j.entries, id)
+	j.mu.Unlock()
+	return j.store.Save(ctx, saved)
+}
+
+// settle writes onto the journalled conversation what became of the step it was
+// carrying out.
+//
+// It is separate from finish because the two say different things and can only
+// be said in one order: settle records the outcome of the work, finish records
+// that the transcript is closed and drops the entry. Calling them the other way
+// round would write the outcome into a record the journal no longer holds.
+//
+// A conversation the journal is not keeping, and an empty status, both write
+// nothing: there is no record to write onto, and an outcome nobody stated is
+// not an outcome.
+func (j *conversationJournal) settle(ctx context.Context, id string, status execution.ExecutionStatus) error {
+	if j == nil || j.store == nil || strings.TrimSpace(string(status)) == "" {
+		return nil
+	}
+	j.mu.Lock()
+	entry, kept := j.entries[id]
+	if !kept {
+		j.mu.Unlock()
+		return nil
+	}
+	entry.record.Outcome = string(status)
+	saved := entry.record
 	j.mu.Unlock()
 	return j.store.Save(ctx, saved)
 }

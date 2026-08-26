@@ -45,7 +45,7 @@ func (s *stubConversationalist) CloseConversation(_ context.Context, conversatio
 func openTestConversation(t *testing.T, id string) *conversationSet {
 	t.Helper()
 	c := newConversationSet()
-	if err := c.open(id, "stub", &stubConversationalist{}, nil, nil, t.TempDir(), time.Now(), "", ""); err != nil {
+	if err := c.open(conversationHold{id: id, providerID: "stub", provider: &stubConversationalist{}, workingDir: t.TempDir(), openedAt: time.Now()}); err != nil {
 		t.Fatalf("opening the conversation: %v", err)
 	}
 	return c
@@ -55,7 +55,7 @@ func openTestConversation(t *testing.T, id string) *conversationSet {
 // the moment it was opened so a test can assert the order of list().
 func openInto(t *testing.T, c *conversationSet, provider *stubConversationalist, id, specCode string, openedAt time.Time) {
 	t.Helper()
-	if err := c.open(id, "stub", provider, nil, nil, t.TempDir(), openedAt, specCode, ""); err != nil {
+	if err := c.open(conversationHold{id: id, providerID: "stub", provider: provider, workingDir: t.TempDir(), openedAt: openedAt, specCode: specCode}); err != nil {
 		t.Fatalf("opening the conversation %s: %v", id, err)
 	}
 }
@@ -187,7 +187,7 @@ func TestConversationStateForgetsDecisionsWhenTheConversationChanges(t *testing.
 	if err := c.closeOne(context.Background(), "conv-4"); err != nil {
 		t.Fatalf("closing the conversation: %v", err)
 	}
-	if err := c.open("conv-5", "stub", &stubConversationalist{}, nil, nil, t.TempDir(), time.Now(), "", ""); err != nil {
+	if err := c.open(conversationHold{id: "conv-5", providerID: "stub", provider: &stubConversationalist{}, workingDir: t.TempDir(), openedAt: time.Now()}); err != nil {
 		t.Fatalf("opening the next conversation: %v", err)
 	}
 
@@ -338,7 +338,7 @@ func TestConversationSetHoldsAsManyAsItIsAsked(t *testing.T) {
 	if err := c.canOpen(); err == nil {
 		t.Fatalf("canOpen() after shutdown should be refused")
 	}
-	if err := c.open("conv-after", "stub", provider, nil, nil, t.TempDir(), now.Add(time.Hour), "", ""); err == nil {
+	if err := c.open(conversationHold{id: "conv-after", providerID: "stub", provider: provider, workingDir: t.TempDir(), openedAt: now.Add(time.Hour)}); err == nil {
 		t.Fatalf("opening on a stopped holder should be refused")
 	}
 }
@@ -412,7 +412,7 @@ func TestConversationSetShutdownReleasesEveryConversationDespiteAFailure(t *test
 	if len(c.list()) != 0 {
 		t.Fatalf("list() = %d entries after shutdown, want none", len(c.list()))
 	}
-	if err := c.open("conv-d", "stub", provider, nil, nil, t.TempDir(), now.Add(time.Hour), "", ""); err == nil {
+	if err := c.open(conversationHold{id: "conv-d", providerID: "stub", provider: provider, workingDir: t.TempDir(), openedAt: now.Add(time.Hour)}); err == nil {
 		t.Fatalf("opening a conversation after shutdown should be refused: nothing would be left to close it")
 	}
 }

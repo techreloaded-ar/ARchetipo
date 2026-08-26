@@ -63,7 +63,7 @@
 	// The words this module owns. None of them names a step or a state of
 	// anybody's method: they are the furniture of a list — what its groups are,
 	// what the standing offer is, and what the list says when it is empty.
-	// I due gruppi dicono l'unica cosa che cambia il modo di leggere un filo:
+	// I due gruppi dicono l'unica cosa che cambia il modo di leggere un thread:
 	// se sta ancora girando o se è finito. Raggrupparli invece per spec o
 	// progetto divideva la lista su un fatto che il codice accanto al titolo già
 	// dice, e lasciava le conversazioni senza spec sotto un'intestazione che non

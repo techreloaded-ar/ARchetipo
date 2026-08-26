@@ -376,6 +376,10 @@ func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code
 		return nil, mapExecutionStartError(err, providerID)
 	}
 	ws.dispatch.claim(code, started.ID)
+	// The run becomes the thread it is read in, before the response is written
+	// and before the dispatch has produced anything: the person who pressed must
+	// find the thread already there, not a moment later.
+	s.holdRunAsConversation(ctx, ws, &started, provider, effectiveConfig)
 
 	ws.dispatch.run(func(dispatchCtx context.Context) {
 		// Deferred in this order so they unwind in the other one: the spec stops
@@ -392,6 +396,11 @@ func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code
 		// confirmation before writing the terminal record, so there is nothing
 		// left to reconcile here.
 		_, _ = continuation(dispatchCtx)
+		// The thread of this run ends with it. It is sealed on a context of its
+		// own for the reason every terminal write here uses one: a shutdown
+		// racing the end of a run must not throw away the transcript of what the
+		// agent said.
+		s.sealRunConversation(context.WithoutCancel(dispatchCtx), ws, started.ID)
 	})
 	return &started, nil
 }

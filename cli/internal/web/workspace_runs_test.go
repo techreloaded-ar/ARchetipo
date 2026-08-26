@@ -468,7 +468,7 @@ func TestWorkspaceRunsRefusedWithoutAnOpenWorkspace(t *testing.T) {
 // keeps, not what closing a conversation releases.
 func (f *workspaceRunsFixture) openConversation(t *testing.T, id string) {
 	t.Helper()
-	if err := f.srv.session().conversation.open(id, "stub", &stubConversationalist{}, nil, nil, t.TempDir(), time.Now(), "", ""); err != nil {
+	if err := f.srv.session().conversation.open(conversationHold{id: id, providerID: "stub", provider: &stubConversationalist{}, workingDir: t.TempDir(), openedAt: time.Now()}); err != nil {
 		t.Fatalf("opening the conversation: %v", err)
 	}
 }
