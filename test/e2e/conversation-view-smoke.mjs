@@ -279,11 +279,14 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     if (JSON.stringify(accepted).includes(MESSAGE_SENTINEL)) {
       throw new Error("AC-1: the accepted message must not be echoed into the history before the process re-emits it");
     }
-    // The first user frame carried the opening instruction; the operator's
-    // message is the second one the process is given.
-    const steered = await control.waitFor(userFrame, 2);
-    if (userFrameText(steered) !== MESSAGE_SENTINEL) {
-      throw new Error(`AC-1: the process received ${JSON.stringify(userFrameText(steered))} instead of the sentinel`);
+    // The opening instruction was held rather than written at the open, so the
+    // operator's message is what delivers it: both travel in the one frame the
+    // process is given, the instruction as the block before the sentinel.
+    const steered = await control.waitFor(userFrame, 1);
+    const steeredBlocks = steered.frame?.message?.content || [];
+    const lastBlock = steeredBlocks[steeredBlocks.length - 1];
+    if (steeredBlocks.length < 2 || lastBlock?.text !== MESSAGE_SENTINEL) {
+      throw new Error(`AC-1: the process received ${JSON.stringify(steeredBlocks)} instead of the opening instruction followed by the sentinel`);
     }
     const stillOne = await readConversation(view.url, conversationA, 0);
     if ((stillOne.events || []).length !== 1) {
@@ -675,10 +678,6 @@ function assistantText(text) {
 // message share.
 function userFrame(entry) {
   return entry.kind === "received" && entry.frame?.type === "user";
-}
-
-function userFrameText(entry) {
-  return (entry.frame?.message?.content || []).map((block) => block.text || "").join("");
 }
 
 // --- the control server ------------------------------------------------------
