@@ -276,6 +276,33 @@ async function startFakeHub({ sandboxDir, planFile }) {
     }
     authorized += 1;
 
+    // The viewer probes the default provider before it dispatches anything, and
+    // the arcipelago probe is the whoami of the external namespace followed by
+    // the list of destinations the credential may use. A hub that did not serve
+    // them would be indistinguishable from one that is not there, and every
+    // action would be refused before a task was ever created.
+    if (req.method === "GET" && url.pathname === "/api/external/me") {
+      return sendJSON(res, 200, {
+        kind: "application",
+        identity: { id: "app-smoke", name: "smoke", workspaceIds: [WORKSPACE_ID] },
+      });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/external/workspaces") {
+      return sendJSON(res, 200, {
+        workspaces: [
+          {
+            id: WORKSPACE_ID,
+            name: "smoke workspace",
+            cwdHint: sandboxDir,
+            requirements: [],
+            archived: false,
+            eligibleRunners: { known: 1, online: 1, missing: [] },
+          },
+        ],
+      });
+    }
+
     if (req.method === "POST" && url.pathname === "/api/external/tasks") {
       return readBody(req).then((raw) => {
         let request;

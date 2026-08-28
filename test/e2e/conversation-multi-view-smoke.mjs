@@ -625,12 +625,20 @@ function userReplay(text) {
   return { type: "user", message: { content: [{ type: "text", text }] }, isReplay: true };
 }
 
-function userFrameText(entry) {
-  return (entry.frame?.message?.content || []).map((block) => block.text || "").join("");
+// The blocks of a user frame are looked at one by one, and never joined. The
+// instruction that opens a conversation is held until the person writes, and
+// then travels in the *same* frame as their first message, as a block of its
+// own (cli/internal/execution/claude/streamjson.go, `hold`). A test that joined
+// the blocks would read that first frame as "the instruction glued to the
+// message" and never recognise the message it delivered — while the process was
+// given exactly the message, told apart from the instruction, which is what the
+// separate blocks are for.
+function userFrameBlocks(entry) {
+  return (entry.frame?.message?.content || []).map((block) => block.text || "");
 }
 
 function userFrameCarrying(text) {
-  return (entry) => entry.kind === "received" && entry.frame?.type === "user" && userFrameText(entry) === text;
+  return (entry) => entry.kind === "received" && entry.frame?.type === "user" && userFrameBlocks(entry).includes(text);
 }
 
 // --- the control server -----------------------------------------------------------
