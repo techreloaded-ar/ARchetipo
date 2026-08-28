@@ -6311,6 +6311,14 @@
 						? status.next_step
 						: null;
 				})(),
+				// Il parser Markdown della pagina, iniettato perché il renderer
+				// resti puro e consumabile anche dove marked non esiste.
+				markedParse:
+					typeof marked !== "undefined" &&
+					marked &&
+					typeof marked.parse === "function"
+						? marked.parse.bind(marked)
+						: null,
 			},
 		);
 

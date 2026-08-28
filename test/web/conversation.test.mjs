@@ -769,14 +769,116 @@ describe("renderConversation — la run dentro il flusso", () => {
 			first < second,
 			"l'ordine dei blocchi è quello delle ancore, non quello del payload",
 		);
+		// Gli eventi text 2 e 3 sono adiacenti e la timeline li fonde in una
+		// riga sola, la cui colonnina porta l'intervallo degli id.
+		const mergedRail = railOf("2–3");
 		assert.ok(
-			html.indexOf(railOf(1)) < first && first < html.indexOf(railOf(2)),
+			html.indexOf(railOf(1)) < first && first < html.indexOf(mergedRail),
 			"il primo blocco non è ancorato al proprio evento",
 		);
 		assert.ok(
-			html.indexOf(railOf(3)) < second,
+			html.indexOf(mergedRail) < second,
 			"il secondo blocco non è ancorato al proprio evento",
 		);
+	});
+
+	// US: la risposta dell'agente è Markdown, e con un parser iniettato la
+	// timeline la interpreta invece di mostrarla cruda. Senza parser — il vm
+	// nudo di questi test — resta il testo escapato di sempre: gli altri test
+	// di questo file sono la prova che il modulo non lancia e non cambia.
+	describe("markdown della risposta dell'agente", () => {
+		it("il testo dell'agente passa dal parser iniettato, quello di chi scrive no", () => {
+			const calls = [];
+			const html = renderConversation(
+				withConversation({
+					events: [
+						{ id: 1, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "user_message", text: "# TESTO-TUO" },
+						{ id: 2, seq: 2, at: "2026-08-21T10:00:02.000Z", kind: "text", text: "# TESTO-AGENTE" },
+					],
+					last_id: 2,
+				}),
+				"",
+				{
+					markedParse: (md) => {
+						calls.push(md);
+						return `<b data-md-reso>${md}</b>`;
+					},
+				},
+			);
+
+			assert.deepEqual(calls, ["# TESTO-AGENTE"], "il parser deve vedere solo il testo dell'agente");
+			assert.ok(
+				html.includes('<b data-md-reso># TESTO-AGENTE</b>'),
+				"l'HTML del parser deve arrivare non escapato",
+			);
+			assert.ok(
+				html.includes("# TESTO-TUO"),
+				"il messaggio di chi scrive resta testo, mai markup",
+			);
+			assert.ok(
+				html.includes("conv-event-markdown"),
+				"il blocco interpretato deve dichiararsi tale, per lo stile che toglie il pre-wrap",
+			);
+		});
+
+		it("i frammenti adiacenti diventano una chiamata sola, e un messaggio in mezzo li separa", () => {
+			const calls = [];
+			const parse = (md) => {
+				calls.push(md);
+				return `<x>${md}</x>`;
+			};
+			renderConversation(
+				withConversation({
+					events: [
+						{ id: 1, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "text", text: "## Tit" },
+						{ id: 2, seq: 2, at: "2026-08-21T10:00:02.000Z", kind: "text", text: "olo\n- voce" },
+						{ id: 3, seq: 3, at: "2026-08-21T10:00:03.000Z", kind: "user_message", text: "FRAPPOSTO" },
+						{ id: 4, seq: 4, at: "2026-08-21T10:00:04.000Z", kind: "text", text: "coda" },
+					],
+					last_id: 4,
+				}),
+				"",
+				{ markedParse: parse },
+			);
+
+			assert.deepEqual(
+				calls,
+				["## Titolo\n- voce", "coda"],
+				"i delta si ricompongono senza separatore, e il messaggio frapposto chiude la riga",
+			);
+		});
+
+		it("la colonnina di una riga fusa porta l'intervallo degli id", () => {
+			const html = renderConversation(
+				withConversation({
+					events: [
+						{ id: 5, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "text", text: "a" },
+						{ id: 6, seq: 2, at: "2026-08-21T10:00:02.000Z", kind: "text", text: "b" },
+					],
+					last_id: 6,
+				}),
+				"",
+				{ markedParse: (md) => md },
+			);
+			assert.ok(html.includes(railOf("5–6")), "la riga fusa deve dichiarare #5–6");
+		});
+
+		it("senza parser il testo resta escapato e visibile", () => {
+			const html = renderConversation(
+				withConversation({
+					events: [
+						{ id: 1, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "text", text: "**non** <interpretato>" },
+					],
+					last_id: 1,
+				}),
+				"",
+			);
+			assert.ok(
+				html.includes("**non** &lt;interpretato&gt;"),
+				"senza marked la risposta è il testo escapato di sempre",
+			);
+			assert.ok(!html.includes("conv-event-markdown"));
+		});
 	});
 
 	it("il comando di un consenso si legge in chiaro", () => {

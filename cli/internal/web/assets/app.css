@@ -5220,6 +5220,22 @@ body.no-workspace [data-workspace-scoped] {
 	word-break: break-word;
 }
 
+/* La risposta dell'agente interpretata come Markdown: gli a capo li mettono i
+   blocchi del markup, non il pre-wrap, che qui raddoppierebbe ogni spazio. */
+.conv-event-text.conv-event-markdown {
+	white-space: normal;
+	font-size: 16px;
+	max-width: none;
+}
+
+.conv-event-markdown > :first-child {
+	margin-top: 0;
+}
+
+.conv-event-markdown > :last-child {
+	margin-bottom: 0;
+}
+
 .conv-event-tool {
 	font-family: var(--font-mono);
 	font-size: 13px;

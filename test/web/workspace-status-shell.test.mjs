@@ -213,7 +213,16 @@ describe("AC-2 — il cammino di avvio è uno solo", () => {
 			"il pannello conversazione non passa più il passo raccomandato al renderer: in coda al thread non comparirebbe alcun blocco",
 		);
 		assert.ok(
-			body.includes("workspaceStatusSnapshot"),
+			body.includes("nextStepStatusView("),
+			"il passo raccomandato non passa più dalla sorgente unica nextStepStatusView: render e avvio potrebbero divergere",
+		);
+		// La sorgente unica legge sempre e solo i payload di
+		// /api/workspace/status: quello scopato sulla spec della conversazione
+		// quando c'è, quello del workspace altrimenti.
+		const source = blockAfter(js, "function nextStepStatusView(");
+		assert.ok(
+			source.includes("conversationStatusSnapshot") &&
+				source.includes("workspaceStatusSnapshot"),
 			"il passo raccomandato non arriva più dal payload di /api/workspace/status: il thread lo starebbe inventando da un'altra fonte",
 		);
 		const load = blockAfter(js, "async function loadWorkspaceStatus(");

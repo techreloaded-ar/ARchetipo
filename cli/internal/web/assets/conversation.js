@@ -343,6 +343,57 @@
 		</li>`;
 	}
 
+	// Una riga sola per una sequenza di eventi `text` adiacenti: la risposta
+	// dell'agente. Un provider che consegna a delta la spezza in un evento per
+	// frammento, e la sintassi Markdown attraversa i frammenti — un elenco, una
+	// fence, una tabella spezzata a metà non si leggono più. Qui i frammenti si
+	// ricompongono prima di interpretarli, uniti senza separatore perché un
+	// delta può spezzare a metà parola e uno spazio inventato la spezzerebbe
+	// una seconda volta; chi consegna blocchi interi li separa in pratica con
+	// eventi di strumento, quindi non si fondono mai.
+	//
+	// Con un parser il testo è Markdown interpretato; senza — nei test in vm
+	// nudo, o se la pagina non ha caricato marked — resta il testo escapato di
+	// sempre. Il parser inserisce il proprio HTML non escapato: è la stessa
+	// postura con cui la pagina rende i corpi di spec, piano e PRD.
+	function renderAgentText(events, parse) {
+		if (!events.length) return "";
+		const last = events[events.length - 1];
+		const head = [
+			`<span class="conv-event-kind">${escapeHtml(EVENT_KINDS.text.label)}</span>`,
+		];
+		const stamp = formatTime(last.at);
+		if (stamp) {
+			head.push(`<span class="conv-event-time">${escapeHtml(stamp)}</span>`);
+		}
+		const text = events
+			.map((e) => String(e.text === null || e.text === undefined ? "" : e.text))
+			.join("");
+		const lines = [];
+		if (text) {
+			lines.push(
+				parse
+					? `<div class="conv-event-text conv-event-markdown markdown-rendered">${parse(text)}</div>`
+					: `<p class="conv-event-text">${escapeHtml(text)}</p>`,
+			);
+		}
+		// La colonnina porta l'intervallo degli id fusi — #2–4 — così il cursore
+		// resta leggibile anche quando tre frammenti sono diventati una riga.
+		const firstID =
+			events[0].id === null || events[0].id === undefined
+				? ""
+				: String(events[0].id);
+		const lastID = last.id === null || last.id === undefined ? "" : String(last.id);
+		const railID = firstID === lastID ? firstID : `${firstID}–${lastID}`;
+		return `<li class="conv-event cev-agent">
+			<div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#${escapeHtml(railID)}</div>
+			<div class="conv-event-body">
+				<div class="conv-event-head">${head.join("")}</div>
+				${lines.join("")}
+			</div>
+		</li>`;
+	}
+
 	/** Il tipo di un evento, o stringa vuota: i payload parziali non sollevano. */
 	function eventKind(event) {
 		return event && typeof event === "object" && typeof event.kind === "string"
@@ -912,6 +963,18 @@
 	function renderTimeline(view, active, ui) {
 		const events = Array.isArray(view.events) ? view.events : [];
 		const local = ui && typeof ui === "object" ? ui : {};
+		// Il parser Markdown arriva iniettato dal chiamante — il pattern di
+		// task-markdown.js — o dalla globale della pagina; la guardia typeof è
+		// ciò che tiene il modulo consumabile in un vm nudo, dove `marked` non
+		// esiste e il testo dell'agente resta escapato.
+		const markedParse =
+			typeof local.markedParse === "function"
+				? local.markedParse
+				: typeof marked !== "undefined" &&
+						marked &&
+						typeof marked.parse === "function"
+					? marked.parse.bind(marked)
+					: null;
 		const anchored = new Map();
 		const pending = [];
 		for (const run of arrayAt(view, "runs")) {
@@ -957,11 +1020,28 @@
 				folded += 1;
 				folding = [];
 			};
+			// Gli eventi `text` consecutivi si accumulano qui e escono come una
+			// riga sola, per la stessa ragione della piega tecnica ma al
+			// contrario: lì si ripiega il rumore, qui si ricompone la risposta
+			// che i provider a delta consegnano in frammenti. I due accumuli non
+			// convivono mai — l'arrivo dell'uno chiude l'altro — quindi l'ordine
+			// delle righe resta quello degli eventi.
+			let agentRun = [];
+			const flushAgent = () => {
+				if (!agentRun.length) return;
+				rows.push(renderAgentText(agentRun, markedParse));
+				agentRun = [];
+			};
 			for (const event of events) {
 				if (isTechnicalEvent(event)) {
+					flushAgent();
 					folding.push(event);
+				} else if (event && event.kind === "text" && !event.tool) {
+					flushTechnical();
+					agentRun.push(event);
 				} else {
 					flushTechnical();
+					flushAgent();
 					rows.push(renderEvent(event));
 				}
 				const id =
@@ -970,10 +1050,14 @@
 						: "";
 				if (!id || emitted.has(id) || !anchored.has(id)) continue;
 				emitted.add(id);
+				// Un blocco run ancorato a un frammento chiude anche la risposta
+				// in corso: la run compare dove la conversazione l'ha chiesta.
 				flushTechnical();
+				flushAgent();
 				for (const row of anchored.get(id)) rows.push(row);
 			}
 			flushTechnical();
+			flushAgent();
 		}
 		for (const [anchor, blocks] of anchored) {
 			if (emitted.has(anchor)) continue;
