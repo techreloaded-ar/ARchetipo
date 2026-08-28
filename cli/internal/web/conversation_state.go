@@ -60,6 +60,10 @@ type liveConversation struct {
 	// providerConfig is the configuration the conversation was opened with, kept
 	// so a later command dispatches with the very configuration that was probed.
 	providerConfig map[string]any
+	// model and modelOptions are resolved once, when this session is opened.
+	// They stay on the conversation even if the workspace default later moves.
+	model        string
+	modelOptions map[string]string
 	// workingDir is the project root the conversation was opened about. It is a
 	// fact of the workspace, not of the provider, which is shared.
 	workingDir string
@@ -165,6 +169,8 @@ type conversationHold struct {
 	provider       execution.Conversationalist
 	collaborator   execution.RunCollaborator
 	providerConfig map[string]any
+	model          string
+	modelOptions   map[string]string
 	workingDir     string
 	openedAt       time.Time
 	specCode       string
@@ -233,6 +239,8 @@ func (c *conversationSet) open(hold conversationHold) error {
 		provider:          hold.provider,
 		collaborator:      hold.collaborator,
 		providerConfig:    hold.providerConfig,
+		model:             hold.model,
+		modelOptions:      cloneModelOptions(hold.modelOptions),
 		workingDir:        hold.workingDir,
 		openedAt:          hold.openedAt,
 		specCode:          hold.specCode,
@@ -478,6 +486,8 @@ func snapshotOf(entry *liveConversation) conversationSnapshot {
 		provider:          entry.provider,
 		collaborator:      entry.collaborator,
 		providerConfig:    entry.providerConfig,
+		model:             entry.model,
+		modelOptions:      cloneModelOptions(entry.modelOptions),
 		workingDir:        entry.workingDir,
 		openedAt:          entry.openedAt,
 		specCode:          entry.specCode,
@@ -641,6 +651,8 @@ type conversationSnapshot struct {
 	provider       execution.Conversationalist
 	collaborator   execution.RunCollaborator
 	providerConfig map[string]any
+	model          string
+	modelOptions   map[string]string
 	workingDir     string
 	openedAt       time.Time
 	specCode       string

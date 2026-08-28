@@ -37,6 +37,7 @@
 	const NO_SETTINGS_COPY =
 		"Questo provider non dichiara nessuna impostazione configurabile.";
 	const MODEL_CHOICE_TITLE = "Modello per questa run";
+	const CONVERSATION_MODEL_CHOICE_TITLE = "Modello per questa conversazione";
 	const INHERITED_COPY = "ereditato dal workspace";
 	const WORKSPACE_SOURCE = "workspace";
 
@@ -59,6 +60,11 @@
 	const RUN_SCOPE = {
 		prefix: "run",
 		selectAttrs: " data-run-model",
+		alwaysOfferEmpty: false,
+	};
+	const CONVERSATION_SCOPE = {
+		prefix: "conversation",
+		selectAttrs: " data-conversation-model",
 		alwaysOfferEmpty: false,
 	};
 
@@ -287,8 +293,9 @@
 	 * @param {object|null} selection  {model, options} chosen for this run.
 	 * @returns {string}               HTML, or "" when there is no view.
 	 */
-	function renderModelChoice(view, selection) {
+	function renderScopedModelChoice(view, selection, scope, titleText) {
 		if (!view || typeof view !== "object") return "";
+		const naming = scope || RUN_SCOPE;
 		const chosen = selection && typeof selection === "object" ? selection : null;
 		const model =
 			chosen && chosen.model !== undefined && chosen.model !== null
@@ -302,7 +309,7 @@
 			view.model_source === WORKSPACE_SOURCE
 				? `<small class="field-help">${escapeHtml(INHERITED_COPY)}</small>`
 				: "";
-		const title = `<span>${escapeHtml(MODEL_CHOICE_TITLE)}</span>`;
+		const title = `<span>${escapeHtml(titleText || MODEL_CHOICE_TITLE)}</span>`;
 
 		if (!view.available) {
 			// The model is stated, not offered: an empty one is the provider's
@@ -312,16 +319,16 @@
 			const reason = view.unavailable_reason
 				? `<small class="field-help field-warning">${escapeHtml(view.unavailable_reason)}</small>`
 				: "";
-			return `<div class="field full" data-run-field="model">${title}<p class="config-copy">${escapeHtml(effective)}</p>${inherited}${reason}</div>`;
+			return `<div class="field full" data-${naming.prefix}-field="model">${title}<p class="config-copy">${escapeHtml(effective)}</p>${inherited}${reason}</div>`;
 		}
 
 		const control = renderModelSelect(
 			{ name: "model" },
 			model,
 			catalogOf(view),
-			RUN_SCOPE,
+			naming,
 		);
-		const field = `<label class="field full" data-run-field="model">${title}${control}${inherited}</label>`;
+		const field = `<label class="field full" data-${naming.prefix}-field="model">${title}${control}${inherited}</label>`;
 		// The options belong to the model currently selected, so they are
 		// drawn after it and are redrawn from scratch whenever it changes.
 		const options = optionsOfModel(view, model);
@@ -336,18 +343,36 @@
 					renderModelOption(
 						option,
 						currentValue(optionValues, String(option.name || "")),
-						RUN_SCOPE,
+						naming,
 					),
 				)
 				.join("")
 		);
 	}
 
+	function renderModelChoice(view, selection) {
+		return renderScopedModelChoice(
+			view,
+			selection,
+			RUN_SCOPE,
+			MODEL_CHOICE_TITLE,
+		);
+	}
+
+	function renderConversationModelChoice(view, selection) {
+		return renderScopedModelChoice(
+			view,
+			selection,
+			CONVERSATION_SCOPE,
+			CONVERSATION_MODEL_CHOICE_TITLE,
+		);
+	}
+
 	// ---- exports ----
 
 	if (typeof module !== "undefined" && module.exports) {
-		module.exports = { renderProviderFields, renderModelChoice, escapeHtml };
+		module.exports = { renderProviderFields, renderModelChoice, renderConversationModelChoice, escapeHtml };
 	} else {
-		window.ProviderFields = { renderProviderFields, renderModelChoice };
+		window.ProviderFields = { renderProviderFields, renderModelChoice, renderConversationModelChoice };
 	}
 })();

@@ -5081,16 +5081,60 @@ body.no-workspace [data-workspace-scoped] {
 /* ---- Empty state -------------------------------------------------------- */
 .conv-empty {
 	display: flex;
-	align-items: center;
+	flex-direction: column;
+	align-items: flex-start;
 	gap: var(--space-3);
-	flex-wrap: wrap;
 	padding: var(--space-5);
+	max-width: 680px;
 }
 
 .conv-empty-text {
 	margin: 0;
 	font-size: 15px;
 	color: var(--text-muted);
+}
+
+.conv-empty-context {
+	margin: 0;
+	font-size: 14px;
+	color: var(--text);
+}
+
+/* Model and reasoning are chosen before the provider session is opened. The
+   same block also appears above the composer of a past conversation, because
+   resuming it creates a new session and may make a new choice. */
+.conv-model-choice {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--space-3);
+	width: min(100%, 620px);
+	padding: var(--space-4);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface-3);
+}
+
+.conv-panel > .conv-model-choice {
+	margin: var(--space-4) var(--gutter) 0;
+}
+
+.conv-model-choice > .field,
+.conv-model-choice > .config-copy,
+.conv-model-choice-help {
+	min-width: 0;
+	margin: 0;
+}
+
+.conv-model-choice-help {
+	grid-column: 1 / -1;
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--text-dim);
+}
+
+.conv-model-choice select {
+	width: 100%;
+	min-height: 44px;
 }
 
 /* ---- Timeline -----------------------------------------------------------
@@ -6616,6 +6660,15 @@ body.no-workspace [data-workspace-scoped] {
 	.conv-composer {
 		padding-left: var(--space-4);
 		padding-right: var(--space-4);
+	}
+
+	.conv-model-choice {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.conv-panel > .conv-model-choice {
+		margin-left: var(--space-4);
+		margin-right: var(--space-4);
 	}
 
 	.conv-notice,

@@ -98,6 +98,9 @@
 		// Stato vuoto
 		empty: "Su questo workspace non c'è nessuna conversazione aperta.",
 		open: "Apri una conversazione",
+		openingSpec: (code) => `Questa conversazione sarà collegata a ${code}.`,
+		modelFixed:
+			"Modello e ragionamento vengono fissati quando la conversazione si apre.",
 		// Timeline
 		markPartialHistory: "storia parziale",
 		partialHistory:
@@ -1266,6 +1269,17 @@
 		return `<button type="button" class="primary-btn conv-open" data-conversation-open${disabled}>${escapeHtml(label)}</button>`;
 	}
 
+	function renderConversationModelChoice(ui) {
+		const html = ui && typeof ui.modelChoiceHtml === "string"
+			? ui.modelChoiceHtml
+			: "";
+		if (!html) return "";
+		return `<div class="conv-model-choice">
+			${html}
+			<p class="conv-model-choice-help">${escapeHtml(TEXT.modelFixed)}</p>
+		</div>`;
+	}
+
 	// The pending proposal: what the agent says it *would* run, never what it
 	// has run. The card names the thing and its target, and — when the server
 	// says it can be taken here and now — offers the two answers a person can
@@ -1505,6 +1519,8 @@
 				${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}
 				<div class="conv-empty">
 					<p class="conv-empty-text">${escapeHtml(TEXT.empty)}</p>
+					${local.openingSpecCode ? `<p class="conv-empty-context">${escapeHtml(TEXT.openingSpec(String(local.openingSpecCode)))}</p>` : ""}
+					${renderConversationModelChoice(local)}
 					${renderOpenButton(local, TEXT.open)}
 				</div>
 			</section>`;
@@ -1564,6 +1580,7 @@
 		// chiudere quella aperta dalla testata: ripetere qui uno dei due
 		// costava al pannello una fascia intera per un comando che ha già il suo
 		// posto, e la conversazione è ciò che quello spazio deve avere.
+		if (!active) blocks.push(renderConversationModelChoice(local));
 		blocks.push(
 			renderComposer(active, typed, local, offered, anyAwaiting(value)),
 		);

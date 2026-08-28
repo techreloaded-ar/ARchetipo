@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
@@ -154,5 +157,115 @@ func TestConversationOmitsTheModelWhenTheProviderDeclaresNoCatalog(t *testing.T)
 	// it cannot say everything.
 	if got := conversationFieldOf(t, body, "provider_id"); got != "conversante" {
 		t.Fatalf("provider_id is %#v, want %q", got, "conversante")
+	}
+}
+
+func TestOpenConversationAppliesOnlyItsOwnModelChoice(t *testing.T) {
+	provider := newCatalogedConversingProvider("conversante", conversationModels())
+	srv := newConversationServer(t, provider)
+	configureDefaultProvider(t, srv, "conversante", map[string]any{
+		"model":  "modello-uno",
+		"sforzo": "basso",
+	})
+	configPath := filepath.Join(srv.session().cfg.ProjectRoot, ".archetipo", "config.yaml")
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := doJSON(t, srv, http.MethodPost, conversationsRoute, map[string]any{
+		"model":         "modello-uno",
+		"model_options": map[string]string{"sforzo": "alto"},
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("POST conversation = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	openings := provider.openings()
+	if len(openings) != 1 {
+		t.Fatalf("provider openings = %d, want 1", len(openings))
+	}
+	wantConfig := map[string]any{"model": "modello-uno", "sforzo": "alto"}
+	if !reflect.DeepEqual(openings[0].ProviderConfig, wantConfig) {
+		t.Fatalf("conversation config = %#v, want %#v", openings[0].ProviderConfig, wantConfig)
+	}
+	if got := conversationFieldOf(t, w.Body.String(), "model"); got != "modello-uno" {
+		t.Fatalf("response model = %#v, want %q", got, "modello-uno")
+	}
+	options, ok := conversationFieldOf(t, w.Body.String(), "model_options").(map[string]any)
+	if !ok || options["sforzo"] != "alto" {
+		t.Fatalf("response model_options = %#v, want sforzo=alto", options)
+	}
+	var opened conversationResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &opened); err != nil {
+		t.Fatal(err)
+	}
+	record, err := srv.session().conversationStore().Get(context.Background(), opened.Conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Model != "modello-uno" || record.ModelOptions["sforzo"] != "alto" {
+		t.Fatalf("journal model choice = %q %#v, want modello-uno/sforzo=alto", record.Model, record.ModelOptions)
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("a per-conversation model choice changed the workspace configuration")
+	}
+}
+
+func TestOpenConversationRejectsAnInvalidModelBeforeStartingAProcess(t *testing.T) {
+	provider := newCatalogedConversingProvider("conversante", conversationModels())
+	srv := newConversationServer(t, provider)
+	configureDefaultProvider(t, srv, "conversante", map[string]any{"model": "modello-uno"})
+
+	w := doJSON(t, srv, http.MethodPost, conversationsRoute, map[string]any{
+		"model": "modello-inesistente",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("POST invalid model = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if len(provider.openings()) != 0 {
+		t.Fatalf("an invalid model still opened %d provider processes", len(provider.openings()))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["field"] != execution.ModelFieldName {
+		t.Fatalf("invalid model field = %#v, want %q", payload["field"], execution.ModelFieldName)
+	}
+}
+
+func TestResumeConversationCanChooseAnotherModelAndReasoningLevel(t *testing.T) {
+	provider := newCatalogedConversingProvider("conversante", conversationModels())
+	srv := newConversationServer(t, provider)
+	configureDefaultProvider(t, srv, "conversante", map[string]any{
+		"model":  "modello-uno",
+		"sforzo": "basso",
+	})
+	opened := openConversationOK(t, srv)
+	id := opened.Conversation.ID
+	w := doJSON(t, srv, http.MethodDelete, conversationsRoute+"/"+id, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE conversation = %d: %s", w.Code, w.Body.String())
+	}
+
+	w = doJSON(t, srv, http.MethodPost, conversationsRoute+"/"+id+"/resume", map[string]any{
+		"message":       "continua",
+		"model":         "modello-uno",
+		"model_options": map[string]string{"sforzo": "alto"},
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("POST resume = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	openings := provider.openings()
+	if len(openings) != 2 {
+		t.Fatalf("provider openings = %d, want 2", len(openings))
+	}
+	want := map[string]any{"model": "modello-uno", "sforzo": "alto"}
+	if !reflect.DeepEqual(openings[1].ProviderConfig, want) {
+		t.Fatalf("resumed conversation config = %#v, want %#v", openings[1].ProviderConfig, want)
 	}
 }

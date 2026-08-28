@@ -186,6 +186,7 @@ type conversationRunView struct {
 // says why.
 type conversationTarget struct {
 	availability providerAvailability
+	runtime      execution.Provider
 	provider     execution.Conversationalist
 	collaborator execution.RunCollaborator
 	// reason is empty exactly when a conversation can be opened. It is the very
@@ -245,6 +246,7 @@ func (s *Server) conversationAvailabilityFor(ctx context.Context, ws *workspaceS
 		target.reason = denied.reasonFor(execution.CapabilityWorkspaceConverse)
 		return target
 	}
+	target.runtime = provider
 	target.provider = conversationalist
 	target.collaborator, _ = execution.RunCollaboratorFor(provider)
 	return target
@@ -389,7 +391,10 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 	// The model is read from the configuration the target carries, which for a
 	// conversation already open is the one its holder was started with and not
 	// today's default: the head must name what is actually answering.
-	model, modelOptions := s.conversationModelChoiceOf(ctx, target.availability.providerID, target.availability.providerConfig)
+	model, modelOptions := snapshot.model, cloneModelOptions(snapshot.modelOptions)
+	if model == "" {
+		model, modelOptions = s.conversationModelChoiceOf(ctx, target.availability.providerID, target.availability.providerConfig)
+	}
 	view := conversationView{
 		Available:         target.reason == "",
 		UnavailableReason: target.reason,
@@ -553,6 +558,17 @@ func (s *Server) conversationModelChoiceOf(ctx context.Context, providerID strin
 	return resolution.Choice.Model, resolution.Choice.Options
 }
 
+func cloneModelOptions(options map[string]string) map[string]string {
+	if len(options) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(options))
+	for name, value := range options {
+		cloned[name] = value
+	}
+	return cloned
+}
+
 // conversationOpenability is the answer to "is there a provider here that could
 // hold a conversation", as the reads render it next to whatever they were asked
 // for.
@@ -627,9 +643,9 @@ func pastConversationViewOf(record conversationlog.Record, openability conversat
 	view := conversationView{
 		Available:         openability.available,
 		UnavailableReason: openability.reason,
-		ProviderID:        openability.providerID,
-		Model:             openability.model,
-		ModelOptions:      openability.modelOptions,
+		ProviderID:        record.ProviderID,
+		Model:             record.Model,
+		ModelOptions:      cloneModelOptions(record.ModelOptions),
 		Conversation: &conversationSnapshotView{
 			ID: record.ID,
 			// The state travels as the record left it, with no interpretation:
@@ -761,11 +777,13 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		}
 	}
 	opened, err := s.openConversationOn(ctx, ws, conversationOpenSpec{
-		specCode: specCode,
-		title:    strings.TrimSpace(body.Title),
+		specCode:     specCode,
+		title:        strings.TrimSpace(body.Title),
+		model:        strings.TrimSpace(body.Model),
+		modelOptions: body.ModelOptions,
 	})
 	if err != nil {
-		writeError(w, err)
+		writeStartError(w, err)
 		return
 	}
 	view := s.conversationViewOf(ctx, ws, opened.target, opened.snapshot, opened.held, 0)
@@ -790,6 +808,10 @@ type conversationOpenSpec struct {
 	// title is the name the thread is to carry. Empty means "name it the way
 	// threads are named", which is by the first thing said in it.
 	title string
+	// model and modelOptions are the choice for this conversation alone. Empty
+	// means that the workspace configuration is inherited unchanged.
+	model        string
+	modelOptions map[string]string
 }
 
 // openedConversation is a conversation that exists by the time it is returned:
@@ -831,6 +853,21 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 		// process only to refuse it a moment later with different words.
 		return openedConversation{}, iox.NewConflict(target.reason, conversationRemedy, nil)
 	}
+	// A conversation is one provider session, so its model is chosen before the
+	// provider opens that session. The shared resolver gives conversations the
+	// same validation and pruning rules as a single run, while returning a clone
+	// that is never persisted back to the workspace configuration.
+	effectiveConfig, modelChoice, err := resolveRunModelChoice(
+		ctx,
+		target.runtime,
+		target.availability.providerConfig,
+		spec.model,
+		spec.modelOptions,
+	)
+	if err != nil {
+		return openedConversation{}, wrapRunModelChoiceError(err)
+	}
+	target.availability.providerConfig = effectiveConfig
 	// The process vocabulary is resolved here and travels on the request,
 	// because the provider does not know the process and must not learn it: the
 	// agent may propose an action, and it can only name one that exists if the
@@ -845,6 +882,12 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 		return openedConversation{}, iox.NewInternal("generating the conversation id", err)
 	}
 	providerConfig := execution.CloneConfig(target.availability.providerConfig)
+	model := ""
+	var modelOptions map[string]string
+	if modelChoice != nil {
+		model = modelChoice.Model
+		modelOptions = cloneModelOptions(modelChoice.Options)
+	}
 	openErr := target.provider.OpenConversation(ctx, execution.ConversationRequest{
 		ConversationID: id,
 		ProcessActions: conversationActionsOf(tpl),
@@ -880,6 +923,8 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 		openedAt:       time.Now().UTC(),
 		specCode:       spec.specCode,
 		resumedFrom:    spec.resumedFrom,
+		model:          model,
+		modelOptions:   modelOptions,
 	}); err != nil {
 		// The holder refused it — the workspace has been left while this open
 		// was in flight. This process is the only one holding the handle, so it
@@ -943,8 +988,10 @@ func conversationID() (string, error) {
 // as it always has — by the first thing the person says in it, and by the
 // moment it was opened until they do.
 type openConversationReq struct {
-	SpecCode string `json:"spec_code"`
-	Title    string `json:"title"`
+	SpecCode     string            `json:"spec_code"`
+	Title        string            `json:"title"`
+	Model        string            `json:"model"`
+	ModelOptions map[string]string `json:"model_options"`
 }
 
 type sendConversationMessageReq struct {

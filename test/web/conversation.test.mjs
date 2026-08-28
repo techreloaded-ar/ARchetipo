@@ -111,6 +111,29 @@ function withConversation(overrides) {
 }
 
 describe("renderConversation", () => {
+	it("prima dell'apertura mostra la scelta di modello della conversazione", () => {
+		const choice = '<label data-conversation-field="model">MODELLO-CONVERSAZIONE</label>';
+		const html = renderConversation(
+			{ available: true, conversation: null, events: [] },
+			"",
+			{ modelChoiceHtml: choice, openingSpecCode: "US-777" },
+		);
+		const text = visibleText(html);
+
+		assert.ok(text.includes("MODELLO-CONVERSAZIONE"));
+		assert.ok(text.includes("US-777"));
+		assert.ok(text.includes("fissati quando la conversazione si apre"));
+		assert.ok(html.indexOf(choice) < html.indexOf("data-conversation-open"));
+	});
+
+	it("una conversazione attiva non offre di mutare il modello già avviato", () => {
+		const html = renderConversation(LIVE, "", {
+			modelChoiceHtml: "MODELLO-DA-NON-MOSTRARE",
+		});
+
+		assert.ok(!html.includes("MODELLO-DA-NON-MOSTRARE"));
+	});
+
 	it("senza disponibilità mostra la ragione e non offre il compositore", () => {
 		const html = renderConversation(
 			{

@@ -80,6 +80,10 @@ func (s *Server) holdRunAsConversation(
 		executionID:    started.ID,
 		action:         started.Action,
 	}
+	if started.ModelChoice != nil {
+		hold.model = started.ModelChoice.Model
+		hold.modelOptions = cloneModelOptions(started.ModelChoice.Options)
+	}
 	if hold.openedAt.IsZero() {
 		hold.openedAt = time.Now().UTC()
 	}

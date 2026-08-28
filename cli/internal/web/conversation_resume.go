@@ -36,7 +36,9 @@ const (
 // wrote in the past conversation, which is what asked for the resume in the
 // first place.
 type resumeConversationReq struct {
-	Message string `json:"message"`
+	Message      string            `json:"message"`
+	Model        string            `json:"model"`
+	ModelOptions map[string]string `json:"model_options"`
 }
 
 // transcriptOf renders a past conversation as the text a new agent is handed as
@@ -156,12 +158,14 @@ func (s *Server) handleResumeWorkspaceConversation(w http.ResponseWriter, r *htt
 	// about whatever the thread was about, and asking the person to name it
 	// again would let the same conversation change subject by being resumed.
 	opened, err := s.openConversationOn(ctx, ws, conversationOpenSpec{
-		specCode:    record.SpecCode,
-		resumedFrom: record.ID,
-		transcript:  transcriptOf(record),
+		specCode:     record.SpecCode,
+		resumedFrom:  record.ID,
+		transcript:   transcriptOf(record),
+		model:        strings.TrimSpace(body.Model),
+		modelOptions: body.ModelOptions,
 	})
 	if err != nil {
-		writeError(w, err)
+		writeStartError(w, err)
 		return
 	}
 	snapshot := opened.snapshot

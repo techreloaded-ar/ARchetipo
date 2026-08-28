@@ -5056,6 +5056,13 @@
 	let conversationPollTimer = null; // interval following the open conversation
 	let conversationPollBusy = false; // a poll is in flight: ticks never overlap
 	let conversationPollFailures = 0; // consecutive failed reads, for the give-up threshold
+	// The model choice belongs to the conversation that is about to start. It is
+	// deliberately separate from modelChoiceSelection above, which belongs to a
+	// process action, so touching one surface can never change the other.
+	let conversationModelChoiceView = null;
+	let conversationModelChoiceSelection = null;
+	let conversationModelChoiceLoadToken = 0;
+	let conversationOpeningSpecCode = "";
 
 	// ---- Thread index (US-058, US-059) ---
 	// Three variables, and none of them a second copy of a conversation: the
@@ -5403,6 +5410,16 @@
 			e.preventDefault();
 			sendConversationMessage();
 		});
+		container.addEventListener("change", (e) => {
+			const target = e.target;
+			if (!target) return;
+			if (target.hasAttribute("data-conversation-model")) {
+				chooseConversationModel(target.value);
+				return;
+			}
+			const option = target.getAttribute("data-conversation-option");
+			if (option !== null) chooseConversationOption(option, target.value);
+		});
 		container.addEventListener("input", (e) => {
 			const input = e.target.closest(".conv-composer-input");
 			if (!input) return;
@@ -5452,9 +5469,7 @@
 				return;
 			}
 			if (e.target.closest("[data-conversation-new]")) {
-				// A free conversation: the very same open route the panel's own
-				// invitation uses, with no spec attached (AC-5).
-				openConversation();
+				prepareConversationOpen("");
 				return;
 			}
 			const thread = e.target.closest("[data-conversation-id]");
@@ -5551,6 +5566,108 @@
 		};
 	}
 
+	async function loadConversationModelChoice() {
+		const token = ++conversationModelChoiceLoadToken;
+		try {
+			const view = await apiGet("/api/execution/model-choice");
+			if (token !== conversationModelChoiceLoadToken) return;
+			conversationModelChoiceView = view || null;
+			renderConversationPanel();
+		} catch (_) {
+			// Choosing is optional. A failed catalog read must not turn opening a
+			// conversation into an unavailable action.
+		}
+	}
+
+	function currentConversationModelChoice() {
+		if (conversationModelChoiceSelection) {
+			return {
+				model: String(conversationModelChoiceSelection.model || ""),
+				options: Object.assign({}, conversationModelChoiceSelection.options),
+			};
+		}
+		const view = conversationModelChoiceView || {};
+		return {
+			model: view.model === undefined || view.model === null ? "" : String(view.model),
+			options: Object.assign({}, view.options || {}),
+		};
+	}
+
+	function conversationDeclaredOptionNames(modelID) {
+		const models =
+			conversationModelChoiceView && Array.isArray(conversationModelChoiceView.models)
+				? conversationModelChoiceView.models
+				: [];
+		const model = models.find(
+			(entry) => entry && String(entry.id || "") === String(modelID || ""),
+		);
+		return model && Array.isArray(model.options)
+			? model.options.filter(Boolean).map((option) => String(option.name || ""))
+			: [];
+	}
+
+	function chooseConversationModel(value) {
+		const current = currentConversationModelChoice();
+		const model = value === undefined || value === null ? "" : String(value);
+		const options = {};
+		conversationDeclaredOptionNames(model).forEach((name) => {
+			if (current.options[name] !== undefined && current.options[name] !== null) {
+				options[name] = String(current.options[name]);
+			}
+		});
+		conversationModelChoiceSelection = { model, options };
+		renderConversationPanel();
+	}
+
+	function chooseConversationOption(name, value) {
+		const current = currentConversationModelChoice();
+		current.options[String(name)] =
+			value === undefined || value === null ? "" : String(value);
+		conversationModelChoiceSelection = current;
+	}
+
+	function conversationModelOverride() {
+		if (!conversationModelChoiceSelection || !conversationModelChoiceView) return null;
+		const inheritedModel =
+			conversationModelChoiceView.model === undefined || conversationModelChoiceView.model === null
+				? ""
+				: String(conversationModelChoiceView.model);
+		const model = String(conversationModelChoiceSelection.model || "");
+		const options = normalizeOptionMap(conversationModelChoiceSelection.options);
+		if (
+			model === inheritedModel &&
+			sameOptionMap(options, normalizeOptionMap(conversationModelChoiceView.options))
+		) return null;
+		return { model, model_options: options };
+	}
+
+	function conversationModelChoiceMarkup() {
+		const render =
+			window.ProviderFields && window.ProviderFields.renderConversationModelChoice;
+		return render
+			? render(conversationModelChoiceView, conversationModelChoiceSelection)
+			: "";
+	}
+
+	function prepareConversationOpen(specCode) {
+		if (conversationBusy) return;
+		stopConversationPolling();
+		conversationsCurrentId = "";
+		conversationView = null;
+		conversationEvents = [];
+		conversationAfterID = 0;
+		conversationPendingMessage = "";
+		conversationRefusal = "";
+		conversationCloseArmed = false;
+		conversationOpeningSpecCode = String(specCode || "");
+		conversationModelChoiceSelection = null;
+		conversationModelChoiceView = null;
+		renderConversationsRail();
+		renderConversationPanel();
+		loadConversationModelChoice();
+		setShellView("conversation");
+	}
+
 	// switchToConversation is the only place that changes which conversation the
 	// panel is showing, and it is what makes AC-2 true on the page: the local
 	// projection is a projection *of one conversation*, so it is emptied with the
@@ -5586,6 +5703,10 @@
 		conversationCloseArmed = false;
 		conversationPollBusy = false;
 		conversationPollFailures = 0;
+		conversationModelChoiceLoadToken += 1;
+		conversationModelChoiceView = null;
+		conversationModelChoiceSelection = null;
+		conversationOpeningSpecCode = "";
 		renderConversationsRail();
 		renderConversationPanel();
 		let view = preloaded;
@@ -5607,6 +5728,7 @@
 		renderConversationPanel();
 		renderConversationsRail();
 		if (conversationIsActive()) startConversationPolling();
+		else loadConversationModelChoice();
 	}
 
 	// openConversationThread shows one thread of the rail. Where one looks does
@@ -5632,15 +5754,22 @@
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
+			const body = { message };
+			const override = conversationModelOverride();
+			if (override) {
+				body.model = override.model;
+				body.model_options = override.model_options;
+			}
 			const view = await apiPost(
 				`/api/workspace/conversations/${encodeURIComponent(id)}/resume`,
-				{ message },
+				body,
 			);
 			// A new conversation is a new history, and switching to it is what
 			// empties the previous one's projection — the draft included here,
 			// because this one has just been sent.
 			conversationDraft = "";
 			conversationsRefusal = "";
+			conversationModelChoiceSelection = null;
 			await switchToConversation(conversationIdOf(view), view);
 			// La conversazione nuova nasce vuota e il messaggio che l'ha aperta è
 			// già stato consegnato: senza l'eco, chi ha premuto invio si
@@ -5673,28 +5802,8 @@
 	// same open route, told which spec it is about, so the thread lands in the
 	// rail under its code instead of among the free ones.
 	async function openSpecConversation(code) {
-		if (conversationBusy || !code) return;
-		conversationBusy = true;
-		renderConversationPanel();
-		try {
-			// Nothing is closed to make room: the conversations already alive stay
-			// alive, and the workspace either holds another one or refuses to
-			// (AC-1, AC-5).
-			const view = await apiPost("/api/workspace/conversations", {
-				spec_code: code,
-			});
-			conversationsRefusal = "";
-			await switchToConversation(conversationIdOf(view), view);
-			// The conversation is the home of the workspace, and a conversation
-			// that was just started is the thing to look at.
-			setShellView("conversation");
-		} catch (err) {
-			refuseConversationOpen(err);
-		} finally {
-			conversationBusy = false;
-			renderConversationPanel();
-			loadConversationsIndex();
-		}
+		if (!code) return;
+		prepareConversationOpen(code);
 	}
 
 	function stopConversationPolling() {
@@ -5719,6 +5828,10 @@
 		conversationLink = "";
 		conversationPollBusy = false;
 		conversationPollFailures = 0;
+		conversationModelChoiceLoadToken += 1;
+		conversationModelChoiceView = null;
+		conversationModelChoiceSelection = null;
+		conversationOpeningSpecCode = "";
 		// The answers given here and the block last reached belong to the
 		// conversation being left: neither may be read as the new one's. Lo
 		// stesso vale per gli avvisi chiusi: chiuderne uno qui non deve zittire
@@ -5844,6 +5957,7 @@
 			// conversation open. No toast — it is the home of the workspace, and
 			// it does not vanish.
 			renderConversationPanel();
+			loadConversationModelChoice();
 			return;
 		}
 		await switchToConversation(first);
@@ -5940,8 +6054,17 @@
 			// workspace already holds keeps its history and its work in progress
 			// (AC-1). Past the limit the server refuses, and the refusal is its
 			// own words.
-			const view = await apiPost("/api/workspace/conversations", {});
+			const body = {};
+			if (conversationOpeningSpecCode) body.spec_code = conversationOpeningSpecCode;
+			const override = conversationModelOverride();
+			if (override) {
+				body.model = override.model;
+				body.model_options = override.model_options;
+			}
+			const view = await apiPost("/api/workspace/conversations", body);
 			conversationsRefusal = "";
+			conversationOpeningSpecCode = "";
+			conversationModelChoiceSelection = null;
 			await switchToConversation(conversationIdOf(view), view);
 		} catch (err) {
 			refuseConversationOpen(err);
@@ -6300,6 +6423,11 @@
 				// l'unica cosa che il pannello disegna in coda alla storia senza
 				// che il server l'abbia detta, ed è dichiarata come tale.
 				pendingMessage: conversationPendingMessage,
+				modelChoiceHtml:
+					!view.conversation || !conversationIsActive()
+						? conversationModelChoiceMarkup()
+						: "",
+				openingSpecCode: conversationOpeningSpecCode,
 				// The recommended step comes from /api/workspace/status and from
 				// no other source — scoped to the spec of this conversation when
 				// it has one, workspace-wide otherwise. The thread hosts it at

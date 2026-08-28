@@ -84,12 +84,14 @@ func (j *conversationJournal) begin(ctx context.Context, snapshot conversationSn
 	}
 	openedAt := snapshot.openedAt
 	record := conversationlog.Record{
-		ID:         snapshot.id,
-		SpecCode:   strings.TrimSpace(specCode),
-		Title:      conversationTitleOf(nil, openedAt),
-		WorkingDir: snapshot.workingDir,
-		ProviderID: snapshot.providerID,
-		OpenedAt:   openedAt,
+		ID:           snapshot.id,
+		SpecCode:     strings.TrimSpace(specCode),
+		Title:        conversationTitleOf(nil, openedAt),
+		WorkingDir:   snapshot.workingDir,
+		ProviderID:   snapshot.providerID,
+		Model:        snapshot.model,
+		ModelOptions: cloneModelOptions(snapshot.modelOptions),
+		OpenedAt:     openedAt,
 		// A record whose last message is the zero instant would sort behind
 		// every other one in an index ordered by recency, which is not what a
 		// conversation opened a second ago is. Until something is said, the

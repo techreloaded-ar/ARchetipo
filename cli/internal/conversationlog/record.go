@@ -32,6 +32,8 @@ type Record struct {
 	Title         string               `json:"title"`
 	WorkingDir    string               `json:"working_dir"`
 	ProviderID    string               `json:"provider_id"`
+	Model         string               `json:"model,omitempty"`
+	ModelOptions  map[string]string    `json:"model_options,omitempty"`
 	OpenedAt      time.Time            `json:"opened_at"`
 	LastMessageAt time.Time            `json:"last_message_at"`
 	MessageCount  int                  `json:"message_count"`

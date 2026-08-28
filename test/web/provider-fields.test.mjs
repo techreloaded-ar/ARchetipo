@@ -540,7 +540,7 @@ describe("renderProviderFields — opzioni del modello selezionato", () => {
 //   - AC-6 senza catalogo il motivo è visibile e nessun selettore compare
 // ---------------------------------------------------------------------------
 
-const { renderModelChoice } = loadProviderFields();
+const { renderModelChoice, renderConversationModelChoice } = loadProviderFields();
 
 // Le voci del selettore del modello della run, isolate dal resto del markup.
 function runModelControl(html) {
@@ -750,5 +750,30 @@ describe("renderModelChoice — scelta per la singola run", () => {
 			empty[0].selected,
 			"la voce vuota in vigore non è quella selezionata",
 		);
+	});
+});
+
+describe("renderConversationModelChoice — scelta per conversazione", () => {
+	it("usa controlli distinti e nomina la conversazione", () => {
+		const html = renderConversationModelChoice(CHOICE_VIEW, {
+			model: "modello-uno",
+			options: { sforzo: "b" },
+		});
+		const text = visibleText(html);
+
+		assert.ok(text.includes("Modello per questa conversazione"));
+		assert.ok(html.includes('name="conversation_model"'));
+		assert.ok(html.includes("data-conversation-model"));
+		assert.ok(html.includes('name="conversation_option_sforzo"'));
+		assert.ok(html.includes('data-conversation-option="sforzo"'));
+		assert.ok(!html.includes("data-run-model"));
+	});
+
+	it("mostra il modello del workspace finché non viene cambiato", () => {
+		const html = renderConversationModelChoice(CHOICE_VIEW, null);
+		const selected = options(html).filter((entry) => entry.selected);
+
+		assert.ok(visibleText(html).includes("ereditato dal workspace"));
+		assert.equal(selected[0].value, "modello-uno");
 	});
 });
