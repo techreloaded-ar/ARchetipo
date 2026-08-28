@@ -438,3 +438,36 @@ func TestRunSpecActionImplementNeverPublishesAnUnverifiedSuccess(t *testing.T) {
 		t.Fatal("an unconfirmed implementation moved the spec to REVIEW")
 	}
 }
+
+// The plan run of a conversational provider stays RUNNING while the agent
+// waits for an answer, and the spec meanwhile becomes PLANNED with a persisted
+// plan. That open run must not keep the Implementa chip inert: since a second
+// start is no longer refused, a running execution blocks only its own action.
+func TestSpecDetailOffersImplementWhileThePlanRunIsStillOpen(t *testing.T) {
+	provider := &implementTestProvider{
+		runTestProvider: blockedProvider("fake"),
+		capabilities:    []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement},
+	}
+	srv, _, conn := newRunServer(t, provider, true)
+
+	status, started := startAction(t, srv, "US-901", "plan")
+	if status != http.StatusCreated {
+		t.Fatalf("POST plan: %d %v", status, started)
+	}
+	id, _ := started["id"].(string)
+	<-provider.entered
+
+	// The agent's mid-conversation work: the plan is persisted and the spec is
+	// PLANNED, while the run that produced them is still open on a question.
+	persistImplementablePlan(t, conn, "US-901")
+	moveSpecTo(t, conn, "US-901", domain.StatusPlanned)
+
+	detail := runSpecDetail(t, srv, "US-901")
+	found, runnable, reason := actionChip(detail, "implement")
+	if !found || !runnable || reason != "" {
+		t.Fatalf("implement while plan runs: found=%v runnable=%v reason=%q", found, runnable, reason)
+	}
+
+	close(provider.release)
+	awaitTerminal(t, srv, id)
+}

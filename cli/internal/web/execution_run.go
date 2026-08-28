@@ -475,6 +475,11 @@ type actionAvailability struct {
 	providerAvailability
 	runningID      string
 	specHasRunning bool
+	// runningAction is the action of the running execution, when it is known.
+	// Since a second start is no longer refused (see dispatchGroup: an action is
+	// a conversation now), a running execution only blocks *its own* action;
+	// an empty value means "unknown" and keeps the old conservative refusal.
+	runningAction string
 	// specHasPlan says whether the spec has at least one persisted plan task.
 	// Only the implement action depends on it, but it travels here rather than
 	// being re-read per action because the detail has already read the plan and
@@ -510,11 +515,15 @@ func (s *Server) actionAvailabilityFor(ctx context.Context, ws *workspaceSession
 	if id, busy := ws.dispatch.current(code); busy {
 		availability.specHasRunning = true
 		availability.runningID = id
+		if record, err := ws.store.Get(ctx, id); err == nil {
+			availability.runningAction = string(record.Action)
+		}
 	}
 	if !availability.specHasRunning {
 		if records, err := ws.store.ListBySpec(ctx, code); err == nil && len(records) > 0 && records[0].Status == execution.StatusRunning {
 			availability.specHasRunning = true
 			availability.runningID = records[0].ID
+			availability.runningAction = string(records[0].Action)
 		}
 	}
 	availability.providerAvailability = s.providerAvailabilityFor(ctx, ws)
@@ -582,7 +591,12 @@ func (a actionAvailability) reasonFor(actionID string) string {
 	if err != nil {
 		return "this action cannot be started from the viewer yet"
 	}
-	if a.specHasRunning {
+	// A running execution blocks only the action it is running: since the
+	// dispatchGroup decision, a second start is not refused, because an action
+	// is a conversation and a run waiting on an answer must not lock the spec
+	// out of every other step. When the running action is unknown, the old
+	// conservative refusal stays.
+	if a.specHasRunning && (a.runningAction == "" || a.runningAction == actionID) {
 		if a.runningID != "" {
 			return "execution " + a.runningID + " is already running for this spec"
 		}
