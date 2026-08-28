@@ -6335,8 +6335,12 @@
 				// l'unica cosa che il pannello disegna in coda alla storia senza
 				// che il server l'abbia detta, ed è dichiarata come tale.
 				pendingMessage: conversationPendingMessage,
+				// `view` è nullo finché l'indice delle conversazioni non è stato
+				// letto — è emptyConversationView() a dirlo, e la guardia qui
+				// rispetta lo stesso contratto di riga 6392: nessuna scelta di
+				// modello si legge da una vista che ancora non c'è.
 				modelChoiceHtml:
-					!view.conversation || !conversationIsActive()
+					!view || !view.conversation || !conversationIsActive()
 						? conversationModelChoiceMarkup()
 						: "",
 				openingSpecCode: conversationOpeningSpecCode,
