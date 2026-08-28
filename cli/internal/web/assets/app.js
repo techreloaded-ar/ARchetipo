@@ -158,7 +158,6 @@
 		runCancelDelivered:
 			"annullamento inviato · si aspetta che la run dichiari il suo stato",
 		runApprovalPending: "Decisione in attesa",
-		runApprovalResolved: "Decisione risolta",
 		runApprovalTitle: "La run aspetta una decisione",
 		runAnsweredStillWaiting: (label) =>
 			`Risposto “${label}” — la run aspetta ancora su questa decisione.`,
@@ -246,7 +245,6 @@
 		runLinkOff: "non in ascolto",
 		runLinkOn: "in ascolto",
 		runLinkReconnecting: "riconnessione…",
-		runApprovalEyebrowResolved: "decisione risolta",
 		runApprovalEyebrowRequested: "decisione richiesta",
 
 		// Provider: elenco vuoto
@@ -644,7 +642,7 @@
 	let runPollAbandoned = false; // the client gave up reading: it is not reconnecting
 	let runPollBusy = false; // a poll is in flight: ticks never overlap
 	let runPollFailures = 0; // consecutive failed reads, for the give-up threshold
-	let runAnswered = null; // approval answered from here, kept as its resolved card
+	let runAnsweredIDs = new Set(); // approvals answered from here, hidden immediately
 	let runCancelSent = false; // a cancel was delivered — a fact about the command, not the run
 	let runSeams = new Set(); // event ids the timeline resumed at after a dropped channel
 	let runSeamPending = false; // the channel dropped: the next appended event opens a seam
@@ -4237,7 +4235,7 @@
 		runBusy = false;
 		runCancelArmed = false;
 		runCancelSent = false;
-		runAnswered = null;
+		runAnsweredIDs = new Set();
 		runSeams = new Set();
 		runSeamPending = false;
 		runPollBusy = false;
@@ -4466,18 +4464,9 @@
 			runOutcome = stillPending
 				? TEXT.runAnsweredStillWaiting(label)
 				: TEXT.runAnsweredTaken(label);
-			// The resolved card keeps the decision readable once the provider
-			// stops listing it as pending. It shows the provider's own options,
-			// verbatim and disabled, with the answered one marked.
-			if (answering) {
-				runAnswered = {
-					id: approvalID,
-					approval: answering,
-					optionID,
-					denied: approvalOptionTone(option) === " deny",
-					outcome: runOutcome,
-				};
-			}
+			// Remember which approval was answered so its card disappears
+			// immediately, even if the refreshed projection still lists it once.
+			if (answering) runAnsweredIDs.add(approvalID);
 		} catch (err) {
 			if (panelContext !== ctx) return;
 			showRunRefusal(err);
@@ -4491,7 +4480,6 @@
 		for (const approval of runApprovals) {
 			if (approval && approval.id === approvalID) return approval;
 		}
-		if (runAnswered && runAnswered.id === approvalID) return runAnswered.approval;
 		return null;
 	}
 
@@ -4575,13 +4563,6 @@
 		}
 
 		const variant = RUN_STATE_VARIANTS[runSnapshot.state] || "run-closed";
-		// An approval answered from here keeps its card only once the provider
-		// has stopped listing it as pending. While it is still pending the
-		// provider's own card stands, and the answer is reported as a notice.
-		const answeredShown = !!(
-			runAnswered &&
-			!runApprovals.some((item) => item && item.id === runAnswered.id)
-		);
 		const blocks = [];
 		if (runSnapshot.error) {
 			blocks.push(renderRunNotice("refused", "error", runSnapshot.error, "error"));
@@ -4589,7 +4570,7 @@
 		if (runRefusal) {
 			blocks.push(renderRunNotice("refused", "refused", runRefusal, "refusal"));
 		}
-		if (runOutcome && !answeredShown) {
+		if (runOutcome) {
 			blocks.push(renderRunNotice("ok", "confirmed", runOutcome, "outcome"));
 		}
 		if (runNotice) {
@@ -4625,11 +4606,11 @@
 			);
 		}
 		blocks.push(
-			runApprovals.map((item) => renderRunApproval(item, null)).join(""),
+			runApprovals
+				.filter((item) => !item || !runAnsweredIDs.has(item.id))
+				.map((item) => renderRunApproval(item))
+				.join(""),
 		);
-		if (answeredShown) {
-			blocks.push(renderRunApproval(runAnswered.approval, runAnswered));
-		}
 		blocks.push(renderRunComposer());
 
 		panelRun.innerHTML = `<section class="run-panel ${variant}" aria-label="${escapeHtml(TEXT.runPanel)}">
@@ -4816,15 +4797,13 @@
 		</li>`;
 	}
 
-	// renderRunApproval shows the decision verbatim: which answers exist is the
-	// provider's statement, so the buttons are its options and nothing else.
-	// A resolved card carries the same options, disabled, with the answered one
-	// marked: its label stays the provider's, unchanged.
-	function renderRunApproval(approval, answered) {
+	// renderRunApproval shows a pending decision verbatim: which answers exist is
+	// the provider's statement, so the buttons are its options and nothing else.
+	function renderRunApproval(approval) {
 		if (!approval || !approval.id) return "";
 		const id = escapeHtml(approval.id);
 		const head = [
-			`<span class="run-approval-eyebrow">${escapeHtml(answered ? TEXT.runApprovalEyebrowResolved : TEXT.runApprovalEyebrowRequested)}</span>`,
+			`<span class="run-approval-eyebrow">${escapeHtml(TEXT.runApprovalEyebrowRequested)}</span>`,
 		];
 		if (approval.tool_name) {
 			head.push(
@@ -4835,7 +4814,7 @@
 		if (stamp) {
 			head.push(`<span class="run-event-time">${escapeHtml(stamp)}</span>`);
 		}
-		const args = answered ? "" : formatExecutionPayload(approval.args);
+		const args = formatExecutionPayload(approval.args);
 		const argsBlock = args
 			? `<pre class="run-approval-args">${escapeHtml(args)}</pre>`
 			: "";
@@ -4847,26 +4826,15 @@
 				// the provider's word, so both spellings of a refusal are honoured
 				// and an unknown one simply gets the neutral button.
 				const tone = approvalOptionTone(option);
-				const chosen =
-					answered && answered.optionID === option.id ? " is-chosen" : "";
-				const off = answered || runBusy ? " disabled" : "";
-				return `<button type="button" class="approval-btn${tone}${chosen}" data-approval-id="${id}" data-option-id="${escapeHtml(option.id)}"${off}>${escapeHtml(option.label || option.id)}</button>`;
+				const off = runBusy ? " disabled" : "";
+				return `<button type="button" class="approval-btn${tone}" data-approval-id="${id}" data-option-id="${escapeHtml(option.id)}"${off}>${escapeHtml(option.label || option.id)}</button>`;
 			})
 			.join("");
-		const card = ["run-approval"];
-		if (answered) card.push("is-answered");
-		if (answered && answered.denied) card.push("is-denied");
-		// The outcome is the sentence built from the projection the server
-		// returned, never from the answer that was sent.
-		const outcome = answered
-			? `<div class="run-approval-outcome${answered.denied ? " denied" : ""}">${escapeHtml(answered.outcome)}</div>`
-			: "";
-		return `<div class="${card.join(" ")}" role="group" aria-label="${answered ? TEXT.runApprovalResolved : TEXT.runApprovalPending}">
+		return `<div class="run-approval" role="group" aria-label="${TEXT.runApprovalPending}">
 			<div class="run-approval-head">${head.join("")}</div>
 			<p class="run-approval-title">${escapeHtml(approval.title || TEXT.runApprovalTitle)}</p>
 			${argsBlock}
 			<div class="run-approval-options">${options}</div>
-			${outcome}
 		</div>`;
 	}
 
@@ -5085,13 +5053,13 @@
 
 	// ---- Answers given inside the conversation (US-060) ---
 	// Two pieces of local state, and neither of them a second copy of anything
-	// the server holds. The first remembers how an approval was answered from
-	// this panel, so the decision stays readable once the provider stops listing
-	// it as pending — the same discipline as runAnswered in the run panel, kept
-	// per approval id because a conversation can carry more than one run. The
+	// the server holds. The first remembers which approvals were answered from
+	// this panel, so they disappear immediately even if one poll still lists
+	// them as pending. It is keyed by id because one conversation can carry more
+	// than one approval. The
 	// second names the run block the viewer was just sent to, so arriving at it
 	// marks it instead of only scrolling to it.
-	let conversationAnsweredApprovals = {}; // approvalID → {optionID, label, denied, executionID, approval}
+	let conversationAnsweredApprovals = {}; // approvalID → true
 	let conversationHighlightAnchor = ""; // anchor event id of the block just reached
 	// Quali avvisi del pannello sono stati chiusi con la loro X. Il pannello si
 	// ridisegna a ogni lettura, quindi la scelta non può vivere nel DOM: senza
@@ -6180,12 +6148,6 @@
 		// screen — the same one every other command of this panel is sent to.
 		const showingID = conversationsCurrentId;
 		if (!executionID && !showingID) return;
-		// The label and the tone are the provider's own words, read from the
-		// option the payload declared — never invented from the id that was
-		// pressed.
-		const answering = findConversationApproval(executionID, approvalID);
-		const option = findRunApprovalOption(answering, optionID);
-		const label = (option && (option.label || option.id)) || optionID;
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
@@ -6196,27 +6158,10 @@
 				{ option_id: optionID },
 			);
 			conversationRefusal = "";
-			// The decision stays on the page once the provider stops listing the
-			// approval as pending: a refusal must remain readable in the
-			// conversation that refused (AC-4).
-			// The approval itself travels with the answer: the provider stops
-			// listing it the moment it is answered, and a card that can only be
-			// drawn from the pending list would disappear with it. Keeping the
-			// declaration keeps the command and the options on the page.
-			conversationAnsweredApprovals[approvalID] = {
-				optionID,
-				label,
-				denied: approvalOptionTone(option) === " deny",
-				executionID,
-				// Which of the two things was answered, said outright rather than
-				// deduced from an empty run id: the renderer draws a decision of
-				// the conversation at the tail of the thread and a decision of a
-				// run inside its block, and reading that from an absence would
-				// make every answer that simply forgot to name its run land in
-				// the wrong place.
-				conversation: !executionID,
-				approval: answering,
-			};
+			// Hide the answered card immediately. The next projection will normally
+			// stop listing it too; this local id closes the short gap without keeping
+			// the command payload in the conversation.
+			conversationAnsweredApprovals[approvalID] = true;
 			try {
 				const showing = conversationsCurrentId;
 				const view = await apiGet(
@@ -6236,39 +6181,6 @@
 			conversationBusy = false;
 			renderConversationPanel();
 		}
-	}
-
-	// The approval a run of this conversation is waiting on, as the payload
-	// declares it. It is the object itself, not a copy of some of its fields:
-	// the resolved card is drawn from the provider's own declaration, so the
-	// command and the options stay readable once the approval has stopped being
-	// pending — the same discipline as findRunApproval in the run panel.
-	function findConversationApproval(executionID, approvalID) {
-		// A decision with no run is the conversation's own, and it is declared at
-		// the top of the payload rather than inside a run block.
-		if (!executionID) {
-			const own =
-				conversationView && Array.isArray(conversationView.approvals)
-					? conversationView.approvals
-					: [];
-			for (const approval of own) {
-				if (approval && approval.id === approvalID) return approval;
-			}
-			return null;
-		}
-		const runs =
-			conversationView && Array.isArray(conversationView.runs)
-				? conversationView.runs
-				: [];
-		for (const run of runs) {
-			if (!run || run.execution_id !== executionID) continue;
-			const approvals = Array.isArray(run.approvals) ? run.approvals : [];
-			for (const approval of approvals) {
-				if (!approval || approval.id !== approvalID) continue;
-				return approval;
-			}
-		}
-		return null;
 	}
 
 	// revealConversationRun brings the viewer to the exact block that is waiting

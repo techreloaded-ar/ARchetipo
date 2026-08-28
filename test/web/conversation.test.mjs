@@ -595,7 +595,7 @@ describe("renderConversation — proposta", () => {
 });
 
 describe("renderConversation — esito", () => {
-	it("dall'esito accettato si raggiunge la run", () => {
+	it("l'esito accettato resta compatto e non offre una vecchia run", () => {
 		const html = renderConversation(
 			withConversation({
 				outcome: {
@@ -615,16 +615,8 @@ describe("renderConversation — esito", () => {
 			"la decisione non è testo visibile",
 		);
 		assert.ok(
-			html.includes("data-conversation-reach-run"),
-			"manca il comando per raggiungere la run avviata",
-		);
-		assert.ok(
-			html.includes('data-scope="AMBITO-X"'),
-			"il comando non porta lo scope del payload",
-		);
-		assert.ok(
-			html.includes('data-code="XX-999"'),
-			"il comando non porta il codice del payload",
+			!html.includes("data-conversation-reach-run"),
+			"l'esito offre ancora il comando Vai alla run",
 		);
 	});
 
@@ -947,7 +939,7 @@ describe("renderConversation — la run dentro il flusso", () => {
 		);
 	});
 
-	it("un'approvazione risolta resta leggibile", () => {
+	it("un'approvazione risolta scompare anche se il payload la elenca ancora", () => {
 		const html = renderConversation(
 			withConversation({
 				events: RUN_EVENTS,
@@ -966,24 +958,14 @@ describe("renderConversation — la run dentro il flusso", () => {
 			},
 		);
 
+		assert.ok(!html.includes("run-approval-title"), "la carta risolta occupa ancora spazio");
 		assert.ok(
-			html.includes("is-answered"),
-			"una decisione già data deve essere disegnata come risolta",
-		);
-		assert.ok(
-			visibleText(html).includes("OPZIONE-RIFIUTO"),
-			"l'opzione scelta non resta leggibile",
-		);
-		const enabled = (html.match(/<button[^>]*data-run-approval-id[^>]*>/g) || [])
-			.filter((button) => !/\sdisabled/.test(button));
-		assert.equal(
-			enabled.length,
-			0,
-			"una decisione già data non deve lasciare bottoni premibili",
+			!visibleText(html).includes("git worktree prune --verbose"),
+			"il payload della decisione risolta resta nella conversazione",
 		);
 	});
 
-	it("il rifiuto resta leggibile quando l'approvazione non è più pendente", () => {
+	it("un'approvazione risolta non viene ricostruita quando non è più pendente", () => {
 		const html = renderConversation(
 			withConversation({
 				events: RUN_EVENTS,
@@ -1005,28 +987,11 @@ describe("renderConversation — la run dentro il flusso", () => {
 			},
 		);
 
-		assert.ok(
-			html.includes("is-denied"),
-			"un rifiuto già dato deve restare disegnato come rifiuto",
-		);
-		assert.ok(
-			visibleText(html).includes("OPZIONE-RIFIUTO"),
-			"l'opzione rifiutata non resta leggibile nella conversazione",
-		);
-		assert.ok(
-			visibleText(html).includes("git worktree prune --verbose"),
-			"il comando rifiutato non resta leggibile",
-		);
-		const enabled = (html.match(/<button[^>]*data-run-approval-id[^>]*>/g) || [])
-			.filter((button) => !/\sdisabled/.test(button));
-		assert.equal(
-			enabled.length,
-			0,
-			"una decisione già data non deve lasciare bottoni premibili",
-		);
+		assert.ok(!html.includes("run-approval-title"), "la carta risolta è stata ricostruita");
+		assert.ok(!visibleText(html).includes("OPZIONE-RIFIUTO"));
 	});
 
-	it("un'approvazione risolta non viene disegnata due volte", () => {
+	it("un'approvazione risolta non lascia copie nel blocco", () => {
 		const html = renderConversation(
 			withConversation({
 				events: RUN_EVENTS,
@@ -1049,7 +1014,7 @@ describe("renderConversation — la run dentro il flusso", () => {
 		);
 
 		const cards = html.match(/run-approval-title/g) || [];
-		assert.equal(cards.length, 1, "la carta è stata disegnata due volte");
+		assert.equal(cards.length, 0, "la carta risolta è ancora disegnata");
 	});
 
 	it("il composer resta scrivibile mentre una run attende", () => {
@@ -1263,7 +1228,7 @@ describe("renderConversation — passo successivo", () => {
 		);
 	});
 
-	it("un passo già in corso porta alla sua run invece di offrire un avvio inerte", () => {
+	it("un passo già in corso non offre una navigazione alla vecchia run", () => {
 		const html = renderConversation(LIVE, "", {
 			nextStep: {
 				scope: "spec",
@@ -1278,12 +1243,8 @@ describe("renderConversation — passo successivo", () => {
 		const block = nextStepBlock(html);
 
 		assert.ok(
-			block.includes("data-conversation-reach-run"),
-			"il passo già in corso non offre alcun modo di raggiungere la run che lo blocca",
-		);
-		assert.ok(
-			block.includes('data-code="US-002"'),
-			"il comando di raggiungimento non porta la spec su cui la run è in corso",
+			!block.includes("data-conversation-reach-run"),
+			"il passo già in corso offre ancora Vai alla run",
 		);
 		assert.ok(
 			!/<button[^>]*conv-nextstep-run/.test(block),
@@ -2060,7 +2021,7 @@ describe("renderConversation — la decisione della conversazione", () => {
 		);
 	});
 
-	it("la decisione presa resta leggibile quando non è più pendente", () => {
+	it("la decisione presa scompare quando non è più pendente", () => {
 		const html = renderConversation(
 			withConversation({ events: RUN_EVENTS, last_id: 3, approvals: [] }),
 			"",
@@ -2078,15 +2039,8 @@ describe("renderConversation — la decisione della conversazione", () => {
 			},
 		);
 
-		assert.ok(html.includes("is-denied"), "il rifiuto non resta disegnato come tale");
-		assert.ok(
-			visibleText(html).includes("OPZIONE-RIFIUTO"),
-			"l'opzione scelta non resta leggibile",
-		);
-		const enabled = (html.match(/<button[^>]*data-run-approval-id[^>]*>/g) || []).filter(
-			(button) => !/\sdisabled/.test(button),
-		);
-		assert.equal(enabled.length, 0, "una decisione già data lascia bottoni premibili");
+		assert.ok(!html.includes("conv-approvals"), "la decisione risolta occupa ancora spazio");
+		assert.ok(!visibleText(html).includes("OPZIONE-RIFIUTO"));
 	});
 
 	it("una decisione della conversazione non compare dentro il blocco di una run", () => {
@@ -2112,7 +2066,7 @@ describe("renderConversation — la decisione della conversazione", () => {
 		);
 
 		const cards = html.match(/run-approval-title/g) || [];
-		assert.equal(cards.length, 1, "la stessa decisione è disegnata due volte");
+		assert.equal(cards.length, 0, "la decisione risolta è ancora disegnata");
 	});
 
 	it("senza permessi in attesa non c'è nessuna carta e nessuna attesa", () => {

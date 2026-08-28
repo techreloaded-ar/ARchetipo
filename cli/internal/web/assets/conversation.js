@@ -126,7 +126,6 @@
 		runReachThread: "Vai alla conversazione del passo",
 		// Decisioni
 		approvalPending: "Decisione in attesa",
-		approvalResolved: "Decisione risolta",
 		approvalTitle: "La run aspetta una decisione",
 		// Chiusura della conversazione
 		close: "Chiudi",
@@ -157,10 +156,8 @@
 			"Non è ancora partito niente: questo è soltanto quello che l'agente farebbe, e succede se lo confermi.",
 		proposalConfirm: "Conferma",
 		proposalRefuse: "Rifiuta",
-		outcomeReach: "Vai alla run",
 		// Passo successivo
 		nextStepRun: "Avvia",
-		nextStepReach: "Vai alla run",
 		// Il dettaglio tecnico, ripiegato.
 		//
 		// Una conversazione la si legge per le risposte dell'agente: gli
@@ -673,9 +670,9 @@
 	 * object is printed whole. The buttons are the options the payload declares
 	 * and nothing else — no answer is invented here, and none is hidden.
 	 *
-	 * When the panel already knows how this decision was answered, the card is
-	 * drawn resolved: the chosen option stays marked and readable, so a refusal
-	 * remains on the page after the provider has stopped listing it as pending.
+	 * An approval disappears as soon as the panel knows it was answered. The
+	 * conversation is the lasting record; a resolved command card would only
+	 * consume the space needed to read it.
 	 */
 	function renderRunApprovalCard(approval, run, ui) {
 		if (!approval || typeof approval !== "object") return "";
@@ -683,13 +680,11 @@
 		if (!id) return "";
 		const local = ui && typeof ui === "object" ? ui : {};
 		const answers = objectAt(local, "answeredApprovals") || {};
-		const answered = Object.prototype.hasOwnProperty.call(answers, id)
-			? answers[id]
-			: null;
+		if (Object.prototype.hasOwnProperty.call(answers, id)) return "";
 		const execution = textAt(run, "execution_id");
 
 		const head = [
-			`<span class="run-approval-eyebrow">${answered ? "approval resolved" : "approval requested"}</span>`,
+			'<span class="run-approval-eyebrow">approval requested</span>',
 		];
 		const tool = textAt(approval, "tool_name");
 		if (tool) {
@@ -705,8 +700,6 @@
 			? `<pre class="run-approval-args">${escapeHtml(args)}</pre>`
 			: "";
 
-		const chosenID =
-			answered && typeof answered === "object" ? textAt(answered, "optionID") : "";
 		const options = (Array.isArray(approval.options) ? approval.options : [])
 			.filter((option) => option && typeof option === "object" && option.id)
 			.map((option) => {
@@ -718,30 +711,20 @@
 				const tone = Object.prototype.hasOwnProperty.call(OPTION_TONES, kind)
 					? OPTION_TONES[kind]
 					: "";
-				const chosen = answered && chosenID === optionID ? " is-chosen" : "";
-				const off = answered || local.busy ? " disabled" : "";
+				const off = local.busy ? " disabled" : "";
 				const label =
 					typeof option.label === "string" && option.label
 						? option.label
 						: optionID;
-				return `<button type="button" class="approval-btn${tone}${chosen}" data-run-approval-id="${escapeHtml(id)}" data-run-option-id="${escapeHtml(optionID)}" data-execution-id="${escapeHtml(execution)}"${off}>${escapeHtml(label)}</button>`;
+				return `<button type="button" class="approval-btn${tone}" data-run-approval-id="${escapeHtml(id)}" data-run-option-id="${escapeHtml(optionID)}" data-execution-id="${escapeHtml(execution)}"${off}>${escapeHtml(label)}</button>`;
 			})
 			.join("");
 
-		const card = ["run-approval", "conv-run-approval"];
-		if (answered) card.push("is-answered");
-		if (answered && answered.denied) card.push("is-denied");
-		const outcome = answered
-			? `<div class="run-approval-outcome${answered.denied ? " denied" : ""}">${escapeHtml(
-					textAt(answered, "label") || chosenID,
-				)}</div>`
-			: "";
-		return `<div class="${card.join(" ")}" role="group" aria-label="${answered ? TEXT.approvalResolved : TEXT.approvalPending}">
+		return `<div class="run-approval conv-run-approval" role="group" aria-label="${TEXT.approvalPending}">
 			<div class="run-approval-head">${head.join("")}</div>
 			<p class="run-approval-title">${escapeHtml(textAt(approval, "title") || TEXT.approvalTitle)}</p>
 			${argsBlock}
 			<div class="run-approval-options">${options}</div>
-			${outcome}
 		</div>`;
 	}
 
@@ -828,44 +811,6 @@
 			rows.push(renderRunApprovalCard(approval, run, local));
 		}
 
-		// A decision answered from this panel keeps its card once the provider
-		// has stopped listing the approval as pending: the refusal must stay
-		// readable in the conversation that refused it. While the approval is
-		// still pending the payload's own card stands and nothing is added here
-		// — the same discipline the run panel applies to its answered approval.
-		//
-		// The card is drawn from the declaration the caller kept, so the command
-		// and the options remain the provider's own words. An answer that names
-		// another run, or an answer whose declaration is missing, draws nothing:
-		// this module invents no approval it has not been given. An answer the
-		// caller marked as the conversation's own draws nothing here either — it
-		// belongs at the tail of the thread, where renderConversationApprovals
-		// puts it, because there is no run it was ever about.
-		const stillPending = {};
-		for (const approval of pending) {
-			const pendingID = approval ? textAt(approval, "id") : "";
-			if (pendingID) stillPending[pendingID] = true;
-		}
-		const answers = objectAt(local, "answeredApprovals") || {};
-		for (const approvalID of Object.keys(answers)) {
-			if (Object.prototype.hasOwnProperty.call(stillPending, approvalID)) {
-				continue;
-			}
-			const answered = answers[approvalID];
-			const declared = objectAt(answered, "approval");
-			if (!declared) continue;
-			if (answered && answered.conversation === true) continue;
-			const owner = textAt(answered, "executionID");
-			if (owner && execution && owner !== execution) continue;
-			rows.push(
-				renderRunApprovalCard(
-					Object.assign({}, declared, { id: approvalID }),
-					run,
-					local,
-				),
-			);
-		}
-
 		const disabled = local.busy ? " disabled" : "";
 		const reach = threadID
 			? `<div class="conv-run-controls">
@@ -904,40 +849,17 @@
 	 * no run to draw it in — and why it carries no execution id: what the
 	 * caller has to answer on is the conversation itself.
 	 *
-	 * A decision already answered keeps its card exactly as a run's does, for
-	 * the same reason: the provider stops listing it the moment it is answered,
-	 * and a refusal must stay readable in the conversation that refused it.
+	 * Answered decisions are deliberately absent: only something that still
+	 * needs a response belongs in this action area.
 	 */
 	function renderConversationApprovals(view, ui) {
 		const local = ui && typeof ui === "object" ? ui : {};
 		const pending = arrayAt(view, "approvals");
 		const cards = [];
-		const stillPending = {};
 		for (const approval of pending) {
 			const id = approval ? textAt(approval, "id") : "";
 			if (!id) continue;
-			stillPending[id] = true;
 			cards.push(renderRunApprovalCard(approval, null, local));
-		}
-		const answers = objectAt(local, "answeredApprovals") || {};
-		for (const approvalID of Object.keys(answers)) {
-			if (Object.prototype.hasOwnProperty.call(stillPending, approvalID)) {
-				continue;
-			}
-			const answered = answers[approvalID];
-			// Only the answers the caller marked as the conversation's own: one
-			// given on a run belongs to that run's block, and drawing it here too
-			// would show one decision twice.
-			if (!answered || answered.conversation !== true) continue;
-			const declared = objectAt(answered, "approval");
-			if (!declared) continue;
-			cards.push(
-				renderRunApprovalCard(
-					Object.assign({}, declared, { id: approvalID }),
-					null,
-					local,
-				),
-			);
 		}
 		const body = cards.filter(Boolean).join("");
 		if (!body) return "";
@@ -1336,10 +1258,8 @@
 	// and the thing it was about — carried by the payload because the line that
 	// proposed it may well have left the retained history by now.
 	//
-	// The way to reach what was started exists exactly when the payload carries
-	// one: a refused proposal started nothing, so there is nothing to reach, and
-	// a control offering to go there would be pointing at a record that does not
-	// exist.
+	// The outcome is only a compact record of the decision. The work it started
+	// already has its conversation, so this block adds no legacy run navigation.
 	function renderOutcome(outcome, ui) {
 		if (!outcome || typeof outcome !== "object") return "";
 		const decision = textAt(outcome, "decision");
@@ -1357,14 +1277,8 @@
 		if (code) {
 			parts.push(`<code class="conv-outcome-code">${escapeHtml(code)}</code>`);
 		}
-		let reach = "";
-		if (textAt(outcome, "execution_id")) {
-			const disabled = ui && ui.busy ? " disabled" : "";
-			reach = `<button type="button" class="ghost-btn conv-outcome-reach" data-conversation-reach-run data-scope="${escapeHtml(textAt(outcome, "scope"))}" data-code="${escapeHtml(code)}"${disabled}>${escapeHtml(TEXT.outcomeReach)}</button>`;
-		}
 		return `<div class="conv-outcome">
 			<div class="conv-outcome-body">${parts.join("")}</div>
-			${reach}
 		</div>`;
 	}
 
@@ -1407,20 +1321,19 @@
 			const unlockHtml = unlock
 				? `<p class="conv-nextstep-unlock">${escapeHtml(unlock)}</p>`
 				: "";
-			// A step refused because it is already running is the one refusal
-			// that has somewhere to go: what is offered is the way to the run,
-			// not an inert copy of the button that started it. Which refusal
-			// this is, is not guessed from the sentence — the payload says so by
-			// naming the run.
+			// A step already in progress needs no duplicate navigation inside its
+			// own conversation. Other blocked steps retain the inert action that
+			// explains what will become available.
 			const running = textAt(step, "running_execution_id");
 			const control = running
-				? `<button type="button" class="ghost-btn conv-nextstep-reach" data-conversation-reach-run data-scope="${escapeHtml(textAt(step, "scope"))}" data-code="${escapeHtml(code)}" data-execution-id="${escapeHtml(running)}">${escapeHtml(TEXT.nextStepReach)}</button>`
+				? ""
 				: `<button type="button" class="conv-nextstep-run"${attrs} disabled>${escapeHtml(TEXT.nextStepRun)}</button>`;
+			const controls = control
+				? `<div class="conv-nextstep-controls">${control}</div>`
+				: "";
 			return `<div class="conv-nextstep is-refused">
 				${head}
-				<div class="conv-nextstep-controls">
-					${control}
-				</div>
+				${controls}
 				${unlockHtml}
 			</div>`;
 		}
@@ -1447,14 +1360,9 @@
 	 * @param {object} [ui]       Local, non-payload state of the panel:
 	 *                            {busy, closeArmed, refusal, link,
 	 *                            answeredApprovals, highlightAnchor}.
-	 *                            answeredApprovals maps an approval id to the
-	 *                            answer already given for it
-	 *                            ({optionID, label, denied, executionID,
-	 *                            approval}), so a decision stays readable once
-	 *                            the provider stops listing it as pending: the
-	 *                            kept approval is what the resolved card is
-	 *                            drawn from, and executionID names the run it
-	 *                            belongs to.
+	 *                            answeredApprovals maps an approval id to true,
+	 *                            so the card disappears immediately after the
+	 *                            answer even if one refresh still lists it.
 	 *                            pendingMessage is the message just sent and not
 	 *                            yet carried back by the agent: it is drawn at
 	 *                            the tail of the timeline, marked as in
