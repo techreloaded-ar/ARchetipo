@@ -475,7 +475,6 @@
 		setTheme(current === "dark" ? "light" : "dark", true);
 	}
 
-	setTheme(document.documentElement.dataset.theme, false);
 	themeToggle.addEventListener("click", toggleTheme);
 
 	// Quanto respira la cornice dell'interfaccia. Vive accanto al tema perché è
@@ -498,7 +497,6 @@
 		}
 	}
 
-	setDensity(document.documentElement.dataset.density, false);
 	if (densityToggle) {
 		densityToggle.addEventListener("click", () => {
 			const current =
@@ -1361,8 +1359,6 @@
 		});
 	}
 
-	applyShellLayout();
-
 	// ---- Workspace runs strip (US-055) ---------------------------------------
 	//
 	// What the workspace is running right now, as a full-width strip above the
@@ -1603,8 +1599,6 @@
 			openRunTarget(waiting);
 		});
 	}
-
-	boot();
 
 	let boardReloadTimer = null;
 	function scheduleBoardReload() {
@@ -5416,11 +5410,6 @@
 
 	bindConversationPanel(conversationEl);
 
-	// Drawn once, before the first read: the home of the workspace is on screen
-	// from the very first paint, and what it shows until the server answers is
-	// the renderer's own empty state.
-	renderConversationPanel();
-
 	// ---- Thread rail (US-058) -----------------------------------------------
 	//
 	// Bound once, like the conversation panel, and for the same reason: the rail
@@ -7602,4 +7591,33 @@
 			.replace(/"/g, "&quot;")
 			.replace(/'/g, "&#39;");
 	}
+
+	// ---- Primo disegno e avvio ----------------------------------------------
+	//
+	// Tutto ciò che questo file *esegue* al caricamento sta qui, in fondo, e in
+	// nessun altro punto. Quando si arriva a questa riga ogni ascolto è già
+	// registrato e ogni dichiarazione a top level è già inizializzata: disegnare
+	// non può più impedire di ascoltare.
+	//
+	// Non è una preferenza di stile, è la lezione di una regressione. Finché il
+	// primo disegno stava in mezzo al file, una sua eccezione interrompeva
+	// questa IIFE e tutto ciò che seguiva non veniva mai eseguito: il rail delle
+	// conversazioni restava disegnato ma senza handler, e i `const` più in basso
+	// restavano in temporal dead zone, così anche "Nuova spec" smetteva di
+	// rispondere. Il danno era sproporzionato alla causa solo per via
+	// dell'ordine, ed è l'ordine che qui viene tolto di mezzo. Chi aggiunge un
+	// disegno iniziale lo aggiunge qui sotto, non dove la funzione è definita.
+	//
+	// Spostarle non cambia nulla di ciò che si vede: l'IIFE è un unico turno
+	// sincrono e il browser non dipinge niente prima della sua fine, quindi
+	// queste chiamate producono lo stesso primo fotogramma di prima.
+	//
+	// L'ordine fra loro è invece significativo: la cornice prima del contenuto,
+	// e `boot()` per ultimo perché è l'unico che parla col server — il pannello
+	// deve avere già il suo stato vuoto addosso quando la prima risposta arriva.
+	setTheme(document.documentElement.dataset.theme, false);
+	setDensity(document.documentElement.dataset.density, false);
+	applyShellLayout();
+	renderConversationPanel();
+	boot();
 })();
