@@ -156,9 +156,13 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
       "the assistant frame of the conversation of yesterday to become a text event",
     );
     await apiJSON(`${viewOne.url}/api/workspace/conversations/${yesterdayID}/messages`, postJSON({ message: HUMAN_SENTINEL }), 202);
-    // The first user frame carried the opening instruction; the operator's
-    // message is the second one the process is given.
-    await control.waitFor(userFrame, 2);
+    // There is no second frame to wait for. The instruction that opens a
+    // conversation is not written at the open: it is held and travels in the
+    // *same* frame as the first message of the person, as a block of its own
+    // (cli/internal/execution/claude/streamjson.go, `hold`). What is waited for
+    // is therefore the frame that really carries what the person wrote,
+    // whichever of its blocks does.
+    await control.waitFor(userFrameCarrying(HUMAN_SENTINEL), 1);
     control.push(emit(userReplay(HUMAN_SENTINEL)));
     const beforeRestart = await waitForConversation(
       viewOne.url,
@@ -333,7 +337,7 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
         throw new Error(`AC-4: the prompt the new agent process really received does not carry ${JSON.stringify(sentinel)}: ${truncate(promptText, 600)}`);
       }
     }
-    await control.waitFor(framesOf(agentResumed.pid, (entry) => userFrame(entry) && userFrameText(entry) === RESUME_SENTINEL), 1);
+    await control.waitFor(framesOf(agentResumed.pid, userFrameCarrying(RESUME_SENTINEL)), 1);
     control.push(emit(userReplay(RESUME_SENTINEL)));
     const resumedHistory = await waitForConversation(
       viewTwo.url,
@@ -543,8 +547,30 @@ function userFrame(entry) {
   return entry.kind === "received" && entry.frame?.type === "user";
 }
 
+// userFrameText joins the blocks of a user frame, and is only ever used to look
+// *inside* what the process was given — a sentinel quoted somewhere in the
+// transcript handed to a resumed conversation.
 function userFrameText(entry) {
-  return (entry.frame?.message?.content || []).map((block) => block.text || "").join("");
+  return userFrameBlocks(entry).join("");
+}
+
+// userFrameBlocks keeps the blocks apart, which is what identifying one message
+// requires. The instruction that opens a conversation is held until the person
+// writes and then travels in the same frame as their first message, as a block
+// of its own: a test that joined them would read that frame as "the instruction
+// glued to the message" and never recognise the message it delivered, while the
+// process was given exactly that message, told apart from the instruction.
+function userFrameBlocks(entry) {
+  return (entry.frame?.message?.content || []).map((block) => block.text || "");
+}
+
+// userFrameCarrying recognizes the frame in which one message was really
+// delivered, whichever of its blocks carries it. The matcher is named after the
+// message so that a timeout says which one never arrived.
+function userFrameCarrying(text) {
+  const matcher = (entry) => userFrame(entry) && userFrameBlocks(entry).includes(text);
+  Object.defineProperty(matcher, "name", { value: `a user frame carrying ${JSON.stringify(text)}` });
+  return matcher;
 }
 
 // framesOf narrows a matcher to one agent process. Correlating by pid is what
