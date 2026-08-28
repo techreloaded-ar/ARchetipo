@@ -162,6 +162,18 @@ describe("P1 — chiudere una modale non scarta la bozza in silenzio", () => {
 // ---------------------------------------------------------------------------
 
 describe("P1 — approvare per trascinamento chiede quanto il bottone", () => {
+	it("la conferma contiene una domanda concreta e non richiama sé stessa", () => {
+		assert.match(
+			js,
+			/approveConfirm:\s*\(code\)\s*=>\s*`Approvare \$\{code\} e chiudere la spec\?`/,
+			"la conferma non contiene più la domanda mostrata alla persona",
+		);
+		assert.ok(
+			!js.includes("approveConfirm: (code) =>\n\t\t\tTEXT.approveConfirm(code)"),
+			"la conferma richiama sé stessa e il click termina con uno stack overflow",
+		);
+	});
+
 	it("la domanda è scritta in un posto solo", () => {
 		const occurrences = [...js.matchAll(/function confirmApproval\(/g)].length;
 		assert.equal(

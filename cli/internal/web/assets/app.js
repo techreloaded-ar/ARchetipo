@@ -79,7 +79,7 @@
 			`${code}: ${n} commento/i convertito/i in task di fix`,
 		failed: (reason) => `Fallito: ${reason}`,
 		approveConfirm: (code) =>
-			TEXT.approveConfirm(code),
+			`Approvare ${code} e chiudere la spec?`,
 		approving: "Approvazione in corso…",
 		approvedIntegrated: (code) => `${code} approvata e integrata`,
 		approved: (code) => `${code} approvata`,
@@ -3056,23 +3056,29 @@
 
 	async function onApprove() {
 		if (!currentSpecCode) return;
-		if (!confirmApproval(currentSpecCode)) return;
+		const code = currentSpecCode;
+		if (!confirmApproval(code)) return;
+		const previousLabel = reviewApproveBtn.textContent;
+		reviewApproveBtn.disabled = true;
+		reviewApproveBtn.textContent = TEXT.approving;
 		reviewStatus.textContent = TEXT.approving;
 		reviewStatus.className = "status-msg";
 		try {
 			const res = await apiPost(
-				`/api/spec/${encodeURIComponent(currentSpecCode)}/approve`,
+				`/api/spec/${encodeURIComponent(code)}/approve`,
 				{},
 			);
 			showToast(
 				res.integrated
-					? TEXT.approvedIntegrated(currentSpecCode)
-					: TEXT.approved(currentSpecCode),
+					? TEXT.approvedIntegrated(code)
+					: TEXT.approved(code),
 				"ok",
 			);
 			closeModal();
 			await loadBoard();
 		} catch (err) {
+			reviewApproveBtn.disabled = false;
+			reviewApproveBtn.textContent = previousLabel;
 			reviewStatus.textContent = TEXT.failed(err.message || err);
 			reviewStatus.className = "status-msg err";
 		}
