@@ -3437,6 +3437,17 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	animation: execution-pulse 1.4s var(--ease) infinite;
 }
 
+/* La run che vive in una conversazione: una riga sola, con la strada per
+   raggiungerla in fondo. */
+.execution-in-thread .execution-head {
+	flex-wrap: nowrap;
+}
+
+.execution-in-thread .execution-reach-thread {
+	margin-left: auto;
+	flex-shrink: 0;
+}
+
 .execution-panel.execution-ok {
 	border-left-color: var(--status-done);
 }

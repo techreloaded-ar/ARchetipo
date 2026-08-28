@@ -128,6 +128,7 @@
 		executionSucceeded: (action) => `${action} riuscita`,
 		executionFailed: (action) => `${action} fallita`,
 		executionRunning: (action) => `${action} in corso`,
+		executionGoToThread: "Vai alla conversazione",
 		executionProvider: (id) => `provider ${id}`,
 		executionDirectory: (dir) => `directory ${dir}`,
 		executionCompleted: (stamp) => `conclusa ${stamp}`,
@@ -701,6 +702,9 @@
 	bindActionsPanel(storyActions);
 	bindActionsPanel(inceptionActions);
 	bindActionsPanel(specDraftActions);
+	bindExecutionPanel(storyExecution);
+	bindExecutionPanel(inceptionExecution);
+	bindExecutionPanel(specDraftExecution);
 	bindModelChoicePanel(storyModelChoice);
 	bindModelChoicePanel(inceptionModelChoice);
 	bindModelChoicePanel(specDraftModelChoice);
@@ -713,6 +717,20 @@
 			const btn = e.target.closest(".action-chip-run");
 			if (!btn) return;
 			startPanelAction(btn.dataset.actionId, btn, conversationsCurrentId);
+		});
+	}
+
+	// Il pannello dell'esecuzione si ridisegna a ogni poll, quindi il pulsante
+	// che porta alla conversazione della run non può possedere il proprio
+	// handler: lo possiede il container, legato una volta sola qui.
+	function bindExecutionPanel(container) {
+		if (!container) return;
+		container.addEventListener("click", (e) => {
+			const btn = e.target.closest("[data-reach-thread]");
+			if (!btn) return;
+			revealConversationRun(btn.dataset.reachThread).catch((err) => {
+				showToast(String((err && err.message) || err), "err");
+			});
 		});
 	}
 
@@ -3922,8 +3940,27 @@
 	function renderExecution(record, note) {
 		lastExecutionRecord = record || null;
 		if (!panelExecution) return;
-		if (!record || executionThreadID) {
+		if (!record) {
 			panelExecution.innerHTML = "";
+			return;
+		}
+		if (executionThreadID) {
+			// La run vive in una conversazione: il pannello non la duplica, ma
+			// finché è aperta offre la strada per raggiungerla. Chiusa la run,
+			// l'esito lo racconta il thread e il pannello si spegne come prima.
+			if (isExecutionTerminal(record)) {
+				panelExecution.innerHTML = "";
+				return;
+			}
+			const action = escapeHtml(record.action || "");
+			panelExecution.innerHTML = `<div class="execution-panel execution-running execution-in-thread">
+				<div class="execution-head">
+					<span class="execution-dot" aria-hidden="true"></span>
+					<span class="execution-headline">${TEXT.executionRunning(action)}</span>
+					<code class="execution-id">${escapeHtml(record.id || "")}</code>
+					<button type="button" class="ghost-btn execution-reach-thread" data-reach-thread="${escapeHtml(executionThreadID)}">${TEXT.executionGoToThread}</button>
+				</div>
+			</div>`;
 			return;
 		}
 		const state =
