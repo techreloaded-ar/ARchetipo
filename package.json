@@ -27,6 +27,7 @@
     "test:view-local-run-smoke": "node ./test/e2e/local-run-view-smoke.mjs",
     "test:view-run-model-smoke": "node ./test/e2e/run-model-choice-view-smoke.mjs",
     "test:view-workspace-root-smoke": "node ./test/e2e/workspace-run-root-view-smoke.mjs",
+    "test:view-page-load-smoke": "node ./test/e2e/viewer-page-load-smoke.mjs",
     "test:view-conversation-smoke": "node ./test/e2e/conversation-view-smoke.mjs",
     "test:view-conversation-history-smoke": "node ./test/e2e/conversation-history-view-smoke.mjs",
     "test:view-conversation-multi-smoke": "node ./test/e2e/conversation-multi-view-smoke.mjs",
