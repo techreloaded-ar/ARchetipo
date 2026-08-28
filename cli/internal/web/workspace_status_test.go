@@ -416,3 +416,101 @@ func TestResolveStageSelectsTheFirstSpecInBoardOrder(t *testing.T) {
 		t.Fatalf("recommended spec = %q, want US-902, the first in board order", spec.Code)
 	}
 }
+
+// readScopedWorkspaceStatus reads the status scoped to one spec, the reading a
+// conversation opened on that spec asks for.
+func readScopedWorkspaceStatus(t *testing.T, srv *Server, code string) workspaceStatusResponse {
+	t.Helper()
+	w := doJSON(t, srv, http.MethodGet, "/api/workspace/status?spec="+code, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/workspace/status?spec=%s: %d %s", code, w.Code, w.Body.String())
+	}
+	var view workspaceStatusResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	return view
+}
+
+// The scoped reading exists for the conversation opened on one spec: the step
+// it recommends must be the next step of that spec, not the workspace-wide one
+// that points at whatever card sits on top of the board.
+func TestWorkspaceStatusScopedToASpecRecommendsImplementingThatSpec(t *testing.T) {
+	provider := &implementTestProvider{
+		runTestProvider: releasedProvider("prov", nil),
+		capabilities:    []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement},
+	}
+	srv, cfg, conn := newRunServer(t, provider, true)
+	writePRDFile(t, cfg.ProjectRoot, "# PRD\n\nVisione e MVP.\n")
+	persistImplementablePlan(t, conn, "US-902")
+	moveSpecTo(t, conn, "US-902", domain.StatusPlanned)
+
+	// The workspace-wide reading still points at the first TODO spec: that is
+	// exactly the answer the scoped one exists to depart from.
+	wide := readWorkspaceStatus(t, srv)
+	if wide.NextStep == nil || wide.NextStep.Action != "plan" || wide.NextStep.Spec == nil || wide.NextStep.Spec.Code != "US-901" {
+		t.Fatalf("the workspace-wide step is no longer planning US-901: %+v", wide.NextStep)
+	}
+
+	view := readScopedWorkspaceStatus(t, srv, "US-902")
+
+	assertStageMatchesArchetype(t, view, "da-implementare")
+	if view.NextStep == nil {
+		t.Fatal("a PLANNED spec has a next step, but next_step is null")
+	}
+	if view.NextStep.Action != "implement" {
+		t.Fatalf("next_step.action = %q, want implement", view.NextStep.Action)
+	}
+	if view.NextStep.Spec == nil || view.NextStep.Spec.Code != "US-902" {
+		t.Fatalf("next_step.spec = %+v, want US-902", view.NextStep.Spec)
+	}
+	if !view.NextStep.Runnable || view.NextStep.UnavailableReason != "" {
+		t.Fatalf("the implement step is not runnable: %+v", view.NextStep)
+	}
+}
+
+// A spec that is done has no next step, and inside its conversation nothing
+// falls back to the workspace-wide recommendation: "nothing is pending here"
+// is the answer.
+func TestWorkspaceStatusScopedToADoneSpecHasNoNextStep(t *testing.T) {
+	srv, cfg, conn := newRunServer(t, releasedInceptionProvider("prov", nil), true)
+	writePRDFile(t, cfg.ProjectRoot, "# PRD\n\nVisione e MVP.\n")
+	moveSpecTo(t, conn, "US-902", domain.StatusDone)
+
+	view := readScopedWorkspaceStatus(t, srv, "US-902")
+
+	assertStageMatchesArchetype(t, view, "completo")
+	if view.NextStep != nil {
+		t.Fatalf("a DONE spec has no next step, yet next_step = %+v", view.NextStep)
+	}
+}
+
+func TestWorkspaceStatusScopedToAnUnknownSpecFails(t *testing.T) {
+	srv, cfg, _ := newRunServer(t, releasedInceptionProvider("prov", nil), true)
+	writePRDFile(t, cfg.ProjectRoot, "# PRD\n\nVisione e MVP.\n")
+
+	w := doJSON(t, srv, http.MethodGet, "/api/workspace/status?spec=US-999", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GET /api/workspace/status?spec=US-999: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// The scoped step keeps the way to the run that refuses it, exactly like the
+// workspace-wide one: same nextStepFor, same payload.
+func TestWorkspaceStatusScopedToASpecNamesTheRunThatRefusesTheStep(t *testing.T) {
+	srv, cfg, _ := newRunServer(t, releasedInceptionProvider("prov", nil), true)
+	writePRDFile(t, cfg.ProjectRoot, "# PRD\n\nVisione e MVP.\n")
+	running := seedConversationRun(t, srv, "US-901", execution.ActionPlan, execution.StatusRunning)
+
+	view := readScopedWorkspaceStatus(t, srv, "US-901")
+
+	if view.NextStep == nil || view.NextStep.Action != "plan" || view.NextStep.Spec == nil || view.NextStep.Spec.Code != "US-901" {
+		t.Fatalf("the scoped step is not planning US-901: %+v", view.NextStep)
+	}
+	if view.NextStep.Runnable {
+		t.Fatal("the step is runnable while a run of it is already under way")
+	}
+	if view.NextStep.RunningExecutionID != running {
+		t.Errorf("next_step.running_execution_id = %q, want %q", view.NextStep.RunningExecutionID, running)
+	}
+}

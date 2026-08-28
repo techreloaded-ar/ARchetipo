@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
@@ -150,6 +151,12 @@ func admitsStatus(statuses []domain.Status, status domain.Status) bool {
 }
 
 // handleGetWorkspaceStatus serves GET /api/workspace/status.
+//
+// With ?spec=<code> the answer is scoped to that one spec: the stage walk sees
+// only it, skips the workspace-scoped stages, and the recommended step becomes
+// the next action for that spec — or nothing, when the spec is done. HasPRD,
+// HasBacklog and Actions stay workspace-wide: they describe the workspace the
+// spec lives in, not the spec.
 func (s *Server) handleGetWorkspaceStatus(w http.ResponseWriter, r *http.Request) {
 	ws := s.session()
 	tpl, err := s.resolveTemplate(ws)
@@ -162,28 +169,36 @@ func (s *Server) handleGetWorkspaceStatus(w http.ResponseWriter, r *http.Request
 	// a single consistent reading of the workspace, not several taken moments
 	// apart.
 	availability := s.workspaceAvailability(ctx, ws)
-	specs, err := ws.conn.FetchBacklogItems(ctx, "")
-	if err != nil {
-		// A workspace with no backlog yet is exactly the workspace this route
-		// exists for: reading its missing precondition as a failure would deny
-		// an answer to the only person who cannot guess it. Anything else is a
-		// viewer that genuinely cannot answer.
-		var coded *iox.CodedError
-		if !errors.As(err, &coded) || coded.Code != iox.CodePreconditionMissing {
+	inputs := stageInputs{}
+	if scopeCode := strings.TrimSpace(r.URL.Query().Get("spec")); scopeCode != "" {
+		scoped, err := ws.conn.ReadSpecDetail(ctx, scopeCode)
+		if err != nil {
 			writeError(w, err)
 			return
 		}
-		specs = nil
-	}
-	specs = s.specsInBoardOrder(ctx, ws, specs)
-
-	stage, targetSpec := resolveStage(tpl, stageInputs{
+		inputs.specsInOrder = []domain.Spec{scoped}
+	} else {
+		specs, err := ws.conn.FetchBacklogItems(ctx, "")
+		if err != nil {
+			// A workspace with no backlog yet is exactly the workspace this route
+			// exists for: reading its missing precondition as a failure would deny
+			// an answer to the only person who cannot guess it. Anything else is a
+			// viewer that genuinely cannot answer.
+			var coded *iox.CodedError
+			if !errors.As(err, &coded) || coded.Code != iox.CodePreconditionMissing {
+				writeError(w, err)
+				return
+			}
+			specs = nil
+		}
+		inputs.specsInOrder = s.specsInBoardOrder(ctx, ws, specs)
 		// A stage is reached when the workspace *admits* the step, which is the
 		// state half of the decision alone: an unusable provider must not move
 		// the workspace to a later stage, it must leave it here with a reason.
-		offersWorkspaceAction: func(id string) bool { return availability.offers(id) == "" },
-		specsInOrder:          specs,
-	})
+		inputs.offersWorkspaceAction = func(id string) bool { return availability.offers(id) == "" }
+	}
+
+	stage, targetSpec := resolveStage(tpl, inputs)
 
 	writeJSON(w, http.StatusOK, workspaceStatusView{
 		Template:   newTemplateView(tpl),

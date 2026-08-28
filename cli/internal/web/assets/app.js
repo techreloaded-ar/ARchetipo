@@ -1690,6 +1690,12 @@
 	// The last payload, kept because the navigation must read the step from the
 	// payload and not from the DOM it produced.
 	let workspaceStatusSnapshot = null;
+	// Lo stesso payload, ma scopato sulla spec della conversazione aperta: in
+	// una conversazione su una spec la card in coda al thread raccomanda il
+	// prossimo passo di *quella* spec, non quello del workspace, che punta alla
+	// prima carta della board. Tiene anche il codice per cui è stato letto, così
+	// una risposta arrivata tardi non veste i panni di un'altra conversazione.
+	let conversationStatusSnapshot = null; // { specCode, view }
 
 	async function loadWorkspaceStatus() {
 		let view;
@@ -1703,10 +1709,69 @@
 			return;
 		}
 		workspaceStatusSnapshot = view;
+		// Il passo scopato segue la stessa cadenza: ogni board_changed che
+		// aggiorna il workspace aggiorna anche la lettura della spec aperta.
+		loadConversationNextStep();
 		// The step lives in the thread, so the read that updates it must redraw
 		// the thread: otherwise the block would stay on the step of a moment ago
 		// until the next poll of the conversation.
 		renderConversationPanel();
+	}
+
+	// La spec di cui parla la conversazione aperta, vuota per una conversazione
+	// libera. È il payload a dirlo, mai una deduzione della pagina.
+	function currentConversationSpecCode() {
+		return conversationView &&
+			conversationView.conversation &&
+			conversationView.conversation.spec_code
+			? String(conversationView.conversation.spec_code)
+			: "";
+	}
+
+	// loadConversationNextStep legge il prossimo passo della spec della
+	// conversazione aperta, con la stessa disciplina di loadWorkspaceStatus: una
+	// lettura che non riesce toglie la card, non ferma nessuno.
+	async function loadConversationNextStep() {
+		const specCode = currentConversationSpecCode();
+		if (!specCode) {
+			if (conversationStatusSnapshot) {
+				conversationStatusSnapshot = null;
+				renderConversationPanel();
+			}
+			return;
+		}
+		let view;
+		try {
+			view = await apiGet(
+				`/api/workspace/status?spec=${encodeURIComponent(specCode)}`,
+			);
+		} catch (_) {
+			conversationStatusSnapshot = null;
+			renderConversationPanel();
+			return;
+		}
+		// Un cambio di conversazione ha vinto mentre la lettura era in volo:
+		// il passo appartiene alla conversazione di adesso, non a quella di un
+		// momento fa.
+		if (specCode !== currentConversationSpecCode()) return;
+		conversationStatusSnapshot = { specCode, view };
+		renderConversationPanel();
+	}
+
+	// nextStepStatusView è la sorgente unica del passo in coda al thread: la
+	// lettura scopata sulla spec della conversazione quando c'è, quella del
+	// workspace altrimenti. Il render e l'avvio leggono entrambi da qui, così
+	// non possono divergere: quel che si vede è quel che parte.
+	function nextStepStatusView() {
+		const specCode = currentConversationSpecCode();
+		if (
+			specCode &&
+			conversationStatusSnapshot &&
+			conversationStatusSnapshot.specCode === specCode
+		) {
+			return conversationStatusSnapshot.view;
+		}
+		return workspaceStatusSnapshot;
 	}
 
 	// The recommended step belongs to the workspace that produced it: leaving
@@ -1716,6 +1781,7 @@
 	// workspace, so the two can never drift apart.
 	function resetWorkspaceStatusState() {
 		workspaceStatusSnapshot = null;
+		conversationStatusSnapshot = null;
 		// Forgetting the step of a workspace that is no longer open must take it
 		// off the screen too: the block lives in the thread, so the thread is
 		// what has to be redrawn.
@@ -5296,7 +5362,7 @@
 			const next = e.target.closest(".conv-nextstep-run");
 			if (next) {
 				const target = window.WorkspaceStatus.nextStepDispatch(
-					workspaceStatusSnapshot,
+					nextStepStatusView(),
 				);
 				if (!target) return;
 				startNextStep(target, next).catch((err) => {
@@ -5706,6 +5772,15 @@
 			conversationAfterID = view.last_id;
 		}
 		conversationView = view;
+		// La spec della conversazione appena applicata potrebbe non essere
+		// quella per cui il passo scopato era stato letto: ogni strada che porta
+		// qui — switch, boot, poll — riallinea la lettura senza aspettarla.
+		if (
+			currentConversationSpecCode() !==
+			(conversationStatusSnapshot ? conversationStatusSnapshot.specCode : "")
+		) {
+			loadConversationNextStep();
+		}
 		return appended;
 	}
 
@@ -6225,14 +6300,17 @@
 				// l'unica cosa che il pannello disegna in coda alla storia senza
 				// che il server l'abbia detta, ed è dichiarata come tale.
 				pendingMessage: conversationPendingMessage,
-				// The recommended step is a fact of the workspace, not of this
-				// conversation: it comes from /api/workspace/status and from no
-				// other source. The thread hosts it at its tail — it does not
-				// own it, and it does not decide whether it can be taken.
-				nextStep:
-					workspaceStatusSnapshot && typeof workspaceStatusSnapshot === "object"
-						? workspaceStatusSnapshot.next_step
-						: null,
+				// The recommended step comes from /api/workspace/status and from
+				// no other source — scoped to the spec of this conversation when
+				// it has one, workspace-wide otherwise. The thread hosts it at
+				// its tail — it does not own it, and it does not decide whether
+				// it can be taken.
+				nextStep: (() => {
+					const status = nextStepStatusView();
+					return status && typeof status === "object"
+						? status.next_step
+						: null;
+				})(),
 			},
 		);
 
