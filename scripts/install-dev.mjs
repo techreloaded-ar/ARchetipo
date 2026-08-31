@@ -20,6 +20,8 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { requireGo } from "./lib/go.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const stagingDir = path.join(repoRoot, ".dev", "npm-staging");
@@ -34,7 +36,7 @@ const supported = new Set([
 	"win32-arm64", "win32-x64",
 ]);
 
-function run(cmd, args, opts = {}) {
+function run(cmd, args, opts = {}, hint = "") {
 	const result = spawnSync(cmd, args, {
 		cwd: repoRoot,
 		encoding: "utf8",
@@ -43,14 +45,19 @@ function run(cmd, args, opts = {}) {
 		...opts,
 	});
 	if (result.error) {
-		console.error(`${cmd} failed to start: ${result.error.message}`);
+		console.error(
+			result.error.code === "ENOENT"
+				? `\n${cmd} is not on PATH (${result.error.message}).`
+				: `\n${cmd} failed to start: ${result.error.message}`,
+		);
+		if (hint) console.error(hint);
 		process.exit(1);
 	}
 	return result;
 }
 
 function runOrDie(cmd, args, opts = {}, hint = "") {
-	const result = run(cmd, args, opts);
+	const result = run(cmd, args, opts, hint);
 	if (result.status !== 0) {
 		if (result.stderr) process.stderr.write(result.stderr);
 		console.error(`\n${cmd} ${args.join(" ")} exited with status ${result.status}.`);
@@ -177,7 +184,7 @@ async function buildBinary(version, platform, nativeDst) {
 		"go",
 		["build", "-o", binPath, "-ldflags", ldflags, "./cmd/archetipo"],
 		{ cwd: path.join(repoRoot, "cli"), stdio: "inherit" },
-		"go build failed — is Go installed and on PATH?",
+		"go build failed. Check the compiler output above.",
 	);
 
 	if (!isWindows) await fs.chmod(binPath, 0o755);
@@ -239,6 +246,10 @@ function verifyAndPrint(version, platform) {
 }
 
 async function main() {
+	// Fail before staging anything: the build needs the Go toolchain, and a
+	// bare spawn ENOENT halfway through says nothing useful.
+	console.log(`Using ${requireGo(repoRoot)}`);
+
 	const version = computeDevVersion();
 	const platform = detectPlatform();
 	console.log(`Packaging ${platform.pkgName} + @techreloaded/archetipo @ ${version}\n`);

@@ -4,9 +4,11 @@ Questa guida serve quando vuoi compilare una versione locale di `archetipo`, pro
 
 ## Prerequisiti
 
-- Go nella versione indicata da `cli/go.mod`.
+- Go nella versione indicata da `cli/go.mod`, **raggiungibile dal `PATH`**: tutti gli script di sviluppo compilano la CLI dai sorgenti. Verifica con `go version`.
 - Node.js solo se vuoi testare anche lo shim npm (`npm/archetipo/bin/archetipo.js`).
 - Un clone locale del repository ARchetipo.
+
+> `npm run` eredita il `PATH` della shell da cui lo lanci. Se `go version` funziona nel terminale ma `npm run install:dev` no, stai lanciando npm da un ambiente diverso (terminale integrato dell'IDE, un altro profilo di shell, o `sudo`).
 
 > Nei comandi sotto, `ARCHETIPO_REPO` punta alla root del clone ARchetipo.
 
@@ -209,6 +211,7 @@ Nota: `npm run build:npm -- 0.0.0-local` sincronizza asset e versioni dentro `np
 
 | Sintomo | Causa probabile | Fix rapido |
 |---|---|---|
+| `go failed to start: spawnSync go ENOENT` / `Go toolchain not found` | Il toolchain Go non è nel `PATH` ereditato da `npm run` (spesso è installato ma la sua directory non è esportata). | `export PATH="/usr/local/go/bin:$PATH"` (o `brew install go`), poi `go version` e ripeti il comando. |
 | `could not locate ARchetipo data directory` | Il binario locale non sa dove trovare `skills/` e runtime. | `export ARCHETIPO_DATA_DIR=/path/to/ARchetipo` |
 | `archetipo version` mostra una versione pubblicata | Nel `PATH` vince l'installazione npm globale. | `export PATH=/path/to/ARchetipo/.local/bin:$PATH` e poi `which -a archetipo` |
 | Lo shim npm dice che manca il native binary | È stato installato solo il pacchetto principale, non il sub-package piattaforma. | `npm run install:dev` (installa entrambi insieme) |

@@ -20,6 +20,8 @@ import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { requireGo } from "./lib/go.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -31,6 +33,9 @@ const exeName = isWindows ? "archetipo.exe" : "archetipo";
 const exePath = path.join(nativeDir, exeName);
 
 async function main() {
+	// 0. Fail before touching anything: the whole script is a Go build.
+	console.log(`Using ${requireGo(repoRoot)}`);
+
 	// 1. Ensure output directories
 	await fs.mkdir(nativeDir, { recursive: true });
 	await fs.mkdir(binDir, { recursive: true });
@@ -46,8 +51,12 @@ async function main() {
 		{ cwd: path.join(repoRoot, "cli"), stdio: "inherit" },
 	);
 
+	if (result.error) {
+		console.error(`go failed to start: ${result.error.message}`);
+		process.exit(1);
+	}
 	if (result.status !== 0) {
-		console.error("go build failed — is Go installed and on PATH?");
+		console.error("go build failed. Check the compiler output above.");
 		process.exit(1);
 	}
 
