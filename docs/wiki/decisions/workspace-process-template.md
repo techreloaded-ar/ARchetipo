@@ -23,9 +23,9 @@ sources:
       role: workspace-config-template
 review:
     content_hash: sha256:5dbb9f02f4363c118bb3c96e0636e25de718d50c5ed9612a4365e26b2fd45b6f
-    evidence_revision: c5ab7abcca10d18e5fe3aed38948e04689b95c6f
+    evidence_revision: 13831f8707f7aafcebba2df7b0b97776abd8f172
     evidence_hash: sha256:2b103b940fddcc16897c9ae0be4e3069385c5e01e9c35e471c16e51bee3ed527
-    reviewed_at: "2026-08-31T15:02:21Z"
+    reviewed_at: "2026-08-31T19:53:57Z"
 ---
 # Template di processo del workspace
 
