@@ -1,10 +1,8 @@
 package codex
 
-import (
-	"strings"
+import "github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
-)
+const localOpening = "Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed."
 
 // plannedStatus is the spec status the receipt must declare. It is an alias of
 // the shared execution constant so that the prompt and the acceptance gate can
@@ -29,19 +27,7 @@ const reviewStatus = execution.ReviewStatus
 // would mean one provider asking for something the shared acceptance gate does
 // not recognize.
 func buildPrompt(req execution.Request) string {
-	return strings.Join([]string{
-		"Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed.",
-		"Plan the spec " + req.SpecCode + " by invoking the ARchetipo planning skill:",
-		"",
-		"/archetipo-plan " + req.SpecCode,
-		"",
-		"Persist the plan through the configured connector, exactly as the skill prescribes. Do not paste the plan into your final message.",
-		"Close your run with a single JSON receipt line and nothing after it:",
-		"",
-		`{"spec_code":"` + req.SpecCode + `","status":"` + plannedStatus + `","tasks":<N>}`,
-		"",
-		"<N> is the number of tasks of the plan you actually persisted. Emit the receipt only after the plan is persisted and the spec is " + plannedStatus + ".",
-	}, "\n")
+	return execution.PlanPrompt(localOpening, req)
 }
 
 // buildImplementPrompt renders the single instruction that carries out a
@@ -65,19 +51,7 @@ func buildPrompt(req execution.Request) string {
 // receipt emitted before that would declare an implementation that the
 // confirmation of the effect will then refuse.
 func buildImplementPrompt(req execution.Request) string {
-	return strings.Join([]string{
-		"Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed.",
-		"Implement the spec " + req.SpecCode + " by invoking the ARchetipo implementation skill:",
-		"",
-		"/archetipo-implement " + req.SpecCode,
-		"",
-		"Carry out the persisted plan to the end — every task of it — and run the tests the plan requires. Do not paste code, diffs or file contents into your final message.",
-		"Close your run with a single JSON receipt line and nothing after it:",
-		"",
-		`{"spec_code":"` + req.SpecCode + `","status":"` + reviewStatus + `","tasks_done":<N>,"tests":"<summary>"}`,
-		"",
-		"<N> is the number of tasks you actually completed and <summary> is one line on the outcome of the final test suite. Emit the receipt only after the spec is " + reviewStatus + ", and never before.",
-	}, "\n")
+	return execution.ImplementPrompt(localOpening, req)
 }
 
 // buildArgs renders the full argument list of the Codex invocation. It is the
@@ -116,22 +90,5 @@ func buildArgs() []string {
 // what later lets a human verdict name the execution that prepared the evidence
 // it was decided on.
 func buildReviewPrompt(req execution.Request) string {
-	return strings.Join([]string{
-		"Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed.",
-		"Prepare the review evidence of the spec " + req.SpecCode + " by invoking the ARchetipo review skill in its prepared dossier mode:",
-		"",
-		"/archetipo-review " + req.SpecCode,
-		"",
-		"Prepared dossier mode: you gather the evidence, a person decides. You must NOT run `archetipo spec move`, `archetipo spec integrate` or `archetipo spec request-changes`, and you must leave the spec in " + reviewStatus + ".",
-		"Persist the evidence with:",
-		"",
-		"archetipo spec review-dossier " + req.SpecCode + " --file <payload>",
-		"",
-		`The payload must carry "execution_id": "` + req.ExecutionID + `", a "summary" of the increment, one entry in "criteria" per acceptance criterion with a verdict of "met", "unclear" or "not_verifiable", and one entry in "blockers" per impediment found. Do not paste the dossier into your final message.`,
-		"Close your run with a single JSON receipt line and nothing after it:",
-		"",
-		`{"spec_code":"` + req.SpecCode + `","status":"` + reviewStatus + `","criteria":<N>,"blockers":<M>}`,
-		"",
-		"<N> is the number of acceptance criteria you examined and <M> the number of blockers you found. Emit the receipt only after the dossier is persisted and the spec is still " + reviewStatus + ".",
-	}, "\n")
+	return execution.ReviewPrompt(localOpening, req)
 }

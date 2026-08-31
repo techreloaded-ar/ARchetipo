@@ -1,20 +1,11 @@
 package arcipelago
 
-import (
-	"strings"
-
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
-)
+import "github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 
 // plannedStatus is the spec status the receipt must declare. It is an alias of
 // the shared execution constant so that the prompt and the acceptance gate can
 // never ask for one word and accept another.
 const plannedStatus = execution.PlannedStatus
-
-// reviewStatus is the same fact for the implementation receipt: the status the
-// prompt asks for and the status the shared gate accepts are one constant, so
-// they cannot drift into asking for one word and accepting another.
-const reviewStatus = execution.ReviewStatus
 
 // runnerOpening is the one sentence every task prompt of this provider starts
 // with. It says the thing that is genuinely different about work done through
@@ -58,19 +49,7 @@ func buildTask(req execution.Request) (title, prompt string, metadata map[string
 
 // buildPlanTask renders the remote task that plans a spec.
 func buildPlanTask(req execution.Request) (title, prompt string) {
-	return "ARchetipo plan " + req.SpecCode, strings.Join([]string{
-		runnerOpening,
-		"Plan the spec " + req.SpecCode + " by invoking the ARchetipo planning skill:",
-		"",
-		"/archetipo-plan " + req.SpecCode,
-		"",
-		"Persist the plan through the configured connector, exactly as the skill prescribes. Do not paste the plan into your final message.",
-		"Close your run with a single JSON receipt line and nothing after it:",
-		"",
-		`{"spec_code":"` + req.SpecCode + `","status":"` + plannedStatus + `","tasks":<N>}`,
-		"",
-		"<N> is the number of tasks of the plan you actually persisted. Emit the receipt only after the plan is persisted and the spec is " + plannedStatus + ".",
-	}, "\n")
+	return "ARchetipo plan " + req.SpecCode, execution.PlanPrompt(runnerOpening, req)
 }
 
 // buildImplementTask renders the remote task that carries out a persisted plan.
@@ -87,19 +66,7 @@ func buildPlanTask(req execution.Request) (title, prompt string) {
 // insist on is *when* the receipt may be emitted: only once the spec has really
 // reached the review status.
 func buildImplementTask(req execution.Request) (title, prompt string) {
-	return "ARchetipo implement " + req.SpecCode, strings.Join([]string{
-		runnerOpening,
-		"Implement the spec " + req.SpecCode + " by invoking the ARchetipo implementation skill:",
-		"",
-		"/archetipo-implement " + req.SpecCode,
-		"",
-		"Carry out the persisted plan to the end — every task of it — and run the tests the plan requires. Do not paste code, diffs or file contents into your final message.",
-		"Close your run with a single JSON receipt line and nothing after it:",
-		"",
-		`{"spec_code":"` + req.SpecCode + `","status":"` + reviewStatus + `","tasks_done":<N>,"tests":"<summary>"}`,
-		"",
-		"<N> is the number of tasks you actually completed and <summary> is one line on the outcome of the final test suite. Emit the receipt only after the spec is " + reviewStatus + ", and never before.",
-	}, "\n")
+	return "ARchetipo implement " + req.SpecCode, execution.ImplementPrompt(runnerOpening, req)
 }
 
 // buildConversationTask renders the remote task that carries one conversation:

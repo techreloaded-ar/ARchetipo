@@ -3,11 +3,11 @@ package arcipelago
 import (
 	"fmt"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/providerconfig"
 )
 
 const (
@@ -32,12 +32,12 @@ type settings struct {
 	Timeout      time.Duration
 }
 
-var knownConfigKeys = map[string]struct{}{
-	"base_url":              {},
-	"workspace_id":          {},
-	"token_env":             {},
-	"poll_interval_seconds": {},
-	"timeout_seconds":       {},
+var knownConfigKeys = map[string]any{
+	"base_url":              true,
+	"workspace_id":          true,
+	"token_env":             true,
+	"poll_interval_seconds": true,
+	"timeout_seconds":       true,
 }
 
 // parseConnection validates the part of the configuration that says *which hub
@@ -132,11 +132,11 @@ func parseConfig(raw map[string]any) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
-	pollSeconds, err := parseSeconds(raw, "poll_interval_seconds", defaultPollInterval, minPollInterval, maxPollInterval)
+	pollSeconds, err := providerconfig.ParseSeconds(raw, "poll_interval_seconds", defaultPollInterval, minPollInterval, maxPollInterval)
 	if err != nil {
 		return settings{}, err
 	}
-	timeoutSeconds, err := parseSeconds(raw, "timeout_seconds", defaultTimeout, minTimeout, maxTimeout)
+	timeoutSeconds, err := providerconfig.ParseSeconds(raw, "timeout_seconds", defaultTimeout, minTimeout, maxTimeout)
 	if err != nil {
 		return settings{}, err
 	}
@@ -155,17 +155,7 @@ func parseConfig(raw map[string]any) (settings, error) {
 // rejectUnknownKeys catches typos before any other check, and sorts the keys so
 // the reported field is deterministic when more than one is unknown.
 func rejectUnknownKeys(raw map[string]any) error {
-	unknown := make([]string, 0, len(raw))
-	for key := range raw {
-		if _, ok := knownConfigKeys[key]; !ok {
-			unknown = append(unknown, key)
-		}
-	}
-	if len(unknown) == 0 {
-		return nil
-	}
-	sort.Strings(unknown)
-	return configErr(unknown[0], "is not a recognized arcipelago provider configuration key")
+	return providerconfig.RejectUnknownKeys(raw, knownConfigKeys, "arcipelago")
 }
 
 func requiredString(value any, field string) (string, error) {
@@ -234,32 +224,4 @@ func parseTokenEnv(value any) (string, error) {
 		return "", configErr("token_env", "must contain only upper-case letters, digits and underscores")
 	}
 	return text, nil
-}
-
-// parseSeconds accepts the numeric forms a provider config can arrive in: YAML
-// decodes integers as int, JSON decodes every number as float64, and an int64
-// can reach here through a programmatic caller.
-func parseSeconds(raw map[string]any, field string, fallback, minimum, maximum int) (int, error) {
-	value, present := raw[field]
-	if !present || value == nil {
-		return fallback, nil
-	}
-	var seconds int
-	switch typed := value.(type) {
-	case int:
-		seconds = typed
-	case int64:
-		seconds = int(typed)
-	case float64:
-		if typed != float64(int(typed)) {
-			return 0, configErr(field, "must be a whole number of seconds")
-		}
-		seconds = int(typed)
-	default:
-		return 0, configErr(field, "must be an integer number of seconds")
-	}
-	if seconds < minimum || seconds > maximum {
-		return 0, configErr(field, fmt.Sprintf("must be between %d and %d", minimum, maximum))
-	}
-	return seconds, nil
 }
