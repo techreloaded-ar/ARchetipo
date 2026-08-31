@@ -34,15 +34,6 @@ import (
 // On error, the JSON envelope is written to stderr exactly once: sub-commands
 // return typed errors and Execute serializes them, so handlers don't have to.
 func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	notifier := version.NewNotifier(version.NotifierConfig{
-		PackageName: npmPackageName,
-		UpdateCmd:   "archetipo update",
-		CacheTTL:    24 * time.Hour,
-		HTTPTimeout: 2 * time.Second,
-	}, version.Version)
-	notifier.Start()
-	defer notifier.Print(stderr)
-
 	root := newRootCmd(stdin, stdout, stderr)
 	root.SetArgs(args)
 	root.SetIn(stdin)

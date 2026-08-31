@@ -30,8 +30,8 @@ type Entry struct {
 	StartedAt   time.Time `json:"startedAt"`
 }
 
-// Dir returns the registry directory, creating it if necessary. It mirrors the
-// version notifier's cache location with a dedicated `run/` subfolder:
+// Dir returns the registry directory, creating it if necessary, under the
+// user's standard cache directory:
 //
 //	macOS   ~/Library/Caches/archetipo/run/
 //	Linux   $XDG_CACHE_HOME/archetipo/run/  (or ~/.cache/archetipo/run/)

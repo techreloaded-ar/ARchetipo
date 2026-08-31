@@ -2,11 +2,10 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -39,7 +38,11 @@ func newUpdateCmd(s streams) *cobra.Command {
 
 func runUpdate(s streams, check, dryRun bool) error {
 	if check {
-		latest, err := fetchLatestVersion(4 * time.Second)
+		npmPath, err := exec.LookPath("npm")
+		if err != nil {
+			return npmNotFoundError(err)
+		}
+		latest, err := fetchLatestVersion(npmPath, 4*time.Second)
 		if err != nil {
 			return iox.NewConnector(iox.CodeConnectorNetwork, "cannot reach npm registry", "check internet connection or use --dry-run", err)
 		}
@@ -53,19 +56,16 @@ func runUpdate(s streams, check, dryRun bool) error {
 
 	cmdLine := []string{"npm", "i", "-g", npmPackageName + "@latest"}
 	if dryRun {
-		fmt.Fprintln(s.out, joinArgs(cmdLine))
+		fmt.Fprintln(s.out, strings.Join(cmdLine, " "))
 		return nil
 	}
 
-	if _, err := exec.LookPath("npm"); err != nil {
-		return iox.NewPrecondition(
-			"npm not found in PATH",
-			"install Node.js or update manually with `npm i -g "+npmPackageName+"@latest`",
-			err,
-		)
+	npmPath, err := exec.LookPath("npm")
+	if err != nil {
+		return npmNotFoundError(err)
 	}
 
-	c := exec.Command(cmdLine[0], cmdLine[1:]...)
+	c := exec.Command(npmPath, cmdLine[1:]...)
 	c.Stdin = s.in
 	c.Stdout = s.out
 	c.Stderr = s.err
@@ -81,46 +81,24 @@ func runUpdate(s streams, check, dryRun bool) error {
 	return nil
 }
 
-func joinArgs(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += " "
-		}
-		out += p
-	}
-	return out
+func npmNotFoundError(err error) error {
+	return iox.NewPrecondition(
+		"npm not found in PATH",
+		"install Node.js or update manually with `npm i -g "+npmPackageName+"@latest`",
+		err,
+	)
 }
 
-// fetchLatestVersion queries the npm registry for the `latest` dist-tag of the
-// archetipo package and returns the resolved version string.
-func fetchLatestVersion(timeout time.Duration) (string, error) {
-	client := &http.Client{Timeout: timeout}
+func fetchLatestVersion(npmPath string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	url := "https://registry.npmjs.org/" + npmPackageName + "/latest"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	output, err := exec.CommandContext(ctx, npmPath, "view", npmPackageName, "version").Output()
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "archetipo/"+version.Version)
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
+	latest := strings.TrimSpace(string(output))
+	if latest == "" {
+		return "", fmt.Errorf("npm returned an empty version")
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("registry returned HTTP %d", resp.StatusCode)
-	}
-	var body struct {
-		Version string `json:"version"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", err
-	}
-	if body.Version == "" {
-		return "", fmt.Errorf("registry response missing version field")
-	}
-	return body.Version, nil
+	return latest, nil
 }
