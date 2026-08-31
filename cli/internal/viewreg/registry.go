@@ -11,7 +11,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,13 +50,6 @@ func Dir() (string, error) {
 func baseDir() (string, error) {
 	if override := os.Getenv(EnvRunDir); override != "" {
 		return override, nil
-	}
-	if runtime.GOOS == "darwin" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(home, "Library", "Caches", "archetipo", "run"), nil
 	}
 	base, err := os.UserCacheDir()
 	if err != nil {

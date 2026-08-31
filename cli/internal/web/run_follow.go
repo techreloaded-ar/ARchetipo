@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -140,8 +141,7 @@ func (f *runFollower) snapshotView(afterID int64) runProjection {
 			events = append(events, event)
 		}
 	}
-	approvals := make([]execution.PendingApproval, len(f.approvals))
-	copy(approvals, f.approvals)
+	approvals := slices.Clone(f.approvals)
 	return runProjection{
 		Snapshot:  f.snapshot,
 		Events:    events,

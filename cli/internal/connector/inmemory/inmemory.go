@@ -15,7 +15,6 @@ import (
 	"sync"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
@@ -340,12 +339,4 @@ func (c *Connector) codeFor(ref string) string {
 		}
 	}
 	return ""
-}
-
-// Register integrates the inmemory connector with the registry under the name
-// "inmemory". Skills do not select it via config.yaml; tests do.
-func Register() {
-	connector.Register("inmemory", func(cfg config.Config) (connector.Connector, error) {
-		return New(cfg), nil
-	})
 }

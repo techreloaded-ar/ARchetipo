@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -192,9 +193,7 @@ func (c *Connector) ReadBoardOrder(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]string, len(store.Backlog.Order))
-	copy(out, store.Backlog.Order)
-	return out, nil
+	return slices.Clone(store.Backlog.Order), nil
 }
 
 // ReadPRD returns the contents of the configured PRD file. A missing file is

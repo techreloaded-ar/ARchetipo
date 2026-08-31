@@ -3860,14 +3860,6 @@
 		}
 	}
 
-	// La spec di cui parla il pannello montato, o niente per il contesto di
-	// workspace. Il contesto è una stringa sola — `spec:<codice>` — e questo è
-	// l'unico posto che la rilegge.
-	function specCodeOfContext(context) {
-		const value = String(context || "");
-		return value.startsWith("spec:") ? value.slice("spec:".length) : "";
-	}
-
 	// Porta sullo schermo il filo in cui la run è appena nata.
 	//
 	// L'elenco si rilegge subito perché altrimenti non si rileggerebbe affatto:

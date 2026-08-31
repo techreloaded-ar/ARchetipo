@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -477,8 +478,7 @@ func (c *conversationSet) list() []conversationSnapshot {
 func snapshotOf(entry *liveConversation) conversationSnapshot {
 	var outcomes []conversationOutcome
 	if len(entry.outcomes) > 0 {
-		outcomes = make([]conversationOutcome, len(entry.outcomes))
-		copy(outcomes, entry.outcomes)
+		outcomes = slices.Clone(entry.outcomes)
 	}
 	return conversationSnapshot{
 		id:                entry.id,

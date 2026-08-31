@@ -11,6 +11,7 @@ package workspace
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -38,9 +39,7 @@ var tools = []Tool{
 // Tools returns the registered tools. The slice is a copy: a caller that sorts
 // or truncates it cannot reach back into the registry.
 func Tools() []Tool {
-	out := make([]Tool, len(tools))
-	copy(out, tools)
-	return out
+	return slices.Clone(tools)
 }
 
 // ToolKeys lists the registered tool keys in registration order.

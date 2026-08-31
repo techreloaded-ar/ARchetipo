@@ -2,7 +2,6 @@ package wiki
 
 import (
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -22,11 +21,11 @@ func fingerprintGitlink(manifest *evidenceManifest, rel string, entry *gitIndexE
 		return block("gitlink is not an ordinary directory", nil)
 	}
 
-	top, err := gitSubmoduleOutput(resolved.Path, "rev-parse", "--show-toplevel")
+	top, err := gitEmbeddedOutput(resolved.Path, "rev-parse", "--show-toplevel")
 	if err != nil || !samePhysicalPath(strings.TrimSpace(string(top)), resolved.Path) {
 		return block("submodule worktree is missing or uninitialized", err)
 	}
-	headRaw, err := gitSubmoduleOutput(resolved.Path, "rev-parse", "--verify", "HEAD")
+	headRaw, err := gitEmbeddedOutput(resolved.Path, "rev-parse", "--verify", "HEAD")
 	if err != nil {
 		return block("submodule HEAD is unavailable", err)
 	}
@@ -35,7 +34,7 @@ func fingerprintGitlink(manifest *evidenceManifest, rel string, entry *gitIndexE
 	if head == "" || head != indexOID {
 		return block("checked-out HEAD does not match the stage-0 gitlink", nil)
 	}
-	status, err := gitSubmoduleOutput(
+	status, err := gitEmbeddedOutput(
 		resolved.Path,
 		"status",
 		"--porcelain=v2",
@@ -52,16 +51,6 @@ func fingerprintGitlink(manifest *evidenceManifest, rel string, entry *gitIndexE
 
 	manifest.record("gitlink", rel, indexOID, head)
 	return nil
-}
-
-func gitSubmoduleOutput(dir string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("git %s failed: %w", args[0], err)
-	}
-	return out, nil
 }
 
 func samePhysicalPath(left, right string) bool {

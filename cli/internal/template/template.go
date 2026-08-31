@@ -14,6 +14,7 @@ package template
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
@@ -46,9 +47,7 @@ type Action struct {
 // clone detaches the mutable slice so a caller that edits Statuses cannot reach
 // back into the registry.
 func (a Action) clone() Action {
-	statuses := make([]domain.Status, len(a.Statuses))
-	copy(statuses, a.Statuses)
-	a.Statuses = statuses
+	a.Statuses = slices.Clone(a.Statuses)
 	return a
 }
 
@@ -195,28 +194,20 @@ func (r *Registry) IDs() []string {
 	if r == nil {
 		return nil
 	}
-	out := make([]string, len(r.order))
-	copy(out, r.order)
-	return out
+	return slices.Clone(r.order)
 }
 
 // clone detaches the mutable slices so a caller that edits Skills or Actions
 // cannot reach back into the registry.
 func (t Template) clone() Template {
-	skills := make([]string, len(t.Skills))
-	copy(skills, t.Skills)
-	t.Skills = skills
+	t.Skills = slices.Clone(t.Skills)
 	actions := make([]Action, len(t.Actions))
 	for i, action := range t.Actions {
 		actions[i] = action.clone()
 	}
 	t.Actions = actions
-	workspaceActions := make([]WorkspaceAction, len(t.WorkspaceActions))
-	copy(workspaceActions, t.WorkspaceActions)
-	t.WorkspaceActions = workspaceActions
-	stages := make([]Stage, len(t.Stages))
-	copy(stages, t.Stages)
-	t.Stages = stages
+	t.WorkspaceActions = slices.Clone(t.WorkspaceActions)
+	t.Stages = slices.Clone(t.Stages)
 	return t
 }
 

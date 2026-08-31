@@ -162,14 +162,3 @@ func WriteError(w io.Writer, err error) {
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(env)
 }
-
-// ReadJSON decodes a single JSON value from r into v. Returns
-// E_INVALID_INPUT on malformed input.
-func ReadJSON(r io.Reader, v any) error {
-	dec := json.NewDecoder(r)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		return NewInvalidInput("invalid JSON on stdin", "expected schema "+Schema, err)
-	}
-	return nil
-}

@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -59,9 +60,7 @@ func DescribeConfig(provider Provider) []ConfigField {
 	if fields == nil {
 		return []ConfigField{}
 	}
-	out := make([]ConfigField, len(fields))
-	copy(out, fields)
-	return out
+	return slices.Clone(fields)
 }
 
 type ConfigurationError struct {
