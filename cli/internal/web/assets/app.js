@@ -5044,6 +5044,10 @@
 	// place claiming to hold a conversation.
 	let conversationsIndex = null; // last read of GET /api/workspace/conversations
 	let conversationsCurrentId = ""; // which thread the panel is showing
+	const CONVERSATIONS_CLOSED_PAGE_SIZE = 20;
+	let conversationsClosedLimit = CONVERSATIONS_CLOSED_PAGE_SIZE;
+	let conversationsIndexBusy = false;
+	let conversationsIndexLoadToken = 0;
 	// The server's own sentence when an open was refused — the limit of live
 	// conversations and which ones to close (AC-5). It is kept here, beside the
 	// rail, because the rail is where the offer to open one stands: it is shown
@@ -5435,6 +5439,10 @@
 				prepareConversationOpen("");
 				return;
 			}
+			if (e.target.closest("[data-conversation-more]")) {
+				loadOlderConversations();
+				return;
+			}
 			const thread = e.target.closest("[data-conversation-id]");
 			if (thread) {
 				openConversationThread(
@@ -5442,6 +5450,20 @@
 				);
 			}
 		});
+		// Progressive disclosure with a keyboard-accessible fallback above: when
+		// the reader reaches the tail, ask for one more page. The listener is on
+		// the stable rail and uses capture because the scrollable list is replaced
+		// whenever the index changes.
+		container.addEventListener("scroll", (e) => {
+			const list = e.target.closest && e.target.closest(".rail-list");
+			if (!list) return;
+			const remaining =
+				list.scrollWidth > list.clientWidth
+					? list.scrollWidth - list.scrollLeft - list.clientWidth
+					: list.scrollHeight - list.scrollTop - list.clientHeight;
+			if (remaining > 80) return;
+			loadOlderConversations();
+		}, true);
 	}
 
 	bindConversationsRail(conversationsRailEl);
@@ -5450,6 +5472,9 @@
 	// owns the holder; the renderer owns everything inside it.
 	function renderConversationsRail() {
 		if (!conversationsRailEl) return;
+		const previousList = conversationsRailEl.querySelector(".rail-list");
+		const previousTop = previousList ? previousList.scrollTop : 0;
+		const previousLeft = previousList ? previousList.scrollLeft : 0;
 		if (noWorkspaceMode() || !window.ConversationIndex) {
 			// No workspace, no rail: an index of nothing is not an empty list, it
 			// is a question that cannot be asked. Emptied rather than hidden, so
@@ -5470,6 +5495,21 @@
 			window.ConversationIndex.renderConversationIndex(conversationsIndex, {
 				currentId: conversationsCurrentId,
 			});
+		const nextList = conversationsRailEl.querySelector(".rail-list");
+		if (nextList) {
+			nextList.scrollTop = previousTop;
+			nextList.scrollLeft = previousLeft;
+		}
+	}
+
+	function loadOlderConversations() {
+		if (
+			conversationsIndexBusy ||
+			!conversationsIndex ||
+			conversationsIndex.has_more_closed !== true
+		) return;
+		conversationsClosedLimit += CONVERSATIONS_CLOSED_PAGE_SIZE;
+		loadConversationsIndex();
 	}
 
 	// loadConversationsIndex re-reads the index of the workspace. It is called
@@ -5478,22 +5518,29 @@
 	// `last_message_at` and the "in corso" mark stay true without a second timer
 	// of their own.
 	async function loadConversationsIndex() {
-		if (!conversationsRailEl) return;
+		if (!conversationsRailEl || conversationsIndexBusy) return;
 		if (noWorkspaceMode()) {
 			conversationsIndex = null;
 			renderConversationsRail();
 			return;
 		}
 		let view;
+		const token = ++conversationsIndexLoadToken;
+		conversationsIndexBusy = true;
 		try {
-			view = await apiGet("/api/workspace/conversations");
+			view = await apiGet(
+				`/api/workspace/conversations?closed_limit=${conversationsClosedLimit}`,
+			);
 		} catch (_) {
 			// A read that failed says nothing about what the workspace holds, so
 			// the rail keeps drawing the last index it had rather than claiming
 			// the history is gone. No toast: a viewer that cannot answer must not
 			// stop anyone from working.
 			return;
+		} finally {
+			if (token === conversationsIndexLoadToken) conversationsIndexBusy = false;
 		}
+		if (token !== conversationsIndexLoadToken) return;
 		conversationsIndex = view;
 		renderConversationsRail();
 	}
@@ -5807,13 +5854,15 @@
 		stopConversationWorkingTicker();
 		// The rail is forgotten with the conversation (AC-6): the index of the
 		// workspace being left must never be on screen beside the workspace now
-		// open, not even for the instant it takes to read the new one. Emptied
-		// first, then re-read.
+		// open, not even for the instant it takes to read the new one. It is emptied
+		// here; the caller that is entering a workspace re-reads it after the reset.
 		conversationsIndex = null;
+		conversationsClosedLimit = CONVERSATIONS_CLOSED_PAGE_SIZE;
+		conversationsIndexBusy = false;
+		conversationsIndexLoadToken += 1;
 		conversationsCurrentId = "";
 		conversationsRefusal = "";
 		renderConversationsRail();
-		loadConversationsIndex();
 		// The panel is the home of the workspace: it never goes blank and it
 		// never hides itself — its visibility belongs to the layout alone. What
 		// it draws once the state is cleared is the home of a workspace with no

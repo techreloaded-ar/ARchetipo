@@ -51,6 +51,7 @@ const helperPath = resolve(
 	"assets",
 	"conversation-index.js",
 );
+const appPath = resolve(dirname(helperPath), "app.js");
 
 // Same minimal virtual-machine loader as conversation.test.mjs: the UMD module
 // detects `module.exports` first, so the Node branch is enough — and a module
@@ -254,6 +255,37 @@ describe("renderConversationIndex", () => {
 		);
 	});
 
+	it("rende compatte le concluse e lascia prominenti quelle vive", () => {
+		const html = renderConversationIndex(
+			{
+				conversations: [
+					{id: "live", title: "Conversazione viva", live: true},
+					{id: "closed", title: "Conclusa", live: false},
+				],
+			},
+			{ now: NOW },
+		);
+		assert.match(threadWithTitle(html, "Conversazione viva"), /is-live/);
+		assert.doesNotMatch(threadWithTitle(html, "Conversazione viva"), /is-closed/);
+		assert.match(threadWithTitle(html, "Conclusa"), /is-closed/);
+	});
+
+	it("offre di caricare le precedenti soltanto quando il server ne dichiara altre", () => {
+		const entry = { id: "closed", title: "Conclusa", live: false };
+		const more = renderConversationIndex(
+			{ conversations: [entry], has_more_closed: true },
+			{ now: NOW },
+		);
+		assert.match(more, /data-conversation-more/);
+		assert.match(visibleText(more), /Carica conversazioni precedenti/);
+
+		const complete = renderConversationIndex(
+			{ conversations: [entry], has_more_closed: false },
+			{ now: NOW },
+		);
+		assert.doesNotMatch(complete, /data-conversation-more/);
+	});
+
 	it("dichiara che non c'è ancora nessuna conversazione e offre di avviarne una (AC-7)", () => {
 		const html = renderConversationIndex({ conversations: [] }, { now: NOW });
 
@@ -303,6 +335,15 @@ describe("renderConversationIndex", () => {
 
 		assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 		assert.doesNotMatch(html, /<script>/);
+	});
+});
+
+describe("cablaggio della rail", () => {
+	it("preserva lo scroll quando il polling ridisegna l'indice", () => {
+		const source = readFileSync(appPath, "utf8");
+		assert.match(source, /const previousTop = previousList \? previousList\.scrollTop : 0/);
+		assert.match(source, /nextList\.scrollTop = previousTop/);
+		assert.match(source, /closed_limit=\$\{conversationsClosedLimit\}/);
 	});
 });
 

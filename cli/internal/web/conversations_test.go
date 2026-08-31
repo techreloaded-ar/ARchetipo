@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -35,9 +36,25 @@ type conversationsRouteTestEntry struct {
 // conversation be opened here, and with which provider" is now answered.
 type conversationsRouteTestIndex struct {
 	Conversations     []conversationsRouteTestEntry `json:"conversations"`
+	HasMoreClosed     bool                          `json:"has_more_closed"`
+	ClosedLimit       int                           `json:"closed_limit"`
 	Available         bool                          `json:"available"`
 	UnavailableReason string                        `json:"unavailable_reason"`
 	ProviderID        string                        `json:"provider_id"`
+}
+
+func conversationsRouteTestReadIndexAt(t *testing.T, srv *Server, limit int) (conversationsRouteTestIndex, string) {
+	t.Helper()
+	w := doJSON(t, srv, http.MethodGet, "/api/workspace/conversations?closed_limit="+strconv.Itoa(limit), nil)
+	body := w.Body.String()
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET conversations = %d, want 200: %s", w.Code, body)
+	}
+	var view conversationsRouteTestIndex
+	if err := json.Unmarshal([]byte(body), &view); err != nil {
+		t.Fatalf("undecodable conversations index: %v (%s)", err, body)
+	}
+	return view, body
 }
 
 // conversationsRouteTestStore is a second store opened on the very directory of
@@ -184,6 +201,60 @@ func TestConversationsIndexListsRecentFirstWithTitleAndSpecCode(t *testing.T) {
 	}
 	if free.LastMessageAt != conversationsRouteTestInstant(older) {
 		t.Errorf("last_message_at = %q, want %q", free.LastMessageAt, conversationsRouteTestInstant(older))
+	}
+}
+
+func TestConversationsIndexPagesOnlyClosedConversationsAndKeepsEveryLiveOne(t *testing.T) {
+	provider := newConversingProvider("chatty", 0)
+	srv := newConversationServer(t, provider)
+	store := conversationsRouteTestStore(t, srv)
+	base := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 25; i++ {
+		conversationsRouteTestSave(t, store, conversationlog.Record{
+			ID:            "conv-closed-" + strconv.Itoa(i),
+			Title:         "Conversazione conclusa " + strconv.Itoa(i),
+			OpenedAt:      base.Add(-time.Duration(i+1) * time.Hour),
+			LastMessageAt: base.Add(-time.Duration(i+1) * time.Hour),
+			FinalState:    string(execution.RunClosed),
+			Events:        []execution.RunEvent{},
+		})
+	}
+	liveID := openConversationOK(t, srv).Conversation.ID
+
+	first, body := conversationsRouteTestReadIndexAt(t, srv, 5)
+	if len(first.Conversations) != 6 {
+		t.Fatalf("the first page carries %d conversations, want 5 closed plus the live one: %s", len(first.Conversations), body)
+	}
+	if !first.HasMoreClosed || first.ClosedLimit != 5 {
+		t.Fatalf("first page metadata = has_more:%v limit:%d, want true/5: %s", first.HasMoreClosed, first.ClosedLimit, body)
+	}
+	if entry := conversationsRouteTestEntryOf(t, first, liveID); !entry.Live {
+		t.Fatalf("the live conversation was paged as history: %s", body)
+	}
+	closed := 0
+	for _, entry := range first.Conversations {
+		if !entry.Live {
+			closed++
+		}
+	}
+	if closed != 5 {
+		t.Fatalf("first page carries %d closed conversations, want 5: %s", closed, body)
+	}
+
+	all, allBody := conversationsRouteTestReadIndexAt(t, srv, 30)
+	if len(all.Conversations) != 26 || all.HasMoreClosed {
+		t.Fatalf("expanded page carries %d conversations and has_more=%v, want all 26 and false: %s", len(all.Conversations), all.HasMoreClosed, allBody)
+	}
+}
+
+func TestConversationsIndexRejectsAnInvalidClosedLimit(t *testing.T) {
+	srv := newConversationServer(t, newConversingProvider("chatty", 0))
+	w := doJSON(t, srv, http.MethodGet, "/api/workspace/conversations?closed_limit=all", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("GET conversations with invalid closed_limit = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "closed_limit") {
+		t.Fatalf("the refusal does not name closed_limit: %s", w.Body.String())
 	}
 }
 

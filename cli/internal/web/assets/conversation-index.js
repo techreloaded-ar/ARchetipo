@@ -105,6 +105,7 @@
 
 	function threadClasses(entry, currentId) {
 		const classes = ["thread"];
+		classes.push(isLive(entry) ? "is-live" : "is-closed");
 		if (!textAt(entry, "spec_code")) classes.push("is-free");
 		const id = textAt(entry, "id");
 		if (currentId && id && id === currentId) classes.push("is-current");
@@ -169,6 +170,13 @@
 		return `<button type="button" class="new-thread" data-conversation-new>
 			<svg class="new-thread-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
 			<span>${TEXT.newThread}</span>
+		</button>`;
+	}
+
+	function renderOlderControl(view) {
+		if (!view || view.has_more_closed !== true) return "";
+		return `<button type="button" class="rail-more" data-conversation-more>
+			<span>Carica conversazioni precedenti</span>
 		</button>`;
 	}
 
@@ -261,7 +269,7 @@
 			.join("");
 
 		return `${top}
-		<div class="rail-list">${groups}</div>`;
+		<div class="rail-list">${groups}${renderOlderControl(view)}</div>`;
 	}
 
 	/**

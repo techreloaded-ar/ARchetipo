@@ -3,9 +3,16 @@ package web
 import (
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+)
+
+const (
+	defaultClosedConversationLimit = 20
+	maxClosedConversationLimit     = 5000
 )
 
 // conversationEntryView is one past — or currently held — conversation of the
@@ -32,6 +39,8 @@ type conversationEntryView struct {
 // rail reads "there are none" from the list itself and never from a missing key.
 type conversationsView struct {
 	Conversations []conversationEntryView `json:"conversations"`
+	HasMoreClosed bool                    `json:"has_more_closed"`
+	ClosedLimit   int                     `json:"closed_limit"`
 	// Available, UnavailableReason and ProviderID say whether *another*
 	// conversation could be opened here, and with which provider. They travel
 	// with the index because the index is the only read a workspace holding
@@ -41,6 +50,22 @@ type conversationsView struct {
 	Available         bool   `json:"available"`
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
 	ProviderID        string `json:"provider_id,omitempty"`
+}
+
+func closedConversationLimit(r *http.Request) (int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("closed_limit"))
+	if raw == "" {
+		return defaultClosedConversationLimit, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 || limit > maxClosedConversationLimit {
+		return 0, iox.NewInvalidInput(
+			"closed_limit must be an integer between 1 and "+strconv.Itoa(maxClosedConversationLimit),
+			"use a positive page size for the closed conversations",
+			err,
+		)
+	}
+	return limit, nil
 }
 
 // conversationEntryOf renders one record. live is decided by the caller, which
@@ -59,8 +84,8 @@ func conversationEntryOf(record conversationlog.Record, live bool) conversationE
 	}
 }
 
-// handleListWorkspaceConversations lists the conversations held on the open
-// workspace, most recent first.
+// handleListWorkspaceConversations lists every live conversation and a bounded
+// prefix of the closed conversations of the open workspace, most recent first.
 //
 // It starts no process, and it probes the runtime only when the workspace holds
 // nothing alive — see conversationOpenabilityOf: this route is re-read on every
@@ -71,6 +96,11 @@ func conversationEntryOf(record conversationlog.Record, live bool) conversationE
 func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http.Request) {
 	ws := s.session()
 	ctx := r.Context()
+	closedLimit, err := closedConversationLimit(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	store := ws.conversationStore()
 	if store == nil {
 		writeError(w, iox.NewInternal("listing the conversations of the workspace", errors.New("this workspace keeps no conversation journal")))
@@ -95,13 +125,25 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 	for _, snapshot := range ws.conversation.list() {
 		alive[snapshot.id] = true
 	}
-	views := make([]conversationEntryView, 0, len(records))
+	views := make([]conversationEntryView, 0, min(len(records), closedLimit+len(alive)))
+	closedCount := 0
+	hasMoreClosed := false
 	for _, record := range records {
-		views = append(views, conversationEntryOf(record, alive[record.ID]))
+		live := alive[record.ID]
+		if !live {
+			if closedCount >= closedLimit {
+				hasMoreClosed = true
+				continue
+			}
+			closedCount++
+		}
+		views = append(views, conversationEntryOf(record, live))
 	}
 	openability := s.conversationOpenabilityOf(ctx, ws)
 	writeJSON(w, http.StatusOK, conversationsView{
 		Conversations:     views,
+		HasMoreClosed:     hasMoreClosed,
+		ClosedLimit:       closedLimit,
 		Available:         openability.available,
 		UnavailableReason: openability.reason,
 		ProviderID:        openability.providerID,
