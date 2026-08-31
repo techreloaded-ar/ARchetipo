@@ -8,8 +8,7 @@
 // A Template makes that process a declared, addressable object without
 // changing what a default initialization produces.
 //
-// Templates are resolved in-process by id, the same way execution providers
-// are: the registry is the single place where a process is written down.
+// The built-in Template is resolved by id and returned as a defensive copy.
 package template
 
 import (
@@ -129,8 +128,7 @@ func (t Template) ActionsFor(status domain.Status) []Action {
 	return out
 }
 
-// RegistryError is the typed failure of registry operations. Callers branch on
-// the type, never on the rendered message.
+// RegistryError is retained as the typed failure returned for an unknown id.
 type RegistryError struct {
 	TemplateID string
 	Reason     string
@@ -141,60 +139,6 @@ func (e *RegistryError) Error() string {
 		return fmt.Sprintf("process template %s", e.Reason)
 	}
 	return fmt.Sprintf("process template %q %s", e.TemplateID, e.Reason)
-}
-
-// Registry resolves Templates by id and preserves registration order so the
-// list of valid ids is stable in error hints.
-type Registry struct {
-	templates map[string]Template
-	order     []string
-}
-
-func NewRegistry() *Registry {
-	return &Registry{templates: make(map[string]Template)}
-}
-
-func (r *Registry) Register(t Template) error {
-	if r == nil || r.templates == nil {
-		return &RegistryError{Reason: "registry is not initialized"}
-	}
-	id := strings.TrimSpace(t.ID)
-	if id == "" {
-		return &RegistryError{Reason: "has an empty id"}
-	}
-	if _, exists := r.templates[id]; exists {
-		return &RegistryError{TemplateID: id, Reason: "is already registered"}
-	}
-	t.ID = id
-	r.templates[id] = t
-	r.order = append(r.order, id)
-	return nil
-}
-
-// Resolve returns the Template registered under id. An empty id is not an
-// error: it means "no explicit selection" and resolves to the default Template,
-// which is what keeps an initialization without --template on today's process.
-func (r *Registry) Resolve(id string) (Template, error) {
-	if r == nil || r.templates == nil {
-		return Template{}, &RegistryError{Reason: "registry is not initialized"}
-	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		id = DefaultID
-	}
-	t, ok := r.templates[id]
-	if !ok {
-		return Template{}, &RegistryError{TemplateID: id, Reason: "is not registered"}
-	}
-	return t.clone(), nil
-}
-
-// IDs lists the registered ids in registration order.
-func (r *Registry) IDs() []string {
-	if r == nil {
-		return nil
-	}
-	return slices.Clone(r.order)
 }
 
 // clone detaches the mutable slices so a caller that edits Skills or Actions
@@ -211,13 +155,8 @@ func (t Template) clone() Template {
 	return t
 }
 
-// Builtin returns the registry the CLI runs with. Registering a single static
-// Template cannot fail — the registry is fresh and the id is a non-empty
-// constant — so the error is deliberately discarded rather than turned into an
-// unreachable failure path.
-func Builtin() *Registry {
-	registry := NewRegistry()
-	_ = registry.Register(Template{
+func builtin() Template {
+	return Template{
 		ID:      FabbricaDelSoftware,
 		Version: fabbricaVersion,
 		Label:   "Fabbrica del software",
@@ -317,17 +256,19 @@ func Builtin() *Registry {
 			Review:     string(domain.StatusReview),
 			Done:       string(domain.StatusDone),
 		},
-	})
-	return registry
+	}
 }
 
 // Default returns the Template used when no selection is made.
 func Default() Template {
-	t, _ := Builtin().Resolve(DefaultID)
-	return t
+	return builtin().clone()
 }
 
-// Resolve looks up id in the built-in registry. An empty id yields Default().
+// Resolve accepts the built-in id. An empty id yields Default().
 func Resolve(id string) (Template, error) {
-	return Builtin().Resolve(id)
+	id = strings.TrimSpace(id)
+	if id == "" || id == DefaultID {
+		return Default(), nil
+	}
+	return Template{}, &RegistryError{TemplateID: id, Reason: "is not registered"}
 }

@@ -661,7 +661,7 @@ func (s *Server) resolveTemplate(ws *workspaceSession) (template.Template, error
 	if err != nil {
 		return template.Template{}, iox.NewInvalidInput(
 			"unknown template: "+ws.cfg.Template.ID,
-			"valid: "+strings.Join(template.Builtin().IDs(), ", "),
+			"valid: "+template.DefaultID,
 			err,
 		)
 	}

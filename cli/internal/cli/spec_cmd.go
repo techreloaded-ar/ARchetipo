@@ -206,7 +206,7 @@ func newSpecActionsCmd(s streams) *cobra.Command {
 				if err != nil {
 					return nil, iox.NewInvalidInput(
 						"unknown template: "+cfg.Template.ID,
-						"valid: "+strings.Join(template.Builtin().IDs(), ", "),
+						"valid: "+template.DefaultID,
 						err,
 					)
 				}

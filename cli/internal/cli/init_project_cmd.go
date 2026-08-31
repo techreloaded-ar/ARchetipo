@@ -68,7 +68,7 @@ func runInitProject(s streams, toolFlags []string, connectorFlag, templateFlag s
 	if err != nil {
 		return iox.NewInvalidInput(
 			"unknown template: "+strings.TrimSpace(templateFlag),
-			"valid: "+strings.Join(template.Builtin().IDs(), ", "),
+			"valid: "+template.DefaultID,
 			err,
 		)
 	}

@@ -1,7 +1,7 @@
 ---
 type: decision
 title: Template di processo del workspace
-description: Il processo di un workspace è una definizione registrata in-process, selezionata per ID all'inizializzazione e conservata nella configurazione
+description: Il processo di un workspace è un valore builtin nominato, risolto per ID all'inizializzazione e conservato nella configurazione
 status: reviewed
 decision_status: accepted
 sources:
@@ -22,10 +22,10 @@ sources:
     - path: .archetipo/config.yaml
       role: workspace-config-template
 review:
-    content_hash: sha256:5b1bd26d22f787fff476872f5eb92b89027c57ca349ff883638e557ff196b03b
-    evidence_revision: aff2c2f75381020af04298015fb37c51fc7eddfc
-    evidence_hash: sha256:a967f4e6915dfe0409c3e1cd7a043e624dcd3c1094448bcf4cf557939b0a96a6
-    reviewed_at: "2026-08-16T11:33:43Z"
+    content_hash: sha256:5dbb9f02f4363c118bb3c96e0636e25de718d50c5ed9612a4365e26b2fd45b6f
+    evidence_revision: c5ab7abcca10d18e5fe3aed38948e04689b95c6f
+    evidence_hash: sha256:2b103b940fddcc16897c9ae0be4e3069385c5e01e9c35e471c16e51bee3ed527
+    reviewed_at: "2026-08-31T15:02:21Z"
 ---
 # Template di processo del workspace
 
@@ -39,13 +39,13 @@ Questo diventa un limite nel momento in cui il processo smette di essere l'unico
 <!-- archetipo:wiki section=decision -->
 ## Decisione
 
-Il Template è una **definizione registrata in-process**: un valore con identificativo, versione, etichetta, lista di skill, azioni offerte su una spec e stati del workflow, risolto per ID da un registry costruito dal binario. Il registry riproduce il pattern già accettato per i provider di esecuzione — stessa forma dell'errore tipizzato, stessa risoluzione per ID — così il repository ha un solo modo di modellare una selezione per identificativo.
+Il Template è un **valore builtin nominato**: porta identificativo, versione, etichetta, lista di skill, azioni offerte su una spec e stati del workflow. Il binario contiene una sola definizione, `fabbrica-del-software`: ID vuoto e ID di default la risolvono direttamente, ogni altro ID produce lo stesso errore tipizzato usato dal contratto precedente. Non esistono registry, ordine di registrazione o duplicate check per una variabilità che il prodotto non offre.
 
 Il package `template` diventa l'unico punto in cui il processo è scritto: `init` installa `tpl.Skills`, e `uninstall` e `doctor` continuano a leggere la stessa lista attraverso una variabile derivata dal Template di default. La duplicazione precedente sparisce senza toccare quei due comandi.
 
 Il Template dichiara anche le proprie **azioni**, cioè i passi che il processo offre su una spec. Ogni azione porta quattro cose: un identificativo stabile, che è ciò su cui un programma si appoggia; un'etichetta destinata a una persona; la skill che la realizza, così il chiamante può scegliere il risultato senza conoscere il nome interno della skill; e l'elenco degli stati in cui l'azione è ammessa. La Fabbrica del software dichiara `plan` / «Pianifica» / `archetipo-plan` per `TODO`, `implement` / «Implementa» / `archetipo-implement` per `PLANNED` e `IN PROGRESS`, `review` / «Rivedi» / `archetipo-review` per `REVIEW`. `DONE` non dichiara alcuna azione. Gli stati ammessi sono i valori canonici del dominio, gli stessi che il Template porta già in `Statuses`, e non le etichette configurabili del workflow: il confronto avviene sul vocabolario che il connector restituisce.
 
-Il filtro per stato restituisce le azioni ammesse in ordine di dichiarazione e restituisce **sempre** un elenco, eventualmente vuoto. Uno stato senza azioni ammesse — `DONE`, ma anche uno stato sconosciuto o la stringa vuota — non è un errore e non è un'assenza: è un elenco vuoto. L'elenco è non-nil per costruzione, così nella rappresentazione JSON resta `[]` e non diventa `null`, e un client non deve distinguere due forme per lo stesso significato. La copia difensiva già applicata a `Skills` si estende alle azioni e agli stati che ciascuna dichiara: senza di essa un chiamante che modificasse il risultato raggiungerebbe il registry.
+Il filtro per stato restituisce le azioni ammesse in ordine di dichiarazione e restituisce **sempre** un elenco, eventualmente vuoto. Uno stato senza azioni ammesse — `DONE`, ma anche uno stato sconosciuto o la stringa vuota — non è un errore e non è un'assenza: è un elenco vuoto. L'elenco è non-nil per costruzione, così nella rappresentazione JSON resta `[]` e non diventa `null`, e un client non deve distinguere due forme per lo stesso significato. La copia difensiva già applicata a `Skills` si estende alle azioni e agli stati che ciascuna dichiara: ogni risoluzione restituisce valori separati dalla definizione builtin.
 
 La lettura è `archetipo spec actions US-XXX`. Legge dal connector lo stato realmente persistito della spec, risolve il Template selezionato dal workspace e restituisce un envelope `spec_actions` con il codice e lo stato della spec, l'identità del Template e le azioni ammesse in quello stato. La forma è per spec e non per stato perché è il ricalcolo al cambiare dello stato reale a dover essere osservabile, e perché una lettura parametrizzata sullo stato introdurrebbe nell'interfaccia una seconda sorgente di verità su di esso; la forma per stato resta ottenibile in futuro senza rompere questa. La versione riportata è quella del Template **risolto** in-process, cioè della definizione da cui le azioni provengono: riportare accanto a esse la versione persistita sarebbe una falsa attribuzione. La coppia identificativo/versione conservata in `.archetipo/config.yaml` resta esposta da `config show`, ed è lì che quel dato appartiene. Un identificativo di Template sconosciuto nella configurazione fallisce con `E_INVALID_INPUT` e l'elenco degli id validi, nella stessa forma già usata dall'inizializzazione; una spec inesistente resta l'`E_PRECONDITION` del connector, invariato.
 
@@ -84,9 +84,9 @@ Restano fuori da questa decisione un secondo Template, l'ereditarietà fra Templ
 <!-- archetipo:wiki section=verification -->
 ## Verifica
 
-Il tipo, il registry e il Template builtin sono in [template.go](../../../cli/internal/template/template.go); i suoi test verificano la lista completa delle skill, gli stati canonici, l'ID vuoto che risolve il default, l'errore tipizzato su ID sconosciuto e l'assenza di aliasing dello slice in [template_test.go](../../../cli/internal/template/template_test.go).
+Il tipo, il Template builtin e la risoluzione diretta sono in [template.go](../../../cli/internal/template/template.go); i suoi test verificano la lista completa delle skill, gli stati canonici, l'ID vuoto che risolve il default, l'errore tipizzato su ID sconosciuto e l'assenza di aliasing degli slice in [template_test.go](../../../cli/internal/template/template_test.go).
 
-Il tipo `Action`, le tre azioni della Fabbrica del software e il filtro `ActionsFor` sono nello stesso [template.go](../../../cli/internal/template/template.go), insieme alla copia difensiva estesa alle azioni e ai loro stati. [template_test.go](../../../cli/internal/template/template_test.go) scrive per esteso la lista attesa delle azioni e la confronta per intero, così che modificare il processo rompa un test in modo esplicito; verifica che identificativo, etichetta e skill siano presenti su ciascuna azione; percorre con una tabella tutti e cinque gli stati canonici, ottenendo `plan` in `TODO`, `implement` in `PLANNED` e `IN PROGRESS`, `review` in `REVIEW` e nessuna azione in `DONE`; asserisce che l'elenco vuoto sia lungo zero **e** non-nil per `DONE`, per uno stato sconosciuto e per lo stato vuoto; e verifica che modificare le azioni ottenute non raggiunga il registry.
+Il tipo `Action`, le tre azioni della Fabbrica del software e il filtro `ActionsFor` sono nello stesso [template.go](../../../cli/internal/template/template.go), insieme alla copia difensiva estesa alle azioni e ai loro stati. [template_test.go](../../../cli/internal/template/template_test.go) scrive per esteso la lista attesa delle azioni e la confronta per intero, così che modificare il processo rompa un test in modo esplicito; verifica che identificativo, etichetta e skill siano presenti su ciascuna azione; percorre con una tabella tutti e cinque gli stati canonici, ottenendo `plan` in `TODO`, `implement` in `PLANNED` e `IN PROGRESS`, `review` in `REVIEW` e nessuna azione in `DONE`; asserisce che l'elenco vuoto sia lungo zero **e** non-nil per `DONE`, per uno stato sconosciuto e per lo stato vuoto; e verifica che modificare le azioni ottenute non raggiunga la definizione builtin.
 
 La lettura `archetipo spec actions US-XXX` è la foglia registrata in [spec_cmd.go](../../../cli/internal/cli/spec_cmd.go), che emette l'envelope `spec_actions`. I test di integrazione in [cli_test.go](../../../cli/internal/cli/cli_test.go) eseguono la CLI reale su un workspace temporaneo con il connector su filesystem e portano una sola spec lungo l'intero ciclo di vita `TODO → PLANNED → IN PROGRESS → REVIEW → DONE`, rileggendo le azioni dopo ogni transizione: nessun doppio si interpone fra lo stato scritto su disco e l'elenco restituito. Il caso `DONE` è asserito con una type assertion su una lista JSON, che fallisce su `null` e rende quindi osservabile la scelta dell'elenco vuoto; lo stesso file verifica che l'envelope nomini il Template risolto, che un codice spec mancante sia `E_INVALID_INPUT` e che una spec inesistente resti `E_PRECONDITION`.
 

@@ -181,28 +181,6 @@ func TestResolveUnknownIDFailsWithRegistryError(t *testing.T) {
 	}
 }
 
-func TestRegistryRejectsEmptyAndDuplicateIDs(t *testing.T) {
-	registry := NewRegistry()
-	if err := registry.Register(Template{ID: "  "}); err == nil {
-		t.Fatal("expected an empty id to be rejected")
-	}
-	if err := registry.Register(Template{ID: "one"}); err != nil {
-		t.Fatalf("first registration failed: %v", err)
-	}
-	if err := registry.Register(Template{ID: "one"}); err == nil {
-		t.Fatal("expected a duplicate id to be rejected")
-	}
-	if got := registry.IDs(); !reflect.DeepEqual(got, []string{"one"}) {
-		t.Fatalf("ids = %v, want [one]", got)
-	}
-}
-
-func TestBuiltinRegistryListsTheDefaultTemplate(t *testing.T) {
-	if got := Builtin().IDs(); !reflect.DeepEqual(got, []string{FabbricaDelSoftware}) {
-		t.Fatalf("ids = %v, want [%s]", got, FabbricaDelSoftware)
-	}
-}
-
 func TestDefaultSkillsAreNotAliased(t *testing.T) {
 	first := Default()
 	first.Skills[0] = "tampered"
@@ -262,28 +240,22 @@ func TestActionsForEmptyListIsNeverNil(t *testing.T) {
 	}
 }
 
-// TestDefaultActionsAreNotAliased resolves twice from the SAME registry on
-// purpose. Two calls to Default() each build a fresh registry, so they can
-// never alias each other and the test would pass even with no copy at all:
-// only a second resolution of the same instance can observe a write that
-// reached the registry.
 func TestDefaultActionsAreNotAliased(t *testing.T) {
-	registry := Builtin()
-	first, err := registry.Resolve(DefaultID)
+	first, err := Resolve(DefaultID)
 	if err != nil {
 		t.Fatalf("resolving the default template failed: %v", err)
 	}
 	first.Actions[0].ID = "tampered"
 	first.Actions[0].Statuses[0] = domain.Status("TAMPERED")
-	second, err := registry.Resolve(DefaultID)
+	second, err := Resolve(DefaultID)
 	if err != nil {
 		t.Fatalf("resolving the default template again failed: %v", err)
 	}
 	if got := second.Actions[0].ID; got != processActions[0].ID {
-		t.Fatalf("registry actions were mutated through the returned slice: id = %q", got)
+		t.Fatalf("builtin actions were mutated through the returned slice: id = %q", got)
 	}
 	if got := second.Actions[0].Statuses[0]; got != processActions[0].Statuses[0] {
-		t.Fatalf("registry action statuses were mutated through the returned slice: status = %q", got)
+		t.Fatalf("builtin action statuses were mutated through the returned slice: status = %q", got)
 	}
 }
 
@@ -321,22 +293,18 @@ func TestDefaultWorkspaceActionSkillsAreInstalled(t *testing.T) {
 	}
 }
 
-// TestDefaultWorkspaceActionsAreNotAliased resolves twice from the SAME
-// registry, for the same reason as TestDefaultActionsAreNotAliased: two calls
-// to Default() build two registries and could never alias each other.
 func TestDefaultWorkspaceActionsAreNotAliased(t *testing.T) {
-	registry := Builtin()
-	first, err := registry.Resolve(DefaultID)
+	first, err := Resolve(DefaultID)
 	if err != nil {
 		t.Fatalf("resolving the default template failed: %v", err)
 	}
 	first.WorkspaceActions[0].ID = "tampered"
-	second, err := registry.Resolve(DefaultID)
+	second, err := Resolve(DefaultID)
 	if err != nil {
 		t.Fatalf("resolving the default template again failed: %v", err)
 	}
 	if got := second.WorkspaceActions[0].ID; got != processWorkspaceActions[0].ID {
-		t.Fatalf("registry workspace actions were mutated through the returned slice: id = %q", got)
+		t.Fatalf("builtin workspace actions were mutated through the returned slice: id = %q", got)
 	}
 }
 
@@ -414,23 +382,17 @@ func TestTerminalStageIsLastAndUnique(t *testing.T) {
 	}
 }
 
-// TestDefaultStagesAreNotAliased resolves twice from the SAME registry, for the
-// same reason as TestDefaultActionsAreNotAliased: two calls to Default() each
-// build a fresh registry, so they can never alias each other and the test would
-// pass even with no copy at all. Only a second resolution of the same instance
-// can observe a write that reached the registry.
 func TestDefaultStagesAreNotAliased(t *testing.T) {
-	registry := Builtin()
-	first, err := registry.Resolve(DefaultID)
+	first, err := Resolve(DefaultID)
 	if err != nil {
 		t.Fatalf("resolving the default template failed: %v", err)
 	}
 	first.Stages[0].ID = "tampered"
-	second, err := registry.Resolve(DefaultID)
+	second, err := Resolve(DefaultID)
 	if err != nil {
 		t.Fatalf("resolving the default template again failed: %v", err)
 	}
 	if got := second.Stages[0].ID; got != processStages[0].ID {
-		t.Fatalf("registry stages were mutated through the returned slice: id = %q", got)
+		t.Fatalf("builtin stages were mutated through the returned slice: id = %q", got)
 	}
 }
