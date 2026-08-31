@@ -3,6 +3,8 @@ package execution
 import (
 	"strings"
 	"testing"
+
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
 )
 
 func TestDeriveIDIsStableAndComponentSensitive(t *testing.T) {
@@ -19,7 +21,7 @@ func TestDeriveIDIsStableAndComponentSensitive(t *testing.T) {
 	if !strings.HasPrefix(base, "req-") || len(base) != 36 {
 		t.Fatalf("unexpected derived id shape: %q", base)
 	}
-	if !validID(base) {
+	if !recordfile.ValidID(base) {
 		t.Fatalf("derived id %q is not accepted by the store", base)
 	}
 	for _, tc := range []struct {
@@ -35,7 +37,7 @@ func TestDeriveIDIsStableAndComponentSensitive(t *testing.T) {
 			if tc.got == base {
 				t.Fatalf("changing the %s did not change the derived id: %q", tc.name, tc.got)
 			}
-			if !validID(tc.got) {
+			if !recordfile.ValidID(tc.got) {
 				t.Fatalf("derived id %q is not accepted by the store", tc.got)
 			}
 		})

@@ -9,9 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
 )
 
 // StoreErrorKind names why a store operation could not be carried out. It is a
@@ -52,25 +52,11 @@ func NewFileStore(projectRoot string) (*FileStore, error) {
 	return &FileStore{dir: filepath.Join(root, ".archetipo", "conversations")}, nil
 }
 
-// validID rejects anything that could make an id escape the store directory:
-// the id is a file name, and only a file name.
-func validID(id string) bool {
-	return id != "" && id != "." && id != ".." && filepath.Base(id) == id && !strings.ContainsAny(id, `/\`)
-}
-
 func (s *FileStore) path(id string) (string, error) {
-	if !validID(id) {
+	if !recordfile.ValidID(id) {
 		return "", &StoreError{Kind: StoreInvalidID, ID: id}
 	}
 	return filepath.Join(s.dir, id+".json"), nil
-}
-
-func encode(record Record) ([]byte, error) {
-	body, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(body, '\n'), nil
 }
 
 // Save writes a record, creating it or replacing it in place. It is an upsert
@@ -89,42 +75,13 @@ func (s *FileStore) Save(ctx context.Context, record Record) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return err
-	}
-	if err := os.Chmod(s.dir, 0o700); err != nil {
-		return err
-	}
 	// A nil slice would serialize as null, and every reader would then need to
 	// tell null from [] for a distinction that does not exist: a conversation
 	// with no events yet has an empty history, not an unknown one.
 	if record.Events == nil {
 		record.Events = []execution.RunEvent{}
 	}
-	body, err := encode(record)
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(s.dir, ".conversation-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err = tmp.Write(body); err == nil {
-		err = tmp.Sync()
-	}
-	if closeErr := tmp.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return recordfile.WriteAtomic(s.dir, path, ".conversation-*.tmp", record)
 }
 
 // Get reads one record. An absent file is a typed not-found, so the caller can

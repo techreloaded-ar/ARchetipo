@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
 )
 
 type IDGenerator func() (string, error)
@@ -272,7 +273,7 @@ func (s *Service) start(ctx context.Context, spec domain.Spec, action ActionID, 
 	if err != nil {
 		return Execution{}, nil, fmt.Errorf("generate execution id: %w", err)
 	}
-	if !validID(id) {
+	if !recordfile.ValidID(id) {
 		return Execution{}, nil, fmt.Errorf("generated invalid execution id %q", id)
 	}
 	created := s.now().UTC()

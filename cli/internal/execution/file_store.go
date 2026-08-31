@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
 )
 
 type FileStore struct{ dir string }
@@ -22,12 +24,8 @@ func NewFileStore(projectRoot string) (*FileStore, error) {
 	return &FileStore{dir: filepath.Join(root, ".archetipo", "executions")}, nil
 }
 
-func validID(id string) bool {
-	return id != "" && id != "." && id != ".." && filepath.Base(id) == id && !strings.ContainsAny(id, `/\\`)
-}
-
 func (s *FileStore) path(id string) (string, error) {
-	if !validID(id) {
+	if !recordfile.ValidID(id) {
 		return "", &StoreError{Kind: StoreInvalidID, ID: id}
 	}
 	return filepath.Join(s.dir, id+".json"), nil
@@ -94,30 +92,7 @@ func (s *FileStore) Update(ctx context.Context, execution Execution) error {
 	} else if err != nil {
 		return err
 	}
-	body, err := encode(execution)
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(s.dir, ".execution-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err = tmp.Write(body); err == nil {
-		err = tmp.Sync()
-	}
-	if closeErr := tmp.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return recordfile.WriteAtomic(s.dir, path, ".execution-*.tmp", execution)
 }
 
 // ListBySpec reads the whole record directory and keeps the records of one
