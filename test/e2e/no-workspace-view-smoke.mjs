@@ -23,6 +23,7 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { apiJSON, buildCLI as buildCLIShared, createRunDir as createRunDirShared, escapeHTML, makeRunCommand, parseCommonArgs, stopProcess as stopProcessShared } from "./support/view-smoke-harness.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -456,29 +457,7 @@ async function findByRealPath(entries, target) {
 }
 
 function parseArgs(argv) {
-  const options = {
-    workspaceRoot: defaultWorkspaceRoot,
-    cleanup: false,
-  };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    switch (arg) {
-      case "--workspace-root":
-        options.workspaceRoot = path.resolve(argv[++i]);
-        break;
-      case "--cleanup":
-        options.cleanup = true;
-        break;
-      case "--help":
-      case "-h":
-        printHelp();
-        process.exit(0);
-        break;
-      default:
-        throw new Error(`Unknown argument: ${arg}`);
-    }
-  }
-  return options;
+  return parseCommonArgs(argv, defaultWorkspaceRoot, printHelp);
 }
 
 function printHelp() {
@@ -495,19 +474,11 @@ Options:
 }
 
 async function createRunDir(root) {
-  await fs.mkdir(root, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const runDir = path.join(root, stamp);
-  await fs.mkdir(runDir, { recursive: true });
-  return runDir;
+  return createRunDirShared(root, false);
 }
 
-async function buildCLI(env) {
-  console.log(`-> building CLI: ${cliPath}`);
-  await runCommand("go-build", "go", ["build", "-o", cliPath, "./cmd/archetipo"], {
-    cwd: path.join(repoRoot, "cli"),
-    env,
-  });
+async function buildCLI() {
+  return buildCLIShared(cliPath, repoRoot, runCommand);
 }
 
 // startViewServer starts the real viewer and returns, besides the process and
@@ -585,26 +556,6 @@ async function waitForWorkspaceList(url, timeoutMs = 10000) {
   throw new Error(`Timed out after ${timeoutMs}ms waiting for ${url} to serve a workspace list with \`workspaces\`, \`open\` and \`currentPath\`; last outcome: ${lastOutcome}`);
 }
 
-async function apiJSON(url, init = {}) {
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(init.headers || {}),
-    },
-  });
-  const text = await response.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = text;
-  }
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} for ${url}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
-  }
-  return data;
-}
 
 // call issues one request against a route description and never throws on a
 // refusal: the refusal is what the AC-5 assertions are made of.
@@ -667,45 +618,11 @@ function assertSameList(actual, expected, label) {
 }
 
 async function runCommand(label, command, args, options = {}) {
-  console.log(`-> ${label}: ${command} ${args.join(" ")}`);
-  const result = await new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env || baseEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout = [];
-    const stderr = [];
-    child.stdout.on("data", (chunk) => stdout.push(chunk));
-    child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.on("close", (code) => resolve({
-      code,
-      stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8"),
-    }));
-    child.on("error", (error) => resolve({ code: 1, stdout: "", stderr: error.message }));
-  });
-
-  if (result.code !== 0) {
-    throw new Error(`${label} failed with exit ${result.code}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
-  }
-  return result;
+  return makeRunCommand(baseEnv)(label, command, args, options);
 }
 
 async function stopProcess(child) {
-  if (!child || child.killed) return;
-  if (process.platform === "win32") {
-    await runCommand("taskkill", "taskkill", ["/PID", String(child.pid), "/T", "/F"]);
-    return;
-  }
-  child.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolve) => child.once("exit", resolve)),
-    delay(3000),
-  ]);
-  if (!child.killed) {
-    child.kill("SIGKILL");
-  }
+  return stopProcessShared(child, runCommand);
 }
 
 // --- report -----------------------------------------------------------------
@@ -792,13 +709,6 @@ ${summary.error ? `\n    <h2>Failure</h2>\n    <pre>${escapeHTML(summary.error)}
 `;
 }
 
-function escapeHTML(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 main().catch((error) => {
   console.error(`\nFAIL: ${error.message}`);

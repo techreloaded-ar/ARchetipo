@@ -56,6 +56,8 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { buildCLI as buildCLIShared, createRunDir as createRunDirShared, escapeHTML, parseCommonArgs, readBody, stopProcess as stopProcessShared } from "./support/view-smoke-harness.mjs";
+import { startViewServer as startViewServerShared } from "./support/view-smoke-harness.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -864,14 +866,6 @@ function sendJSON(res, status, payload) {
   res.end(body);
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
-  });
-}
 
 // --- fixtures ---------------------------------------------------------------------
 
@@ -926,25 +920,7 @@ async function createWorkspace(runDir, sandboxDir, env) {
 // --- harness ------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const options = { workspaceRoot: defaultWorkspaceRoot, cleanup: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    switch (argv[i]) {
-      case "--workspace-root":
-        options.workspaceRoot = path.resolve(argv[++i]);
-        break;
-      case "--cleanup":
-        options.cleanup = true;
-        break;
-      case "--help":
-      case "-h":
-        printHelp();
-        process.exit(0);
-        break;
-      default:
-        throw new Error(`Unknown argument: ${argv[i]}`);
-    }
-  }
-  return options;
+  return parseCommonArgs(argv, defaultWorkspaceRoot, printHelp);
 }
 
 function printHelp() {
@@ -961,61 +937,15 @@ Options:
 }
 
 async function createRunDir(root) {
-  const runsRoot = path.join(root, "runs");
-  await fs.mkdir(runsRoot, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const runDir = path.join(runsRoot, stamp);
-  await fs.mkdir(runDir, { recursive: true });
-  return runDir;
+  return createRunDirShared(root, true);
 }
 
 async function buildCLI() {
-  console.log(`-> building CLI: ${cliPath}`);
-  await runCommand("go-build", "go", ["build", "-o", cliPath, "./cmd/archetipo"], {
-    cwd: path.join(repoRoot, "cli"),
-    env: { ...process.env, ARCHETIPO_DATA_DIR: repoRoot },
-  });
+  return buildCLIShared(cliPath, repoRoot, runCommand);
 }
 
 async function startViewServer(cwd, env) {
-  const child = spawn(cliPath, ["view", "--host", "127.0.0.1", "--port", "0", "--no-open"], {
-    cwd,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
-  });
-
-  const ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error(`view server did not become ready in time\nSTDERR:\n${stderr}\nSTDOUT:\n${stdout}`));
-    }, 15000);
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-      const match = stderr.match(/ARchetipo view ready at (http:\/\/[^\s]+)/);
-      if (match) {
-        clearTimeout(timeout);
-        resolve(match[1]);
-      }
-    });
-    child.on("exit", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`view server exited early with code ${code}\nSTDERR:\n${stderr}\nSTDOUT:\n${stdout}`));
-    });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
-
-  const url = await ready;
-  await waitForHTTP(`${url}/api/board`);
-  return { child, url };
+  return startViewServerShared(cliPath, cwd, env, "/api/board");
 }
 
 async function waitForHTTP(url) {
@@ -1106,13 +1036,7 @@ async function runCommand(label, command, args, options = {}) {
 }
 
 async function stopProcess(child) {
-  if (!child || child.killed) return;
-  child.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolve) => child.once("exit", resolve)),
-    delay(3000),
-  ]);
-  if (!child.killed) child.kill("SIGKILL");
+  return stopProcessShared(child, runCommand);
 }
 
 function truncate(value, max = 200) {
@@ -1204,13 +1128,6 @@ ${summary.error ? `\n    <h2>Failure</h2>\n    <pre>${escapeHTML(summary.error)}
 `;
 }
 
-function escapeHTML(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 main().catch((error) => {
   console.error(`\nFAIL: ${error.message}`);

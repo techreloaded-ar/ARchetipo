@@ -19,6 +19,8 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { apiJSON, buildCLI as buildCLIShared, createRunDir as createRunDirShared, makeRunCommand, parseCommonArgs, stopProcess as stopProcessShared, waitForHTTP } from "./support/view-smoke-harness.mjs";
+import { startViewServer as startViewServerShared } from "./support/view-smoke-harness.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -271,29 +273,7 @@ async function findByRealPath(entries, target) {
 }
 
 function parseArgs(argv) {
-  const options = {
-    workspaceRoot: defaultWorkspaceRoot,
-    cleanup: false,
-  };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    switch (arg) {
-      case "--workspace-root":
-        options.workspaceRoot = path.resolve(argv[++i]);
-        break;
-      case "--cleanup":
-        options.cleanup = true;
-        break;
-      case "--help":
-      case "-h":
-        printHelp();
-        process.exit(0);
-        break;
-      default:
-        throw new Error(`Unknown argument: ${arg}`);
-    }
-  }
-  return options;
+  return parseCommonArgs(argv, defaultWorkspaceRoot, printHelp);
 }
 
 function printHelp() {
@@ -310,98 +290,18 @@ Options:
 }
 
 async function createRunDir(root) {
-  await fs.mkdir(root, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const runDir = path.join(root, stamp);
-  await fs.mkdir(runDir, { recursive: true });
-  return runDir;
+  return createRunDirShared(root, false);
 }
 
-async function buildCLI(env) {
-  console.log(`-> building CLI: ${cliPath}`);
-  await runCommand("go-build", "go", ["build", "-o", cliPath, "./cmd/archetipo"], {
-    cwd: path.join(repoRoot, "cli"),
-    env,
-  });
+async function buildCLI() {
+  return buildCLIShared(cliPath, repoRoot, runCommand);
 }
 
 async function startViewServer(cwd, env) {
-  const child = spawn(cliPath, ["view", "--host", "127.0.0.1", "--port", "0", "--no-open"], {
-    cwd,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
-  });
-
-  const ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error(`view server did not become ready in time\nSTDERR:\n${stderr}\nSTDOUT:\n${stdout}`));
-    }, 15000);
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-      const match = stderr.match(/ARchetipo view ready at (http:\/\/[^\s]+)/);
-      if (match) {
-        clearTimeout(timeout);
-        resolve(match[1]);
-      }
-    });
-
-    child.on("exit", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`view server exited early with code ${code}\nSTDERR:\n${stderr}\nSTDOUT:\n${stdout}`));
-    });
-
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
-
-  const url = await ready;
-  await waitForHTTP(`${url}/api/workspaces`);
-  return { child, url };
+  return startViewServerShared(cliPath, cwd, env, "/api/workspaces");
 }
 
-async function waitForHTTP(url) {
-  const started = Date.now();
-  while (Date.now() - started < 10000) {
-    try {
-      const response = await fetch(url, { headers: { Accept: "application/json" } });
-      if (response.ok) return;
-    } catch {
-      // keep polling
-    }
-    await delay(200);
-  }
-  throw new Error(`Timed out waiting for ${url}`);
-}
 
-async function apiJSON(url, init = {}) {
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(init.headers || {}),
-    },
-  });
-  const text = await response.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = text;
-  }
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} for ${url}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
-  }
-  return data;
-}
 
 async function postExpectingStatus(url, payload, expectedStatus) {
   const response = await fetch(url, {
@@ -440,45 +340,11 @@ function assertSameList(actual, expected, label) {
 }
 
 async function runCommand(label, command, args, options = {}) {
-  console.log(`-> ${label}: ${command} ${args.join(" ")}`);
-  const result = await new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env || baseEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout = [];
-    const stderr = [];
-    child.stdout.on("data", (chunk) => stdout.push(chunk));
-    child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.on("close", (code) => resolve({
-      code,
-      stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8"),
-    }));
-    child.on("error", (error) => resolve({ code: 1, stdout: "", stderr: error.message }));
-  });
-
-  if (result.code !== 0) {
-    throw new Error(`${label} failed with exit ${result.code}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
-  }
-  return result;
+  return makeRunCommand(baseEnv)(label, command, args, options);
 }
 
 async function stopProcess(child) {
-  if (!child || child.killed) return;
-  if (process.platform === "win32") {
-    await runCommand("taskkill", "taskkill", ["/PID", String(child.pid), "/T", "/F"]);
-    return;
-  }
-  child.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolve) => child.once("exit", resolve)),
-    delay(3000),
-  ]);
-  if (!child.killed) {
-    child.kill("SIGKILL");
-  }
+  return stopProcessShared(child, runCommand);
 }
 
 main().catch((error) => {

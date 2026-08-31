@@ -61,6 +61,8 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { buildCLI as buildCLIShared, createRunDir as createRunDirShared, waitForHTTP } from "./support/view-smoke-harness.mjs";
+import { startViewServer as startViewServerShared } from "./support/view-smoke-harness.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -664,77 +666,17 @@ Environment:
 }
 
 async function createRunDir(root) {
-  await fs.mkdir(root, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const runDir = path.join(root, stamp);
-  await fs.mkdir(runDir, { recursive: true });
-  return runDir;
+  return createRunDirShared(root, false);
 }
 
-async function buildCLI(env) {
-  console.log(`-> building CLI: ${cliPath}`);
-  await runCommand("go-build", "go", ["build", "-o", cliPath, "./cmd/archetipo"], {
-    cwd: path.join(repoRoot, "cli"),
-    env,
-  });
+async function buildCLI() {
+  return buildCLIShared(cliPath, repoRoot, runCommand);
 }
 
 async function startViewServer(cwd, env) {
-  const child = spawn(cliPath, ["view", "--host", "127.0.0.1", "--port", "0", "--no-open"], {
-    cwd,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
-  });
-
-  const ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error(`view server did not become ready in time\nSTDERR:\n${stderr}\nSTDOUT:\n${stdout}`));
-    }, 15000);
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-      const match = stderr.match(/ARchetipo view ready at (http:\/\/[^\s]+)/);
-      if (match) {
-        clearTimeout(timeout);
-        resolve(match[1]);
-      }
-    });
-
-    child.on("exit", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`view server exited early with code ${code}\nSTDERR:\n${stderr}\nSTDOUT:\n${stdout}`));
-    });
-
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
-
-  const url = await ready;
-  await waitForHTTP(`${url}/api/board`);
-  return { child, url };
+  return startViewServerShared(cliPath, cwd, env, "/api/board");
 }
 
-async function waitForHTTP(url) {
-  const started = Date.now();
-  while (Date.now() - started < 10000) {
-    try {
-      const response = await fetch(url, { headers: { Accept: "application/json" } });
-      if (response.ok) return;
-    } catch {
-      // keep polling
-    }
-    await delay(200);
-  }
-  throw new Error(`Timed out waiting for ${url}`);
-}
 
 async function runCommand(label, command, args, options = {}) {
   console.log(`-> ${label}: ${command} ${args.join(" ")}`);
