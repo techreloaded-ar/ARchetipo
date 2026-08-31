@@ -175,7 +175,7 @@ func (p *Provider) conversationEndReason(live *liveConversation, runErr error) s
 	case live.waitErr != nil:
 		return fmt.Sprintf("the claude conversation process could not be run to completion: %v", live.waitErr)
 	default:
-		return fmt.Sprintf("the claude conversation process exited %d%s", live.exitCode, diagnosticSuffix(live.stderr))
+		return fmt.Sprintf("the claude conversation process exited %d%s", live.exitCode, localrun.DiagnosticSuffix(live.stderr))
 	}
 }
 

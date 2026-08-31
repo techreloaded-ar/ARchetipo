@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
 // sentinel stands for anything the agent may have printed that must never be
@@ -670,7 +671,7 @@ func TestDiagnosticTruncatesAVeryLongStderr(t *testing.T) {
 }
 
 func TestDiagnosticSuffixNamesAnEmptyStream(t *testing.T) {
-	if got := diagnosticSuffix("   \n"); !strings.Contains(got, "wrote nothing") {
+	if got := localrun.DiagnosticSuffix("   \n"); !strings.Contains(got, "wrote nothing") {
 		t.Fatalf("suffix = %q", got)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
 // executeReview has a local Codex session prepare the review evidence of a
@@ -43,7 +44,7 @@ func (p *Provider) executeReview(ctx context.Context, req execution.Request, cfg
 		turn.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without preparing the review of %s", req.SpecCode))
 		return execution.Result{}, fmt.Errorf(
 			"the codex command %q ended without having prepared the review of %s%s: %w",
-			cfg.Command, req.SpecCode, diagnosticSuffix(turn.stderr), err,
+			cfg.Command, req.SpecCode, localrun.DiagnosticSuffix(turn.stderr), err,
 		)
 	}
 	turn.session.Close(execution.RunClosed, "")

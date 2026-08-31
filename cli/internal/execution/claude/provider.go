@@ -35,7 +35,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
@@ -160,7 +159,7 @@ func New(options Options) *Provider {
 		conversations: make(map[string]*liveConversation),
 	}
 	if p.runner == nil {
-		p.runner = execRunner{}
+		p.runner = localrun.ExecRunner{}
 	}
 	if p.starter == nil {
 		p.starter = localrun.ExecStarter{}
@@ -269,7 +268,7 @@ func (p *Provider) Execute(ctx context.Context, req execution.Request) (executio
 		held.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a plan for %s", req.SpecCode))
 		return execution.Result{}, fmt.Errorf(
 			"the claude command %q ended without having produced a plan for %s%s: %w",
-			cfg.Command, req.SpecCode, diagnosticSuffix(held.stderr), err,
+			cfg.Command, req.SpecCode, localrun.DiagnosticSuffix(held.stderr), err,
 		)
 	}
 	held.session.Close(execution.RunClosed, "")
@@ -404,7 +403,7 @@ func (p *Provider) failSpecConversation(live *liveSession, cfg settings, req exe
 		live.session.Close(execution.RunCrashed, fmt.Sprintf("the claude process exited %d without completing the turn", exitCode))
 		return fmt.Errorf(
 			"the claude command %q exited %d after %s without %s %s: the turn never completed%s",
-			cfg.Command, exitCode, rounded, subject.gerund, req.SpecCode, diagnosticSuffix(stderr),
+			cfg.Command, exitCode, rounded, subject.gerund, req.SpecCode, localrun.DiagnosticSuffix(stderr),
 		)
 	}
 }
@@ -618,7 +617,7 @@ func (p *Provider) Available(ctx context.Context, raw map[string]any) error {
 		return fmt.Errorf("the claude command %q was found but could not be run: %w", cfg.Command, err)
 	}
 	if exitCode != 0 {
-		return fmt.Errorf("the claude command %q exited %d instead of reporting its version%s", cfg.Command, exitCode, diagnosticSuffix(stderr))
+		return fmt.Errorf("the claude command %q exited %d instead of reporting its version%s", cfg.Command, exitCode, localrun.DiagnosticSuffix(stderr))
 	}
 	return nil
 }
@@ -626,23 +625,3 @@ func (p *Provider) Available(ctx context.Context, raw map[string]any) error {
 // diagnosticSuffix appends the beginning of a failing command's stderr, bounded
 // by truncate, or says plainly that it wrote nothing, so an empty stream never
 // reads as a truncated message.
-func diagnosticSuffix(stderr string) string {
-	body := strings.TrimSpace(stderr)
-	if body == "" {
-		return " (it wrote nothing on standard error)"
-	}
-	return ": " + truncate(body)
-}
-
-// truncate bounds an echoed stream and cuts on a rune boundary, so a clipped
-// message never ends in half a character.
-func truncate(body string) string {
-	if len(body) <= maxCapturedOutput {
-		return body
-	}
-	cut := maxCapturedOutput
-	for cut > 0 && !utf8.RuneStart(body[cut]) {
-		cut--
-	}
-	return body[:cut] + "..."
-}

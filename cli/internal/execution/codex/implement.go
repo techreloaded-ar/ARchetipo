@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
 // executeImplement carries out one persisted plan through a local Codex
@@ -43,7 +44,7 @@ func (p *Provider) executeImplement(ctx context.Context, req execution.Request, 
 		turn.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without implementing %s", req.SpecCode))
 		return execution.Result{}, fmt.Errorf(
 			"the codex command %q ended without having implemented %s%s: %w",
-			cfg.Command, req.SpecCode, diagnosticSuffix(turn.stderr), err,
+			cfg.Command, req.SpecCode, localrun.DiagnosticSuffix(turn.stderr), err,
 		)
 	}
 	turn.session.Close(execution.RunClosed, "")

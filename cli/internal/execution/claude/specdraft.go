@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
 // executeSpecDraft runs one assisted spec authoring as a conversation.
@@ -65,7 +66,7 @@ func (p *Provider) executeSpecDraft(ctx context.Context, req execution.Request, 
 	receipt, err := execution.AcceptSpecDraftReceipt(final)
 	if err != nil {
 		live.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a proposed spec: %v", err))
-		return execution.Result{}, fmt.Errorf("the claude command %q ended without having proposed a spec%s: %w", cfg.Command, diagnosticSuffix(stderr), err)
+		return execution.Result{}, fmt.Errorf("the claude command %q ended without having proposed a spec%s: %w", cfg.Command, localrun.DiagnosticSuffix(stderr), err)
 	}
 	live.session.Close(execution.RunClosed, "")
 	return p.resultForSpecDraft(cfg, exitCode, elapsed, turns, receipt)
@@ -89,13 +90,13 @@ func (p *Provider) failSpecDraft(live *liveSession, cfg settings, runErr, convEr
 		live.session.Close(execution.RunCrashed, fmt.Sprintf("the claude spec proposal ended on a failed turn after %s", rounded))
 		return fmt.Errorf(
 			"the claude command %q ended the spec proposal on a turn that did not complete after %s, without having proposed a spec%s",
-			cfg.Command, rounded, diagnosticSuffix(stderr),
+			cfg.Command, rounded, localrun.DiagnosticSuffix(stderr),
 		)
 	default:
 		live.session.Close(execution.RunCrashed, fmt.Sprintf("the claude process exited %d without having proposed a spec", exitCode))
 		return fmt.Errorf(
 			"the claude command %q exited %d after %s without having proposed a spec: the conversation ended without a receipt%s",
-			cfg.Command, exitCode, rounded, diagnosticSuffix(stderr),
+			cfg.Command, exitCode, rounded, localrun.DiagnosticSuffix(stderr),
 		)
 	}
 }

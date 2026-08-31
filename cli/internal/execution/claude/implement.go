@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
 // executeImplement carries out one persisted plan through a local Claude
@@ -48,7 +49,7 @@ func (p *Provider) executeImplement(ctx context.Context, req execution.Request, 
 		held.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without implementing %s", req.SpecCode))
 		return execution.Result{}, fmt.Errorf(
 			"the claude command %q ended without having implemented %s%s: %w",
-			cfg.Command, req.SpecCode, diagnosticSuffix(held.stderr), err,
+			cfg.Command, req.SpecCode, localrun.DiagnosticSuffix(held.stderr), err,
 		)
 	}
 	held.session.Close(execution.RunClosed, "")

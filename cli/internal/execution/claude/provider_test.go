@@ -991,20 +991,20 @@ func TestDiagnosticTruncatesAVeryLongStderr(t *testing.T) {
 // diagnostic has to stay valid text whatever the agent wrote.
 func TestTruncateCutsOnARuneBoundary(t *testing.T) {
 	body := strings.Repeat("è", maxCapturedOutput)
-	got := truncate(body)
+	got := localrun.Truncate(body)
 	if !utf8.ValidString(got) {
 		t.Fatalf("the truncated body is not valid UTF-8: %q", got)
 	}
 	if !strings.HasSuffix(got, "...") {
 		t.Fatalf("a truncated body does not say it was cut: %q", got)
 	}
-	if short := truncate("abc"); short != "abc" {
+	if short := localrun.Truncate("abc"); short != "abc" {
 		t.Fatalf("a body within the limit was altered: %q", short)
 	}
 }
 
 func TestDiagnosticSuffixNamesAnEmptyStream(t *testing.T) {
-	if got := diagnosticSuffix("   \n"); !strings.Contains(got, "wrote nothing") {
+	if got := localrun.DiagnosticSuffix("   \n"); !strings.Contains(got, "wrote nothing") {
 		t.Fatalf("suffix = %q", got)
 	}
 }

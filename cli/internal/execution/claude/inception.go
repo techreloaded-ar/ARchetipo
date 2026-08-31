@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
 // The three ways an inception conversation can end without a PRD. They are
@@ -73,7 +74,7 @@ func (p *Provider) executeInception(ctx context.Context, req execution.Request, 
 	receipt, err := execution.AcceptPRDReceipt(final)
 	if err != nil {
 		live.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a PRD: %v", err))
-		return execution.Result{}, fmt.Errorf("the claude command %q ended without having produced a PRD%s: %w", cfg.Command, diagnosticSuffix(stderr), err)
+		return execution.Result{}, fmt.Errorf("the claude command %q ended without having produced a PRD%s: %w", cfg.Command, localrun.DiagnosticSuffix(stderr), err)
 	}
 	live.session.Close(execution.RunClosed, "")
 	return p.resultForInception(cfg, exitCode, elapsed, turns, receipt)
@@ -188,13 +189,13 @@ func (p *Provider) failInception(live *liveSession, cfg settings, runErr, convEr
 		live.session.Close(execution.RunCrashed, fmt.Sprintf("the claude inception ended on a failed turn after %s", rounded))
 		return fmt.Errorf(
 			"the claude command %q ended the inception on a turn that did not complete after %s, without having produced a PRD%s",
-			cfg.Command, rounded, diagnosticSuffix(stderr),
+			cfg.Command, rounded, localrun.DiagnosticSuffix(stderr),
 		)
 	default:
 		live.session.Close(execution.RunCrashed, fmt.Sprintf("the claude process exited %d without having produced a PRD", exitCode))
 		return fmt.Errorf(
 			"the claude command %q exited %d after %s without having produced a PRD: the inception ended without a receipt%s",
-			cfg.Command, exitCode, rounded, diagnosticSuffix(stderr),
+			cfg.Command, exitCode, rounded, localrun.DiagnosticSuffix(stderr),
 		)
 	}
 }
