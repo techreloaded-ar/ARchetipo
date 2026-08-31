@@ -100,7 +100,7 @@ func (c *Connector) ReadPlanBody(ctx context.Context, specCode string) (string, 
 		return "", err
 	}
 	desc, _, _ := parseDescription(c.decodeFields(issue).Description)
-	_, planBody := splitPlanSections(desc)
+	_, planBody := connector.SplitPlanSections(desc)
 	return planBody, nil
 }
 
@@ -381,11 +381,7 @@ func (c *Connector) ReadExistingBacklog(ctx context.Context) (domain.BacklogSumm
 // WRITE
 
 func (c *Connector) SavePRD(ctx context.Context, content string) (domain.WriteResult, error) {
-	path := c.cfg.AbsPath(c.cfg.Paths.PRD)
-	if err := writeFile(path, []byte(content)); err != nil {
-		return domain.WriteResult{}, err
-	}
-	return domain.WriteResult{OK: true, Refs: []domain.Ref{{Path: path}}}, nil
+	return connector.SaveLocalPRD(c.cfg.AbsPath(c.cfg.Paths.PRD), content)
 }
 
 func (c *Connector) SaveInitialBacklog(ctx context.Context, specs []domain.Spec) (domain.WriteResult, error) {
@@ -474,8 +470,8 @@ func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.Pl
 	}
 	current := c.decodeFields(issue).Description
 	cleanBody, epic, meta := parseDescription(current)
-	specBody, _ := splitPlanSections(cleanBody)
-	updated := renderDescription(joinPlanSections(specBody, plan.PlanBody), epic, meta)
+	specBody, _ := connector.SplitPlanSections(cleanBody)
+	updated := renderDescription(connector.JoinPlanSections(specBody, plan.PlanBody), epic, meta)
 	if err := c.do(ctx, "PUT", "/rest/api/3/issue/"+key,
 		map[string]any{"fields": map[string]any{"description": adfFromText(updated)}}, nil); err != nil {
 		return domain.WriteResult{}, err
@@ -586,7 +582,7 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 	}
 	cur := c.specFromIssue(issue)
 	cleanBody, _, _ := parseDescription(c.decodeFields(issue).Description)
-	_, planBody := splitPlanSections(cleanBody)
+	_, planBody := connector.SplitPlanSections(cleanBody)
 
 	// Build the current meta from the spec (mirrors specFromIssue round-trip).
 	meta := specmeta.Meta{
@@ -647,7 +643,7 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 		descChanged = true
 	}
 	if descChanged {
-		fields["description"] = adfFromText(renderDescription(joinPlanSections(body, planBody), epic, meta))
+		fields["description"] = adfFromText(renderDescription(connector.JoinPlanSections(body, planBody), epic, meta))
 	}
 	if len(fields) == 0 {
 		return domain.WriteResult{OK: true, Refs: []domain.Ref{{Code: cur.Code, URL: c.browseURL(key)}}}, nil
@@ -766,7 +762,7 @@ func (c *Connector) decodeFields(it jiraIssue) knownFields {
 func (c *Connector) specFromIssue(it jiraIssue) domain.Spec {
 	f := c.decodeFields(it)
 	body, epic, meta := parseDescription(f.Description)
-	specBody, _ := splitPlanSections(body)
+	specBody, _ := connector.SplitPlanSections(body)
 	status := domain.StatusTodo
 	if f.Status != nil {
 		status = c.statusFromJira(f.Status.Name)

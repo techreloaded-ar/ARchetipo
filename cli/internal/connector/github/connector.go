@@ -193,7 +193,7 @@ func (c *Connector) ReadPlanBody(ctx context.Context, specCode string) (string, 
 		return "", err
 	}
 	cleanBody, _ := specmeta.Parse(raw.Body)
-	_, planBody := splitPlanSections(cleanBody)
+	_, planBody := connector.SplitPlanSections(cleanBody)
 	return planBody, nil
 }
 
@@ -268,11 +268,7 @@ func summarizeSpecs(specs []domain.Spec) domain.BacklogSummary {
 func (c *Connector) SavePRD(ctx context.Context, content string) (domain.WriteResult, error) {
 	// PRD lives as a local markdown file even with the github connector,
 	// matching the contract documented in github.md.
-	path := c.cfg.AbsPath(c.cfg.Paths.PRD)
-	if err := writeFile(path, []byte(content)); err != nil {
-		return domain.WriteResult{}, err
-	}
-	return domain.WriteResult{OK: true, Refs: []domain.Ref{{Path: path}}}, nil
+	return connector.SaveLocalPRD(c.cfg.AbsPath(c.cfg.Paths.PRD), content)
 }
 
 func (c *Connector) SaveInitialBacklog(ctx context.Context, specs []domain.Spec) (domain.WriteResult, error) {
@@ -308,8 +304,8 @@ func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.Pl
 	// Upsert the strategic plan while keeping the specification and its hidden
 	// metadata intact.
 	cleanBody, meta := specmeta.Parse(parent.Body)
-	specBody, _ := splitPlanSections(cleanBody)
-	updatedBody := specmeta.Render(joinPlanSections(specBody, plan.PlanBody), meta)
+	specBody, _ := connector.SplitPlanSections(cleanBody)
+	updatedBody := specmeta.Render(connector.JoinPlanSections(specBody, plan.PlanBody), meta)
 	if _, err := c.editIssueBody(ctx, parentNum, updatedBody); err != nil {
 		return domain.WriteResult{}, err
 	}
@@ -350,7 +346,7 @@ func (c *Connector) SavePlan(ctx context.Context, specRef string, plan domain.Pl
 		}
 
 		title := fmt.Sprintf("%s: %s", t.ID, t.Title)
-		body := firstNonEmpty(t.Body, t.Description)
+		body := connector.FirstNonEmpty(t.Body, t.Description)
 		labels := []string{}
 		if epicLabel != "" {
 			labels = append(labels, epicLabel)
@@ -479,7 +475,7 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 	}
 	// Parse current body to separate user content from embedded metadata.
 	cleanBody, meta := specmeta.Parse(raw.Body)
-	specBody, planBody := splitPlanSections(cleanBody)
+	specBody, planBody := connector.SplitPlanSections(cleanBody)
 
 	// Track what changed for the REST PATCH.
 	patchFields := map[string]any{}
@@ -513,7 +509,7 @@ func (c *Connector) UpdateSpec(ctx context.Context, specRef string, patch domain
 	if patch.Body != nil || patch.Scope != nil || patch.BlockedBy != nil ||
 		patch.Branch != nil || patch.Worktree != nil || patch.ForkBase != nil ||
 		patch.Rework != nil {
-		patchFields["body"] = specmeta.Render(joinPlanSections(specBody, planBody), meta)
+		patchFields["body"] = specmeta.Render(connector.JoinPlanSections(specBody, planBody), meta)
 	}
 
 	// Handle epic (label) changes.
@@ -888,7 +884,7 @@ func (c *Connector) viewIssueAsSpec(ctx context.Context, num int) (domain.Spec, 
 		return domain.Spec{}, err
 	}
 	cleanBody, meta := specmeta.Parse(raw.Body)
-	specBody, _ := splitPlanSections(cleanBody)
+	specBody, _ := connector.SplitPlanSections(cleanBody)
 	epic := domain.Epic{}
 	for _, l := range raw.Labels {
 		if strings.HasPrefix(l.Name, "EP-") {

@@ -178,11 +178,7 @@ func (c *Connector) ReadExistingBacklog(ctx context.Context) (domain.BacklogSumm
 }
 
 func (c *Connector) SavePRD(ctx context.Context, content string) (domain.WriteResult, error) {
-	path := c.cfg.AbsPath(c.cfg.Paths.PRD)
-	if err := writeFile(path, []byte(content)); err != nil {
-		return domain.WriteResult{}, err
-	}
-	return domain.WriteResult{OK: true, Refs: []domain.Ref{{Path: path}}}, nil
+	return connector.SaveLocalPRD(c.cfg.AbsPath(c.cfg.Paths.PRD), content)
 }
 
 // ReadBoardOrder returns the global ordering of spec codes as persisted by
@@ -621,14 +617,4 @@ func numericTail(code string) int {
 		return 0
 	}
 	return value
-}
-
-func writeFile(path string, content []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("creating dir: %w", err)
-	}
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", path, err)
-	}
-	return nil
 }

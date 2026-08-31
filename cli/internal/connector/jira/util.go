@@ -3,11 +3,10 @@ package jira
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/specmeta"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 )
@@ -99,7 +98,7 @@ func parseDescription(raw string) (body string, epic domain.Epic, meta specmeta.
 // renderTaskDescription appends the task marker (type + dependencies) to a
 // sub-task body.
 func renderTaskDescription(t domain.Task) string {
-	out := strings.TrimRight(firstNonEmpty(t.Body, t.Description), "\n")
+	out := strings.TrimRight(connector.FirstNonEmpty(t.Body, t.Description), "\n")
 	marker := "type=" + string(t.Type)
 	if len(t.Dependencies) > 0 {
 		marker += " deps=" + strings.Join(t.Dependencies, ",")
@@ -129,38 +128,6 @@ func parseTaskDescription(raw string) (body string, typ domain.TaskType, deps []
 	}
 	body = strings.TrimSpace(taskMarkerRegexp.ReplaceAllString(raw, ""))
 	return body, typ, deps
-}
-
-func firstNonEmpty(a, b string) string {
-	if strings.TrimSpace(a) != "" {
-		return a
-	}
-	return b
-}
-
-const planSeparator = "\n\n---\n\n"
-
-func splitPlanSections(body string) (specBody, planBody string) {
-	body = strings.TrimSpace(body)
-	if strings.HasPrefix(body, "---\n") {
-		return "", strings.TrimSpace(strings.TrimPrefix(body, "---\n"))
-	}
-	if idx := strings.Index(body, "\n---\n"); idx >= 0 {
-		return strings.TrimSpace(body[:idx]), strings.TrimSpace(body[idx+len("\n---\n"):])
-	}
-	return body, ""
-}
-
-func joinPlanSections(specBody, planBody string) string {
-	specBody = strings.TrimSpace(specBody)
-	planBody = strings.TrimSpace(planBody)
-	if planBody == "" {
-		return specBody
-	}
-	if specBody == "" {
-		return "---\n\n" + planBody
-	}
-	return specBody + planSeparator + planBody
 }
 
 // adfFromText converts ARchetipo markdown/plain text into the smallest ADF
@@ -240,16 +207,4 @@ func collectADFText(v any, b *strings.Builder) {
 			collectADFText(children, b)
 		}
 	}
-}
-
-// writeFile mirrors filefs.writeFile (the jira connector still persists the PRD
-// as a local markdown file).
-func writeFile(path string, content []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("creating dir: %w", err)
-	}
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", path, err)
-	}
-	return nil
 }

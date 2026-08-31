@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/specmeta"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 )
@@ -15,7 +16,7 @@ import (
 func TestReadPlanBodySeparatesSpecAndPreservesMetadata(t *testing.T) {
 	const specBody = "## Spec\n\nAs a user, I want X."
 	const planBody = "## Technical solution\n\nUse the existing service."
-	storedBody := specmeta.Render(joinPlanSections(specBody, planBody), specmeta.Meta{Scope: "MVP"})
+	storedBody := specmeta.Render(connector.JoinPlanSections(specBody, planBody), specmeta.Meta{Scope: "MVP"})
 	m := newMock(t).
 		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":`+strconv.Quote(storedBody)+`,"url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`)
 
@@ -47,7 +48,7 @@ func TestReadPlanBodySeparatesSpecAndPreservesMetadata(t *testing.T) {
 
 func TestSavePlanUpsertsExistingSection(t *testing.T) {
 	const specBody = "## Spec\n\nAs a user, I want X."
-	storedBody := specmeta.Render(joinPlanSections(specBody, "## Old plan"), specmeta.Meta{Scope: "MVP"})
+	storedBody := specmeta.Render(connector.JoinPlanSections(specBody, "## Old plan"), specmeta.Meta{Scope: "MVP"})
 	m := newMock(t).
 		on("api repos/acme/web/issues/10/sub_issues?per_page=100&page=1", `[]`).
 		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":`+strconv.Quote(storedBody)+`,"url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`).
@@ -84,7 +85,7 @@ func TestSavePlanUpsertsExistingSection(t *testing.T) {
 
 func TestUpdateSpecPreservesPlanSection(t *testing.T) {
 	const planBody = "## Technical solution\n\nKeep this plan."
-	storedBody := specmeta.Render(joinPlanSections("## Spec\n\nOriginal.", planBody), specmeta.Meta{})
+	storedBody := specmeta.Render(connector.JoinPlanSections("## Spec\n\nOriginal.", planBody), specmeta.Meta{})
 	m := newMock(t).
 		on("api repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","body":`+strconv.Quote(storedBody)+`,"url":"https://gh/i/10","labels":[{"name":"archetipo-backlog"}]}`).
 		on("api -X PATCH repos/acme/web/issues/10", `{"number":10,"title":"US-001: Setup","url":"https://gh/i/10"}`)

@@ -1,9 +1,6 @@
 package github
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -66,55 +63,4 @@ func epicTitleFromLabel(label string) string {
 		return ""
 	}
 	return label[open+1 : close]
-}
-
-// firstNonEmpty returns the first non-blank string. When both are populated,
-// body takes precedence over description.
-func firstNonEmpty(a, b string) string {
-	if strings.TrimSpace(a) != "" {
-		return a
-	}
-	return b
-}
-
-const planSeparator = "\n\n---\n\n"
-
-// splitPlanSections separates the specification body from the strategic plan
-// stored in the same issue. The plain horizontal-rule separator is retained
-// for compatibility with plans written by earlier connector versions.
-func splitPlanSections(body string) (specBody, planBody string) {
-	body = strings.TrimSpace(body)
-	if strings.HasPrefix(body, "---\n") {
-		return "", strings.TrimSpace(strings.TrimPrefix(body, "---\n"))
-	}
-	if idx := strings.Index(body, "\n---\n"); idx >= 0 {
-		return strings.TrimSpace(body[:idx]), strings.TrimSpace(body[idx+len("\n---\n"):])
-	}
-	return body, ""
-}
-
-// joinPlanSections renders one canonical plan section, replacing any previous
-// section rather than appending another copy during replanning.
-func joinPlanSections(specBody, planBody string) string {
-	specBody = strings.TrimSpace(specBody)
-	planBody = strings.TrimSpace(planBody)
-	if planBody == "" {
-		return specBody
-	}
-	if specBody == "" {
-		return "---\n\n" + planBody
-	}
-	return specBody + planSeparator + planBody
-}
-
-// writeFile is a duplicate of filefs.writeFile to avoid an import cycle when
-// the github connector also needs to persist a local file (PRD).
-func writeFile(path string, content []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("creating dir: %w", err)
-	}
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", path, err)
-	}
-	return nil
 }
