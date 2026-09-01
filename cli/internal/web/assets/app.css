@@ -3225,11 +3225,19 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 
 /* The model a single run would use, drawn above the actions it applies to.
    Empty until the choice has been read, and empty forever where it cannot be. */
-.story-model-choice {
+/* La riga del comando: la scelta dell'agente e il comando che la usa stanno
+   affiancati, come nello stato vuoto della conversazione — «Pianifica» qui,
+   «Apri una conversazione» là. Il margine sotto è del contenitore e non dei due
+   figli, così restano una riga sola anche quando uno dei due è vuoto. */
+.story-command {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
 	margin: 0 0 var(--space-4);
 }
 
-.story-model-choice:empty {
+.story-command > .story-actions {
 	margin: 0;
 }
 
