@@ -2036,15 +2036,19 @@
 	// generale di cambiare stato, e la regola su quali passaggi costano qualcosa
 	// la dice il server nel dialog di conferma, non la board impedendoli. Anche
 	// le card in Done si trascinano: riaprirle è un passaggio come gli altri.
-	// `sort: false` resta: il riordino dentro la colonna non è in gioco qui.
+	// Il riordino dentro la colonna è la stessa gesture ma non cambia stato:
+	// nessuna conferma da chiedere, solo l'ordine da scrivere (onUpdate).
+	// `draggable` limita la presa alle card: il segnaposto di colonna vuota non
+	// è un oggetto da spostare.
 	function createBoardSortable(body) {
 		Sortable.create(body, {
 			group: { name: "board", pull: true, put: true },
-			sort: false,
+			draggable: ".card",
 			animation: 140,
 			ghostClass: "sortable-ghost",
 			dragClass: "sortable-drag",
 			onAdd: onDragMove,
+			onUpdate: onDragReorder,
 		});
 	}
 
@@ -2123,23 +2127,42 @@
 			return;
 		}
 
-		// L'ancora si legge dalla card che ora sta accanto a quella trascinata,
-		// prima che qualunque ridisegno la sposti.
-		let anchor = {};
-		const cards = Array.from(evt.to.querySelectorAll(".card"));
-		const idx = cards.findIndex((c) => c === evt.item);
-		if (idx === -1) {
-			anchor = {};
-		} else if (idx < cards.length - 1) {
-			anchor = { before: cards[idx + 1].dataset.code };
-		} else if (idx > 0) {
-			anchor = { after: cards[idx - 1].dataset.code };
-		}
-
 		await requestTransition(code, targetColumn, {
-			anchor,
+			anchor: dragAnchor(evt),
 			onCancel: revertBoard,
 		});
+	}
+
+	// L'ancora si legge dalla card che ora sta accanto a quella trascinata,
+	// prima che qualunque ridisegno la sposti.
+	function dragAnchor(evt) {
+		const cards = Array.from(evt.to.querySelectorAll(".card"));
+		const idx = cards.findIndex((c) => c === evt.item);
+		if (idx === -1) return {};
+		if (idx < cards.length - 1) return { before: cards[idx + 1].dataset.code };
+		if (idx > 0) return { after: cards[idx - 1].dataset.code };
+		return {};
+	}
+
+	// Riordino dentro la stessa colonna: lo stato non cambia, quindi non c'è
+	// nessun costo da far confermare. Si scrive l'ordine con lo stesso endpoint
+	// dello spostamento, colonna d'arrivo uguale a quella di partenza.
+	async function onDragReorder(evt) {
+		const columnId = evt.to && evt.to.dataset ? evt.to.dataset.columnId : "";
+		const code = evt.item.dataset.code;
+		if (!code || !columnId) {
+			await revertBoard();
+			return;
+		}
+		const anchor = dragAnchor(evt);
+		try {
+			await apiPost("/api/board/move", { code, to: columnId, ...anchor });
+		} catch (err) {
+			showToast(TEXT.moveFailed(err.message || err), "err");
+			await revertBoard();
+			return;
+		}
+		await loadBoard();
 	}
 
 	// Rimette la board com'era prima del trascinamento: il DOM è già stato

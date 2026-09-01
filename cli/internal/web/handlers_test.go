@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -548,5 +549,67 @@ func TestRequestChangesNoCommentsErrors(t *testing.T) {
 	srv.mux.ServeHTTP(w, r)
 	if w.Code == http.StatusOK {
 		t.Fatalf("expected error without comments, got 200: %s", w.Body.String())
+	}
+}
+
+// Riordinare una card dentro la sua colonna passa dallo stesso endpoint dello
+// spostamento: colonna d'arrivo uguale a quella di partenza, e l'ancora decide
+// la posizione. Lo stato non si tocca.
+func TestMoveCardReordersInsideTheSameColumn(t *testing.T) {
+	srv, conn := newTestServer(t)
+	specs := []domain.Spec{
+		{Code: "US-001", Title: "Uno", Status: domain.StatusTodo},
+		{Code: "US-002", Title: "Due", Status: domain.StatusTodo},
+		{Code: "US-003", Title: "Tre", Status: domain.StatusTodo},
+	}
+	if _, err := conn.SaveInitialBacklog(context.Background(), specs); err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte(`{"code":"US-003","to":"todo","before":"US-001"}`)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/board/move", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	srv.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	got, err := conn.ReadSpecDetail(context.Background(), "US-003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.StatusTodo {
+		t.Errorf("un riordino non deve cambiare stato: %q", got.Status)
+	}
+
+	w = httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/board", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("board status: got %d, body=%s", w.Code, w.Body.String())
+	}
+	var view struct {
+		Columns []struct {
+			ID    string `json:"id"`
+			Specs []struct {
+				Code string `json:"code"`
+			} `json:"specs"`
+		} `json:"columns"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, col := range view.Columns {
+		if col.ID != "todo" {
+			continue
+		}
+		for _, s := range col.Specs {
+			order = append(order, s.Code)
+		}
+	}
+	want := []string{"US-003", "US-001", "US-002"}
+	if !slices.Equal(order, want) {
+		t.Errorf("ordine della colonna todo: got %v, want %v", order, want)
 	}
 }
