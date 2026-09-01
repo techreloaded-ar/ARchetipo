@@ -2998,7 +2998,7 @@
 		parts.push(`<div class="review-dossier-head">${head.join("")}</div>`);
 		if (dossier.summary)
 			parts.push(
-				`<p class="review-dossier-summary">${escapeHtml(dossier.summary)}</p>`,
+				`<div class="review-dossier-summary markdown-rendered">${marked.parse(dossier.summary)}</div>`,
 			);
 		const criteria = dossier.criteria || [];
 		if (criteria.length > 0) {
@@ -3006,7 +3006,7 @@
 				.map((c) => {
 					const verdictClass = `criterion-${escapeHtml(c.verdict || "unclear")}`;
 					const note = c.note
-						? `<span class="criterion-note">${escapeHtml(c.note)}</span>`
+						? `<span class="criterion-note">${marked.parseInline(c.note)}</span>`
 						: "";
 					return `<li><span class="criterion-badge ${verdictClass}">${escapeHtml(c.verdict || "")}</span><span class="criterion-id">${escapeHtml(c.id || "")}</span>${note}</li>`;
 				})
@@ -3016,7 +3016,7 @@
 		const blockers = dossier.blockers || [];
 		if (blockers.length > 0) {
 			const items = blockers
-				.map((b) => `<li>${escapeHtml(b)}</li>`)
+				.map((b) => `<li>${marked.parseInline(b)}</li>`)
 				.join("");
 			parts.push(
 				`<div class="review-blockers"><strong>Blockers</strong><ul>${items}</ul></div>`,
