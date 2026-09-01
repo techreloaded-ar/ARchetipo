@@ -1,4 +1,4 @@
-package cli
+package workspace
 
 import (
 	"fmt"
@@ -13,7 +13,7 @@ import (
 // outside it, so a leftover is always both visible and reachable from here.
 const temporaryArtifactsDirName = "tmp"
 
-// removeSpecTemporaryArtifacts deletes the temporary artifacts a single spec
+// RemoveSpecTemporaryArtifacts deletes the temporary artifacts a single spec
 // accumulates under .archetipo/tmp/: the `plan-<CODE>/` staging directory
 // written by the planning skill, and the `payload-<CODE>-*.json` files
 // assembled by planning and by review's request-changes.
@@ -25,7 +25,7 @@ const temporaryArtifactsDirName = "tmp"
 // Callers treat a failure as non-fatal. By the time this runs the spec has
 // already been integrated or transitioned, and a file that could not be
 // removed must never turn a completed transition into a failed command.
-func removeSpecTemporaryArtifacts(projectRoot, specCode string) error {
+func RemoveSpecTemporaryArtifacts(projectRoot, specCode string) error {
 	code := strings.TrimSpace(specCode)
 	// The code arrives from the command line and is about to become part of a
 	// path, so refuse anything that could escape the temporary root instead of

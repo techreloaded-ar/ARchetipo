@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
 type diffView struct {
@@ -261,9 +263,12 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
-	} else if _, err := ws.conn.TransitionStatus(ctx, code, domain.StatusDone); err != nil {
-		writeError(w, err)
-		return
+	} else {
+		if _, err := ws.conn.TransitionStatus(ctx, code, domain.StatusDone); err != nil {
+			writeError(w, err)
+			return
+		}
+		sweepSpecTemporaryArtifacts(ws, code)
 	}
 	s.broker.Publish()
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -338,5 +343,18 @@ func (s *Server) integrateSpec(ctx context.Context, ws *workspaceSession, code s
 	if _, err := ws.conn.TransitionStatus(ctx, code, domain.StatusDone); err != nil {
 		return err
 	}
+	sweepSpecTemporaryArtifacts(ws, code)
 	return nil
+}
+
+// sweepSpecTemporaryArtifacts removes the staging leftovers of a spec that has
+// just reached the end of its lifecycle. Every door the viewer opens onto DONE
+// calls it, so a spec closed from the web leaves the workspace as clean as one
+// closed from the CLI. A leftover that resists deletion is logged and not
+// returned: the transition already succeeded, and undoing it over a stray file
+// would be worse than the file.
+func sweepSpecTemporaryArtifacts(ws *workspaceSession, code string) {
+	if err := workspace.RemoveSpecTemporaryArtifacts(ws.cfg.ProjectRoot, code); err != nil {
+		log.Printf("sweep temporary artifacts for %s: %v", code, err)
+	}
 }

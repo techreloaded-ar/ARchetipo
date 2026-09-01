@@ -1,4 +1,4 @@
-package cli
+package workspace
 
 import (
 	"os"
@@ -107,8 +107,8 @@ func TestRemoveSpecTemporaryArtifacts(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			projectRoot := seedTemporaryArtifacts(t, tc.seeded...)
-			if err := removeSpecTemporaryArtifacts(projectRoot, tc.specCode); err != nil {
-				t.Fatalf("removeSpecTemporaryArtifacts: unexpected error %v", err)
+			if err := RemoveSpecTemporaryArtifacts(projectRoot, tc.specCode); err != nil {
+				t.Fatalf("RemoveSpecTemporaryArtifacts: unexpected error %v", err)
 			}
 			got := remainingTemporaryArtifacts(t, projectRoot)
 			if len(got) != len(tc.want) {
@@ -126,7 +126,7 @@ func TestRemoveSpecTemporaryArtifacts(t *testing.T) {
 func TestRemoveSpecTemporaryArtifactsWithoutTemporaryRoot(t *testing.T) {
 	// A project that never staged anything must not be an error: the sweep runs
 	// after every transition to DONE, including on projects that use no skill.
-	if err := removeSpecTemporaryArtifacts(t.TempDir(), "US-001"); err != nil {
+	if err := RemoveSpecTemporaryArtifacts(t.TempDir(), "US-001"); err != nil {
 		t.Fatalf("expected a missing tmp/ directory to be a no-op, got %v", err)
 	}
 }
@@ -135,7 +135,7 @@ func TestRemoveSpecTemporaryArtifactsRejectsCodesThatEscapeTheRoot(t *testing.T)
 	for _, specCode := range []string{"", "   ", "../../etc", "US-001/../..", `..\..\win`} {
 		t.Run(specCode, func(t *testing.T) {
 			projectRoot := seedTemporaryArtifacts(t, "plan-US-001/")
-			if err := removeSpecTemporaryArtifacts(projectRoot, specCode); err == nil {
+			if err := RemoveSpecTemporaryArtifacts(projectRoot, specCode); err == nil {
 				t.Fatalf("expected spec code %q to be refused", specCode)
 			}
 			if got := remainingTemporaryArtifacts(t, projectRoot); len(got) != 1 {

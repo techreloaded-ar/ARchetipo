@@ -31,12 +31,43 @@
 		deleteStory: "Elimina la storia",
 		specTitle: (code) => `Spec ${code}`,
 		blockedBy: (list) => `bloccata da ${list}`,
-		emptyDone: "trascina qui una card in Review per approvarla",
+		emptyDone: "trascina qui una card per chiuderla",
 		emptyColumn: "nessuna spec",
-		dragOnlyReviewToDone:
-			"Si può trascinare soltanto da Review a Done",
-		movedToDone: (code, column) => `${code} approvata e spostata in ${column}`,
 		moveFailed: (reason) => `Spostamento fallito: ${reason}`,
+
+		// Cambio di stato: il server manda i codici degli effetti, le parole
+		// stanno qui come tutte le altre. Un codice che non trova la sua frase
+		// viene comunque mostrato: meglio un avviso spoglio di un avviso muto.
+		transitionImpacts: {
+			skips_review:
+				"La spec si chiude senza che venga registrato nessun verdetto di revisione.",
+			branch_left_open:
+				"Il branch e il worktree restano aperti: non vengono né integrati né ripuliti, e le spec che dipendono da questa risulteranno bloccate da un blocker non integrato.",
+			review_dangling:
+				"I commenti e il dossier di revisione restano orfani; una run di revisione in corso verrebbe declassata.",
+			reopen_done:
+				"La history conserva il passaggio in Done: le metriche di ciclo e di lead time restano falsate, e l'autopilot può rimettere la spec in lavorazione.",
+			rework_stuck:
+				"Il badge rework resta appeso: lo azzera soltanto una nuova pianificazione a partire da Todo.",
+			planned_without_plan:
+				"Non c'è nessun piano salvato: l'implementazione verrà declassata a UNCONFIRMED_EFFECT e l'azione «pianifica» non verrà più offerta.",
+			manual_in_progress:
+				"Finché la spec resta in questo stato, «spec plan» la rifiuterà.",
+			backward_move:
+				"La history conserva anche questo passo all'indietro: le metriche ne escono distorte.",
+		},
+		transitionImpactUnknown: (code) => `Effetto non descritto: ${code}`,
+		transitionNoImpacts: "Nessun effetto collaterale da segnalare.",
+		transitionConfirmTitle: (code, column) => `Spostare ${code} in ${column}?`,
+		transitionViaApprove:
+			"Il passaggio viene registrato come approvazione: il verdetto finisce nella revisione e, se c'è un branch, viene integrato.",
+		transitionViaRequestChanges:
+			"Il passaggio viene registrato come richiesta di modifiche: i commenti di revisione entrano nel corpo della spec come feedback di rework.",
+		transitionRaw:
+			"Il passaggio è uno spostamento diretto sulla board: non attraversa nessun flusso di revisione.",
+		transitionBlockedRunning:
+			"C'è una run in corso su questa spec: aspetta che finisca, oppure annullala, prima di spostarla.",
+		transitionDone: (code, column) => `${code} spostata in ${column}`,
 		noEpicsYet:
 			"Definisci almeno un'epica nel backlog prima di creare una spec",
 		backlogUnreadable: "Il backlog non si è potuto leggere",
@@ -310,6 +341,23 @@
 	const specViewTitle = document.getElementById("story-view-title");
 	const specBodyView = document.getElementById("story-body-view");
 	const specDeleteBtn = document.getElementById("story-delete-btn");
+	const specStatusSelect = document.getElementById("story-status-select");
+	const transitionConfirmModal = document.getElementById(
+		"transition-confirm-modal",
+	);
+	const transitionConfirmTitle = document.getElementById(
+		"transition-confirm-title",
+	);
+	const transitionConfirmIntro = document.getElementById(
+		"transition-confirm-intro",
+	);
+	const transitionImpactList = document.getElementById(
+		"transition-impact-list",
+	);
+	const transitionConfirmBtn = document.getElementById(
+		"transition-confirm-btn",
+	);
+	const transitionCancelBtn = document.getElementById("transition-cancel-btn");
 	const specEditBtn = document.getElementById("story-edit-btn");
 	const specCancelBtn = document.getElementById("story-cancel-btn");
 	const planView = document.getElementById("plan-view");
@@ -672,7 +720,10 @@
 		// keystroke in a text field: acting on it would throw the reader onto
 		// the board and unmount the panels of a spec they never asked to leave.
 		// The handlers below still close real modals, and are untouched.
-		if (e.key === "Escape" && specOpen && shellView === "spec")
+		// Una modale aperta sopra il dettaglio si prende Escape per sé: chiuderla
+		// e insieme buttare fuori dalla spec sarebbe rispondere due volte a un
+		// tasto solo.
+		if (e.key === "Escape" && specOpen && shellView === "spec" && !topModal())
 			leaveSpecDetail();
 	});
 	tabs.forEach((t) =>
@@ -681,6 +732,29 @@
 	specForm.addEventListener("submit", onSaveSpec);
 	planForm.addEventListener("submit", onSavePlan);
 	specEditBtn.addEventListener("click", () => enterSpecEditMode());
+	specStatusSelect.addEventListener("change", () => {
+		const code = currentSpecCode;
+		const to = specStatusSelect.value;
+		if (!code || !to) return;
+		const previous = currentSpecSnapshot ? currentSpecSnapshot.status : "";
+		requestTransition(code, to, {
+			// Riaprire il dettaglio è quello che rimette in riga azioni, tab e
+			// pannelli per lo stato nuovo: sono tutti calcolati sullo stato.
+			onDone: () => openEditor(code),
+			onCancel: () => fillStatusSelect(previous),
+		});
+	});
+	transitionConfirmBtn.addEventListener("click", () => decideTransition(true));
+	transitionCancelBtn.addEventListener("click", () => decideTransition(false));
+	transitionConfirmModal.addEventListener("click", (e) => {
+		if (e.target === transitionConfirmModal && isTopModal(transitionConfirmModal))
+			decideTransition(false);
+	});
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && isTopModal(transitionConfirmModal))
+			decideTransition(false);
+	});
+
 	specDeleteBtn.addEventListener("click", () => {
 		if (currentSpecCode)
 			confirmAndDeleteSpec(
@@ -1676,6 +1750,9 @@
 			if (!configModal.classList.contains("hidden")) return;
 			if (!newSpecModal.classList.contains("hidden")) return;
 			if (!newWorkspaceModal.classList.contains("hidden")) return;
+			// Un ridisegno sotto il dialog di conferma cambierebbe la board che
+			// la domanda sta descrivendo.
+			if (!transitionConfirmModal.classList.contains("hidden")) return;
 			loadBoard();
 		}, 150);
 	}
@@ -1951,36 +2028,24 @@
 			columnEl.appendChild(body);
 			columnsEl.appendChild(columnEl);
 
-			createBoardSortable(body, col.id);
+			createBoardSortable(body);
 		});
 	}
 
-	function createBoardSortable(body, columnId) {
-		if (columnId === "review") {
-			Sortable.create(body, {
-				group: { name: "review-approval", pull: true, put: false },
-				sort: false,
-				animation: 140,
-				ghostClass: "sortable-ghost",
-				dragClass: "sortable-drag",
-			});
-			return;
-		}
-		if (columnId === "done") {
-			Sortable.create(body, {
-				group: {
-					name: "review-approval",
-					pull: false,
-					put: ["review-approval"],
-				},
-				draggable: ".done-drop-target-disabled",
-				sort: false,
-				animation: 140,
-				ghostClass: "sortable-ghost",
-				dragClass: "sortable-drag",
-				onAdd: onDragMove,
-			});
-		}
+	// Ogni colonna dà e riceve card: il trascinamento è diventato il modo
+	// generale di cambiare stato, e la regola su quali passaggi costano qualcosa
+	// la dice il server nel dialog di conferma, non la board impedendoli. Anche
+	// le card in Done si trascinano: riaprirle è un passaggio come gli altri.
+	// `sort: false` resta: il riordino dentro la colonna non è in gioco qui.
+	function createBoardSortable(body) {
+		Sortable.create(body, {
+			group: { name: "board", pull: true, put: true },
+			sort: false,
+			animation: 140,
+			ghostClass: "sortable-ghost",
+			dragClass: "sortable-drag",
+			onAdd: onDragMove,
+		});
 	}
 
 	function renderCard(spec) {
@@ -2050,39 +2115,16 @@
 	}
 
 	async function onDragMove(evt) {
-		const sourceColumn =
-			evt.from && evt.from.dataset ? evt.from.dataset.columnId : "";
 		const targetColumn =
 			evt.to && evt.to.dataset ? evt.to.dataset.columnId : "";
-		if (sourceColumn !== "review" || targetColumn !== "done") {
-			showToast(TEXT.dragOnlyReviewToDone, "err");
-			// revert any accidental DOM change by restoring the last known good board.
-			if (boardSnapshot) {
-				renderBoard(boardSnapshot);
-				updateStats(boardSnapshot);
-			} else {
-				await loadBoard();
-			}
-			return;
-		}
-
 		const code = evt.item.dataset.code;
-
-		// Un drop su Done è un'approvazione a tutti gli effetti: chiede la
-		// stessa conferma del bottone Approva, perché un trascinamento
-		// accidentale non deve poter chiudere una spec. Se la conferma non
-		// arriva, la card torna dov'era.
-		if (!confirmApproval(code)) {
-			if (boardSnapshot) {
-				renderBoard(boardSnapshot);
-				updateStats(boardSnapshot);
-			} else {
-				await loadBoard();
-			}
+		if (!code || !targetColumn) {
+			await revertBoard();
 			return;
 		}
 
-		// Determine anchor based on the card now next to the dragged item.
+		// L'ancora si legge dalla card che ora sta accanto a quella trascinata,
+		// prima che qualunque ridisegno la sposti.
 		let anchor = {};
 		const cards = Array.from(evt.to.querySelectorAll(".card"));
 		const idx = cards.findIndex((c) => c === evt.item);
@@ -2093,20 +2135,131 @@
 		} else if (idx > 0) {
 			anchor = { after: cards[idx - 1].dataset.code };
 		}
-		try {
-			await apiPost("/api/board/move", { code, to: targetColumn, ...anchor });
-			showToast(TEXT.movedToDone(code, targetColumn), "ok");
+
+		await requestTransition(code, targetColumn, {
+			anchor,
+			onCancel: revertBoard,
+		});
+	}
+
+	// Rimette la board com'era prima del trascinamento: il DOM è già stato
+	// cambiato dal drag, e nessuno ha ancora scritto niente sul server.
+	async function revertBoard() {
+		if (boardSnapshot) {
+			renderBoard(boardSnapshot);
+			updateStats(boardSnapshot);
+		} else {
 			await loadBoard();
-			await loadWorkspaceStatus();
+		}
+	}
+
+	// ---- Cambio di stato di una spec ---------------------------------------
+	//
+	// Il selettore nel dettaglio e il trascinamento sulla board chiedono la
+	// stessa cosa, quindi la chiedono nello stesso modo: il server dice che cosa
+	// costa il passaggio e su quale strada instradarlo, qui si mostra la
+	// domanda, e la risposta va sul flusso giusto — approvazione, richiesta di
+	// modifiche, o spostamento diretto. Due copie di questa sequenza sarebbero
+	// libere di divergere, e divergerebbero sul punto che conta: se il verdetto
+	// viene registrato o no.
+
+	/** La funzione che chiude il dialog aperto, o null se non ce n'è uno. */
+	let transitionDecision = null;
+
+	function decideTransition(confirmed) {
+		if (!transitionDecision) return;
+		const decide = transitionDecision;
+		transitionDecision = null;
+		transitionConfirmModal.classList.add("hidden");
+		leaveModal(transitionConfirmModal);
+		decide(confirmed);
+	}
+
+	function columnTitle(columnId) {
+		const column = (boardSnapshot?.columns || []).find(
+			(c) => c.id === columnId,
+		);
+		return column ? column.title : columnId;
+	}
+
+	function askTransition(code, columnLabel, preview) {
+		transitionConfirmTitle.textContent = TEXT.transitionConfirmTitle(
+			code,
+			columnLabel,
+		);
+		transitionConfirmIntro.textContent =
+			preview.recommended_action === "approve"
+				? TEXT.transitionViaApprove
+				: preview.recommended_action === "request_changes"
+					? TEXT.transitionViaRequestChanges
+					: TEXT.transitionRaw;
+		const impacts = preview.impacts || [];
+		transitionImpactList.innerHTML = "";
+		const lines = impacts.length
+			? impacts.map(
+					(c) => TEXT.transitionImpacts[c] || TEXT.transitionImpactUnknown(c),
+				)
+			: [TEXT.transitionNoImpacts];
+		lines.forEach((line) => {
+			const li = document.createElement("li");
+			li.textContent = line;
+			transitionImpactList.appendChild(li);
+		});
+		transitionConfirmModal.classList.remove("hidden");
+		enterModal(transitionConfirmModal, transitionCancelBtn);
+		return new Promise((resolve) => {
+			transitionDecision = resolve;
+		});
+	}
+
+	async function requestTransition(code, to, options = {}) {
+		const onCancel = options.onCancel || (() => {});
+		const onDone = options.onDone || (() => {});
+		let preview;
+		try {
+			preview = await apiGet(
+				`/api/spec/${encodeURIComponent(code)}/transition-preview?to=${encodeURIComponent(to)}`,
+			);
 		} catch (err) {
 			showToast(TEXT.moveFailed(err.message || err), "err");
-			// revert the optimistic DOM change by reloading the last known good board.
-			if (boardSnapshot) {
-				renderBoard(boardSnapshot);
-				updateStats(boardSnapshot);
+			await onCancel();
+			return;
+		}
+		if (preview.allowed === false) {
+			showToast(TEXT.transitionBlockedRunning, "err");
+			await onCancel();
+			return;
+		}
+		const columnLabel = columnTitle(to);
+		if (!(await askTransition(code, columnLabel, preview))) {
+			await onCancel();
+			return;
+		}
+		try {
+			if (preview.recommended_action === "approve") {
+				await apiPost(`/api/spec/${encodeURIComponent(code)}/approve`, {});
+			} else if (preview.recommended_action === "request_changes") {
+				await apiPost(
+					`/api/spec/${encodeURIComponent(code)}/request-changes`,
+					{},
+				);
 			} else {
-				await loadBoard();
+				// L'ancora vale solo sullo spostamento grezzo: i due flussi
+				// corretti portano la spec dove decidono loro, e l'ordine della
+				// colonna d'arrivo non è quello che la persona stava curando.
+				await apiPost("/api/board/move", {
+					code,
+					to,
+					...(options.anchor || {}),
+				});
 			}
+			showToast(TEXT.transitionDone(code, columnLabel), "ok");
+			await loadBoard();
+			await loadWorkspaceStatus();
+			await onDone();
+		} catch (err) {
+			showToast(TEXT.moveFailed(err.message || err), "err");
+			await onCancel();
 		}
 	}
 
@@ -2208,6 +2361,24 @@
 			s.code ? TEXT.deleteSpec(s.code) : TEXT.deleteStory,
 		);
 		specBodyView.innerHTML = marked.parse(s.body || TEXT.noDescription);
+		fillStatusSelect(s.status);
+	}
+
+	// Le voci del selettore sono le colonne della board, prese dalla board: le
+	// etichette le decide il workflow del workspace, e riscriverle qui vorrebbe
+	// dire darne una seconda versione che prima o poi non coincide.
+	function fillStatusSelect(status) {
+		const columns = boardSnapshot?.columns || [];
+		specStatusSelect.innerHTML = "";
+		columns.forEach((column) => {
+			const option = document.createElement("option");
+			option.value = column.id;
+			option.textContent = column.title;
+			specStatusSelect.appendChild(option);
+		});
+		const current = columns.find((column) => column.status === status);
+		specStatusSelect.value = current ? current.id : "";
+		specStatusSelect.disabled = columns.length === 0;
 	}
 
 	function findMockupForSpec(code) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/metrics"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
 // boardColumnView is the JSON shape of one Kanban column in GET /api/board.
@@ -444,10 +446,32 @@ func (s *Server) handleMoveCard(w http.ResponseWriter, r *http.Request) {
 	if req.After != nil {
 		anchor.After = *req.After
 	}
-	res, err := ws.conn.MoveBoardCard(r.Context(), req.Code, req.To, anchor)
+	ctx := r.Context()
+	// A spec with a run in flight is the one thing that cannot be moved: the
+	// agent is working against the state this would change under it. Every other
+	// transition is allowed, and the viewer warns about its cost first — see
+	// handleTransitionPreview.
+	//
+	// The CLI `spec move` deliberately keeps no such guard: it is the manual
+	// override, and taking it away would leave nobody able to unstick a spec
+	// whose run never finished.
+	if id, _, running := s.specRunningExecution(ctx, ws, req.Code); running {
+		writeError(w, iox.NewConflict(
+			fmt.Sprintf("spec %s has a running execution (%s)", req.Code, id),
+			"wait for the run to finish, or cancel it, before moving the card", nil))
+		return
+	}
+	res, err := ws.conn.MoveBoardCard(ctx, req.Code, req.To, anchor)
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	// The spec's lifecycle ends here, so its staging leftovers do too — the same
+	// sweep `archetipo spec move` performs. Non-fatal: the card has already moved.
+	if req.To == "done" {
+		if err := workspace.RemoveSpecTemporaryArtifacts(ws.cfg.ProjectRoot, req.Code); err != nil {
+			log.Printf("move %s to done: %v", req.Code, err)
+		}
 	}
 	writeJSON(w, http.StatusOK, res)
 }

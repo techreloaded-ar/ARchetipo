@@ -235,6 +235,11 @@
                     <div class="story-view-topbar">
                         <div class="story-view-meta" id="story-view-meta"></div>
                         <div class="story-view-actions">
+                            <!-- Select nativa: la tastiera, il fuoco e la lettura
+                                 assistita arrivano gratis, e le etichette sono le
+                                 stesse colonne della board perche' le riempie la
+                                 board stessa. -->
+                            <select id="story-status-select" class="ghost-btn story-status-select" aria-label="Stato della storia"></select>
                             <button type="button" id="story-delete-btn" class="ghost-btn danger-ghost-btn">Elimina la storia</button>
                         </div>
                     </div>
@@ -425,6 +430,22 @@
             <section class="tab-panel active">
                 <div id="metrics-body" class="metrics-body"></div>
                 <span class="status-msg" id="metrics-status"></span>
+            </section>
+        </div>
+    </div>
+
+    <div id="transition-confirm-modal" class="modal-root hidden" role="dialog" aria-modal="true" aria-labelledby="transition-confirm-title">
+        <div class="modal transition-confirm-modal">
+            <header class="modal-header">
+                <h2 id="transition-confirm-title" class="modal-title"></h2>
+            </header>
+            <section class="tab-panel active">
+                <p id="transition-confirm-intro" class="transition-confirm-intro"></p>
+                <ul id="transition-impact-list" class="transition-impact-list"></ul>
+                <div class="form-actions">
+                    <button type="button" id="transition-cancel-btn" class="ghost-btn">Annulla</button>
+                    <button type="button" id="transition-confirm-btn" class="ghost-btn danger-ghost-btn">Sposta</button>
+                </div>
             </section>
         </div>
     </div>

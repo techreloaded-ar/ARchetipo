@@ -232,6 +232,7 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("DELETE /api/spec/{code}", s.handleDeleteSpec)
 	s.handleWorkspace("PUT /api/spec/{code}/plan", s.handleSavePlan)
 	s.handleWorkspace("POST /api/board/move", s.handleMoveCard)
+	s.handleWorkspace("GET /api/spec/{code}/transition-preview", s.handleTransitionPreview)
 	s.handleWorkspace("GET /api/spec/{code}/diff", s.handleGetDiff)
 	s.handleWorkspace("GET /api/spec/{code}/review", s.handleGetReview)
 	s.handleWorkspace("PUT /api/spec/{code}/review", s.handleSaveReview)

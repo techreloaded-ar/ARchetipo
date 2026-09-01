@@ -56,6 +56,7 @@ var workspaceScopedRoutes = []scopedRoute{
 	{"DELETE /api/spec/{code}", http.MethodDelete, "/api/spec/US-001", ""},
 	{"PUT /api/spec/{code}/plan", http.MethodPut, "/api/spec/US-001/plan", "{}"},
 	{"POST /api/board/move", http.MethodPost, "/api/board/move", "{}"},
+	{"GET /api/spec/{code}/transition-preview", http.MethodGet, "/api/spec/US-001/transition-preview?to=done", ""},
 	{"GET /api/spec/{code}/diff", http.MethodGet, "/api/spec/US-001/diff", ""},
 	{"GET /api/spec/{code}/review", http.MethodGet, "/api/spec/US-001/review", ""},
 	{"PUT /api/spec/{code}/review", http.MethodPut, "/api/spec/US-001/review", "{}"},

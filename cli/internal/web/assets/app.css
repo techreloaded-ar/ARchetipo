@@ -1976,7 +1976,16 @@ html[data-theme="light"] .theme-ico-moon {
 .story-view-actions {
 	display: flex;
 	justify-content: flex-end;
+	gap: var(--space-2);
 	flex: 0 0 auto;
+}
+
+/* Il selettore di stato porta la forma della pillola come gli altri comandi
+   della riga: la freccia nativa resta, è quella che lo fa leggere come una
+   scelta e non come un bottone. */
+.story-status-select {
+	appearance: auto;
+	padding: 0 var(--space-3);
 }
 
 .story-view.hidden,
@@ -7484,4 +7493,27 @@ body.no-workspace [data-workspace-scoped] {
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
+}
+
+/* ---- Conferma di un cambio di stato ------------------------------------
+   Una domanda sola, corta: la strada che il passaggio prende e la lista di
+   quello che lascia dietro. */
+.transition-confirm-modal {
+	width: min(560px, 100%);
+}
+
+.transition-confirm-intro {
+	margin: 0 0 var(--space-4);
+	color: var(--text);
+	line-height: 1.5;
+}
+
+.transition-impact-list {
+	margin: 0 0 var(--space-5);
+	padding-left: var(--space-5);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	color: var(--text-dim);
+	line-height: 1.5;
 }

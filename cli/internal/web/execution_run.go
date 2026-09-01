@@ -512,20 +512,7 @@ type providerAvailability struct {
 
 func (s *Server) actionAvailabilityFor(ctx context.Context, ws *workspaceSession, code string, planTaskCount int) actionAvailability {
 	availability := actionAvailability{specHasPlan: planTaskCount > 0}
-	if id, busy := ws.dispatch.current(code); busy {
-		availability.specHasRunning = true
-		availability.runningID = id
-		if record, err := ws.store.Get(ctx, id); err == nil {
-			availability.runningAction = string(record.Action)
-		}
-	}
-	if !availability.specHasRunning {
-		if records, err := ws.store.ListBySpec(ctx, code); err == nil && len(records) > 0 && records[0].Status == execution.StatusRunning {
-			availability.specHasRunning = true
-			availability.runningID = records[0].ID
-			availability.runningAction = string(records[0].Action)
-		}
-	}
+	availability.runningID, availability.runningAction, availability.specHasRunning = s.specRunningExecution(ctx, ws, code)
 	availability.providerAvailability = s.providerAvailabilityFor(ctx, ws)
 	return availability
 }

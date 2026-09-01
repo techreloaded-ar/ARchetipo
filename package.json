@@ -21,6 +21,7 @@
     "test:view-open-workspace-smoke": "node ./test/e2e/open-workspace-view-smoke.mjs",
     "test:view-no-workspace-smoke": "node ./test/e2e/no-workspace-view-smoke.mjs",
     "test:view-delete-smoke": "node ./test/e2e/delete-story-view-smoke.mjs",
+    "test:view-transition-smoke": "node ./test/e2e/transition-view-smoke.mjs",
     "test:view-execution-smoke": "node ./test/e2e/execution-config-view-smoke.mjs",
     "test:view-plan-smoke": "node ./test/e2e/plan-from-view-smoke.mjs",
     "test:view-run-smoke": "node ./test/e2e/run-from-view-smoke.mjs",

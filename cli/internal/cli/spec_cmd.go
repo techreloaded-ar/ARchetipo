@@ -18,6 +18,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
 // newSpecCmd builds `archetipo spec ...` with twelve leaves:
@@ -552,7 +553,7 @@ func newSpecIntegrateCmd(s streams) *cobra.Command {
 				}
 				// The spec's lifecycle ends here, so its staging leftovers do
 				// too. Non-fatal: the spec is already DONE.
-				if err := removeSpecTemporaryArtifacts(cfg.ProjectRoot, ref); err != nil {
+				if err := workspace.RemoveSpecTemporaryArtifacts(cfg.ProjectRoot, ref); err != nil {
 					fmt.Fprintf(s.err, "warning: %v\n", err)
 				}
 				return res, nil
@@ -814,7 +815,7 @@ func newSpecMoveCmd(s streams) *cobra.Command {
 				// Same end-of-lifecycle sweep as `spec integrate`, for the
 				// non-worktree path that reaches DONE through a plain move.
 				if target == "done" {
-					if err := removeSpecTemporaryArtifacts(cfg.ProjectRoot, ref); err != nil {
+					if err := workspace.RemoveSpecTemporaryArtifacts(cfg.ProjectRoot, ref); err != nil {
 						fmt.Fprintf(s.err, "warning: %v\n", err)
 					}
 				}
