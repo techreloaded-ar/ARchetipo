@@ -47,8 +47,14 @@
 	// titolo di sezione: ci sono soltanto le parole che il valore da solo non
 	// direbbe.
 	const ROW_MODEL_EYEBROW = "Modello";
+	// Quando la scelta smette di poter cambiare lo dice l'ambito, perché è la
+	// sola cosa che i due sanno di diverso: una conversazione si apre, una run
+	// parte. Le parole stanno accanto al prefisso per la stessa ragione per cui
+	// ci sta lui — sono ciò che distingue i due ambiti, non due componenti.
 	const ROW_MODEL_TITLE = "Modello di questa conversazione";
 	const ROW_MODEL_FIXED_COPY = "si fissa quando la conversazione si apre";
+	const ROW_RUN_MODEL_TITLE = "Modello di questa run";
+	const ROW_RUN_FIXED_COPY = "si fissa quando la run parte";
 	// La voce e il segmento che dicono «non scelgo io»: la prima in coda
 	// all'elenco dei modelli, il secondo in testa ai segmenti di un'opzione,
 	// perché in entrambi i casi è il posto in cui la si cerca.
@@ -80,6 +86,9 @@
 		prefix: "run",
 		selectAttrs: " data-run-model",
 		alwaysOfferEmpty: false,
+		row: true,
+		rowTitle: ROW_RUN_MODEL_TITLE,
+		rowFixedCopy: ROW_RUN_FIXED_COPY,
 	};
 	// La conversazione segue la stessa regola sulla voce vuota della run, e
 	// disegna la scelta in un'altra forma: `row` dice che al posto dei campi a
@@ -91,6 +100,8 @@
 		selectAttrs: " data-conversation-model",
 		alwaysOfferEmpty: false,
 		row: true,
+		rowTitle: ROW_MODEL_TITLE,
+		rowFixedCopy: ROW_MODEL_FIXED_COPY,
 	};
 
 	// ---- internal helpers ----
@@ -301,8 +312,9 @@
 	 * scelta si è staccata da quella ereditata. Il valore resta comunque scritto
 	 * accanto, perché nessuna informazione qui è portata dal solo colore.
 	 */
-	function renderRowPill(key, label, title, changed, open, popoverBody) {
-		return `<span class="conv-pill-shell"><button type="button" class="conv-pill${changed ? " is-chosen" : ""}" data-conversation-pill="${escapeHtml(key)}" aria-haspopup="menu" aria-expanded="${open ? "true" : "false"}" title="${escapeHtml(title)}"><span class="conv-pill-value">${escapeHtml(label)}</span>${rowChevron()}</button><div class="conv-pop" role="menu" data-conversation-pop="${escapeHtml(key)}"${open ? "" : " hidden"}>${popoverBody}</div></span>`;
+	function renderRowPill(naming, key, label, title, changed, open, popoverBody) {
+		const p = naming.prefix;
+		return `<span class="conv-pill-shell"><button type="button" class="conv-pill${changed ? " is-chosen" : ""}" data-${p}-pill="${escapeHtml(key)}" aria-haspopup="menu" aria-expanded="${open ? "true" : "false"}" title="${escapeHtml(title)}"><span class="conv-pill-value">${escapeHtml(label)}</span>${rowChevron()}</button><div class="conv-pop" role="menu" data-${p}-pop="${escapeHtml(key)}"${open ? "" : " hidden"}>${popoverBody}</div></span>`;
 	}
 
 	function renderRowEyebrow(text) {
@@ -319,8 +331,8 @@
 	}
 
 	/** Una voce dell'elenco dei modelli. */
-	function renderRowModelEntry(value, label, tag, checked) {
-		return `<button type="button" class="conv-pop-entry" role="menuitemradio" aria-checked="${checked ? "true" : "false"}" data-conversation-model-choice="${escapeHtml(value)}">${rowCheck()}<span class="conv-pop-entry-text">${escapeHtml(label)}</span>${tag ? `<span class="conv-pop-tag">${escapeHtml(tag)}</span>` : ""}</button>`;
+	function renderRowModelEntry(naming, value, label, tag, checked) {
+		return `<button type="button" class="conv-pop-entry" role="menuitemradio" aria-checked="${checked ? "true" : "false"}" data-${naming.prefix}-model-choice="${escapeHtml(value)}">${rowCheck()}<span class="conv-pop-entry-text">${escapeHtml(label)}</span>${tag ? `<span class="conv-pop-tag">${escapeHtml(tag)}</span>` : ""}</button>`;
 	}
 
 	/**
@@ -329,16 +341,19 @@
 	 * non sono più un suffisso della parola ma una targhetta accanto, così il
 	 * nome del modello resta il nome del modello.
 	 */
-	function renderRowModelEntries(models, value, offerEmpty) {
+	function renderRowModelEntries(naming, models, value, offerEmpty) {
 		const known = models.some((m) => String(m.id || "") === value);
 		const entries = [];
 		if (value !== "" && !known) {
-			entries.push(renderRowModelEntry(value, value, ROW_UNLISTED_TAG, true));
+			entries.push(
+				renderRowModelEntry(naming, value, value, ROW_UNLISTED_TAG, true),
+			);
 		}
 		models.forEach((model) => {
 			const id = String(model.id || "");
 			entries.push(
 				renderRowModelEntry(
+					naming,
 					id,
 					model.label || id,
 					model.default ? ROW_DEFAULT_TAG : "",
@@ -350,20 +365,21 @@
 		// rinuncia a scegliere sta dopo tutto ciò che si può scegliere.
 		if (offerEmpty) {
 			entries.push(
-				renderRowModelEntry("", ROW_EMPTY_MODEL_LABEL, "", value === ""),
+				renderRowModelEntry(naming, "", ROW_EMPTY_MODEL_LABEL, "", value === ""),
 			);
 		}
 		return entries.join("");
 	}
 
 	/** Le scelte di un'opzione, come un gruppo di segmenti percorribile. */
-	function renderRowSegments(option, value) {
+	function renderRowSegments(naming, option, value) {
 		const name = String(option.name || "");
 		const choices = Array.isArray(option.choices)
 			? option.choices.filter(Boolean)
 			: [];
+		const p = naming.prefix;
 		const segment = (choiceValue, label, pressed) =>
-			`<button type="button" class="conv-segment" aria-pressed="${pressed ? "true" : "false"}" data-conversation-option="${escapeHtml(name)}" data-conversation-option-choice="${escapeHtml(choiceValue)}">${escapeHtml(label)}</button>`;
+			`<button type="button" class="conv-segment" aria-pressed="${pressed ? "true" : "false"}" data-${p}-option="${escapeHtml(name)}" data-${p}-option-choice="${escapeHtml(choiceValue)}">${escapeHtml(label)}</button>`;
 		const segments = [segment("", ROW_EMPTY_OPTION_LABEL, value === "")];
 		choices.forEach((choice) => {
 			const choiceValue = String(choice.value || "");
@@ -389,11 +405,11 @@
 	}
 
 	/** Il corpo del popover di una sola opzione: occhiello, segmenti, aiuto. */
-	function renderRowOptionBody(option, value) {
+	function renderRowOptionBody(naming, option, value) {
 		const name = String(option.name || "");
 		return (
 			renderRowEyebrow(option.label || name) +
-			renderRowSegments(option, value) +
+			renderRowSegments(naming, option, value) +
 			renderRowFoot(option.help || "", false)
 		);
 	}
@@ -420,20 +436,24 @@
 					? modelEntry.label || model
 					: model;
 		const inheritedNote = workspace ? `${INHERITED_COPY} · ` : "";
+		const rowTitle = naming.rowTitle || ROW_MODEL_TITLE;
+		const fixedCopy = naming.rowFixedCopy || ROW_MODEL_FIXED_COPY;
 		cells.push(
 			renderRowPill(
+				naming,
 				"model",
 				modelLabel,
-				`${ROW_MODEL_TITLE} · ${inheritedNote}${ROW_MODEL_FIXED_COPY}`,
+				`${rowTitle} · ${inheritedNote}${fixedCopy}`,
 				model !== inheritedModel,
 				open === "model",
 				renderRowEyebrow(ROW_MODEL_EYEBROW) +
 					renderRowModelEntries(
+						naming,
 						models,
 						model,
 						naming.alwaysOfferEmpty !== false || model === "",
 					) +
-					renderRowFoot(`${inheritedNote}${ROW_MODEL_FIXED_COPY}`, true),
+					renderRowFoot(`${inheritedNote}${fixedCopy}`, true),
 			),
 		);
 
@@ -450,12 +470,13 @@
 			const firstValue = currentValue(optionValues, firstName);
 			cells.push(
 				renderRowPill(
+					naming,
 					`option:${firstName}`,
 					rowOptionLabel(first, firstValue),
 					first.label || firstName,
 					chosenOption(first),
 					open === `option:${firstName}`,
-					renderRowOptionBody(first, firstValue),
+					renderRowOptionBody(naming, first, firstValue),
 				),
 			);
 		}
@@ -463,6 +484,7 @@
 		if (rest.length) {
 			cells.push(
 				renderRowPill(
+					naming,
 					"more",
 					rowMoreOptionsLabel(rest.length),
 					rest.map((o) => o.label || String(o.name || "")).join(" · "),
@@ -471,6 +493,7 @@
 					rest
 						.map((option) =>
 							renderRowOptionBody(
+								naming,
 								option,
 								currentValue(optionValues, String(option.name || "")),
 							),
@@ -616,12 +639,13 @@
 		);
 	}
 
-	function renderModelChoice(view, selection) {
+	function renderModelChoice(view, selection, open) {
 		return renderScopedModelChoice(
 			view,
 			selection,
 			RUN_SCOPE,
 			MODEL_CHOICE_TITLE,
+			open,
 		);
 	}
 

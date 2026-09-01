@@ -613,6 +613,11 @@
 	let panelModelChoice = null; // container the single-run model choice is drawn in
 	let modelChoiceView = null; // last read of GET /api/execution/model-choice
 	let modelChoiceSelection = null; // what the reader chose here, or null when nobody touched it
+	// Quale popover della riga è aperto — "model", "option:<nome>", "more" — o ""
+	// se nessuno. Vale la stessa regola dello scope conversazione: il pannello si
+	// ridisegna a ogni lettura, quindi un'apertura che vivesse nel DOM si
+	// richiuderebbe da sola.
+	let modelChoiceOpen = "";
 	let panelStartURL = ""; // route that starts an action in this context
 	let panelSettle = null; // what to do when the execution reaches a terminal state
 	let executionPollTimer = null; // interval following the open spec's execution
@@ -737,16 +742,55 @@
 	// listeners.
 	function bindModelChoicePanel(container) {
 		if (!container) return;
-		container.addEventListener("change", (e) => {
+		// La riga agente: una pastiglia apre o chiude il suo popover, una voce
+		// sceglie il modello, un segmento sceglie il valore di un'opzione. Dopo
+		// ogni scelta il popover si chiude e il fuoco torna sulla pastiglia da cui
+		// si era partiti — il ridisegno ha rifatto il DOM, quindi la si ritrova
+		// per chiave. Sono gli stessi tre rami dello scope conversazione, sugli
+		// stessi marcatori con l'altro prefisso.
+		container.addEventListener("click", (e) => {
 			if (container !== panelModelChoice) return;
-			const target = e.target;
-			if (!target) return;
-			if (target.hasAttribute("data-run-model")) {
-				chooseRunModel(target.value);
+			const pill = e.target.closest("[data-run-pill]");
+			if (pill) {
+				toggleRunChoicePopover(pill.getAttribute("data-run-pill") || "");
 				return;
 			}
-			const option = target.getAttribute("data-run-option");
-			if (option !== null) chooseRunOption(option, target.value);
+			const modelChoice = e.target.closest("[data-run-model-choice]");
+			if (modelChoice) {
+				modelChoiceOpen = "";
+				chooseRunModel(modelChoice.getAttribute("data-run-model-choice"));
+				focusRunPill("model");
+				return;
+			}
+			const optionChoice = e.target.closest("[data-run-option-choice]");
+			if (optionChoice) {
+				const pop = optionChoice.closest("[data-run-pop]");
+				const key = pop ? pop.getAttribute("data-run-pop") || "" : "";
+				modelChoiceOpen = "";
+				chooseRunOption(
+					optionChoice.getAttribute("data-run-option"),
+					optionChoice.getAttribute("data-run-option-choice"),
+				);
+				focusRunPill(key);
+			}
+		});
+		// Esc chiude e riporta il fuoco alla pastiglia; dentro un popover le
+		// frecce percorrono voci e segmenti come un controllo solo, e Invio è il
+		// clic che il `<button>` fa da sé.
+		container.addEventListener("keydown", (e) => {
+			if (container !== panelModelChoice) return;
+			if (e.key === "Escape" && modelChoiceOpen) {
+				e.preventDefault();
+				closeRunChoicePopover();
+				return;
+			}
+			const pop = e.target.closest ? e.target.closest("[data-run-pop]") : null;
+			if (!pop || CHOICE_STEPS[e.key] === undefined) return;
+			const items = choiceItems(pop);
+			const at = items.indexOf(e.target);
+			if (at === -1) return;
+			e.preventDefault();
+			items[(at + CHOICE_STEPS[e.key] + items.length) % items.length].focus();
 		});
 	}
 
@@ -3614,6 +3658,7 @@
 		// another one starts again from what the workspace declares.
 		modelChoiceView = null;
 		modelChoiceSelection = null;
+		modelChoiceOpen = "";
 		if (panelModelChoice) panelModelChoice.innerHTML = "";
 		// Prima di renderExecution: è la condizione che quella legge, e montare
 		// un pannello nuovo non deve ereditare il verdetto del precedente.
@@ -3660,7 +3705,77 @@
 		const render =
 			window.ProviderFields && window.ProviderFields.renderModelChoice;
 		if (!render) return;
-		panelModelChoice.innerHTML = render(modelChoiceView, modelChoiceSelection);
+		// Il DOM è nuovo dopo il ridisegno: chi stava scegliendo con la tastiera
+		// non deve perdere il posto, e il popover va ricollocato perché è fisso al
+		// viewport e le colonne della spec scorrono.
+		const place = runChoiceFocus(document.activeElement);
+		panelModelChoice.innerHTML = render(
+			modelChoiceView,
+			modelChoiceSelection,
+			modelChoiceOpen,
+		);
+		restoreRunChoiceFocus(place);
+		placeChoicePopover(panelModelChoice, "run");
+	}
+
+	function runChoiceNode(attribute, key) {
+		return choiceNode(panelModelChoice, attribute, key);
+	}
+
+	function focusRunPill(key) {
+		const pill = runChoiceNode("data-run-pill", key);
+		if (pill) pill.focus();
+	}
+
+	// Che cosa della riga teneva il fuoco: la pastiglia — indice -1 — o la voce
+	// che sta a quel posto nel suo popover.
+	function runChoiceFocus(focused) {
+		if (!focused || !focused.closest) return null;
+		if (!panelModelChoice || !panelModelChoice.contains(focused)) return null;
+		const pillKey = focused.getAttribute("data-run-pill");
+		if (pillKey !== null) return { key: pillKey, index: -1 };
+		const pop = focused.closest("[data-run-pop]");
+		if (!pop) return null;
+		return {
+			key: pop.getAttribute("data-run-pop") || "",
+			index: choiceItems(pop).indexOf(focused),
+		};
+	}
+
+	// Il posto e non l'elemento: dopo un cambio di modello le voci possono essere
+	// altre, quindi si ripiega sull'ultima e — se il popover non c'è più — sulla
+	// pastiglia.
+	function restoreRunChoiceFocus(place) {
+		if (!place) return;
+		if (place.index < 0) return focusRunPill(place.key);
+		const items = choiceItems(runChoiceNode("data-run-pop", place.key));
+		if (!items.length) return focusRunPill(place.key);
+		items[Math.min(place.index, items.length - 1)].focus();
+	}
+
+	// Aprire un popover porta il fuoco dentro: da tastiera è l'unico modo di
+	// arrivarci, e da mouse non toglie niente a nessuno.
+	function focusRunPopover(key) {
+		const pop = runChoiceNode("data-run-pop", key);
+		const first = pop
+			? pop.querySelector(".conv-pop-entry, .conv-segment")
+			: null;
+		if (first) first.focus();
+	}
+
+	function toggleRunChoicePopover(key) {
+		modelChoiceOpen = modelChoiceOpen === key ? "" : key;
+		renderModelChoicePanel();
+		if (modelChoiceOpen) focusRunPopover(key);
+		else focusRunPill(key);
+	}
+
+	function closeRunChoicePopover() {
+		if (!modelChoiceOpen) return;
+		const key = modelChoiceOpen;
+		modelChoiceOpen = "";
+		renderModelChoicePanel();
+		focusRunPill(key);
 	}
 
 	// The option names one catalog entry declares. Unknown entry, or an entry
@@ -3710,13 +3825,15 @@
 		renderModelChoicePanel();
 	}
 
-	// Choosing an option touches that option alone: the controls around it keep
-	// what they are showing, so no redraw is needed.
+	// Ridisegna, a differenza di prima: il valore non vive più in un `<select>`
+	// che se lo tiene da sé, ma è scritto sulla pastiglia e nel segmento premuto,
+	// e senza ridisegno resterebbero entrambi a dire il valore di prima.
 	function chooseRunOption(name, value) {
 		const current = currentModelChoice();
 		current.options[String(name)] =
 			value === undefined || value === null ? "" : String(value);
 		modelChoiceSelection = { model: current.model, options: current.options };
+		renderModelChoicePanel();
 	}
 
 	// What this run must carry beyond the action: the choice, and only when it
@@ -5554,16 +5671,19 @@
 		conversationModelChoiceOpen = "";
 		renderConversationPanel();
 	});
+	choicePopoverClosers.push(() => {
+		if (!modelChoiceOpen) return;
+		modelChoiceOpen = "";
+		renderModelChoicePanel();
+	});
 
-	// Un clic fuori dalla riga chiude il popover. Sta sul documento e non sul
-	// pannello perché "fuori" comincia proprio dove il pannello finisce; il
-	// fuoco non viene spostato, perché chi ha cliccato altrove ha già deciso
-	// dove guardare.
+	// Un clic fuori dalla riga chiude il popover, in qualunque ambito sia aperto.
+	// Sta sul documento e non sul pannello perché "fuori" comincia proprio dove
+	// il pannello finisce; il fuoco non viene spostato, perché chi ha cliccato
+	// altrove ha già deciso dove guardare.
 	document.addEventListener("click", (e) => {
-		if (!conversationModelChoiceOpen) return;
 		if (e.target.closest && e.target.closest(".conv-agent-row")) return;
-		conversationModelChoiceOpen = "";
-		renderConversationPanel();
+		closeChoicePopovers();
 	});
 
 	// ---- Thread rail (US-058) -----------------------------------------------

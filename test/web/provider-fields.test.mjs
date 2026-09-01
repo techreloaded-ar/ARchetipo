@@ -534,28 +534,13 @@ describe("renderProviderFields — opzioni del modello selezionato", () => {
 // sono inventati apposta.
 //
 // Verifica:
-//   - AC-1 il modello ereditato dal workspace è la voce selezionata, e
-//     l'ereditarietà è dichiarata a parole
+//   - AC-1 il modello ereditato dal workspace è quello scritto sulla pastiglia,
+//     e l'ereditarietà è dichiarata a parole
 //   - AC-2 le opzioni mostrate sono quelle del modello selezionato
-//   - AC-6 senza catalogo il motivo è visibile e nessun selettore compare
+//   - AC-6 senza catalogo il motivo è visibile e nessuna pastiglia compare
 // ---------------------------------------------------------------------------
 
 const { renderModelChoice, renderConversationModelChoice } = loadProviderFields();
-
-// Le voci del selettore del modello della run, isolate dal resto del markup.
-function runModelControl(html) {
-	const m = /<select name="run_model"[^>]*>([\s\S]*?)<\/select>/.exec(html);
-	return m ? options(m[1]) : null;
-}
-
-// Le voci del controllo di una opzione della run, per nome.
-function runOptionControl(html, name) {
-	const re = new RegExp(
-		`<select name="run_option_${name}"[^>]*>([\\s\\S]*?)</select>`,
-	);
-	const m = re.exec(html);
-	return m ? options(m[1]) : null;
-}
 
 const CHOICE_VIEW = {
 	available: true,
@@ -581,71 +566,104 @@ const CHOICE_VIEW = {
 	],
 };
 
-describe("renderModelChoice — scelta per la singola run", () => {
-	it("mostra il modello ereditato dal workspace come voce selezionata", () => {
+describe("renderModelChoice — la riga agente della singola run", () => {
+	it("mostra il modello ereditato dal workspace sulla pastiglia", () => {
 		const html = renderModelChoice(CHOICE_VIEW, null);
-		const entries = runModelControl(html);
+		const row = runRow(html);
 
-		assert.ok(entries, "il selettore del modello della run non è stato disegnato");
-		const selected = entries.filter((o) => o.selected);
-		assert.equal(selected.length, 1, "esattamente una voce deve essere selezionata");
+		assert.equal(row.length, 2, "una pastiglia per il modello e una per la sua opzione");
+		assert.equal(row[0].key, "model", "la prima pastiglia non è quella del modello");
 		assert.equal(
-			selected[0].value,
-			"modello-uno",
-			"la voce selezionata non è il modello ereditato dal workspace",
+			row[0].value,
+			"Modello Uno",
+			"la pastiglia non porta scritto il modello ereditato",
 		);
-		const text = visibleText(html);
 		assert.ok(
-			/ereditato dal workspace/i.test(text),
+			!row[0].chosen,
+			"il modello ereditato è segnato come una scelta staccata da lui",
+		);
+		assert.ok(
+			/ereditato dal workspace/i.test(row[0].title + row[0].foot),
 			"l'ereditarietà dal workspace non è dichiarata a parole",
 		);
-		assert.ok(text.includes("Modello Uno"), "il modello ereditato non è leggibile");
+		assert.ok(
+			/si fissa quando la run parte/.test(row[0].title + row[0].foot),
+			"la riga della run parla della conversazione invece che della run",
+		);
 	});
 
 	it("offre le opzioni del modello selezionato e non quelle degli altri", () => {
-		const withOptions = renderModelChoice(CHOICE_VIEW, { model: "modello-uno" });
-		const entries = runOptionControl(withOptions, "sforzo");
-		assert.ok(entries, "l'opzione del modello scelto non è stata disegnata");
+		const withOptions = runRow(
+			renderModelChoice(CHOICE_VIEW, { model: "modello-uno" }),
+		);
+		const option = withOptions.find((cell) => cell.key === "option:sforzo");
+		assert.ok(option, "l'opzione del modello scelto non è stata disegnata");
 		assert.deepEqual(
-			entries.map((o) => o.value),
+			option.segments.map((seg) => seg.value),
 			["", "a", "b"],
-			"la voce vuota più le due scelte dichiarate, in quell'ordine",
+			"il segmento vuoto più le due scelte dichiarate, in quell'ordine",
 		);
 		assert.ok(
-			withOptions.includes('data-run-option="sforzo"'),
-			"il controllo dell'opzione non porta il proprio nome in un attributo dedicato",
+			option.segments.every((seg) => seg.option === "sforzo"),
+			"i segmenti non portano il nome della propria opzione",
 		);
 
 		const other = renderModelChoice(CHOICE_VIEW, { model: "modello-due" });
 		assert.equal(
-			runOptionControl(other, "sforzo"),
-			null,
-			"l'opzione di un altro modello resta disegnata dopo il cambio di modello",
+			runRow(other).length,
+			1,
+			"un modello senza opzioni disegna comunque una pastiglia di opzione",
 		);
 		assert.ok(
 			!other.includes('data-run-option="'),
 			"un modello senza opzioni disegna comunque un controllo di opzione",
 		);
 		assert.ok(
-			visibleText(other).includes("Questo modello non dichiara nessuna opzione."),
-			"il modello senza opzioni non lo dichiara a parole",
+			!visibleText(other).includes("Questo modello non dichiara nessuna opzione."),
+			"la riga spiega un vuoto invece di non disegnarlo",
 		);
 	});
 
-	it("riporta il valore di opzione già scelto", () => {
-		const entries = runOptionControl(
+	it("riporta il valore di opzione già scelto, sulla pastiglia e nel segmento", () => {
+		const row = runRow(
 			renderModelChoice(CHOICE_VIEW, {
 				model: "modello-uno",
 				options: { sforzo: "b" },
 			}),
-			"sforzo",
 		);
-		const selected = entries.filter((o) => o.selected);
-		assert.equal(selected.length, 1, "esattamente una voce deve essere selezionata");
-		assert.equal(selected[0].value, "b", "la scelta già fatta non è riproposta selezionata");
+		const option = row.find((cell) => cell.key === "option:sforzo");
+		assert.equal(option.value, "Scelta B", "la pastiglia non porta il valore scelto");
+		const pressed = option.segments.filter((seg) => seg.pressed);
+		assert.equal(pressed.length, 1, "esattamente un segmento deve essere premuto");
+		assert.equal(pressed[0].value, "b", "la scelta già fatta non è il segmento premuto");
 	});
 
-	it("dichiara la scelta non disponibile con il motivo", () => {
+	it("disegna la riga di separazione solo nell'elenco dei modelli", () => {
+		const row = runRow(
+			renderModelChoice(CHOICE_VIEW, { model: "modello-uno" }),
+		);
+		assert.ok(
+			row[0].rule,
+			"l'elenco dei modelli non è separato dalla sua nota",
+		);
+		assert.ok(
+			!row.find((cell) => cell.key === "option:sforzo").rule,
+			"i segmenti di un'opzione sono separati dal loro stesso aiuto",
+		);
+	});
+
+	it("apre il popover che `open` nomina, e uno solo", () => {
+		const row = runRow(
+			renderModelChoice(CHOICE_VIEW, { model: "modello-uno" }, "option:sforzo"),
+		);
+		assert.deepEqual(
+			row.filter((cell) => cell.open).map((cell) => cell.key),
+			["option:sforzo"],
+			"l'apertura non segue la chiave passata dal chiamante",
+		);
+	});
+
+	it("dichiara la scelta non disponibile con il motivo, senza pastiglie", () => {
 		const html = renderModelChoice(
 			{
 				available: false,
@@ -655,16 +673,20 @@ describe("renderModelChoice — scelta per la singola run", () => {
 			},
 			null,
 		);
-		const text = visibleText(html);
 
 		assert.ok(
-			text.includes("il catalogo non è ottenibile"),
-			"il motivo dell'indisponibilità non è visibile",
+			html.includes("il catalogo non è ottenibile"),
+			"il motivo dell'indisponibilità non è raggiungibile",
 		);
-		assert.ok(text.includes("modello-uno"), "il modello effettivo non è dichiarato");
 		assert.ok(
-			!html.includes("<select"),
-			"la scelta non disponibile disegna comunque un selettore",
+			visibleText(html).includes("modello-uno"),
+			"il modello effettivo non è dichiarato",
+		);
+		assert.ok(!html.includes("<select"), "la scelta non disponibile disegna un selettore");
+		assert.equal(
+			runRow(html).length,
+			0,
+			"la scelta non disponibile offre pastiglie da premere invano",
 		);
 	});
 
@@ -718,7 +740,7 @@ describe("renderModelChoice — scelta per la singola run", () => {
 			{ available: false },
 		];
 		for (const view of partials) {
-			const html = renderModelChoice(view, null);
+			const html = renderModelChoice(view, null, "model");
 			assert.equal(typeof html, "string", "il renderer non ha restituito una stringa");
 		}
 	});
@@ -729,26 +751,39 @@ describe("renderModelChoice — scelta per la singola run", () => {
 	// L'unico caso in cui la voce vuota dice il vero è quando è già lei quella
 	// in vigore.
 	it("non offre la voce vuota sopra un modello ereditato", () => {
-		const entries = runModelControl(renderModelChoice(CHOICE_VIEW, null));
+		const row = runRow(renderModelChoice(CHOICE_VIEW, null));
 
-		assert.ok(entries, "il selettore del modello della run non è stato disegnato");
 		assert.ok(
-			!entries.some((o) => o.value === ""),
+			!row[0].entries.some((entry) => entry.value === ""),
 			"la voce vuota è offerta anche se un modello è già in vigore",
 		);
 	});
 
 	it("offre la voce vuota quando è il modello ereditato a essere vuoto", () => {
-		const entries = runModelControl(
-			renderModelChoice({ ...CHOICE_VIEW, model: "" }, null),
-		);
+		const row = runRow(renderModelChoice({ ...CHOICE_VIEW, model: "" }, null));
+		const empty = row[0].entries.filter((entry) => entry.value === "");
 
-		assert.ok(entries, "il selettore del modello della run non è stato disegnato");
-		const empty = entries.filter((o) => o.value === "");
 		assert.equal(empty.length, 1, "la voce vuota deve essere offerta una sola volta");
+		assert.ok(empty[0].checked, "la voce vuota in vigore non è quella spuntata");
+	});
+
+	it("i due ambiti disegnano la stessa riga con marcatori distinti", () => {
+		const selection = { model: "modello-uno", options: { sforzo: "b" } };
+		const run = renderModelChoice(CHOICE_VIEW, selection);
+		const conversation = renderConversationModelChoice(CHOICE_VIEW, selection);
+
+		assert.deepEqual(
+			runRow(run).map((cell) => [cell.key, cell.value]),
+			agentRow(conversation).map((cell) => [cell.key, cell.value]),
+			"le due righe non offrono le stesse pastiglie con gli stessi valori",
+		);
 		assert.ok(
-			empty[0].selected,
-			"la voce vuota in vigore non è quella selezionata",
+			!run.includes("data-conversation-"),
+			"la riga della run porta i marcatori della conversazione",
+		);
+		assert.ok(
+			!conversation.includes("data-run-"),
+			"la riga della conversazione porta i marcatori della run",
 		);
 	});
 });
@@ -776,10 +811,12 @@ function between(chunk, opening, closing) {
 }
 
 // Le voci dell'elenco dei modelli dentro un popover.
-function modelEntries(chunk) {
+function modelEntries(chunk, scope = "conversation") {
 	const out = [];
-	const re =
-		/<button [^>]*data-conversation-model-choice="([^"]*)"[^>]*>([\s\S]*?)<\/button>/g;
+	const re = new RegExp(
+		`<button [^>]*data-${scope}-model-choice="([^"]*)"[^>]*>([\\s\\S]*?)</button>`,
+		"g",
+	);
 	let m;
 	while ((m = re.exec(chunk)) !== null) {
 		const open = m[0].slice(0, m[0].indexOf(">") + 1);
@@ -794,10 +831,12 @@ function modelEntries(chunk) {
 }
 
 // I segmenti di un'opzione dentro un popover.
-function optionSegments(chunk) {
+function optionSegments(chunk, scope = "conversation") {
 	const out = [];
-	const re =
-		/<button [^>]*data-conversation-option="([^"]*)" data-conversation-option-choice="([^"]*)"[^>]*>([\s\S]*?)<\/button>/g;
+	const re = new RegExp(
+		`<button [^>]*data-${scope}-option="([^"]*)" data-${scope}-option-choice="([^"]*)"[^>]*>([\\s\\S]*?)</button>`,
+		"g",
+	);
 	let m;
 	while ((m = re.exec(chunk)) !== null) {
 		const open = m[0].slice(0, m[0].indexOf(">") + 1);
@@ -811,21 +850,29 @@ function optionSegments(chunk) {
 	return out;
 }
 
-// La riga come una lista di pastiglie, ognuna con il suo popover.
-function agentRow(html) {
+// La riga come una lista di pastiglie, ognuna con il suo popover. Lo stesso
+// helper legge le due righe che il modulo disegna — quella della conversazione e
+// quella della run — perché è lo stesso markup sotto un altro prefisso.
+function agentRow(html, scope = "conversation") {
 	return html
 		.split('<span class="conv-pill-shell">')
 		.slice(1)
 		.map((chunk) => ({
-			key: firstAttribute(chunk, "data-conversation-pill"),
+			key: firstAttribute(chunk, `data-${scope}-pill`),
 			value: between(chunk, '<span class="conv-pill-value">', "</span>"),
 			title: firstAttribute(chunk, "title"),
 			chosen: /class="conv-pill is-chosen"/.test(chunk),
-			open: !/data-conversation-pop="[^"]*" hidden>/.test(chunk),
+			open: !new RegExp(`data-${scope}-pop="[^"]*" hidden>`).test(chunk),
 			foot: between(chunk, '<div class="conv-pop-foot">', "</div>"),
-			entries: modelEntries(chunk),
-			segments: optionSegments(chunk),
+			rule: chunk.includes('<div class="conv-pop-rule"></div>'),
+			entries: modelEntries(chunk, scope),
+			segments: optionSegments(chunk, scope),
 		}));
+}
+
+// La riga della run, letta dallo stesso helper con l'altro prefisso.
+function runRow(html) {
+	return agentRow(html, "run");
 }
 
 describe("renderConversationModelChoice — la riga agente", () => {
