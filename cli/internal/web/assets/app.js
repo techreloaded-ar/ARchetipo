@@ -3960,7 +3960,21 @@
 	function closeChoicePopovers() {
 		choicePopoverClosers.forEach((close) => close());
 	}
-	window.addEventListener("scroll", closeChoicePopovers, true);
+	// Uno scorrimento chiude il popover solo se muove la pastiglia a cui è
+	// ancorato — cioè se l'elemento scorso contiene il popover aperto. La
+	// timeline della conversazione non lo contiene: sta sopra la riga, e il suo
+	// scrollTop viene ripristinato dal renderer a ogni ridisegno — compreso il
+	// ridisegno che ha appena aperto il popover, il cui scroll lo chiuderebbe
+	// sul nascere.
+	window.addEventListener(
+		"scroll",
+		(e) => {
+			const pop = document.querySelector(".conv-pop:not([hidden])");
+			if (pop && e.target !== document && !e.target.contains(pop)) return;
+			closeChoicePopovers();
+		},
+		true,
+	);
 	window.addEventListener("resize", closeChoicePopovers);
 
 	// ---- Spec actions --------------------------------------------------------
