@@ -1426,7 +1426,9 @@ describe("renderConversation — passo successivo", () => {
 // opzioni che quel modello dichiara — l'effort fra queste. Il solo
 // identificativo del provider diceva il terzo meno interessante del fatto.
 describe("l'agente nominato in testata", () => {
-	it("mette in fila provider, modello e opzioni del modello", () => {
+	it("nomina il solo provider anche quando il payload porta modello e opzioni", () => {
+		// Modello ed effort stanno già sulla riga agente accanto al compositore:
+		// ripeterli in testata sarebbe dirli due volte nello stesso pannello.
 		const html = renderConversation(
 			withConversation({
 				provider_id: "fornitore",
@@ -1438,25 +1440,12 @@ describe("l'agente nominato in testata", () => {
 
 		assert.match(
 			html,
-			/class="conv-provider"[^>]*>Fornitore Modello LIVELLO-X</,
-			"la testata non nomina modello e opzioni accanto al provider",
+			/class="conv-provider"[^>]*>Fornitore</,
+			"la testata non nomina il provider",
 		);
-	});
-
-	it("ordina le opzioni per nome, così due letture non divergono", () => {
-		const html = renderConversation(
-			withConversation({
-				provider_id: "fornitore",
-				model: "modello",
-				model_options: { zeta: "ULTIMA", alfa: "PRIMA" },
-			}),
-			"",
-		);
-
-		assert.match(
-			html,
-			/class="conv-provider"[^>]*>Fornitore Modello PRIMA ULTIMA</,
-			"le opzioni non sono in ordine di nome",
+		assert.ok(
+			!/class="conv-provider"[^>]*>[^<]*(Modello|LIVELLO-X)/.test(html),
+			"la testata ripete modello o opzioni accanto al provider",
 		);
 	});
 
@@ -1470,7 +1459,7 @@ describe("l'agente nominato in testata", () => {
 
 		assert.match(
 			html,
-			/class="conv-provider"[^>]*>fornitore-2 modello\.9</,
+			/class="conv-provider"[^>]*>fornitore-2</,
 			"un identificativo composto è stato riscritto",
 		);
 	});

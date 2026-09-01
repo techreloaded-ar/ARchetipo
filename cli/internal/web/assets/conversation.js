@@ -1145,31 +1145,6 @@
 		return value.charAt(0).toUpperCase() + value.slice(1);
 	}
 
-	// Who is answering, in one line: the provider, the model it is running, and
-	// the values of whatever options that model declares — the effort level
-	// among them. The provider id alone said the least interesting third of it:
-	// the same provider answers with a different model and a different reasoning
-	// budget from one workspace to the next, and that is the part worth reading.
-	//
-	// Every piece is optional and each missing one simply drops out, so a
-	// provider that declares no catalog still reads as its own name and nothing
-	// is ever drawn as an empty slot.
-	function agentLabel(view) {
-		const parts = [];
-		const provider = displayName(textAt(view, "provider_id"));
-		if (provider) parts.push(provider);
-		const model = displayName(textAt(view, "model"));
-		if (model) parts.push(model);
-		const options = objectAt(view, "model_options");
-		if (options) {
-			for (const key of Object.keys(options).sort()) {
-				const value = textAt(options, key);
-				if (value) parts.push(value);
-			}
-		}
-		return parts.join(" ");
-	}
-
 	// `controls` is whatever the caller wants at the right end of the band —
 	// today the close control, and only while the conversation is live. The head
 	// does not decide what belongs there and never builds it: it is handed the
@@ -1178,7 +1153,10 @@
 		const dir = objectAt(view, "conversation")
 			? textAt(objectAt(view, "conversation"), "working_dir")
 			: "";
-		const agent = agentLabel(view);
+		// La testata nomina il solo provider: modello ed effort stanno già sulla
+		// riga agente accanto al compositore, e ripeterli qui era dirli due
+		// volte nello stesso pannello.
+		const agent = displayName(textAt(view, "provider_id"));
 		const dirHtml = dir
 			? `<code class="conv-dir" title="${escapeHtml(dir)}">${escapeHtml(dir)}</code>`
 			: "";
