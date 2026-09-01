@@ -5700,6 +5700,14 @@ body.no-workspace [data-workspace-scoped] {
 	transform: rotate(90deg);
 }
 
+/* Il comando che ripiega una sola riga tecnica: sta nella testata della riga,
+   porta solo la freccetta, e si sposta a fine riga per non rubare spazio al
+   nome di cio' che ripiega. */
+.conv-event-fold {
+	margin-left: auto;
+	padding: 2px 4px;
+}
+
 /* Lo stesso comando dentro un blocco run: si allinea al margine del log che
    apre, invece di partire dal bordo del blocco. */
 .conv-run-log-toggle {

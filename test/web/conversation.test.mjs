@@ -1766,6 +1766,51 @@ describe("la ripresa di una conversazione finita", () => {
 		assert.match(aperta, /RISPOSTA-AGENTE/, "aprire la piega si è portata via la risposta");
 	});
 
+	it("dentro la piega aperta, ogni riga con un corpo si ripiega da sola", () => {
+		// Un esito di strumento lungo non deve costringere a richiudere tutta
+		// la piega: la riga porta il proprio comando, con chiave `t<id>`, e
+		// ripiegata tiene il nome dello strumento e lascia andare l'esito.
+		const aperta = renderConversation(CON_STRUMENTI, "", { technicalAll: true });
+		assert.ok(
+			aperta.includes('data-conversation-technical-toggle="t4"'),
+			"la riga dello strumento non offre il comando per ripiegarsi",
+		);
+		const ripiegata = visibleText(
+			renderConversation(CON_STRUMENTI, "", {
+				technicalAll: true,
+				technicalOpen: { t4: true },
+			}),
+		);
+		assert.ok(
+			!ripiegata.includes("ESITO-STRUMENTO"),
+			"ripiegata, la riga mostra ancora l'esito dello strumento",
+		);
+		assert.match(
+			ripiegata,
+			/AVVIO-STRUMENTO/,
+			"ripiegare una riga ha ripiegato anche le sue vicine",
+		);
+		assert.match(
+			ripiegata,
+			/RAGIONAMENTO-INTERNO/,
+			"ripiegare una riga ha ripiegato il ragionamento",
+		);
+	});
+
+	it("fuori dalla piega le righe non offrono il comando della singola riga", () => {
+		// La risposta dell'agente e la frase di chi scrive non sono lavorazione:
+		// non hanno niente da ripiegare, e un comando lì non comanderebbe nulla.
+		const html = renderConversation(CON_STRUMENTI, "", {});
+		assert.ok(
+			!html.includes('data-conversation-technical-toggle="t1"'),
+			"la frase di chi scrive porta un comando di piega che non le spetta",
+		);
+		assert.ok(
+			!html.includes('data-conversation-technical-toggle="t5"'),
+			"la risposta dell'agente porta un comando di piega che non le spetta",
+		);
+	});
+
 	it("il comando della testata apre il dettaglio di tutta la conversazione", () => {
 		const html = renderConversation(CON_STRUMENTI, "", {});
 		assert.ok(

@@ -173,6 +173,8 @@
 		technicalMany: (howMany) => `${howMany} passaggi tecnici`,
 		technicalReveal: "Mostra questi passaggi",
 		technicalFold: "Ripiega questi passaggi",
+		technicalRowReveal: "Mostra questo passaggio",
+		technicalRowFold: "Ripiega questo passaggio",
 		technicalFailed: "con errore",
 		// Il comando della testata vale per tutta la conversazione e resta
 		// scelto: chi lavora al dettaglio tecnico non deve riaprirlo a ogni
@@ -312,7 +314,7 @@
 	// head and the text. The id is shown because it is what makes the cursor
 	// legible — a reader can see that the history went 5, 6, 7 and repeated
 	// nothing.
-	function renderEvent(event) {
+	function renderEvent(event, ui) {
 		if (!event || typeof event !== "object") return "";
 		const kind = typeof event.kind === "string" ? event.kind : "";
 		const entry = known(EVENT_KINDS, kind) ? EVENT_KINDS[kind] : null;
@@ -336,11 +338,31 @@
 			lines.push(`<p class="conv-event-text">${escapeHtml(text)}</p>`);
 		}
 		const id = event.id === null || event.id === undefined ? "" : String(event.id);
-		return `<li class="conv-event ${variant}">
+		// Dentro una piega aperta — ed e' l'unico caso in cui il chiamante
+		// passa `ui` — ogni riga con un corpo si puo' ripiegare da sola: un
+		// esito di strumento lungo non deve costringere a richiudere tutta la
+		// piega per riavere la conversazione. La chiave e' `t<id>`, disgiunta
+		// per costruzione dalle chiavi `e<id>` delle pieghe, e vive nella
+		// stessa tabella technicalOpen: presente significa ripiegata, perche'
+		// qui il difetto e' l'opposto della piega — la riga nasce aperta.
+		const foldKey = ui && id && text ? `t${id}` : "";
+		const folded =
+			foldKey !== "" &&
+			(objectAt(ui, "technicalOpen") || {})[foldKey] === true;
+		if (foldKey) {
+			const command = folded ? TEXT.technicalRowReveal : TEXT.technicalRowFold;
+			head.push(
+				`<button type="button" class="conv-tech-toggle conv-event-fold" data-conversation-technical-toggle="${escapeHtml(foldKey)}" aria-expanded="${folded ? "false" : "true"}" title="${escapeHtml(command)}"><span class="conv-tech-caret${folded ? "" : " is-open"}" aria-hidden="true"></span></button>`,
+			);
+		}
+		// Ripiegata, di uno strumento resta il nome; di ogni altra riga resta
+		// la testata, che ne dice il tipo e l'ora.
+		const body = folded ? (event.tool ? [lines[0]] : []) : lines;
+		return `<li class="conv-event ${variant}${folded ? " is-folded" : ""}">
 			<div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#${escapeHtml(id)}</div>
 			<div class="conv-event-body">
 				<div class="conv-event-head">${head.join("")}</div>
-				${lines.join("")}
+				${body.join("")}
 			</div>
 		</li>`;
 	}
@@ -494,7 +516,7 @@
 			? `<span class="conv-tech-failed">${escapeHtml(TEXT.technicalFailed)}</span>`
 			: "";
 		const listHtml = open
-			? `<ol class="conv-tech-list">${rows.map(renderEvent).join("")}</ol>`
+			? `<ol class="conv-tech-list">${rows.map((row) => renderEvent(row, local)).join("")}</ol>`
 			: "";
 
 		return `<li class="conv-tech${open ? " is-open" : ""}${failed ? " has-error" : ""}">

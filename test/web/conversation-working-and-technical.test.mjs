@@ -296,6 +296,17 @@ describe("il pannello passa al renderer ciò che il renderer non può sapere", (
 		assert.match(js, /localStorage\.setItem\(\s*CONVERSATION_TECHNICAL_KEY/);
 	});
 
+	it("il comando della testata azzera anche le pieghe aperte a mano", () => {
+		// «Ripiega il dettaglio tecnico» deve ripiegare tutto: senza l'azzeramento
+		// una piega aperta una per una restava aperta, e il comando non
+		// comandava cio' che dice.
+		const commuta = functionOf(js, "toggleConversationTechnicalAll");
+		assert.ok(
+			commuta.includes("conversationTechnicalOpen = {}"),
+			"commutare il dettaglio tecnico non dimentica le pieghe aperte a mano",
+		);
+	});
+
 	it("le pieghe aperte si dimenticano cambiando conversazione", () => {
 		// Una piega aperta appartiene alla conversazione in cui è stata aperta:
 		// sotto un'altra sarebbe una scelta fatta su qualcos'altro.

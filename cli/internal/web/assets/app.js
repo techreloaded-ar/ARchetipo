@@ -5353,11 +5353,12 @@
 	// o senza il dettaglio tecnico — e la scelta resta scritta: e' di chi
 	// guarda, non della conversazione che ha davanti.
 	//
-	// Riaccendendola le pieghe aperte a mano non vengono dimenticate: spegnerla
-	// riporta esattamente allo stato di prima invece di richiudere anche quello
-	// che era stato aperto uno per uno.
+	// Il comando della testata azzera anche le pieghe aperte una per una:
+	// «Ripiega il dettaglio tecnico» deve ripiegare *tutto*, comprese quelle —
+	// altrimenti il comando non comanda cio' che dice.
 	function toggleConversationTechnicalAll() {
 		conversationTechnicalAll = !conversationTechnicalAll;
+		conversationTechnicalOpen = {};
 		try {
 			localStorage.setItem(
 				CONVERSATION_TECHNICAL_KEY,
