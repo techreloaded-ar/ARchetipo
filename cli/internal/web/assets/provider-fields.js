@@ -309,10 +309,13 @@
 		return `<div class="conv-pop-eyebrow">${escapeHtml(text)}</div>`;
 	}
 
-	function renderRowFoot(text) {
-		return text
-			? `<div class="conv-pop-rule"></div><div class="conv-pop-foot">${escapeHtml(text)}</div>`
-			: "";
+	// La riga di separazione la chiede chi disegna il popover, non il piede:
+	// separa l'elenco dei modelli dalla sua nota, ma sotto i segmenti di
+	// un'opzione dividerebbe un gruppo solo dal suo stesso aiuto.
+	function renderRowFoot(text, withRule) {
+		if (!text) return "";
+		const rule = withRule ? '<div class="conv-pop-rule"></div>' : "";
+		return `${rule}<div class="conv-pop-foot">${escapeHtml(text)}</div>`;
 	}
 
 	/** Una voce dell'elenco dei modelli. */
@@ -391,7 +394,7 @@
 		return (
 			renderRowEyebrow(option.label || name) +
 			renderRowSegments(option, value) +
-			renderRowFoot(option.help || "")
+			renderRowFoot(option.help || "", false)
 		);
 	}
 
@@ -430,7 +433,7 @@
 						model,
 						naming.alwaysOfferEmpty !== false || model === "",
 					) +
-					renderRowFoot(`${inheritedNote}${ROW_MODEL_FIXED_COPY}`),
+					renderRowFoot(`${inheritedNote}${ROW_MODEL_FIXED_COPY}`, true),
 			),
 		);
 

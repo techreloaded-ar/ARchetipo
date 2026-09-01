@@ -5069,7 +5069,6 @@ body.no-workspace [data-workspace-scoped] {
 
 .conv-empty-command {
 	gap: var(--space-3);
-	width: 100%;
 }
 
 .conv-agent-row {
@@ -5085,7 +5084,6 @@ body.no-workspace [data-workspace-scoped] {
 .conv-empty-command .conv-agent-row {
 	align-self: center;
 	padding-bottom: 0;
-	margin-right: auto;
 }
 
 .conv-pill-shell {
@@ -5152,9 +5150,10 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 .conv-agent-dot {
+	padding: 0 2px;
 	color: var(--text-dim);
-	opacity: 0.5;
-	font-size: 12px;
+	opacity: 0.8;
+	font-size: 13px;
 }
 
 /* Ciò che si legge e non si preme: il modello fissato di una conversazione
@@ -5178,27 +5177,34 @@ body.no-workspace [data-workspace-scoped] {
 	opacity: 0.7;
 }
 
-/* Il popover si apre verso l'alto: la riga vive in fondo al pannello, e sotto
-   di lei non c'è posto. Nel compositore si ancora a destra e nello stato vuoto a
-   sinistra, cioè dal lato in cui il pannello ha spazio: dall'altro uscirebbe
-   dallo schermo. */
+/* Il popover sta fuori dal flusso del pannello, e deve: il pannello ritaglia
+   sui propri angoli arrotondati (`.conv-panel { overflow: hidden }`), e un
+   popover ancorato dentro di lui verrebbe tagliato al suo bordo. Fisso rispetto
+   al viewport non lo tocca nessun `overflow`, e le colonne che scorrono non se
+   lo portano via.
+
+   Dove si colloca non lo dice qui nessuna regola: lo decide il JS sul rettangolo
+   della pastiglia, perché sopra o sotto e quanto a sinistra dipendono dallo
+   spazio che c'è in quel momento, e il CSS non lo sa. `top`/`left` qui sono solo
+   il punto da cui si parte prima della prima misura.
+
+   La larghezza la porta il contenuto: sei segmenti in 264px fissi finivano a
+   ~40px l'uno e troncavano la parola. */
 .conv-pop {
-	position: absolute;
-	bottom: calc(100% + 8px);
-	right: 0;
-	width: 264px;
-	max-width: 78vw;
+	position: fixed;
+	top: 0;
+	left: 0;
+	min-width: 264px;
+	max-width: min(92vw, 420px);
 	padding: 6px;
 	border: 1px solid var(--border);
 	border-radius: 12px;
 	background: var(--surface);
 	box-shadow: var(--shadow);
-	z-index: 30;
-}
-
-.conv-empty-command .conv-pop {
-	right: auto;
-	left: 0;
+	/* Sopra la topbar, come ogni altro menu che si apre (`.dropdown-menu`): a
+	   30 il popover ci passava sotto e l'occhiello finiva coperto. Sotto i
+	   modali, che restano la cosa più in alto della pagina. */
+	z-index: 60;
 }
 
 .conv-pop-eyebrow {
@@ -5277,17 +5283,21 @@ body.no-workspace [data-workspace-scoped] {
 	color: var(--text-dim);
 }
 
+/* Vanno a capo invece di stringersi: quante scelte dichiari è cosa del
+   provider, e sei non è più un caso particolare di quattro. */
 .conv-segments {
 	display: flex;
+	flex-wrap: wrap;
 	gap: 4px;
 	padding: 2px 6px 6px;
 }
 
 .conv-segment {
-	flex: 1;
-	min-width: 0;
+	/* Larghi quanto la loro parola, mai meno: è il troncamento che si sta
+	   correggendo, quindi niente `min-width: 0` sotto cui rimpicciolire. */
+	flex: 0 1 auto;
 	height: 30px;
-	padding: 0 6px;
+	padding: 0 10px;
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--surface-2);

@@ -3760,6 +3760,92 @@
 		return keys.every((key) => b[key] === a[key]);
 	}
 
+	// ---- La riga agente, in comune fra i suoi ambiti -------------------------
+	//
+	// La stessa riga di pastiglie è disegnata più di una volta — per la
+	// conversazione, per la run di una spec — e i marcatori la distinguono per
+	// prefisso. Quello che non cambia è come la si guarda e come la si percorre:
+	// dove va a finire un popover, che cosa prende il fuoco, come le frecce
+	// camminano sulle voci. Sta qui una volta sola perché è la stessa riga
+	// disegnata due volte, non due componenti che si somigliano.
+
+	const CHOICE_POP_GAP = 8; // fra la pastiglia e il suo popover
+	const CHOICE_POP_EDGE = 8; // fra il popover e il bordo del viewport
+
+	// Le frecce dentro un popover: su e giù per un elenco di voci, sinistra e
+	// destra per un gruppo di segmenti. Sono la stessa camminata sulla stessa
+	// lista, quindi sono una tabella sola e non due rami.
+	const CHOICE_STEPS = {
+		ArrowDown: 1,
+		ArrowRight: 1,
+		ArrowUp: -1,
+		ArrowLeft: -1,
+	};
+
+	/** Le voci percorribili di un popover, nell'ordine in cui si percorrono. */
+	function choiceItems(pop) {
+		return pop
+			? Array.prototype.slice.call(
+					pop.querySelectorAll(".conv-pop-entry, .conv-segment"),
+				)
+			: [];
+	}
+
+	// Il DOM della riga è nuovo dopo ogni ridisegno: ciò che aveva il fuoco si
+	// ritrova per chiave e non si tiene per riferimento. Il confronto è
+	// sull'attributo e non su un selettore composto, perché il nome di
+	// un'opzione lo dichiara il provider e potrebbe contenere una virgoletta.
+	function choiceNode(root, attribute, key) {
+		if (!root || !key) return null;
+		const nodes = root.querySelectorAll(`[${attribute}]`);
+		for (let i = 0; i < nodes.length; i++) {
+			if (nodes[i].getAttribute(attribute) === key) return nodes[i];
+		}
+		return null;
+	}
+
+	// Il popover è `position: fixed` — deve esserlo, perché il pannello ritaglia
+	// sui propri angoli e le colonne della spec scorrono — quindi il posto glielo
+	// dà chi lo disegna e non il CSS: sopra la pastiglia se sopra c'è spazio,
+	// sotto altrimenti, e in ogni caso dentro i bordi del viewport da entrambi i
+	// lati. Si misura dopo il ridisegno, perché prima il popover da collocare non
+	// esiste ancora.
+	function placeChoicePopover(root, prefix) {
+		const pop = root
+			? root.querySelector(`[data-${prefix}-pop]:not([hidden])`)
+			: null;
+		if (!pop) return;
+		const pill = choiceNode(
+			root,
+			`data-${prefix}-pill`,
+			pop.getAttribute(`data-${prefix}-pop`) || "",
+		);
+		if (!pill) return;
+		const anchor = pill.getBoundingClientRect();
+		const box = pop.getBoundingClientRect();
+		const above = anchor.top - box.height - CHOICE_POP_GAP;
+		pop.style.top = `${
+			above >= CHOICE_POP_EDGE ? above : anchor.bottom + CHOICE_POP_GAP
+		}px`;
+		pop.style.left = `${Math.max(
+			CHOICE_POP_EDGE,
+			Math.min(anchor.left, window.innerWidth - box.width - CHOICE_POP_EDGE),
+		)}px`;
+	}
+
+	// Un popover aperto si chiude quando la pagina si muove sotto di lui: è
+	// fisso al viewport, quindi resterebbe fermo mentre la sua pastiglia scorre
+	// via. Chiudere è la risposta più semplice e non lo lascia mai staccato da
+	// ciò che sta scegliendo; ricollocarlo a ogni pixel sarebbe più codice per un
+	// gesto che nessuno fa mentre sceglie. In cattura, perché a scorrere sono le
+	// colonne interne e non la finestra.
+	const choicePopoverClosers = [];
+	function closeChoicePopovers() {
+		choicePopoverClosers.forEach((close) => close());
+	}
+	window.addEventListener("scroll", closeChoicePopovers, true);
+	window.addEventListener("resize", closeChoicePopovers);
+
 	// ---- Spec actions --------------------------------------------------------
 
 	// renderSpecActions shows the actions the workspace process Template admits
@@ -5074,15 +5160,6 @@
 	// degli avvisi chiusi: il pannello si ridisegna a ogni giro di poll, quindi
 	// un'apertura che vivesse nel DOM si richiuderebbe da sola in un secondo.
 	let conversationModelChoiceOpen = "";
-	// Le frecce dentro un popover: su e giù per un elenco di voci, sinistra e
-	// destra per un gruppo di segmenti. Sono la stessa camminata sulla stessa
-	// lista, quindi sono una tabella sola e non due rami.
-	const CONVERSATION_CHOICE_STEPS = {
-		ArrowDown: 1,
-		ArrowRight: 1,
-		ArrowUp: -1,
-		ArrowLeft: -1,
-	};
 	// La scelta di tenerle *tutte* aperte, invece, e' di chi guarda e non della
 	// conversazione: chi lavora al dettaglio tecnico lo vuole aperto sempre, e
 	// non deve ridirlo a ogni conversazione ne' domani mattina.
@@ -5450,14 +5527,12 @@
 			const pop = e.target.closest
 				? e.target.closest("[data-conversation-pop]")
 				: null;
-			if (pop && CONVERSATION_CHOICE_STEPS[e.key] !== undefined) {
-				const items = Array.prototype.slice.call(
-					pop.querySelectorAll(".conv-pop-entry, .conv-segment"),
-				);
+			if (pop && CHOICE_STEPS[e.key] !== undefined) {
+				const items = choiceItems(pop);
 				const at = items.indexOf(e.target);
 				if (at === -1) return;
 				e.preventDefault();
-				const step = CONVERSATION_CHOICE_STEPS[e.key];
+				const step = CHOICE_STEPS[e.key];
 				items[(at + step + items.length) % items.length].focus();
 				return;
 			}
@@ -5473,6 +5548,12 @@
 	}
 
 	bindConversationPanel(conversationEl);
+
+	choicePopoverClosers.push(() => {
+		if (!conversationModelChoiceOpen) return;
+		conversationModelChoiceOpen = "";
+		renderConversationPanel();
+	});
 
 	// Un clic fuori dalla riga chiude il popover. Sta sul documento e non sul
 	// pannello perché "fuori" comincia proprio dove il pannello finisce; il
@@ -5737,26 +5818,12 @@
 	// sull'attributo e non su un selettore composto, perché il nome di
 	// un'opzione lo dichiara il provider e potrebbe contenere una virgoletta.
 	function conversationChoiceNode(attribute, key) {
-		if (!conversationEl || !key) return null;
-		const nodes = conversationEl.querySelectorAll(`[${attribute}]`);
-		for (let i = 0; i < nodes.length; i++) {
-			if (nodes[i].getAttribute(attribute) === key) return nodes[i];
-		}
-		return null;
+		return choiceNode(conversationEl, attribute, key);
 	}
 
 	function focusConversationPill(key) {
 		const pill = conversationChoiceNode("data-conversation-pill", key);
 		if (pill) pill.focus();
-	}
-
-	/** Le voci percorribili di un popover, nell'ordine in cui si percorrono. */
-	function conversationChoiceItems(pop) {
-		return pop
-			? Array.prototype.slice.call(
-					pop.querySelectorAll(".conv-pop-entry, .conv-segment"),
-				)
-			: [];
 	}
 
 	// Che cosa della riga agente teneva il fuoco: la pastiglia — indice -1 — o
@@ -5772,7 +5839,7 @@
 		if (!pop) return null;
 		return {
 			key: pop.getAttribute("data-conversation-pop") || "",
-			index: conversationChoiceItems(pop).indexOf(focused),
+			index: choiceItems(pop).indexOf(focused),
 		};
 	}
 
@@ -5782,7 +5849,7 @@
 	function restoreConversationChoiceFocus(place) {
 		if (!place) return;
 		if (place.index < 0) return focusConversationPill(place.key);
-		const items = conversationChoiceItems(
+		const items = choiceItems(
 			conversationChoiceNode("data-conversation-pop", place.key),
 		);
 		if (!items.length) return focusConversationPill(place.key);
@@ -6632,6 +6699,7 @@
 			}
 		}
 		restoreConversationChoiceFocus(agentRowFocus);
+		placeChoicePopover(conversationEl, "conversation");
 	}
 
 	// ---- API helpers --------------------------------------------------------
