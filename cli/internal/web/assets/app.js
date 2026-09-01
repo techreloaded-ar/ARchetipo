@@ -5069,6 +5069,20 @@
 	// su schermo e si dimentica con lei, come gli avvisi chiusi: una piega
 	// aperta qui non deve stare aperta in un'altra conversazione.
 	let conversationTechnicalOpen = {}; // chiave piega → true
+	// Quale popover della riga agente è aperto — "model", "option:<nome>",
+	// "more" — o "" se nessuno. Vale la stessa regola delle pieghe tecniche e
+	// degli avvisi chiusi: il pannello si ridisegna a ogni giro di poll, quindi
+	// un'apertura che vivesse nel DOM si richiuderebbe da sola in un secondo.
+	let conversationModelChoiceOpen = "";
+	// Le frecce dentro un popover: su e giù per un elenco di voci, sinistra e
+	// destra per un gruppo di segmenti. Sono la stessa camminata sulla stessa
+	// lista, quindi sono una tabella sola e non due rami.
+	const CONVERSATION_CHOICE_STEPS = {
+		ArrowDown: 1,
+		ArrowRight: 1,
+		ArrowUp: -1,
+		ArrowLeft: -1,
+	};
 	// La scelta di tenerle *tutte* aperte, invece, e' di chi guarda e non della
 	// conversazione: chi lavora al dettaglio tecnico lo vuole aperto sempre, e
 	// non deve ridirlo a ogni conversazione ne' domani mattina.
@@ -5251,6 +5265,41 @@
 	function bindConversationPanel(container) {
 		if (!container) return;
 		container.addEventListener("click", (e) => {
+			// La riga agente: una pastiglia apre o chiude il suo popover, una
+			// voce sceglie il modello, un segmento sceglie il valore di
+			// un'opzione. Dopo ogni scelta il popover si chiude e il fuoco torna
+			// sulla pastiglia da cui si era partiti — il ridisegno ha rifatto il
+			// DOM, quindi la si ritrova per chiave.
+			const pill = e.target.closest("[data-conversation-pill]");
+			if (pill) {
+				toggleConversationChoicePopover(
+					pill.getAttribute("data-conversation-pill") || "",
+				);
+				return;
+			}
+			const modelChoice = e.target.closest("[data-conversation-model-choice]");
+			if (modelChoice) {
+				conversationModelChoiceOpen = "";
+				chooseConversationModel(
+					modelChoice.getAttribute("data-conversation-model-choice"),
+				);
+				focusConversationPill("model");
+				return;
+			}
+			const optionChoice = e.target.closest(
+				"[data-conversation-option-choice]",
+			);
+			if (optionChoice) {
+				const pop = optionChoice.closest("[data-conversation-pop]");
+				const key = pop ? pop.getAttribute("data-conversation-pop") || "" : "";
+				conversationModelChoiceOpen = "";
+				chooseConversationOption(
+					optionChoice.getAttribute("data-conversation-option"),
+					optionChoice.getAttribute("data-conversation-option-choice"),
+				);
+				focusConversationPill(key);
+				return;
+			}
 			const noticeDismiss = e.target.closest(
 				"[data-conversation-notice-dismiss]",
 			);
@@ -5374,16 +5423,6 @@
 			e.preventDefault();
 			sendConversationMessage();
 		});
-		container.addEventListener("change", (e) => {
-			const target = e.target;
-			if (!target) return;
-			if (target.hasAttribute("data-conversation-model")) {
-				chooseConversationModel(target.value);
-				return;
-			}
-			const option = target.getAttribute("data-conversation-option");
-			if (option !== null) chooseConversationOption(option, target.value);
-		});
 		container.addEventListener("input", (e) => {
 			const input = e.target.closest(".conv-composer-input");
 			if (!input) return;
@@ -5399,6 +5438,29 @@
 		// scelta dei caratteri e non deve mandare a metà ciò che si sta ancora
 		// scrivendo.
 		container.addEventListener("keydown", (e) => {
+			// Un popover aperto si chiude con Esc e riporta il fuoco alla
+			// pastiglia; dentro di esso le frecce percorrono le voci e i
+			// segmenti come un controllo solo, e Invio è il clic che il
+			// `<button>` fa da sé.
+			if (e.key === "Escape" && conversationModelChoiceOpen) {
+				e.preventDefault();
+				closeConversationChoicePopover();
+				return;
+			}
+			const pop = e.target.closest
+				? e.target.closest("[data-conversation-pop]")
+				: null;
+			if (pop && CONVERSATION_CHOICE_STEPS[e.key] !== undefined) {
+				const items = Array.prototype.slice.call(
+					pop.querySelectorAll(".conv-pop-entry, .conv-segment"),
+				);
+				const at = items.indexOf(e.target);
+				if (at === -1) return;
+				e.preventDefault();
+				const step = CONVERSATION_CHOICE_STEPS[e.key];
+				items[(at + step + items.length) % items.length].focus();
+				return;
+			}
 			const input = e.target.closest(".conv-composer-input");
 			if (!input) return;
 			if (e.key !== "Enter") return;
@@ -5411,6 +5473,17 @@
 	}
 
 	bindConversationPanel(conversationEl);
+
+	// Un clic fuori dalla riga chiude il popover. Sta sul documento e non sul
+	// pannello perché "fuori" comincia proprio dove il pannello finisce; il
+	// fuoco non viene spostato, perché chi ha cliccato altrove ha già deciso
+	// dove guardare.
+	document.addEventListener("click", (e) => {
+		if (!conversationModelChoiceOpen) return;
+		if (e.target.closest && e.target.closest(".conv-agent-row")) return;
+		conversationModelChoiceOpen = "";
+		renderConversationPanel();
+	});
 
 	// ---- Thread rail (US-058) -----------------------------------------------
 	//
@@ -5621,11 +5694,15 @@
 		renderConversationPanel();
 	}
 
+	// Ridisegna, a differenza di prima: il valore non vive più in un `<select>`
+	// che se lo tiene da sé, ma è scritto sulla pastiglia e nel segmento premuto,
+	// e senza ridisegno resterebbero entrambi a dire il valore di prima.
 	function chooseConversationOption(name, value) {
 		const current = currentConversationModelChoice();
 		current.options[String(name)] =
 			value === undefined || value === null ? "" : String(value);
 		conversationModelChoiceSelection = current;
+		renderConversationPanel();
 	}
 
 	function conversationModelOverride() {
@@ -5647,8 +5724,94 @@
 		const render =
 			window.ProviderFields && window.ProviderFields.renderConversationModelChoice;
 		return render
-			? render(conversationModelChoiceView, conversationModelChoiceSelection)
+			? render(
+					conversationModelChoiceView,
+					conversationModelChoiceSelection,
+					conversationModelChoiceOpen,
+				)
 			: "";
+	}
+
+	// Il DOM del pannello è nuovo dopo ogni ridisegno: ciò che aveva il fuoco si
+	// ritrova per chiave e non si tiene per riferimento. Il confronto è
+	// sull'attributo e non su un selettore composto, perché il nome di
+	// un'opzione lo dichiara il provider e potrebbe contenere una virgoletta.
+	function conversationChoiceNode(attribute, key) {
+		if (!conversationEl || !key) return null;
+		const nodes = conversationEl.querySelectorAll(`[${attribute}]`);
+		for (let i = 0; i < nodes.length; i++) {
+			if (nodes[i].getAttribute(attribute) === key) return nodes[i];
+		}
+		return null;
+	}
+
+	function focusConversationPill(key) {
+		const pill = conversationChoiceNode("data-conversation-pill", key);
+		if (pill) pill.focus();
+	}
+
+	/** Le voci percorribili di un popover, nell'ordine in cui si percorrono. */
+	function conversationChoiceItems(pop) {
+		return pop
+			? Array.prototype.slice.call(
+					pop.querySelectorAll(".conv-pop-entry, .conv-segment"),
+				)
+			: [];
+	}
+
+	// Che cosa della riga agente teneva il fuoco: la pastiglia — indice -1 — o
+	// la voce che sta a quel posto nel suo popover. Il pannello si ridisegna
+	// anche a ogni giro di poll, e chi stava scegliendo con la tastiera non deve
+	// perdere il posto perché il server ha risposto.
+	function conversationChoiceFocus(focused) {
+		if (!focused || !focused.closest) return null;
+		if (!focused.closest(".conv-agent-row")) return null;
+		const pillKey = focused.getAttribute("data-conversation-pill");
+		if (pillKey !== null) return { key: pillKey, index: -1 };
+		const pop = focused.closest("[data-conversation-pop]");
+		if (!pop) return null;
+		return {
+			key: pop.getAttribute("data-conversation-pop") || "",
+			index: conversationChoiceItems(pop).indexOf(focused),
+		};
+	}
+
+	// Il posto e non l'elemento: dopo un cambio di modello le voci possono
+	// essere altre, quindi si ripiega sull'ultima e — se il popover non c'è più
+	// — sulla pastiglia.
+	function restoreConversationChoiceFocus(place) {
+		if (!place) return;
+		if (place.index < 0) return focusConversationPill(place.key);
+		const items = conversationChoiceItems(
+			conversationChoiceNode("data-conversation-pop", place.key),
+		);
+		if (!items.length) return focusConversationPill(place.key);
+		items[Math.min(place.index, items.length - 1)].focus();
+	}
+
+	// Aprire un popover porta il fuoco dentro: da tastiera è l'unico modo di
+	// arrivarci, e da mouse non toglie niente a nessuno.
+	function focusConversationPopover(key) {
+		const pop = conversationChoiceNode("data-conversation-pop", key);
+		const first = pop
+			? pop.querySelector(".conv-pop-entry, .conv-segment")
+			: null;
+		if (first) first.focus();
+	}
+
+	function toggleConversationChoicePopover(key) {
+		conversationModelChoiceOpen = conversationModelChoiceOpen === key ? "" : key;
+		renderConversationPanel();
+		if (conversationModelChoiceOpen) focusConversationPopover(key);
+		else focusConversationPill(key);
+	}
+
+	function closeConversationChoicePopover() {
+		if (!conversationModelChoiceOpen) return;
+		const key = conversationModelChoiceOpen;
+		conversationModelChoiceOpen = "";
+		renderConversationPanel();
+		focusConversationPill(key);
 	}
 
 	function prepareConversationOpen(specCode) {
@@ -5664,6 +5827,7 @@
 		conversationOpeningSpecCode = String(specCode || "");
 		conversationModelChoiceSelection = null;
 		conversationModelChoiceView = null;
+		conversationModelChoiceOpen = "";
 		renderConversationsRail();
 		renderConversationPanel();
 		loadConversationModelChoice();
@@ -5697,6 +5861,7 @@
 		// conversazione che si sta lasciando: sotto un'altra sarebbero l'attesa
 		// di qualcun altro. La scelta di tenere il dettaglio tecnico sempre
 		// aperto invece resta: quella e' di chi guarda.
+		conversationModelChoiceOpen = "";
 		conversationTechnicalOpen = {};
 		conversationWorkingSince = 0;
 		stopConversationWorkingTicker();
@@ -5841,6 +6006,7 @@
 		conversationAnsweredApprovals = {};
 		conversationHighlightAnchor = "";
 		conversationDismissedNotices = {};
+		conversationModelChoiceOpen = "";
 		conversationTechnicalOpen = {};
 		conversationWorkingSince = 0;
 		stopConversationWorkingTicker();
@@ -6316,6 +6482,7 @@
 			focused.classList.contains("conv-composer-input")
 		);
 		const caret = composerHadFocus ? focused.selectionStart : 0;
+		const agentRowFocus = conversationChoiceFocus(focused);
 
 		// The renderer reads the accumulated timeline, not the last page of it:
 		// the cursor means the server only ever sends what is new. Before the
@@ -6464,6 +6631,7 @@
 				input.setSelectionRange(at, at);
 			}
 		}
+		restoreConversationChoiceFocus(agentRowFocus);
 	}
 
 	// ---- API helpers --------------------------------------------------------

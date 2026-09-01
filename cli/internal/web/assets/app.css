@@ -5051,41 +5051,260 @@ body.no-workspace [data-workspace-scoped] {
 	color: var(--text);
 }
 
-/* Model and reasoning are chosen before the provider session is opened. The
-   same block also appears above the composer of a past conversation, because
-   resuming it creates a new session and may make a new choice. */
-.conv-model-choice {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+/* ---- La riga agente -----------------------------------------------------
+   Modello e opzioni si scelgono prima che la sessione del provider si apra, e
+   la stessa riga sta sopra al compositore di una conversazione conclusa, perché
+   riprenderla apre una sessione nuova e può fare una scelta nuova.
+
+   È una riga e non un riquadro: sta accanto al comando che la usa — «Apri una
+   conversazione» nello stato vuoto, «Invia» nel compositore — e a riposo non ha
+   cornice, perché è il valore in vigore e non un modulo da compilare. */
+.conv-empty-command,
+.conv-agent-row {
+	display: inline-flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 2px;
+}
+
+.conv-empty-command {
 	gap: var(--space-3);
-	width: min(100%, 620px);
-	padding: var(--space-4);
-	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: var(--surface-3);
+	width: 100%;
 }
 
-.conv-panel > .conv-model-choice {
-	margin: var(--space-4) var(--gutter) 0;
-}
-
-.conv-model-choice > .field,
-.conv-model-choice > .config-copy,
-.conv-model-choice-help {
+.conv-agent-row {
+	/* Nel compositore la riga vive fra il campo e il pulsante: cede spazio
+	   prima il suggerimento, poi lei, mai il campo. */
+	flex: 0 1 auto;
 	min-width: 0;
-	margin: 0;
+	/* Allineata al testo del pulsante accanto, alto 40px, come il suggerimento. */
+	align-self: flex-end;
+	padding-bottom: 7px;
 }
 
-.conv-model-choice-help {
-	grid-column: 1 / -1;
+.conv-empty-command .conv-agent-row {
+	align-self: center;
+	padding-bottom: 0;
+	margin-right: auto;
+}
+
+.conv-pill-shell {
+	position: relative;
+	display: inline-flex;
+}
+
+.conv-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	max-width: 100%;
+	height: 26px;
+	padding: 0 8px;
+	border: 1px solid transparent;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--text-dim);
+	font: 600 13px/1 var(--font-sans);
+	cursor: pointer;
+	transition:
+		background 0.15s var(--ease),
+		color 0.15s var(--ease),
+		border-color 0.15s var(--ease);
+}
+
+.conv-pill:hover {
+	background: var(--surface-hover);
+	color: var(--text);
+}
+
+.conv-pill[aria-expanded="true"] {
+	background: var(--surface-hover);
+	border-color: var(--border);
+	color: var(--text);
+}
+
+.conv-pill-value {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.conv-pill-chevron {
+	flex: 0 0 auto;
+	opacity: 0.55;
+}
+
+/* L'unico segno di colore della riga, e vale una cosa sola: questa
+   conversazione parte diversa da quella che il workspace erediterebbe. Il punto
+   accompagna l'indaco perché il valore non sia portato dal solo colore — la
+   parola resta comunque scritta accanto. */
+.conv-pill.is-chosen {
+	color: var(--accent);
+}
+
+.conv-pill.is-chosen::after {
+	content: "";
+	flex: 0 0 auto;
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: var(--accent);
+}
+
+.conv-agent-dot {
+	color: var(--text-dim);
+	opacity: 0.5;
 	font-size: 12px;
+}
+
+/* Ciò che si legge e non si preme: il modello fissato di una conversazione
+   viva, e il modello effettivo quando il provider non espone un catalogo. */
+.conv-agent-inert {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 26px;
+	padding: 0 8px;
+	color: var(--text-dim);
+	font: 600 13px/1 var(--font-sans);
+}
+
+.conv-agent-inert.is-warning {
+	color: var(--attention);
+}
+
+.conv-agent-lock {
+	flex: 0 0 auto;
+	opacity: 0.7;
+}
+
+/* Il popover si apre verso l'alto: la riga vive in fondo al pannello, e sotto
+   di lei non c'è posto. Nel compositore si ancora a destra e nello stato vuoto a
+   sinistra, cioè dal lato in cui il pannello ha spazio: dall'altro uscirebbe
+   dallo schermo. */
+.conv-pop {
+	position: absolute;
+	bottom: calc(100% + 8px);
+	right: 0;
+	width: 264px;
+	max-width: 78vw;
+	padding: 6px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface);
+	box-shadow: var(--shadow);
+	z-index: 30;
+}
+
+.conv-empty-command .conv-pop {
+	right: auto;
+	left: 0;
+}
+
+.conv-pop-eyebrow {
+	padding: 6px 8px 4px;
+	font-size: 10px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	font-weight: 800;
+	color: var(--text-dim);
+}
+
+.conv-pop-entry {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 7px 8px;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--text);
+	font: 500 14px var(--font-sans);
+	text-align: left;
+	cursor: pointer;
+}
+
+.conv-pop-entry:hover {
+	background: var(--surface-hover);
+}
+
+/* Il contorno del fuoco sta dentro la voce: fuori sarebbe tagliato dal bordo
+   del popover. */
+.conv-pop-entry:focus-visible {
+	outline-offset: -3px;
+}
+
+.conv-pop-entry[aria-checked="true"] {
+	font-weight: 700;
+}
+
+.conv-pop-entry-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.conv-pop-tag {
+	margin-left: auto;
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--text-dim);
+}
+
+.conv-pop-check {
+	flex: 0 0 auto;
+	color: var(--accent);
+	opacity: 0;
+}
+
+.conv-pop-entry[aria-checked="true"] .conv-pop-check {
+	opacity: 1;
+}
+
+.conv-pop-rule {
+	height: 1px;
+	margin: 5px 6px;
+	background: var(--border);
+}
+
+/* Dove va a finire l'aiuto del provider: lo legge chi sta scegliendo, invece di
+   stare sempre a schermo per tutti. */
+.conv-pop-foot {
+	padding: 4px 8px 6px;
+	font-size: 11px;
 	line-height: 1.45;
 	color: var(--text-dim);
 }
 
-.conv-model-choice select {
-	width: 100%;
-	min-height: 44px;
+.conv-segments {
+	display: flex;
+	gap: 4px;
+	padding: 2px 6px 6px;
+}
+
+.conv-segment {
+	flex: 1;
+	min-width: 0;
+	height: 30px;
+	padding: 0 6px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--surface-2);
+	color: var(--text-muted);
+	font: 600 12px var(--font-sans);
+	cursor: pointer;
+}
+
+.conv-segment:hover {
+	border-color: var(--border-strong);
+	color: var(--text);
+}
+
+.conv-segment[aria-pressed="true"] {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-ink);
 }
 
 /* ---- Timeline -----------------------------------------------------------
@@ -6613,15 +6832,6 @@ body.no-workspace [data-workspace-scoped] {
 		padding-right: var(--space-4);
 	}
 
-	.conv-model-choice {
-		grid-template-columns: minmax(0, 1fr);
-	}
-
-	.conv-panel > .conv-model-choice {
-		margin-left: var(--space-4);
-		margin-right: var(--space-4);
-	}
-
 	.conv-notice,
 	.conv-proposal,
 	.conv-nextstep,
@@ -6648,6 +6858,13 @@ body.no-workspace [data-workspace-scoped] {
 		align-self: center;
 		overflow: visible;
 		white-space: normal;
+		padding-bottom: 0;
+	}
+
+	/* Il campo ha preso la riga tutta per sé: la riga agente scende con il
+	   suggerimento e il pulsante, e lì si allinea al centro come loro. */
+	.conv-agent-row {
+		align-self: center;
 		padding-bottom: 0;
 	}
 

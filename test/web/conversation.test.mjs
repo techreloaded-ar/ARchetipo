@@ -111,8 +111,10 @@ function withConversation(overrides) {
 }
 
 describe("renderConversation", () => {
-	it("prima dell'apertura mostra la scelta di modello della conversazione", () => {
-		const choice = '<label data-conversation-field="model">MODELLO-CONVERSAZIONE</label>';
+	// La riga agente sta sulla riga del comando che la usa, e non in un riquadro
+	// sopra di esso: nello stato vuoto è il pulsante che apre.
+	it("prima dell'apertura mostra la scelta di modello sulla riga del comando", () => {
+		const choice = '<div class="conv-agent-row">MODELLO-CONVERSAZIONE</div>';
 		const html = renderConversation(
 			{ available: true, conversation: null, events: [] },
 			"",
@@ -122,16 +124,57 @@ describe("renderConversation", () => {
 
 		assert.ok(text.includes("MODELLO-CONVERSAZIONE"));
 		assert.ok(text.includes("US-777"));
-		assert.ok(text.includes("fissati quando la conversazione si apre"));
 		assert.ok(html.indexOf(choice) < html.indexOf("data-conversation-open"));
+		assert.ok(
+			html.indexOf('class="conv-empty-command"') < html.indexOf(choice),
+			"la scelta non è sulla riga del comando che la usa",
+		);
 	});
 
-	it("una conversazione attiva non offre di mutare il modello già avviato", () => {
-		const html = renderConversation(LIVE, "", {
-			modelChoiceHtml: "MODELLO-DA-NON-MOSTRARE",
-		});
+	// A conversazione conclusa riprenderla apre una sessione nuova, e la riga
+	// agente è dove si sceglie con che modello parte: sta nel compositore,
+	// all'altezza del pulsante che manda.
+	it("a conversazione conclusa la scelta sta dentro al compositore", () => {
+		const choice = '<div class="conv-agent-row">MODELLO-CONVERSAZIONE</div>';
+		const html = renderConversation(
+			withConversation({
+				conversation: { ...LIVE.conversation, state: "CLOSED" },
+			}),
+			"",
+			{ modelChoiceHtml: choice },
+		);
+
+		assert.ok(html.includes(choice));
+		assert.ok(
+			html.indexOf('class="conv-composer"') < html.indexOf(choice),
+			"la scelta non è dentro al compositore",
+		);
+	});
+
+	// Prima il blocco spariva e con lui l'informazione: ora la riga resta,
+	// inerte e con un lucchetto.
+	it("una conversazione attiva dice il modello fissato e non lo offre", () => {
+		const html = renderConversation(
+			withConversation({
+				model: "MODELLO-FISSATO",
+				model_options: { sforzo: "LIVELLO-X" },
+			}),
+			"",
+			{ modelChoiceHtml: "MODELLO-DA-NON-MOSTRARE" },
+		);
+		const text = visibleText(html);
 
 		assert.ok(!html.includes("MODELLO-DA-NON-MOSTRARE"));
+		assert.ok(!html.includes("data-conversation-pill"), "la scelta è ancora premibile");
+		assert.ok(html.includes("conv-agent-lock"), "la riga fissata non porta il lucchetto");
+		assert.ok(
+			html.includes('title="Modello e ragionamento sono stati fissati all&#39;apertura"'),
+			"la ragione per cui non si sceglie più non è nel title",
+		);
+		assert.ok(
+			text.includes("MODELLO-FISSATO · LIVELLO-X"),
+			"il modello fissato e il suo sforzo non si leggono sulla riga",
+		);
 	});
 
 	it("senza disponibilità mostra la ragione e non offre il compositore", () => {

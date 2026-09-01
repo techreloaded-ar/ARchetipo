@@ -99,8 +99,10 @@
 		empty: "Su questo workspace non c'è nessuna conversazione aperta.",
 		open: "Apri una conversazione",
 		openingSpec: (code) => `Questa conversazione sarà collegata a ${code}.`,
-		modelFixed:
-			"Modello e ragionamento vengono fissati quando la conversazione si apre.",
+		// A conversazione aperta la scelta non si cambia più. Prima la riga
+		// spariva, e con lei l'informazione; ora resta, inerte e con un
+		// lucchetto, e questa frase è il suo `title`.
+		modelLocked: "Modello e ragionamento sono stati fissati all'apertura",
 		// Timeline
 		markPartialHistory: "storia parziale",
 		partialHistory:
@@ -1074,7 +1076,12 @@
 	// else: it never takes the word away. Writing to the agent while its run is
 	// stopped on a decision is exactly what the composer is for, so `writable`
 	// keeps looking only at the state of the conversation.
-	function renderComposer(active, draft, ui, offered, awaiting) {
+	//
+	// `agentRow` è la riga di pastiglie che dice — e, a conversazione conclusa,
+	// lascia scegliere — con che modello si parla. Sta sulla riga del comando
+	// che la usa e non in un riquadro sopra: si legge con chi si parla
+	// nell'istante in cui si decide di parlargli.
+	function renderComposer(active, draft, ui, offered, awaiting, agentRow) {
 		const writable = active && offered !== false;
 		const disabled = ui.busy || !writable ? " disabled" : "";
 		const placeholder = writable
@@ -1120,6 +1127,7 @@
 			${resumeHtml}
 			<div class="conv-composer-row">
 				<textarea class="conv-composer-input" rows="1" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
+				${typeof agentRow === "string" ? agentRow : ""}
 				${hintHtml}
 				<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
 			</div>
@@ -1191,15 +1199,37 @@
 		return `<button type="button" class="primary-btn conv-open" data-conversation-open${disabled}>${escapeHtml(label)}</button>`;
 	}
 
-	function renderConversationModelChoice(ui) {
-		const html = ui && typeof ui.modelChoiceHtml === "string"
+	// Con chi si sta parlando, in una riga sola: il modello e i valori delle
+	// opzioni che quel modello dichiara, nell'ordine in cui il payload li porta.
+	// Non nomina il provider — quello sta già nella testata — perché qui la
+	// domanda è che cosa risponde, non chi.
+	function fixedAgentLabel(view) {
+		const parts = [];
+		const model = textAt(view, "model");
+		if (model) parts.push(model);
+		const options = objectAt(view, "model_options");
+		if (options) {
+			for (const key of Object.keys(options).sort()) {
+				const value = textAt(options, key);
+				if (value) parts.push(value);
+			}
+		}
+		return parts.join(" · ");
+	}
+
+	// La riga agente, nelle sue due forme. Finché la conversazione non è aperta
+	// è la riga di pastiglie che il renderer dei campi disegna — si sceglie. Da
+	// quando è aperta è la stessa riga inerte, con un lucchetto: la scelta non
+	// si cambia più, ma si continua a leggere con chi si sta parlando.
+	function renderConversationModelChoice(view, ui, active) {
+		if (active) {
+			const label = fixedAgentLabel(view);
+			if (!label) return "";
+			return `<span class="conv-agent-row"><span class="conv-agent-inert" title="${escapeHtml(TEXT.modelLocked)}"><svg class="conv-agent-lock" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.4" y="7" width="9.2" height="6.2" rx="1.4" /><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7" /></svg>${escapeHtml(label)}</span></span>`;
+		}
+		return ui && typeof ui.modelChoiceHtml === "string"
 			? ui.modelChoiceHtml
 			: "";
-		if (!html) return "";
-		return `<div class="conv-model-choice">
-			${html}
-			<p class="conv-model-choice-help">${escapeHtml(TEXT.modelFixed)}</p>
-		</div>`;
 	}
 
 	// The pending proposal: what the agent says it *would* run, never what it
@@ -1428,8 +1458,10 @@
 				<div class="conv-empty">
 					<p class="conv-empty-text">${escapeHtml(TEXT.empty)}</p>
 					${local.openingSpecCode ? `<p class="conv-empty-context">${escapeHtml(TEXT.openingSpec(String(local.openingSpecCode)))}</p>` : ""}
-					${renderConversationModelChoice(local)}
-					${renderOpenButton(local, TEXT.open)}
+					<div class="conv-empty-command">
+						${renderConversationModelChoice(value, local, false)}
+						${renderOpenButton(local, TEXT.open)}
+					</div>
 				</div>
 			</section>`;
 		}
@@ -1488,9 +1520,15 @@
 		// chiudere quella aperta dalla testata: ripetere qui uno dei due
 		// costava al pannello una fascia intera per un comando che ha già il suo
 		// posto, e la conversazione è ciò che quello spazio deve avere.
-		if (!active) blocks.push(renderConversationModelChoice(local));
 		blocks.push(
-			renderComposer(active, typed, local, offered, anyAwaiting(value)),
+			renderComposer(
+				active,
+				typed,
+				local,
+				offered,
+				anyAwaiting(value),
+				renderConversationModelChoice(value, local, active),
+			),
 		);
 
 		// Due comandi nella testata e non piu' uno: come si legge la

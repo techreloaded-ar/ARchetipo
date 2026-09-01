@@ -753,27 +753,322 @@ describe("renderModelChoice — scelta per la singola run", () => {
 	});
 });
 
-describe("renderConversationModelChoice — scelta per conversazione", () => {
-	it("usa controlli distinti e nomina la conversazione", () => {
-		const html = renderConversationModelChoice(CHOICE_VIEW, {
-			model: "modello-uno",
-			options: { sforzo: "b" },
-		});
-		const text = visibleText(html);
+// ---------------------------------------------------------------------------
+// La riga agente: la stessa scelta della run, resa come una riga di pastiglie.
+//
+// Gli oracoli restano sul testo visibile — che cosa il lettore legge sulla riga
+// e dentro il popover — tranne dove il criterio è la selezione stessa
+// (`aria-checked`, `aria-pressed`) o l'apertura (`hidden`): lì l'attributo è il
+// criterio.
+// ---------------------------------------------------------------------------
 
-		assert.ok(text.includes("Modello per questa conversazione"));
-		assert.ok(html.includes('name="conversation_model"'));
-		assert.ok(html.includes("data-conversation-model"));
-		assert.ok(html.includes('name="conversation_option_sforzo"'));
-		assert.ok(html.includes('data-conversation-option="sforzo"'));
-		assert.ok(!html.includes("data-run-model"));
+function firstAttribute(chunk, name) {
+	const m = new RegExp(`${name}="([^"]*)"`).exec(chunk);
+	return m ? m[1] : "";
+}
+
+function between(chunk, opening, closing) {
+	const at = chunk.indexOf(opening);
+	if (at === -1) return "";
+	const from = at + opening.length;
+	const to = chunk.indexOf(closing, from);
+	return to === -1 ? "" : chunk.slice(from, to);
+}
+
+// Le voci dell'elenco dei modelli dentro un popover.
+function modelEntries(chunk) {
+	const out = [];
+	const re =
+		/<button [^>]*data-conversation-model-choice="([^"]*)"[^>]*>([\s\S]*?)<\/button>/g;
+	let m;
+	while ((m = re.exec(chunk)) !== null) {
+		const open = m[0].slice(0, m[0].indexOf(">") + 1);
+		out.push({
+			value: m[1],
+			text: between(m[2], '<span class="conv-pop-entry-text">', "</span>"),
+			tag: between(m[2], '<span class="conv-pop-tag">', "</span>"),
+			checked: /aria-checked="true"/.test(open),
+		});
+	}
+	return out;
+}
+
+// I segmenti di un'opzione dentro un popover.
+function optionSegments(chunk) {
+	const out = [];
+	const re =
+		/<button [^>]*data-conversation-option="([^"]*)" data-conversation-option-choice="([^"]*)"[^>]*>([\s\S]*?)<\/button>/g;
+	let m;
+	while ((m = re.exec(chunk)) !== null) {
+		const open = m[0].slice(0, m[0].indexOf(">") + 1);
+		out.push({
+			option: m[1],
+			value: m[2],
+			text: m[3],
+			pressed: /aria-pressed="true"/.test(open),
+		});
+	}
+	return out;
+}
+
+// La riga come una lista di pastiglie, ognuna con il suo popover.
+function agentRow(html) {
+	return html
+		.split('<span class="conv-pill-shell">')
+		.slice(1)
+		.map((chunk) => ({
+			key: firstAttribute(chunk, "data-conversation-pill"),
+			value: between(chunk, '<span class="conv-pill-value">', "</span>"),
+			title: firstAttribute(chunk, "title"),
+			chosen: /class="conv-pill is-chosen"/.test(chunk),
+			open: !/data-conversation-pop="[^"]*" hidden>/.test(chunk),
+			foot: between(chunk, '<div class="conv-pop-foot">', "</div>"),
+			entries: modelEntries(chunk),
+			segments: optionSegments(chunk),
+		}));
+}
+
+describe("renderConversationModelChoice — la riga agente", () => {
+	it("disegna una pastiglia per il modello e una per la sua prima opzione", () => {
+		const row = agentRow(
+			renderConversationModelChoice(CHOICE_VIEW, {
+				model: "modello-uno",
+				options: { sforzo: "b" },
+			}),
+		);
+
+		assert.deepEqual(
+			row.map((pill) => pill.key),
+			["model", "option:sforzo"],
+			"la riga non è modello più prima opzione",
+		);
+		assert.equal(row[0].value, "Modello Uno", "la pastiglia non dice il modello");
+		assert.equal(
+			row[1].value,
+			"Scelta B",
+			"la pastiglia dell'opzione non dice il valore in vigore",
+		);
+	});
+
+	it("non produce nessun controllo degli altri due ambiti", () => {
+		const html = renderConversationModelChoice(CHOICE_VIEW, null);
+
+		assert.ok(!html.includes("<select"), "la riga ha disegnato un select");
+		assert.ok(!html.includes("data-run-model"), "la riga porta i marcatori della run");
 	});
 
 	it("mostra il modello del workspace finché non viene cambiato", () => {
-		const html = renderConversationModelChoice(CHOICE_VIEW, null);
-		const selected = options(html).filter((entry) => entry.selected);
+		const row = agentRow(renderConversationModelChoice(CHOICE_VIEW, null));
 
-		assert.ok(visibleText(html).includes("ereditato dal workspace"));
-		assert.equal(selected[0].value, "modello-uno");
+		assert.equal(row[0].value, "Modello Uno");
+		assert.ok(!row[0].chosen, "una scelta ereditata è segnata come scelta propria");
+		assert.ok(
+			/ereditato dal workspace/i.test(row[0].title),
+			"l'ereditarietà dal workspace non è dichiarata nel title",
+		);
+		assert.ok(
+			/ereditato dal workspace/i.test(row[0].foot),
+			"l'ereditarietà dal workspace non è dichiarata nel piede del popover",
+		);
+	});
+
+	// L'unico segno di colore della riga, e il criterio è la selezione stessa.
+	it("segna la pastiglia quando la scelta si stacca da quella ereditata", () => {
+		const row = agentRow(
+			renderConversationModelChoice(CHOICE_VIEW, {
+				model: "modello-due",
+				options: {},
+			}),
+		);
+
+		assert.ok(row[0].chosen, "una scelta diversa dall'ereditata non è segnata");
+	});
+
+	it("porta il catalogo nel popover, con la targhetta del default", () => {
+		const row = agentRow(
+			renderConversationModelChoice(
+				{
+					...CHOICE_VIEW,
+					models: [
+						{ id: "modello-uno", label: "Modello Uno", options: [] },
+						{ id: "modello-due", label: "Modello Due", default: true, options: [] },
+					],
+				},
+				null,
+			),
+		);
+		const entries = row[0].entries;
+
+		assert.deepEqual(
+			entries.map((entry) => entry.value),
+			["modello-uno", "modello-due"],
+			"l'elenco non è il catalogo dichiarato",
+		);
+		assert.deepEqual(
+			entries.map((entry) => entry.tag),
+			["", "default"],
+			"esattamente una voce deve portare la targhetta del default",
+		);
+		assert.equal(
+			entries.filter((entry) => entry.checked).length,
+			1,
+			"esattamente una voce deve essere quella in vigore",
+		);
+		assert.ok(
+			entries.every((entry) => !/default del provider/.test(entry.text)),
+			"il nome del modello porta ancora il vecchio suffisso",
+		);
+	});
+
+	it("tiene un valore fuori catalogo e lo marca", () => {
+		const row = agentRow(
+			renderConversationModelChoice(
+				{ ...CHOICE_VIEW, model: "modello-mai-visto" },
+				null,
+			),
+		);
+		const unlisted = row[0].entries.filter(
+			(entry) => entry.value === "modello-mai-visto",
+		);
+
+		assert.equal(unlisted.length, 1, "il valore fuori catalogo è stato perso");
+		assert.equal(unlisted[0].tag, "non in elenco");
+		assert.ok(unlisted[0].checked, "il valore in vigore non è quello segnato");
+	});
+
+	// Stessa regola della run, e per la stessa ragione: una voce vuota offerta
+	// sopra un modello ereditato sarebbe una scelta che il server non distingue
+	// da «nessuna scelta».
+	it("offre la voce vuota solo quando il modello ereditato è vuoto", () => {
+		const inherited = agentRow(renderConversationModelChoice(CHOICE_VIEW, null));
+		assert.ok(
+			!inherited[0].entries.some((entry) => entry.value === ""),
+			"la voce vuota è offerta sopra un modello ereditato",
+		);
+
+		const row = agentRow(
+			renderConversationModelChoice({ ...CHOICE_VIEW, model: "" }, null),
+		);
+		const entries = row[0].entries;
+		assert.equal(
+			entries[entries.length - 1].value,
+			"",
+			"la voce vuota non è in coda all'elenco",
+		);
+		assert.ok(entries[entries.length - 1].checked);
+		assert.equal(row[0].value, "Sceglie il provider");
+	});
+
+	it("offre il segmento vuoto in testa alle scelte di un'opzione", () => {
+		const row = agentRow(
+			renderConversationModelChoice(CHOICE_VIEW, {
+				model: "modello-uno",
+				options: {},
+			}),
+		);
+		const segments = row[1].segments;
+
+		assert.deepEqual(
+			segments.map((segment) => segment.value),
+			["", "a", "b"],
+			"i segmenti non sono la rinuncia più le scelte dichiarate",
+		);
+		assert.equal(segments[0].text, "auto");
+		assert.ok(segments[0].pressed, "il valore vuoto in vigore non è quello premuto");
+		assert.equal(row[1].value, "auto");
+	});
+
+	it("non disegna la seconda pastiglia se il modello non dichiara opzioni", () => {
+		const row = agentRow(
+			renderConversationModelChoice(CHOICE_VIEW, {
+				model: "modello-due",
+				options: {},
+			}),
+		);
+
+		assert.deepEqual(row.map((pill) => pill.key), ["model"]);
+	});
+
+	it("raccoglie le opzioni oltre la prima in una pastiglia sola", () => {
+		const view = {
+			...CHOICE_VIEW,
+			models: [
+				{
+					id: "modello-uno",
+					label: "Modello Uno",
+					options: [
+						{ name: "sforzo", label: "Sforzo", choices: [{ value: "a" }] },
+						{ name: "verbosita", label: "Verbosità", choices: [{ value: "x" }] },
+						{ name: "lingua", label: "Lingua", choices: [{ value: "it" }] },
+					],
+				},
+			],
+		};
+		const row = agentRow(renderConversationModelChoice(view, null));
+
+		assert.deepEqual(
+			row.map((pill) => pill.key),
+			["model", "option:sforzo", "more"],
+			"la riga cresce oltre tre voci",
+		);
+		assert.equal(row[2].value, "+2 opzioni");
+		assert.deepEqual(
+			[...new Set(row[2].segments.map((segment) => segment.option))],
+			["verbosita", "lingua"],
+			"la pastiglia di coda non raccoglie le opzioni oltre la prima",
+		);
+	});
+
+	// Il pannello si ridisegna a ogni giro di poll: quale popover è aperto
+	// arriva da fuori, e uno solo alla volta.
+	it("apre il popover che le viene chiesto, e uno solo", () => {
+		const row = agentRow(
+			renderConversationModelChoice(CHOICE_VIEW, null, "option:sforzo"),
+		);
+
+		assert.deepEqual(
+			row.map((pill) => pill.open),
+			[false, true],
+			"l'apertura chiesta non è quella disegnata",
+		);
+	});
+
+	it("senza catalogo scrive il modello e non offre nessuna pastiglia", () => {
+		const html = renderConversationModelChoice(
+			{
+				available: false,
+				model: "modello-uno",
+				unavailable_reason: "il provider non espone un catalogo",
+			},
+			null,
+		);
+
+		assert.equal(agentRow(html).length, 0, "una pastiglia è premibile invano");
+		assert.ok(visibleText(html).includes("⚠ modello-uno"));
+		assert.ok(
+			html.includes('title="il provider non espone un catalogo"'),
+			"la ragione del server non è nel title",
+		);
+	});
+
+	it("non lancia su payload parziali", () => {
+		const partials = [
+			null,
+			undefined,
+			{},
+			{ available: true },
+			{ available: true, model: "sconosciuto" },
+			{ available: true, models: "non-una-lista" },
+			{ available: true, models: [null] },
+			{ available: true, model: "m", models: [{ id: "m", options: null }] },
+			{ available: false },
+		];
+		for (const view of partials) {
+			assert.equal(
+				typeof renderConversationModelChoice(view, null, "model"),
+				"string",
+				"il renderer non ha restituito una stringa",
+			);
+		}
 	});
 });
