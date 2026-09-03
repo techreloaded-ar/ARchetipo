@@ -719,8 +719,7 @@ func (s *Server) readPastConversation(ctx context.Context, ws *workspaceSession,
 	}
 	record, err := store.Get(ctx, id)
 	if err != nil {
-		var storeErr *conversationlog.StoreError
-		if errors.As(err, &storeErr) && (storeErr.Kind == conversationlog.StoreNotFound || storeErr.Kind == conversationlog.StoreInvalidID) {
+		if conversationRecordMissing(err) {
 			return conversationlog.Record{}, conversationNotFound(id, err)
 		}
 		return conversationlog.Record{}, iox.NewInternal("reading the conversation "+id, err)

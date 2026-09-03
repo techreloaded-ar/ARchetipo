@@ -481,3 +481,200 @@ func TestConversationsRoutesRefuseWithoutAnOpenWorkspace(t *testing.T) {
 		})
 	}
 }
+
+// TestDeleteConversationRecordRemovesItFromTheIndex is what the trash on a
+// closed thread does: the record goes, the rail stops drawing it, and the
+// conversations beside it are untouched.
+func TestDeleteConversationRecordRemovesItFromTheIndex(t *testing.T) {
+	srv := newConversationServer(t, newConversingProvider("chatty", 0))
+	store := conversationsRouteTestStore(t, srv)
+	at := time.Date(2026, 8, 22, 17, 5, 0, 0, time.UTC)
+	conversationsRouteTestSave(t, store, conversationlog.Record{
+		ID:            "conv-da-buttare",
+		Title:         "Una vecchia chiacchierata",
+		OpenedAt:      at.Add(-time.Hour),
+		LastMessageAt: at,
+		FinalState:    string(execution.RunClosed),
+		Events:        []execution.RunEvent{},
+	})
+	conversationsRouteTestSave(t, store, conversationlog.Record{
+		ID:            "conv-da-tenere",
+		Title:         "Quella che resta",
+		OpenedAt:      at.Add(-2 * time.Hour),
+		LastMessageAt: at.Add(-time.Hour),
+		FinalState:    string(execution.RunClosed),
+		Events:        []execution.RunEvent{},
+	})
+
+	w := doJSON(t, srv, http.MethodDelete, "/api/workspace/conversations/conv-da-buttare/record", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE record = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	// Il record intero torna indietro, e non il solo id: è quello che rende
+	// possibile l'annullamento, perché l'indice del rail è un riassunto e non
+	// porta né gli eventi né il provider.
+	deleted := conversationsRouteTestDeletedRecord(t, w.Body.String())
+	if deleted.Title != "Una vecchia chiacchierata" || deleted.ID != "conv-da-buttare" {
+		t.Fatalf("the delete answered with %#v, want the whole record", deleted)
+	}
+
+	view, body := conversationsRouteTestReadIndex(t, srv)
+	if strings.Contains(body, "conv-da-buttare") {
+		t.Errorf("the deleted conversation is still in the index: %s", body)
+	}
+	if len(view.Conversations) != 1 || view.Conversations[0].ID != "conv-da-tenere" {
+		t.Fatalf("the index holds %#v, want only conv-da-tenere", view.Conversations)
+	}
+	// Gone from the read as well, and not only from the list: a thread that
+	// still answered would be a history the rail claims to have thrown away.
+	if status, _, _ := conversationsRouteTestReadTranscript(t, srv, "conv-da-buttare"); status != http.StatusNotFound {
+		t.Errorf("reading the deleted conversation = %d, want 404", status)
+	}
+}
+
+// A conversation nobody ever wrote is a 404 and not a silent success: pressing
+// a thread that is no longer there has to be told apart from erasing one.
+func TestDeleteConversationRecordUnknownIsNotFound(t *testing.T) {
+	srv := newConversationServer(t, newConversingProvider("chatty", 0))
+
+	w := doJSON(t, srv, http.MethodDelete, "/api/workspace/conversations/conv-mai-esistita/record", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("DELETE of an unknown record = %d, want 404: %s", w.Code, w.Body.String())
+	}
+}
+
+// A live conversation is closed, never thrown away. The rail draws no trash on
+// one, and the route refuses it too: whoever has not closed a thread has not
+// decided to lose what was said in it.
+func TestDeleteConversationRecordRefusesALiveConversation(t *testing.T) {
+	srv := newConversationServer(t, newConversingProvider("chatty", 0))
+	view := openConversationOK(t, srv)
+	id := view.Conversation.ID
+
+	w := doJSON(t, srv, http.MethodDelete, "/api/workspace/conversations/"+id+"/record", nil)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("DELETE of a live record = %d, want 409: %s", w.Code, w.Body.String())
+	}
+	if status, _, body := conversationsRouteTestReadTranscript(t, srv, id); status != http.StatusOK {
+		t.Fatalf("the refused conversation is no longer readable: %d %s", status, body)
+	}
+}
+
+// conversationsRouteTestDeletedRecord reads back the record a delete answered
+// with. It decodes into the very type the store keeps, because the undo posts
+// that same JSON back: a test that decoded into a shape of its own would prove
+// nothing about the round trip the page actually makes.
+func conversationsRouteTestDeletedRecord(t *testing.T, body string) conversationlog.Record {
+	t.Helper()
+	var payload struct {
+		Deleted conversationlog.Record `json:"deleted"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("undecodable delete answer: %v (%s)", err, body)
+	}
+	return payload.Deleted
+}
+
+// TestDeletedConversationIsPutBackByItsOwnRecord is the undo end to end: what
+// the delete answered with, posted back, restores the conversation whole —
+// events included, and back in its place in the order.
+func TestDeletedConversationIsPutBackByItsOwnRecord(t *testing.T) {
+	srv := newConversationServer(t, newConversingProvider("chatty", 0))
+	store := conversationsRouteTestStore(t, srv)
+	at := time.Date(2026, 8, 22, 17, 5, 0, 0, time.UTC)
+	conversationsRouteTestSave(t, store, conversationlog.Record{
+		ID:            "conv-ripescabile",
+		SpecCode:      "US-058",
+		Title:         "Quella che torna",
+		OpenedAt:      at.Add(-time.Hour),
+		LastMessageAt: at,
+		MessageCount:  3,
+		FinalState:    string(execution.RunClosed),
+		Events:        []execution.RunEvent{{ID: 1, Kind: "message", Text: "una cosa detta"}},
+	})
+	conversationsRouteTestSave(t, store, conversationlog.Record{
+		ID:            "conv-piu-vecchia",
+		Title:         "Quella prima",
+		OpenedAt:      at.Add(-3 * time.Hour),
+		LastMessageAt: at.Add(-2 * time.Hour),
+		FinalState:    string(execution.RunClosed),
+		Events:        []execution.RunEvent{},
+	})
+
+	w := doJSON(t, srv, http.MethodDelete, "/api/workspace/conversations/conv-ripescabile/record", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE record = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	deleted := conversationsRouteTestDeletedRecord(t, w.Body.String())
+
+	back := doJSON(t, srv, http.MethodPost, "/api/workspace/conversations/conv-ripescabile/record", deleted)
+	if back.Code != http.StatusOK {
+		t.Fatalf("POST record = %d, want 200: %s", back.Code, back.Body.String())
+	}
+
+	restored, err := store.Get(context.Background(), "conv-ripescabile")
+	if err != nil {
+		t.Fatalf("the conversation was not put back: %v", err)
+	}
+	if restored.Title != "Quella che torna" || restored.SpecCode != "US-058" || restored.MessageCount != 3 {
+		t.Errorf("the record came back changed: %#v", restored)
+	}
+	// Gli eventi sono la ragione per cui il record intero viaggia: un
+	// annullamento che riscrivesse la riga dell'indice rimetterebbe una
+	// conversazione senza niente di quello che ci si era detti.
+	if len(restored.Events) != 1 || restored.Events[0].Text != "una cosa detta" {
+		t.Errorf("the restored conversation lost what was said in it: %#v", restored.Events)
+	}
+	// Torna anche al suo posto nell'ordine, che è quello del suo ultimo
+	// messaggio: nessuno lo ricalcola al ripristino.
+	view, _ := conversationsRouteTestReadIndex(t, srv)
+	if len(view.Conversations) != 2 || view.Conversations[0].ID != "conv-ripescabile" {
+		t.Errorf("the restored conversation is not back in its place: %#v", view.Conversations)
+	}
+}
+
+// Un annullamento non può scrivere sopra una conversazione che c'è: rimette a
+// posto quello che è stato cancellato, e uno che sovrascrivesse sarebbe un
+// secondo modo di perdere una storia.
+func TestRestoreConversationRefusesToOverwriteAnExistingOne(t *testing.T) {
+	srv := newConversationServer(t, newConversingProvider("chatty", 0))
+	store := conversationsRouteTestStore(t, srv)
+	at := time.Date(2026, 8, 22, 17, 5, 0, 0, time.UTC)
+	record := conversationlog.Record{
+		ID:            "conv-gia-qui",
+		Title:         "Quella che c'è",
+		OpenedAt:      at.Add(-time.Hour),
+		LastMessageAt: at,
+		FinalState:    string(execution.RunClosed),
+		Events:        []execution.RunEvent{},
+	}
+	conversationsRouteTestSave(t, store, record)
+
+	w := doJSON(t, srv, http.MethodPost, "/api/workspace/conversations/conv-gia-qui/record", record)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("POST over an existing record = %d, want 409: %s", w.Code, w.Body.String())
+	}
+	kept, err := store.Get(context.Background(), "conv-gia-qui")
+	if err != nil || kept.Title != "Quella che c'è" {
+		t.Fatalf("the refused restore touched the record: %#v (%v)", kept, err)
+	}
+}
+
+// Il record va rimesso sotto il proprio id: la route e il corpo che si
+// contraddicono sono un errore di chi chiama, non una conversazione da
+// battezzare col nome sbagliato.
+func TestRestoreConversationRefusesAnIDThatIsNotItsOwn(t *testing.T) {
+	srv := newConversationServer(t, newConversingProvider("chatty", 0))
+
+	w := doJSON(t, srv, http.MethodPost, "/api/workspace/conversations/conv-una/record", conversationlog.Record{
+		ID:     "conv-un-altra",
+		Title:  "Quella sbagliata",
+		Events: []execution.RunEvent{},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("POST with a mismatched id = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if status, _, _ := conversationsRouteTestReadTranscript(t, srv, "conv-un-altra"); status != http.StatusNotFound {
+		t.Error("the refused restore wrote the record anyway")
+	}
+}

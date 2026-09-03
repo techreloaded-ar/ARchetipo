@@ -160,3 +160,100 @@ func (ws *workspaceSession) conversationStore() *conversationlog.FileStore {
 	}
 	return ws.journal.store
 }
+
+// handleDeleteWorkspaceConversation erases one past conversation of the open
+// workspace: the record goes, and with it the line the rail was drawing.
+//
+// It is a route of its own and not the DELETE of the conversation, which
+// already means "close it". The two commands must stay apart: one ends a
+// session and keeps everything that was said, this one throws it away. A live
+// conversation is refused for the same reason — someone who has not closed a
+// thread has not decided to lose it.
+func (s *Server) handleDeleteWorkspaceConversation(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
+	ctx := r.Context()
+	id := strings.TrimSpace(r.PathValue("id"))
+	if _, live := ws.conversation.get(id); live {
+		writeError(w, iox.NewConflict(
+			"the conversation "+id+" is still live on this workspace",
+			"close it first, then delete it",
+			nil,
+		))
+		return
+	}
+	// Read before erasing. It is what tells "this workspace never had that
+	// conversation" — a 404 the rail can explain — from a store that could not
+	// be written, it proves the journal is there before Delete is asked for it,
+	// and it is the copy the undo will put back.
+	record, err := s.readPastConversation(ctx, ws, id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := ws.conversationStore().Delete(ctx, id); err != nil {
+		writeError(w, iox.NewInternal("deleting the conversation "+id, err))
+		return
+	}
+	// The whole record travels back, and not just the id it was asked about.
+	// It is what makes the undo possible at all: the index the rail holds is a
+	// summary — no events, no provider, no model — so a page that had only that
+	// could put back a conversation stripped of everything that was said in it.
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": record})
+}
+
+// handleRestoreWorkspaceConversation writes back a conversation that was just
+// deleted: it is the other half of the undo, and it takes the very record the
+// delete answered with.
+//
+// It refuses to write over a conversation that is there. An undo puts back what
+// was erased, and one that could overwrite would be a second way to lose a
+// history — the opposite of what it is for.
+func (s *Server) handleRestoreWorkspaceConversation(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
+	ctx := r.Context()
+	id := strings.TrimSpace(r.PathValue("id"))
+	var record conversationlog.Record
+	if err := decodeJSON(r, &record); err != nil {
+		writeError(w, err)
+		return
+	}
+	if strings.TrimSpace(record.ID) != id {
+		writeError(w, iox.NewInvalidInput(
+			"the body describes the conversation "+record.ID+", and the route names "+id,
+			"put a record back under its own id",
+			nil,
+		))
+		return
+	}
+	store := ws.conversationStore()
+	if store == nil {
+		writeError(w, iox.NewInternal("putting the conversation "+id+" back", errors.New("this workspace keeps no conversation journal")))
+		return
+	}
+	switch _, err := store.Get(ctx, id); {
+	case err == nil:
+		writeError(w, iox.NewConflict(
+			"the conversation "+id+" is already on this workspace",
+			"there is nothing to put back",
+			nil,
+		))
+		return
+	case !conversationRecordMissing(err):
+		writeError(w, iox.NewInternal("putting the conversation "+id+" back", err))
+		return
+	}
+	if err := store.Save(ctx, record); err != nil {
+		writeError(w, iox.NewInternal("putting the conversation "+id+" back", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"restored": record})
+}
+
+// conversationRecordMissing tells "this workspace keeps no such record" from
+// "the store could not be read". They are opposite answers: only the first one
+// is a 404 to a reader, and only the first one leaves room to write.
+func conversationRecordMissing(err error) bool {
+	var storeErr *conversationlog.StoreError
+	return errors.As(err, &storeErr) &&
+		(storeErr.Kind == conversationlog.StoreNotFound || storeErr.Kind == conversationlog.StoreInvalidID)
+}

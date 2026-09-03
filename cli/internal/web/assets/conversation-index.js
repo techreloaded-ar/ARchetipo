@@ -74,6 +74,15 @@
 		groupDone: "Concluse",
 		live: "in corso",
 		empty: "Su questo workspace non c'è ancora nessuna conversazione.",
+		// Il comando di cancellazione dice sempre *quale* thread cancella: sta
+		// dentro una lista di righe che si somigliano, e un'etichetta uguale su
+		// tutte non basterebbe a chi la legge senza vedere dove sta il puntatore.
+		deleteThread: (label) => `Elimina la conversazione ${label}`,
+		// Il bottone dice cosa fa; quale conversazione rimetta a posto lo dice
+		// il nome accessibile. Il titolo per esteso dentro una colonna stretta
+		// andrebbe a capo tre volte per una cosa che si legge di sfuggita.
+		undo: "Annulla l'eliminazione",
+		undoOf: (label) => `Annulla l'eliminazione di ${label}`,
 	};
 
 	// There is deliberately no entry here for a refusal to open a conversation.
@@ -138,11 +147,28 @@
 		const codeHtml = code
 			? `<span class="thread-code">${escapeHtml(code)}</span>`
 			: "";
-		return `<button type="button" class="${classes}" data-conversation-id="${escapeHtml(id)}"${current}>
-			${codeHtml}
-			<span class="thread-title">${escapeHtml(textAt(entry, "title"))}</span>
-			${renderMeta(entry, now)}
-		</button>`;
+		// Solo i thread conclusi portano il comando di cancellazione, ed è la
+		// stessa regola che il server applica: una conversazione ancora viva si
+		// chiude, non si butta via. Disegnarlo anche là offrirebbe un comando
+		// che verrebbe rifiutato.
+		//
+		// Il comando è fratello del thread e non figlio suo: un bottone dentro
+		// un bottone non è markup valido, e il puntatore finirebbe per aprire il
+		// thread che si sta cancellando. Per questo la riga li tiene entrambi.
+		const label = textAt(entry, "title") || id;
+		const remove = isLive(entry)
+			? ""
+			: `<button type="button" class="thread-delete-btn" data-conversation-delete="${escapeHtml(id)}" title="${escapeHtml(TEXT.deleteThread(label))}" aria-label="${escapeHtml(TEXT.deleteThread(label))}">
+				<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 4.5h9" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M6 2.5h4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M5 4.5v8h6v-8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6.75 6.5v4.25M9.25 6.5v4.25" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+			</button>`;
+		return `<div class="thread-row">
+			<button type="button" class="${classes}" data-conversation-id="${escapeHtml(id)}"${current}>
+				${codeHtml}
+				<span class="thread-title">${escapeHtml(textAt(entry, "title"))}</span>
+				${renderMeta(entry, now)}
+			</button>
+			${remove}
+		</div>`;
 	}
 
 	/**
@@ -170,6 +196,23 @@
 		return `<button type="button" class="new-thread" data-conversation-new>
 			<svg class="new-thread-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
 			<span>${TEXT.newThread}</span>
+		</button>`;
+	}
+
+	// L'annullamento dell'ultima eliminazione, in fondo alla lista. Vive solo
+	// finché la pagina se lo ricorda: è la pagina a tenere il record cancellato,
+	// e il bottone non è altro che l'offerta di riscriverlo.
+	//
+	// Si disegna anche quando la lista è vuota — cancellare l'unica
+	// conversazione del workspace è esattamente il caso in cui serve — e per
+	// questo non sta dentro il ramo che disegna i gruppi.
+	function renderUndoControl(undo) {
+		const id = textAt(undo, "id");
+		if (!id) return "";
+		const label = textAt(undo, "title") || id;
+		return `<button type="button" class="rail-undo" data-conversation-undo="${escapeHtml(id)}" title="${escapeHtml(TEXT.undoOf(label))}" aria-label="${escapeHtml(TEXT.undoOf(label))}">
+			<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 8a5 5 0 1 1 1.7 3.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M3 4.5V8h3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+			<span>${TEXT.undo}</span>
 		</button>`;
 	}
 
@@ -243,6 +286,7 @@
 		);
 		const currentId = textAt(ui, "currentId");
 		const now = ui && typeof ui === "object" ? ui.now : null;
+		const undo = renderUndoControl(objectAt(ui, "undo"));
 
 		const top = `<div class="rail-top">${renderNewThread()}</div>`;
 
@@ -250,6 +294,7 @@
 			return `${top}
 		<div class="rail-list">
 			<p class="rail-empty">${TEXT.empty}</p>
+			${undo}
 		</div>`;
 		}
 
@@ -269,7 +314,7 @@
 			.join("");
 
 		return `${top}
-		<div class="rail-list">${groups}${renderOlderControl(view)}</div>`;
+		<div class="rail-list">${groups}${renderOlderControl(view)}${undo}</div>`;
 	}
 
 	/**

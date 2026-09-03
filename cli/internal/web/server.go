@@ -283,6 +283,8 @@ func (s *Server) registerRoutes() {
 	// be named by.
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/approvals/{approvalId}", s.handleRespondWorkspaceConversationApproval)
 	s.handleWorkspace("DELETE /api/workspace/conversations/{id}", s.handleCloseWorkspaceConversation)
+	s.handleWorkspace("DELETE /api/workspace/conversations/{id}/record", s.handleDeleteWorkspaceConversation)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/record", s.handleRestoreWorkspaceConversation)
 	// Writing into a past conversation is the one thing this collection does
 	// that is neither a read nor a plain open: it opens a new conversation with
 	// the old one as context, beside the ones already alive.

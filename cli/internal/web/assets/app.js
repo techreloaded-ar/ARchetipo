@@ -123,6 +123,9 @@
 			`Eliminare ${label}? La storia esce dal backlog locale e i suoi artefatti locali di piano e revisione vengono cancellati, se ci sono. Dal visore non si può annullare.`,
 		specDeleted: (code) => `${code} eliminata`,
 		deleteFailed: (reason) => `Eliminazione fallita: ${reason}`,
+		conversationDeleted: "Conversazione eliminata",
+		conversationRestored: "Conversazione rimessa a posto",
+		undoFailed: (reason) => `Annullamento fallito: ${reason}`,
 
 		// Configurazione
 		configNotTested: "Non verificata in questa sessione.",
@@ -5568,6 +5571,11 @@
 	// place claiming to hold a conversation.
 	let conversationsIndex = null; // last read of GET /api/workspace/conversations
 	let conversationsCurrentId = ""; // which thread the panel is showing
+	// L'ultima conversazione eliminata, col suo record intero: è quello che il
+	// bottone «Annulla» rimette sul disco. Vive qui e da nessun'altra parte —
+	// una ricarica della pagina se lo porta via, e da lì la cancellazione è
+	// definitiva. Ne resta una sola: «annulla» vuol dire l'ultima.
+	let conversationsUndo = null;
 	const CONVERSATIONS_CLOSED_PAGE_SIZE = 20;
 	let conversationsClosedLimit = CONVERSATIONS_CLOSED_PAGE_SIZE;
 	let conversationsIndexBusy = false;
@@ -6039,6 +6047,21 @@
 				loadOlderConversations();
 				return;
 			}
+			// Prima del thread: il comando gli sta accanto e non dentro, ma
+			// leggerlo per primo tiene la regola scritta una volta sola invece
+			// che appesa alla forma del markup.
+			const undo = e.target.closest("[data-conversation-undo]");
+			if (undo) {
+				undoConversationDelete();
+				return;
+			}
+			const remove = e.target.closest("[data-conversation-delete]");
+			if (remove) {
+				deleteConversation(
+					remove.getAttribute("data-conversation-delete") || "",
+				);
+				return;
+			}
 			const thread = e.target.closest("[data-conversation-id]");
 			if (thread) {
 				openConversationThread(
@@ -6090,12 +6113,70 @@
 			notice +
 			window.ConversationIndex.renderConversationIndex(conversationsIndex, {
 				currentId: conversationsCurrentId,
+				undo: conversationsUndo,
 			});
 		const nextList = conversationsRailEl.querySelector(".rail-list");
 		if (nextList) {
 			nextList.scrollTop = previousTop;
 			nextList.scrollLeft = previousLeft;
 		}
+	}
+
+	// deleteConversation butta via una conversazione conclusa, subito e senza
+	// chiedere: la domanda è sostituita dal bottone «Annulla» che compare in
+	// fondo alla lista. Il rifiuto di cancellarne una ancora viva è del server,
+	// e questa non lo ripete — il comando non viene nemmeno disegnato sui thread
+	// in corso.
+	//
+	// L'annullamento è possibile solo perché la DELETE risponde col record
+	// intero: è quella copia, e non la riga sintetica dell'indice, che verrà
+	// riscritta.
+	async function deleteConversation(id) {
+		if (!id) return;
+		let deleted;
+		try {
+			deleted = await apiDelete(
+				`/api/workspace/conversations/${encodeURIComponent(id)}/record`,
+			);
+		} catch (err) {
+			showToast(TEXT.deleteFailed(err.message || err), "err");
+			return;
+		}
+		// Senza il record non c'è niente da rimettere a posto, e un bottone
+		// «Annulla» che fallisse alla pressione sarebbe peggio di nessun
+		// bottone: l'offerta si fa solo quando può essere mantenuta.
+		const record = deleted && deleted.deleted;
+		conversationsUndo =
+			record && record.id
+				? { id: record.id, title: record.title || "", record }
+				: null;
+		showToast(TEXT.conversationDeleted, "ok");
+		// Il pannello non può restare su un thread che non esiste più: torna
+		// all'offerta di aprirne uno nuovo, che è lo stato di un workspace che
+		// non sta mostrando nessuna conversazione.
+		if (conversationsCurrentId === id) prepareConversationOpen("");
+		await loadConversationsIndex();
+	}
+
+	// undoConversationDelete riscrive l'ultima conversazione eliminata. Il
+	// bottone sparisce comunque, riuscita o no: quello che teneva è stato
+	// speso, e lasciarlo lì offrirebbe una seconda volta un annullamento che
+	// la prima ha già consumato.
+	async function undoConversationDelete() {
+		const pending = conversationsUndo;
+		if (!pending) return;
+		conversationsUndo = null;
+		renderConversationsRail();
+		try {
+			await apiPost(
+				`/api/workspace/conversations/${encodeURIComponent(pending.id)}/record`,
+				pending.record,
+			);
+			showToast(TEXT.conversationRestored, "ok");
+		} catch (err) {
+			showToast(TEXT.undoFailed(err.message || err), "err");
+		}
+		await loadConversationsIndex();
 	}
 
 	function loadOlderConversations() {
@@ -6537,6 +6618,10 @@
 		conversationsIndexLoadToken += 1;
 		conversationsCurrentId = "";
 		conversationsRefusal = "";
+		// Anche l'annullamento se ne va col workspace: il record che teneva
+		// andrebbe riscritto in un progetto che non è quello da cui è stato
+		// cancellato.
+		conversationsUndo = null;
 		renderConversationsRail();
 		// The panel is the home of the workspace: it never goes blank and it
 		// never hides itself — its visibility belongs to the layout alone. What

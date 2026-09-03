@@ -7171,6 +7171,54 @@ body.no-workspace [data-workspace-scoped] {
 	background: var(--border);
 }
 
+/* La riga tiene il thread e il suo comando di cancellazione, che gli sta
+   accanto e non dentro: un bottone dentro un bottone non è markup valido. È
+   `relative` solo per dare al comando un angolo dove appoggiarsi. */
+.thread-row {
+	position: relative;
+}
+
+/* Stessa gestualità della card della board: il comando resta invisibile finché
+   il puntatore non è sulla riga, e compare comunque appena prende il fuoco da
+   tastiera — altrimenti sarebbe raggiungibile ma non visibile. */
+.thread-delete-btn {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--text-dim);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	opacity: 0;
+	transition:
+		opacity var(--transition),
+		color var(--transition),
+		background var(--transition);
+}
+
+.thread-row:hover .thread-delete-btn,
+.thread-row:focus-within .thread-delete-btn {
+	opacity: 1;
+}
+
+.thread-delete-btn:hover {
+	color: var(--danger);
+	background: var(--danger-soft);
+}
+
+.thread-delete-btn:focus-visible {
+	outline: none;
+	opacity: 1;
+	box-shadow: 0 0 0 3px var(--danger-soft);
+}
+
 /* Una colonna sola: il codice della spec — quando c'è — sta sopra al titolo, e
    la riga di quando sotto. La griglia a due colonne di prima teneva la prima
    larga quanto il codice anche per i thread che non ne hanno uno, e quello spazio
@@ -7259,6 +7307,32 @@ body.no-workspace [data-workspace-scoped] {
 .rail-more:focus-visible {
 	background: var(--surface-3);
 	color: var(--text-strong);
+}
+
+/* L'annullamento dell'ultima eliminazione, in coda alla lista. Ha la stessa
+   forma di .rail-more perché è la stessa cosa — un comando in fondo alla
+   colonna — e solo il colore lo distingue: è l'unica riga del rail che rimette
+   qualcosa a posto, e va trovata senza cercarla. */
+.rail-undo {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-2);
+	width: 100%;
+	min-height: 40px;
+	margin-top: var(--space-2);
+	border: 1px solid var(--accent);
+	border-radius: var(--radius);
+	background: transparent;
+	color: var(--accent);
+	font: 600 13px/1.3 var(--font-sans);
+	padding: var(--space-2) var(--space-3);
+	cursor: pointer;
+}
+
+.rail-undo:hover,
+.rail-undo:focus-visible {
+	background: var(--accent-soft);
 }
 
 /* Il codice della spec ancora il thread: in monospazio, sopra al titolo, così
@@ -7498,9 +7572,24 @@ body.no-workspace [data-workspace-scoped] {
 		display: none;
 	}
 
-	.workspace-shell > .conversation-rail .thread {
+	/* Nella striscia è la riga a essere l'elemento della fila, non più il
+	   thread: la larghezza fissa sta su di lei, altrimenti la card si
+	   restringerebbe sul suo contenuto e le colonne non sarebbero più pari. */
+	.workspace-shell > .conversation-rail .thread-row {
 		flex: 0 0 auto;
 		width: 210px;
+	}
+
+	/* Nella striscia «in fondo alla lista» vuol dire in coda alla fila: il
+	   margine che lo staccava da sopra diventa larghezza propria e nient'altro. */
+	.workspace-shell > .conversation-rail .rail-undo {
+		flex: 0 0 auto;
+		width: auto;
+		margin-top: 0;
+		white-space: nowrap;
+	}
+
+	.workspace-shell > .conversation-rail .thread {
 		min-height: 0;
 		margin-bottom: 0;
 		background: var(--surface);

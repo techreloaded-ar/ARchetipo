@@ -108,6 +108,27 @@ func (s *FileStore) Get(ctx context.Context, id string) (Record, error) {
 	return record, nil
 }
 
+// Delete removes one record from the workspace, for good. An absent file is a
+// typed not-found for the same reason Get's is: erasing a conversation nobody
+// ever wrote is a mistake, and answering "done" would hide it from the caller
+// who has to tell the person that the thread they pressed is no longer there.
+func (s *FileStore) Delete(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := s.path(id)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return &StoreError{Kind: StoreNotFound, ID: id, Err: err}
+		}
+		return err
+	}
+	return nil
+}
+
 // List returns every record of the workspace, most recent first. There is no
 // index and no cache on purpose: the number of local records is small, and an
 // index would add a state to invalidate for a gain nobody can measure.

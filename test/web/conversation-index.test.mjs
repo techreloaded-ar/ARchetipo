@@ -88,7 +88,13 @@ function visibleText(html) {
 // speak about one entry — "this one carries no code" — instead of about the
 // whole rail, where another entry's code would satisfy it by accident.
 function threadWithTitle(html, title) {
-	const buttons = html.split("<button").slice(1);
+	// Only the thread button itself: the trash beside it names the same
+	// conversation in its label, and counting it too would make every
+	// "exactly one" assertion below fail on a second copy of the same thread.
+	const buttons = html
+		.split("<button")
+		.slice(1)
+		.filter((chunk) => chunk.includes("data-conversation-id"));
 	const found = buttons.filter((chunk) => chunk.includes(title));
 	assert.equal(
 		found.length,
@@ -535,6 +541,103 @@ describe("renderLimitNotice", () => {
 		);
 		assert.match(html, /&lt;script&gt;/);
 		assert.match(html, /troppe vive/);
+	});
+});
+
+describe("il comando di cancellazione di un thread", () => {
+	const rail = () =>
+		renderConversationIndex(
+			{
+				conversations: [
+					{
+						id: "conv-viva",
+						title: "Quella in corso",
+						last_message_at: ago(HOUR),
+						live: true,
+					},
+					{
+						id: "conv-chiusa",
+						title: "Quella conclusa",
+						last_message_at: ago(3 * DAY),
+					},
+				],
+			},
+			{ now: NOW },
+		);
+
+	it("sta su ogni conversazione conclusa e dice quale cancella", () => {
+		const html = rail();
+		assert.match(html, /data-conversation-delete="conv-chiusa"/);
+		assert.match(html, /Elimina la conversazione Quella conclusa/);
+	});
+
+	it("non compare su una conversazione ancora viva", () => {
+		const html = rail();
+		assert.ok(
+			!html.includes('data-conversation-delete="conv-viva"'),
+			`a live conversation must carry no trash, got ${html}`,
+		);
+		assert.equal(html.match(/data-conversation-delete=/g).length, 1);
+	});
+
+	it("sta accanto al thread e non dentro: niente bottoni annidati", () => {
+		const html = rail();
+		// Il thread apre la conversazione, il comando la cancella: se il secondo
+		// fosse dentro il primo il markup sarebbe invalido e una pressione
+		// finirebbe per aprire quello che si sta cancellando.
+		const insideThread = /data-conversation-id="[^"]*"[^>]*>(?:(?!<\/button>)[\s\S])*data-conversation-delete/;
+		assert.ok(
+			!insideThread.test(html),
+			`the trash must be a sibling of the thread, got ${html}`,
+		);
+	});
+});
+
+describe("l'annullamento dell'ultima eliminazione", () => {
+	const withUndo = (conversations) =>
+		renderConversationIndex(
+			{ conversations },
+			{ now: NOW, undo: { id: "conv-tolta", title: "Quella tolta" } },
+		);
+
+	it("sta in fondo alla lista e dice quale conversazione rimette a posto", () => {
+		const html = withUndo([
+			{ id: "conv-resta", title: "Quella che resta", last_message_at: ago(HOUR) },
+		]);
+		assert.match(html, /data-conversation-undo="conv-tolta"/);
+		assert.match(visibleText(html), /Annulla l'eliminazione/);
+		// Nel nome accessibile l'apostrofo è sfuggito, come ogni altro testo che
+		// finisce in un attributo.
+		assert.match(
+			html,
+			/aria-label="Annulla l&#39;eliminazione di Quella tolta"/,
+		);
+		// In fondo vuol dire dopo l'ultimo thread, non prima.
+		assert.ok(
+			html.indexOf("data-conversation-undo") >
+				html.lastIndexOf("data-conversation-id"),
+			`the undo must come after the threads, got ${html}`,
+		);
+	});
+
+	it("c'è anche quando la lista è rimasta vuota", () => {
+		// Cancellare l'unica conversazione del workspace è esattamente il caso
+		// in cui serve: senza il bottone qui, quella cancellazione non si
+		// potrebbe più annullare.
+		const html = withUndo([]);
+		assert.match(html, /data-conversation-undo="conv-tolta"/);
+		assert.match(visibleText(html), /non c'è ancora nessuna conversazione/);
+	});
+
+	it("non compare quando non c'è niente da annullare", () => {
+		const html = renderConversationIndex(
+			{ conversations: [{ id: "conv-1", title: "Una", last_message_at: ago(HOUR) }] },
+			{ now: NOW },
+		);
+		assert.ok(
+			!html.includes("data-conversation-undo"),
+			`no deletion, no undo, got ${html}`,
+		);
 	});
 });
 

@@ -231,3 +231,35 @@ func TestFileStoreListFailsNamingTheDamagedFile(t *testing.T) {
 		t.Fatalf("error does not name the damaged file: %v", err)
 	}
 }
+
+// Delete erases the record and only that one, and an id the store never wrote
+// comes back as a typed not-found: "there is nothing to erase" and "the erase
+// failed" are opposite answers, and the route above tells them apart.
+func TestFileStoreDeleteRemovesOnlyTheNamedRecord(t *testing.T) {
+	root := t.TempDir()
+	store := newStore(t, root)
+	saveRecord(t, store, Record{ID: "conv-one", LastMessageAt: time.Now().UTC()})
+	saveRecord(t, store, Record{ID: "conv-two", LastMessageAt: time.Now().UTC()})
+
+	if err := store.Delete(context.Background(), "conv-one"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	records, err := store.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].ID != "conv-two" {
+		t.Fatalf("after Delete the store holds %#v, want only conv-two", records)
+	}
+
+	var storeErr *StoreError
+	err = store.Delete(context.Background(), "conv-one")
+	if !errors.As(err, &storeErr) || storeErr.Kind != StoreNotFound {
+		t.Fatalf("deleting an absent record = %v, want not_found", err)
+	}
+	err = store.Delete(context.Background(), "../escape")
+	if !errors.As(err, &storeErr) || storeErr.Kind != StoreInvalidID {
+		t.Fatalf("Delete accepted an invalid id: %v", err)
+	}
+}
