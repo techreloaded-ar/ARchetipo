@@ -5935,6 +5935,21 @@
 				}
 				return;
 			}
+			// Una bozza si conferma dove le spec si creano, e non altrove: il
+			// comando porta a quel modulo con la proposta già versata dentro,
+			// che è esattamente ciò che il modulo mostrerebbe se lo si aprisse
+			// a mano. Da qui in poi la creazione è quella di sempre.
+			const deliveredDraft = e.target.closest(
+				"[data-conversation-delivered-draft]",
+			);
+			if (deliveredDraft) {
+				const draft = conversationDeliveredSpecDraft();
+				if (draft) {
+					openNewSpec();
+					applySpecDraft(draft);
+				}
+				return;
+			}
 			// Same rule as the status strip: reaching a run only navigates to the
 			// panel where the run already lives, so there is a single place that
 			// mounts execution panels and resumes a record.
@@ -7149,6 +7164,10 @@
 						? conversationModelChoiceMarkup()
 						: "",
 				openingSpecCode: conversationOpeningSpecCode,
+				// La bozza che questa conversazione ha consegnato, quando ne ha
+				// consegnata una. Riconoscerla vuol dire sapere quale azione la
+				// produce, ed è un sapere di questa pagina e non del renderer.
+				deliveredDraft: conversationDeliveredSpecDraft(),
 				// The recommended step comes from /api/workspace/status and from
 				// no other source — scoped to the spec of this conversation when
 				// it has one, workspace-wide otherwise. The thread hosts it at
@@ -7484,7 +7503,13 @@
 		// The server hands back the workspace's last execution on every read, so
 		// reopening the modal finds the conversation it left behind instead of
 		// starting a second one.
-		resumeExecution(view.execution, SPEC_DRAFT_CONTEXT);
+		//
+		// Una run già finita va conclusa, non soltanto ridisegnata: è la
+		// conclusione che versa la bozza nel modulo, e senza di essa una
+		// proposta pronta resterebbe leggibile solo dentro al record — il
+		// pannello direbbe "riuscita" sopra a un modulo vuoto. È la stessa
+		// distinzione che followExecution fa già per ogni altro pannello.
+		followExecution(view.execution, SPEC_DRAFT_CONTEXT);
 		loadModelChoice(SPEC_DRAFT_CONTEXT);
 	}
 
@@ -7493,6 +7518,11 @@
 	// which is the ordinary submit of this very form.
 	async function settleSpecDraft(record) {
 		if (!record || record.status !== "SUCCEEDED") return;
+		// L'ultima esecuzione di workspace che il server consegna può essere di
+		// un'altra azione — una generazione del backlog, un'inception — e quella
+		// non è una bozza illeggibile: è un'altra cosa, e questo pannello
+		// conclude soltanto ciò che sa concludere.
+		if (record.action !== SPEC_DRAFT_ACTION) return;
 		const draft =
 			record.result && record.result.payload && record.result.payload.spec_draft;
 		if (!draft || typeof draft !== "object") {
@@ -7507,6 +7537,23 @@
 		setSpecDraftNotice(
 			TEXT.draftProposed,
 		);
+	}
+
+	// conversationDeliveredSpecDraft è la bozza che la conversazione aperta ha
+	// prodotto, oppure null.
+	//
+	// Una conversazione che *è* un passo del processo porta con sé il record
+	// intero, e la bozza sta lì dentro: è l'unico posto in cui sta, perché una
+	// proposta non viene scritta da nessuna parte finché non la si conferma. Un
+	// passo di altro genere e una run non riuscita non hanno niente da
+	// confermare, e rispondono di no.
+	function conversationDeliveredSpecDraft() {
+		const record = conversationView && conversationView.execution;
+		if (!record || record.action !== SPEC_DRAFT_ACTION) return null;
+		if (record.status !== "SUCCEEDED") return null;
+		const draft =
+			record.result && record.result.payload && record.result.payload.spec_draft;
+		return draft && typeof draft === "object" ? draft : null;
 	}
 
 	function applySpecDraft(draft) {

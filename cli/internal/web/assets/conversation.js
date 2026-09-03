@@ -158,6 +158,13 @@
 			"Non è ancora partito niente: questo è soltanto quello che l'agente farebbe, e succede se lo confermi.",
 		proposalConfirm: "Conferma",
 		proposalRefuse: "Rifiuta",
+		// La bozza che la conversazione ha consegnato. Che cosa sia lo dice il
+		// suo titolo, che arriva dal chiamante: qui si sa soltanto che c'è
+		// qualcosa di pronto e che non è ancora stato creato niente.
+		markDelivered: "bozza",
+		deliveredPromise:
+			"Non è ancora stato creato niente: questa è la bozza che l'agente propone, e diventa una spec solo quando la confermi nel modulo.",
+		deliveredOpen: "Rivedi e crea",
 		// Passo successivo
 		nextStepRun: "Avvia",
 		// Il dettaglio tecnico, ripiegato.
@@ -1312,6 +1319,37 @@
 		</div>`;
 	}
 
+	// La bozza che questa conversazione ha consegnato, con il comando che porta
+	// dov'è possibile confermarla.
+	//
+	// Che ci sia una bozza, e quale, lo decide chi chiama: qui non si sa che
+	// cosa produca una bozza né quale passo del metodo l'abbia prodotta — si
+	// disegna un titolo e un comando, come per ogni altra cosa che arriva già
+	// risolta. Il blocco sta accanto alla proposta e per la stessa ragione: è
+	// una cosa da fare adesso, e va letta senza scorrere una storia che nel
+	// frattempo è cresciuta.
+	//
+	// Riusa la veste della proposta perché è la stessa cosa detta due volte:
+	// qualcosa di pronto che non è ancora successo, e un comando per farlo
+	// succedere.
+	function renderDeliveredDraft(draft, ui) {
+		if (!draft || typeof draft !== "object") return "";
+		const local = ui && typeof ui === "object" ? ui : {};
+		const title = textAt(draft, "title");
+		const head = `<div class="conv-proposal-head">
+			<span class="conv-proposal-mark">${escapeHtml(TEXT.markDelivered)}</span>
+			${title ? `<span class="conv-proposal-title">${escapeHtml(title)}</span>` : ""}
+		</div>`;
+		const disabled = local.busy ? " disabled" : "";
+		return `<div class="conv-proposal">
+			${head}
+			<p class="conv-proposal-promise">${escapeHtml(TEXT.deliveredPromise)}</p>
+			<div class="conv-proposal-controls">
+				<button type="button" class="approval-btn allow" data-conversation-delivered-draft${disabled}>${escapeHtml(TEXT.deliveredOpen)}</button>
+			</div>
+		</div>`;
+	}
+
 	// The step the workspace recommends next, drawn at the tail of the thread —
 	// after everything that has been said and before the place where the next
 	// thing is said. It is not a fact of this conversation: the caller reads it
@@ -1505,6 +1543,12 @@
 		if (proposal) blocks.push(renderProposal(proposal, local));
 		const outcome = objectAt(value, "outcome");
 		if (outcome) blocks.push(renderOutcome(outcome, local));
+		// La bozza consegnata sta con loro, e per la stessa ragione: è ciò che
+		// resta da fare adesso. Arriva dal chiamante e non dal payload, perché
+		// riconoscerla vuol dire sapere quale run la produce, ed è un sapere che
+		// questo modulo non ha.
+		const delivered = objectAt(local, "deliveredDraft");
+		if (delivered) blocks.push(renderDeliveredDraft(delivered, local));
 		blocks.push(renderTimeline(value, active, local));
 		// A decision the agent is waiting on sits right after the history and
 		// before what to do next: it is the reason nothing more is happening,

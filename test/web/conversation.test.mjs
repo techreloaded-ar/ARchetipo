@@ -637,6 +637,57 @@ describe("renderConversation — proposta", () => {
 	});
 });
 
+// La bozza consegnata. Una conversazione che ha prodotto una proposta da
+// confermare deve dirlo dov'è successo, perché quella proposta non è scritta in
+// nessun altro posto: senza il comando resta leggibile solo dentro al record.
+// Riconoscerla non è compito del renderer, quindi arriva dal chiamante e il
+// modulo la disegna come ogni altra cosa già risolta.
+describe("renderConversation — bozza consegnata", () => {
+	it("mostra la bozza e il comando per confermarla", () => {
+		const html = renderConversation(LIVE, "", {
+			deliveredDraft: { title: "TITOLO-DELLA-BOZZA" },
+		});
+		const text = visibleText(html);
+
+		assert.ok(
+			text.includes("TITOLO-DELLA-BOZZA"),
+			"il titolo della bozza non è testo visibile",
+		);
+		assert.ok(
+			html.includes("data-conversation-delivered-draft"),
+			"manca il comando che porta a confermare la bozza",
+		);
+		assert.ok(
+			/non è ancora stato creato niente/i.test(text),
+			"il pannello non dichiara che nulla è ancora stato creato",
+		);
+	});
+
+	it("senza bozza non resta nessun comando", () => {
+		const html = renderConversation(LIVE, "");
+
+		assert.ok(
+			!html.includes("data-conversation-delivered-draft"),
+			"senza bozza non deve restare un comando da premere",
+		);
+	});
+
+	it("neutralizza l'HTML che arriva dalla bozza", () => {
+		const html = renderConversation(LIVE, "", {
+			deliveredDraft: { title: "<script>alert(1)</script>" },
+		});
+
+		assert.ok(
+			html.includes("&lt;script&gt;"),
+			"il titolo della bozza non è neutralizzato",
+		);
+		assert.ok(
+			!html.includes("<script"),
+			"la bozza ha prodotto un tag reale",
+		);
+	});
+});
+
 describe("renderConversation — esito", () => {
 	it("l'esito accettato resta compatto e non offre una vecchia run", () => {
 		const html = renderConversation(

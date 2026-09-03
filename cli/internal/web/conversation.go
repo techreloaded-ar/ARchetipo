@@ -656,6 +656,13 @@ func pastConversationViewOf(record conversationlog.Record, openability conversat
 			OpenedAt:    record.OpenedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 			SpecCode:    record.SpecCode,
 			ResumedFrom: record.ResumedFrom,
+			// Un passo del processo resta quel passo anche dopo essere finito.
+			// Il journal li scrive entrambi proprio perché una trascrizione che
+			// non sa nominare il proprio esito lascia il lettore con tutta la
+			// discussione e nessuna strada per sapere com'è andata: dirli qui è
+			// leggere il record, non interpretarlo.
+			Action:      execution.ActionID(record.Action),
+			ExecutionID: record.ExecutionID,
 		},
 		Events: events,
 		LastID: afterID,
@@ -707,7 +714,22 @@ func (s *Server) handleGetWorkspaceConversation(w http.ResponseWriter, r *http.R
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, pastConversationViewOf(record, s.conversationOpenabilityOf(ctx, ws), afterID))
+	view := pastConversationViewOf(record, s.conversationOpenabilityOf(ctx, ws), afterID)
+	// Il record di un passo finito si legge qui e non dentro
+	// pastConversationViewOf, che non tocca nessun archivio: è la stessa lettura
+	// che la gemella viva fa dal suo, con la stessa regola sul fallimento —
+	// assente, non un avviso, perché il thread resta il thread.
+	//
+	// Senza di essa una conversazione che *è* un passo perderebbe il proprio
+	// esito nel momento in cui smette di essere tenuta in memoria, e con esso
+	// tutto ciò che il passo ha prodotto e che non è scritto altrove: una
+	// proposta, per esempio, che finché nessuno la conferma vive solo lì.
+	if id := strings.TrimSpace(record.ExecutionID); id != "" && ws.store != nil {
+		if outcome, err := ws.store.Get(ctx, id); err == nil {
+			view.Execution = &outcome
+		}
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 // readPastConversation reads one conversation from the journal of the open
