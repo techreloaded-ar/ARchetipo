@@ -199,9 +199,13 @@
 		</button>`;
 	}
 
-	// L'annullamento dell'ultima eliminazione, in fondo alla lista. Vive solo
-	// finché la pagina se lo ricorda: è la pagina a tenere il record cancellato,
-	// e il bottone non è altro che l'offerta di riscriverlo.
+	// L'annullamento dell'ultima eliminazione. Vive solo finché la pagina se lo
+	// ricorda: è la pagina a tenere il record cancellato, e il bottone non è
+	// altro che l'offerta di riscriverlo.
+	//
+	// Non sta dentro la lista ma nella barra ferma in fondo alla colonna: una
+	// lista lunga si scorre, e un ripensamento che va cercato in coda a mille
+	// thread è un ripensamento che non arriva in tempo.
 	//
 	// Si disegna anche quando la lista è vuota — cancellare l'unica
 	// conversazione del workspace è esattamente il caso in cui serve — e per
@@ -287,6 +291,7 @@
 		const currentId = textAt(ui, "currentId");
 		const now = ui && typeof ui === "object" ? ui.now : null;
 		const undo = renderUndoControl(objectAt(ui, "undo"));
+		const dock = undo ? `<div class="rail-bottom">${undo}</div>` : "";
 
 		const top = `<div class="rail-top">${renderNewThread()}</div>`;
 
@@ -294,8 +299,8 @@
 			return `${top}
 		<div class="rail-list">
 			<p class="rail-empty">${TEXT.empty}</p>
-			${undo}
-		</div>`;
+		</div>
+		${dock}`;
 		}
 
 		// Every entry the payload marks as live, and not "the" live one: a
@@ -314,7 +319,8 @@
 			.join("");
 
 		return `${top}
-		<div class="rail-list">${groups}${renderOlderControl(view)}${undo}</div>`;
+		<div class="rail-list">${groups}${renderOlderControl(view)}</div>
+		${dock}`;
 	}
 
 	/**

@@ -7309,10 +7309,21 @@ body.no-workspace [data-workspace-scoped] {
 	color: var(--text-strong);
 }
 
-/* L'annullamento dell'ultima eliminazione, in coda alla lista. Ha la stessa
-   forma di .rail-more perché è la stessa cosa — un comando in fondo alla
-   colonna — e solo il colore lo distingue: è l'unica riga del rail che rimette
-   qualcosa a posto, e va trovata senza cercarla. */
+/* La barra ferma in fondo alla colonna, fuori dalla lista che scorre. Ospita
+   l'unico comando che rimette qualcosa a posto: se scorresse con i thread,
+   trovarlo vorrebbe dire percorrere tutta la lista, che è esattamente la cosa
+   che chi ha appena cancellato per sbaglio non ha il tempo di fare. */
+.rail-bottom {
+	flex: 0 0 auto;
+	padding: var(--space-2) var(--space-3) var(--space-3);
+	border-top: 1px solid var(--border);
+	background: var(--surface);
+}
+
+/* L'annullamento dell'ultima eliminazione. Ha la stessa forma di .rail-more
+   perché è la stessa cosa — un comando in fondo alla colonna — e solo il colore
+   lo distingue: è l'unica riga del rail che rimette qualcosa a posto, e va
+   trovata senza cercarla. */
 .rail-undo {
 	display: flex;
 	align-items: center;
@@ -7320,7 +7331,6 @@ body.no-workspace [data-workspace-scoped] {
 	gap: var(--space-2);
 	width: 100%;
 	min-height: 40px;
-	margin-top: var(--space-2);
 	border: 1px solid var(--accent);
 	border-radius: var(--radius);
 	background: transparent;
@@ -7580,12 +7590,23 @@ body.no-workspace [data-workspace-scoped] {
 		width: 210px;
 	}
 
-	/* Nella striscia «in fondo alla lista» vuol dire in coda alla fila: il
-	   margine che lo staccava da sopra diventa larghezza propria e nient'altro. */
+	/* Nella striscia il fondo della colonna è la coda della fila, e la barra ci
+	   resta appiccicata invece di allontanarsi con lo scorrimento: è la striscia
+	   stessa a scorrere in orizzontale, quindi qui serve `sticky` e non basta
+	   starne fuori come nella colonna. */
+	.workspace-shell > .conversation-rail .rail-bottom {
+		display: flex;
+		align-items: center;
+		position: sticky;
+		right: 0;
+		padding: var(--space-2) var(--space-4) var(--space-2) var(--space-2);
+		border-top: 0;
+		border-left: 1px solid var(--border);
+	}
+
 	.workspace-shell > .conversation-rail .rail-undo {
 		flex: 0 0 auto;
 		width: auto;
-		margin-top: 0;
 		white-space: nowrap;
 	}
 

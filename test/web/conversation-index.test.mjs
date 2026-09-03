@@ -618,6 +618,13 @@ describe("l'annullamento dell'ultima eliminazione", () => {
 				html.lastIndexOf("data-conversation-id"),
 			`the undo must come after the threads, got ${html}`,
 		);
+		// E fuori dalla lista che scorre: sta nella barra ferma in fondo alla
+		// colonna, altrimenti una lista lunga lo porterebbe via con sé.
+		assert.ok(
+			html.indexOf("rail-bottom") > html.indexOf('class="rail-list"') &&
+				html.indexOf("data-conversation-undo") > html.indexOf("rail-bottom"),
+			`the undo must live in the docked bar after the list, got ${html}`,
+		);
 	});
 
 	it("c'è anche quando la lista è rimasta vuota", () => {
