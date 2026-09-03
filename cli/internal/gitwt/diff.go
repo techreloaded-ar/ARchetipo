@@ -33,9 +33,10 @@ type Line struct {
 
 // Diff returns the structured diff between forkBase and branch, restricted to
 // the changes introduced on branch since it diverged from forkBase
-// (`git diff <forkBase>...<branch>`).
+// (`git diff <forkBase>...<branch>`), minus the runtime artifacts of the viewer.
 func Diff(ctx context.Context, repoRoot, forkBase, branch string) ([]FileDiff, error) {
-	out, err := runGit(ctx, repoRoot, "diff", "--no-color", "--find-renames", forkBase+"..."+branch, "--")
+	args := append([]string{"diff", "--no-color", "--find-renames", forkBase + "..." + branch, "--", "."}, RuntimeArtifactPathspecs...)
+	out, err := runGit(ctx, repoRoot, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -43,9 +44,11 @@ func Diff(ctx context.Context, repoRoot, forkBase, branch string) ([]FileDiff, e
 }
 
 // DiffWorkingTree returns the structured diff between base and the working tree
-// (`git diff <base>`). Used as a fallback when a spec has no recorded branch.
+// (`git diff <base>`), minus the runtime artifacts of the viewer. Used when a
+// spec has no recorded branch.
 func DiffWorkingTree(ctx context.Context, repoRoot, base string) ([]FileDiff, error) {
-	out, err := runGit(ctx, repoRoot, "diff", "--no-color", "--find-renames", base, "--")
+	args := append([]string{"diff", "--no-color", "--find-renames", base, "--", "."}, RuntimeArtifactPathspecs...)
+	out, err := runGit(ctx, repoRoot, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -82,6 +82,34 @@ func EnsureRepo(ctx context.Context, repoRoot, base string) error {
 	return nil
 }
 
+// HeadSHA is the commit the working tree currently sits on. It is what a spec
+// started without the worktree workflow records as its fork base: with no branch
+// of its own, nothing else says where its increment begins.
+func HeadSHA(ctx context.Context, repoRoot string) (string, error) {
+	return runGit(ctx, repoRoot, "rev-parse", "HEAD")
+}
+
+// IsRepo reports whether repoRoot is inside a git work tree, without turning a
+// plain "no" into an error.
+func IsRepo(ctx context.Context, repoRoot string) bool {
+	return gitOK(ctx, repoRoot, "rev-parse", "--is-inside-work-tree")
+}
+
+// RuntimeArtifactPathspecs excludes what the viewer writes while it works —
+// conversation transcripts, execution records and staging files — from both the
+// review diff and the automatic commit. They live under .archetipo/ next to the
+// backlog, but they are the trace of the run, not the increment it produced: a
+// single transcript is tens of thousands of lines, and with git.auto_commit on
+// it would be versioned and then shown to whoever opens the review.
+//
+// One list, used by everything that has to say what is not part of an increment,
+// so the diff and the commit cannot disagree about it.
+var RuntimeArtifactPathspecs = []string{
+	":(exclude).archetipo/conversations",
+	":(exclude).archetipo/executions",
+	":(exclude).archetipo/tmp",
+}
+
 func refExists(ctx context.Context, repoRoot, ref string) bool {
 	return gitOK(ctx, repoRoot, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
 }
@@ -354,7 +382,8 @@ func CommitSpecChanges(ctx context.Context, repoRoot, workdirRel, code, title st
 	if strings.TrimSpace(status) == "" {
 		return nil
 	}
-	if _, err := runGitInDir(ctx, workdirAbs, "add", "-A"); err != nil {
+	addArgs := append([]string{"add", "-A", "--", "."}, RuntimeArtifactPathspecs...)
+	if _, err := runGitInDir(ctx, workdirAbs, addArgs...); err != nil {
 		return iox.NewConflict(
 			fmt.Sprintf("could not stage changes for %s", code),
 			"inspect the working directory and retry `archetipo spec review`", err)

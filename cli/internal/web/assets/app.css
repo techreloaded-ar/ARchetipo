@@ -2863,6 +2863,25 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	border-color: var(--accent);
 }
 
+/* Il file grande del diff nasce ripiegato e si apre da qui: costruire le sue
+   righe è quello che costa, non mostrarle. */
+.diff-file-expand {
+	display: block;
+	width: 100%;
+	padding: var(--space-2) var(--space-4);
+	text-align: left;
+	color: var(--accent);
+	background: none;
+	border: none;
+	border-top: 1px solid var(--border);
+	font: inherit;
+	cursor: pointer;
+}
+
+.diff-file-expand:hover {
+	background: var(--surface-3);
+}
+
 .diff-hunk-header {
 	padding: 2px var(--space-4);
 	color: var(--accent);

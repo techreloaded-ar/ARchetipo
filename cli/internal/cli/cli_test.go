@@ -2934,3 +2934,68 @@ func TestInit_UnknownTemplateLeavesNoPartialWorkspace(t *testing.T) {
 		}
 	}
 }
+
+// Senza worktree nessuno registrava da dove parte l'incremento, e il diff di
+// revisione ripiegava sulla base configurata: su un branch di lavoro lontano da
+// main quello è tutto il divario, non la spec. Ora anche questo ramo salva la
+// HEAD del momento in cui la spec parte, e un secondo start — quello del
+// rework — non la sovrascrive.
+func TestSpecStartRecordsForkBaseWithoutWorktree(t *testing.T) {
+	newProject(t)
+	initGitMain(t)
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	planFile := writeInputFile(t, "plan.json", planJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "plan", "US-001", "--file", planFile); res.exit != 0 {
+		t.Fatalf("plan failed: %s", res.stderr.String())
+	}
+	head := mustOutput(t, "git", "rev-parse", "HEAD")
+	if res := runCLI(t, "", "spec", "start", "US-001"); res.exit != 0 {
+		t.Fatalf("start failed: %s", res.stderr.String())
+	}
+	if got := specForkBase(t, "US-001"); got != head {
+		t.Fatalf("fork_base = %q, want the HEAD at start %q", got, head)
+	}
+
+	mustRun(t, "git", "commit", "--allow-empty", "-m", "altro lavoro")
+	if res := runCLI(t, "", "spec", "start", "US-001"); res.exit != 0 {
+		t.Fatalf("second start failed: %s", res.stderr.String())
+	}
+	if got := specForkBase(t, "US-001"); got != head {
+		t.Fatalf("un secondo start ha spostato fork_base a %q, want %q", got, head)
+	}
+}
+
+// Fuori da un repository git non c'è nessuna HEAD da registrare, e non è un
+// fallimento di `spec start`.
+func TestSpecStartWithoutGitStillStarts(t *testing.T) {
+	newProject(t)
+	specsFile := writeInputFile(t, "specs.json", specJSON)
+	planFile := writeInputFile(t, "plan.json", planJSON)
+	if res := runCLI(t, "", "spec", "add", "--file", specsFile); res.exit != 0 {
+		t.Fatalf("seed add failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "plan", "US-001", "--file", planFile); res.exit != 0 {
+		t.Fatalf("plan failed: %s", res.stderr.String())
+	}
+	if res := runCLI(t, "", "spec", "start", "US-001"); res.exit != 0 {
+		t.Fatalf("start failed: %s", res.stderr.String())
+	}
+	if got := specForkBase(t, "US-001"); got != "" {
+		t.Fatalf("fork_base = %q fuori da un repository git, want vuoto", got)
+	}
+}
+
+func specForkBase(t *testing.T, code string) string {
+	t.Helper()
+	show := runCLI(t, "", "spec", "show", code)
+	if show.exit != 0 {
+		t.Fatalf("show failed: %s", show.stderr.String())
+	}
+	_, data := decodeOK(t, show)
+	spec, _ := data["spec"].(map[string]any)
+	forkBase, _ := spec["fork_base"].(string)
+	return forkBase
+}

@@ -416,3 +416,77 @@ func TestIntegrate_RealGit_MissingCommitterIdentityIsNotReportedAsConflict(t *te
 		t.Fatalf("unexpected message %q", codedErr.Message)
 	}
 }
+
+// I transcript delle conversazioni e i record di esecuzione sono la traccia
+// della run, non l'incremento che ha prodotto: non vanno mostrati a chi rivede
+// né versionati dal commit automatico, che altrimenti li mette dentro il diff
+// della spec successiva.
+func TestDiffAndCommitIgnoreRuntimeArtifacts(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+
+	if err := os.MkdirAll(filepath.Join(root, ".archetipo", "conversations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".archetipo", "conversations", "exec-1.json"), []byte("{\"turns\":[]}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := DiffWorkingTree(ctx, root, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.Contains(f.NewPath, ".archetipo/conversations") {
+			t.Fatalf("il diff mostra un artefatto di runtime: %s", f.NewPath)
+		}
+	}
+	if len(files) != 1 || files[0].NewPath != "a.txt" {
+		t.Fatalf("atteso il solo a.txt nel diff, got %+v", files)
+	}
+
+	if err := CommitSpecChanges(ctx, root, "", "US-001", "Greeting", CommitMessageOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	tracked, err := runGit(ctx, root, "ls-files", ".archetipo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(tracked) != "" {
+		t.Fatalf("il commit automatico ha versionato artefatti di runtime: %q", tracked)
+	}
+	committed, err := runGit(ctx, root, "show", "--name-only", "--format=", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(committed) != "a.txt" {
+		t.Fatalf("il commit contiene %q, atteso il solo a.txt", strings.TrimSpace(committed))
+	}
+}
+
+// Senza worktree la base dell'incremento è la HEAD del momento in cui la spec è
+// partita: HeadSHA è quello che spec start registra.
+func TestHeadSHAIsTheCurrentCommit(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	head, err := HeadSHA(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := runGit(ctx, root, "rev-parse", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head != want {
+		t.Fatalf("HeadSHA = %q, want %q", head, want)
+	}
+	if !IsRepo(ctx, root) {
+		t.Fatal("IsRepo ha detto no su un repository git")
+	}
+	if IsRepo(ctx, t.TempDir()) {
+		t.Fatal("IsRepo ha detto sì fuori da un repository git")
+	}
+}

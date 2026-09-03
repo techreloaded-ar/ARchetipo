@@ -261,6 +261,9 @@
 		diffLoading: "Caricamento del diff…",
 		diffError: (reason) => `Errore: ${reason}`,
 		diffEmpty: "Nessuna modifica in questo diff.",
+		baseFallbackHint:
+			"Il punto di partenza registrato per questa spec non esiste più: il diff parte dalla base configurata e può contenere molto più dell'incremento.",
+		diffFileCollapsed: (n) => `${n} righe — mostra`,
 
 		// Azioni della spec
 		noActionAvailable: "In questo stato non è disponibile nessuna azione",
@@ -616,6 +619,13 @@
 	let reviewComments = []; // inline comments for the spec currently under review
 	let reviewLoaded = false; // whether the review tab has been loaded for this spec
 	let currentReview = null; // ultima review letta: serve a contare i rilievi del dossier
+	// I file grandi del diff nascono ripiegati: costruire una riga DOM per ogni
+	// riga di un file generato blocca il thread, e quasi mai è quello che si sta
+	// rivedendo. La mappa tiene, per ogni percorso del file, la funzione che lo
+	// apre — sotto tutti e due i suoi nomi, perché un commento sul lato «old» è
+	// ancorato al vecchio percorso.
+	const DIFF_FILE_COLLAPSE_LINES = 400;
+	let diffFileExpanders = new Map();
 	let currentSpecSnapshot = null; // last loaded spec (for cancel + re-render after save)
 	let currentPlanSnapshot = null; // last loaded plan (for cancel + re-render after save)
 	let boardSnapshot = null; // last loaded board (for undo on failed drag)
@@ -768,6 +778,9 @@
 	planEditBtn.addEventListener("click", () => enterPlanEditMode());
 	planCancelBtn.addEventListener("click", () => exitPlanEditMode());
 	addTaskBtn.addEventListener("click", () => addTaskRow());
+	// Un solo listener per tutto il diff invece di uno per riga: su un diff di
+	// migliaia di righe la differenza è tutta nel costo di costruzione.
+	reviewDiff.addEventListener("click", onDiffClick);
 	reviewRequestBtn.addEventListener("click", onRequestChanges);
 	reviewIntegrateBtn.addEventListener("click", onIntegrate);
 	reviewApproveBtn.addEventListener("click", onApprove);
@@ -2682,6 +2695,13 @@
 		reviewComments = [];
 		reviewLoaded = false;
 		currentReview = null;
+		// Il pannello di revisione è unico e riusato: il DOM del diff lasciato
+		// dentro un pannello nascosto continua a pesare su ogni ridisegno della
+		// board, ed è quello che costringeva a ricaricare la pagina.
+		diffFileExpanders = new Map();
+		reviewDiff.innerHTML = "";
+		reviewDossier.innerHTML = "";
+		reviewBranch.innerHTML = "";
 		reviewTab.classList.add("hidden");
 	}
 
@@ -2944,20 +2964,29 @@
 		}
 	}
 
+	// Il dossier e il verdetto sono quello che serve per decidere, il diff è
+	// quello che serve per capire: le due richieste partono insieme ma si
+	// aspettano separatamente, così «Approva» è premibile prima che il diff
+	// abbia finito di arrivare.
 	async function loadReview() {
 		reviewLoaded = true;
 		reviewStatus.textContent = "";
 		reviewStatus.className = "status-msg";
 		reviewDiff.innerHTML = `<div class="review-empty">${escapeHtml(TEXT.diffLoading)}</div>`;
+		const code = currentSpecCode;
+		const pendingDiff = apiGet(`/api/spec/${encodeURIComponent(code)}/diff`);
+		// Se è la review a fallire, il diff non viene mai atteso: il catch vuoto
+		// evita la unhandled rejection, l'errore vero lo riporta l'await.
+		pendingDiff.catch(() => {});
 		try {
-			const [diff, review] = await Promise.all([
-				apiGet(`/api/spec/${encodeURIComponent(currentSpecCode)}/diff`),
-				apiGet(`/api/spec/${encodeURIComponent(currentSpecCode)}/review`),
-			]);
+			const review = await apiGet(
+				`/api/spec/${encodeURIComponent(code)}/review`,
+			);
 			currentReview = review || null;
 			reviewComments = (review && review.comments) || [];
-			renderReviewBranch(diff);
 			renderDossier(review || {});
+			const diff = await pendingDiff;
+			renderReviewBranch(diff);
 			renderDiff(diff);
 		} catch (err) {
 			reviewLoaded = false;
@@ -2972,7 +3001,9 @@
 				`<span class="review-chip">⎇ ${escapeHtml(diff.branch)}</span>`,
 			);
 		parts.push(
-			`<span class="review-chip">base ${escapeHtml(diff.base || "")}</span>`,
+			diff.base_fallback
+				? `<span class="review-chip" title="${escapeHtml(TEXT.baseFallbackHint)}">base ${escapeHtml(diff.base || "")} ⚠</span>`
+				: `<span class="review-chip">base ${escapeHtml(diff.base || "")}</span>`,
 		);
 		if (diff.branch)
 			parts.push(
@@ -3062,6 +3093,7 @@
 
 	function renderDiff(diff) {
 		reviewDiff.innerHTML = "";
+		diffFileExpanders = new Map();
 		const files = diff.files || [];
 		if (files.length === 0) {
 			reviewDiff.innerHTML =
@@ -3080,14 +3112,38 @@
 		header.className = "diff-file-header";
 		header.innerHTML = `<span class="diff-file-status diff-${escapeHtml(file.status || "modified")}">${escapeHtml(file.status || "modified")}</span><span class="diff-file-path">${escapeHtml(path)}</span>`;
 		wrap.appendChild(header);
-		(file.hunks || []).forEach((hunk) => {
-			const hh = document.createElement("div");
-			hh.className = "diff-hunk-header";
-			hh.textContent = hunk.header;
-			wrap.appendChild(hh);
-			(hunk.lines || []).forEach((line) =>
-				wrap.appendChild(renderDiffLine(path, file, line)),
-			);
+		const hunks = file.hunks || [];
+		const lineCount = hunks.reduce((n, h) => n + (h.lines || []).length, 0);
+		const buildLines = () => {
+			const body = document.createDocumentFragment();
+			hunks.forEach((hunk) => {
+				const hh = document.createElement("div");
+				hh.className = "diff-hunk-header";
+				hh.textContent = hunk.header;
+				body.appendChild(hh);
+				(hunk.lines || []).forEach((line) =>
+					body.appendChild(renderDiffLine(path, file, line)),
+				);
+			});
+			wrap.appendChild(body);
+		};
+		if (lineCount <= DIFF_FILE_COLLAPSE_LINES) {
+			buildLines();
+			return wrap;
+		}
+		const toggle = document.createElement("button");
+		toggle.type = "button";
+		toggle.className = "diff-file-expand";
+		toggle.textContent = TEXT.diffFileCollapsed(lineCount);
+		wrap.appendChild(toggle);
+		const expand = () => {
+			if (!toggle.isConnected) return;
+			toggle.remove();
+			buildLines();
+		};
+		toggle.addEventListener("click", expand);
+		[file.new_path, file.old_path, path].forEach((p) => {
+			if (p) diffFileExpanders.set(p, expand);
 		});
 		return wrap;
 	}
@@ -3109,11 +3165,26 @@
             <span class="diff-sign">${sign}</span>
             <span class="diff-code">${escapeHtml(line.text)}</span>
         `;
-		row.querySelector(".diff-comment-add").addEventListener("click", (e) => {
-			e.stopPropagation();
-			openComposer(row, anchorFile, side, lineNo);
-		});
 		return row;
+	}
+
+	function onDiffClick(e) {
+		const add = e.target.closest(".diff-comment-add");
+		if (!add) return;
+		const row = add.closest(".diff-line");
+		if (!row) return;
+		e.stopPropagation();
+		openComposer(
+			row,
+			row.dataset.file,
+			row.dataset.side,
+			Number(row.dataset.line),
+		);
+	}
+
+	function expandDiffFile(path) {
+		const expand = diffFileExpanders.get(path);
+		if (expand) expand();
 	}
 
 	function renderAllComments() {
@@ -3122,6 +3193,9 @@
 			.querySelectorAll(".diff-comment-block")
 			.forEach((n) => n.remove());
 		reviewComments.forEach((c) => {
+			// Un commento salvato su un file ripiegato lo apre: tenerlo chiuso
+			// nasconderebbe anche il rilievo che qualcuno ci ha lasciato.
+			expandDiffFile(c.file);
 			const row = findLineRow(c.file, c.side, c.line);
 			if (row) insertCommentBlock(row, c);
 		});

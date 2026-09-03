@@ -16,18 +16,19 @@ import (
 )
 
 type diffView struct {
-	Base   string           `json:"base"`
-	Branch string           `json:"branch"`
-	Ahead  int              `json:"ahead"`
-	Behind int              `json:"behind"`
-	Files  []gitwt.FileDiff `json:"files"`
+	Base         string           `json:"base"`
+	BaseFallback bool             `json:"base_fallback,omitempty"`
+	Branch       string           `json:"branch"`
+	Ahead        int              `json:"ahead"`
+	Behind       int              `json:"behind"`
+	Files        []gitwt.FileDiff `json:"files"`
 }
 
 // handleGetDiff returns the structured diff for a spec under review. When the
 // spec has a recorded branch (worktree workflow) the diff is
-// `git diff <fork_base>...<branch>`; otherwise it falls back to `git diff
-// <base>` against the working tree, where base comes from ?base= or the
-// configured worktree base.
+// `git diff <fork_base>...<branch>`; otherwise it is `git diff <base>` against
+// the working tree, where base comes from ?base=, from the fork base `spec
+// start` recorded, or — last — from the configured worktree base.
 func (s *Server) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	ws := s.session()
 	code := r.PathValue("code")
@@ -56,16 +57,33 @@ func (s *Server) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, diffView{Base: forkBase, Branch: spec.Branch, Ahead: ahead, Behind: behind, Files: files})
 		return
 	}
+	// Without a branch the increment still has a beginning: the HEAD `spec start`
+	// recorded. The configured base is the last resort, and on a working branch
+	// far from it that answer is the whole divergence rather than this spec's
+	// work — so when the recorded base no longer resolves the fallback says so,
+	// and the viewer's chip shows which base it is actually looking at.
 	base := strings.TrimSpace(r.URL.Query().Get("base"))
+	fallback := false
+	if base == "" {
+		base = strings.TrimSpace(spec.ForkBase)
+	}
 	if base == "" {
 		base = ws.cfg.Worktree.Base
 	}
 	files, err := gitwt.DiffWorkingTree(ctx, root, base)
 	if err != nil {
-		writeError(w, err)
-		return
+		if base == ws.cfg.Worktree.Base {
+			writeError(w, err)
+			return
+		}
+		base, fallback = ws.cfg.Worktree.Base, true
+		files, err = gitwt.DiffWorkingTree(ctx, root, base)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
 	}
-	writeJSON(w, http.StatusOK, diffView{Base: base, Files: files})
+	writeJSON(w, http.StatusOK, diffView{Base: base, BaseFallback: fallback, Files: files})
 }
 
 func (s *Server) handleGetReview(w http.ResponseWriter, r *http.Request) {
@@ -282,6 +300,11 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
+		// A closed spec carries no fork base, the same way integrateSpec leaves
+		// none: the SHA described where its increment began, and a spec that is
+		// done has no increment left to bound.
+		emptyForkBase := ""
+		_, _ = ws.conn.UpdateSpec(ctx, code, domain.SpecUpdate{ForkBase: &emptyForkBase})
 		sweepSpecTemporaryArtifacts(ws, code)
 	}
 	s.broker.Publish()

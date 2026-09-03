@@ -427,8 +427,10 @@ func newSpecStartCmd(s streams) *cobra.Command {
 		Long: "Transitions the spec from PLANNED to IN PROGRESS. When the worktree " +
 			"workflow is enabled (worktree.enabled in config.yaml), it also creates a " +
 			"dedicated git branch + worktree forked from the right base (dependency-aware) " +
-			"and records branch/worktree/fork_base on the spec. Worktree setup is " +
-			"non-fatal: outside a git repository it is skipped with a warning.",
+			"and records branch/worktree/fork_base on the spec. With the worktree " +
+			"workflow off it records fork_base alone, from the current HEAD, so the " +
+			"review diff still knows where the increment begins. Both are non-fatal: " +
+			"outside a git repository they are skipped with a warning.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := strings.TrimSpace(args[0])
@@ -446,11 +448,44 @@ func newSpecStartCmd(s streams) *cobra.Command {
 					} else {
 						res.Refs = append(res.Refs, domain.Ref{Code: ref, Path: wt})
 					}
+				} else if werr := recordForkBase(ctx, cfg, c, ref); werr != nil {
+					fmt.Fprintf(s.err, "warning: fork base not recorded: %v\n", werr)
 				}
 				return res, nil
 			})
 		},
 	}
+}
+
+// recordForkBase remembers where the increment of a spec begins when the
+// worktree workflow is off. Without it nobody does: the spec has no branch, so
+// its review diff falls back to the configured base, and on a working branch
+// dozens of commits ahead of main that means showing hundreds of files that have
+// nothing to do with the spec.
+//
+// It is idempotent on purpose. A second start — the one a rework cycle does —
+// keeps the base the first one recorded, so the diff covers the original
+// increment together with the fixes made on top of it.
+//
+// Outside a git repository it does nothing and says nothing: there is no HEAD to
+// record, and that is not a failure of `spec start`.
+func recordForkBase(ctx context.Context, cfg config.Config, c connector.Connector, ref string) error {
+	if !gitwt.IsRepo(ctx, cfg.ProjectRoot) {
+		return nil
+	}
+	spec, err := c.ReadSpecDetail(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(spec.ForkBase) != "" {
+		return nil
+	}
+	head, err := gitwt.HeadSHA(ctx, cfg.ProjectRoot)
+	if err != nil {
+		return err
+	}
+	_, err = c.UpdateSpec(ctx, ref, domain.SpecUpdate{ForkBase: &head})
+	return err
 }
 
 // setupWorktree creates (idempotently) the branch + worktree for a spec and
