@@ -3296,11 +3296,18 @@
 		renderAllComments();
 	}
 
+	// La PUT salva la review intera, non i soli commenti: mandare solo quelli
+	// cancellava dal file il dossier e il verdetto: lasciare un commento inline
+	// buttava via le evidenze su cui lo si stava lasciando, e con loro i rilievi
+	// che «Chiedi modifiche» avrebbe riportato nella spec.
 	async function persistReview() {
+		const review = { ...(currentReview || {}), comments: reviewComments };
+		currentReview = review;
 		try {
-			await apiPut(`/api/spec/${encodeURIComponent(currentSpecCode)}/review`, {
-				comments: reviewComments,
-			});
+			await apiPut(
+				`/api/spec/${encodeURIComponent(currentSpecCode)}/review`,
+				review,
+			);
 		} catch (err) {
 			showToast(TEXT.saveFailed(err.message || err), "err");
 		}
