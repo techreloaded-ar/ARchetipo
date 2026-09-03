@@ -536,7 +536,71 @@ func TestRequestChangesMovesCommentsIntoSpec(t *testing.T) {
 	}
 }
 
-func TestRequestChangesNoCommentsErrors(t *testing.T) {
+// Chiedere modifiche dal viewer non obbliga la persona a riscrivere sulle righe
+// del diff quello che il dossier ha gia trovato: i blocker e i criteri non
+// soddisfatti diventano bullet da soli, come fa la skill archetipo-review.
+func TestRequestChangesBuildsTheFeedbackFromTheDossier(t *testing.T) {
+	srv, _ := newFileServer(t)
+	ctx := context.Background()
+	if _, err := srv.session().conn.SaveInitialBacklog(ctx, []domain.Spec{
+		{Code: "US-001", Title: "Greeting", Epic: domain.Epic{Code: "EP-001", Title: "F"}, Status: domain.StatusReview, Body: "## User Story\nas a user"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rs := srv.session().conn.(connector.ReviewStore)
+	if err := rs.SaveReview(ctx, "US-001", domain.Review{Dossier: &domain.ReviewDossier{
+		Criteria: []domain.ReviewCriterion{
+			{ID: "AC-1", Verdict: domain.ReviewCriterionMet},
+			{ID: "AC-2", Verdict: domain.ReviewCriterionUnclear, Note: "nessun test copre il caso vuoto"},
+		},
+		Blockers: []string{"il build non passa"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/spec/US-001/request-changes",
+		bytes.NewReader([]byte(`{"feedback":"manca la migrazione"}`)))
+	r.Header.Set("Content-Type", "application/json")
+	srv.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+
+	spec, err := srv.session().conn.ReadSpecDetail(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Status != domain.StatusTodo {
+		t.Errorf("expected status TODO, got %s", spec.Status)
+	}
+	if !spec.Rework {
+		t.Error("expected rework flag to be set")
+	}
+	for _, want := range []string{
+		"- il build non passa",
+		"- AC-2: nessun test copre il caso vuoto",
+		"- manca la migrazione",
+	} {
+		if !strings.Contains(spec.Body, want) {
+			t.Errorf("spec body missing %q; body=%q", want, spec.Body)
+		}
+	}
+	if strings.Contains(spec.Body, "AC-1") {
+		t.Errorf("un criterio soddisfatto non e un rilievo; body=%q", spec.Body)
+	}
+	rev, err := rs.ReadReview(ctx, "US-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev.Verdict == nil || rev.Verdict.Decision != domain.ReviewDecisionChangesRequested {
+		t.Errorf("verdetto atteso changes_requested, got %+v", rev.Verdict)
+	}
+}
+
+// Un rifiuto senza nessuna indicazione non darebbe niente da pianificare: e
+// l'unico caso in cui si chiede ancora alla persona di scrivere il motivo.
+func TestRequestChangesWithNothingToSendBackErrors(t *testing.T) {
 	srv, _ := newFileServer(t)
 	ctx := context.Background()
 	if _, err := srv.session().conn.SaveInitialBacklog(ctx, []domain.Spec{
@@ -548,7 +612,7 @@ func TestRequestChangesNoCommentsErrors(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/spec/US-001/request-changes", nil)
 	srv.mux.ServeHTTP(w, r)
 	if w.Code == http.StatusOK {
-		t.Fatalf("expected error without comments, got 200: %s", w.Body.String())
+		t.Fatalf("expected error without any feedback, got 200: %s", w.Body.String())
 	}
 }
 

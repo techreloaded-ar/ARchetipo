@@ -584,3 +584,46 @@ func AppendReworkFeedback(body string, comments []ReviewComment) string {
 	}
 	return b.String()
 }
+
+// ReworkFeedbackItems assembles everything a rejected spec has to carry back
+// into planning: the inline comments left on the diff, the dossier's blockers,
+// the criteria the dossier could not call met, and the free text the person adds
+// at the moment of the refusal — in that order, from the most anchored to the
+// most general.
+//
+// It lives in the domain because it is the same rule the archetipo-review skill
+// applies (PHASE 3, "Request changes"): the person rejecting an increment does
+// not transcribe by hand what the evidence already says. An item without an
+// anchor is a legitimate item — AppendReworkFeedback renders it as a plain
+// bullet — so what the dossier found becomes a Fix task exactly like a comment
+// written on a line of the diff.
+func ReworkFeedbackItems(review Review, freeText string) []ReviewComment {
+	items := append([]ReviewComment{}, review.Comments...)
+	if review.Dossier != nil {
+		for _, blocker := range review.Dossier.Blockers {
+			if text := strings.TrimSpace(blocker); text != "" {
+				items = append(items, ReviewComment{Body: text})
+			}
+		}
+		for _, criterion := range review.Dossier.Criteria {
+			if criterion.Verdict == ReviewCriterionMet {
+				continue
+			}
+			body := strings.TrimSpace(criterion.ID)
+			if note := strings.TrimSpace(criterion.Note); note != "" {
+				if body == "" {
+					body = note
+				} else {
+					body += ": " + note
+				}
+			}
+			if body != "" {
+				items = append(items, ReviewComment{Body: body})
+			}
+		}
+	}
+	if text := strings.TrimSpace(freeText); text != "" {
+		items = append(items, ReviewComment{Body: text})
+	}
+	return items
+}

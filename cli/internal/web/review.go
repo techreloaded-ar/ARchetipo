@@ -115,11 +115,18 @@ func (s *Server) handleSaveReview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, review)
 }
 
-// handleRequestChanges moves the saved inline comments into the spec body as a
-// "## Rework Feedback" section, flags the spec as in rework, transitions it back
-// to TODO, and clears the review. The feedback now lives inside the spec: the
-// next archetipo-plan run reads it (inside the spec's worktree) and turns each
-// item into a Fix task before re-planning.
+// handleRequestChanges writes into the spec body, as a "## Rework Feedback"
+// section, everything the review already knows — the inline comments, the
+// dossier's blockers and unmet criteria, and the free text the person adds —
+// flags the spec as in rework, transitions it back to TODO, and clears the
+// review. The feedback now lives inside the spec: the next archetipo-plan run
+// reads it (inside the spec's worktree) and turns each item into a Fix task
+// before re-planning.
+//
+// Assembling the items here rather than demanding them from the caller is what
+// makes the viewer's gate the same gate as the archetipo-review skill's: a
+// person who reads a dossier full of blockers should not have to retype them on
+// the lines of the diff to reject the increment.
 func (s *Server) handleRequestChanges(w http.ResponseWriter, r *http.Request) {
 	ws := s.session()
 	code := r.PathValue("code")
@@ -138,8 +145,15 @@ func (s *Server) handleRequestChanges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if len(review.Comments) == 0 {
-		writeError(w, iox.NewInvalidInput("no review comments to convert", "add inline comments before requesting changes", nil))
+	// The body is optional: rejecting with nothing to add is legitimate when the
+	// dossier and the comments already say what has to change.
+	var payload struct {
+		Feedback string `json:"feedback"`
+	}
+	_ = decodeJSON(r, &payload)
+	items := domain.ReworkFeedbackItems(review, payload.Feedback)
+	if len(items) == 0 {
+		writeError(w, iox.NewInvalidInput("no feedback to send back", "write what must change, or add inline comments", nil))
 		return
 	}
 	spec, err := ws.conn.ReadSpecDetail(ctx, code)
@@ -147,7 +161,7 @@ func (s *Server) handleRequestChanges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	body := domain.AppendReworkFeedback(spec.Body, review.Comments)
+	body := domain.AppendReworkFeedback(spec.Body, items)
 	rework := true
 	if _, err := ws.conn.UpdateSpec(ctx, code, domain.SpecUpdate{Body: &body, Rework: &rework}); err != nil {
 		writeError(w, err)
@@ -172,7 +186,7 @@ func (s *Server) handleRequestChanges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "comments_moved": len(review.Comments)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": len(items)})
 }
 
 // decidedExecutionID names the execution whose evidence a verdict was taken on.

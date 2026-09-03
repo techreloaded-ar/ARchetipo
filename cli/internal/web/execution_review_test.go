@@ -396,8 +396,10 @@ func TestRequestChangesRecordsItsVerdictAndTheStructuredFeedback(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("POST request-changes: %d %v", status, body)
 	}
-	if moved, _ := body["comments_moved"].(float64); moved != 1 {
-		t.Fatalf("comments_moved = %v, want 1", body["comments_moved"])
+	// Tre rilievi: il commento inline, il blocker del dossier e il criterio che
+	// il dossier non ha potuto dichiarare soddisfatto.
+	if items, _ := body["items"].(float64); items != 3 {
+		t.Fatalf("items = %v, want 3", body["items"])
 	}
 
 	detail := runSpecDetail(t, srv, "US-901")

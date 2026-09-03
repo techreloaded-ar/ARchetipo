@@ -102,12 +102,13 @@
 		commentPlaceholder: "Lascia un commento…",
 		commentSave: "Commenta",
 		commentCancel: "Annulla",
-		commentsFirst: "Aggiungi prima almeno un commento",
+		requestChangesFeedback:
+			"Che cosa va cambiato? Lascia vuoto se bastano i commenti e i rilievi del dossier.",
 		requestChangesConfirm: (n, code) =>
-			`Convertire ${n} commento/i in task di fix e riportare ${code} a IN PROGRESS?`,
+			`Riportare ${code} a TODO con ${n} rilievo/i da pianificare?`,
 		requestingChanges: "Richiesta delle modifiche in corso…",
 		changesRequested: (code, n) =>
-			`${code}: ${n} commento/i convertito/i in task di fix`,
+			`${code} riportata a TODO: ${n} rilievo/i da pianificare`,
 		failed: (reason) => `Fallito: ${reason}`,
 		approveConfirm: (code) =>
 			`Approvare ${code} e chiudere la spec?`,
@@ -614,6 +615,7 @@
 	let currentSpecCode = null;
 	let reviewComments = []; // inline comments for the spec currently under review
 	let reviewLoaded = false; // whether the review tab has been loaded for this spec
+	let currentReview = null; // ultima review letta: serve a contare i rilievi del dossier
 	let currentSpecSnapshot = null; // last loaded spec (for cancel + re-render after save)
 	let currentPlanSnapshot = null; // last loaded plan (for cancel + re-render after save)
 	let boardSnapshot = null; // last loaded board (for undo on failed drag)
@@ -2679,6 +2681,7 @@
 		currentPlanSnapshot = null;
 		reviewComments = [];
 		reviewLoaded = false;
+		currentReview = null;
 		reviewTab.classList.add("hidden");
 	}
 
@@ -2951,6 +2954,7 @@
 				apiGet(`/api/spec/${encodeURIComponent(currentSpecCode)}/diff`),
 				apiGet(`/api/spec/${encodeURIComponent(currentSpecCode)}/review`),
 			]);
+			currentReview = review || null;
 			reviewComments = (review && review.comments) || [];
 			renderReviewBranch(diff);
 			renderDossier(review || {});
@@ -3250,35 +3254,72 @@
 		}
 	}
 
+	// withBusyButton tiene il bottone occupato per la durata dell'azione e lo
+	// rimette com'era in ogni caso. Il ripristino sta nel `finally` perché la
+	// strada del successo chiude la scheda ma non distrugge il pannello: è unico
+	// e riusato, e una label lasciata a «Approvazione in corso…» accoglierebbe la
+	// prossima spec che si apre. Serve anche a impedire il doppio invio, che su
+	// azioni irreversibili manderebbe due POST.
+	async function withBusyButton(btn, busyLabel, action) {
+		const label = btn.textContent;
+		btn.disabled = true;
+		btn.textContent = busyLabel;
+		try {
+			return await action();
+		} finally {
+			btn.disabled = false;
+			btn.textContent = label;
+		}
+	}
+
+	// countReworkItems conta quello che il server riporterà nella spec, con la
+	// stessa regola di domain.ReworkFeedbackItems: serve solo a far dire alla
+	// domanda quanti rilievi partiranno. Il conteggio che vale resta quello del
+	// server, che è l'unico a vedere la review salvata.
+	function countReworkItems(freeText) {
+		const dossier = (currentReview && currentReview.dossier) || {};
+		const unmet = (dossier.criteria || []).filter((c) => c.verdict !== "met");
+		return (
+			reviewComments.length +
+			(dossier.blockers || []).length +
+			unmet.length +
+			(freeText.trim() ? 1 : 0)
+		);
+	}
+
 	async function onRequestChanges() {
 		if (!currentSpecCode) return;
-		if (reviewComments.length === 0) {
-			showToast(TEXT.commentsFirst, "err");
-			return;
-		}
+		const freeText = window.prompt(TEXT.requestChangesFeedback, "");
+		if (freeText === null) return;
 		if (
 			!window.confirm(
-				TEXT.requestChangesConfirm(reviewComments.length, currentSpecCode),
+				TEXT.requestChangesConfirm(
+					countReworkItems(freeText),
+					currentSpecCode,
+				),
 			)
 		)
 			return;
 		reviewStatus.textContent = TEXT.requestingChanges;
 		reviewStatus.className = "status-msg";
-		try {
-			const res = await apiPost(
-				`/api/spec/${encodeURIComponent(currentSpecCode)}/request-changes`,
-				{},
-			);
-			showToast(
-				TEXT.changesRequested(currentSpecCode, res.comments_moved),
-				"ok",
-			);
-			closeModal();
-			await loadBoard();
-		} catch (err) {
-			reviewStatus.textContent = TEXT.failed(err.message || err);
-			reviewStatus.className = "status-msg err";
-		}
+		await withBusyButton(
+			reviewRequestBtn,
+			TEXT.requestingChanges,
+			async () => {
+				try {
+					const res = await apiPost(
+						`/api/spec/${encodeURIComponent(currentSpecCode)}/request-changes`,
+						{ feedback: freeText },
+					);
+					showToast(TEXT.changesRequested(currentSpecCode, res.items), "ok");
+					closeModal();
+					await loadBoard();
+				} catch (err) {
+					reviewStatus.textContent = TEXT.failed(err.message || err);
+					reviewStatus.className = "status-msg err";
+				}
+			},
+		);
 	}
 
 	// L'approvazione si può chiedere da due strade — il bottone Approva e il
@@ -3296,30 +3337,27 @@
 		if (!currentSpecCode) return;
 		const code = currentSpecCode;
 		if (!confirmApproval(code)) return;
-		const previousLabel = reviewApproveBtn.textContent;
-		reviewApproveBtn.disabled = true;
-		reviewApproveBtn.textContent = TEXT.approving;
 		reviewStatus.textContent = TEXT.approving;
 		reviewStatus.className = "status-msg";
-		try {
-			const res = await apiPost(
-				`/api/spec/${encodeURIComponent(code)}/approve`,
-				{},
-			);
-			showToast(
-				res.integrated
-					? TEXT.approvedIntegrated(code)
-					: TEXT.approved(code),
-				"ok",
-			);
-			closeModal();
-			await loadBoard();
-		} catch (err) {
-			reviewApproveBtn.disabled = false;
-			reviewApproveBtn.textContent = previousLabel;
-			reviewStatus.textContent = TEXT.failed(err.message || err);
-			reviewStatus.className = "status-msg err";
-		}
+		await withBusyButton(reviewApproveBtn, TEXT.approving, async () => {
+			try {
+				const res = await apiPost(
+					`/api/spec/${encodeURIComponent(code)}/approve`,
+					{},
+				);
+				showToast(
+					res.integrated
+						? TEXT.approvedIntegrated(code)
+						: TEXT.approved(code),
+					"ok",
+				);
+				closeModal();
+				await loadBoard();
+			} catch (err) {
+				reviewStatus.textContent = TEXT.failed(err.message || err);
+				reviewStatus.className = "status-msg err";
+			}
+		});
 	}
 
 	async function onIntegrate() {
@@ -3332,18 +3370,20 @@
 			return;
 		reviewStatus.textContent = TEXT.integrating;
 		reviewStatus.className = "status-msg";
-		try {
-			await apiPost(
-				`/api/spec/${encodeURIComponent(currentSpecCode)}/integrate`,
-				{},
-			);
-			showToast(TEXT.integrated(currentSpecCode), "ok");
-			closeModal();
-			await loadBoard();
-		} catch (err) {
-			reviewStatus.textContent = TEXT.failed(err.message || err);
-			reviewStatus.className = "status-msg err";
-		}
+		await withBusyButton(reviewIntegrateBtn, TEXT.integrating, async () => {
+			try {
+				await apiPost(
+					`/api/spec/${encodeURIComponent(currentSpecCode)}/integrate`,
+					{},
+				);
+				showToast(TEXT.integrated(currentSpecCode), "ok");
+				closeModal();
+				await loadBoard();
+			} catch (err) {
+				reviewStatus.textContent = TEXT.failed(err.message || err);
+				reviewStatus.className = "status-msg err";
+			}
+		});
 	}
 
 	// cssEscape escapes a string for use in a CSS attribute selector. Falls back
