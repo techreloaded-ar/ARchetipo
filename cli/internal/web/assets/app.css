@@ -1065,6 +1065,31 @@ html[data-theme="light"] .theme-ico-moon {
 	white-space: nowrap;
 }
 
+/* L'esito di una revisione respinta, in testa al dettaglio della spec: stessi
+   colori del badge della board, perché è la stessa cosa vista da vicino. */
+.rework-panel {
+	border: 1px solid var(--attention-border);
+	border-left: 3px solid var(--attention);
+	border-radius: var(--radius-lg);
+	background: var(--attention-soft);
+	padding: var(--space-4);
+	margin-bottom: var(--space-4);
+}
+
+.rework-panel-title {
+	margin: 0;
+	font-size: 15px;
+	font-weight: 800;
+	color: var(--attention);
+}
+
+.rework-panel-hint {
+	margin: var(--space-2) 0 var(--space-3);
+	font-size: 14px;
+	line-height: 1.55;
+	color: var(--text-muted);
+}
+
 .priority-HIGH {
 	border-color: var(--danger-border);
 	background: var(--danger-soft);

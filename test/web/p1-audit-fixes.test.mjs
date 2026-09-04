@@ -183,23 +183,59 @@ describe("P1 — approvare per trascinamento chiede quanto il bottone", () => {
 		);
 	});
 
+	/** Il corpo di `requestTransition`. `sectionOf` da solo non lo sa leggere:
+	 *  la firma contiene già un `{}` (`options = {}`) e il blocco bilanciato si
+	 *  chiuderebbe lì. Si parte quindi dalla parentesi che chiude gli argomenti. */
+	function bodyOfRequestTransition() {
+		const at = js.indexOf("async function requestTransition(");
+		assert.notEqual(at, -1, "la sorgente non contiene più `requestTransition`");
+		return sectionOf(js.slice(at), ") {");
+	}
+
 	it("il drop su Done e il bottone Approva passano dalla stessa domanda", () => {
-		for (const marker of ["async function onDragMove(", "async function onApprove("]) {
-			const body = sectionOf(js, marker);
-			assert.ok(
-				body.includes("confirmApproval("),
-				`\`${marker}\` non chiede conferma: un'approvazione irreversibile partirebbe da sola`,
-			);
-		}
+		// Il trascinamento non chiede più da sé: delega a `requestTransition`,
+		// che è la strada unica di ogni cambio di stato dalla board.
+		assert.ok(
+			sectionOf(js, "async function onDragMove(").includes(
+				"requestTransition(",
+			),
+			"`onDragMove` non passa più dal cambio di stato con conferma: uno spostamento irreversibile partirebbe da solo",
+		);
+		const transition = bodyOfRequestTransition();
+		const asked = transition.indexOf("await askTransition(");
+		assert.notEqual(
+			asked,
+			-1,
+			"`requestTransition` non chiede più conferma: il drop su Done approverebbe da solo",
+		);
+		assert.ok(
+			asked < transition.indexOf("apiPost("),
+			"`requestTransition` scrive prima di chiedere: la conferma arriverebbe a cose fatte",
+		);
+		assert.ok(
+			sectionOf(js, "async function onApprove(").includes("confirmApproval("),
+			"`onApprove` non chiede conferma: un'approvazione irreversibile partirebbe da sola",
+		);
 	});
 
 	it("una conferma negata rimette la card dov'era", () => {
-		const body = sectionOf(js, "async function onDragMove(");
-		const at = body.indexOf("confirmApproval(");
-		const after = body.slice(at, at + 400);
+		assert.match(
+			sectionOf(js, "async function onDragMove("),
+			/onCancel:\s*revertBoard/,
+			"il trascinamento non dice più come annullarsi: la card resterebbe nella colonna d'arrivo",
+		);
+		const transition = bodyOfRequestTransition();
 		assert.ok(
-			after.includes("renderBoard(boardSnapshot)") || after.includes("loadBoard()"),
-			"rifiutare la conferma lascia la card in Done: la board mentirebbe sullo stato della spec",
+			transition
+				.slice(transition.indexOf("await askTransition("))
+				.includes("await onCancel()"),
+			"la conferma rifiutata non richiama l'annullamento: la board mentirebbe sullo stato della spec",
+		);
+		const revert = sectionOf(js, "async function revertBoard(");
+		assert.ok(
+			revert.includes("renderBoard(boardSnapshot)") ||
+				revert.includes("loadBoard()"),
+			"annullare non ridisegna la board: la card resterebbe dove non è",
 		);
 	});
 });

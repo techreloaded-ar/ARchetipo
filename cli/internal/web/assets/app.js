@@ -258,6 +258,9 @@
 		boardNoBacklog:
 			"Nessun backlog ancora — esegui <code>archetipo init</code> per cominciare.",
 		reworkBadge: "In rework: le osservazioni della revisione aspettano di essere ripianificate",
+		reworkPanelTitle: "Revisione non superata",
+		reworkPanelHint:
+			"La spec è tornata in Todo con queste osservazioni da ripianificare: una nuova pianificazione le trasforma in task di Fix.",
 		branchTitle: "ramo git",
 
 		// Diff e revisione
@@ -2369,9 +2372,26 @@
 		}
 	}
 
+	// Il titolo della sezione è lo stesso che request-changes scrive nel corpo
+	// (domain.ReworkFeedbackHeading): se non c'è, il corpo resta intero.
+	const REWORK_FEEDBACK_HEADING = "## Rework Feedback";
+
+	function splitReworkFeedback(body) {
+		const at = body.indexOf(REWORK_FEEDBACK_HEADING);
+		if (at < 0) return { body, feedback: "" };
+		return {
+			body: body.slice(0, at),
+			feedback: body.slice(at + REWORK_FEEDBACK_HEADING.length),
+		};
+	}
+
 	function fillSpecView(s) {
 		specViewTitle.textContent = s.title || "(untitled)";
 		const metaParts = [];
+		if (s.rework)
+			metaParts.push(
+				`<span class="rework-badge" title="${escapeHtml(TEXT.reworkBadge)}">⟲ rework</span>`,
+			);
 		if (s.priority)
 			metaParts.push(
 				`<span class="priority-badge priority-${escapeHtml(s.priority)}">${escapeHtml(s.priority)}</span>`,
@@ -2401,7 +2421,18 @@
 			"aria-label",
 			s.code ? TEXT.deleteSpec(s.code) : TEXT.deleteStory,
 		);
-		specBodyView.innerHTML = marked.parse(s.body || TEXT.noDescription);
+		// Una spec respinta dalla revisione porta le osservazioni in fondo al
+		// corpo, dopo criteri e contesto, dove chi apre il dettaglio non le trova.
+		// Finché il marcatore rework è appeso, quelle osservazioni sono la cosa da
+		// fare: si staccano dal corpo e si mettono in testa, dove la board le
+		// aveva promesse col badge. Passata la ripianificazione il marcatore cade e
+		// la sezione torna a essere una parte del corpo come le altre.
+		const rework = s.rework ? splitReworkFeedback(s.body || "") : null;
+		const bodyMarkdown = (rework ? rework.body : s.body) || TEXT.noDescription;
+		specBodyView.innerHTML =
+			(rework && rework.feedback
+				? `<section class="rework-panel"><h3 class="rework-panel-title">⟲ ${escapeHtml(TEXT.reworkPanelTitle)}</h3><p class="rework-panel-hint">${escapeHtml(TEXT.reworkPanelHint)}</p><div class="markdown-rendered">${marked.parse(rework.feedback)}</div></section>`
+				: "") + marked.parse(bodyMarkdown);
 		fillStatusSelect(s.status);
 	}
 
