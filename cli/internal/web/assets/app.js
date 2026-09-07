@@ -2736,6 +2736,7 @@
 		reviewDiff.innerHTML = "";
 		reviewDossier.innerHTML = "";
 		reviewBranch.innerHTML = "";
+		reviewIntegrateBtn.hidden = true;
 		reviewTab.classList.add("hidden");
 	}
 
@@ -3044,6 +3045,12 @@
 				`<span class="review-chip">+${diff.ahead || 0} / −${diff.behind || 0}</span>`,
 			);
 		reviewBranch.innerHTML = parts.join("");
+		// Integrare vuol dire fondere un ramo: senza ramo — worktree spento, o
+		// spec mai partita in un worktree — il server rifiuta e basta, e il
+		// bottone prometteva una chiusura che non poteva dare. Chi vuole chiudere
+		// lo stesso una spec respinta passa da Approva, che di rami non ne ha
+		// bisogno.
+		reviewIntegrateBtn.hidden = !diff.branch;
 	}
 
 	// renderDossier shows the evidence a provider prepared for this spec, and the
@@ -3402,6 +3409,17 @@
 		);
 	}
 
+	// Un'azione di revisione che fallisce lo dice in due posti: la riga di
+	// stato del pannello e un toast. La riga di stato da sola non basta —
+	// sta in fondo, sotto il diff, e su un incremento lungo cade fuori dallo
+	// schermo: il rifiuto del server sembrava un click andato nel vuoto.
+	function reviewFailed(err) {
+		const msg = TEXT.failed(err.message || err);
+		reviewStatus.textContent = msg;
+		reviewStatus.className = "status-msg err";
+		showToast(msg, "err");
+	}
+
 	async function onRequestChanges() {
 		if (!currentSpecCode) return;
 		const freeText = window.prompt(TEXT.requestChangesFeedback, "");
@@ -3430,8 +3448,7 @@
 					closeModal();
 					await loadBoard();
 				} catch (err) {
-					reviewStatus.textContent = TEXT.failed(err.message || err);
-					reviewStatus.className = "status-msg err";
+					reviewFailed(err);
 				}
 			},
 		);
@@ -3469,8 +3486,7 @@
 				closeModal();
 				await loadBoard();
 			} catch (err) {
-				reviewStatus.textContent = TEXT.failed(err.message || err);
-				reviewStatus.className = "status-msg err";
+				reviewFailed(err);
 			}
 		});
 	}
@@ -3495,8 +3511,7 @@
 				closeModal();
 				await loadBoard();
 			} catch (err) {
-				reviewStatus.textContent = TEXT.failed(err.message || err);
-				reviewStatus.className = "status-msg err";
+				reviewFailed(err);
 			}
 		});
 	}

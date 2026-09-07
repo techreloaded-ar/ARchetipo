@@ -1,0 +1,54 @@
+// test/web/review-actions.test.mjs
+// Oracoli strutturali sulle azioni della scheda Review.
+// Esecuzione: node --test test/web/review-actions.test.mjs
+//
+// Due fatti che nessun test unitario può presidiare, perché app.js è una IIFE
+// senza DOM sotto e quello che conta è *dove* le cose sono scritte:
+//
+//   - «Integra e chiudi» compare solo quando c'è un ramo da integrare. Senza
+//     ramo il server rifiuta (worktree spento, o spec mai partita in un
+//     worktree) e il bottone prometteva una chiusura che non poteva dare;
+//   - un'azione di revisione che fallisce lo dice anche in un toast. La riga
+//     di stato del pannello sta in fondo, sotto il diff: su un incremento
+//     lungo cade fuori dallo schermo, e il rifiuto sembrava un click andato
+//     nel vuoto.
+
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const js = readFileSync(
+	resolve(__dirname, "..", "..", "cli", "internal", "web", "assets", "app.js"),
+	"utf8",
+);
+
+describe("le azioni della scheda Review", () => {
+	it("mostra «Integra e chiudi» solo quando la spec ha un ramo", () => {
+		assert.match(
+			js,
+			/reviewIntegrateBtn\.hidden = !diff\.branch;/,
+			"renderReviewBranch non lega più la visibilità del bottone al ramo: senza ramo l'integrazione è un vicolo cieco",
+		);
+		assert.match(
+			js,
+			/reviewIntegrateBtn\.hidden = true;/,
+			"il pannello di revisione è unico e riusato: senza il ripristino il bottone resta visibile sulla spec successiva",
+		);
+	});
+
+	it("annuncia in un toast ogni fallimento delle tre azioni", () => {
+		assert.match(
+			js,
+			/function reviewFailed\(err\)[\s\S]{0,300}?showToast\(msg, "err"\)/,
+			"reviewFailed non emette più il toast: il fallimento resterebbe scritto solo sotto il diff",
+		);
+		assert.equal(
+			(js.match(/\breviewFailed\(err\);/g) || []).length,
+			3,
+			"le tre azioni della revisione — chiedi modifiche, approva, integra — devono passare tutte da reviewFailed",
+		);
+	});
+});
