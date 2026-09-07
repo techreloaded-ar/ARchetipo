@@ -95,7 +95,7 @@
 			"Nessun dossier di revisione — avvia <em>Rivedi</em> perché il provider prepari le evidenze",
 		approveHint: "Accetta l'incremento e chiude la spec",
 		approveBlocked: (n) =>
-			`Il dossier riporta ${n} elemento/i bloccante/i: chiedi modifiche, oppure risolvili prima`,
+			`Il dossier riporta ${n} elemento/i bloccante/i: approvando li scavalchi`,
 		unknownPath: "(sconosciuto)",
 		addComment: "Aggiungi un commento",
 		deleteComment: "Elimina il commento",
@@ -112,6 +112,8 @@
 		failed: (reason) => `Fallito: ${reason}`,
 		approveConfirm: (code) =>
 			`Approvare ${code} e chiudere la spec?`,
+		approveConfirmBlocked: (n, code) =>
+			`Il dossier di ${code} riporta ${n} elemento/i bloccante/i. Approvare lo stesso e chiudere la spec?`,
 		approving: "Approvazione in corso…",
 		approvedIntegrated: (code) => `${code} approvata e integrata`,
 		approved: (code) => `${code} approvata`,
@@ -3122,10 +3124,12 @@
 			);
 		}
 		reviewDossier.innerHTML = parts.join("");
-		// The verdict stays the person's, so the button is never removed — but the
-		// interface does not invite closing an increment the dossier itself
-		// declares blocked. Requesting changes stays available in every case.
-		reviewApproveBtn.disabled = blockers.length > 0;
+		// Il verdetto è della persona, e vale anche contro il dossier: un rilievo
+		// bloccante avvisa e cambia la domanda, non spegne il bottone. Spegnerlo
+		// lasciava senza uscita chi vuole chiudere lo stesso una spec respinta —
+		// con i worktree disabilitati «Integra e chiudi» non c'è, e restava la
+		// sola richiesta di modifiche, cioè nessuna strada per chiudere.
+		reviewApproveBtn.disabled = false;
 		reviewApproveBtn.title =
 			blockers.length > 0
 				? TEXT.approveBlocked(blockers.length)
@@ -3460,8 +3464,12 @@
 	// qui una volta sola: due formulazioni diverse sarebbero due promesse
 	// diverse sullo stesso effetto.
 	function confirmApproval(code) {
+		const blockers =
+			((currentReview && currentReview.dossier) || {}).blockers || [];
 		return window.confirm(
-			TEXT.approveConfirm(code),
+			blockers.length > 0
+				? TEXT.approveConfirmBlocked(blockers.length, code)
+				: TEXT.approveConfirm(code),
 		);
 	}
 

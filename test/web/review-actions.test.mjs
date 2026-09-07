@@ -46,6 +46,22 @@ describe("le azioni della scheda Review", () => {
 		);
 	});
 
+	it("lascia premibile «Approva» anche sopra un dossier bloccato", () => {
+		// È l'unica strada per chiudere una spec respinta quando i worktree sono
+		// disabilitati e «Integra e chiudi» non c'è: spegnere il bottone lasciava
+		// come sola azione la richiesta di modifiche, cioè nessuna uscita.
+		assert.doesNotMatch(
+			js,
+			/reviewApproveBtn\.disabled = blockers\.length > 0;/,
+			"«Approva» torna spento sopra i blocker: una spec respinta non si potrebbe più chiudere senza worktree",
+		);
+		assert.match(
+			js,
+			/approveConfirmBlocked/,
+			"la conferma non nomina più i rilievi che si stanno scavalcando",
+		);
+	});
+
 	it("nasconde davvero ciò che il JS marca come hidden", () => {
 		// `.ghost-btn` dà `display: inline-flex` ai bottoni, e una dichiarazione
 		// d'autore batte il `[hidden] { display: none }` del browser: senza questa
