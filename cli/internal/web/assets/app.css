@@ -780,6 +780,15 @@ html[data-theme="light"] .theme-ico-moon {
 	display: none !important;
 }
 
+/* Anche l'attributo standard nasconde davvero. Le regole dei bottoni e delle
+   barre danno un `display` a classi molto generiche, e una dichiarazione
+   d'autore batte il `[hidden] { display: none }` del browser: senza questa
+   riga un elemento nascosto dal JS con `el.hidden = true` resterebbe a
+   schermo e cliccabile, cioè nascosto solo per chi legge il codice. */
+[hidden] {
+	display: none !important;
+}
+
 /* ---- Board / Columns -------------------------------------------------- */
 /* Since US-061 the board is a stack of two things: the counters of the backlog
    and the row of columns. Only the row scrolls sideways, so the counters stay

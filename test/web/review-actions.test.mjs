@@ -20,10 +20,17 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const js = readFileSync(
-	resolve(__dirname, "..", "..", "cli", "internal", "web", "assets", "app.js"),
-	"utf8",
+const assetsDir = resolve(
+	__dirname,
+	"..",
+	"..",
+	"cli",
+	"internal",
+	"web",
+	"assets",
 );
+const js = readFileSync(resolve(assetsDir, "app.js"), "utf8");
+const css = readFileSync(resolve(assetsDir, "app.css"), "utf8");
 
 describe("le azioni della scheda Review", () => {
 	it("mostra «Integra e chiudi» solo quando la spec ha un ramo", () => {
@@ -36,6 +43,18 @@ describe("le azioni della scheda Review", () => {
 			js,
 			/reviewIntegrateBtn\.hidden = true;/,
 			"il pannello di revisione è unico e riusato: senza il ripristino il bottone resta visibile sulla spec successiva",
+		);
+	});
+
+	it("nasconde davvero ciò che il JS marca come hidden", () => {
+		// `.ghost-btn` dà `display: inline-flex` ai bottoni, e una dichiarazione
+		// d'autore batte il `[hidden] { display: none }` del browser: senza questa
+		// regola `reviewIntegrateBtn.hidden = true` è nascosto solo nel codice, e a
+		// schermo il bottone resta lì, cliccabile.
+		assert.match(
+			css,
+			/\[hidden\] \{\s*display: none !important;\s*\}/,
+			"app.css non nasconde più l'attributo hidden: ogni elemento con un display d'autore resterebbe visibile",
 		);
 	});
 
