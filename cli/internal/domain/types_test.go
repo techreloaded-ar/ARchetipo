@@ -56,7 +56,8 @@ func TestReworkFeedbackItems(t *testing.T) {
 			{ID: "AC-2", Verdict: ReviewCriterionUnclear, Note: "nessun test copre il caso vuoto"},
 			{ID: "AC-3", Verdict: ReviewCriterionNotVerifiable},
 		},
-		Blockers: []string{"il build non passa", "  "},
+		Blockers:      []string{"il build non passa", "  "},
+		MinorFindings: []string{"nome della variabile poco parlante"},
 	}
 	comment := ReviewComment{File: "app.js", Line: 12, Side: "new", Body: "nome poco chiaro"}
 
@@ -88,12 +89,18 @@ func TestReworkFeedbackItems(t *testing.T) {
 			want:     []string{"manca la migrazione"},
 		},
 		{
-			name:     "ordine: commenti, blocker, criteri, testo libero",
+			name:   "le segnalazioni minori tornano indietro come i blocker",
+			review: Review{Dossier: &ReviewDossier{MinorFindings: []string{"nome della variabile poco parlante"}}},
+			want:   []string{"nome della variabile poco parlante"},
+		},
+		{
+			name:     "ordine: commenti, blocker, segnalazioni minori, criteri, testo libero",
 			review:   Review{Comments: []ReviewComment{comment}, Dossier: dossier},
 			freeText: "manca la migrazione",
 			want: []string{
 				"nome poco chiaro",
 				"il build non passa",
+				"nome della variabile poco parlante",
 				"AC-2: nessun test copre il caso vuoto",
 				"AC-3",
 				"manca la migrazione",

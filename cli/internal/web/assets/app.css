@@ -2142,7 +2142,8 @@ html[data-theme="light"] .theme-ico-moon {
 
 .markdown-rendered code,
 .criterion-note code,
-.review-blockers code {
+.review-blockers code,
+.review-minor code {
 	background: var(--surface-3);
 	color: var(--text-muted);
 	padding: 1px 6px;
@@ -2834,9 +2835,22 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	color: var(--text);
 }
 
-.review-blockers ul {
+.review-blockers ul,
+.review-minor ul {
 	margin: var(--space-2) 0 0;
 	padding-left: 20px;
+	color: var(--text);
+}
+
+/* Le segnalazioni non bloccanti si leggono, non allarmano: stesso impianto dei
+   bloccanti, senza il rosso, perché non c'è niente da scavalcare. */
+.review-minor {
+	margin-top: var(--space-3);
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	font-size: 15px;
 	color: var(--text);
 }
 

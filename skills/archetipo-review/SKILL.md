@@ -170,11 +170,14 @@ Compose the dossier payload from the evidence of PHASE 1:
     {"id": "AC-1", "verdict": "met", "note": "<what proves it>"},
     {"id": "AC-2", "verdict": "unclear", "note": "<what is missing>"}
   ],
-  "blockers": ["<one entry per impediment found>"]
+  "blockers": ["<one entry per impediment that prevents acceptance>"],
+  "minor_findings": ["<one entry per remark that is worth reading and does not prevent acceptance>"]
 }
 ```
 
 `verdict` is one of `met`, `unclear` or `not_verifiable`: `unclear` means the evidence was found and does not settle the question, `not_verifiable` that no evidence of that kind exists at all. `blockers` is empty when nothing stands in the way — that is an ordinary outcome, not a weaker one.
+
+**`blockers` and `minor_findings` are not two shades of the same list.** A blocker is what makes the increment unacceptable as delivered: a failing build or test, an acceptance criterion contradicted by the code, a required Wiki blocker, a promised e2e evidence that is absent. Everything else you found — a naming nit, a duplication worth collapsing, a missing non-required test, an improvement for later — is a minor finding. Put it in `minor_findings` and nowhere else: a spec whose only findings are minor is a spec to approve, and writing one of them into `blockers` makes the viewer offer a forced closure over an increment that nothing was blocking. When in doubt about a single item, ask whether you would send the increment back for it alone; if not, it is minor.
 
 Write the payload to `.archetipo/tmp/payload-{US-CODE}-dossier.json` **with your file-writing tool, never through a shell pipe** — the same cross-platform rule already in force for the rework feedback — then, from `data.project_root`:
 
@@ -220,7 +223,7 @@ Never infer, request, or self-activate the mode. If any of the three lines is mi
 
 Do not ask for a verdict. Decide it from the dossier with this policy, then execute it through PHASE 3.
 
-- **ACCEPTED** — every verifiable acceptance criterion is met; every task in `data.tasks` is canonical `DONE`; there is no increment blocker and no Wiki blocker; the e2e evidence the spec promised is present. In this mode a task that is not done is a defect, not an advisory finding — it overrides the Edge Case Handling rule that lets a human approve anyway. A missing demo video is a defect only when the config gate is on and recording was warranted. This verdict is the explicit approval that `wiki approve` requires.
+- **ACCEPTED** — every verifiable acceptance criterion is met; every task in `data.tasks` is canonical `DONE`; there is no increment blocker and no Wiki blocker; the e2e evidence the spec promised is present. Minor findings never stand in the way of this verdict: they are recorded in the dossier and the spec is accepted with them. In this mode a task that is not done is a defect, not an advisory finding — it overrides the Edge Case Handling rule that lets a human approve anyway. A missing demo video is a defect only when the config gate is on and recording was warranted. This verdict is the explicit approval that `wiki approve` requires.
 - **CHANGES_REQUESTED** — the spec is not acceptable, every defect is repairable through rework, **and** the prompt says `Request-changes allowed: yes`. Produce the feedback payload and run the Request-changes sequence of PHASE 3 exactly as written, with one anchored item per defect and per Wiki blocker.
 - **LEFT_IN_REVIEW** — either the rework budget is exhausted (`Request-changes allowed: no`) and the spec is not acceptable, or a blocker is not repairable by rework: merge conflicts needing manual resolution, unintegrated external blockers, a Wiki infrastructure failure, or feedback that would contradict the spec's own acceptance criteria (scope change). Leave the spec in `{config.workflow.statuses.review}`, run no transition command, and preserve the branch and worktree untouched.
 

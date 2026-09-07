@@ -739,7 +739,8 @@ func newSpecReviewDossierCmd(s streams) *cobra.Command {
 		Use:   "review-dossier US-XXX",
 		Short: "Attach the review evidence a provider prepared for a spec under REVIEW",
 		Long: "Reads a YAML or JSON payload from --file (a review dossier: {\"execution_id\",\"summary\"," +
-			"\"criteria\":[{\"id\",\"verdict\",\"note\"}],\"blockers\":[...]}) and stores it in the spec's " +
+			"\"criteria\":[{\"id\",\"verdict\",\"note\"}],\"blockers\":[...],\"minor_findings\":[...]}) " +
+			"and stores it in the spec's " +
 			"review artifact, preserving any inline comment already saved. It does NOT change the status " +
 			"of the spec: preparing evidence is not deciding, and the verdict remains a human gesture. " +
 			"Errors with E_CONFLICT when the spec is not in REVIEW.",

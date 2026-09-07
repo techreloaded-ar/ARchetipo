@@ -99,6 +99,8 @@
 			"Accetta l'incremento, integra il ramo nel base e chiude la spec",
 		approveBlocked: (n) =>
 			`Il dossier riporta ${n} elemento/i bloccante/i: chiudendo li scavalchi`,
+		blockersHeading: "Bloccanti",
+		minorFindingsHeading: "Segnalazioni non bloccanti",
 		// Le quattro facce del bottone di chiusura. La spec si chiude sempre — è
 		// la persona a decidere, non il dossier — ma l'etichetta dice quale delle
 		// due cose sta facendo, e se il ramo viaggia con lei.
@@ -3099,6 +3101,13 @@
 		reviewApproveBtn.classList.toggle("danger-ghost-btn", forced);
 	}
 
+	function findingsBlock(className, heading, findings) {
+		const items = findings
+			.map((f) => `<li>${marked.parseInline(f)}</li>`)
+			.join("");
+		return `<div class="${className}"><strong>${escapeHtml(heading)}</strong><ul>${items}</ul></div>`;
+	}
+
 	// renderDossier shows the evidence a provider prepared for this spec, and the
 	// verdict already taken on it. Its three states are rendered explicitly, and
 	// the empty one says what to do about it: an absent panel would read as a
@@ -3159,13 +3168,24 @@
 				.join("");
 			parts.push(`<ul class="review-criteria">${rows}</ul>`);
 		}
+		// I due secchi si leggono uguale e pesano diverso: quello bloccante si
+		// veste di rosso perché la chiusura dovrà scavalcarlo, l'altro no perché
+		// non c'è niente da scavalcare — resta però scritto, che è tutto il
+		// motivo per cui il provider lo ha riportato.
 		const blockers = dossier.blockers || [];
 		if (blockers.length > 0) {
-			const items = blockers
-				.map((b) => `<li>${marked.parseInline(b)}</li>`)
-				.join("");
 			parts.push(
-				`<div class="review-blockers"><strong>Blockers</strong><ul>${items}</ul></div>`,
+				findingsBlock("review-blockers", TEXT.blockersHeading, blockers),
+			);
+		}
+		const minorFindings = dossier.minor_findings || [];
+		if (minorFindings.length > 0) {
+			parts.push(
+				findingsBlock(
+					"review-minor",
+					TEXT.minorFindingsHeading,
+					minorFindings,
+				),
 			);
 		}
 		reviewDossier.innerHTML = parts.join("");
@@ -3444,6 +3464,7 @@
 		return (
 			reviewComments.length +
 			(dossier.blockers || []).length +
+			(dossier.minor_findings || []).length +
 			unmet.length +
 			(freeText.trim() ? 1 : 0)
 		);

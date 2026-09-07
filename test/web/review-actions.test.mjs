@@ -101,6 +101,25 @@ describe("le azioni della scheda Review", () => {
 		);
 	});
 
+	it("non veste da forzatura una chiusura che ha solo segnalazioni minori", () => {
+		const fn = sectionOf(js, "function updateCloseButton()");
+		assert.doesNotMatch(
+			fn,
+			/minor_findings/,
+			"la faccia del bottone guarda di nuovo le segnalazioni minori: un incremento che nessuno blocca si chiuderebbe come una forzatura",
+		);
+		assert.match(
+			go,
+			/MinorFindings \[\]string/,
+			"il dossier non ha più un posto per le segnalazioni non bloccanti: tornerebbero tutte nei blocker",
+		);
+		assert.match(
+			sectionOf(js, "function renderDossier(review)"),
+			/dossier\.minor_findings/,
+			"il dossier non mostra più le segnalazioni non bloccanti: sarebbero raccolte e mai lette",
+		);
+	});
+
 	it("registra e mostra i tre verdetti, non due", () => {
 		assert.match(
 			js,

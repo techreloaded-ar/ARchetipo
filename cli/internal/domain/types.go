@@ -511,12 +511,20 @@ const (
 // ExecutionID names the execution that prepared it. It is what later lets a
 // human verdict name the run that produced the evidence it was decided on;
 // without it the verdict would be a decision with no traceable instruction.
+//
+// Blockers and MinorFindings are both things the reviewer found, and the
+// distinction between them is the only one the gate reads: a blocker is what
+// stands in the way of acceptance, a minor finding is worth seeing and does
+// not. An increment carrying minor findings alone is an increment to approve —
+// the closing button stays the ordinary one and the verdict stays "approved" —
+// while what was found is still written in the dossier for a person to read.
 type ReviewDossier struct {
-	ExecutionID string            `json:"execution_id,omitempty" yaml:"execution_id,omitempty"`
-	PreparedAt  string            `json:"prepared_at,omitempty" yaml:"prepared_at,omitempty"`
-	Summary     string            `json:"summary" yaml:"summary"`
-	Criteria    []ReviewCriterion `json:"criteria" yaml:"criteria"`
-	Blockers    []string          `json:"blockers,omitempty" yaml:"blockers,omitempty"`
+	ExecutionID   string            `json:"execution_id,omitempty" yaml:"execution_id,omitempty"`
+	PreparedAt    string            `json:"prepared_at,omitempty" yaml:"prepared_at,omitempty"`
+	Summary       string            `json:"summary" yaml:"summary"`
+	Criteria      []ReviewCriterion `json:"criteria" yaml:"criteria"`
+	Blockers      []string          `json:"blockers,omitempty" yaml:"blockers,omitempty"`
+	MinorFindings []string          `json:"minor_findings,omitempty" yaml:"minor_findings,omitempty"`
 }
 
 // The three decisions a human verdict can carry. Closing over blockers is its
@@ -590,8 +598,9 @@ func AppendReworkFeedback(body string, comments []ReviewComment) string {
 }
 
 // ReworkFeedbackItems assembles everything a rejected spec has to carry back
-// into planning: the inline comments left on the diff, the dossier's blockers,
-// the criteria the dossier could not call met, and the free text the person adds
+// into planning: the inline comments left on the diff, the dossier's findings —
+// blocking and minor alike — the criteria the dossier could not call met, and
+// the free text the person adds
 // at the moment of the refusal — in that order, from the most anchored to the
 // most general.
 //
@@ -604,8 +613,12 @@ func AppendReworkFeedback(body string, comments []ReviewComment) string {
 func ReworkFeedbackItems(review Review, freeText string) []ReviewComment {
 	items := append([]ReviewComment{}, review.Comments...)
 	if review.Dossier != nil {
-		for _, blocker := range review.Dossier.Blockers {
-			if text := strings.TrimSpace(blocker); text != "" {
+		// Blocking or minor, a finding that sent the increment back is a thing
+		// to fix: the severity decided whether to reject, and once the refusal
+		// is taken it has nothing left to decide.
+		findings := append(append([]string{}, review.Dossier.Blockers...), review.Dossier.MinorFindings...)
+		for _, finding := range findings {
+			if text := strings.TrimSpace(finding); text != "" {
 				items = append(items, ReviewComment{Body: text})
 			}
 		}
