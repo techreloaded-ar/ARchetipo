@@ -104,6 +104,45 @@ func selfApprovingExecute(conn connector.Connector) func(context.Context, execut
 
 // seedSpecUnderReview brings US-901 to the real starting state of a review: a
 // plan carried out and the spec waiting for a decision.
+// Closing a spec is one gesture, but the two things it can be are not the same:
+// an increment the dossier promoted, or one it declared blocked. The verdict
+// records which, and the server decides it from the dossier it just read — the
+// client is never asked, so a forced closure cannot arrive dressed as approval.
+func TestApproveRecordsWhichOfTheTwoClosuresHappened(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		blockers []string
+		want     string
+	}{
+		{"a promoted dossier closes as an approval", nil, domain.ReviewDecisionApproved},
+		{"a blocked dossier closes over its blockers", []string{"il README documenta ancora la vecchia rotta"}, domain.ReviewDecisionClosedOverBlockers},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, conn, _ := newTransitionServer(t, false)
+			var rs connector.ReviewStore = conn
+			if err := rs.SaveReview(context.Background(), "US-902", domain.Review{
+				Dossier: &domain.ReviewDossier{Summary: "pronta", Blockers: tc.blockers},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			status, body := postJSON(t, srv, "/api/spec/US-902/approve", nil)
+			if status != http.StatusOK {
+				t.Fatalf("POST approve: %d %v", status, body)
+			}
+			if body["decision"] != tc.want {
+				t.Fatalf("the response does not say which closure happened: %v, want %q", body["decision"], tc.want)
+			}
+			review := readReviewArtifact(t, srv, "US-902")
+			if review.Verdict == nil || review.Verdict.Decision != tc.want {
+				t.Fatalf("recorded verdict: %#v, want %q", review.Verdict, tc.want)
+			}
+			if detail := runSpecDetail(t, srv, "US-902"); detail.Spec.Status != domain.StatusDone {
+				t.Fatalf("the closure left the spec %s", detail.Spec.Status)
+			}
+		})
+	}
+}
+
 func seedSpecUnderReview(t *testing.T, conn connector.Connector) {
 	t.Helper()
 	persistImplementablePlan(t, conn, "US-901")
@@ -322,7 +361,10 @@ func TestApproveIsTheOnlyThingThatClosesASpecUnderReview(t *testing.T) {
 		t.Fatalf("the approval left the spec %s", detail.Spec.Status)
 	}
 	review := readReviewArtifact(t, srv, "US-901")
-	if review.Verdict == nil || review.Verdict.Decision != domain.ReviewDecisionApproved {
+	// The prepared dossier carries a blocker, so this closure is the forced one.
+	// Which of the two it was is the verdict's own business — see
+	// TestApproveRecordsWhichOfTheTwoClosuresHappened.
+	if review.Verdict == nil || review.Verdict.Decision != domain.ReviewDecisionClosedOverBlockers {
 		t.Fatalf("the verdict was not recorded: %#v", review.Verdict)
 	}
 	if review.Verdict.ExecutionID != id {

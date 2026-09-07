@@ -519,10 +519,14 @@ type ReviewDossier struct {
 	Blockers    []string          `json:"blockers,omitempty" yaml:"blockers,omitempty"`
 }
 
-// The two decisions a human verdict can carry.
+// The three decisions a human verdict can carry. Closing over blockers is its
+// own decision and not a flavour of approval: the dossier said the increment
+// was blocked, a person closed it anyway, and a review that recorded that as
+// "approved" would erase the only fact worth remembering about it.
 const (
-	ReviewDecisionApproved         = "approved"
-	ReviewDecisionChangesRequested = "changes_requested"
+	ReviewDecisionApproved           = "approved"
+	ReviewDecisionChangesRequested   = "changes_requested"
+	ReviewDecisionClosedOverBlockers = "closed_over_blockers"
 )
 
 // ReviewVerdict is the record of the human decision taken on a spec in review:

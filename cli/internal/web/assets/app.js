@@ -89,13 +89,23 @@
 		// Revisione
 		verdictApproved: "Approvata",
 		verdictChangesRequested: "Modifiche richieste",
+		verdictClosedOverBlockers: "Chiusa sopra i rilievi bloccanti",
 		verdictWhen: (when) => ` il ${when}`,
 		verdictFrom: (id) => ` — evidenze preparate dall'esecuzione ${id}`,
 		noDossier:
 			"Nessun dossier di revisione — avvia <em>Rivedi</em> perché il provider prepari le evidenze",
 		approveHint: "Accetta l'incremento e chiude la spec",
+		approveHintIntegrate:
+			"Accetta l'incremento, integra il ramo nel base e chiude la spec",
 		approveBlocked: (n) =>
-			`Il dossier riporta ${n} elemento/i bloccante/i: approvando li scavalchi`,
+			`Il dossier riporta ${n} elemento/i bloccante/i: chiudendo li scavalchi`,
+		// Le quattro facce del bottone di chiusura. La spec si chiude sempre — è
+		// la persona a decidere, non il dossier — ma l'etichetta dice quale delle
+		// due cose sta facendo, e se il ramo viaggia con lei.
+		closeApprove: "Approva e chiudi",
+		closeApproveIntegrate: "Approva e integra",
+		closeForce: "Chiudi comunque",
+		closeForceIntegrate: "Integra e chiudi comunque",
 		unknownPath: "(sconosciuto)",
 		addComment: "Aggiungi un commento",
 		deleteComment: "Elimina il commento",
@@ -104,6 +114,8 @@
 		commentCancel: "Annulla",
 		requestChangesFeedback:
 			"Che cosa va cambiato? Lascia vuoto se bastano i commenti e i rilievi del dossier.",
+		requestChangesEmpty:
+			"Non c'è niente da rimandare indietro: scrivi che cosa va cambiato, oppure lascia un commento sul diff.",
 		requestChangesConfirm: (n, code) =>
 			`Riportare ${code} a TODO con ${n} rilievo/i da pianificare?`,
 		requestingChanges: "Richiesta delle modifiche in corso…",
@@ -113,14 +125,11 @@
 		approveConfirm: (code) =>
 			`Approvare ${code} e chiudere la spec?`,
 		approveConfirmBlocked: (n, code) =>
-			`Il dossier di ${code} riporta ${n} elemento/i bloccante/i. Approvare lo stesso e chiudere la spec?`,
+			`Il dossier di ${code} riporta ${n} elemento/i bloccante/i, e nessuno di essi è risolto. Chiuderla lo stesso? La revisione resterà registrata come chiusa sopra i rilievi, non come approvata.`,
 		approving: "Approvazione in corso…",
 		approvedIntegrated: (code) => `${code} approvata e integrata`,
 		approved: (code) => `${code} approvata`,
-		integrateConfirm: (code) =>
-			`Integrare il ramo di ${code} nel base, rimuovere il suo worktree e segnarla DONE?`,
-		integrating: "Integrazione in corso…",
-		integrated: (code) => `${code} integrata`,
+		closedOverBlockers: (code) => `${code} chiusa sopra i rilievi bloccanti`,
 		deleteSpecConfirm: (label) =>
 			`Eliminare ${label}? La storia esce dal backlog locale e i suoi artefatti locali di piano e revisione vengono cancellati, se ci sono. Dal visore non si può annullare.`,
 		specDeleted: (code) => `${code} eliminata`,
@@ -505,7 +514,6 @@
 	const reviewDiff = document.getElementById("review-diff");
 	const reviewStatus = document.getElementById("review-status");
 	const reviewRequestBtn = document.getElementById("review-request-btn");
-	const reviewIntegrateBtn = document.getElementById("review-integrate-btn");
 	const reviewApproveBtn = document.getElementById("review-approve-btn");
 	const reviewDossier = document.getElementById("review-dossier");
 	const densityToggle = document.getElementById("density-toggle");
@@ -627,6 +635,7 @@
 	let reviewComments = []; // inline comments for the spec currently under review
 	let reviewLoaded = false; // whether the review tab has been loaded for this spec
 	let currentReview = null; // ultima review letta: serve a contare i rilievi del dossier
+	let reviewBranchName = ""; // ramo della spec in revisione, "" quando non ne ha
 	// I file grandi del diff nascono ripiegati: costruire una riga DOM per ogni
 	// riga di un file generato blocca il thread, e quasi mai è quello che si sta
 	// rivedendo. La mappa tiene, per ogni percorso del file, la funzione che lo
@@ -790,7 +799,6 @@
 	// migliaia di righe la differenza è tutta nel costo di costruzione.
 	reviewDiff.addEventListener("click", onDiffClick);
 	reviewRequestBtn.addEventListener("click", onRequestChanges);
-	reviewIntegrateBtn.addEventListener("click", onIntegrate);
 	reviewApproveBtn.addEventListener("click", onApprove);
 	// The action chips are re-rendered on every open, so the handler lives on
 	// their container instead of on buttons that no longer exist. Every
@@ -2738,7 +2746,7 @@
 		reviewDiff.innerHTML = "";
 		reviewDossier.innerHTML = "";
 		reviewBranch.innerHTML = "";
-		reviewIntegrateBtn.hidden = true;
+		reviewBranchName = "";
 		reviewTab.classList.add("hidden");
 	}
 
@@ -3052,7 +3060,43 @@
 		// bottone prometteva una chiusura che non poteva dare. Chi vuole chiudere
 		// lo stesso una spec respinta passa da Approva, che di rami non ne ha
 		// bisogno.
-		reviewIntegrateBtn.hidden = !diff.branch;
+		reviewBranchName = diff.branch || "";
+		updateCloseButton();
+	}
+
+	// updateCloseButton dà al bottone di chiusura la faccia del caso in cui si
+	// trova. La spec si chiude sempre — è la persona a decidere, non il dossier —
+	// ma le due cose che può fare non sono la stessa: approvare un incremento che
+	// il dossier ha promosso, o chiuderne uno che dichiara bloccato. L'etichetta
+	// e lo stile dicono quale delle due, e il ramo dice se l'integrazione viaggia
+	// con la chiusura: è la stessa condizione che il server usa per decidere se
+	// integrare, cioè un ramo registrato sulla spec.
+	//
+	// Dossier e diff arrivano da due richieste separate e in ordine non garantito,
+	// quindi ognuna delle due aggiorna quello che sa e richiama questa: il
+	// bottone si compone da sé, invece di dipendere da chi è arrivato prima.
+	function updateCloseButton() {
+		const blockers =
+			((currentReview && currentReview.dossier) || {}).blockers || [];
+		const forced = blockers.length > 0;
+		const integrates = reviewBranchName !== "";
+		reviewApproveBtn.textContent = forced
+			? integrates
+				? TEXT.closeForceIntegrate
+				: TEXT.closeForce
+			: integrates
+				? TEXT.closeApproveIntegrate
+				: TEXT.closeApprove;
+		reviewApproveBtn.title = forced
+			? TEXT.approveBlocked(blockers.length)
+			: integrates
+				? TEXT.approveHintIntegrate
+				: TEXT.approveHint;
+		// Chiudere sopra i rilievi resta premibile, ma non si veste da azione
+		// consigliata: chi passa di lì per abitudine deve accorgersi che questa
+		// volta sta scavalcando qualcosa.
+		reviewApproveBtn.classList.toggle("primary-btn", !forced);
+		reviewApproveBtn.classList.toggle("danger-ghost-btn", forced);
 	}
 
 	// renderDossier shows the evidence a provider prepared for this spec, and the
@@ -3067,7 +3111,9 @@
 			const decided =
 				verdict.decision === "approved"
 					? TEXT.verdictApproved
-					: TEXT.verdictChangesRequested;
+					: verdict.decision === "closed_over_blockers"
+						? TEXT.verdictClosedOverBlockers
+						: TEXT.verdictChangesRequested;
 			const when = verdict.decided_at
 				? escapeHtml(TEXT.verdictWhen(verdict.decided_at))
 				: "";
@@ -3083,8 +3129,7 @@
 				`<div class="review-empty">${TEXT.noDossier}</div>`,
 			);
 			reviewDossier.innerHTML = parts.join("");
-			reviewApproveBtn.disabled = false;
-			reviewApproveBtn.title = TEXT.approveHint;
+			updateCloseButton();
 			return;
 		}
 		const head = [];
@@ -3124,16 +3169,7 @@
 			);
 		}
 		reviewDossier.innerHTML = parts.join("");
-		// Il verdetto è della persona, e vale anche contro il dossier: un rilievo
-		// bloccante avvisa e cambia la domanda, non spegne il bottone. Spegnerlo
-		// lasciava senza uscita chi vuole chiudere lo stesso una spec respinta —
-		// con i worktree disabilitati «Integra e chiudi» non c'è, e restava la
-		// sola richiesta di modifiche, cioè nessuna strada per chiudere.
-		reviewApproveBtn.disabled = false;
-		reviewApproveBtn.title =
-			blockers.length > 0
-				? TEXT.approveBlocked(blockers.length)
-				: TEXT.approveHint;
+		updateCloseButton();
 	}
 
 	function renderDiff(diff) {
@@ -3428,6 +3464,10 @@
 		if (!currentSpecCode) return;
 		const freeText = window.prompt(TEXT.requestChangesFeedback, "");
 		if (freeText === null) return;
+		if (countReworkItems(freeText) === 0) {
+			showToast(TEXT.requestChangesEmpty, "err");
+			return;
+		}
 		if (
 			!window.confirm(
 				TEXT.requestChangesConfirm(
@@ -3486,36 +3526,13 @@
 					{},
 				);
 				showToast(
-					res.integrated
-						? TEXT.approvedIntegrated(code)
-						: TEXT.approved(code),
+					res.decision === "closed_over_blockers"
+						? TEXT.closedOverBlockers(code)
+						: res.integrated
+							? TEXT.approvedIntegrated(code)
+							: TEXT.approved(code),
 					"ok",
 				);
-				closeModal();
-				await loadBoard();
-			} catch (err) {
-				reviewFailed(err);
-			}
-		});
-	}
-
-	async function onIntegrate() {
-		if (!currentSpecCode) return;
-		if (
-			!window.confirm(
-				TEXT.integrateConfirm(currentSpecCode),
-			)
-		)
-			return;
-		reviewStatus.textContent = TEXT.integrating;
-		reviewStatus.className = "status-msg";
-		await withBusyButton(reviewIntegrateBtn, TEXT.integrating, async () => {
-			try {
-				await apiPost(
-					`/api/spec/${encodeURIComponent(currentSpecCode)}/integrate`,
-					{},
-				);
-				showToast(TEXT.integrated(currentSpecCode), "ok");
 				closeModal();
 				await loadBoard();
 			} catch (err) {

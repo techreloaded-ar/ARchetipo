@@ -280,8 +280,16 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	executionID := s.decidedExecutionID(ctx, ws, code, review)
+	// The same door closes a spec the dossier cleared and one it declared
+	// blocked, because a person is allowed to close either — but the verdict
+	// says which of the two happened. The server decides it from the dossier it
+	// just read: the client cannot dress a forced closure up as an approval.
+	decision := domain.ReviewDecisionApproved
+	if review.Dossier != nil && len(review.Dossier.Blockers) > 0 {
+		decision = domain.ReviewDecisionClosedOverBlockers
+	}
 	review.Verdict = &domain.ReviewVerdict{
-		Decision:    domain.ReviewDecisionApproved,
+		Decision:    decision,
 		DecidedAt:   time.Now().UTC().Format(time.RFC3339),
 		ExecutionID: executionID,
 	}
@@ -313,6 +321,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		"status":       string(domain.StatusDone),
 		"execution_id": executionID,
 		"integrated":   integrated,
+		"decision":     decision,
 	})
 }
 
