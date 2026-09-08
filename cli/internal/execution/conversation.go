@@ -7,10 +7,10 @@ import "context"
 // of the process, has no spec, no capability to satisfy and no execution record
 // behind it, so it carries only the three facts a provider needs to start.
 type ConversationRequest struct {
-	// ConversationID is the id under which the provider registers the session.
-	// It is therefore the run id the conversation will later be read and
-	// commanded with, through the very same RunCollaborator methods a run uses:
-	// a conversation borrows the run vocabulary without borrowing the record.
+	// ConversationID is the legacy id under which the provider registers the
+	// process. It is not a native provider reference; durable sessions use
+	// SessionMetadata.Native and keep conversation, turn and execution ids
+	// separate.
 	ConversationID string `json:"conversation_id"`
 	// WorkingDir is the project root of the open workspace. It travels on the
 	// request and not on the provider for the same reason Request.WorkingDir
@@ -31,8 +31,9 @@ type ConversationRequest struct {
 	// empty list is a legitimate state and means the agent has nothing to
 	// propose.
 	ProcessActions []ConversationAction `json:"process_actions,omitempty"`
-	// Context is the transcript of a past conversation this one resumes; empty
-	// for a conversation that resumes nothing.
+	// Context is the transcript of a past legacy conversation used to seed a new
+	// one; empty for a conversation that resumes nothing. It is not native
+	// resume and must never be represented as such.
 	//
 	// It travels on the request rather than being sent as a first message
 	// because it is not something anybody said in *this* conversation: it is
@@ -60,6 +61,10 @@ type ConversationAction struct {
 // Provider, like ConfigDescriber and RunCollaborator: Provider is a stable
 // contract and adding a method to it would break every existing implementation
 // for the sake of one caller.
+//
+// Legacy contract: this is the pre-native, process-scoped boundary. New
+// adapters implement SessionProvider. It remains temporarily readable by View
+// while persisted legacy conversations are migrated.
 type Conversationalist interface {
 	// OpenConversation starts the agent process, makes the conversation
 	// followable under ConversationRequest.ConversationID and returns. It does

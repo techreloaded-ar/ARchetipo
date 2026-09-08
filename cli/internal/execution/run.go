@@ -29,23 +29,26 @@ type RunSnapshot struct {
 	ClosedAt *time.Time `json:"closed_at,omitempty"`
 }
 
-// RunEvent is one entry of a run's history, translated out of whatever the
-// provider emits.
+// RunEvent is one entry of a run or native session history, translated out of
+// whatever the provider emits. TurnID and SubmissionID are populated for a
+// native session and remain empty on legacy run events.
 //
 // ID is the only admissible cursor. Seq is deliberately not one: a message sent
 // by the operator reuses the run's current seq, so two distinct rows can
 // legitimately carry the same Seq. A cursor built on Seq would therefore either
 // skip a row (when it treats the duplicate as already seen) or repeat one (when
 // it does not) — both are visible defects in a timeline. ID is monotonic per
-// run, so "everything after ID" is a total, gap-free statement.
+// event stream, so "everything after ID" is a total, gap-free statement.
 type RunEvent struct {
-	ID   int64           `json:"id"`
-	Seq  int             `json:"seq"`
-	At   time.Time       `json:"at"`
-	Kind string          `json:"kind"`
-	Text string          `json:"text,omitempty"`
-	Tool string          `json:"tool,omitempty"`
-	Raw  json.RawMessage `json:"raw,omitempty"`
+	ID           int64           `json:"id"`
+	Seq          int             `json:"seq"`
+	At           time.Time       `json:"at"`
+	Kind         string          `json:"kind"`
+	Text         string          `json:"text,omitempty"`
+	Tool         string          `json:"tool,omitempty"`
+	Raw          json.RawMessage `json:"raw,omitempty"`
+	TurnID       string          `json:"turn_id,omitempty"`
+	SubmissionID string          `json:"submission_id,omitempty"`
 }
 
 // ApprovalOption is one answer a pending approval accepts.
