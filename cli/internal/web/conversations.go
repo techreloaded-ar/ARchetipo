@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
@@ -32,6 +33,10 @@ type conversationEntryView struct {
 	ResumedFrom   string `json:"resumed_from"`
 	State         string `json:"state"`
 	Live          bool   `json:"live"`
+	Native        bool   `json:"native"`
+	Resumable     bool   `json:"resumable"`
+	Archived      bool   `json:"archived"`
+	LegacyLimit   string `json:"legacy_limit,omitempty"`
 }
 
 // conversationsView is the index of the open workspace. Conversations is never
@@ -71,7 +76,17 @@ func closedConversationLimit(r *http.Request) (int, error) {
 // conversationEntryOf renders one record. live is decided by the caller, which
 // is the only place that can see the holder.
 func conversationEntryOf(record conversationlog.Record, live bool) conversationEntryView {
-	return conversationEntryView{
+	state := record.FinalState
+	if record.Native() {
+		state = string(record.Work)
+		if record.Connection == execution.ConnectionReleased {
+			state = string(execution.ConnectionReleased)
+		}
+		if record.Archive == execution.ArchiveArchived {
+			state = string(execution.ArchiveArchived)
+		}
+	}
+	view := conversationEntryView{
 		ID:            record.ID,
 		Title:         record.Title,
 		SpecCode:      record.SpecCode,
@@ -79,9 +94,16 @@ func conversationEntryOf(record conversationlog.Record, live bool) conversationE
 		LastMessageAt: record.LastMessageAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 		MessageCount:  record.MessageCount,
 		ResumedFrom:   record.ResumedFrom,
-		State:         record.FinalState,
+		State:         state,
 		Live:          live,
+		Native:        record.Native(),
+		Resumable:     record.Native() && record.Recovery == execution.RecoveryResumable,
+		Archived:      record.Archive == execution.ArchiveArchived,
 	}
+	if !record.Native() {
+		view.LegacyLimit = "no native session reference; transcript is readable but cannot be resumed natively"
+	}
+	return view
 }
 
 // handleListWorkspaceConversations lists every live conversation and a bounded
@@ -198,7 +220,11 @@ func (s *Server) handleDeleteWorkspaceConversation(w http.ResponseWriter, r *htt
 	// It is what makes the undo possible at all: the index the rail holds is a
 	// summary — no events, no provider, no model — so a page that had only that
 	// could put back a conversation stripped of everything that was said in it.
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": record})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted":                  record,
+		"deleted_scope":            "ARchetipo metadata and timeline only",
+		"native_session_preserved": record.Native(),
+	})
 }
 
 // handleRestoreWorkspaceConversation writes back a conversation that was just

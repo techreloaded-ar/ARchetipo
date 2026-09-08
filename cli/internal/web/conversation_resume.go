@@ -147,6 +147,56 @@ func (s *Server) handleResumeWorkspaceConversation(w http.ResponseWriter, r *htt
 		))
 		return
 	}
+	if record.Native() {
+		if record.Archive == execution.ArchiveArchived {
+			writeError(w, iox.NewConflict(
+				"the conversation "+record.ID+" is archived",
+				"reopen it before resuming its native session",
+				nil,
+			))
+			return
+		}
+		if s.registry == nil {
+			writeError(w, iox.NewConflict("no execution provider registry is available", "start View with the original provider registered", nil))
+			return
+		}
+		provider, resolveErr := s.registry.Resolve(record.Session.ProviderID)
+		if resolveErr != nil {
+			writeError(w, iox.NewConflict(
+				"the original provider "+record.Session.ProviderID+" is not available",
+				"restore that provider; changing the workspace default does not move this session",
+				resolveErr,
+			))
+			return
+		}
+		sessions, supported := execution.SessionProviderFor(provider)
+		if !supported {
+			writeError(w, iox.NewConflict(
+				"the original provider no longer supports native sessions",
+				"restore a compatible provider adapter",
+				nil,
+			))
+			return
+		}
+		if err := ws.conversation.open(conversationHold{
+			id: record.ID, providerID: record.Session.ProviderID, sessionProvider: sessions, session: *record.Session,
+			providerConfig: execution.CloneConfig(record.Session.Environment.ProviderConfig), model: record.NextTurn.Model,
+			modelOptions: cloneModelOptions(record.NextTurn.Options), workingDir: record.Session.Environment.WorkingDir,
+			openedAt: record.OpenedAt, specCode: record.SpecCode,
+		}); err != nil {
+			writeError(w, conversationOpenRefusal(ctx, ws, err))
+			return
+		}
+		snapshot, _ := ws.conversation.get(record.ID)
+		if err := s.sendNativeConversationMessage(ctx, ws, snapshot, sendConversationMessageReq{Message: body.Message}); err != nil {
+			ws.conversation.forget(record.ID)
+			writeError(w, err)
+			return
+		}
+		ws.startNativeFollower(snapshot)
+		writeJSON(w, http.StatusCreated, s.nativeConversationView(ctx, ws, snapshot, 0))
+		return
+	}
 	// Nothing is sealed and nothing is closed here any more. A resume used to
 	// end the live conversation first, so the workspace would never hold two —
 	// which is precisely what this workspace now does, and closing a live thread

@@ -56,8 +56,10 @@ type liveConversation struct {
 	// and commands the session behind it. They are two interfaces rather than
 	// one because a conversation borrows the run vocabulary without borrowing
 	// the record: only the closing half is conversation-specific.
-	provider     execution.Conversationalist
-	collaborator execution.RunCollaborator
+	provider        execution.Conversationalist
+	collaborator    execution.RunCollaborator
+	sessionProvider execution.SessionProvider
+	session         execution.SessionMetadata
 	// providerConfig is the configuration the conversation was opened with, kept
 	// so a later command dispatches with the very configuration that was probed.
 	providerConfig map[string]any
@@ -165,17 +167,19 @@ func (c *conversationSet) canOpen() error {
 // conversation differ in which fields they fill, and a positional call with ten
 // values gives a reader no way to see which kind is being opened.
 type conversationHold struct {
-	id             string
-	providerID     string
-	provider       execution.Conversationalist
-	collaborator   execution.RunCollaborator
-	providerConfig map[string]any
-	model          string
-	modelOptions   map[string]string
-	workingDir     string
-	openedAt       time.Time
-	specCode       string
-	resumedFrom    string
+	id              string
+	providerID      string
+	provider        execution.Conversationalist
+	collaborator    execution.RunCollaborator
+	sessionProvider execution.SessionProvider
+	session         execution.SessionMetadata
+	providerConfig  map[string]any
+	model           string
+	modelOptions    map[string]string
+	workingDir      string
+	openedAt        time.Time
+	specCode        string
+	resumedFrom     string
 	// executionID and action are set only for a conversation that *is* an
 	// action of the process. See the fields of the same name on
 	// liveConversation.
@@ -216,7 +220,7 @@ func (c *conversationSet) open(hold conversationHold) error {
 		if hold.collaborator == nil {
 			return fmt.Errorf("an action conversation needs a collaborator that can end its run")
 		}
-	} else if hold.provider == nil {
+	} else if hold.provider == nil && hold.sessionProvider == nil {
 		return fmt.Errorf("a conversation needs a provider that can close it")
 	}
 	c.mu.Lock()
@@ -239,6 +243,8 @@ func (c *conversationSet) open(hold conversationHold) error {
 		providerID:        hold.providerID,
 		provider:          hold.provider,
 		collaborator:      hold.collaborator,
+		sessionProvider:   hold.sessionProvider,
+		session:           hold.session,
 		providerConfig:    hold.providerConfig,
 		model:             hold.model,
 		modelOptions:      cloneModelOptions(hold.modelOptions),
@@ -485,6 +491,8 @@ func snapshotOf(entry *liveConversation) conversationSnapshot {
 		providerID:        entry.providerID,
 		provider:          entry.provider,
 		collaborator:      entry.collaborator,
+		sessionProvider:   entry.sessionProvider,
+		session:           entry.session,
 		providerConfig:    entry.providerConfig,
 		model:             entry.model,
 		modelOptions:      cloneModelOptions(entry.modelOptions),
@@ -557,6 +565,9 @@ func releaseConversation(ctx context.Context, entry *liveConversation) error {
 			return nil
 		}
 		return err
+	}
+	if entry.sessionProvider != nil {
+		return entry.sessionProvider.ReleaseSession(ctx, execution.SessionRequest{Session: entry.session})
 	}
 	if entry.provider == nil {
 		return nil
@@ -646,17 +657,19 @@ type conversationOutcome struct {
 // instant. It is a copy on purpose: a caller that held the live struct would be
 // reading fields the next open or close is free to rewrite underneath it.
 type conversationSnapshot struct {
-	id             string
-	providerID     string
-	provider       execution.Conversationalist
-	collaborator   execution.RunCollaborator
-	providerConfig map[string]any
-	model          string
-	modelOptions   map[string]string
-	workingDir     string
-	openedAt       time.Time
-	specCode       string
-	resumedFrom    string
+	id              string
+	providerID      string
+	provider        execution.Conversationalist
+	collaborator    execution.RunCollaborator
+	sessionProvider execution.SessionProvider
+	session         execution.SessionMetadata
+	providerConfig  map[string]any
+	model           string
+	modelOptions    map[string]string
+	workingDir      string
+	openedAt        time.Time
+	specCode        string
+	resumedFrom     string
 	// executionID and action say this conversation is an action of the process,
 	// and name the record it is the outcome of. Both are empty for a free
 	// conversation. See the fields of the same name on liveConversation.

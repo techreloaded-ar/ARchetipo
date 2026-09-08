@@ -87,13 +87,18 @@ type conversationView struct {
 	// Both are omitted when the provider declares no catalog, when its catalog
 	// cannot be obtained, or when nothing is configured: a viewer that has only
 	// the provider id draws exactly what it drew before these fields existed.
-	Model        string                    `json:"model,omitempty"`
-	ModelOptions map[string]string         `json:"model_options,omitempty"`
-	Conversation *conversationSnapshotView `json:"conversation"`
-	Events       []execution.RunEvent      `json:"events"`
-	LastID       int64                     `json:"last_id"`
-	Truncated    bool                      `json:"truncated"`
-	Notice       string                    `json:"notice,omitempty"`
+	Model        string                      `json:"model,omitempty"`
+	ModelOptions map[string]string           `json:"model_options,omitempty"`
+	Conversation *conversationSnapshotView   `json:"conversation"`
+	Events       []execution.RunEvent        `json:"events"`
+	LastID       int64                       `json:"last_id"`
+	Truncated    bool                        `json:"truncated"`
+	HasMore      bool                        `json:"has_more"`
+	Session      *execution.SessionSnapshot  `json:"session,omitempty"`
+	NextTurn     execution.TurnConfiguration `json:"next_turn,omitempty"`
+	Deliveries   []execution.SessionDelivery `json:"deliveries,omitempty"`
+	LegacyLimit  string                      `json:"legacy_limit,omitempty"`
+	Notice       string                      `json:"notice,omitempty"`
 	// Approvals are the decisions the agent of this conversation is waiting on.
 	// They exist because a local agent asks before it uses a tool it may not use
 	// on its own, and a question nobody can see is a conversation stopped
@@ -189,6 +194,7 @@ type conversationTarget struct {
 	runtime      execution.Provider
 	provider     execution.Conversationalist
 	collaborator execution.RunCollaborator
+	sessions     execution.SessionProvider
 	// reason is empty exactly when a conversation can be opened. It is the very
 	// sentence providerAvailability.reasonFor produces, never a second wording
 	// for the same fact.
@@ -235,8 +241,9 @@ func (s *Server) conversationAvailabilityFor(ctx context.Context, ws *workspaceS
 		target.reason = denied.reasonFor(execution.CapabilityWorkspaceConverse)
 		return target
 	}
-	conversationalist, converses := execution.ConversationalistFor(provider)
-	if !converses {
+	conversationalist, legacyConversations := execution.ConversationalistFor(provider)
+	sessions, nativeConversations := execution.SessionProviderFor(provider)
+	if !legacyConversations && !nativeConversations {
 		// Unreachable while the capability stays derived from the interface, and
 		// answered with the same sentence anyway: a capability list emptied of the
 		// one the provider cannot honour is exactly the state reasonFor already
@@ -249,6 +256,7 @@ func (s *Server) conversationAvailabilityFor(ctx context.Context, ws *workspaceS
 	target.runtime = provider
 	target.provider = conversationalist
 	target.collaborator, _ = execution.RunCollaboratorFor(provider)
+	target.sessions = sessions
 	return target
 }
 
@@ -271,6 +279,7 @@ func heldConversationTarget(snapshot conversationSnapshot) conversationTarget {
 		},
 		provider:     snapshot.provider,
 		collaborator: snapshot.collaborator,
+		sessions:     snapshot.sessionProvider,
 	}
 }
 
@@ -411,6 +420,7 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 	if !open {
 		return view
 	}
+	view.LegacyLimit = "no native session reference; this transcript can only seed a new conversation explicitly"
 	rendered := &conversationSnapshotView{
 		ID:          snapshot.id,
 		WorkingDir:  snapshot.workingDir,
@@ -674,7 +684,8 @@ func pastConversationViewOf(record conversationlog.Record, openability conversat
 		// A conversation that has ended waits on nothing: there is no process
 		// left to answer, and offering a live button on one would be an offer
 		// nothing can honour.
-		Approvals: []execution.PendingApproval{},
+		Approvals:   []execution.PendingApproval{},
+		LegacyLimit: "no native session reference; this transcript can only seed a new conversation explicitly",
 	}
 	if len(events) > 0 {
 		view.LastID = events[len(events)-1].ID
@@ -704,6 +715,10 @@ func (s *Server) handleGetWorkspaceConversation(w http.ResponseWriter, r *http.R
 	ctx := r.Context()
 	id := strings.TrimSpace(r.PathValue("id"))
 	if snapshot, live := ws.conversation.get(id); live {
+		if snapshot.sessionProvider != nil {
+			writeJSON(w, http.StatusOK, s.nativeConversationView(ctx, ws, snapshot, afterID))
+			return
+		}
 		// The verdict costs no probe for a conversation that is being held. See
 		// heldConversationTarget.
 		writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, ws, heldConversationTarget(snapshot), snapshot, true, afterID))
@@ -712,6 +727,10 @@ func (s *Server) handleGetWorkspaceConversation(w http.ResponseWriter, r *http.R
 	record, err := s.readPastConversation(ctx, ws, id)
 	if err != nil {
 		writeError(w, err)
+		return
+	}
+	if record.Native() {
+		writeJSON(w, http.StatusOK, pastNativeConversationView(ws, record, afterID))
 		return
 	}
 	view := pastConversationViewOf(record, s.conversationOpenabilityOf(ctx, ws), afterID)
@@ -808,6 +827,9 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		return
 	}
 	view := s.conversationViewOf(ctx, ws, opened.target, opened.snapshot, opened.held, 0)
+	if opened.snapshot.sessionProvider != nil {
+		view = s.nativeConversationView(ctx, ws, opened.snapshot, 0)
+	}
 	if opened.notice != "" && view.Notice == "" {
 		view.Notice = opened.notice
 	}
@@ -908,6 +930,59 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 	if modelChoice != nil {
 		model = modelChoice.Model
 		modelOptions = cloneModelOptions(modelChoice.Options)
+	}
+	if target.sessions != nil {
+		discovery, discoverErr := target.sessions.DiscoverSession(ctx, execution.SessionDiscoveryRequest{
+			ProviderConfig: providerConfig,
+			WorkingDir:     ws.cfg.ProjectRoot,
+		})
+		if discoverErr != nil {
+			return openedConversation{}, iox.NewInternal("discovering native session support: "+discoverErr.Error(), discoverErr)
+		}
+		environment := discovery.Environment
+		if strings.TrimSpace(environment.WorkingDir) == "" {
+			environment.WorkingDir = ws.cfg.ProjectRoot
+		}
+		if environment.ProviderConfig == nil {
+			environment.ProviderConfig = providerConfig
+		}
+		created, createErr := target.sessions.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: id, Environment: environment})
+		if createErr != nil {
+			return openedConversation{}, iox.NewInternal("creating a native conversation: "+createErr.Error(), createErr)
+		}
+		created.Session.ConversationID = id
+		created.Session.ProviderID = target.availability.providerID
+		created.Session.Environment = environment
+		if created.Archive == "" {
+			created.Archive = execution.ArchiveOpen
+		}
+		openedAt := time.Now().UTC()
+		record := conversationlog.Record{
+			Version: conversationlog.CurrentVersion, ID: id, SpecCode: spec.specCode,
+			Title: conversationTitleOf(nil, openedAt), WorkingDir: environment.WorkingDir,
+			ProviderID: created.Session.ProviderID, OpenedAt: openedAt, LastMessageAt: openedAt,
+			Session: &created.Session, Archive: created.Archive, Connection: created.Connection,
+			Recovery: created.Recovery, Work: created.Work, CurrentTurn: created.CurrentTurn,
+			NextTurn: execution.TurnConfiguration{Model: model, Options: modelOptions},
+		}
+		if title := strings.TrimSpace(spec.title); title != "" {
+			record.Title = truncateRunes(title, conversationTitleLimit)
+		}
+		if err := ws.conversationStore().Save(ctx, record); err != nil {
+			_ = target.sessions.ReleaseSession(context.WithoutCancel(ctx), execution.SessionRequest{Session: created.Session})
+			return openedConversation{}, iox.NewInternal("persisting the native conversation: "+err.Error(), err)
+		}
+		if err := ws.conversation.open(conversationHold{
+			id: id, providerID: created.Session.ProviderID, sessionProvider: target.sessions, session: created.Session,
+			providerConfig: providerConfig, model: model, modelOptions: modelOptions,
+			workingDir: environment.WorkingDir, openedAt: openedAt, specCode: spec.specCode,
+		}); err != nil {
+			_ = target.sessions.ReleaseSession(context.WithoutCancel(ctx), execution.SessionRequest{Session: created.Session})
+			return openedConversation{}, conversationOpenRefusal(ctx, ws, err)
+		}
+		snapshot, held := ws.conversation.get(id)
+		ws.startNativeFollower(snapshot)
+		return openedConversation{target: target, snapshot: snapshot, held: held}, nil
 	}
 	openErr := target.provider.OpenConversation(ctx, execution.ConversationRequest{
 		ConversationID: id,
@@ -1055,6 +1130,15 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "send a message"))
 		return
 	}
+	if snapshot.sessionProvider != nil {
+		ctx := r.Context()
+		if err := s.sendNativeConversationMessage(ctx, ws, snapshot, body); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, s.nativeConversationView(ctx, ws, snapshot, afterID))
+		return
+	}
 	if snapshot.collaborator == nil {
 		writeError(w, iox.NewConflict(
 			"the conversation "+snapshot.id+" cannot be commanded from this viewer",
@@ -1116,6 +1200,14 @@ func (s *Server) handleRespondWorkspaceConversationApproval(w http.ResponseWrite
 		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "answer a decision"))
 		return
 	}
+	if snapshot.sessionProvider != nil {
+		if err := s.respondNativeConversationApproval(r.Context(), ws, snapshot, approvalID, body.OptionID); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, s.nativeConversationView(r.Context(), ws, snapshot, afterID))
+		return
+	}
 	if snapshot.collaborator == nil {
 		writeError(w, iox.NewConflict(
 			"the conversation "+snapshot.id+" cannot be commanded from this viewer",
@@ -1153,6 +1245,18 @@ func (s *Server) handleCloseWorkspaceConversation(w http.ResponseWriter, r *http
 	snapshot, live := ws.conversation.get(id)
 	if !live {
 		writeError(w, s.conversationGoneRefusal(ctx, ws, id, "close it"))
+		return
+	}
+	if snapshot.sessionProvider != nil {
+		view := s.nativeConversationView(ctx, ws, snapshot, afterID)
+		if err := ws.releaseNativeConversation(ctx, snapshot); err != nil {
+			writeError(w, iox.NewInternal("releasing the native conversation "+id, err))
+			return
+		}
+		if view.Conversation != nil {
+			view.Conversation.State = execution.RunClosed
+		}
+		writeJSON(w, http.StatusOK, view)
 		return
 	}
 	// Sealed while the holder still holds it: the final state is read from the

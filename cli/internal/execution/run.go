@@ -179,8 +179,8 @@ func RunCollaboratorFor(provider Provider) (RunCollaborator, bool) {
 // DeclaredCapabilities is what a caller shows when it lists a provider: the
 // capabilities the provider declares, plus CapabilityRunDialog when — and only
 // when — the provider really implements RunCollaborator, and plus
-// CapabilityWorkspaceConverse when — and only when — it really implements
-// Conversationalist.
+// CapabilityWorkspaceConverse when — and only when — it implements the native
+// SessionProvider or the legacy Conversationalist.
 //
 // Both are derived and never declared by hand. A constant repeated inside every
 // provider's Capabilities is a constant that eventually disagrees with the
@@ -204,7 +204,9 @@ func DeclaredCapabilities(ctx context.Context, provider Provider) ([]Capability,
 	if _, collaborates := RunCollaboratorFor(provider); collaborates {
 		declared = append(declared, CapabilityRunDialog)
 	}
-	if _, converses := ConversationalistFor(provider); converses {
+	_, nativeSessions := SessionProviderFor(provider)
+	_, legacyConversations := ConversationalistFor(provider)
+	if nativeSessions || legacyConversations {
 		declared = append(declared, CapabilityWorkspaceConverse)
 	}
 	normalized := NormalizeCapabilities(declared)

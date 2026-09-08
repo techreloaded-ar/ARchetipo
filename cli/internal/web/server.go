@@ -282,6 +282,10 @@ func (s *Server) registerRoutes() {
 	// conversation's own id, because a conversation has no execution record to
 	// be named by.
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/approvals/{approvalId}", s.handleRespondWorkspaceConversationApproval)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/interrupt", s.handleInterruptNativeConversation)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/archive", s.handleArchiveNativeConversation)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/reopen", s.handleReopenNativeConversation)
+	s.handleWorkspace("PUT /api/workspace/conversations/{id}/next-turn", s.handleUpdateNativeConversationNextTurn)
 	s.handleWorkspace("DELETE /api/workspace/conversations/{id}", s.handleCloseWorkspaceConversation)
 	s.handleWorkspace("DELETE /api/workspace/conversations/{id}/record", s.handleDeleteWorkspaceConversation)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/record", s.handleRestoreWorkspaceConversation)
