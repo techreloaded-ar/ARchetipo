@@ -135,6 +135,9 @@ type Provider struct {
 	// commandable" and "still readable".
 	conversationsMu sync.Mutex
 	conversations   map[string]*liveConversation
+
+	nativeSessionsMu sync.Mutex
+	nativeSessions   map[string]*nativeSession
 }
 
 var (
@@ -142,6 +145,7 @@ var (
 	_ execution.AvailabilityReporter = (*Provider)(nil)
 	_ execution.RunCollaborator      = (*Provider)(nil)
 	_ execution.Conversationalist    = (*Provider)(nil)
+	_ execution.SessionProvider      = (*Provider)(nil)
 )
 
 // New builds a provider, defaulting every unset seam to its real
@@ -156,7 +160,8 @@ func New(options Options) *Provider {
 		workingDir:   options.WorkingDir,
 		now:          options.Now,
 
-		conversations: make(map[string]*liveConversation),
+		conversations:  make(map[string]*liveConversation),
+		nativeSessions: make(map[string]*nativeSession),
 	}
 	if p.runner == nil {
 		p.runner = localrun.ExecRunner{}

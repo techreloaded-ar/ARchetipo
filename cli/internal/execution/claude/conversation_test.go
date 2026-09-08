@@ -180,7 +180,7 @@ func TestOpenConversationWritesNothingUntilTheFirstMessage(t *testing.T) {
 	if len(got) != 2 || got[1] != first {
 		t.Fatalf("the process received %v; want the held instruction and then exactly the first message", got)
 	}
-	if !strings.Contains(got[0], "free conversation") {
+	if !strings.Contains(got[0], "ARchetipo workspace") {
 		t.Fatalf("what travelled ahead of the first message was not the conversation instruction: %q", got[0])
 	}
 	// One frame and one turn: the instruction and the message arrive together,

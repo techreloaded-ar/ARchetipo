@@ -199,13 +199,18 @@ func (s *streamSession) toolNameOf(toolUseID string) string {
 func (s *streamSession) append(kind, text, tool string, raw json.RawMessage) {
 	s.mu.Lock()
 	seq := s.seq
+	turnID := s.turnID
+	submissionID := s.submissionID
+	appendEvent := s.appendEvent
 	s.mu.Unlock()
-	s.session.Append(execution.RunEvent{
-		Seq:  seq,
-		Kind: kind,
-		Text: text,
-		Tool: tool,
-		Raw:  localrun.RawOf(raw),
+	appendEvent(execution.RunEvent{
+		Seq:          seq,
+		Kind:         kind,
+		Text:         text,
+		Tool:         tool,
+		Raw:          localrun.RawOf(raw),
+		TurnID:       turnID,
+		SubmissionID: submissionID,
 	})
 }
 

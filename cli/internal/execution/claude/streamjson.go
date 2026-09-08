@@ -41,11 +41,13 @@ const (
 // else survives untouched in the raw line, which is what every event carries:
 // narrowing what is read must never narrow what is kept.
 type frame struct {
-	Type    string          `json:"type"`
-	Subtype string          `json:"subtype"`
-	Message json.RawMessage `json:"message"`
-	Result  string          `json:"result"`
-	IsError bool            `json:"is_error"`
+	Type      string          `json:"type"`
+	Subtype   string          `json:"subtype"`
+	Message   json.RawMessage `json:"message"`
+	Result    string          `json:"result"`
+	IsError   bool            `json:"is_error"`
+	SessionID string          `json:"session_id"`
+	Model     string          `json:"model"`
 	// RequestID and Request belong to the control protocol, which travels on
 	// the same stream as the history. They are read here rather than in a
 	// second decode of the line because the frame type alone does not say what
@@ -139,7 +141,12 @@ type streamSession struct {
 	// that build a session for a test keep building it unchanged; the provider
 	// overrides it before consume starts, which is the only moment at which
 	// nothing is reading it yet.
-	now func() time.Time
+	now           func() time.Time
+	appendEvent   func(execution.RunEvent)
+	turnID        string
+	submissionID  string
+	initSessionID string
+	initModel     string
 
 	// turnDone is re-armable: it is closed when the current turn ends and
 	// replaced by a fresh one when the next turn opens. It lives under mu, like
@@ -157,7 +164,7 @@ type streamSession struct {
 var _ localrun.Dialogue = (*streamSession)(nil)
 
 func newStreamSession(process localrun.Process, session *localrun.Session, conversational bool) *streamSession {
-	return &streamSession{
+	stream := &streamSession{
 		process:        process,
 		session:        session,
 		conversational: conversational,
@@ -175,6 +182,8 @@ func newStreamSession(process localrun.Process, session *localrun.Session, conve
 		turns:    make(chan TurnOutcome, turnBuffer),
 		gone:     make(chan struct{}),
 	}
+	stream.appendEvent = func(event execution.RunEvent) { session.Append(event) }
+	return stream
 }
 
 // consume reads the process until its output ends. It runs on its own goroutine
@@ -222,9 +231,26 @@ func (s *streamSession) consume() {
 		}
 		s.project(f, line)
 		if f.Type == frameSystem && f.Subtype == subtypeInit {
+			s.mu.Lock()
+			s.initSessionID = f.SessionID
+			s.initModel = f.Model
+			s.mu.Unlock()
 			s.readyOnce.Do(func() { close(s.ready) })
 		}
 	}
+}
+
+func (s *streamSession) correlate(turnID, submissionID string) {
+	s.mu.Lock()
+	s.turnID = turnID
+	s.submissionID = submissionID
+	s.mu.Unlock()
+}
+
+func (s *streamSession) initializedAs() (string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.initSessionID, s.initModel
 }
 
 // settle delivers a control response to whoever is waiting for that request id.
@@ -297,6 +323,23 @@ func (s *streamSession) start(ctx context.Context, prompt string) error {
 	s.mu.Unlock()
 	if err := s.writeUserText(prompt); err != nil {
 		return fmt.Errorf("the claude session could not be given its instruction: %w", err)
+	}
+	select {
+	case <-s.ready:
+		return nil
+	case <-s.gone:
+		return fmt.Errorf("the claude session ended before announcing itself")
+	case <-ctx.Done():
+		return fmt.Errorf("the claude session did not announce itself: %w", ctx.Err())
+	}
+}
+
+// startNative starts a real user turn. Unlike start, the text is not an
+// adapter instruction and therefore remains in the native conversation
+// timeline when Claude replays it.
+func (s *streamSession) startNative(ctx context.Context, message string) error {
+	if err := s.writeUserText(message); err != nil {
+		return fmt.Errorf("the claude session could not be given its message: %w", err)
 	}
 	select {
 	case <-s.ready:

@@ -4,8 +4,8 @@
 //
 // It answers `--version` like the real binary, and under the streaming flags
 // the provider passes (`--print --input-format stream-json --output-format
-// stream-json --verbose --replay-user-messages --no-session-persistence
-// --permission-mode <mode>` plus an optional `--model`) it speaks the same
+// stream-json --verbose --replay-user-messages --permission-mode <mode>` plus
+// `--session-id` or `--resume`, and optional model/effort) it speaks the same
 // NDJSON protocol on stdin and stdout, one frame per line. The shapes are the
 // ones observed on Claude Code 2.1.235: `system`/`init`, `assistant`, `user`,
 // `result` on the way out, an operator `user` frame and a `control_request` of

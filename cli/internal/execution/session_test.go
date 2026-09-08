@@ -8,7 +8,6 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/arcipelago"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/claude"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/codex"
 )
 
@@ -332,7 +331,6 @@ func TestNativeSessionContractCreatesTwoTurnsInterruptsAndResumes(t *testing.T) 
 
 func TestIncompleteAdaptersDoNotExposeNativeSessions(t *testing.T) {
 	providers := []execution.Provider{
-		claude.New(claude.Options{}),
 		codex.New(codex.Options{}),
 		arcipelago.New(arcipelago.Options{}),
 	}

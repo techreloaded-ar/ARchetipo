@@ -20,6 +20,76 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
+// TestLiveClaudeNativeSessionProvider exercises the production SessionProvider
+// boundary used by View: native ID creation, a real filesystem write, release,
+// resume and a second turn with different model/effort and native memory.
+func TestLiveClaudeNativeSessionProvider(t *testing.T) {
+	if os.Getenv("LIVE_CLAUDE") == "" {
+		t.Skip("set LIVE_CLAUDE=1 to run the live Claude SessionProvider probe")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	root := t.TempDir()
+	token := "NATIVE_ADAPTER_" + liveRandomHex(t, 4)
+	config := map[string]any{"command": "claude", "model": "sonnet", "effort": "low", "permission_mode": "acceptEdits"}
+	provider := New(Options{})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "live-native-claude", Environment: execution.SessionEnvironment{WorkingDir: root, ProviderConfig: config, Location: "local"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := provider.StartTurn(ctx, execution.StartTurnRequest{Session: created.Session, TurnID: "turn-live-1", SubmissionID: "submission-live-1", Message: "Ricorda esattamente il token " + token + ". Scrivi esattamente OK seguito da newline nel file native-adapter-marker.txt usando i tool reali, poi conferma brevemente.", Model: "sonnet", Options: map[string]string{"effort": "low"}})
+	if err != nil || first.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("first turn: %#v, %v", first, err)
+	}
+	waitForLiveNativeIdle(t, ctx, provider, created.Session)
+	marker, err := os.ReadFile(filepath.Join(root, "native-adapter-marker.txt"))
+	if err != nil || string(marker) != "OK\n" {
+		t.Fatalf("real tool write = %q, %v", marker, err)
+	}
+	if err := provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session}); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := New(Options{})
+	resumed, err := restarted.ResumeSession(ctx, execution.ResumeSessionRequest{Session: created.Session})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := restarted.StartTurn(ctx, execution.StartTurnRequest{Session: resumed.Session, TurnID: "turn-live-2", SubmissionID: "submission-live-2", Message: "Quale token ti avevo chiesto di ricordare? Rispondi con il solo token.", Model: "opus", Options: map[string]string{"effort": "high"}})
+	if err != nil || second.Turn.Applied.Model == "" || second.Turn.Applied.Options["effort"] != "high" {
+		t.Fatalf("resumed turn: %#v, %v", second, err)
+	}
+	waitForLiveNativeIdle(t, ctx, restarted, resumed.Session)
+	native := restarted.nativeSession(resumed.Session.Native.ID)
+	native.mu.Lock()
+	events := append([]execution.RunEvent(nil), native.events...)
+	native.mu.Unlock()
+	for _, event := range events {
+		if event.Kind == localrun.KindText && strings.Contains(event.Text, token) {
+			return
+		}
+	}
+	t.Fatalf("resumed session did not recall %q; events: %#v", token, events)
+}
+
+func waitForLiveNativeIdle(t *testing.T, ctx context.Context, provider *Provider, metadata execution.SessionMetadata) {
+	t.Helper()
+	for {
+		snapshot, err := provider.ReadSession(ctx, execution.SessionRequest{Session: metadata})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Work == execution.SessionIdle {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
 // TestLiveClaudeResumeWithModelAndSkill proves the native persistence contract
 // without going through ARchetipo's long-lived stream adapter. The first
 // process creates a real persisted Claude session; a second process resumes the

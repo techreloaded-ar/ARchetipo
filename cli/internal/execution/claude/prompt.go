@@ -126,6 +126,30 @@ func buildArgs(cfg settings) []string {
 	return args
 }
 
+func buildNativeSessionArgs(cfg settings, sessionID string, resume bool) []string {
+	args := []string{
+		"--print",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--verbose",
+		"--replay-user-messages",
+		"--permission-mode", cfg.PermissionMode,
+		"--permission-prompt-tool", permissionPromptHost,
+	}
+	if resume {
+		args = append(args, "--resume", sessionID)
+	} else {
+		args = append(args, "--session-id", sessionID)
+	}
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
+	}
+	if cfg.Effort != "" {
+		args = append(args, "--effort", cfg.Effort)
+	}
+	return args
+}
+
 // buildInceptionPrompt renders the single instruction that opens an inception
 // conversation.
 //

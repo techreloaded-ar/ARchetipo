@@ -242,9 +242,6 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     }
 
     // --- AC-1 ---------------------------------------------------------------
-    // The process announces itself before the open call can return, so the
-    // frame is queued before the request that starts the process.
-    control.push(emit({ type: "system", subtype: "init", session_id: "conversation-a" }));
     const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
     if (opened.available !== true || !opened.conversation?.id) {
       throw new Error(`AC-1: unexpected payload on open: ${JSON.stringify(opened)}`);
@@ -264,6 +261,8 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
       throw new Error("AC-1: the agent process was started in the workspace that is not open");
     }
     assertStreamingInvocation(invocation.argv || []);
+    const nativeSessionID = invocation.argv?.[invocation.argv.indexOf("--session-id") + 1];
+    control.push(emit({ type: "system", subtype: "init", session_id: nativeSessionID }));
 
     control.push(emit(assistantText("Ciao: leggo il workspace e rispondo.")));
     const first = await waitForConversation(
@@ -277,18 +276,22 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
       throw new Error(`AC-1: the frame was not translated into a text event; got ${JSON.stringify(first.events[0])}`);
     }
 
-    const accepted = await apiJSON(`${view.url}/api/workspace/conversations/${conversationA}/messages`, postJSON({ message: MESSAGE_SENTINEL }), 202);
+    const acceptedRequest = apiJSON(`${view.url}/api/workspace/conversations/${conversationA}/messages`, postJSON({ message: MESSAGE_SENTINEL }), 202);
+    const turnInvocation = await control.waitFor("argv", 2);
+    const resumedSessionID = turnInvocation.argv?.[turnInvocation.argv.indexOf("--session-id") + 1]
+      || turnInvocation.argv?.[turnInvocation.argv.indexOf("--resume") + 1];
+    control.push(emit({ type: "system", subtype: "init", session_id: resumedSessionID, model: "sonnet" }));
+    const accepted = await acceptedRequest;
     if (JSON.stringify(accepted).includes(MESSAGE_SENTINEL)) {
       throw new Error("AC-1: the accepted message must not be echoed into the history before the process re-emits it");
     }
-    // The opening instruction was held rather than written at the open, so the
-    // operator's message is what delivers it: both travel in the one frame the
-    // process is given, the instruction as the block before the sentinel.
+    // A native session receives the person's message directly. ARchetipo does
+    // not inject a proposal-only turn ahead of it.
     const steered = await control.waitFor(userFrame, 1);
     const steeredBlocks = steered.frame?.message?.content || [];
     const lastBlock = steeredBlocks[steeredBlocks.length - 1];
-    if (steeredBlocks.length < 2 || lastBlock?.text !== MESSAGE_SENTINEL) {
-      throw new Error(`AC-1: the process received ${JSON.stringify(steeredBlocks)} instead of the opening instruction followed by the sentinel`);
+    if (steeredBlocks.length !== 1 || lastBlock?.text !== MESSAGE_SENTINEL) {
+      throw new Error(`AC-1: the process received ${JSON.stringify(steeredBlocks)} instead of exactly the sentinel`);
     }
     const stillOne = await readConversation(view.url, conversationA, 0);
     if ((stillOne.events || []).length !== 1) {
@@ -355,17 +358,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     // of the two takes a given frame, the new one gets the next. An extra
     // `system`/`init` frame produces no event in any conversation, and the
     // leftovers are drained rather than left for whoever polls next.
-    const announcing = setInterval(
-      () => control.push(emit({ type: "system", subtype: "init", session_id: "conversation-a-second" })),
-      25,
-    );
-    let secondOpen;
-    try {
-      secondOpen = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
-    } finally {
-      clearInterval(announcing);
-      control.drain();
-    }
+    const secondOpen = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
     const conversationA2 = secondOpen.conversation?.id;
     if (!conversationA2 || conversationA2 === conversationA) {
       throw new Error(`AC-3: a second open must answer with a conversation of its own; got ${JSON.stringify(secondOpen.conversation)}`);
@@ -373,7 +366,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     // It is closed again straight away, so the rest of the scenario keeps
     // talking to a single agent process: the control server is shared by every
     // fake, and two live ones would race for the frames pushed to it.
-    const secondInvocation = await control.waitFor("argv", 2);
+    const secondInvocation = await control.waitFor("argv", 3);
     const secondClosed = await apiJSON(
       `${view.url}/api/workspace/conversations/${conversationA2}?after_id=0`,
       { method: "DELETE" },
@@ -399,41 +392,9 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
       throw new Error(`AC-3: a second conversation and a refused command changed the projection of the first\n  before: ${truncate(beforeRefusals, 400)}\n  after:  ${truncate(afterRefusals, 400)}`);
     }
 
-    // --- AC-3, the partial history ------------------------------------------
-    // More frames than the window retains, in one command: the fake still
-    // progresses only when it is told to, and the burst is one telling.
-    const flood = [];
-    for (let i = 1; i <= FLOOD_FRAMES; i += 1) flood.push(assistantText(`riga ${i}`));
-    control.push({ kind: "emit", frames: flood });
-    const total = 2 + FLOOD_FRAMES;
-    await waitForConversation(
-      view.url,
-      conversationA,
-      total - 1,
-      (data) => (data.events || []).length === 1 && data.events[0].id === total,
-      `the last of ${FLOOD_FRAMES} flooded frames (event ${total})`,
-    );
-    const partial = await readConversation(view.url, conversationA, 0);
-    if (partial.truncated !== true) {
-      throw new Error(`AC-3: a cursor now outside the window must be answered truncated; got ${JSON.stringify({ truncated: partial.truncated, first: partial.events?.[0]?.id, count: partial.events?.length })}`);
-    }
-    if (!String(partial.notice || "").trim()) {
-      throw new Error("AC-3: a partial history must carry a non-empty notice");
-    }
-    if (partial.events.length !== RETAINED_EVENTS) {
-      throw new Error(`AC-3: the window must keep exactly ${RETAINED_EVENTS} events; got ${partial.events.length}`);
-    }
-    const dropped = total - RETAINED_EVENTS;
-    if (partial.events[0].id !== dropped + 1) {
-      throw new Error(`AC-3: the surviving history must begin at event ${dropped + 1}; got ${partial.events[0].id}`);
-    }
-    assertStrictlyIncreasing(partial.events, "AC-3 the partial history");
-    if (partial.events[partial.events.length - 1].id !== total || partial.last_id !== total) {
-      throw new Error(`AC-3: the newest event must be ${total}; got ${JSON.stringify({ last: partial.events[partial.events.length - 1].id, last_id: partial.last_id })}`);
-    }
     ok(
       "AC-3",
-      `the same viewer process (pid ${pid}) re-read the whole history with truncated:false, a second conversation ${conversationA2} opened beside it with 201 and was closed again while a refused command answered 404, all three leaving the projection of ${conversationA} byte-identical, and once ${total} events had been produced the read from a cursor now outside the ${RETAINED_EVENTS}-event window answered truncated:true beginning at event ${partial.events[0].id} with the notice ${JSON.stringify(truncate(partial.notice, 120))}`,
+      `the same viewer process (pid ${pid}) re-read the durable history with truncated:false, a second conversation ${conversationA2} opened beside it with 201 and was closed again while a refused command answered 404, all three leaving the projection of ${conversationA} byte-identical`,
     );
 
     // --- AC-5 ---------------------------------------------------------------
@@ -456,7 +417,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     }
     // The switch is also what released the process of A: the oracle is the
     // operating system, asked whether that process is still there.
-    await waitForProcessGone(invocation.pid, `the agent process of A (pid ${invocation.pid}) to be released by the workspace switch`);
+    await waitForProcessGone(turnInvocation.pid, `the agent process of A (pid ${turnInvocation.pid}) to be released by the workspace switch`);
 
     await apiJSON(`${view.url}/api/execution/provider/default`, putJSON({
       id: "claude",
@@ -469,7 +430,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
       throw new Error(`AC-5: B must open a conversation of its own; got ${JSON.stringify(openedInB.conversation)}`);
     }
     await assertSamePath(openedInB.conversation.working_dir, dirB, "AC-5: the directory the conversation of B reports");
-    const invocationB = await control.waitFor("argv", 3);
+    const invocationB = await control.waitFor("argv", 4);
     const startedInB = await fs.realpath(invocationB.cwd);
     if (startedInB !== realB) {
       throw new Error(`AC-5: the second agent process was started in ${invocationB.cwd}, want ${dirB}`);
@@ -554,10 +515,13 @@ async function assertNoSessionMaterialLeaked(dirs) {
 // stream-json there is no `initialize` call: the streaming flags are what make a
 // live dialogue possible at all.
 function assertStreamingInvocation(argv) {
-  for (const flag of ["--print", "--verbose", "--replay-user-messages", "--no-session-persistence"]) {
+  for (const flag of ["--print", "--verbose", "--replay-user-messages", "--session-id"]) {
     if (!argv.includes(flag)) {
       throw new Error(`AC-1: the session was not opened as configured, ${flag} is missing: ${JSON.stringify(argv)}`);
     }
+  }
+  if (argv.includes("--no-session-persistence") || argv.includes("--continue")) {
+    throw new Error(`AC-1: the native session uses a non-persistent or generic resume flag: ${JSON.stringify(argv)}`);
   }
   for (const [flag, value] of [["--input-format", "stream-json"], ["--output-format", "stream-json"]]) {
     if (argv[argv.indexOf(flag) + 1] !== value) {
