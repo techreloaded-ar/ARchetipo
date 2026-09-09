@@ -32,6 +32,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { buildCLI as buildCLIShared, createRunDir as createRunDirShared, escapeHTML, makeRunCommand, parseCommonArgs, readBody, stopProcess as stopProcessShared } from "./support/view-smoke-harness.mjs";
 import { startViewServer as startViewServerShared } from "./support/view-smoke-harness.mjs";
+import { findChrome, launchChrome } from "./viewer-page-load-smoke.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -132,6 +133,7 @@ async function main() {
 async function scenarioNativeCodexConversation(dirC, env) {
   let view;
   let control;
+  let browser;
   try {
     control = await startControlServer();
     view = await startViewServer(dirC, {
@@ -172,12 +174,37 @@ async function scenarioNativeCodexConversation(dirC, env) {
       throw new Error(`AC-4: thread/start was not persistent and interactive: ${JSON.stringify(threadStart.params)}`);
     }
 
-    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/next-turn`, putJSON({ model: "gpt-fake", model_options: { effort: "high" } }));
-    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/messages`, postJSON({ message: "turno codex uno" }), 202);
+    const chromePath = await findChrome(process.env.ARCHETIPO_CHROME || process.env.CHROME_PATH);
+    if (!chromePath) throw new Error("task 06 richiede Chrome; imposta ARCHETIPO_CHROME se non è nel percorso standard");
+    browser = await launchChrome(chromePath, path.join(path.dirname(dirC), "chrome-profile"));
+    const page = await browser.newPage();
+    const exceptions = [];
+    page.on("Runtime.exceptionThrown", (params) => exceptions.push(params.exceptionDetails));
+    await page.send("Runtime.enable");
+    await page.send("Page.enable");
+    await page.send("Page.navigate", { url: view.url });
+    await page.once("Page.loadEventFired", 30000, "il caricamento della View");
+    await page.waitFor(`!!document.querySelector('[data-conversation-id="${conversationID}"]')`, 20000, "la rail entry della sessione Codex");
+    await page.evaluate(`document.querySelector('[data-conversation-id="${conversationID}"]').click()`);
+    await page.waitFor(`!!document.querySelector('[data-conversation-pill="model"]')`, 20000, "il selettore modello della sessione");
+    await page.evaluate(`document.querySelector('[data-conversation-pill="model"]').click()`);
+    await page.evaluate(`document.querySelector('[data-conversation-model-choice="gpt-fake"]').click()`);
+    await page.waitFor(`!!document.querySelector('[data-conversation-pill="option:effort"]')`, 20000, "il selettore effort");
+    await page.evaluate(`document.querySelector('[data-conversation-pill="option:effort"]').click()`);
+    await page.evaluate(`document.querySelector('[data-conversation-option-choice="high"]').click()`);
+    await waitForConversation(view.url, conversationID, 0, (data) => data.next_turn?.model === "gpt-fake" && data.next_turn?.options?.effort === "high", "la scelta model/effort fatta con click");
+    await page.evaluate(`document.querySelector('.conv-composer-input').focus()`);
+    await page.send("Input.insertText", { text: "turno codex uno" });
+    await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+    await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
     const firstTurn = await control.waitFor("turn/start", 1);
     if (firstTurn.params?.model !== "gpt-fake" || firstTurn.params?.effort !== "high") {
       throw new Error(`AC-4: turn/start lost model/effort: ${JSON.stringify(firstTurn.params)}`);
     }
+    await page.waitFor(`document.querySelector('.conv-composer-hint')?.textContent.includes('turn attivo')`, 20000, "la dichiarazione dello steering");
+    await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.value = 'correzione nel turn'; input.dispatchEvent(new Event('input', {bubbles:true})); input.form.requestSubmit(); })()`);
+    await control.waitFor("turn/steer", 1);
+    if (exceptions.length) throw new Error(`la View ha emesso eccezioni JS: ${JSON.stringify(exceptions)}`);
     control.push({ kind: "emit", method: "item/started", params: { item: { type: "userMessage", content: [{ type: "text", text: "turno codex uno" }] } } });
     control.push({ kind: "emit", method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
     await waitForConversation(view.url, conversationID, 0, (data) => data.session?.work === "IDLE", "the first Codex turn to complete");
@@ -185,6 +212,15 @@ async function scenarioNativeCodexConversation(dirC, env) {
     const secondAccepted = apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/messages`, postJSON({ message: "turno codex due" }), 202);
     await control.waitFor("turn/start", 2);
     await secondAccepted;
+    await page.send("Page.setWebLifecycleState", { state: "frozen" });
+    for (let index = 0; index < 505; index += 1) {
+      control.push({ kind: "emit", method: "item/agentMessage/delta", params: { delta: `history-${index}\n` } });
+    }
+    await waitForConversation(view.url, conversationID, 0, (data) => data.has_more === true, "la history Codex paginata");
+    await page.send("Page.setWebLifecycleState", { state: "active" });
+    await page.waitFor(`!!document.querySelector('[data-conversation-history-more]')`, 30000, "il comando di paginazione della history");
+    await page.evaluate(`document.querySelector('[data-conversation-history-more]').click()`);
+    await page.waitFor(`!document.querySelector('[data-conversation-history-more]')`, 30000, "la pagina successiva della history");
     control.push({ kind: "request", id: 71, method: "item/commandExecution/requestApproval", params: { threadId: "thread-1", turnId: "turn-2", itemId: "item-1", reason: "write smoke file" } });
     const waitingApproval = await waitForConversation(view.url, conversationID, 0, (data) => data.session?.work === "WAITING_APPROVAL", "the Codex approval to reach View");
     if (waitingApproval.session?.pending_approvals?.[0]?.id !== "71") {
@@ -204,13 +240,19 @@ async function scenarioNativeCodexConversation(dirC, env) {
       throw new Error(`AC-4: input response = ${JSON.stringify(inputResponse)}`);
     }
 
-    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/interrupt`, postJSON({}), 202);
+    await page.waitFor(`!!document.querySelector('[data-conversation-interrupt]')`, 20000, "il comando interrupt");
+    await page.evaluate(`document.querySelector('[data-conversation-interrupt]').click()`);
     await control.waitFor("turn/interrupt", 1);
     control.push({ kind: "emit", method: "turn/completed", params: { turn: { id: "turn-2", status: "interrupted" } } });
     await waitForConversation(view.url, conversationID, 0, (data) => data.session?.current_turn?.state === "INTERRUPTED", "the interrupted Codex turn");
-    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}`, { method: "DELETE" }, 200);
-    const resumed = await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/resume`, postJSON({ message: "riprendi" }), 201);
+    await page.waitFor(`!!document.querySelector('[data-conversation-close-open]')`, 20000, "il comando archive");
+    await page.evaluate(`document.querySelector('[data-conversation-close-open]').click()`);
+    await page.evaluate(`document.querySelector('[data-conversation-close-confirm]').click()`);
+    await waitForConversation(view.url, conversationID, 0, (data) => data.conversation?.state === "CLOSED", "l'archiviazione della sessione");
+    await page.waitFor(`!!document.querySelector('[data-conversation-reopen]')`, 20000, "il comando reopen");
+    await page.evaluate(`document.querySelector('[data-conversation-reopen]').click()`);
     const resumeCall = await control.waitFor("thread/resume", 1);
+    const resumed = await waitForConversation(view.url, conversationID, 0, (data) => data.session?.connection === "CONNECTED", "il resume della stessa sessione");
     if (resumed.conversation?.id !== conversationID || resumed.session?.session?.native?.id !== nativeID || resumeCall.params?.threadId !== nativeID) {
       throw new Error(`AC-4: resume changed identity: ${JSON.stringify({ resumed, resumeCall })}`);
     }
@@ -223,6 +265,7 @@ async function scenarioNativeCodexConversation(dirC, env) {
       "Codex exposes workspace.converse and keeps one persistent native thread across two turn/start calls, per-turn model/effort, approval, structured input, interrupt, release and thread/resume without adding a rail entry",
     );
   } finally {
+    if (browser) await browser.close();
     if (view) await stopProcess(view.child);
     if (control) await control.close();
   }

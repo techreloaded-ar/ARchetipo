@@ -102,7 +102,9 @@
 		// A conversazione aperta la scelta non si cambia più. Prima la riga
 		// spariva, e con lei l'informazione; ora resta, inerte e con un
 		// lucchetto, e questa frase è il suo `title`.
-		modelLocked: "Modello e ragionamento sono stati fissati all'apertura",
+		modelLocked: "Impostazioni applicate al turn attivo",
+		nextTurn: "Prossimo turn",
+		activeTurn: "Turn attivo",
 		// Timeline
 		markPartialHistory: "storia parziale",
 		partialHistory:
@@ -130,15 +132,16 @@
 		approvalPending: "Decisione in attesa",
 		approvalTitle: "La run aspetta una decisione",
 		// Chiusura della conversazione
-		close: "Chiudi",
-		closeConversation: "Chiudi la conversazione",
-		closeQuestion: "Chiuderla e lasciare andare l'agente?",
-		closeYes: "Sì, chiudi",
+		close: "Archivia",
+		closeConversation: "Archivia la conversazione",
+		closeQuestion: "Archiviare la conversazione? Il contesto nativo resterà disponibile.",
+		closeYes: "Sì, archivia",
 		closeNo: "No",
+		reopen: "Riapri",
+		interrupt: "Interrompi turn",
 		// Compositore
 		writePlaceholder: "Scrivi all'agente…",
-		writeClosePlaceholder:
-			"Questa conversazione non accetta altri messaggi: chiudila per lasciare andare l'agente",
+		writeClosePlaceholder: "Questa sessione non è recuperabile",
 		writeOverPlaceholder:
 			"Questa conversazione è finita e non accetta altri messaggi",
 		// Corta e minuta: è un promemoria da leggere una volta, non una frase da
@@ -147,9 +150,14 @@
 		readOnly: "sola lettura",
 		awaitHint: "la run riprende quando rispondi all'attesa qui sopra",
 		send: "Invia",
-		markResume: "ripresa",
-		resumeNote:
-			"La risposta arriva in una <strong>conversazione nuova</strong>, che riceve questa come contesto.",
+		markResume: "sessione",
+		resumeNote: "Il prossimo messaggio riprende la stessa sessione e la stessa conversation.",
+		steeringHint: "il messaggio entra nel turn attivo; modello ed effort scelti valgono dal prossimo turn",
+		nextTurnHint: "il messaggio avvia il prossimo turn con modello ed effort selezionati",
+		waitForTurnHint: "questo provider non supporta steering: attendi la fine del turn o interrompilo",
+		inputPending: "Input richiesto",
+		inputPlaceholder: "Risposta JSON",
+		inputSend: "Rispondi",
 		// Proposta e suo esito
 		markProposed: "proposta",
 		markNotPossible: "non è possibile",
@@ -1039,6 +1047,9 @@
 		// che si guarda mentre si aspetta.
 		const workingRow = renderWorking(objectAt(local, "working"));
 		if (workingRow) rows.push(workingRow);
+		if (view.has_more === true) {
+			rows.push('<li class="conv-history-more"><button type="button" class="ghost-btn" data-conversation-history-more>Carica altri messaggi</button></li>');
+		}
 		const frozen = active ? "" : " is-frozen";
 		return `<ol class="conv-timeline${frozen}">${rows.join("")}</ol>`;
 	}
@@ -1095,6 +1106,19 @@
 		</span>`;
 	}
 
+	function renderLifecycleControls(view, ui) {
+		const session = objectAt(view, "session");
+		if (!session) return ui.active ? renderCloseControl(ui) : "";
+		const disabled = ui.busy ? " disabled" : "";
+		if (textAt(session, "archive") === "ARCHIVED") {
+			return `<button type="button" class="conv-close-btn" data-conversation-reopen${disabled}>${escapeHtml(TEXT.reopen)}</button>`;
+		}
+		const interrupt = textAt(session, "work") !== "IDLE"
+			? `<button type="button" class="conv-close-btn" data-conversation-interrupt${disabled}>${escapeHtml(TEXT.interrupt)}</button>`
+			: "";
+		return `${interrupt}${renderCloseControl(ui)}`;
+	}
+
 	// `offered` is whether a conversation can be opened in this workspace at all.
 	// It gates the writing half and nothing else: a live conversation whose
 	// provider is no longer the offered one takes no new message, but it is still
@@ -1111,26 +1135,29 @@
 	// che la usa e non in un riquadro sopra: si legge con chi si parla
 	// nell'istante in cui si decide di parlargli.
 	function renderComposer(active, draft, ui, offered, awaiting, agentRow) {
-		const writable = active && offered !== false;
+		const writable = typeof ui.writable === "boolean" ? ui.writable : active && offered !== false;
 		const disabled = ui.busy || !writable ? " disabled" : "";
 		const placeholder = writable
 			? TEXT.writePlaceholder
 			: active
 				? TEXT.writeClosePlaceholder
 				: TEXT.writeOverPlaceholder;
-		// Una conversazione finita non è muta: ci si scrive per riprenderla, e
-		// ciò che ne esce è una conversazione nuova. Quel fatto è la cosa più
-		// importante da sapere prima di premere Invio, quindi sta su una riga
+		// Una sessione rilasciata non è muta: ci si scrive per riprendere la stessa
+		// conversation. Quel fatto è la cosa più importante da sapere prima di
+		// premere Invio, quindi sta su una riga
 		// propria sopra al campo — visibile per intero e in ogni larghezza —
 		// invece di stare stretto accanto al campo come un suggerimento fra gli
 		// altri, dove rubava larghezza a ciò che si sta scrivendo.
-		const ended = !active;
+		const ended = !active && ui.resumable === true;
 		// Il suggerimento c'è sempre: sparendo a conversazione finita lasciava la
 		// riga senza dire perché il campo non risponde, e chi tornava a scrivere
 		// su una conversazione viva se lo trovava comparire come una novità. Ora
 		// dice sempre una delle due cose vere del campo — come si manda, oppure
 		// che non si scrive — e sta scritto minuto perché è un promemoria.
-		const hint = writable ? TEXT.writeHint : TEXT.readOnly;
+		const hint = writable
+			? (ui.sendBehavior === "steer" ? TEXT.steeringHint : ui.sendBehavior === "turn" ? TEXT.nextTurnHint : TEXT.writeHint)
+			: ui.sendBehavior === "wait" ? TEXT.waitForTurnHint
+			: TEXT.readOnly;
 		const hintHtml = `<span class="conv-composer-hint">${escapeHtml(hint)}</span>`;
 		// Si chiude come ogni altra nota del pannello: dopo la prima lettura la
 		// riga è del compositore. Il segnaposto del campo continua comunque a
@@ -1164,6 +1191,21 @@
 		</form>`;
 	}
 
+	function renderConversationInputs(view, ui) {
+		const session = objectAt(view, "session");
+		return arrayAt(session, "pending_inputs").map((input) => {
+			if (!input || !input.id) return "";
+			const id = escapeHtml(input.id);
+			const draft = ui.inputDrafts && typeof ui.inputDrafts[input.id] === "string" ? ui.inputDrafts[input.id] : "";
+			return `<form class="conv-input" data-conversation-input-form="${id}">
+				<strong>${escapeHtml(input.title || TEXT.inputPending)}</strong>
+				<pre>${escapeHtml(JSON.stringify(input.payload || {}, null, 2))}</pre>
+				<textarea data-conversation-input-draft="${id}" placeholder="${escapeHtml(TEXT.inputPlaceholder)}">${escapeHtml(draft)}</textarea>
+				<button type="submit" class="primary-btn"${ui.busy ? " disabled" : ""}>${escapeHtml(TEXT.inputSend)}</button>
+			</form>`;
+		}).join("");
+	}
+
 	// A one-word identifier is a name and reads as one once it is capitalised;
 	// anything else — an identifier carrying digits, dashes or dots — is left
 	// exactly as it is spelled, because title-casing a compound identifier
@@ -1186,17 +1228,25 @@
 		// riga agente accanto al compositore, e ripeterli qui era dirli due
 		// volte nello stesso pannello.
 		const agent = displayName(textAt(view, "provider_id"));
+		const session = objectAt(view, "session");
+		const metadata = objectAt(session, "session");
+		const environment = objectAt(metadata, "environment");
+		const location = textAt(environment, "location");
 		const dirHtml = dir
 			? `<code class="conv-dir" title="${escapeHtml(dir)}">${escapeHtml(dir)}</code>`
 			: "";
 		const providerHtml = agent
 			? `<span class="conv-provider" title="${escapeHtml(agent)}">${escapeHtml(agent)}</span>`
 			: "";
+		const locationHtml = location
+			? `<span class="conv-provider" title="${escapeHtml(location)}">${escapeHtml(location)}</span>`
+			: "";
 		return `<div class="conv-head">
 			<span class="conv-badge ${variant}">${escapeHtml(badge)}</span>
 			${dirHtml}
 			<span class="conv-head-spacer"></span>
 			${providerHtml}
+			${locationHtml}
 			${typeof controls === "string" ? controls : ""}
 		</div>`;
 	}
@@ -1224,11 +1274,30 @@
 		return parts.join(" · ");
 	}
 
+	function turnConfigurationLabel(configuration) {
+		const parts = [];
+		if (configuration && configuration.model) parts.push(String(configuration.model));
+		const options = objectAt(configuration, "options");
+		if (options) {
+			for (const key of Object.keys(options).sort()) {
+				if (options[key] !== undefined && options[key] !== null && String(options[key])) parts.push(String(options[key]));
+			}
+		}
+		return parts.join(" · ");
+	}
+
 	// La riga agente, nelle sue due forme. Finché la conversazione non è aperta
 	// è la riga di pastiglie che il renderer dei campi disegna — si sceglie. Da
 	// quando è aperta è la stessa riga inerte, con un lucchetto: la scelta non
 	// si cambia più, ma si continua a leggere con chi si sta parlando.
 	function renderConversationModelChoice(view, ui, active) {
+		if (ui && typeof ui.modelChoiceHtml === "string" && ui.modelChoiceHtml) {
+			const session = objectAt(view, "session");
+			const currentTurn = objectAt(session, "current_turn");
+			const applied = turnConfigurationLabel(objectAt(currentTurn, "applied"));
+			const current = applied ? `<span class="conv-agent-inert" title="${escapeHtml(TEXT.modelLocked)}">${escapeHtml(TEXT.activeTurn)}: ${escapeHtml(applied)}</span>` : "";
+			return `<span class="conv-next-turn">${current}<span class="conv-next-turn-label">${escapeHtml(TEXT.nextTurn)}</span>${ui.modelChoiceHtml}</span>`;
+		}
 		if (active) {
 			const label = fixedAgentLabel(view);
 			if (!label) return "";
@@ -1555,6 +1624,7 @@
 		// and it must be readable without scrolling past a step nobody can take
 		// while the agent is stopped.
 		blocks.push(renderConversationApprovals(value, local));
+		blocks.push(renderConversationInputs(value, local));
 		// The recommended step closes the thread: it is what to do next, and it
 		// belongs after everything that has been said and before the place where
 		// the next thing is said.
@@ -1564,11 +1634,17 @@
 		// chiudere quella aperta dalla testata: ripetere qui uno dei due
 		// costava al pannello una fascia intera per un comando che ha già il suo
 		// posto, e la conversazione è ciò che quello spazio deve avere.
+		const session = objectAt(value, "session");
+		const composerUI = Object.assign({}, local);
+		if (session && composerUI.writable === undefined) {
+			composerUI.resumable = textAt(session, "recovery") === "RESUMABLE";
+			composerUI.writable = composerUI.resumable && textAt(session, "archive") !== "ARCHIVED";
+		}
 		blocks.push(
 			renderComposer(
 				active,
 				typed,
-				local,
+				composerUI,
 				offered,
 				anyAwaiting(value),
 				renderConversationModelChoice(value, local, active),
@@ -1579,7 +1655,7 @@
 		// conversazione — con o senza il dettaglio tecnico — e, finche' e'
 		// viva, lasciarla andare. Il primo c'e' sempre, perche' una
 		// conversazione conclusa la si rilegge esattamente come una viva.
-		const controls = `${renderTechnicalControl(local)}${active ? renderCloseControl(local) : ""}`;
+		const controls = `${renderTechnicalControl(local)}${renderLifecycleControls(value, Object.assign({}, local, {active}))}`;
 		return `<section class="conv-panel ${variant}" aria-label="${escapeHtml(TEXT.panel)}">
 			${renderHead(value, badge, variant, controls)}
 			${blocks.join("")}

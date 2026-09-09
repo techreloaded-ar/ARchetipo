@@ -367,7 +367,37 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 		}
 	}
 	if record.Work != "" && record.Work != execution.SessionIdle {
-		return iox.NewConflict("the conversation "+snapshot.id+" already has an active turn", "wait for it to finish or interrupt that turn", nil)
+		discovery, discoveryErr := snapshot.sessionProvider.DiscoverSession(ctx, execution.SessionDiscoveryRequest{
+			ProviderConfig: snapshot.providerConfig, WorkingDir: snapshot.workingDir, Native: &snapshot.session.Native,
+		})
+		if discoveryErr != nil || !execution.SupportsSessionCapability(discovery.Capabilities, execution.SessionCapabilitySteering) {
+			return iox.NewConflict("the active turn does not accept steering", "wait for it to finish or interrupt that turn", discoveryErr)
+		}
+		if record.CurrentTurn == nil {
+			return iox.NewConflict("the conversation "+snapshot.id+" has no identifiable active turn", "refresh the session before sending another command", nil)
+		}
+		submissionID, operationErr := nativeOperationID("submission-")
+		if operationErr != nil {
+			return operationErr
+		}
+		delivery := execution.SessionDelivery{SubmissionID: submissionID, TurnID: record.CurrentTurn.ID, State: execution.DeliveryUncertain}
+		record.Deliveries = upsertDelivery(record.Deliveries, delivery)
+		if saveErr := ws.conversationStore().Save(ctx, record); saveErr != nil {
+			return saveErr
+		}
+		delivery, steerErr := snapshot.sessionProvider.SteerTurn(ctx, execution.SessionCommandRequest{
+			Session: snapshot.session, TurnID: record.CurrentTurn.ID, SubmissionID: submissionID, Message: body.Message,
+		})
+		if delivery.State != "" {
+			record.Deliveries = upsertDelivery(record.Deliveries, delivery)
+		}
+		if saveErr := ws.conversationStore().Save(context.WithoutCancel(ctx), record); saveErr != nil {
+			return saveErr
+		}
+		if steerErr != nil {
+			return iox.NewConflict("the steering delivery was not confirmed", "reconcile the native session before retrying", steerErr)
+		}
+		return nil
 	}
 	turnID, err := nativeOperationID("turn-")
 	if err != nil {
@@ -700,6 +730,61 @@ type nativeNextTurnRequest struct {
 	ModelOptions map[string]string `json:"model_options"`
 }
 
+type nativeConversationModelChoiceView struct {
+	executionModelChoiceView
+	Capabilities []execution.SessionCapability `json:"capabilities"`
+	Environment  execution.SessionEnvironment  `json:"environment"`
+}
+
+func (s *Server) nativeConversationDiscovery(ctx context.Context, ws *workspaceSession, id string) (conversationlog.Record, execution.SessionDiscovery, error) {
+	record, err := ws.conversationStore().GetMetadata(ctx, id)
+	if err != nil || !record.Native() {
+		return conversationlog.Record{}, execution.SessionDiscovery{}, conversationNotFound(id, err)
+	}
+	if s.registry == nil {
+		return conversationlog.Record{}, execution.SessionDiscovery{}, iox.NewConflict("no execution provider registry is available", "start View with the original provider registered", nil)
+	}
+	provider, err := s.registry.Resolve(record.Session.ProviderID)
+	if err != nil {
+		return conversationlog.Record{}, execution.SessionDiscovery{}, iox.NewConflict("the original provider "+record.Session.ProviderID+" is not available", "restore that provider; changing the default does not move this session", err)
+	}
+	sessions, ok := execution.SessionProviderFor(provider)
+	if !ok {
+		return conversationlog.Record{}, execution.SessionDiscovery{}, iox.NewConflict("the original provider no longer supports native sessions", "restore a compatible provider adapter", nil)
+	}
+	discovery, err := sessions.DiscoverSession(ctx, execution.SessionDiscoveryRequest{
+		ProviderConfig: record.Session.Environment.ProviderConfig,
+		WorkingDir:     record.Session.Environment.WorkingDir,
+		Native:         &record.Session.Native,
+	})
+	if err != nil {
+		return conversationlog.Record{}, execution.SessionDiscovery{}, iox.NewConflict("the native session catalog is not available", "restore its provider runtime and try again", err)
+	}
+	return record, discovery, nil
+}
+
+func (s *Server) handleGetNativeConversationModelChoice(w http.ResponseWriter, r *http.Request) {
+	ws := s.session()
+	record, discovery, err := s.nativeConversationDiscovery(r.Context(), ws, strings.TrimSpace(r.PathValue("id")))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	view := nativeConversationModelChoiceView{
+		executionModelChoiceView: executionModelChoiceView{
+			ProviderID: record.Session.ProviderID, ModelField: execution.ModelFieldName,
+			Model: record.NextTurn.Model, Options: cloneModelOptions(record.NextTurn.Options),
+			ModelSource: "session", Models: discovery.Models, Available: len(discovery.Models) > 0,
+		},
+		Capabilities: execution.NormalizeSessionCapabilities(discovery.Capabilities),
+		Environment:  discovery.Environment,
+	}
+	if len(discovery.Models) == 0 {
+		view.UnavailableReason = "the session provider returned an empty model catalog"
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
 func (s *Server) handleUpdateNativeConversationNextTurn(w http.ResponseWriter, r *http.Request) {
 	var body nativeNextTurnRequest
 	if err := decodeJSON(r, &body); err != nil {
@@ -714,12 +799,17 @@ func (s *Server) handleUpdateNativeConversationNextTurn(w http.ResponseWriter, r
 		return
 	}
 	defer func() { _ = lock.Unlock() }()
-	record, err := ws.conversationStore().GetMetadata(r.Context(), id)
-	if err != nil || !record.Native() {
-		writeError(w, conversationNotFound(id, err))
+	record, discovery, err := s.nativeConversationDiscovery(r.Context(), ws, id)
+	if err != nil {
+		writeError(w, err)
 		return
 	}
-	record.NextTurn = execution.TurnConfiguration{Model: strings.TrimSpace(body.Model), Options: cloneModelOptions(body.ModelOptions)}
+	nextTurn := execution.TurnConfiguration{Model: strings.TrimSpace(body.Model), Options: cloneModelOptions(body.ModelOptions)}
+	if err := execution.ValidateTurnConfiguration(discovery.Models, nextTurn); err != nil {
+		writeError(w, iox.NewInvalidInput(err.Error(), "choose a model and options declared by this session provider", err))
+		return
+	}
+	record.NextTurn = nextTurn
 	if err := ws.conversationStore().Save(r.Context(), record); err != nil {
 		writeError(w, iox.NewInternal("saving the next turn configuration", err))
 		return

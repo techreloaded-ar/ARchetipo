@@ -54,7 +54,8 @@ func (p *persistentFakeNativeProvider) Execute(context.Context, execution.Reques
 	return execution.Result{}, nil
 }
 func (p *persistentFakeNativeProvider) DiscoverSession(_ context.Context, request execution.SessionDiscoveryRequest) (execution.SessionDiscovery, error) {
-	return execution.SessionDiscovery{Capabilities: []execution.SessionCapability{execution.SessionCapabilityResume, execution.SessionCapabilityInterrupt},
+	return execution.SessionDiscovery{Capabilities: []execution.SessionCapability{execution.SessionCapabilityResume, execution.SessionCapabilityInterrupt, execution.SessionCapabilitySteering, execution.SessionCapabilityTurnModel, execution.SessionCapabilityTurnOptions},
+		Models:      []execution.ModelOption{{ID: "fake-large", Default: true, Options: []execution.ModelOptionField{{Name: "effort", Choices: []execution.ModelOptionChoice{{Value: "high"}, {Value: "low"}}}}}},
 		Environment: execution.SessionEnvironment{WorkingDir: request.WorkingDir, ProviderConfig: execution.CloneConfig(request.ProviderConfig), Location: "local"}}, nil
 }
 func (p *persistentFakeNativeProvider) CreateSession(_ context.Context, request execution.CreateSessionRequest) (execution.SessionSnapshot, error) {
@@ -162,7 +163,7 @@ func (p *persistentFakeNativeProvider) ReleaseSession(_ context.Context, request
 	return nil
 }
 
-func TestNativeConversationPersistsWithoutReadsResumesSameIDAndRejectsDoubleTurn(t *testing.T) {
+func TestNativeConversationPersistsWithoutReadsResumesSameIDAndSteersActiveTurn(t *testing.T) {
 	provider := newPersistentFakeNativeProvider("native-fake", nil)
 	srv, cfg, conn := newRunServer(t, provider, true)
 	opened := openConversationOK(t, srv)
@@ -186,8 +187,8 @@ func TestNativeConversationPersistsWithoutReadsResumesSameIDAndRejectsDoubleTurn
 			accepted++
 		}
 	}
-	if accepted != 1 || provider.store.starts != 1 {
-		t.Fatalf("accepted=%d starts=%d, want one turn", accepted, provider.store.starts)
+	if accepted != 2 || provider.store.starts != 1 {
+		t.Fatalf("accepted=%d starts=%d, want two deliveries in one turn", accepted, provider.store.starts)
 	}
 
 	provider.store.mu.Lock()
@@ -269,6 +270,7 @@ func TestNativeConversationPersistsWithoutReadsResumesSameIDAndRejectsDoubleTurn
 	if restartedProvider.store.starts != 2 || otherProvider.store.starts != 0 {
 		t.Fatalf("existing session moved with the default: original starts=%d other starts=%d", restartedProvider.store.starts, otherProvider.store.starts)
 	}
+	closeConversation(t, restarted, id)
 }
 
 func TestNativeConversationKeepsAnUncertainDeliveryAfterSubmissionFailure(t *testing.T) {
@@ -309,6 +311,16 @@ func TestNativeConversationLifecycleThroughHTTPWithoutBrowser(t *testing.T) {
 	}
 	opened := decodeConversation(t, string(body))
 	id := opened.Conversation.ID
+	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodGet, conversationsRoute+"/"+id+"/model-choice", nil)
+	var modelChoice nativeConversationModelChoiceView
+	if status != http.StatusOK || json.Unmarshal(body, &modelChoice) != nil || modelChoice.ProviderID != "native-fake" || modelChoice.ModelSource != "session" || modelChoice.Environment.Location != "local" || len(modelChoice.Models) != 1 {
+		t.Fatalf("session model choice = %d: %s", status, body)
+	}
+	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPut, conversationsRoute+"/"+id+"/next-turn",
+		map[string]any{"model": "not-in-session-catalog", "model_options": map[string]string{"effort": "high"}})
+	if status != http.StatusBadRequest {
+		t.Fatalf("invalid next turn = %d: %s", status, body)
+	}
 	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPut, conversationsRoute+"/"+id+"/next-turn",
 		map[string]any{"model": "fake-large", "model_options": map[string]string{"effort": "high"}})
 	if status != http.StatusOK {

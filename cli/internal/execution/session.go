@@ -3,9 +3,35 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
+
+// ValidateTurnConfiguration checks a next-turn choice against the catalog
+// discovered in the actual native session environment.
+func ValidateTurnConfiguration(models []ModelOption, configuration TurnConfiguration) error {
+	model, found := findModel(models, strings.TrimSpace(configuration.Model))
+	if !found {
+		return fmt.Errorf("model must be one of %s", strings.Join(modelIDs(models), ", "))
+	}
+	declared := make(map[string]ModelOptionField, len(model.Options))
+	for _, option := range model.Options {
+		declared[option.Name] = option
+	}
+	for _, name := range sortedKeys(configuration.Options) {
+		value := configuration.Options[name]
+		option, ok := declared[name]
+		if !ok {
+			return fmt.Errorf("%s is not an option of model %s", name, model.ID)
+		}
+		if !hasChoice(option.Choices, value) {
+			return fmt.Errorf("%s must be one of %s", name, strings.Join(choiceValues(option.Choices), ", "))
+		}
+	}
+	return nil
+}
 
 // SessionCapability is an optional behaviour of a native harness session.
 // Creation, event streaming and release are the baseline SessionProvider

@@ -51,8 +51,8 @@
 	// sola cosa che i due sanno di diverso: una conversazione si apre, una run
 	// parte. Le parole stanno accanto al prefisso per la stessa ragione per cui
 	// ci sta lui — sono ciò che distingue i due ambiti, non due componenti.
-	const ROW_MODEL_TITLE = "Modello di questa conversazione";
-	const ROW_MODEL_FIXED_COPY = "si fissa quando la conversazione si apre";
+	const ROW_MODEL_TITLE = "Modello del prossimo turn";
+	const ROW_MODEL_FIXED_COPY = "si applica al prossimo turn";
 	const ROW_RUN_MODEL_TITLE = "Modello di questa run";
 	const ROW_RUN_FIXED_COPY = "si fissa quando la run parte";
 	// La voce e il segmento che dicono «non scelgo io»: la prima in coda

@@ -5158,6 +5158,39 @@ body.no-workspace [data-workspace-scoped] {
 	gap: 2px;
 }
 
+.conv-next-turn {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.conv-next-turn-label {
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+}
+
+.conv-input {
+	display: grid;
+	gap: 8px;
+	padding: 12px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+}
+
+.conv-input pre,
+.conv-input textarea {
+	margin: 0;
+	max-width: 100%;
+}
+
+.conv-history-more {
+	list-style: none;
+	text-align: center;
+}
+
 .conv-empty-command {
 	gap: var(--space-3);
 }

@@ -275,6 +275,7 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("GET /api/workspace/conversations", s.handleListWorkspaceConversations)
 	s.handleWorkspace("POST /api/workspace/conversations", s.handleOpenWorkspaceConversation)
 	s.handleWorkspace("GET /api/workspace/conversations/{id}", s.handleGetWorkspaceConversation)
+	s.handleWorkspace("GET /api/workspace/conversations/{id}/model-choice", s.handleGetNativeConversationModelChoice)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/messages", s.handleSendWorkspaceConversationMessage)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/proposal", s.handleDecideWorkspaceConversationProposal)
 	// A conversation whose agent stops to ask permission is a conversation

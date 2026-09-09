@@ -5649,6 +5649,8 @@
 	let conversationModelChoiceView = null;
 	let conversationModelChoiceSelection = null;
 	let conversationModelChoiceLoadToken = 0;
+	let conversationCapabilities = [];
+	let conversationInputDrafts = {};
 	let conversationOpeningSpecCode = "";
 
 	// ---- Thread index (US-058, US-059) ---
@@ -5803,6 +5805,20 @@
 	// consegna — non sta aspettando: sta aspettando *chi scrive*.
 	function conversationWorking() {
 		if (!conversationIsActive()) return { active: false };
+		const sessionWork = typeof conversationView !== "undefined" && conversationView && conversationView.session
+			? conversationView.session.work
+			: "";
+		if (sessionWork === "IDLE") return { active: false };
+		if (sessionWork && sessionWork !== "IDLE") {
+			return {
+				active: true,
+				kind: "",
+				tool: "",
+				seconds: conversationWorkingSince
+					? Math.floor((Date.now() - conversationWorkingSince) / 1000)
+					: 0,
+			};
+		}
 		// Un turno si apre con il messaggio di chi scrive e si chiude con la
 		// riga che lo chiude. Non basta guardare l'ultima riga della storia:
 		// una conversazione appena aperta ne ha gia' due — i ganci che scattano
@@ -5889,6 +5905,18 @@
 	function bindConversationPanel(container) {
 		if (!container) return;
 		container.addEventListener("click", (e) => {
+			if (e.target.closest("[data-conversation-history-more]")) {
+				loadMoreConversationHistory();
+				return;
+			}
+			if (e.target.closest("[data-conversation-interrupt]")) {
+				interruptConversation();
+				return;
+			}
+			if (e.target.closest("[data-conversation-reopen]")) {
+				reopenConversation();
+				return;
+			}
 			// La riga agente: una pastiglia apre o chiude il suo popover, una
 			// voce sceglie il modello, un segmento sceglie il valore di
 			// un'opzione. Dopo ogni scelta il popover si chiude e il fuoco torna
@@ -6057,12 +6085,23 @@
 			}
 		});
 		container.addEventListener("submit", (e) => {
+			const requestedInput = e.target.closest("[data-conversation-input-form]");
+			if (requestedInput) {
+				e.preventDefault();
+				respondConversationInput(requestedInput.getAttribute("data-conversation-input-form") || "");
+				return;
+			}
 			const form = e.target.closest(".conv-composer");
 			if (!form) return;
 			e.preventDefault();
 			sendConversationMessage();
 		});
 		container.addEventListener("input", (e) => {
+			const requestedInput = e.target.closest("[data-conversation-input-draft]");
+			if (requestedInput) {
+				conversationInputDrafts[requestedInput.getAttribute("data-conversation-input-draft") || ""] = requestedInput.value;
+				return;
+			}
 			const input = e.target.closest(".conv-composer-input");
 			if (!input) return;
 			conversationDraft = input.value;
@@ -6360,12 +6399,15 @@
 		};
 	}
 
-	async function loadConversationModelChoice() {
+	async function loadConversationModelChoice(id) {
 		const token = ++conversationModelChoiceLoadToken;
 		try {
-			const view = await apiGet("/api/execution/model-choice");
+			const view = await apiGet(id
+				? `/api/workspace/conversations/${encodeURIComponent(id)}/model-choice`
+				: "/api/execution/model-choice");
 			if (token !== conversationModelChoiceLoadToken) return;
 			conversationModelChoiceView = view || null;
+			conversationCapabilities = view && Array.isArray(view.capabilities) ? view.capabilities : [];
 			renderConversationPanel();
 		} catch (_) {
 			// Choosing is optional. A failed catalog read must not turn opening a
@@ -6401,6 +6443,7 @@
 	}
 
 	function chooseConversationModel(value) {
+		const previous = conversationModelChoiceSelection;
 		const current = currentConversationModelChoice();
 		const model = value === undefined || value === null ? "" : String(value);
 		const options = {};
@@ -6411,17 +6454,40 @@
 		});
 		conversationModelChoiceSelection = { model, options };
 		renderConversationPanel();
+		persistConversationNextTurn(previous);
 	}
 
 	// Ridisegna, a differenza di prima: il valore non vive più in un `<select>`
 	// che se lo tiene da sé, ma è scritto sulla pastiglia e nel segmento premuto,
 	// e senza ridisegno resterebbero entrambi a dire il valore di prima.
 	function chooseConversationOption(name, value) {
+		const previous = conversationModelChoiceSelection;
 		const current = currentConversationModelChoice();
 		current.options[String(name)] =
 			value === undefined || value === null ? "" : String(value);
 		conversationModelChoiceSelection = current;
 		renderConversationPanel();
+		persistConversationNextTurn(previous);
+	}
+
+	async function persistConversationNextTurn(previous) {
+		const id = conversationsCurrentId;
+		if (!id || !conversationView || !conversationView.session) return;
+		const chosen = currentConversationModelChoice();
+		try {
+			const result = await apiPut(
+				`/api/workspace/conversations/${encodeURIComponent(id)}/next-turn`,
+				{ model: chosen.model, model_options: normalizeOptionMap(chosen.options) },
+			);
+			if (conversationsCurrentId !== id) return;
+			conversationRefusal = "";
+			if (result && result.next_turn) conversationView.next_turn = result.next_turn;
+		} catch (err) {
+			if (conversationsCurrentId !== id) return;
+			conversationModelChoiceSelection = previous;
+			showConversationRefusal(err);
+			renderConversationPanel();
+		}
 	}
 
 	function conversationModelOverride() {
@@ -6532,6 +6598,8 @@
 		conversationOpeningSpecCode = String(specCode || "");
 		conversationModelChoiceSelection = null;
 		conversationModelChoiceView = null;
+		conversationCapabilities = [];
+		conversationInputDrafts = {};
 		conversationModelChoiceOpen = "";
 		renderConversationsRail();
 		renderConversationPanel();
@@ -6578,6 +6646,8 @@
 		conversationModelChoiceLoadToken += 1;
 		conversationModelChoiceView = null;
 		conversationModelChoiceSelection = null;
+		conversationCapabilities = [];
+		conversationInputDrafts = {};
 		conversationOpeningSpecCode = "";
 		renderConversationsRail();
 		renderConversationPanel();
@@ -6597,10 +6667,11 @@
 			if (conversationsCurrentId !== id) return;
 		}
 		applyConversationView(view);
+		if (view && view.session) loadConversationModelChoice(id);
 		renderConversationPanel();
 		renderConversationsRail();
 		if (conversationIsActive()) startConversationPolling();
-		else loadConversationModelChoice();
+		else if (!view || !view.session) loadConversationModelChoice();
 	}
 
 	// openConversationThread shows one thread of the rail. Where one looks does
@@ -6614,10 +6685,7 @@
 		await switchToConversation(id);
 	}
 
-	// resumeConversationThread is what writing in a past thread does (AC-4).
-	// Nothing of the old session is reopened: the server opens a *new*
-	// conversation and hands it the old one as context, and the banner says so
-	// in as many words.
+	// A native resume preserves both the ARchetipo id and the harness session id.
 	async function resumeConversationThread() {
 		const id = conversationsCurrentId;
 		if (conversationBusy || !id) return;
@@ -6626,40 +6694,111 @@
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
-			const body = { message };
-			const override = conversationModelOverride();
-			if (override) {
-				body.model = override.model;
-				body.model_options = override.model_options;
-			}
-			const view = await apiPost(
-				`/api/workspace/conversations/${encodeURIComponent(id)}/resume`,
-				body,
+			let view = await apiPost(
+				`/api/workspace/conversations/${encodeURIComponent(id)}/reopen`,
+				{},
 			);
-			// A new conversation is a new history, and switching to it is what
-			// empties the previous one's projection — the draft included here,
-			// because this one has just been sent.
+			if (conversationIdOf(view) !== id) {
+				throw new Error("il resume ha cambiato conversation ID");
+			}
+			applyConversationView(view);
+			view = await apiPost(
+				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
+				{ message },
+			);
 			conversationDraft = "";
-			conversationsRefusal = "";
-			conversationModelChoiceSelection = null;
-			await switchToConversation(conversationIdOf(view), view);
-			// La conversazione nuova nasce vuota e il messaggio che l'ha aperta è
-			// già stato consegnato: senza l'eco, chi ha premuto invio si
-			// ritroverebbe davanti una storia vuota al posto di ciò che ha
-			// appena detto. L'eco si rimette *dopo* il cambio, che l'ha azzerata
-			// con tutto il resto, e si sistema subito contro quello che la
-			// conversazione nuova porta già con sé.
 			conversationPendingMessage = message;
-			conversationEvents.forEach(settleConversationPending);
+			conversationsRefusal = "";
+			applyConversationView(view);
+			startConversationPolling();
 		} catch (err) {
-			// Rifiutata: qui la bozza non era stata svuotata — si svuota solo
-			// quando la ripresa riesce — quindi il testo è già dov'era.
 			showConversationRefusal(err);
 			renderConversationPanel();
 		} finally {
 			conversationBusy = false;
 			renderConversationPanel();
 			loadConversationsIndex();
+		}
+	}
+
+	async function reopenConversation() {
+		const id = conversationsCurrentId;
+		if (conversationBusy || !id) return;
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			const view = await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/reopen`, {});
+			applyConversationView(view);
+			conversationRefusal = "";
+			startConversationPolling();
+		} catch (err) {
+			showConversationRefusal(err);
+		} finally {
+			conversationBusy = false;
+			renderConversationPanel();
+			loadConversationsIndex();
+		}
+	}
+
+	async function interruptConversation() {
+		const id = conversationsCurrentId;
+		if (conversationBusy || !id) return;
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			const view = await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/interrupt`, {});
+			applyConversationView(view);
+			conversationRefusal = "";
+		} catch (err) {
+			showConversationRefusal(err);
+		} finally {
+			conversationBusy = false;
+			renderConversationPanel();
+		}
+	}
+
+	async function loadMoreConversationHistory() {
+		const id = conversationsCurrentId;
+		if (conversationBusy || !id || !conversationView || conversationView.has_more !== true) return;
+		try {
+			const view = await apiGet(`/api/workspace/conversations/${encodeURIComponent(id)}?after_id=${conversationAfterID}`);
+			if (conversationsCurrentId === id) {
+				applyConversationView(view);
+				renderConversationPanel();
+			}
+		} catch (err) {
+			showConversationRefusal(err);
+			renderConversationPanel();
+		}
+	}
+
+	async function respondConversationInput(inputID) {
+		const id = conversationsCurrentId;
+		const draft = conversationInputDrafts[inputID] || "";
+		if (conversationBusy || !id || !inputID || !draft.trim()) return;
+		let payload;
+		try {
+			payload = JSON.parse(draft);
+		} catch (_) {
+			conversationRefusal = "L'input richiesto deve essere JSON valido";
+			renderConversationPanel();
+			return;
+		}
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			const view = await apiPost(
+				`/api/workspace/conversations/${encodeURIComponent(id)}/inputs/${encodeURIComponent(inputID)}?after_id=${conversationAfterID}`,
+				{ payload },
+			);
+			delete conversationInputDrafts[inputID];
+			applyConversationView(view);
+			conversationRefusal = "";
+		} catch (err) {
+			showConversationRefusal(err);
+		} finally {
+			conversationBusy = false;
+			renderConversationPanel();
 		}
 	}
 
@@ -6703,6 +6842,8 @@
 		conversationModelChoiceLoadToken += 1;
 		conversationModelChoiceView = null;
 		conversationModelChoiceSelection = null;
+		conversationCapabilities = [];
+		conversationInputDrafts = {};
 		conversationOpeningSpecCode = "";
 		// The answers given here and the block last reached belong to the
 		// conversation being left: neither may be read as the new one's. Lo
@@ -6867,6 +7008,9 @@
 				return;
 			}
 			if (conversationPollBusy) return;
+			// Older pages are loaded only by the explicit history control. Polling
+			// resumes once the client has reached the durable tail.
+			if (conversationView && conversationView.has_more === true) return;
 			conversationPollBusy = true;
 			let view;
 			try {
@@ -7151,11 +7295,10 @@
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
-			// Closing names the conversation being closed (AC-4): the others stay
-			// exactly as they were, and none of their state is touched here.
-			const view = await apiDelete(
-				`/api/workspace/conversations/${encodeURIComponent(id)}?after_id=${conversationAfterID}`,
-			);
+			// Archiving releases the runtime but preserves the native context.
+			const view = conversationView && conversationView.session
+				? await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/archive`, {})
+				: await apiDelete(`/api/workspace/conversations/${encodeURIComponent(id)}?after_id=${conversationAfterID}`);
 			conversationRefusal = "";
 			// A slot has just been freed, so the reason an open was refused is no
 			// longer the truth of this workspace.
@@ -7251,10 +7394,11 @@
 				// letto — è emptyConversationView() a dirlo, e la guardia qui
 				// rispetta lo stesso contratto di riga 6392: nessuna scelta di
 				// modello si legge da una vista che ancora non c'è.
-				modelChoiceHtml:
-					!view || !view.conversation || !conversationIsActive()
-						? conversationModelChoiceMarkup()
-						: "",
+				modelChoiceHtml: conversationModelChoiceMarkup(),
+				writable: !!(view && view.session && view.session.archive !== "ARCHIVED" && view.session.recovery === "RESUMABLE" && (view.session.work === "IDLE" || conversationCapabilities.includes("turn.steering"))),
+				resumable: !!(view && view.session && view.session.recovery === "RESUMABLE"),
+				sendBehavior: view && view.session && view.session.work !== "IDLE" ? (conversationCapabilities.includes("turn.steering") ? "steer" : "wait") : "turn",
+				inputDrafts: conversationInputDrafts,
 				openingSpecCode: conversationOpeningSpecCode,
 				// La bozza che questa conversazione ha consegnato, quando ne ha
 				// consegnata una. Riconoscerla vuol dire sapere quale azione la
@@ -7285,46 +7429,6 @@
 		// Il contatore vive quanto la riga che aggiorna, non un istante di piu'.
 		if (conversationWorkingSince) startConversationWorkingTicker();
 		else stopConversationWorkingTicker();
-
-		// The declaration of a resume, at the head of the conversation it is
-		// about (AC-4). It is drawn from the payload alone — a conversation that
-		// took up no other one carries no resumed_from, and the renderer answers
-		// that with silence.
-		const banner =
-			window.ConversationIndex &&
-			conversationDismissedNotices["resume"] !== true
-				? window.ConversationIndex.renderResumeBanner(view)
-				: "";
-		if (banner) {
-			const panel = conversationEl.querySelector(".conv-panel");
-			const head = panel ? panel.querySelector(".conv-head") : null;
-			if (head) head.insertAdjacentHTML("afterend", banner);
-			else if (panel) panel.insertAdjacentHTML("afterbegin", banner);
-		}
-
-		// A conversation that has ended takes no more messages *in itself*, and
-		// the renderer is right to say so — but it can be taken up, and the
-		// composer is where that is done. So the controls the renderer froze are
-		// handed back here, with words that name what pressing Send actually
-		// does: a new conversation, given this one as context. This is the
-		// panel's local state, which is exactly what the caller owns and the
-		// renderer does not.
-		if (view && view.conversation && !conversationIsActive()) {
-			const resumeInput = conversationEl.querySelector(".conv-composer-input");
-			const resumeSend = conversationEl.querySelector(
-				".conv-composer .conv-composer-row button[type='submit']",
-			);
-			if (resumeInput) {
-				resumeInput.disabled = conversationBusy;
-				resumeInput.placeholder =
-					"Scrivi per riprendere questa conversazione…";
-			}
-			if (resumeSend) resumeSend.disabled = conversationBusy;
-			// Che la risposta arrivi in una conversazione nuova non è più un
-			// suggerimento stretto accanto al campo: il renderer lo dice per
-			// esteso su una riga propria sopra al compositore, dove si legge
-			// senza togliere larghezza a ciò che si scrive.
-		}
 
 		const nextTimeline = conversationEl.querySelector(".conv-timeline");
 		if (nextTimeline) {
