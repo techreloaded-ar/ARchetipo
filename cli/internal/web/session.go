@@ -57,6 +57,19 @@ type workspaceSession struct {
 	journal         *conversationJournal
 	nativeFollowers *nativeSessionFollowers
 
+	// broker is how a change this session makes on its own — an action of the
+	// process closing inside a conversation — reaches the clients that are
+	// looking at the board. It is set when the session starts, and is nil for a
+	// session nobody ever started.
+	broker *Broker
+
+	// actionConfirmations are the verdicts the actions in flight still owe
+	// their records, keyed by execution id. They live in memory because a
+	// workspace action's verdict closes over a snapshot of the workspace taken
+	// before it started, which cannot be read again afterwards without
+	// describing what the action itself did. See registerActionConfirmation.
+	actionConfirmations sync.Map
+
 	// startOnce, stopOnce and cancel govern the lifecycle. cancel is nil until
 	// start runs, so a session built and never started can still be stopped.
 	// Both guards are Once because the two callers can legitimately race: a
@@ -141,6 +154,7 @@ func (ws *workspaceSession) start(parent context.Context, broker *Broker) {
 		if alreadyStopped {
 			return
 		}
+		ws.broker = broker
 		if parent == nil {
 			parent = context.Background()
 		}

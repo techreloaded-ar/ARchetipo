@@ -368,9 +368,9 @@ func (s *Server) handleDecideWorkspaceConversationProposal(w http.ResponseWriter
 	var started *execution.Execution
 	var startErr error
 	if view.Scope == template.ScopeSpec {
-		started, startErr = s.startSpecAction(ctx, ws, view.SpecCode, execution.ActionID(view.Action), "", nil)
+		started, startErr = s.startSpecAction(ctx, ws, view.SpecCode, execution.ActionID(view.Action), "", nil, id)
 	} else {
-		started, startErr = s.startWorkspaceAction(ctx, ws, execution.ActionID(view.Action), "", nil)
+		started, startErr = s.startWorkspaceAction(ctx, ws, execution.ActionID(view.Action), "", nil, id)
 	}
 	if startErr != nil {
 		writeStartError(w, startErr)

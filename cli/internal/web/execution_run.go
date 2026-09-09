@@ -196,7 +196,7 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, iox.NewInvalidInput("action is required", "supported actions: "+supportedActions(), nil))
 		return
 	}
-	started, err := s.startSpecAction(r.Context(), ws, code, action, req.Model, req.ModelOptions)
+	started, err := s.startSpecAction(r.Context(), ws, code, action, req.Model, req.ModelOptions, req.ConversationID)
 	if err != nil {
 		writeStartError(w, err)
 		return
@@ -227,7 +227,7 @@ func (s *Server) handleRunSpecAction(w http.ResponseWriter, r *http.Request) {
 // reservation, the status transition and the dispatch. Nothing here writes an
 // HTTP response: every refusal is returned as an error, and writeStartError is
 // the single place that turns one into a response.
-func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code string, action execution.ActionID, model string, modelOptions map[string]string) (*execution.Execution, error) {
+func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code string, action execution.ActionID, model string, modelOptions map[string]string, conversationID string) (*execution.Execution, error) {
 	spec, err := ws.conn.ReadSpecDetail(ctx, code)
 	if err != nil {
 		return nil, err
@@ -362,6 +362,25 @@ func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code
 	startOpts := []execution.StartOption(nil)
 	if modelChoice != nil {
 		startOpts = append(startOpts, execution.WithModelChoice(*modelChoice))
+	}
+	// A provider that holds native sessions carries the action out in the
+	// conversation the person is reading, and never in a second agent started
+	// beside it. The record is still created, still transitions the backlog and
+	// is still confirmed against the connector; what changes is that the work
+	// happens in a session that was already open and stays open afterwards.
+	if _, native := execution.SessionProviderFor(provider); native {
+		return s.startActionInSession(ctx, ws, actionInSession{
+			conversationID: conversationID,
+			action:         action,
+			specCode:       code,
+			spec:           spec,
+			providerID:     providerID,
+			providerConfig: effectiveConfig,
+			modelChoice:    modelChoice,
+			model:          model,
+			modelOptions:   modelOptions,
+			confirm:        confirm,
+		})
 	}
 	started, continuation, err := ws.service.Start(ctx, spec, action, providerID, execution.CloneConfig(effectiveConfig), confirm, startOpts...)
 	if err != nil {

@@ -174,6 +174,12 @@ type conversationRunView struct {
 	// approvals exist only while a follower is attached, and attaching it is
 	// this side's job.
 	AwaitingResponse bool `json:"awaiting_response"`
+	// InThisThread says the action is being carried out in the very
+	// conversation this view describes. The block then carries no log and
+	// offers no way to reach a thread: the thread is the one being read, and
+	// drawing the same turns twice on one page is exactly what the unification
+	// of runs and conversations exists to stop.
+	InThisThread bool `json:"in_this_thread"`
 	// ThreadID names the conversation this run is read in, empty for a run that
 	// is read nowhere else.
 	//
@@ -1094,6 +1100,13 @@ type openConversationReq struct {
 type sendConversationMessageReq struct {
 	Message string `json:"message"`
 	Skill   string `json:"skill,omitempty"`
+	// executionID names the ARchetipo action this turn carries out, and is
+	// deliberately not a JSON field: a browser cannot claim that the message it
+	// is typing belongs to an action. It is filled in by the two callers that
+	// know — the start of an action, and an ordinary message sent while one is
+	// still in flight — so the turn the provider opens can be told apart later
+	// from every turn that belongs to no action at all.
+	executionID string
 }
 
 // handleSendWorkspaceConversationMessage delivers a message to the open

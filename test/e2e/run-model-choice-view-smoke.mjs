@@ -191,16 +191,21 @@ async function scenarioPerRunChoiceOverridesOnlyThatRun(runDir) {
     const configBefore = await fs.readFile(configPath);
 
     // 5 — AC-2 and AC-3: a run started with an explicit choice.
-    const overridden = await apiJSON(
+    // The press opens the native session the action works in, so the process
+    // starts *inside* the request: its invocation is read, and the frame that
+    // announces its session pushed, while the response is still in flight.
+    const overriddenStart = apiJSON(
       `${view.url}/api/spec/${SPEC}/execution`,
       postJSON({ action: "plan", model: RUN_MODEL, model_options: { effort: RUN_EFFORT } }),
       201,
     );
+    const overriddenArgv = (await control.waitFor("argv", 1)).argv || [];
+    control.push(emitClaude({ type: "system", subtype: "init", session_id: sessionIDOf(overriddenArgv) }));
+    const overridden = await overriddenStart;
     if (overridden.status !== "RUNNING" || !overridden.id) {
       throw new Error(`AC-2: unexpected execution record on start: ${JSON.stringify(overridden)}`);
     }
     const overriddenID = overridden.id;
-    const overriddenArgv = (await control.waitFor("argv", 1)).argv || [];
     assertFlagValue(overriddenArgv, "--model", RUN_MODEL, "AC-2");
     assertFlagValue(overriddenArgv, "--effort", RUN_EFFORT, "AC-2");
     if (overriddenArgv.includes(WORKSPACE_MODEL) || overriddenArgv.includes(WORKSPACE_EFFORT)) {
@@ -208,7 +213,6 @@ async function scenarioPerRunChoiceOverridesOnlyThatRun(runDir) {
     }
     ok("AC-2", `the process was invoked with --model ${RUN_MODEL} --effort ${RUN_EFFORT}, and neither ${WORKSPACE_MODEL} nor ${WORKSPACE_EFFORT} appears anywhere in its argv`);
 
-    control.push(emitClaude({ type: "system", subtype: "init", session_id: "session-1" }));
     const openRecord = await apiJSON(`${view.url}/api/execution/${overriddenID}`);
     if (openRecord.status !== "RUNNING") {
       throw new Error(`AC-3: the record must still be open when it is read; got ${JSON.stringify(openRecord.status)}`);
@@ -246,7 +250,11 @@ async function scenarioPerRunChoiceOverridesOnlyThatRun(runDir) {
 
     // 8 — AC-5: a run started with neither field is the run the workspace
     // configures, right down to the argv.
-    const inherited = await apiJSON(`${view.url}/api/spec/${SPEC}/execution`, postJSON({ action: "plan" }), 201);
+    const inheritedStart = apiJSON(`${view.url}/api/spec/${SPEC}/execution`, postJSON({ action: "plan" }), 201);
+    const inheritedArgv = (await control.waitFor("argv", 2)).argv || [];
+    const inheritedSessionID = sessionIDOf(inheritedArgv);
+    control.push(emitClaude({ type: "system", subtype: "init", session_id: inheritedSessionID }));
+    const inherited = await inheritedStart;
     if (inherited.status !== "RUNNING" || !inherited.id) {
       throw new Error(`AC-5: unexpected execution record on start: ${JSON.stringify(inherited)}`);
     }
@@ -254,7 +262,6 @@ async function scenarioPerRunChoiceOverridesOnlyThatRun(runDir) {
     if (inheritedID === overriddenID) {
       throw new Error("AC-5: the second start must be a new execution, not the previous record");
     }
-    const inheritedArgv = (await control.waitFor("argv", 2)).argv || [];
     assertFlagValue(inheritedArgv, "--model", WORKSPACE_MODEL, "AC-5");
     assertFlagValue(inheritedArgv, "--effort", WORKSPACE_EFFORT, "AC-5");
     if (inheritedArgv.includes(RUN_MODEL) || inheritedArgv.includes(RUN_EFFORT)) {
@@ -271,8 +278,10 @@ async function scenarioPerRunChoiceOverridesOnlyThatRun(runDir) {
     // 9 — regression: a run started after an overridden one still holds an
     // ordinary dialogue. The message reaches the process as a user frame and
     // enters the history only when the process re-emits it.
-    control.push(emitClaude({ type: "system", subtype: "init", session_id: "session-2" }));
     await waitForRun(view.url, inheritedID, (data) => data.run && data.run.state === "ACTIVE");
+    // A streaming Claude exits when a turn ends, so the turn this message opens
+    // is a new process resumed on the same session id, announcing itself again.
+    control.push(emitClaude({ type: "system", subtype: "init", session_id: inheritedSessionID }));
     const accepted = await apiJSON(
       `${view.url}/api/execution/${inheritedID}/run/messages`,
       postJSON({ message: MESSAGE_SENTINEL }),
@@ -374,6 +383,12 @@ function userFrame(entry) {
 
 function userFrameText(entry) {
   return (entry.frame?.message?.content || []).map((block) => block.text || "").join("");
+}
+
+// sessionIDOf reads, out of the invocation the process reported, the native
+// session the viewer assigned it.
+function sessionIDOf(argv) {
+  return argv[argv.indexOf("--session-id") + 1];
 }
 
 function postJSON(payload) {

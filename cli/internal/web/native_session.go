@@ -10,10 +10,22 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
 const nativeConversationPageSize = 500
+
+// nativeTurnSettleAttempts and nativeTurnSettleInterval bound how long a
+// follower keeps asking, after a turn has ended, whether the action that turn
+// was carrying out can be closed. They are small because the gap they cover is
+// the provider's own — the moment between its last event and its verdict on the
+// turn — and an action still running after them is one that is legitimately
+// waiting for a person.
+const (
+	nativeTurnSettleAttempts = 20
+	nativeTurnSettleInterval = 100 * time.Millisecond
+)
 
 // nativeSessionFollowers are the only readers of provider event streams. They
 // append on receipt, so browser polling is never part of the durability path.
@@ -22,6 +34,11 @@ type nativeSessionFollowers struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	running map[string]context.CancelFunc
+	// wg is what makes closeAll a real end and not only a cancellation. A
+	// follower writes into this workspace's journal, so one still running after
+	// the workspace has been left would write the timeline of a project the
+	// viewer no longer serves.
+	wg sync.WaitGroup
 }
 
 func newNativeSessionFollowers() *nativeSessionFollowers {
@@ -49,8 +66,10 @@ func (f *nativeSessionFollowers) start(id string, follow func(context.Context)) 
 	}
 	ctx, cancel := context.WithCancel(parent)
 	f.running[id] = cancel
+	f.wg.Add(1)
 	f.mu.Unlock()
 	go func() {
+		defer f.wg.Done()
 		defer func() {
 			f.mu.Lock()
 			delete(f.running, id)
@@ -80,6 +99,9 @@ func (f *nativeSessionFollowers) closeAll() {
 	}
 	f.running = map[string]context.CancelFunc{}
 	f.mu.Unlock()
+	// Waited on outside the lock: a follower on its way out takes the same
+	// mutex to unregister itself, so waiting under it would deadlock.
+	f.wg.Wait()
 }
 
 func (ws *workspaceSession) restoreNativeConversations(registry *execution.Registry) error {
@@ -140,6 +162,50 @@ func (ws *workspaceSession) startNativeFollower(snapshot conversationSnapshot) {
 		return
 	}
 	ws.nativeFollowers.start(snapshot.id, func(ctx context.Context) {
+		// A provider whose stream stays open for the life of the session never
+		// returns from the loop below, so the end of an action cannot be noticed
+		// after the stream: it has to be noticed *in* it. The signal is the turn
+		// end the timeline itself carries, and settling on it costs no polling
+		// and asks the provider nothing.
+		ended := make(chan struct{}, 1)
+		settling := make(chan struct{})
+		// Its own cancellation, so the settler ends when *this* follower ends
+		// and not only when the whole workspace does. Without it a stream that
+		// failed would leave the follower blocked on the wait below, and its id
+		// registered — which is what stops the next message from starting a new
+		// follower for the same conversation.
+		settleCtx, stopSettling := context.WithCancel(ctx)
+		go func() {
+			defer close(settling)
+			for {
+				select {
+				case <-settleCtx.Done():
+					return
+				case <-ended:
+					// Retried, because the two facts arrive separately: the
+					// provider appends the last event of a turn and marks the
+					// turn terminal a moment later. The first attempt often sees
+					// a turn that has ended without yet saying how, and an
+					// action left running by that attempt has nothing else
+					// coming to wake it.
+					for attempt := 0; attempt < nativeTurnSettleAttempts; attempt++ {
+						ws.settleSessionActions(settleCtx, snapshot.id)
+						if !ws.hasRunningAction(settleCtx, snapshot.id) {
+							break
+						}
+						select {
+						case <-settleCtx.Done():
+							return
+						case <-time.After(nativeTurnSettleInterval):
+						}
+					}
+				}
+			}
+		}()
+		// Declared in this order so they unwind in the other one: the settler is
+		// told to stop first, and only then is it waited for.
+		defer func() { <-settling }()
+		defer stopSettling()
 		for ctx.Err() == nil {
 			record, err := ws.conversationStore().GetMetadata(ctx, snapshot.id)
 			if err != nil {
@@ -158,6 +224,12 @@ func (ws *workspaceSession) startNativeFollower(snapshot conversationSnapshot) {
 				if appendErr := appender.Append(event); appendErr != nil {
 					return appendErr
 				}
+				if event.Kind == localrun.KindTurnEnd {
+					select {
+					case ended <- struct{}{}:
+					default:
+					}
+				}
 				afterID = event.ID
 				copy := event
 				lastReceived = &copy
@@ -172,11 +244,20 @@ func (ws *workspaceSession) startNativeFollower(snapshot conversationSnapshot) {
 			}
 			if err != nil {
 				_ = ws.markNativeDisconnected(context.Background(), snapshot.id)
+				// A stream that ended mid-turn fails that turn, and an action
+				// running in it has therefore ended too.
+				ws.settleSessionActions(context.Background(), snapshot.id)
 				return
 			}
 			if observed, readErr := snapshot.sessionProvider.ReadSession(ctx, execution.SessionRequest{Session: snapshot.session}); readErr == nil {
 				_ = ws.persistNativeSnapshot(ctx, snapshot.id, observed)
 			}
+			// The action, if this conversation is carrying one out, is closed
+			// from what the record now says: a turn that ended, a receipt the
+			// connector backs, an interrupt. It happens here rather than in a
+			// handler because the end of a turn is observed by the follower and
+			// by nothing else.
+			ws.settleSessionActions(ctx, snapshot.id)
 			select {
 			case <-ctx.Done():
 				return
@@ -251,7 +332,19 @@ func (ws *workspaceSession) persistNativeSnapshot(ctx context.Context, id string
 	record.Connection = snapshot.Connection
 	record.Recovery = snapshot.Recovery
 	record.Work = snapshot.Work
-	record.CurrentTurn = snapshot.CurrentTurn
+	// The observed turn replaces the recorded one, except for the action it is
+	// carrying out: that link was written when the turn was started and belongs
+	// to ARchetipo, so a provider that reports the turn without echoing it back
+	// must not be able to detach it.
+	if snapshot.CurrentTurn != nil {
+		observed := *snapshot.CurrentTurn
+		if observed.ExecutionID == "" && record.CurrentTurn != nil && record.CurrentTurn.ID == observed.ID {
+			observed.ExecutionID = record.CurrentTurn.ExecutionID
+		}
+		record.CurrentTurn = &observed
+	} else {
+		record.CurrentTurn = nil
+	}
 	if snapshot.CurrentTurn != nil {
 		for index := range record.Deliveries {
 			if record.Deliveries[index].State == execution.DeliveryUncertain && record.Deliveries[index].TurnID == snapshot.CurrentTurn.ID {
@@ -259,8 +352,8 @@ func (ws *workspaceSession) persistNativeSnapshot(ctx context.Context, id string
 			}
 		}
 	}
-	if snapshot.CurrentTurn != nil && terminalTurn(snapshot.CurrentTurn.State) {
-		record.Turns = upsertTurn(record.Turns, *snapshot.CurrentTurn)
+	if record.CurrentTurn != nil && terminalTurn(record.CurrentTurn.State) {
+		record.Turns = upsertTurn(record.Turns, *record.CurrentTurn)
 	}
 	return ws.conversationStore().Save(ctx, record)
 }
@@ -356,10 +449,21 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 			_ = ws.conversationStore().Save(context.WithoutCancel(ctx), record)
 			return err
 		}
-		record.Connection = observed.Connection
-		record.Recovery = observed.Recovery
-		record.Work = observed.Work
-		record.CurrentTurn = observed.CurrentTurn
+	}
+	// What the session is doing is taken from the session itself and not from
+	// the record, in both branches. The record is written by the follower after
+	// it has appended the events of a turn, so between the last event of a turn
+	// and that write it still says the turn is running — and a message sent in
+	// that window would be steered into a turn that has already ended.
+	record.Connection = observed.Connection
+	record.Recovery = observed.Recovery
+	record.Work = observed.Work
+	if observed.CurrentTurn != nil {
+		live := *observed.CurrentTurn
+		if live.ExecutionID == "" && record.CurrentTurn != nil && record.CurrentTurn.ID == live.ID {
+			live.ExecutionID = record.CurrentTurn.ExecutionID
+		}
+		record.CurrentTurn = &live
 	}
 	for _, delivery := range record.Deliveries {
 		if delivery.State == execution.DeliveryUncertain {
@@ -431,8 +535,18 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 	if err != nil {
 		return err
 	}
+	// A turn typed into a thread that is carrying out an action belongs to that
+	// action: it is the answer to what the agent asked, and losing the link
+	// would leave the answer floating beside the work it answers. The caller
+	// that starts an action names it explicitly; every other caller inherits
+	// whatever the conversation is still carrying out, and inherits nothing
+	// when it is carrying out nothing.
+	executionID := strings.TrimSpace(body.executionID)
+	if executionID == "" {
+		executionID = pendingActionExecutionID(ctx, ws, record)
+	}
 	requested := record.NextTurn
-	turn := execution.SessionTurn{ID: turnID, State: execution.TurnActive, Requested: requested, StartedAt: time.Now().UTC()}
+	turn := execution.SessionTurn{ID: turnID, ExecutionID: executionID, State: execution.TurnActive, Requested: requested, StartedAt: time.Now().UTC()}
 	delivery := execution.SessionDelivery{SubmissionID: submissionID, TurnID: turnID, State: execution.DeliveryUnsent}
 	record.CurrentTurn = &turn
 	record.Work = execution.SessionTurnActive
@@ -448,7 +562,7 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 		return err
 	}
 	started, startErr := snapshot.sessionProvider.StartTurn(ctx, execution.StartTurnRequest{
-		Session: snapshot.session, TurnID: turnID, SubmissionID: submissionID,
+		Session: snapshot.session, TurnID: turnID, SubmissionID: submissionID, ExecutionID: executionID,
 		Message: body.Message, Model: requested.Model, Options: cloneModelOptions(requested.Options), Skills: selectedSkills,
 	})
 	if started.Delivery.State != "" {
@@ -456,7 +570,14 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 	}
 	record.Deliveries = upsertDelivery(record.Deliveries, delivery)
 	if started.Turn.ID != "" {
-		record.CurrentTurn = &started.Turn
+		observed := started.Turn
+		// The link is ours, not the provider's: a provider that reports the turn
+		// without echoing the execution back must not be able to detach the turn
+		// from the action it was started for.
+		if observed.ExecutionID == "" {
+			observed.ExecutionID = executionID
+		}
+		record.CurrentTurn = &observed
 		record.Work = execution.SessionTurnActive
 	}
 	if saveErr := ws.conversationStore().Save(context.WithoutCancel(ctx), record); saveErr != nil {
@@ -481,6 +602,14 @@ func (s *Server) nativeConversationView(ctx context.Context, ws *workspaceSessio
 		record.Work = observed.Work
 		record.CurrentTurn = observed.CurrentTurn
 	}
+	// Reading the thread is also the moment to close whatever action of the
+	// process has finished in it. The follower normally gets there first, but a
+	// viewer restarted while an action was in flight has no follower that saw
+	// the turn end, and the record must not stay RUNNING because of that.
+	ws.settleSessionActions(ctx, snapshot.id)
+	if refreshed, refreshErr := ws.conversationStore().GetMetadata(ctx, snapshot.id); refreshErr == nil {
+		record.ExecutionIDs = refreshed.ExecutionIDs
+	}
 	page, pageErr := ws.conversationStore().ReadEvents(ctx, snapshot.id, afterID, nativeConversationPageSize)
 	view := conversationView{
 		Available: true, ProviderID: record.ProviderID, Model: record.NextTurn.Model,
@@ -491,6 +620,7 @@ func (s *Server) nativeConversationView(ctx context.Context, ws *workspaceSessio
 	}
 	view.NextTurn = record.NextTurn
 	view.Deliveries = append([]execution.SessionDelivery(nil), record.Deliveries...)
+	view.Runs = s.nativeConversationRuns(ctx, ws, record)
 	if record.Session != nil {
 		view.ProviderID = record.Session.ProviderID
 		view.Conversation.WorkingDir = record.Session.Environment.WorkingDir
@@ -642,6 +772,16 @@ func (s *Server) handleInterruptNativeConversation(w http.ResponseWriter, r *htt
 	record, err := ws.conversationStore().GetMetadata(r.Context(), id)
 	if err != nil || record.CurrentTurn == nil || record.Work == execution.SessionIdle {
 		_ = lock.Unlock()
+		// There is no turn to interrupt, but there may still be an action of the
+		// process waiting for an answer that is not coming: the agent asked
+		// something and stopped speaking. Stopping is then cancelling that
+		// action, which closes its record and leaves the conversation itself
+		// alive and writable — the whole point of a session that outlives the
+		// work run in it.
+		if err == nil && ws.cancelSessionAction(r.Context(), id) {
+			writeJSON(w, http.StatusAccepted, s.nativeConversationView(r.Context(), ws, snapshot, 0))
+			return
+		}
 		writeError(w, iox.NewConflict("the conversation "+id+" has no active turn", "start a turn before interrupting it", err))
 		return
 	}
@@ -665,13 +805,28 @@ func (s *Server) handleInterruptNativeConversation(w http.ResponseWriter, r *htt
 		record.Deliveries = upsertDelivery(record.Deliveries, delivery)
 	}
 	if observed, readErr := snapshot.sessionProvider.ReadSession(r.Context(), execution.SessionRequest{Session: snapshot.session}); readErr == nil {
-		record.Work, record.CurrentTurn = observed.Work, observed.CurrentTurn
+		record.Work = observed.Work
 		if observed.CurrentTurn != nil {
-			record.Turns = upsertTurn(record.Turns, *observed.CurrentTurn)
+			interrupted := *observed.CurrentTurn
+			// The link to the action survives the interrupt for the same reason
+			// it survives an ordinary observation: it is ARchetipo's, not the
+			// provider's, and an interrupted turn that forgot which action it
+			// was running would leave that action's record open for ever.
+			if interrupted.ExecutionID == "" && record.CurrentTurn != nil && record.CurrentTurn.ID == interrupted.ID {
+				interrupted.ExecutionID = record.CurrentTurn.ExecutionID
+			}
+			record.CurrentTurn = &interrupted
+			record.Turns = upsertTurn(record.Turns, interrupted)
+		} else {
+			record.CurrentTurn = nil
 		}
 	}
 	_ = ws.conversationStore().Save(context.WithoutCancel(r.Context()), record)
 	_ = lock.Unlock()
+	// The action the interrupted turn was carrying out ends with it: the record
+	// is closed here rather than left to the follower, so the board is right by
+	// the time this response is read.
+	ws.settleSessionActions(r.Context(), id)
 	if interruptErr != nil {
 		writeError(w, iox.NewConflict("the native turn was not confirmed interrupted", "reconcile the session before retrying", interruptErr))
 		return

@@ -35,6 +35,13 @@ type persistentFakeNativeProvider struct {
 	store     *persistentFakeNativeStore
 	failStart bool
 	lastStart execution.StartTurnRequest
+	// capabilities are the ARchetipo actions this fake accepts. They are empty
+	// by default, which is the honest shape of a provider that only holds
+	// conversations; a test about actions in a session fills them in.
+	capabilities []execution.Capability
+	// starts is every turn this fake was asked to open, in order, so a test can
+	// assert which action each turn was carrying out.
+	turnStarts []execution.StartTurnRequest
 }
 
 func newPersistentFakeNativeProvider(id string, store *persistentFakeNativeStore) *persistentFakeNativeProvider {
@@ -46,7 +53,10 @@ func newPersistentFakeNativeProvider(id string, store *persistentFakeNativeStore
 
 func (p *persistentFakeNativeProvider) ID() string { return p.id }
 func (p *persistentFakeNativeProvider) Capabilities(context.Context) ([]execution.Capability, error) {
-	return []execution.Capability{}, nil
+	if p.capabilities == nil {
+		return []execution.Capability{}, nil
+	}
+	return append([]execution.Capability(nil), p.capabilities...), nil
 }
 func (p *persistentFakeNativeProvider) ValidateConfig(context.Context, map[string]any) error {
 	return nil
@@ -100,6 +110,7 @@ func (p *persistentFakeNativeProvider) StartTurn(_ context.Context, request exec
 	}
 	p.store.starts++
 	p.lastStart = request
+	p.turnStarts = append(p.turnStarts, request)
 	if p.failStart {
 		return execution.SessionTurnStarted{}, fmt.Errorf("connection lost while submitting")
 	}

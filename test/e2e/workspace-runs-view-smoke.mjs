@@ -188,10 +188,14 @@ async function scenario(runDir) {
 		// The run that ends. It is started, driven to a terminal record and its
 		// process is watched out of existence before anything else is started,
 		// so the list assertion later has a real counter-example behind it.
-		const closedStart = await apiJSON(`${view.url}/api/spec/${SPEC_CLOSED}/execution`, postJSON({ action: "plan" }), 201);
-		const closedID = closedStart.id;
+		// The press opens the native session the action works in, so the process
+		// starts *inside* the request: its invocation is read, and the frame that
+		// announces its session pushed, while the response is still in flight.
+		const closedRequest = apiJSON(`${view.url}/api/spec/${SPEC_CLOSED}/execution`, postJSON({ action: "plan" }), 201);
 		const closedProcess = await control.waitFor("argv", 1);
-		control.push(emit({ type: "system", subtype: "init", session_id: "session-closed" }));
+		control.push(emit({ type: "system", subtype: "init", session_id: sessionIDOf(closedProcess.argv) }));
+		const closedStart = await closedRequest;
+		const closedID = closedStart.id;
 		control.push(emit({
 			type: "result",
 			subtype: "error_during_execution",
@@ -229,12 +233,14 @@ async function scenario(runDir) {
 		// The run of workspace scope. Nothing is ever emitted to its process
 		// again: it stays in flight for the rest of the smoke, which is exactly
 		// what the rail has to be able to show.
-		const workspaceStart = await apiJSON(`${view.url}/api/workspace/execution`, postJSON({ action: "spec-draft" }), 201);
+		const workspaceRequest = apiJSON(`${view.url}/api/workspace/execution`, postJSON({ action: "spec-draft" }), 201);
+		const workspaceProcess = await control.waitFor("argv", 3);
+		control.push(emit({ type: "system", subtype: "init", session_id: sessionIDOf(workspaceProcess.argv) }));
+		const workspaceStart = await workspaceRequest;
 		const workspaceID = workspaceStart.id;
 		if (workspaceStart.status !== "RUNNING" || workspaceStart.spec_code !== "") {
 			throw new Error(`the workspace-scoped execution is not the expected one: ${JSON.stringify(workspaceStart)}`);
 		}
-		await control.waitFor("argv", 3);
 		console.log(`-> workspace scope: execution ${workspaceID} (spec-draft) is running`);
 
 		// --- Phase 2: the remote provider -------------------------------------
@@ -1208,6 +1214,13 @@ async function waitForHTTP(url) {
 		await delay(200);
 	}
 	throw new Error(`Timed out waiting for ${url}`);
+}
+
+// sessionIDOf reads, out of the invocation the process reported, the native
+// session the viewer assigned it.
+function sessionIDOf(argv) {
+	const args = argv || [];
+	return args[args.indexOf("--session-id") + 1];
 }
 
 function postJSON(payload) {

@@ -297,46 +297,127 @@ func (s *Service) start(ctx context.Context, spec domain.Spec, action ActionID, 
 	// flight carries its own root and no later workspace switch can rewrite it.
 	request := Request{ExecutionID: id, SpecCode: spec.Code, Action: action, Capability: capability, WorkingDir: started.WorkingDir, ProviderConfig: CloneConfig(validatedConfig)}
 	continuation := func(ctx context.Context) (Execution, error) {
-		execution := started
 		result, dispatchErr := provider.Execute(ctx, request)
 		if dispatchErr == nil {
 			dispatchErr = ctx.Err()
 		}
-		completed := s.now().UTC()
-		execution.CompletedAt = &completed
-		if dispatchErr != nil {
-			execution.Status = StatusFailed
-			execution.Error = &ExecutionError{Code: "PROVIDER_ERROR", Message: dispatchErr.Error()}
-			// A failure that happened after the remote work existed keeps that
-			// identifier in a structured field: the record is the only trace left of
-			// work that may still be running on the other side.
-			var remoteErr *RemoteError
-			if errors.As(dispatchErr, &remoteErr) && strings.TrimSpace(remoteErr.ExternalID) != "" {
-				execution.Error.ExternalID = strings.TrimSpace(remoteErr.ExternalID)
-			}
-		} else {
-			if len(result.Payload) == 0 || !json.Valid(result.Payload) {
-				execution.Status = StatusFailed
-				execution.Error = &ExecutionError{Code: "INVALID_PROVIDER_RESULT", Message: fmt.Sprintf("provider %q returned invalid JSON payload", providerID)}
-			} else {
-				execution.Status = StatusSucceeded
-				execution.Result = &result
-			}
-		}
-		// The caller's verdict is applied before the record is closed, never after,
-		// so the store only ever receives the terminal state the caller stands
-		// behind. WithoutCancel for the same reason as the write below: a shutdown
-		// racing the verdict must not turn a real success into an unverified one.
-		if confirm != nil {
-			confirm(context.WithoutCancel(ctx), &execution)
-		}
-		// WithoutCancel is what makes the record survive a cancelled dispatch: an
-		// interrupted run closes as FAILED with the reason instead of staying
-		// RUNNING for ever with nobody left to close it.
-		if err := s.store.Update(context.WithoutCancel(ctx), execution); err != nil {
-			return Execution{}, err
-		}
-		return execution, nil
+		return s.closeRecord(ctx, started, providerID, &result, dispatchErr, confirm)
 	}
 	return started, continuation, nil
+}
+
+// closeRecord computes and writes the single terminal state of a record.
+//
+// It is shared by the dispatch that this service owns and by an action carried
+// out in a native session, which this service deliberately does not own: the
+// two must agree on what a success is, on how a failure is worded and on the
+// fact that the caller's verdict is applied before the write and never after
+// it. Two copies of this would be free to disagree about all three.
+//
+// result is the payload of a success and is nil when there is none to report;
+// cause is the reason of a failure and takes precedence over any result.
+func (s *Service) closeRecord(ctx context.Context, started Execution, providerID string, result *Result, cause error, confirm Confirmation) (Execution, error) {
+	execution := started
+	completed := s.now().UTC()
+	execution.CompletedAt = &completed
+	switch {
+	case cause != nil:
+		execution.Status = StatusFailed
+		execution.Error = &ExecutionError{Code: "PROVIDER_ERROR", Message: cause.Error()}
+		// A failure that happened after the remote work existed keeps that
+		// identifier in a structured field: the record is the only trace left of
+		// work that may still be running on the other side.
+		var remoteErr *RemoteError
+		if errors.As(cause, &remoteErr) && strings.TrimSpace(remoteErr.ExternalID) != "" {
+			execution.Error.ExternalID = strings.TrimSpace(remoteErr.ExternalID)
+		}
+	case result == nil || len(result.Payload) == 0 || !json.Valid(result.Payload):
+		execution.Status = StatusFailed
+		execution.Error = &ExecutionError{Code: "INVALID_PROVIDER_RESULT", Message: fmt.Sprintf("provider %q returned invalid JSON payload", providerID)}
+	default:
+		execution.Status = StatusSucceeded
+		execution.Result = result
+	}
+	// The caller's verdict is applied before the record is closed, never after,
+	// so the store only ever receives the terminal state the caller stands
+	// behind. WithoutCancel for the same reason as the write below: a shutdown
+	// racing the verdict must not turn a real success into an unverified one.
+	if confirm != nil {
+		confirm(context.WithoutCancel(ctx), &execution)
+	}
+	// WithoutCancel is what makes the record survive a cancelled dispatch: an
+	// interrupted run closes as FAILED with the reason instead of staying
+	// RUNNING for ever with nobody left to close it.
+	if err := s.store.Update(context.WithoutCancel(ctx), execution); err != nil {
+		return Execution{}, err
+	}
+	return execution, nil
+}
+
+// Open creates the RUNNING record of an action whose work this service does not
+// own, and returns it without dispatching anything.
+//
+// It is the half of Start that belongs to the record. An action carried out in
+// a native harness session is not a process this service spawns and waits for:
+// the session already exists, it belongs to the conversation, and it outlives
+// the action by design. What the action still owes the workspace is an
+// execution record — created before the work begins so the board can show it,
+// and closed exactly once when the work is over.
+//
+// The caller MUST later call Settle with the returned id, exactly once. Until
+// it does, the record stays RUNNING, which is the truth: the action is still
+// being carried out in the session.
+//
+// Preflight is applied here for the same reason Start applies it: a provider
+// that cannot run the action must be refused before any record exists.
+func (s *Service) Open(ctx context.Context, spec domain.Spec, action ActionID, providerID string, providerConfig map[string]any, opts ...StartOption) (Execution, error) {
+	if err := validateActionObject(action, spec.Code); err != nil {
+		return Execution{}, err
+	}
+	_, capability, err := s.preflight(ctx, action, providerID, providerConfig)
+	if err != nil {
+		return Execution{}, err
+	}
+	id, err := s.newID()
+	if err != nil {
+		return Execution{}, fmt.Errorf("generate execution id: %w", err)
+	}
+	if !recordfile.ValidID(id) {
+		return Execution{}, fmt.Errorf("generated invalid execution id %q", id)
+	}
+	opened := Execution{ID: id, SpecCode: spec.Code, Action: action, Capability: capability, ProviderID: providerID, SpecStatusBefore: spec.Status, Status: StatusRunning, CreatedAt: s.now().UTC(), WorkingDir: s.workingRoot}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&opened)
+		}
+	}
+	if err := s.store.Create(ctx, opened); err != nil {
+		return Execution{}, err
+	}
+	return opened, nil
+}
+
+// Settle writes the terminal state of a record Open created, reading it back
+// from the store instead of holding it in memory.
+//
+// Reading it back is what makes the close survive a restart of the viewer: the
+// session is durable and an action may span several turns, so the process that
+// observes the end of the work is not necessarily the one that started it. The
+// bool reports whether this call is the one that closed the record; a record
+// that is already terminal is returned untouched, so a second observation of
+// the same ending — a replayed event, two followers, a reconciliation after a
+// restart — can never rewrite a verdict that has already been taken.
+func (s *Service) Settle(ctx context.Context, executionID string, result *Result, cause error, confirm Confirmation) (Execution, bool, error) {
+	opened, err := s.store.Get(ctx, executionID)
+	if err != nil {
+		return Execution{}, false, err
+	}
+	if opened.Status != StatusRunning {
+		return opened, false, nil
+	}
+	closed, err := s.closeRecord(ctx, opened, opened.ProviderID, result, cause, confirm)
+	if err != nil {
+		return Execution{}, false, err
+	}
+	return closed, true, nil
 }

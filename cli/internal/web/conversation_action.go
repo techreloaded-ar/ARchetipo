@@ -1,28 +1,22 @@
 package web
 
-// A run is a conversation with a preconfigured prompt.
+// A run of a provider that holds no native session is a conversation with a
+// preconfigured prompt.
 //
-// There used to be two kinds of agent session in the viewer, and they were the
-// same process started twice: a *run* — an action dispatched from a chip, one
-// turn, no way to answer it — and a *conversation* — a free thread, many turns,
-// read-only. They spawned the same binary with the same arguments, shared the
-// registry, the event protocol and the message route, and differed only in
-// policy. Pressing "Pianifica" therefore lit two agent processes: one to do the
-// work and one, idle, to be talked to about it — and the thread the person read
-// was not the agent that was working.
+// This is the older of the two ways an action of the process is read, and it is
+// now the exception rather than the rule. A provider that holds native sessions
+// carries its actions out inside the conversation the person already has open —
+// see session_action.go — where the session outlives the action, the record is
+// an identity of its own, and a receipt closes the action without closing the
+// thread. Nothing of that is available to a provider that cannot hold a
+// session: its run is a dispatch with a beginning and an end, and the only
+// thread it can offer is the run itself.
 //
-// This file is where the two become one. The session a local provider registers
-// for a run is already a localrun session under the execution's own id, already
-// followable and already commandable through the very methods a conversation
-// uses. Nothing has to be built for it to *be* the thread: it only has to be
-// held as one. What is added here is that holding — and what it costs is one
-// field on the conversation and one branch on the close.
-//
-// The record survives, and survives as what it always was: the outcome. It is
-// still created before the dispatch, still carries BeginActionEffect, still
-// closed by the continuation with VerifyActionEffect applied inside the
-// terminal write. What changed is where it is read: not beside the thread, but
-// as the thread's own outcome.
+// So the old equivalences survive here, and only here, because for this kind of
+// provider they are simply true: the execution *is* the conversation, held
+// under the execution's own id, and the end of the dispatch *is* the end of the
+// thread. What used to make them wrong was applying them to a session that was
+// meant to outlive the work; that case has moved out of this file entirely.
 
 import (
 	"context"

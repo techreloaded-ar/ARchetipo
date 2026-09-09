@@ -240,11 +240,48 @@ func threadOfRun(ws *workspaceSession, executionID string) string {
 	if ws == nil || strings.TrimSpace(executionID) == "" {
 		return ""
 	}
+	// An action carried out in a native session runs in a conversation of its
+	// own id, which the conversation's record names among its executions. It is
+	// looked for first because it is the ordinary case now: the legacy branch
+	// below only answers for a provider that has no native session and whose
+	// run is therefore still held under the execution's own id.
+	if native := nativeThreadOfAction(ws, executionID); native != "" {
+		return native
+	}
 	snapshot, held := ws.conversation.get(executionID)
 	if !held || strings.TrimSpace(snapshot.executionID) == "" {
 		return ""
 	}
 	return snapshot.id
+}
+
+// nativeThreadOfAction names the native conversation carrying this execution,
+// and is empty for an execution that no native session is running.
+//
+// It is kept apart from threadOfRun because the two answers are not
+// interchangeable: this one says "the work is turns of a session", which is
+// what lets the run routes read the conversation's timeline, while threadOfRun
+// also answers for a legacy run held as a thread — whose history is the run's
+// own and not a session's.
+func nativeThreadOfAction(ws *workspaceSession, executionID string) string {
+	if ws == nil || strings.TrimSpace(executionID) == "" {
+		return ""
+	}
+	for _, snapshot := range ws.conversation.list() {
+		if snapshot.sessionProvider == nil {
+			continue
+		}
+		record, err := ws.conversationStore().GetMetadata(context.Background(), snapshot.id)
+		if err != nil {
+			continue
+		}
+		for _, id := range record.ExecutionIDs {
+			if id == executionID {
+				return snapshot.id
+			}
+		}
+	}
+	return ""
 }
 
 // handleGetExecutionRun serves the projection of the run behind an execution.
@@ -260,6 +297,16 @@ func (s *Server) handleGetExecutionRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws := s.session()
+	// An action carried out inside a native session has no run of its own: what
+	// it has is the turns it opened in a conversation, and they are read from
+	// that conversation's durable timeline rather than from a follower nothing
+	// ever attached.
+	if thread := nativeThreadOfAction(ws, id); thread != "" {
+		if view, projected := s.sessionActionRunView(r.Context(), ws, thread, id, afterID); projected {
+			writeJSON(w, http.StatusOK, view)
+			return
+		}
+	}
 	target, notice, err := s.resolveRunTarget(r.Context(), ws, id)
 	if err != nil {
 		writeError(w, err)
@@ -309,6 +356,19 @@ func (s *Server) handleSendRunMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws := s.session()
+	// An action carried out in a native session is talked to in its
+	// conversation, and the answer becomes another turn *of that action*: there
+	// is one agent and one thread, so a second delivery channel would be a
+	// second way of saying the same thing into the same turn.
+	if thread := nativeThreadOfAction(ws, id); thread != "" {
+		if err := s.sendActionMessage(r.Context(), ws, thread, id, body.Message); err != nil {
+			writeError(w, err)
+			return
+		}
+		view, _ := s.sessionActionRunView(r.Context(), ws, thread, id, afterID)
+		writeJSON(w, http.StatusAccepted, view)
+		return
+	}
 	target, notice, err := s.resolveRunTarget(r.Context(), ws, id)
 	if err != nil {
 		writeError(w, err)
@@ -357,6 +417,23 @@ func (s *Server) handleRespondRunApproval(w http.ResponseWriter, r *http.Request
 		return
 	}
 	ws := s.session()
+	// An approval raised while an action works belongs to the session that
+	// raised it, and is answered through the session's own route for the reason
+	// the message above is: one agent, one thread, one answer.
+	if thread := nativeThreadOfAction(ws, id); thread != "" {
+		snapshot, live := ws.conversation.get(thread)
+		if !live {
+			writeError(w, s.conversationGoneRefusal(r.Context(), ws, thread, "answer an approval"))
+			return
+		}
+		if err := s.respondNativeConversationApproval(r.Context(), ws, snapshot, approvalID, body.OptionID); err != nil {
+			writeError(w, err)
+			return
+		}
+		view, _ := s.sessionActionRunView(r.Context(), ws, thread, id, afterID)
+		writeJSON(w, http.StatusAccepted, view)
+		return
+	}
 	target, notice, err := s.resolveRunTarget(r.Context(), ws, id)
 	if err != nil {
 		writeError(w, err)
@@ -394,6 +471,15 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws := s.session()
+	// Cancelling an action of a session stops the action and never the session:
+	// the turn is interrupted if one is speaking, the record is closed, and the
+	// conversation stays open and writable afterwards.
+	if thread := nativeThreadOfAction(ws, id); thread != "" {
+		s.cancelActionInSession(r.Context(), ws, thread, id)
+		view, _ := s.sessionActionRunView(r.Context(), ws, thread, id, afterID)
+		writeJSON(w, http.StatusAccepted, view)
+		return
+	}
 	target, notice, err := s.resolveRunTarget(r.Context(), ws, id)
 	if err != nil {
 		writeError(w, err)

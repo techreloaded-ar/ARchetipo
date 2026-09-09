@@ -838,8 +838,12 @@
 		// compositori che scrivono in un turno solo. Quello che il blocco tiene
 		// è ciò che questa conversazione sa davvero: di aver chiesto il passo, e
 		// dove il passo sta accadendo.
-		const threadID = textAt(run, "thread_id");
-		if (!threadID) rows.push(renderRunLogFold(run, local));
+		// Un passo portato avanti in *questa* conversazione non ha né un log da
+		// citare né un thread da raggiungere: il thread è quello che si sta
+		// leggendo, e i suoi turni sono già sopra.
+		const inThisThread = !!run.in_this_thread;
+		const threadID = inThisThread ? "" : textAt(run, "thread_id");
+		if (!threadID && !inThisThread) rows.push(renderRunLogFold(run, local));
 		if (run.truncated) {
 			rows.push(
 				`<div class="conv-run-partial" role="note">${escapeHtml(TEXT.runPartial)}</div>`,
@@ -851,7 +855,9 @@
 		}
 
 		const disabled = local.busy ? " disabled" : "";
-		const reach = threadID
+		const reach = inThisThread
+			? ""
+			: threadID
 			? `<div class="conv-run-controls">
 			<button type="button" class="ghost-btn conv-run-reach" data-conversation-reach-thread="${escapeHtml(threadID)}"${disabled}>${escapeHtml(TEXT.runReachThread)}</button>
 		</div>`
