@@ -140,6 +140,9 @@ type SessionSkill struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Path        string `json:"path,omitempty"`
+	Namespace   string `json:"namespace,omitempty"`
+	Origin      string `json:"origin,omitempty"`
+	Invocation  string `json:"invocation"`
 }
 
 // SessionTurn has a core id, an optional provider id and an optional execution
@@ -209,6 +212,7 @@ type SessionDiscovery struct {
 	Capabilities []SessionCapability `json:"capabilities"`
 	Models       []ModelOption       `json:"models"`
 	Skills       []SessionSkill      `json:"skills"`
+	SkillsKnown  bool                `json:"skills_known"`
 	Environment  SessionEnvironment  `json:"environment"`
 }
 

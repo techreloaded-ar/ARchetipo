@@ -75,7 +75,12 @@ rl.on("line", async (line) => {
       break;
     case "skills/list": {
       const cwd = message.params?.cwds?.[0] || process.cwd();
-      write({ id: message.id, result: { data: [{ cwd, skills: [] }] } });
+      write({ id: message.id, result: { data: [{ cwd, skills: [
+        { name: "codex-only", description: "Solo Codex", path: `${cwd}/.agents/skills/codex-only/SKILL.md`, enabled: true, scope: "repo" },
+        { name: "shared", description: "Condivisa", path: `${cwd}/.agents/skills/shared/SKILL.md`, enabled: true, scope: "repo" },
+        { name: "disabled", description: "Disabilitata", path: `${cwd}/.agents/skills/disabled/SKILL.md`, enabled: false, scope: "repo" },
+        { name: "plugin:fixture", description: "Plugin", path: `${cwd}/plugins/fixture/SKILL.md`, enabled: true, scope: "user" },
+      ] }] } });
       break;
     }
     case "thread/start":

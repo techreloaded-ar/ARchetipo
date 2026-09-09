@@ -193,6 +193,12 @@ async function scenarioNativeCodexConversation(dirC, env) {
     await page.evaluate(`document.querySelector('[data-conversation-pill="option:effort"]').click()`);
     await page.evaluate(`document.querySelector('[data-conversation-option-choice="high"]').click()`);
     await waitForConversation(view.url, conversationID, 0, (data) => data.next_turn?.model === "gpt-fake" && data.next_turn?.options?.effort === "high", "la scelta model/effort fatta con click");
+    await page.waitFor(`!!document.querySelector('[data-conversation-skill] option[value="plugin:fixture"]')`, 20000, "il menu delle skill native");
+    const skillOptions = await page.evaluate(`Array.from(document.querySelectorAll('[data-conversation-skill] option')).map((option) => option.value)`);
+    if (!skillOptions.includes("codex-only") || !skillOptions.includes("shared") || skillOptions.includes("claude-only") || skillOptions.includes("disabled")) {
+      throw new Error(`AC-4: il catalogo Codex non rispetta runtime e disabilitazioni: ${JSON.stringify(skillOptions)}`);
+    }
+    await page.evaluate(`(() => { const select = document.querySelector('[data-conversation-skill]'); select.value = 'plugin:fixture'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`);
     await page.evaluate(`document.querySelector('.conv-composer-input').focus()`);
     await page.send("Input.insertText", { text: "turno codex uno" });
     await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
@@ -200,6 +206,10 @@ async function scenarioNativeCodexConversation(dirC, env) {
     const firstTurn = await control.waitFor("turn/start", 1);
     if (firstTurn.params?.model !== "gpt-fake" || firstTurn.params?.effort !== "high") {
       throw new Error(`AC-4: turn/start lost model/effort: ${JSON.stringify(firstTurn.params)}`);
+    }
+    const skillInput = (firstTurn.params?.input || []).find((entry) => entry?.type === "skill");
+    if (skillInput?.name !== "plugin:fixture" || !(firstTurn.params?.input || []).some((entry) => entry?.type === "text" && entry.text.includes("$plugin:fixture"))) {
+      throw new Error(`AC-4: la skill non è stata invocata come input nativo nello stesso turn: ${JSON.stringify(firstTurn.params)}`);
     }
     await page.waitFor(`document.querySelector('.conv-composer-hint')?.textContent.includes('turn attivo')`, 20000, "la dichiarazione dello steering");
     await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.value = 'correzione nel turn'; input.dispatchEvent(new Event('input', {bubbles:true})); input.form.requestSubmit(); })()`);
@@ -209,8 +219,11 @@ async function scenarioNativeCodexConversation(dirC, env) {
     control.push({ kind: "emit", method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
     await waitForConversation(view.url, conversationID, 0, (data) => data.session?.work === "IDLE", "the first Codex turn to complete");
 
-    const secondAccepted = apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/messages`, postJSON({ message: "turno codex due" }), 202);
-    await control.waitFor("turn/start", 2);
+    const secondAccepted = apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/messages`, postJSON({ message: "turno codex due", skill: "shared" }), 202);
+    const secondTurn = await control.waitFor("turn/start", 2);
+    if (!(secondTurn.params?.input || []).some((entry) => entry?.type === "skill" && entry.name === "shared")) {
+      throw new Error(`AC-4: la skill condivisa non è stata invocata nello stesso thread: ${JSON.stringify(secondTurn.params)}`);
+    }
     await secondAccepted;
     await page.send("Page.setWebLifecycleState", { state: "frozen" });
     for (let index = 0; index < 505; index += 1) {

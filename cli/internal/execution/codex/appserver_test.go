@@ -94,7 +94,7 @@ func (f *fakeCodex) Send(line []byte) error {
 		f.mu.Lock()
 		skillPath := f.skillPath
 		f.mu.Unlock()
-		f.reply(message.ID, fmt.Sprintf(`{"data":[{"cwd":"/workspace","skills":[{"name":"fixture","description":"Fixture","path":%q,"enabled":true}]}]}`, skillPath), nil)
+		f.reply(message.ID, fmt.Sprintf(`{"data":[{"cwd":"/workspace","skills":[{"name":"plugin:fixture","description":"Fixture","path":%q,"enabled":true,"scope":"repo"},{"name":"disabled","description":"Disabled","path":"/disabled/SKILL.md","enabled":false,"scope":"user"}]}]}`, skillPath), nil)
 	case methodTurnStart:
 		f.mu.Lock()
 		f.turnCount++

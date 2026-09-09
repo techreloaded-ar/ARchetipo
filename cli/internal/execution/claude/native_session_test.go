@@ -165,12 +165,52 @@ func TestNativeClaudeSessionBridgesApprovalAndInterruptWithoutDestroyingTheSessi
 	waitForNativeIdle(t, provider, created.Session)
 }
 
+func TestNativeClaudeUsesTheCatalogReportedBySystemInitInTheSameSession(t *testing.T) {
+	dir := t.TempDir()
+	process := newFakeClaude()
+	secondProcess := newFakeClaude()
+	process.silent = true
+	secondProcess.silent = true
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: &claudeProcessSequence{processes: []*fakeClaude{process, secondProcess}}, Now: time.Now})
+	created, err := provider.CreateSession(context.Background(), execution.CreateSessionRequest{ConversationID: "skill-conversation", Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: map[string]any{"command": fakeCommand(t)}, Location: "local"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := provider.DiscoverSession(context.Background(), execution.SessionDiscoveryRequest{ProviderConfig: created.Session.Environment.ProviderConfig, WorkingDir: dir, Native: &created.Session.Native})
+	if err != nil || before.SkillsKnown || len(before.Skills) != 0 {
+		t.Fatalf("pre-init discovery must stay unknown: %#v, %v", before, err)
+	}
+	announceSessionOnFirstMessage(process, created.Session.Native.ID, "opus")
+	_, err = provider.StartTurn(context.Background(), execution.StartTurnRequest{Session: created.Session, TurnID: "warmup", SubmissionID: "warmup-submission", Message: "ciao"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	process.emit(userFrame("ciao", true))
+	process.emit(resultFrame("Ciao.", false))
+	waitForNativeIdle(t, provider, created.Session)
+	discovery, err := provider.DiscoverSession(context.Background(), execution.SessionDiscoveryRequest{ProviderConfig: created.Session.Environment.ProviderConfig, WorkingDir: dir, Native: &created.Session.Native})
+	if err != nil || !discovery.SkillsKnown || len(discovery.Skills) != 3 || discovery.Skills[0].Name != "claude-only" || discovery.Skills[2].Name != "shared" || discovery.Skills[1].Name != "plugin:fixture" || discovery.Skills[1].Namespace != "plugin" || discovery.Skills[1].Invocation != "/plugin:fixture" {
+		t.Fatalf("runtime skill discovery = %#v, %v", discovery, err)
+	}
+	announceSessionOnFirstMessage(secondProcess, created.Session.Native.ID, "opus")
+	_, err = provider.StartTurn(context.Background(), execution.StartTurnRequest{Session: created.Session, TurnID: "skill-turn", SubmissionID: "skill-submission", Message: "esegui", Skills: []execution.SessionSkill{discovery.Skills[2]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondProcess.mu.Lock()
+	last := string(secondProcess.sent[len(secondProcess.sent)-1])
+	secondProcess.mu.Unlock()
+	if !strings.Contains(last, "/shared\\n\\nesegui") {
+		t.Fatalf("native skill invocation missing from %s", last)
+	}
+}
+
 func announceSessionOnFirstMessage(process *fakeClaude, sessionID, model string) {
 	process.onSend(func(line []byte) error {
 		process.mu.Lock()
 		process.sent = append(process.sent, append(json.RawMessage(nil), line...))
 		process.mu.Unlock()
-		process.emit(`{"type":"system","subtype":"init","session_id":"` + sessionID + `","model":"` + model + `"}`)
+		process.emit(`{"type":"system","subtype":"init","session_id":"` + sessionID + `","model":"` + model + `","skills":["claude-only","shared","plugin:fixture","model-only"],"slash_commands":["claude-only","shared","plugin:fixture"]}`)
 		return nil
 	})
 }

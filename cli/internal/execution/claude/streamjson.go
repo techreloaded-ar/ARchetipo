@@ -41,13 +41,15 @@ const (
 // else survives untouched in the raw line, which is what every event carries:
 // narrowing what is read must never narrow what is kept.
 type frame struct {
-	Type      string          `json:"type"`
-	Subtype   string          `json:"subtype"`
-	Message   json.RawMessage `json:"message"`
-	Result    string          `json:"result"`
-	IsError   bool            `json:"is_error"`
-	SessionID string          `json:"session_id"`
-	Model     string          `json:"model"`
+	Type          string          `json:"type"`
+	Subtype       string          `json:"subtype"`
+	Message       json.RawMessage `json:"message"`
+	Result        string          `json:"result"`
+	IsError       bool            `json:"is_error"`
+	SessionID     string          `json:"session_id"`
+	Model         string          `json:"model"`
+	Skills        []string        `json:"skills"`
+	SlashCommands []string        `json:"slash_commands"`
 	// RequestID and Request belong to the control protocol, which travels on
 	// the same stream as the history. They are read here rather than in a
 	// second decode of the line because the frame type alone does not say what
@@ -147,6 +149,7 @@ type streamSession struct {
 	submissionID  string
 	initSessionID string
 	initModel     string
+	initSkills    []string
 
 	// turnDone is re-armable: it is closed when the current turn ends and
 	// replaced by a fresh one when the next turn opens. It lives under mu, like
@@ -234,6 +237,7 @@ func (s *streamSession) consume() {
 			s.mu.Lock()
 			s.initSessionID = f.SessionID
 			s.initModel = f.Model
+			s.initSkills = invocableClaudeSkills(f.Skills, f.SlashCommands)
 			s.mu.Unlock()
 			s.readyOnce.Do(func() { close(s.ready) })
 		}
@@ -251,6 +255,32 @@ func (s *streamSession) initializedAs() (string, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.initSessionID, s.initModel
+}
+
+func (s *streamSession) discoveredSkills() ([]string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.initSessionID == "" {
+		return nil, false
+	}
+	return append([]string(nil), s.initSkills...), true
+}
+
+func invocableClaudeSkills(skills, slashCommands []string) []string {
+	commands := make(map[string]bool, len(slashCommands))
+	for _, command := range slashCommands {
+		commands[strings.TrimPrefix(strings.TrimSpace(command), "/")] = true
+	}
+	out := make([]string, 0, len(skills))
+	seen := make(map[string]bool, len(skills))
+	for _, skill := range skills {
+		skill = strings.TrimPrefix(strings.TrimSpace(skill), "/")
+		if skill != "" && commands[skill] && !seen[skill] {
+			seen[skill] = true
+			out = append(out, skill)
+		}
+	}
+	return out
 }
 
 // settle delivers a control response to whoever is waiting for that request id.

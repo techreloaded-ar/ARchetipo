@@ -42,7 +42,7 @@ func TestNativeCodexSessionUsesPersistentThreadAcrossTurnsAndResume(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(discovery.Models) != 1 || discovery.Models[0].ID != "gpt-native" || len(discovery.Skills) != 1 || discovery.Skills[0].Path != skillPath {
+	if len(discovery.Models) != 1 || discovery.Models[0].ID != "gpt-native" || !discovery.SkillsKnown || len(discovery.Skills) != 1 || discovery.Skills[0].Path != skillPath || discovery.Skills[0].Name != "plugin:fixture" || discovery.Skills[0].Namespace != "plugin" || discovery.Skills[0].Origin != "repo" || discovery.Skills[0].Invocation != "$plugin:fixture" {
 		t.Fatalf("runtime discovery = %#v", discovery)
 	}
 	for _, capability := range []execution.SessionCapability{execution.SessionCapabilityResume, execution.SessionCapabilityInput, execution.SessionCapabilityApproval, execution.SessionCapabilitySkillInvocation} {

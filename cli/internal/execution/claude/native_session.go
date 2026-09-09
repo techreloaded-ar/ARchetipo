@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +24,8 @@ type nativeSession struct {
 	current        *execution.SessionTurn
 	process        localrun.Process
 	client         *streamSession
+	runtimeSkills  []string
+	skillsKnown    bool
 	events         []execution.RunEvent
 	nextEventID    int64
 	nextSubscriber int
@@ -42,6 +43,7 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 	if err := p.Available(ctx, request.ProviderConfig); err != nil {
 		return execution.SessionDiscovery{}, err
 	}
+	skills, skillsKnown := p.discoverNativeClaudeSkills(request.Native)
 	return execution.SessionDiscovery{
 		Capabilities: execution.NormalizeSessionCapabilities([]execution.SessionCapability{
 			execution.SessionCapabilityResume, execution.SessionCapabilityTurnModel,
@@ -50,7 +52,8 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 			execution.SessionCapabilitySteering, execution.SessionCapabilityInterrupt,
 		}),
 		Models:      execution.CloneModels(models),
-		Skills:      discoverClaudeSkills(dir),
+		Skills:      skills,
+		SkillsKnown: skillsKnown,
 		Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: cloneProviderConfig(request.ProviderConfig), Location: "local"},
 	}, nil
 }
@@ -134,7 +137,7 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 	if effort, ok := request.Options["effort"]; ok {
 		cfg.Effort = effort
 	}
-	if err := validateNativeTurn(cfg, request.Skills, request.Session.Environment.WorkingDir); err != nil {
+	if err := validateNativeTurn(cfg, request.Skills, session.runtimeSkills, session.skillsKnown); err != nil {
 		session.mu.Unlock()
 		return execution.SessionTurnStarted{Delivery: delivery}, err
 	}
@@ -167,6 +170,7 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 		return execution.SessionTurnStarted{Turn: turn, Delivery: delivery}, err
 	}
 	observedID, observedModel := client.initializedAs()
+	observedSkills, skillsKnown := client.discoveredSkills()
 	if observedID != "" && observedID != request.Session.Native.ID {
 		_, _, _ = p.shutdown(process)
 		err := fmt.Errorf("claude resumed session %q instead of %q", observedID, request.Session.Native.ID)
@@ -180,6 +184,8 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 	}
 	session.mu.Lock()
 	session.started = true
+	session.runtimeSkills = observedSkills
+	session.skillsKnown = skillsKnown
 	session.cfg.Model = cfg.Model
 	session.cfg.Effort = cfg.Effort
 	session.current = &turn
@@ -465,16 +471,19 @@ func mapIfSet(key, value string) map[string]string {
 	return map[string]string{key: value}
 }
 
-func validateNativeTurn(cfg settings, skills []execution.SessionSkill, dir string) error {
+func validateNativeTurn(cfg settings, skills []execution.SessionSkill, names []string, known bool) error {
 	if _, err := parseModel(cfg.Model); err != nil {
 		return err
 	}
 	if _, err := parseEffort(optionalString(cfg.Effort)); err != nil {
 		return err
 	}
+	if len(skills) > 0 && !known {
+		return fmt.Errorf("the Claude skill catalog is not available before system/init")
+	}
 	available := make(map[string]bool)
-	for _, skill := range discoverClaudeSkills(dir) {
-		available[skill.Name] = true
+	for _, name := range names {
+		available[name] = true
 	}
 	for _, skill := range skills {
 		if !available[skill.Name] {
@@ -502,21 +511,30 @@ func nativeTurnMessage(request execution.StartTurnRequest) string {
 	return strings.Join(names, "\n") + "\n\n" + request.Message
 }
 
-func discoverClaudeSkills(dir string) []execution.SessionSkill {
-	entries, err := os.ReadDir(filepath.Join(dir, ".claude", "skills"))
-	if err != nil {
-		return []execution.SessionSkill{}
+func (p *Provider) discoverNativeClaudeSkills(native *execution.NativeSessionReference) ([]execution.SessionSkill, bool) {
+	if native == nil {
+		return []execution.SessionSkill{}, false
 	}
-	out := make([]execution.SessionSkill, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	session := p.nativeSession(native.ID)
+	if session == nil {
+		return []execution.SessionSkill{}, false
+	}
+	session.mu.Lock()
+	names := append([]string(nil), session.runtimeSkills...)
+	known := session.skillsKnown
+	session.mu.Unlock()
+	out := make([]execution.SessionSkill, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
 			continue
 		}
-		path := filepath.Join(dir, ".claude", "skills", entry.Name(), "SKILL.md")
-		if _, err := os.Stat(path); err == nil {
-			out = append(out, execution.SessionSkill{Name: entry.Name(), Path: path})
+		namespace := ""
+		if separator := strings.IndexByte(name, ':'); separator > 0 {
+			namespace = name[:separator]
 		}
+		out = append(out, execution.SessionSkill{Name: name, Namespace: namespace, Origin: "runtime", Invocation: "/" + name})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
+	return out, known
 }

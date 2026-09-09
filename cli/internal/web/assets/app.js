@@ -5650,6 +5650,7 @@
 	let conversationModelChoiceSelection = null;
 	let conversationModelChoiceLoadToken = 0;
 	let conversationCapabilities = [];
+	let conversationSkillSelection = "";
 	let conversationInputDrafts = {};
 	let conversationOpeningSpecCode = "";
 
@@ -6107,6 +6108,10 @@
 			conversationDraft = input.value;
 			adattaAltezzaCompositore(input);
 		});
+		container.addEventListener("change", (e) => {
+			const skill = e.target.closest("[data-conversation-skill]");
+			if (skill) conversationSkillSelection = skill.value || "";
+		});
 		// Invio manda il messaggio, Maiusc+Invio va a capo: è il gesto che si ha
 		// nelle dita in una conversazione, e scrivere è ciò che qui si fa più
 		// spesso. ⌘/Ctrl+Invio resta valido perché chi lo aveva imparato non
@@ -6517,6 +6522,23 @@
 			: "";
 	}
 
+	function conversationSkillChoiceMarkup(view) {
+		const catalog = conversationModelChoiceView || {};
+		if (!view || !view.session || view.session.work !== "IDLE") return "";
+		if (catalog.skills_known !== true) {
+			return '<span class="conv-skill-note" title="Il runtime pubblica il catalogo effettivo dopo l’avvio">Skill disponibili dopo il primo turn</span>';
+		}
+		const skills = Array.isArray(catalog.skills) ? catalog.skills : [];
+		if (!skills.length) return "";
+		const options = ['<option value="">Nessuna skill</option>'].concat(skills.map((skill) => {
+			const name = String((skill && skill.name) || "");
+			const origin = String((skill && (skill.namespace || skill.origin)) || "");
+			const selected = name === conversationSkillSelection ? " selected" : "";
+			return `<option value="${escapeHtml(name)}"${selected}>${escapeHtml(origin ? `${name} · ${origin}` : name)}</option>`;
+		}));
+		return `<label class="conv-skill-choice" title="Invoca la skill nel prossimo turn"><span>Skill</span><select data-conversation-skill>${options.join("")}</select></label>`;
+	}
+
 	// Il DOM del pannello è nuovo dopo ogni ridisegno: ciò che aveva il fuoco si
 	// ritrova per chiave e non si tiene per riferimento. Il confronto è
 	// sull'attributo e non su un selettore composto, perché il nome di
@@ -6599,6 +6621,7 @@
 		conversationModelChoiceSelection = null;
 		conversationModelChoiceView = null;
 		conversationCapabilities = [];
+		conversationSkillSelection = "";
 		conversationInputDrafts = {};
 		conversationModelChoiceOpen = "";
 		renderConversationsRail();
@@ -6647,6 +6670,7 @@
 		conversationModelChoiceView = null;
 		conversationModelChoiceSelection = null;
 		conversationCapabilities = [];
+		conversationSkillSelection = "";
 		conversationInputDrafts = {};
 		conversationOpeningSpecCode = "";
 		renderConversationsRail();
@@ -6704,7 +6728,7 @@
 			applyConversationView(view);
 			view = await apiPost(
 				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
-				{ message },
+				{ message, skill: conversationSkillSelection || undefined },
 			);
 			conversationDraft = "";
 			conversationPendingMessage = message;
@@ -6843,6 +6867,7 @@
 		conversationModelChoiceView = null;
 		conversationModelChoiceSelection = null;
 		conversationCapabilities = [];
+		conversationSkillSelection = "";
 		conversationInputDrafts = {};
 		conversationOpeningSpecCode = "";
 		// The answers given here and the block last reached belong to the
@@ -6888,6 +6913,7 @@
 	// failed poll cannot draw the same line twice.
 	function applyConversationView(view) {
 		if (!view) return 0;
+		const previousWork = conversationView && conversationView.session ? conversationView.session.work : "";
 		const events = Array.isArray(view.events) ? view.events : [];
 		let appended = 0;
 		for (const event of events) {
@@ -6897,6 +6923,7 @@
 			conversationAfterID = event.id;
 			appended += 1;
 			settleConversationPending(event);
+			if (event.kind === "skill_catalog_changed") loadConversationModelChoice(conversationsCurrentId);
 		}
 		if (
 			typeof view.last_id === "number" &&
@@ -6905,6 +6932,10 @@
 			conversationAfterID = view.last_id;
 		}
 		conversationView = view;
+		if (previousWork && previousWork !== "IDLE" && view.session && view.session.work === "IDLE") {
+			loadConversationModelChoice(conversationsCurrentId);
+			loadBoard();
+		}
 		// La spec della conversazione appena applicata potrebbe non essere
 		// quella per cui il passo scopato era stato letto: ogni strada che porta
 		// qui — switch, boot, poll — riallinea la lettura senza aspettarla.
@@ -7125,13 +7156,14 @@
 		try {
 			const view = await apiPost(
 				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
-				{ message },
+				{ message, skill: conversationSkillSelection || undefined },
 			);
 			// Accepted means delivered, not published: the text stays out of the
 			// timeline until the agent carries it back. Quello che si vede in
 			// coda fino ad allora è l'eco locale qui sopra, e porta scritto che
 			// è in consegna — non si spaccia per storia.
 			conversationRefusal = "";
+			conversationSkillSelection = "";
 			applyConversationView(view);
 			startConversationPolling();
 		} catch (err) {
@@ -7395,6 +7427,7 @@
 				// rispetta lo stesso contratto di riga 6392: nessuna scelta di
 				// modello si legge da una vista che ancora non c'è.
 				modelChoiceHtml: conversationModelChoiceMarkup(),
+				skillChoiceHtml: conversationSkillChoiceMarkup(view),
 				writable: !!(view && view.session && view.session.archive !== "ARCHIVED" && view.session.recovery === "RESUMABLE" && (view.session.work === "IDLE" || conversationCapabilities.includes("turn.steering"))),
 				resumable: !!(view && view.session && view.session.recovery === "RESUMABLE"),
 				sendBehavior: view && view.session && view.session.work !== "IDLE" ? (conversationCapabilities.includes("turn.steering") ? "steer" : "wait") : "turn",

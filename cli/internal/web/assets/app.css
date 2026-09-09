@@ -5172,6 +5172,23 @@ body.no-workspace [data-workspace-scoped] {
 	text-transform: uppercase;
 }
 
+.conv-skill-choice {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 11px;
+	color: var(--muted);
+}
+
+.conv-skill-choice select {
+	max-width: 220px;
+}
+
+.conv-skill-note {
+	font-size: 11px;
+	color: var(--muted);
+}
+
 .conv-input {
 	display: grid;
 	gap: 8px;

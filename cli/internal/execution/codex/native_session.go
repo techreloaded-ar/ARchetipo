@@ -43,11 +43,22 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 	if err := p.Available(ctx, request.ProviderConfig); err != nil {
 		return execution.SessionDiscovery{}, err
 	}
-	process, client, err := p.startNativeClient(ctx, cfg, dir)
-	if err != nil {
-		return execution.SessionDiscovery{}, err
+	var process localrun.Process
+	var client *appServer
+	if request.Native != nil {
+		if session := p.nativeSession(request.Native.ID); session != nil {
+			session.mu.Lock()
+			client = session.client
+			session.mu.Unlock()
+		}
 	}
-	defer func() { _, _, _ = p.shutdown(process) }()
+	if client == nil {
+		process, client, err = p.startNativeClient(ctx, cfg, dir)
+		if err != nil {
+			return execution.SessionDiscovery{}, err
+		}
+		defer func() { _, _, _ = p.shutdown(process) }()
+	}
 	models, err := client.discoverModels(ctx)
 	if err != nil {
 		return execution.SessionDiscovery{}, err
@@ -64,7 +75,7 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 			execution.SessionCapabilityApproval, execution.SessionCapabilitySteering,
 			execution.SessionCapabilityInterrupt,
 		}),
-		Models: models, Skills: skills,
+		Models: models, Skills: skills, SkillsKnown: true,
 		Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: cloneCodexProviderConfig(request.ProviderConfig), Location: "local"},
 	}, nil
 }
@@ -413,6 +424,7 @@ func (a *appServer) discoverSkills(ctx context.Context, dir string) ([]execution
 				Description string `json:"description"`
 				Path        string `json:"path"`
 				Enabled     bool   `json:"enabled"`
+				Scope       string `json:"scope"`
 			} `json:"skills"`
 		} `json:"data"`
 	}
@@ -423,7 +435,11 @@ func (a *appServer) discoverSkills(ctx context.Context, dir string) ([]execution
 	for _, group := range response.Data {
 		for _, skill := range group.Skills {
 			if skill.Enabled {
-				out = append(out, execution.SessionSkill{Name: skill.Name, Description: skill.Description, Path: skill.Path})
+				namespace := ""
+				if separator := strings.IndexByte(skill.Name, ':'); separator > 0 {
+					namespace = skill.Name[:separator]
+				}
+				out = append(out, execution.SessionSkill{Name: skill.Name, Description: skill.Description, Path: skill.Path, Namespace: namespace, Origin: skill.Scope, Invocation: "$" + skill.Name})
 			}
 		}
 	}
@@ -495,6 +511,10 @@ func (s *nativeSession) handleRequest(request rpcMessage) {
 }
 
 func (s *nativeSession) handleNotification(method string, params json.RawMessage) {
+	if method == "skills/changed" {
+		s.append(execution.RunEvent{Kind: "skill_catalog_changed", Text: "Il catalogo skill del runtime è cambiato"})
+		return
+	}
 	if method != "serverRequest/resolved" {
 		return
 	}

@@ -367,6 +367,9 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 		}
 	}
 	if record.Work != "" && record.Work != execution.SessionIdle {
+		if strings.TrimSpace(body.Skill) != "" {
+			return iox.NewConflict("a native skill cannot be added through steering", "wait for the active turn to finish, then invoke the skill", nil)
+		}
 		discovery, discoveryErr := snapshot.sessionProvider.DiscoverSession(ctx, execution.SessionDiscoveryRequest{
 			ProviderConfig: snapshot.providerConfig, WorkingDir: snapshot.workingDir, Native: &snapshot.session.Native,
 		})
@@ -399,6 +402,27 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 		}
 		return nil
 	}
+	var selectedSkills []execution.SessionSkill
+	if requestedName := strings.TrimSpace(body.Skill); requestedName != "" {
+		discovery, discoveryErr := snapshot.sessionProvider.DiscoverSession(ctx, execution.SessionDiscoveryRequest{
+			ProviderConfig: snapshot.providerConfig, WorkingDir: snapshot.workingDir, Native: &snapshot.session.Native,
+		})
+		if discoveryErr != nil {
+			return iox.NewConflict("the native skill catalog is not available", "refresh the catalog before invoking a skill", discoveryErr)
+		}
+		if !discovery.SkillsKnown {
+			return iox.NewConflict("the native skill catalog is not known yet", "complete one ordinary turn so the runtime can report its catalog", nil)
+		}
+		for _, skill := range discovery.Skills {
+			if skill.Name == requestedName {
+				selectedSkills = []execution.SessionSkill{skill}
+				break
+			}
+		}
+		if len(selectedSkills) == 0 {
+			return iox.NewInvalidInput("skill is not available in this native session", "choose a skill from the current session catalog", nil)
+		}
+	}
 	turnID, err := nativeOperationID("turn-")
 	if err != nil {
 		return err
@@ -425,7 +449,7 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 	}
 	started, startErr := snapshot.sessionProvider.StartTurn(ctx, execution.StartTurnRequest{
 		Session: snapshot.session, TurnID: turnID, SubmissionID: submissionID,
-		Message: body.Message, Model: requested.Model, Options: cloneModelOptions(requested.Options),
+		Message: body.Message, Model: requested.Model, Options: cloneModelOptions(requested.Options), Skills: selectedSkills,
 	})
 	if started.Delivery.State != "" {
 		delivery = started.Delivery
@@ -734,6 +758,8 @@ type nativeConversationModelChoiceView struct {
 	executionModelChoiceView
 	Capabilities []execution.SessionCapability `json:"capabilities"`
 	Environment  execution.SessionEnvironment  `json:"environment"`
+	Skills       []execution.SessionSkill      `json:"skills"`
+	SkillsKnown  bool                          `json:"skills_known"`
 }
 
 func (s *Server) nativeConversationDiscovery(ctx context.Context, ws *workspaceSession, id string) (conversationlog.Record, execution.SessionDiscovery, error) {
@@ -778,6 +804,8 @@ func (s *Server) handleGetNativeConversationModelChoice(w http.ResponseWriter, r
 		},
 		Capabilities: execution.NormalizeSessionCapabilities(discovery.Capabilities),
 		Environment:  discovery.Environment,
+		Skills:       discovery.Skills,
+		SkillsKnown:  discovery.SkillsKnown,
 	}
 	if len(discovery.Models) == 0 {
 		view.UnavailableReason = "the session provider returned an empty model catalog"

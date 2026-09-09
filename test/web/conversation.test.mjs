@@ -131,6 +131,14 @@ describe("renderConversation", () => {
 		);
 	});
 
+	it("mostra la selezione skill nel composer senza interpretarne il catalogo", () => {
+		const html = renderConversation(LIVE, "", {
+			skillChoiceHtml: '<label class="conv-skill-choice"><select data-conversation-skill><option>plugin:fixture</option></select></label>',
+		});
+		assert.ok(html.includes("data-conversation-skill"));
+		assert.ok(html.indexOf("data-conversation-skill") < html.indexOf('type="submit"'));
+	});
+
 	// A conversazione conclusa riprenderla apre una sessione nuova, e la riga
 	// agente è dove si sceglie con che modello parte: sta nel compositore,
 	// all'altezza del pulsante che manda.

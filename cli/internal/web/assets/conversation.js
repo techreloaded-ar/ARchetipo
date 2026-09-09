@@ -1183,6 +1183,7 @@
 			${resumeHtml}
 			<div class="conv-composer-row">
 				<textarea class="conv-composer-input" rows="1" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
+				${typeof ui.skillChoiceHtml === "string" ? ui.skillChoiceHtml : ""}
 				${typeof agentRow === "string" ? agentRow : ""}
 				${hintHtml}
 				<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>

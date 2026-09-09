@@ -1093,6 +1093,7 @@ type openConversationReq struct {
 
 type sendConversationMessageReq struct {
 	Message string `json:"message"`
+	Skill   string `json:"skill,omitempty"`
 }
 
 // handleSendWorkspaceConversationMessage delivers a message to the open

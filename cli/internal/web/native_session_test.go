@@ -34,6 +34,7 @@ type persistentFakeNativeProvider struct {
 	id        string
 	store     *persistentFakeNativeStore
 	failStart bool
+	lastStart execution.StartTurnRequest
 }
 
 func newPersistentFakeNativeProvider(id string, store *persistentFakeNativeStore) *persistentFakeNativeProvider {
@@ -54,8 +55,10 @@ func (p *persistentFakeNativeProvider) Execute(context.Context, execution.Reques
 	return execution.Result{}, nil
 }
 func (p *persistentFakeNativeProvider) DiscoverSession(_ context.Context, request execution.SessionDiscoveryRequest) (execution.SessionDiscovery, error) {
-	return execution.SessionDiscovery{Capabilities: []execution.SessionCapability{execution.SessionCapabilityResume, execution.SessionCapabilityInterrupt, execution.SessionCapabilitySteering, execution.SessionCapabilityTurnModel, execution.SessionCapabilityTurnOptions},
+	return execution.SessionDiscovery{Capabilities: []execution.SessionCapability{execution.SessionCapabilityResume, execution.SessionCapabilityInterrupt, execution.SessionCapabilitySteering, execution.SessionCapabilityTurnModel, execution.SessionCapabilityTurnOptions, execution.SessionCapabilitySkillDiscovery, execution.SessionCapabilitySkillInvocation},
 		Models:      []execution.ModelOption{{ID: "fake-large", Default: true, Options: []execution.ModelOptionField{{Name: "effort", Choices: []execution.ModelOptionChoice{{Value: "high"}, {Value: "low"}}}}}},
+		Skills:      []execution.SessionSkill{{Name: "plugin:fixture", Description: "Fixture", Namespace: "plugin", Origin: "repo", Invocation: "$plugin:fixture"}},
+		SkillsKnown: true,
 		Environment: execution.SessionEnvironment{WorkingDir: request.WorkingDir, ProviderConfig: execution.CloneConfig(request.ProviderConfig), Location: "local"}}, nil
 }
 func (p *persistentFakeNativeProvider) CreateSession(_ context.Context, request execution.CreateSessionRequest) (execution.SessionSnapshot, error) {
@@ -96,6 +99,7 @@ func (p *persistentFakeNativeProvider) StartTurn(_ context.Context, request exec
 		return execution.SessionTurnStarted{}, fmt.Errorf("turn already active")
 	}
 	p.store.starts++
+	p.lastStart = request
 	if p.failStart {
 		return execution.SessionTurnStarted{}, fmt.Errorf("connection lost while submitting")
 	}
@@ -313,7 +317,7 @@ func TestNativeConversationLifecycleThroughHTTPWithoutBrowser(t *testing.T) {
 	id := opened.Conversation.ID
 	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodGet, conversationsRoute+"/"+id+"/model-choice", nil)
 	var modelChoice nativeConversationModelChoiceView
-	if status != http.StatusOK || json.Unmarshal(body, &modelChoice) != nil || modelChoice.ProviderID != "native-fake" || modelChoice.ModelSource != "session" || modelChoice.Environment.Location != "local" || len(modelChoice.Models) != 1 {
+	if status != http.StatusOK || json.Unmarshal(body, &modelChoice) != nil || modelChoice.ProviderID != "native-fake" || modelChoice.ModelSource != "session" || modelChoice.Environment.Location != "local" || len(modelChoice.Models) != 1 || !modelChoice.SkillsKnown || len(modelChoice.Skills) != 1 {
 		t.Fatalf("session model choice = %d: %s", status, body)
 	}
 	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPut, conversationsRoute+"/"+id+"/next-turn",
@@ -326,9 +330,12 @@ func TestNativeConversationLifecycleThroughHTTPWithoutBrowser(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("next turn = %d: %s", status, body)
 	}
-	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"message": "over real HTTP"})
+	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"message": "over real HTTP", "skill": "plugin:fixture"})
 	if status != http.StatusAccepted {
 		t.Fatalf("message = %d: %s", status, body)
+	}
+	if len(provider.lastStart.Skills) != 1 || provider.lastStart.Skills[0].Name != "plugin:fixture" || provider.lastStart.Skills[0].Invocation != "$plugin:fixture" {
+		t.Fatalf("native skill was not resolved into the same turn: %#v", provider.lastStart)
 	}
 	provider.store.mu.Lock()
 	var native *persistentFakeNativeSession

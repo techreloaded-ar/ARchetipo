@@ -119,6 +119,13 @@ func waitLiveCodexNativeState(t *testing.T, ctx context.Context, provider *Provi
 		if snapshot.CurrentTurn != nil && snapshot.CurrentTurn.State == state {
 			return
 		}
+		// Un turno finito male non diventa mai lo stato atteso: senza questa
+		// uscita la prova resta appesa fino al timeout e non dice cosa è
+		// successo davvero.
+		if snapshot.CurrentTurn != nil && snapshot.CurrentTurn.State != execution.TurnActive &&
+			snapshot.CurrentTurn.State != execution.TurnWaitingInput && snapshot.CurrentTurn.State != execution.TurnWaitingApproval {
+			t.Fatalf("Codex native turn reached %s instead of %s: %s", snapshot.CurrentTurn.State, state, snapshot.CurrentTurn.Error)
+		}
 		for _, approval := range snapshot.PendingApprovals {
 			if _, err := provider.RespondSessionApproval(ctx, execution.SessionCommandRequest{
 				Session: session, TurnID: snapshot.CurrentTurn.ID, SubmissionID: "live-approval-" + approval.ID,

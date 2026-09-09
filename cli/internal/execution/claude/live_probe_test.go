@@ -118,7 +118,7 @@ func TestLiveClaudeResumeWithModelAndSkill(t *testing.T) {
 	defer cancel()
 
 	first := runLiveClaudeProcess(t, ctx, root, []string{"--session-id", sessionID, "--model", "sonnet", "--effort", "low"},
-		"Invoca /native-protocol-probe. Memorizza anche la parola "+randomWord+" senza scriverla in file.")
+		"/native-protocol-probe\n\nMemorizza anche la parola "+randomWord+" senza scriverla in file.")
 	if first.SessionID != sessionID || !strings.Contains(first.Model, "sonnet") {
 		t.Fatalf("first runtime reported session=%q model=%q", first.SessionID, first.Model)
 	}
