@@ -331,13 +331,18 @@ func TestNativeSessionContractCreatesTwoTurnsInterruptsAndResumes(t *testing.T) 
 
 func TestIncompleteAdaptersDoNotExposeNativeSessions(t *testing.T) {
 	providers := []execution.Provider{
-		codex.New(codex.Options{}),
 		arcipelago.New(arcipelago.Options{}),
 	}
 	for _, provider := range providers {
 		if _, supported := execution.SessionProviderFor(provider); supported {
 			t.Fatalf("incomplete adapter %q exposes native session capabilities", provider.ID())
 		}
+	}
+}
+
+func TestCompletedLocalAdaptersExposeNativeSessions(t *testing.T) {
+	if _, supported := execution.SessionProviderFor(codex.New(codex.Options{})); !supported {
+		t.Fatal("codex does not expose native session capabilities")
 	}
 }
 

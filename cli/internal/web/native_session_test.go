@@ -318,6 +318,19 @@ func TestNativeConversationLifecycleThroughHTTPWithoutBrowser(t *testing.T) {
 	if status != http.StatusAccepted {
 		t.Fatalf("message = %d: %s", status, body)
 	}
+	provider.store.mu.Lock()
+	var native *persistentFakeNativeSession
+	for _, candidate := range provider.store.sessions {
+		native = candidate
+	}
+	native.snapshot.Work = execution.SessionWaitingInput
+	native.snapshot.PendingInputs = []execution.PendingInput{{ID: "input-1", Payload: json.RawMessage(`{"question":"A o B?"}`)}}
+	provider.store.mu.Unlock()
+	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPost, conversationsRoute+"/"+id+"/inputs/input-1",
+		map[string]any{"payload": map[string]any{"answers": map[string]any{"choice": "B"}}})
+	if status != http.StatusAccepted {
+		t.Fatalf("input response = %d: %s", status, body)
+	}
 	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPost, conversationsRoute+"/"+id+"/interrupt", map[string]any{})
 	if status != http.StatusAccepted {
 		t.Fatalf("interrupt = %d: %s", status, body)

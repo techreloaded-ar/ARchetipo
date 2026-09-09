@@ -36,6 +36,8 @@ type fakeCodex struct {
 	steerErr     *rpcError
 	interruptErr *rpcError
 	reemitSteer  bool
+	turnCount    int
+	skillPath    string
 
 	turnStarted chan struct{}
 	done        chan struct{}
@@ -51,7 +53,7 @@ var _ localrun.Process = (*fakeCodex)(nil)
 func newFakeCodex() *fakeCodex {
 	return &fakeCodex{
 		lines:       make(chan []byte, 512),
-		turnStarted: make(chan struct{}),
+		turnStarted: make(chan struct{}, 16),
 		done:        make(chan struct{}),
 	}
 }
@@ -84,9 +86,22 @@ func (f *fakeCodex) Send(line []byte) error {
 	case methodInitialized:
 	case methodThreadStart:
 		f.reply(message.ID, `{"thread":{"id":"thread-1"}}`, f.threadErr)
+	case methodThreadResume:
+		f.reply(message.ID, `{"thread":{"id":"thread-1"},"model":"gpt-native","reasoningEffort":"high"}`, f.threadErr)
+	case "model/list":
+		f.reply(message.ID, `{"data":[{"id":"gpt-native","model":"gpt-native","displayName":"GPT Native","isDefault":true,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]}]}`, nil)
+	case "skills/list":
+		f.mu.Lock()
+		skillPath := f.skillPath
+		f.mu.Unlock()
+		f.reply(message.ID, fmt.Sprintf(`{"data":[{"cwd":"/workspace","skills":[{"name":"fixture","description":"Fixture","path":%q,"enabled":true}]}]}`, skillPath), nil)
 	case methodTurnStart:
-		f.reply(message.ID, `{"turn":{"id":"turn-1"}}`, f.turnErr)
-		close(f.turnStarted)
+		f.mu.Lock()
+		f.turnCount++
+		turnID := fmt.Sprintf("turn-%d", f.turnCount)
+		f.mu.Unlock()
+		f.reply(message.ID, fmt.Sprintf(`{"turn":{"id":%q}}`, turnID), f.turnErr)
+		f.turnStarted <- struct{}{}
 	case methodTurnSteer:
 		text := textOfInput(message.Params)
 		f.mu.Lock()
@@ -139,7 +154,22 @@ func (f *fakeCodex) push(payload []byte) {
 }
 
 func (f *fakeCodex) completeTurn() {
-	f.emit("turn/completed", `{"turn":{"id":"turn-1"}}`)
+	f.mu.Lock()
+	turnID := fmt.Sprintf("turn-%d", f.turnCount)
+	f.mu.Unlock()
+	f.emit("turn/completed", fmt.Sprintf(`{"turn":{"id":%q,"status":"completed"}}`, turnID))
+}
+
+func (f *fakeCodex) interruptTurn() {
+	f.mu.Lock()
+	turnID := fmt.Sprintf("turn-%d", f.turnCount)
+	f.mu.Unlock()
+	f.emit("turn/completed", fmt.Sprintf(`{"turn":{"id":%q,"status":"interrupted"}}`, turnID))
+}
+
+func (f *fakeCodex) request(id int, method, params string) {
+	payload, _ := json.Marshal(map[string]any{"id": id, "method": method, "params": json.RawMessage(params)})
+	f.push(payload)
 }
 
 // end closes the process's output, which is how a real process disappears.
@@ -369,7 +399,7 @@ func TestAppServerTranslatesEveryNotificationThatCarriesHistory(t *testing.T) {
 		{
 			name:     "an error the server reported",
 			method:   "error",
-			params:   `{"message":"model unavailable"}`,
+			params:   `{"error":{"message":"model unavailable"}}`,
 			wantKind: localrun.KindError,
 			wantText: "model unavailable",
 		},

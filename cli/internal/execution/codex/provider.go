@@ -31,6 +31,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
@@ -111,12 +112,16 @@ type Provider struct {
 	starter    localrun.Starter
 	workingDir func() (string, error)
 	now        func() time.Time
+
+	nativeSessionsMu sync.Mutex
+	nativeSessions   map[string]*nativeSession
 }
 
 var (
 	_ execution.Provider             = (*Provider)(nil)
 	_ execution.AvailabilityReporter = (*Provider)(nil)
 	_ execution.RunCollaborator      = (*Provider)(nil)
+	_ execution.SessionProvider      = (*Provider)(nil)
 )
 
 // New builds a provider, defaulting every unset seam to its real
@@ -125,11 +130,12 @@ var (
 // effects.
 func New(options Options) *Provider {
 	p := &Provider{
-		Collaborator: localrun.NewCollaborator(localrun.NewRegistry()),
-		runner:       options.Runner,
-		starter:      options.Starter,
-		workingDir:   options.WorkingDir,
-		now:          options.Now,
+		Collaborator:   localrun.NewCollaborator(localrun.NewRegistry()),
+		runner:         options.Runner,
+		starter:        options.Starter,
+		workingDir:     options.WorkingDir,
+		now:            options.Now,
+		nativeSessions: make(map[string]*nativeSession),
 	}
 	if p.runner == nil {
 		p.runner = localrun.ExecRunner{}

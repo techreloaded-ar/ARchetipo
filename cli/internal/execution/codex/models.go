@@ -6,11 +6,9 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 )
 
-// models are the identifiers `thread/start` accepts as its `model` parameter,
-// verified against codex-cli 0.147.0. The list is closed on purpose and is
-// declared by this package rather than discovered by interrogating the CLI:
-// asking the binary would make the configuration form depend on a process that
-// may not be installed, and Codex exposes no enumeration of its models anyway.
+// models are the fallback catalog used by the batch-provider configuration.
+// Native conversations instead discover the current catalog from model/list;
+// keeping this fallback makes configuration possible before Codex is installed.
 // A declared list can fall behind the vendor, so an identifier outside this
 // catalog is never rejected: a value already configured outside it stays
 // selected and is saved unchanged.
@@ -21,7 +19,7 @@ import (
 // by choice of this package, exactly as the model catalog is, and the Default
 // marker is a best-effort hint about the level Codex applies on its own, which
 // a person's `~/.codex/config.toml` can override.
-var reasoningEfforts = []string{"minimal", "low", "medium", "high"}
+var reasoningEfforts = []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 // defaultReasoningEffort is the level the marker points at. Leaving the option
 // unset passes no override at all.

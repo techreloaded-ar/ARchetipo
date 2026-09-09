@@ -101,7 +101,7 @@ async function main() {
     const dirB = await createWorkspace(runDir, targetsDir, "beta", "claude", CODE_B, env);
     const dirC = await createWorkspace(runDir, targetsDir, "gamma", "codex", CODE_C, env);
 
-    await scenarioNotOfferedWithoutTheCapability(dirC, env);
+    await scenarioNativeCodexConversation(dirC, env);
     await scenarioConversationOfTheOpenWorkspace(dirA, dirB, env);
     await assertNoSessionMaterialLeaked([dirA, dirB, dirC]);
   } catch (error) {
@@ -127,21 +127,16 @@ async function main() {
 
 // --- AC-4 -------------------------------------------------------------------
 //
-// A provider that is perfectly available and simply does not hold conversations
-// must not be asked to. The workspace default is the real `codex` provider
-// pointed at its own fake, which answers `--version` like the real binary: the
-// runtime is usable, and the capability is the only thing missing.
-async function scenarioNotOfferedWithoutTheCapability(dirC, env) {
+// The Codex workspace exercises the same native conversation contract as
+// Claude through the real View routes and a controlled app-server fake.
+async function scenarioNativeCodexConversation(dirC, env) {
   let view;
   let control;
   try {
     control = await startControlServer();
-    // Both fakes are pointed at this server on purpose: it is what makes "no
-    // agent process was started" an observation and not an assumption.
     view = await startViewServer(dirC, {
       ...env,
       FAKE_CODEX_CONTROL: control.url,
-      FAKE_CLAUDE_CONTROL: control.url,
     });
     console.log(`-> view ready on the codex workspace: ${view.url}`);
 
@@ -158,42 +153,74 @@ async function scenarioNotOfferedWithoutTheCapability(dirC, env) {
     if (codex.available !== true) {
       throw new Error(`AC-4: the codex runtime must be usable for this case to mean anything; got ${JSON.stringify(codex)}`);
     }
-    if ((codex.capabilities || []).includes("workspace.converse")) {
-      throw new Error(`AC-4: codex must not declare workspace.converse; got ${JSON.stringify(codex.capabilities)}`);
+    if (!(codex.capabilities || []).includes("workspace.converse")) {
+      throw new Error(`AC-4: codex must declare workspace.converse; got ${JSON.stringify(codex.capabilities)}`);
     }
-
-    const listingBefore = await listRecursively(dirC);
-
     const offered = await apiJSON(`${view.url}/api/workspace/conversations`, {}, 200);
-    if (offered.available !== false) {
-      throw new Error(`AC-4: the conversation must not be offered; got ${JSON.stringify(offered)}`);
-    }
-    if ((offered.conversations || []).length !== 0) {
-      throw new Error(`AC-4: a workspace that is not offered a conversation holds none; got ${JSON.stringify(offered)}`);
-    }
-    if (offered.provider_id !== "codex") {
-      throw new Error(`AC-4: the refusal must name the provider it is about; got ${JSON.stringify(offered.provider_id)}`);
-    }
-    if (!String(offered.unavailable_reason || "").includes("workspace.converse")) {
-      throw new Error(`AC-4: the reason must name workspace.converse; got ${JSON.stringify(offered.unavailable_reason)}`);
+    if (offered.available !== true) {
+      throw new Error(`AC-4: the Codex conversation must be offered; got ${JSON.stringify(offered)}`);
     }
 
-    const refused = await expectStatus(`${view.url}/api/workspace/conversations`, 409, postJSON({}));
-    if (String(refused.error || "") !== String(offered.unavailable_reason || "")) {
-      throw new Error(
-        `AC-4: pressing the button must be refused with the very sentence the payload declared\n  read:    ${JSON.stringify(offered.unavailable_reason)}\n  refusal: ${JSON.stringify(refused.error)}`,
-      );
+    const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
+    const conversationID = opened.conversation?.id;
+    const nativeID = opened.session?.session?.native?.id;
+    if (!conversationID || nativeID !== "thread-1") {
+      throw new Error(`AC-4: Codex did not expose its persistent native thread: ${JSON.stringify(opened)}`);
+    }
+    const threadStart = await control.waitFor("thread/start", 1);
+    if (threadStart.params?.ephemeral !== false || threadStart.params?.approvalPolicy !== "untrusted") {
+      throw new Error(`AC-4: thread/start was not persistent and interactive: ${JSON.stringify(threadStart.params)}`);
     }
 
-    if (control.reports().length !== 0) {
-      throw new Error(
-        `AC-4: no agent process may be started for a conversation that is not offered; the control server saw ${JSON.stringify(control.reports().map((entry) => entry.kind))}`,
-      );
+    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/next-turn`, putJSON({ model: "gpt-fake", model_options: { effort: "high" } }));
+    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/messages`, postJSON({ message: "turno codex uno" }), 202);
+    const firstTurn = await control.waitFor("turn/start", 1);
+    if (firstTurn.params?.model !== "gpt-fake" || firstTurn.params?.effort !== "high") {
+      throw new Error(`AC-4: turn/start lost model/effort: ${JSON.stringify(firstTurn.params)}`);
     }
-    await assertSameListing("AC-4", listingBefore, await listRecursively(dirC), dirC);
+    control.push({ kind: "emit", method: "item/started", params: { item: { type: "userMessage", content: [{ type: "text", text: "turno codex uno" }] } } });
+    control.push({ kind: "emit", method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await waitForConversation(view.url, conversationID, 0, (data) => data.session?.work === "IDLE", "the first Codex turn to complete");
+
+    const secondAccepted = apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/messages`, postJSON({ message: "turno codex due" }), 202);
+    await control.waitFor("turn/start", 2);
+    await secondAccepted;
+    control.push({ kind: "request", id: 71, method: "item/commandExecution/requestApproval", params: { threadId: "thread-1", turnId: "turn-2", itemId: "item-1", reason: "write smoke file" } });
+    const waitingApproval = await waitForConversation(view.url, conversationID, 0, (data) => data.session?.work === "WAITING_APPROVAL", "the Codex approval to reach View");
+    if (waitingApproval.session?.pending_approvals?.[0]?.id !== "71") {
+      throw new Error(`AC-4: pending approval is missing: ${JSON.stringify(waitingApproval.session)}`);
+    }
+    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/approvals/71`, postJSON({ option_id: "allow" }), 202);
+    const approvalResponse = await control.waitFor((entry) => entry.kind === "response" && entry.id === 71);
+    if (approvalResponse.result?.decision !== "accept") {
+      throw new Error(`AC-4: approval response = ${JSON.stringify(approvalResponse)}`);
+    }
+
+    control.push({ kind: "request", id: 72, method: "item/tool/requestUserInput", params: { threadId: "thread-1", turnId: "turn-2", questions: [{ id: "choice", question: "A o B?" }] } });
+    await waitForConversation(view.url, conversationID, 0, (data) => data.session?.work === "WAITING_INPUT", "the Codex input request to reach View");
+    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/inputs/72`, postJSON({ payload: { answers: { choice: { answers: ["B"] } } } }), 202);
+    const inputResponse = await control.waitFor((entry) => entry.kind === "response" && entry.id === 72);
+    if (inputResponse.result?.answers?.choice?.answers?.[0] !== "B") {
+      throw new Error(`AC-4: input response = ${JSON.stringify(inputResponse)}`);
+    }
+
+    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/interrupt`, postJSON({}), 202);
+    await control.waitFor("turn/interrupt", 1);
+    control.push({ kind: "emit", method: "turn/completed", params: { turn: { id: "turn-2", status: "interrupted" } } });
+    await waitForConversation(view.url, conversationID, 0, (data) => data.session?.current_turn?.state === "INTERRUPTED", "the interrupted Codex turn");
+    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}`, { method: "DELETE" }, 200);
+    const resumed = await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/resume`, postJSON({ message: "riprendi" }), 201);
+    const resumeCall = await control.waitFor("thread/resume", 1);
+    if (resumed.conversation?.id !== conversationID || resumed.session?.session?.native?.id !== nativeID || resumeCall.params?.threadId !== nativeID) {
+      throw new Error(`AC-4: resume changed identity: ${JSON.stringify({ resumed, resumeCall })}`);
+    }
+    const listing = await apiJSON(`${view.url}/api/workspace/conversations`);
+    if ((listing.conversations || []).filter((entry) => entry.id === conversationID).length !== 1) {
+      throw new Error(`AC-4: resume created another rail entry: ${JSON.stringify(listing.conversations)}`);
+    }
     ok(
       "AC-4",
-      `with the available codex provider as default, GET /api/workspace/conversations answers 200 available:false stating ${JSON.stringify(truncate(offered.unavailable_reason))}, POST answers 409 with the identical sentence, no agent process was ever started and the ${listingBefore.length} paths of the sandbox are unchanged`,
+      "Codex exposes workspace.converse and keeps one persistent native thread across two turn/start calls, per-turn model/effort, approval, structured input, interrupt, release and thread/resume without adding a rail entry",
     );
   } finally {
     if (view) await stopProcess(view.child);
@@ -956,10 +983,10 @@ function renderReport(summary) {
     </header>
 
     <h2>Scenario</h2>
-    <p>Three real workspaces. One is initialized with <code>archetipo init --tool codex</code> and holds the
-    available-but-not-conversational provider; the other two, <code>A</code> and <code>B</code>, are initialized
+    <p>Three real workspaces. One is initialized with <code>archetipo init --tool codex</code> and exercises a
+    persistent app-server thread; the other two, <code>A</code> and <code>B</code>, are initialized
     with <code>--tool claude</code> and are served by a single <code>archetipo view</code> process. Only the agent
-    binary is fake: <code>test/e2e/support/fake-claude.mjs</code>, driven frame by frame through a local control
+    binaries are fake: <code>test/e2e/support/fake-codex.mjs</code> and <code>test/e2e/support/fake-claude.mjs</code>, driven frame by frame through a local control
     server. The oracles are the working directory the agent process reports at startup, the frames it was really
     given, the execution records that never appear on the filesystem, and the end of the process, asked of the
     operating system by pid.</p>

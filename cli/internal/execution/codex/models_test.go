@@ -124,7 +124,7 @@ func TestCatalogDeclaresTheReasoningEffortOptionOnEveryModel(t *testing.T) {
 	if len(models) == 0 {
 		t.Fatal("the declared catalog is empty")
 	}
-	wantEfforts := []string{"minimal", "low", "medium", "high"}
+	wantEfforts := []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 	for _, model := range models {
 		if len(model.Options) != 1 {
 			t.Fatalf("model %q declares %d options, want 1: %#v", model.ID, len(model.Options), model.Options)

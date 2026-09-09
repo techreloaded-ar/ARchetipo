@@ -15,6 +15,8 @@
 import process from "node:process";
 import readline from "node:readline";
 
+let turnCount = 0;
+
 const control = process.env.FAKE_CODEX_CONTROL;
 
 if (process.argv.includes("--version")) {
@@ -50,6 +52,8 @@ function noActiveTurn(id, what) {
   write({ id, error: { code: -32600, message: `no active turn to ${what}` } });
 }
 
+await report("argv", { argv: process.argv.slice(2), cwd: process.cwd(), pid: process.pid });
+
 const rl = readline.createInterface({ input: process.stdin });
 
 rl.on("line", async (line) => {
@@ -66,15 +70,28 @@ rl.on("line", async (line) => {
       break;
     case "initialized":
       break;
+    case "model/list":
+      write({ id: message.id, result: { data: [{ id: "gpt-fake", model: "gpt-fake", displayName: "GPT Fake", isDefault: true, defaultReasoningEffort: "medium", supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "medium" }, { reasoningEffort: "high" }] }] } });
+      break;
+    case "skills/list": {
+      const cwd = message.params?.cwds?.[0] || process.cwd();
+      write({ id: message.id, result: { data: [{ cwd, skills: [] }] } });
+      break;
+    }
     case "thread/start":
       await report("thread/start", { params: message.params });
       write({ id: message.id, result: { thread: { id: "thread-1" } } });
       break;
+    case "thread/resume":
+      await report("thread/resume", { params: message.params });
+      write({ id: message.id, result: { thread: { id: message.params?.threadId || "thread-1", ephemeral: false }, model: "gpt-fake", reasoningEffort: "medium" } });
+      break;
     case "turn/start":
       turnActive = true;
+      turnCount += 1;
       await report("turn/start", { params: message.params });
-      write({ id: message.id, result: { turn: { id: "turn-1" } } });
-      write({ method: "turn/started", params: { turn: { id: "turn-1" } } });
+      write({ id: message.id, result: { turn: { id: `turn-${turnCount}` } } });
+      write({ method: "turn/started", params: { turn: { id: `turn-${turnCount}` } } });
       break;
     case "turn/steer": {
       const text = (message.params?.input || []).map((entry) => entry.text).join("");
@@ -97,6 +114,10 @@ rl.on("line", async (line) => {
       write({ id: message.id, result: {} });
       break;
     default:
+      if (message.id !== undefined && message.method === undefined) {
+        await report("response", { id: message.id, result: message.result, error: message.error });
+        break;
+      }
       if (message.id !== undefined) {
         write({ id: message.id, error: { code: -32601, message: "unknown method" } });
       }
@@ -121,6 +142,8 @@ async function pump() {
         turnActive = false;
       }
       write({ method: command.method, params: command.params });
+    } else if (command && command.kind === "request") {
+      write({ id: command.id, method: command.method, params: command.params });
     } else if (command && command.kind === "exit") {
       process.exit(command.code ?? 0);
     }

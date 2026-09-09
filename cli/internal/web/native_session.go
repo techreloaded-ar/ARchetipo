@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"sync"
@@ -655,6 +656,41 @@ func (s *Server) respondNativeConversationApproval(ctx context.Context, ws *work
 	}
 	if commandErr != nil {
 		return iox.NewConflict("the approval delivery was not confirmed", "reconcile the native session before retrying", commandErr)
+	}
+	return nil
+}
+
+func (s *Server) respondNativeConversationInput(ctx context.Context, ws *workspaceSession, snapshot conversationSnapshot, inputID string, payload json.RawMessage) error {
+	lock, err := ws.conversationStore().Lock(ctx, snapshot.id)
+	if err != nil {
+		return iox.NewInternal("locking the conversation "+snapshot.id, err)
+	}
+	defer func() { _ = lock.Unlock() }()
+	record, err := ws.conversationStore().GetMetadata(ctx, snapshot.id)
+	if err != nil || record.CurrentTurn == nil {
+		return iox.NewConflict("the conversation has no active turn", "answer input requested by the current turn", err)
+	}
+	submissionID, err := nativeOperationID("submission-")
+	if err != nil {
+		return err
+	}
+	delivery := execution.SessionDelivery{SubmissionID: submissionID, TurnID: record.CurrentTurn.ID, State: execution.DeliveryUncertain}
+	record.Deliveries = upsertDelivery(record.Deliveries, delivery)
+	if err := ws.conversationStore().Save(ctx, record); err != nil {
+		return err
+	}
+	delivery, commandErr := snapshot.sessionProvider.RespondSessionInput(ctx, execution.SessionCommandRequest{
+		Session: snapshot.session, TurnID: record.CurrentTurn.ID, SubmissionID: submissionID,
+		InteractionID: inputID, Payload: payload,
+	})
+	if delivery.State != "" {
+		record.Deliveries = upsertDelivery(record.Deliveries, delivery)
+	}
+	if saveErr := ws.conversationStore().Save(context.WithoutCancel(ctx), record); saveErr != nil {
+		return saveErr
+	}
+	if commandErr != nil {
+		return iox.NewConflict("the input delivery was not confirmed", "reconcile the native session before retrying", commandErr)
 	}
 	return nil
 }

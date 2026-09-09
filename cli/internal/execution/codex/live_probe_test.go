@@ -23,6 +23,118 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
+// TestLiveCodexNativeSessionProvider exercises the production SessionProvider,
+// not only the protocol helper: the same thread writes through a real skill,
+// is released, resumes through a fresh app-server process and retains context.
+func TestLiveCodexNativeSessionProvider(t *testing.T) {
+	if os.Getenv("LIVE_CODEX") == "" {
+		t.Skip("set LIVE_CODEX=1 to run the live Codex SessionProvider probe")
+	}
+	root := t.TempDir()
+	skillDir := filepath.Join(root, ".agents", "skills", "native-provider-probe")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillBody := "---\nname: native-provider-probe\ndescription: Production adapter fixture.\n---\nWrite exactly NATIVE_PROVIDER_OK followed by a newline to provider-marker.txt, then answer only NATIVE_PROVIDER_OK.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	provider := New(Options{WorkingDir: func() (string, error) { return root, nil }})
+	config := map[string]any{"sandbox": "workspace-write"}
+	discovery, err := provider.DiscoverSession(ctx, execution.SessionDiscoveryRequest{ProviderConfig: config, WorkingDir: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(discovery.Models) == 0 {
+		t.Fatal("Codex model/list returned no model")
+	}
+	var skill execution.SessionSkill
+	for _, candidate := range discovery.Skills {
+		if candidate.Name == "native-provider-probe" {
+			skill = candidate
+		}
+	}
+	if skill.Name == "" {
+		t.Fatalf("Codex skills/list omitted the fixture: %#v", discovery.Skills)
+	}
+	model := discovery.Models[0]
+	for _, candidate := range discovery.Models {
+		if candidate.Default {
+			model = candidate
+			break
+		}
+	}
+	effort := ""
+	if len(model.Options) > 0 && len(model.Options[0].Choices) > 0 {
+		effort = model.Options[0].Choices[0].Value
+	}
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "live-codex-native", Environment: discovery.Environment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	randomWord := "ZAFFIRO-" + strings.ToUpper(liveCodexRandomHex(t, 4))
+	first, err := provider.StartTurn(ctx, execution.StartTurnRequest{Session: created.Session, TurnID: "turn-live-1", SubmissionID: "submission-live-1", Message: "Invoca la skill indicata. Memorizza anche " + randomWord + " senza scriverla nel file.", Model: model.ID, Options: mapIfLiveCodexEffort(effort), Skills: []execution.SessionSkill{skill}})
+	if err != nil || first.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("first turn = %#v, %v", first, err)
+	}
+	waitLiveCodexNativeState(t, ctx, provider, created.Session, execution.TurnCompleted)
+	marker, err := os.ReadFile(filepath.Join(root, "provider-marker.txt"))
+	if err != nil || string(marker) != "NATIVE_PROVIDER_OK\n" {
+		t.Fatalf("native skill did not write through the production adapter: %q, %v", marker, err)
+	}
+	if err := provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session}); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := provider.ResumeSession(ctx, execution.ResumeSessionRequest{Session: created.Session})
+	if err != nil || resumed.Session.Native.ID != created.Session.Native.ID {
+		t.Fatalf("resume = %#v, %v", resumed, err)
+	}
+	second, err := provider.StartTurn(ctx, execution.StartTurnRequest{Session: resumed.Session, TurnID: "turn-live-2", SubmissionID: "submission-live-2", Message: "Qual era la parola casuale? Rispondi soltanto con quella.", Model: model.ID, Options: mapIfLiveCodexEffort(effort)})
+	if err != nil || second.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("second turn = %#v, %v", second, err)
+	}
+	waitLiveCodexNativeState(t, ctx, provider, resumed.Session, execution.TurnCompleted)
+	if answer := strings.TrimSpace(provider.nativeSession(created.Session.Native.ID).client.FinalMessage()); answer != randomWord {
+		t.Fatalf("native resume lost context: got %q, want %q", answer, randomWord)
+	}
+	t.Logf("production SessionProvider wrote a file and resumed thread %s with model %s effort %s", created.Session.Native.ID, model.ID, effort)
+}
+
+func mapIfLiveCodexEffort(effort string) map[string]string {
+	if effort == "" {
+		return nil
+	}
+	return map[string]string{"effort": effort}
+}
+
+func waitLiveCodexNativeState(t *testing.T, ctx context.Context, provider *Provider, session execution.SessionMetadata, state execution.TurnState) {
+	t.Helper()
+	for {
+		snapshot, err := provider.ReadSession(ctx, execution.SessionRequest{Session: session})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.CurrentTurn != nil && snapshot.CurrentTurn.State == state {
+			return
+		}
+		for _, approval := range snapshot.PendingApprovals {
+			if _, err := provider.RespondSessionApproval(ctx, execution.SessionCommandRequest{
+				Session: session, TurnID: snapshot.CurrentTurn.ID, SubmissionID: "live-approval-" + approval.ID,
+				InteractionID: approval.ID, OptionID: localrun.ApprovalAllow,
+			}); err != nil {
+				t.Fatalf("answering live Codex approval %s: %v", approval.ID, err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("Codex native turn did not reach %s", state)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
 // TestLiveCodexResumeWithModelEffortAndSkill drives the persisted app-server
 // contract that View needs: discover the runtime's real model and skill
 // catalogs, run one turn, release the app-server process, resume the same

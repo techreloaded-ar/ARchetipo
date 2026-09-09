@@ -26,6 +26,7 @@ const (
 	methodInitialize    = "initialize"
 	methodInitialized   = "initialized"
 	methodThreadStart   = "thread/start"
+	methodThreadResume  = "thread/resume"
 	methodTurnStart     = "turn/start"
 	methodTurnSteer     = "turn/steer"
 	methodTurnInterrupt = "turn/interrupt"
@@ -74,15 +75,23 @@ type appServer struct {
 	process localrun.Process
 	session *localrun.Session
 
-	mu        sync.Mutex
-	nextID    int64
-	pending   map[int64]chan rpcMessage
-	threadID  string
-	turnID    string
-	seq       int
-	completed bool
-	agent     strings.Builder
-	lastFull  string
+	mu            sync.Mutex
+	nextID        int64
+	pending       map[int64]chan rpcMessage
+	threadID      string
+	turnID        string
+	seq           int
+	completed     bool
+	turnEnded     bool
+	agent         strings.Builder
+	lastFull      string
+	turnStatus    string
+	turnError     string
+	turnCoreID    string
+	submissionID  string
+	appendEvent   func(execution.RunEvent)
+	serverRequest func(rpcMessage)
+	notification  func(string, json.RawMessage)
 
 	turnOnce sync.Once
 	turnDone chan struct{}
@@ -92,13 +101,15 @@ type appServer struct {
 var _ localrun.Dialogue = (*appServer)(nil)
 
 func newAppServer(process localrun.Process, session *localrun.Session) *appServer {
-	return &appServer{
+	server := &appServer{
 		process:  process,
 		session:  session,
 		pending:  make(map[int64]chan rpcMessage),
 		turnDone: make(chan struct{}),
 		gone:     make(chan struct{}),
 	}
+	server.appendEvent = func(event execution.RunEvent) { session.Append(event) }
+	return server
 }
 
 // consume reads the process until its output ends. It runs on its own
@@ -118,12 +129,15 @@ func (a *appServer) consume() {
 		case len(message.ID) > 0 && message.Method == "":
 			a.settle(message)
 		case len(message.ID) > 0 && message.Method != "":
-			// A request from the server. The session runs with approvals
-			// disabled, so nothing here is expected — but a request left
-			// unanswered would block the process for ever, so it is declined
-			// explicitly.
-			a.decline(message)
+			if a.serverRequest != nil {
+				a.serverRequest(message)
+			} else {
+				a.decline(message)
+			}
 		case message.Method != "":
+			if a.notification != nil {
+				a.notification(message.Method, message.Params)
+			}
 			a.project(message.Method, message.Params)
 		}
 	}
@@ -212,8 +226,27 @@ func (a *appServer) notify(method string, params any) error {
 
 // start performs the handshake and opens the turn that carries the work.
 func (a *appServer) start(ctx context.Context, cfg settings, dir, prompt string) error {
+	if err := a.initialize(ctx); err != nil {
+		return err
+	}
+	thread, err := a.openThread(ctx, cfg, dir, "", true, "never")
+	if err != nil {
+		return err
+	}
+	_, err = a.startTurn(ctx, prompt, "", "", nil)
+	if err != nil {
+		return err
+	}
+	if thread.ID == "" {
+		return fmt.Errorf("the codex app server opened a thread without an identity")
+	}
+	return nil
+}
+
+func (a *appServer) initialize(ctx context.Context) error {
 	if _, err := a.call(ctx, methodInitialize, map[string]any{
-		"clientInfo": map[string]any{"name": "archetipo", "title": "ARchetipo", "version": "1"},
+		"clientInfo":   map[string]any{"name": "archetipo", "title": "ARchetipo", "version": "1"},
+		"capabilities": map[string]any{"experimentalApi": true},
 	}); err != nil {
 		return fmt.Errorf("the codex app server did not accept the handshake: %w", err)
 	}
@@ -221,11 +254,27 @@ func (a *appServer) start(ctx context.Context, cfg settings, dir, prompt string)
 		return err
 	}
 
+	return nil
+}
+
+type openedThread struct {
+	ID     string
+	Model  string
+	Effort string
+}
+
+func (a *appServer) openThread(ctx context.Context, cfg settings, dir, resumeID string, ephemeral bool, approvalPolicy string) (openedThread, error) {
 	threadParams := map[string]any{
 		"cwd":            dir,
 		"sandbox":        cfg.Sandbox,
-		"approvalPolicy": "never",
-		"ephemeral":      true,
+		"approvalPolicy": approvalPolicy,
+	}
+	method := methodThreadResume
+	if resumeID == "" {
+		method = methodThreadStart
+		threadParams["ephemeral"] = ephemeral
+	} else {
+		threadParams["threadId"] = resumeID
 	}
 	if cfg.Model != "" {
 		threadParams["model"] = cfg.Model
@@ -237,29 +286,56 @@ func (a *appServer) start(ctx context.Context, cfg settings, dir, prompt string)
 	if cfg.ReasoningEffort != "" {
 		threadParams["config"] = map[string]any{"model_reasoning_effort": cfg.ReasoningEffort}
 	}
-	result, err := a.call(ctx, methodThreadStart, threadParams)
+	result, err := a.call(ctx, method, threadParams)
 	if err != nil {
-		return fmt.Errorf("the codex app server could not open a thread: %w", err)
+		return openedThread{}, fmt.Errorf("the codex app server could not open a thread: %w", err)
 	}
 	var thread struct {
 		Thread struct {
 			ID string `json:"id"`
 		} `json:"thread"`
+		Model           string `json:"model"`
+		ReasoningEffort string `json:"reasoningEffort"`
 	}
 	if err := json.Unmarshal(result, &thread); err != nil || strings.TrimSpace(thread.Thread.ID) == "" {
-		return fmt.Errorf("the codex app server opened a thread without an identity")
+		return openedThread{}, fmt.Errorf("the codex app server opened a thread without an identity")
+	}
+	if resumeID != "" && thread.Thread.ID != resumeID {
+		return openedThread{}, fmt.Errorf("the codex app server resumed thread %q instead of %q", thread.Thread.ID, resumeID)
 	}
 
 	a.mu.Lock()
 	a.threadID = thread.Thread.ID
 	a.mu.Unlock()
 
-	result, err = a.call(ctx, methodTurnStart, map[string]any{
-		"threadId": thread.Thread.ID,
-		"input":    []any{map[string]any{"type": "text", "text": prompt}},
-	})
+	return openedThread{ID: thread.Thread.ID, Model: thread.Model, Effort: thread.ReasoningEffort}, nil
+}
+
+func (a *appServer) startTurn(ctx context.Context, prompt, model, effort string, skills []execution.SessionSkill) (string, error) {
+	threadID, _ := a.ids()
+	input := []any{map[string]any{"type": "text", "text": prompt}}
+	for _, skill := range skills {
+		input = append(input, map[string]any{"type": "skill", "name": skill.Name, "path": skill.Path})
+	}
+	params := map[string]any{"threadId": threadID, "input": input}
+	if model != "" {
+		params["model"] = model
+	}
+	if effort != "" {
+		params["effort"] = effort
+	}
+	a.mu.Lock()
+	a.turnOnce = sync.Once{}
+	a.turnDone = make(chan struct{})
+	a.completed = false
+	a.turnEnded = false
+	a.turnStatus, a.turnError = "", ""
+	a.agent.Reset()
+	a.lastFull = ""
+	a.mu.Unlock()
+	result, err := a.call(ctx, methodTurnStart, params)
 	if err != nil {
-		return fmt.Errorf("the codex app server could not start the turn: %w", err)
+		return "", fmt.Errorf("the codex app server could not start the turn: %w", err)
 	}
 	var turn struct {
 		Turn struct {
@@ -267,12 +343,30 @@ func (a *appServer) start(ctx context.Context, cfg settings, dir, prompt string)
 		} `json:"turn"`
 	}
 	if err := json.Unmarshal(result, &turn); err != nil || strings.TrimSpace(turn.Turn.ID) == "" {
-		return fmt.Errorf("the codex app server started a turn without an identity")
+		return "", fmt.Errorf("the codex app server started a turn without an identity")
 	}
 	a.mu.Lock()
 	a.turnID = turn.Turn.ID
 	a.mu.Unlock()
-	return nil
+	return turn.Turn.ID, nil
+}
+
+func (a *appServer) correlate(turnID, submissionID string) {
+	a.mu.Lock()
+	a.turnCoreID, a.submissionID = turnID, submissionID
+	a.mu.Unlock()
+}
+
+func (a *appServer) turnOutcome() (string, string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.turnStatus, a.turnError
+}
+
+func (a *appServer) declaredTurnEnd() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.turnEnded
 }
 
 func (a *appServer) ids() (string, string) {

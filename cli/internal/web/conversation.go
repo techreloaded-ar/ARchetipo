@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1223,6 +1224,44 @@ func (s *Server) handleRespondWorkspaceConversationApproval(w http.ResponseWrite
 		return
 	}
 	writeJSON(w, http.StatusAccepted, s.conversationViewOf(ctx, ws, heldConversationTarget(snapshot), snapshot, true, afterID))
+}
+
+type respondConversationInputRequest struct {
+	Payload json.RawMessage `json:"payload"`
+}
+
+func (s *Server) handleRespondWorkspaceConversationInput(w http.ResponseWriter, r *http.Request) {
+	afterID, err := parseAfterID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	inputID := strings.TrimSpace(r.PathValue("inputId"))
+	if inputID == "" {
+		writeError(w, iox.NewInvalidInput("missing input id", "use /api/workspace/conversations/<id>/inputs/<inputId>", nil))
+		return
+	}
+	var body respondConversationInputRequest
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, err)
+		return
+	}
+	if len(body.Payload) == 0 || string(body.Payload) == "null" {
+		writeError(w, iox.NewInvalidInput("payload is required", "answer the structured input requested by the provider", nil))
+		return
+	}
+	ws := s.session()
+	id := strings.TrimSpace(r.PathValue("id"))
+	snapshot, live := ws.conversation.get(id)
+	if !live || snapshot.sessionProvider == nil {
+		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "answer a structured input request"))
+		return
+	}
+	if err := s.respondNativeConversationInput(r.Context(), ws, snapshot, inputID, body.Payload); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, s.nativeConversationView(r.Context(), ws, snapshot, afterID))
 }
 
 // handleCloseWorkspaceConversation closes the conversation and releases the
